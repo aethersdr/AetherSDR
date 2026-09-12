@@ -36,13 +36,14 @@ int main(int argc, char* argv[])
     parser.addOption(simDiscoveryOption);
     const QCommandLineOption controlOption(
         QStringLiteral("allow-local-control"),
-        QStringLiteral("Grant current-user local clients non-TX connection and receive-frequency control."));
+        QStringLiteral("Grant current-user local clients non-TX connection and receive control."));
     parser.addOption(controlOption);
     parser.process(app);
 
     AetherSDR::control::LocalControlServer server(
         nullptr, {}, nullptr, parser.isSet(controlOption));
-    if (!server.listen(parser.value(socketOption))) {
+    if (!server.listen(parser.value(socketOption),
+                       AetherSDR::control::LocalControlServer::ListenMode::ReserveEndpoint)) {
         QTextStream(stderr) << "aetherd: cannot listen on local socket '"
                             << parser.value(socketOption) << "'\n";
         return 1;
@@ -50,12 +51,9 @@ int main(int argc, char* argv[])
     // Claim the endpoint before settings or model construction: even the
     // AppSettings singleton constructor can create directories/migrate paths.
     // Native settings must then load before RadioModel snapshots its settings.
-    // bindConnectionTarget() below requires that no client was accepted in
-    // between. Nothing here runs the event loop except a first-run legacy XML
-    // import (AppSettings::load -> importLegacyXml -> persistVaultToKeychain
-    // pumps a bounded QEventLoop); a client arriving in that window makes the
-    // bind refuse and the daemon exit 1, which is fail-closed and one-shot.
-    // Keep any further settings work after the bind, never ahead of it.
+    // Constructors/settings imports can pump nested event loops. Reserving
+    // the endpoint closes early arrivals without admitting sessions, so no
+    // client can race the one-shot target binding or see partial resources.
     std::unique_ptr<AetherSDR::RadioDiscoverySource> discoverySource =
         AetherSDR::aetherd::makeDiscoverySource(
             {parser.isSet(localDiscoveryOption), parser.isSet(simDiscoveryOption)});
@@ -63,6 +61,7 @@ int main(int argc, char* argv[])
     radioSession.setSessionId(1);
     std::unique_ptr<AetherSDR::control::RadioConnectionTarget> connectionTarget;
     std::unique_ptr<AetherSDR::control::SliceFrequencyTarget> frequencyTarget;
+    std::unique_ptr<AetherSDR::control::ReceiveControlTarget> receiveTarget;
     if (parser.isSet(controlOption)) {
         connectionTarget = AetherSDR::control::makeModelRadioConnectionTarget(&radioSession.radioModel());
         if (!connectionTarget || !server.bindConnectionTarget(connectionTarget.get())) {
@@ -75,6 +74,12 @@ int main(int argc, char* argv[])
             QTextStream(stderr) << "aetherd: cannot initialize frequency control\n";
             return 1;
         }
+        receiveTarget = AetherSDR::control::makeModelReceiveControlTarget(
+            &radioSession.radioModel(), connectionTarget.get());
+        if (!receiveTarget || !server.bindReceiveTarget(receiveTarget.get())) {
+            QTextStream(stderr) << "aetherd: cannot initialize receive control\n";
+            return 1;
+        }
     }
     AetherSDR::control::RadioCatalogue catalogue(
         std::move(discoverySource), &server.resourceStore());
@@ -82,6 +87,10 @@ int main(int argc, char* argv[])
         &radioSession.radioModel(), &server.resourceStore(),
         QStringLiteral("radio-1"), nullptr, connectionTarget.get());
     catalogue.start();
+    if (!server.startServing()) {
+        QTextStream(stderr) << "aetherd: cannot start local client service\n";
+        return 1;
+    }
     const int result = app.exec();
     // The server was constructed first; stop delivery before target/model
     // teardown rather than relying on reverse local-variable destruction.

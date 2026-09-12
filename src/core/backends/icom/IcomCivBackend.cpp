@@ -286,6 +286,13 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Radio,
                                static_cast<qint64>(m.tuningMinHz),
                                static_cast<qint64>(m.tuningMaxHz)};
+    // CI-V mode/filter presets and scope geometry need profile-specific
+    // contracts before the daemon can safely offer these generic intents.
+    c.receiveModeControl = std::nullopt;
+    c.receiveFilterControl = std::nullopt;
+    c.receiveAudioControl = std::nullopt;
+    c.receivePanCenterControl = std::nullopt;
+    c.receivePanBandwidthControl = std::nullopt;
 
     const std::span<const IcomBand> bands = bandsFor(m);
     c.declaredBandRanges.reserve(static_cast<int>(bands.size()));
@@ -6203,17 +6210,6 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         if (requestId != 0) {
             emit extensionResult(requestId, true);
         }
-        return;
-    }
-    if (verb == QLatin1String("tuner.start")) {
-        // The ATU cycle — explicitly NOT setTune(). Exposed as an extension so
-        // an operator with an AH-705 can reach it without the TUNE button
-        // running an ATU that may not be attached.
-        if (!sendTunerCommandIfSupported(true)) {
-            emit extensionError(requestId, QStringLiteral("antenna tuner unsupported"));
-            return;
-        }
-        emit extensionResult(requestId, true);
         return;
     }
     if (verb == QLatin1String("scope.reference")) {

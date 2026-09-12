@@ -161,6 +161,21 @@ target_compile_definitions(control_connection_test PRIVATE AETHERSDR_VERSION="${
 target_link_libraries(control_connection_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME control_connection_test COMMAND control_connection_test)
 
+# #5594 (M1): backends announce capability revisions. Socket-free — FlexBackend's
+# radio-status decode is driven directly, and the RTL case asserts the opposite
+# claim (a declaration that is fixed per session emits nothing).
+add_executable(backend_capability_revision_test tests/backend_capability_revision_test.cpp)
+target_include_directories(backend_capability_revision_test PRIVATE src tests)
+target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
+
+# ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
+# backend records setAtu(); no sockets, no radio.
+add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
+target_include_directories(atu_seam_gate_test PRIVATE src tests)
+target_link_libraries(atu_seam_gate_test PRIVATE aethercore Qt6::Core)
+add_test(NAME atu_seam_gate_test COMMAND atu_seam_gate_test)
+
 # Socket-free frequency control: a recording engine backend and normalized
 # observations exercise the production target/service. LocalControlServer
 # instances only test startup binding; neither listens or opens an endpoint.
@@ -168,6 +183,27 @@ add_executable(control_slice_frequency_test tests/control_slice_frequency_test.c
 target_include_directories(control_slice_frequency_test PRIVATE src tests)
 target_link_libraries(control_slice_frequency_test PRIVATE aethercore Qt6::Core)
 add_test(NAME control_slice_frequency_test COMMAND control_slice_frequency_test)
+
+# Socket-free typed receive admission; injected backend intents and separate
+# normalized observations, no synthetic firmware peer or network endpoint.
+add_executable(control_receive_test tests/control_receive_test.cpp)
+target_include_directories(control_receive_test PRIVATE src tests)
+target_link_libraries(control_receive_test PRIVATE aethercore Qt6::Core)
+add_test(NAME control_receive_test COMMAND control_receive_test)
+
+# Socket-free bounded telemetry and transmit observation. The test injects
+# samples and a monotonic clock, with no sockets, peers, timers waited on or TX.
+add_executable(control_telemetry_test tests/control_telemetry_test.cpp)
+target_include_directories(control_telemetry_test PRIVATE src tests)
+target_link_libraries(control_telemetry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME control_telemetry_test COMMAND control_telemetry_test)
+
+# not registered: explicit opt-in diagnostic. Launches OUR aetherd and binds
+# its unique QLocalServer endpoint (Unix-domain socket / Windows named pipe).
+# Built-in Demo only; no third-party firmware peer. Exit 77 on listen refusal.
+# Never part of the default build, CTest graph or per-PR CI gate.
+add_executable(aetherd_receive_smoke EXCLUDE_FROM_ALL tools/aetherd_receive_smoke.cpp)
+target_link_libraries(aetherd_receive_smoke PRIVATE Qt6::Core Qt6::Network)
 
 # Real factory wiring, with local=false: simulator metadata only, no sockets,
 # device scans, radio connections or third-party firmware stand-ins.
@@ -534,6 +570,18 @@ endif()
 add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
+
+# Socket-free shared-pool admission and injected receiver lifetime tests. These
+# foundations are compiled/tested even when the optional RTL USB driver is off.
+add_executable(wdsp_channel_reservation_test tests/wdsp_channel_reservation_test.cpp)
+target_link_libraries(wdsp_channel_reservation_test PRIVATE aethercore)
+add_test(NAME wdsp_channel_reservation_test COMMAND wdsp_channel_reservation_test)
+set_tests_properties(wdsp_channel_reservation_test PROPERTIES TIMEOUT 120)
+
+add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
+target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_receiver_registry_test COMMAND rtl_receiver_registry_test)
+set_tests_properties(rtl_receiver_registry_test PROPERTIES TIMEOUT 120)
 
 # HL2 Metis protocol — pure wire encode/decode, standalone (no Qt / aethercore).
 add_executable(hl2_metis_protocol_test
@@ -2060,6 +2108,20 @@ target_include_directories(dss_renderer_test PRIVATE src)
 target_link_libraries(dss_renderer_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME dss_renderer_test COMMAND dss_renderer_test)
 
+# Socket-free full-width to GPU half-width contract (RFC #5561).
+add_executable(fft_line_width_test tests/fft_line_width_test.cpp)
+target_include_directories(fft_line_width_test PRIVATE src)
+add_test(NAME fft_line_width_test COMMAND fft_line_width_test)
+
+# Transient menu/dialog ownership under nested event-loop teardown (#5566).
+# Socket-free; also runs in the unfiltered full-suite and sanitizer lanes.
+add_executable(scoped_child_widget_test tests/scoped_child_widget_test.cpp)
+target_include_directories(scoped_child_widget_test PRIVATE src)
+target_link_libraries(scoped_child_widget_test PRIVATE Qt6::Widgets)
+add_test(NAME scoped_child_widget_test COMMAND scoped_child_widget_test)
+set_tests_properties(scoped_child_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(spectrum_preview_logic_test
     tests/spectrum_preview_logic_test.cpp
 )
@@ -2243,6 +2305,17 @@ add_executable(spot_auto_scroll_test
 target_include_directories(spot_auto_scroll_test PRIVATE src)
 target_link_libraries(spot_auto_scroll_test PRIVATE Qt6::Core)
 add_test(NAME spot_auto_scroll_test COMMAND spot_auto_scroll_test)
+
+# SpotHub WSJT-X feed: per-instance dial frequency for Decode placement
+# (#3595). Header-only and Qt-Core-only so it runs without WsjtxClient's
+# QUdpSocket / LogManager dependency graph. Socket-free by design — the UDP
+# framing is unchanged by the fix.
+add_executable(wsjtx_dial_tracker_test
+    tests/wsjtx_dial_tracker_test.cpp
+)
+target_include_directories(wsjtx_dial_tracker_test PRIVATE src)
+target_link_libraries(wsjtx_dial_tracker_test PRIVATE Qt6::Core)
+add_test(NAME wsjtx_dial_tracker_test COMMAND wsjtx_dial_tracker_test)
 
 add_executable(n1mm_spot_client_test
     tests/n1mm_spot_client_test.cpp
@@ -3593,6 +3666,19 @@ target_include_directories(demo_backend_swap_test PRIVATE src)
 target_link_libraries(demo_backend_swap_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME demo_backend_swap_test COMMAND demo_backend_swap_test)
 
+# IRadioBackend threading contract (IRadioBackend.h "THREADING AND LIFETIME
+# CONTRACT"). Socket-free: the simulator standalone plus every family through
+# the production factory, constructed and torn down, never dialed.
+add_executable(backend_seam_affinity_test tests/backend_seam_affinity_test.cpp)
+target_include_directories(backend_seam_affinity_test PRIVATE src tests)
+target_link_libraries(backend_seam_affinity_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME backend_seam_affinity_test COMMAND backend_seam_affinity_test)
+
+add_executable(backend_family_switch_test tests/backend_family_switch_test.cpp)
+target_include_directories(backend_family_switch_test PRIVATE src tests)
+target_link_libraries(backend_family_switch_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME backend_family_switch_test COMMAND backend_family_switch_test)
+
 add_executable(demo_applet_tooltip_test
     tests/demo_applet_tooltip_test.cpp
     src/gui/DemoApplet.cpp
@@ -3996,6 +4082,21 @@ target_compile_definitions(memory_csv_compat_test PRIVATE
     CHIRP_SAMPLE_CSV="${CMAKE_CURRENT_SOURCE_DIR}/docs/automation/sample-chirp-memories.csv")
 target_link_libraries(memory_csv_compat_test PRIVATE Qt6::Core)
 add_test(NAME memory_csv_compat_test COMMAND memory_csv_compat_test)
+
+# Socket-free engine ownership/cancellation policy; no radio or peer process.
+add_executable(tx_coordinator_test
+    tests/tx_coordinator_test.cpp
+    src/core/TxCoordinator.cpp
+)
+target_include_directories(tx_coordinator_test PRIVATE src)
+target_link_libraries(tx_coordinator_test PRIVATE Qt6::Core)
+add_test(NAME tx_coordinator_test COMMAND tx_coordinator_test)
+
+# Socket-free: production models with injected backend command recorders.
+add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
+target_include_directories(tx_operation_integration_test PRIVATE src tests)
+target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_operation_integration_test COMMAND tx_operation_integration_test)
 
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp
@@ -4794,6 +4895,9 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    atu_seam_gate_test
+    backend_capability_revision_test
+    tx_operation_integration_test
     backend_slice_lifecycle_test
     client_display_settings_test
     rx_applet_squelch_reconciliation_test
@@ -4804,6 +4908,8 @@ set(AETHER_SETTINGS_CONSUMERS
     icom_control_profile_test
     control_resource_service_test
     control_slice_frequency_test
+    control_receive_test
+    control_telemetry_test
     aetherd_discovery_startup_test
     automation_bridge_start_outcome_test
     slice_label_test
@@ -5124,3 +5230,16 @@ add_executable(droop_calibration_seam_test tests/droop_calibration_seam_test.cpp
 target_include_directories(droop_calibration_seam_test PRIVATE src tests)
 target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
 add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)
+
+# Socket-free injected APRS frames, producer cancellation and queue admission.
+add_executable(aprs_digipeater_model_test
+    tests/aprs_digipeater_model_test.cpp
+    src/models/AprsDigipeaterModel.cpp
+    src/core/aprs/AprsFillInDigipeater.cpp
+    src/core/aprs/AprsBeacon.cpp
+    src/core/aprs/AprsPacket.cpp
+    src/core/tnc/Ax25.cpp
+)
+target_include_directories(aprs_digipeater_model_test PRIVATE src)
+target_link_libraries(aprs_digipeater_model_test PRIVATE Qt6::Core)
+add_test(NAME aprs_digipeater_model_test COMMAND aprs_digipeater_model_test)

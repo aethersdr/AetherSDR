@@ -3,6 +3,7 @@
 #include "core/LogManager.h"
 #include <QDebug>
 #include <QTimer>
+#include <QThread>
 
 namespace AetherSDR {
 
@@ -10,8 +11,14 @@ TransmitModel::TransmitModel(QObject* parent)
     : QObject(parent)
 {}
 
+TransmitModel::~TransmitModel()
+{
+    invalidatePttRelease();
+}
+
 void TransmitModel::resetState()
 {
+    cancelPttRelease();
     m_apdEnabled = false;
     m_apdConfigurable = false;
     m_apdEqActive = false;
@@ -336,6 +343,11 @@ void TransmitModel::startTune(PttSource source)
     }
     if (!runPttPreflight(source, false))
         return;
+    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
+    if (m_keyingAdmission && (!permit || !permit())) {
+        return;
+    }
+    const quint64 intentEpoch = ++m_tuneIntentEpoch;
 
     // Tag the initiating source so the status-bar operator TX timer can exclude
     // local TUNE carriers as well as TCI/DAX-initiated tune (the radio reports
@@ -355,8 +367,9 @@ void TransmitModel::startTune(PttSource source)
         m_tune = true;
         emit tuneChanged(true);
     }
-    emit commandReady("transmit tune 1");
-    emit tuneCommandIssued(true);
+    if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
+        emit tuneCommandIssued(true);
+    }
 }
 
 void TransmitModel::startTwoToneTune(PttSource source)
@@ -366,15 +379,24 @@ void TransmitModel::startTwoToneTune(PttSource source)
     }
     if (!runPttPreflight(source, false))
         return;
+    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
+    if (m_keyingAdmission && (!permit || !permit())) {
+        return;
+    }
+    const quint64 intentEpoch = ++m_tuneIntentEpoch;
 
     m_activePttSource = source;   // exclude local/TCI/DAX tune (see startTune, #4131)
     setTuneMode("two_tone");
+    if (intentEpoch != m_tuneIntentEpoch || (permit && !permit())) {
+        return;
+    }
     if (!m_tune) {
         m_tune = true;
         emit tuneChanged(true);
     }
-    emit commandReady("transmit tune 1");
-    emit tuneCommandIssued(true);
+    if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
+        emit tuneCommandIssued(true);
+    }
 }
 
 void TransmitModel::toggleTwoToneTune()
@@ -394,25 +416,41 @@ void TransmitModel::toggleTwoToneTune()
 
 void TransmitModel::stopTune()
 {
+    const quint64 intentEpoch = ++m_tuneIntentEpoch;
+    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, false) : KeyingPermit{};
     if (m_tune) {
         m_tune = false;
         emit tuneChanged(false);
     }
-    emit commandReady("transmit tune 0");
-    emit tuneCommandIssued(false);
+    if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
+        emit tuneCommandIssued(false);
+    }
 }
 
 void TransmitModel::setMox(bool on)
 {
+    if (on && !runPttPreflight(m_activePttSource)) {
+        return;
+    }
+    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Mox, on) : KeyingPermit{};
+    if (on && m_keyingAdmission && (!permit || !permit())) {
+        return;
+    }
+    const quint64 intentEpoch = ++m_moxIntentEpoch;
+    invalidatePttRelease();
     // Optimistic MOX edge gating keeps UI/audio aligned with user intent.
     // Interlock status from the radio will still reconcile final state.
     if (m_transmitting != on) {
         m_transmitting = on;
         emit transmittingChanged(on);
+        if (intentEpoch != m_moxIntentEpoch || m_transmitting != on || (permit && !permit())) {
+            return;
+        }
         emit moxChanged(on);
     }
-    emit commandReady(QString("xmit %1").arg(on ? 1 : 0));
-    emit moxCommandIssued(on);
+    if (intentEpoch == m_moxIntentEpoch && (!permit || permit())) {
+        emit moxCommandIssued(on);
+    }
 }
 
 void TransmitModel::setTransmitting(bool tx)
@@ -420,6 +458,9 @@ void TransmitModel::setTransmitting(bool tx)
     if (tx == m_transmitting) return;
     m_transmitting = tx;
     emit transmittingChanged(tx);
+    if (m_transmitting != tx) {
+        return;
+    }
     // Keep moxChanged for backward compat — CW decoder gate and QSO recorder
     // currently gate on this signal and need interlock-driven TX edges too.
     emit moxChanged(tx);
@@ -427,13 +468,15 @@ void TransmitModel::setTransmitting(bool tx)
 
 void TransmitModel::atuStart()
 {
-    emit commandReady("atu start");
+    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Atu, true) : KeyingPermit{};
+    if (m_keyingAdmission && (!permit || !permit())) {
+        return;
+    }
     emit atuCommandIssued(true);
 }
 
 void TransmitModel::atuBypass()
 {
-    emit commandReady("atu bypass");
     emit atuCommandIssued(false);
 }
 
@@ -937,19 +980,65 @@ void TransmitModel::cancelPendingQuindarOff()
     m_quindarOutroInFlight = false;
 }
 
-void TransmitModel::dispatchMoxOff()
+void TransmitModel::invalidatePttRelease()
 {
-    if (m_pttOffHook) {
-        m_pttOffHook();
+    if (m_pttReleaseFence) {
+        m_pttReleaseFence->store(false, std::memory_order_release);
+        m_pttReleaseFence.reset();
+    }
+}
+
+void TransmitModel::cancelPttRelease()
+{
+    const quint64 intentEpoch = ++m_moxIntentEpoch;
+    ++m_tuneIntentEpoch;
+    invalidatePttRelease();
+    cancelPendingQuindarOff();
+    if (m_quindarTone) {
+        m_quindarTone->forceIdle();
+    }
+    emit quindarActiveChanged(false);
+    if (intentEpoch == m_moxIntentEpoch) {
+        emit pttReleaseCancelled();
+    }
+}
+
+TransmitModel::PttRelease TransmitModel::capturePttRelease()
+{
+    invalidatePttRelease();
+    m_pttReleaseFence = std::make_shared<std::atomic<bool>>(true);
+    const std::shared_ptr<std::atomic<bool>> fence = m_pttReleaseFence;
+    return {[fence] { return fence->load(std::memory_order_acquire); },
+            [this, ownerThread = thread()] {
+                if (QThread::currentThread() == ownerThread) {
+                    setMox(false);
+                } else {
+                    qCWarning(lcProtocol) << "PTT release refused off the model owning thread";
+                }
+            }};
+}
+
+void TransmitModel::dispatchMoxOff(const PttRelease& release)
+{
+    if (!release.current()) {
         return;
     }
-    setMox(false);
+    if (m_pttOffHook) {
+        m_pttOffHook(release);
+        return;
+    }
+    release.release();
 }
 
 void TransmitModel::requestPttOn(PttSource source)
 {
     if (!runPttPreflight(source))
         return;
+    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Mox, true) : KeyingPermit{};
+    if (m_keyingAdmission && (!permit || !permit())) {
+        return;
+    }
+    invalidatePttRelease();
 
     // Remember who asked to key so the status-bar TX timer can exclude
     // TCI-hardware and DAX transmits (both surface as source=SW at the radio).
@@ -988,11 +1077,17 @@ void TransmitModel::requestPttOn(PttSource source)
             emit quindarActiveChanged(false);
         });
     }
-    setMox(true);
+    if (!permit || permit()) {
+        setMox(true);
+    }
 }
 
 void TransmitModel::requestPttOff(PttSource /*source*/)
 {
+    if (m_pttReleaseFence && m_pttReleaseFence->load(std::memory_order_acquire)) {
+        return; // a duplicate release must not truncate an in-flight normal tail
+    }
+    const PttRelease release = capturePttRelease();
     auto* tone = m_quindarTone;
 
     // No Quindar, no phone mode, or already shutting down → straight
@@ -1002,7 +1097,7 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
         || tone->phase() == ClientQuindarTone::Phase::Idle
         || m_quindarOutroInFlight) {
         cancelPendingQuindarOff();
-        dispatchMoxOff();
+        dispatchMoxOff(release);
         return;
     }
 
@@ -1010,22 +1105,29 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
     // tone gets transmitted before the radio unkeys.  Outro duration
     // is style-dependent and computed from current settings.
     tone->startOutro();
-    m_quindarOutroInFlight = true;
     emit quindarActiveChanged(true);
+    if (!release.current()) {
+        return;
+    }
     const int outroMs = std::max(50, tone->currentOutroDurationMs());
 
     cancelPendingQuindarOff();
+    m_quindarOutroInFlight = true;
     m_pendingMoxOffTimer = new QTimer(this);
     m_pendingMoxOffTimer->setSingleShot(true);
     m_pendingMoxOffTimer->setInterval(outroMs);
-    connect(m_pendingMoxOffTimer, &QTimer::timeout, this, [this]() {
+    connect(m_pendingMoxOffTimer, &QTimer::timeout, this, [this, release, timer = m_pendingMoxOffTimer]() {
         // If a re-engage happened during the outro window the timer
         // would have been cancelled; if we're here, the outro fully
         // completed and it's safe to flip MOX off.
+        timer->deleteLater();
+        if (timer != m_pendingMoxOffTimer) {
+            return;
+        }
         m_pendingMoxOffTimer = nullptr;
         m_quindarOutroInFlight = false;
         emit quindarActiveChanged(false);
-        dispatchMoxOff();
+        dispatchMoxOff(release);
     });
     m_pendingMoxOffTimer->start();
 }

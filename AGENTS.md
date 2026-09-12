@@ -476,7 +476,19 @@ selected at connect time by a `family` string through `makeBackend()`.
 The seam's known gaps and the multi-radio migration order are tracked in
 #5262 (M0–M6) and the review meta-issue #5554 — read both before changing
 anything in this table's territory (see the temporary notice at the top of
-"AI Agent Guidelines"):
+"AI Agent Guidelines"). **Every implementor honours the THREADING AND
+LIFETIME CONTRACT at the top of `IRadioBackend.h`** (backend lives on its
+owner's thread, every seam signal is emitted from it, workers are private,
+payloads declared and registered in one place, teardown bounded and
+ordered). What is pinned versus surveyed: `backend_seam_affinity_test`
+pins rules 1, 2 and 6 for the simulator and rule 1 plus a cold
+construct/teardown for every other family; `hl2_connect_reentrancy_test`
+pins rule 2 for HL2 while its DSP build runs on the I/O thread;
+`backend_family_switch_test` pins rule 5 across the production switch with
+a deterministic stale-delivery injection. Live-emission affinity for flex,
+anan, icom and rtl is a survey result until
+`tests/SeamThreadAffinityProbe.h` — which drops the same tripwire into any
+test that drives a backend — is carried by a test that drives one:
 
 | Family | Backend | Notes |
 |---|---|---|
@@ -519,8 +531,13 @@ grants are not implemented yet.
 existing owned slice, with explicit backend observation provenance and fail-closed
 TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
 not optimistically update the model. Unknown coverage/readback remains unavailable.
-Meters, read-only transmit state, other typed slice/pan receive controls, and the desktop
-adapter have not landed; UI code still consumes models directly, and that
+The receive-control milestone adds typed mode/filter/gain/mute and pan
+center/bandwidth intents for qualified existing owned resources, separate
+backend receive observations, bounded latest-value `meter` resources and a
+read-only `transmitState`; see `docs/aetherd-local-receive-control.md` for the
+per-backend support matrix and remaining no-op, geometry and TX-idle limits.
+This is not all-backend feature parity: unavailable operations remain absent.
+The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.

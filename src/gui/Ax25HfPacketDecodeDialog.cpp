@@ -8,7 +8,7 @@
 #include "core/MaidenheadLocator.h"
 #include "core/ThemeManager.h"
 #include "core/aprs/AprsBeacon.h"
-#include "core/aprs/AprsFillInDigipeater.h"
+#include "models/AprsDigipeaterModel.h"
 #include "core/aprs/AprsMessenger.h"
 #include "core/aprs/AprsPacket.h"
 #include "core/aprs/AprsSettings.h"
@@ -99,11 +99,6 @@ constexpr auto kPacketDecoderDebugSetting    = "Ax25PacketDecoderDiagnosticsDebu
 // TncSettings::migrateLegacy() is run from MainWindow at startup.
 constexpr auto kTncSettingsKey   = "AetherModemKissTnc";
 
-// Symmetry with KissTncServer's kMaxWriteBacklogBytes on the RX path: cap
-// the TX queue so a misbehaving KISS client pushing frames faster than RF
-// can drain them can't grow it without bound. Drop-oldest on overflow
-// (oldest is the most-stale; better to lose old data than block new).
-constexpr int kMaxKissTxQueueDepth   = 64;
 // Maximum 250 ms radio-busy retries per head-of-queue frame before we
 // abandon it and try the next one. 60 × 250 ms = 15 s — long enough to
 // ride out an ATU tune or a long voice transmission, short enough that a
@@ -856,8 +851,38 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_aprsStations = new AprsStationList(this);
     m_aprsMessenger = new AprsMessenger(this);
     m_aprsBeacon = new AprsBeacon(this);
-    m_digi = new AprsFillInDigipeater(this);
-    m_digiBeacon = new AprsBeacon(this);
+    m_digi = m_radio ? m_radio->aprsDigipeater() : new AprsDigipeaterModel(this);
+    m_digi->setEnabled(false);
+    m_digi->clear();
+    connect(m_digi, &AprsDigipeaterModel::queued, this,
+            &Ax25HfPacketDecodeDialog::maybeStartNextKissTx, Qt::QueuedConnection);
+    connect(m_digi, &AprsDigipeaterModel::disarmed, this, [this] {
+        if (m_digiEnable) {
+            const QSignalBlocker blocker(m_digiEnable);
+            m_digiEnable->setChecked(false);
+        }
+        if (m_digiBeaconNow) { m_digiBeaconNow->setEnabled(false); }
+        if (m_txFromDigi && (m_txActive || m_txPendingStream)) {
+            finishTransmit(true, QStringLiteral("fill-in disabled"), true);
+        }
+        refreshDigiStatus();
+    });
+    connect(m_digi, &AprsDigipeaterModel::heard, this,
+            [this](const QString& source, const QString& line) {
+        if (m_digiHeardGraph) { m_digiHeardGraph->recordEvent(); }
+        m_digiUniqueSources.insert(source);
+        appendDigiLog(QStringLiteral("RX"), line);
+    });
+    connect(m_digi, &AprsDigipeaterModel::repeated, this, [this](const QString& line) {
+        appendDigiLog(QStringLiteral("DIGI"), line);
+        m_digiLastRepeatUtc = QDateTime::currentDateTimeUtc();
+        if (m_digiRepeatGraph) { m_digiRepeatGraph->recordEvent(); }
+        refreshDigiStatus();
+    });
+    connect(m_digi, &AprsDigipeaterModel::dropped, this, [this] {
+        if (m_digiDropGraph) { m_digiDropGraph->recordEvent(); }
+        refreshDigiStatus();
+    });
 
     // The TNC store lives next to the app settings (heard log + session logs).
     const QString tncDir =
@@ -1153,35 +1178,8 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
                 if (m_aprsMessenger)
                     m_aprsMessenger->onPacket(*packet);
             }
-            if (decoded->type == ax25::FrameType::UI && !decoded->info.isEmpty()) {
-                if (m_digiHeardGraph)
-                    m_digiHeardGraph->recordEvent();
-                m_digiUniqueSources.insert(decoded->src.toString());
-                const QString tnc = AprsFillInDigipeater::tnc2(*decoded);
-                appendDigiLog(QStringLiteral("RX"), tnc);
-                if (m_digi && m_digi->isEnabled()) {
-                    const auto decision = m_digi->consider(*decoded, true);
-                    if (decision.drop == AprsFillInDigipeater::Drop::Repeated
-                        && decision.outgoing) {
-                        appendDigiLog(QStringLiteral("DIGI"),
-                                      AprsFillInDigipeater::tnc2(*decision.outgoing));
-                        m_digiLastRepeatUtc = QDateTime::currentDateTimeUtc();
-                        if (m_digiRepeatGraph)
-                            m_digiRepeatGraph->recordEvent();
-                        if (m_enableDecode && !m_enableDecode->isChecked()) {
-                            appendSystemLine(
-                                QStringLiteral("Enabling the modem for fill-in digipeat."));
-                            m_enableDecode->setChecked(true);
-                        }
-                        m_kissTxQueue.enqueue(decision.outgoing->encode());
-                        maybeStartNextKissTx();
-                    } else if (decision.drop == AprsFillInDigipeater::Drop::Duplicate
-                               || decision.drop == AprsFillInDigipeater::Drop::NoAliasMatch) {
-                        if (m_digiDropGraph)
-                            m_digiDropGraph->recordEvent();
-                    }
-                    refreshDigiStatus();
-                }
+            if (frame.fcsOk && m_enableDecode && m_enableDecode->isChecked()) {
+                m_digi->receiveFrame(frame.ax25FrameNoFcs);
             }
         }
         if (m_pms)
@@ -1248,8 +1246,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(m_pms, &PmsMailbox::transmitFrame, this, [this](const QByteArray& raw) {
         if (raw.isEmpty() || !m_audio || !m_radio)
             return;
-        m_kissTxQueue.enqueue(raw); // shares the one-at-a-time keying/pacing path
-        maybeStartNextKissTx();
+        m_digi->enqueue(raw); // shares the one-at-a-time keying/pacing path
     });
     connect(m_pms, &PmsMailbox::activity, this, &Ax25HfPacketDecodeDialog::appendSystemLine);
     connect(m_pms, &PmsMailbox::stateChanged, this, [this] { refreshPmsStatus(); });
@@ -1283,15 +1280,11 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             appendSystemLine(QStringLiteral("Enabling the modem for APRS transmit."));
             m_enableDecode->setChecked(true);
         }
-        m_kissTxQueue.enqueue(raw);
-        maybeStartNextKissTx();
+        m_digi->enqueue(raw);
     };
     connect(m_aprsBeacon, &AprsBeacon::transmitFrame, this, enqueueAprsTx);
     connect(m_aprsMessenger, &AprsMessenger::transmitFrame, this, enqueueAprsTx);
-    connect(m_digiBeacon, &AprsBeacon::transmitFrame, this, enqueueAprsTx);
-    connect(m_digiBeacon, &AprsBeacon::activity,
-            this, &Ax25HfPacketDecodeDialog::appendSystemLine);
-    connect(m_digi, &AprsFillInDigipeater::activity,
+    connect(m_digi, &AprsDigipeaterModel::activity,
             this, &Ax25HfPacketDecodeDialog::appendSystemLine);
     connect(m_aprsBeacon, &AprsBeacon::activity,
             this, &Ax25HfPacketDecodeDialog::appendSystemLine);
@@ -1313,8 +1306,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(m_terminal, &TncTerminal::transmitFrame, this, [this](const QByteArray& raw) {
         if (raw.isEmpty() || !m_audio || !m_radio)
             return;
-        m_kissTxQueue.enqueue(raw); // shares the one-at-a-time keying/pacing path
-        maybeStartNextKissTx();
+        m_digi->enqueue(raw); // shares the one-at-a-time keying/pacing path
     });
     connect(m_terminal, &TncTerminal::output, this, [this](const QString& text) {
         if (!m_terminalView)
@@ -1410,6 +1402,8 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
 {
+    m_digi->setEnabled(false);
+    m_digi->clear();
     if (m_txActive || m_txPendingStream)
         finishTransmit(true, QStringLiteral("AetherModem window closing"));
     if (m_captureActive)
@@ -1437,6 +1431,7 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
     m_sliceSquelchConnection = {};
     m_sliceModeConnection = {};
 
+    if (m_digi) { m_digi->setEnabled(false); }
     m_attachedSlice = slice;
     m_attachedSliceId = slice ? slice->sliceId() : -1;
 
@@ -1464,6 +1459,8 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
 void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool persist)
 {
     m_shimConfig = ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal);
+    if (m_digi) { m_digi->setBaud(m_shimConfig.baud); }
+    if (m_digiEnable) { m_digiEnable->setEnabled(m_shimConfig.baud == 1200); }
     // ax25DemodConfigForProfile() returns profile defaults, so re-apply the
     // operator's TXDELAY override or switching bands would silently discard it
     // mid-sweep — and the sweep would be measuring the wrong preamble.
@@ -1672,7 +1669,7 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
             }
         } else if (action == QLatin1String("digi")) {
             const QString sub = value.trimmed().toLower();
-            if (!m_digi || !m_digiEnable)
+            if (!m_digiEnable)
                 return automationError(QStringLiteral("fill-in digipeater is unavailable"));
             if (sub == QLatin1String("on") || sub == QLatin1String("enable")) {
                 applyDigiConfigFromUi(false);
@@ -1693,14 +1690,14 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
                 }
             } else if (sub == QLatin1String("beacon")) {
                 applyDigiConfigFromUi(false);
-                if (!m_digiBeacon) {
+                if (!m_digi) {
                     return automationError(QStringLiteral("digi beacon is unavailable"));
                 }
                 if (!m_digi->isEnabled()) {
                     return automationError(QStringLiteral(
                         "digi beacon is gated on fill-in — `modem digi on` first"));
                 }
-                if (!m_digiBeacon->sendNow()) {
+                if (!m_digi->sendBeaconNow()) {
                     return automationError(QStringLiteral(
                         "digi beacon not sent — set a callsign and a GPS or manual position"));
                 }
@@ -1979,6 +1976,7 @@ void Ax25HfPacketDecodeDialog::overrideImpossibleT1ForProfile()
 
 void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
 {
+    if (!enabled && m_digi) { m_digi->setEnabled(false); }
     if (enabled) {
         QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
         m_lastDiagnostics = {};
@@ -2005,11 +2003,11 @@ void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
         // forbids, and being deaf makes every one of those transmissions futile.
         if (m_txActive || m_txPendingStream)
             finishTransmit(true, QStringLiteral("modem disabled"));
-        if (!m_kissTxQueue.isEmpty()) {
+        if (!m_digi->isEmpty()) {
             appendSystemLine(QStringLiteral(
                 "Dropping %1 queued TX frame(s): the modem is off.")
-                .arg(m_kissTxQueue.size()));
-            m_kissTxQueue.clear();
+                .arg(m_digi->size()));
+            m_digi->clear();
         }
         m_kissTxBusyRetries = 0;
         // Drop both connected-mode sessions silently — a graceful DISC would
@@ -2228,6 +2226,7 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
     // (see armTxStreamWaitTimeout).
     ++m_txGeneration;
     m_txFromKiss = fromKiss;
+    if (!fromKiss) { m_txFromDigi = false; }
     m_pendingTx = tx;
     m_txPcm = tx.stereoFloat32Pcm;
     m_txOffsetBytes = 0;
@@ -2696,7 +2695,7 @@ void Ax25HfPacketDecodeDialog::handleTxAudioFinished(quint64 token, int drainMs)
     });
 }
 
-void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reason)
+void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reason, bool preserveQueue)
 {
     if (m_txPaceTimer)
         m_txPaceTimer->stop();
@@ -2744,18 +2743,19 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     m_txRestoreAudioDaxMode = false;
     m_txRestoreTransmitDax = false;
     m_txFromKiss = false;
+    m_txFromDigi = false;
     refreshTransmitControls();
 
     // Drain any queued KISS transmits. On a clean finish, kick the next one on a
     // deferred (queued) call so we never re-enter the TX path within finish; on
     // an abort, drop the backlog so a broken radio can't spin the queue.
-    if (aborted) {
-        if (!m_kissTxQueue.isEmpty()) {
+    if (aborted && !preserveQueue) {
+        if (!m_digi->isEmpty()) {
             appendSystemLine(QStringLiteral("Dropping %1 queued KISS TX frame(s) after abort.")
-                .arg(m_kissTxQueue.size()));
-            m_kissTxQueue.clear();
+                .arg(m_digi->size()));
+            m_digi->clear();
         }
-    } else if (!m_kissTxQueue.isEmpty()) {
+    } else if (!m_digi->isEmpty()) {
         QTimer::singleShot(0, this, [this] { maybeStartNextKissTx(); });
     }
 }
@@ -2920,6 +2920,7 @@ void Ax25HfPacketDecodeDialog::refreshStatus()
 
 void Ax25HfPacketDecodeDialog::refreshTransmitControls()
 {
+    refreshDigiStatus();
     if (!m_txButton)
         return;
 
@@ -3251,38 +3252,23 @@ void Ax25HfPacketDecodeDialog::handleKissFrameFromClient(const QByteArray& ax25N
         appendSystemLine(QStringLiteral("KISS TX dropped: audio engine or radio not ready."));
         qCWarning(lcAx25).noquote()
             << "KISS TX dropped: audio engine or radio not ready (queue size:"
-            << m_kissTxQueue.size() << ").";
+            << m_digi->size() << ").";
         return;
     }
-    // Cap the queue to prevent a misbehaving KISS client (or a stalled
-    // PTT-deny on the radio) from growing it without bound. Drop the
-    // oldest pending frame — newer data is more useful than stale
-    // backlog. Symmetric with KissTncServer::kMaxWriteBacklogBytes on
-    // the RX path.
-    while (m_kissTxQueue.size() >= kMaxKissTxQueueDepth) {
-        m_kissTxQueue.dequeue();
-        appendSystemLine(QStringLiteral(
-            "KISS TX queue full (%1 frames); dropping oldest pending frame.")
-            .arg(kMaxKissTxQueueDepth));
-        qCWarning(lcAx25).noquote()
-            << "KISS TX queue full; dropping oldest pending frame. cap="
-            << kMaxKissTxQueueDepth;
-    }
-    m_kissTxQueue.enqueue(ax25NoFcs);
+    m_digi->enqueue(ax25NoFcs);
     ++m_kissTxCount;
     refreshTncStatus();
-    maybeStartNextKissTx();
 }
 
 void Ax25HfPacketDecodeDialog::maybeStartNextKissTx()
 {
-    if (m_kissTxQueue.isEmpty())
+    if (m_digi->isEmpty())
         return;
     if (m_txActive || m_txPendingStream)
         return; // finishTransmit() re-drains when the current TX completes
     if (!m_audio || !m_radio) {
-        const int dropped = m_kissTxQueue.size();
-        m_kissTxQueue.clear();
+        const int dropped = m_digi->size();
+        m_digi->clear();
         m_kissTxBusyRetries = 0;
         if (dropped > 0) {
             appendSystemLine(QStringLiteral(
@@ -3299,7 +3285,7 @@ void Ax25HfPacketDecodeDialog::maybeStartNextKissTx()
         if (m_kissTxBusyRetries > kMaxKissTxBusyRetries) {
             // Give up on the head-of-queue frame and move on. A stuck PTT
             // shouldn't permanently jam every subsequent frame behind it.
-            m_kissTxQueue.dequeue();
+            m_digi->dequeue();
             const int retries = m_kissTxBusyRetries;
             m_kissTxBusyRetries = 0;
             appendSystemLine(QStringLiteral(
@@ -3317,7 +3303,8 @@ void Ax25HfPacketDecodeDialog::maybeStartNextKissTx()
         return;
     }
 
-    const QByteArray frame = m_kissTxQueue.dequeue();
+    const auto pending = m_digi->dequeue();
+    const QByteArray frame = pending.raw;
     m_kissTxBusyRetries = 0;
     Ax25TransmitResult tx = ax25BuildTransmitAudioFromFrame(m_shimConfig, frame);
     if (!tx.ok) {
@@ -3326,6 +3313,7 @@ void Ax25HfPacketDecodeDialog::maybeStartNextKissTx()
         QTimer::singleShot(0, this, [this] { maybeStartNextKissTx(); }); // skip to next frame
         return;
     }
+    m_txFromDigi = pending.digi;
     beginTransmission(tx, true);
 }
 
@@ -4245,8 +4233,8 @@ void Ax25HfPacketDecodeDialog::handleGpsUpdate()
     const bool valid = latOk && lonOk && m_radio->gpsPositionValid()
         && (lat != 0.0 || lon != 0.0);
     m_aprsBeacon->setGpsPosition(lat, lon, valid);
-    if (m_digiBeacon)
-        m_digiBeacon->setGpsPosition(lat, lon, valid);
+    if (m_digi)
+        m_digi->setGpsPosition(lat, lon, valid);
     refreshAprsPositionLabel();
 }
 
@@ -4584,6 +4572,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
 
     grid->addWidget(sectionLabel(QStringLiteral("FILL-IN"), controlsFrame), 0, 0, 1, 4);
     m_digiEnable = new QCheckBox(QStringLiteral("Enable WIDE1-1 fill-in"), controlsFrame);
+    markTxKeying(m_digiEnable);
     m_digiEnable->setToolTip(QStringLiteral(
         "Repeat the first unused hop when it is WIDE1-1 (home fill-in). "
         "Does not answer WIDE2-n — that is a wide-area digi's job."));
@@ -4621,14 +4610,17 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
 
     grid->addWidget(sectionLabel(QStringLiteral("CALL"), controlsFrame), 2, 0);
     m_digiCall = new QLineEdit(controlsFrame);
+    m_digiCall->setAccessibleName(QStringLiteral("Digipeater callsign"));
     m_digiCall->setPlaceholderText(QStringLiteral("KI6BCJ-7"));
     grid->addWidget(m_digiCall, 3, 0);
     grid->addWidget(sectionLabel(QStringLiteral("ALIAS"), controlsFrame), 2, 1);
     m_digiAlias = new QLineEdit(controlsFrame);
+    m_digiAlias->setAccessibleName(QStringLiteral("Digipeater alias"));
     m_digiAlias->setPlaceholderText(QStringLiteral("WIDE1-1"));
     grid->addWidget(m_digiAlias, 3, 1);
     grid->addWidget(sectionLabel(QStringLiteral("DUPE (s)"), controlsFrame), 2, 2);
     m_digiDupeSecs = new QSpinBox(controlsFrame);
+    m_digiDupeSecs->setAccessibleName(QStringLiteral("Digipeater duplicate window"));
     m_digiDupeSecs->setRange(5, 300);
     m_digiDupeSecs->setValue(30);
     grid->addWidget(m_digiDupeSecs, 3, 2);
@@ -4637,9 +4629,11 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
     auto* beaconRow = new QHBoxLayout;
     beaconRow->setSpacing(8);
     m_digiBeaconEnable = new QCheckBox(QStringLiteral("Enable"), controlsFrame);
+    markTxKeying(m_digiBeaconEnable);
     m_digiBeaconEnable->setToolTip(QStringLiteral(
         "Timed fill-in beacon. Armed only while WIDE1-1 fill-in is enabled."));
     m_digiBeaconInterval = new QSpinBox(controlsFrame);
+    m_digiBeaconInterval->setAccessibleName(QStringLiteral("Digipeater beacon interval"));
     m_digiBeaconInterval->setRange(1, 1440);
     m_digiBeaconInterval->setSuffix(QStringLiteral(" min"));
     m_digiBeaconInterval->setValue(15);
@@ -4655,14 +4649,17 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
 
     grid->addWidget(sectionLabel(QStringLiteral("SYMBOL"), controlsFrame), 4, 0);
     m_digiBeaconSymbol = new QComboBox(controlsFrame);
+    m_digiBeaconSymbol->setAccessibleName(QStringLiteral("Digipeater beacon symbol"));
     fillAprsSymbolCombo(m_digiBeaconSymbol, AprsSettings::digiBeaconSymbol());
     grid->addWidget(m_digiBeaconSymbol, 5, 0);
     grid->addWidget(sectionLabel(QStringLiteral("PATH"), controlsFrame), 4, 1, 1, 2);
     m_digiBeaconPath = new QLineEdit(controlsFrame);
+    m_digiBeaconPath->setAccessibleName(QStringLiteral("Digipeater beacon path"));
     m_digiBeaconPath->setPlaceholderText(QStringLiteral("WIDE2-1 (empty = direct)"));
     grid->addWidget(m_digiBeaconPath, 5, 1, 1, 2);
     grid->addWidget(sectionLabel(QStringLiteral("TEXT"), controlsFrame), 4, 3, 1, 3);
     m_digiBeaconText = new QLineEdit(controlsFrame);
+    m_digiBeaconText->setAccessibleName(QStringLiteral("Digipeater beacon text"));
     m_digiBeaconText->setPlaceholderText(QStringLiteral("AetherDigi online (AX.25)"));
     grid->addWidget(m_digiBeaconText, 5, 3, 1, 3);
 
@@ -4682,6 +4679,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
     graphHeader->addWidget(sectionLabel(QStringLiteral("TRAFFIC"), graphFrame));
     graphHeader->addStretch(1);
     m_digiWindow = new QComboBox(graphFrame);
+    m_digiWindow->setAccessibleName(QStringLiteral("Digipeater graph window"));
     m_digiWindow->addItem(QStringLiteral("5 min"), 5);
     m_digiWindow->addItem(QStringLiteral("15 min"), 15);
     m_digiWindow->addItem(QStringLiteral("1 hour"), 60);
@@ -4745,7 +4743,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
     {
         const QSignalBlocker b0(m_digiEnable);
         const QSignalBlocker b1(m_digiBeaconEnable);
-        m_digiEnable->setChecked(AprsSettings::digiEnabled());
+        m_digiEnable->setChecked(false); // TX authorization is session-local.
         m_digiBeaconEnable->setChecked(AprsSettings::digiBeaconEnabled());
     }
 
@@ -4771,13 +4769,13 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
             this, [this](int) { applyDigiConfigFromUi(true); });
     connect(m_digiBeaconNow, &QPushButton::clicked, this, [this] {
         applyDigiConfigFromUi(false);
-        if (!m_digi || !m_digi->isEnabled()) {
+        if (!m_digi->isEnabled()) {
             appendSystemLine(QStringLiteral(
                 "Digi beacon skipped: enable WIDE1-1 fill-in first."));
             return;
         }
-        if (m_digiBeacon)
-            m_digiBeacon->sendNow();
+        if (m_digi)
+            m_digi->sendBeaconNow();
     });
     connect(m_digiHf300, &QRadioButton::toggled, this, [this](bool checked) {
         if (checked)
@@ -4804,7 +4802,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
 
 void Ax25HfPacketDecodeDialog::applyDigiConfigFromUi(bool persist)
 {
-    if (!m_digi || !m_digiBeacon)
+    if (!m_digi)
         return;
 
     QString call = m_digiCall ? m_digiCall->text().trimmed().toUpper() : QString();
@@ -4813,7 +4811,7 @@ void Ax25HfPacketDecodeDialog::applyDigiConfigFromUi(bool persist)
     const ax25::Address addr =
         ax25::Address::parse(call).value_or(ax25::Address{});
     m_digi->setMyAddress(addr);
-    m_digiBeacon->setMyAddress(addr);
+
 
     const QString aliasText = m_digiAlias
         ? m_digiAlias->text().trimmed().toUpper()
@@ -4825,13 +4823,18 @@ void Ax25HfPacketDecodeDialog::applyDigiConfigFromUi(bool persist)
     if (m_digiDupeSecs)
         m_digi->setDupeWindowSecs(m_digiDupeSecs->value());
     m_digi->setEnabled(m_digiEnable && m_digiEnable->isChecked());
+    if (m_digiEnable && m_digiEnable->isChecked() != m_digi->isEnabled()) {
+        const QSignalBlocker blocker(m_digiEnable);
+        m_digiEnable->setChecked(m_digi->isEnabled());
+        appendSystemLine(QStringLiteral("Fill-in requires a valid callsign and the 1200-baud profile."));
+    }
 
     QString symbol = m_digiBeaconSymbol
         ? m_digiBeaconSymbol->currentData().toString()
         : QStringLiteral("\\#");
     if (symbol.size() != 2)
         symbol = QStringLiteral("\\#");
-    m_digiBeacon->setSymbol(symbol.at(0).toLatin1(), symbol.at(1).toLatin1());
+    m_digi->setBeaconSymbol(symbol.at(0).toLatin1(), symbol.at(1).toLatin1());
 
     QVector<ax25::Address> path;
     if (m_digiBeaconPath) {
@@ -4844,14 +4847,14 @@ void Ax25HfPacketDecodeDialog::applyDigiConfigFromUi(bool persist)
                 path.append(*a);
         }
     }
-    m_digiBeacon->setPath(path);
-    m_digiBeacon->setStatusText(m_digiBeaconText ? m_digiBeaconText->text()
+    m_digi->setBeaconPath(path);
+    m_digi->setBeaconStatusText(m_digiBeaconText ? m_digiBeaconText->text()
                                                  : QString());
     if (m_digiBeaconInterval)
-        m_digiBeacon->setIntervalMinutes(m_digiBeaconInterval->value());
+        m_digi->setBeaconIntervalMinutes(m_digiBeaconInterval->value());
     const bool fillInOn = m_digiEnable && m_digiEnable->isChecked();
     const bool beaconWanted = m_digiBeaconEnable && m_digiBeaconEnable->isChecked();
-    m_digiBeacon->setEnabled(fillInOn && beaconWanted);
+    m_digi->setBeaconEnabled(fillInOn && beaconWanted);
     if (m_digiBeaconNow)
         m_digiBeaconNow->setEnabled(fillInOn);
     if (m_digiBeaconEnable)
@@ -4859,13 +4862,12 @@ void Ax25HfPacketDecodeDialog::applyDigiConfigFromUi(bool persist)
 
     double lat = 0.0, lon = 0.0;
     if (m_aprsBeacon && m_aprsBeacon->currentPosition(lat, lon)) {
-        m_digiBeacon->setManualPosition(lat, lon, !m_aprsBeacon->usingGps());
+        m_digi->setManualPosition(lat, lon, !m_aprsBeacon->usingGps());
         if (m_aprsBeacon->usingGps())
-            m_digiBeacon->setGpsPosition(lat, lon, true);
+            m_digi->setGpsPosition(lat, lon, true);
     }
 
     if (persist) {
-        AprsSettings::setDigiEnabled(m_digiEnable && m_digiEnable->isChecked());
         AprsSettings::setDigiCall(call);
         AprsSettings::setDigiAlias(aliasText);
         AprsSettings::setDigiAlsoMyCall(m_digiAlsoMyCall && m_digiAlsoMyCall->isChecked());
@@ -4915,9 +4917,9 @@ QJsonObject Ax25HfPacketDecodeDialog::digiAutomationStatus() const
         {QStringLiteral("alsoMyCall"), m_digi && m_digi->alsoMyCall()},
         {QStringLiteral("alsoRelay"), m_digi && m_digi->alsoRelay()},
         {QStringLiteral("dupeWindowSecs"), m_digi ? m_digi->dupeWindowSecs() : 30},
-        {QStringLiteral("beaconEnabled"), m_digiBeacon && m_digiBeacon->isEnabled()},
+        {QStringLiteral("beaconEnabled"), m_digi && m_digi->beaconEnabled()},
         {QStringLiteral("beaconIntervalMin"),
-         m_digiBeacon ? m_digiBeacon->intervalMinutes() : 15},
+         m_digi ? m_digi->beaconIntervalMinutes() : 15},
         {QStringLiteral("baud"), m_shimConfig.baud},
         {QStringLiteral("profileId"), profileSettingsValue(m_shimConfig.profile)},
     };
@@ -4949,9 +4951,13 @@ void Ax25HfPacketDecodeDialog::refreshDigiStatus()
     QString last = QStringLiteral("never");
     if (m_digiLastRepeatUtc.isValid())
         last = aprsAgeText(m_digiLastRepeatUtc) + QStringLiteral(" ago");
-    const QString state = m_digi->isEnabled()
-        ? QStringLiteral("on")
-        : QStringLiteral("off");
+    QString state = m_digi->isEnabled()
+        ? QStringLiteral("TX armed (1200 baud)") : QStringLiteral("off");
+    if (m_txFromDigi && m_txActive) {
+        state = QStringLiteral("TX active");
+    } else if (m_txFromDigi && m_txPendingStream) {
+        state = QStringLiteral("TX pending");
+    }
     m_digiStatusValue->setText(
         QStringLiteral("Fill-in %1  ·  heard %2  repeated %3 (%4%)  skipped %5  "
                        "unique %6  last fill-in %7  ·  %8  alias %9")

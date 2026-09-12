@@ -12,6 +12,8 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <span>
+#include <string>
 #include <vector>
 
 using namespace AetherSDR::anan;
@@ -211,6 +213,161 @@ int main()
               "bypassAdc0Filters=false: ANT1 stays set, HF Bypass clears");
         check(readU16(hpNoBypass, 1430) == 0,
               "bypassAdc1Filters=false: Alex1 stays zero");
+    }
+
+    // ---- Multi-DDC encode (DDC-Specific rows at 17+6n, HP words at 9+4n) ----
+    // The single-DDC overloads delegate to these, so the first thing to pin
+    // is that delegation is byte-identical -- a drift there would silently
+    // change the packets the bench-validated DDC0 path already sends.
+    {
+        const std::array<DdcConfig, 1> justDdc0{DdcConfig{48, 0}};
+        check(buildDdcSpecific(justDdc0) == buildDdcSpecific(48),
+              "buildDdcSpecific: 1-element list is byte-identical to the single-DDC overload");
+
+        const std::uint32_t word = phaseWord(10'000'000.0);
+        const std::array<std::uint32_t, 1> justWord0{word};
+        check(buildHighPriority(true, justWord0) == buildHighPriority(true, word),
+              "buildHighPriority: 1-element list is byte-identical to the single-DDC overload");
+    }
+
+    {
+        // Four DDCs, deliberately all different so a row landing on the wrong
+        // offset (or every row reading DDC0's values) cannot pass.
+        const std::array<DdcConfig, 4> ddcs{
+            DdcConfig{48, 0}, DdcConfig{192, 1}, DdcConfig{768, 0}, DdcConfig{1536, 1}};
+        const auto d = buildDdcSpecific(ddcs);
+
+        check(d[7] == 0x0F, "byte7 bits 0-3 set: DDC0-3 all enabled");
+
+        bool rowsOk = true;
+        for (std::size_t n = 0; n < ddcs.size(); ++n) {
+            const std::size_t row = 17 + 6 * n;
+            const int rate = static_cast<int>(d[row + 1]) << 8 | d[row + 2];
+            if (d[row] != static_cast<std::uint8_t>(ddcs[n].adcIndex)
+                || rate != ddcs[n].rateKsps
+                || d[row + 3] != 0 || d[row + 4] != 0   // CIC1/CIC2 "For Future use"
+                || d[row + 5] != 24) {
+                rowsOk = false;
+                std::fprintf(stderr,
+                    "  DDC%zu row at %zu: adc=%u rate=%d cic=%u,%u size=%u "
+                    "(expected adc=%d rate=%d cic=0,0 size=24)\n",
+                    n, row, d[row], rate, d[row + 3], d[row + 4], d[row + 5],
+                    ddcs[n].adcIndex, ddcs[n].rateKsps);
+            }
+        }
+        check(rowsOk, "each DDC's 6-byte row at 17+6n carries its own ADC/rate/size, "
+                      "with CIC1/CIC2 left zero");
+
+        // Nothing beyond the last encoded row: DDC4-79 must stay disabled.
+        bool tailZero = true;
+        for (std::size_t i = 17 + 6 * ddcs.size(); i < 1444; ++i)
+            if (d[i] != 0) { tailZero = false; break; }
+        check(tailZero, "DDC4-79 rows stay zero/disabled");
+
+        // High Priority: one 4-byte phase word per DDC at 9+4n.
+        const std::array<std::uint32_t, 4> words{
+            phaseWord(3'500'000.0), phaseWord(7'100'000.0),
+            phaseWord(14'200'000.0), phaseWord(28'400'000.0)};
+        const auto hp = buildHighPriority(true, words);
+        bool wordsOk = true;
+        for (std::size_t n = 0; n < words.size(); ++n) {
+            const std::size_t at = 9 + 4 * n;
+            const std::uint32_t got =
+                static_cast<std::uint32_t>(hp[at]) << 24
+              | static_cast<std::uint32_t>(hp[at + 1]) << 16
+              | static_cast<std::uint32_t>(hp[at + 2]) << 8
+              | hp[at + 3];
+            if (got != words[n]) {
+                wordsOk = false;
+                std::fprintf(stderr, "  DDC%zu phase word at %zu: got %u expected %u\n",
+                             n, at, got, words[n]);
+            }
+        }
+        check(wordsOk, "each DDC's frequency/phase word round-trips at 9+4n");
+
+        // Principle VI is structural, not incidental: adding DDCs must not
+        // add a way to key. No parameter here can set the PTT bits.
+        check((hp[4] & 0x1E) == 0,
+              "multi-DDC High Priority still never sets the PTT bits (byte4 bits 1-4)");
+    }
+
+    // ---- Sender-port demux (the ONLY thing separating DDC streams) ----
+    {
+        // Base + n, verified against p2app's generalpacket.c and its
+        // DefaultPorts[] table (both give 1035..1044 for DDC0..9).
+        check(kDdc0DefaultPort == 1035, "DDC0's default source port is 1035");
+
+        // In range: each port maps to its own index.
+        bool mapped = true;
+        for (int n = 0; n < 4; ++n) {
+            const auto idx = ddcIndexForSenderPort(
+                static_cast<std::uint16_t>(1035 + n), 4);
+            if (!idx || *idx != n) {
+                mapped = false;
+                std::fprintf(stderr, "  port %d -> %s (expected %d)\n", 1035 + n,
+                             idx ? std::to_string(*idx).c_str() : "nullopt", n);
+            }
+        }
+        check(mapped, "ports 1035..1038 map to DDC 0..3");
+
+        // Below the base, and at/above the active count: both rejected.
+        check(!ddcIndexForSenderPort(1034, 4).has_value(),
+              "a port below the base is not a DDC stream");
+        check(!ddcIndexForSenderPort(1039, 4).has_value(),
+              "a port past the active DDC count is rejected (DDC4 with only 4 active)");
+        check(ddcIndexForSenderPort(1038, 4).has_value(),
+              "the last active DDC's port IS accepted (boundary, not off-by-one)");
+
+        // A single-DDC session must reject DDC1's port -- this is the case
+        // that keeps a leftover stream from a previous multi-DDC session
+        // from being fed to DDC0.
+        check(ddcIndexForSenderPort(1035, 1).has_value(),
+              "single-DDC session accepts DDC0's port");
+        check(!ddcIndexForSenderPort(1036, 1).has_value(),
+              "single-DDC session rejects DDC1's port");
+
+        // Degenerate counts: no DDCs active means nothing is a DDC stream.
+        check(!ddcIndexForSenderPort(1035, 0).has_value(),
+              "numDdc=0 accepts nothing");
+        check(!ddcIndexForSenderPort(1035, -1).has_value(),
+              "a negative DDC count accepts nothing rather than underflowing");
+
+        // The shared-socket traffic this must not misclassify: Mic Data and
+        // High Priority Status arrive on the same PC-side socket.
+        check(!ddcIndexForSenderPort(kRadioPort, 4).has_value(),
+              "the radio's command port is never mistaken for a DDC stream");
+
+        // An explicit non-default base still works, for a session that ever
+        // negotiates ports via the General packet's bytes 17-18.
+        const auto negotiated = ddcIndexForSenderPort(2003, 4, 2000);
+        check(negotiated && *negotiated == 3,
+              "an explicitly negotiated base port is honoured");
+    }
+
+    {
+        // Empty list: a legitimate all-disabled packet, not a malformed one.
+        const auto none = buildDdcSpecific(std::span<const DdcConfig>{});
+        check(none[7] == 0x00, "empty DDC list disables every DDC (byte7 = 0)");
+        check(none[4] == 2, "empty DDC list still carries the ADC-count field");
+
+        // Over the cap: extras are ignored rather than encoded or truncating
+        // the packet. kMaxDdcs is the codec's own bound (Principle VII).
+        const std::array<DdcConfig, 5> tooMany{
+            DdcConfig{48, 0}, DdcConfig{48, 0}, DdcConfig{48, 0},
+            DdcConfig{48, 0}, DdcConfig{1536, 1}};
+        const auto capped = buildDdcSpecific(tooMany);
+        check(capped[7] == 0x0F, "more DDCs than kMaxDdcs: only the first 4 are enabled");
+        const std::size_t fifthRow = 17 + 6 * 4;
+        check(capped[fifthRow] == 0 && capped[fifthRow + 1] == 0
+              && capped[fifthRow + 2] == 0 && capped[fifthRow + 5] == 0,
+              "the 5th DDC's row is left untouched, not encoded");
+
+        const std::array<std::uint32_t, 5> tooManyWords{1, 2, 3, 4, 0xFFFFFFFFu};
+        const auto hpCapped = buildHighPriority(true, tooManyWords);
+        const std::size_t fifthWord = 9 + 4 * 4;
+        check(hpCapped[fifthWord] == 0 && hpCapped[fifthWord + 1] == 0
+              && hpCapped[fifthWord + 2] == 0 && hpCapped[fifthWord + 3] == 0,
+              "more phase words than kMaxDdcs: the 5th is ignored, not written");
     }
 
     // ---- DDC frame: strict shape validation ----

@@ -10738,7 +10738,7 @@ SliceModel* MainWindow::swrSweepTargetSlice(int requestedSliceId) const
 // SWR sweep methods live in MainWindow_SwrSweep.cpp (#3351 Phase 1e).
 // RADE / FreeDV / DAX methods live in MainWindow_DigitalModes.cpp (#3351 Phase 1e).
 
-// StreamDeck native integration removed — use TCI StreamController plugin instead.
+// StreamDeck native integration removed — drive it over TCI instead.
 
 // ─── Applet-panel pop-out (#1713 Phase 6) ───────────────────────────────────
 //

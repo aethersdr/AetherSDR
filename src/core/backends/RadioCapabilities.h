@@ -6,6 +6,7 @@
 #include <QStringList>
 #include <QVector>
 #include <QVariantMap>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -34,6 +35,38 @@ struct SliceFrequencyControl {
     Authority authority{Authority::Unknown};
     qint64 minimumHz{0};
     qint64 maximumHz{0};
+};
+
+// Optional per-feature records (#5262 M2). Absence means no headless verb;
+// neither UI ranges nor an inherited no-op establish support. Authority is
+// configuration provenance, never hardware acknowledgement/DSP completion.
+struct ReceiveModeControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    QStringList modes;
+};
+struct ReceiveFilterMode {
+    QString mode;
+    int minimumLowHz{0};
+    int maximumLowHz{0};
+    int minimumHighHz{0};
+    int maximumHighHz{0};
+    int minimumWidthHz{0};
+    int maximumWidthHz{0};
+};
+struct ReceiveFilterControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    QList<ReceiveFilterMode> modes;
+};
+struct ReceiveAudioControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    // Both gain (0..100) and mute must act on the shared slice's RX audio.
+};
+struct ReceivePanRangeControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    qint64 minimumHz{0};
+    qint64 maximumHz{0};
+    // Declaring center support promises no implicit slice retune. Declaring
+    // bandwidth support promises no slice creation/removal or retune.
 };
 
 // A stable, radio-owned receive-filter preset. `id` is the identity used on
@@ -151,6 +184,11 @@ struct RadioCapabilities {
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
     SliceFrequencyControl sliceFrequencyControl;
+    std::optional<ReceiveModeControl> receiveModeControl;
+    std::optional<ReceiveFilterControl> receiveFilterControl;
+    std::optional<ReceiveAudioControl> receiveAudioControl;
+    std::optional<ReceivePanRangeControl> receivePanCenterControl;
+    std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
 
     // Optional per-band native coverage. Empty means "not reported" and keeps
     // canonical band labels. This is distinct from txPowerBands: receive-only

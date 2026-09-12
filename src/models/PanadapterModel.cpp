@@ -52,8 +52,16 @@ quint32 parseHandleHex(const QString& text)
 
 void PanadapterModel::setClientHandle(const QString& h)
 {
+    const bool ownerChanged = m_ownerHandle != parseHandleHex(h);
+    if (ownerChanged) {
+        m_reportedCenterHz.reset();
+        m_reportedBandwidthHz.reset();
+    }
     m_clientHandle = h;
     m_ownerHandle = parseHandleHex(h);
+    if (ownerChanged) {
+        emit geometryObservationChanged();
+    }
 }
 
 bool PanadapterModel::ownedByClient(quint32 handle) const
@@ -132,6 +140,36 @@ bool PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
         emit infoChanged(m_centerMhz, m_bandwidthMhz);
     }
     return changed;
+}
+
+void PanadapterModel::recordGeometryObservation(double centerMhz, double bandwidthMhz)
+{
+    const auto beforeCenter = m_reportedCenterHz;
+    const auto beforeBandwidth = m_reportedBandwidthHz;
+    const auto record = [](double mhz, std::optional<qint64>& field) {
+        if (mhz < 0 && std::isfinite(mhz)) {
+            return; // normalized absent-field sentinel
+        }
+        // Unlike the legacy display setter, non-finite reports invalidate
+        // control observations: retaining old geometry would admit stale intents.
+        field = std::isfinite(mhz) && mhz >= 0.000001 && mhz <= 9'007'199'254.0
+            ? std::optional<qint64>(qRound64(mhz * 1'000'000.0)) : std::nullopt;
+    };
+    record(centerMhz, m_reportedCenterHz);
+    record(bandwidthMhz, m_reportedBandwidthHz);
+    if (beforeCenter != m_reportedCenterHz || beforeBandwidth != m_reportedBandwidthHz) {
+        emit geometryObservationChanged();
+    }
+}
+
+void PanadapterModel::resetCenterKnownForReconnect()
+{
+    m_centerKnown = false;
+    if (m_reportedCenterHz || m_reportedBandwidthHz) {
+        m_reportedCenterHz.reset();
+        m_reportedBandwidthHz.reset();
+        emit geometryObservationChanged();
+    }
 }
 
 // Re-announce the current centre/span even though neither changed.

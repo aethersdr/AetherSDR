@@ -108,6 +108,8 @@ private:
     // Slice 0 state — default to 95.2 MHz FM Wide
     double m_sliceFreqHz{95'200'000.0};
     QString m_sliceMode{"WFM"};
+    int m_receiveGain{100};
+    bool m_receiveMuted{false};
     int m_sliceFilterLow{-100000};
     int m_sliceFilterHigh{100000};
 

@@ -699,7 +699,9 @@ set(CORE_SOURCES
     src/core/control/RadioConnectionTarget.h  # socket-free connection intent seam
     src/core/backends/ModelRadioConnectionTarget.cpp # native translation and lifecycle
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
+    src/core/control/RadioTelemetryAdapter.cpp # bounded read-only telemetry
     src/core/control/ModelSliceFrequencyTarget.cpp # validated non-keying intents
+    src/core/control/ModelReceiveControlTarget.cpp # typed receive operations
     src/core/control/RadioCatalogue.cpp       # bounded normalized discovery resource
     src/core/control/LocalControlServer.cpp   # current-user local transport
     src/core/discovery/RadioDiscoverySource.h  # socket-free discovery interface (AUTOMOC)
@@ -745,6 +747,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/WdspChannel.cpp
+    src/core/backends/rtl/RtlReceiverRegistry.cpp # RFC #5468 prepared receiver ownership; no USB dependency
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
@@ -789,6 +792,7 @@ set(CORE_SOURCES
     src/core/CwSidetoneQAudioSink.cpp
     src/core/CwxLocalKeyer.cpp
     src/core/IambicKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/core/SpectralNR.cpp
     src/core/MonoDspStereoAdapter.cpp
     src/core/PanadapterStream.cpp
@@ -946,9 +950,11 @@ elseif(UNIX)
 endif()
 
 set(MODEL_SOURCES
+    src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
+    src/models/RadioModel_TxCoordinator.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
     src/models/ModelCapabilities.cpp

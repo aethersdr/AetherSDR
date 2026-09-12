@@ -1211,7 +1211,7 @@ comparing screenshots.
    "panIndex":1,"objectName":"",
    "fftAverage":0,"fftFps":25,"fftWeightedAvg":false,
    "fftHeatMap":true,"showGrid":true,
-   "fftLineWidth":2.0,"fftLineColor":"#00e5ff",
+   "fftLineWidth":1.0,"fftLineColor":"#00e5ff",
    "fftFillAlpha":0.7,"fftFillColor":"#00e5ff",
    "noiseFloorEnable":false,"noiseFloorPosition":75,
    "wfBlankerEnabled":false,"wfBlankerThreshold":1.15,"wfBlankerMode":0,
@@ -3527,7 +3527,13 @@ mailbox, and the terminal, so a headless soak box never has to open it.
 - **`modem digi on` / `modem digi off`** — arm/disarm the fill-in. `on` ⚠️
   keys the transmitter whenever a matching UI frame is heard, so it is refused
   unless `AETHER_AUTOMATION_ALLOW_TX=1`. Verifies the checkbox actually took
-  (a missing digi callsign fails closed).
+  (a missing digi callsign or a profile other than 1200 baud fails closed).
+  Fill-in starts disarmed on every launch; configuration and beacon preference
+  persist, but TX authorization does not. Disabling fill-in cancels its pending
+  repeats/beacons and active TX without discarding other producers' packets.
+  Disabling the modem, changing the attached slice, disconnecting the radio,
+  or switching to 300 baud also disarms fill-in. Both Digi enable checkboxes
+  are TX-keying controls for generic automation invocations.
 - **`modem digi beacon`** ⚠️ — fire one fill-in-style position beacon now
   (same `AETHER_AUTOMATION_ALLOW_TX=1` rail). Fails if there is no callsign or
   no GPS/manual position.

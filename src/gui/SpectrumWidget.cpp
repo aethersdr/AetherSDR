@@ -1,7 +1,9 @@
 #include "SpectrumWidget.h"
+#include "ScopedChildWidget.h"
 
 #include "SliceToneCues.h"
 #include "gui/FftHeatMap.h"
+#include "gui/FftLineWidth.h"
 #include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
 #include "DssDcEdgeMath.h"
@@ -2558,7 +2560,7 @@ void SpectrumWidget::loadSettings()
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
     m_freqScaleFontPt = std::clamp(
         s.value(settingsKey("DisplayFreqScaleFontPt"), "8").toInt(), 8, 14);
-    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
+    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "1.0").toFloat();
     m_noiseFloorEnable = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
     const int legacyNoiseFloorPosition = std::clamp(
         s.value(settingsKey("DisplayNoiseFloorPosition"), "75").toInt(), 1, 99);
@@ -9470,7 +9472,13 @@ static double snapToStep(double mhz, int stepHz)
 void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 {
     PerfInputScope perfScope("mousePress");
-    const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
+    // A menu's nested event loop can destroy this panadapter during shutdown.
+    const QPointer<SpectrumWidget> self(this);
+    const auto dragStatePublisher = makeScopeExit([self] {
+        if (self) {
+            self->publishPerfDragState();
+        }
+    });
     (void)dragStatePublisher;
 
     // A prior off-screen-pill press is relevant only to Qt's immediately
@@ -9923,7 +9931,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 // Follow display mode so menu labels match the pill above (#2606).
                 const QString letter =
                     SliceLabel::unicodeForm(so.sliceId, so.perClientLetter);
-                QMenu menu(this);
+                ScopedChildWidget<QMenu> menuOwner(this);
+                QMenu& menu = *menuOwner.get();
                 menu.addAction(QString("Close Slice %1").arg(letter), this,
                     [this, id = so.sliceId]{ emit sliceCloseRequested(id); });
                 menu.addAction(QString("Move Slice %1 Here").arg(letter), this,
@@ -9937,8 +9946,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 menu.addSeparator();
                 addCenterLockAction(&menu, so, true);
                 addSliceLinkControls(menu);
-                menu.exec(ev->globalPosition().toPoint());
                 ev->accept();
+                menu.exec(ev->globalPosition().toPoint());
                 return;
             }
         }
@@ -9964,7 +9973,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             }
         }
 
-        QMenu menu(this);
+        ScopedChildWidget<QMenu> menuOwner(this);
+        QMenu& menu = *menuOwner.get();
 
         // Spot-on-label context menu
         if (hitSpotIdx >= 0) {
@@ -10144,8 +10154,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             });
         }
 
-        menu.exec(ev->globalPosition().toPoint());
         ev->accept();
+        menu.exec(ev->globalPosition().toPoint());
         return;
     }
 
@@ -11217,7 +11227,9 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
         freqMhz = std::round(freqMhz / stepMhz) * stepMhz;
     }
     auto& as = AppSettings::instance();
-    QDialog dlg(this);
+    const QPointer<SpectrumWidget> self(this);
+    ScopedChildWidget<QDialog> dialogOwner(this);
+    QDialog& dlg = *dialogOwner.get();
     dlg.setWindowTitle("Add Spot");
     AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
                       "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
@@ -11274,7 +11286,10 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     freqSpin->setFocus();
     freqSpin->selectAll();
 
-    if (dlg.exec() != QDialog::Accepted) return;
+    const int result = dlg.exec();
+    if (!self || !dialogOwner || result != QDialog::Accepted) {
+        return;
+    }
 
     const double finalFreqMhz = freqSpin->value();
     const QString callsign = callEdit->text().trimmed().toUpper();
@@ -14754,9 +14769,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     static_cast<float>(specH) * fbDpr,              // hPx
                     static_cast<float>(n),                          // columnCount
                     1.0f,                                           // hasData
-                    // Match the old vertex bake: stroke half-widths were
-                    // DEVICE-pixel offsets with no dpr scaling.
-                    m_fftLineWidth,                                 // coreHalfWidthPx
+                    // The slider is a FULL width in device px (the QPainter
+                    // path sets a cosmetic pen of exactly m_fftLineWidth), and
+                    // the shader takes a HALF width, so halve it here. Passing
+                    // the full value as the half drew every trace at twice its
+                    // labelled width on the GPU path (RFC #5561 §A). Device
+                    // pixels, no dpr scaling, as the old vertex bake did.
+                    AetherSDR::fftLineHalfWidth(m_fftLineWidth),      // coreHalfWidthPx
                     kFftLineFeatherPx,                              // featherPx
                     kFftLineCoreAlpha,
                     kFftLineFeatherAlpha,

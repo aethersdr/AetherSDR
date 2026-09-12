@@ -5,6 +5,7 @@
 #include "ControlSession.h"
 #include "RadioConnectionTarget.h"
 #include "SliceFrequencyTarget.h"
+#include "ReceiveControlTarget.h"
 
 #include <QJsonObject>
 #include <QString>
@@ -30,6 +31,7 @@ public:
     // This lets the daemon claim its endpoint before constructing any models.
     [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
     [[nodiscard]] bool bindFrequencyTarget(SliceFrequencyTarget* target);
+    [[nodiscard]] bool bindReceiveTarget(ReceiveControlTarget* target);
 
     [[nodiscard]] ServiceReply handle(
         const QByteArray& bytes, ControlSession* session) const;
@@ -46,12 +48,16 @@ private:
         const ProtocolRequest& request, const ControlSession& session) const;
     [[nodiscard]] ServiceReply handleFrequency(
         const ProtocolRequest& request, const ControlSession& session) const;
+    [[nodiscard]] ServiceReply handleReceive(const ProtocolRequest& request,
+        const ControlSession& session, ReceiveOperation operation) const;
 
     ControlResourceStore* m_resources{nullptr};
     QPointer<RadioConnectionTarget> m_connectionTarget;
     bool m_targetBound{false};
     QPointer<SliceFrequencyTarget> m_frequencyTarget;
     bool m_frequencyTargetBound{false};
+    QPointer<ReceiveControlTarget> m_receiveTarget;
+    bool m_receiveTargetBound{false};
     mutable bool m_dispatchStarted{false};
 };
 

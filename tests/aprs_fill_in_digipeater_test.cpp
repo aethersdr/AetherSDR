@@ -36,7 +36,6 @@ static Frame ui(const QString& src, const QString& dest,
 static void configureDigi(AprsFillInDigipeater& d)
 {
     d.setMyAddress(*Address::parse(QStringLiteral("KI6BCJ-7")));
-    d.setEnabled(true);
     d.setDupeWindowSecs(30);
     d.setAlsoMyCall(true);
     d.setAlsoRelay(false);
@@ -184,9 +183,25 @@ static void testNotUi()
     CHECK(d.consider(f).drop == AprsFillInDigipeater::Drop::NotUi, "SABM ignored");
 }
 
+static void testDestinationAndPathIdentity()
+{
+    AprsFillInDigipeater d;
+    configureDigi(d);
+    Frame first = ui(QStringLiteral("N0CALL-9"), QStringLiteral("APRS"),
+                     {QStringLiteral("WIDE1-1")}, QByteArray(">same payload"));
+    CHECK(d.consider(first).outgoing.has_value(), "first packet repeated");
+    Frame other = first;
+    other.dest = *Address::parse(QStringLiteral("APZATH"));
+    CHECK(d.consider(other).outgoing.has_value(), "destination distinguishes packet");
+    first.via.append(*Address::parse(QStringLiteral("WIDE2-1")));
+    CHECK(d.consider(first).drop == AprsFillInDigipeater::Drop::Duplicate,
+          "path changes do not defeat duplicate suppression");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    testDestinationAndPathIdentity();
     testWide11FillIn();
     testDoesNotAnswerWide2();
     testDoesNotAnswerWide12();

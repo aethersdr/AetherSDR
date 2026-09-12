@@ -24,7 +24,6 @@ public:
     static QString manualLon();
 
     // Fill-in digipeater (Digi tab). Nested in the same AetherModemAprs blob.
-    static bool digiEnabled();
     static QString digiCall();           // empty → fall back to myCall()
     static QString digiAlias();          // "WIDE1-1"
     static bool digiAlsoMyCall();
@@ -45,7 +44,6 @@ public:
     static void setPath(const QString& path);
     static void setManualPosition(const QString& lat, const QString& lon);
 
-    static void setDigiEnabled(bool on);
     static void setDigiCall(const QString& call);
     static void setDigiAlias(const QString& alias);
     static void setDigiAlsoMyCall(bool on);

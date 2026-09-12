@@ -1809,8 +1809,12 @@ private:
     QMetaObject::Connection m_radeDaxReconcileConn;  // RADE slice dax= change → move the Rade hold
     QMetaObject::Connection m_freedvMoxConn;
     QMetaObject::Connection m_radeMoxFallbackConn;
+    QMetaObject::Connection m_radePttIntentConn;
     QString m_lastRadeRxCallsign;
     bool m_radeEooPending{false};
+    TransmitModel::PttRelease m_radePttRelease;
+    quint64 m_radeEooRequestId{0};
+    std::shared_ptr<std::atomic<bool>> m_radeFallbackReleaseFence;
     bool m_radeTxActive{false};
     void activateRADE(int sliceId);
     void deactivateRADE();

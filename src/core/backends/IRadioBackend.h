@@ -75,6 +75,96 @@ struct MemoryRecallDetails {
 // samples owns an engine-side DSP chain — either way it emits the same
 // normalized signals, so no consumer can tell the difference.
 //
+// ---- THREADING AND LIFETIME CONTRACT ----------------------------------------
+//
+// Every implementor honours the following, and backend_seam_affinity_test /
+// backend_family_switch_test pin it. A backend that needs an exception does
+// not take one quietly: it changes this text first.
+//
+//  1. THE BACKEND OBJECT LIVES ON ITS OWNER'S THREAD. RadioModel constructs
+//     the backend on the thread RadioModel itself lives on (the GUI thread in
+//     the desktop app, the daemon's main thread in aetherd) and never moves
+//     it. Every virtual on this interface is called on that thread, and a
+//     backend may assume so — no verb needs a lock against another verb.
+//
+//  2. EVERY SEAM SIGNAL IS EMITTED FROM THAT THREAD. This includes the
+//     high-rate data plane (audioFrameReady, sliceAudioFrameReady,
+//     spectrumFrameReady, waterfallRowReady, meterUpdate) and the cadence
+//     signals (linkStatsUpdated). A backend whose socket, DSP or timer lives
+//     on a worker thread brings the result back to its own thread FIRST — a
+//     queued connection with `this` as the receiver context, or
+//     QMetaObject::invokeMethod(this, …) — and emits from there. It never
+//     emits a seam signal from inside a worker-thread callback, a
+//     Qt::DirectConnection lambda bound to a worker-thread sender, or a
+//     std::function the worker invokes.
+//
+//     Consequence for consumers: RadioModel may connect to any seam signal
+//     with the default (Auto) connection type and get a direct call, in
+//     order, with no re-entrancy across threads. Consumers must NOT rely on
+//     Qt::DirectConnection to reach a worker thread through the seam — there
+//     is no such thread to reach.
+//
+//  3. WORKERS ARE THE BACKEND'S PRIVATE BUSINESS. Threads, sockets, DSP
+//     objects and their affinity are implementation detail. Nothing above the
+//     seam may observe, name, or wait on them; a consumer that needs a
+//     backend-side value asks the backend on the backend's thread
+//     (healthSnapshot(), linkStats(), dspChains()) and the backend answers
+//     from its own cache — see the SYNCHRONOUS note on healthSnapshot().
+//
+//     TRANSITIONAL EXCEPTION, and the only one: FlexBackend::connection() /
+//     panStream() and SimBackend's equivalents are backend-owned wire objects
+//     living on worker threads that RadioModel still harvests and drives
+//     directly — including Qt::BlockingQueuedConnection invokes — while the
+//     command plane moves behind the seam (#5262 M4, #5554 §2.6). They are the
+//     only objects above the seam that may wait on a backend thread, no new
+//     call site may join them, and every handler bound to them is
+//     generation-guarded per rule 5. When M4 lands, this paragraph goes.
+//
+//  4. SEAM PAYLOADS ARE DECLARED AND REGISTERED IN ONE PLACE. Every value
+//     type that crosses the seam (the *Delta structs, MeterDef, LinkStats) is
+//     declared with Q_DECLARE_METATYPE in its own header AND registered with
+//     qRegisterMetaType in RadioModel's constructor. A new payload type adds
+//     itself to both, in the same change that introduces it.
+//
+//     This is NOT what makes a queued connection deliver. On Qt 6 moc embeds
+//     each signal parameter's QMetaType in the meta-object and a
+//     pointer-to-member-function connection self-registers at connect time, so
+//     a queued seam signal delivers with neither line present — the Qt 5
+//     "Cannot queue arguments of type …" failure this rule used to cite does
+//     not reproduce here. The registration is for the NAME-based paths that do
+//     not go through moc's embedded type: QMetaType::fromName, QVariant round
+//     trips, string-based SIGNAL/SLOT connects, and QSignalSpy argument
+//     capture (tests/hl2_backend_test.cpp relies on exactly that). Registering
+//     in one place keeps those working and keeps the answer to "is this a seam
+//     payload?" in a single list.
+//
+//  5. TEARDOWN IS BOUNDED AND ORDERED. disconnectRadio() returns with no
+//     worker still able to reach a seam signal: it stops its sources, quits
+//     and joins its threads (or hands them to a self-deleting reaper the way
+//     RtlSdrBackend does for a stuck open), and emits disconnected() exactly
+//     once, from its own thread, before returning or asynchronously — but
+//     never twice and never from a worker. The destructor completes the
+//     same drain for a backend destroyed while connected, and must never
+//     wait on a BlockingQueuedConnection whose target thread may itself be
+//     waiting on this thread — that is the wait cycle the family-switch test
+//     exists to catch. RadioModel::teardownBackend() disconnects every seam
+//     signal BEFORE destroying the backend, but THAT IS NOT SUFFICIENT and a
+//     consumer must not believe it is: QObject::disconnect stops new posts and
+//     Qt purges a queued QMetaCallEvent only when the RECEIVER dies, so a call
+//     already posted by a dying backend (or by a wire object on its worker
+//     thread) is still delivered afterwards. What actually drops it is the
+//     receiver generation: teardownBackend() bumps a counter, and every
+//     handler bound to a backend-owned object captures it and returns early
+//     when it no longer matches (RadioModel::setupBackend()). Believing the
+//     disconnect was enough is what let a torn-down session's trailing status
+//     line delete the next session's slice.
+//
+//  6. A BACKEND EMITS NOTHING AFTER disconnected(). A frame a worker sent
+//     before it was stopped may still be queued when disconnectRadio()
+//     returns; the backend gates its re-emit on its own connected flag (see
+//     SimBackend's audio forwards) so the seam stays silent once it has said
+//     goodbye. sim_backend_test pins this for the reference implementation.
+//
 // This is the CORE seed. It carries the lifecycle, capability, canonical-verb,
 // and extension surface; it grows one method at a time as the touchpoint
 // burndown (docs/architecture/aetherd-touchpoints.md) converts each gui→engine
@@ -1145,9 +1235,7 @@ signals:
 
 }  // namespace AetherSDR
 
-// linkStatsUpdated is direct-connected today (Hl2Backend's cadence timer lives
-// on the same thread as its consumer), but a backend whose socket owner emits
-// it from a worker thread would need the queued path — which silently drops the
-// signal unless the type is registered. Declared here so that stays a
-// non-event.
+// Contract rule 4: every seam payload is declared here and registered in
+// RadioModel's constructor, so a queued or QMetaMethod-based connection of
+// linkStatsUpdated delivers rather than silently dropping.
 Q_DECLARE_METATYPE(AetherSDR::IRadioBackend::LinkStats)

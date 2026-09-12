@@ -151,11 +151,6 @@ bool readFlag(const QJsonObject& o, const char* key, bool def = false)
 
 } // namespace
 
-bool AprsSettings::digiEnabled()
-{
-    return readFlag(readObj(), "digiEnabled");
-}
-
 QString AprsSettings::digiCall()
 {
     return readObj().value(QStringLiteral("digiCall")).toString();
@@ -212,11 +207,6 @@ QString AprsSettings::digiBeaconSymbol()
 {
     const QString sym = readObj().value(QStringLiteral("digiBeaconSymbol")).toString();
     return sym.size() == 2 ? sym : QStringLiteral("\\#");
-}
-
-void AprsSettings::setDigiEnabled(bool on)
-{
-    setString("digiEnabled", truthy(on));
 }
 
 void AprsSettings::setDigiCall(const QString& call)

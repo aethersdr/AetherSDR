@@ -443,6 +443,11 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // Link lifecycle: first EP6 -> connected; stop -> disconnected.
     connect(m_metis, &MetisClient::linkUp, this, [this] {
         m_connected = true;
+        // #5594 (M1): seed the announcement baseline at the connect edge. The
+        // connect itself republishes capabilities through connectionStateChanged,
+        // so this value is already described — recording it here is what stops
+        // the first zoom that does NOT move the ceiling from announcing anyway.
+        m_ceilingAnnouncer.seed(receiverCeiling());
         // Started here rather than in connectRadio(): before the first EP6 there
         // is no link to describe, and ticking through the connect attempt would
         // publish a "reported" snapshot of zeros that reads as a dead link
@@ -499,6 +504,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         if (m_connected) {
             m_connected = false;
+            m_ceilingAnnouncer.reset();   // #5594 (M1): re-seeded on the next connect
             m_linkStatsTimer->stop();
             resetIoBoardSchedule();
             emit disconnected();
@@ -516,6 +522,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // destructor also guards against.
         QMetaObject::invokeMethod(m_metis, "stop", Qt::QueuedConnection);
         m_connected = false;
+        m_ceilingAnnouncer.reset();   // #5594 (M1): re-seeded on the next connect
         m_linkStatsTimer->stop();
         resetIoBoardSchedule();
         emit connectionError(QStringLiteral("Hermes-Lite 2: %1").arg(reason));
@@ -836,6 +843,17 @@ int Hl2Backend::receiverCeiling() const
     p.boardMaxRx = m_boardMaxRx;
     const int board = MetisClient::effectiveNumRx(p);
     return std::min(board, maxReceiversAtRate(m_sampleRateHz, board));
+}
+
+void Hl2Backend::announceReceiverCeilingRevision()
+{
+    // Disconnected, the ceiling reported by capabilities() is not receiverCeiling()
+    // at all (it falls back to the receiver count), and the connect/disconnect
+    // edges already republish capabilities on their own. Nothing to announce.
+    if (!m_connected)
+        return;
+    if (m_ceilingAnnouncer.shouldAnnounce(receiverCeiling()))
+        emit capabilitiesChanged();
 }
 
 bool Hl2Backend::createPanadapter()
@@ -1450,6 +1468,21 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.tuningMaxHz = 38'400'000.0;
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
                                100'000, 38'400'000};
+    c.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
+        {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("DIGU"),
+         QStringLiteral("DIGL"), QStringLiteral("AM"), QStringLiteral("SAM"), QStringLiteral("CW")}};
+    // Conservative carrier-relative subdomains of the existing WDSP passband.
+    c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine, {
+        {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},
+        {QStringLiteral("DIGU"), 0, 11990, 10, 12000, 10, 12000},
+        {QStringLiteral("LSB"), -12000, -10, -11990, 0, 10, 12000},
+        {QStringLiteral("DIGL"), -12000, -10, -11990, 0, 10, 12000},
+        {QStringLiteral("AM"), -12000, -10, 10, 12000, 20, 24000},
+        {QStringLiteral("SAM"), -12000, -10, 10, 12000, 20, 24000}}};
+    c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
+                                                      100'000, 38'400'000};
+    c.receivePanBandwidthControl = std::nullopt; // radio-wide rate can retire other receivers
     // THE RADIO'S POWER CLASS, which is what every forward-power gauge scales
     // its arc from. Declared as a band table because that is the seam the
     // clients already read: RadioModel::refreshTxPowerLimit turns it into
@@ -2671,6 +2704,7 @@ void Hl2Backend::setSliceAudioMute(int sliceId, bool mute)
     if (ddc >= 0 && static_cast<std::size_t>(ddc) < m_mixPending.size())
         m_mixPending[static_cast<std::size_t>(ddc)].clear();
     qCDebug(lcHl2) << "HL2: slice" << sliceId << (mute ? "muted" : "unmuted");
+    emitSliceState(ddc);
 }
 
 void Hl2Backend::setSliceAudioGain(int sliceId, int gainPercent)
@@ -2681,7 +2715,12 @@ void Hl2Backend::setSliceAudioGain(int sliceId, int gainPercent)
     // 0..100 -> 0.0..1.0 LINEAR, matching what a Flex does with audio_level
     // rather than inventing a dB curve here. Unity at 100 keeps a single
     // unmuted slice at exactly the level it has today.
-    r->audioGain = std::clamp(gainPercent, 0, 100) / 100.0f;
+    const float scaled = std::clamp(gainPercent, 0, 100) / 100.0f;
+    if (r->audioGain == scaled) {
+        return;
+    }
+    r->audioGain = scaled;
+    emitSliceState(ddcForSlice(sliceId));
 }
 
 void Hl2Backend::setSliceAudioPan(int sliceId, int panPercent)
@@ -3227,6 +3266,10 @@ void Hl2Backend::applyPanBandwidth(double hz)
                     Qt::QueuedConnection,
                     Q_ARG(AetherSDR::hl2::SampleRate,
                           sampleRateEnum(previousRate)));
+            // #5594 (M1): the rate went back, so the ceiling may have gone back
+            // with it. Guarded, so a rollback to the rate we already announced
+            // says nothing.
+            announceReceiverCeilingRevision();
             emitAllPanState();
             return;
         }
@@ -3238,6 +3281,13 @@ void Hl2Backend::applyPanBandwidth(double hz)
     // Written only after the reconfigure SUCCEEDED — persisting a rate the DSP
     // just refused would make the failure permanent across restarts.
     Hl2Settings::setSpanMhz(static_cast<double>(m_sampleRateHz) / 1.0e6);
+
+    // #5594 (M1): the rate is committed, so the receiver ceiling this radio can
+    // honestly offer may have moved with it — maxSlices and maxPanadapters both
+    // report it. Announced here rather than at the top of the function because
+    // an announcement before the reconfigure could be rolled back below.
+    // Guarded: the majority of zooms stay inside one ceiling and say nothing.
+    announceReceiverCeilingRevision();
 
     // A narrower window may no longer contain the slice: the usable passband
     // shrank, and a slice left outside it would sit in the roll-off (or off the
@@ -5633,6 +5683,8 @@ void Hl2Backend::emitSliceState(int ddc)
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;
     d.filterHigh = r->filterHighHz;
+    d.audioGain = qRound(r->audioGain * 100.0f);
+    d.audioMute = r->audioMuted;
     // The AGC pair the DSP is actually running.
     //
     // Never published before, which is why a RESTORED AGC would have been

@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "ScopedChildWidget.h"
 #include "AgcModeAvailability.h"
 #include "FmTonePresentation.h"
 #include "gui/CtcssToneLabel.h"
@@ -843,18 +844,28 @@ void VfoWidget::buildUI()
     m_txAntBtn->setStyleSheet(kFlatBtn + "QPushButton { color: #ff4444; }");
     connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
         if (!m_slice) return;
-        QMenu menu(this);
+        // Same non-blocking shape as the RX antenna menu above: no nested
+        // event loop, so widget teardown or a slice change while the popup is
+        // open cannot strand a suspended frame (#5566).
+        QPointer<SliceModel> slice = m_slice;
+        QMenu* menu = new QMenu(m_txAntBtn);
+        connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
         const QStringList options = txAntennaOptions();
         for (const QString& ant : options) {
-            auto* act = menu.addAction(antennaMenuLabel(ant, options));
+            auto* act = menu->addAction(antennaMenuLabel(ant, options));
             act->setData(ant);
             act->setCheckable(true);
             act->setChecked(ant == m_slice->txAntenna());
             act->setToolTip(ant);
             act->setStatusTip(ant);
         }
-        if (auto* sel = menu.exec(m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height()))))
-            m_slice->setTxAntenna(sel->data().toString());
+        connect(menu, &QMenu::triggered, this, [slice](QAction* sel) {
+            if (!sel || !slice) {
+                return;
+            }
+            slice->setTxAntenna(sel->data().toString());
+        });
+        menu->popup(m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
     });
     hdr->addWidget(m_txAntBtn);
 
@@ -5646,10 +5657,17 @@ void VfoWidget::rebuildFilterButtons()
         }
         btn->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(btn, &QPushButton::customContextMenuRequested, this, [this, i, btn](const QPoint& pos) {
-            QMenu menu;
-            menu.addAction("Set Custom Edges...", [this, i] {
+            ScopedChildWidget<QMenu> menuOwner(this);
+            QMenu& menu = *menuOwner.get();
+            // Rebuilding presets deletes btn; old actions must not address the
+            // replacement mode's preset arrays after a nested event loop.
+            menu.addAction("Set Custom Edges...", btn,
+                           [this, i, button = QPointer<QPushButton>(btn)] {
                 if (!m_slice) return;
-                QDialog dlg(this);
+                const QPointer<VfoWidget> self(this);
+                const QPointer<SliceModel> slice(m_slice);
+                ScopedChildWidget<QDialog> dialogOwner(this);
+                QDialog& dlg = *dialogOwner.get();
                 dlg.setWindowTitle("Set Custom Filter Edges");
                 auto* form = new QFormLayout(&dlg);
                 auto* loSpin = new QSpinBox(&dlg);
@@ -5673,7 +5691,11 @@ void VfoWidget::rebuildFilterButtons()
                 QObject::connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
                 QObject::connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
                 form->addRow(btns);
-                if (dlg.exec() != QDialog::Accepted) return;
+                const int result = dlg.exec();
+                if (!self || !dialogOwner || !button || !slice
+                    || self->m_slice != slice.data() || result != QDialog::Accepted) {
+                    return;
+                }
                 int lo = loSpin->value();
                 int hi = hiSpin->value();
                 if (hi <= lo) return;
@@ -5684,7 +5706,7 @@ void VfoWidget::rebuildFilterButtons()
                 rebuildFilterButtons();
                 m_slice->setFilterWidth(lo, hi);
             });
-            menu.addAction("Reset to Default", [this, i] {
+            menu.addAction("Reset to Default", btn, [this, i] {
                 if (!m_slice) return;
                 const auto& factory = filterPresetsFor(m_slice->mode()).filterWidths;
                 if (i >= factory.size()) return;
@@ -6697,11 +6719,16 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
     if ((obj == m_freqLabel || obj == m_collapsedFreqLabel) && event->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::RightButton && m_slice) {
-            QMenu menu(this);
+            ScopedChildWidget<QMenu> menuOwner(this);
+            QMenu& menu = *menuOwner.get();
             AetherSDR::ThemeManager::instance().applyStyleSheet(&menu, "QMenu { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; }"
                 "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }");
-            menu.addAction("Add Spot", this, [this] {
-                emit addSpotRequested(m_slice->frequency());
+            const QPointer<SliceModel> slice(m_slice);
+            menu.addAction("Add Spot", this, [this, slice] {
+                if (!slice || m_slice != slice.data()) {
+                    return;
+                }
+                emit addSpotRequested(slice->frequency());
             });
             menu.exec(me->globalPosition().toPoint());
             return true;

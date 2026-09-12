@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 216 touchpoint headers (185 core, 31 models) — 216/216 tagged, 0/216 converted.
+**Totals:** 216 touchpoint headers (184 core, 32 models) — 216/216 tagged, 0/216 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -163,7 +163,6 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/WsjtxClient.h` | 2 | ui-support — UDP listener for local WSJT-X app decodes/status; desktop-side integration feeding the universal spot surface | unconverted |
 | `core/WsprBeacon.h` | 1 | universal — WSPR type-1 message encoder and sample-accurate continuous-phase 4-FSK generator (lock-free, allocation-free on the audio thread). Radio-agnostic engine DSP. | unconverted |
 | `core/aprs/AprsBeacon.h` | 1 | universal — APRS position/status beacon composition; radio-agnostic packet operating feature. | unconverted |
-| `core/aprs/AprsFillInDigipeater.h` | 1 | universal — APRS New-N WIDE1-1 fill-in digipeater; radio-agnostic packet operating feature over the canonical TX path. | unconverted |
 | `core/aprs/AprsMessenger.h` | 2 | universal — APRS messaging (send/ack/retry) over canonical TX path; radio-agnostic. | unconverted |
 | `core/aprs/AprsPacket.h` | 3 | universal — APRS/AX.25 packet parse+encode data types; radio-agnostic. | unconverted |
 | `core/aprs/AprsSettings.h` | 2 | ui-support — APRS client settings holder (callsign/SSID/paths); client-side settings, not radio state. | unconverted |
@@ -195,6 +194,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/tnc/TncTerminal.h` | 1 | universal — Packet terminal session model (command/monitor); radio-agnostic operating feature. | unconverted |
 | `models/AetherClockModel.h` | 2 | universal — Thin first-class AetherClock model with full Q_PROPERTY coverage (protocol-serializable, QML-ready), mirroring engine state over queued connections. Owns no DSP and has no vendor ties — one of only three models already shaped the way the protocol will want them. | unconverted |
 | `models/AntennaGeniusModel.h` | 4 | peripheral(4o3a) — 4O3A Antenna Genius switch client — standalone accessory with its own UDP-broadcast discovery (port 9007) + direct TCP; connects by device IP/port independent of the radio, works with any radio. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
+| `models/AprsDigipeaterModel.h` | 1 | universal — Session-local APRS fill-in policy and bounded modem queue; no backend-specific commands or transport ownership. | unconverted |
 | `models/BandDefs.h` | 5 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 9 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 5 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |

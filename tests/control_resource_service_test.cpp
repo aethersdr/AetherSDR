@@ -698,18 +698,20 @@ bool testSimBackendEndToEnd()
     const QJsonObject displayCadence =
         panValue.value(QStringLiteral("displayCadence")).toObject();
     if (!check(hasExactlyKeys(radioValue,
-                              {"id", "connected", "family", "identity", "capabilities"})
+                              {"id", "connected", "family", "identity", "capabilities", "meterDelivery"})
                    && hasExactlyKeys(identity,
                                      {"name", "model", "serial", "version", "manufacturer"})
                    && hasExactlyKeys(capabilities,
                                      {"maxSlices", "maxPanadapters", "sampleRatesHz",
                                       "tuningRangeHz", "declaredBands", "canTransmit",
                                       "maximumTransmitWatts", "hasTuner", "hasAmplifier",
-                                      "extensions", "sliceFrequencyControl"})
+                                      "extensions", "sliceFrequencyControl", "receiveModeControl",
+                                      "receiveFilterControl", "receiveAudioControl",
+                                      "receivePanCenterControl", "receivePanBandwidthControl"})
                    && hasExactlyKeys(sliceValue,
                                      {"id", "letter", "panadapterId", "owned",
                                       "frequencyHz", "frequencyObservation", "mode", "filter", "active",
-                                      "txSlice", "locked", "audio", "receive"})
+                                      "txSlice", "locked", "audio", "receive", "receiveObservation"})
                    && hasExactlyKeys(sliceValue.value(QStringLiteral("filter")).toObject(),
                                      {"lowHz", "highHz"})
                    && hasExactlyKeys(sliceValue.value(QStringLiteral("audio")).toObject(),
@@ -721,7 +723,7 @@ bool testSimBackendEndToEnd()
                    && hasExactlyKeys(receive.value(QStringLiteral("squelch")).toObject(),
                                      {"enabled", "level"})
                    && hasExactlyKeys(panValue,
-                                     {"id", "centerHz", "centerKnown",
+                                     {"id", "centerHz", "centerKnown", "owned", "geometryObservation",
                                       "bandwidthHz", "dbmRange", "bandwidthLimitsHz",
                                       "receive", "displayCadence"})
                    && hasExactlyKeys(panValue.value(QStringLiteral("dbmRange")).toObject(),

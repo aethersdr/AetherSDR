@@ -32,6 +32,52 @@ QString frequencyAuthority(SliceFrequencyControl::Authority authority)
     return QStringLiteral("unknown");
 }
 
+template<class T>
+QString receiveAuthority(const std::optional<T>& capability)
+{
+    return capability ? frequencyAuthority(capability->authority) : QStringLiteral("unknown");
+}
+
+QJsonValue receiveRange(const std::optional<ReceivePanRangeControl>& range)
+{
+    return range ? QJsonValue(QJsonObject{{QStringLiteral("authority"), receiveAuthority(range)},
+        {QStringLiteral("minimumHz"), range->minimumHz},
+        {QStringLiteral("maximumHz"), range->maximumHz}}) : QJsonValue(QJsonValue::Null);
+}
+
+QJsonValue receiveFilter(const std::optional<ReceiveFilterControl>& filter)
+{
+    if (!filter) {
+        return QJsonValue(QJsonValue::Null);
+    }
+    QJsonArray modes;
+    for (const ReceiveFilterMode& range : filter->modes) {
+        modes.append(QJsonObject{{QStringLiteral("mode"), range.mode},
+            {QStringLiteral("minimumLowHz"), range.minimumLowHz},
+            {QStringLiteral("maximumLowHz"), range.maximumLowHz},
+            {QStringLiteral("minimumHighHz"), range.minimumHighHz},
+            {QStringLiteral("maximumHighHz"), range.maximumHighHz},
+            {QStringLiteral("minimumWidthHz"), range.minimumWidthHz},
+            {QStringLiteral("maximumWidthHz"), range.maximumWidthHz}});
+    }
+    return QJsonObject{{QStringLiteral("authority"), receiveAuthority(filter)},
+                       {QStringLiteral("modes"), modes}};
+}
+
+template<class T>
+QJsonValue observedValue(const std::optional<T>& value)
+{
+    return value ? QJsonValue(*value) : QJsonValue(QJsonValue::Null);
+}
+
+template<class T>
+QJsonObject receiveObservation(const std::optional<T>& value, const QJsonValue& authority)
+{
+    return {{QStringLiteral("known"), value.has_value()},
+            {QStringLiteral("value"), observedValue(value)},
+            {QStringLiteral("authority"), authority}};
+}
+
 QJsonObject capabilityValue(const RadioCapabilities& capabilities)
 {
     QJsonArray sampleRates;
@@ -56,6 +102,17 @@ QJsonObject capabilityValue(const RadioCapabilities& capabilities)
              {QStringLiteral("authority"), frequencyAuthority(capabilities.sliceFrequencyControl.authority)},
              {QStringLiteral("minimumHz"), capabilities.sliceFrequencyControl.minimumHz},
              {QStringLiteral("maximumHz"), capabilities.sliceFrequencyControl.maximumHz}}},
+        {QStringLiteral("receiveModeControl"), capabilities.receiveModeControl
+            ? QJsonValue(QJsonObject{{QStringLiteral("authority"), receiveAuthority(capabilities.receiveModeControl)},
+                {QStringLiteral("modes"), strings(capabilities.receiveModeControl->modes)}})
+            : QJsonValue(QJsonValue::Null)},
+        {QStringLiteral("receiveFilterControl"), receiveFilter(capabilities.receiveFilterControl)},
+        {QStringLiteral("receiveAudioControl"), capabilities.receiveAudioControl
+            ? QJsonValue(QJsonObject{{QStringLiteral("authority"), receiveAuthority(capabilities.receiveAudioControl)},
+                {QStringLiteral("minimumGain"), 0}, {QStringLiteral("maximumGain"), 100}})
+            : QJsonValue(QJsonValue::Null)},
+        {QStringLiteral("receivePanCenterControl"), receiveRange(capabilities.receivePanCenterControl)},
+        {QStringLiteral("receivePanBandwidthControl"), receiveRange(capabilities.receivePanBandwidthControl)},
         {QStringLiteral("canTransmit"), capabilities.canTransmit},
         {QStringLiteral("maximumTransmitWatts"), capabilities.txPowerMaxWatts},
         {QStringLiteral("hasTuner"), capabilities.hasTuner},
@@ -149,6 +206,9 @@ RadioResourceAdapter::RadioResourceAdapter(
                                      panId});
             });
 
+    m_telemetry = std::make_unique<RadioTelemetryAdapter>(m_radio, m_resources, m_radioSessionId);
+    connect(m_telemetry.get(), &RadioTelemetryAdapter::deliveryChanged,
+            this, &RadioResourceAdapter::publishRadioSession);
     publishAll();
 }
 
@@ -173,6 +233,7 @@ void RadioResourceAdapter::attachSlice(SliceModel* slice)
     connect(slice, &SliceModel::letterChanged, this, refresh);
     connect(slice, &SliceModel::frequencyChanged, this, refresh);
     connect(slice, &SliceModel::frequencyReported, this, refresh);
+    connect(slice, &SliceModel::receiveObservationChanged, this, refresh);
     connect(slice, &SliceModel::panIdChanged, this, refresh);
     connect(slice, &SliceModel::modeChanged, this, refresh);
     connect(slice, &SliceModel::filterChanged, this, refresh);
@@ -226,6 +287,7 @@ void RadioResourceAdapter::attachPanadapter(PanadapterModel* panadapter)
     m_panadapters.insert(panadapter);
     const auto refresh = [this, panadapter] { publishPanadapter(panadapter); };
     connect(panadapter, &PanadapterModel::infoChanged, this, refresh);
+    connect(panadapter, &PanadapterModel::geometryObservationChanged, this, refresh);
     connect(panadapter, &PanadapterModel::levelChanged, this, refresh);
     connect(panadapter, &PanadapterModel::bandwidthLimitsChanged, this, refresh);
     connect(panadapter, &PanadapterModel::rxAntennaChanged, this, refresh);
@@ -287,6 +349,11 @@ void RadioResourceAdapter::publishRadioSession()
 {
     const RadioCapabilities capabilities = m_radio->backendCapabilities();
     m_frequencyAuthority = frequencyAuthority(capabilities.sliceFrequencyControl.authority);
+    m_receiveAuthorities = {{QStringLiteral("mode"), receiveAuthority(capabilities.receiveModeControl)},
+        {QStringLiteral("filter"), receiveAuthority(capabilities.receiveFilterControl)},
+        {QStringLiteral("audio"), receiveAuthority(capabilities.receiveAudioControl)},
+        {QStringLiteral("center"), receiveAuthority(capabilities.receivePanCenterControl)},
+        {QStringLiteral("bandwidth"), receiveAuthority(capabilities.receivePanBandwidthControl)}};
     QJsonObject value{
         {QStringLiteral("id"), m_radioSessionId},
         {QStringLiteral("connected"), m_radio->isConnected()},
@@ -298,6 +365,9 @@ void RadioResourceAdapter::publishRadioSession()
              {QStringLiteral("version"), m_radio->version()},
              {QStringLiteral("manufacturer"), capabilities.manufacturer}}},
         {QStringLiteral("capabilities"), capabilityValue(capabilities)}};
+    if (m_telemetry) {
+        value.insert(QStringLiteral("meterDelivery"), m_telemetry->meterDelivery());
+    }
     if (m_connectionTarget) {
         QString state;
         switch (m_connectionTarget->state()) {
@@ -311,6 +381,14 @@ void RadioResourceAdapter::publishRadioSession()
             {QStringLiteral("errorCode"), m_connectionTarget->errorCode()}});
     }
     m_resources->upsert({QStringLiteral("radioSession"), {}, m_radioSessionId}, value);
+    // Refresh cached-authority projections on lifecycle/capability edges, not
+    // on each sample. A newly unsupported operation must not retain old labels.
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        publishSlice(slice);
+    }
+    for (PanadapterModel* pan : std::as_const(m_panadapters)) {
+        publishPanadapter(pan);
+    }
 }
 
 void RadioResourceAdapter::publishSlice(SliceModel* slice)
@@ -322,6 +400,7 @@ void RadioResourceAdapter::publishSlice(SliceModel* slice)
         m_frequencyAuthority = frequencyAuthority(
             m_radio->backendCapabilities().sliceFrequencyControl.authority);
     }
+    const SliceModel::ReceiveObservation& observed = slice->receiveObservation();
     const QJsonObject value{
         {QStringLiteral("id"), QString::number(slice->sliceId())},
         {QStringLiteral("letter"), slice->letter()},
@@ -335,6 +414,17 @@ void RadioResourceAdapter::publishSlice(SliceModel* slice)
                   : QJsonValue(QJsonValue::Null)},
              {QStringLiteral("authority"), m_frequencyAuthority}}},
         {QStringLiteral("mode"), slice->mode()},
+        {QStringLiteral("receiveObservation"), QJsonObject{
+            {QStringLiteral("mode"), receiveObservation(observed.mode, m_receiveAuthorities.value(QStringLiteral("mode")))},
+            {QStringLiteral("filter"), QJsonObject{
+                {QStringLiteral("known"), observed.mode && observed.filterLowHz && observed.filterHighHz
+                     && *observed.filterLowHz < *observed.filterHighHz},
+                {QStringLiteral("lowHz"), observedValue(observed.filterLowHz)},
+                {QStringLiteral("highHz"), observedValue(observed.filterHighHz)},
+                {QStringLiteral("authority"), m_receiveAuthorities.value(QStringLiteral("filter"))}}},
+            {QStringLiteral("audio"), QJsonObject{
+                {QStringLiteral("gain"), receiveObservation(observed.gain, m_receiveAuthorities.value(QStringLiteral("audio")))},
+                {QStringLiteral("muted"), receiveObservation(observed.muted, m_receiveAuthorities.value(QStringLiteral("audio")))}}}}},
         {QStringLiteral("filter"), QJsonObject{
              {QStringLiteral("lowHz"), slice->filterLow()},
              {QStringLiteral("highHz"), slice->filterHigh()}}},
@@ -366,6 +456,14 @@ void RadioResourceAdapter::publishPanadapter(PanadapterModel* panadapter)
     }
     const QJsonObject value{
         {QStringLiteral("id"), panadapter->panId()},
+        {QStringLiteral("owned"), m_radio->receiveControlPanId(panadapter->panId()).has_value()},
+        {QStringLiteral("geometryObservation"), QJsonObject{
+            {QStringLiteral("centerKnown"), panadapter->reportedCenterHz().has_value()},
+            {QStringLiteral("bandwidthKnown"), panadapter->reportedBandwidthHz().has_value()},
+            {QStringLiteral("centerHz"), observedValue(panadapter->reportedCenterHz())},
+            {QStringLiteral("bandwidthHz"), observedValue(panadapter->reportedBandwidthHz())},
+            {QStringLiteral("centerAuthority"), m_receiveAuthorities.value(QStringLiteral("center"))},
+            {QStringLiteral("bandwidthAuthority"), m_receiveAuthorities.value(QStringLiteral("bandwidth"))}}},
         {QStringLiteral("centerHz"), qRound64(panadapter->centerMhz() * 1'000'000.0)},
         {QStringLiteral("centerKnown"), panadapter->centerKnown()},
         {QStringLiteral("bandwidthHz"),

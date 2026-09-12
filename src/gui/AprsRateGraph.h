@@ -6,8 +6,7 @@
 
 namespace AetherSDR {
 
-// Two-series time histogram for the Digi tab: heard APRS frames vs fill-in
-// repeats. 10-second buckets covering the last six hours; the paint path
+// Single-series time histogram for one Digi-tab activity counter. 10-second buckets covering the last six hours; the paint path
 // folds those into the operator-selected window.
 class AprsRateGraph : public QWidget {
     Q_OBJECT
@@ -21,7 +20,6 @@ public:
     int windowMinutes() const { return m_windowMin; }
 
     void recordEvent();
-    void clear();
 
     int eventsInWindow() const;
 
@@ -32,7 +30,6 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
-    int currentBucket() const;
     void advanceBucket();
 
     QString m_title;

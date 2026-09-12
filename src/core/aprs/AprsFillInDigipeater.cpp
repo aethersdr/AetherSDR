@@ -13,33 +13,9 @@ AprsFillInDigipeater::AprsFillInDigipeater(QObject* parent)
         m_alias = *a;
 }
 
-void AprsFillInDigipeater::setEnabled(bool on)
-{
-    m_enabled = on;
-}
-
 void AprsFillInDigipeater::setDupeWindowSecs(int secs)
 {
     m_dupeSecs = qBound(5, secs, 300);
-}
-
-void AprsFillInDigipeater::resetStats()
-{
-    m_stats = {};
-}
-
-QString AprsFillInDigipeater::dropName(Drop d)
-{
-    switch (d) {
-    case Drop::Repeated:     return QStringLiteral("repeated");
-    case Drop::NotUi:        return QStringLiteral("not-ui");
-    case Drop::Own:          return QStringLiteral("own");
-    case Drop::Duplicate:    return QStringLiteral("duplicate");
-    case Drop::AlreadyHeard: return QStringLiteral("already-in-path");
-    case Drop::NoUnusedHop:  return QStringLiteral("no-unused-hop");
-    case Drop::NoAliasMatch: return QStringLiteral("no-alias");
-    }
-    return QStringLiteral("other");
 }
 
 QString AprsFillInDigipeater::tnc2(const Frame& frame)
@@ -134,6 +110,7 @@ AprsFillInDigipeater::consider(const Frame& frame, bool recordStats)
 
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     const QString key = frame.src.toString() + QLatin1Char('|')
+        + frame.dest.toString() + QLatin1Char('|')
         + QString::fromLatin1(frame.info);
     if (isDuplicate(key, nowMs)) {
         d.reason = QStringLiteral("duplicate inside dupe window");

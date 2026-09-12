@@ -33,7 +33,7 @@ class QVBoxLayout;
 namespace AetherSDR {
 
 class AprsBeacon;
-class AprsFillInDigipeater;
+class AprsDigipeaterModel;
 class AprsMessagesDialog;
 class AprsRateGraph;
 class AprsMessenger;
@@ -183,7 +183,7 @@ private:
     void paceTransmitAudio();
     void disconnectPttConfirmation();
     void handleTxAudioFinished(quint64 token, int drainMs);
-    void finishTransmit(bool aborted, const QString& reason);
+    void finishTransmit(bool aborted, const QString& reason, bool preserveQueue = false);
 
     // APRS client (APRS tab): station table, timed beacon, messaging.
     void buildAprsUi(QWidget* page, QVBoxLayout* pageLayout);
@@ -349,7 +349,7 @@ private:
     QSpinBox* m_tncPort{nullptr};
     QLabel* m_tncStatusDot{nullptr};
     QLabel* m_tncStatusValue{nullptr};
-    QQueue<QByteArray> m_kissTxQueue;
+    bool m_txFromDigi{false};
     // Number of 250 ms radio-busy retries currently elapsed on the head-of-
     // queue frame. Capped (kMaxKissTxBusyRetries) so a stuck-transmitting
     // radio can't spin maybeStartNextKissTx() forever and starve later
@@ -385,8 +385,7 @@ private:
     QPushButton* m_aprsEnvelope{nullptr};
 
     // Fill-in digipeater (Digi tab).
-    AprsFillInDigipeater* m_digi{nullptr};
-    AprsBeacon* m_digiBeacon{nullptr};
+    AprsDigipeaterModel* m_digi{nullptr};
     QRadioButton* m_digiHf300{nullptr};
     QRadioButton* m_digiVhf1200{nullptr};
     QCheckBox* m_digiEnable{nullptr};

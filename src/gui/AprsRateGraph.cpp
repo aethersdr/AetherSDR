@@ -21,6 +21,8 @@ AprsRateGraph::AprsRateGraph(QWidget* parent)
 void AprsRateGraph::setTitle(const QString& title)
 {
     m_title = title;
+    setAccessibleName(title);
+    setAccessibleDescription(QStringLiteral("Packet activity histogram over the selected time window."));
     update();
 }
 
@@ -51,23 +53,10 @@ void AprsRateGraph::advanceBucket()
     m_headStartMs += qint64(advance) * kBucketSecs * 1000;
 }
 
-int AprsRateGraph::currentBucket() const
-{
-    return m_head;
-}
-
 void AprsRateGraph::recordEvent()
 {
     advanceBucket();
     m_counts[m_head] += 1;
-    update();
-}
-
-void AprsRateGraph::clear()
-{
-    m_counts.fill(0);
-    m_head = 0;
-    m_headStartMs = QDateTime::currentMSecsSinceEpoch();
     update();
 }
 

@@ -55,6 +55,19 @@ semantics see [local frequency control](../aetherd-local-slice-frequency-control
 
 ## Wired and consumed
 
+### Local receive-control records
+
+The optional `receiveModeControl`, `receiveFilterControl`, `receiveAudioControl`,
+`receivePanCenterControl`, and `receivePanBandwidthControl` records are read by
+`ModelReceiveControlTarget` at action time and by `RadioResourceAdapter` for
+versioned metadata/observation provenance. All six backends declare each record
+explicitly. They do not change UI visibility or migrate legacy command routes.
+Null or unknown authority fails closed. Their full per-backend support matrix,
+range contracts, TX-idle restrictions and remaining no-op/coupling limitations
+are in [local receive control](../aetherd-local-receive-control.md#qualified-backend-surface).
+`control_receive_test` pins declarations and action-time admission; the optional
+RTL declaration check runs only when the RTL backend is built.
+
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|
 | `canCreateSlices` | ✅ | ❌ | ❌ | `RadioModel::addSliceOnPan`, only without a command plane | Admission to the neutral backend's independent slice-creation hook on an existing pan. Flex and Sim use their existing command adapters without consulting this field, so the values shown are declarations, not a UI availability rule; do not gate +RX on this field alone. Capacity remains `maxSlices`; paired/fixed receiver topologies do not gain independent creation. Icom, ANAN and RTL explicitly declare false; RTL remains one slice in RFC #5468 P01. |
@@ -130,7 +143,7 @@ semantics see [local frequency control](../aetherd-local-slice-frequency-control
 | `canApplyMemories` | ✅ | ❌ | ❌ | `RadioModel::tryMemoryCommand` | True means the backend accepts its native memory-apply command. Initial Icom support is ❌ and applies recallable cached fields through the existing neutral slice setters instead of entering vendor Memory mode; split/RPS/DV/DD records are display-only. |
 | `canRefreshMemories` | ❌ | ❌ | ❌ | Memory Channels dialog → `RadioModel::refreshMemories` | Explicit, button-only radio-memory snapshots. IC-7300MK2 reads 99 channels; IC-9700 reads all 297 or one selected band; IC-705 requires one selected group and reads only its 100 channels. No memory scan runs during connection. |
 | `clientSettingsDomains` | empty | Tuning\|Passband\|SpanRate\|RfGain\|TxSetpoints\|Memories\|Agc | empty | `RadioStateMemory::shouldEngage` → `RadioModel::handRestoredStateToBackend` | connect-time operating-state restore + debounced capture (RFC #4603 PR 3): `Hl2Backend::applyRestoredState` seeds rate/freq/LNA at connect, `pushInitialState` applies restored mode+passband (reconciled with #4484 — restored as a pair, so mode and passband cannot disagree) and the start band's drive; per-band LNA/drive maps ride the extension document and follow TX-slice band changes. `Agc` (#4909) carries the mode + threshold pair as typed universal fields — FLAT, not per-band, and seeded onto EVERY receiver by `Hl2Backend::seedReceiverAgc()`, because the AGC runs in host-side WDSP and no HPSDR register can be asked what it is. Seeding runs from `connectRadio` when the connect SERIAL changes or the receivers were rebuilt from nothing — never on a plain auto-reconnect, because `handRestoredStateToBackend` re-hands the document before every connect and `buildReceivers` preserves live receiver state, so an unconditional seed flattened per-receiver AGC on each dropped link. Memories is declarative only — the bank engages on `persistsMemories` and keeps its own shared document (PR 6). Flex/Sim: no-op by empty declaration. |
-| `extensionNamespaces` | `["flex"]` | `["hl2"]` | — | No production reader or general `invokeExtension` pre-check yet | Flex: amp / tuner operate/bypass/autotune verbs. HL2: `freqcal.get` / `.set` / `.set_live`, behind the `freqcal` bridge verb and the Calibration page. Icom: `["icom"]`, with PC-audio, tuner, scope, control-map, scheduler and diagnostic verbs. RadioModel's Icom PC-audio wrappers and the Flex accessory routes still pre-check by family string; #5262 M1 converts those consumers. |
+| `extensionNamespaces` | `["flex"]` | `["hl2"]` | — | No production reader or general `invokeExtension` pre-check yet | Flex: amp / tuner operate/bypass/autotune verbs. HL2: `freqcal.get` / `.set` / `.set_live`, behind the `freqcal` bridge verb and the Calibration page. Icom: `["icom"]`, with PC-audio, scope, control-map, scheduler and diagnostic verbs. RadioModel's Icom PC-audio wrappers and the Flex accessory routes still pre-check by family string; #5262 M1 converts those consumers. |
 | `maxNotchFilters` | 1000 | 1024 | 0 | `MainWindow::applyCapabilitiesToUi`, `SpectrumWidget::setNotchCapabilities` | The sidebar `+TNF` button and the panadapter's add/remove-notch entries. **0 hides them.** Flex's figure is a UI sanity limit (neither FlexLib nor the wire declares one); HL2's is WDSP's real notch-database size |
 | `notchHasDepth` | ✅ | ❌ | ❌ | `SpectrumWidget::setNotchCapabilities` | The depth submenu on a notch's right-click menu. A WDSP notch is a full null with no depth to set |
 | `notchMinWidthHz` / `notchMaxWidthHz` | 10 / 6000 | 50 / 6000 | 0 / 0 | `SpectrumWidget::setNotchCapabilities` | Clamps drag-resize and the width presets. HL2's floor is set by the RX filter length and WDSP **silently widens** anything narrower, so a UI offering less draws a notch narrower than the one being heard |

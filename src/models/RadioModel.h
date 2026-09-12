@@ -30,6 +30,7 @@
 #include "TnfModel.h"
 #include "SpotModel.h"
 #include "CwxModel.h"
+#include "core/TxCoordinator.h"
 #include "DvkModel.h"
 #include "UsbCableModel.h"
 #include "DaxIqModel.h"
@@ -62,6 +63,7 @@ inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabil
         && capabilities.takesTxAudioOverSeam;
 }
 
+class AprsDigipeaterModel;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
@@ -86,6 +88,7 @@ class RadioModel : public QObject {
 
 public:
     explicit RadioModel(QObject* parent = nullptr);
+    AprsDigipeaterModel* aprsDigipeater();
     ~RadioModel() override;
 
     // Access the underlying connection and panadapter stream
@@ -728,6 +731,9 @@ public:
     // 2.3 backend-signal handlers, single-sourced (#4065 review).
     PanadapterModel* resolvePan(const QString& panId) const;
     QList<PanadapterModel*> panadapters() const { return m_panadapters.values(); }
+    // Exact live identity + confirmed ownership for an untrusted local intent.
+    // Returns the backend's own id, not an invented or caller-supplied wire id.
+    std::optional<QString> receiveControlPanId(const QString& modelPanId) const;
 
     // Radio-authoritative display inventory vs what we own (#3856 Layer B).
     // Built from the accumulated "display pan"/"display waterfall" status maps;
@@ -807,6 +813,9 @@ public:
     void acceptPresentedWanCert();
     void rejectPresentedWanCert();
     void setTransmit(bool tx, TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
+    // Snapshot for engine-owned deferred release. This is not a credential or
+    // an invitation to borrow whichever operation happens to be current later.
+    TxCoordinator::Operation transmitOperation() const { return m_txOperation; }
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     void sendCwKey(bool down, const QString& debugSource = {},
@@ -834,6 +843,11 @@ public:
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
                        quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
                        std::chrono::steady_clock::time_point scheduledAt = {});
+    // Producer-thread entry: capture the session before queueing onto the model.
+    // Old queued iambic edges cannot borrow the replacement radio's authority.
+    void queueCwKeyEdge(bool down, const QString& debugSource,
+                       quint64 debugTraceId, quint64 debugSourceMs,
+                       std::chrono::steady_clock::time_point scheduledAt);
     void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
     bool addSlice();           // Create a new slice on the active panadapter
@@ -1213,6 +1227,9 @@ signals:
     void txAudioGateChanged(bool transmitting);
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
+    // Accepted local PTT intent, including re-engage during a deferred tail.
+    // Not radio readback: never use this to publish observed transmit state.
+    void localTransmitEngaged();
     // A backend's explicit keyed-state readback, including unchanged answers
     // hidden by the change-gated radioTransmittingChanged signal.
     void radioTransmitConfirmed(bool transmitting);
@@ -1550,6 +1567,9 @@ private:
     // run again on a family change — not just at construction.
     void setupBackend(const QString& family);
     void teardownBackend();
+    // The family switch itself: drop session models, tear down, build, announce.
+    // One body, called by connectToRadio() and rebuildBackendForTest().
+    void rebuildBackendForFamily(const QString& family);
     // Push the backend's RadioCapabilities into the models that own each flag,
     // then emit capabilitiesChanged. Called on every connect/disconnect edge and
     // whenever the backend revises its own capabilities.
@@ -1571,6 +1591,7 @@ private:
     // decide whether a connect needs a different backend.
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
+    std::unique_ptr<AprsDigipeaterModel> m_aprsDigipeater;
     QVector<TxPowerBand> m_txPowerBands;
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;
@@ -1664,6 +1685,13 @@ public:
     // Install a socket-free backend with the same normalized receiver-state
     // bindings used by production. Replacement drops old session models.
     void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
+    // The production family switch WITHOUT the dial that follows it: calls the
+    // same rebuildBackendForFamily() connectToRadio() calls, so the two cannot
+    // drift. Builds the REAL backend for `family` through makeBackend(), so a
+    // test can cycle every family through construction, the full setupBackend()
+    // wiring and teardown with no socket, no device and no radio. Returns false
+    // when the family has no backend in this build (RTL without librtlsdr).
+    bool rebuildBackendForTest(const QString& family);
     // Replace only the ordinary lifecycle command transport, including replies.
     // Tests can pin Flex/Sim encoding without constructing a wire object/peer.
     void setSliceLifecycleCommandSinkForTest(
@@ -1674,6 +1702,7 @@ public:
 
 private:
     friend class RadioModelSliceLifecycleTestAccess;
+    friend class TxOperationIntegrationTestAccess;
     void wireBackendReceiverState();
     bool dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback = {});
     quint64 m_backendReceiverGeneration = 0;
@@ -1720,6 +1749,30 @@ private:
     qint64 m_lastAudioMs{0};
     TunerModel       m_tunerModel;
     TransmitModel    m_transmitModel;
+    // Transitional desktop actor: existing integrations still enter through
+    // the desktop methods. Per-client authority is a subsequent Stage 4 step;
+    // no daemon client can register or obtain this actor.
+    TxCoordinator m_txCoordinator;
+    TxCoordinator::Actor m_desktopTxActor;
+    TxCoordinator::Operation m_txOperation;
+    enum class TxActivity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
+    unsigned m_txActivities{0};
+    bool m_txSessionClosing{false};
+    quint64 m_txCommandEpoch{0};
+    quint64 m_tuneCommandEpoch{0};
+    quint64 m_atuCommandEpoch{0};
+    quint64 m_cwKeyDeliveryEpoch{0};
+    quint64 m_cwPttDeliveryEpoch{0};
+    std::atomic<quint64> m_cwInputSession{0};
+    std::chrono::steady_clock::time_point m_cwInputNotBefore{};
+    static qint64 txMonotonicMs();
+    bool beginLocalTxActivity(TxActivity activity);
+    void endLocalTxActivity(TxActivity activity);
+    void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
+    void resetTxOperations();
+    void applyBackendTransmitDelta(const TransmitDelta& delta);
+    bool sendNetCwTcp(const QString& command, const TxCoordinator::Operation& operation,
+                     bool keying, std::function<void()> delivered);
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;
@@ -1736,9 +1789,10 @@ private:
     int      m_netCwIndex{1};           // sequential dedup index
     QElapsedTimer m_netCwClock;          // 16-bit relative ms clock for time=0x....
     qint64   m_netCwLastSendMs{-1};
-    void sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
+    bool sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
                           quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
-                          std::chrono::steady_clock::time_point scheduledAt = {});
+                          std::chrono::steady_clock::time_point scheduledAt = {},
+                          std::function<void()> delivered = {});
     QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;
@@ -1808,7 +1862,6 @@ private:
     QString     m_lastInterlockNotificationKey;
     qint64      m_lastInterlockNotificationMs{0};
     qint64      m_interlockNotificationArmedUntilMs{0};
-    TransmitModel::PttSource m_pendingTransmitPreflightSource{TransmitModel::PttSource::Mox};
     TransmitModel::PttSource m_interlockNotificationSource{TransmitModel::PttSource::Mox};
     int         m_digitalVoiceTxSliceId{-1};
     QString     m_lastDigitalVoiceTxSelectionKey;

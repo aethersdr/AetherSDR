@@ -1,5 +1,6 @@
 #include "core/backends/anan/P2Protocol.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace AetherSDR::anan {
@@ -90,9 +91,8 @@ std::array<std::uint8_t, 60> buildGeneral() noexcept
     return pkt;
 }
 
-std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps, int numAdcs,
-                                                bool ditherEnabled, bool randomEnabled,
-                                                int ddc0AdcIndex) noexcept
+std::array<std::uint8_t, 1444> buildDdcSpecific(std::span<const DdcConfig> ddcs, int numAdcs,
+                                                bool ditherEnabled, bool randomEnabled) noexcept
 {
     std::array<std::uint8_t, 1444> pkt{};  // full spec length (80 DDCs); unused DDCs
                                             // stay zero/disabled
@@ -100,25 +100,59 @@ std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps, int numAdcs,
                                                    // supports" (p.25)
     // Bytes 5/6: one Dither/Random control on this radio, not a per-ADC
     // pair, so both ADC0 and ADC1 bits track it together regardless of
-    // which ADC ddc0AdcIndex actually selects.
+    // which ADC any given DDC actually selects.
     pkt[5] = ditherEnabled ? 0x03 : 0x00;
     pkt[6] = randomEnabled ? 0x03 : 0x00;
-    pkt[7] = 0x01;   // bit[0]: enable DDC0 only
-    pkt[17] = static_cast<std::uint8_t>(ddc0AdcIndex);  // DDC0 -> ADC(ddc0AdcIndex)
-    writeU16be(&pkt[18], static_cast<std::uint16_t>(ddc0RateKsps));  // bytes 18-19,
-                                                                      // raw ksps value
-    pkt[22] = 24;    // DDC0 sample size, 24 bits (default, made explicit)
+
+    // Clamp rather than trust the caller: writing rows for more DDCs than
+    // kMaxDdcs would keep landing inside this 1444-byte packet (the spec has
+    // room for 80), so this is not a buffer guard -- it is a refusal to
+    // enable hardware receivers the rest of this backend is not driving.
+    const std::size_t count =
+        std::min(ddcs.size(), static_cast<std::size_t>(kMaxDdcs));
+
+    std::uint8_t enableBits = 0;
+    for (std::size_t n = 0; n < count; ++n) {
+        enableBits |= static_cast<std::uint8_t>(1u << n);
+        // One 6-byte row per DDC: ADC select, 2-byte rate, CIC1, CIC2,
+        // sample size. Offsets confirmed against the single-DDC layout this
+        // replaced (DDC0: 17 / 18-19 / 20-21 / 22), which is bench-proven.
+        const std::size_t row = 17 + 6 * n;
+        pkt[row] = static_cast<std::uint8_t>(ddcs[n].adcIndex);
+        writeU16be(&pkt[row + 1], static_cast<std::uint16_t>(ddcs[n].rateKsps));
+        // row+3, row+4 = CIC1/CIC2, "For Future use" (p.25) -- left zero.
+        pkt[row + 5] = 24;   // sample size, 24 bits (default, made explicit)
+    }
+    pkt[7] = enableBits;   // bit[n] enables DDC n
     return pkt;
 }
 
-std::array<std::uint8_t, 1444> buildHighPriority(bool run, std::uint32_t ddc0FreqWord,
+std::array<std::uint8_t, 1444> buildDdcSpecific(int ddc0RateKsps, int numAdcs,
+                                                bool ditherEnabled, bool randomEnabled,
+                                                int ddc0AdcIndex) noexcept
+{
+    // Delegates so the row layout has exactly one implementation; the
+    // single-DDC output stays byte-identical to what this function built
+    // before the multi-DDC overload existed (pinned by the existing tests).
+    const DdcConfig one{ddc0RateKsps, ddc0AdcIndex};
+    return buildDdcSpecific(std::span<const DdcConfig>(&one, 1),
+                            numAdcs, ditherEnabled, randomEnabled);
+}
+
+std::array<std::uint8_t, 1444> buildHighPriority(bool run,
+                                                  std::span<const std::uint32_t> ddcFreqWords,
                                                   bool bypassAdc0Filters,
                                                   bool bypassAdc1Filters) noexcept
 {
     std::array<std::uint8_t, 1444> pkt{};  // full spec length; attenuator fields stay zero
     pkt[4] = run ? 0x01 : 0x00;  // bit[0] = run. Bits[1..4] = PTT0..3 -- there is no
                                   // parameter to set them; see this header's own comment.
-    writeU32be(&pkt[9], ddc0FreqWord);  // bytes 9-12, DDC0 frequency/phase word
+    // One 4-byte frequency/phase word per DDC at 9 + 4*n (p.32). Same
+    // clamp-and-ignore contract as buildDdcSpecific().
+    const std::size_t count =
+        std::min(ddcFreqWords.size(), static_cast<std::size_t>(kMaxDdcs));
+    for (std::size_t n = 0; n < count; ++n)
+        writeU32be(&pkt[9 + 4 * n], ddcFreqWords[n]);
     // Alex0 register, bytes 1432-1435 -- ANT1 (bit 24) always, HF Bypass
     // (bit 12) when requested. See this function's declaration comment.
     std::uint32_t alex0 = std::uint32_t{1} << 24;
@@ -130,6 +164,31 @@ std::array<std::uint8_t, 1444> buildHighPriority(bool run, std::uint32_t ddc0Fre
     if (bypassAdc1Filters)
         writeU16be(&pkt[1430], std::uint16_t{1} << 12);
     return pkt;
+}
+
+std::array<std::uint8_t, 1444> buildHighPriority(bool run, std::uint32_t ddc0FreqWord,
+                                                  bool bypassAdc0Filters,
+                                                  bool bypassAdc1Filters) noexcept
+{
+    // Delegates, same reasoning as buildDdcSpecific()'s single-DDC overload:
+    // one implementation of the row layout, and byte-identical output to
+    // what this built before (pinned by the existing tests).
+    return buildHighPriority(run, std::span<const std::uint32_t>(&ddc0FreqWord, 1),
+                             bypassAdc0Filters, bypassAdc1Filters);
+}
+
+std::optional<int> ddcIndexForSenderPort(std::uint16_t senderPort, int numDdc,
+                                          std::uint16_t basePort) noexcept
+{
+    if (numDdc <= 0 || senderPort < basePort)
+        return std::nullopt;
+    // Widened to int before subtracting: both operands are uint16_t, and the
+    // guard above already rules out the wrap case, but doing the arithmetic
+    // in int keeps that correctness local rather than resting on the guard.
+    const int index = static_cast<int>(senderPort) - static_cast<int>(basePort);
+    if (index >= numDdc)
+        return std::nullopt;
+    return index;
 }
 
 std::optional<DdcFrame> parseDdcFrame(std::span<const std::uint8_t> data) noexcept

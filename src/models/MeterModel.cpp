@@ -214,6 +214,17 @@ void MeterModel::defineMeter(const MeterDef& def)
     if (isTxWaveformMeter(def) && def.name == "COMPPEAK") {
         logCompressionMeterMap(def);
     }
+    emit meterDefinitionChanged(def.index);
+}
+
+QList<int> MeterModel::firstDefinedIndices(int limit, std::optional<int> after) const
+{
+    QList<int> indices;
+    for (auto it = after ? m_defs.upperBound(*after) : m_defs.cbegin();
+         it != m_defs.cend() && indices.size() < limit; ++it) {
+        indices.append(it.key());
+    }
+    return indices;
 }
 
 void MeterModel::removeMeter(int index)
@@ -225,6 +236,7 @@ void MeterModel::removeMeter(int index)
     m_defs.remove(index);
     m_values.remove(index);
     m_valueUpdatedMs.remove(index);
+    emit meterRemoved(index);
 
     const auto matchesIndex = [index](QMap<int, int>::iterator entry) {
         return entry.value() == index;
@@ -415,6 +427,7 @@ void MeterModel::clear()
     m_ampFwdPwr = 0.0f;
     m_ampSwr = 1.0f;
     m_ampTemp = 0.0f;
+    emit metersCleared();
 }
 
 void MeterModel::setCompressionMaximumDb(float maximum)

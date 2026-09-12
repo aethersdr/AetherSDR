@@ -24,7 +24,7 @@ public:
         Repeated,     // we encoded a fill-in copy
         NotUi,
         Own,          // source is MYCALL
-        Duplicate,    // same source+info inside the dupe window
+        Duplicate,    // same source+destination+info inside the dupe window
         AlreadyHeard, // our call already has the H-bit in the via list
         NoUnusedHop,
         NoAliasMatch,
@@ -47,9 +47,6 @@ public:
 
     explicit AprsFillInDigipeater(QObject* parent = nullptr);
 
-    void setEnabled(bool on);
-    bool isEnabled() const { return m_enabled; }
-
     void setMyAddress(const ax25::Address& addr) { m_my = addr; }
     ax25::Address myAddress() const { return m_my; }
 
@@ -65,18 +62,12 @@ public:
     void setDupeWindowSecs(int secs);
     int dupeWindowSecs() const { return m_dupeSecs; }
 
-    // Pure decision. Does not TX. Updates dupe memory and stats when
-    // `recordStats` is true (the on-air path); tests can pass false.
+    // Does not TX. Always updates dupe memory; recordStats controls counters.
     Decision consider(const ax25::Frame& frame, bool recordStats = true);
 
     Stats stats() const { return m_stats; }
-    void resetStats();
 
     static QString tnc2(const ax25::Frame& frame);
-    static QString dropName(Drop d);
-
-signals:
-    void activity(const QString& line);
 
 private:
     bool hopMatches(const ax25::Address& hop) const;
@@ -84,7 +75,6 @@ private:
     bool isDuplicate(const QString& key, qint64 nowMs);
     void pruneDupes(qint64 nowMs);
 
-    bool m_enabled{false};
     ax25::Address m_my;
     ax25::Address m_alias; // default WIDE1-1, set in ctor
     bool m_alsoMyCall{true};

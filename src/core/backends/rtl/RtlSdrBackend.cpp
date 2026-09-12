@@ -91,6 +91,19 @@ RtlSdrBackend::~RtlSdrBackend()
 
 RadioCapabilities RtlSdrBackend::capabilities() const
 {
+    // #5594 (M1) item 4: this backend deliberately never emits
+    // capabilitiesChanged, and that is the honest answer rather than a gap.
+    //
+    // Every field below is either a compile-time constant for the R820T/RTL2832U
+    // pair or comes from the USB descriptor strings (m_vendor, m_product /
+    // m_modelName, and m_serial), read during connectRadio() before connected()
+    // and cleared on disconnect or a configuration failure before connection.
+    // The declaration is fixed for the whole session: no mid-session revision, and
+    // a synthetic emission would be noise dressed up as a contract.
+    //
+    // If a future tuner-dependent field is added here (a per-tuner gain table,
+    // a direct-sampling range that depends on the IC), it becomes revisable and
+    // this comment stops being true.
     RadioCapabilities c;
     c.family = QStringLiteral("rtl");
     c.model  = m_modelName;
@@ -129,6 +142,15 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.tuningMaxHz = 1'766'000'000;
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
                                24'000, 1'766'000'000};
+    c.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
+        {QStringLiteral("AM"), QStringLiteral("SAM"), QStringLiteral("FM"),
+         QStringLiteral("FMN"), QStringLiteral("WFM"), QStringLiteral("USB"),
+         QStringLiteral("LSB"), QStringLiteral("CW"), QStringLiteral("CWR")}};
+    c.receiveFilterControl = std::nullopt; // DDC currently stores, but never consumes, filter edges
+    c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    c.receivePanCenterControl = std::nullopt; // setPanCenter also retunes slice 0
+    c.receivePanBandwidthControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
+                                                         225'001, 3'000'000};
 
     // Sample rates — non-contiguous legal windows for R820T
     c.sampleRatesHz = {
@@ -353,6 +375,10 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
 
     // ── Instantiate Worker (owns RtlSdrDdc processing engine) ─────────────
     m_worker = std::make_unique<RtlSdrWorker>(m_device);
+    // A new DDC starts at unity/unmuted. Do not publish the old worker's
+    // mixer observation across a reconnect.
+    m_receiveGain = 100;
+    m_receiveMuted = false;
 
     if (RtlSdrDdc* ddcEngine = m_worker->ddc()) {
         ddcEngine->setSampleRate(m_sampleRateHz);
@@ -603,6 +629,10 @@ void RtlSdrBackend::setSliceAudioMute(int sliceId, bool mute)
     if (sliceId == 0) {
         if (RtlSdrDdc* ddcEngine = ddc()) {
             ddcEngine->setAudioMute(mute);
+            m_receiveMuted = mute;
+            SliceDelta delta;
+            delta.audioMute = mute;
+            emit sliceChanged(sliceId, delta);
         }
     }
 }
@@ -612,6 +642,10 @@ void RtlSdrBackend::setSliceAudioGain(int sliceId, int gainPercent)
     if (sliceId == 0) {
         if (RtlSdrDdc* ddcEngine = ddc()) {
             ddcEngine->setAudioGain(gainPercent);
+            m_receiveGain = std::clamp(gainPercent, 0, 100);
+            SliceDelta delta;
+            delta.audioGain = m_receiveGain;
+            emit sliceChanged(sliceId, delta);
         }
     }
 }
@@ -893,6 +927,8 @@ void RtlSdrBackend::emitInitialState()
     sDelta.mode = m_sliceMode;
     sDelta.filterLow = m_sliceFilterLow;
     sDelta.filterHigh = m_sliceFilterHigh;
+    sDelta.audioGain = m_receiveGain;
+    sDelta.audioMute = m_receiveMuted;
     // No txAntenna or rxAntenna list on hardware without software antenna switches (Constitution Principle II & VI)
     sDelta.modeList = QStringList{QStringLiteral("AM"), QStringLiteral("SAM"),
                                   QStringLiteral("FM"), QStringLiteral("FMN"),
