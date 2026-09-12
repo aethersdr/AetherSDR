@@ -267,4 +267,44 @@ regional globe playback, primary global flat-map playback, source switching and
 zoom controls. The final globe run used 2048-square whole-world playback with
 LibreWXR disabled, matching the operator's direct-regional setting. Test instances
 remained disconnected from radio hardware with TX automation disabled and were
-stopped afterward. These changes remain local and uncommitted.
+stopped afterward. These results describe the local implementation before publication.
+
+
+### RFC implementation captures (September 12, 2026)
+
+The images below show the proposed implementation at source commit
+`94fc042a18c62c2b82e13ae91ac191a4ad11ca77`, rebased onto upstream
+`3b3312eb8a5af12e485c4284d64fca59ee72fcf7`. This is a proposal awaiting
+maintainer design approval, not a released feature. The ARM64 build and all six
+focused CTest suites passed; a separate native Cocoa run passed all 47 loading,
+playback and rendering cases. The authenticated MCP walkthrough used isolated
+settings, DEMO-0001 and disabled TX automation. Windows/Linux remain unverified.
+
+An initial live loading failure recovered after restarting the overlay. One
+station catalog remained unavailable, so the visible 208-site status is partial;
+the screenshots do not claim complete station coverage.
+
+![Global precipitation playback](images/weather-radar/global-playback.png)
+
+LibreWXR precipitation playback over Africa and the Atlantic. The primary
+includes radar, satellite estimates and model data.
+
+![Nominal radar-site coverage](images/weather-radar/nominal-coverage.png)
+
+Optional faint nominal radar-site coverage over North America. Published
+footprints describe instrument reach, not current operational status.
+
+![Expanded sources and licenses](images/weather-radar/sources-licenses.png)
+
+Expanded attribution, license and product details; OpenStreetMap credit remains
+visible on the map when the panel is collapsed.
+
+![Flat-map precipitation playback](images/weather-radar/flat-map.png)
+
+Native flat-map capture showing precipitation across continents.
+
+Screenshot weather imagery: LibreWXR and contributing agencies listed under
+Credits and licensing above, CC BY 4.0 with Radar-DPC imagery subject to
+CC BY-SA 4.0. Imagery is reprojected/composited by AetherSDR; these screenshot
+images are shared under CC BY-SA 4.0. Basemap: © OpenStreetMap contributors,
+ODbL. These image credits do not change the application's source-code license.
