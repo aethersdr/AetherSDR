@@ -95,10 +95,10 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // capabilitiesChanged, and that is the honest answer rather than a gap.
     //
     // Every field below is either a compile-time constant for the R820T/RTL2832U
-    // pair or comes from m_modelName/m_vendor, and those two are read from the
-    // USB descriptor strings during connectRadio() — BEFORE emit connected() —
-    // and cleared only in disconnectRadio(). So the declaration is fixed for the
-    // whole life of a session: there is no mid-session revision to announce, and
+    // pair or comes from the USB descriptor strings (m_vendor, m_product /
+    // m_modelName, and m_serial), read during connectRadio() before connected()
+    // and cleared on disconnect or a configuration failure before connection.
+    // The declaration is fixed for the whole session: no mid-session revision, and
     // a synthetic emission would be noise dressed up as a contract.
     //
     // If a future tuner-dependent field is added here (a per-tuner gain table,

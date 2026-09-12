@@ -35,9 +35,11 @@
 //          applyPanBandwidth(). Driving that needs a connected radio, and the
 //          fake-EP6 fixture that used to provide one is retired (see the
 //          commented block in tests/tests.cmake and #5254). That call-site
-//          placement is review-verified, not test-verified, and this comment
+//          placement and receiverCeiling() itself are review-verified; the
+//          arithmetic below is reconstructed from its public helpers. This comment
 //          says so rather than letting the file read as full coverage.
 
+#include "TestSettingsProfile.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2CapabilityAnnouncer.h"
@@ -51,6 +53,7 @@
 #include <QMap>
 #include <QSignalSpy>
 #include <QString>
+#include <QVector>
 
 #include <algorithm>
 #include <cstdio>
@@ -77,6 +80,10 @@ static QMap<QString, QString> radioStatus(std::initializer_list<std::pair<const 
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("backend-capability-revision"));
+    if (!profile.isValid()) {
+        return 1;
+    }
     QCoreApplication app(argc, argv);
 
     // ---- flex: the model name is the capability input, and it lands late ----
@@ -84,6 +91,23 @@ int main(int argc, char** argv)
         FlexBackend backend;
         QSignalSpy caps(&backend, &IRadioBackend::capabilitiesChanged);
         QSignalSpy radio(&backend, &IRadioBackend::radioChanged);
+
+        // Mirror RadioModel's same-thread delta application and model provider.
+        // Capture inside the notification: reading afterwards would miss an
+        // emission moved ahead of radioChanged, which exposes the old table.
+        QString model;
+        QVector<RadioCapabilities> observed;
+        backend.setModelProvider([&model] { return model; });
+        QObject::connect(&backend, &IRadioBackend::radioChanged, &backend,
+                         [&model](const RadioDelta& delta) {
+            if (delta.model) {
+                model = *delta.model;
+            }
+        });
+        QObject::connect(&backend, &IRadioBackend::capabilitiesChanged, &backend,
+                         [&backend, &observed] {
+            observed.append(backend.capabilities());
+        });
 
         // A status with no model key revises nothing. This is the common case on
         // a live radio — `radio ...` repeats for callsign, nickname and the
@@ -99,6 +123,9 @@ int main(int argc, char** argv)
         // seeded table (built before the name was known) is now wrong.
         backend.decodeRadioStatus(radioStatus({{"model", "FLEX-8600"}}));
         check(caps.count() == 1, "the first model announces exactly one revision");
+        check(observed.size() == 1 && observed[0].model == QStringLiteral("FLEX-8600")
+                  && observed[0].maxSlices == 4 && observed[0].hasExtendedDsp,
+              "the first notification exposes the new model and derived capabilities");
 
         // The radio repeats the same model on an unrelated edit. Nothing about
         // the capability table changed, so nothing may be announced.
@@ -110,14 +137,21 @@ int main(int argc, char** argv)
         // A genuinely different model is a genuinely different table.
         backend.decodeRadioStatus(radioStatus({{"model", "FLEX-6400"}}));
         check(caps.count() == 2, "a changed model announces again");
+        check(observed.size() == 2 && observed[1].model == QStringLiteral("FLEX-6400")
+                  && observed[1].maxSlices == 2 && !observed[1].hasExtendedDsp,
+              "a changed-model notification exposes the revised capability table");
 
         // Disconnect drops the baseline: a reconnect republishes capabilities
         // from scratch, so the previous session's announcement describes nothing
         // and the same radio has to be announced again.
         backend.clearExtensionHandles();
+        model.clear();
         backend.decodeRadioStatus(radioStatus({{"model", "FLEX-6400"}}));
         check(caps.count() == 3,
               "after a disconnect the same model announces again");
+        check(observed.size() == 3 && observed[2].model == QStringLiteral("FLEX-6400")
+                  && observed[2].maxSlices == 2 && !observed[2].hasExtendedDsp,
+              "a reconnect notification exposes the new session model");
     }
 
     // ---- rtl: a static declaration, asserted rather than assumed ----

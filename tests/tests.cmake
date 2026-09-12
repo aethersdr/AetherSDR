@@ -161,8 +161,6 @@ target_compile_definitions(control_connection_test PRIVATE AETHERSDR_VERSION="${
 target_link_libraries(control_connection_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME control_connection_test COMMAND control_connection_test)
 
-# ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
-# backend records setAtu(); no sockets, no radio.
 # #5594 (M1): backends announce capability revisions. Socket-free — FlexBackend's
 # radio-status decode is driven directly, and the RTL case asserts the opposite
 # claim (a declaration that is fixed per session emits nothing).
@@ -171,6 +169,8 @@ target_include_directories(backend_capability_revision_test PRIVATE src tests)
 target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
 
+# ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
+# backend records setAtu(); no sockets, no radio.
 add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
 target_include_directories(atu_seam_gate_test PRIVATE src tests)
 target_link_libraries(atu_seam_gate_test PRIVATE aethercore Qt6::Core)
