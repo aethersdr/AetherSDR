@@ -26,8 +26,22 @@ ALSO: THE COUNT IS NOT WHAT GREP SAYS. `grep -c '^\\s*bool '` over this header
 reports 74, and that figure reached #5262 and its planning comments. Three of
 those are `operator==` declarations inside the nested helper structs
 (DeclaredBandRange, RxFilterPreset, RxFilterControl), which are not capability
-fields at all. This parser counts DIRECT bool members of RadioCapabilities only,
-by tracking brace depth — 71 at the freeze.
+fields at all. This parser counts DIRECT bool members of RadioCapabilities only
+— 71 at the freeze.
+
+A precision about HOW, because the obvious explanation is wrong (#5619 review):
+those three are excluded by the START OFFSET, not by the depth tracking. They
+are declared ABOVE `struct RadioCapabilities`, so the scan never reaches them.
+The depth guard exists for a nested type declared INSIDE the struct, of which
+there are none today — so it is currently unexercised on this header, and should
+be read as a guard against a future nested struct rather than as logic this
+count has validated.
+
+WHAT A COUNT CANNOT SEE. Converting one bool to a record while adding another in
+the same commit leaves the number flat and passes. That is inherent to counting
+rather than a defect — a name set would catch the swap but fail on ordinary
+renames and reordering, which is the churn this deliberately tolerates. The
+review that catches the swap is a human one.
 
 Usage:
     python tools/check_capability_records.py            # report
@@ -81,9 +95,19 @@ def direct_bool_fields(text: str) -> list[str]:
         code = re.sub(r"//.*$", "", line)
         code = re.sub(r"/\*.*?\*/", "", code)
         if depth_before == 1 and "(" not in code:
-            m = re.match(r"\s*bool\s+([A-Za-z_]\w*)\s*(=|;)", code)
+            # EVERY declarator on the line, and every initialiser form. The
+            # first version matched only `bool x = false;` — which is what the
+            # header happens to use today, so it passed — and a brace init
+            # (`bool x{false};`), a second declarator (`bool a = false, b;`) and
+            # a bitfield (`bool x : 1;`) all walked straight past it (#5619
+            # review). Style-dependent evasions are exactly what a ratchet is
+            # for: the one bool that slips in will not match house style.
+            m = re.match(r"\s*bool\s+(?P<rest>[^;]*);", code)
             if m:
-                fields.append(m.group(1))
+                for decl in m.group("rest").split(","):
+                    name = re.match(r"\s*([A-Za-z_]\w*)", decl)
+                    if name:
+                        fields.append(name.group(1))
         if depth <= 0:
             break
     return fields
