@@ -1224,14 +1224,16 @@ private:
     bool retireInvalidPcmSources();
     void queueLegacyKiwiAudioData(const QByteArray& pcm24kStereoFloat);
     void queueKiwiAudioData(const QString& sourceId, const QByteArray& pcm24kStereoFloat);
-    void resetMainPcmState(int producerRate);
+    bool mainPcmSourceOwnsDisplay() const;
+    // rebuildDsp=false keeps the optional NR chain: it is built for the
+    // producer domain, so a device-rate change must not pay to recreate it.
+    void resetMainPcmState(int producerRate, bool rebuildDsp = true);
     void flushRxDevice();
     void setRxDeviceRate(int rate);
     bool prepareMainPcmDsp();
     std::optional<PcmFrame> m_mainPcmFrame;
     std::optional<PcmFrame> m_legacyKiwiPcmFrame;
     std::atomic<int> m_rxProducerRate{DEFAULT_SAMPLE_RATE};
-    bool m_mainPcmDspReady{true};
     std::unique_ptr<RxClientEffects> m_legacyKiwiClientEffects;
 
     // DSP lifecycle mutex: held during feedAudioData() DSP section AND

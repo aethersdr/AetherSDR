@@ -1877,6 +1877,16 @@ static QString formatAudioBuffer(qsizetype bytes, double ms)
     return QString("%1 bytes (%2 ms)").arg(bytes).arg(ms, 0, 'f', 1);
 }
 
+// The peak row pairs two INDEPENDENT maxima: peak bytes and peak duration are
+// tracked separately on purpose, so that a later rate change cannot reinterpret
+// historical bytes through the current rate. They therefore need not come from
+// the same instant, and rendering them as "N bytes (M ms)" would assert that M
+// is N's duration. Show them as two separate maxima instead.
+static QString formatAudioBufferPeaks(qsizetype bytes, double ms)
+{
+    return QString("%1 bytes peak / %2 ms peak").arg(bytes).arg(ms, 0, 'f', 1);
+}
+
 static QString formatMsValue(int value)
 {
     return value < 1 ? "< 1 ms" : QString("%1 ms").arg(value);
@@ -2734,7 +2744,7 @@ void NetworkDiagnosticsDialog::refresh()
         const QStringList sliceLabels = audibleSliceLabels(m_model);
         m_audioBufferLabel->setText(formatAudioBuffer(m_audio->rxBufferBytes(), m_audio->rxBufferMs()));
         m_overviewAudioValue->setText(QString("%1 ms").arg(m_audio->rxBufferMs(), 0, 'f', 1));
-        m_audioBufferPeakLabel->setText(formatAudioBuffer(m_audio->rxBufferPeakBytes(), m_audio->rxBufferPeakMs()));
+        m_audioBufferPeakLabel->setText(formatAudioBufferPeaks(m_audio->rxBufferPeakBytes(), m_audio->rxBufferPeakMs()));
         m_audioUnderrunLabel->setText(QString::number(underruns));
         m_audioUnderrunRateLabel->setText(QString::number(sample.underrunsPerSecond, 'f', 0));
 

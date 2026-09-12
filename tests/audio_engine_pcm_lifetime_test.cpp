@@ -7,6 +7,7 @@
 #include "core/ClientComp.h"
 #include "core/DeepFilterFilter.h"
 #include "core/SpecbleachFilter.h"
+#include "core/SpectralNR.h"
 
 #include <QBuffer>
 #include <QCoreApplication>
@@ -206,11 +207,208 @@ public:
         engine.drainRxAudio(pcm.size());
         return invalid && engine.rxBufferBytes() == 0;
     }
+
+    static void feedMainPcm(AudioEngine& engine, const PcmFrame& frame)
+    {
+        engine.feedPcmFrame(frame);
+    }
+
+    static void drain(AudioEngine& engine, qsizetype freeBytes)
+    {
+        engine.drainRxAudio(freeBytes);
+    }
+
+    static const void* mainNr2Identity(AudioEngine& engine)
+    {
+        std::lock_guard<std::recursive_mutex> lock(engine.m_dspMutex);
+        return engine.m_nr2.get();
+    }
+
+    // NR2's FFT size scales with the producer rate it was built for, so it
+    // identifies the domain a filter belongs to.
+    static int mainNr2FftSize(AudioEngine& engine)
+    {
+        std::lock_guard<std::recursive_mutex> lock(engine.m_dspMutex);
+        return engine.m_nr2 ? engine.m_nr2->fftSize() : 0;
+    }
+
+    // Overlap-add output for one block. A filter that has been rebuilt starts
+    // cold, so its output differs from one that has been running — which is the
+    // only reliable way to tell a retained filter from a replacement. Neither
+    // pointer identity nor FFT size can: a same-rate rebuild frees and
+    // reallocates, and the allocator commonly returns the same address.
+    static QByteArray mainNr2Process(AudioEngine& engine, const QByteArray& stereo)
+    {
+        std::lock_guard<std::recursive_mutex> lock(engine.m_dspMutex);
+        if (!engine.m_nr2) {
+            return {};
+        }
+        QByteArray out = stereo;
+        const int frames = out.size() / (2 * static_cast<int>(sizeof(float)));
+        engine.m_nr2->processStereoSharedMask(
+            reinterpret_cast<const float*>(stereo.constData()),
+            reinterpret_cast<float*>(out.data()), frames);
+        return out;
+    }
+
+    static void setDeviceRate(AudioEngine& engine, int rate)
+    {
+        engine.setRxDeviceRate(rate);
+    }
+
+    static void setProducerRate(AudioEngine& engine, int rate)
+    {
+        engine.resetMainPcmState(rate);
+    }
+
+    static bool mainPcmFrameHeld(AudioEngine& engine)
+    {
+        std::lock_guard<std::recursive_mutex> lock(engine.m_dspMutex);
+        return engine.m_mainPcmFrame.has_value();
+    }
 };
 
 } // namespace AetherSDR
 
 namespace {
+
+// A producer revoked WHILE the drain is mixing must not reach the device. The
+// top-of-drain retirement cannot see it — the epoch is still live when the drain
+// starts — so the recheck immediately before the device write is the only thing
+// standing between a dead radio and a chunk of its audio being played.
+//
+// receivePresentationOutputAudioReady fires from inside the mix, after the chunk
+// is assembled and before that recheck, so a direct-connected slot revoking the
+// producer there reproduces the concurrent case deterministically, on the real
+// production path, with no test hook in the engine. Without the recheck this
+// test observes the chunk arriving at the device.
+bool checkRevocationDuringDspWithheld()
+{
+    AetherSDR::AudioEngine engine;
+    AetherSDR::AudioEngineRatesTestAccess::stopTimer(engine);
+    // The presentation signal is only emitted while a Kiwi source is active.
+    const QString kiwiId = QStringLiteral("revocation-during-dsp");
+    AetherSDR::AudioEngineRatesTestAccess::enableSource(engine, kiwiId);
+
+    QBuffer output;
+    output.open(QIODevice::ReadWrite);
+    AetherSDR::AudioEngineRatesTestAccess::attachMemoryOutput(engine, output);
+
+    AetherSDR::PcmProducer producer;
+    if (!producer.start(AetherSDR::PcmPurpose::Speaker)) {
+        std::fprintf(stderr, "FAIL: speaker producer would not start\n");
+        return false;
+    }
+    const int frames = 480;
+    QByteArray pcm(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* samples = reinterpret_cast<float*>(pcm.data());
+    for (int i = 0; i < frames * 2; ++i) {
+        samples[i] = 0.25f;
+    }
+    const auto frame = producer.legacyStereo24(pcm);
+    if (!frame) {
+        std::fprintf(stderr, "FAIL: producer would not publish the test block\n");
+        return false;
+    }
+    AetherSDR::AudioEngineRatesTestAccess::feedMainPcm(engine, *frame);
+
+    int revocations = 0;
+    QObject::connect(&engine, &AetherSDR::AudioEngine::receivePresentationOutputAudioReady,
+                     &engine, [&](const QString&, const QString&, const QByteArray&, int) {
+        // Mid-mix: exactly where a disconnect on the radio thread would land.
+        if (revocations++ == 0) {
+            producer.invalidate();
+        }
+    }, Qt::DirectConnection);
+
+    AetherSDR::AudioEngineRatesTestAccess::drain(engine, pcm.size());
+
+    const bool fired = revocations > 0;
+    const bool withheld = output.data().isEmpty();
+    const bool retired = !AetherSDR::AudioEngineRatesTestAccess::mainPcmFrameHeld(engine);
+    AetherSDR::AudioEngineRatesTestAccess::detachMemoryOutput(engine);
+
+    if (!fired) {
+        std::fprintf(stderr,
+            "FAIL: presentation signal never fired; the revocation seam did not run\n");
+        return false;
+    }
+    std::printf("%s: revoked-during-DSP chunk withheld from the device\n",
+                withheld ? "PASS" : "FAIL");
+    std::printf("%s: revoked main source retired by the pre-write recheck\n",
+                retired ? "PASS" : "FAIL");
+    return withheld && retired;
+}
+
+// The optional NR chain belongs to the PRODUCER domain: its filters are built
+// for a producer rate and never see the device rate. startRxStream() reaches
+// setRxDeviceRate() on every sink open — including the #1361 zombie-sink and
+// #1411 liveness watchdogs, which run on the GUI thread — so rebuilding there
+// charged each of those recovery paths a full model construction (DFNR measures
+// ~450 ms) for no change. Pin both directions: a device-rate change keeps the
+// filters, a producer-rate change replaces them.
+bool checkDeviceRateKeepsNrChain()
+{
+    // 480 stereo frames of a steady tone: enough to drive the overlap-add.
+    const int frames = 480;
+    QByteArray block(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* samples = reinterpret_cast<float*>(block.data());
+    for (int i = 0; i < frames; ++i) {
+        const float v = 0.3f * std::sin(2.0f * float(M_PI) * 1000.0f * float(i) / 24000.0f);
+        samples[i * 2] = v;
+        samples[i * 2 + 1] = v;
+    }
+
+    auto primed = [&](AetherSDR::AudioEngine& engine) {
+        engine.setNr2Enabled(true);
+        for (int i = 0; i < 8; ++i) {
+            AetherSDR::AudioEngineRatesTestAccess::mainNr2Process(engine, block);
+        }
+    };
+
+    // A: primed, no device-rate change. The reference "still running" output.
+    AetherSDR::AudioEngine warmEngine;
+    AetherSDR::AudioEngineRatesTestAccess::stopTimer(warmEngine);
+    primed(warmEngine);
+    const QByteArray warm =
+        AetherSDR::AudioEngineRatesTestAccess::mainNr2Process(warmEngine, block);
+
+    // B: fresh filter, never primed. The "was rebuilt" output.
+    AetherSDR::AudioEngine coldEngine;
+    AetherSDR::AudioEngineRatesTestAccess::stopTimer(coldEngine);
+    coldEngine.setNr2Enabled(true);
+    const QByteArray cold =
+        AetherSDR::AudioEngineRatesTestAccess::mainNr2Process(coldEngine, block);
+
+    // The detector is only meaningful if warm and cold actually differ.
+    const bool sensitive = !warm.isEmpty() && warm != cold;
+    std::printf("%s: primed and cold NR2 outputs differ (detector is sensitive)\n",
+                sensitive ? "PASS" : "FAIL");
+
+    // C: primed, then two device-rate changes. Must still match the warm output.
+    AetherSDR::AudioEngine engine;
+    AetherSDR::AudioEngineRatesTestAccess::stopTimer(engine);
+    primed(engine);
+    const int builtFft = AetherSDR::AudioEngineRatesTestAccess::mainNr2FftSize(engine);
+    AetherSDR::AudioEngineRatesTestAccess::setDeviceRate(engine, 48000);
+    AetherSDR::AudioEngineRatesTestAccess::setDeviceRate(engine, 44100);
+    const QByteArray afterDevice =
+        AetherSDR::AudioEngineRatesTestAccess::mainNr2Process(engine, block);
+    const bool kept = afterDevice == warm
+        && AetherSDR::AudioEngineRatesTestAccess::mainNr2FftSize(engine) == builtFft;
+    std::printf("%s: device-rate change keeps the producer-domain NR chain and its history\n",
+                kept ? "PASS" : "FAIL");
+
+    // A real producer-rate move must still replace the chain; FFT size scales
+    // with the producer rate, so it survives allocator address reuse.
+    AetherSDR::AudioEngineRatesTestAccess::setProducerRate(engine, 48000);
+    const int afterProducerFft = AetherSDR::AudioEngineRatesTestAccess::mainNr2FftSize(engine);
+    const bool rebuilt = builtFft > 0 && afterProducerFft == builtFft * 2;
+    std::printf("%s: producer-rate change still rebuilds the NR chain (fft %d -> %d)\n",
+                rebuilt ? "PASS" : "FAIL", builtFft, afterProducerFft);
+
+    return sensitive && kept && rebuilt;
+}
 
 bool checkAggregateDurations()
 {
@@ -389,6 +587,8 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     const bool durationChecks = checkAggregateDurations();
     const bool invalidProcessingChecks = checkInvalidProcessingWithheld();
+    const bool revocationDuringDspChecks = checkRevocationDuringDspWithheld();
+    const bool deviceRateNrChecks = checkDeviceRateKeepsNrChain();
     const bool meterChecks = checkPresentedMeters();
     const bool singleFeedChecks = checkSingleAuxiliaryFeed();
     AetherSDR::AudioEngine engine;
@@ -446,7 +646,8 @@ int main(int argc, char** argv)
     const bool prepared = AetherSDR::AudioEngineRatesTestAccess::initializeSource(engine, sourceId)
         && AetherSDR::AudioEngineRatesTestAccess::sourcePrepared(engine, sourceId);
     const unsigned initializations = completedInitializations.load(std::memory_order_relaxed);
-    const bool passed = durationChecks && invalidProcessingChecks && meterChecks && singleFeedChecks
+    const bool passed = durationChecks && invalidProcessingChecks && revocationDuringDspChecks
+        && deviceRateNrChecks && meterChecks && singleFeedChecks
         && initialized.load(std::memory_order_relaxed)
         && initializations > 0 && retiredEpochs == 300 && prepared;
     std::printf("%s: %d typed epochs retired; %u concurrent initialization attempts; final source %s\n",

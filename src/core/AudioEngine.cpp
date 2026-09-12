@@ -4542,7 +4542,17 @@ bool AudioEngine::prepareMainPcmDsp()
         ;
 }
 
-void AudioEngine::resetMainPcmState(int producerRate)
+// Whether the main typed source owns the RX display right now. The EQ analyzer
+// tap and the auxiliary meter mirror must agree on this: testing only for a
+// non-null frame left a revoked-but-not-yet-retired frame counting as live for
+// up to one 10 ms drain tick, so the tap stayed suppressed after the meters had
+// already handed back to the auxiliary source.
+bool AudioEngine::mainPcmSourceOwnsDisplay() const
+{
+    return m_mainPcmFrame && m_mainPcmFrame->current();
+}
+
+void AudioEngine::resetMainPcmState(int producerRate, bool rebuildDsp)
 {
     std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     m_rxBuffer.clear();
@@ -4563,8 +4573,14 @@ void AudioEngine::resetMainPcmState(int producerRate)
         std::fill(std::begin(m_clientEqTapRx), std::end(m_clientEqTapRx), 0.0f);
         m_clientEqTapRxWrite = 0;
     }
-    m_mainPcmDspReady = prepareMainPcmDsp();
-    if (!m_mainPcmDspReady) {
+    // Only a PRODUCER-rate change invalidates these filters — they are built
+    // for the producer domain and never see the device rate. Rebuilding costs a
+    // model load (DFNR measures ~450 ms), so a caller that has not moved the
+    // producer rate keeps them, history included: the stream behind them did
+    // not change, and dropping their state would inject an NR transient.
+    // Withholding on failed preparation is enforced per call in
+    // processMixedRxAudioData(), not by a flag here.
+    if (rebuildDsp && !prepareMainPcmDsp()) {
         qCWarning(lcAudio) << "AudioEngine: enabled RX processing could not prepare at"
                           << producerRate << "Hz; withholding this source";
     }
@@ -4616,9 +4632,17 @@ void AudioEngine::setRxDeviceRate(int rate)
 {
     // Called only after successful output negotiation. The producer rate is
     // unchanged; old device-format bytes and every converter history expire.
+    //
+    // The optional NR chain is deliberately NOT rebuilt here. startRxStream()
+    // reaches this on every sink open — including the #1361 zombie-sink and
+    // #1411 liveness watchdogs, which fire on real hardware and run on the GUI
+    // thread — and those filters belong to the producer domain, which this call
+    // does not touch. Rebuilding them anyway put a model load on each of those
+    // recovery paths, freezing the UI at the exact moment the user is already
+    // hearing a glitch.
     std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     m_rxOutputRate.store(rate);
-    resetMainPcmState(m_rxProducerRate.load());
+    resetMainPcmState(m_rxProducerRate.load(), /*rebuildDsp=*/false);
     m_radeRxBuffer.clear();
     m_radeRxResampler.reset();
     m_kiwiSdrRxBuffer.clear();
@@ -5339,7 +5363,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         // the signal actually heading to the sink at native 24 kHz.
         const int tapFrames = eqSource->size() / (2 * static_cast<int>(sizeof(float)));
         if (tapFrames > 0 && !txPresentationGated
-            && (!auxiliaryEffects || !m_mainPcmFrame)) {
+            && (!auxiliaryEffects || !mainPcmSourceOwnsDisplay())) {
             tapClientEqRxStereo(
                 reinterpret_cast<const float*>(eqSource->constData()),
                 tapFrames);
@@ -5565,7 +5589,7 @@ void AudioEngine::updateAuxiliaryClientEffectMeters(RxClientEffects& source)
     // The main source owns the RX display whenever its typed stream is live.
     // With auxiliary-only playback, retain the existing last-presented-source
     // meter behavior without redirecting UI parameter writes to a DSP replica.
-    if (m_mainPcmFrame && m_mainPcmFrame->current()) {
+    if (mainPcmSourceOwnsDisplay()) {
         return;
     }
     m_clientGateRx->copyMeteringFrom(source.gate());
