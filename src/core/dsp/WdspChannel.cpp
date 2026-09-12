@@ -988,29 +988,57 @@ void WdspChannel::close() noexcept
     if (!m_open) {
         return;
     }
-    const std::scoped_lock setupLock(g_setupMutex);
     // TEARDOWN, and the only CloseChannel in this process. Stop first:
     // CloseChannel on a running channel frees buffers out from under the mute
     // ramp and skips the flush entirely, which is both a click on the way out
     // and a race.
     //
     // dmode 1 here, unlike setRunning()'s stop, and it does NOT mean the same
-    // thing. The flush flag it waits on is cleared by fexchange2, and this runs
-    // behind the control fence (the destructor has drained the callbacks;
-    // reconfigure() holds beginControlOperation()), so by construction nothing
-    // will clear it and the wait runs to WDSP's 100 ms timeout. The value of
-    // the blocking form is the timeout branch itself: it force-clears the
-    // exchange, flush and down-slew flags, which is exactly the state
-    // CloseChannel wants to find. A channel already stopped through
-    // setRunning() takes none of this — SetChannelState no-ops when the state
-    // already matches, so the wait is skipped too.
+    // thing. The flag it waits on is ch[channel].flushflag, and NOTHING ON THIS
+    // THREAD can clear it. The chain is one hop longer than it looks:
+    // fexchange0/fexchange2 run the down-slew and, when the slew completes,
+    // release a->Sem_Flush (iobuffs.c:502 and :561); WDSP's per-channel
+    // flushChannel thread wakes on that semaphore, flushes, and only then
+    // clears flushflag (channel.c:180). So the wait is satisfiable ONLY while
+    // the host keeps calling fexchange*, and close() runs behind the control
+    // fence — the destructor has drained the callbacks, reconfigure() holds
+    // beginControlOperation() — so by construction nothing will call it and the
+    // wait runs to WDSP's 100 ms timeout.
+    //
+    // The blocking form is still the right call here, because the timeout
+    // branch is not waste: it force-clears exchange, flushflag and
+    // slew.downflag, which is exactly the state CloseChannel wants to find.
+    // Passing dmode 0 would skip the wait AND the force-clear, which is not the
+    // same shortcut.
+    //
+    // The real fix is at the OWNER, not here: a channel already stopped through
+    // setRunning() takes none of this, because SetChannelState no-ops when the
+    // state already matches. Both RX owners in this tree (Hl2RxDsp, AnanRxDsp)
+    // now stop before they let a channel go, so in production this line is
+    // normally a no-op and the 100 ms is not paid at all.
+    //
+    // OUTSIDE g_setupMutex, and it is the only WDSP call in this class that is.
+    // That lock exists to serialise the FFTW PLANNER (see the comments at the
+    // top of this file); SetChannelState enters none of it. Everything it
+    // touches is indexed by channel — ch[channel].state/flushflag/exchange,
+    // ch[channel].iob.pc->slew — and so is everything the flushChannel thread
+    // it hands off to reaches: flush_iobuffs/flush_main are memsets and index
+    // resets over rxa[channel]/txa[channel], with no fftw_plan or
+    // fftw_destroy_plan reachable from either (checked by walking the call
+    // graph out of flush_main across the vendored tree). Under the lock, N
+    // channels closing while running queued N timeouts end to end. NOT
+    // MEASURED, an inference from the 100 ms constant: four receivers would
+    // have been ~0.4 s of serialised teardown.
     SetChannelState(m_channelId, 0, 1);
     m_running.store(false, std::memory_order_relaxed);
-    CloseChannel(m_channelId);
-    // After the channel has stopped and drained: while it is still running a
-    // callback can be inside processIq(), and destroying the stage under one
-    // frees the delay line out from under xanb().
-    closeNoiseBlanker();
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        CloseChannel(m_channelId);
+        // After the channel has stopped and drained: while it is still running
+        // a callback can be inside processIq(), and destroying the stage under
+        // one frees the delay line out from under xanb().
+        closeNoiseBlanker();
+    }
     m_open = false;
 }
 

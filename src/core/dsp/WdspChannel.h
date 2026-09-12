@@ -160,9 +160,14 @@ public:
     // place: close(), reached from the destructor and from reconfigure().
     //
     // DMODE, and why a running stop cannot use the blocking form. WDSP's stop
-    // sets a down-slew flag and a flush flag; both are cleared by the NEXT
-    // fexchange2 calls (iobuffs.c), so the drain runs on the thread that is
-    // feeding the channel, not inside SetChannelState. The blocking form
+    // sets a down-slew flag and a flush flag, and clearing them takes TWO hops,
+    // not one: the next fexchange0/fexchange2 calls run the down-slew and
+    // release the channel's Sem_Flush when it completes (iobuffs.c:502, :561),
+    // and WDSP's per-channel flushChannel thread wakes on that semaphore,
+    // flushes, and clears the flush flag (channel.c:180). Either way the drain
+    // starts on the thread that is feeding the channel, not inside
+    // SetChannelState, and a channel nobody is feeding can never finish it.
+    // The blocking form
     // (dmode 1) is therefore correct only once the feed has been fenced off,
     // which is what close() does behind beginControlOperation(). Called with
     // the feed still live — and worse, from the feeding thread itself — it
