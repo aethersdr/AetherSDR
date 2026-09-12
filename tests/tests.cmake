@@ -571,6 +571,18 @@ add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
 
+# Socket-free shared-pool admission and injected receiver lifetime tests. These
+# foundations are compiled/tested even when the optional RTL USB driver is off.
+add_executable(wdsp_channel_reservation_test tests/wdsp_channel_reservation_test.cpp)
+target_link_libraries(wdsp_channel_reservation_test PRIVATE aethercore)
+add_test(NAME wdsp_channel_reservation_test COMMAND wdsp_channel_reservation_test)
+set_tests_properties(wdsp_channel_reservation_test PROPERTIES TIMEOUT 120)
+
+add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
+target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_receiver_registry_test COMMAND rtl_receiver_registry_test)
+set_tests_properties(rtl_receiver_registry_test PROPERTIES TIMEOUT 120)
+
 # HL2 Metis protocol — pure wire encode/decode, standalone (no Qt / aethercore).
 add_executable(hl2_metis_protocol_test
     tests/hl2_metis_protocol_test.cpp
