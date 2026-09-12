@@ -2914,6 +2914,13 @@ add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
 # Read-only external-device diagnostic registry and provider dispatch. The
 # platform-specific Ulanzi HID snapshot is supplied by MainWindow on macOS;
 # this test pins the bridge contract without requiring physical hardware.
+# Direct handleLine injection; no sockets are opened and no radio is constructed.
+add_executable(automation_cell_test tests/automation_cell_test.cpp)
+target_include_directories(automation_cell_test PRIVATE src)
+target_link_libraries(automation_cell_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME automation_cell_test COMMAND automation_cell_test)
+set_tests_properties(automation_cell_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(automation_device_diagnostics_test
     tests/automation_device_diagnostics_test.cpp
 )
@@ -5050,6 +5057,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    automation_cell_test
     automation_server_gesture_test
     automation_device_diagnostics_test
     automation_json_id_test

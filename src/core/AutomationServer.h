@@ -467,7 +467,7 @@ private:
     // checked. Returns an empty object on success with `view`/`index` set,
     // otherwise the error to hand back.
     QJsonObject resolveCell(const QString& target, const QString& value,
-                            QAbstractItemView*& view, QModelIndex& index) const;
+                           QAbstractItemView*& view, QModelIndex& index) const;
     // scrollTo <target> (alias ensureVisible): scroll the nearest QScrollArea
     // ancestor so the target widget sits in its viewport. Widgets parked below
     // the fold of a scroll area (e.g. the Aetherial strip's waveform panel)

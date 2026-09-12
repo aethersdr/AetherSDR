@@ -71,7 +71,8 @@
 // Best-effort value extraction for common control types.
 #include <QAbstractButton>
 #include <QAbstractSlider>
-#include <QAbstractItemView>   // invoke selectRow: QTableWidget/QTreeWidget/QListWidget row select
+#include <QAbstractItemView>
+#include <QPersistentModelIndex>
 #include <QItemSelectionModel>
 #include <QComboBox>
 #include <QLineEdit>
@@ -3032,10 +3033,11 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("cell", {}, "cell <target> <row> <col> — read an item-view cell: text, tooltip, selection",
-            parseTargetXY,
+            parseTargetRest,
             [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
-                if (a.target.isEmpty())
+                if (a.target.isEmpty()) {
                     return err(QStringLiteral("cell requires a target item view"));
+                }
                 return s.doCell(a.target, a.value);
             });
 
@@ -9961,24 +9963,31 @@ QJsonObject AutomationServer::doTooltip(const QString& target,
             return err(QStringLiteral("cell has no tooltip: %1 row %2 col %3")
                            .arg(target).arg(index.row()).arg(index.column()));
         }
-        // A scrolled-out row has an empty visualRect; bring it on screen first.
-        // A row or column hidden by the view (a filter, setColumnHidden) stays
-        // empty after that — the event would land at the viewport origin on
-        // whatever cell sits there, so refuse rather than report the wrong tip.
+        // Scrolling can synchronously reset the model or rebuild the view.
+        // Hold both lifetimes before invoking it and reject a stale index.
+        QPointer<QAbstractItemView> viewGuard = view;
+        const QPersistentModelIndex persistentIndex(index);
         view->scrollTo(index);
-        const QRect cellRect = view->visualRect(index);
-        if (cellRect.isEmpty()) {
-            return err(QStringLiteral("cell is not visible (hidden row or column): %1 row %2 col %3")
+        if (!viewGuard || !persistentIndex.isValid()
+            || viewGuard->model() != persistentIndex.model()
+            || viewGuard->rootIndex() != persistentIndex.parent()) {
+            return err(QStringLiteral("cell changed while scrolling: ") + target);
+        }
+        index = persistentIndex;
+        QPointer<QWidget> viewport = viewGuard->viewport();
+        // visualRect describes the entire cell, even when it exceeds the
+        // viewport. Aim inside its visible intersection, never outside the view
+        // or on a different cell (for example, the anchor of a merged span).
+        const QRect cellRect = viewGuard->visualRect(index).intersected(viewport->rect());
+        if (cellRect.isEmpty() || viewGuard->indexAt(cellRect.center()) != index) {
+            return err(QStringLiteral("cell is not visible (hidden or outside viewport): %1 row %2 col %3")
                            .arg(target).arg(index.row()).arg(index.column()));
         }
-        const QString className = shortClassName(view);
+        const QString className = shortClassName(viewGuard);
         const int row = index.row();
         const int col = index.column();
-        // QPointer guards (#4122 review): a ToolTip handler that rebuilds UI
-        // can destroy the view during sendEvent — nothing below touches the
-        // raw pointers after the event.
-        QPointer<QAbstractItemView> viewGuard = view;
-        QPointer<QWidget> viewport = view->viewport();
+        // The help-event handler may destroy the view too; nothing below the
+        // event delivery touches either raw pointer.
         const QPoint local = cellRect.center();
         const QPoint global = viewport->mapToGlobal(local);
         QHelpEvent event(QEvent::ToolTip, local, global);
@@ -10072,10 +10081,10 @@ QJsonObject AutomationServer::doTooltip(const QString& target,
 
 // Shared by `cell` and the cell form of `tooltip` (#5503): resolve the
 // target to an item view with a model and "row col" to a bounds-checked
-// index. Top-level rows only — a tree's children are not addressable by a
-// flat row number in this version.
+// index relative to the view's root. Descendants below that level are not
+// addressable by a flat row number in this version.
 QJsonObject AutomationServer::resolveCell(const QString& target, const QString& value,
-                                          QAbstractItemView*& view, QModelIndex& index) const
+                                         QAbstractItemView*& view, QModelIndex& index) const
 {
     QWidget* w = resolveWidget(target);
     if (!w) {
@@ -10098,15 +10107,19 @@ QJsonObject AutomationServer::resolveCell(const QString& target, const QString& 
     if (parts.size() != 2 || !okRow || !okCol) {
         return err(QStringLiteral("cell needs integer row and column indices"));
     }
-    const int rows = m->rowCount();
-    const int cols = m->columnCount();
+    const QModelIndex root = view->rootIndex();
+    const int rows = m->rowCount(root);
+    const int cols = m->columnCount(root);
     if (row < 0 || row >= rows) {
         return err(QStringLiteral("row %1 out of range [0,%2)").arg(row).arg(rows));
     }
     if (col < 0 || col >= cols) {
         return err(QStringLiteral("column %1 out of range [0,%2)").arg(col).arg(cols));
     }
-    index = m->index(row, col);
+    index = m->index(row, col, root);
+    if (!index.isValid()) {
+        return err(QStringLiteral("cell has no valid model index"));
+    }
     return {};
 }
 
@@ -10133,8 +10146,8 @@ QJsonObject AutomationServer::doCell(const QString& target, const QString& value
         {QStringLiteral("toolTip"), m->data(index, Qt::ToolTipRole).toString()},
         {QStringLiteral("accessibleText"), m->data(index, Qt::AccessibleTextRole).toString()},
         {QStringLiteral("selected"), sm != nullptr && sm->isSelected(index)},
-        {QStringLiteral("rows"), m->rowCount()},
-        {QStringLiteral("cols"), m->columnCount()},
+        {QStringLiteral("rows"), m->rowCount(view->rootIndex())},
+        {QStringLiteral("cols"), m->columnCount(view->rootIndex())},
     };
 }
 
