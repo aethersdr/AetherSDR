@@ -4664,6 +4664,15 @@ add_executable(hl2_overload_policy_test
 )
 target_include_directories(hl2_overload_policy_test PRIVATE src)
 add_test(NAME hl2_overload_policy_test COMMAND hl2_overload_policy_test)
+# HERMES.md §13 item 16: the pre-DDC overload flag paired with WDSP's post-DDC
+# RXA_ADC_PK. Header-only and Qt-free, like the overload policy above and for
+# the same reason — the interesting branches need a saturated converter, which
+# no test can arrange.
+add_executable(hl2_adc_pairing_test
+    tests/hl2_adc_pairing_test.cpp
+)
+target_include_directories(hl2_adc_pairing_test PRIVATE src)
+add_test(NAME hl2_adc_pairing_test COMMAND hl2_adc_pairing_test)
 add_executable(hl2_dsp_setup_policy_test
     tests/hl2_dsp_setup_policy_test.cpp
 )
