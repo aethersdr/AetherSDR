@@ -52,26 +52,13 @@ constexpr qint64 kFrameCacheLifetimeMs = 4 * 60 * 60 * 1000
                                        + 15 * 60 * 1000;
 constexpr qint64 kMaximumFrameCacheBytes = 256 * 1024 * 1024;
 
-MapView::ViewportMode flatMapViewportMode()
-{
-#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
-    // A QOpenGLWidget viewport can force an immediate backing-store repaint
-    // while it is being attached. On macOS that repaint may re-enter a
-    // Metal-backed QRhiWidget (the spectrum or WAVE scope) and invalidate its
-    // active graphics pipeline. Keep the map on QGraphicsView's raster
-    // viewport when the app is built with those Metal-backed widgets.
-    return MapView::ViewportMode::Raster;
-#else
-    return MapView::ViewportMode::OpenGlIfAvailable;
-#endif
-}
-
 }
 
 MapDisplayWidget::MapDisplayWidget(QWidget* parent)
     : QWidget(parent)
     , m_stack(new QStackedLayout(this))
-    , m_flatView(new MapView(this, flatMapViewportMode()))
+    , m_flatView(new MapView(
+          this, MapView::ViewportMode::OpenGlIfAvailable))
 {
     m_cityLightsSource = new CityLightsSource(this);
     connect(m_cityLightsSource, &CityLightsSource::imageChanged,

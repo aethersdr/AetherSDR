@@ -644,8 +644,8 @@ public:
     static bool defaultFilterEdgesHidden();
     static void setDefaultMarkerWidth(int widthPx);
     static void setDefaultFilterEdgesHidden(bool hide);
-    void setMarkerWidth(int widthPx);
-    void setFilterEdgesHidden(bool hide);
+    void setMarkerWidth(int widthPx, bool persist = true);
+    void setFilterEdgesHidden(bool hide, bool persist = true);
 private:
     int  m_markerWidth{1};
     bool m_filterEdgesHidden{false};

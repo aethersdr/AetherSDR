@@ -43,6 +43,7 @@
 #include "SettingsBrowserDialog.h"
 #include "ThemeEditorDialog.h"
 #include "TxBandDialog.h"
+#include "SwrSweepLicenseDialog.h"
 #include "TxApplet.h"
 #include "UlanziDialMapperDialog.h"
 #include "VfoWidget.h"
@@ -105,10 +106,8 @@ void MainWindow::buildMenuBar()
             this, &MainWindow::disconnectFromRadioByUser);
 
     connect(fileMenu, &QMenu::aboutToShow, this,
-            [this, chooseRadio, disconnectRadio] {
-        const bool connected = m_radioModel.isConnected();
-        chooseRadio->setEnabled(!connected);
-        disconnectRadio->setEnabled(connected);
+            [this, disconnectRadio] {
+        disconnectRadio->setEnabled(m_radioModel.isConnected());
     });
 
     auto* waveformsAct = new QAction("Waveforms...", this);
@@ -384,6 +383,33 @@ void MainWindow::buildMenuBar()
         showOrRaisePersistent(m_ulanziMapperDialog, m_dialBackend,
                               &m_shortcutManager, midi);
     });
+    settingsMenu->addSeparator();
+    auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
+    connect(usbCablesAction, &QAction::triggered, this, [this] {
+        openRadioSetupPage(QStringLiteral("USB Cables"));
+    });
+    settingsMenu->addSeparator();
+
+    m_keyboardShortcutsEnabled = AppSettings::instance()
+        .value("KeyboardShortcutsEnabled", "False").toString() == "True";
+    auto* kbAct = settingsMenu->addAction("Keyboard Shortcuts");
+    kbAct->setCheckable(true);
+    kbAct->setChecked(m_keyboardShortcutsEnabled);
+    connect(kbAct, &QAction::toggled, this, [this](bool on) {
+        m_keyboardShortcutsEnabled = on;
+        s_keyboardShortcutsEnabled = on;
+        AppSettings::instance().setValue("KeyboardShortcutsEnabled", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+    auto* configShortcutsAct = settingsMenu->addAction("Configure Shortcuts...");
+    configShortcutsAct->setMenuRole(QAction::NoRole);
+    connect(configShortcutsAct, &QAction::triggered, this, [this] {
+        ShortcutDialog dlg(&m_shortcutManager, this);
+        dlg.exec();
+        m_shortcutManager.rebuildShortcuts(this, shortcutGuard);
+    });
+    settingsMenu->addSeparator();
+
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
         const bool wasFresh = !m_spotHubDialog;
@@ -992,7 +1018,7 @@ void MainWindow::buildMenuBar()
         connect(action, &QAction::triggered, this, [this, width = option.second] {
             VfoWidget::setDefaultMarkerWidth(width);
             for (auto* vfo : findChildren<VfoWidget*>()) {
-                vfo->setMarkerWidth(width);
+                vfo->setMarkerWidth(width, /*persist=*/false);
             }
         });
     }
@@ -1011,7 +1037,7 @@ void MainWindow::buildMenuBar()
         connect(action, &QAction::triggered, this, [this, hide = option.second] {
             VfoWidget::setDefaultFilterEdgesHidden(hide);
             for (auto* vfo : findChildren<VfoWidget*>()) {
-                vfo->setFilterEdgesHidden(hide);
+                vfo->setFilterEdgesHidden(hide, /*persist=*/false);
             }
         });
     }
@@ -1178,26 +1204,6 @@ void MainWindow::buildMenuBar()
         }
     });
 
-    m_keyboardShortcutsEnabled = AppSettings::instance()
-        .value("KeyboardShortcutsEnabled", "False").toString() == "True";
-    auto* kbAct = viewMenu->addAction("Keyboard Shortcuts");
-    kbAct->setCheckable(true);
-    kbAct->setChecked(m_keyboardShortcutsEnabled);
-    connect(kbAct, &QAction::toggled, this, [this](bool on) {
-        m_keyboardShortcutsEnabled = on;
-        s_keyboardShortcutsEnabled = on;
-        AppSettings::instance().setValue("KeyboardShortcutsEnabled", on ? "True" : "False");
-        AppSettings::instance().save();
-    });
-    auto* configShortcutsAct = viewMenu->addAction("Configure Shortcuts...");
-    configShortcutsAct->setMenuRole(QAction::NoRole); // prevent macOS auto-reparenting (#883)
-    connect(configShortcutsAct, &QAction::triggered, this, [this] {
-        ShortcutDialog dlg(&m_shortcutManager, this);
-        dlg.exec();
-        // Rebuild shortcuts in case bindings changed
-        m_shortcutManager.rebuildShortcuts(this, shortcutGuard);
-    });
-
     viewMenu->addSeparator();
     auto* heartbeatBlinkAct = viewMenu->addAction("Blink Status Indicator");
     heartbeatBlinkAct->setCheckable(true);
@@ -1267,6 +1273,11 @@ void MainWindow::buildMenuBar()
     auto* swrScanAction = toolsMenu->addAction("Start SWR Scan...");
     swrScanAction->setProperty(kTxKeyingProperty, true);
     connect(swrScanAction, &QAction::triggered, this, [this] {
+        // Always show the license dialog from Tools so the ellipsis is
+        // honest and a remembered overlay confirm cannot one-click TX.
+        if (!SwrSweepLicenseDialog::confirm(this, /*force=*/true)) {
+            return;
+        }
         startSwrSweep();
     });
     auto* preTuneAction = toolsMenu->addAction("Pre-tune ATU Bands...");
@@ -1299,7 +1310,7 @@ void MainWindow::buildMenuBar()
     toolsMenu->addAction(waveformsAct);
 
     toolsMenu->addSeparator();
-    auto* radioHealthAction = toolsMenu->addAction("Radio Health...", this, [this] {
+    toolsMenu->addAction("Radio Health...", this, [this] {
         auto* dlg = new RadioHealthDialog(&m_radioModel, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         trackPersistentDialog(dlg);
@@ -1321,7 +1332,7 @@ void MainWindow::buildMenuBar()
              copyAssistAction,
 #endif
              swrScanAction, preTuneAction, clearAtuAction,
-             radioHealthAction, gpsDashboardAction, runtimeMonitorAction] {
+             gpsDashboardAction, runtimeMonitorAction] {
         const bool connected = m_radioModel.isConnected();
         const RadioCapabilities caps = m_radioModel.backendCapabilities();
         const auto& tx = m_radioModel.transmitModel();
@@ -1342,18 +1353,20 @@ void MainWindow::buildMenuBar()
             m_asrIndicator && (m_asrIndicator->isEnabled() || copyVisible));
         copyAssistAction->setChecked(copyVisible);
 #endif
+        const bool hasTxApplet = m_appletPanel && m_appletPanel->txApplet();
         swrScanAction->setEnabled(txReady);
         swrScanAction->setToolTip(txReady ? QString()
             : tr("Requires an idle, TX-capable radio with this client holding the interlock"));
         const bool memories = caps.hasTunerMemories;
-        preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled());
+        preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
+            && hasTxApplet);
         preTuneAction->setToolTip(!memories
             ? tr("ATU memory controls are unavailable for this radio")
             : (!tx.memoriesEnabled()
                    ? tr("Enable MEM before running the pre-tune sweep")
-                   : QString()));
-        clearAtuAction->setEnabled(connected && memories);
-        radioHealthAction->setEnabled(connected);
+                   : (txReady ? QString()
+                              : tr("Requires an idle, TX-capable radio with this client holding the interlock"))));
+        clearAtuAction->setEnabled(connected && memories && hasTxApplet);
         runtimeMonitorAction->setEnabled(true);
         const bool gps = !connected
             || (caps.hasGpsLocation && m_radioModel.hasGpsHardware());
