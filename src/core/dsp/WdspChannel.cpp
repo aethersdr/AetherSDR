@@ -509,12 +509,13 @@ bool WdspChannel::setRunning(bool running) noexcept
     if (!beginControlOperation()) {
         return false;
     }
-    {
-        const std::scoped_lock setupLock(g_setupMutex);
-        // dmode 0 in BOTH directions — see the header. The drain is
-        // processIq()'s job and this thread cannot wait for it.
-        SetChannelState(m_channelId, running ? 1 : 0, 0);
-    }
+    // dmode 0 in BOTH directions — see the header. The drain is processIq()'s
+    // job and this thread cannot wait for it.
+    //
+    // OUTSIDE g_setupMutex, like close()'s stop and for the reason spelled out
+    // there: that lock serialises the FFTW planner and SetChannelState enters
+    // none of it. Three SetChannelState sites in this file, one convention.
+    SetChannelState(m_channelId, running ? 1 : 0, 0);
     m_running.store(running, std::memory_order_relaxed);
     endControlOperation();
     return true;
@@ -540,7 +541,13 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
         // SetChannelState(oldstate, 0)). open() always starts the channel,
         // because that is what an initial build wants; a rebuild of a STOPPED
         // channel must not put it back on the air behind the caller's back.
-        const std::scoped_lock setupLock(g_setupMutex);
+        //
+        // Safe to leave a ramp pending here, which it did not used to be: this
+        // arms a down-slew that nothing is obliged to clock, and before
+        // AetherSDR patch 5 a later setRunning(true) would then have finished
+        // that stale ramp and killed the channel. Case 1 now cancels it.
+        //
+        // Outside g_setupMutex, like the other two SetChannelState sites.
         SetChannelState(m_channelId, 0, 0);
         m_running.store(false, std::memory_order_relaxed);
     }
@@ -1010,6 +1017,16 @@ void WdspChannel::close() noexcept
     // slew.downflag, which is exactly the state CloseChannel wants to find.
     // Passing dmode 0 would skip the wait AND the force-clear, which is not the
     // same shortcut.
+    //
+    // AND THAT IS NOT AN ARGUMENT AGAINST THE OWNER-SIDE STOP DESCRIBED IN THE
+    // NEXT PARAGRAPH, which deliberately makes this line a no-op so the
+    // force-clear never runs. Reaching CloseChannel with all three flags still
+    // set is benign, checked rather than assumed: pre_main_destroy clears
+    // exchange, pre_main_build clears flushflag, and post_main_destroy ->
+    // destroy_iobuffs frees the whole iob so create_iobuffs hands back a fresh
+    // slew with downflag zeroed. Nothing can release Sem_Flush in between,
+    // because nothing calls fexchange*. A future reader following the
+    // paragraph above should not re-add the wait. (Raised in review of #5628.)
     //
     // The real fix is at the OWNER, not here: a channel already stopped through
     // setRunning() takes none of this, because SetChannelState no-ops when the

@@ -180,10 +180,32 @@ public:
     // bit clears, fexchange2 writes nothing at all, so this class zeroes the
     // output itself rather than letting the last block before the stop repeat.
     //
+    // A START HAS NO CLOCKING PRECONDITION, and that took a vendored patch.
+    // Upstream's SetChannelState case 1 arms the up-slew but never clears
+    // slew.downflag, and the two flags are read independently on opposite sides
+    // of fexchange2 — up gates the input, down gates the output. So a start
+    // taken before the previous stop's ramp had been clocked out used to leave
+    // that ramp pending on a channel WDSP considered running; the next few
+    // blocks finished it, and downslew2's completion arm clears
+    // ch[].exchange, after which fexchange2 returns having touched nothing at
+    // all. The channel was silently dead, isRunning() said true, and only a
+    // reconfigure() recovered it. AetherSDR patch 5 (see
+    // third_party/wdsp/AETHERSDR-PATCHES.md) makes case 1 cancel a pending
+    // down-ramp first, so stop/start pairs are safe at any spacing, including
+    // none — which is what the §13 row 9a T/R edge needs. Pinned by
+    // runRestartDuringRampTest.
+    //
     // Control-path work, guarded exactly like setMode(): returns false if a
     // control operation is already in flight, and must not be called from
     // processIq(). Setting the state it is already in is a no-op that succeeds.
-    bool setRunning(bool running) noexcept;
+    //
+    // [[nodiscard]] because beginControlOperation() REFUSES rather than waits:
+    // a caller that ignores false has not stopped the channel and will silently
+    // pay close()'s 100 ms instead. Every owner in this tree calls this from the
+    // thread that drives processIq(), where a callback cannot be in flight, so
+    // today it cannot fail — the attribute is there to make it a compile error
+    // rather than a mystery if that ownership ever moves off that thread.
+    [[nodiscard]] bool setRunning(bool running) noexcept;
     [[nodiscard]] bool isRunning() const noexcept
     {
         return m_running.load(std::memory_order_relaxed);

@@ -322,10 +322,58 @@ int SetChannelState (int channel, int state, int dmode)
 			}
 			break;
 		case 1:
+			// AetherSDR patch 5: a START CANCELS A DOWN-RAMP THAT WAS NEVER CLOCKED OUT.
+			//
+			// Upstream's case 1 arms the up-slew and re-arms exchange but never touches
+			// slew.downflag, and the two flags are read INDEPENDENTLY on opposite sides of
+			// fexchange0/fexchange2: upflag gates the input (upslew0/upslew2), downflag
+			// gates the output (downslew0/downslew2). A stop sets downflag; the ramp only
+			// advances when the host clocks fexchange*. So stop-then-start before the host
+			// has clocked the ramp to completion leaves downflag set on a channel whose
+			// state is now 1, and the next few blocks finish the stale ramp. That is not
+			// merely a cosmetic fade on a running channel: the completion arm of
+			// downslew0/downslew2 in iobuffs.c does
+			//     InterlockedBitTestAndReset (&ch[channel].exchange, 0);
+			// so it CLEARS EXCHANGE. Every later fexchange* then fails its opening
+			// `if (exchange)` test and returns having written nothing and reported no
+			// error, while ch[channel].state still reads 1. The channel is silently dead
+			// until it is closed and rebuilt, and no flag a host can read says so.
+			//
+			// The asymmetry is the whole point: only the DOWN flag's completion clears
+			// exchange, so the mirror case (start, then stop with upflag still pending) is
+			// harmless and needs nothing here.
+			//
+			// flush_slews() rather than a bare clear of downflag, because the flag is not
+			// the whole of the ramp: slew.dstate/dcount are the state machine, and clearing
+			// the flag alone would strand dstate mid-ramp (DOWNSLEW/ZERO with a live dcount)
+			// for the NEXT stop to resume from. flush_slews() resets both directions, which
+			// is also what we want for the up-ramp we are about to arm — a fresh fade-in
+			// from BEGIN rather than a resume of whatever ustate held. It clears upflag too,
+			// hence the ordering: flush first, arm second.
+			//
+			// Under csEXCH, for the same reason SetChannelTDelayUp/Down and
+			// SetChannelTSlewUp/Down take it around their own flush_slews() calls:
+			// slew.dstate/dcount are plain ints owned by fexchange*'s critical section, and
+			// without the lock this cancel could interleave with an in-flight downslew that
+			// then clears exchange after we have set it. Taking it also makes the whole of
+			// case 1 atomic against fexchange*. No new lock-order edge: csEXCH is the
+			// innermost of the two channel sections (flushChannel takes csDSP then csEXCH),
+			// this takes no other lock inside it and does not wait, and the port maps
+			// CRITICAL_SECTION to a RECURSIVE pthread mutex, so a host calling this from
+			// inside its own fexchange* thread is safe.
+			//
+			// ch[channel].flushflag is deliberately NOT cleared. The flush request belongs
+			// to the flushChannel thread, which is parked on Sem_Flush and can only be
+			// released by a ramp that completes; the next genuine stop releases it and the
+			// flag clears then. Clearing it here would not wake that thread, only lie to
+			// the dmode-1 wait in case 0.
+			EnterCriticalSection (&ch[channel].csEXCH);
+			flush_slews (a);
 			InterlockedBitTestAndSet (&a->slew.upflag, 0);
 			InterlockedBitTestAndSet (&ch[channel].iob.ch_upslew, 0);
 			InterlockedBitTestAndReset (&ch[channel].iob.pc->exec_bypass, 0);
 			InterlockedBitTestAndSet (&ch[channel].exchange, 0);
+			LeaveCriticalSection (&ch[channel].csEXCH);
 			break;
 		}
 	}

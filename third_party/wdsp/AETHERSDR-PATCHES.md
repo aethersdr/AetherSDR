@@ -2,8 +2,8 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3` (`Release Version 2.00`).
-AetherSDR carries four teardown fixes in the otherwise exact `Source/*.[ch]`
-snapshot:
+AetherSDR carries five local fixes in the otherwise exact `Source/*.[ch]`
+snapshot — four teardown fixes and one channel-state fix:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -60,12 +60,66 @@ snapshot:
    `flushChannel()` has the same detached shape and no handshake; it has not
    surfaced, and gets the same treatment if it does.
 
+5. `upstream/channel.c`: `SetChannelState()` case 1 now cancels a pending
+   down-ramp (`flush_slews()` under `csEXCH`) before it arms the up-ramp.
+
+   Upstream's case 1 sets `slew.upflag`, `iob.ch_upslew` and `exchange` and
+   clears `exec_bypass`, but never touches `iob.pc->slew.downflag`. The two
+   flags are read independently on opposite sides of `fexchange0`/`fexchange2`
+   — `upflag` gates the input, `downflag` gates the output — and the ramp only
+   advances when the host clocks `fexchange*`. So a stop followed by a start
+   before the host has clocked the down-ramp to completion leaves `downflag`
+   set on a channel whose `state` is now 1, and the next few blocks finish the
+   stale ramp. `downslew0`/`downslew2`'s completion arm does
+   `InterlockedBitTestAndReset (&ch[channel].exchange, 0)`, so finishing that
+   ramp **clears `exchange`**: every later `fexchange*` fails its opening
+   `if (exchange)` test and returns having written nothing and reported no
+   error, while `state` still reads 1. The channel is silently dead until it is
+   closed and rebuilt, and no flag a host can read says so.
+
+   The asymmetry is the point — only the *down* flag's completion clears
+   `exchange`, so the mirror case (a stop taken with `upflag` still pending)
+   needs nothing.
+
+   `flush_slews()` rather than a bare clear of `downflag`, because the flag is
+   not the whole ramp: `slew.dstate`/`dcount` are the state machine, and
+   clearing the flag alone strands `dstate` mid-ramp for the *next* stop to
+   resume from. It resets both directions, which is also what the up-ramp being
+   armed wants. It clears `upflag`, hence the ordering: flush first, arm
+   second. `csEXCH` because `dstate`/`dcount` are plain ints owned by
+   `fexchange*`'s critical section — the same reason `SetChannelTDelayUp`/`Down`
+   and `SetChannelTSlewUp`/`Down` already take it around their own
+   `flush_slews()` — and because it makes the whole of case 1 atomic against
+   `fexchange*`. No new lock-order edge: `csEXCH` is the inner of the two
+   channel sections (`flushChannel` takes `csDSP` then `csEXCH`), nothing is
+   taken inside it and nothing waits there, and the port maps
+   `CRITICAL_SECTION` to a **recursive** pthread mutex. `ch[channel].flushflag`
+   is deliberately left alone: the flush request belongs to the parked
+   `flushChannel` thread, which only a completed ramp can release.
+
+   Found in review of #5628. Without it, `WdspChannel::setRunning(true)` on a
+   channel whose stop has not been clocked out — the T/R edge `docs/HERMES.md`
+   §13 row 9a contemplates — silently kills the channel while `isRunning()`
+   reports true. `wdsp_channel_test`'s `runRestartDuringRampTest` covers all
+   three ways in (no clocking at all, a restart inside the slew window, and a
+   start after `reconfigure()` of a stopped channel) and fails on every one
+   with this patch reverted.
+
 Without these lines, opening and closing one RX channel leaks one `notchdb`
 object and two NURBS objects, while one TX channel leaks one transition table.
 `wdsp_channel_test` detects both paths deterministically.
 Without the fourth, every channel close is a use-after-free race on the
 worker thread; `wdsp_channel_test` and the HL2 backend tests show it under
 ThreadSanitizer.
+Without the fifth, a stop immediately followed by a start silently and
+permanently disables the channel; `wdsp_channel_test` shows it
+deterministically.
+
+**Marking convention.** Patches 4 and 5 carry `// AetherSDR patch N:` comments
+at every edited site, so `grep -rn "AetherSDR patch" third_party/wdsp/` finds
+them all. Patches 1-3 predate that convention: each is a single added
+`_aligned_free` line with no marker, findable only from this file. New patches
+use the marker.
 
 When refreshing WDSP, first check whether upstream contains equivalent frees.
 If it does, drop the corresponding local patch. Otherwise reapply only these
