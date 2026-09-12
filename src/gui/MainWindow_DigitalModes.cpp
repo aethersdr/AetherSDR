@@ -15,6 +15,7 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include "DStarAvailabilityGate.h"
 
 #include "AppletPanel.h"
 #include "Ax25HfPacketDecodeDialog.h"
@@ -75,8 +76,8 @@ void MainWindow::scheduleDigitalVoiceAutoStart()
         // hasWaveforms is the same gate as File ▸ Waveforms… and the
         // AetherModem D-STAR tab: without a SmartSDR waveform API the
         // helper cannot register and would run with no reachable Stop.
-        if (!m_radioModel.isConnected() || m_radioModel.isWan()
-            || !m_radioModel.backendCapabilities().hasWaveforms) {
+        if (!dstarServiceCanStart(m_radioModel.isConnected(), m_radioModel.isWan(),
+                                  m_radioModel.backendCapabilities().hasWaveforms)) {
             return;
         }
         m_radioModel.dstarModel().start(

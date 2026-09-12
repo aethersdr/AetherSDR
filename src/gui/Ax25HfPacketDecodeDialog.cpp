@@ -24,6 +24,7 @@
 #include "core/tnc/TncTerminal.h"
 #include "core/pms/PmsMailbox.h"
 #include "gui/DStarModemPage.h"
+#include "gui/DStarAvailabilityGate.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -1362,10 +1363,10 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     // is honest. Subsequent revisions come from
     // MainWindow::applyCapabilitiesToUi — one owner, not a second subscribe.
     if (m_radio) {
-        setDstarTabAvailable(!m_radio->isConnected()
-                             || m_radio->backendCapabilities().hasWaveforms);
+        setDstarTabAvailable(m_radio->isConnected(),
+                             m_radio->backendCapabilities().hasWaveforms);
     } else {
-        setDstarTabAvailable(true);
+        setDstarTabAvailable(false, false);
     }
 }
 
@@ -3606,12 +3607,13 @@ void Ax25HfPacketDecodeDialog::refreshTerminalStatus()
     }
 }
 
-void Ax25HfPacketDecodeDialog::setDstarTabAvailable(bool available)
+void Ax25HfPacketDecodeDialog::setDstarTabAvailable(bool connected, bool hasWaveforms)
 {
     if (!m_dstarTab) {
         return;
     }
-    const bool show = available && kLocalDigitalVoiceWaveformAvailable;
+    const bool show = dstarTabAvailable(connected, hasWaveforms,
+                                        kLocalDigitalVoiceWaveformAvailable);
     m_dstarTab->setVisible(show);
     if (show) {
         return;

@@ -149,7 +149,7 @@ public:
     // cannot load waveforms, or when this build has no helper. True on
     // disconnect (permissive) and when RadioCapabilities::hasWaveforms is
     // true. Hiding also stops a running helper so it is not orphaned.
-    void setDstarTabAvailable(bool available);
+    void setDstarTabAvailable(bool connected, bool hasWaveforms);
 
 protected:
     // Command history (Up/Down) on the terminal input line.
