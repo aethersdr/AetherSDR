@@ -199,11 +199,52 @@ went, and safe only because nothing had ever set it.
 
 **Bit 7 is not a read bit, and there is no read-only command.** `RESP_START`
 latches `cmd_data` and the write happens regardless; the reply is an **echo** of
-what was written. The only replies that are not echoes are the AD9866 SPI
-(`0x3b`) and I2C (`0x3c`) commands, which carry a read opcode inside the data
-and come back with the read value (`RESP_READ`). Every RQST is a write that asks
-to be acknowledged, and any caller of `MetisClient::requestRegister` has to read
-it that way.
+what was written. The only replies that are not echoes are the two **I2C**
+commands (`0x3c`, `0x3d`), which carry a read opcode inside the data and come
+back with the read value (`RESP_READ`). Every RQST is a write that asks to be
+acknowledged, and any caller of `MetisClient::requestRegister` has to read it
+that way.
+
+**And `0x3b` is not one of them — it is a converter write that reaches the
+transmit path.** An earlier version of this section, and of the code, called the
+AD9866 SPI command the read path. It is not, and the RTL is explicit twice over.
+`ad9866ctrl` has **no data output at all** — `control.v` instantiates it with
+`cmd_addr` / `cmd_data` / `cmd_rqst` / `cmd_ack` and nothing else, and inside,
+`assign sdo = 1'b0;` with `//assign dataout` commented out. `RESP_READ`'s AD9866
+branch therefore assigns the *I2C* bus's data, behind the gateware's own note:
+
+```verilog
+        end else if (~cmd_ack_ad9866) begin
+          resp_cmd_data_next = cmd_resp_data_i2c; // FIXME: suppor read cmd_resp_data_ad9866
+```
+
+What `0x3b` *does*, from `ad9866ctrl.v`:
+
+```verilog
+          // Generic AD9866 write
+          6'h3b: begin
+            if (cmd_data[31:24] == 8'h06) begin
+              // Must write
+              if (rffe_ad9866_sen_n) cmd_state_next = CMD_WRITE;
+```
+
+and `CMD_WRITE` puts `{3'b000, cmd_data[20:16], cmd_data[7:0]}` on the
+converter's SPI bus — an **arbitrary AD9866 register, arbitrary byte**. Among
+the registers that reaches is `0x0a`, which is exactly where the gateware's own
+TX-gain command writes (`icmd_data = {5'h0a,4'b0100,tx_gain}`), along with
+`0x0c` (TX interpolation), `0x0e` (IAMP enable) and `0x10`/`0x11` (TX gain
+select) by its own `initarray` comments.
+
+It also **persists harder than `0x01` does.** The `6'h09` handler issues its SPI
+write only `if (tx_gain != cmd_data[31:28])`, against an FPGA-side shadow
+register that a `0x3b` write never touches — so after a `0x3b` write to AD9866
+`0x0a` the gateware still believes the old gain and will not re-assert it. The
+mechanism that would have corrected the value is suppressed by its own change
+detector. `0x3b` is therefore **off** `MetisClient::requestRegister`'s
+allow-list, by that list's own re-asserted-or-excluded rule. It was never
+reachable without a deliberate call and had zero callers; an item that genuinely
+needs converter SPI adds it back with the `8'h06` cookie and the target register
+named at the call site.
 
 **The free-running RADDR is TWO bits on this hardware, not four, and the cycle
 is 0..3 — not 0..4.** `control.v` declares `logic [1:0] resp_addr` and composes
@@ -271,10 +312,48 @@ write of the command reply into the output register:
 So a reply waits one frame at best and two at worst, depending on the phase
 `resp_cnt` is in when it reaches `RESP_WAIT`; the free-running telemetry slots
 are the other half of the alternation. `Hl2ControlRequest`'s 32-frame deadline
-is therefore **sixteen** response opportunities, not thirty-two — which is still
-ample (~42 ms at 48 kHz with one receiver) and the constant is unchanged. The
-header had this right where it sizes the deadline; this paragraph is where the
-reasoning now lives.
+is therefore **sixteen** response opportunities, not thirty-two — ample in
+*slots* at every rate, which is what a frame count is for.
+
+**A frame is not a fixed amount of time, and we quoted one configuration as if
+it were general.** This section used to size the deadline as "~42 ms", full
+stop. That is true at 48 kHz with one receiver and nowhere else. An EP6 frame
+carries `504 / (6·numRx + 2)` rounds, so frames per second rise with **both**
+the sample rate and the receiver count. Computed from `MetisProtocol.h`'s
+geometry and filtered by `maxReceiversAtRate()`'s 70 Mbit/s budget:
+
+| Rate | Receivers | Rounds/frame | Frames/s | 32 frames | + 32 quarantine |
+|---|---|---|---|---|---|
+| 48 k | 1 | 63 | 762 | 42.0 ms | 84.0 ms |
+| 48 k | 4 | 19 | 2,526 | 12.7 ms | 25.3 ms |
+| 96 k | 4 | 19 | 5,053 | 6.33 ms | 12.7 ms |
+| 192 k | 2 | 36 | 5,333 | 6.0 ms | 12.0 ms |
+| 192 k | 4 | 19 | 10,105 | 3.17 ms | 6.33 ms |
+| 384 k | 1 | 63 | 6,095 | 5.25 ms | 10.5 ms |
+| 384 k | 3 | 25 | 15,360 | **2.08 ms** | **4.17 ms** |
+
+384 kHz is `Hl2Backend::maxIqSampleRateHz()` unless low-bandwidth mode is on,
+and the budget admits three receivers there; the shipping `hl2b5up_main` variant
+reports four at discovery, and 192 kHz × 4 RX is the tightest pair both limits
+allow. That is a **twentyfold spread**, and the short end is the problem,
+because what consumes a deadline is **host-side delivery latency**, which is
+wall-clock and which a frame count cannot see. Every frame drained after the
+request is sent counts against it — including frames the radio emitted *before*
+it saw the request, still sitting in the socket buffer. The 6.08 ms worst-case
+inter-arrival gap in the table above is ~93 frames at 384 kHz with three
+receivers, drained in one `onReadyRead()` pass: the whole deadline *and* the
+whole quarantine, before the reply could be read at all.
+
+**So the deadline is both halves, and neither alone.** `onEp6Frame(nowMs)` takes
+a monotonic millisecond count and expires a deadline only when the frame count
+has run out **and** a wall-clock floor has passed; the quarantine has the same
+pair, its floor running from the instant the deadline blew. The floor is derived
+rather than picked — `32 × ep6RoundsPerFrame(1) / 48 kHz` = **42 ms**, exactly
+the budget the frame count was originally sized at — so the effect is to make
+the "~42 ms" this document always claimed true at *every* rate instead of at one
+of them, and it lengthens the 48 kHz case not at all. The clock is **passed in**,
+so `Hl2ControlRequest` still holds no clock and `hl2_rqst_ack_test` pins a
+384 kHz case with no real time passing.
 
 **The response clock is EP6 frames, and only while streaming.** `resp_rqst`
 toggles once in `usopenhpsdr1.v`'s `SYNC_RESP`, which runs once per 512-byte
@@ -282,8 +361,22 @@ frame (so twice per EP6 packet), and the whole emit path is gated on `run`.
 Command responses go out only on alternate slots (`cmd_resp_rqst & ~resp_cnt`),
 so an ACK **displaces one free-running telemetry slot** — the oracle's warning
 about saturating with requests starving the classic responses is literally true,
-one slot per request. It also means a wall-clock timeout is the wrong
-instrument: `Hl2ControlRequest` counts the radio's own slots instead.
+one slot per request. It is also why the frame count survives the fix as the
+*necessary* half: a radio that stopped streaming owes no slots, and a pure
+wall-clock deadline would report "the radio timed out" for a condition that is
+really "we never gave it an opportunity to answer".
+
+**The late-reply guarantee is narrowed, not absolute.** Quarantine keeps an
+abandoned request's reply from landing on a fresh one *for as long as the
+quarantine lasts*, and the floor is what makes that a real duration rather than
+2 ms. It is not "by construction", which is what an earlier version of
+`Hl2ControlRequest.h` claimed: a caller that re-issues the **identical** request
+after a timeout is asking for a reply byte-for-byte equal to the one it
+abandoned, and a wire with no transaction id cannot separate those two.
+`hl2_rqst_ack_test` pins that residual rather than hiding it. `Echo::
+SubsystemRead`, which matches on the six-bit address alone, is weaker still —
+so `requestRegister` refuses it outright today, no allow-listed address being of
+that shape.
 
 **No radio has ever answered this code.** Every test behind item 13 is synthetic
 — a hand-built `Ep6Response` fed straight to `ingestControlResponse`. That is
@@ -1260,7 +1353,7 @@ Audited against this branch's merge base, `6f46eea7`.
 
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
-| ~~13~~ | ~~RQST/ACK state machine~~ **DONE** | O §5 | `Hl2ControlRequest` + `MetisClient::requestRegister`. One outstanding, echo-matched, deadline counted in EP6 frames; a blown deadline **quarantines** rather than freeing the slot, so the abandoned request's late echo has nowhere to land. Requestable addresses are an **allow-list** (0x0a, 0x0e, 0x3b today) and not a deny-list, so items 14-23 add one deliberately rather than inherit it. The wire facts it was built from are in §4 — three of them contradict what we had, and no radio has yet answered the code | — |
+| ~~13~~ | ~~RQST/ACK state machine~~ **DONE** | O §5 | `Hl2ControlRequest` + `MetisClient::requestRegister`. One outstanding, echo-matched; the deadline is counted in EP6 frames **and** floored on a wall clock, because a frame is 42 ms at 48 kHz with one receiver and 2.08 ms at 384 kHz with three. A blown deadline **quarantines** rather than freeing the slot, which makes a late echo landing on a fresh request improbable — not impossible; an identical re-issue is indistinguishable and §4 says so. Requestable addresses are an **allow-list** (0x0a, 0x0e) and not a deny-list, so items 14-23 add one deliberately rather than inherit it; 0x3b came off it once the RTL showed it is a converter **write** reaching the TX gain register, not a read path. The wire facts it was built from are in §4, and **no radio has yet answered the code** | — |
 | 14 | ADC overload bit + clip counter | O §6, A2 §A3 | The *correct* driver for gain decisions — audio level in one slice says nothing about what saturates a converter seeing 0–38.4 MHz | S |
 | 15 | Discovery-reply telemetry (temp, power, PTT, clip) | O §1 | Pollable **without a stream** — cheapest first increment, and a diagnostic when the stream is broken | S |
 | 16 | Pair WDSP `RXA_ADC_PK` with the hardware clip indicator | A3 §7 | Post-DDC slice vs pre-DDC full spectrum. They disagree by design; A3 calls this the most useful diagnostic pairing on the HL2 | S |

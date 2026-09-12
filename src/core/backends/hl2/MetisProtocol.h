@@ -412,11 +412,19 @@ Cc ccTxDrive(int level, bool paEnable = false) noexcept;
 // item does need one, the change is to that allow-list, with a note there
 // saying what the acknowledgement is worth — not a flag added here.
 // addr 0x3b: a raw SPI transaction against the AD9866 itself (gateware
-// `ad9866ctrl.v`, which decodes `6'h3b`). The only path on this wire that can
-// read a converter register BACK — the reply carries the value read rather than
-// an echo of what was written, which is what Hl2ControlRequest::Echo::
-// SubsystemRead exists for. No encoder here yet: nothing writes it, and
-// MetisClient::requestRegister names it only as an allow-listed address.
+// `ad9866ctrl.v`, which decodes `6'h3b`). A WRITE, and only a write — an
+// earlier note here called it the read path, which the RTL contradicts:
+// `ad9866ctrl` has no data output, `assign sdo = 1'b0;`, and control.v's
+// RESP_READ carries `cmd_resp_data_i2c` for the AD9866 branch behind the
+// gateware's own `// FIXME: suppor read cmd_resp_data_ad9866`. The reply is our
+// echo or the 0x3F refusal.
+//
+// What it writes: gated on `cmd_data[31:24] == 8'h06`, it puts
+// `{3'b000, cmd_data[20:16], cmd_data[7:0]}` on the converter's SPI bus — any
+// AD9866 register, any byte, INCLUDING the TX-gain register 0x0a that the
+// gateware's own 0x09 handler drives. It is therefore a transmit-path write
+// that nothing re-asserts, and MetisClient::requestRegister does NOT allow-list
+// it. No encoder here either: nothing writes it.
 inline constexpr std::uint8_t kC0Ad9866Spi = 0x76;  // addr 0x3b << 1
 inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
 inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1

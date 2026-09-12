@@ -65,6 +65,11 @@ void enableBroadcast(QUdpSocket& s) noexcept
 }  // namespace
 
 MetisClient::MetisClient(QObject* parent) : QObject(parent) {
+    // Started once, here, and never restarted. controlNowMs() differences it
+    // across an outstanding request, so a restart mid-request would move the
+    // wall-clock floor underneath the deadline that is counting against it.
+    m_controlClock.start();
+
     // Telemetry crosses from the I/O thread to the GUI thread as a queued
     // signal argument; without registration Qt drops the emission with only a
     // warning, and the meters would simply never move.
@@ -656,28 +661,64 @@ bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
     // WHAT THIS GUARANTEES, stated narrowly, because the broad version is not
     // true and a reader who takes it away will be wrong:
     //
-    //   * none of these three registers emits RF, and none of them reaches
-    //     anything outside the radio's own case. In particular 0x3d (I2C2) is
-    //     NOT here. MetisProtocol.h's IO-board note says what sits on that bus:
-    //     a Raspberry Pi Pico that switches amplifiers, antenna relays and
+    //   * neither of these two registers emits RF, and neither reaches anything
+    //     outside the radio's own case. In particular 0x3d (I2C2) is NOT here.
+    //     MetisProtocol.h's IO-board note says what sits on that bus: a
+    //     Raspberry Pi Pico that switches amplifiers, antenna relays and
     //     transverters. An arbitrary-data RQST there is a direct I2C write to
     //     that board. It is absent because nothing needs it — not because it
     //     would be harmless.
     //
-    //   * 0x0a and 0x0e are RE-ASSERTED by the round robin in
-    //     buildNextControlPacket (the gain slot and the ADC-assign slot), so a
-    //     wrong value written through here self-corrects within one rotation,
-    //     ~16 ms at four receivers. That property is most of why these two are
-    //     the safe ones, and it is exactly what 0x01 (the TX1 NCO) does NOT
-    //     have: this client sends the transmit frequency once per tune and
-    //     never refreshes it, so a bad write there would persist silently until
-    //     the operator moved the dial, with our own idea of the TX frequency
-    //     now wrong. 0x01 is therefore off the list too.
+    //   * THE RULE IS RE-ASSERTED-OR-EXCLUDED. 0x0a and 0x0e are RE-ASSERTED by
+    //     the round robin in buildNextControlPacket (the gain slot and the
+    //     ADC-assign slot), so a wrong value written through here self-corrects
+    //     within one rotation, ~16 ms at four receivers. That property is most
+    //     of why these two are the safe ones, and it is exactly what 0x01 (the
+    //     TX1 NCO) does NOT have: this client sends the transmit frequency once
+    //     per tune and never refreshes it, so a bad write there would persist
+    //     silently until the operator moved the dial, with our own idea of the
+    //     TX frequency now wrong. 0x01 is therefore off the list too.
     //
-    //   * 0x3b is the read path, and the only one: the AD9866 SPI command is
-    //     how a converter register comes BACK off this wire at all
-    //     (`ad9866ctrl.v`, `6'h3b`), and its reply carries the value read
-    //     instead of an echo — pass subsystemRead = true for it.
+    // 0x3b WAS ON THIS LIST AND IS NOT ANY MORE. It was admitted as "the
+    // subsystem READ path". Read against `ad9866ctrl.v` — which we hold at
+    // /tmp/hl2/gateware/rtl and which is not vendored in this tree — that
+    // description is wrong twice over, and both corrections point the same way:
+    //
+    //   1. IT IS NOT A READ. `control.v`'s RESP_READ has exactly one data
+    //      source, and for the AD9866 branch it is the WRONG one, with the
+    //      gateware's own note saying so:
+    //          end else if (~cmd_ack_ad9866) begin
+    //            resp_cmd_data_next = cmd_resp_data_i2c; // FIXME: suppor read cmd_resp_data_ad9866
+    //      `ad9866ctrl` has no data output at all — control.v instantiates it
+    //      with cmd_addr/cmd_data/cmd_rqst/cmd_ack and nothing more, and inside,
+    //      `assign sdo = 1'b0;` with `//assign dataout` commented out. A 0x3b
+    //      ACK carries our own echo, or the 0x3F refusal. Never a value.
+    //
+    //   2. IT IS A WRITE, AND IT REACHES THE TRANSMIT PATH. ad9866ctrl.v:
+    //          // Generic AD9866 write
+    //          6'h3b: begin
+    //            if (cmd_data[31:24] == 8'h06) begin
+    //              if (rffe_ad9866_sen_n) cmd_state_next = CMD_WRITE;
+    //      and CMD_WRITE puts `{3'b000, cmd_data[20:16], cmd_data[7:0]}` on the
+    //      converter's SPI bus — an ARBITRARY AD9866 register (five bits) with
+    //      an ARBITRARY byte. Among the registers that reaches: 0x0a, which is
+    //      where the gateware's own TX-gain command writes
+    //      (`icmd_data = {5'h0a,4'b0100,tx_gain}`), plus 0x0c (TX interpolation),
+    //      0x0e (IAMP enable) and 0x10/0x11 (TX gain select) from its own
+    //      initarray comments. So "none of these registers emits RF" was
+    //      UNVERIFIED for 0x3b, and against the RTL it is false.
+    //
+    //   3. AND IT PERSISTS HARDER THAN 0x01 DOES. The 0x09 handler issues its
+    //      SPI write only `if (tx_gain != cmd_data[31:28])` against an FPGA-side
+    //      shadow register that a 0x3b write does not touch. So after a 0x3b
+    //      write to AD9866 0x0a the gateware still believes the old gain and
+    //      will NOT re-assert it — the mechanism that would have corrected the
+    //      value is suppressed by its own change detector. By this list's own
+    //      rule that is an exclusion, not a judgement call.
+    //
+    // There are zero callers, so dropping it costs nothing. An item that really
+    // needs converter SPI adds it back deliberately, with the 8'h06 cookie and
+    // the register it means named at the call site.
     //
     // 0x09 (TX drive, onboard PA enable, ATU) and 0x39 (sync/reset, which
     // carries the watchdog enable at [27:24] and the master enable at [11:8],
@@ -687,10 +728,18 @@ bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
     static constexpr int kRequestableAddresses[] = {
         kC0AdcGain >> 1,            // 0x0a  AD9866 RX LNA gain (ccRxGain)
         kC0AdcAssignOrTxGain >> 1,  // 0x0e  ADC assign / TX LNA gain (ccAdcAssign)
-        kC0Ad9866Spi >> 1,          // 0x3b  AD9866 SPI — the subsystem read path
     };
     if (std::find(std::begin(kRequestableAddresses), std::end(kRequestableAddresses), addr)
         == std::end(kRequestableAddresses))
+        return false;
+
+    // No allow-listed address replies with a READ value: on this gateware only
+    // the I2C buses do (control.v RESP_READ, `cmd_resp_data_i2c`), and neither
+    // is on the list. A caller asking for Echo::SubsystemRead here is asking to
+    // throw away the echo and match on six bits of address alone — which is the
+    // pairing the quarantine narrows but cannot rule out. Refuse rather than
+    // silently downgrade the match.
+    if (subsystemRead)
         return false;
 
     // Response slots live inside the EP6 frame, and the EP6 emit path is gated
@@ -703,8 +752,10 @@ bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
     Hl2ControlRequest::Request r;
     r.addr = addr;
     r.data = data;
-    r.echo = subsystemRead ? Hl2ControlRequest::Echo::SubsystemRead
-                           : Hl2ControlRequest::Echo::Exact;
+    // Unconditional, because the refusal above has already established that
+    // subsystemRead is false. Every reachable address replies with an echo, so
+    // every request spends it.
+    r.echo = Hl2ControlRequest::Echo::Exact;
     return m_ccRequest.arm(r);
 }
 
@@ -721,12 +772,19 @@ void MetisClient::publishControlVerdict()
     }
 }
 
-void MetisClient::tickControlRequest()
+qint64 MetisClient::controlNowMs() const noexcept
+{
+    return m_controlClock.isValid() ? m_controlClock.elapsed() : 0;
+}
+
+void MetisClient::tickControlRequest(qint64 nowMs)
 {
     // ONE CALL PER EP6 FRAME, not per packet: the gateware opens exactly one
     // response slot per 512-byte frame (usopenhpsdr1.v, SYNC_RESP), so this is
-    // the same clock the radio answers on.
-    m_ccRequest.onEp6Frame();
+    // the same clock the radio answers on. The wall clock rides alongside it
+    // because a frame is not a fixed amount of time — see Hl2ControlRequest's
+    // class note for the rate table.
+    m_ccRequest.onEp6Frame(nowMs);
     publishControlVerdict();
 }
 
@@ -945,14 +1003,14 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     return pkt;
 }
 
-void MetisClient::onControlPacketSent(qint64 bytesWritten) noexcept
+void MetisClient::onControlPacketSent(qint64 bytesWritten, qint64 nowMs) noexcept
 {
     // Consumed either way: the claim belongs to the packet just built, and a
     // send that failed must not leave it standing for the next one.
     const bool carriedRequest = m_requestOnBuiltPacket;
     m_requestOnBuiltPacket = false;
     if (carriedRequest && bytesWritten > 0)
-        m_ccRequest.onRequestSent();
+        m_ccRequest.onRequestSent(nowMs);
 }
 
 void MetisClient::sendControlPacket()
@@ -972,7 +1030,7 @@ void MetisClient::sendControlPacket()
     // AFTER the write, and taking its return value: this is the seam where a
     // RQST bank stops being something we intend to send and becomes something
     // the radio has been given a chance to answer.
-    onControlPacketSent(written);
+    onControlPacketSent(written, controlNowMs());
 }
 
 void MetisClient::countTx(qint64 bytesWritten) noexcept
@@ -1110,7 +1168,7 @@ void MetisClient::onReadyRead()
             // on the deadline frame is an answer and not a timeout, and ticked
             // even when the frame carries no parseable C&C — a frame that
             // arrived is a slot that passed.
-            tickControlRequest();
+            tickControlRequest(controlNowMs());
         }
         // Coalesce to ~10 Hz: telemetry free-runs continuously, so a frame
         // skipped by the throttle is superseded within the interval and the

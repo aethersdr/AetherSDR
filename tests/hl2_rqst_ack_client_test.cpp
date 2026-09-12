@@ -30,12 +30,18 @@ struct MetisClientTestAccess {
     {
         c.ingestControlResponse(r);
     }
-    // One EP6 frame's worth of deadline, the way a datagram would.
-    static void feedFrame(MetisClient& c) { c.tickControlRequest(); }
+    // One EP6 frame's worth of deadline, the way a datagram would, on the
+    // caller's clock. The clock is a parameter all the way down: a frame is not
+    // a fixed amount of time, so the deadline has a wall-clock floor as well as
+    // a frame count, and this test can move both independently.
+    static void feedFrame(MetisClient& c, qint64 nowMs) { c.tickControlRequest(nowMs); }
     // Confirm the packet just built reached the socket, the way
     // sendControlPacket() does with sendTo()'s return value. `bytes <= 0` is a
     // write the kernel refused.
-    static void confirmSent(MetisClient& c, qint64 bytes) { c.onControlPacketSent(bytes); }
+    static void confirmSent(MetisClient& c, qint64 bytes, qint64 nowMs)
+    {
+        c.onControlPacketSent(bytes, nowMs);
+    }
 };
 }
 
@@ -70,10 +76,15 @@ static std::uint32_t dataOf(const Packet& p, std::size_t frame)
 // Build a packet AND confirm it reached the socket — the two-step the transport
 // performs. Split on purpose: the deadline must not start on a bank that only
 // got as far as a buffer, so every test that means "this went out" says both.
+// The fake wall clock, in milliseconds. Every test that cares about the
+// deadline drives it explicitly; the rest leave it at zero, which is correct
+// because a request that is answered never consults the floor.
+static qint64 g_nowMs = 0;
+
 static Packet sendPacket(MetisClient& c)
 {
     const auto pkt = c.buildNextControlPacket();
-    MetisClientTestAccess::confirmSent(c, static_cast<qint64>(kUsbPacketSize));
+    MetisClientTestAccess::confirmSent(c, static_cast<qint64>(kUsbPacketSize), g_nowMs);
     return pkt;
 }
 
@@ -109,7 +120,7 @@ static void testOnlyTheAllowListedAddressesAreRequestable()
 
     // The whole of the allow-list, and each one has to be re-armable after the
     // previous answer or the loop below would prove nothing after the first.
-    const int allowed[] = {kC0AdcGain >> 1, kC0AdcAssignOrTxGain >> 1, kC0Ad9866Spi >> 1};
+    const int allowed[] = {kC0AdcGain >> 1, kC0AdcAssignOrTxGain >> 1};
     for (const int a : allowed) {
         check(c.requestRegister(a, 0x40u), "an allow-listed address is accepted");
         while (c.controlRequest().state() == Hl2ControlRequest::State::Queued)
@@ -123,8 +134,7 @@ static void testOnlyTheAllowListedAddressesAreRequestable()
     // could not have: this passes for addresses nobody has thought about yet.
     // Named individually below are the ones with a reason worth stating.
     for (int a = 0; a < 0x40; ++a) {
-        const bool onList = a == (kC0AdcGain >> 1) || a == (kC0AdcAssignOrTxGain >> 1)
-                         || a == (kC0Ad9866Spi >> 1);
+        const bool onList = a == (kC0AdcGain >> 1) || a == (kC0AdcAssignOrTxGain >> 1);
         if (onList)
             continue;
         check(!c.requestRegister(a, 0), "an address not on the allow-list is refused");
@@ -143,6 +153,25 @@ static void testOnlyTheAllowListedAddressesAreRequestable()
     // master enables and has wedged a radio.
     check(!c.requestRegister(kC0TxDrive >> 1, 0), "0x09 (TX drive / PA) is refused");
     check(!c.requestRegister(kC0Sync >> 1, 0), "0x39 (sync / reset) is refused");
+    // 0x3b is off the list too, and this is the case the reviewer found. It was
+    // admitted as "the subsystem read path", which ad9866ctrl.v contradicts: the
+    // module has no data output at all, and control.v's AD9866 branch of
+    // RESP_READ assigns the I2C bus's data behind its own
+    // "// FIXME: suppor read cmd_resp_data_ad9866". What it IS, gated on
+    // cmd_data[31:24] == 8'h06, is a generic converter SPI WRITE of
+    // {3'b000, cmd_data[20:16], cmd_data[7:0]} — an arbitrary AD9866 register,
+    // including 0x0a, where the gateware's own TX-gain command writes
+    // (icmd_data = {5'h0a,4'b0100,tx_gain}). And it persists harder than 0x01
+    // does: the 0x09 handler re-writes gain only `if (tx_gain != cmd_data[31:28])`
+    // against an FPGA shadow a 0x3b write never touches, so the mechanism that
+    // would correct it is suppressed by its own change detector. By this list's
+    // own re-asserted-or-excluded rule, that is an exclusion.
+    check(!c.requestRegister(kC0Ad9866Spi >> 1, 0),
+          "0x3b (raw AD9866 SPI write, reaches the TX gain register) is refused");
+    check(!c.requestRegister(kC0Ad9866Spi >> 1, 0x060A004Fu),
+          "including with the 8'h06 cookie the gateware actually acts on");
+    check(!c.requestRegister(kC0Ad9866Spi >> 1, 0x00ABCD12u, true),
+          "and as a claimed subsystem read");
     // Refused even with the transmit gate explicitly open: this layer is not
     // the place that decision gets made, and a future writer must add the
     // conditional deliberately rather than find it already gone.
@@ -150,6 +179,17 @@ static void testOnlyTheAllowListedAddressesAreRequestable()
     check(!c.requestRegister(kC0TxDrive >> 1, 0), "0x09 stays refused with the gate OPEN");
     check(!c.requestRegister(kC0Sync >> 1, 0), "0x39 stays refused with the gate OPEN");
     check(!c.requestRegister(kRespAddrError, 0), "0x3F is refused");
+    // No allow-listed address replies with a READ value — on this gateware only
+    // the I2C buses do, and neither is reachable — so asking for
+    // Echo::SubsystemRead is asking to discard the echo and match on six bits of
+    // address alone. That is the pairing the quarantine narrows but cannot rule
+    // out, so it is refused rather than silently downgraded.
+    check(!c.requestRegister(kC0AdcGain >> 1, 0x40u, true),
+          "a claimed subsystem read at 0x0a is REFUSED, not downgraded");
+    check(!c.requestRegister(kC0AdcAssignOrTxGain >> 1, 0x40u, true),
+          "and at 0x0e");
+    check(c.controlRequest().state() == Hl2ControlRequest::State::Idle,
+          "and none of those refusals armed anything");
     check(!c.requestRegister(0x40, 0), "an address past the six-bit field is refused");
     check(!c.requestRegister(-1, 0), "a negative address is refused");
 }
@@ -167,7 +207,7 @@ static void testAFailedSendDoesNotBurnTheRequest()
 
     const auto lost = c.buildNextControlPacket();
     check(anyFrameRequests(lost), "the RQST bank was built");
-    MetisClientTestAccess::confirmSent(c, -1);          // sendTo() failed
+    MetisClientTestAccess::confirmSent(c, -1, g_nowMs);          // sendTo() failed
     check(c.controlRequest().state() == Hl2ControlRequest::State::Queued,
           "a failed send leaves the request QUEUED, deadline not started");
 
@@ -320,8 +360,18 @@ static void testReplyAndTimeoutReachTheSeam()
     check(c.requestRegister(0x0E, 2), "re-armed after a refusal");
     while (c.controlRequest().state() == Hl2ControlRequest::State::Queued)
         (void)sendPacket(c);
-    for (int i = 0; i < Hl2ControlRequest::kDefaultDeadlineFrames; ++i)
-        MetisClientTestAccess::feedFrame(c);
+    // The frame count alone is no longer a timeout. At 384 kHz with three
+    // receivers these 32 frames are 2.08 ms of wall clock, which is inside a
+    // single recorded EP6 delivery gap — the radio could not have answered yet.
+    for (int i = 0; i < Hl2ControlRequest::kDefaultDeadlineFrames * 4; ++i)
+        MetisClientTestAccess::feedFrame(c, g_nowMs);
+    check(failures == 1, "frames alone do not publish a timeout any more");
+    check(c.controlRequest().state() == Hl2ControlRequest::State::Awaiting,
+          "the request is still outstanding while the floor holds");
+
+    // Past the floor, both halves are satisfied and it settles as it always did.
+    g_nowMs += Hl2ControlRequest::kDefaultFloorMs;
+    MetisClientTestAccess::feedFrame(c, g_nowMs);
     check(failures == 2 && !lastRefused,
           "a deadline with no ACK publishes a timeout, not silence");
     check(replies == 1, "and no reply");
@@ -329,8 +379,12 @@ static void testReplyAndTimeoutReachTheSeam()
     // the radio still owes it.
     check(!c.requestRegister(0x0E, 3), "an immediate retry after a timeout is REFUSED");
     for (int i = 0; i < Hl2ControlRequest::kDefaultQuarantineFrames; ++i)
-        MetisClientTestAccess::feedFrame(c);
-    check(c.requestRegister(0x0E, 3), "and accepted once the quarantine elapses");
+        MetisClientTestAccess::feedFrame(c, g_nowMs);
+    check(!c.requestRegister(0x0E, 3),
+          "the quarantine has a wall-clock floor of its own, from the moment we gave up");
+    g_nowMs += Hl2ControlRequest::kDefaultFloorMs;
+    MetisClientTestAccess::feedFrame(c, g_nowMs);
+    check(c.requestRegister(0x0E, 3), "and accepted once BOTH halves have elapsed");
 }
 
 static void testStopClearsTheOutstandingRequest()

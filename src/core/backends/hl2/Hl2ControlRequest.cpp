@@ -22,20 +22,31 @@ std::optional<Cc> Hl2ControlRequest::wireBank() const noexcept
     return withRespRqst(ccRegister(m_request.addr, m_request.data), true);
 }
 
-void Hl2ControlRequest::onRequestSent() noexcept
+void Hl2ControlRequest::onRequestSent(std::int64_t nowMs) noexcept
 {
     if (m_state != State::Queued)
         return;
     m_state = State::Awaiting;
     m_framesLeft = m_deadlineFrames;
+    m_floorAtMs = nowMs + m_floorMs;
 }
 
-void Hl2ControlRequest::onEp6Frame() noexcept
+void Hl2ControlRequest::onEp6Frame(std::int64_t nowMs) noexcept
 {
     switch (m_state) {
     case State::Awaiting:
-        if (--m_framesLeft <= 0) {
+        // AND, not OR, and the frames are decremented either way. The count can
+        // run out long before the floor at a high sample rate — that is the
+        // whole point — so it is clamped at zero rather than allowed to run
+        // negative while the floor is still pending.
+        if (m_framesLeft > 0)
+            --m_framesLeft;
+        if (m_framesLeft <= 0 && nowMs >= m_floorAtMs) {
             ++m_timeouts;
+            // The quarantine's floor starts HERE, at the instant we gave up,
+            // not at takeReply(): what it has to outlast is the reply still
+            // owed for the request abandoned at this moment.
+            m_floorAtMs = nowMs + m_floorMs;
             // Note the outcome is delivered, not swallowed: a caller must be
             // able to see that this radio did not answer. What it does NOT do is
             // free the slot — see takeReply().
@@ -43,7 +54,9 @@ void Hl2ControlRequest::onEp6Frame() noexcept
         }
         break;
     case State::Quarantine:
-        if (--m_framesLeft <= 0) {
+        if (m_framesLeft > 0)
+            --m_framesLeft;
+        if (m_framesLeft <= 0 && nowMs >= m_floorAtMs) {
             m_state = State::Idle;
             m_request = {};
         }
@@ -132,6 +145,7 @@ void Hl2ControlRequest::reset() noexcept
     m_request = {};
     m_reply = {};
     m_framesLeft = 0;
+    m_floorAtMs = 0;
 }
 
 void Hl2ControlRequest::settle(Outcome outcome, std::uint32_t data) noexcept

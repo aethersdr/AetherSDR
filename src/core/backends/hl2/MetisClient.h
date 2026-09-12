@@ -210,11 +210,12 @@ public:
     //     the set of RQST-able addresses is enumerated, so an address nobody
     //     considered is refused by default rather than permitted by default.
     //
-    // TODAY THAT LIST IS 0x0a (AD9866 RX LNA gain), 0x0e (ADC assign / TX LNA
-    // gain) and 0x3b (AD9866 SPI, the subsystem read path). The reason for each,
-    // and the reason for the ones deliberately left off — 0x01 the TX NCO,
-    // 0x09 TX drive/PA, 0x39 sync/reset, 0x3c/0x3d the two I2C buses — is
-    // written at the list itself. Read it before adding one.
+    // TODAY THAT LIST IS 0x0a (AD9866 RX LNA gain) and 0x0e (ADC assign / TX
+    // LNA gain). Both are RE-ASSERTED by the round robin, which is the rule the
+    // list is built on. The reason for each, and the reason for the ones
+    // deliberately left off — 0x01 the TX NCO, 0x09 TX drive/PA, 0x39
+    // sync/reset, 0x3b the raw AD9866 SPI write, 0x3c/0x3d the two I2C buses —
+    // is written at the list itself. Read it before adding one.
     //
     // WHAT IS GUARANTEED, exactly. This method cannot key a transmitter:
     // ccRegister() leaves C0[0] clear, the RQST bit is C0[7], and withRespRqst()
@@ -226,11 +227,14 @@ public:
     // widens the blast radius; widening it is not a refactor.
     //
     // `subsystemRead` selects Hl2ControlRequest::Echo::SubsystemRead, whose
-    // reply carries the value READ instead of an echo of what was written. Of
-    // the allow-listed addresses only 0x3b is of that shape; the two I2C
-    // commands (0x3c/0x3d) are as well, and are not reachable from here.
-    // Wrong on an ordinary register it would throw away the data half of the
-    // echo match, leaving a six-bit address as the whole correspondence.
+    // reply carries the value READ instead of an echo of what was written. On
+    // this gateware that is the two I2C commands (0x3c/0x3d) and nothing else,
+    // and neither is on the allow-list — so TODAY THIS ARGUMENT IS REFUSED, not
+    // honoured. It stays in the signature because the shape is right and item
+    // 19's config EEPROM will need it; it is refused because on an address
+    // whose reply IS an echo it would discard the data half of the match and
+    // leave a six-bit address as the whole correspondence, which is precisely
+    // the pairing the quarantine cannot always catch.
     Q_INVOKABLE bool requestRegister(int addr, quint32 data, bool subsystemRead = false);
 
     // I/O-THREAD ONLY, like linkCounters(). Returned by reference because the
@@ -399,8 +403,16 @@ private:
     // — see MetisClientTestAccess.
     void ingestControlResponse(const Ep6Response& resp);
     // Advance the RQST/ACK deadline by one EP6 frame and publish any verdict
-    // that falls out — a timeout has no ACK to carry it.
-    void tickControlRequest();
+    // that falls out — a timeout has no ACK to carry it. `nowMs` is the
+    // wall-clock half of the deadline: a frame count alone is 2.08 ms at
+    // 384 kHz with three receivers, which is inside a single recorded delivery
+    // gap. Passed in rather than read inside Hl2ControlRequest so that class
+    // keeps no clock, and passed in HERE rather than read inside this method so
+    // the socket-free tests can pin a rate without real time passing.
+    void tickControlRequest(qint64 nowMs);
+    // Monotonic milliseconds for the two calls above. Origin is arbitrary — the
+    // value is only ever differenced inside Hl2ControlRequest.
+    [[nodiscard]] qint64 controlNowMs() const noexcept;
     // Emit whatever verdict the machine has settled, if any.
     void publishControlVerdict();
     // Confirm that the packet buildNextControlPacket() just produced reached the
@@ -410,7 +422,9 @@ private:
     // makes Hl2ControlRequest::onRequestSent()'s "handed to the socket" true
     // rather than aspirational. Exposed to MetisClientTestAccess so the
     // socket-free tests drive the same two-step seam the transport does.
-    void onControlPacketSent(qint64 bytesWritten) noexcept;
+    // `nowMs` starts the deadline's wall-clock floor and must come from the
+    // same clock as tickControlRequest()'s.
+    void onControlPacketSent(qint64 bytesWritten, qint64 nowMs) noexcept;
     // Give up the outstanding request because the stream it belonged to is
     // gone: publish anything already settled, tell a caller that is still
     // waiting, then reset. Used by stop() and by the silence watchdog's
@@ -449,6 +463,10 @@ private:
     int     m_startAttempts = 0;          // start datagrams sent this connect
     QElapsedTimer m_ep2Clock;             // pacer reference clock
     QElapsedTimer m_sinceLastEp6;         // silence detection
+    // Free-running from construction and never restarted: the RQST/ACK floor
+    // differences it, so it must not be reset under an outstanding request the
+    // way m_sinceLastEp6 is per packet.
+    QElapsedTimer m_controlClock;
     quint64 m_ep2Sent = 0;                // EP2 frames sent since m_ep2Clock
     qint64  m_ep2IntervalUs = 2625;       // derived from the sample rate
     bool    m_watchdogEnabled = true;     // gateware watchdog (anti-wedge)
