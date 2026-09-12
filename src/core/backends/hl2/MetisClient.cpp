@@ -539,10 +539,21 @@ void MetisClient::setBandFilter(int ocFilterByte)
         return;                       // relays already where they belong
     m_params.ocFilterByte = oc;
     m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), oc);
-    // Ahead of the rotation: a band change moves the NCO and the filter in the
-    // same gesture, and waiting for the round robin would leave the relays on
-    // the old band for up to three EP2 frames.
-    m_oneShot.push_back(m_ccConfig);
+    // NOTHING IS QUEUED HERE, and that is deliberate rather than an omission.
+    //
+    // buildNextControlPacket() puts LIVE m_ccConfig in bank A of EVERY EP2
+    // frame, so the new relay pattern is on the wire on the next frame (~2.6 ms
+    // at 48 kHz) with no help. There is no rotation to get ahead of either: the
+    // round robin is the receiver NCOs, then gain, then the ADC assignment --
+    // the config register was never in it.
+    //
+    // Queuing a COPY was also harmful. A one-shot only ever fills bank B, the
+    // radio applies bank B after bank A, and the copy is a SNAPSHOT -- so a band
+    // change followed by a sample-rate change sent one frame whose bank A held
+    // the new DDC rate and whose bank B held the old one, and the radio ended
+    // that frame on the old one. Bank A re-asserted the truth on the following
+    // frame, so it was ~1 ms of stale rate: small, real, and intended by
+    // nothing. (aethersdr/AetherSDR#4579)
 }
 
 void MetisClient::setIoBoardTxFrequencyHz(quint64 hz)

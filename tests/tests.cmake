@@ -3659,6 +3659,14 @@ target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
 
+# HL2 band filter / EP2 frame composition — socket-free, on MetisClient's own
+# packet builder. A band change must not leave two disagreeing config banks in
+# one frame (#4579).
+add_executable(hl2_band_filter_frame_test tests/hl2_band_filter_frame_test.cpp)
+target_include_directories(hl2_band_filter_frame_test PRIVATE src)
+target_link_libraries(hl2_band_filter_frame_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_band_filter_frame_test COMMAND hl2_band_filter_frame_test)
+
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
 add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
