@@ -13,15 +13,25 @@ name: Static Checks
 #
 # `Static checks` IS a required status check (flipped 2026-09-12). The required
 # contexts are build / check-windows / check-macos / Static checks, so a red run
-# here blocks a merge and every gate below is enforcing, not advisory — the
-# frozen per-PR test gate (tools/check_ci_test_gate.py) included.
+# here blocks a merge — the frozen per-PR test gate
+# (tools/check_ci_test_gate.py) included, which is what the #5405 rollout was
+# for.
+#
+# WHAT THAT DOES AND DOES NOT MAKE ENFORCING. A step only blocks if it can fail
+# the job, so "required" promotes the --strict steps and nothing else. Still
+# advisory by design, and unchanged by the flip:
+#   * the accessibility step below — warnings only, never fails the job
+#     (docs/a11y.md);
+#   * EB2/EB3 findings against TRACKED baselines — those warn; only a new
+#     violation or a grown baseline errors. 102 warnings currently ride on a
+#     green run.
 #
 # This was the LAST action of the #5405 rollout and it sat undone from
-# 2026-09-04 to 2026-09-12. For eight days the gate that PR existed to enforce
-# was itself unenforced, which is worth remembering the next time a rollout ends
-# in a manual step: nothing in CI can tell you the manual step was skipped, and
-# this file confidently said "NOT yet required" the whole time without anything
-# checking whether that was still true.
+# 2026-09-04 to 2026-09-12: for eight days the gate that PR existed to enforce
+# was itself unenforced. The lesson for the next rollout ending in a manual
+# step is the durable part — nothing in CI can tell you the step was skipped,
+# and this file asserted "NOT yet required" throughout with nothing checking
+# whether that was still true.
 #
 # The `paths:` filter is gone, and that ordering is deliberate: a required
 # check a PR never triggers blocks that PR forever, so the filter has to go
