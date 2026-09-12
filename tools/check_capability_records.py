@@ -32,10 +32,17 @@ fields at all. This parser counts DIRECT bool members of RadioCapabilities only
 A precision about HOW, because the obvious explanation is wrong (#5619 review):
 those three are excluded by the START OFFSET, not by the depth tracking. They
 are declared ABOVE `struct RadioCapabilities`, so the scan never reaches them.
-The depth guard exists for a nested type declared INSIDE the struct, of which
-there are none today — so it is currently unexercised on this header, and should
-be read as a guard against a future nested struct rather than as logic this
-count has validated.
+
+The depth tracking earns its keep separately, on a nested type declared INSIDE
+the struct: `enum class ClientSettingsDomain : quint32 {` at RadioCapabilities.h
+:356. Its enumerators are not bools so nothing would be miscounted today, but
+the guard is exercised rather than dormant.
+
+(An earlier revision of this docstring claimed there were no nested types and
+called the guard unexercised. That was wrong, and it is the third time in this
+file's short history that a comment credited a mechanism other than the one
+running — worth stating, because the parser's correctness is the only thing
+standing behind the frozen number.)
 
 WHAT A COUNT CANNOT SEE. Converting one bool to a record while adding another in
 the same commit leaves the number flat and passes. That is inherent to counting
@@ -53,7 +60,12 @@ import re
 import sys
 from pathlib import Path
 
-HEADER = Path("src/core/backends/RadioCapabilities.h")
+REPO = Path(__file__).resolve().parent.parent
+# Anchored on the script, not the cwd — every sibling checker in tools/ does
+# this. The first version used a bare relative path; it failed CLOSED rather
+# than passing vacuously, so it was never a hole, but "run it from anywhere"
+# should be true of all of them (#5619 review, K5PTB).
+HEADER = REPO / "src" / "core" / "backends" / "RadioCapabilities.h"
 
 # The population at the freeze (#5262 M2, 2026-09-12). SHRINK ONLY.
 #

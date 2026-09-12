@@ -117,8 +117,21 @@ REPO = Path(__file__).resolve().parent.parent
 # same shape deliberately: two different answers to "what is above the seam"
 # would be a bug generator.
 ABOVE_SEAM_DIRS = [REPO / "src" / "gui", REPO / "src" / "core", REPO / "src" / "models"]
-ABOVE_SEAM_FILES = [REPO / "src" / "main.cpp"]
+# The same three root shell files the sibling lists — not just main.cpp. The
+# docstring's reason for copying this definition was that two answers to "what
+# is above the seam" is a bug generator; a THIRD answer is no better (#5619
+# review, K5PTB). Neither MacStartupAbortGuard file carries a command today, so
+# this closes a latent divergence rather than a live gap.
+ABOVE_SEAM_FILES = [
+    REPO / "src" / "main.cpp",
+    REPO / "src" / "MacStartupAbortGuard.h",
+    REPO / "src" / "MacStartupAbortGuard.cpp",
+]
 BACKENDS_PREFIX = "src/core/backends/"
+# Same suffix set as check_engine_boundary.py's ENGINE_SUFFIXES, for the same
+# reason: .mm (MacMicPermission.mm) and .hpp/.cc must not be blind spots. Only
+# the .mm file exists above the seam today and it is clean.
+SCANNED_SUFFIXES = (".h", ".hpp", ".cpp", ".cc", ".mm")
 
 # Per-directory vacuity floor, EB3's guard applied here (check_engine_boundary
 # .py:210). If a root is renamed or the script runs from the wrong cwd, its
@@ -182,6 +195,13 @@ def count_for(path: Path) -> int:
     text = path.read_text(encoding="utf-8", errors="replace")
     # A comment that SAYS "emit commandReady" is not a call site; grep counted
     # one in SliceModel.cpp.
+    #
+    # STRING LITERALS ARE BLANKED FIRST. Stripping `//` straight away ate the
+    # rest of any line containing a "http://…" literal, taking a real call with
+    # it — an UNDER-count, so it would have passed silently (#5619 review,
+    # K5PTB). No instance exists above the seam today. Blanking is safe here
+    # because only the call pattern is counted, never the command text.
+    text = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', text)
     text = re.sub(r"//[^\n]*", "", text)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 
@@ -198,7 +218,10 @@ def scan() -> dict[str, int]:
         if not root.exists():
             raise SystemExit(f"check_command_plane: above-seam root missing: {root}")
         seen = 0
-        for path in sorted(list(root.rglob("*.cpp")) + list(root.rglob("*.h"))):
+        paths: list[Path] = []
+        for suffix in SCANNED_SUFFIXES:
+            paths.extend(root.rglob(f"*{suffix}"))
+        for path in sorted(set(paths)):
             rel = path.relative_to(REPO).as_posix()
             if rel.startswith(BACKENDS_PREFIX):
                 continue
