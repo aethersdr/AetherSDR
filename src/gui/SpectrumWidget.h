@@ -141,7 +141,10 @@ public:
     // Per-pan settings persistence
     void setPanIndex(int idx);
     int panIndex() const { return m_panIndex; }
-    Q_PROPERTY(int waterfallTimeMarkerSeconds READ waterfallTimeMarkerSeconds WRITE setWaterfallTimeMarkerSeconds)
+    // Read-only by design: the interval is set through the context menu (or
+    // DisplaySettings), never by reflection. Exposing it for reads keeps the
+    // automation bridge's dss snapshot honest without adding settable surface.
+    Q_PROPERTY(int waterfallTimeMarkerSeconds READ waterfallTimeMarkerSeconds)
     int waterfallTimeMarkerSeconds() const { return m_wfTimeMarkerSeconds; }
     void setWaterfallTimeMarkerSeconds(int seconds);
 

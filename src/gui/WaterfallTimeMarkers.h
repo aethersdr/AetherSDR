@@ -7,8 +7,13 @@
 
 namespace AetherSDR {
 
-inline constexpr std::array<int, 9> kWaterfallMarkerIntervals{
-    0, 15, 30, 60, 300, 600, 900, 1800, 3600};
+// Intervals longer than the retained history can never place a visible line:
+// kWaterfallHistoryMs caps retention at 20 minutes, and a screenful of
+// waterfall is only ~11-19 s at typical rates, so 30-minute and 1-hour
+// entries would sit in the menu doing nothing. 15 minutes is already the
+// point of diminishing returns and is kept as the documented upper bound.
+inline constexpr std::array<int, 7> kWaterfallMarkerIntervals{
+    0, 15, 30, 60, 300, 600, 900};
 
 inline int validWaterfallMarkerInterval(int seconds)
 {
@@ -47,6 +52,9 @@ inline QVector<WaterfallTimeMarker> waterfallTimeMarkers(
         const WaterfallTimeRow& row = rows[(head + age) % rows.size()];
         // No invented rows across a gap, and no repeated boundary on a batch
         // of equal timestamps. A backward clock adjustment starts a new run.
+        // The `<=` deliberately overlaps the bucket comparison below: a row
+        // that did not advance the clock is already caught there, so this is
+        // defence in depth rather than the sole guard for it.
         if (row.previousMs <= 0 || row.timestampMs <= row.previousMs
             || row.timestampMs / intervalMs == row.previousMs / intervalMs) {
             continue;

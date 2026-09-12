@@ -10164,8 +10164,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             for (const int seconds : kWaterfallMarkerIntervals) {
                 const QString label = seconds == 0 ? tr("Off")
                     : seconds < 60 ? tr("%1 seconds").arg(seconds)
-                    : seconds < 3600 ? (seconds == 60 ? tr("1 minute") : tr("%1 minutes").arg(seconds / 60))
-                    : tr("1 hour");
+                    : seconds == 60 ? tr("1 minute")
+                    : tr("%1 minutes").arg(seconds / 60);
                 QAction* action = timeMenu->addAction(label);
                 action->setObjectName(QStringLiteral("waterfallTimeMarkers%1").arg(seconds));
                 action->setCheckable(true);

@@ -44,6 +44,9 @@ int main()
     check(waterfallTimeMarkers({{900000, 1000}}, 0, 15, 0, 40).size() == 1, "gap does not invent skipped rows");
     check(waterfallTimeMarkers({{1000, 900000}}, 0, 15, 0, 40).isEmpty(), "backward clock jump");
     check(waterfallTimeMarkers({{30000, 0}}, 0, 15, 0, 40).isEmpty(), "unstamped row");
+    check(waterfallTimeMarkers({{60000, 60000}}, 0, 15, 0, 40).isEmpty(), "a row that did not advance the clock");
+    check(waterfallTimeMarkers({{1800000, 1799999}}, 0, 1800, 0, 40).isEmpty(), "retired 30-minute interval is not accepted");
+    check(waterfallTimeMarkers({{3600000, 3599999}}, 0, 3600, 0, 40).isEmpty(), "retired 1-hour interval is not accepted");
     check(waterfallTimeMarkers({{60000, 59999}}, 0, 15, 1, 40).isEmpty(), "not-yet-presented top row is clipped");
     return failed ? 1 : 0;
 }
