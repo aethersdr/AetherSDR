@@ -87,6 +87,18 @@ public:
         uploader.onOverallTimeout(generation, timeoutToken);
     }
 
+    static int overallTimeoutMs(const FirmwareUploader& uploader, qint64 bytes)
+    {
+        return uploader.overallTimeoutMsFor(bytes);
+    }
+    static bool barrierActive(const FirmwareUploader& uploader)
+    {
+        return uploader.retryBarrierActive();
+    }
+    static void expireRadioProgressFreshness(FirmwareUploader& uploader)
+    {
+        uploader.m_radioProgressStaleMs = 0;
+    }
     static qint64 pending(const FirmwareUploader& uploader) { return uploader.m_pendingBytes; }
     static bool waiting(const FirmwareUploader& uploader) { return uploader.m_waitingForConfirmation; }
     static quint64 timeoutToken(const FirmwareUploader& uploader) { return uploader.m_timeoutToken; }
@@ -122,8 +134,10 @@ QByteArray nonPeriodicBytes(qsizetype size)
     return data;
 }
 
+using Outcome = AetherSDR::FirmwareUploader::Outcome;
+
 struct FinishedEvent {
-    bool success;
+    Outcome outcome;
     QString message;
 };
 
@@ -132,8 +146,8 @@ void checkRetryRequiresFreshConnection()
     AetherSDR::FirmwareUploader uploader(nullptr);
     QVector<FinishedEvent> finished;
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::finished,
-                     [&finished](bool success, const QString& message) {
-                         finished.append({success, message});
+                     [&finished](Outcome outcome, const QString& message) {
+                         finished.append({outcome, message});
                      });
     const QByteArray data = nonPeriodicBytes(8);
     const auto first = AetherSDR::FirmwareUploaderTestAccess::begin(uploader, data);
@@ -170,8 +184,8 @@ void checkByteIdentityAndPostDrainState()
     QVector<FinishedEvent> finished;
     int lastProgress = -1;
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::finished,
-                     [&finished](bool success, const QString& message) {
-                         finished.append({success, message});
+                     [&finished](Outcome outcome, const QString& message) {
+                         finished.append({outcome, message});
                      });
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::progressChanged,
                      [&lastProgress](int percent, const QString&) { lastProgress = percent; });
@@ -223,8 +237,8 @@ void checkUploadTimeoutAndModelDisconnect()
     AetherSDR::FirmwareUploader uploader(nullptr);
     QVector<FinishedEvent> finished;
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::finished,
-                     [&finished](bool success, const QString& message) {
-                         finished.append({success, message});
+                     [&finished](Outcome outcome, const QString& message) {
+                         finished.append({outcome, message});
                      });
 
     const auto timedOutGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
@@ -234,15 +248,15 @@ void checkUploadTimeoutAndModelDisconnect()
         uploader, timedOutGeneration, uploadTimeout, QStringLiteral("upload timeout"));
     AetherSDR::FirmwareUploaderTestAccess::expire(
         uploader, timedOutGeneration, uploadTimeout, QStringLiteral("late timeout"));
-    check(finished.size() == 1 && !finished.front().success,
+    check(finished.size() == 1 && finished.front().outcome == Outcome::Failed,
           "an inactive upload is bounded and its stale timeout cannot emit twice");
 
     const auto disconnectedGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
         uploader, nonPeriodicBytes(1), [](const char*, qint64 requested) { return requested; });
     AetherSDR::FirmwareUploaderTestAccess::acknowledge(uploader, disconnectedGeneration, 1);
     AetherSDR::FirmwareUploaderTestAccess::modelDisconnected(uploader, disconnectedGeneration);
-    check(finished.size() == 2 && !finished.back().success
-              && finished.back().message.contains(QStringLiteral("unconfirmed")),
+    check(finished.size() == 2 && finished.back().outcome == Outcome::Unconfirmed
+              && finished.back().message.contains(QStringLiteral("rebooting")),
           "radio command-channel disconnect after drain reports an unconfirmed outcome once");
 }
 
@@ -267,8 +281,8 @@ void checkOverallDeadlineCannotBeExtendedByProgress()
     AetherSDR::FirmwareUploader uploader(nullptr);
     QVector<FinishedEvent> finished;
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::finished,
-                     [&finished](bool success, const QString& message) {
-                         finished.append({success, message});
+                     [&finished](Outcome outcome, const QString& message) {
+                         finished.append({outcome, message});
                      });
     const auto generation = AetherSDR::FirmwareUploaderTestAccess::start(
         uploader, nonPeriodicBytes(8), [](const char*, qint64 requested) { return requested; });
@@ -279,8 +293,8 @@ void checkOverallDeadlineCannotBeExtendedByProgress()
         uploader, generation, QStringLiteral("file update"), {{QStringLiteral("transfer"), QStringLiteral("0.26")}});
     AetherSDR::FirmwareUploaderTestAccess::expireOverall(uploader, generation, overallTimeout);
     AetherSDR::FirmwareUploaderTestAccess::expireOverall(uploader, generation, overallTimeout);
-    check(finished.size() == 1 && !finished.front().success
-              && finished.front().message.contains(QStringLiteral("10-minute")),
+    check(finished.size() == 1 && finished.front().outcome == Outcome::Failed
+              && finished.front().message.contains(QStringLiteral("operation limit")),
           "radio progress cannot extend the hard client operation deadline");
 }
 
@@ -290,8 +304,8 @@ void checkRadioStatusValidationAndFailure()
     QVector<FinishedEvent> finished;
     QVector<QString> progress;
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::finished,
-                     [&finished](bool success, const QString& message) {
-                         finished.append({success, message});
+                     [&finished](Outcome outcome, const QString& message) {
+                         finished.append({outcome, message});
                      });
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::progressChanged,
                      [&progress](int, const QString& message) { progress.append(message); });
@@ -307,9 +321,6 @@ void checkRadioStatusValidationAndFailure()
     }
     AetherSDR::FirmwareUploaderTestAccess::status(
         uploader, generation, QStringLiteral("file update"), {{QStringLiteral("failed"), QStringLiteral("2")}});
-    AetherSDR::FirmwareUploaderTestAccess::status(
-        uploader, generation, QStringLiteral("file update"),
-        {{QStringLiteral("failed"), QStringLiteral("0")}, {QStringLiteral("reason"), QStringLiteral("none")}});
     check(progress.size() == progressBeforeMalformed && finished.isEmpty(),
           "malformed transfer and failed values are ignored without inventing a result");
 
@@ -317,7 +328,7 @@ void checkRadioStatusValidationAndFailure()
         uploader, generation, QStringLiteral("file update"),
         {{QStringLiteral("failed"), QStringLiteral("1")},
          {QStringLiteral("reason"), QStringLiteral("signature validation failed")}});
-    check(finished.size() == 1 && !finished.front().success
+    check(finished.size() == 1 && finished.front().outcome == Outcome::Failed
               && finished.front().message.contains(QStringLiteral("signature validation failed")),
           "radio failed=1 terminates once and preserves the reported reason");
 }
@@ -327,8 +338,8 @@ void checkDisconnectTimeoutAndStaleCallbacks()
     AetherSDR::FirmwareUploader uploader(nullptr);
     QVector<FinishedEvent> finished;
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::finished,
-                     [&finished](bool success, const QString& message) {
-                         finished.append({success, message});
+                     [&finished](Outcome outcome, const QString& message) {
+                         finished.append({outcome, message});
                      });
 
     const auto disconnectedGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
@@ -337,8 +348,8 @@ void checkDisconnectTimeoutAndStaleCallbacks()
     AetherSDR::FirmwareUploaderTestAccess::disconnected(uploader, disconnectedGeneration);
     AetherSDR::FirmwareUploaderTestAccess::expire(
         uploader, disconnectedGeneration, disconnectedTimeout, QStringLiteral("late timeout"));
-    check(finished.size() == 1 && !finished.front().success,
-          "disconnect before drain is an unconfirmed failure and emits one terminal result");
+    check(finished.size() == 1 && finished.front().outcome == Outcome::Failed,
+          "disconnect before drain is a failure and emits one terminal result");
 
     const auto cancelledGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
         uploader, nonPeriodicBytes(8), [](const char*, qint64 requested) { return requested; });
@@ -350,7 +361,7 @@ void checkDisconnectTimeoutAndStaleCallbacks()
         {{QStringLiteral("failed"), QStringLiteral("1")}, {QStringLiteral("reason"), QStringLiteral("late")}});
     AetherSDR::FirmwareUploaderTestAccess::expire(
         uploader, cancelledGeneration, cancelledTimeout, QStringLiteral("late timeout"));
-    check(finished.size() == 2 && !finished.back().success,
+    check(finished.size() == 2 && finished.back().outcome == Outcome::Failed,
           "cancel invalidates late byte, status, and timeout callbacks exactly once");
 
     const auto waitingGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
@@ -362,8 +373,8 @@ void checkDisconnectTimeoutAndStaleCallbacks()
           "disconnect after drain remains unconfirmed rather than reporting install success");
     AetherSDR::FirmwareUploaderTestAccess::expire(
         uploader, waitingGeneration, confirmationTimeout, QStringLiteral("confirmation timed out"));
-    check(finished.size() == 3 && !finished.back().success,
-          "post-drain confirmation wait is bounded and never succeeds speculatively");
+    check(finished.size() == 3 && finished.back().outcome == Outcome::Unconfirmed,
+          "post-drain confirmation wait is bounded and resolves unconfirmed, never successful");
 }
 
 void checkRejectedUploadResponse()
@@ -371,12 +382,12 @@ void checkRejectedUploadResponse()
     AetherSDR::FirmwareUploader uploader(nullptr);
     QVector<FinishedEvent> finished;
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::finished,
-                     [&finished](bool success, const QString& message) {
-                         finished.append({success, message});
+                     [&finished](Outcome outcome, const QString& message) {
+                         finished.append({outcome, message});
                      });
     const auto generation = AetherSDR::FirmwareUploaderTestAccess::begin(uploader, nonPeriodicBytes(4));
     AetherSDR::FirmwareUploaderTestAccess::reject(uploader, generation, 0x15);
-    check(finished.size() == 1 && !finished.front().success,
+    check(finished.size() == 1 && finished.front().outcome == Outcome::Failed,
           "a rejected upload-port response terminates without starting a transfer");
 }
 
@@ -387,8 +398,8 @@ void checkProgressReentrancyCannotMutateReplacementAttempt()
     bool restarted = false;
     quint64 replacementGeneration = 0;
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::finished,
-                     [&finished](bool success, const QString& message) {
-                         finished.append({success, message});
+                     [&finished](Outcome outcome, const QString& message) {
+                         finished.append({outcome, message});
                      });
     QObject::connect(&uploader, &AetherSDR::FirmwareUploader::progressChanged,
                      [&uploader, &restarted, &replacementGeneration](int, const QString& message) {
@@ -411,8 +422,117 @@ void checkProgressReentrancyCannotMutateReplacementAttempt()
           "progress callback cancellation cannot let an old acknowledgement mutate its replacement");
     AetherSDR::FirmwareUploaderTestAccess::acknowledge(uploader, replacementGeneration, 5);
     check(AetherSDR::FirmwareUploaderTestAccess::waiting(uploader)
-              && finished.size() == 1 && !finished.front().success,
+              && finished.size() == 1 && finished.front().outcome == Outcome::Failed,
           "replacement attempt remains independent after reentrant cancellation");
+}
+
+
+// #5572 review: failed=0 is the radio's own confirmation, not noise. FlexLib
+// treats any parseable `failed` as the terminal word on an update and drops the
+// command channel on it (Radio.cs:12612-12631), so dropping failed=0 would
+// discard the one signal that can distinguish a real install from a silent one.
+// #5572 review: m_radioProgressSeen used to latch forever, so if the radio's
+// status stream stalled while TCP kept draining, the bar froze at the last
+// reported percentage for the rest of the transfer — and acknowledgeBytes
+// re-arms the inactivity timer, so nothing else would have noticed.
+void checkStaleRadioProgressFallsBackToLocalBytes()
+{
+    AetherSDR::FirmwareUploader uploader(nullptr);
+    int lastProgress = -1;
+    QObject::connect(&uploader, &AetherSDR::FirmwareUploader::progressChanged,
+                     [&lastProgress](int percent, const QString&) { lastProgress = percent; });
+    const auto generation = AetherSDR::FirmwareUploaderTestAccess::start(
+        uploader, nonPeriodicBytes(100), [](const char*, qint64 requested) { return requested; });
+    AetherSDR::FirmwareUploaderTestAccess::status(
+        uploader, generation, QStringLiteral("file update"),
+        {{QStringLiteral("transfer"), QStringLiteral("0.10")}});
+    AetherSDR::FirmwareUploaderTestAccess::acknowledge(uploader, generation, 40);
+    check(lastProgress == 10,
+          "fresh radio progress supersedes the local byte counter");
+
+    AetherSDR::FirmwareUploaderTestAccess::expireRadioProgressFreshness(uploader);
+    AetherSDR::FirmwareUploaderTestAccess::acknowledge(uploader, generation, 40);
+    check(lastProgress == 80,
+          "a stalled radio status stream falls back to local byte progress");
+}
+
+void checkRadioConfirmationSucceedsAndReleasesBarrier()
+{
+    AetherSDR::FirmwareUploader uploader(nullptr);
+    QVector<FinishedEvent> finished;
+    QObject::connect(&uploader, &AetherSDR::FirmwareUploader::finished,
+                     [&finished](Outcome outcome, const QString& message) {
+                         finished.append({outcome, message});
+                     });
+    const auto generation = AetherSDR::FirmwareUploaderTestAccess::start(
+        uploader, nonPeriodicBytes(4), [](const char*, qint64 requested) { return requested; });
+    AetherSDR::FirmwareUploaderTestAccess::dispatched(uploader);
+    AetherSDR::FirmwareUploaderTestAccess::acknowledge(uploader, generation, 4);
+    check(AetherSDR::FirmwareUploaderTestAccess::waiting(uploader) && finished.isEmpty(),
+          "a drained socket still waits for the radio rather than claiming success");
+
+    AetherSDR::FirmwareUploaderTestAccess::status(
+        uploader, generation, QStringLiteral("file update"),
+        {{QStringLiteral("failed"), QStringLiteral("0")}});
+    check(finished.size() == 1 && finished.front().outcome == Outcome::Succeeded,
+          "radio failed=0 confirms the install and is the only path to Succeeded");
+    check(!AetherSDR::FirmwareUploaderTestAccess::barrierActive(uploader),
+          "a radio-settled outcome leaves nothing pending, so the retry barrier clears");
+}
+
+// The barrier exists for attempts whose outcome the radio never reported. An
+// outcome the radio DID report must not keep it armed, and an ambiguous one must.
+void checkBarrierReleasedOnlyByRadioSettledOutcomes()
+{
+    AetherSDR::FirmwareUploader rejected(nullptr);
+    QVector<FinishedEvent> rejectedFinished;
+    QObject::connect(&rejected, &AetherSDR::FirmwareUploader::finished,
+                     [&rejectedFinished](Outcome outcome, const QString& message) {
+                         rejectedFinished.append({outcome, message});
+                     });
+    const auto generation = AetherSDR::FirmwareUploaderTestAccess::start(
+        rejected, nonPeriodicBytes(8), [](const char*, qint64 requested) { return requested; });
+    AetherSDR::FirmwareUploaderTestAccess::dispatched(rejected);
+    AetherSDR::FirmwareUploaderTestAccess::status(
+        rejected, generation, QStringLiteral("file update"),
+        {{QStringLiteral("failed"), QStringLiteral("1")},
+         {QStringLiteral("reason"), QStringLiteral("bad-signature")}});
+    check(rejectedFinished.size() == 1 && rejectedFinished.front().outcome == Outcome::Failed
+              && !AetherSDR::FirmwareUploaderTestAccess::barrierActive(rejected),
+          "a radio-reported rejection is unambiguous and releases the barrier");
+
+    AetherSDR::FirmwareUploader stalled(nullptr);
+    const auto stalledGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
+        stalled, nonPeriodicBytes(8), [](const char*, qint64 requested) { return requested; });
+    AetherSDR::FirmwareUploaderTestAccess::dispatched(stalled);
+    AetherSDR::FirmwareUploaderTestAccess::expire(
+        stalled, stalledGeneration,
+        AetherSDR::FirmwareUploaderTestAccess::timeoutToken(stalled),
+        QStringLiteral("upload timeout"));
+    check(AetherSDR::FirmwareUploaderTestAccess::barrierActive(stalled),
+          "a timeout after dispatch leaves the outcome unobservable, so the barrier holds");
+}
+
+// #5572 review: a fixed ten-minute ceiling needed ~644 KB/s to pass the
+// reporter's own 386 MB image, which a SmartLink uplink does not owe us.
+void checkOverallDeadlineScalesWithImageSize()
+{
+    AetherSDR::FirmwareUploader uploader(nullptr);
+    const int small = AetherSDR::FirmwareUploaderTestAccess::overallTimeoutMs(uploader, 1024);
+    check(small == 10 * 60 * 1000,
+          "a small image keeps the ten-minute floor");
+
+    const qint64 reportedImage = 386282416;
+    const int large =
+        AetherSDR::FirmwareUploaderTestAccess::overallTimeoutMs(uploader, reportedImage);
+    check(large > small, "a large image is given more than the floor");
+    // It must survive a genuinely slow uplink: the budget has to exceed the time
+    // the image takes at a rate the floor would have failed.
+    check(static_cast<qint64>(large) > (reportedImage * 1000LL) / (128LL * 1024LL),
+          "#5572's 386MB image survives a 128 KB/s uplink within the deadline");
+    check(AetherSDR::FirmwareUploaderTestAccess::overallTimeoutMs(
+              uploader, 500LL * 1024LL * 1024LL) <= 2 * 60 * 60 * 1000,
+          "the deadline is still capped so a wedged transfer cannot run forever");
 }
 
 } // namespace
@@ -429,5 +549,9 @@ int main(int argc, char** argv)
     checkDisconnectTimeoutAndStaleCallbacks();
     checkRejectedUploadResponse();
     checkProgressReentrancyCannotMutateReplacementAttempt();
+    checkStaleRadioProgressFallsBackToLocalBytes();
+    checkRadioConfirmationSucceedsAndReleasesBarrier();
+    checkBarrierReleasedOnlyByRadioSettledOutcomes();
+    checkOverallDeadlineScalesWithImageSize();
     return g_failures == 0 ? 0 : 1;
 }

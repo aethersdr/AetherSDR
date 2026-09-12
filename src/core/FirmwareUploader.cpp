@@ -37,30 +37,30 @@ void FirmwareUploader::upload(const QString& filePath)
         return;
     }
     if (!m_model || !m_model->isConnected()) {
-        emit finished(false, tr("Connect to the radio before uploading firmware"));
+        emit finished(Outcome::Failed, tr("Connect to the radio before uploading firmware"));
         return;
     }
 
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly)) {
-        emit finished(false, tr("Cannot open file: %1").arg(file.errorString()));
+        emit finished(Outcome::Failed, tr("Cannot open file: %1").arg(file.errorString()));
         return;
     }
     if (file.size() > kMaxFileBytes) {
-        emit finished(false, tr("File too large (> 500MB)"));
+        emit finished(Outcome::Failed, tr("File too large (> 500MB)"));
         return;
     }
     const QByteArray fileData = file.readAll();
     if (file.error() != QFileDevice::NoError) {
-        emit finished(false, tr("Could not read firmware file: %1").arg(file.errorString()));
+        emit finished(Outcome::Failed, tr("Could not read firmware file: %1").arg(file.errorString()));
         return;
     }
     if (fileData.isEmpty()) {
-        emit finished(false, tr("File is empty"));
+        emit finished(Outcome::Failed, tr("File is empty"));
         return;
     }
     if (fileData.size() != file.size()) {
-        emit finished(false, tr("Firmware file changed while it was being read"));
+        emit finished(Outcome::Failed, tr("Firmware file changed while it was being read"));
         return;
     }
 
@@ -79,15 +79,15 @@ void FirmwareUploader::cancel()
     if (!m_uploading) {
         return;
     }
-    finishOperation(m_generation, false, tr("Firmware upload cancelled"));
+    finishOperation(m_generation, Outcome::Failed, tr("Firmware upload cancelled"));
 }
 
 bool FirmwareUploader::beginOperation(const QByteArray& fileData, const QString& fileName)
 {
     // File-update status has no attempt identifier. A late failure from the
     // previous upload must not be attributed to a retry on the same session.
-    if (m_requiresFreshConnection) {
-        emit finished(false, tr("Disconnect and reconnect to the radio before retrying firmware upload; "
+    if (retryBarrierActive()) {
+        emit finished(Outcome::Failed, tr("Disconnect and reconnect to the radio before retrying firmware upload; "
                                "the previous update outcome may still be pending"));
         return false;
     }
@@ -108,6 +108,8 @@ bool FirmwareUploader::beginOperation(const QByteArray& fileData, const QString&
     m_waitingForConfirmation = false;
     m_radioProgressSeen = false;
     m_radioProgressPercent = 0;
+    m_radioProgressAge.invalidate();
+    m_outcomeSettledByRadio = false;
     armOverallTimeout(m_generation);
 
     if (!m_model) {
@@ -131,7 +133,7 @@ void FirmwareUploader::requestUploadPort(Generation generation)
         return;
     }
     if (!m_model) {
-        finishOperation(generation, false, tr("Radio disconnected before upload started"));
+        finishOperation(generation, Outcome::Failed, tr("Radio disconnected before upload started"));
         return;
     }
 
@@ -149,8 +151,11 @@ void FirmwareUploader::requestUploadPort(Generation generation)
     if (!isCurrent(generation) || !m_model) {
         return;
     }
+    // The barrier is armed in onUploadPortReceived, once the radio has actually
+    // accepted the command and opened its file server. Arming it here would
+    // lock out a retry after a rejection that dispatched no firmware byte and
+    // can leave no `file update` status pending (#5572 review).
     const QPointer<FirmwareUploader> self(this);
-    markUploadDispatched();
     m_model->sendCmdPublic(
         QStringLiteral("file upload %1 update").arg(m_fileData.size()),
         [self, generation](int code, const QString& body) {
@@ -169,10 +174,15 @@ void FirmwareUploader::onUploadPortReceived(Generation generation,
     }
     if (code != 0) {
         finishOperation(generation,
-                        false,
+                        Outcome::Failed,
                         tr("Radio rejected firmware upload (error 0x%1)").arg(code, 0, 16));
         return;
     }
+
+    // The radio accepted the upload and is standing up its file server: from
+    // here a `file update` outcome may arrive for this attempt, so the retry
+    // barrier becomes real.
+    markUploadDispatched();
 
     bool parsed = false;
     const uint port = body.trimmed().toUInt(&parsed);
@@ -198,7 +208,7 @@ void FirmwareUploader::connectUploadSocket(Generation generation, quint16 port)
         return;
     }
     if (!m_model) {
-        finishOperation(generation, false, tr("Radio disconnected before upload started"));
+        finishOperation(generation, Outcome::Failed, tr("Radio disconnected before upload started"));
         return;
     }
 
@@ -241,7 +251,7 @@ void FirmwareUploader::tryFallbackPort(Generation generation)
         return;
     }
     if (m_uploadPort == kFallbackPort) {
-        finishOperation(generation, false, tr("Cannot connect to firmware upload port"));
+        finishOperation(generation, Outcome::Failed, tr("Cannot connect to firmware upload port"));
         return;
     }
     emit progressChanged(0, tr("Trying fallback port %1...").arg(kFallbackPort));
@@ -292,7 +302,7 @@ void FirmwareUploader::queueNextChunk(Generation generation)
         return;
     }
     if (accepted <= 0 || accepted > requested || accepted > remaining) {
-        finishOperation(generation, false, tr("Upload failed: socket accepted no data"));
+        finishOperation(generation, Outcome::Failed, tr("Upload failed: socket accepted no data"));
         return;
     }
     // Advance only by bytes accepted by write(), never by a partial drain from
@@ -317,12 +327,20 @@ void FirmwareUploader::acknowledgeBytes(Generation generation, qint64 bytes)
         return;
     }
     if (bytes <= 0 || bytes > m_pendingBytes) {
-        finishOperation(generation, false, tr("Upload failed: invalid socket byte accounting"));
+        finishOperation(generation, Outcome::Failed, tr("Upload failed: invalid socket byte accounting"));
         return;
     }
     m_pendingBytes -= bytes;
     m_bytesAcknowledged += bytes;
-    if (!m_radioProgressSeen) {
+    // Radio-reported transfer supersedes the local counter, but only while it
+    // is still arriving. Latching m_radioProgressSeen forever would freeze the
+    // bar at the last reported percentage if the status stream stalled while
+    // TCP kept draining — the inactivity timer is re-armed just below, so
+    // nothing else would notice (#5572 review).
+    const bool radioProgressFresh =
+        m_radioProgressSeen && m_radioProgressAge.isValid()
+        && m_radioProgressAge.elapsed() < m_radioProgressStaleMs;
+    if (!radioProgressFresh) {
         const int percent = static_cast<int>((m_bytesAcknowledged * 100LL) / m_fileData.size());
         emit progressChanged(percent,
                              tr("Uploading... %1 / %2 KB")
@@ -336,7 +354,7 @@ void FirmwareUploader::acknowledgeBytes(Generation generation, qint64 bytes)
 
     if (m_bytesAcknowledged == m_fileData.size()) {
         if (m_bytesQueued != m_fileData.size() || m_pendingBytes != 0) {
-            finishOperation(generation, false, tr("Upload failed: invalid socket byte accounting"));
+            finishOperation(generation, Outcome::Failed, tr("Upload failed: invalid socket byte accounting"));
             return;
         }
         qCDebug(lcFirmware) << "FirmwareUploader: firmware bytes drained";
@@ -352,7 +370,8 @@ void FirmwareUploader::acknowledgeBytes(Generation generation, qint64 bytes)
         destroySocket(false);
         armTimeout(generation,
                    kConfirmationTimeoutMs,
-                   tr("Firmware bytes were sent, but the radio did not confirm installation"));
+                   tr("Firmware bytes were sent, but the radio did not confirm installation. "
+                      "Reconnect to check the radio's firmware version."));
         return;
     }
 
@@ -375,7 +394,7 @@ void FirmwareUploader::handleDisconnected(Generation generation)
         return;
     }
     finishOperation(generation,
-                    false,
+                    Outcome::Failed,
                     tr("Radio closed the firmware upload connection before the transfer completed"));
 }
 
@@ -388,7 +407,7 @@ void FirmwareUploader::onError(Generation generation, QTcpSocket* socket)
         tryFallbackPort(generation);
         return;
     }
-    finishOperation(generation, false, tr("Upload failed: %1").arg(socket->errorString()));
+    finishOperation(generation, Outcome::Failed, tr("Upload failed: %1").arg(socket->errorString()));
 }
 
 void FirmwareUploader::onRadioStatus(Generation generation,
@@ -402,13 +421,26 @@ void FirmwareUploader::onRadioStatus(Generation generation,
     if (kvs.contains(QStringLiteral("failed"))) {
         bool parsed = false;
         const int failed = kvs.value(QStringLiteral("failed")).toInt(&parsed);
-        if (parsed && (failed == 0 || failed == 1) && failed == 1) {
+        if (parsed && failed == 1) {
+            m_outcomeSettledByRadio = true;
             const QString reason = kvs.value(QStringLiteral("reason")).trimmed();
             finishOperation(generation,
-                            false,
+                            Outcome::Failed,
                             reason.isEmpty()
                                 ? tr("Radio reported that firmware installation failed")
                                 : tr("Radio reported that firmware installation failed: %1").arg(reason));
+            return;
+        }
+        if (parsed && failed == 0) {
+            // The radio's own word that it accepted the image. FlexLib treats
+            // any parseable `failed` as terminal and drops the command channel
+            // on it ("close main command channel too since the radio will
+            // reboot", Radio.cs:12626-12630), so this — not a drained socket,
+            // not transfer=1.00 — is the one signal that confirms an install.
+            m_outcomeSettledByRadio = true;
+            finishOperation(generation,
+                            Outcome::Succeeded,
+                            tr("Radio accepted the firmware image and is rebooting"));
             return;
         }
     }
@@ -421,6 +453,7 @@ void FirmwareUploader::onRadioStatus(Generation generation,
     const int percent = static_cast<int>(transfer * 100.0);
     m_radioProgressSeen = true;
     m_radioProgressPercent = percent;
+    m_radioProgressAge.restart();
     emit progressChanged(percent,
                          m_waitingForConfirmation
                              ? tr("Radio reported firmware transfer %1%; installation remains unconfirmed")
@@ -441,6 +474,24 @@ void FirmwareUploader::markUploadDispatched()
 {
     m_requiresFreshConnection = true;
     m_disconnectObserved = false;
+    // This object is parented to RadioSetupDialog, which carries
+    // WA_DeleteOnClose: closing the window destroys the uploader and would take
+    // the barrier with it, so reopening would offer the ambiguous same-session
+    // retry the barrier exists to forbid. Record it on the model, which outlives
+    // the dialog and clears it only on a genuine reconnect (#5572 review).
+    if (m_model) {
+        m_model->blockFirmwareRetryUntilReconnect();
+    }
+}
+
+bool FirmwareUploader::retryBarrierActive() const
+{
+    // The model is authoritative whenever there is one; the local copy is the
+    // fallback for a model-less uploader (tests).
+    if (m_model) {
+        return m_model->firmwareRetryBlocked();
+    }
+    return m_requiresFreshConnection;
 }
 
 void FirmwareUploader::handleConnectionStateChanged(bool connected)
@@ -459,10 +510,15 @@ void FirmwareUploader::handleModelDisconnected(Generation generation)
     if (!isCurrent(generation)) {
         return;
     }
+    // A command-channel drop after the bytes landed is the signature of the
+    // radio rebooting to apply the image — but it is equally the signature of
+    // it falling over, so it confirms nothing either way. Report it as its own
+    // outcome instead of collapsing it into success or failure (#5572 review).
     finishOperation(generation,
-                    false,
+                    m_waitingForConfirmation ? Outcome::Unconfirmed : Outcome::Failed,
                     m_waitingForConfirmation
-                        ? tr("Radio disconnected after the firmware bytes were sent; installation is unconfirmed")
+                        ? tr("Radio disconnected after the firmware bytes were sent — it is most likely "
+                             "rebooting to apply the image. Reconnect to confirm the firmware version.")
                         : tr("Radio disconnected before the firmware transfer completed"));
 }
 
@@ -495,7 +551,11 @@ void FirmwareUploader::onTimeout(Generation generation,
         tryFallbackPort(generation);
         return;
     }
-    finishOperation(generation, false, message);
+    // Only the post-drain wait is ambiguous; every earlier timeout means the
+    // transfer demonstrably did not complete.
+    finishOperation(generation,
+                    m_waitingForConfirmation ? Outcome::Unconfirmed : Outcome::Failed,
+                    message);
 }
 
 void FirmwareUploader::armOverallTimeout(Generation generation)
@@ -509,7 +569,19 @@ void FirmwareUploader::armOverallTimeout(Generation generation)
         ++m_overallTimeoutToken;
     }
     m_overallTimeoutGeneration = generation;
-    m_overallTimeoutTimer.start(kOverallUploadTimeoutMs);
+    m_overallTimeoutTimer.start(overallTimeoutMsFor(m_fileData.size()));
+}
+
+int FirmwareUploader::overallTimeoutMsFor(qint64 fileBytes) const
+{
+    // Ten minutes is the floor, not the value: a 386 MB image (the #5572 case)
+    // needs ~644 KB/s to fit in ten minutes, which no SmartLink/WAN uplink owes
+    // us. Allow the image's size at a pessimistic floor rate, then cap it so a
+    // wedged transfer still cannot run forever.
+    const qint64 sizeAllowanceMs =
+        (fileBytes * 1000LL) / kMinExpectedBytesPerSec + kConfirmationTimeoutMs;
+    const qint64 budget = qMax<qint64>(kOverallUploadBaseMs, sizeAllowanceMs);
+    return static_cast<int>(qMin<qint64>(budget, kOverallUploadCeilingMs));
 }
 
 void FirmwareUploader::onOverallTimeout(Generation generation, quint64 timeoutToken)
@@ -518,12 +590,13 @@ void FirmwareUploader::onOverallTimeout(Generation generation, quint64 timeoutTo
         return;
     }
     finishOperation(generation,
-                    false,
-                    tr("Firmware upload exceeded the 10-minute operation limit"));
+                    m_waitingForConfirmation ? Outcome::Unconfirmed : Outcome::Failed,
+                    tr("Firmware upload exceeded its %1-minute operation limit")
+                        .arg(overallTimeoutMsFor(m_fileData.size()) / 60000));
 }
 
 void FirmwareUploader::finishOperation(Generation generation,
-                                       bool success,
+                                       Outcome outcome,
                                        const QString& message)
 {
     if (!isCurrent(generation)) {
@@ -543,11 +616,24 @@ void FirmwareUploader::finishOperation(Generation generation,
     m_waitingForConfirmation = false;
     m_radioProgressSeen = false;
     m_radioProgressPercent = 0;
+    m_radioProgressAge.invalidate();
     m_uploading = false;
     m_generation = nextGeneration();
     ++m_timeoutToken;
     ++m_overallTimeoutToken;
-    emit finished(success, message);
+    // Release the barrier only for an outcome the RADIO settled (`file update
+    // failed=`, either value): that leaves nothing pending to misattribute to a
+    // later attempt. Every other terminal — socket error, byte-accounting
+    // failure, cancel, any timeout — can still have dispatched bytes whose fate
+    // the radio never reported, which is precisely what the barrier is for.
+    if (m_outcomeSettledByRadio) {
+        m_requiresFreshConnection = false;
+        if (m_model) {
+            m_model->clearFirmwareRetryBlock();
+        }
+    }
+    m_outcomeSettledByRadio = false;
+    emit finished(outcome, message);
 }
 
 void FirmwareUploader::destroySocket(bool abortConnection)
