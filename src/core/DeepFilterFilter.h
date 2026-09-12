@@ -16,8 +16,9 @@ namespace AetherSDR {
 class Resampler;
 
 // Client-side neural noise reduction using DeepFilterNet3.
-// Processes 24kHz stereo Int16 audio by upsampling to 48kHz mono,
-// running the DeepFilter model, and downsampling back to 24kHz stereo.
+// The immutable input/output domain is 24 or 48 kHz stereo float32. Legacy24
+// retains the existing SRC pair; native48 reaches the model without SRC.
+// The existing mono analysis and delayed stereo level-balance policy remain.
 //
 // DeepFilterNet expects 48kHz mono float [-1.0, 1.0] input.
 // Frame size determined at runtime via df_get_frame_length().
@@ -25,18 +26,21 @@ class Resampler;
 
 class DeepFilterFilter {
 public:
-    DeepFilterFilter();
+    // Unsupported rates leave isValid() false. Recreate for a new rate/source.
+    explicit DeepFilterFilter(int sampleRate = 24000);
     ~DeepFilterFilter();
 
     DeepFilterFilter(const DeepFilterFilter&) = delete;
     DeepFilterFilter& operator=(const DeepFilterFilter&) = delete;
 
-    // Process a block of 24kHz stereo Int16 PCM.
+    // Process a block of 24/48 kHz stereo float32 PCM.
     // Returns the processed block (same format, same size).
-    QByteArray process(const QByteArray& pcm24kStereo);
+    QByteArray process(const QByteArray& pcmStereo);
 
     // Returns true if df_create() succeeded.
     bool isValid() const { return m_state != nullptr; }
+
+    int sampleRate() const { return m_sampleRate; }
 
     // Reset internal state (e.g., on band change).
     void reset();
@@ -50,13 +54,14 @@ public:
     float postFilterBeta() const { return m_postFilterBeta.load(); }
 
 private:
+    const int m_sampleRate;
     DFState* m_state{nullptr};
     int m_frameSize{0};                     // samples per frame (from df_get_frame_length)
     std::unique_ptr<Resampler> m_up;        // 24kHz mono → 48kHz mono
     std::unique_ptr<Resampler> m_down;      // 48kHz mono → 24kHz mono
     QByteArray m_inAccum;                   // accumulate 48kHz mono float input
-    QByteArray m_outAccum;                  // accumulate 24kHz stereo float output
-    std::vector<float> m_mono24k;
+    QByteArray m_outAccum;                  // accumulate configured-rate stereo float output
+    std::vector<float> m_monoInput;
     std::vector<float> m_processed48k;
     MonoDspStereoAdapter m_stereoAdapter;
     std::atomic<float> m_attenLimit{100.0f};

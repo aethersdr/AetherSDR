@@ -10,7 +10,10 @@ namespace AetherSDR {
 // stereo content cannot survive a mono DSP path; only its level balance does.
 class MonoDspStereoAdapter {
 public:
-    explicit MonoDspStereoAdapter(int processingLatencyFrames = 0);
+    explicit MonoDspStereoAdapter(int processingLatencyFrames = 0, int sampleRate = 24000);
+
+    bool isValid() const { return m_sampleRate == 24000 || m_sampleRate == 48000; }
+    int sampleRate() const { return m_sampleRate; }
 
     void reset();
     void setProcessingLatencyFrames(int frames);
@@ -25,6 +28,10 @@ private:
     void compactDryStereoFifoIfNeeded();
     void resetEnvelopeState();
 
+    int m_sampleRate{24000};
+    float m_balanceEnvelopeCoeff{4.0e-5f};
+    float m_monoObservabilityEnvelopeCoeff{0.006f};
+    float m_balancePowerFloor{0.0f};
     QByteArray m_dryStereoFifo;
     int m_dryStereoReadOffset{0};
     int m_processingLatencyFrames{0};

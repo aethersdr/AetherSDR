@@ -16,10 +16,10 @@ namespace AetherSDR {
 // Uses vDSP's real FFT, hardware-accelerated on Apple Silicon via AMX.
 //
 // Design characteristics:
-//   - Processes at 24 kHz natively — no 24↔48 kHz resampling.
+//   - Processes at its immutable 24 or 48 kHz rate without resampling.
 //     Eliminates the double-resampler chain that caused clicks, phase
 //     distortion, and int16 mid-point quantisation noise.
-//   - 512-point FFT at 24 kHz → 46.9 Hz/bin (2× better than NR2).
+//   - 512-point FFT at 24 kHz, 1024 at 48 kHz: 46.9 Hz/bin in both domains.
 //   - Smoothed-periodogram minimum statistics with calibrated bias and
 //     rate-limited upward tracking, using a 25-frame history (~267 ms).
 //   - Near-silent frames freeze the learned noise floor so mute, squelch, and
@@ -27,21 +27,23 @@ namespace AetherSDR {
 //   - Per-bin Wiener gain is temporally smoothed (GSMOOTH) to suppress
 //     musical-noise artefacts caused by rapid frame-to-frame gain swings.
 //   - Output accumulator ensures exact byte-count match with no silence
-//     gaps; startup latency is one hop (≈10.7 ms) of pre-filled zeros.
+//     gaps; the pre-filled FFT frame retains the same ≈21.3 ms delay at both rates.
 //   - User-adjustable strength: 0 = bypass, 1 = full NR.
 //
-// Processing chain (all at 24 kHz):
+// Processing chain (entirely in the configured sample-rate domain):
 //   stereo float32 -> shared mono FFT NR mask -> independent L/R OLA synthesis
 
 class MacNRFilter {
 public:
-    MacNRFilter();
+    explicit MacNRFilter(int sampleRate = 24000);
     ~MacNRFilter();
 
     bool isValid() const { return m_fftSetup != nullptr; }
 
-    // Process 24 kHz stereo float32 PCM; returns same format, same byte count.
-    QByteArray process(const QByteArray& pcm24kStereo);
+    // Process configured-rate stereo float32 PCM; returns same format, same byte count.
+    QByteArray process(const QByteArray& pcmStereo);
+
+    int sampleRate() const { return m_sampleRate; }
 
     // Reset internal state (e.g. on band change or stream restart).
     void reset();
@@ -55,15 +57,16 @@ public:
     float strength()     const { return m_strength.load(); }
 
 private:
+    const int m_sampleRate;
     void updateGainFromFrame(const float* inBuf);
     void synthesizeFrameWithCurrentGain(const float* inBuf, float* outBuf,
                                         float synthesisStrength);
 
     // ── FFT parameters ─────────────────────────────────────────────────
-    static constexpr int LOG2N = 9;           // log2(512)
-    static constexpr int N     = 1 << LOG2N;  // 512-point real FFT
-    static constexpr int H     = N / 2;       // 256-sample hop (50 % overlap)
-    static constexpr int NBINS = N / 2 + 1;   // 257 unique spectral bins
+    const int m_log2n;
+    const int m_fftSize;
+    const int m_hopSize;
+    const int m_bins;
 
     // ── Algorithm tuning ───────────────────────────────────────────────
     static constexpr int   HIST             = 25;    // noise history frames (~267 ms)
@@ -97,7 +100,7 @@ private:
     std::vector<float> m_outAccumR; // processed 24 kHz right-channel output
 
     // ── Noise estimator state ─────────────────────────────────────────
-    float              m_powerHistory[HIST][NBINS]{}; // smoothed periodograms
+    std::vector<float> m_powerHistory; // HIST rows of m_bins powers // smoothed periodograms
     int                m_histIdx{0};
     std::vector<float> m_noiseEst;       // current noise floor estimate [NBINS]
     std::vector<float> m_smoothedPower;  // current smoothed periodogram [NBINS]

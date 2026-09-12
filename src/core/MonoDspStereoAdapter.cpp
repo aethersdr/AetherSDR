@@ -7,11 +7,7 @@ namespace AetherSDR {
 namespace {
 
 constexpr int kChannels = 2;
-constexpr int kSampleRate = 24000;
-constexpr int kMaxBufferedFrames = kSampleRate * 5;
 constexpr int kFrameBytes = kChannels * static_cast<int>(sizeof(float));
-constexpr int kMaxBufferedBytes = kMaxBufferedFrames * kFrameBytes;
-constexpr int kCompactThresholdBytes = kSampleRate * kFrameBytes;
 // Keep balance changes well below the audio envelope rate. The mono DSP owns
 // the program waveform; this estimate only distributes it between channels.
 constexpr float kBalanceEnvelopeCoeff = 4.0e-5f;
@@ -36,10 +32,21 @@ float updatePowerEnvelope(
 
 } // namespace
 
-MonoDspStereoAdapter::MonoDspStereoAdapter(int processingLatencyFrames)
-    : m_processingLatencyFrames(std::max(0, processingLatencyFrames))
+MonoDspStereoAdapter::MonoDspStereoAdapter(int processingLatencyFrames, int sampleRate)
+    : m_sampleRate(sampleRate)
+    , m_processingLatencyFrames(std::max(0, processingLatencyFrames))
     , m_latencyFramesRemaining(m_processingLatencyFrames)
-{}
+{
+    // Preserve the legacy coefficients bit-for-bit. At 48 kHz two updates
+    // cover the same elapsed time as one legacy update.
+    if (sampleRate == 48000) {
+        m_balanceEnvelopeCoeff = 1.0f - std::sqrt(1.0f - kBalanceEnvelopeCoeff);
+        m_monoObservabilityEnvelopeCoeff =
+            1.0f - std::sqrt(1.0f - kMonoObservabilityEnvelopeCoeff);
+    }
+    m_balancePowerFloor = sampleRate == 24000 ? kBalancePowerFloor
+        : kPowerFloor * (m_balanceEnvelopeCoeff / m_monoObservabilityEnvelopeCoeff);
+}
 
 void MonoDspStereoAdapter::reset()
 {
@@ -84,7 +91,7 @@ void MonoDspStereoAdapter::compactDryStereoFifoIfNeeded()
         return;
     }
 
-    if (m_dryStereoReadOffset >= kCompactThresholdBytes) {
+    if (m_dryStereoReadOffset >= m_sampleRate * kFrameBytes) {
         m_dryStereoFifo.remove(0, m_dryStereoReadOffset);
         m_dryStereoReadOffset = 0;
     }
@@ -92,14 +99,14 @@ void MonoDspStereoAdapter::compactDryStereoFifoIfNeeded()
 
 void MonoDspStereoAdapter::pushDryStereo(const QByteArray& stereoPcm)
 {
-    if (stereoPcm.isEmpty()) {
+    if (!isValid() || stereoPcm.isEmpty()) {
         return;
     }
 
     m_dryStereoFifo.append(stereoPcm);
 
     const int readableBytes = readableDryStereoBytes();
-    if (readableBytes > kMaxBufferedBytes) {
+    if (readableBytes > m_sampleRate * 5 * kFrameBytes) {
         // A rate mismatch this large means dry and processed timelines can no
         // longer be paired reliably. Drop the pending dry side and re-prime on
         // the next block instead of preserving a permanent offset.
@@ -115,7 +122,7 @@ void MonoDspStereoAdapter::pushDryStereo(const QByteArray& stereoPcm)
 
 QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, int frames)
 {
-    if (!processedMono || frames <= 0) {
+    if (!isValid() || !processedMono || frames <= 0) {
         return {};
     }
 
@@ -153,12 +160,12 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
         m_dryMonoPower = updatePowerEnvelope(
             m_dryMonoPower,
             dryMono * dryMono,
-            kMonoObservabilityEnvelopeCoeff,
+            m_monoObservabilityEnvelopeCoeff,
             kPowerFloor);
         m_dryStereoPower = updatePowerEnvelope(
             m_dryStereoPower,
             dryStereoPower,
-            kMonoObservabilityEnvelopeCoeff,
+            m_monoObservabilityEnvelopeCoeff,
             kPowerFloor);
 
         const float observableMonoFloor =
@@ -174,13 +181,13 @@ QByteArray MonoDspStereoAdapter::takeProcessedMono(const float* processedMono, i
             m_leftPower = updatePowerEnvelope(
                 m_leftPower,
                 left * left,
-                kBalanceEnvelopeCoeff,
-                kBalancePowerFloor);
+                m_balanceEnvelopeCoeff,
+                m_balancePowerFloor);
             m_rightPower = updatePowerEnvelope(
                 m_rightPower,
                 right * right,
-                kBalanceEnvelopeCoeff,
-                kBalancePowerFloor);
+                m_balanceEnvelopeCoeff,
+                m_balancePowerFloor);
             const float leftLevel = std::sqrt(std::max(m_leftPower, 0.0f));
             const float rightLevel = std::sqrt(std::max(m_rightPower, 0.0f));
             const float totalLevel = leftLevel + rightLevel;

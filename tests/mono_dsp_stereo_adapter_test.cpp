@@ -482,6 +482,36 @@ bool testOverflowClearsInsteadOfMisaligning()
 
 int main()
 {
+    for (const int rate : {24000, 48000}) {
+        MonoDspStereoAdapter adapter(0, rate);
+        adapter.pushDryStereo(makeConstantStereoBlock(rate * 4, 0.8f, 0.2f));
+        if (!adapter.isValid() || adapter.sampleRate() != rate
+            || adapter.bufferedFrames() != rate * 4) {
+            std::printf("rate-aware queue discarded a valid four-second buffer\n");
+            return 1;
+        }
+        adapter.pushDryStereo(makeConstantStereoBlock(rate * 2, 0.8f, 0.2f));
+        if (adapter.bufferedFrames() != 0) {
+            std::printf("rate-aware queue failed its five-second cap\n");
+            return 1;
+        }
+    }
+    MonoDspStereoAdapter invalid(0, 44100);
+    invalid.pushDryStereo(makeConstantStereoBlock(100, 0.8f, 0.2f));
+    if (invalid.isValid() || invalid.bufferedFrames() != 0) {
+        return 1;
+    }
+    MonoDspStereoAdapter legacy;
+    MonoDspStereoAdapter explicit24(0, 24000);
+    const QByteArray dry = makeConstantStereoBlock(2400, 0.8f, 0.2f);
+    const std::vector<float> wet(2400, 0.25f);
+    legacy.pushDryStereo(dry);
+    explicit24.pushDryStereo(dry);
+    if (legacy.takeProcessedMono(wet.data(), wet.size())
+        != explicit24.takeProcessedMono(wet.data(), wet.size())) {
+        std::printf("explicit24 changed legacy adapter output\n");
+        return 1;
+    }
     if (!testPreservesRatioWithSharedGain()) {
         return 1;
     }

@@ -2031,6 +2031,48 @@ target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
 target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
 add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
 
+# Socket/device-free tests of the real optional wrappers. The local C API
+# substitutes only apply half-gain and expose sample counts; these tests do
+# not load a downloaded model, SDK pack or GPU and do not claim inference.
+add_library(nr_test_nvafx_api SHARED tests/nr_test_nvafx_api.cpp)
+set_target_properties(nr_test_nvafx_api PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+add_executable(nr_rate_domain_test
+    tests/nr_rate_domain_test.cpp
+    tests/nr_test_df_api.cpp
+    src/core/DeepFilterFilter.cpp
+    src/core/NvidiaAfxFilter.cpp
+    src/core/MonoDspStereoAdapter.cpp
+    src/core/Resampler.cpp
+)
+target_compile_definitions(nr_rate_domain_test PRIVATE HAVE_DFNR HAVE_NVIDIA_AFX)
+target_include_directories(nr_rate_domain_test PRIVATE
+    src third_party/deepfilter/include third_party/r8brain)
+target_link_libraries(nr_rate_domain_test PRIVATE Qt6::Core ${CMAKE_DL_LIBS})
+set_target_properties(nr_rate_domain_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/nr-rate-domain-tests")
+add_dependencies(nr_rate_domain_test nr_test_nvafx_api)
+add_test(NAME nr_rate_domain_test
+    COMMAND nr_rate_domain_test $<TARGET_FILE:nr_test_nvafx_api>)
+
+if(ENABLE_SPECBLEACH)
+    add_executable(specbleach_rate_domain_test
+        tests/specbleach_rate_domain_test.cpp
+        src/core/SpecbleachFilter.cpp
+        src/core/MonoDspStereoAdapter.cpp
+        ${SPECBLEACH_SOURCES}
+    )
+    target_compile_definitions(specbleach_rate_domain_test PRIVATE HAVE_SPECBLEACH)
+    target_include_directories(specbleach_rate_domain_test PRIVATE src
+        third_party/libspecbleach/include third_party/libspecbleach/src
+        ${FFTW3_INCLUDE_DIRS} ${FFTW3_H_DIR})
+    target_link_libraries(specbleach_rate_domain_test PRIVATE Qt6::Core ${FFTW3F_LIB})
+    if(MSVC AND SPECBLEACH_STATIC_LIB)
+        add_dependencies(specbleach_rate_domain_test specbleach_build)
+        target_link_libraries(specbleach_rate_domain_test PRIVATE ${SPECBLEACH_STATIC_LIB})
+    endif()
+    add_test(NAME specbleach_rate_domain_test COMMAND specbleach_rate_domain_test)
+endif()
+
 # tests/TestEventLoop.h is test infrastructure that makes correctness claims, so
 # it carries its own proof — including a negative case that pins the #4693
 # iteration-count idiom as genuinely broken, so the trap cannot quietly stop
