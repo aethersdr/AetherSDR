@@ -52,13 +52,28 @@ constexpr qint64 kFrameCacheLifetimeMs = 4 * 60 * 60 * 1000
                                        + 15 * 60 * 1000;
 constexpr qint64 kMaximumFrameCacheBytes = 256 * 1024 * 1024;
 
+// On macOS + GPU spectrum, attaching a QOpenGLWidget viewport can force a
+// backing-store repaint that re-enters a Metal-backed QRhiWidget (the
+// panadapter or WAVE scope) and blows up in
+// QMetalGraphicsPipeline::makeActiveForCurrentRenderPassEncoder. Keep the
+// flat PSK map on QGraphicsView's raster viewport in that configuration.
+// Discovered while opening Tools → PSK Reporter on a GPU-spectrum build
+// (PR #5595). Not a performance claim — compatibility only.
+MapView::ViewportMode flatMapViewportMode()
+{
+#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
+    return MapView::ViewportMode::Raster;
+#else
+    return MapView::ViewportMode::OpenGlIfAvailable;
+#endif
+}
+
 }
 
 MapDisplayWidget::MapDisplayWidget(QWidget* parent)
     : QWidget(parent)
     , m_stack(new QStackedLayout(this))
-    , m_flatView(new MapView(
-          this, MapView::ViewportMode::OpenGlIfAvailable))
+    , m_flatView(new MapView(this, flatMapViewportMode()))
 {
     m_cityLightsSource = new CityLightsSource(this);
     connect(m_cityLightsSource, &CityLightsSource::imageChanged,
