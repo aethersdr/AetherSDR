@@ -33,12 +33,21 @@ namespace AetherSDR {
 //
 // Output
 // ──────
-// onKeyDownChange(bool down) flips the sidetone gate.  It is called directly
-// from the worker thread, so the receiver MUST be lock-free (e.g.
-// CwSidetoneGenerator::setKeyDown, which is std::atomic).
+// onKeyDownChange(bool down, when) flips the sidetone gate.  `when` is the
+// edge's SCHEDULED instant on the element grid (m_epoch + m_nextEdgeMs), not
+// the emission wall-clock: the callback runs when the worker wakes, but the
+// grid deadline is exact and known before the edge fires, so a consumer that
+// places the edge in time (the sidetone's sample mapping) renders the rhythm
+// the text was scheduled with rather than the worker's wake rhythm — the
+// same contract as IambicKeyer (#4890, #4977).  Edges that are not on the
+// grid (stop/abort/drain key-up, a run's first element before the epoch is
+// taken) carry wall clock.  Called directly from the worker thread, so the
+// receiver MUST be lock-free (e.g. CwSidetoneGenerator::setKeyDown, which is
+// std::atomic).
 class CwxLocalKeyer {
 public:
-    using KeyDownCallback = std::function<void(bool down)>;
+    using KeyDownCallback =
+        std::function<void(bool down, std::chrono::steady_clock::time_point when)>;
 
     CwxLocalKeyer();
     virtual ~CwxLocalKeyer();
@@ -78,6 +87,7 @@ protected:
     virtual void armTimer(int waitMs);       // record the next (drift-corrected) wait
     qint64 nextEdgeMsForTest() const { return m_nextEdgeMs; }
     bool elapsedValidForTest() const { return m_epochValid; }
+    std::chrono::steady_clock::time_point epochForTest() const { return m_epoch; }
 
 private:
     enum class Element : char { Dit, Dah, ElementGap, CharGap, WordGap };
@@ -88,7 +98,7 @@ private:
     void scheduleNext();
     void resetEpoch();
     void startEpoch();
-    void emitKeyDown(bool down);
+    void emitKeyDown(bool down, std::chrono::steady_clock::time_point when);
     void keyUpIfDown();
     void workerLoop();
 

@@ -98,6 +98,17 @@ public:
 
 public slots:
     void setOperatorCallsign(const QString& callsign);
+    // Family is set by the manager before the client thread starts; the wire
+    // deltas between KiwiSDR and Web-888 are documented in
+    // docs/web888-cleanroom-design.md.
+    void setReceiverFamily(KiwiSdrProtocol::KiwiSdrReceiverFamily family)
+    {
+        m_receiverFamily = family;
+    }
+    KiwiSdrProtocol::KiwiSdrReceiverFamily receiverFamily() const
+    {
+        return m_receiverFamily;
+    }
     void setReceiverControls(const KiwiSdrReceiverControls& controls);
     void connectToEndpoint(const QString& endpoint,
                            const QString& password = {});
@@ -142,7 +153,13 @@ signals:
     void waterfallAvailabilityChanged(bool available, const QString& detail);
     void recoverableDisconnect(const QString& detail);
 
+protected:
+    // Transport seam for socket-free validation of waterfall command ordering.
+    virtual bool waterfallTransportConnected() const;
+    virtual void sendWaterfallCommand(const QString& command);
+
 private:
+    friend class KiwiSdrWaterfallSetupTest;
     enum class StreamKind {
         Sound,
         Waterfall,
@@ -174,6 +191,7 @@ private:
     void sendSoundAudioRateAck();
     void sendSoundSampleRateCommands();
     void sendWaterfallSetupCommands();
+    void sendWaterfallPostAuthCommands();
     void queueKiwiMonitor();
     void sendTrackedSliceToServer();
     void sendReceiverControlsToServer();
@@ -240,7 +258,6 @@ private:
     }
     void sendKeepalive();
     void sendSoundCommand(const QString& command);
-    void sendWaterfallCommand(const QString& command);
     void resetProtocolTrace();
     qint64 protocolTraceElapsedMs() const;
     void traceProtocolEvent(const QString& event);
@@ -270,6 +287,9 @@ private:
     QString m_stateDetail;
     QString m_endpoint;
     QString m_password;
+    KiwiSdrProtocol::KiwiSdrReceiverFamily m_receiverFamily{
+        KiwiSdrProtocol::KiwiSdrReceiverFamily::Kiwi};
+    bool m_waterfallSetupResent{false};
     QString m_host;
     QString m_operatorCallsign;
     QString m_lastSoundIdentityCallsign;

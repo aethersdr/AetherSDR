@@ -1,8 +1,13 @@
 #pragma once
 
 #include <QWidget>
+#include "DeferredSettingsWrites.h"
 #include <QVector>
 #include <QTimer>
+
+#include "core/backends/RadioCapabilities.h"
+#include "core/RadioSettingsScope.h"
+#include <optional>
 
 class ScrollableLabel;
 namespace AetherSDR { class FilterPassbandWidget; }
@@ -176,12 +181,14 @@ private:
     void updateFilterButtons();
     void refreshFilterWidth();   // "AUTO" while adaptive is live, else the width
     void updateModeSettings(const QString& mode);
+    bool squelchAvailableInMode(const QString& mode) const;
     void rebuildFilterButtons();
 public:
     // Narrow the filter buttons to the widths a radio can actually reach.
     // An EMPTY list restores the operator's own configurable set, so this is
     // reversible on disconnect rather than a one-way edit of their settings.
     void setRadioFilterWidths(const QList<int>& widthsHz);
+    void setRadioFilterControl(const RxFilterControl& control);
 private:
     // The list actually in force: the radio's when it declared one, else the
     // operator's configurable set. Every site that indexes filter buttons must
@@ -253,6 +260,7 @@ private:
     // so the settings-driven list is not overwritten — reconnecting to a radio
     // with continuous filters must give the operator their own list back.
     QVector<int>            m_radioFilterWidths;
+    RxFilterControl         m_radioFilterControl;
     // Parallel "custom edges" — INT_MIN sentinel = use mode rules. (#2259)
     QVector<int>            m_filterCustomLo;
     QVector<int>            m_filterCustomHi;
@@ -313,6 +321,16 @@ private:
     // so switching the active slice doesn't pull in another slice's threshold.
     int          m_sqlManualLevel{20};
 
+    // Icom has no separate SQL enable register: Off writes threshold zero.
+    // Only client intent is retained, never a live threshold to replay at attach.
+    RadioSettingsScope m_clientSquelchScope;
+    std::optional<int> m_clientManualSqlLevel;
+    bool m_restoreAutoSql{false};
+    bool m_clientSqlAwaitingReport{false};
+    void loadClientSquelchIntent();
+    void saveClientSquelchIntent();
+    AetherSDR::DeferredSettingsWrites m_pendingSquelchWrites;
+    QMetaObject::Connection m_squelchDisconnectConnection;
     void applySqlModeVisuals();
     void cycleSqlMode();
     void setSqlMode(SqlMode m, bool propagateToRadio);

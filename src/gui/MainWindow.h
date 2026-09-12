@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DeferredSettingsWrites.h"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  MainWindow is DECOMPOSED (#3351). Add member fields/declarations here ONLY
 //     when genuinely cross-cutting — a feature's method bodies live in the
@@ -8,7 +10,9 @@
 //     Map + decision guide: docs/architecture/mainwindow-decomposition.md
 // ─────────────────────────────────────────────────────────────────────────────
 
+#include "core/backends/anan/AnanDiscovery.h"
 #include "core/backends/hl2/Hl2Discovery.h"
+#include "core/RtlSdrDiscovery.h"
 #include "models/RadioModel.h"
 #include "models/BandSettings.h"
 #include "models/AntennaGeniusModel.h"
@@ -73,6 +77,7 @@
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/AcomConnection.h"
+#include "core/LpMeterConnection.h"
 #include "core/SpeConnection.h"
 #include "core/VkampConnection.h"
 #include "core/DxccColorProvider.h"
@@ -134,6 +139,9 @@ class AdaptiveFilterEngine;
 class AppletPanel;
 class BandPlanManager;
 class NetworkDiagnosticsHistory;
+class MemoryHistoryRing;
+class CpuHistoryRing;
+class UiTickLagMeter;
 class WhatsNewDialog;
 class ProfileManagerDialog;
 class SettingsBrowserDialog;
@@ -280,8 +288,10 @@ public:
     // both at launch (AETHER_AUTOMATION env var, from main.cpp) and at
     // runtime from the Radio Setup → Network toggle. Idempotent: starting
     // while running is a no-op; stopping while stopped is a no-op.
-    // sockName empty → the default PID-suffixed name. Returns true if the
-    // bridge is listening afterwards.
+    // sockName empty → the default PID-suffixed name. Returns true once a
+    // start is initiated (or already pending/running) and false only when the
+    // bind already failed synchronously; observe the result signal below for
+    // the actual bind outcome.
     bool startAutomationBridge(const QString& sockName = QString());
     void stopAutomationBridge();
     // Persist a new shared-secret token and push it to the running bridge
@@ -300,6 +310,13 @@ signals:
     // restore. wirePanadapter() owns the pending dBm handshake state, while the
     // restore can originate in several MainWindow translation units.
     void bandStackRestoreStarting(const QString& panId);
+    // Outcome of an automation-bridge start (#4181). startAutomationBridge()
+    // returns as soon as the start is *initiated* — the socket only binds
+    // later, inside the async token-read callback — so this is the only
+    // signal that says whether the bridge is actually listening. Emitted from
+    // both branches of that callback; RadioSetupDialog uses it to reconcile
+    // the Network-tab toggle. MainWindow persists the result independently.
+    void automationBridgeStartResult(bool ok);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -328,6 +345,8 @@ private slots:
     void onRadioMessage(const QString& text, MessageSeverity severity);
     void onSliceAdded(SliceModel* slice);
     void onSliceRemoved(int id);
+    // Ordinary RX close from the VFO ✕ / "Close Slice" menu (RFC #5468 P01).
+    void requestSliceClose(int sliceId);
 
     // Master volume — single entry point used by both the title bar slider
     // (TitleBar::masterVolumeChanged) and TCI clients (TciServer::
@@ -404,6 +423,8 @@ private:
     // nothing to be honest about, and a control that stays hidden after
     // unplugging reads as a fault rather than as an accurate report.
     void applyCapabilitiesToUi(bool connected, const RadioCapabilities& caps);
+    void applyTxAudioCapabilities(bool connected, const RadioCapabilities& caps);
+    void wireStatusBarMessages();
 
     // Push radio-side-DSP availability into one overlay menu's WNB row. Separate
     // from applyCapabilitiesToUi() because overlay menus are also built lazily
@@ -498,6 +519,7 @@ private:
     void disableSplit();
     // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
     // from the constructor, in original order, defined in its subject TU.
+    void wireModemAudioCompletion(); // MainWindow_Wiring.cpp
     void wireMeters();              // MainWindow_Wiring.cpp
     void wireSpotSubsystem();       // MainWindow_Spots.cpp
     // RadioSession precursors (#3351 Phase 2c / #3445) — MainWindow_Session.cpp
@@ -715,6 +737,8 @@ private:
     // SpectrumWidget setters that persist it, radio-authoritative values via the
     // same commands the live sliders send). Returns how many pans were written.
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
+    AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
+    void scheduleClientWaterfallRateSave(int panIndex, int rate);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
@@ -737,6 +761,9 @@ private:
     void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
+    // The RTTY pane's ✕: persist "operator does not want this window" and
+    // re-run the refresh, which stops the decoder (#5353).
+    void onRttyPanelCloseRequested();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
     void wireVfoWidget(VfoWidget* w, SliceModel* s);
     void wireVfoTelemetry(VfoWidget* vfo, SliceModel* s);
@@ -1007,6 +1034,11 @@ private:
     // HPSDR/Metis discovery for Hermes-Lite 2 radios. Feeds the same
     // ConnectionPanel slots as m_discovery, tagged family="hl2".
     hl2::Hl2Discovery m_hl2Discovery;
+    // openHPSDR Protocol 2 discovery for the ANAN-G2. Feeds the same
+    // ConnectionPanel slots as m_discovery, tagged family="anan".
+    anan::AnanDiscovery m_ananDiscovery;
+    // Local USB discovery for RTL-SDR devices, tagged family="rtl".
+    RtlSdrDiscovery m_rtlDiscovery;
     // Radio sessions (#3445 Camp B / #3351). Each session owns the full
     // per-radio aggregate; today there is exactly one. The vector sits at
     // the old `RadioModel m_radioModel` member position so destruction
@@ -1029,6 +1061,17 @@ private:
     QByteArray        m_knownDefaultAudioOutputId;
     bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
+    // The Runtime Monitor's memory history (#2554), owned here for the same
+    // reason the network history is: the dialog is WA_DeleteOnClose and a
+    // trend chart that forgot everything on Close would not be a trend.
+    // Filled only while the dialog is open (sampling follows visibility).
+    std::unique_ptr<MemoryHistoryRing> m_memoryHistory;
+    // The Overview tab's CPU history, owned here for the same reason.
+    std::unique_ptr<CpuHistoryRing> m_cpuHistory;
+    // GUI event-loop tick lag, fed by the perf-heartbeat timer's slot and read
+    // by the Runtime Monitor's Overview tab. Lives for the whole window because
+    // the heartbeat does; the dialog resets it when it starts reading.
+    std::unique_ptr<UiTickLagMeter> m_uiTickLagMeter;
     QsoRecorder*      m_qsoRecorder{nullptr};
     // The one live QSO-recorder notice, if any (#4629 review). Held so a
     // repeating condition raises the existing dialog instead of stacking a new
@@ -1074,6 +1117,7 @@ private:
     TgxlConnection    m_tgxlConn;        // direct TCP 9010 to TGXL for manual relay control
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
     AcomConnection    m_acomConn;        // ACOM S-series amplifier, serial or ser2net
+    LpMeterConnection m_lpMeterConn;    // TelePost LP-100A wattmeter, serial or ser2net
     SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
@@ -1455,6 +1499,8 @@ private:
     // waveforms / no multi-client sessions.
     QAction*         m_waveformsAction{nullptr};
     QAction*         m_multiFlexAction{nullptr};
+    QAction*         m_aetherControlAction{nullptr};
+    QAction*         m_flexControlKnobAction{nullptr};
 
     // Audio stream re-creation flag (after profile load)
     bool             m_needAudioStream{false};
@@ -1557,6 +1603,10 @@ private:
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
+    // Slice lifecycle refusals already shown this connect session, keyed
+    // "<operation>\n<reason>": one notice per distinct refusal, so a control
+    // that re-requests (rigctl split on every set_split_vfo) cannot spam the bar.
+    QSet<QString> m_sliceLifecycleNoticesShown;
     // Auto-reconnect bookkeeping — see maybeAutoConnectToDiscoveredRadio().
     //
     // The slot is driven by radioUpdated as well as radioDiscovered, and
@@ -1632,6 +1682,9 @@ private:
     int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
     QTimer* m_layoutRestoreTimer{nullptr}; // debounced layout rearrange after pans added on connect
     qint64 m_layoutRestoreUntilMs{0};
+    // WheelApf-while-off hint: wall-clock until which the notice is already
+    // on screen, so a spinning knob does not re-upsert the card per detent (#4658).
+    qint64 m_apfOffHintUntilMs{0};
     // User layout choices should suppress startup rearrange, but still allow
     // the pending timer to restore saved floating pan windows.
     bool m_suppressStartupPanLayoutRearrange{false};
@@ -1756,8 +1809,12 @@ private:
     QMetaObject::Connection m_radeDaxReconcileConn;  // RADE slice dax= change → move the Rade hold
     QMetaObject::Connection m_freedvMoxConn;
     QMetaObject::Connection m_radeMoxFallbackConn;
+    QMetaObject::Connection m_radePttIntentConn;
     QString m_lastRadeRxCallsign;
     bool m_radeEooPending{false};
+    TransmitModel::PttRelease m_radePttRelease;
+    quint64 m_radeEooRequestId{0};
+    std::shared_ptr<std::atomic<bool>> m_radeFallbackReleaseFence;
     bool m_radeTxActive{false};
     void activateRADE(int sliceId);
     void deactivateRADE();

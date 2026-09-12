@@ -254,6 +254,28 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    // Synthetic receiver: this is the API's bounded numeric domain, not an
+    // advertised hardware tuning range. Off-scene signals simply become silent.
+    caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
+                                  1, 1'000'000'000'000};
+    caps.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
+                                                {QStringLiteral("USB"), QStringLiteral("LSB")}};
+    caps.receiveFilterControl = std::nullopt; // demo passband setters only echo state
+    caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
+    caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
+    caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
+    caps.canReboot = false;
+    caps.hasRemoteOnControl = false;
+    caps.canUpgradeFirmware = false;
+    caps.hasSmartLink = false;
+    caps.hasLicenseInfo = false;
+    caps.hasClientNetworkConfig = false;
+    caps.hasFlexControlIntegration = false;
+    caps.hasAudioCompression = false;
+    caps.hasSharpFilters = false;
+    caps.usesVita49Transport = false;
+    caps.hasNetworkConfigurationReadback = false;
+    caps.hasPrivateIpConnectionPolicy = false;
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = familyName();
@@ -261,6 +283,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.model  = demoModelName();
     caps.fmTonePresentation = FmTonePresentation::Legacy;
     caps.fmDtcsCodes = {};
+    caps.canCreateSlices = false;
     caps.maxSlices = 1;          // Phase 1: a single slice. Phase 2 raises this.
     // Four receivers since #4887 phase 4 — enough to exercise the workspace
     // canvas's per-pan items and measure the multi-pan render budget in CI
@@ -280,24 +303,30 @@ RadioCapabilities SimBackend::capabilities() const
     caps.receiveOnlyModes = {};
     caps.hasRadioDialLock = false;
     caps.hasTuner = false;
+    caps.hasTunerMemories = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
     caps.hasLmsNoiseFilters = false;
+    caps.hasAudioPeakingFilter = false;
     caps.hasManualNotch = false;
     caps.hasTransmitFrequencyCheck = false;
+    caps.hasDdcPanEdgeRolloff = false;   // synthetic scene, no real receive chain
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;
     // Synthesised signals come out exactly where the demo says they are; there
     // is no oscillator to be wrong about.
     caps.hostFrequencyCalibration = false;
+    caps.hostDroopCalibration = false;   // synthesised bins have no DDC to droop
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
     caps.hasDownwardExpander = false;
+    caps.hasAgcThreshold = true;
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;
+    caps.hasRadioPttReadback = false;
     // Continuous/unknown — the operator keeps their own width list.
     caps.rxFilterWidthsHz = {};
     caps.hasTxFilterControls = false;   // RX-only; no transmit passband exists
@@ -323,6 +352,11 @@ RadioCapabilities SimBackend::capabilities() const
     caps.notchMinWidthHz = 0.0;
     caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
+    caps.hasGpsSatelliteTelemetry = false;
+    caps.hasGpsFrequencyReference = false;
+    caps.hasGpsTimeConfiguration = false;
+    caps.hasGpsHardware = false;
+    caps.gpsHardwareRequiresPresence = false;
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
     caps.hasPaTemperatureTelemetry = false;   // synthetic scene; no PA temperature
     caps.hasPaCurrentTelemetry = false;       // synthetic scene; no PA current

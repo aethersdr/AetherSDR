@@ -9,6 +9,8 @@
 #include "core/backends/TransmitDelta.h"
 
 #include <functional>
+#include <atomic>
+#include <memory>
 
 class QTimer;
 
@@ -40,6 +42,7 @@ class TransmitModel : public QObject {
 
 public:
     explicit TransmitModel(QObject* parent = nullptr);
+    ~TransmitModel() override;
 
     // ── Transmit getters ────────────────────────────────────────────────────
     int     rfPower()       const { return m_rfPower; }
@@ -117,6 +120,8 @@ public:
     void    setMaxPowerLevel(int w) { if (m_maxPowerLevel != w) { m_maxPowerLevel = w; emit maxPowerLevelChanged(w); } }
     QString tuneMode()        const { return m_tuneMode; }
     QString txSliceMode()     const { return m_txSliceMode; }
+    bool tuneAvailable() const { return m_tuneAvailable; }
+    void setTuneAvailable(bool available);
     bool    showTxInWaterfall() const { return m_showTxInWaterfall; }
 
     // ── APD getters ─────────────────────────────────────────────────────────
@@ -208,6 +213,10 @@ public:
     // than briefly greying out a control that does exist.
     void setHasTuner(bool present);
     [[nodiscard]] bool hasTuner() const { return m_hasTuner; }
+    // Independent from matching: Flex exposes radio-side ATU memory recall
+    // and database operations, while an Icom 1C 01 tuner path does not.
+    void setHasTunerMemories(bool present);
+    [[nodiscard]] bool hasTunerMemories() const { return m_hasTunerMemories; }
     void setTunePower(int power);
     void setTuneMode(const QString& mode);
     void startTune(PttSource source = PttSource::Tune);
@@ -230,12 +239,27 @@ public:
     using PttPreflight = std::function<QString(PttSource)>;
     void setPttPreflight(PttPreflight preflight);
 
-    // Pre-unkey hook: when set, requestPttOff() calls hook() instead of
-    // setMox(false) directly. Hook MUST eventually release PTT via setTransmit(false).
-    // Designed for RADE EOO intercept.
-    using PttOffHook = std::function<void()>;
+    enum class KeyingIntent { Mox, Tune, Atu };
+    // Installed by the engine. Admission precedes optimistic state and every
+    // keying signal; a standalone model has no transport to authorize.
+    using KeyingPermit = std::function<bool()>;
+    using KeyingAdmission = std::function<KeyingPermit(KeyingIntent, bool)>;
+    void setKeyingAdmission(KeyingAdmission admission) { m_keyingAdmission = std::move(admission); }
+
+    // A deferred release owns its original cancellation fence. A new key-on,
+    // explicit stop, reset or destruction invalidates it, including on audio
+    // workers. Never reconstruct a release from the then-current operation.
+    struct PttRelease {
+        std::function<bool()> isCurrent;
+        std::function<void()> finish;
+        bool current() const { return isCurrent && isCurrent(); }
+        void release() const { if (current() && finish) { finish(); } }
+    };
+    using PttOffHook = std::function<void(PttRelease)>;
     void setPttOffHook(PttOffHook hook);
     void clearPttOffHook();
+    void invalidatePttRelease();
+    void cancelPttRelease();
 
     void atuStart();
     void atuBypass();
@@ -311,16 +335,17 @@ signals:
     // reuse that same signal rather than a duplicate. #4449 recovery.)
     // Keying and tune as INTENT rather than as a Flex command string.
     //
-    // setMox() and startTune() emit "xmit N" / "transmit tune N" through
-    // commandReady, which is a Flex TCP command and reaches a backend with no
-    // command channel not at all. These carry the same intent for backends that
-    // key through IRadioBackend. RadioModel routes them only for non-Flex
-    // families, so Flex keeps its single command and does not key twice.
+    // All backends receive these through RadioModel's coordinator and typed
+    // seam. Keying is never duplicated through commandReady.
     void moxCommandIssued(bool on);
+    // Immediate teardown/cancellation, distinct from a normal tail request.
+    void pttReleaseCancelled();
     void tuneCommandIssued(bool on);
     void hostModulationChanged(bool on);
     void hasTunerChanged(bool present);
+    void hasTunerMemoriesChanged(bool present);
     void tuneChanged(bool tuning);
+    void tuneAvailabilityChanged(bool available);
     void moxChanged(bool mox);
     // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
     // OR from setTransmitting() (interlock-driven: CW break-in, VOX, footswitch).
@@ -404,15 +429,20 @@ private:
     bool isPhoneModeForQuindar() const;
     bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
     void cancelPendingQuindarOff();
-    void dispatchMoxOff();
+    void dispatchMoxOff(const PttRelease& release);
+    PttRelease capturePttRelease();
 
     // PTT coordinator state (#2262)
     class ClientQuindarTone* m_quindarTone{nullptr};
     TxModeGetter             m_txModeGetter;
     PttPreflight             m_pttPreflight;
+    KeyingAdmission          m_keyingAdmission;
     QTimer*                  m_pendingMoxOffTimer{nullptr};
     bool                     m_quindarOutroInFlight{false};
     PttOffHook               m_pttOffHook;
+    std::shared_ptr<std::atomic<bool>> m_pttReleaseFence;
+    quint64 m_moxIntentEpoch{0};
+    quint64 m_tuneIntentEpoch{0};
 
     // APD state
     bool m_apdEnabled{false};
@@ -424,6 +454,7 @@ private:
     int    m_rfPower{100};
     bool   m_hostModulation{false};
     bool   m_hasTuner{true};
+    bool   m_hasTunerMemories{true};
     int    m_tunePower{10};
     bool   m_tune{false};
     bool   m_mox{false};
@@ -484,6 +515,7 @@ private:
     int     m_rcaTxReqPolarity{0};
     int     m_maxPowerLevel{100};
     QString m_tuneMode{"single_tone"};
+    bool m_tuneAvailable = true;
     QString m_txSliceMode;   // empty until first transmit status; "FDVU", "FDVL", "USB", etc.
     bool    m_showTxInWaterfall{false};
 

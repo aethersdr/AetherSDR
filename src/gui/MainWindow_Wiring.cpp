@@ -18,6 +18,10 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include "core/ClientDisplaySettings.h"
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QStatusBar>
 
 #include "AetherDspWidget.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
@@ -40,6 +44,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "LpMeterApplet.h"
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
 #include "MeterApplet.h"
@@ -77,6 +82,8 @@
 #include <QJsonParseError>
 #include <QPointer>
 #include <QSet>
+
+#include <optional>
 #include <QStringList>
 #include <QTimer>
 
@@ -85,6 +92,33 @@
 #include <cmath>
 
 namespace AetherSDR {
+
+void MainWindow::wireStatusBarMessages()
+{
+    QHBoxLayout* layout = qobject_cast<QHBoxLayout*>(m_statusBarContainer->layout());
+    const int stationIndex = layout->indexOf(m_stationNickLabel);
+    connect(statusBar(), &QStatusBar::messageChanged, this,
+            [this, layout, stationIndex](const QString& message) {
+        if (!message.isEmpty() && m_stationNickLabel->parentWidget() == m_statusBarContainer) {
+            // Only the existing Connect control is permanent while a message
+            // is shown. Making the full-width bar permanent hides Qt's text.
+            layout->removeWidget(m_stationNickLabel);
+            statusBar()->addPermanentWidget(m_stationNickLabel);
+            m_stationNickLabel->show();
+            // addPermanentWidget reformats the bar and can re-show normal
+            // children; explicitly leave Qt's temporary-message area clear.
+            m_statusBarContainer->hide();
+        } else if (message.isEmpty()
+                   && m_stationNickLabel->parentWidget() != m_statusBarContainer) {
+            statusBar()->removeWidget(m_stationNickLabel);
+            layout->insertWidget(stationIndex, m_stationNickLabel);
+            m_stationNickLabel->show();
+            m_statusBarContainer->show();
+            updateStatusBarMinimumWidth();
+        }
+    });
+}
+
 
 namespace {
 
@@ -1596,6 +1630,7 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
             targetVfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
             targetVfo->setHasManualNotch(m_radioModel.hasManualNotch());
             targetVfo->setHasHostNoiseBlanker(m_radioModel.hasHostNoiseBlanker());
+            targetVfo->setRadioFilterControl(m_radioModel.radioFilterControl());
             targetVfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
             wireVfoWidget(targetVfo, s);
             targetVfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
@@ -2168,6 +2203,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         vfo->setHasLmsNoiseFilters(m_radioModel.hasLmsNoiseFilters());
         vfo->setHasManualNotch(m_radioModel.hasManualNotch());
         vfo->setHasHostNoiseBlanker(m_radioModel.hasHostNoiseBlanker());
+        vfo->setRadioFilterControl(m_radioModel.radioFilterControl());
         vfo->setRadioFilterWidths(m_radioModel.radioFilterWidthsHz());
 
         wireVfoWidget(vfo, s);
@@ -2249,6 +2285,34 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     refreshSliceLinkUi();
     updateAetherDspModePolicy();
+}
+
+void MainWindow::requestSliceClose(int sliceId)
+{
+    // The ✕ button and the "Close Slice" menu are always offered, so the one
+    // refusal an operator will actually meet is named rather than silent.
+    // Everything else RadioModel::removeSlice() refuses is reported by the
+    // model itself (sliceLifecycleFailed / commandDropped), once per session.
+    if (m_radioModel.slices().size() <= 1) {
+        statusBar()->showMessage(tr("Cannot close the last slice"), 4000);
+        return;
+    }
+    // Capture before the request: a backend that confirms synchronously has
+    // already retired the SliceModel by the time removeSlice() returns.
+    const SliceModel* slice = m_radioModel.slice(sliceId);
+    const bool lockOnSlice = centerLockActiveForSlice(slice);
+    const QString panId = slice ? slice->panId() : QString();
+    // A refused or pending request leaves the current receiver — and its
+    // center lock — intact.
+    if (!m_radioModel.removeSlice(sliceId))
+        return;
+    // Accepted: drop the operator's lock intent now, exactly as the pre-seam
+    // close did before sending the wire command. Leaving it to onSliceRemoved
+    // would preserve the persisted letter inside a band-recall grace window,
+    // and a dormant intent re-locks whichever slice Flex next recycles into
+    // that letter (#3854 review).
+    if (lockOnSlice)
+        clearCenterLockForPan(panId, /*clearPersistedIntent=*/true);
 }
 
 void MainWindow::onSliceRemoved(int id)
@@ -2952,9 +3016,26 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
     }
 }
 
+void MainWindow::scheduleClientWaterfallRateSave(int panIndex, int rate)
+{
+    const RadioSettingsScope scope = m_radioModel.settingsScope();
+    const bool shapedLocally = m_radioModel.shapesDisplayRatesLocally();
+    if (!shapedLocally || !scope.hasRadioIdentity() || panIndex < 0) {
+        return;
+    }
+    // Include scope in the key so a radio switch cannot overwrite a pending edit.
+    const QString key = QString::number(scope.family().size()) + QLatin1Char(':') + scope.family()
+        + QString::number(scope.radioId().size()) + QLatin1Char(':') + scope.radioId()
+        + QLatin1Char(':') + QString::number(panIndex);
+    m_pendingDisplayWrites.schedule(key, [scope, panIndex, shapedLocally, rate] {
+        ClientDisplaySettings::saveWaterfallRate(scope, panIndex, shapedLocally, rate);
+    });
+}
+
 void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
                                       PanadapterModel* pan)
 {
+    m_pendingDisplayWrites.flush();
     if (!applet || !pan) {
         return;
     }
@@ -3025,6 +3106,10 @@ void MainWindow::wirePanDisplayStatus(PanadapterApplet* applet,
     // to a Flex has to be told the law changed back.
     sw->setWfRateShapedLocally(m_radioModel.shapesDisplayRatesLocally());
     if (m_radioModel.shapesDisplayRatesLocally()) {
+        if (const auto savedRate = ClientDisplaySettings::waterfallRate(
+                m_radioModel.settingsScope(), sw->panIndex(), true)) {
+            sw->setWfLineDuration(*savedRate);
+        }
         m_radioModel.requestPanDisplayRates(panId, sw->fftFps(),
                                             sw->wfLineDuration());
     }
@@ -3152,12 +3237,10 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
         // A pan applet exists before the radio hands back its id (setPanId()
         // runs after creation), so a clone racing pan creation would put
         // `display pan set  average=0` — double space, no id — on the wire.
-        // requestPanDisplayRates() already returns early on an empty id; these
-        // two raw sendCommand() calls are the exposed pair.
+        // requestPanAverage()/requestPanDisplayRates() reject an empty id;
+        // weighted-average still needs this guard on its raw command path.
         if (!targetPanId.isEmpty()) {
-            m_radioModel.sendCommand(QString("display pan set %1 average=%2")
-                                         .arg(targetPanId)
-                                         .arg(src->fftAverage()));
+            m_radioModel.requestPanAverage(targetPanId, src->fftAverage());
             m_radioModel.sendCommand(QString("display pan set %1 weighted_average=%2")
                                          .arg(targetPanId)
                                          .arg(src->fftWeightedAvg() ? 1 : 0));
@@ -3214,6 +3297,7 @@ int MainWindow::cloneDisplaySettingsToAllPans(PanadapterApplet* source)
                                           AetherSDR::WaterfallRate::kMin,
                                           AetherSDR::WaterfallRate::kMax);
             dst->setWfLineDuration(wfRate);
+            scheduleClientWaterfallRateSave(dst->panIndex(), wfRate);
             if (!m_adaptiveThrottleActive) {
                 m_radioModel.requestPanDisplayRates(targetPanId, /*fps=*/0,
                                                     wfRate);
@@ -3607,6 +3691,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     sw->disconnect(this);
     menu->disconnect(this);
     applet->disconnect(this);
+    // This connection belongs to the pane's wiring, not decoder routing:
+    // routeRttyDecoderOutput() may already have selected this same applet,
+    // and its unchanged-target fast path cannot restore a connection removed
+    // by the bulk disconnect above. Every close must persist dismissal (#5353).
+    connect(applet, &PanadapterApplet::rttyPanelCloseRequested,
+            this, &MainWindow::onRttyPanelCloseRequested);
     QObject::disconnect(this, &MainWindow::bandStackRestoreStarting, sw, nullptr);
     connect(this, &MainWindow::bandStackRestoreStarting,
             sw, [applet, pendingDbm, reconcileDbmRangeFromModel]
@@ -4440,8 +4530,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::fftAverageChanged,
             this, [this, applet, sw](int v) {
         sw->setFftAverage(v);
-        m_radioModel.sendCommand(
-            QString("display pan set %1 average=%2").arg(applet->panId()).arg(v));
+        m_radioModel.requestPanAverage(applet->panId(), v);
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
             this, [this, applet, sw](int v) {
@@ -4556,6 +4645,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->setWfLineDuration(clampedRate);
+        scheduleClientWaterfallRateSave(sw->panIndex(), clampedRate);
         // Same reason as the FPS slider above: on a raw-spectrum backend this is
         // the engine's waterfall shaping target, not a radio setting.
         m_radioModel.requestPanDisplayRates(applet->panId(), /*fps=*/0, clampedRate);
@@ -4704,7 +4794,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setFftFillAlpha(0.70f);
         sw->setFftFillColor(QColor(0x00, 0xe5, 0xff));
         sw->setFftLineColor(QColor(0x00, 0xe5, 0xff));
-        sw->setFftLineWidth(2.0f);
+        sw->setFftLineWidth(1.0f);
         sw->setFftWeightedAvg(false);
         sw->setFftHeatMap(true);
         sw->setWfColorScheme(0);
@@ -4714,6 +4804,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfAutoBlackOffset(50);
         sw->setWfAutoBlackRadioSide(false);
         sw->setWfLineDuration(100);
+        scheduleClientWaterfallRateSave(sw->panIndex(), 100);
         sw->setWfBlankerEnabled(false);
         sw->setWfBlankerThreshold(1.15f);
         sw->setWfBlankerMode(0);
@@ -4731,8 +4822,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // so the reset doesn't fight the congestion-aware cap. The SpectrumWidget
         // values above (sw->setFftFps / sw->setWfLineDuration) are already updated,
         // so they become the new restore targets when the throttle lifts.
-        m_radioModel.sendCommand(
-            QString("display pan set %1 average=0").arg(applet->panId()));
+        m_radioModel.requestPanAverage(applet->panId(), 0);
         m_radioModel.sendCommand(
             QString("display pan set %1 weighted_average=0").arg(applet->panId()));
         // fps + line_duration go through the dispatcher rather than as Flex wire
@@ -4755,7 +4845,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("DisplayFftFillAlpha"),        "0.70");
         s.setValue(sw->settingsKey("DisplayFftFillColor"),        "#00e5ff");
         s.setValue(sw->settingsKey("DisplayFftLineColor"),        "#00e5ff");
-        s.setValue(sw->settingsKey("DisplayFftLineWidth"),        "2.0");
+        s.setValue(sw->settingsKey("DisplayFftLineWidth"),        "1.0");
         s.setValue(sw->settingsKey("DisplayFftHeatMap"),          "True");
         s.setValue(sw->settingsKey("DisplayWfColorScheme"),       "0");
         s.setValue(sw->settingsKey("DisplayWfColorGain"),         "50");
@@ -5233,12 +5323,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::sliceCloseRequested,
             this, [this](int sliceId) {
-        if (m_radioModel.slices().size() <= 1) return;
-        if (SliceModel* slice = m_radioModel.slice(sliceId);
-            centerLockActiveForSlice(slice)) {
-            clearCenterLockForPan(slice->panId(), true);
-        }
-        m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
+        requestSliceClose(sliceId);
     });
     connect(sw, &SpectrumWidget::sliceCreateRequested,
             this, [this, applet](double freqMhz) {
@@ -5651,12 +5736,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         syncKiwiSdrDiversityEscControls();
     });
     connect(w, &VfoWidget::closeSliceRequested, this, [this, sliceId]() {
-        if (m_radioModel.slices().size() <= 1) return;
-        if (SliceModel* slice = m_radioModel.slice(sliceId);
-            centerLockActiveForSlice(slice)) {
-            clearCenterLockForPan(slice->panId(), true);
-        }
-        m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
+        requestSliceClose(sliceId);
     });
     connect(w, &VfoWidget::stepTuneRequested, this, [this, sliceId](double mhz) {
         if (auto* sl = m_radioModel.slice(sliceId))
@@ -5936,6 +6016,14 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 // MTR / HLTH / TX applet routing. Runs once at construction; kept in this
 // TU with the rest of the model→UI wiring.
 
+void MainWindow::wireModemAudioCompletion()
+{
+    connect(m_audio, &AudioEngine::modemTxAudioFinished,
+            this, [this](quint64 token) {
+        m_radioModel.finishTxAudio(token);
+    });
+}
+
 void MainWindow::wireMeters()
 {
     // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
@@ -6045,6 +6133,7 @@ void MainWindow::wireMeters()
         m_acomConn.setAutoReconnect(ar);
         m_speConn.setAutoReconnect(ar);
         m_vkampConn.setAutoReconnect(ar);
+        m_lpMeterConn.setAutoReconnect(ar);
     }
 
     // Wire TgxlConnection to TunerModel
@@ -6393,6 +6482,41 @@ void MainWindow::wireMeters()
         connect(spe, &SpeApplet::driveUpClicked, this, [this]() {
             m_speConn.sendKey(AetherSDR::Spe::Key::RightArrow);
         });
+        // FRONT PANEL group (floating layout): manual band, the amp-menu SET
+        // key, and manual ATU L/C stepping — each a literal keystroke.
+        connect(spe, &SpeApplet::bandDownClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::BandDown);
+        });
+        connect(spe, &SpeApplet::bandUpClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::BandUp);
+        });
+        connect(spe, &SpeApplet::setKeyClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::Set);
+        });
+        connect(spe, &SpeApplet::lMinusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::LMinus);
+        });
+        connect(spe, &SpeApplet::lPlusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::LPlus);
+        });
+        connect(spe, &SpeApplet::cMinusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::CMinus);
+        });
+        connect(spe, &SpeApplet::cPlusClicked, this, [this]() {
+            m_speConn.sendKey(AetherSDR::Spe::Key::CPlus);
+        });
+        // LCD mirror: poll only while the floating presentation shows it.
+        connect(spe, &SpeApplet::lcdPollingWanted, this, [this](bool wanted) {
+            m_speConn.setLcdPolling(wanted);
+        });
+        connect(&m_speConn, &SpeConnection::lcdFrameReceived, this,
+                [this](const AetherSDR::Spe::Lcd::Frame& frame) {
+            m_appletPanel->speApplet()->setLcdFrame(frame);
+        });
+        connect(&m_speConn, &SpeConnection::lcdFreshChanged, this,
+                [this](bool fresh) {
+            m_appletPanel->speApplet()->setLcdFresh(fresh);
+        });
     }
 
     // Startup auto-connect from saved Peripherals settings — deliberately
@@ -6509,6 +6633,104 @@ void MainWindow::wireMeters()
         const int savedVariant = PeripheralSettings::deviceInt(
             "Vkamp", "Variant", static_cast<int>(AetherSDR::Vkamp::Variant::W2000));
         m_appletPanel->vkampApplet()->setVariant(static_cast<AetherSDR::Vkamp::Variant>(savedVariant));
+    }
+
+    // ── LP-100A wattmeter — serial or ser2net, no FlexRadio relay ─────────
+    // See docs/architecture/lp-100a-wattmeter-design.md. Same structure and
+    // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
+    // wiring first, the auto-connect trigger LAST. connectSerial() can call
+    // onTransportUp() synchronously, so anything wired after the trigger
+    // misses the first connected().
+    connect(&m_lpMeterConn, &LpMeterConnection::connected, this, [this]() {
+        auto* lp = m_appletPanel->lpMeterApplet();
+        // Derived from the LIVE transport, never the persisted setting — the
+        // two diverge when the operator switches the Radio Setup mode combo
+        // without disconnecting. Same rationale as the ACOM block.
+        lp->setSource(m_lpMeterConn.sourceLabel());
+        lp->setConnected(true);
+        m_appletPanel->setLpMeterVisible(true);
+    });
+    connect(&m_lpMeterConn, &LpMeterConnection::disconnected, this, [this]() {
+        m_appletPanel->lpMeterApplet()->setConnected(false);
+        m_appletPanel->setLpMeterVisible(false);
+    });
+    connect(&m_lpMeterConn, &LpMeterConnection::readingUpdated, this,
+            [this](const AetherSDR::LpMeter::Reading& r) {
+        auto* lp = m_appletPanel->lpMeterApplet();
+        lp->setReading(r);
+        // Riding-along state is cheap to push per reading and drives only a
+        // tooltip; the applet does no work with it beyond storing it.
+        lp->setRidingAlong(m_lpMeterConn.isRidingAlong(),
+                           m_lpMeterConn.foreignIntervalMs());
+    });
+    // The meter reports WHICH range is active but never that range's ceiling
+    // in watts, so the scale comes from the connection's RangeTracker rather
+    // than from the reading.
+    connect(&m_lpMeterConn, &LpMeterConnection::gaugeCeilingChanged, this,
+            [this](double ceilingW, bool autoExpanded) {
+        m_appletPanel->lpMeterApplet()->setPowerCeiling(ceilingW, autoExpanded);
+    });
+    // Link up, meter silent. Deliberately does NOT hide the tile: the LP-100A
+    // can wedge with the serial link perfectly healthy, and hiding the applet
+    // would remove the only surface that could explain it.
+    connect(&m_lpMeterConn, &LpMeterConnection::dataFlowingChanged, this,
+            [this](bool flowing) {
+        m_appletPanel->lpMeterApplet()->setDataFlowing(flowing);
+    });
+    // Power-range full scale is a display preference owned by the applet, so
+    // the applet is where it is edited; the connection only consumes it.
+    connect(m_appletPanel->lpMeterApplet(), &LpMeterApplet::ceilingsChanged, this,
+            [this](const AetherSDR::LpMeter::RangeCeilings& c, int editedRange) {
+        // From the context menu, so it is authoritative and overrides an
+        // auto-expanded ceiling -- see RangeTracker::CeilingSource.
+        m_lpMeterConn.setRangeCeilings(
+            c, AetherSDR::LpMeter::RangeTracker::CeilingSource::OperatorEdit,
+            editedRange >= 0 ? std::optional<int>(editedRange) : std::nullopt);
+        // Persisted as int: the edit dialog offers 0 decimals, so a fractional
+        // full scale is unreachable and the cast cannot lose anything today.
+        PeripheralSettings::setDeviceInt("Lp100a", "RangeHighW",
+                                         static_cast<int>(c.highW));
+        PeripheralSettings::setDeviceInt("Lp100a", "RangeMidW",
+                                         static_cast<int>(c.midW));
+        PeripheralSettings::setDeviceInt("Lp100a", "RangeLowW",
+                                         static_cast<int>(c.lowW));
+    });
+
+    // Stored ceilings, then the auto-connect trigger LAST (see above).
+    {
+        AetherSDR::LpMeter::RangeCeilings c;
+        c.highW = PeripheralSettings::deviceInt("Lp100a", "RangeHighW",
+                                                static_cast<int>(c.highW));
+        c.midW = PeripheralSettings::deviceInt("Lp100a", "RangeMidW",
+                                               static_cast<int>(c.midW));
+        c.lowW = PeripheralSettings::deviceInt("Lp100a", "RangeLowW",
+                                               static_cast<int>(c.lowW));
+        m_lpMeterConn.setRangeCeilings(
+            c, AetherSDR::LpMeter::RangeTracker::CeilingSource::ConfigLoad);
+        m_appletPanel->lpMeterApplet()->setCeilings(c);
+
+        const QString mode = PeripheralSettings::deviceString("Lp100a", "ConnectionMode",
+#ifdef HAVE_SERIALPORT
+            "Serial"
+#else
+            "Network"
+#endif
+        );
+        if (mode == "Network") {
+            const QString ip = PeripheralSettings::deviceString("Lp100a", "ManualIp");
+            // 2000 rather than the ACOM row's 7000: it is ser2net's own
+            // common default and the port the reference station uses.
+            const int port = PeripheralSettings::deviceInt("Lp100a", "ManualPort", 2000);
+            if (!ip.isEmpty())
+                m_lpMeterConn.connectNetwork(ip, static_cast<quint16>(port));
+        }
+#ifdef HAVE_SERIALPORT
+        else {
+            const QString port = PeripheralSettings::deviceString("Lp100a", "SerialPort");
+            if (!port.isEmpty())
+                m_lpMeterConn.connectSerial(port);
+        }
+#endif
     }
 
     // Switch Fwd Power gauge scale based on radio max power and amplifier presence.

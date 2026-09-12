@@ -57,7 +57,7 @@ public slots:
     // Request End-of-Over (EOO) transmission. Once requested, the engine
     // will finish processing any queued voice audio, then append the EOO
     // frame and a short silence tail before stopping.
-    void setEooRequested(bool requested);
+    void setEooRequested(bool requested, quint64 requestId = 0);
 
     // Set the operator callsign to embed in the EOO frame. Must be called
     // before the first PTT press. Thread-safe: may be called from any thread.
@@ -69,7 +69,7 @@ public slots:
 signals:
     void rxSpeechReady(const QByteArray& pcm);   // Decoded speech, 24kHz stereo int16
     void txModemReady(const QByteArray& pcm);     // Encoded modem, 24kHz stereo int16
-    void eooFinished();                           // Emitted after EOO frame and silence tail sent
+    void eooFinished(quint64 requestId); // original request, after EOO and silence tail
     void syncChanged(bool synced);
     void snrChanged(float snrDb);
     void freqOffsetChanged(float hz);
@@ -84,6 +84,7 @@ private:
     bool                 m_synced{false};
 
     bool                 m_eooRequested{false};
+    quint64              m_eooRequestId{0};
     bool                 m_eooSent{false};
     bool                 m_eooFinished{false};
 

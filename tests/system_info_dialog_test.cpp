@@ -13,18 +13,22 @@
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 #include "core/ThreadCpuRing.h"
+#include "core/ThemeManager.h"
 #include "gui/SparklineDelegate.h"
 #include "gui/SystemInfoDialog.h"
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QDir>
 #include <QFile>
 #include <QLocale>
 #include <QScrollBar>
+#include <QScrollArea>
 #include <QStyledItemDelegate>
 #include <QTemporaryDir>
 #include <QPainter>
@@ -62,9 +66,11 @@ int main(int argc, char** argv)
     auto* tabs = dialog.findChild<QTabWidget*>();
     report("it has a tab widget", tabs != nullptr);
     if (tabs != nullptr) {
-        report("it has exactly two tabs", tabs->count() == 2);
-        report("first tab is Threads", tabs->tabText(0) == QLatin1String("Threads"));
-        report("second tab is Logs", tabs->tabText(1) == QLatin1String("Logs"));
+        report("it has exactly four tabs", tabs->count() == 4);
+        report("first tab is Overview", tabs->tabText(0) == QLatin1String("Overview"));
+        report("second tab is Threads", tabs->tabText(1) == QLatin1String("Threads"));
+        report("third tab is Memory", tabs->tabText(2) == QLatin1String("Memory"));
+        report("fourth tab is Logs", tabs->tabText(3) == QLatin1String("Logs"));
     }
 
     auto* table = dialog.findChild<QTableWidget*>();
@@ -477,6 +483,315 @@ int main(int argc, char** argv)
         tailing.hide();
         QCoreApplication::processEvents();
         LogManager::instance().shutdownLogging();
+    }
+
+    // ── Memory tab (#2554 acceptance criterion 4) ──────────────────────────
+    // applyMemorySample is a slot so the tab can be driven without a collector
+    // or a worker thread. Bytes are CONSTRUCTED (routing and formatting only).
+    {
+        qRegisterMetaType<AetherSDR::MemorySample>("AetherSDR::MemorySample");
+        SystemInfoDialog memoryDialog;
+
+        auto* range = memoryDialog.findChild<QComboBox*>(QStringLiteral("systemInfoTimeframe"));
+        report("the Memory tab has a timeframe selector", range != nullptr);
+        if (range != nullptr) {
+            report("it offers the issue's four timeframes", range->count() == 4);
+            report("it defaults to 5 minutes", range->currentData().toInt() == 5 * 60);
+        }
+
+        auto* resident = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryResident"));
+        auto* peak     = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryPeak"));
+        auto* priv     = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryPrivate"));
+        auto* virt     = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemoryVirtual"));
+        auto* summary  = memoryDialog.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
+        report("the four readouts exist",
+               resident != nullptr && peak != nullptr && priv != nullptr && virt != nullptr);
+        report("readouts start as a dash, not as zero",
+               resident != nullptr && resident->text() == QStringLiteral("\u2014"));
+
+        const auto driveMemory = [&memoryDialog](const MemorySample& sample) {
+            return QMetaObject::invokeMethod(&memoryDialog, "applyMemorySample",
+                                             Qt::DirectConnection,
+                                             Q_ARG(AetherSDR::MemorySample, sample));
+        };
+        MemorySample first;
+        first.wallMs = 1'700'000'000'000;
+        first.valid = true;
+        first.residentMetric = QStringLiteral("physicalFootprint");
+        first.residentBytes = 200ull * 1024 * 1024;
+        first.peakResidentBytes = 210ull * 1024 * 1024;
+        first.privateBytes = 150ull * 1024 * 1024;
+        first.virtualBytes = 8000ull * 1024 * 1024;
+        report("a memory sample can be driven into the dialog", driveMemory(first));
+        if (resident != nullptr) {
+            report("resident reads in MB with one decimal",
+                   resident->text() == QStringLiteral("200.0 MB"));
+            report("peak, private and virtual read from their own fields",
+                   peak->text() == QStringLiteral("210.0 MB")
+                       && priv->text() == QStringLiteral("150.0 MB")
+                       && virt->text() == QStringLiteral("8000.0 MB"));
+        }
+        report("the summary names the platform's resident metric",
+               summary != nullptr && summary->text().contains(QLatin1String("physical footprint")));
+
+        MemorySample second = first;
+        second.wallMs += 1500;
+        second.residentBytes = 180ull * 1024 * 1024;   // a chart must move DOWN as well as up
+        report("a second sample is accepted", driveMemory(second));
+        report("the readouts follow the newest sample down",
+               resident != nullptr && resident->text() == QStringLiteral("180.0 MB"));
+        report("the summary counts both samples",
+               summary != nullptr && summary->text().contains(QLatin1String("2 samples")));
+
+        if (range != nullptr) {
+            range->setCurrentIndex(3);   // 1 hour
+            report("changing the timeframe re-slices without disturbing the readouts",
+                   range->currentData().toInt() == 60 * 60
+                       && resident->text() == QStringLiteral("180.0 MB"));
+        }
+
+        // Hide/show keeps the history: the ring is dialog-lifetime (see the
+        // header comment), unlike the CPU ring that Peak clears.
+        memoryDialog.show();
+        QCoreApplication::processEvents();
+        memoryDialog.hide();
+        QCoreApplication::processEvents();
+        // show() starts the real collector thread, so a slow runner (sanitizer
+        // lane) can land a third sample before hide(): "kept" means at least
+        // the two we drove, not exactly two.
+        const auto sampleCount = [](const QString& text) {
+            const QRegularExpressionMatch m = QRegularExpression(QStringLiteral("(\\d+) samples")).match(text);
+            return m.hasMatch() ? m.captured(1).toInt() : -1;
+        };
+        report("hiding the dialog keeps the memory history",
+               summary != nullptr && sampleCount(summary->text()) >= 2);
+
+        // A field the platform never fills reads as a dash, not "0.0 MB". The
+        // shape is SOURCED: MemoryTelemetry.cpp's Windows branch fills resident,
+        // peak and private from GetProcessMemoryInfo and never assigns
+        // virtualBytes (read 2026-09-03); the byte values are CONSTRUCTED.
+        MemorySample windowsShaped = first;
+        windowsShaped.wallMs += 3000;
+        windowsShaped.residentMetric = QStringLiteral("workingSet");
+        windowsShaped.virtualBytes = 0;
+        report("a Windows-shaped sample is accepted", driveMemory(windowsShaped));
+        report("an unset field reads as a dash, the others as values",
+               virt != nullptr && virt->text() == QStringLiteral("\u2014")
+                   && resident->text() == QStringLiteral("200.0 MB"));
+        report("the summary names the working set",
+               summary != nullptr && summary->text().contains(QLatin1String("working set")));
+        report("a readout announces its value (docs/a11y.md live-value rule)",
+               resident->accessibleName() == QStringLiteral("Resident memory 200.0 MB")
+                   && virt->accessibleName() == QStringLiteral("Virtual address space \u2014"));
+
+        // An invalid sample — the Linux VmRSS-read-failed shape, where
+        // MemoryTelemetry.cpp still sets residentMetric — shows four dashes and
+        // a summary that names no metric. Values CONSTRUCTED (all zero).
+        MemorySample invalid;
+        invalid.wallMs = windowsShaped.wallMs + 1500;
+        invalid.valid = false;
+        invalid.residentMetric = QStringLiteral("vmRss");
+        report("an invalid sample is accepted", driveMemory(invalid));
+        report("an invalid sample reads as four dashes",
+               resident->text() == QStringLiteral("\u2014") && peak->text() == QStringLiteral("\u2014")
+                   && priv->text() == QStringLiteral("\u2014") && virt->text() == QStringLiteral("\u2014"));
+        report("an invalid sample's summary names no metric",
+               summary != nullptr && summary->text() == QStringLiteral("Process memory: not available on this platform"));
+    }
+
+    // Reproduce #5427 with populated, disambiguated thread labels. Five
+    // wrapped legend rows used to consume the entire 150 px graph, hiding
+    // both the data and the legend at an otherwise valid dialog size.
+    {
+        CpuHistoryRing ring;
+        for (int i = 0; i < 10; ++i) {
+            CpuHistoryRing::Record record;
+            record.wallMs = 1'700'000'000'000LL + i * 1500;
+            record.valid = true;
+            record.busiestValid = true;
+            record.coreCount = 8;
+            record.processPercentOfCapacity = 10.0;
+            record.busiestPercentOfCore = 60.0;
+            for (int j = 0; j < CpuHistoryRing::kTopThreads; ++j) {
+                record.threads.push_back({quint64(100000 + j),
+                    QStringLiteral("PanadapterStream"), double(60 - 10 * j + i)});
+            }
+            ring.push(record);
+        }
+        SystemInfoDialog populated(nullptr, &ring);
+        populated.show();
+        populated.resize(750, 480);
+        app.processEvents();
+        auto* graph = populated.findChild<QWidget*>(QStringLiteral("systemInfoOverviewThreadsGraph"));
+        auto* scroll = populated.findChild<QScrollArea*>(QStringLiteral("systemInfoOverviewScroll"));
+        report("populated overview still fits below the 600 px default", populated.height() < 600);
+        report("small overview can scroll to the lower charts",
+               scroll != nullptr && scroll->verticalScrollBar()->maximum() > 0);
+        if (graph != nullptr) {
+            if (scroll != nullptr) {
+                scroll->ensureWidgetVisible(graph);
+            }
+            const QImage pixels = graph->grab().toImage().convertToFormat(QImage::Format_RGB32);
+            const char* tokens[] = {"color.accent", "color.accent.success", "color.accent.warning",
+                                    "color.accent.bright", "color.accent.danger"};
+            for (const char* token : tokens) {
+                const QRgb color = ThemeManager::instance().color(token).rgb();
+                int count = 0;
+                for (int y = 0; y < pixels.height(); ++y) {
+                    for (int x = 0; x < pixels.width(); ++x) {
+                        if (pixels.pixel(x, y) == color) {
+                            ++count;
+                        }
+                    }
+                }
+                report("each populated thread series is painted at the small dialog size", count > 0);
+            }
+        } else {
+            report("the populated thread graph exists", false);
+        }
+        populated.hide();
+    }
+
+    // ── Overview tab (#2554: cards + charts; acceptance criterion 3's colour) ──
+    // applyCpuSample is a slot so the cards can be driven without a collector,
+    // a worker thread, or a machine busy enough to reach a band. Every number
+    // here is CONSTRUCTED (routing, formatting and the band arithmetic only).
+    {
+        qRegisterMetaType<AetherSDR::CpuSample>("AetherSDR::CpuSample");
+        SystemInfoDialog ov;
+        auto* range = ov.findChild<QComboBox*>(QStringLiteral("systemInfoOverviewTimeframe"));
+        report("the Overview tab has its own timeframe selector", range != nullptr && range->count() == 4);
+        auto* cpuCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardCpu"));
+        auto* maxCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardMaxThread"));
+        auto* memCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardMemory"));
+        auto* lagCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardTickLag"));
+        report("the four cards exist",
+               cpuCard != nullptr && maxCard != nullptr && memCard != nullptr && lagCard != nullptr);
+        // The 2 × 2 grid must not raise the dialog's minimum above its own
+        // 900 × 600 default, or the default and any saved geometry never
+        // apply (#5427 review: 696 px with the graphs at their 220 px floor).
+        const int minimumHeight = ov.minimumSizeHint().height();
+        std::printf("  Overview dialog minimum height: %d px\n", minimumHeight);
+        report("the Overview tab leaves the dialog's minimum height under its 600 px default",
+               minimumHeight < 600);
+        report("cards start as a dash, not zero",
+               cpuCard != nullptr && cpuCard->text() == QStringLiteral("\u2014")
+                   && cpuCard->property("level").toString() == QLatin1String("normal"));
+
+        const auto driveCpu = [&ov](const CpuSample& sample) {
+            return QMetaObject::invokeMethod(&ov, "applyCpuSample", Qt::DirectConnection,
+                                             Q_ARG(AetherSDR::CpuSample, sample));
+        };
+        CpuSample s;
+        s.wallMs = 1'700'000'000'000;
+        s.coreCount = 8;
+        s.processPercentOfCapacity = 12.34;
+        s.hasBusiest = true;
+        s.busiestTid = 7;
+        s.busiestName = QStringLiteral("AudioEngine");
+        s.busiestPercentOfCore = 42.0;
+        ThreadCpuSample busy;
+        busy.tid = 7;
+        busy.name = s.busiestName;
+        busy.cpuPercentOfCore = 42.0;
+        s.busyThreads.push_back(busy);
+        report("a CPU sample can be driven into the dialog", driveCpu(s));
+        if (cpuCard != nullptr && maxCard != nullptr && lagCard != nullptr) {
+            report("CPU Total reads the process percent with one decimal",
+                   cpuCard->text() == QStringLiteral("12.3 %")
+                       && cpuCard->property("level").toString() == QLatin1String("normal"));
+            report("Max Thread reads the busiest thread's percent of one core",
+                   maxCard->text() == QStringLiteral("42.0 %"));
+            report("the tick-lag card reads a dash when the meter was never ticked",
+                   lagCard->text() == QStringLiteral("\u2014"));
+            report("a card announces its value (docs/a11y.md live-value rule)",
+                   cpuCard->accessibleName() == QStringLiteral("CPU total 12.3 %"));
+        }
+        // Bands: the issue's own numbers, inclusive at the line. 50 / 80 for
+        // CPU Total; 70 / 90 for Max Thread.
+        const auto level = [&](QLabel* card) { return card == nullptr ? QString() : card->property("level").toString(); };
+        s.wallMs += 1500; s.processPercentOfCapacity = 50.0; s.busiestPercentOfCore = 70.0; driveCpu(s);
+        report("CPU Total at 50 % is the warning band", level(cpuCard) == QLatin1String("warning"));
+        report("Max Thread at 70 % is the warning band", level(maxCard) == QLatin1String("warning"));
+        s.wallMs += 1500; s.processPercentOfCapacity = 80.0; s.busiestPercentOfCore = 90.0; driveCpu(s);
+        report("CPU Total at 80 % is the danger band", level(cpuCard) == QLatin1String("danger"));
+        report("Max Thread at 90 % is the danger band", level(maxCard) == QLatin1String("danger"));
+        s.wallMs += 1500; s.processPercentOfCapacity = 49.9; s.busiestPercentOfCore = 69.9; driveCpu(s);
+        report("just under the lines is normal again",
+               level(cpuCard) == QLatin1String("normal") && level(maxCard) == QLatin1String("normal"));
+
+        // The Memory card reads the memory ring: 1 GB is the warning line.
+        MemorySample m;
+        m.wallMs = s.wallMs;
+        m.valid = true;
+        m.residentMetric = QStringLiteral("vmRss");
+        m.residentBytes = 1024ull * 1024 * 1024;
+        m.peakResidentBytes = m.residentBytes;
+        QMetaObject::invokeMethod(&ov, "applyMemorySample", Qt::DirectConnection,
+                                  Q_ARG(AetherSDR::MemorySample, m));
+        report("the Memory card reads the resident set and bands at 1 GB",
+               memCard != nullptr && memCard->text() == QStringLiteral("1024.0 MB")
+                   && level(memCard) == QLatin1String("warning"));
+        m.wallMs += 1500; m.residentBytes = 2048ull * 1024 * 1024;
+        QMetaObject::invokeMethod(&ov, "applyMemorySample", Qt::DirectConnection,
+                                  Q_ARG(AetherSDR::MemorySample, m));
+        report("2 GB is the danger band", level(memCard) == QLatin1String("danger"));
+    }
+
+    // The tick-lag card reads the meter MainWindow injects, at the instant the
+    // CPU sample lands. Timestamps CONSTRUCTED through the meter's clock seam.
+    {
+        UiTickLagMeter meter;
+        meter.tickAt(0);
+        meter.tickAt(70 * 1'000'000);   // 20 ms late
+        meter.tickAt(120 * 1'000'000);  // on time
+        SystemInfoDialog ov(nullptr, nullptr, &meter);
+        auto* lagCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardTickLag"));
+        auto* maxCard = ov.findChild<QLabel*>(QStringLiteral("systemInfoCardMaxThread"));
+        CpuSample s;
+        s.wallMs = 1'700'000'000'000;
+        s.coreCount = 8;
+        QMetaObject::invokeMethod(&ov, "applyCpuSample", Qt::DirectConnection,
+                                  Q_ARG(AetherSDR::CpuSample, s));
+        report("the tick-lag card reads the worst lag since the meter was last read",
+               lagCard != nullptr && lagCard->text() == QStringLiteral("20.0 ms"));
+        // This sample carries no per-thread reading (hasBusiest false): the
+        // Max Thread card must say so with the dash, not "(unnamed)" at 0.0 %
+        // (#5427 review).
+        report("a sample with no busiest thread leaves the Max Thread card at the dash",
+               maxCard != nullptr && maxCard->text() == QStringLiteral("\u2014"));
+        report("reading the meter resets it", meter.take().tickCount == 0);
+    }
+
+    // The history outlives the dialog when MainWindow hands one in: the
+    // dialog is WA_DeleteOnClose, so Close would otherwise take the trend with
+    // it (found on the demo: "3 samples" after Close and reopen).
+    {
+        MemoryHistoryRing shared;
+        MemorySample s;
+        s.wallMs = 1'700'000'000'000;
+        s.valid = true;
+        s.residentMetric = QStringLiteral("vmRss");
+        s.residentBytes = 300ull * 1024 * 1024;
+        {
+            SystemInfoDialog first(&shared);
+            QMetaObject::invokeMethod(&first, "applyMemorySample", Qt::DirectConnection,
+                                      Q_ARG(AetherSDR::MemorySample, s));
+            s.wallMs += 1500;
+            QMetaObject::invokeMethod(&first, "applyMemorySample", Qt::DirectConnection,
+                                      Q_ARG(AetherSDR::MemorySample, s));
+            report("samples driven into the first dialog land in the shared ring", shared.size() == 2);
+        }   // first is destroyed here, as Close does
+        SystemInfoDialog second(&shared);
+        auto* summary2 = second.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
+        auto* resident2 = second.findChild<QLabel*>(QStringLiteral("systemInfoMemoryResident"));
+        report("a reopened dialog shows the history it was handed, before any new sample",
+               summary2 != nullptr && summary2->text().contains(QLatin1String("2 samples"))
+                   && resident2 != nullptr && resident2->text() == QStringLiteral("300.0 MB"));
+        SystemInfoDialog own;
+        auto* summaryOwn = own.findChild<QLabel*>(QStringLiteral("systemInfoMemorySummary"));
+        report("a dialog given no history starts with its own empty ring",
+               summaryOwn != nullptr && summaryOwn->text() == QStringLiteral("Sampling…"));
     }
 
     std::printf("%s\n", g_failures == 0 ? "system_info_dialog_test: all passed"

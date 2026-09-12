@@ -1,0 +1,10 @@
+{
+  "name": "kiwi-directory-mirror",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/poll.test.mjs test/fixtures/directory.html",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail kiwi-directory-mirror"
+  }
+}

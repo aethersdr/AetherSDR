@@ -124,7 +124,13 @@ protected:
         painter.setRenderHint(QPainter::Antialiasing);
         painter.fillRect(rect(), QColor("#050b13"));
 
-        const QRectF plot = rect().adjusted(84, 30, -14, -42);
+        // The legend wraps onto further rows instead of dropping entries, and
+        // the plot gives up one row's height per extra row (#2554: a five-line
+        // chart needs every line named; the single row used to stop at
+        // width - 110 and leave the rest unnamed and unclickable).
+        const int legendRows = legendRowCount(QFontMetrics(font()));
+        const QRectF plot =
+            rect().adjusted(84, 30, -14, -42 - (legendRows - 1) * kLegendRowHeight);
         painter.setPen(QPen(QColor("#233246"), 1));
         painter.setBrush(Qt::NoBrush);
         painter.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 7, 7);
@@ -180,6 +186,57 @@ protected:
             maxY = niceCeiling(maxY);
         }
 
+        // Per-series "last sample" hints in the left gutter.  Each
+        // visible series gets a colored label at the y-pixel matching
+        // its most recent value; labels are spread vertically to avoid
+        // overlap when several streams sit close together (e.g. RX and
+        // Audio both around ~1 Mbps).  Positioned HERE, before the axis
+        // ticks are painted, because a hint and a tick label share the
+        // same gutter: the live value wins, and a tick whose label would
+        // sit under a hint keeps its grid line but loses its text.  The
+        // hints themselves are painted last, over the series.
+        struct ValueHint {
+            double  idealY;
+            double  y;
+            QColor  color;
+            QString text;
+        };
+        QVector<ValueHint> hints;
+        hints.reserve(visibleSeries.size());
+        for (const Series& series : visibleSeries) {
+            if (series.points.isEmpty()) {
+                continue;
+            }
+            const double v = series.points.last().y();
+            double yRatio;
+            if (m_logScale) {
+                const double clamped = std::clamp(v, minY, maxY);
+                yRatio = std::log10(clamped / minY) / std::log10(maxY / minY);
+            } else {
+                yRatio = std::clamp(
+                    (v - minY) / std::max(0.001, maxY - minY),
+                    0.0,
+                    1.0);
+            }
+            const double y = plot.bottom() - plot.height() * yRatio;
+            const QString unitSuffix = series.unitSuffix.isEmpty() ? m_suffix : series.unitSuffix;
+            hints.push_back({y, y, series.color, formatAxisValue(v, unitSuffix)});
+        }
+        std::sort(hints.begin(), hints.end(),
+                  [](const ValueHint& a, const ValueHint& b) { return a.idealY < b.idealY; });
+        constexpr double kHintMinGap = 14.0;
+        double prev = plot.top() - kHintMinGap;
+        for (ValueHint& h : hints) {
+            if (h.y < prev + kHintMinGap) h.y = prev + kHintMinGap;
+            if (h.y > plot.bottom())      h.y = plot.bottom();
+            prev = h.y;
+        }
+        double next = plot.bottom() + kHintMinGap;
+        for (int i = hints.size() - 1; i >= 0; --i) {
+            if (hints[i].y > next - kHintMinGap) hints[i].y = next - kHintMinGap;
+            if (hints[i].y < plot.top())          hints[i].y = plot.top();
+            next = hints[i].y;
+        }
         // Y-axis grid + tick labels.  Linear: 4 evenly-spaced.
         // Log: one tick per decade between minY and maxY so labels
         // sit at clean 1k / 10k / 100k / 1M / 10M boundaries.
@@ -203,9 +260,15 @@ protected:
             } else {
                 label = formatAxisValue(tickValue, axisSuffix);
             }
-            painter.setPen(QColor("#8d99ad"));
-            painter.drawText(QRectF(4, y - 8, 74, 16), Qt::AlignRight | Qt::AlignVCenter,
-                             label);
+            const QRectF tickRect(4, y - 8, 74, 16);
+            const bool underHint = std::any_of(
+                hints.cbegin(), hints.cend(), [&tickRect](const ValueHint& h) {
+                    return QRectF(4, h.y - 10, 74, 20).intersects(tickRect);
+                });
+            if (!underHint) {
+                painter.setPen(QColor("#8d99ad"));
+                painter.drawText(tickRect, Qt::AlignRight | Qt::AlignVCenter, label);
+            }
             painter.setPen(QPen(QColor("#233246"), 1));
         }
         for (int i = 0; i <= 4; ++i) {
@@ -315,60 +378,13 @@ protected:
             painter.drawPath(path);
         }
 
-        // Per-series "last sample" hints in the left gutter.  Each
-        // visible series gets a colored label at the y-pixel matching
-        // its most recent value; labels are spread vertically to avoid
-        // overlap when several streams sit close together (e.g. RX and
-        // Audio both around ~1 Mbps).
-        struct ValueHint {
-            double  idealY;
-            double  y;
-            QColor  color;
-            QString text;
-        };
-        QVector<ValueHint> hints;
-        hints.reserve(visibleSeries.size());
-        for (const Series& series : visibleSeries) {
-            if (series.points.isEmpty()) {
-                continue;
-            }
-            const double v = series.points.last().y();
-            double yRatio;
-            if (m_logScale) {
-                const double clamped = std::clamp(v, minY, maxY);
-                yRatio = std::log10(clamped / minY) / std::log10(maxY / minY);
-            } else {
-                yRatio = std::clamp(
-                    (v - minY) / std::max(0.001, maxY - minY),
-                    0.0,
-                    1.0);
-            }
-            const double y = plot.bottom() - plot.height() * yRatio;
-            const QString unitSuffix = series.unitSuffix.isEmpty() ? m_suffix : series.unitSuffix;
-            hints.push_back({y, y, series.color, formatAxisValue(v, unitSuffix)});
-        }
-        std::sort(hints.begin(), hints.end(),
-                  [](const ValueHint& a, const ValueHint& b) { return a.idealY < b.idealY; });
-        constexpr double kHintMinGap = 14.0;
-        double prev = plot.top() - kHintMinGap;
-        for (ValueHint& h : hints) {
-            if (h.y < prev + kHintMinGap) h.y = prev + kHintMinGap;
-            if (h.y > plot.bottom())      h.y = plot.bottom();
-            prev = h.y;
-        }
-        double next = plot.bottom() + kHintMinGap;
-        for (int i = hints.size() - 1; i >= 0; --i) {
-            if (hints[i].y > next - kHintMinGap) hints[i].y = next - kHintMinGap;
-            if (hints[i].y < plot.top())          hints[i].y = plot.top();
-            next = hints[i].y;
-        }
         for (const ValueHint& h : hints) {
             const QRectF rect(4, h.y - 10, 74, 20);
             // Vertical alpha gradient (0 → chart bg → 0) so the soft
             // top/bottom edges blend into adjacent hints rather than
-            // butting them with a hard rectangle seam.  The opaque
-            // middle band still hides whatever decade tick may sit at
-            // the same y-coordinate.
+            // butting them with a hard rectangle seam.  (A tick label
+            // under this patch is not painted at all — see the tick
+            // loop — so nothing ghosts out past the opaque band.)
             QLinearGradient bgGrad(rect.center().x(), rect.top(),
                                    rect.center().x(), rect.bottom());
             const QColor bgSolid("#050b13");
@@ -539,32 +555,66 @@ private:
         return suffix.isEmpty() ? m_suffix : suffix;
     }
 
-    void drawLegend(QPainter* painter, const QRectF& plot)
+    static constexpr int kLegendRowHeight = 18;
+
+    // One legend entry's placement: a 14 px dash, 4 px, the label, then a
+    // 30 px gap. An entry that would run past the plot's right edge starts
+    // the next row, unless it is the first on its row (a label wider than
+    // the widget still gets drawn, clipped, rather than skipped).
+    struct LegendSlot {
+        int           x{0};
+        int           row{0};
+        int           labelWidth{0};
+        const Series* series{nullptr};
+    };
+
+    QVector<LegendSlot> legendLayout(const QFontMetrics& fm) const
     {
-        m_legendHits.clear();
-        int x = static_cast<int>(plot.left());
-        int y = static_cast<int>(plot.bottom()) + 12;
-        const QFontMetrics fm(painter->font());
+        QVector<LegendSlot> entries;
+        const int left = 84;            // = the plot's left edge (rect().adjusted(84, …))
+        const int right = width() - 14; // = the plot's right edge
+        int x = left;
+        int row = 0;
         for (const Series& series : m_series) {
             if (series.points.isEmpty()) {
                 continue;
             }
+            const int labelWidth = fm.horizontalAdvance(series.label);
+            if (x != left && x + labelWidth + 26 > right) {
+                x = left;
+                ++row;
+            }
+            entries.push_back({x, row, labelWidth, &series});
+            x += 30 + labelWidth;
+        }
+        return entries;
+    }
+
+    int legendRowCount(const QFontMetrics& fm) const
+    {
+        const QVector<LegendSlot> entries = legendLayout(fm);
+        return entries.isEmpty() ? 1 : entries.last().row + 1;
+    }
+
+    void drawLegend(QPainter* painter, const QRectF& plot)
+    {
+        m_legendHits.clear();
+        const int top = static_cast<int>(plot.bottom()) + 12;
+        for (const LegendSlot& slot : legendLayout(QFontMetrics(painter->font()))) {
+            const Series& series = *slot.series;
+            const int x = slot.x;
+            const int y = top + slot.row * kLegendRowHeight;
             const bool selected = m_selectedLabels.isEmpty() || m_selectedLabels.contains(series.label);
             const QColor textColor = selected ? QColor("#d4deea") : QColor("#6e7a8d");
             const QColor lineColor = selected ? series.color : QColor("#25364d");
-            const int labelWidth = fm.horizontalAdvance(series.label);
-            const QRect hitRect(x, y, labelWidth + 24, 18);
+            const QRect hitRect(x, y, slot.labelWidth + 24, 18);
 
             painter->setPen(QPen(lineColor, selected ? 2 : 1));
             painter->drawLine(x, y + 7, x + 14, y + 7);
             painter->setPen(textColor);
-            painter->drawText(x + 18, y, labelWidth + 8, 16,
+            painter->drawText(x + 18, y, slot.labelWidth + 8, 16,
                               Qt::AlignLeft | Qt::AlignVCenter, series.label);
             m_legendHits.push_back({hitRect, series.label});
-            x += 30 + labelWidth;
-            if (x > width() - 110) {
-                break;
-            }
         }
     }
 

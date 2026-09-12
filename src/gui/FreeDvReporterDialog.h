@@ -49,6 +49,9 @@ signals:
     // Emitted when the operator commits a new status message. MainWindow
     // forwards it to FreeDvClient::updateMessage() on the client's thread.
     void messageChanged(const QString& message);
+    // Emitted on a station row double-click; MainWindow tunes the active
+    // slice and forces RADE mode (#4125).
+    void tuneRequested(double freqMhz);
 
 private slots:
     void onSliceFrequencyChanged(double mhz);

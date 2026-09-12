@@ -246,6 +246,141 @@ void testLongPayload()
     report("long payload: decoded", r.goodFcs == 1);
 }
 
+
+// ── Back-to-back frame regression helpers  ──────────────────────────────────────────────────────────────────
+
+uint16_t testFcs(const std::vector<uint8_t>& data)
+{
+    uint16_t crc = 0xFFFF;
+    for (uint8_t b : data) {
+        crc ^= b;
+        for (int i = 0; i < 8; ++i)
+            crc = (crc & 1) ? static_cast<uint16_t>((crc >> 1) ^ 0x8408)
+                            : static_cast<uint16_t>(crc >> 1);
+    }
+    return static_cast<uint16_t>(crc ^ 0xFFFF);
+}
+
+void appendFlagBits(std::vector<uint8_t>& out)
+{
+    static const uint8_t kFlag[8] = {0, 1, 1, 1, 1, 1, 1, 0};
+    for (uint8_t b : kFlag)
+        out.push_back(b);
+}
+
+// Appends body + FCS as bit-stuffed data bits (LSB first), no flags.
+void appendStuffedFrameBits(std::vector<uint8_t>& out, std::vector<uint8_t> body)
+{
+    const uint16_t crc = testFcs(body);
+    body.push_back(static_cast<uint8_t>(crc & 0xFF));
+    body.push_back(static_cast<uint8_t>((crc >> 8) & 0xFF));
+
+    int ones = 0;
+    for (uint8_t byte : body) {
+        for (int i = 0; i < 8; ++i) {
+            const uint8_t bit = static_cast<uint8_t>((byte >> i) & 1);
+            out.push_back(bit);
+            if (bit) {
+                if (++ones == 5) {
+                    out.push_back(0);  // stuffed zero
+                    ones = 0;
+                }
+            } else {
+                ones = 0;
+            }
+        }
+    }
+}
+
+// NRZI encode: data 1 holds the tone, data 0 toggles it.
+std::vector<uint8_t> nrziEncode(const std::vector<uint8_t>& bits)
+{
+    std::vector<uint8_t> tones;
+    tones.reserve(bits.size());
+    uint8_t tone = 1;
+    for (uint8_t bit : bits) {
+        if (!bit)
+            tone ^= 1;
+        tones.push_back(tone);
+    }
+    return tones;
+}
+
+std::vector<uint8_t> testAddress(const char* call, int ssid, bool last)
+{
+    std::vector<uint8_t> a;
+    for (int i = 0; i < 6; ++i)
+        a.push_back(static_cast<uint8_t>((call[i] ? call[i] : ' ') << 1));
+    a.push_back(static_cast<uint8_t>(0x60 | (ssid << 1) | (last ? 1 : 0)));
+    return a;
+}
+
+std::vector<uint8_t> testUiFrame(const char* payload)
+{
+    std::vector<uint8_t> f;
+    const auto dest = testAddress("TEST  ", 0, false);
+    const auto src  = testAddress("N0CALL", 1, true);
+    f.insert(f.end(), dest.begin(), dest.end());
+    f.insert(f.end(), src.begin(), src.end());
+    f.push_back(0x03);  // UI
+    f.push_back(0xF0);  // no layer 3
+    for (const char* p = payload; *p; ++p)
+        f.push_back(static_cast<uint8_t>(*p));
+    return f;
+}
+
+int decodeGoodFrames(const std::vector<uint8_t>& tones)
+{
+    HdlcCodec codec;
+    codec.reset();
+    int good = 0;
+    for (uint8_t t : tones)
+        if (codec.processBit(t) && codec.fcsValid())
+            ++good;
+    return good;
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+// Regression: closeFrame() leaves the frame buffer intact so the caller can
+// read frameData() after processBit() returns, but nothing cleared it
+// afterwards. beginFrame() only ran in InPreamble when a *second* flag
+// arrived, so two frames sharing a single separating flag — the ordinary
+// back-to-back case, and what a connected-mode session looks like on the air —
+// were concatenated. The second frame arrived byte-misaligned and closeFrame()
+// rejected it on the m_bitIndex != 7 check.
+void testBackToBackFramesSingleSeparatingFlag()
+{
+    std::vector<uint8_t> bits;
+    for (int i = 0; i < 8; ++i)
+        appendFlagBits(bits);  // preamble
+    appendStuffedFrameBits(bits, testUiFrame("first frame payload"));
+    appendFlagBits(bits);      // exactly one separating flag
+    appendStuffedFrameBits(bits, testUiFrame("second frame payload"));
+    appendFlagBits(bits);
+
+    const int good = decodeGoodFrames(nrziEncode(bits));
+    report("back-to-back frames with one separating flag both decode", good == 2);
+}
+
+// Control: two separating flags always worked, because the second flag hit the
+// InPreamble branch that calls beginFrame(). Guards against a fix that trades
+// one case for the other.
+void testBackToBackFramesTwoSeparatingFlags()
+{
+    std::vector<uint8_t> bits;
+    for (int i = 0; i < 8; ++i)
+        appendFlagBits(bits);
+    appendStuffedFrameBits(bits, testUiFrame("alpha"));
+    appendFlagBits(bits);
+    appendFlagBits(bits);
+    appendStuffedFrameBits(bits, testUiFrame("bravo"));
+    appendFlagBits(bits);
+
+    const int good = decodeGoodFrames(nrziEncode(bits));
+    report("back-to-back frames with two separating flags both decode", good == 2);
+}
+
 } // namespace
 
 int main()
@@ -259,6 +394,8 @@ int main()
     testPreambleCount();
     testReset();
     testLongPayload();
+    testBackToBackFramesSingleSeparatingFlag();
+    testBackToBackFramesTwoSeparatingFlags();
 
     if (g_failed == 0)
         std::printf("All tests passed.\n");

@@ -728,6 +728,8 @@ void SpectrumOverlayMenu::buildAntPanel()
     gainLabel->setFixedWidth(kLabelW);
     gainRow->addWidget(gainLabel);
     m_rfGainSlider = new GuardedSlider(Qt::Horizontal);
+    m_rfGainSlider->setObjectName(QStringLiteral("antennaRfGainSlider"));
+    m_rfGainSlider->setAccessibleName(QStringLiteral("RF gain"));
     m_rfGainSlider->setRange(-8, 32);
     m_rfGainSlider->setSingleStep(8);
     m_rfGainSlider->setPageStep(8);
@@ -1781,7 +1783,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
         auto* lineWidthSlider = new GuardedSlider(Qt::Horizontal);
         lineWidthSlider->setRange(0, 10);
-        lineWidthSlider->setValue(4);
+        lineWidthSlider->setValue(2);
         lineWidthSlider->setSingleStep(1);
         lineWidthSlider->setPageStep(1);
         lineWidthSlider->setObjectName("displayFftLineWidthSlider");
@@ -1794,7 +1796,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         applyPrimarySliderStyle(m_lineWidthSlider);
         grid->addWidget(m_lineWidthSlider, row, 2);
 
-        m_lineWidthLabel = new QLabel("2.0");
+        m_lineWidthLabel = new QLabel("1.0");
         m_lineWidthLabel->setStyleSheet(valStyle);
         reserveValueColumnLabel(m_lineWidthLabel);
         m_lineWidthLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);

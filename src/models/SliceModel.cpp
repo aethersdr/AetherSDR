@@ -562,6 +562,46 @@ void SliceModel::setAgcMode(const QString& mode)
     emit agcCommandIssued(m_agcMode, m_agcThreshold);
 }
 
+int SliceModel::receiveAgcThresholdMinimum() const
+{
+    return m_externalReceiveAudioReplacement ? KiwiSdrProtocol::kAgcThresholdMinDb : 0;
+}
+
+int SliceModel::receiveAgcThresholdMaximum() const
+{
+    return m_externalReceiveAudioReplacement ? KiwiSdrProtocol::kAgcThresholdMaxDb : 100;
+}
+
+bool SliceModel::agcTKnobUsesOffLevel() const
+{
+    return receiveAgcMode() == QStringLiteral("off");
+}
+
+int SliceModel::agcTKnobMinimum() const
+{
+    return agcTKnobUsesOffLevel() ? 0 : receiveAgcThresholdMinimum();
+}
+
+int SliceModel::agcTKnobMaximum() const
+{
+    return agcTKnobUsesOffLevel() ? 100 : receiveAgcThresholdMaximum();
+}
+
+int SliceModel::agcTKnobLevel() const
+{
+    return agcTKnobUsesOffLevel() ? receiveAgcOffLevel() : receiveAgcThreshold();
+}
+
+// The setters clamp and de-duplicate; nothing is re-asserted here.
+void SliceModel::setAgcTKnobLevel(int value)
+{
+    if (agcTKnobUsesOffLevel()) {
+        setAgcOffLevel(value);
+    } else {
+        setAgcThreshold(value);
+    }
+}
+
 void SliceModel::setAgcThreshold(int value)
 {
     if (m_externalReceiveAudioReplacement) {
@@ -623,6 +663,14 @@ void SliceModel::setSquelch(bool on, int level)
     level = qBound(0, level, 100);
     const bool onChanged = (m_squelchOn != on);
     const bool levelChanged = (m_squelchLevel != level);
+
+    // Optimistic local changes are not fresh readback for a later reattach.
+    if (onChanged) {
+        m_squelchOnKnown = false;
+    }
+    if (levelChanged) {
+        m_squelchLevelKnown = false;
+    }
 
     m_squelchOn    = on;
     m_squelchLevel = level;
@@ -1119,6 +1167,32 @@ void SliceModel::emitLetterRefresh()
 
 void SliceModel::applyChanges(const SliceDelta& d)
 {
+    const ReceiveObservation previousObservation = m_receiveObservation;
+    if (d.mode) {
+        // A mode change invalidates the old mode's passband. Partial filter
+        // reports may restore each edge independently, never from UI state.
+        if (m_receiveObservation.mode != d.mode) {
+            m_receiveObservation.filterLowHz.reset();
+            m_receiveObservation.filterHighHz.reset();
+        }
+        m_receiveObservation.mode = d.mode->isEmpty() || d.mode->size() > 32
+            ? std::nullopt : d.mode;
+    }
+    if (d.filterLow) {
+        m_receiveObservation.filterLowHz = d.filterLow;
+    }
+    if (d.filterHigh) {
+        m_receiveObservation.filterHighHz = d.filterHigh;
+    }
+    if (d.audioGain) {
+        const double gain = *d.audioGain;
+        m_receiveObservation.gain = std::isfinite(gain) && gain >= 0 && gain <= 100
+                && std::floor(gain) == gain
+            ? std::optional<int>(static_cast<int>(gain)) : std::nullopt;
+    }
+    if (d.audioMute) {
+        m_receiveObservation.muted = d.audioMute;
+    }
     // aetherd RFC 2.3: the Flex slice-status wire decode moved to
     // FlexBackend::decodeSliceStatus, which emits sliceChanged(sliceId, changes)
     // with normalized, canonically-named typed values. This applies those
@@ -1150,6 +1224,9 @@ void SliceModel::applyChanges(const SliceDelta& d)
 
     if (d.frequency.has_value()) {
         const double f = *d.frequency;
+        m_frequencyReportedKnown = std::isfinite(f)
+            && f > 0.0 && f <= kMaximumReportedFrequencyMhz;
+        m_reportedFrequency = m_frequencyReportedKnown ? f : 0.0;
         // qFuzzyCompare fails when either value is 0.0 — use explicit epsilon
         if (std::abs(m_frequency - f) > 1e-9) {
             m_frequency = f;
@@ -1519,6 +1596,8 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit agcOffLevelChanged(m_agcOffLevel);
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
+        m_squelchOnKnown |= d.squelchOn.has_value();
+        m_squelchLevelKnown |= d.squelchLevel.has_value();
         if (d.squelchOn.has_value())
             m_squelchOn = *d.squelchOn;
         if (d.squelchLevel.has_value()) {
@@ -1661,10 +1740,34 @@ void SliceModel::applyChanges(const SliceDelta& d)
         if (changed) emit stepChanged(m_stepHz, m_stepList);
     }
 
+    if (d.frequency.has_value() && !freqChanged) {
+        // Also report a same-value echo following an optimistic desktop tune.
+        // A changed value already notifies observation consumers below.
+        emit frequencyReported();
+    }
     if (freqChanged)
         emit frequencyChanged(m_frequency);
     if (modeChanged_)   emit modeChanged(m_mode);
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
+    if (previousObservation != m_receiveObservation) {
+        emit receiveObservationChanged();
+    }
+    if (d.mode) {
+        emit receiveModeReported();
+    }
+}
+
+void SliceModel::invalidateFrequencyObservation()
+{
+    if (m_receiveObservation != ReceiveObservation{}) {
+        m_receiveObservation = {};
+        emit receiveObservationChanged();
+    }
+    if (m_frequencyReportedKnown) {
+        m_frequencyReportedKnown = false;
+        m_reportedFrequency = 0.0;
+        emit frequencyReported();
+    }
 }
 
 void SliceModel::applyRecalledStepHz(int hz)

@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QMetaObject>
 
+class QMenu;
 class QPushButton;
 class QLabel;
 class QSlider;
@@ -45,6 +46,13 @@ public:
     // and command routing. (#2624)
     void setRadioModel(RadioModel* radio);
     void setBandPlanManager(BandPlanManager* bandPlan);
+
+    // Building a context menu is split from showing it so the actions, their
+    // enabled state and their explanatory tooltips can be asserted without
+    // entering the modal QMenu::exec() loop. The show* slots build then exec.
+    // (#5510)
+    void buildAtuContextMenu(QMenu& menu);
+    void buildTuneContextMenu(QMenu& menu);
 
 public slots:
     void updateMeters(float fwdPower, float swr, bool swrValid);
@@ -90,10 +98,11 @@ private:
     // change between clicks falls back to "atu start". (#1993)
     double m_atuTunedFreqMhz{-1.0};
 
-    // Inputs to updateAtuAvailability(). Both default to the permissive value
-    // so an applet built before either model has reported looks exactly as it
-    // did before this gate existed.
+    // Capability inputs to updateAtuAvailability(). Matching and Flex-style
+    // memory operations are separate claims; both default permissive so an
+    // applet built before a model reports retains the disconnected presentation.
     bool m_radioHasTuner{true};
+    bool m_radioHasTunerMemories{true};
     bool m_tgxlOperate{false};
 
     // Gauges (HGauge*)

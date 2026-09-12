@@ -529,6 +529,7 @@ void SpectralNR::reset()
 
 void SpectralNR::resetTransient()
 {
+    ++m_transientResetCount;
     std::fill(m_inAccum.begin(), m_inAccum.end(), 0.0);
     std::fill(m_outAccum.begin(), m_outAccum.end(), 0.0);
     std::fill(m_stereoInAccumL.begin(), m_stereoInAccumL.end(), 0.0);
@@ -565,7 +566,8 @@ void SpectralNR::resetTransient()
     // bounded rather than corrected: minimum statistics re-levels a floor that
     // is now too high within a few frames, and one that is too low within one
     // window (m_U * m_V frames, ~1.5 s) — no slower than the full reset()
-    // this path replaced. Pinned by the ±6 dB step rows in spectral_nr_test.
+    // this path replaced. Pinned by the ±6 dB step rows in
+    // nr2_tx_rx_reset_test.
     std::fill(m_commonWantedProtected.begin(),
               m_commonWantedProtected.end(), 0);
     std::fill(m_commonReferencePsd.begin(),
@@ -600,6 +602,7 @@ void SpectralNR::resetTransient()
 
 void SpectralNR::resetNoiseEstimate()
 {
+    ++m_noiseEstimateResetCount;
     // Start with a HIGH noise estimate — gains will be < 1 during convergence,
     // producing gentle suppression rather than amplification spikes.
     // The OSMS tracker will converge downward to the true noise floor in ~2s.

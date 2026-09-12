@@ -5,6 +5,7 @@
 #include <QVariantMap>
 #include <QString>
 #include <QStringList>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -65,13 +66,17 @@ public:
     // is populated for the first time (even if it equals the placeholder).
     // Returns true when a value actually changed (and infoChanged was emitted).
     bool setCenterBandwidth(double centerMhz, double bandwidthMhz);
+    // Backend publications only; UI geometry setters do not establish proof.
+    void recordGeometryObservation(double centerMhz, double bandwidthMhz);
+    std::optional<qint64> reportedCenterHz() const { return m_reportedCenterHz; }
+    std::optional<qint64> reportedBandwidthHz() const { return m_reportedBandwidthHz; }
     // Force an infoChanged with the current values — for a backend re-asserting
     // a span it refused to change. See the definition.
     void republishCenterBandwidth();
     // A reclaimed model retains its numeric display state while reconnecting,
     // but that previous-session center is not authoritative until the radio
     // reports the new session's pan state.
-    void resetCenterKnownForReconnect() { m_centerKnown = false; }
+    void resetCenterKnownForReconnect();
     // Normalized display-level-range setter driven by the backend (aetherd RFC
     // 2.3, second universal pan field). NaN for either bound means "leave
     // unchanged" (dBm is signed, so no numeric sentinel is safe). Emits
@@ -150,6 +155,13 @@ public:
     void setWide(bool wide);
     bool loopA() const { return m_loopA; }
     bool loopB() const { return m_loopB; }
+    // Dispatch evidence is deliberately distinct from radio status. Flex 4.2.18
+    // can ACK a display setter without echoing status to the setting client.
+    void setRequestedFftSettings(int average, int fps);
+    int radioReportedAverage() const { return m_radioReportedAverage; }
+    int radioReportedFps() const { return m_radioReportedFps; }
+    bool averageIsRequest() const { return m_averageIsRequest; }
+    bool fpsIsRequest() const { return m_fpsIsRequest; }
     int fps() const { return m_fps; }
     int average() const { return m_average; }
     bool weightedAverage() const { return m_weightedAverage; }
@@ -209,6 +221,7 @@ public:
     void applyStateExtension(const QVariantMap& fields);
 
 signals:
+    void geometryObservationChanged();
     void infoChanged(double centerMhz, double bandwidthMhz);
     void levelChanged(float minDbm, float maxDbm);
     void bandwidthLimitsChanged(double minMhz, double maxMhz);
@@ -226,6 +239,7 @@ signals:
     void wideChanged(bool active);
     void loopChanged(bool loopA, bool loopB);
     void fpsChanged(int fps);
+    void fftProvenanceChanged();
     void fpsReported(int fps);
     // Averaging is radio-authoritative (firmware runs it, echoes the level in
     // pan status). Reported fires every status cycle; Changed only on an actual
@@ -250,6 +264,8 @@ private:
     quint32     m_ownerHandle{0};   // parsed m_clientHandle; 0 = unknown (#3977)
     double      m_centerMhz{14.1};
     bool        m_centerKnown{false}; // true after a normalized center update
+    std::optional<qint64> m_reportedCenterHz;
+    std::optional<qint64> m_reportedBandwidthHz;
     double      m_bandwidthMhz{0.2};
     float       m_minDbm{-130.0f};
     float       m_maxDbm{-40.0f};
@@ -274,6 +290,10 @@ private:
     bool        m_loopA{false};
     bool        m_loopB{false};
     int         m_wnbLevel{50};
+    int         m_radioReportedAverage{-1};
+    int         m_radioReportedFps{-1};
+    bool        m_averageIsRequest{false};
+    bool        m_fpsIsRequest{false};
     int         m_fps{-1};
     int         m_average{-1};        // -1 = unknown; 0 = off, 1-N = level (#4001)
     bool        m_weightedAverage{false};

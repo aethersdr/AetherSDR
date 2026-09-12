@@ -4,6 +4,7 @@
 // translation is covered separately by aetherd_tuner_decode_test.
 
 #include "models/TunerModel.h"
+#include "core/TgxlConnection.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -24,9 +25,28 @@ int main(int argc, char** argv)
     {
         TunerModel t;
         QSignalSpy st(&t, &TunerModel::stateChanged);
+        QSignalSpy antennaEdge(&t, &TunerModel::antennaAChanged);
+        QSignalSpy tuningEdge(&t, &TunerModel::tuningChanged);
+        bool operateAtPresence = false;
+        bool bypassAtPresence = false;
+        bool edgesDeferredAtPresence = false;
+        QString ipAtPresence;
+        QObject::connect(&t, &TunerModel::presenceChanged, &t,
+                         [&t, &antennaEdge, &tuningEdge, &operateAtPresence,
+                          &bypassAtPresence, &edgesDeferredAtPresence,
+                          &ipAtPresence](bool present) {
+            if (present) {
+                operateAtPresence = t.isOperate();
+                bypassAtPresence = t.isBypass();
+                edgesDeferredAtPresence = antennaEdge.count() == 0
+                    && tuningEdge.count() == 0;
+                ipAtPresence = t.tgxlIp();
+            }
+        });
         TunerDelta d;
+        d.handle = "0x2000";
         d.model = "TunerGeniusXL"; d.serialNum = "TG123";
-        d.operate = true; d.bypass = false;
+        d.operate = true; d.bypass = false; d.tuning = true;
         d.relayC1 = 20; d.relayC2 = 5; d.relayL = 12;
         d.antennaA = 1; d.oneByThree = true; d.ip = "10.0.0.5";
         t.applyChanges(d);
@@ -34,6 +54,10 @@ int main(int argc, char** argv)
         CHECK(t.isOperate() && !t.isBypass());
         CHECK(t.relayC1() == 20 && t.relayC2() == 5 && t.relayL() == 12);
         CHECK(t.antennaA() == 1 && t.hasAntennaSwitch() && t.tgxlIp() == "10.0.0.5");
+        CHECK(t.isPresent() && operateAtPresence && !bypassAtPresence
+              && edgesDeferredAtPresence);
+        CHECK(ipAtPresence == "10.0.0.5");
+        CHECK(antennaEdge.count() == 1 && tuningEdge.count() == 1);
         CHECK(st.count() == 1);
         t.applyChanges(d);                // identical → change-gated, no re-emit
         CHECK(st.count() == 1);
@@ -48,6 +72,22 @@ int main(int argc, char** argv)
         TunerDelta b; b.operate = true;   // operate unchanged; relayC1 not present
         t.applyChanges(b);
         CHECK(t.relayC1() == 5 && st.count() == 0);
+    }
+
+    // ---- direct presence with no radio handle survives a handle-less delta ----
+    {
+        TunerModel t;
+        TgxlConnection direct;
+        t.setDirectConnection(&direct);
+        QSignalSpy presence(&t, &TunerModel::presenceChanged);
+        CHECK(QMetaObject::invokeMethod(&direct, "connected", Qt::DirectConnection));
+        CHECK(t.isPresent() && t.handle().isEmpty() && presence.count() == 1);
+
+        TunerDelta directState;
+        directState.operate = true;
+        t.applyChanges(directState);
+        CHECK(t.isPresent() && t.handle().isEmpty() && t.isOperate());
+        CHECK(presence.count() == 1);
     }
 
     // ---- tuning + antenna edges emit their signals before stateChanged ----

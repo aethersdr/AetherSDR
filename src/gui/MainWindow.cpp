@@ -36,6 +36,7 @@
 #include "gui/MiniPanScope.h"
 #include "gui/MiniPanReslice.h"
 #include "PanLayoutDialog.h"
+#include "core/CwRecordGate.h"        // micTapOwnsRecorder — carried explicitly (AGENTS.md, #3532)
 #include "core/RadioMessageTypes.h"   // MessageSeverity for onRadioMessage
 #include "core/LogManager.h"
 #include "core/ShutdownTrace.h"
@@ -103,6 +104,9 @@
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
 #include "SystemInfoDialog.h"
+#include "MemoryHistoryRing.h"
+#include "CpuHistoryRing.h"
+#include "UiTickLagMeter.h"
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
@@ -140,6 +144,7 @@
 #include "models/XvtrPolicy.h"
 #include "core/BandStackSettings.h"
 #include "gui/BandStackPanel.h"
+#include "gui/WindowShowState.h"
 #include "models/TunerModel.h"
 #include "models/TransmitModel.h"
 #include "models/EqualizerModel.h"
@@ -831,6 +836,11 @@ void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
 
 void MainWindow::showMultiFlexDialog()
 {
+    if (m_radioModel.isConnected()
+        && !m_radioModel.backendCapabilities().hasMultiClientSessions) {
+        return;
+    }
+
     MultiFlexDialog dlg(&m_radioModel, this);
     connect(&dlg, &MultiFlexDialog::disconnectClientRequested,
             this, &MainWindow::handleMultiFlexClientDisconnect);
@@ -1217,9 +1227,21 @@ MainWindow::MainWindow(QWidget* parent)
 
     applyDarkTheme();
 
+    // The Runtime Monitor's tick-lag meter measures THIS timer's cadence, so
+    // the nominal interval it subtracts is pinned to the interval set here.
+    static_assert(UiTickLagMeter::kNominalIntervalMs == 50.0,
+                  "UiTickLagMeter::kNominalIntervalMs must match the perf heartbeat interval");
+    m_uiTickLagMeter = std::make_unique<UiTickLagMeter>();
+    // Precise, not the default coarse type: with the default, an idle GUI
+    // thread on Windows 11 read the 50 ms heartbeat ~13 ms late on every tick
+    // (measured on #5427), so the Overview's tick-lag card had a floor that was
+    // timer scheduling, not event-loop load. The same timer drives
+    // PerfTelemetry::recordUiHeartbeat(), whose stall detection tightens with it.
+    m_perfHeartbeatTimer.setTimerType(Qt::PreciseTimer);
     m_perfHeartbeatTimer.setInterval(50);
-    connect(&m_perfHeartbeatTimer, &QTimer::timeout, this, [] {
+    connect(&m_perfHeartbeatTimer, &QTimer::timeout, this, [this] {
         PerfTelemetry::instance().recordUiHeartbeat();
+        m_uiTickLagMeter->tick();
     });
     m_perfHeartbeatTimer.start();
 
@@ -1421,6 +1443,8 @@ MainWindow::MainWindow(QWidget* parent)
             });
 
     m_networkDiagnosticsHistory = new NetworkDiagnosticsHistory(&m_radioModel, m_audio, this);
+    m_memoryHistory = std::make_unique<MemoryHistoryRing>();
+    m_cpuHistory = std::make_unique<CpuHistoryRing>();
     connect(&m_radioModel, &RadioModel::digitalVoiceWaveformDegradationStarted,
             this, [this](const QString& message) {
         if (!message.isEmpty()) {
@@ -1692,8 +1716,21 @@ MainWindow::MainWindow(QWidget* parent)
     // TX. Without the TX tap, Client-Side recordings were full-length silence
     // during transmit (#3556). The recorder MOX-gates the two so the file is a
     // single time-interleaved RX/TX stream.
+    // Gated on the current TX-slot owner: this tap keeps running through a CW
+    // over (mic capture follows mic_selection, not mode), and the recorder
+    // cannot tell mic bytes from pumped sidetone — ungated, room noise landed
+    // in the CW portion of the file (#4281). Context stays m_qsoRecorder so the
+    // connection type and lifetime are unchanged.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            m_qsoRecorder, &QsoRecorder::feedTxAudio);
+            m_qsoRecorder, [this](const QByteArray& pcm, bool /*clientLeveled*/) {
+        // Evaluated at queued-delivery time on the recorder's thread, so blocks
+        // already in flight when ownership flips are gated by the NEW owner —
+        // bounded (tens of ms) leakage in both directions at over boundaries.
+        if (!micTapOwnsRecorder(m_audio->txRecorderSource())) {
+            return;
+        }
+        m_qsoRecorder->feedTxAudio(pcm);
+    });
     // Host-modulated backends (HL2) take their transmit audio from the SAME tap
     // the recorder uses: fully processed, after the test tone, compressor and
     // EQ. One path means the TONE button, the microphone and the recording all
@@ -1704,6 +1741,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
                                    clientLeveled);
     });
+    wireModemAudioCompletion();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
     // CW/CWX path (#2539): break-in keys the radio without a local MOX edge and
@@ -1714,7 +1752,35 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_audio, &AudioEngine::cwSidetoneRecordPcmReady,
             m_qsoRecorder, &QsoRecorder::feedTxAudio);
     connect(m_audio, &AudioEngine::cwRecordingActiveChanged,
-            m_qsoRecorder, &QsoRecorder::onMoxChanged);
+            m_qsoRecorder, &QsoRecorder::setCwOverActive);
+    // Queued, unlike the two direct connections below: setCwOverActive reaches
+    // applyOverBookkeeping, which touches a QTimer and can open a file, so it
+    // must run on the recorder's own thread rather than the AudioEngine's.
+    // Mirror the keyer speed so the pump can size the CW over-hang in dit units
+    // rather than a fixed wall-clock value (#4281).
+    m_audio->setCwWpm(m_radioModel.transmitModel().cwSpeed());
+    connect(&m_radioModel.transmitModel(), &TransmitModel::cwSpeedChanged,
+            m_audio, [ae = m_audio](int wpm) { ae->setCwWpm(wpm); });
+    // Tune carriers raise the interlock as an owned TX but are not a CW over:
+    // mirror tune state so cwOverTxActive can exclude them (#4281).
+    // TransmitModel sets its flag optimistically before the tune command is
+    // even sent, so this mirror cannot lose a race against the interlock rise.
+    m_audio->setTuneActive(m_radioModel.transmitModel().isTuning());
+    connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
+            m_audio, [ae = m_audio](bool tuning) { ae->setTuneActive(tuning); });
+    // Let the CW record pump skip rendering while no file is open (#4281).
+    // Direct connections: the slot is a single atomic store that touches no Qt
+    // state, and recordingStarted is emitted once the file is open and
+    // m_recording is set — so the flag is true before the recorder can accept
+    // anything, and a queued hop cannot lose the first elements of an over.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStarted,
+            m_audio, [ae = m_audio](const QString&) {
+        ae->setQsoRecordingActive(true);
+    }, Qt::DirectConnection);
+    connect(m_qsoRecorder, &QsoRecorder::recordingStopped,
+            m_audio, [ae = m_audio](const QString&, int) {
+        ae->setQsoRecordingActive(false);
+    }, Qt::DirectConnection);
 
     // ── CW decoder: feed audio ──────────────────────────────────────────
     // Audio feed is global (same audio for all pans) and lives in
@@ -2302,6 +2368,17 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](bool) { updatePaTempLabel(); });
     connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
             this, [this](bool) { updatePaTempLabel(); });
+    // stateChanged() too, now that the gate above reads isMox(). Backend MOX
+    // is assigned with a bare `changed |= assign(d.mox, m_mox)`
+    // (TransmitModel.cpp:84) and deliberately does NOT raise moxChanged --
+    // routing it through setTransmitting() would open this client's
+    // mic/DAX/serial-PTT paths when the radio is keyed by someone else. It
+    // folds into the catch-all stateChanged() instead, so that is the only
+    // signal a radio-initiated key actually raises. Without this the label
+    // would refresh only when a paCurrent sample happened to arrive -- correct
+    // by luck rather than by wiring.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::stateChanged,
+            this, [this]() { updatePaTempLabel(); });
 
     auto normalizeOscillatorValue = [](QString value) {
         value = value.trimmed().toLower();
@@ -2317,13 +2394,27 @@ MainWindow::MainWindow(QWidget* parent)
         return value.trimmed().isEmpty() ? QStringLiteral("Unknown") : value.toUpper();
     };
     auto updateFrequencyReferenceLabel = [this, normalizeOscillatorValue, oscillatorName] {
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
         const QString state = normalizeOscillatorValue(m_radioModel.oscState());
         const QString setting = normalizeOscillatorValue(m_radioModel.oscSetting());
         const bool locked = m_radioModel.oscLocked();
 
         QString sourceLabel;
         QString statusLabel;
-        if (state.isEmpty()) {
+        if (caps.hasGpsLocation && !caps.hasGpsFrequencyReference) {
+            // A position receiver is not a frequency reference. Keep the
+            // compact status-bar identity and fix state privacy-safe while
+            // the live position details remain available in the GPS dashboard.
+            sourceLabel = QStringLiteral("Int. GPS");
+            // A hand-entered position (IC-705 GPS Select = Manual) is usable
+            // but it is not a fix; say so rather than printing "Locked".
+            const QString positionStatus = m_radioModel.gpsPositionValid()
+                ? (m_radioModel.gpsSource() == QLatin1String("Manual")
+                       ? QStringLiteral("Manual") : QStringLiteral("Locked"))
+                : (m_radioModel.gpsStatus().isEmpty()
+                       ? QStringLiteral("Waiting") : m_radioModel.gpsStatus());
+            statusLabel = QStringLiteral("[%1]").arg(positionStatus);
+        } else if (state.isEmpty()) {
             sourceLabel = QStringLiteral("Ref: --");
             statusLabel = QStringLiteral("[Waiting]");
         } else if (state == "gpsdo") {
@@ -2350,10 +2441,19 @@ MainWindow::MainWindow(QWidget* parent)
         m_gpsLabel->setText(sourceLabel);
         m_gpsStatusLabel->setText(statusLabel);
 
-        QString tooltip = QStringLiteral("10 MHz reference\nSetting: %1\nActual: %2\nLock: %3")
-            .arg(oscillatorName(setting, false),
-                 oscillatorName(state, false),
-                 locked ? QStringLiteral("Locked") : QStringLiteral("Unlocked"));
+        QString tooltip;
+        if (caps.hasGpsLocation && !caps.hasGpsFrequencyReference) {
+            tooltip = QStringLiteral("GPS position receiver\nSource: %1\nStatus: %2")
+                .arg(m_radioModel.gpsSource().isEmpty() ? QStringLiteral("Unknown")
+                                                        : m_radioModel.gpsSource(),
+                     m_radioModel.gpsStatus().isEmpty() ? QStringLiteral("Waiting")
+                                                        : m_radioModel.gpsStatus());
+        } else {
+            tooltip = QStringLiteral("10 MHz reference\nSetting: %1\nActual: %2\nLock: %3")
+                .arg(oscillatorName(setting, false),
+                     oscillatorName(state, false),
+                     locked ? QStringLiteral("Locked") : QStringLiteral("Unlocked"));
+        }
         if (state == "external") {
             tooltip += QStringLiteral("\nExternal 10 MHz: %1")
                 .arg(m_radioModel.extPresent() ? QStringLiteral("detected")
@@ -2397,9 +2497,14 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Use GPS UTC time only when GPSDO is installed and locked.
         // GPS with no antenna/lock sends stale "00:00:00Z" — fall back to system clock.
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        const bool usablePositionTime = caps.hasGpsLocation
+            && !caps.hasGpsFrequencyReference
+            && m_radioModel.gpsPositionValid();
         if (!utcTime.isEmpty()
-            && normalizeOscillatorValue(m_radioModel.oscState()) == "gpsdo"
-            && m_radioModel.oscLocked()) {
+            && (usablePositionTime
+                || (normalizeOscillatorValue(m_radioModel.oscState()) == "gpsdo"
+                    && m_radioModel.oscLocked()))) {
             m_gpsTimeLabel->setText(utcTime);
             m_useSystemClock = false;
         } else {
@@ -2419,9 +2524,17 @@ MainWindow::MainWindow(QWidget* parent)
         QString dateFmt = loc.dateFormat(QLocale::ShortFormat);
         if (!dateFmt.contains(QLatin1String("yyyy")))
             dateFmt.replace(QLatin1String("yy"), QLatin1String("yyyy"));
-        m_gpsDateLabel->setText(loc.toString(utc.date(), dateFmt));
-        if (m_useSystemClock)
+        QDate displayDate = utc.date();
+        if (!m_useSystemClock) {
+            const QDate radioDate = QDate::fromString(m_radioModel.gpsDate(), Qt::ISODate);
+            if (radioDate.isValid()) {
+                displayDate = radioDate;
+            }
+        }
+        m_gpsDateLabel->setText(loc.toString(displayDate, dateFmt));
+        if (m_useSystemClock) {
             m_gpsTimeLabel->setText(utc.toString("HH:mm:ssZ"));
+        }
     });
     clockTimer->start(1000);
 
@@ -2450,7 +2563,11 @@ MainWindow::MainWindow(QWidget* parent)
         m_connPanel->setStatusText("Looking for your radio…");
         setPanadapterConnectionAnimation(true, "Looking for your radio…");
     } else if (!autoConnectToLastRadio) {
-        QTimer::singleShot(0, this, &MainWindow::toggleConnectionDialog);
+        QTimer::singleShot(0, this, &MainWindow::showConnectionDialog);
+    } else {
+        // No saved radio exists for the enabled auto-connect path. Delay until
+        // the main window is mapped, matching the established first-run flow.
+        QTimer::singleShot(500, this, [this]() { showConnectionDialog(); });
     }
 
     // Auto-connect to routed radios (probed, not broadcast-discovered)
@@ -2475,6 +2592,30 @@ MainWindow::MainWindow(QWidget* parent)
             setPanadapterConnectionAnimation(true, "Connecting to radio…");
             m_radioModel.connectToRadio(info);
         }
+    });
+
+    // A startup auto-connect that gives up must hand the window back. The
+    // no-saved-radio popup above is suppressed whenever LastConnectedRadioSerial
+    // is set, so without this a saved radio that cannot be reached leaves the
+    // "Looking for your radio…" overlay up forever with no offered way into the
+    // connection dialog — the operator has to know the Settings menu item exists.
+    connect(m_connPanel, &ConnectionPanel::startupConnectUnavailable,
+            this, [this](const QString& reason) {
+        // isConnected() is false for the whole handshake, so it cannot tell
+        // "nothing is happening" from "another connect is already winning":
+        // a routed HL2/ANAN saved by IP on the LAN is also found by broadcast
+        // discovery, whose auto-connect starts first and makes the radio
+        // answer the later directed probe as busy. That probe's report must
+        // not tear down the live connect (see maybeAutoConnectToDiscoveredRadio).
+        if (m_userDisconnected || m_radioModel.isConnected()
+            || m_radioModel.isConnectAttemptInFlight()) {
+            return;
+        }
+        setPanadapterConnectionAnimation(false);
+        m_connPanel->setStatusText(reason);
+        // show, not toggle: toggleConnectionDialog() would hide a dialog the
+        // operator had already opened while the probe was still in flight.
+        showConnectionDialog();
     });
 
     // Probe saved routed radio on startup
@@ -2562,12 +2703,6 @@ MainWindow::MainWindow(QWidget* parent)
         m_splitter->setSizes(sizes);
     });
 
-    // Auto-popup connection dialog if no saved radio
-    QString lastSerial = s.value("LastConnectedRadioSerial", "").toString();
-    if (lastSerial.isEmpty()) {
-        QTimer::singleShot(500, this, [this]() { toggleConnectionDialog(); });
-    }
-
     // Restore the Memory dialog if it was open when the app last exited.
     QTimer::singleShot(0, this, [this]() {
         if (AppSettings::instance().value("MemoryDialogOpen", "False").toString() == "True")
@@ -2589,6 +2724,14 @@ MainWindow::~MainWindow()
 {
     ShutdownTrace destructorTrace("main_window.destructor_body");
     qApp->removeEventFilter(this);
+
+    // The Runtime Monitor reads m_memoryHistory, m_cpuHistory and
+    // m_uiTickLagMeter, which are unique_ptr members and so are gone before
+    // ~QObject deletes the dialog (a WA_DeleteOnClose child). Its destructor
+    // does not touch them today; take the dialog down first so that a future
+    // line in ~SystemInfoDialog() cannot turn into a use-after-free at exit
+    // (#5427 review).
+    delete m_systemInfoDialog;
 
     // The qApp::focusChanged lambda (MainWindow_Shortcuts.cpp) runs
     // releaseSliderShortcutLease(), which touches m_shortcutManager and the
@@ -3252,7 +3395,8 @@ RadioSetupDialog* MainWindow::openRadioSetupPage(const QString& page)
     showOrRaisePersistent(m_radioSetupDialog,
                           &m_radioModel, m_audio,
                           &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
-                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn);
+                          m_kiwiSdrManager, &m_acomConn, &m_speConn, &m_vkampConn,
+                          &m_lpMeterConn);
     if (wasFresh && m_radioSetupDialog)
         wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     if (m_radioSetupDialog && !page.isEmpty())
@@ -3265,18 +3409,27 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     if (!dlg) return;
     connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
             m_txBandAction, &QAction::trigger);
-    // Agent automation bridge toggle (#3646). The dialog already persisted
-    // AutomationBridgeEnabled; here we act on it live. AETHER_AUTOMATION
+    // Agent automation bridge toggle (#3646). The dialog persists the click as
+    // the operator's intent; the async bind outcome then corrects it (#4181,
+    // AutomationBridgeSettings::recordStartOutcome()). AETHER_AUTOMATION
     // force-enables at launch and the dialog disables the toggle in that
     // case, so a stop request can't arrive for an env-forced bridge.
     connect(dlg, &RadioSetupDialog::automationBridgeToggled, this, [this](bool on) {
         if (on) {
-            if (!startAutomationBridge())
-                qWarning() << "automation bridge failed to start (socket in use?)";
+            // startAutomationBridge() only reports that the start was
+            // *initiated* — the bind happens later, in the async token-read
+            // callback — so the outcome comes back over
+            // automationBridgeStartResult below, not from this return value.
+            startAutomationBridge();
         } else {
             stopAutomationBridge();
         }
     });
+    // Reconcile the Network-tab toggle with what
+    // the socket actually did (#4181). `dlg` is the context object, so this
+    // auto-disconnects when the modeless dialog is destroyed.
+    connect(this, &MainWindow::automationBridgeStartResult, dlg,
+            [dlg](bool ok) { dlg->reportAutomationBridgeStartResult(ok); });
     connect(dlg, &RadioSetupDialog::automationBridgeTokenRotated, this,
             [this](const QString& tok) { setAutomationBridgeToken(tok); });
     connect(dlg, &RadioSetupDialog::automationBridgeTxAllowedChanged, this,
@@ -3388,6 +3541,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         // Re-evaluate CW decode panel and TX tap from the dialog's
         // RX/TX toggles, plus run state vs current slice mode (#2417).
         refreshCwDecodeState();
+        // Same for the Phone & CW page's RTTY Decode toggle — this is how the
+        // pane comes back after the operator dismissed it with ✕ (#5353).
+        refreshRttyDecodeState();
 
         // If audio compression changed, recreate the RX audio stream
         QString newComp = m_radioModel.audioCompressionParam();
@@ -3556,7 +3712,8 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 
 void MainWindow::updateStatusBarMinimumWidth()
 {
-    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()) {
+    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()
+        || !statusBar()->currentMessage().isEmpty()) {
         return;
     }
 
@@ -3731,6 +3888,7 @@ void MainWindow::changeEvent(QEvent* event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    m_pendingDisplayWrites.flush();
     ShutdownTrace closeEventTrace("main_window.close_event");
 #ifdef Q_OS_MAC
     // Shared Ulanzi access temporarily remaps only the dial's system key
@@ -3760,6 +3918,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // this function returns, leaving the amp holding a stale half-open
     // connection instead of seeing a clean close.
     m_vkampConn.disconnect();
+    // The LP-100A is likewise independent of the radio lifecycle and may be
+    // connected through a shared ser2net proxy. Close it explicitly while
+    // the event loop is still live instead of relying on member destruction.
+    m_lpMeterConn.disconnect();
 
     // Same event-loop reasoning: the operating-state capture flush normally
     // rides the queued backend disconnected() signal, which never lands
@@ -4175,7 +4337,8 @@ void MainWindow::showNetworkDiagnosticsDialog()
 
 void MainWindow::showSystemInfoDialog()
 {
-    showOrRaisePersistent(m_systemInfoDialog);
+    showOrRaisePersistent(m_systemInfoDialog, m_memoryHistory.get(), m_cpuHistory.get(),
+                          m_uiTickLagMeter.get());
 }
 
 void MainWindow::showAgcCalibrationDialog(int sliceId)
@@ -4466,9 +4629,34 @@ void MainWindow::updatePaTempLabel()
 {
     const auto& meters = m_radioModel.meterModel();
     if (m_paCurrentStatusPreferred && meters.hasPaCurrentMeter()) {
+        // isMox() BELONGS HERE, and its absence was the whole of #5306.
+        //
+        // isTransmitting() and isMox() are separate members: m_transmitting is
+        // written only by the client-initiated setMox()/setTransmitting()
+        // paths, while m_mox is assigned from the radio's own status payload
+        // (TransmitModel.cpp:84). Key an Icom AT THE RADIO and only m_mox goes
+        // true — so this gate stayed false for the whole transmission and the
+        // label showed "Id —" while a live 3.4 A sample sat in the model.
+        //
+        // Measured on an IC-9700 (dummy load, 145.050 FM): across eight
+        // key-downs mox was true with real forward power and hasPaCurrent()
+        // was true with paCurrent tracking 3.30-3.47 A, while isTransmitting()
+        // was false in every sample. The sample path was never the problem.
+        //
+        // That supersedes #5306's second root cause, which reported
+        // paCurrent=ABSENT and blamed the !m_keyed guard suppressing Id
+        // samples. Both readings were honest; the backend moved between them.
+        // onMeterTick() now polls the radio's own PTT every kPttPollMs and
+        // sets m_keyed from the 1C 00 readback, so m_keyed tracks a
+        // radio-initiated key and the Id samples do arrive. Only this GUI
+        // gate was still dropping them.
+        //
+        // Seven other keyed-state checks in this tree already read
+        // isTransmitting() || isTuning() || isMox(); this one had drifted.
         const bool liveTxCurrent =
             (m_radioModel.transmitModel().isTransmitting()
-             || m_radioModel.transmitModel().isTuning())
+             || m_radioModel.transmitModel().isTuning()
+             || m_radioModel.transmitModel().isMox())
             && meters.hasPaCurrent();
         m_paTempLabel->setText(liveTxCurrent
             ? QString("Id %1 A").arg(meters.paCurrent(), 0, 'f', 1)
@@ -4848,6 +5036,24 @@ void MainWindow::buildUI()
     m_panApplet = nullptr;  // ensure setActivePanApplet sees a change
     setActivePanApplet(m_panStack->addPanadapter("default"));
     splitter->addWidget(m_panStack);
+
+    // A panadapter created AFTER the initial connect (Add Panadapter, layout
+    // switch, band-recall) never goes through onConnectionStateChanged()'s
+    // loop over allApplets() -- it comes up with QPushButton's default
+    // enabled state, silently reopening the exact no-op-click gap
+    // setBandSegmentZoomAvailable() exists to close, until the next
+    // connect/disconnect happens to re-sync it. panAdded fires once per
+    // applet "however it was created" (see its own comment on
+    // PanadapterStack::panAdded), so this is the one place that reliably
+    // catches every creation path.
+    connect(m_panStack, &PanadapterStack::panAdded, this, [this](const QString& panId) {
+        auto* applet = m_panStack->panadapter(panId);
+        if (!applet || !applet->spectrumWidget()) {
+            return;
+        }
+        applet->spectrumWidget()->setBandSegmentZoomAvailable(
+            m_radioModel.isConnected() && m_radioModel.usesFlexCommandPlane());
+    });
 
     // Band stack panel signal wiring
     auto* bsPanel = m_panStack->bandStackPanel();
@@ -5730,6 +5936,7 @@ void MainWindow::buildUI()
     hbox->addWidget(timeStack);
 
     statusBar()->addWidget(m_statusBarContainer, 1);
+    wireStatusBarMessages();
     updateStatusBarMinimumWidth();
     updateBandStackIndicator();
 
@@ -5887,6 +6094,30 @@ void MainWindow::onConnectionStateChanged(bool connected)
 
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
+
+    // Band/segment zoom only ever works on Flex (see SpectrumWidget::
+    // setBandSegmentZoomAvailable()'s own comment) -- usesFlexCommandPlane()
+    // is a direct family() == "flex" check (RadioModel.h), not merely "some
+    // connection object exists": SimBackend/demo mode owns a RadioConnection
+    // too but isn't Flex and doesn't understand band_zoom=/segment_zoom=, so
+    // the plain hasCommandPlane() this used before was one indirection looser
+    // than the actual question being asked. Edge taper is keyed off
+    // RadioCapabilities::hasDdcPanEdgeRolloff instead (see its own comment)
+    // -- a future DDC-based backend gets that automatically instead of
+    // needing its own family string added here. Re-evaluate both on every
+    // connect and disconnect, since usesFlexCommandPlane()/
+    // backendCapabilities() only know the CURRENTLY connected radio.
+    if (m_panStack) {
+        const bool bandSegmentZoomAvailable = connected && m_radioModel.usesFlexCommandPlane();
+        const bool edgeTaperEnabled =
+            connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
+        for (auto* applet : m_panStack->allApplets()) {
+            if (applet && applet->spectrumWidget()) {
+                applet->spectrumWidget()->setBandSegmentZoomAvailable(bandSegmentZoomAvailable);
+                applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
+            }
+        }
+    }
 
     // Demo scene push on connect: the applet owns the startup scene, so its
     // control state is pushed to the engine the moment the demo connects (no
@@ -6321,7 +6552,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 
         // Show reconnect dialog on unexpected disconnect (only one at a time)
-        if (!m_userDisconnected && !m_reconnectDlg) {
+        if (!m_userDisconnected && !m_reconnectDlg && !m_radioModel.radioWakeActive()) {
             const bool frameless = framelessWindowEnabled();
             m_reconnectDlg = new QDialog(this);
             m_reconnectDlg->setWindowTitle(tr("Radio Disconnected"));
@@ -7140,6 +7371,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         // can never move.
         // Empty on disconnect, which RESTORES the operator's own list rather
         // than stranding them on the last radio's three filters.
+        m_appletPanel->setRadioFilterControl(
+            connected ? caps.rxFilterControl : RxFilterControl{});
         m_appletPanel->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                       : QList<int>{});
         // Same contract for the TRANSMIT passband, and the same restore-on-
@@ -7149,6 +7382,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         if (auto* phone = m_appletPanel->phoneApplet()) {
             phone->setTxFilterControlsAvailable(!connected || caps.hasTxFilterControls);
             phone->setDexpVisible(!connected || caps.hasDownwardExpander);
+            phone->setAmCarrierAvailable(!connected || caps.hasAmCarrierLevel);
+            phone->setVoxDelayAvailable(!connected || caps.hasVoxDelay);
             phone->setTxFilterEdges(connected ? caps.txFilterLowEdgesHz : QList<int>{},
                                     connected ? caps.txFilterHighEdgesHz : QList<int>{});
         }
@@ -7262,6 +7497,8 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
                 vfo->setHasHostNoiseBlanker(hostNoiseBlanker);
                 // The VFO's filter grid and the RX applet's are two views of one
                 // radio; only the applet was being told what the hardware has.
+                vfo->setRadioFilterControl(
+                    connected ? caps.rxFilterControl : RxFilterControl{});
                 vfo->setRadioFilterWidths(connected ? caps.rxFilterWidthsHz
                                                     : QList<int>{});
             }
@@ -7284,6 +7521,23 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // session history rather than on the connected radio.
     if (m_appletPanel && m_appletPanel->txApplet()) {
         m_appletPanel->txApplet()->setRadioSideDspAvailable(radioSideDsp);
+    }
+
+    // ── APF on the P/CW pane's CW face (#4879) ──────────────────────────────
+    //
+    // NOT hasRadioSideDsp: Icom declares that true for NR/NB/notch and has no
+    // APF register. The row's only effect is Flex `slice set <n> apf=`, so it
+    // rides hasAudioPeakingFilter (permissive while disconnected, like LMS).
+    // The DSP-tab APF button is still ungated — pre-existing, left alone.
+    if (m_appletPanel && m_appletPanel->phoneCwApplet()) {
+        const RadioCapabilities cwCaps = connected ? caps : RadioCapabilities{};
+        m_appletPanel->phoneCwApplet()->setCompressionMaximumDb(cwCaps.compressionMaximumDb);
+        m_appletPanel->phoneCwApplet()->setAlcMeterUnit(cwCaps.alcMeterUnit);
+        m_appletPanel->phoneCwApplet()->setCwControlLimits(
+            cwCaps.cwSpeedMinWpm, cwCaps.cwSpeedMaxWpm,
+            cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz);
+        m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
+            m_radioModel.hasAudioPeakingFilter());
     }
 
     // ── The 8-band graphic EQ ───────────────────────────────────────────────
@@ -7412,8 +7666,21 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     if (m_waveformsAction) {
         m_waveformsAction->setVisible(!connected || caps.hasWaveforms);
     }
+    if (m_ax25HfPacketDecodeDialog) {
+        m_ax25HfPacketDecodeDialog->setDstarTabAvailable(
+            connected, caps.hasWaveforms);
+    }
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
+    }
+    if (m_aetherControlAction) {
+        m_aetherControlAction->setVisible(!connected || caps.hasFlexControlIntegration);
+    }
+    if (m_flexControlKnobAction) {
+        m_flexControlKnobAction->setVisible(!connected || caps.hasFlexControlIntegration);
+    }
+    if (connected && !caps.hasFlexControlIntegration && m_flexControlDialog) {
+        m_flexControlDialog->close();
     }
 
     // Demo Noise tile: a sim-cluster applet, so applet-granularity hiding is
@@ -9378,12 +9645,15 @@ void MainWindow::toggleAetherialStrip()
         m_aetherialStrip->setMicInputReady(ready);
         m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
     }
-    if (m_aetherialStrip->isVisible()) {
+    // windowIsShowing() rather than isVisible(): a minimized strip still
+    // reports isVisible(), so the bare check sent it down the hide() branch and
+    // the next press called show(), which restores it straight back to
+    // minimized.  The strip could then only be recovered from the taskbar/Dock,
+    // never from its own button.
+    if (windowIsShowing(m_aetherialStrip)) {
         m_aetherialStrip->hide();
     } else {
-        m_aetherialStrip->show();
-        m_aetherialStrip->raise();
-        m_aetherialStrip->activateWindow();
+        showAndRaiseWindow(m_aetherialStrip);
     }
 }
 
@@ -9625,6 +9895,14 @@ void MainWindow::updateKeyerAvailability()
     // activatedAmbiguously (#2464, #2582, #4173).
     SliceModel* txSlice = m_radioModel.txSlice();
     const QString txMode = txSlice ? txSlice->mode() : QString();
+    // Mirror "the TX slice is in a CW mode" into the CW over machinery: the
+    // record-gate latch must not arm off a key edge in a voice mode, and
+    // leaving CW ends any over in flight (#4281). This function already
+    // re-runs on every mode change and TX-slice reassignment — exactly the
+    // coverage the mirror needs. No TX slice (receive-only) parses as not-CW.
+    if (m_audio) {
+        m_audio->setTxModeCw(isCwMode(txMode));
+    }
     // Both keyers carry a family gate ahead of the mode gate: a radio with no
     // text buffer and no voice recorder never gains one by switching mode, so
     // the capability is ANDed into the availability that drives the enabled
@@ -10464,7 +10742,7 @@ SliceModel* MainWindow::swrSweepTargetSlice(int requestedSliceId) const
 // SWR sweep methods live in MainWindow_SwrSweep.cpp (#3351 Phase 1e).
 // RADE / FreeDV / DAX methods live in MainWindow_DigitalModes.cpp (#3351 Phase 1e).
 
-// StreamDeck native integration removed — use TCI StreamController plugin instead.
+// StreamDeck native integration removed — drive it over TCI instead.
 
 // ─── Applet-panel pop-out (#1713 Phase 6) ───────────────────────────────────
 //

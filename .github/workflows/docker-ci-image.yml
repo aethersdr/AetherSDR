@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - '.github/docker/Dockerfile'
+      - '.github/docker/Dockerfile.tsan'
     branches: [main]
   workflow_dispatch:
 
@@ -84,4 +85,42 @@ jobs:
         run: |
           echo "Published ghcr.io/aethersdr/aethersdr-ci"
           echo "  tags:   latest, sha-${{ github.sha }}"
+          echo "  digest: ${{ steps.build.outputs.digest }}"
+
+  # The TSan variant (Qt built -sanitize thread; see Dockerfile.tsan). Runs
+  # AFTER the base image so it layers on the :latest just published, and
+  # regardless of whether the base build was needed (a Dockerfile.tsan-only
+  # push still rebuilds it on the existing :latest). A Qt source build on a
+  # hosted runner is a couple of hours; the timeout is a backstop, not a
+  # budget.
+  build-tsan:
+    needs: build
+    if: ${{ !cancelled() && needs.build.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (tsan)
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .github/docker
+          file: .github/docker/Dockerfile.tsan
+          push: true
+          tags: |
+            ghcr.io/aethersdr/aethersdr-ci:tsan
+            ghcr.io/aethersdr/aethersdr-ci:tsan-sha-${{ github.sha }}
+
+      - name: Report published digest
+        run: |
+          echo "Published ghcr.io/aethersdr/aethersdr-ci"
+          echo "  tags:   tsan, tsan-sha-${{ github.sha }}"
           echo "  digest: ${{ steps.build.outputs.digest }}"

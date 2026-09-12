@@ -17,6 +17,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import aether_mcp  # noqa: E402
@@ -301,11 +302,99 @@ def test_gesture_session():
         aether_mcp.Bridge = original_bridge
         aether_mcp.bridge_socket_path = original_sockpath
         os.environ.pop("AETHER_MCP_TOKEN", None)
+
+
+def test_owned_process_shutdown():
+    """No live process: Windows has no SIGKILL, including on the timeout path."""
+    original_sys = aether_mcp.sys
+    original_signal = aether_mcp.signal
+    original_owned = aether_mcp._owned_app
+    original_os = aether_mcp.os
+
+    class Process:
+        pid = 12345
+
+        def __init__(self, needs_kill=False, refuses_kill=False):
+            self.returncode = None
+            self.calls = []
+            self.needs_kill = needs_kill
+            self.refuses_kill = refuses_kill
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.calls.append("terminate")
+            if not self.needs_kill:
+                self.returncode = 1
+
+        def kill(self):
+            self.calls.append("kill")
+            if not self.refuses_kill:
+                self.returncode = 1
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                raise aether_mcp.subprocess.TimeoutExpired("mock", timeout)
+            return self.returncode
+
+    def no_process_group(_pid):
+        raise ProcessLookupError("mock process has no OS process group")
+
+    try:
+        # Stub os BEFORE the win32 loop, not after it. Process.pid is a fake
+        # that is entirely plausible on a real host, and this test exists to
+        # assert the platform guard — so it must not depend on that guard
+        # holding. If the guard ever regresses, a real process group would be
+        # signalled here, under the registered CTest.
+        aether_mcp.os = SimpleNamespace(**vars(original_os))
+        aether_mcp.os.getpgid = no_process_group
+        aether_mcp.sys = SimpleNamespace(platform="win32")
+        aether_mcp.signal = SimpleNamespace(SIGTERM=15)  # Deliberately no SIGKILL.
+        for needs_kill, refuses_kill in ((False, False), (True, False), (True, True)):
+            process = Process(needs_kill, refuses_kill)
+            aether_mcp._owned_app = {
+                "process": process, "socket": "mock-owned-pipe", "label": "mock",
+            }
+            result = aether_mcp._stop_owned_app()
+            expected = ["terminate", "kill"] if needs_kill else ["terminate"]
+            check(f"Windows shutdown sequence {needs_kill}/{refuses_kill}",
+                  process.calls == expected, str(process.calls))
+            check(f"Windows shutdown retains truthful ownership {needs_kill}/{refuses_kill}",
+                  result["running"] == refuses_kill
+                  and result["ok"] != refuses_kill
+                  and (aether_mcp._owned_app is not None) == refuses_kill, str(result))
+        group_calls = []
+        aether_mcp.sys = SimpleNamespace(platform="linux")
+        aether_mcp.signal = SimpleNamespace(SIGTERM=15, SIGKILL=9)
+        aether_mcp.os = SimpleNamespace(**vars(original_os))
+        aether_mcp.os.getpgid = lambda pid: pid
+        aether_mcp.os.killpg = lambda pid, sig: group_calls.append((pid, sig))
+        process = Process()
+        aether_mcp._signal_owned_process(process)
+        aether_mcp._signal_owned_process(process, force=True)
+        check("POSIX shutdown retains TERM/KILL process-group signaling",
+              group_calls == [(process.pid, 15), (process.pid, 9)] and not process.calls,
+              str(group_calls))
+
+        aether_mcp.os.getpgid = no_process_group
+        aether_mcp._signal_owned_process(process)
+        aether_mcp._signal_owned_process(process, force=True)
+        check("POSIX missing-group fallback retains terminate/kill",
+              process.calls == ["terminate", "kill"], str(process.calls))
+    finally:
+        aether_mcp._owned_app = original_owned
+        aether_mcp.signal = original_signal
+        aether_mcp.sys = original_sys
+        aether_mcp.os = original_os
+
+
 def test_secure_app_instance():
     """Fresh builds inherit the token only at runtime and are identity-checked."""
     aether_mcp._stop_owned_app()
     original_popen = aether_mcp.subprocess.Popen
     original_bridge = aether_mcp.Bridge
+    original_os = aether_mcp.os
     saved_env = {key: os.environ.get(key) for key in (
         "AETHER_MCP_TOKEN", "AETHER_MCP_SOCKET", "AETHER_AUTOMATION_ALLOW_TX")}
     popen_calls = []
@@ -377,6 +466,12 @@ def test_secure_app_instance():
 
     aether_mcp.subprocess.Popen = fake_popen
     aether_mcp.Bridge = _Bridge
+    # A mocked Popen PID must never resolve to a real host process group.
+    def no_process_group(_pid):
+        raise ProcessLookupError("mock process has no OS process group")
+
+    aether_mcp.os = SimpleNamespace(**vars(original_os))
+    aether_mcp.os.getpgid = no_process_group
     try:
         with tempfile.TemporaryDirectory() as temp_root:
             worktree = Path(temp_root) / "AetherSDR"
@@ -504,6 +599,7 @@ def test_secure_app_instance():
         aether_mcp._stop_owned_app()
         aether_mcp.subprocess.Popen = original_popen
         aether_mcp.Bridge = original_bridge
+        aether_mcp.os = original_os
         for key, value in saved_env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -687,6 +783,7 @@ if __name__ == "__main__":
     test_field_mapping()
     test_token_attached()
     test_gesture_session()
+    test_owned_process_shutdown()
     test_secure_app_instance()
     test_jsonrpc_robustness()
     test_robustness_tools()

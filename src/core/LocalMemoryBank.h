@@ -79,6 +79,10 @@ public:
     bool isWritable() const { return m_writable; }
 
     const QMap<int, MemoryEntry>& entries() const { return m_entries; }
+    // Locate a row previously ingested from the same external source. The pair
+    // is deliberately independent of the client slot number: native radio
+    // channel numbers and CSV row numbers may collide with manual memories.
+    int importedSlot(const QString& source, const QString& key) const;
 
     // Handle one `memory …` command. Returns handled=false for anything outside
     // the four verbs above.
@@ -90,7 +94,9 @@ public:
 
     // Write now if anything is pending. Called on disconnect and at teardown so
     // the debounce window can never be the reason an edit is lost.
-    void flush();
+    // Returns false when pending edits could not be committed. Sync completion
+    // must not confuse a decoded radio snapshot with a durably saved bank.
+    bool flush();
 
     // Last file-write failure, empty when the last save succeeded. Surfaced so a
     // read-only config dir shows up as something other than memories that

@@ -1,7 +1,9 @@
 #include "SpectrumWidget.h"
+#include "ScopedChildWidget.h"
 
 #include "SliceToneCues.h"
 #include "gui/FftHeatMap.h"
+#include "gui/FftLineWidth.h"
 #include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
 #include "DssDcEdgeMath.h"
@@ -61,6 +63,7 @@
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QEvent>
+#include <QHelpEvent>
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
@@ -320,8 +323,16 @@ void assignDiversityPairDirections(const QVector<VfoPos>& vfos,
         return vfos[lhs].sliceId < vfos[rhs].sliceId;
     });
 
-    dirMap[vfos[diversityIndices[0]].sliceId] = VfoWidget::LockLeft;
-    dirMap[vfos[diversityIndices[1]].sliceId] = VfoWidget::LockRight;
+    // After the sort, index 0 is the parent / master slice (the one DIV was
+    // enabled on, which SmartSDR tags "DIV") when the radio reports the
+    // diversity_parent / diversity_index metadata; absent that, diversityOrder-
+    // KeyForVfo falls back to slice ID and index 0 is the lower-numbered slice.
+    // diversityPairFlagDir locks index 0 RIGHT to match SmartSDR's layout and
+    // index 1 LEFT; see its comment for the fallback case.
+    dirMap[vfos[diversityIndices[0]].sliceId] =
+        VfoWidget::diversityPairFlagDir(0);
+    dirMap[vfos[diversityIndices[1]].sliceId] =
+        VfoWidget::diversityPairFlagDir(1);
 }
 
 void assignModeForcedDirections(const QVector<SpectrumWidget::SliceOverlay>& overlays,
@@ -2159,13 +2170,40 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // m_vfoWidget is set by setActiveVfoWidget() as an alias to the active one.
 
     // Bottom-left waterfall zoom buttons
+    // An explicit :disabled rule is required here, not optional -- a custom
+    // QPushButton { ... } base rule takes over the cascade for every state,
+    // including disabled, so without one setEnabled(false) alone leaves a
+    // disabled button visually identical to an enabled one (Qt's own default
+    // grayed-out rendering never gets a chance to apply). Dimmer text and a
+    // more transparent background than the base rule, matching the same
+    // "communicate inactive without hiding the control" intent as
+    // setBandSegmentZoomAvailable()'s explanatory tooltip.
     static const QString kZoomBtnStyle =
         "QPushButton { background: rgba(15,15,26,180); border: 1px solid #304050;"
         " border-radius: 2px; color: #90a0b0; font-size: 11px; font-weight: bold;"
         " padding: 0; margin: 0; min-width: 0; }"
         "QPushButton:hover { background: rgba(30,50,70,200); color: #c8d8e8; }"
         "QPushButton:checked { background: rgba(0,180,216,210); color: #000; }"
-        "QPushButton:pressed { background: #00b4d8; color: #000; }";
+        "QPushButton:pressed { background: #00b4d8; color: #000; }"
+        // Its own role rather than the shared {{color.text.disabled}} /
+        // {{color.border.subtle}}: this button always paints its own dark
+        // rgba(15,15,26,*) backdrop first, regardless of app theme, so a
+        // theme-relative "dimmed text" token is the wrong reference point --
+        // color.text.disabled resolves to #a0b0c0 in the light theme (WCAG
+        // luminance 0.42), BRIGHTER than the enabled state's #90a0b0 (0.34),
+        // inverting the intended hierarchy (ten9876, #5166 review). The
+        // values are the enabled colours' own RGB at reduced alpha, which
+        // dims them against this widget's own backdrop by construction.
+        // A new token role rather than the literals this shipped with first
+        // (theme-style-guide.md section 4; Ozy311, #5166 review) -- and the
+        // reason both bundled themes carry the same value is that the alpha
+        // IS the mechanism here, so there is nothing theme-relative left to
+        // vary. Tokens store canonical ARGB so the Theme Editor can read and
+        // reset them; ThemeManager converts translucent token values to rgba()
+        // when resolving this QSS template.
+        "QPushButton:disabled { background: {{color.spectrum.zoomButton.disabled.background}};"
+        " border-color: {{color.spectrum.zoomButton.disabled.border}};"
+        " color: {{color.spectrum.zoomButton.disabled.text}}; }";
 
     // objectName + accessibleName let the automation bridge target these by a
     // stable handle instead of the visible label \u2014 notably zoom-out, whose glyph
@@ -2175,7 +2213,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         btn->setObjectName(objName);
         btn->setAccessibleName(a11y);
         btn->setFixedSize(22, 22);
-        btn->setStyleSheet(kZoomBtnStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(btn, kZoomBtnStyle);
         btn->setCursor(Qt::PointingHandCursor);
         return btn;
     };
@@ -2186,7 +2224,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         tr("Switches the displayed spectrum and waterfall between Flex and KiwiSDR. Audio and meters are unchanged."));
     m_kiwiSdrDisplaySourceBtn->setCheckable(true);
     m_kiwiSdrDisplaySourceBtn->setFixedSize(46, 22);
-    m_kiwiSdrDisplaySourceBtn->setStyleSheet(kZoomBtnStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_kiwiSdrDisplaySourceBtn, kZoomBtnStyle);
     m_kiwiSdrDisplaySourceBtn->setCursor(Qt::PointingHandCursor);
     m_kiwiSdrDisplaySourceBtn->setToolTip(
         tr("Show Flex or KiwiSDR spectrum/waterfall. Audio and meters are unchanged."));
@@ -2200,6 +2238,17 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     m_zoomBandBtn = makeBtn("B", QStringLiteral("panZoomBandBtn"), QStringLiteral("Zoom to band"));
     m_zoomOutBtn  = makeBtn("\u2212", QStringLiteral("panZoomOutBtn"), QStringLiteral("Zoom out"));  // minus sign U+2212
     m_zoomInBtn   = makeBtn("+", QStringLiteral("panZoomInBtn"),   QStringLiteral("Zoom in"));
+
+    // setBandSegmentZoomAvailable() disables these two on non-Flex radios so
+    // the click is a real no-op instead of a silent one -- but Qt's default
+    // QWidget::event() skips QEvent::ToolTip on a disabled widget by design
+    // (confirmed: Qt does not auto-show tooltips for disabled widgets), which
+    // would silently defeat the very tooltip explaining WHY they're grayed
+    // out. eventFilter() answers QEvent::ToolTip for these two directly,
+    // bypassing that skip -- the QHelpEvent itself still arrives at a
+    // disabled widget, only the base class's auto-display is what's skipped.
+    m_zoomSegBtn->installEventFilter(this);
+    m_zoomBandBtn->installEventFilter(this);
 
     // SmartSDR pcap: B sends "band_zoom=1", S sends "segment_zoom=1"
     connect(m_zoomBandBtn, &QPushButton::clicked, this, [this]() {
@@ -2511,7 +2560,7 @@ void SpectrumWidget::loadSettings()
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
     m_freqScaleFontPt = std::clamp(
         s.value(settingsKey("DisplayFreqScaleFontPt"), "8").toInt(), 8, 14);
-    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
+    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "1.0").toFloat();
     m_noiseFloorEnable = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
     const int legacyNoiseFloorPosition = std::clamp(
         s.value(settingsKey("DisplayNoiseFloorPosition"), "75").toInt(), 1, 99);
@@ -9423,7 +9472,13 @@ static double snapToStep(double mhz, int stepHz)
 void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 {
     PerfInputScope perfScope("mousePress");
-    const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
+    // A menu's nested event loop can destroy this panadapter during shutdown.
+    const QPointer<SpectrumWidget> self(this);
+    const auto dragStatePublisher = makeScopeExit([self] {
+        if (self) {
+            self->publishPerfDragState();
+        }
+    });
     (void)dragStatePublisher;
 
     // A prior off-screen-pill press is relevant only to Qt's immediately
@@ -9876,7 +9931,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 // Follow display mode so menu labels match the pill above (#2606).
                 const QString letter =
                     SliceLabel::unicodeForm(so.sliceId, so.perClientLetter);
-                QMenu menu(this);
+                ScopedChildWidget<QMenu> menuOwner(this);
+                QMenu& menu = *menuOwner.get();
                 menu.addAction(QString("Close Slice %1").arg(letter), this,
                     [this, id = so.sliceId]{ emit sliceCloseRequested(id); });
                 menu.addAction(QString("Move Slice %1 Here").arg(letter), this,
@@ -9890,8 +9946,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 menu.addSeparator();
                 addCenterLockAction(&menu, so, true);
                 addSliceLinkControls(menu);
-                menu.exec(ev->globalPosition().toPoint());
                 ev->accept();
+                menu.exec(ev->globalPosition().toPoint());
                 return;
             }
         }
@@ -9917,7 +9973,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             }
         }
 
-        QMenu menu(this);
+        ScopedChildWidget<QMenu> menuOwner(this);
+        QMenu& menu = *menuOwner.get();
 
         // Spot-on-label context menu
         if (hitSpotIdx >= 0) {
@@ -10097,8 +10154,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             });
         }
 
-        menu.exec(ev->globalPosition().toPoint());
         ev->accept();
+        menu.exec(ev->globalPosition().toPoint());
         return;
     }
 
@@ -11170,7 +11227,9 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
         freqMhz = std::round(freqMhz / stepMhz) * stepMhz;
     }
     auto& as = AppSettings::instance();
-    QDialog dlg(this);
+    const QPointer<SpectrumWidget> self(this);
+    ScopedChildWidget<QDialog> dialogOwner(this);
+    QDialog& dlg = *dialogOwner.get();
     dlg.setWindowTitle("Add Spot");
     AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
                       "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
@@ -11227,7 +11286,10 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     freqSpin->setFocus();
     freqSpin->selectAll();
 
-    if (dlg.exec() != QDialog::Accepted) return;
+    const int result = dlg.exec();
+    if (!self || !dialogOwner || result != QDialog::Accepted) {
+        return;
+    }
 
     const double finalFreqMhz = freqSpin->value();
     const QString callsign = callEdit->text().trimmed().toUpper();
@@ -11436,6 +11498,17 @@ bool SpectrumWidget::eventFilter(QObject* watched, QEvent* event)
     QWidget* widget = qobject_cast<QWidget*>(watched);
     if (!widget || anyDragActive()) {
         return SPECTRUM_BASE_CLASS::eventFilter(watched, event);
+    }
+
+    // See the installEventFilter() call sites in the constructor: only these
+    // two are ever disabled-with-an-explanatory-tooltip, so only these two
+    // need the disabled-widget tooltip workaround.
+    if ((widget == m_zoomSegBtn || widget == m_zoomBandBtn)
+        && event->type() == QEvent::ToolTip && !widget->isEnabled()
+        && !widget->toolTip().isEmpty()) {
+        auto* helpEvent = static_cast<QHelpEvent*>(event);
+        QToolTip::showText(helpEvent->globalPos(), widget->toolTip(), widget);
+        return true;
     }
 
     bool vfoDescendant = false;
@@ -13931,6 +14004,60 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
 
+            // Cosmetic fade over the outer margin of the spectrum trace and
+            // waterfall, toward the canvas background -- see
+            // setPanEdgeTaperEnabled()'s own comment for why this is drawn
+            // here (a pixel-only overlay, on top of everything below it)
+            // rather than as a bin crop. Drawn first in this layer so the
+            // freq scale, WNB/RF-gain indicators, etc. below still paint on
+            // top of it unaffected. Only the CONTENT width (excluding the
+            // dBm strip, which isn't spectrum data) is faded.
+            if (m_edgeTaperEnabled) {
+                // 0.09 (9% margin per side) -- derived, not guessed: once
+                // AnanDroopCorrection applies a real per-bin dB correction
+                // (measured by AnanDroopCalibrator's sweep) to most of
+                // the span, this fade only needs to cover the residual
+                // sliver where that correction was CLAMPED -- i.e. the bins
+                // close enough to the CIC null that boosting them further
+                // would amplify noise, not recover signal, so they stay
+                // genuinely uncorrected. The sweep reported a
+                // clamped fraction of ~0.079-0.082 across all 6 DDC0 rates
+                // (consistent, since it's the same relative filter shape at
+                // every rate) -- 0.09 is that worst case plus a small
+                // margin. fftSize is fixed at 1024 for every rate, and this
+                // fraction applies uniformly to pixel width, so a bin-count
+                // fraction and a pixel-width fraction are the same number
+                // with no unit conversion needed. paintEvent()'s software
+                // path carries the SAME constant and must be changed with
+                // this one -- they are one fade drawn by two renderers, and
+                // letting them drift means the same radio hides a different
+                // fraction of its span depending only on whether RHI came
+                // up. Superseded value: 0.05,
+                // from the pre-AnanDroopCorrection era when this fade was
+                // the ONLY mitigation and had to cover the whole droop
+                // region, not just its unrecoverable edge.
+                static constexpr double kEdgeTaperFraction = 0.09;
+                const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
+                QColor bgOpaque = bg; bgOpaque.setAlpha(255);
+                QColor bgClear = bg; bgClear.setAlpha(0);
+                auto paintTaperedEdges = [&](const QRect& area, int contentW) {
+                    const int marginPx = static_cast<int>(contentW * kEdgeTaperFraction);
+                    if (marginPx <= 0) return;
+                    QLinearGradient left(area.left(), 0, area.left() + marginPx, 0);
+                    left.setColorAt(0.0, bgOpaque);
+                    left.setColorAt(1.0, bgClear);
+                    p.fillRect(QRect(area.left(), area.top(), marginPx, area.height()), left);
+                    const int rightContentEdge = area.left() + contentW;
+                    QLinearGradient right(rightContentEdge - marginPx, 0, rightContentEdge, 0);
+                    right.setColorAt(0.0, bgClear);
+                    right.setColorAt(1.0, bgOpaque);
+                    p.fillRect(QRect(rightContentEdge - marginPx, area.top(), marginPx, area.height()),
+                              right);
+                };
+                paintTaperedEdges(specRect, specContentW);
+                paintTaperedEdges(wfRect, wfContentW);
+            }
+
             // Divider bar
             p.fillRect(0, specH, w, DIVIDER_H, AetherSDR::ThemeManager::instance().color("color.background.2"));
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, freqScaleH()));
@@ -14642,9 +14769,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     static_cast<float>(specH) * fbDpr,              // hPx
                     static_cast<float>(n),                          // columnCount
                     1.0f,                                           // hasData
-                    // Match the old vertex bake: stroke half-widths were
-                    // DEVICE-pixel offsets with no dpr scaling.
-                    m_fftLineWidth,                                 // coreHalfWidthPx
+                    // The slider is a FULL width in device px (the QPainter
+                    // path sets a cosmetic pen of exactly m_fftLineWidth), and
+                    // the shader takes a HALF width, so halve it here. Passing
+                    // the full value as the half drew every trace at twice its
+                    // labelled width on the GPU path (RFC #5561 §A). Device
+                    // pixels, no dpr scaling, as the old vertex bake did.
+                    AetherSDR::fftLineHalfWidth(m_fftLineWidth),      // coreHalfWidthPx
                     kFftLineFeatherPx,                              // featherPx
                     kFftLineCoreAlpha,
                     kFftLineFeatherAlpha,
@@ -15072,6 +15203,43 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     drawFreqScale(p, scaleRect);
     p.fillRect(wfRect, Qt::black);  // paint the strip gap before the time tape
     drawWaterfall(p, wfContentRect);
+
+    // Cosmetic fade over the outer margin of the spectrum trace and
+    // waterfall, toward the canvas background -- software-path mirror of
+    // renderGpuFrame()'s own overlay taper (see setPanEdgeTaperEnabled()'s
+    // own comment for why this exists and isn't a bin crop). Drawn here,
+    // after both content regions are fully painted but before the VFO
+    // flags/TNF/spot markers/SWR overlay below, so those stay fully
+    // visible on top of it, same ordering as the GPU path.
+    if (m_edgeTaperEnabled) {
+        // 0.09 (9% margin per side) -- see renderGpuFrame()'s own comment
+        // for the derivation, and why guessing a gentler-looking smaller
+        // value was wrong. This value is PAIRED with that one on purpose:
+        // it is the same fade, drawn by whichever path is live, and the two
+        // drifting apart means the same radio fades a different fraction of
+        // its span depending only on whether RHI came up. Change both.
+        static constexpr double kEdgeTaperFraction = 0.09;
+        const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
+        QColor bgOpaque = bg; bgOpaque.setAlpha(255);
+        QColor bgClear = bg; bgClear.setAlpha(0);
+        auto paintTaperedEdges = [&](const QRect& area, int contentW) {
+            const int marginPx = static_cast<int>(contentW * kEdgeTaperFraction);
+            if (marginPx <= 0) return;
+            QLinearGradient left(area.left(), 0, area.left() + marginPx, 0);
+            left.setColorAt(0.0, bgOpaque);
+            left.setColorAt(1.0, bgClear);
+            p.fillRect(QRect(area.left(), area.top(), marginPx, area.height()), left);
+            const int rightContentEdge = area.left() + contentW;
+            QLinearGradient right(rightContentEdge - marginPx, 0, rightContentEdge, 0);
+            right.setColorAt(0.0, bgClear);
+            right.setColorAt(1.0, bgOpaque);
+            p.fillRect(QRect(rightContentEdge - marginPx, area.top(), marginPx, area.height()),
+                      right);
+        };
+        paintTaperedEdges(specRect, specContentRect.width());
+        paintTaperedEdges(wfRect, wfContentRect.width());
+    }
+
     repositionVfoFlags(specRect);
     if (is3D && m_threeDSliceDepth) {
         drawDssDepthGeometry(

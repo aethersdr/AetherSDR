@@ -15,6 +15,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "LpMeterApplet.h"
 #include "TxApplet.h"
 #include "PhoneCwApplet.h"
 #include "PhoneApplet.h"
@@ -805,6 +806,20 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                                m_drawer, m_drawerLayout);
         m_speBtn = entry.btn;
         markHardwareConditional("SPE");
+        // Popped out, the applet switches to its roomier presentation and
+        // reveals the FRONT PANEL key group (SpeApplet::setFloating) — same
+        // pattern as the PWR cross-needle above.
+        if (ContainerWidget* container =
+                qobject_cast<ContainerWidget*>(entry.widget)) {
+            // Wide enough for the LCD mirror's 2x glass (480px + bezel).
+            container->setDefaultFloatingSize(QSize(540, 760));
+            connect(container, &ContainerWidget::dockModeChanged,
+                    m_speApplet,
+                    [this](ContainerWidget::DockMode mode) {
+                        m_speApplet->setFloating(
+                            mode != ContainerWidget::DockMode::PanelDocked);
+                    });
+        }
         m_appletOrder.append(entry);
     }
 
@@ -818,6 +833,19 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                                m_drawer, m_drawerLayout);
         m_vkampBtn = entry.btn;
         markHardwareConditional("VKAMP");
+        m_appletOrder.append(entry);
+    }
+
+    // LP-100A wattmeter — an instrument rather than an amplifier, so it is
+    // independent of every amplifier applet above and lives in the Metering
+    // category. Deliberately NOT in kDefaultOrder: it has no discovery path,
+    // so the stored Peripherals configuration is the only thing that can ever
+    // reveal it. See docs/architecture/lp-100a-wattmeter-design.md.
+    m_lpMeterApplet = new LpMeterApplet;
+    {
+        auto entry = makeEntry("LP100", "LP-100A Meter", m_lpMeterApplet, false,
+                               m_drawer, m_drawerLayout);
+        markHardwareConditional("LP100");
         m_appletOrder.append(entry);
     }
 
@@ -1333,6 +1361,7 @@ QList<AppletPanel::AppletCatalogEntry> AppletPanel::appletCatalog() const
         {QStringLiteral("WAVE"),  QStringLiteral("Audio & DSP")},
         {QStringLiteral("PWR"),   QStringLiteral("Metering")},
         {QStringLiteral("MTR"),   QStringLiteral("Metering")},
+        {QStringLiteral("LP100"), QStringLiteral("Metering")},
         {QStringLiteral("HLTH"),  QStringLiteral("Antennas & Switching")},
         {QStringLiteral("AG"),    QStringLiteral("Antennas & Switching")},
         {QStringLiteral("SS"),    QStringLiteral("Antennas & Switching")},
@@ -1669,6 +1698,13 @@ void AppletPanel::setRadioFilterWidths(const QList<int>& widthsHz)
         m_rxApplet->setRadioFilterWidths(widthsHz);
 }
 
+void AppletPanel::setRadioFilterControl(const RxFilterControl& control)
+{
+    if (m_rxApplet) {
+        m_rxApplet->setRadioFilterControl(control);
+    }
+}
+
 void AppletPanel::setMicLevelMeterState(MicMeterSessionState session,
                                         bool available)
 {
@@ -1748,6 +1784,12 @@ void AppletPanel::setVkampVisible(bool visible)
     applyBarLayout();
 }
 
+void AppletPanel::setLpMeterVisible(bool visible)
+{
+    updateHardwareAvailability("LP100", "Applet_LP100", visible);
+    applyBarLayout();
+}
+
 void AppletPanel::setAgVisible(bool visible)
 {
     updateHardwareAvailability("AG", "Applet_AG", visible);
@@ -1794,11 +1836,12 @@ void AppletPanel::setSlice(SliceModel* slice)
     if (m_aetherClockApplet)
         m_aetherClockApplet->setSlice(slice);
 
-    if (slice) {
-        connect(slice, &SliceModel::modeChanged,
-                m_phoneCwApplet, &PhoneCwApplet::setMode);
-        m_phoneCwApplet->setMode(slice->mode());
-    }
+    // The mode connection used to be made here with no prior disconnect, and
+    // MainWindow calls setSlice on every active-slice change — so returning to
+    // a slice already visited stacked another handler and setMode fired N
+    // times per mode change.  PhoneCwApplet::setSlice now owns both edges of
+    // the binding and disconnects the outgoing slice first (#4879).
+    m_phoneCwApplet->setSlice(slice);
 }
 
 void AppletPanel::setAntennaList(const QStringList& ants)

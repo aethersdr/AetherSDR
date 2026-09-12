@@ -161,6 +161,11 @@ QString AppSettings::legacyXmlPath() const
 
 void AppSettings::migrateSettingsPath()
 {
+    // An explicitly selected profile must not MOVE an operator's legacy store
+    // out of the normal configuration directory on its first launch.
+    if (!qEnvironmentVariable("AETHER_SETTINGS_DIR").trimmed().isEmpty()) {
+        return;
+    }
     const QString xmlPath = SettingsPaths::legacyXmlPath();
     if (QFile::exists(xmlPath)) {
         return;  // already at the correct location
@@ -1047,8 +1052,10 @@ bool AppSettings::readStationRowFromDisk(const QString& key,
 QJsonObject AppSettings::radioFeatureExact(const QString& family,
                                            const QString& radioId,
                                            const QString& feature,
-                                           int* schemaVersionOut) const
+                                           int* schemaVersionOut,
+                                           FeatureReadStatus* statusOut) const
 {
+    if (statusOut) { *statusOut = FeatureReadStatus::Unavailable; }
     if (schemaVersionOut != nullptr) {
         *schemaVersionOut = 0;
     }
@@ -1058,9 +1065,13 @@ QJsonObject AppSettings::radioFeatureExact(const QString& family,
     }
     int version = 0;
     QString value;
-    if (!m_db->readRadioFeature(family, radioId, feature, version, value)) {
+    bool readFailed = false;
+    if (!m_db->readRadioFeature(family, radioId, feature, version, value, &readFailed)) {
+        if (statusOut && !readFailed) { *statusOut = FeatureReadStatus::Missing; }
         return {};
     }
+    if (schemaVersionOut) { *schemaVersionOut = version; }
+    if (statusOut) { *statusOut = FeatureReadStatus::Corrupt; }
     QJsonParseError parseError{};
     const QJsonDocument parsed =
         QJsonDocument::fromJson(value.toUtf8(), &parseError);
@@ -1073,6 +1084,7 @@ QJsonObject AppSettings::radioFeatureExact(const QString& family,
     if (schemaVersionOut != nullptr) {
         *schemaVersionOut = version;
     }
+    if (statusOut) { *statusOut = FeatureReadStatus::Present; }
     return parsed.object();
 }
 
@@ -1421,10 +1433,15 @@ void AppSettings::recordPersistentGuiClientIdReply(const QString& clientId)
 void AppSettings::migrateFromQSettings()
 {
     std::unique_ptr<QSettings> old;
-    if (QStandardPaths::isTestModeEnabled()) {
-        const QString isolatedLegacyPath =
-            QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-            + QStringLiteral("/AetherSDR/legacy-qsettings.ini");
+    const bool explicitProfile =
+        !qEnvironmentVariable("AETHER_SETTINGS_DIR").trimmed().isEmpty();
+    if (explicitProfile || QStandardPaths::isTestModeEnabled()) {
+        // AETHER_SETTINGS_DIR is also used by real automation clients, outside
+        // Qt test mode. Never import the host's native preferences into them.
+        const QString isolatedLegacyPath = explicitProfile
+            ? SettingsPaths::configDir() + QStringLiteral("/legacy-qsettings.ini")
+            : QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+                + QStringLiteral("/AetherSDR/legacy-qsettings.ini");
         old = std::make_unique<QSettings>(isolatedLegacyPath, QSettings::IniFormat);
     } else {
         old = std::make_unique<QSettings>(QStringLiteral("AetherSDR"),

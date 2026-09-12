@@ -89,6 +89,12 @@ public:
     // noise profile does not describe the new stream.
     void resetTransient();
 
+    // Monotonic diagnostics used by the bridge and the socket-free TX->RX
+    // integration test. A full reset increments both counters; the warm
+    // TX->RX path increments only transientResetCount().
+    std::uint64_t transientResetCount() const { return m_transientResetCount; }
+    std::uint64_t noiseEstimateResetCount() const { return m_noiseEstimateResetCount; }
+
     // User-adjustable parameters (thread-safe, called from main thread)
     void setGainMax(float v);
     void setGainFloor(float v);
@@ -290,6 +296,8 @@ private:
     // Startup ramp
     int m_frameCount{0};                // frames processed since reset
     int m_rampFrames{1};                // one second at the configured hop rate
+    std::uint64_t m_transientResetCount{0};
+    std::uint64_t m_noiseEstimateResetCount{0};
 
     // ── Algorithm constants (fixed) ─────────────────────────────────────
     static constexpr double GammaMax   = 40.0;    // linear a-posteriori SNR cap

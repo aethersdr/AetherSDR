@@ -5,7 +5,12 @@
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
+#include <QAction>
 #include <QApplication>
+#include <QLabel>
+#include <QHelpEvent>
+#include <QMenu>
+#include <QToolTip>
 #include <QSignalSpy>
 #include <QPushButton>
 #include <QSlider>
@@ -47,6 +52,17 @@ QWidget* namedWidget(TxApplet& applet, const QString& accessibleName)
     for (QWidget* widget : widgets) {
         if (widget->accessibleName() == accessibleName)
             return widget;
+    }
+    return nullptr;
+}
+
+QLabel* labelWithText(TxApplet& applet, const QString& text)
+{
+    const QList<QLabel*> labels = applet.findChildren<QLabel*>();
+    for (QLabel* label : labels) {
+        if (label->text() == text) {
+            return label;
+        }
     }
     return nullptr;
 }
@@ -207,7 +223,7 @@ void testAtuSuccessTogglesToBypass()
     if (!atu)
         return;
 
-    QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    QSignalSpy commandSpy(&model, &TransmitModel::atuCommandIssued);
     TransmitDelta matched;
     matched.transmitFreq = 14.100;
     matched.atuEnabled = true;
@@ -216,7 +232,7 @@ void testAtuSuccessTogglesToBypass()
     atu->click();
     report("successful same-frequency ATU click requests bypass",
            !commandSpy.isEmpty()
-               && commandSpy.takeLast().at(0).toString() == QStringLiteral("atu bypass"));
+               && !commandSpy.takeLast().at(0).toBool());
 
     TransmitDelta bypassed;
     bypassed.atuEnabled = false;
@@ -226,10 +242,236 @@ void testAtuSuccessTogglesToBypass()
     atu->click();
     report("bypassed ATU click starts a fresh tune",
            !commandSpy.isEmpty()
-               && commandSpy.takeLast().at(0).toString() == QStringLiteral("atu start"));
+               && commandSpy.takeLast().at(0).toBool());
+}
+
+void testAtuCapabilityUsesThreeVisibleStates()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+
+    auto* atu = qobject_cast<QPushButton*>(
+        namedWidget(applet, QStringLiteral("ATU tune")));
+    auto* mem = qobject_cast<QPushButton*>(
+        namedWidget(applet, QStringLiteral("ATU memories")));
+    QLabel* success = labelWithText(applet, QStringLiteral("Success"));
+    QLabel* bypass = labelWithText(applet, QStringLiteral("Byp"));
+    QLabel* memory = labelWithText(applet, QStringLiteral("Mem"));
+    report("ATU capability widgets exist",
+           atu && mem && success && bypass && memory);
+    if (!atu || !mem || !success || !bypass || !memory) {
+        return;
+    }
+    const QString inactiveSuccessStyle = success->styleSheet();
+    const QString inactiveBypassStyle = bypass->styleSheet();
+    const QString inactiveMemoryStyle = memory->styleSheet();
+
+    report("available inactive ATU controls remain enabled",
+           atu->isEnabled() && mem->isEnabled()
+               && !atu->isCheckable() && mem->isCheckable()
+               && !mem->isChecked());
+    report("available inactive indicators are greyed",
+           success->isEnabled() && bypass->isEnabled() && memory->isEnabled()
+               && !inactiveSuccessStyle.isEmpty()
+               && inactiveSuccessStyle == inactiveBypassStyle
+               && inactiveSuccessStyle == inactiveMemoryStyle);
+
+    QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    QSignalSpy atuIntents(&model, &TransmitModel::atuCommandIssued);
+    model.setHasTuner(false);
+    model.setHasTunerMemories(false);
+    QApplication::processEvents();
+    report("unavailable tuner controls remain visible",
+           !atu->isHidden() && !mem->isHidden()
+               && !success->isHidden() && !bypass->isHidden() && !memory->isHidden());
+    report("unavailable tuner controls are dimmed and inert",
+           !atu->isEnabled() && !mem->isEnabled());
+    report("unavailable tuner indicators are dimmed",
+           !success->isEnabled() && !bypass->isEnabled() && !memory->isEnabled()
+               && success->styleSheet() != inactiveSuccessStyle
+               && bypass->styleSheet() != inactiveBypassStyle
+               && memory->styleSheet() != inactiveMemoryStyle);
+    atu->click();
+    mem->click();
+    report("unavailable tuner controls emit no commands", commandSpy.isEmpty() && atuIntents.isEmpty());
+    report("unavailable tuner controls explain the state",
+           atu->toolTip()
+                   == QStringLiteral("Antenna tuner controls are unavailable for this radio")
+               && mem->toolTip()
+                   == QStringLiteral("ATU memory controls are unavailable for this radio"));
+
+    model.setHasTuner(true);
+    model.setHasTunerMemories(true);
+    QApplication::processEvents();
+    report("available tuner controls return to inactive state",
+           atu->isEnabled() && mem->isEnabled()
+               && !mem->isChecked()
+               && success->styleSheet() == inactiveSuccessStyle
+               && bypass->styleSheet() == inactiveBypassStyle
+               && memory->styleSheet() == inactiveMemoryStyle);
+
+    model.setHasTunerMemories(false);
+    QApplication::processEvents();
+    report("Icom-style tuner availability keeps memory surfaces unavailable",
+           atu->isEnabled() && !mem->isEnabled()
+               && atu->contextMenuPolicy() == Qt::NoContextMenu
+               && success->isEnabled() && success->styleSheet() == inactiveSuccessStyle
+               && !memory->isEnabled() && memory->styleSheet() != inactiveMemoryStyle);
+    mem->click();
+    report("unavailable tuner-memory control emits no command", commandSpy.isEmpty());
+
+    model.setHasTunerMemories(true);
+    QApplication::processEvents();
+    report("tuner-memory capability restores memory-only menu actions",
+           atu->contextMenuPolicy() == Qt::CustomContextMenu);
+
+    TransmitDelta active;
+    active.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL");
+    active.atuEnabled = true;
+    active.memoriesEnabled = true;
+    active.usingMemory = true;
+    model.applyChanges(active);
+    QApplication::processEvents();
+    report("available active tuner indicators are enabled",
+           success->isEnabled() && memory->isEnabled() && bypass->isEnabled()
+               && success->styleSheet() != inactiveSuccessStyle
+               && memory->styleSheet() != inactiveMemoryStyle
+               && bypass->styleSheet() == inactiveBypassStyle);
+    report("available active tuner memory control follows radio readback",
+           !atu->isCheckable() && mem->isChecked());
+    const QString activeSuccessStyle = success->styleSheet();
+    const QString activeMemoryStyle = memory->styleSheet();
+
+    model.setHasTuner(false);
+    model.setHasTunerMemories(false);
+    QApplication::processEvents();
+    report("active tuner controls dim when capability disappears",
+           mem->isChecked()
+               && !atu->isEnabled() && !mem->isEnabled()
+               && !success->isEnabled() && !memory->isEnabled()
+               && success->styleSheet() != inactiveSuccessStyle
+               && memory->styleSheet() != inactiveMemoryStyle
+               && success->styleSheet() != activeSuccessStyle
+               && memory->styleSheet() != activeMemoryStyle);
+}
+
+void testTuneAvailability()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+    auto* tune = qobject_cast<QPushButton*>(namedWidget(applet, QStringLiteral("Tune")));
+    report("Tune button exists", tune != nullptr);
+    if (!tune) {
+        return;
+    }
+    QSignalSpy commands(&model, &TransmitModel::commandReady);
+    QSignalSpy tuneIntents(&model, &TransmitModel::tuneCommandIssued);
+    model.setTuneAvailable(false);
+    report("unsupported Tune button is disabled", !tune->isEnabled());
+    model.startTune();
+    model.startTwoToneTune();
+    report("both Tune paths refuse without commands or optimistic state",
+           commands.isEmpty() && tuneIntents.isEmpty() && !model.isTuning());
+    model.setTuneAvailable(true);
+    report("capable mode restores Tune", tune->isEnabled());
+    model.startTune();
+    model.setTuneAvailable(false);
+    report("active Tune retains an enabled stop control", tune->isEnabled() && model.isTuning());
+    tune->click();
+    report("stop remains usable and restores disabled state", !model.isTuning() && !tune->isEnabled());
 }
 
 } // namespace
+
+// #5510 — a disabled menu entry must be able to say WHY it is disabled.
+//
+// The ATU right-click menu has always set an explanatory tooltip on a disabled
+// "Pre-tune bands…", but Qt has suppressed per-action tooltips since 5.1 unless
+// the menu opts in, and a disabled QAction does not highlight on hover either.
+// The operator therefore saw an inert item with no feedback at all and reported
+// it as a broken control. These assertions pin the opt-in and the reason text;
+// deleting menu.setToolTipsVisible(true) fails the first one.
+void testAtuContextMenuExplainsWhyPreTuneIsDisabled()
+{
+    TransmitModel model;
+    TxApplet applet;
+    applet.setTransmitModel(&model);
+
+    // The reporter's state: the radio HAS an ATU memory database, but memories
+    // are switched off, so the sweep is legitimately unavailable.
+    model.setHasTunerMemories(true);
+    TransmitDelta memoriesOff;
+    memoriesOff.memoriesEnabled = false;
+    model.applyChanges(memoriesOff);
+
+    QMenu menu;
+    applet.buildAtuContextMenu(menu);
+
+    report("ATU menu opts into per-action tooltips",
+           menu.toolTipsVisible(),
+           menu.toolTipsVisible()
+               ? QString()
+               : QStringLiteral("QMenu::toolTipsVisible() is false, so every "
+                                "disabled-item explanation is unreachable"));
+
+    QAction* preTune = nullptr;
+    for (QAction* action : menu.actions()) {
+        if (action->text().startsWith(QStringLiteral("Pre-tune"))) {
+            preTune = action;
+            break;
+        }
+    }
+
+    report("ATU menu offers a Pre-tune entry", preTune != nullptr);
+    if (preTune == nullptr) {
+        return;
+    }
+
+    report("Pre-tune is disabled while ATU memories are off",
+           !preTune->isEnabled());
+    report("Disabled Pre-tune carries a reason",
+           !preTune->toolTip().isEmpty(),
+           preTune->toolTip());
+
+    // Assert the RENDER, not the property. toolTipsVisible() being true only means
+    // the menu opted in; what the operator needs is Qt actually painting the text
+    // over a DISABLED entry. Qt's QMenu::actionAt() does not filter on enabled
+    // state, but that is Qt's behaviour to demonstrate here, not ours to assume.
+    menu.popup(QPoint(50, 50));
+    QCoreApplication::processEvents();
+    const QRect tipRect = menu.actionGeometry(preTune);
+    QHelpEvent tipEvent(QEvent::ToolTip, tipRect.center(),
+                        menu.mapToGlobal(tipRect.center()));
+    QApplication::sendEvent(&menu, &tipEvent);
+    QCoreApplication::processEvents();
+    const QString shownTip = QToolTip::text();
+    report("Disabled Pre-tune actually renders its reason",
+           shownTip == preTune->toolTip(),
+           shownTip.isEmpty() ? QStringLiteral("<nothing rendered>") : shownTip);
+    QToolTip::hideText();
+    menu.close();
+    QCoreApplication::processEvents();
+
+    // Control: the SAME construction with memories on must enable the entry, so
+    // the assertion above cannot pass just because the item is always disabled.
+    TransmitDelta memoriesOn;
+    memoriesOn.memoriesEnabled = true;
+    model.applyChanges(memoriesOn);
+
+    QMenu enabledMenu;
+    applet.buildAtuContextMenu(enabledMenu);
+    QAction* enabledPreTune = nullptr;
+    for (QAction* action : enabledMenu.actions()) {
+        if (action->text().startsWith(QStringLiteral("Pre-tune"))) {
+            enabledPreTune = action;
+            break;
+        }
+    }
+    report("Pre-tune is enabled once ATU memories are on",
+           enabledPreTune != nullptr && enabledPreTune->isEnabled());
+}
 
 int main(int argc, char** argv)
 {
@@ -254,6 +496,9 @@ int main(int argc, char** argv)
     testCapabilityPowerScaleHonoursBandCeiling();
     testForwardPowerResponseCapabilityIsConsumed();
     testAtuSuccessTogglesToBypass();
+    testAtuCapabilityUsesThreeVisibleStates();
+    testTuneAvailability();
+    testAtuContextMenuExplainsWhyPreTuneIsDisabled();
 
     std::printf("\n%s\n",
                 g_failed == 0

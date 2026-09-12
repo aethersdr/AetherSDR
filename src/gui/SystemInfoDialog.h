@@ -2,7 +2,11 @@
 
 #include "PersistentDialog.h"
 #include "core/SystemInfo.h"
+#include "core/SystemInfoCollector.h"
 #include "core/ThreadCpuRing.h"
+#include "MemoryHistoryRing.h"
+#include "CpuHistoryRing.h"
+#include "UiTickLagMeter.h"
 
 #include <QFile>
 #include <QHash>
@@ -11,6 +15,7 @@
 #include <QVector>
 
 class QCheckBox;
+class QComboBox;
 class QPushButton;
 class QHBoxLayout;
 class QLabel;
@@ -21,7 +26,7 @@ class QTimer;
 
 namespace AetherSDR {
 
-class SystemInfoCollector;
+class TimeSeriesGraphWidget;
 
 // Runtime diagnostics for AetherSDR itself (#2554).
 //
@@ -34,7 +39,15 @@ class SystemInfoDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
-    explicit SystemInfoDialog(QWidget* parent = nullptr);
+    // `history` and `cpuHistory` are the app-lifetime rings MainWindow owns
+    // (#2554); the dialog is WA_DeleteOnClose, so anything it owned would die
+    // with Close. `tickLagMeter` is MainWindow's heartbeat meter, read on the
+    // GUI thread when a CPU sample arrives. Null means "use my own" — what the
+    // tests do (an own meter is never ticked, so its readings stay empty).
+    explicit SystemInfoDialog(MemoryHistoryRing* history = nullptr,
+                              CpuHistoryRing* cpuHistory = nullptr,
+                              UiTickLagMeter* tickLagMeter = nullptr,
+                              QWidget* parent = nullptr);
     ~SystemInfoDialog() override;
 
 protected:
@@ -52,6 +65,17 @@ private slots:
     // reach.
     void applySample(const QVector<AetherSDR::ThreadCpuSample>& threads);
 
+    // The Memory tab's counterpart: one reading into the ring, the readouts
+    // and the chart refreshed from it. A slot for the same reason as
+    // applySample — a test hands it constructed samples and reads the labels.
+    void applyMemorySample(const AetherSDR::MemorySample& sample);
+
+    // The Overview tab's counterpart (#2554): the process-level reading into
+    // the CPU ring, the heartbeat meter read at the same instant, then the
+    // cards and charts refreshed from the rings. A slot for the same reason
+    // as the other two.
+    void applyCpuSample(const AetherSDR::CpuSample& sample);
+
     // Acceptance criterion 3, in its minimal form: the summary line goes red
     // when a thread crosses 90 % of one core. A slot for the same reason
     // applySample is one — a test can raise the alert without a machine that
@@ -68,10 +92,20 @@ private slots:
     void pollLog();
 
 private:
+    QWidget* buildOverviewTab();
     QWidget* buildThreadsTab();
+    QWidget* buildMemoryTab();
     QWidget* buildLogsTab();
 
     void applyAlertStyle();
+    void refreshMemoryChart();
+    int  selectedMemoryRangeSeconds() const;
+    void refreshOverview();
+    int  selectedOverviewRangeSeconds() const;
+    // Colour a card's value for its band and expose the band as the label's
+    // "level" property ("normal" / "warning" / "danger") for tests and the
+    // automation bridge, which read properties and not stylesheets.
+    static void setCardLevel(QLabel* value, SystemInfo::CardLevel level);
 
     void startSampling();
     void stopSampling();
@@ -111,6 +145,38 @@ private:
     // connections compare the generation they were made under and drop what
     // no longer belongs to a live sampling run.
     quint64       m_samplingGeneration{0};
+
+    // Memory tab (#2554 acceptance criterion 4). The ring is NOT cleared when
+    // sampling stops: unlike Peak's "last 60 s", a trend chart is honest about
+    // a gap — the series break where nothing was sampled (maxConnectGapSeconds)
+    // — and it outlives the dialog when MainWindow hands one in, so Close and
+    // reopen shows what was sampled before. History accrues only while open.
+    MemoryHistoryRing     m_ownMemoryRing;              // used when nothing is injected
+    MemoryHistoryRing*    m_memoryRing{&m_ownMemoryRing};
+
+    // Overview tab (#2554): the CPU ring follows the memory ring's lifetime
+    // rules exactly; the meter is MainWindow's unless nothing was injected.
+    CpuHistoryRing        m_ownCpuRing;
+    CpuHistoryRing*       m_cpuRing{&m_ownCpuRing};
+    UiTickLagMeter        m_ownTickLagMeter;
+    UiTickLagMeter*       m_tickLagMeter{&m_ownTickLagMeter};
+    QComboBox*            m_overviewRange{nullptr};
+    QLabel*               m_cardCpuValue{nullptr};
+    QLabel*               m_cardMaxThreadValue{nullptr};
+    QLabel*               m_cardMaxThreadCaption{nullptr};
+    QLabel*               m_cardMemoryValue{nullptr};
+    QLabel*               m_cardTickLagValue{nullptr};
+    TimeSeriesGraphWidget* m_overviewCpuGraph{nullptr};
+    TimeSeriesGraphWidget* m_overviewMemoryGraph{nullptr};
+    TimeSeriesGraphWidget* m_overviewThreadsGraph{nullptr};
+    TimeSeriesGraphWidget* m_overviewTickGraph{nullptr};
+    TimeSeriesGraphWidget* m_memoryGraph{nullptr};
+    QComboBox*            m_memoryRange{nullptr};
+    QLabel*               m_memorySummary{nullptr};
+    QLabel*               m_memoryResident{nullptr};
+    QLabel*               m_memoryPeak{nullptr};
+    QLabel*               m_memoryPrivate{nullptr};
+    QLabel*               m_memoryVirtual{nullptr};
 
     // Logs tab
     QWidget*        m_logsPage{nullptr};   // parent for dynamically rebuilt filters

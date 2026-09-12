@@ -40,6 +40,10 @@ int main(int argc, char** argv)
     QStringList blockedMessages;
     QObject::connect(&tx, &TransmitModel::commandReady,
                      [&commands](const QString& cmd) { commands.append(cmd); });
+    QObject::connect(&tx, &TransmitModel::tuneCommandIssued,
+                     [&commands](bool on) { commands.append(on ? "intent:tune:on" : "intent:tune:off"); });
+    QObject::connect(&tx, &TransmitModel::moxCommandIssued,
+                     [&commands](bool on) { commands.append(on ? "intent:mox:on" : "intent:mox:off"); });
     QObject::connect(&tx, &TransmitModel::pttBlocked,
                      [&blockedMessages](const QString& message) { blockedMessages.append(message); });
 
@@ -61,6 +65,28 @@ int main(int argc, char** argv)
     tx.applyChanges(td([](TransmitDelta& d) { d.mox = false; }));
     ok &= expect(radioTxEdges.isEmpty() && localMoxEdges.isEmpty(),
                  "radio-reported MOX emits no local transmit-ownership edges");
+
+    // ...but it MUST raise stateChanged(), because that is the only edge a
+    // presentation consumer gating on isMox() can subscribe to (#5306).
+    // MainWindow's PA-current label reads isMox() and repaints on this signal;
+    // wiring it to moxChanged instead produces a slot that never fires, and
+    // the assertion above is precisely why. Guard both directions so a future
+    // change that folds mox into a silent assign, or one that "fixes" this by
+    // reopening moxChanged, fails here.
+    int stateEdges = 0;
+    QObject::connect(&tx, &TransmitModel::stateChanged,
+                     [&stateEdges]() { ++stateEdges; });
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    ok &= expect(stateEdges == 1 && tx.isMox(),
+                 "radio-reported MOX raises stateChanged() so isMox() consumers repaint");
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = true; }));
+    ok &= expect(stateEdges == 1,
+                 "an unchanged MOX value raises no redundant stateChanged()");
+    tx.applyChanges(td([](TransmitDelta& d) { d.mox = false; }));
+    ok &= expect(stateEdges == 2 && !tx.isMox(),
+                 "the un-key edge repaints too, so the label cannot latch on stale current");
+    ok &= expect(localMoxEdges.isEmpty(),
+                 "and none of that reopened the local moxChanged path");
 
     // ---- forced mic selection is ADOPTED, never commanded --------------------
     //
@@ -124,7 +150,7 @@ int main(int argc, char** argv)
     tx.startTwoToneTune();
     ok &= expect(commands == QStringList({
                      "transmit set tune_mode=two_tone",
-                     "transmit tune 1",
+                     "intent:tune:on",
                  })
                      && tx.activePttSource() == TransmitModel::PttSource::Tune,
                  "two-tone tune sets mode and tags the tune source before starting");
@@ -133,7 +159,7 @@ int main(int argc, char** argv)
     commands.clear();
     tx.toggleTwoToneTune();
     ok &= expect(commands == QStringList({
-                     "transmit tune 0",
+                     "intent:tune:off",
                      "transmit set tune_mode=single_tone",
                  }),
                  "two-tone tune toggle stops and restores single-tone mode");
@@ -143,13 +169,13 @@ int main(int argc, char** argv)
     tx.toggleTwoToneTune();
     ok &= expect(commands == QStringList({
                      "transmit set tune_mode=two_tone",
-                     "transmit tune 1",
+                     "intent:tune:on",
                  }),
                  "two-tone tune toggle starts two-tone when not tuning");
 
     commands.clear();
     tx.startTune();
-    ok &= expect(commands == QStringList({"transmit tune 1"})
+    ok &= expect(commands == QStringList({"intent:tune:on"})
                      && tx.activePttSource() == TransmitModel::PttSource::Tune,
                  "single-tone tune tags the tune source before starting");
 
@@ -379,7 +405,7 @@ int main(int argc, char** argv)
     tx.setTxModeGetter([] { return QStringLiteral("USB"); });
     commands.clear();
     tx.requestPttOn(TransmitModel::PttSource::Wspr);
-    ok &= expect(commands == QStringList({"xmit 1"})
+    ok &= expect(commands == QStringList({"intent:mox:on"})
                  && quindar.phase() == ClientQuindarTone::Phase::Idle,
                  "WSPR PTT bypasses Quindar signaling");
 

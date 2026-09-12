@@ -32,6 +32,7 @@
 #include "PhoneCwApplet.h"
 #include "SpectrumOverlayMenu.h"
 #include "RfGainPresentation.h"
+#include "RfGainRestore.h"
 #include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with ConnectionPanel
 #include "core/backends/sim/SimBackend.h"   // demo owns its audio — see wirePanStreamRxAudioSinks
 #include "core/CwSidetoneGenerator.h"
@@ -46,6 +47,11 @@
 #elif defined(HAVE_PIPEWIRE)
 #include "core/PipeWireAudioBridge.h"
 #endif
+// MainWindow.h only forward-declares the dial backend; the device lifecycle
+// handler below needs the complete type and the UlanziDialBackend alias on
+// every platform. This header does the per-platform selection itself, which
+// is what it exists for.
+#include "core/UlanziDialBackend.h"
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
@@ -255,6 +261,39 @@ void MainWindow::wireDiscovery()
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioUpdated,
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     m_hl2Discovery.start();
+
+    // aetherd ANAN P2 Phase 1b: ANAN-G2 radios answer openHPSDR Protocol 2
+    // discovery on the same UDP/1024 port number as HL2's Protocol 1 (a
+    // different wire format entirely), tagged family="anan" so RadioModel
+    // routes the connect through AnanBackend. Mirrors the HL2 wiring above
+    // line for line.
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioLost, this,
+            [this](const QString& serial) {
+                m_autoConnectAttempts.remove(serial);
+                if (m_autoConnectSerial == serial)
+                    m_autoConnectSerial.clear();
+            });
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioDiscovered,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    connect(&m_ananDiscovery, &anan::AnanDiscovery::radioUpdated,
+            this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+    m_ananDiscovery.start();
+
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioDiscovered,
+            m_connPanel, &ConnectionPanel::onRadioDiscovered);
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioUpdated,
+            m_connPanel, &ConnectionPanel::onRadioUpdated);
+    connect(&m_rtlDiscovery, &RtlSdrDiscovery::radioLost,
+            m_connPanel, &ConnectionPanel::onRadioLost);
+    if (RtlSdrDiscovery::isAvailable()) {
+        m_rtlDiscovery.start();
+    }
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
             m_connPanel, &ConnectionPanel::onRadioUpdated);
     connect(&m_discovery, &RadioDiscovery::radioUpdated,
@@ -279,10 +318,16 @@ void MainWindow::wireDiscovery()
                     m_autoConnectSerial.clear();
             });
     connect(m_connPanel, &ConnectionPanel::retryDiscoveryRequested, this, [this] {
-        m_connPanel->setStatusText("Searching your local network…");
+        m_connPanel->setStatusText(RtlSdrDiscovery::isAvailable()
+                                       ? "Searching local network & USB devices…"
+                                       : "Searching your local network…");
         if (m_titleBar) m_titleBar->setDiscovering(true);
         m_discovery.stopListening();
         m_discovery.startListening();
+        if (RtlSdrDiscovery::isAvailable()) {
+            m_rtlDiscovery.stop();
+            m_rtlDiscovery.start();
+        }
     });
     connect(m_connPanel, &ConnectionPanel::networkDiagnosticsRequested,
             this, &MainWindow::showNetworkDiagnosticsDialog);
@@ -593,7 +638,8 @@ void MainWindow::updateExperimentalRadioSupport(bool connected)
         box->setAttribute(Qt::WA_DeleteOnClose);
         box->setIcon(QMessageBox::Information);
         box->setWindowTitle(QStringLiteral("Experimental radio support"));
-        box->setText(experimentalRadioNoticeText(noticeDescriptor.displayName));
+        box->setText(experimentalRadioNoticeText(
+            noticeDescriptor.displayName, m_radioModel.backendCapabilities().canTransmit));
         box->setStandardButtons(QMessageBox::Ok);
         box->setDefaultButton(QMessageBox::Ok);
         if (QAbstractButton* continueButton = box->button(QMessageBox::Ok)) {
@@ -658,6 +704,11 @@ void MainWindow::updateExperimentalRadioSupport(bool connected)
 void MainWindow::wireRadioModel()
 {
     // ── Wire up radio model ────────────────────────────────────────────────
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+        if (!connected) {
+            m_pendingDisplayWrites.flush();
+        }
+    });
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, &MainWindow::onConnectionStateChanged);
 
@@ -677,8 +728,10 @@ void MainWindow::wireRadioModel()
     // surface cannot spam the bar while still never failing silently.
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
-        if (connected)
+        if (connected) {
             m_commandDroppedNoticeShown = false;
+            m_sliceLifecycleNoticesShown.clear();
+        }
     });
     connect(&m_radioModel, &RadioModel::commandDropped,
             this, [this](const QString&) {
@@ -710,93 +763,27 @@ void MainWindow::wireRadioModel()
         if (!connected)
             failSafeMomentaryKeyingToRx("radio-disconnect");
     });
-    // Local microphone capture for a backend that MODULATES ON THE HOST.
-    //
-    // Capture is otherwise started only from the Flex DAX signals
-    // (txAudioStreamReady / remoteTxStreamReady, gated on mic_selection=PC),
-    // none of which a Hermes-Lite 2 ever emits. The consequence was subtle: no
-    // capture meant no txFinalMonitorPcmReady, and since the TONE generator is
-    // injected INSIDE that callback, neither the microphone NOR the test tone
-    // produced anything — the radio keyed and transmitted silence, with the
-    // radio's own forward-power counts reading 0 to prove it.
-    //
-    // startTxStream also opens the Flex-side network sender, but that stays
-    // inert here: the Opus encoder and the VITA-49 send are gated on a stream id
-    // this backend never sets, so what actually runs is capture plus the client
-    // TX DSP chain, which is exactly what submitTxAudio needs.
-    connect(&m_radioModel, &RadioModel::connectionStateChanged,
-            this, [this](bool connected) {
-        // Capability, not a family-name test: a backend host-modulates only if
-        // it says so AND is actually allowed to transmit. An RX-only (or
-        // transmit-blocked) backend must not open the mic / lock PC audio. (#4449)
-        const RadioCapabilities caps = m_radioModel.backendCapabilities();
-        // TWO DIFFERENT QUESTIONS, and they were one flag until an Icom proved
-        // they are not. `hostModulates` is "does the HOST run the modulator";
-        // takesTxAudioOverSeam is "does transmit audio leave through the seam".
-        // An Icom answers no to the first and YES to the second — its own
-        // firmware modulates, from PCM this computer captures and ships.
-        //
-        // Everything below is about the AUDIO, so all of it keys off the
-        // second. Gating it on the first meant an Icom captured nothing,
-        // processed nothing and emitted nothing: the radio keyed and put no
-        // modulation on the air.
-        const bool seamTxAudio = caps.takesTxAudioOverSeam && caps.canTransmit;
-        m_audio->setHostModulation(seamTxAudio && connected);
-        // PC audio is not optional on a host-modulating backend: all audio, both
-        // directions, lives on this computer. Turning it off would leave the
-        // operator deaf and mute with nothing to explain it.
-        const bool pcAudioRequired = seamTxAudio && caps.hostModulates;
-        const bool pcAudioEnabled = pcAudioRequired
-            || AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True";
-        if (m_titleBar) {
-            m_titleBar->setPcAudioLocked(connected && pcAudioRequired);
-        }
-        if (connected && seamTxAudio && pcAudioEnabled) {
-            if (!m_audio->isTxStreaming())
-                audioStartTx(m_radioModel.radioAddress(), 4991);
-            // RX must be started imperatively, exactly like TX. Locking the
-            // button calls setPcAudioEnabled(), which is signal-blocked, so no
-            // pcAudioToggled() fires and the toggle handler never opens the
-            // sink. The two setting-gated start paths (onConnected /
-            // profile-load) are skipped when a stale PcAudioEnabled=False is
-            // persisted, and the locked button can no longer be clicked to
-            // recover -- leaving the sink Stopped with the button showing ON.
-            // Persist the setting too, so those paths agree on the next launch.
-            if (pcAudioRequired) {
-                AppSettings::instance().setValue("PcAudioEnabled", "True");
-                AppSettings::instance().save();
-                audioStartRx();
-            }
-        } else if (seamTxAudio && m_audio->isTxStreaming()) {
-            audioStopTx();
-        }
-        // TELL THE BACKEND, DO NOT COMMAND IT. `pcAudioEnabled` comes from a
-        // client-persisted key; DATA OFF MOD is a SET-menu item the RADIO
-        // persists and recalls itself. Writing one from the other on the
-        // connect edge is the two-sources-of-truth fight Constitution III
-        // exists to prevent -- an operator who set DATA OFF MOD to USB for
-        // their rig interface would find it silently rewritten every session,
-        // with no dialog and no undo. Publishing the state instead lets the
-        // backend ADVISE on a mismatch (checkModInput) while the radio stays
-        // authoritative; only an operator click writes (setPcAudioEnabled).
-        if (connected) {
-            m_radioModel.notePcAudioEnabled(pcAudioEnabled);
-        }
-    });
+    // RadioModel publishes this on connect, disconnect, and late identity.
+    // A Network Radio Name must not decide whether the TX audio route starts.
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged,
+            this, &MainWindow::applyTxAudioCapabilities);
 
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
     // Radio configuration advice: shown, but it does NOT touch the session.
     // Deliberately not onConnectionError — see IRadioBackend::configurationWarning.
-    // 15 s rather than the usual 4: this one names a four-level menu path the
-    // operator has to walk on the radio's front panel while reading it.
+    // Advice belongs in the panel while it is open. Mid-session warnings need
+    // the visible status bar; its Connect control survives temporary messages.
     connect(&m_radioModel, &RadioModel::configurationWarning,
             this, [this](const QString& message) {
         qCWarning(lcProtocol).noquote() << "radio configuration:" << message;
-        statusBar()->showMessage(message, 15000);
+        if (m_connPanel->isVisible()) {
+            m_connPanel->setStatusText(message);
+        } else {
+            statusBar()->showMessage(message, 15000);
+        }
     });
-    connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
-            this, [this](const QString& message) {
+    const auto showTerminalConnectionFailure = [this](const QString& message) {
         // A rejected GUI registration is terminal for this attempt. Keep the
         // reason visible, suppress both LAN and WAN automatic reconnect loops,
         // and let the operator retry normally after freeing a radio slot.
@@ -811,9 +798,20 @@ void MainWindow::wireRadioModel()
             reconnectDialog->close();
             reconnectDialog->deleteLater();
         }
-    });
+    };
+    connect(&m_radioModel, &RadioModel::guiClientRegistrationFailed,
+            this, showTerminalConnectionFailure);
+    connect(&m_radioModel, &RadioModel::radioWakeFailed,
+            this, showTerminalConnectionFailure);
     connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
             this, &MainWindow::onWanCertFingerprintMismatch);
+    connect(&m_radioModel, &RadioModel::radioWakeProgress, this,
+            [this](const QString& message, bool active) {
+        m_connPanel->setStatusText(message);
+        m_connStatusLabel->setText(active ? tr("Connecting") : message);
+        setPanadapterConnectionAnimation(active, message);
+
+    });
     connect(&m_radioModel, &RadioModel::forcedDisconnectRequested,
             this, [this] {
         const bool wasWan = m_radioModel.isWan();
@@ -939,6 +937,20 @@ void MainWindow::wireRadioModel()
         statusBar()->showMessage(
             QString("%1 supports a maximum of %2 panadapters")
                 .arg(model).arg(limit), 4000);
+    });
+    // Same shape as the commandDropped notice above: RadioModel's qCWarning
+    // carries every occurrence; the operator sees each distinct refusal once
+    // per connect session.
+    connect(&m_radioModel, &RadioModel::sliceLifecycleFailed, this,
+            [this](const QString& operation, int, const QString& reason) {
+        const QString key = operation + QLatin1Char('\n') + reason;
+        if (m_sliceLifecycleNoticesShown.contains(key))
+            return;
+        m_sliceLifecycleNoticesShown.insert(key);
+        const QString what = operation == QLatin1String("remove")
+            ? tr("Cannot remove slice: %1").arg(reason)
+            : tr("Cannot create slice: %1").arg(reason);
+        statusBar()->showMessage(what, 6000);
     });
     connect(&m_radioModel, &RadioModel::sliceCreateFailed,
             this, [this](int limit, const QString& model) {
@@ -1161,19 +1173,29 @@ void MainWindow::wireRadioModel()
         // VITA-49 burst pressure on the GUI event loop can't gap CW elements
         // (#3623) — same reason the iambic keyer below avoids QTimer.
         m_cwxLocalKeyer = std::make_unique<CwxLocalKeyer>();
-        m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
+        m_cwxLocalKeyer->setOnKeyDownChange([this](bool down,
+                                                   std::chrono::steady_clock::time_point when) {
             // Lock-free atomic gate; safe to call directly from the keyer
-            // thread, matching the iambic keyer's gate path below.
-            // CWX: same fix pending (#4890).  This keyer runs the same
-            // absolute-grid schedule (#3644) and knows each edge's instant
-            // (m_epoch + m_nextEdgeMs), but still takes the 1-arg callback,
-            // so its sidetone renders wake rhythm while the iambic path
-            // below renders scheduled rhythm.
+            // thread, matching the iambic keyer's gate path below.  `when`
+            // is the element's absolute grid instant (#4890/#4977), so a
+            // machine-formed CWX macro renders the rhythm it was scheduled
+            // with rather than the worker's wake rhythm.
             if (m_audio)
-                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
+                m_audio->setCwKeyDown(down, when);   // keys audible + recorder sidetone
         });
         connect(&m_radioModel.cwxModel(), &CwxModel::transmissionRequested,
                 this, [this](const QString& text, int wpm) {
+            // The over-hang must outlast THIS over's slowest inter-word gap,
+            // and CWX keys at its own per-segment speed, independent of the
+            // TransmitModel::cwSpeed mirror that sizes the hang — a 15 WPM
+            // segment against a 30 WPM mirror would age the latch inside every
+            // word gap and split the over per word (#4281). Every segment of a
+            // message announces here at send time, so min-tracking them sizes
+            // the hang from the message's slowest speed; the pump clears the
+            // override when the over ends.
+            if (m_audio) {
+                m_audio->noteCwOverSpeed(wpm);
+            }
             if (m_cwxLocalKeyer) m_cwxLocalKeyer->start(text, wpm);
         });
         connect(&m_radioModel.cwxModel(), &CwxModel::transmissionCancelled,
@@ -1209,12 +1231,8 @@ void MainWindow::wireRadioModel()
                     << " down=" << down
                     << " schedMs=" << cwTraceMsAt(when);
             }
-            QMetaObject::invokeMethod(this, [this, down, when]() {
-                const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
-                const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
-                m_radioModel.sendCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
-                                           traceId, sourceMs, when);
-            }, Qt::QueuedConnection);
+            m_radioModel.queueCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
+                                       traceId, sourceMs, when);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
             // The radio's break-in setting decides whether key edges produce
@@ -1244,6 +1262,28 @@ void MainWindow::wireRadioModel()
     }
 
     // TX/RX transition → audio source switching
+    connect(&m_radioModel.transmitModel(), &TransmitModel::pttReleaseCancelled,
+            this, [this] {
+#ifdef HAVE_RADE
+        ++m_radeEooRequestId;
+        if (m_radeFallbackReleaseFence) {
+            m_radeFallbackReleaseFence->store(false, std::memory_order_release);
+        }
+        m_radePttRelease = {};
+        m_radeEooPending = false;
+        m_radeTxActive = false;
+        if (m_radeEngine) {
+            QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine] {
+                engine->resetTx();
+            }, Qt::QueuedConnection);
+        }
+#endif
+        // Cancellation must not wait for EOO, even when optimistic MOX was
+        // already false and neither of the state-edge handlers below fires.
+        if (m_audio) {
+            m_audio->setTransmitting(false);
+        }
+    });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             this, [this](bool tx) {
         // Keep TX audio source strictly aligned with the local MOX edge for all
@@ -1284,7 +1324,8 @@ void MainWindow::wireRadioModel()
                 // when this fires (RadioModel emits it synchronously with moxChanged).
                 // Suppress now; eooFinished posts setTransmitting(false) to the
                 // AudioEngine queue after the EOO packets.
-                if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()) {
+                if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()
+                    && m_radeEooPending && m_radePttRelease.current()) {
                     qCDebug(lcRade) << "MainWindow: txAudioGateChanged(false) suppressed — RADE EOO pending";
                 } else {
                     m_audio->setTransmitting(false);
@@ -1307,7 +1348,11 @@ void MainWindow::wireRadioModel()
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool tx) {
         if (m_audio) {
-            m_audio->setRadioTransmitting(tx);
+            // Ownership rides along: the interlock parse stores its
+            // tx_client_handle attribution before emitting this signal, so the
+            // pair is one consistent snapshot — the CW over machinery tracks
+            // OUR transmission, not any client's (#4281).
+            m_audio->setRadioTransmitting(tx, m_radioModel.txOwnedByUs());
         }
         // Waterfall freeze/unfreeze: gate on the actual interlock TRANSMITTING
         // state, not the MOX edge. moxChanged fires the instant the user releases
@@ -1332,7 +1377,7 @@ void MainWindow::wireRadioModel()
         m_appletPanel->meterApplet()->setTransmitting(tx);
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
-            m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);
+            m_appletPanel->phoneCwApplet()->resetAlc();
         }
         if (tx) {
             AetherSDR::ThemeManager::instance().applyStyleSheet(m_txIndicator, "QLabel { color: white; background: {{color.accent.danger}}; font-weight: bold; "
@@ -1668,19 +1713,15 @@ void MainWindow::wirePanLifecycle()
             const bool clientOwnsRfGain =
                 m_radioModel.backendCapabilities().clientSettingsDomains.testFlag(
                     RadioCapabilities::ClientSettingsDomain::RfGain);
-            // Flex deliberately declares no client-owned RF-gain domain: the
-            // radio persists and reports its pan gain. Sim likewise regenerates
-            // its scene. Only a backend that explicitly delegates this domain
-            // (currently HL2) may receive a saved client replay.
-            const bool restoreSavedRfGain = clientOwnsRfGain && haveSavedRfGain;
             PanadapterModel* activePan = m_radioModel.activePanadapter();
-            const int rfGain = restoreSavedRfGain
-                ? s.value(rfGainKey).toInt()
-                : (activePan ? activePan->rfGain() : 0);
             m_radioModel.setPanWnb(wnbOn);
             m_radioModel.setPanWnbLevel(wnbLevel);
-            if (restoreSavedRfGain)
-                m_radioModel.setPanRfGain(rfGain);
+            const int rfGain = restoreLegacyRfGain(
+                m_radioModel.backendCapabilities().family, clientOwnsRfGain,
+                haveSavedRfGain ? std::optional<int>(s.value(rfGainKey).toInt())
+                               : std::nullopt,
+                activePan ? activePan->rfGain() : 0,
+                [this](int gain) { m_radioModel.setPanRfGain(gain); });
             sw->setWnbActive(wnbOn);
             sw->setRfGain(rfGain);
             sw->overlayMenu()->setWnbState(wnbOn, wnbLevel);
@@ -2540,8 +2581,9 @@ QJsonObject MainWindow::automationActivateMemory(int memoryIndex,
 
 bool MainWindow::startAutomationBridge(const QString& sockName)
 {
-    if (m_automation && m_automation->isRunning())
-        return true;  // idempotent
+    if (m_automation) {
+        return true;  // already listening or waiting for the same async token read
+    }
 
     // AETHER_AUTOMATION_SOCKET (or the caller's sockName) pins an explicit
     // endpoint; otherwise the default is PID-suffixed so two instances don't
@@ -2554,8 +2596,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
                    : QStringLiteral("aethersdr-automation-%1")
                          .arg(QCoreApplication::applicationPid());
 
-    if (!m_automation)
-        m_automation = std::make_unique<AutomationServer>();
+    // Provably null here: the early return above covers every live server,
+    // listening or still waiting for its token.
+    m_automation = std::make_unique<AutomationServer>();
 
     // dumpTree reports the status-bar message (#4864) by reading a generic
     // dynamic property — core/ must not know the QStatusBar type
@@ -2625,35 +2668,98 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
                 {QStringLiteral("error"), QStringLiteral("unknown device diagnostic")},
             };
         }
-#ifdef Q_OS_MAC
         if (!m_dialBackend) {
             return QJsonObject{
                 {QStringLiteral("ok"), false},
                 {QStringLiteral("error"), QStringLiteral("Ulanzi backend unavailable")},
             };
         }
-        if (diagnostic == QLatin1String("ulanzi-start")) {
-            m_dialBackend->start();
-        } else if (diagnostic == QLatin1String("ulanzi-stop")) {
-            m_dialBackend->stop();
+
+        // AutoConnection executes inline on macOS (IOKit's main run loop),
+        // and queues to ExtControllers on Linux/Windows. Refuse before posting
+        // if that thread has stopped; invokeMethod alone accepts undeliverable
+        // queued calls to a QObject that still belongs to a finished thread.
+        const bool lifecycle = diagnostic != QLatin1String("ulanzi");
+        QThread* backendThread = m_dialBackend->thread();
+        bool queued = false;
+        if (lifecycle) {
+#if !defined(Q_OS_LINUX) && !defined(Q_OS_MAC) && !(defined(Q_OS_WIN) && defined(HAVE_HIDAPI))
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("supported"), false},
+                {QStringLiteral("error"), QStringLiteral("Ulanzi backend unavailable in this build")},
+            };
+#endif
+            if (!backendThread || !backendThread->isRunning()) {
+                return QJsonObject{
+                    {QStringLiteral("ok"), false},
+                    {QStringLiteral("queued"), false},
+                    {QStringLiteral("error"), QStringLiteral("Ulanzi backend thread is not running")},
+                };
+            }
+            queued = backendThread != QThread::currentThread();
+            const bool accepted = diagnostic == QLatin1String("ulanzi-start")
+                ? QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
+                                            Qt::AutoConnection)
+                : QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
+                                            Qt::AutoConnection);
+            if (!accepted) {
+                return QJsonObject{
+                    {QStringLiteral("ok"), false},
+                    {QStringLiteral("queued"), false},
+                    {QStringLiteral("error"), QStringLiteral("Ulanzi lifecycle dispatch failed")},
+                };
+            }
         }
+
+        const auto dialEnabled = [] {
+            return AppSettings::instance()
+                       .value(QStringLiteral("UlanziDialEnabled"),
+                              QStringLiteral("False"))
+                       .toString()
+                   == QLatin1String("True");
+        };
+
+        // queued means accepted for delivery, not completed. A later thread
+        // shutdown can still prevent delivery; do not report device state from
+        // before an asynchronous lifecycle request as its outcome.
+#ifdef Q_OS_MAC
         QJsonObject snapshot = m_dialBackend->diagnostics();
         snapshot[QStringLiteral("operation")] = diagnostic;
-        snapshot[QStringLiteral("enabled")] =
-            AppSettings::instance()
-                    .value(QStringLiteral("UlanziDialEnabled"),
-                           QStringLiteral("False"))
-                    .toString()
-            == QLatin1String("True");
+        snapshot[QStringLiteral("enabled")] = dialEnabled();
+        snapshot[QStringLiteral("queued")] = queued;
         return snapshot;
 #else
-        return QJsonObject{
-            {QStringLiteral("ok"), true},
-            {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
-            {QStringLiteral("supported"), false},
-            {QStringLiteral("message"),
-             QStringLiteral("Ulanzi HID diagnostics are currently macOS-only")},
-        };
+        // No diagnostics() on the Linux/Windows backends yet, so a bare
+        // `devices ulanzi` query still cannot be answered here. Report that as
+        // a REFUSAL rather than ok:true — a caller checking ok (the obvious
+        // field) previously read success from a call that did nothing at all,
+        // and only the separate supported:false said otherwise.
+        //
+        // A lifecycle call is different: dispatch was accepted, so it reports
+        // ok:true and carries what these backends can honestly answer. It
+        // does NOT carry supported:false -- no snapshot was asked for, and a
+        // script that reads `supported` as "did this work" would abort on a
+        // start that actually ran. That field belongs only on the refusal.
+        if (diagnostic == QLatin1String("ulanzi")) {
+            return QJsonObject{
+                {QStringLiteral("ok"), false},
+                {QStringLiteral("diagnostic"), QStringLiteral("ulanzi")},
+                {QStringLiteral("supported"), false},
+                {QStringLiteral("error"),
+                 QStringLiteral("Ulanzi HID diagnostics are currently macOS-only; "
+                                "ulanzi-start and ulanzi-stop are supported here")},
+            };
+        }
+        QJsonObject result;
+        result[QStringLiteral("ok")] = true;
+        result[QStringLiteral("diagnostic")] = QStringLiteral("ulanzi");
+        result[QStringLiteral("operation")] = diagnostic;
+        // Reporting isConnected() here would describe the state BEFORE the
+        // queued request and read as a failed command, so it is left out.
+        result[QStringLiteral("queued")] = queued;
+        result[QStringLiteral("enabled")] = dialEnabled();
+        return result;
 #endif
     });
 
@@ -2664,9 +2770,17 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     QPointer<AutomationServer> guard(m_automation.get());
     const QString startName = name;
     AutomationBridgeSettings::loadToken(this, [this, guard, startName](const QString& tok) {
-        if (!guard || m_automation.get() != guard)
+        if (!guard || m_automation.get() != guard) {
             return;  // toggled off or restarted before the token arrived
-        guard->setAuthToken(tok);
+        }
+        // A token pushed while this read was pending (Rotate, or the dialog's
+        // auto-mint on enable) is newer than whatever the keychain returns —
+        // keep it, or a stale/empty read would bind the bridge with the
+        // wrong token while the Network tab shows the new one. A fresh server
+        // holds no token, so "empty" means nothing was pushed.
+        if (guard->authToken().isEmpty()) {
+            guard->setAuthToken(tok);
+        }
         if (tok.isEmpty()) {
             qWarning().noquote()
                 << "Automation bridge starting UNAUTHENTICATED — any same-user "
@@ -2676,6 +2790,24 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         if (!guard->start(startName)) {
             qWarning() << "Automation bridge failed to start (socket in use?)";
             m_automation.reset();
+            // Nothing is listening, so the persisted opt-in must not survive —
+            // otherwise every launch silently re-attempts the doomed start and
+            // the operator is never told (#4181). The env-var force-enable is
+            // not an opt-in we own; recordStartOutcome() leaves it alone then.
+            const bool forced = AutomationBridgeSettings::envForced();
+            AutomationBridgeSettings::recordStartOutcome(false, forced);
+            // On the launch path no Radio Setup dialog exists, so the result
+            // signal below can have no receiver. The status bar is the one
+            // surface always present to say why the toggle is off next time
+            // the operator looks; the server already logged errorString().
+            if (!forced) {
+                statusBar()->showMessage(
+                    QStringLiteral("Agent automation bridge could not bind its "
+                                   "socket (see the log) — the Radio Setup toggle "
+                                   "is now off."),
+                    15000);
+            }
+            emit automationBridgeStartResult(false);
             return;
         }
         // TX-automation gate — set AFTER start(), which reads
@@ -2694,8 +2826,19 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         guard->setReadOnly(
             qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY")
             || AutomationBridgeSettings::readOnly());
+        // Persist at the owner that observed the successful bind. The modeless
+        // Radio Setup dialog may have closed while the token read was pending.
+        // An environment-forced start must not change the operator's opt-in.
+        AutomationBridgeSettings::recordStartOutcome(
+            true, AutomationBridgeSettings::envForced());
+        emit automationBridgeStartResult(true);
     });
-    return true;  // start initiated; the socket begins listening once the token resolves
+    // Normally the bridge is NOT listening yet — the socket binds inside the
+    // callback above, and callers wanting the outcome must watch
+    // automationBridgeStartResult. On the synchronous token paths (AETHER_MCP_TOKEN,
+    // legacy token, no keychain) the callback has already run, so a failed bind
+    // has already reset m_automation: report that rather than a stale "initiated".
+    return m_automation != nullptr;
 }
 
 void MainWindow::stopAutomationBridge()
@@ -2740,6 +2883,33 @@ void MainWindow::setAutomationReadOnly(bool readOnly)
     // immediately — no restart needed to arm or lift the gate.
     if (m_automation)
         m_automation->setReadOnly(readOnly);
+}
+
+void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilities& caps)
+{
+    const bool pcAudioRequired = caps.takesTxAudioOverSeam
+        && caps.canTransmit && caps.hostModulates;
+    auto& settings = AppSettings::instance();
+    const bool savedPcAudio = settings.value("PcAudioEnabled", "True").toString() == "True";
+    const bool pcAudioEnabled = pcAudioRequired || savedPcAudio;
+    if (m_titleBar) {
+        m_titleBar->setPcAudioLocked(connected && pcAudioRequired);
+    }
+    if (connected && pcAudioRequired && !savedPcAudio) {
+        settings.setValue("PcAudioEnabled", "True");
+        settings.save();
+    }
+    // Evaluate stream state on the audio thread, after any preceding update.
+    // Repeated capabilities must not enqueue duplicate capture starts.
+    AudioEngine* audio = m_audio;
+    const QHostAddress address = m_radioModel.radioAddress();
+    QMetaObject::invokeMethod(audio, [audio, connected, caps, pcAudioEnabled, address] {
+        audio->applyBackendAudioCapabilities(connected, caps, pcAudioEnabled, address);
+    });
+    if (connected) {
+        // Observation only: never restore a client setting into DATA OFF MOD.
+        m_radioModel.notePcAudioEnabled(pcAudioEnabled);
+    }
 }
 
 } // namespace AetherSDR
