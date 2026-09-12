@@ -41,10 +41,15 @@ void TransmitModel::resetState()
     // asymmetry is deliberate but it leaves the feature on-but-unarmed, so say
     // so out loud: the applet renders that state distinctly rather than showing
     // one checked button for both (#5288 review, blocker 1).
-    if (m_cwDelayHeld > 0) {
+    // Clear BEFORE emitting: the applet's slot reads holdBreakInDelayArmed()
+    // synchronously, so emitting first hands it the state we are in the middle
+    // of leaving and the button keeps showing "holding 48 ms" after the delay is
+    // gone. (Caught driving the GUI, not in review.)
+    const bool wasArmed = (m_cwDelayHeld > 0);
+    m_cwDelayHeld = -1;   // also covers the 0 (deliberate QSK) case
+    if (wasArmed) {
         emit holdBreakInDelayArmedChanged(false);
     }
-    m_cwDelayHeld = -1;   // also covers the 0 (deliberate QSK) case
 
     emit apdStateChanged();
     emit transmittingChanged(false);

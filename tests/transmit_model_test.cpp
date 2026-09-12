@@ -556,8 +556,16 @@ int main(int argc, char** argv)
     {
         TransmitModel cw;
         QList<bool> armedEdges;
+        // Also record what the GETTER says at the moment the signal fires: a
+        // slot that reads holdBreakInDelayArmed() must not see the state being
+        // left behind. Emitting before the member is updated is how the button
+        // kept reading "holding 48 ms" after a disconnect had cleared it.
+        QList<bool> armedAtEmit;
         QObject::connect(&cw, &TransmitModel::holdBreakInDelayArmedChanged,
-                         [&armedEdges](bool a) { armedEdges.append(a); });
+                         [&](bool a) {
+                             armedEdges.append(a);
+                             armedAtEmit.append(cw.holdBreakInDelayArmed());
+                         });
 
         ok &= expect(!cw.holdBreakInDelayArmed(), "a fresh model is not armed");
         cw.setHoldBreakInDelay(true);
@@ -588,6 +596,8 @@ int main(int argc, char** argv)
                      "after a disconnect the hold is still ON but no longer armed");
         ok &= expect(armedEdges == QList<bool>({true, false, true, false}),
                      "resetState emits the disarming edge so the UI can show it");
+        ok &= expect(armedAtEmit == armedEdges,
+                     "holdBreakInDelayArmed() already agrees with every edge as it is emitted");
     }
 
     // resetState() (every disconnect, via RadioModel::onDisconnected) clears the
