@@ -37,8 +37,20 @@ Hl2RxDsp::~Hl2RxDsp()
     // WDSP's mute ramp never actually runs. The saving is the skipped wait, not
     // a smoother exit. The one place a stop CAN be taken with samples still
     // flowing is the T/R mute, which is item 9a and is a bench decision.
-    if (m_channel)
-        m_channel->setRunning(false);
+    //
+    // CHECKED, not discarded. setRunning() goes through beginControlOperation(),
+    // which REFUSES rather than waits when a processIq() callback is in flight.
+    // That cannot happen here today — Hl2Backend destroys these through
+    // deleteLater() posted to the I/O thread, which is the thread that drives
+    // processIqBlock() — so a false is not a hazard, it is a statement that the
+    // ownership assumption above has stopped being true. Say so instead of just
+    // getting slow again.
+    if (m_channel && !m_channel->setRunning(false)) {
+        qCWarning(lcHl2RxDsp)
+            << "could not stop the WDSP channel before destroying it: a "
+               "processIq callback was in flight. Teardown will pay WDSP's "
+               "100 ms stop-and-flush timeout.";
+    }
 }
 
 bool Hl2RxDsp::configure(const Config& config, std::string* error)
@@ -117,8 +129,14 @@ bool Hl2RxDsp::configure(const Config& config, std::string* error)
     // No drain here either. configure() runs ON the DSP thread, which is the
     // same thread that calls processIq(), so nothing can feed the old channel
     // between this line and its destruction.
-    if (m_channel)
-        m_channel->setRunning(false);
+    //
+    // Checked for the same reason as the destructor's — see there.
+    if (m_channel && !m_channel->setRunning(false)) {
+        qCWarning(lcHl2RxDsp)
+            << "could not stop the outgoing WDSP channel before the swap: a "
+               "processIq callback was in flight. The rebuild will pay WDSP's "
+               "100 ms stop-and-flush timeout.";
+    }
     m_channel = std::move(channel);
     m_spectrum = std::make_unique<Hl2Spectrum>(config.fftSize);
 

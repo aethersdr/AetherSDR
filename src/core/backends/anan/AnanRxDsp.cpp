@@ -1,10 +1,13 @@
 #include "core/backends/anan/AnanRxDsp.h"
 
 #include <QDebug>
+#include <QLoggingCategory>
 #include <QMetaType>
 
 #include <algorithm>
 #include <cmath>
+
+Q_LOGGING_CATEGORY(lcAnanRxDsp, "aether.anan.rxdsp")
 
 namespace AetherSDR::anan {
 
@@ -30,8 +33,18 @@ AnanRxDsp::~AnanRxDsp()
     //
     // No drain: nothing feeds this object after it is destroyed, so WDSP's mute
     // ramp does not actually run. The saving is the skipped wait.
-    if (m_channel)
-        m_channel->setRunning(false);
+    //
+    // CHECKED, not discarded. setRunning() goes through beginControlOperation(),
+    // which REFUSES rather than waits when a processIq() callback is in flight.
+    // It cannot be, here: this object is destroyed on the thread that drives
+    // processIq(). A false therefore reports that that assumption has stopped
+    // holding, which is worth a line in the log rather than a silent 100 ms.
+    if (m_channel && !m_channel->setRunning(false)) {
+        qCWarning(lcAnanRxDsp)
+            << "could not stop the WDSP channel before destroying it: a "
+               "processIq callback was in flight. Teardown will pay WDSP's "
+               "100 ms stop-and-flush timeout.";
+    }
 }
 
 bool AnanRxDsp::configure(const Config& config, std::string* error)
@@ -199,8 +212,14 @@ void AnanRxDsp::installChannel(RebuildResult result)
     // genuinely still flowing there. Stopping that early would trade the
     // receive audio that the asynchronous rebuild exists to preserve for
     // 100 ms of teardown, which is the wrong way round.
-    if (m_channel)
-        m_channel->setRunning(false);
+    //
+    // Checked for the same reason as the destructor's — see there.
+    if (m_channel && !m_channel->setRunning(false)) {
+        qCWarning(lcAnanRxDsp)
+            << "could not stop the outgoing WDSP channel before the swap: a "
+               "processIq callback was in flight. The rebuild will pay WDSP's "
+               "100 ms stop-and-flush timeout.";
+    }
     m_channel = std::move(result.channel);
     m_spectrum = std::move(result.spectrum);
 }
