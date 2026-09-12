@@ -75,6 +75,10 @@ HEADER = REPO / "src" / "core" / "backends" / "RadioCapabilities.h"
 # ratchet. Raising it needs a maintainer ruling on #5262, not a quiet edit.
 FROZEN_BOOL_COUNT = 71
 
+# The largest one-commit drop that is plausibly a real conversion rather than the
+# parser falling over. See the vacuity check in main().
+MAX_PLAUSIBLE_DROP = 15
+
 
 def direct_bool_fields(text: str) -> list[str]:
     """Bool members declared directly in RadioCapabilities, nested structs excluded."""
@@ -160,6 +164,30 @@ def main() -> int:
         print(f"capability-records: {count} boolean(s), frozen at {FROZEN_BOOL_COUNT} "
               f"— GREW by {added}")
         return 1 if args.strict else 0
+
+    # ANTI-VACUITY FLOOR, the sibling's ABOVE_SEAM_DIR_FLOOR applied here (#5619
+    # re-review, K5PTB). The multi-line /* */ blind spot documented above is not
+    # a small under-count when it fires: the brace tracking collapses, the scan
+    # finds almost nothing, and the "below the frozen count" branch below then
+    # prints "the migration is working" and tells the contributor to lower
+    # FROZEN_BOOL_COUNT to the collapsed number — which would disarm the ratchet
+    # permanently. Anyone following that message in good faith destroys the gate.
+    #
+    # A conversion retires bools a few at a time, so a large drop is a parse
+    # failure rather than progress. The threshold is deliberately generous: it
+    # only has to separate "someone converted a handful" from "the parser fell
+    # over".
+    if count < FROZEN_BOOL_COUNT - MAX_PLAUSIBLE_DROP:
+        print(f"::error file={HEADER},title=capability-bool-vacuity::"
+              f"only {count} boolean(s) found against a frozen {FROZEN_BOOL_COUNT} — "
+              f"that is too large a drop to be a conversion and is almost certainly a "
+              f"PARSE FAILURE (an unbalanced brace inside a block comment collapses "
+              f"the depth tracking). DO NOT lower FROZEN_BOOL_COUNT to match: that "
+              f"would disarm the ratchet permanently. Fix the parser, or raise "
+              f"MAX_PLAUSIBLE_DROP if a conversion really did retire this many.")
+        print(f"capability-records: {count} boolean(s) against a frozen "
+              f"{FROZEN_BOOL_COUNT} — implausible drop, treating as a parse failure")
+        return 1
 
     if count < FROZEN_BOOL_COUNT:
         print(f"capability-records: {count} boolean(s), below the frozen "

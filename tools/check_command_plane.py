@@ -84,7 +84,7 @@ BASELINE = {
     "src/models/FlexWaveformModel.cpp": 3,
     "src/models/UsbCableModel.cpp": 3,
     # ---- gui ----
-    "src/gui/RadioSetupDialog.cpp": 32,
+    "src/gui/RadioSetupDialog.cpp": 41,
     "src/gui/MainWindow.cpp": 21,
     "src/gui/MainWindow_Wiring.cpp": 20,
     "src/gui/ProfileManagerDialog.cpp": 12,
@@ -160,34 +160,104 @@ ABOVE_SEAM_DIR_FLOOR = 20
 # Receivers that are OTHER DEVICES, each its own wire:
 #     client / m_dxCluster (DX cluster + RBN telnet), m_wanConn (SmartLink WAN),
 #     m_pgxlConn (PGXL amp), m_directConn (tuner), connection
-RADIO_MODEL_RECEIVERS = ("m_radioModel", "m_model", "model", "modelGuard", "this")
-
 # Files whose UNQUALIFIED send* calls route to the Flex plane. Everything else
 # unqualified belongs to the object that defines it — AntennaGeniusModel writes
 # its own QTcpSocket, VkampConnection/TgxlConnection/PgxlConnection/WanConnection
 # each speak their own protocol.
 #
 # RadioModel.cpp is the sink itself; SliceModel.cpp reaches it through a one-line
-# helper whose body is `emit commandReady(cmd)` — the case the first version
-# missed, which froze the milestone's largest target at 2.
+# helper whose body is `emit commandReady(cmd)`.
 PLANE_HELPER_FILES = {
     "src/models/RadioModel.cpp",
     "src/models/SliceModel.cpp",
 }
 
+RADIO_MODEL_RECEIVERS = ("m_radioModel", "m_model", "model", "modelGuard", "this")
+
+# Receivers that are a DIFFERENT DEVICE. Named so that an unknown one can be an
+# error rather than a guess — see UNKNOWN_RECEIVER below.
+FOREIGN_RECEIVERS = (
+    "client", "m_client", "m_rbnClient", "m_dxCluster",   # DX cluster + RBN telnet
+    "m_wanConn",                                          # SmartLink WAN channel
+    "m_pgxlConn", "m_tgxlConn",                           # PGXL / TGXL amp + tuner
+    "m_directConn",                                       # tuner direct connection
+    "connection",
+)
+
+# GENERIC PASSTHROUGH HELPERS: methods that wrap `emit commandReady` AND take the
+# wire key or the whole command FROM THE CALLER. A call to one carries raw wire
+# text at the call site, so it is a conversion site (#5619 review,
+# aethersdr-agent: a new `usb_cable` control slipped through because only
+# send(Command|Cmd|CmdPublic) was resolved).
+#
+# WHY THIS IS HAND-LISTED RATHER THAN DERIVED, which was the review's preferred
+# fix. Deriving "every method whose body emits commandReady" finds 64 of them —
+# and most are TYPED SETTERS: TransmitModel::setRfPower, setCwSpeed, setVoxEnable
+# and ~40 more. Those assemble their own wire text from a typed argument, and a
+# call to one is precisely the typed intent M4 is migrating TOWARD. Counting them
+# would freeze the destination as if it were the thing being left behind — six
+# sampled setters alone are 26 gui call sites.
+#
+# The property that actually matters is "does the CALLER name the wire key?",
+# which no regex can decide:
+#     sendCommand(QString cmd)          caller supplies the whole command  -> count
+#     sendSet(serial, key, value)       caller supplies the key            -> count
+#     setRfPower(int watts)             key is internal                    -> do not
+# So the list is curated against that criterion, and the criterion is written
+# here so the next addition is a judgement someone can check rather than repeat.
+WIRE_TEXT_HELPERS = ("sendSet", "sendSetBit", "sendRemove")
+
 # The plane's own signal. Always a site, wherever it appears above the seam.
 EMIT_RE = re.compile(r"emit\s+commandReady\s*\(")
 # A qualified call on one of the RadioModel receivers. sendCmdPublic is included
-# explicitly: it forwards straight to sendCmd(), and the first version's
-# `\bsendCmd\s*\(` did not match it, so ~26 call sites across gui and core were
-# invisible to the freeze (#5619 review, Ozy).
+# explicitly: it forwards straight to sendCmd(), and an earlier matcher of
+# `\bsendCmd\s*\(` did not match it, hiding ~26 call sites.
 QUALIFIED_RE = re.compile(
     r"\b(?:" + "|".join(RADIO_MODEL_RECEIVERS) + r")\s*(?:->|\.)\s*"
     r"send(?:Command|Cmd|CmdPublic)\s*\(")
+# A call to a generic passthrough helper, on any receiver.
+HELPER_RE = re.compile(
+    r"(?:->|\.)\s*(?:" + "|".join(WIRE_TEXT_HELPERS) + r")\s*\(")
 # An unqualified call, only meaningful inside PLANE_HELPER_FILES.
 UNQUALIFIED_RE = re.compile(r"(?<![\w>.])send(?:Command|Cmd|CmdPublic)\s*\(")
 # Definitions and declarations are not call sites.
 DEF_RE = re.compile(r"\b\w+::send(?:Command|Cmd|CmdPublic)\s*\(")
+
+# ANY qualified send(Command|Cmd|CmdPublic), whatever the receiver. Used to find
+# receivers that are in NEITHER list, which is a hard error rather than a silent
+# choice — see the UNKNOWN_RECEIVER note in main().
+ANY_QUALIFIED_RE = re.compile(
+    r"\b(\w+)\s*(?:->|\.)\s*send(?:Command|Cmd|CmdPublic)\s*\(")
+
+
+def unknown_receivers(text: str) -> set[str]:
+    """Receivers of a send* call that are classified neither Flex nor foreign.
+
+    An allow-list gets the DEFAULT right for a new foreign protocol — it is
+    ignored rather than frozen — but it makes the opposite mistake silently: a
+    Flex call through an unrecognised member name (`m_radio->sendCommand(...)`)
+    is not counted, not reported and not blocked, in a brand-new file included
+    (#5619 re-review, K5PTB). That is the same failure shape as the original
+    SliceModel hole, arriving by a different route, and it contradicts the
+    guarantee static-checks.yml states.
+
+    So every receiver is classified and an unknown one FAILS, asking for a
+    decision instead of making one. A new amplifier driver costs one line in
+    FOREIGN_RECEIVERS; a misspelled Flex receiver costs a CI failure rather than
+    a hole.
+    """
+    seen = {m.group(1) for m in ANY_QUALIFIED_RE.finditer(text)}
+    return seen - set(RADIO_MODEL_RECEIVERS) - set(FOREIGN_RECEIVERS)
+
+
+UNCLASSIFIED: dict[str, list[str]] = {}
+
+
+def _strip(text: str) -> str:
+    """Blank string literals, then remove comments. See count_for."""
+    text = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', text)
+    text = re.sub(r"//[^\n]*", "", text)
+    return re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 
 
 def count_for(path: Path) -> int:
@@ -206,7 +276,9 @@ def count_for(path: Path) -> int:
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 
     rel = path.relative_to(REPO).as_posix()
-    n = len(EMIT_RE.findall(text)) + len(QUALIFIED_RE.findall(text))
+    n = (len(EMIT_RE.findall(text))
+         + len(QUALIFIED_RE.findall(text))
+         + len(HELPER_RE.findall(text)))
     if rel in PLANE_HELPER_FILES:
         n += len(UNQUALIFIED_RE.findall(text)) - len(DEF_RE.findall(text))
     return max(n, 0)
@@ -226,6 +298,10 @@ def scan() -> dict[str, int]:
             if rel.startswith(BACKENDS_PREFIX):
                 continue
             seen += 1
+            unknown = unknown_receivers(_strip(path.read_text(encoding="utf-8",
+                                                              errors="replace")))
+            if unknown:
+                UNCLASSIFIED[rel] = sorted(unknown)
             n = count_for(path)
             if n:
                 current[rel] = n
@@ -272,6 +348,16 @@ def main() -> int:
             print(f"::notice file={rel},title=command-plane-progress::"
                   f"{rel} is down to {n} from {allowed} — lower its row in "
                   f"tools/check_command_plane.py so the gain cannot be given back.")
+
+    for rel, names in sorted(UNCLASSIFIED.items()):
+        blocking += 1
+        print(f"::error file={rel},title=command-plane-receiver::"
+              f"{rel} calls send(Command|Cmd|CmdPublic) on unclassified receiver(s) "
+              f"{', '.join(names)}. This checker must know whether that reaches the "
+              f"Flex command plane or a different device's wire — it will not guess. "
+              f"Add the name to RADIO_MODEL_RECEIVERS (it is the RadioModel, and the "
+              f"call is a conversion site) or to FOREIGN_RECEIVERS (it is another "
+              f"device) in tools/check_command_plane.py (#5262 M4).")
 
     for rel, allowed in sorted(BASELINE.items()):
         if rel not in current:
