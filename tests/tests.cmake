@@ -1932,6 +1932,15 @@ target_include_directories(qso_recorder_pc_audio_guard_test PRIVATE
 target_link_libraries(qso_recorder_pc_audio_guard_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME qso_recorder_pc_audio_guard_test COMMAND qso_recorder_pc_audio_guard_test)
 
+# #5634 — delayed profile-transfer callbacks must retain their operation,
+# request, and socket identity without using a firmware peer or listener.
+add_executable(profile_transfer_generation_test
+    tests/profile_transfer_generation_test.cpp
+)
+target_include_directories(profile_transfer_generation_test PRIVATE src)
+target_link_libraries(profile_transfer_generation_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME profile_transfer_generation_test COMMAND profile_transfer_generation_test)
+
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
 )
