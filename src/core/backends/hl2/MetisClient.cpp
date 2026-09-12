@@ -337,8 +337,35 @@ void MetisClient::onWatchdogTick()
         // Socket still open but the radio went quiet — surface it as link loss
         // rather than sitting in a permanently "connected" state.
         m_linkUp = false;
+        // And drop the outstanding request with the link, exactly as stop()
+        // does. Hl2ControlRequest::reset()'s own doc says "for a link that went
+        // down", and this is that; leaving the machine Awaiting here made the
+        // asymmetry a lie and, when the silence is a real metis-stop/restart,
+        // reported TimedOut for a request the radio may well have applied
+        // before it went away.
+        dropControlRequest();
         emit linkDown();
     }
+}
+
+void MetisClient::dropControlRequest()
+{
+    // Publish first: a verdict that had already settled is real and was earned
+    // before the link went, so it is not thrown away with it.
+    publishControlVerdict();
+    // Then tell a caller that is still waiting. reset() alone would leave it
+    // waiting for a signal that can no longer be emitted — silence is the one
+    // outcome this seam is not allowed to produce. `refused` is false: the
+    // radio did not refuse, it stopped being reachable, which is the same
+    // no-answer the deadline reports.
+    const auto st = m_ccRequest.state();
+    if (st == Hl2ControlRequest::State::Queued
+        || st == Hl2ControlRequest::State::Awaiting) {
+        emit controlRequestFailed(m_ccRequest.outstanding().addr, /*refused=*/false);
+    }
+    m_ccRequest.reset();
+    // A bank already built but not yet confirmed has nowhere to land now.
+    m_requestOnBuiltPacket = false;
 }
 
 void MetisClient::stop()
@@ -369,7 +396,7 @@ void MetisClient::stop()
     // The radio's response register does not survive a metis-stop, and neither
     // does the quarantine's reason for existing: nothing the next stream
     // delivers can be a reply to a request from this one.
-    m_ccRequest.reset();
+    dropControlRequest();
     if (m_linkUp) {
         m_linkUp = false;
         emit linkDown();
@@ -615,17 +642,55 @@ void MetisClient::requestPipelineReset()
 
 bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
 {
-    // Addresses whose DATA can transmit or wedge, refused at this layer so that
-    // no caller reaches them by way of a "read". See the header for what a
-    // future writer has to change, and why deleting these is not it.
+    // ---- THE ALLOW-LIST ----
     //
-    //   0x09  TX drive level, onboard PA enable, ATU. ccTxDrive()'s register.
-    //   0x39  sync / reset. Carries the watchdog enable at [27:24] and the
-    //         master enable at [11:8]; writing it wedged a radio once already
-    //         (see requestPipelineReset above).
-    constexpr int kTxDriveAddr = kC0TxDrive >> 1;   // 0x09
-    constexpr int kSyncAddr    = kC0Sync >> 1;      // 0x39
-    if (addr == kTxDriveAddr || addr == kSyncAddr)
+    // These addresses, and nothing else. The SHAPE is the point, and it is a
+    // deliberate inversion of the deny-list this started as: a deny-list FAILS
+    // OPEN — the next person to add a register to the C&C map gets it
+    // RQST-able for free, without having thought about it once — and an
+    // allow-list FAILS CLOSED. Adding an entry is then a reviewable act with a
+    // reason written next to it, which is what the entries below are. There are
+    // zero callers today, so this is the cheapest moment the inversion will
+    // ever have.
+    //
+    // WHAT THIS GUARANTEES, stated narrowly, because the broad version is not
+    // true and a reader who takes it away will be wrong:
+    //
+    //   * none of these three registers emits RF, and none of them reaches
+    //     anything outside the radio's own case. In particular 0x3d (I2C2) is
+    //     NOT here. MetisProtocol.h's IO-board note says what sits on that bus:
+    //     a Raspberry Pi Pico that switches amplifiers, antenna relays and
+    //     transverters. An arbitrary-data RQST there is a direct I2C write to
+    //     that board. It is absent because nothing needs it — not because it
+    //     would be harmless.
+    //
+    //   * 0x0a and 0x0e are RE-ASSERTED by the round robin in
+    //     buildNextControlPacket (the gain slot and the ADC-assign slot), so a
+    //     wrong value written through here self-corrects within one rotation,
+    //     ~16 ms at four receivers. That property is most of why these two are
+    //     the safe ones, and it is exactly what 0x01 (the TX1 NCO) does NOT
+    //     have: this client sends the transmit frequency once per tune and
+    //     never refreshes it, so a bad write there would persist silently until
+    //     the operator moved the dial, with our own idea of the TX frequency
+    //     now wrong. 0x01 is therefore off the list too.
+    //
+    //   * 0x3b is the read path, and the only one: the AD9866 SPI command is
+    //     how a converter register comes BACK off this wire at all
+    //     (`ad9866ctrl.v`, `6'h3b`), and its reply carries the value read
+    //     instead of an echo — pass subsystemRead = true for it.
+    //
+    // 0x09 (TX drive, onboard PA enable, ATU) and 0x39 (sync/reset, which
+    // carries the watchdog enable at [27:24] and the master enable at [11:8],
+    // and which wedged a radio once already — see requestPipelineReset above)
+    // are absent and must not be added unconditionally. A future item that
+    // needs either has to gate it on transmitEnabled() deliberately.
+    static constexpr int kRequestableAddresses[] = {
+        kC0AdcGain >> 1,            // 0x0a  AD9866 RX LNA gain (ccRxGain)
+        kC0AdcAssignOrTxGain >> 1,  // 0x0e  ADC assign / TX LNA gain (ccAdcAssign)
+        kC0Ad9866Spi >> 1,          // 0x3b  AD9866 SPI — the subsystem read path
+    };
+    if (std::find(std::begin(kRequestableAddresses), std::end(kRequestableAddresses), addr)
+        == std::end(kRequestableAddresses))
         return false;
 
     // Response slots live inside the EP6 frame, and the EP6 emit path is gated
@@ -766,6 +831,10 @@ void MetisClient::flushTxIq()
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
 {
     static const Cc kCcAdc = ccAdcAssign();
+    // Cleared here rather than only on confirmation: a packet built and then
+    // thrown away (a test, or a caller that inspects the bytes) must not leave
+    // a stale claim that some later packet carried the request.
+    m_requestOnBuiltPacket = false;
     Cc b;
     if (!m_oneShot.empty()) {
         b = m_oneShot.front();
@@ -781,7 +850,17 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         // per armed request — the RQST bit never reaches a bank the round robin
         // re-asserts, which would re-request three times a rotation for ever.
         b = *rqst;
-        m_ccRequest.onRequestSent();
+        // NOT onRequestSent() here: this packet has not been handed to the
+        // socket yet, and Hl2ControlRequest::onRequestSent()'s own contract says
+        // "when the bank has actually been handed to the socket". Starting the
+        // deadline at build time makes a FAILED send indistinguishable from a
+        // radio that did not answer — the request would have left Queued, so it
+        // could never go out on a later frame, and the caller would be told
+        // "timed out" after 32 frames plus 32 more of quarantine for a command
+        // the radio never saw. onControlPacketSent() does it instead, after
+        // sendTo() reports a write; a failed send leaves the request Queued and
+        // it goes out on the next EP2 frame.
+        m_requestOnBuiltPacket = true;
     } else {
         // The rotation is every receiver's NCO, then gain, then ADC assignment:
         // numRx + 2 slots. Each receiver's NCO is RE-ASSERTED rather than sent
@@ -866,6 +945,16 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     return pkt;
 }
 
+void MetisClient::onControlPacketSent(qint64 bytesWritten) noexcept
+{
+    // Consumed either way: the claim belongs to the packet just built, and a
+    // send that failed must not leave it standing for the next one.
+    const bool carriedRequest = m_requestOnBuiltPacket;
+    m_requestOnBuiltPacket = false;
+    if (carriedRequest && bytesWritten > 0)
+        m_ccRequest.onRequestSent();
+}
+
 void MetisClient::sendControlPacket()
 {
     if (!m_socket)
@@ -878,7 +967,12 @@ void MetisClient::sendControlPacket()
     // device leaves every receiver unassigned (and therefore emits all-zero IQ)
     // until it has seen it. Re-asserting it rather than sending it once keeps a
     // device that reconnects or resets mid-session from silently going quiet.
-    countTx(sendTo(*m_socket, buildNextControlPacket(), m_host, m_port));
+    const qint64 written = sendTo(*m_socket, buildNextControlPacket(), m_host, m_port);
+    countTx(written);
+    // AFTER the write, and taking its return value: this is the seam where a
+    // RQST bank stops being something we intend to send and becomes something
+    // the radio has been given a chance to answer.
+    onControlPacketSent(written);
 }
 
 void MetisClient::countTx(qint64 bytesWritten) noexcept

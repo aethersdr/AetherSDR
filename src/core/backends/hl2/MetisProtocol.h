@@ -390,12 +390,34 @@ Cc ccTxDrive(int level, bool paEnable = false) noexcept;
 // ordinary register-then-value slave expects. ONE-BYTE WRITES ONLY — there is
 // no burst mode, so an N-byte value costs N C&C banks.
 //
-// RQST (C0[7]) IS DELIBERATELY LEFT CLEAR. The wiki calls it optional for a
-// write, and setting it makes the radio answer with an ACK response — which
-// Hl2Telemetry::apply() dispatches on RADDR *without* consulting the ACK flag.
-// Today an I2C reply (RADDR 0x3c/0x3d) lands harmlessly in its `default:`, but
-// a write that provokes no reply at all cannot perturb the telemetry decoder
-// under any future edit to that switch. This path stays write-only.
+// RQST (C0[7]) IS LEFT CLEAR ON THESE BANKS, AND THE REASON HAS CHANGED.
+//
+// It used to be a decoder hazard: `Hl2Telemetry::apply()` dispatched on RADDR
+// *without* consulting the ACK flag, so an I2C reply (RADDR 0x3c/0x3d) landed
+// harmlessly in its `default:` only by accident of that switch's shape, and any
+// future edit to it could have made an echo of our own outgoing bytes read as
+// telemetry. THAT BUG IS FIXED — `apply()` now returns early on `r.ack`
+// (MetisProtocol.cpp) — so the hazard is closed and is no longer the reason.
+//
+// What decides whether an address may carry RQST now is the ALLOW-LIST in
+// `MetisClient::requestRegister`, and NEITHER 0x3c NOR 0x3d IS ON IT. That is a
+// deliberate omission, not an oversight: an arbitrary-data RQST at 0x3d is a
+// direct I2C write to the companion board described immediately below — the one
+// that switches amplifiers, antenna relays and transverters — and 0x3c reaches
+// the Versa clock that the board's own clocking depends on. Neither is
+// re-asserted by anything, so a wrong value there persists.
+//
+// The encoders in this section therefore stay write-only because nothing needs
+// an acknowledgement for them, and because nothing may ask for one. If a future
+// item does need one, the change is to that allow-list, with a note there
+// saying what the acknowledgement is worth — not a flag added here.
+// addr 0x3b: a raw SPI transaction against the AD9866 itself (gateware
+// `ad9866ctrl.v`, which decodes `6'h3b`). The only path on this wire that can
+// read a converter register BACK — the reply carries the value read rather than
+// an echo of what was written, which is what Hl2ControlRequest::Echo::
+// SubsystemRead exists for. No encoder here yet: nothing writes it, and
+// MetisClient::requestRegister names it only as an allow-listed address.
+inline constexpr std::uint8_t kC0Ad9866Spi = 0x76;  // addr 0x3b << 1
 inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
 inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1
 inline constexpr std::uint8_t kI2cCookieWrite = 0x06;  // C1

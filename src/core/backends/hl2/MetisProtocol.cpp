@@ -260,6 +260,15 @@ void Hl2Telemetry::apply(const Ep6Response& r) noexcept
 {
     // PTT first: C0[0] is ptt_resp in BOTH branches of control.v's iresp
     // composition, so it is the one field an ACK still carries honestly.
+    //
+    // NOT a belt-and-braces PTT path for MetisClient, and the comment used to
+    // imply it was: that client routes every ACK to ingestControlResponse and
+    // never here, so on that wiring this line only ever runs for free-running
+    // telemetry — where every one of control.v's four RADDR slots carries
+    // ptt_resp anyway, so nothing is lost. It is kept
+    // because apply() is a public decoder with other callers and tests, and
+    // because dropping a field an ACK genuinely carries would be the wrong
+    // default for them.
     ptt = r.ptt;
     // Everything below reads `raddr` as a free-running telemetry slot. In an ACK
     // it is a command address and `data` is our own echo — see the header.

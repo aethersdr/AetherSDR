@@ -25,6 +25,15 @@
 //     overwrites the saved address and data of the request still waiting for a
 //     slot. So a pipelined pair does not give you two answers late; it gives
 //     you one answer and one silence, and no error anywhere.
+//
+//     BOTH OF THOSE ARE GATED ON THE RQST BIT, which is what makes this a host
+//     discipline problem rather than an impossibility. control.v enters the
+//     sequence only on `cmd_rqst & cmd_requires_resp & ~cmd_is_alt`, and the
+//     RESP_WAIT overwrite is inside `if (resp_rqst & ~resp_cnt)` and then
+//     `if (cmd_rqst & cmd_requires_resp)` — `cmd_requires_resp` being C0[7],
+//     wired from `cmd_resprqst` in hermeslite_core.v. The ordinary round robin,
+//     which never sets C0[7], therefore CANNOT clobber a pending reply however
+//     fast it runs. Only another RQST can, and only one party issues those.
 //     --> arm() REFUSES unless the machine is Idle, and says so in its return
 //         type. There is no queue. A caller that wants two reads does two.
 //
@@ -80,10 +89,16 @@ public:
         // only evidence, beyond a six-bit address, that this reply belongs to
         // this request rather than to the last one at the same register.
         Exact,
-        // An AD9866 SPI (0x3b) or I2C (0x3c) command whose reply carries the
-        // value READ rather than the bytes written. Only the address can be
-        // matched, so such a request is strictly weaker evidence — which is
-        // exactly why the quarantine on timeout is not optional.
+        // A command whose reply carries the value READ rather than the bytes
+        // written: the AD9866 SPI command (0x3b) and both I2C buses (0x3c
+        // internal, 0x3d the external companion bus — MetisProtocol.h documents
+        // TWO, and picking Echo::Exact for either would silently throw away the
+        // data half of the match). Of those, only 0x3b is reachable through
+        // MetisClient::requestRegister's allow-list today.
+        //
+        // Only the address can be matched, so such a request is strictly weaker
+        // evidence — which is exactly why the quarantine on timeout is not
+        // optional.
         SubsystemRead,
     };
 
@@ -116,13 +131,25 @@ public:
     // Deadline and quarantine, in EP6 FRAMES. See the class note for why the
     // unit is frames.
     //
-    // The gateware answers fast: RESP_START latches on the command, RESP_ACK and
-    // RESP_READ each take a cycle or two, and RESP_WAIT releases the reply on
-    // the next `resp_rqst & ~resp_cnt` — which is at most two frames away,
-    // because resp_cnt flips on every frame. Three or four frames is the
-    // expected turnaround; 32 is generous enough to absorb an EP2 pacer tick,
-    // the round trip, and a slow I2C subsystem without being so long that a
-    // genuinely dead request stalls a caller.
+    // The gateware answers fast, but NOT every frame, and the difference is
+    // worth stating because 32 was sized against it. control.v toggles
+    // `resp_cnt` on every `resp_rqst` and then acts "Only every other
+    // resp_rqst" (its own comment): both the RESP_WAIT exit and the write of
+    // the command reply into `iresp` are guarded by `~resp_cnt`. So a COMMAND
+    // RESPONSE SLOT OPENS ON ALTERNATE EP6 FRAMES, not on every frame — the
+    // free-running telemetry slots are the other half of that alternation.
+    //
+    // RESP_START latches on the command and RESP_ACK/RESP_READ each take a
+    // cycle or two of clk_ctrl, which is nothing beside a frame; the wait for a
+    // slot is the whole of the latency, and it is one frame at best and two at
+    // worst depending on the phase `resp_cnt` happens to be in. Call it two to
+    // four frames end to end. 32 frames is therefore SIXTEEN response
+    // opportunities, not thirty-two — still generous enough to absorb an EP2
+    // pacer tick, the round trip and a slow I2C subsystem, and at 48 kHz with
+    // one receiver (63 samples per 512-byte frame) it is ~42 ms, which is short
+    // enough that a genuinely dead request does not strand a caller. The
+    // constant is unchanged because the alternation was already counted; what
+    // was missing was saying so here.
     static constexpr int kDefaultDeadlineFrames = 32;
     // Equal to the deadline: whatever the radio still owes us is released on the
     // next slot after it becomes available, so one more deadline's worth of

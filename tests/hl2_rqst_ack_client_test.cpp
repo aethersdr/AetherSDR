@@ -32,6 +32,10 @@ struct MetisClientTestAccess {
     }
     // One EP6 frame's worth of deadline, the way a datagram would.
     static void feedFrame(MetisClient& c) { c.tickControlRequest(); }
+    // Confirm the packet just built reached the socket, the way
+    // sendControlPacket() does with sendTo()'s return value. `bytes <= 0` is a
+    // write the kernel refused.
+    static void confirmSent(MetisClient& c, qint64 bytes) { c.onControlPacketSent(bytes); }
 };
 }
 
@@ -63,6 +67,16 @@ static std::uint32_t dataOf(const Packet& p, std::size_t frame)
          | (std::uint32_t(p[frame + 6]) << 8) | std::uint32_t(p[frame + 7]);
 }
 
+// Build a packet AND confirm it reached the socket — the two-step the transport
+// performs. Split on purpose: the deadline must not start on a bank that only
+// got as far as a buffer, so every test that means "this went out" says both.
+static Packet sendPacket(MetisClient& c)
+{
+    const auto pkt = c.buildNextControlPacket();
+    MetisClientTestAccess::confirmSent(c, static_cast<qint64>(kUsbPacketSize));
+    return pkt;
+}
+
 static Ep6Response ack(int raddr, std::uint32_t data)
 {
     Ep6Response r;
@@ -84,14 +98,46 @@ static void testRefusedBeforeThereIsAStream()
     check(c.controlRequest().state() == Hl2ControlRequest::State::Idle,
           "and arms nothing");
     for (int i = 0; i < 16; ++i)
-        check(!anyFrameRequests(c.buildNextControlPacket()),
+        check(!anyFrameRequests(sendPacket(c)),
               "no RQST bit reaches the wire from a refused request");
 }
 
-static void testTransmitCapableRegistersAreRefused()
+static void testOnlyTheAllowListedAddressesAreRequestable()
 {
     MetisClient c;
     MetisClientTestAccess::setStreaming(c);
+
+    // The whole of the allow-list, and each one has to be re-armable after the
+    // previous answer or the loop below would prove nothing after the first.
+    const int allowed[] = {kC0AdcGain >> 1, kC0AdcAssignOrTxGain >> 1, kC0Ad9866Spi >> 1};
+    for (const int a : allowed) {
+        check(c.requestRegister(a, 0x40u), "an allow-listed address is accepted");
+        while (c.controlRequest().state() == Hl2ControlRequest::State::Queued)
+            (void)sendPacket(c);
+        MetisClientTestAccess::feedResponse(c, ack(a, 0x40u));
+        check(c.controlRequest().state() == Hl2ControlRequest::State::Idle,
+              "and settles, so the next one can be armed");
+    }
+
+    // EVERY other six-bit address is refused, which is the property a deny-list
+    // could not have: this passes for addresses nobody has thought about yet.
+    // Named individually below are the ones with a reason worth stating.
+    for (int a = 0; a < 0x40; ++a) {
+        const bool onList = a == (kC0AdcGain >> 1) || a == (kC0AdcAssignOrTxGain >> 1)
+                         || a == (kC0Ad9866Spi >> 1);
+        if (onList)
+            continue;
+        check(!c.requestRegister(a, 0), "an address not on the allow-list is refused");
+    }
+
+    // 0x3d is the external companion bus — a Pico that switches amplifiers,
+    // antenna relays and transverters. 0x3c is the internal bus (Versa clock,
+    // AD9866). Neither self-corrects, and neither is on the list.
+    check(!c.requestRegister(kC0I2c2 >> 1, 0), "0x3d (I2C2, companion board) is refused");
+    check(!c.requestRegister(kC0I2c1 >> 1, 0), "0x3c (I2C1, internal bus) is refused");
+    // 0x01 is the TX NCO, and unlike 0x00/0x02..0x08 the round robin never
+    // re-asserts it: a bad write there would persist until the next tune.
+    check(!c.requestRegister(kC0TxFreq >> 1, 0), "0x01 (TX NCO, not re-asserted) is refused");
     // 0x09 is TX drive level, onboard PA enable and ATU: its DATA is what puts
     // RF out of the socket. 0x39 is sync/reset, which carries the watchdog and
     // master enables and has wedged a radio.
@@ -105,8 +151,63 @@ static void testTransmitCapableRegistersAreRefused()
     check(!c.requestRegister(kC0Sync >> 1, 0), "0x39 stays refused with the gate OPEN");
     check(!c.requestRegister(kRespAddrError, 0), "0x3F is refused");
     check(!c.requestRegister(0x40, 0), "an address past the six-bit field is refused");
-    // A register that is neither: the AD9866 LNA gain.
-    check(c.requestRegister(kC0AdcGain >> 1, 0x40u), "an ordinary register is accepted");
+    check(!c.requestRegister(-1, 0), "a negative address is refused");
+}
+
+static void testAFailedSendDoesNotBurnTheRequest()
+{
+    // onRequestSent() runs on the socket's return value, not on the build. A
+    // write the kernel refused must leave the request Queued so it goes out on
+    // the next EP2 frame — starting the deadline here would spend 32 frames
+    // plus 32 of quarantine on a command the radio was never shown, and report
+    // it as "the radio did not answer".
+    MetisClient c;
+    MetisClientTestAccess::setStreaming(c);
+    check(c.requestRegister(0x0E, 0xDEAD'BEEFu), "armed");
+
+    const auto lost = c.buildNextControlPacket();
+    check(anyFrameRequests(lost), "the RQST bank was built");
+    MetisClientTestAccess::confirmSent(c, -1);          // sendTo() failed
+    check(c.controlRequest().state() == Hl2ControlRequest::State::Queued,
+          "a failed send leaves the request QUEUED, deadline not started");
+
+    const auto retry = sendPacket(c);
+    check(anyFrameRequests(retry), "and it goes out on the next frame instead");
+    check(dataOf(retry, kFrameB) == 0xDEAD'BEEFu, "with the same data");
+    check(c.controlRequest().state() == Hl2ControlRequest::State::Awaiting,
+          "only a send that succeeded starts the deadline");
+    // Still exactly once overall: the lost packet is not a second command.
+    int further = 0;
+    for (int i = 0; i < 32; ++i)
+        if (anyFrameRequests(sendPacket(c)))
+            ++further;
+    check(further == 0, "and never a third time");
+}
+
+static void testLinkDownDropsTheRequestAndSaysSo()
+{
+    // reset()'s own doc is "for a link that went down". stop() did it; the
+    // silence watchdog did not, so a metis-stop/restart left a stale Awaiting
+    // that later reported TimedOut for a request the radio may have applied.
+    // Both now go through dropControlRequest(), which is what this exercises —
+    // via stop(), because the watchdog needs a socket and a timer and this test
+    // has neither by design.
+    MetisClient c;
+    MetisClientTestAccess::setStreaming(c);
+    int failures = 0, lastAddr = -1;
+    bool lastRefused = true;
+    QObject::connect(&c, &MetisClient::controlRequestFailed,
+                     [&](int a, bool refused) { ++failures; lastAddr = a; lastRefused = refused; });
+
+    check(c.requestRegister(0x0E, 7), "armed");
+    while (c.controlRequest().state() == Hl2ControlRequest::State::Queued)
+        (void)sendPacket(c);
+    c.stop();
+    check(c.controlRequest().state() == Hl2ControlRequest::State::Idle,
+          "the link going down forgets the outstanding request");
+    check(failures == 1 && lastAddr == 0x0E && !lastRefused,
+          "and the caller is told, rather than left waiting for a signal that "
+          "can no longer be emitted");
 }
 
 static void testRequestReachesTheWireExactlyOnce()
@@ -122,7 +223,7 @@ static void testRequestReachesTheWireExactlyOnce()
     // and every repeat would be a fresh command the radio's one-deep response
     // register has to serve.
     for (int i = 0; i < 64; ++i) {
-        const auto pkt = c.buildNextControlPacket();
+        const auto pkt = sendPacket(c);
         if (anyFrameRequests(pkt)) { ++seen; requestPacket = pkt; }
         check(!anyFrameKeyed(pkt), "no frame is ever keyed by a request");
     }
@@ -154,7 +255,7 @@ static void testARequestCannotKeyAKeyedRadioAnyHarder()
     check(c.requestRegister(0x0E, 0), "armed");
     for (int i = 0; i < 32; ++i) {
         c.setMox(true);
-        check(!anyFrameKeyed(c.buildNextControlPacket()),
+        check(!anyFrameKeyed(sendPacket(c)),
               "a request frame is not a way past the transmit gate");
     }
 }
@@ -173,7 +274,7 @@ static void testRequestDoesNotOvertakeAnOperatorWrite()
     int boardWritesBeforeRequest = 0;
     bool sawRequest = false;
     for (int i = 0; i < 16 && !sawRequest; ++i) {
-        const auto pkt = c.buildNextControlPacket();
+        const auto pkt = sendPacket(c);
         const std::uint8_t b = c0(pkt, kFrameB);
         if ((b & kC0RespRqstBit) != 0)
             sawRequest = true;
@@ -200,9 +301,8 @@ static void testReplyAndTimeoutReachTheSeam()
 
     // --- answered ---
     check(c.requestRegister(0x0E, 0x0000'8000u), "armed");
-    (void)c.buildNextControlPacket();                  // put it on the wire
     while (c.controlRequest().state() == Hl2ControlRequest::State::Queued)
-        (void)c.buildNextControlPacket();
+        (void)sendPacket(c);                           // put it on the wire
     MetisClientTestAccess::feedResponse(c, ack(0x0E, 0x0000'8000u));
     check(replies == 1, "a matching ACK publishes a reply");
     check(lastAddr == 0x0E && lastData == 0x0000'8000u, "carrying the echo");
@@ -211,7 +311,7 @@ static void testReplyAndTimeoutReachTheSeam()
     // --- refused by the radio ---
     check(c.requestRegister(0x0E, 1), "re-armed after an answer");
     while (c.controlRequest().state() == Hl2ControlRequest::State::Queued)
-        (void)c.buildNextControlPacket();
+        (void)sendPacket(c);
     MetisClientTestAccess::feedResponse(c, ack(kRespAddrError, 0));
     check(failures == 1 && lastRefused, "a 0x3F reply publishes a refusal");
     check(lastAddr == 0x0E, "named by the address asked for");
@@ -219,7 +319,7 @@ static void testReplyAndTimeoutReachTheSeam()
     // --- unanswered ---
     check(c.requestRegister(0x0E, 2), "re-armed after a refusal");
     while (c.controlRequest().state() == Hl2ControlRequest::State::Queued)
-        (void)c.buildNextControlPacket();
+        (void)sendPacket(c);
     for (int i = 0; i < Hl2ControlRequest::kDefaultDeadlineFrames; ++i)
         MetisClientTestAccess::feedFrame(c);
     check(failures == 2 && !lastRefused,
@@ -244,7 +344,7 @@ static void testStopClearsTheOutstandingRequest()
     // And it does not leak onto the next session's wire.
     MetisClientTestAccess::setStreaming(c);
     for (int i = 0; i < 16; ++i)
-        check(!anyFrameRequests(c.buildNextControlPacket()),
+        check(!anyFrameRequests(sendPacket(c)),
               "no stale RQST survives a stop");
 }
 
@@ -253,12 +353,14 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
 
     testRefusedBeforeThereIsAStream();
-    testTransmitCapableRegistersAreRefused();
+    testOnlyTheAllowListedAddressesAreRequestable();
     testRequestReachesTheWireExactlyOnce();
     testARequestCannotKeyAKeyedRadioAnyHarder();
     testRequestDoesNotOvertakeAnOperatorWrite();
     testReplyAndTimeoutReachTheSeam();
     testStopClearsTheOutstandingRequest();
+    testAFailedSendDoesNotBurnTheRequest();
+    testLinkDownDropsTheRequestAndSaysSo();
 
     if (g_failures == 0)
         std::printf("hl2_rqst_ack_client_test: OK\n");
