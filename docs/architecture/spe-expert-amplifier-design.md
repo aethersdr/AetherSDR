@@ -315,9 +315,22 @@ control application and re-validated against the real 1.5K-FA (see
 `THIRD_PARTY_LICENSES` for the provenance chain, which ends at the
 MIT-licensed expert-amp-server project) — is:
 
-- **Request**: the standard keystroke-style packet with code `0x80`,
-  polled at 600 ms (the field-proven cadence; the frame is ~5x a Status
-  reply, and the mirror is for eyes, not telemetry).
+- **Request**: the standard keystroke-style packet with code `0x80`.
+  Polling is reply-paced on a single-shot timer: a request arms only a
+  1 s lost-reply fallback, and each decoded display re-arms the short
+  250 ms gap — so the effective cadence is gap plus round trip plus the
+  link's own serialization time for the 371-byte frame (~285 ms total at
+  115200; a 19200 proxy serial side stretches it to ~450 ms on its own).
+  As long as the round trip stays under the 1 s fallback — which covers
+  the slowest plausible link, a 9600 baud serial side spending ~390 ms on
+  the frame alone — a second request is never issued while the previous
+  reply is still arriving: the amplifier is never asked to interleave
+  display blocks, and a slow link stretches the cadence instead of
+  accumulating a request backlog. A round trip beyond the fallback is
+  treated as a lost reply and retried, accepting the overlap risk on a
+  link that degenerate. At a 9600 baud proxy serial side the 100 ms
+  Status poll alone consumes ~80% of the wire, so ser2net serial sides
+  should be configured at 57600 or above.
 - **Reply**: `AA AA AA | 6A 01` (16-bit payload length, 362) `| 95 FE |
   ` 2-byte inverted flag word |` 320 character bytes (8 rows x 40
   columns, row-major) + 40 attribute bytes (one per column, bit N =
@@ -343,6 +356,34 @@ With the mirror on screen, the FRONT PANEL keys stop being blind — the
 operator navigates the amplifier's menu watching the amplifier's screen,
 which is what unlocked the §4 ruling change. Those keys remain disabled
 until the first checksum-valid display arrives and are disabled again after
-two missed 600 ms refreshes. Every acknowledged keystroke requests an
-immediate display refresh and resets the periodic cadence, so a fast menu
-sequence does not have to wait a full polling interval to show its result.
+2.4 s without one — an absolute window sized to cover a lost frame plus a
+retry even on a 9600 baud proxy serial side AND the amplifier's own quiet
+spells around OPERATE/STANDBY relay transitions, because routine events
+must read as a hiccup, not flap the gate. A display frame that arrives
+complete but fails validation triggers a prompt re-request (80 ms pause;
+each retry is itself provoked by a full received-and-rejected frame, so
+the retry stream is self-limited by the link's serialization time): the
+field case is strong RF near the serial run mid-transmit, where the
+371-byte display reply dies to bit errors far more often than the 76-byte
+Status reply, and one clean frame every second or two is all the mirror
+needs to stay live through a transmission. Losing freshness changes
+nothing on the glass: the mirror holds its newest image at full
+brightness, exactly like the amplifier's own LCD holds its picture, and
+the disabled key group is the one and only not-live signal. (Both
+alternatives were field-tested and rejected: blanking the glass made the
+mirror blink in and out, and even a light dim read as the LCD switching
+off — display gaps of one to several seconds are ROUTINE on a
+best-effort link, in plain standby on a quiet band, so any visible
+staleness treatment fires constantly and punishes the operator without
+adding safety the key gate doesn't already provide.) The mirror only
+returns to the idle glass when the image is truly obsolete (disconnect,
+or a docked⇄floating switch). Every
+acknowledged keystroke requests an immediate display refresh, and the
+cadence re-arms from each display *reply* rather than free-running: the
+original free-running 600 ms period was an exact multiple of the 100 ms
+Status poll, and two such timers phase-lock with every display reply
+straddling a status poll on the wire, dropping display frames in bursts
+until clock drift walks the alignment out. Pacing from the reply folds the
+amplifier's variable response latency into the period, so no stable phase
+relationship can form — and it is also what makes the small 250 ms gap
+safe on slow links (see the request bullet above).

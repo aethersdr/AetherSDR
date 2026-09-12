@@ -75,8 +75,9 @@ public:
     void switchOff() { sendKey(Spe::Key::SwitchOff); }
 
     // Remote LCD mirroring: while enabled (and connected) the amplifier's
-    // display is polled with the 0x80 request at kLcdPollIntervalMs and
-    // every decoded refresh arrives via lcdFrameReceived. Driven by the
+    // display is polled with the 0x80 request — each reply schedules the
+    // next request kLcdPollIntervalMs later — and every decoded refresh
+    // arrives via lcdFrameReceived. Driven by the
     // applet's floating state — the docked rail has no room for the LCD,
     // so polling it there would be pure link noise.
     void setLcdPolling(bool on);
@@ -108,9 +109,10 @@ signals:
     void connectionFailed(const QString& errorString);
     void statusUpdated(const AetherSDR::Spe::Status& status);
     void lcdFrameReceived(const AetherSDR::Spe::Lcd::Frame& frame);
-    // True only after a checksum-valid LCD reply, and false again after two
-    // missed 600 ms refreshes or whenever LCD polling/transport stops. The
-    // floating menu keys use this independently of Status liveness.
+    // True only after a checksum-valid LCD reply, and false again after
+    // kLcdStaleTimeoutMs without one, or whenever LCD polling/transport
+    // stops. The floating menu keys use this independently of Status
+    // liveness.
     void lcdFreshChanged(bool fresh);
     // Fires on the first Status reply of a connection and again if the
     // reported ID ever changes (in practice: never mid-session). The GUI
@@ -173,10 +175,42 @@ private:
     // against Status's ~76, and the panel is for eyes, not telemetry.
     QTimer m_lcdTimer;
     QTimer m_lcdStaleTimer;
+    QTimer m_lcdRetryTimer;  // single-shot reject->re-request pause
     bool   m_lcdWanted{false};
     bool   m_lcdFresh{false};
-    static constexpr int kLcdPollIntervalMs = 600;
-    static constexpr int kLcdStaleTimeoutMs = kLcdPollIntervalMs * 2;
+    // The IDLE GAP between a display reply and the next request, not a
+    // free-running period: m_lcdTimer is single-shot, a REQUEST arms only
+    // the kLcdLostReplyMs fallback, and only a decoded REPLY re-arms this
+    // short gap — so the effective cadence is gap + round trip + the
+    // link's serialization time for the 371-byte frame (~32 ms at 115200,
+    // ~193 ms at 19200), and a second request cannot be issued while the
+    // previous reply is still arriving unless the round trip exceeds
+    // kLcdLostReplyMs. That self-clocking is what makes a small gap safe
+    // on slow links: the amp is never asked to interleave display blocks
+    // and the cadence stretches instead of piling up. (At ≤9600 the
+    // 100 ms Status poll alone nearly saturates the wire — see the design
+    // note §11's proxy baud recommendation.)
+    static constexpr int kLcdPollIntervalMs = 250;
+    // Lost-reply fallback: armed at request time, superseded by the reply
+    // re-arm above. Sized above the worst plausible round trip (a 9600
+    // baud proxy serial side spends ~390 ms serializing the frame alone),
+    // so within it a request is either answered or genuinely lost — never
+    // merely still in flight.
+    static constexpr int kLcdLostReplyMs = 1000;
+    // Prompt-retry pause after a display frame fails validation (see the
+    // parser's reject callback). Short enough that a mostly-corrupted
+    // mid-transmit stream still lands a clean frame within the staleness
+    // window whenever one gets through at all; long enough that the retry
+    // stream (each retry also provoked by a full received frame) stays
+    // well under the wire's capacity even at 115200 with Status polling.
+    static constexpr int kLcdRetryGapMs = 80;
+    // Absolute, deliberately decoupled from the poll gap: it must cover a
+    // full lost frame plus a retry on the slowest plausible link (a 9600
+    // baud proxy serial side spends ~390 ms per display frame) AND the
+    // amplifier's own quiet spells — it stops serving the display for a
+    // moment around OPERATE/STANDBY relay transitions — so routine events
+    // never flap the gate. On a fast link the margin only calms things.
+    static constexpr int kLcdStaleTimeoutMs = 2400;
 
     QString m_currentModelId;
 

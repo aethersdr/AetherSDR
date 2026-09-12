@@ -201,6 +201,13 @@ void FrameParser::feed(const QByteArray& bytes)
                     || telnet.state == DisplayCandidateState::Incomplete) {
                     return;
                 }
+                // Complete in both readings and valid in neither: a display
+                // frame died on the wire. Report it before resyncing so the
+                // owner can re-request promptly instead of waiting out the
+                // rest of its poll gap with a dead mirror.
+                if (m_onDisplayReject) {
+                    m_onDisplayReject();
+                }
                 if (!resyncToNextSync()) {
                     return;
                 }

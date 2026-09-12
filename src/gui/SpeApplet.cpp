@@ -380,6 +380,10 @@ void SpeApplet::setFloating(bool floating)
         return;
     }
     m_floating = floating;
+    // A presentation switch starts the mirror over — whatever image is held
+    // is from the previous floating session, not merely stale, so drop it
+    // to the idle glass before the freshness gate re-applies.
+    m_lcd->clear();
     setLcdFresh(false);
     applyDensity();
     // The LCD mirror only exists in the floating presentation — start (or
@@ -394,10 +398,18 @@ void SpeApplet::setLcdFrame(const AetherSDR::Spe::Lcd::Frame& frame)
 
 void SpeApplet::setLcdFresh(bool fresh)
 {
+    // Freshness gates the FRONT PANEL keys and nothing else. The glass
+    // deliberately keeps its last image at full brightness: display frames
+    // stop for seconds at a time in routine operation (link stalls, the
+    // amp's own quiet spells around relay transitions, RF bursts on the
+    // serial run mid-transmit), and every attempt to mark those moments on
+    // the glass — blanking it, then dimming it — field-tested as the
+    // mirror visibly "switching off" over and over. The authoritative
+    // not-live signal is the disabled key group; the mirror, like the
+    // amplifier's own LCD, just shows the newest picture it has. Hard
+    // clears remain where the image is truly obsolete (disconnect,
+    // presentation switch).
     m_lcdFresh = fresh;
-    if (!fresh) {
-        m_lcd->clear();
-    }
     updateCommandsEnabled();
 }
 
