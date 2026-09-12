@@ -9,8 +9,6 @@
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
-
-#include <QHostAddress>
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -67,10 +65,6 @@ inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabil
 
 class AprsDigipeaterModel;
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
-// Forward-declared, NOT included: Hl2TelemetryService.h pulls MetisProtocol.h
-// with it, and every consumer of this header is not an HL2 consumer. Held by
-// pointer below and constructed only where an HL2 is actually in play.
-namespace hl2 { class Hl2TelemetryService; }
 class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
 struct LicenseFeatureState {
@@ -347,44 +341,6 @@ public:
     // which the dialog renders as "this radio reports no health registers"
     // rather than as an empty table.
     IRadioBackend::HealthSnapshot backendHealthSnapshot() const;
-
-    // Stream-free HL2 telemetry rows (roadmap #15).
-    //
-    // SEPARATE FROM backendHealthSnapshot() ON PURPOSE. That one returns an
-    // empty snapshot when m_backend is null, and m_backend is built inside
-    // connectToRadio() — so routing these through it would make them absent in
-    // exactly the states they exist for: another client holding the radio, or
-    // nothing connected yet. That was the original defect; this seam is the
-    // fix. The service's lifetime is this model's, not a connection's.
-    //
-    // NOT const: reading the rows IS the poller's demand signal, and a query
-    // that quietly restarts a demand window is a lie about what it does. The
-    // mutation is on the non-const path where it belongs.
-    //
-    // Empty when no HL2 poller exists — see hasStreamFreeTelemetry(). It does
-    // not construct one: a Flex health read must not bring an HL2 service into
-    // being.
-    [[nodiscard]] IRadioBackend::HealthSnapshot streamFreeTelemetryRows();
-    // Whether an HL2 stream-free poller exists in this session at all. The gate
-    // a family-agnostic consumer asks before merging these rows into a snapshot
-    // — without it a Flex or Icom `health` grows HL2 attribution keys.
-    [[nodiscard]] bool hasStreamFreeTelemetry() const
-    {
-        return m_hl2Telemetry != nullptr;
-    }
-    // Aim the stream-free poller at a radio WITHOUT connecting. A null address
-    // stops it AND releases the service, so the rows go away again. Read-only:
-    // the poller sends the EF FE 02 status request and nothing else, never
-    // START/STOP and never a register write, which is what makes it safe to
-    // point at a radio another operator is using.
-    //
-    // HL2 FAMILIES ONLY, and it returns false for anything else. The gate lives
-    // here rather than at the bridge verb because the invariant is this model's:
-    // without it a `telemetry target` on a Flex, Icom or Sim session constructed
-    // the HL2 service, which made hasStreamFreeTelemetry() true and grew HL2
-    // attribution rows on that family's `health` — reproduced live against the
-    // demo simulator, with real datagrams leaving a sim session.
-    bool setTelemetryPollTarget(const QHostAddress& addr);
 
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
@@ -1638,17 +1594,6 @@ private:
     void handRestoredStateToBackend();  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
-    // Construct the stream-free HL2 poller on first need and return it. The
-    // only place m_hl2Telemetry is created, so "which sessions pay for it" has
-    // one answer and it is visible at its two call sites.
-    hl2::Hl2TelemetryService& ensureHl2Telemetry();
-    // Destroy the service when nothing is using it any more, so its rows stop
-    // appearing. The mirror of ensureHl2Telemetry(): without it the service was
-    // built once and never released, `telemetry target off` left the rows
-    // standing for the life of the process, and a family switch from HL2 to
-    // Flex carried them across. Refuses while an HL2 backend holds the borrowed
-    // pointer setupBackend() handed it.
-    void releaseHl2TelemetryIfUnused();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
     void restoreClientOwnedCwState(const RestoredRadioState& state);
 
@@ -1683,19 +1628,6 @@ private:
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
     std::unique_ptr<AprsDigipeaterModel> m_aprsDigipeater;
-    // Stream-free HL2 telemetry (roadmap #15). Its lifetime is this model's and
-    // not a connection's — it must answer when m_backend above is null, which
-    // is the whole reason it does not live inside the backend.
-    //
-    // A POINTER, NOT A VALUE MEMBER, and null until an HL2 is in play. As a
-    // value member every RadioModel constructed it and started its 1 Hz state
-    // timer, Flex and Icom and Sim sessions included, and every consumer of
-    // this header compiled MetisProtocol.h. "Idle until demand" was true of the
-    // polling and not of the object. Created by ensureHl2Telemetry() from
-    // exactly two places: an HL2 backend being built, and an explicit poll
-    // target being aimed. Nothing else constructs it, and reading the rows
-    // deliberately does not.
-    std::unique_ptr<hl2::Hl2TelemetryService> m_hl2Telemetry;
     QVector<TxPowerBand> m_txPowerBands;
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;

@@ -10,7 +10,6 @@
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")
-#include "core/backends/hl2/Hl2TelemetryService.h"  // stream-free telemetry (#15); forward-declared in the header
 #include "models/ConnectStatePolicy.h"
 #include "core/backends/anan/AnanBackend.h"    // aetherd ANAN P2 Phase 1b (family "anan")
 #include "core/backends/anan/AnanSettings.h"   // owned "Anan" settings object (Principle V)
@@ -825,14 +824,6 @@ void RadioModel::setupBackend(const QString& family)
     // RadioModel: `this`, or a value member such as m_transmitModel.
     m_radioDialLocked.reset();
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
-    // A switch AWAY from HL2 takes the HL2-only service with it. Here rather
-    // than in teardownBackend(), which also runs on a plain disconnect — and
-    // answering a DISCONNECTED HL2 is the entire point of this service, so
-    // releasing it there would delete the instrument in the state it exists
-    // for. rebuildBackendForFamily() tears the old backend down before calling
-    // this, so nothing is holding the borrowed pointer by now.
-    if (m_family != QLatin1String("hl2"))
-        releaseHl2TelemetryIfUnused();
     // IRadioBackend contract rule 5. teardownBackend() bumps this before the
     // old backend dies, and every handler below that INTERPRETS a delivery from
     // a backend-owned object captures it and returns early once it no longer
@@ -865,12 +856,6 @@ void RadioModel::setupBackend(const QString& family)
                    "was unavailable when AetherSDR was compiled."));
             return;
         }
-        // Hand the HL2 backend the stream-free telemetry service this model
-        // owns. It is a borrow, not a transfer: the service must outlive every
-        // backend, because its job is answering when there is no backend at all.
-        if (auto* hl2 = dynamic_cast<hl2::Hl2Backend*>(m_backend.get()))
-            hl2->setTelemetryService(&ensureHl2Telemetry());
-
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
             flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
@@ -4583,79 +4568,6 @@ IRadioBackend::HealthSnapshot RadioModel::backendHealthSnapshot() const
 {
     return m_backend ? m_backend->healthSnapshot()
                      : IRadioBackend::HealthSnapshot{};
-}
-
-hl2::Hl2TelemetryService& RadioModel::ensureHl2Telemetry()
-{
-    if (!m_hl2Telemetry) {
-        // Parented to this model, so its lifetime is the model's — the whole
-        // point of the class — while its EXISTENCE is now conditional on an
-        // HL2 being in play. A Flex, Icom or Sim session never reaches here
-        // and therefore constructs nothing and starts no timer.
-        m_hl2Telemetry = std::make_unique<hl2::Hl2TelemetryService>(this);
-    }
-    return *m_hl2Telemetry;
-}
-
-IRadioBackend::HealthSnapshot RadioModel::streamFreeTelemetryRows()
-{
-    // Deliberately does NOT consult m_backend. See the header.
-    //
-    // And deliberately does NOT construct the service: a family-agnostic health
-    // read on a Flex must not bring an HL2 poller into existence, so "no poller"
-    // answers with no rows rather than with an armed one.
-    if (!m_hl2Telemetry) {
-        return IRadioBackend::HealthSnapshot{};
-    }
-    m_hl2Telemetry->noteDemand();
-    return m_hl2Telemetry->healthRows();
-}
-
-void RadioModel::releaseHl2TelemetryIfUnused()
-{
-    if (!m_hl2Telemetry)
-        return;
-    // An HL2 backend holds a BORROWED pointer to it (setupBackend), so it must
-    // outlive that backend. Not a lifetime subtlety: setTelemetryService()
-    // keeps a raw pointer and nothing tells the backend the service has gone.
-    if (dynamic_cast<hl2::Hl2Backend*>(m_backend.get()))
-        return;
-    m_hl2Telemetry.reset();
-}
-
-bool RadioModel::setTelemetryPollTarget(const QHostAddress& addr)
-{
-    // HL2 ONLY. The poller speaks Metis on port 1025 and the rows it publishes
-    // are HL2 attribution keys, so aiming it from a Flex, Icom or Sim session
-    // is not a smaller version of the feature, it is the feature pointed at the
-    // wrong family — and because `health` merges on hasStreamFreeTelemetry(),
-    // building the service is what put those keys on that family's snapshot.
-    if (m_family != QLatin1String("hl2"))
-        return false;
-
-    if (addr.isNull()) {
-        if (!m_hl2Telemetry) {
-            // "Stop polling" on a session that never started is a no-op, not a
-            // reason to construct the poller so it can be told to stop.
-            return true;
-        }
-        // Stop, then LET GO. Clearing the target alone left hasStreamFreeTelemetry()
-        // true, so `health` went on merging rows that said "source: none,
-        // polling every 1000 ms" about a poller that no longer had a radio —
-        // and there was no way back to the snapshot the session started with.
-        m_hl2Telemetry->setTarget(addr);
-        releaseHl2TelemetryIfUnused();
-        return true;
-    }
-
-    hl2::Hl2TelemetryService& service = ensureHl2Telemetry();
-    service.setTarget(addr);
-    // Deliberately does NOT touch m_backend, does not set m_family, and does
-    // not begin a connection. Aiming the read-only poller at a radio and
-    // connecting to it are different acts, and conflating them is what made
-    // this impossible to do safely against a radio somebody else was holding.
-    service.noteDemand();
-    return true;
 }
 
 // Shared key-on guard for the paths that do NOT go through setTransmit().

@@ -1,20 +1,41 @@
 # HL2 stream-free telemetry — Design Note
 
-**Status:** Implemented, automation bridge only. The decode half
-(`MetisProtocol.cpp::parseDiscoveryReply`), the cadence rule
-(`Hl2TelemetryCadence.h`), the poller and the service above the backend
+**Status:** Implemented in-family, and deliberately **not constructed by
+anything**. The decode half (`MetisProtocol.cpp::parseDiscoveryReply`), the
+cadence rule (`Hl2TelemetryCadence.h`), the poller and the service
 (`Hl2TelemetryService`) are all built and tested. This note began as the plan
 for the poller and stays because §1 is still the reason the cadence is what it
 is; it is no longer a proposal.
 
-**Reachable from:** the automation bridge — `health`, and `telemetry target
-<ip>` to aim the poller without connecting. **NOT** from the operator's Radio
-Health dialog, which still reads `backendHealthSnapshot()` alone and therefore
-still says "Not connected." in exactly the states this feature exists for.
-That is a deliberate omission rather than an oversight: the dialog is core UX,
-and `GOVERNANCE.md` wants an approved RFC before a PR changes it. Wiring it is
-its own change, behind its own RFC, and the cadence table below describes what
-the POLLER does, not what any panel currently shows.
+**Reachable from: nothing yet, and that is the honest state.** The owner of the
+service, the `telemetry target <ip>` bridge verb and the `health` merge are a
+SEPARATE change — see "Why the owner is not in this change" below. Until that
+lands, `Hl2Backend::setTelemetryService()` has no caller, the service is
+constructed nowhere, and no operator or bridge surface shows a stream-free row.
+Everything below describes what the poller DOES when something drives it, not
+what any panel currently shows.
+
+### Why the owner is not in this change
+
+`docs/HERMES.md` gained a section, **"For coding agents — keep bring-up inside
+the family backend"** (jensenpat, `f6f56458`, merged in `1457d06d`). It carries
+a pre-PR grep over `src/models/RadioModel.*` and others and the rule
+*"Unexplained hits mean the work is not localized. Split it or stop."*, and it
+separately forbids adding `family == "hl2"` branches above the seam.
+
+The owner of this service cannot live inside `src/core/backends/hl2/`: the whole
+argument of §5 is that `Hl2Backend` exists only after a successful connect, and
+the states this instrument serves are the ones where there is no backend. So the
+owner is model-lifetime code, which is exactly the section's other clause:
+*"When the seam itself is missing a verb … that is a separate, capability-shaped
+PR, not a drive-by in the wire patch."*
+
+That PR designs the missing seam. This one stops at the family boundary.
+
+**The operator's Radio Health dialog is a third change**, further out still. It
+reads `backendHealthSnapshot()` alone and therefore says "Not connected." in
+exactly the states this feature exists for. The dialog is core UX and
+`GOVERNANCE.md` wants an approved RFC before a PR changes it.
 
 **Scope:** reading the radio's own state — PA temperature, forward and reverse
 power, PTT, ADC clip, TX FIFO, PTT hang time — **without an IQ stream**, and
@@ -113,8 +134,9 @@ So: **`setTarget()` is required, and `setAllowBroadcastFallback()` is off by
 default.** With neither, the poller sends nothing. Naming the radio is one line
 at the call site and removes a whole class of packet nobody asked for.
 
-`telemetry target <ip>` on the automation bridge supplies it without
-connecting — see §5.
+The automation bridge's `telemetry target <ip>` verb is how an address is meant
+to be supplied without connecting. It is **not in this change** — see the status
+block at the top and §5 item 3.
 
 ### 2.2 It is a read, and stays one
 
@@ -335,15 +357,20 @@ Additive, and outside the region `Hl2Backend`'s transmit drive path occupies.
    `DiscoveryReply`, with the gateware's offsets pinned by test against
    `usopenhpsdr1.v`'s own down-counter.
 2. **Done.** `Hl2TelemetryPoller`, one UDP socket to `<radio>:1025`, sending
-   `EF FE 02` on the §3 schedule. Owned by `Hl2TelemetryService`, which is a
-   value member of `RadioModel` — **not** of `Hl2Backend`, which only exists
-   after a successful connect and so cannot host an instrument for the
-   no-connection case. `telemetry target <ip>` aims it without connecting,
-   because the only other way to supply an address was `connectRadio()`, and
-   that sends Metis START — a write during another operator's session.
-3. **Then.** A seam field carrying source and age, and the surface that renders
-   it, including the "another client holds the radio" case which no existing
-   readout has ever had to express.
+   `EF FE 02` on the §3 schedule, owned by `Hl2TelemetryService`.
+   `Hl2Backend::setTelemetryService()` takes a BORROWED pointer and drives the
+   link state while a backend exists; it does not own the service and cannot,
+   because it only exists after a successful connect and the no-connection case
+   is the point. **In this change that setter has no caller.**
+3. **Next, and not here.** The owner: something with model lifetime that
+   constructs the service, a bridge verb that aims it without connecting —
+   `connectRadio()` is the only other way to supply an address and it sends
+   Metis START, a write during another operator's session — and the merge that
+   puts its rows into `health`. That is seam design, not wire work, and it is
+   its own PR.
+4. **Then.** The surface that renders source and age, including the "another
+   client holds the radio" case which no existing readout has ever had to
+   express.
 
 ## 6. Why item #13 is not a prerequisite
 
