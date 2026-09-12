@@ -3817,6 +3817,18 @@ target_include_directories(extension_namespace_gate_test PRIVATE src)
 target_link_libraries(extension_namespace_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME extension_namespace_gate_test COMMAND extension_namespace_gate_test)
 
+# Health that survives disconnection is gated on a DECLARATION, not on a family
+# string -- docs/HERMES.md's coding-agent section forbids the latter above the
+# seam, and #5554 §2.8 wants the matching dynamic_cast retired. The first check
+# is the load-bearing one: a self-registering TU that nothing references can be
+# dropped from a static archive silently, and the feature then does not exist.
+# Socket-free: the only address ever named is TEST-NET-1 and the refusal paths
+# construct no poller.
+add_executable(offline_health_registry_test tests/offline_health_registry_test.cpp)
+target_include_directories(offline_health_registry_test PRIVATE src)
+target_link_libraries(offline_health_registry_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME offline_health_registry_test COMMAND offline_health_registry_test)
+
 # #5594 item 3: the capacity a Flex declares in discovery (max_slices /
 # max_panadapters), and that it is never confused with the adjacent
 # available_* availability keys. Socket-free.
@@ -4717,6 +4729,93 @@ add_executable(hl2_band_memory_test
 )
 target_include_directories(hl2_band_memory_test PRIVATE src)
 add_test(NAME hl2_band_memory_test COMMAND hl2_band_memory_test)
+# HL2 stream-free telemetry poll cadence -- pure header policy, no Qt, no socket.
+# The rule is the only part of the poller with a judgement in it; see
+# docs/architecture/hl2-stream-free-telemetry.md section 3 for the derivation.
+add_executable(hl2_telemetry_cadence_test
+    tests/hl2_telemetry_cadence_test.cpp
+)
+target_include_directories(hl2_telemetry_cadence_test PRIVATE src)
+add_test(NAME hl2_telemetry_cadence_test COMMAND hl2_telemetry_cadence_test)
+
+# The tick/mirror ALIASING the cadence rule cannot catch on its own: a counter
+# mirrored at 1 Hz, sampled by a 1 Hz tick, reports a healthy stream as stalled.
+# Pure, no Qt -- it replays a publish/tick trace, and keeps the OLD predicate as
+# a negative control so the trace is proved to discriminate rather than assumed
+# to.
+add_executable(hl2_link_state_alias_test
+    tests/hl2_link_state_alias_test.cpp
+)
+target_include_directories(hl2_link_state_alias_test PRIVATE src)
+add_test(NAME hl2_link_state_alias_test COMMAND hl2_link_state_alias_test)
+
+# telemetrySource policy + the health-snapshot merge, as pure functions both
+# call sites use. Truth table rather than a scenario: the row exists to tell two
+# states apart, so a test seeing only one answer proves nothing.
+add_executable(hl2_telemetry_source_test tests/hl2_telemetry_source_test.cpp)
+target_include_directories(hl2_telemetry_source_test PRIVATE src)
+target_link_libraries(hl2_telemetry_source_test PRIVATE Qt6::Core)
+add_test(NAME hl2_telemetry_source_test COMMAND hl2_telemetry_source_test)
+
+# The WIRE between the cadence rule and the backend that must ask it. Links
+# aethercore because it constructs a real Hl2Backend -- the point is that the
+# BACKEND drives the service, which no service-level test can check.
+add_executable(hl2_telemetry_wire_test tests/hl2_telemetry_wire_test.cpp)
+target_include_directories(hl2_telemetry_wire_test PRIVATE src tests)
+target_link_libraries(hl2_telemetry_wire_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_telemetry_wire_test COMMAND hl2_telemetry_wire_test)
+
+# HL2 stream-free telemetry SERVICE -- must answer with no backend and no
+# connection, which is the state the whole feature exists for. Needs Qt (timer)
+# but no aethercore and no radio.
+#
+# SOCKET-FREE, and by construction rather than by care: it never gives the
+# service a target, and with no target and the broadcast fallback off the
+# poller sends nothing. Nothing is bound, nothing is sent, no peer exists. The
+# wire cases are the opt-in target below.
+add_executable(hl2_telemetry_service_test
+    tests/hl2_telemetry_service_test.cpp
+    src/core/backends/hl2/Hl2TelemetryService.cpp
+    src/core/backends/OfflineHealthSource.cpp  # the registry Hl2TelemetryService.cpp declares into
+    src/core/backends/hl2/Hl2TelemetryPoller.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
+)
+target_include_directories(hl2_telemetry_service_test PRIVATE src)
+target_link_libraries(hl2_telemetry_service_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hl2_telemetry_service_test COMMAND hl2_telemetry_service_test)
+
+# The same poller's WIRE behaviour, off the default graph. AGENTS.md's
+# test-layer boundary keeps a socket-owning test out of the ordinary suite; the
+# option() shape (rather than EXCLUDE_FROM_ALL) is the one hl2_tx_loopback_test
+# above uses, so that when it IS enabled it stays a REGISTERED test and a
+# refused bind shows as Skipped rather than silently green.
+#
+# SOCKETS THIS TEST BINDS, per the socket-test canon: one IPv4 UDP listener on
+# 127.0.0.1:1025 (ShareAddress) -- the Metis discovery port -- which receives
+# only what the test's own service instances send it. Outbound: 127.0.0.1 (that
+# listener) and 192.0.2.1, TEST-NET-1, unroutable by RFC 5737. No listening
+# server, no peer process, and no synthetic radio firmware: the code under test
+# is ours and the socket is how the assertion reaches it.
+option(AETHER_ENABLE_HL2_TELEMETRY_SOCKET_TEST
+       "Build and register the opt-in HL2 stream-free telemetry wire test" OFF)
+if(AETHER_ENABLE_HL2_TELEMETRY_SOCKET_TEST)
+    add_executable(hl2_telemetry_wire_socket_test
+        tests/hl2_telemetry_wire_socket_test.cpp
+        src/core/backends/hl2/Hl2TelemetryService.cpp
+        src/core/backends/OfflineHealthSource.cpp  # the registry Hl2TelemetryService.cpp declares into
+        src/core/backends/hl2/Hl2TelemetryPoller.cpp
+        src/core/backends/hl2/MetisProtocol.cpp
+    )
+    target_include_directories(hl2_telemetry_wire_socket_test PRIVATE src)
+    target_link_libraries(hl2_telemetry_wire_socket_test
+        PRIVATE Qt6::Core Qt6::Network)
+    add_test(NAME hl2_telemetry_wire_socket_test
+             COMMAND hl2_telemetry_wire_socket_test)
+    # A port this machine will not give us is an honest skip, never a passing
+    # wire proof.
+    set_tests_properties(hl2_telemetry_wire_socket_test
+                         PROPERTIES SKIP_RETURN_CODE 77)
+endif()
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -5118,6 +5217,7 @@ set(AETHER_SETTINGS_CONSUMERS
     backend_capability_revision_test
     radio_capacity_declaration_test
     extension_namespace_gate_test
+    offline_health_registry_test
     tx_operation_integration_test
     backend_slice_lifecycle_test
     waterfall_time_marker_settings_test
