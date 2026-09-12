@@ -163,6 +163,66 @@ A reviewer seeing a new token asks one question — "is this really a
 new role?" — which is precisely the design conversation a new colour
 deserves.
 
+## 4a. Three-state controls
+
+**Individual controls are never shown or hidden per radio.** Every control
+renders in one of three states, and hiding exists only at *applet* granularity —
+a radio-specific cluster moves to its own applet, which hides wholesale.
+(Maintainer-ruled, #5262 M3a.)
+
+| State | Meaning | Token | Announced as |
+|---|---|---|---|
+| **unavailable** | this radio lacks the capability | `color.control.unavailable` | the reason, verbatim |
+| **inactive** | supported here, not engaged now | `color.control.inactive` | "Available, not currently active" |
+| **active** | engaged | normal text colour | nothing extra |
+
+### Why dim rather than hide
+
+A hidden control tells a blind operator *nothing at all* — it is not announced,
+so there is no way to learn the radio simply does not support it. A dimmed
+control with a stated reason is discoverable. This has regressed twice: #5266
+gave the Enforce Private IP button a disabled state, tooltip and
+`accessibleDescription`; #5299 replaced all three with a bare `setVisible()`
+four days later. `tools/check_a11y.py` now fails that shape.
+
+### The reason is required, and a tooltip is not enough
+
+`unavailable` **must** carry a reason, and the reason must reach a screen
+reader. Qt exposes `accessibleDescription` (widgets) and `statusTip`
+(`QAction` — which has no accessible description) to accessibility clients. A
+tooltip is a mouse affordance and is never announced.
+
+### Contrast, stated honestly
+
+Measured against the app background (`color.gray.900`):
+
+| Token | dark | light |
+|---|---|---|
+| `color.control.inactive` | 7.71:1 | 2.46:1 |
+| `color.control.unavailable` | 2.09:1 | 1.77:1 |
+
+**These do not meet WCAG's 3:1 floor for UI components, and the two states are
+separated by only 1.39:1 in the light theme.** The tokens deliberately reuse the
+greys the rest of the app already uses for disabled text, so a dimmed control
+looks like every other disabled control — visual consistency was the explicit
+call. The consequence is that **colour alone does not reliably distinguish the
+two muted states, especially in the light theme**, which is precisely why the
+accessible description above is mandatory rather than advisory: it is the
+channel that actually carries the distinction.
+
+The underlying greys (`color.text.disabled` at 2.09/1.77, `color.text.label` at
+2.94/2.04) are pre-existing and used tree-wide. Raising them is a visual change
+to every dialog and is tracked separately under #4896, not here.
+
+### Using it
+
+Register with `ControlAvailabilityRegistry` (`src/gui/`) rather than writing
+another `setVisible()`/`setEnabled()` pair. A control declares its predicate
+once; the registry subscribes to `capabilitiesChanged` a single time and
+**applies immediately at registration**, so a widget built after the connect
+edge is correct without the hand-written second push that the Calibration page
+and DemoApplet used to need.
+
 ## 5. Colour-as-data (the exemptions)
 
 A small set of colours are *data*, not theme, and are exempt from the

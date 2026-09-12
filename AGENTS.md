@@ -68,6 +68,7 @@ When helping with AetherSDR:
   reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
   coding conventions and the AI-to-AI debugging protocol (open a GitHub issue
   for cross-agent coordination)
+- **Gating a control on a radio capability? Dim it, never hide it.** Individual controls render in one of three states — unavailable (the radio lacks it, dimmed **with a stated reason**), inactive (supported, not engaged), active. Hiding survives only at applet granularity for a cohesive radio-specific cluster. Register with `ControlAvailabilityRegistry` rather than writing another `setVisible()`; the reason must reach a screen reader via `accessibleDescription` (widgets) or `statusTip` (`QAction`s), because a tooltip is a mouse affordance that is never announced. `tools/check_a11y.py` warns on a disabled control whose reason lives only in a tooltip. Doctrine: [`docs/style/theme-style-guide.md`](docs/style/theme-style-guide.md) §"Three-state controls" (#5262 M3a, #4896).
 - **Adding or changing UI? Read [`docs/style/theme-style-guide.md`](docs/style/theme-style-guide.md) first** — every colour resolves through a ThemeManager token (error/warning/success/notification/TX all have one); never hardcode a colour literal. CI's hardcoded-colour ratchet fails a PR that raises the count above its base branch.
 - **Sign every commit you author.** `main` enforces `required_signatures`, so a
   PR with unsigned commits cannot merge without an admin override. If the

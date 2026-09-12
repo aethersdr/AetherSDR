@@ -7355,6 +7355,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // is for controls that would look broken when greyed out with no radio
     // attached. A brand name is a fact about a connected radio, so it clears
     // with the rest of the identity block.
+    //
+    // NOTE (#5262 M3a): "hide rather than dim" is no longer the general rule —
+    // individual controls dim with a reason, and hiding survives only for a
+    // cohesive radio-specific cluster. This site is unaffected: it clears a
+    // TEXT VALUE that has no meaning without a radio, which is neither of those
+    // cases. See docs/style/theme-style-guide.md §"Three-state controls".
     m_radioManufacturer = connected ? caps.manufacturer : QString();
     refreshRadioIdentityLabels();
 
@@ -7717,13 +7723,23 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         const bool cmdPlane = !connected || m_radioModel.hasCommandPlane();
         const QString why =
             cmdPlane ? QString() : tr("Not supported by this radio");
+        // The reason rides on the tooltip AND on an accessible channel. A
+        // tooltip is a mouse affordance that a screen reader never sees, so
+        // setEnabled + setToolTip alone leaves a blind operator with a dead
+        // menu entry and no stated cause — short of M0 item 3's own acceptance
+        // from the day it merged (#5262 M3a, #4896).
+        //
+        // QAction has no accessibleDescription; Qt exposes an action's status
+        // tip to accessibility clients, so that is where the reason goes.
         if (m_txBandAction) {
             m_txBandAction->setEnabled(cmdPlane);
             m_txBandAction->setToolTip(why);
+            m_txBandAction->setStatusTip(why);
         }
         if (m_tuneInhibitMenu) {
             m_tuneInhibitMenu->menuAction()->setEnabled(cmdPlane);
             m_tuneInhibitMenu->menuAction()->setToolTip(why);
+            m_tuneInhibitMenu->menuAction()->setStatusTip(why);
         }
     }
 

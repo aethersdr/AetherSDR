@@ -88,6 +88,7 @@ def check_file(path: Path) -> list:
     findings += check_value_change_methods(lines)
     findings += check_widget_constructor_names(lines)
     findings += check_custom_painted_widgets(lines, path)
+    findings += check_disabled_reason_is_accessible(lines)
     return findings
 
 
@@ -380,6 +381,66 @@ def check_custom_painted_widgets(lines: list, path: Path) -> list:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Check 5 -- a disabled control whose reason lives only in a tooltip
+# ---------------------------------------------------------------------------
+#
+# #5262 M3a doctrine: a control the radio cannot support is DIMMED WITH A
+# REASON, never hidden. The reason has to reach a screen reader, and a tooltip
+# does not — Qt exposes accessibleDescription (widgets) and statusTip (actions)
+# to accessibility clients, but a tooltip is a mouse affordance.
+#
+# This is the shape that already regressed twice. #5266 gave the Enforce Private
+# IP button a disabled state, a tooltip AND an accessibleDescription; #5299
+# replaced the lot with a bare setVisible() four days later. TX Band Settings
+# and Inhibit-during-TUNE shipped with setEnabled + setToolTip and no accessible
+# channel at all, short of their own acceptance criteria on the day they merged.
+# Both are fixed; this stops the third one.
+#
+# Deliberately narrow: it fires only when a tooltip is set on the SAME OBJECT in
+# the same function as a disabling setEnabled, which is the "dimmed with a
+# reason" pattern. A tooltip that merely describes a control is not a finding.
+
+DISABLE_RE = re.compile(r"(\w+)\s*->\s*setEnabled\s*\(\s*(?!true\s*\))")
+TOOLTIP_RE = re.compile(r"(\w+)\s*->\s*setToolTip\s*\(")
+ACCESSIBLE_RE = re.compile(r"(\w+)\s*->\s*(?:setAccessibleDescription|setStatusTip)\s*\(")
+MENU_ACTION_RE = re.compile(r"(\w+)\s*->\s*menuAction\s*\(\s*\)\s*->\s*set")
+
+
+def check_disabled_reason_is_accessible(lines: list) -> list:
+    findings = []
+    window = 12          # statements that plausibly belong to one gate
+    disabled: dict = {}  # receiver -> line index of the disabling setEnabled
+    tooltipped: dict = {}
+    accessible: set = set()
+
+    for i, line in enumerate(lines):
+        if re.search(r"//\s*a11y-check\s*:\s*skip-line", line):
+            continue
+        for m in DISABLE_RE.finditer(line):
+            disabled[m.group(1)] = i
+        for m in TOOLTIP_RE.finditer(line):
+            tooltipped[m.group(1)] = i
+        for m in ACCESSIBLE_RE.finditer(line):
+            accessible.add(m.group(1))
+
+    for name, tip_line in tooltipped.items():
+        if name not in disabled or name in accessible:
+            continue
+        if abs(disabled[name] - tip_line) > window:
+            continue
+        findings.append((
+            tip_line + 1,
+            "a11y-disabled-reason-not-announced",
+            f"`{name}` is disabled and given a tooltip reason, but no "
+            f"accessibleDescription (widget) or statusTip (QAction). A tooltip "
+            f"is a mouse affordance — a screen reader never sees it, so a blind "
+            f"operator gets a dead control with no stated cause. Set the same "
+            f"reason on setAccessibleDescription() or setStatusTip(). "
+            f"(#5262 M3a doctrine, #4896)"))
+    return findings
+
 
 def main() -> None:
     files = collect_files(sys.argv[1:])

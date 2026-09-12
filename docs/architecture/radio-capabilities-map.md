@@ -328,7 +328,18 @@ Both predicates therefore turn on whether the operator has actually moved one of
 the Flex-shaped controls in this process.
 `tests/host_voice_chain_policy_test.cpp` pins the truth table.
 
-### The status-bar row: hidden, not dimmed — and what stays
+### The status-bar row: DIMMED, not hidden — and what stays
+
+> **Superseded 2026-09-12 (#5262 M3a).** This section previously argued for
+> hiding. The maintainer ruling reverses it: individual controls are never
+> hidden per radio — they dim with a reason, and hiding survives only at applet
+> granularity for a cohesive radio-specific cluster. A hidden control is not
+> announced to a screen reader, so it tells a blind operator nothing at all.
+> The doctrine, the two theme tokens and the accessible-description requirement
+> are in `docs/style/theme-style-guide.md` §"Three-state controls"; the
+> mechanism is `ControlAvailabilityRegistry`. The migration of the remaining
+> hide sites is M3b, scheduled after M4's conversion so gates and visuals change
+> once.
 
 `CWX`, `DVK` and `FDX` are three labels in the status bar whose entire
 implementation is a verb the radio's firmware executes: `cwx …`, `dvk …`,

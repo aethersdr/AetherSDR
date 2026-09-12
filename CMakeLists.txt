@@ -1025,6 +1025,7 @@ add_subdirectory(third_party/QGeoView/lib EXCLUDE_FROM_ALL)
 
 set(GUI_SOURCES
     src/gui/Contribute.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
     src/gui/WindowGeometryRestore.cpp
