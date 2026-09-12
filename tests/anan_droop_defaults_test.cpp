@@ -1,5 +1,6 @@
 #include "core/backends/anan/AnanDroopDefaults.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
