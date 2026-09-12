@@ -28,10 +28,13 @@ private:
     void compactDryStereoFifoIfNeeded();
     void resetEnvelopeState();
 
+    // All three are set in the constructor's init list from the named constants
+    // in the .cpp. Deliberately no default here: duplicating the literals let
+    // the 24 kHz path diverge from them unnoticed.
     int m_sampleRate{24000};
-    float m_balanceEnvelopeCoeff{4.0e-5f};
-    float m_monoObservabilityEnvelopeCoeff{0.006f};
-    float m_balancePowerFloor{0.0f};
+    float m_balanceEnvelopeCoeff;
+    float m_monoObservabilityEnvelopeCoeff;
+    float m_balancePowerFloor;
     QByteArray m_dryStereoFifo;
     int m_dryStereoReadOffset{0};
     int m_processingLatencyFrames{0};

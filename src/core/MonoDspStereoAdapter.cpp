@@ -32,20 +32,29 @@ float updatePowerEnvelope(
 
 } // namespace
 
+// One envelope step at 48 kHz must cover half the time of a legacy 24 kHz step,
+// so that two of them span the same interval: (1 - a')^2 = 1 - a. At 24 kHz the
+// legacy coefficient is returned unchanged, bit-for-bit.
+static float rateScaledEnvelopeCoeff(float legacyCoeff, int sampleRate)
+{
+    return sampleRate == 48000 ? 1.0f - std::sqrt(1.0f - legacyCoeff) : legacyCoeff;
+}
+
 MonoDspStereoAdapter::MonoDspStereoAdapter(int processingLatencyFrames, int sampleRate)
     : m_sampleRate(sampleRate)
+    // Derived from the named constants above, never from a duplicated literal:
+    // the 24 kHz path is bit-identical only while these agree, and a default in
+    // the header would drift silently the first time a constant is retuned.
+    , m_balanceEnvelopeCoeff(rateScaledEnvelopeCoeff(kBalanceEnvelopeCoeff, sampleRate))
+    , m_monoObservabilityEnvelopeCoeff(
+          rateScaledEnvelopeCoeff(kMonoObservabilityEnvelopeCoeff, sampleRate))
+    // Same expression kBalancePowerFloor is defined by, so it holds the input
+    // threshold constant across the rescale instead of special-casing 24 kHz.
+    , m_balancePowerFloor(kPowerFloor
+          * (m_balanceEnvelopeCoeff / m_monoObservabilityEnvelopeCoeff))
     , m_processingLatencyFrames(std::max(0, processingLatencyFrames))
     , m_latencyFramesRemaining(m_processingLatencyFrames)
 {
-    // Preserve the legacy coefficients bit-for-bit. At 48 kHz two updates
-    // cover the same elapsed time as one legacy update.
-    if (sampleRate == 48000) {
-        m_balanceEnvelopeCoeff = 1.0f - std::sqrt(1.0f - kBalanceEnvelopeCoeff);
-        m_monoObservabilityEnvelopeCoeff =
-            1.0f - std::sqrt(1.0f - kMonoObservabilityEnvelopeCoeff);
-    }
-    m_balancePowerFloor = sampleRate == 24000 ? kBalancePowerFloor
-        : kPowerFloor * (m_balanceEnvelopeCoeff / m_monoObservabilityEnvelopeCoeff);
 }
 
 void MonoDspStereoAdapter::reset()

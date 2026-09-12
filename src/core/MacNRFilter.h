@@ -85,29 +85,29 @@ private:
     // ── vDSP state ─────────────────────────────────────────────────────
     FFTSetup           m_fftSetup{nullptr};
     std::vector<float> m_splitRe;   // split-complex real  [H]
-    std::vector<float> m_splitIm;   // split-complex imag  [H]
+    std::vector<float> m_splitIm;   // split-complex imag  [m_hopSize]
 
     // ── OLA buffers ────────────────────────────────────────────────────
-    std::vector<float> m_window;    // sqrt-Hann analysis+synthesis window [N]
-    std::vector<float> m_inAccum;   // 24 kHz mono float input accumulator
-    std::vector<float> m_inAccumL;  // 24 kHz left-channel input accumulator
-    std::vector<float> m_inAccumR;  // 24 kHz right-channel input accumulator
-    std::vector<float> m_olaBufferL; // left overlap-add accumulator [N]
-    std::vector<float> m_olaBufferR; // right overlap-add accumulator [N]
-    std::vector<float> m_frameBuf;  // windowed analysis frame [N]
-    std::vector<float> m_synthBuf;  // synthesis frame [N]
-    std::vector<float> m_outAccumL; // processed 24 kHz left-channel output
-    std::vector<float> m_outAccumR; // processed 24 kHz right-channel output
+    std::vector<float> m_window;    // sqrt-Hann analysis+synthesis window [m_fftSize]
+    std::vector<float> m_inAccum;   // mono float input accumulator [m_fftSize]
+    std::vector<float> m_inAccumL;  // left-channel input accumulator [m_fftSize]
+    std::vector<float> m_inAccumR;  // right-channel input accumulator [m_fftSize]
+    std::vector<float> m_olaBufferL; // left overlap-add accumulator [m_fftSize]
+    std::vector<float> m_olaBufferR; // right overlap-add accumulator [m_fftSize]
+    std::vector<float> m_frameBuf;  // windowed analysis frame [m_fftSize]
+    std::vector<float> m_synthBuf;  // synthesis frame [m_fftSize]
+    std::vector<float> m_outAccumL; // processed left-channel output
+    std::vector<float> m_outAccumR; // processed right-channel output
 
     // ── Noise estimator state ─────────────────────────────────────────
-    std::vector<float> m_powerHistory; // HIST rows of m_bins powers // smoothed periodograms
+    std::vector<float> m_powerHistory; // smoothed periodograms, HIST rows of m_bins
     int                m_histIdx{0};
-    std::vector<float> m_noiseEst;       // current noise floor estimate [NBINS]
-    std::vector<float> m_smoothedPower;  // current smoothed periodogram [NBINS]
-    std::vector<float> m_prevPostSnr;    // previous a-posteriori SNR [NBINS]
-    std::vector<float> m_filterGain;     // unblended synthesis mask [NBINS]
-    std::vector<float> m_powerBuf;       // current power spectrum [NBINS]
-    std::vector<float> m_gainBuf;        // raw Wiener gain per bin [NBINS]
+    std::vector<float> m_noiseEst;       // current noise floor estimate [m_bins]
+    std::vector<float> m_smoothedPower;  // current smoothed periodogram [m_bins]
+    std::vector<float> m_prevPostSnr;    // previous a-posteriori SNR [m_bins]
+    std::vector<float> m_filterGain;     // unblended synthesis mask [m_bins]
+    std::vector<float> m_powerBuf;       // current power spectrum [m_bins]
+    std::vector<float> m_gainBuf;        // raw Wiener gain per bin [m_bins]
     bool               m_noiseInitialized{false};
 
     std::atomic<float> m_strength{1.0f};
