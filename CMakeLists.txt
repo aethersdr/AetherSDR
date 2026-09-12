@@ -304,7 +304,13 @@ endif()
 # macOS:   brew install portaudio
 if(WIN32)
     set(PORTAUDIO_ROOT "${CMAKE_SOURCE_DIR}/third_party/portaudio")
-    if(EXISTS "${PORTAUDIO_ROOT}/include/portaudio.h")
+    # Check BOTH artefacts the link below depends on. Testing only the header
+    # let a half-populated third_party/portaudio (interrupted setup run, cache
+    # restored without lib/) configure as "found", satisfy the CI assert, and
+    # then die at link. setup-portaudio.ps1's own early-exit guard tests the
+    # .lib, so this keeps the two in agreement. (#5200)
+    if(EXISTS "${PORTAUDIO_ROOT}/include/portaudio.h"
+       AND EXISTS "${PORTAUDIO_ROOT}/lib/portaudio_static_x64.lib")
         set(PORTAUDIO_FOUND TRUE)
         set(PORTAUDIO_INCLUDE_DIRS "${PORTAUDIO_ROOT}/include")
         # Static lib, so its host-API system dependencies must be named here

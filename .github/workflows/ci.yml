@@ -465,8 +465,17 @@ jobs:
         shell: pwsh
         run: |
           if (-not (Select-String -Path configure.log -Pattern 'PortAudio \(third_party\) found' -Quiet)) {
-            Write-Host "ERROR: setup-portaudio.ps1 ran but CMake did not find third_party/portaudio. Relevant output:"
-            Select-String -Path configure.log -Pattern 'PortAudio|portaudio'
+            Write-Host "ERROR: setup-portaudio.ps1 ran but CMake did not find third_party/portaudio."
+            # NOT Select-String on configure.log: the not-found leg is a
+            # message(WARNING), which CMake writes to stderr, and the configure
+            # step tees stdout only (see the note there). Show the tree the
+            # detection actually keys on instead.
+            Write-Host "--- third_party/portaudio ---"
+            if (Test-Path third_party\portaudio) {
+              Get-ChildItem -Recurse third_party\portaudio | Select-Object -ExpandProperty FullName
+            } else {
+              Write-Host "(third_party/portaudio does not exist)"
+            }
             exit 1
           }
           Select-String -Path configure.log -Pattern 'PortAudio \(third_party\) found'

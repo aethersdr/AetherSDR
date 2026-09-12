@@ -44,8 +44,12 @@ New-Item -ItemType Directory -Force -Path "$OutDir\include" | Out-Null
 if (-not (Test-Path $TarFile)) {
     Write-Host "Downloading PortAudio ${PaVersion} source..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $PaUrl -OutFile $TarFile
-    Confirm-Sha256 -Path $TarFile -Expected $PaSha256
 }
+# Verify OUTSIDE the download guard. This script deletes the tarball on
+# success, so a tarball that survives to a later run is by definition from a
+# run that failed partway — possibly mid-download. Verifying only what we just
+# fetched would consume that one unchecked.
+Confirm-Sha256 -Path $TarFile -Expected $PaSha256
 
 # ── Extract ──────────────────────────────────────────────────────────────
 Write-Host "Extracting..." -ForegroundColor Cyan
