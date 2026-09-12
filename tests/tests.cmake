@@ -4024,6 +4024,18 @@ target_include_directories(extension_namespace_gate_test PRIVATE src)
 target_link_libraries(extension_namespace_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME extension_namespace_gate_test COMMAND extension_namespace_gate_test)
 
+# Health that survives disconnection is gated on a DECLARATION, not on a family
+# string -- docs/HERMES.md's coding-agent section forbids the latter above the
+# seam, and #5554 §2.8 wants the matching dynamic_cast retired. The first check
+# is the load-bearing one: a self-registering TU that nothing references can be
+# dropped from a static archive silently, and the feature then does not exist.
+# Socket-free: the only address ever named is TEST-NET-1 and the refusal paths
+# construct no poller.
+add_executable(offline_health_registry_test tests/offline_health_registry_test.cpp)
+target_include_directories(offline_health_registry_test PRIVATE src)
+target_link_libraries(offline_health_registry_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME offline_health_registry_test COMMAND offline_health_registry_test)
+
 # #5594 item 3: the capacity a Flex declares in discovery (max_slices /
 # max_panadapters), and that it is never confused with the adjacent
 # available_* availability keys. Socket-free.
@@ -5009,6 +5021,7 @@ add_test(NAME hl2_telemetry_wire_test COMMAND hl2_telemetry_wire_test)
 add_executable(hl2_telemetry_service_test
     tests/hl2_telemetry_service_test.cpp
     src/core/backends/hl2/Hl2TelemetryService.cpp
+    src/core/backends/OfflineHealthSource.cpp  # the registry Hl2TelemetryService.cpp declares into
     src/core/backends/hl2/Hl2TelemetryPoller.cpp
     src/core/backends/hl2/MetisProtocol.cpp
 )
@@ -5423,6 +5436,7 @@ set(AETHER_SETTINGS_CONSUMERS
     radio_capacity_declaration_test
     extension_namespace_gate_test
     control_availability_registry_test
+    offline_health_registry_test
     tx_operation_integration_test
     backend_slice_lifecycle_test
     waterfall_time_marker_settings_test
