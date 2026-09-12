@@ -6,6 +6,7 @@
 #include <map>
 
 #include <QByteArray>
+#include <QLoggingCategory>
 #include <QMap>
 #include <QObject>
 #include <QString>
@@ -183,6 +184,13 @@ public:
             m_slicePcm.clear();
             ++m_pcmSession;
             m_pcmLive = m_speakerPcm.start(PcmPurpose::Speaker, -1, {}, m_pcmSession);
+            if (!m_pcmLive) {
+                // Refusing here means total RX silence on this backend. Say so:
+                // every downstream refusal is a silent return, so without this
+                // the failure is indistinguishable from a dead radio.
+                qWarning() << "IRadioBackend: speaker PCM producer refused to start for session"
+                           << m_pcmSession << "- RX audio will be silent on this connection";
+            }
         });
         connect(this, &IRadioBackend::disconnected, this, [this] {
             retirePcmStreams();
@@ -1266,6 +1274,7 @@ protected:
     void publishLegacyAudio(const QByteArray& pcm)
     {
         if (!m_pcmLive || !isConnected()) {
+            warnAudioDropped();
             return;
         }
         if (const auto frame = m_speakerPcm.legacyStereo24(pcm)) {
@@ -1275,6 +1284,7 @@ protected:
     bool publishLegacySliceAudio(int sliceId, const QByteArray& pcm)
     {
         if (!m_pcmLive || !isConnected() || sliceId < 0) {
+            warnAudioDropped();
             return false;
         }
         auto it = m_slicePcm.find(sliceId);
@@ -1300,8 +1310,21 @@ protected:
     }
 
 private:
+    // One line per session, not per frame: this fires at audio rate.
+    void warnAudioDropped()
+    {
+        if (m_pcmDropWarned == m_pcmSession) {
+            return;
+        }
+        m_pcmDropWarned = m_pcmSession;
+        qWarning() << "IRadioBackend: dropping RX audio in session" << m_pcmSession
+                   << "- no live PCM producer (live =" << m_pcmLive
+                   << ", connected =" << isConnected() << ")";
+    }
+
     bool m_pcmLive = false;
     quint64 m_pcmSession = 0;
+    quint64 m_pcmDropWarned = 0;
     PcmProducer m_speakerPcm;
     std::map<int, std::unique_ptr<PcmProducer>> m_slicePcm;
 };

@@ -301,7 +301,7 @@ void MainWindow::activateRADE(int sliceId)
     auto* s = m_radioModel.slice(sliceId);
     if (!s) return;
 
-    // RADE's receive path is DAX channel audio (PanadapterStream::daxAudioReady),
+    // RADE's receive path is DAX channel audio (PanadapterStream::daxPcmReady),
     // and only a Flex backend owns a PanadapterStream — RadioModel leaves
     // panStream() null for every other family. The connect() further down
     // dereferenced it bare, so selecting RADE on a Hermes-Lite 2 was a SEGFAULT,

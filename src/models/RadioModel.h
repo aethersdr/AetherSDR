@@ -1601,9 +1601,6 @@ private:
     // m_backend and m_panStream are both settled for the new family.
     void wireRxDemodAudioBus();
     void wireBackendPcm();
-    PcmFrameGate m_backendPcmGate;
-    PcmFrameGate m_slicePcmGate;
-    PcmFrameGate m_demodPcmGate;
 
     // aetherd RFC step 2 (§5.5): the radio-facing seam. Held via std::unique_ptr
     // (owned via unique_ptr below). As of 2.2b it OWNS the RadioConnection +
@@ -2391,6 +2388,13 @@ public:
     PanadapterStream::CategoryStats categoryStats(PanadapterStream::StreamCategory cat) const;
     QVector<PanadapterStream::AudioStreamDiagnostics> audioStreamDiagnostics() const;
     void resetAudioStreamDiagnostics();
+
+private:
+    // Per-consumer replay cursors for the three typed PCM relays wired in
+    // wireBackendPcm()/wireRxDemodAudioBus(). Data, not slots.
+    PcmFrameGate m_backendPcmGate;
+    PcmFrameGate m_slicePcmGate;
+    PcmFrameGate m_demodPcmGate;
 };
 
 } // namespace AetherSDR

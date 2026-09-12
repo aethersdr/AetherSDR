@@ -102,6 +102,43 @@ void identityContinuityAndQueueing(QObject& receiver)
     check(gap && gate.accept(*gap), "marked forward discontinuity accepted");
     check(!producer.produce({0.1f, -0.1f}, std::numeric_limits<quint64>::max(), true),
           "sample position overflow refused");
+
+    // A consumer detached from a running producer resumes when it is
+    // reattached. The producer counts on production, not delivery, so the
+    // frames it emitted while this gate was starved leave a forward gap that
+    // carries no discontinuity flag — the exact shape a playback mute/unmute
+    // cycle produces on both the Flex and seam-backend speaker paths. The gate
+    // must resync rather than refuse: the cursor only moves on an accepted
+    // frame, so one refusal here would silence the consumer for the life of
+    // the epoch. Backward motion stays refused (asserted below).
+    {
+        PcmProducer live;
+        live.start(PcmPurpose::Speaker);
+        PcmFrameGate attached;
+        for (int i = 0; i < 3; ++i) {
+            const auto frame = live.produce({0.3f, -0.3f});
+            check(frame && attached.accept(*frame), "attached consumer accepts steady frames");
+        }
+        // Detached: produced, never delivered to this gate.
+        for (int i = 0; i < 5; ++i) {
+            check(live.produce({0.3f, -0.3f}).has_value(), "producer advances while consumer is detached");
+        }
+        const auto resumed = live.produce({0.3f, -0.3f});
+        check(resumed && !resumed->discontinuity(),
+              "resumed frame carries no discontinuity flag");
+        check(resumed && resumed->firstSample() > 3,
+              "resumed frame is ahead of the starved cursor");
+        check(resumed && attached.accept(*resumed),
+              "consumer reattached after a forward gap resyncs instead of locking out");
+        int accepted = 0;
+        for (int i = 0; i < 5; ++i) {
+            const auto frame = live.produce({0.3f, -0.3f});
+            if (frame && attached.accept(*frame)) {
+                ++accepted;
+            }
+        }
+        check(accepted == 5, "reattached consumer keeps accepting after resync");
+    }
     int deliveries = 0;
     QMetaObject::invokeMethod(&receiver, [frame = *gap, &deliveries] {
         if (!frame.legacyStereo24().isEmpty()) {

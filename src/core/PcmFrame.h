@@ -222,9 +222,19 @@ private:
     bool m_first = true;
 };
 
-// Receiver-side bounded replay/order guard. Separate consumers have separate
-// cursors; reading a slice tap never consumes the speaker's frame. New streams
-// are admitted only with a live producer token; traffic cannot resurrect one.
+// Receiver-side bounded replay guard. Separate consumers have separate cursors;
+// reading a slice tap never consumes the speaker's frame. New streams are
+// admitted only with a live producer token; traffic cannot resurrect one.
+//
+// The guard is deliberately ONE-SIDED: it refuses a frame at or behind the
+// cursor (replay, duplicate, reorder) and admits one ahead of it. A forward gap
+// is not an attack, it is "this consumer missed frames" — which every consumer
+// that can be detached from a running producer does legitimately. Playback mute
+// is the live example: MainWindow disconnects the Flex speaker feed, and
+// MainWindow_Session returns early for a seam backend, while the producer keeps
+// counting. Refusing the gap would leave that consumer's cursor permanently
+// behind a live epoch, and since the cursor only advances on an accepted frame
+// there is no way back — RX audio would stay silent until the next reconnect.
 class PcmFrameGate final {
 public:
     static constexpr std::size_t kMaxStreams = 32;
@@ -237,8 +247,7 @@ public:
         for (Cursor& cursor : m_cursors) {
             const std::shared_ptr<const detail::PcmEpoch> epoch = cursor.epoch.lock();
             if (epoch == frame.m_epoch) {
-                if (frame.firstSample() < cursor.nextSample
-                    || (frame.firstSample() != cursor.nextSample && !frame.discontinuity())) {
+                if (frame.firstSample() < cursor.nextSample) {
                     return false;
                 }
                 cursor.nextSample = frame.firstSample() + frame.frameCount();

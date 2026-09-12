@@ -1764,7 +1764,7 @@ AudioEngine::AudioEngine(QObject* parent)
                 return;
             if (frames <= 0 || sampleRateHz <= 0) return;
             // CwDecoder::feedAudio expects 24 kHz stereo float32 — the
-            // same shape PanadapterStream::audioDataReady() emits on
+            // same shape PanadapterStream::pcmFrameReady() carries on
             // the RX side.  Decimate 48→24 by averaging consecutive
             // pairs; the sidetone is a single sine well below 12 kHz
             // so the cheap two-tap LPF is sufficient for ggmorse.  For

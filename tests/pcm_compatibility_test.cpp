@@ -255,11 +255,8 @@ void flexCompatibility()
     PanadapterStream stream; // no init(), sockets, bind or peer
     PcmFrame last;
     int speaker = 0;
-    int legacySpeaker = 0;
     QObject::connect(&stream, &PanadapterStream::pcmFrameReady, &stream,
                      [&](const PcmFrame& frame) { last = frame; ++speaker; });
-    QObject::connect(&stream, &PanadapterStream::audioDataReady, &stream,
-                     [&](const QByteArray&) { ++legacySpeaker; });
     const QVector<float> samples{0.25f, -0.5f, 1.125f, -0.0f};
     QByteArray packet(PanadapterStream::VITA49_HEADER_BYTES, '\0');
     for (float value : samples) {
@@ -269,7 +266,7 @@ void flexCompatibility()
         packet.append(reinterpret_cast<const char*>(&wire), sizeof(wire));
     }
     PcmCompatibilityTestAccess::narrow(stream, packet);
-    check(speaker == 1 && legacySpeaker == 1, "Flex publishes one typed and one compatibility frame");
+    check(speaker == 1, "Flex publishes one typed frame per decoded packet");
     check(last.legacyStereo24() == bytes(samples), "Flex LR float decode remains byte exact");
     PcmCompatibilityTestAccess::narrow(stream, packet.left(packet.size() - 4));
     check(speaker == 1, "malformed Flex stereo alignment rejected");

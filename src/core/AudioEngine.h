@@ -72,7 +72,7 @@ class MacNRFilter;
 // AudioEngine handles audio playback (RX) and capture (TX).
 //
 // RX path:
-//   Audio PCM arrives via PanadapterStream::audioDataReady() — the radio sends
+//   Audio PCM arrives via PanadapterStream::pcmFrameReady() — the radio sends
 //   VITA-49 IF-Data packets to the single "client udpport" socket owned by
 //   PanadapterStream. PanadapterStream strips the header and emits the raw PCM;
 //   connect that signal to feedAudioData() then call startRxStream() to open
@@ -742,7 +742,7 @@ signals:
     // from the audio thread; receivers should connect via Qt::AutoConnection
     // (which becomes queued across threads) so feedAudio() lands on the
     // decoder's thread.  Format: 24 kHz stereo float32 — same as the
-    // RX panStream::audioDataReady() path so CwDecoder::feedAudio()
+    // RX panStream::pcmFrameReady() path so CwDecoder::feedAudio()
     // accepts it without a separate adapter.
     void txDecodeAudioReady(const QByteArray& pcm24kStereoFloat);
     // `channels` is carried explicitly (#4489) rather than left for a consumer
@@ -1205,8 +1205,6 @@ private:
     QElapsedTimer m_lastDaxRadioChannelLog;
     std::unique_ptr<Resampler> m_txResampler;  // RADE e.g. 48k -> 24k (lazy init)
 
-    PcmFrameGate m_pcmIngress;
-    PcmFrameGate m_kiwiPcmIngress;
 
     // DSP lifecycle mutex: held during feedAudioData() DSP section AND
     // during enable/disable to prevent use-after-free (#502)
@@ -1464,6 +1462,12 @@ private:
     static constexpr quint16 FLEX_INFO_CLASS = 0x534C;
     static constexpr quint16 PCC_IF_NARROW = 0x03E3;
     static constexpr quint16 PCC_DAX_REDUCED = 0x0123;  // reduced BW DAX (24kHz int16 mono)
+
+private:
+    // Per-consumer replay cursors for the two typed PCM ingress slots. Data,
+    // not slots — kept out of the `private slots:` block above deliberately.
+    PcmFrameGate m_pcmIngress;
+    PcmFrameGate m_kiwiPcmIngress;
 };
 
 } // namespace AetherSDR

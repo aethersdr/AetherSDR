@@ -1656,10 +1656,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── Panadapter stream → audio engine ──────────────────────────────────
     // All VITA-49 traffic arrives on the single client udpport socket owned by
-    // PanadapterStream, which strips IF-Data headers and emits audioDataReady().
+    // PanadapterStream, which strips IF-Data headers and emits pcmFrameReady().
     // The QAudioSink feed is wired in one helper so a Flex-backend swap can
     // rebind it (the stream is destroyed/rebuilt on a family change;
-    // audioDataReady carries Flex RX audio itself, so a missed rebind is
+    // pcmFrameReady carries Flex RX audio itself, so a missed rebind is
     // silence rather than a degraded feature).
     wirePanStreamRxAudioSinks();
     // The taps that listen alongside the speaker — QSO recorder RX, CW and RTTY
@@ -2830,7 +2830,7 @@ MainWindow::~MainWindow()
     // ~QWidget::deleteChildren(), which runs *after* MainWindow's value members
     // (including m_radioModel) have already been destroyed — crash on quit
     // (#2385). Tear it down explicitly here: audio is stopped (no more
-    // daxAudioReady cross-thread signals), m_radioModel is still alive (DAX
+    // daxPcmReady cross-thread signals), m_radioModel is still alive (DAX
     // stream-remove commands reach the radio), and we null out TciApplet's raw
     // back-reference first so no dangling pointer remains in the widget tree.
     if (m_appletPanel && m_appletPanel->tciApplet())

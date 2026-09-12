@@ -27,8 +27,8 @@ class OpusCodec;
 
 // Receives all VITA-49 UDP datagrams from the radio on the single "client udpport"
 // and routes them by PacketClassCode (bytes 14-15 of the VITA-49 class ID):
-//   • PCC 0x03E3 → narrow audio, float32 stereo big-endian  → audioDataReady()
-//   • PCC 0x0123 → narrow audio reduced-BW, int16 mono BE   → audioDataReady()
+//   • PCC 0x03E3 → narrow audio, float32 stereo big-endian  → pcmFrameReady()
+//   • PCC 0x0123 → narrow audio reduced-BW, int16 mono BE   → pcmFrameReady()
 //   • PCC 0x8003 → panadapter FFT bins                      → spectrumReady()
 //   • PCC 0x8004 → waterfall tiles (Width×Height uint16)    → waterfallRowReady()
 //   • PCC 0x8002 → meter data (id/value pairs)             → meterDataReady()
@@ -216,7 +216,7 @@ signals:
     // TCI uses this to invalidate its channel→trx routing cache.
     void daxStreamUnregistered(int channel, quint32 streamId);
 
-    void daxAudioReady(int channel, const QByteArray& pcm);
+    // One DAX channel's RX audio as owning typed PCM.
     void daxPcmReady(int channel, const AetherSDR::PcmFrame& frame);
     void iqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
     void spectrumReady(quint32 streamId, const QVector<float>& binsDbm, qint64 emittedNs);
@@ -226,9 +226,8 @@ signals:
                            quint32 timecode, qint64 emittedNs);
     // Emitted once per waterfall tile with the radio's computed auto black level.
     void waterfallAutoBlackLevel(quint32 streamId, quint32 autoBlack);
-    // Compatibility output after IF-Data decode: owning native-endian
-    // float32 stereo at 24 kHz. Production routes use pcmFrameReady instead.
-    void audioDataReady(const QByteArray& pcm);
+    // Speaker RX audio after IF-Data decode: owning native-endian float32,
+    // at the producer's declared format. A1 publishes 24 kHz stereo.
     void pcmFrameReady(const AetherSDR::PcmFrame& frame);
     // Meter data: parallel arrays of (meter_index, raw_int16_value).
     void meterDataReady(const QVector<quint16>& ids, const QVector<qint16>& vals);

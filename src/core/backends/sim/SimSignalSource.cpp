@@ -1,5 +1,7 @@
 #include "core/backends/sim/SimSignalSource.h"
 
+#include <QDebug>
+
 namespace AetherSDR {
 
 SimSignalSource::SimSignalSource(QObject* parent) : QObject(parent)
@@ -43,8 +45,16 @@ void SimSignalSource::start()
 
 void SimSignalSource::startSession(quint64 session)
 {
-    m_speakerPcm.start(PcmPurpose::Speaker, -1, {}, session);
-    m_slicePcm.start(PcmPurpose::Slice, kSliceId, {}, session);
+    // Both callers pass the backend's monotonic pcmSession(), so a repeated
+    // value is a wiring bug, not a benign retry: PcmProducer refuses a session
+    // at or below the current one and the OLD epoch stays live, which used to
+    // look like working audio purely by ordering luck.
+    const bool speakerOk = m_speakerPcm.start(PcmPurpose::Speaker, -1, {}, session);
+    const bool sliceOk = m_slicePcm.start(PcmPurpose::Slice, kSliceId, {}, session);
+    if (!speakerOk || !sliceOk) {
+        qWarning() << "SimSignalSource: producer refused session" << session
+                   << "(speaker =" << speakerOk << ", slice =" << sliceOk << ")";
+    }
     m_clock.invalidate();   // fresh pacing baseline; first frames next tick
     m_debtNs = 0;
     m_timer.start();

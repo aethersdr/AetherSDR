@@ -292,11 +292,14 @@ bool PanadapterStream::start(RadioConnection* conn)
 
 bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
 {
-    m_pcmProducer.start();
     if (!m_socket) {
         qCWarning(lcVita49) << "PanadapterStream: cannot rebind UDP socket before init";
         return false;
     }
+    // Rotate the epoch only once the rebind is actually going ahead. Starting
+    // above the guard revoked every queued frame and reset continuity on a
+    // stream that then kept running unchanged.
+    m_pcmProducer.start();
 
     if (m_routedPrimeTimer)
         m_routedPrimeTimer->stop();
@@ -1163,7 +1166,6 @@ void PanadapterStream::publishLegacyDaxAudio(quint32 streamId, int channel,
     }
     if (frame) {
         emit daxPcmReady(channel, *frame);
-        emit daxAudioReady(channel, frame->legacyStereo24());
     }
 }
 
@@ -1171,7 +1173,6 @@ void PanadapterStream::publishLegacyAudio(const QByteArray& pcm)
 {
     if (const auto frame = m_pcmProducer.legacyStereo24(pcm)) {
         emit pcmFrameReady(*frame);
-        emit audioDataReady(frame->legacyStereo24());
     }
 }
 
@@ -1522,7 +1523,7 @@ void PanadapterStream::registerDaxStream(quint32 streamId, int channel)
     QMutexLocker lock(&m_streamMutex);
     // Enforce one active stream per channel. A stale stream from a previous
     // session or a duplicate subscription created by another code path would
-    // cause daxAudioReady to fire twice per audio period — doubling perceived
+    // cause daxPcmReady to fire twice per audio period — doubling perceived
     // speed. Remove any prior mapping for this channel before inserting.
     for (auto it = m_daxStreamIds.begin(); it != m_daxStreamIds.end(); ) {
         if (it.value() == channel && it.key() != streamId) {

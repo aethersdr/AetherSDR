@@ -220,7 +220,7 @@ void MainWindow::wireDiscovery()
             m_audio, [this](const PcmFrame& pcm) {
         if (backendFeedsEngineDirectly()) return;   // demo feeds the engine directly
         // Playback mute. The Flex path mutes by disconnecting the stream's
-        // audioDataReady from feedAudioData; against a null PanadapterStream
+        // pcmFrameReady from feedPcmFrame; against a null PanadapterStream
         // that disconnect is a silent no-op, so a seam backend would keep
         // feeding live receive UNDER the playback. Reachable in practice only
         // now that the recorder captures RX on such a radio at all. (#4537.)
@@ -2238,7 +2238,7 @@ void MainWindow::wireCatPorts()
     tciServer()->wireSpotModel();
 
     // Wire RX audio from PanadapterStream → TCI server for audio streaming.
-    // TCI audio feeds exclusively from DAX (not audioDataReady) so that
+    // TCI audio feeds exclusively from DAX (not pcmFrameReady) so that
     // audio_mute doesn't kill TCI audio (#1331). Stream-bound, so it goes through
     // the shared helper the post-swap rebind also calls (#4448).
     wirePanStreamTciSinks();
@@ -2286,11 +2286,11 @@ void MainWindow::wireCatPorts()
 
 }
 
-// The RX-audio sinks fed by PanadapterStream::audioDataReady, in one place so
+// The RX-audio sinks fed by PanadapterStream::pcmFrameReady, in one place so
 // buildUI() and rewirePanStreamAfterBackendSwap() bind an identical set. The
 // stream is owned by the Flex backend and is destroyed/rebuilt on a family
 // swap (RadioModel::teardownBackend/setupBackend), which drops these — and Flex
-// RX audio itself rides audioDataReady, so a missed one is silence, not a
+// RX audio itself rides pcmFrameReady, so a missed one is silence, not a
 // degraded feature. Keeping the list here (not open-coded in two places) is why
 // a new sink added to buildUI cannot silently go un-rebound after a swap.
 // Deliberately NOT IRadioBackend::ownsRxAudio(), despite the near-identical

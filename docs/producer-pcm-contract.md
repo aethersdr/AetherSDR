@@ -19,8 +19,8 @@ travel alongside their frame and retain their existing meanings.
 
 `firstSample` counts sample frames (LR pairs for stereo), not floats or bytes.
 It advances only on accepted input. A start or accepted format change resets its
-origin and marks the first frame discontinuous. Explicit forward gaps require a
-discontinuity flag; backward positions, overflow and repeated or older explicit
+origin and marks the first frame discontinuous. Backward positions, overflow and
+repeated or older explicit
 sessions are refused. Legacy adapters count accepted output samples; this does
 not reconstruct missing capture timestamps or establish multi-receiver alignment.
 
@@ -35,6 +35,15 @@ worker, DSP or QObject ownership. Stop, reconnect, format change and slice retir
 revoke old tokens. A queued frame stays invalid even after the same slot or rate is
 reused. `PcmFrameGate` independently rejects stale, replayed and out-of-order frames
 for each consumer, with at most 32 live stream cursors. Inactive entries are reused.
+
+The gate is deliberately one-sided: it refuses a frame at or behind the cursor and
+admits one ahead of it. A forward gap means the consumer missed frames, which every
+consumer that can be detached from a running producer does legitimately — playback
+mute detaches the Flex speaker feed and short-circuits the seam-backend feed while
+the producer keeps counting. Because a cursor only advances on an accepted frame,
+refusing that gap would strand the consumer behind a live epoch with no way back,
+silencing RX until the next reconnect. Replay protection comes from the backward
+check plus epoch liveness, neither of which a forward gap weakens.
 
 Each producer and consumer gate has one execution context. Only token revocation
 may overlap production/delivery; start, format change and destruction remain
@@ -70,8 +79,19 @@ The existing single-producer choices remain: Flex stream playback, backend-owned
 speaker playback, and the simulator's existing direct speaker route. The normalized
 `rxDemodAudioReady` bus remains a separate subscriber for recording/CW/RTTY. Per-slice
 TCI/AetherClock, Flex DAX/RADE and concurrent Kiwi routes retain their attribution.
-Raw compatibility signals on the Flex, Kiwi and ANAN producer objects remain for
-existing low-level users; the migrated production GUI routes use typed signals.
+Every production route uses the typed signals. `PanadapterStream`'s byte-valued
+`audioDataReady`/`daxAudioReady` are removed rather than retained: after the
+migration nothing in the tree connected to them, their arguments were still being
+deep-copied per audio block, and they bypassed the gate — so any later consumer
+wired to them would silently have skipped admission control.
+
+No A1 adapter sets `discontinuity` after the first frame of an epoch: each one
+publishes contiguous positions, so a lost Flex UDP audio packet is presented as
+continuous even though packet-loss concealment detected it. Propagating that would
+make AudioEngine retire and reset the chain on every lost packet, which is an
+audible-behaviour change rather than a wiring fix, so it belongs with the later
+milestones that own playback policy. Today the field is exercised by tests and by
+explicit-position producers only.
 
 AudioEngine's original byte APIs remain for legacy internal/playback callers. Its
 new typed entry points reject incompatible formats and duplicate/stale frames,
