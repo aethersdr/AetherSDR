@@ -343,6 +343,17 @@ QByteArray floatBytes(const std::vector<float>& v)
 
 Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
 {
+    // THE DEFAULT CONTROL LAW, set here rather than as a member initialiser
+    // because its sampling-bias budget is a logarithm of the gate period and
+    // therefore not a constant expression. See setAutoRfGainMode.
+    //
+    // Setting a law is not arming one: m_autoRfGainEnabled stays false, no
+    // stream starts, and nothing about this installation's behaviour changes
+    // until an operator switches the control on.
+    m_autoGainConfig = AetherSDR::hl2::bandscopeReleaseConfig(
+        AetherSDR::hl2::gatedPeakBiasDbForPeriod(
+            MetisClient::bandscopeSamplePeriodMs()));
+
     // No parent: moveToThread() refuses an object that has one, and both of
     // these belong on the I/O thread rather than the GUI thread. They are
     // destroyed explicitly in the destructor after the thread is joined.
@@ -4444,6 +4455,12 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             // never told about.
             const bool on = arg.toBool() && m_connected;
             m_bandscopeEnabled = on;
+            // AN EXPLICIT OPERATOR ACTION TAKES THE GATE BACK, in both
+            // directions: turning it on makes it theirs to turn off, and
+            // turning it off must not leave the loop believing it still owns a
+            // stream that is no longer running. Either way the automatic
+            // control stops being the owner; see applyBandscopeForAutoGain.
+            m_bandscopeOwnedByAutoGain = false;
             QMetaObject::invokeMethod(m_metis, "setBandscopeEnabled",
                                       Qt::QueuedConnection, Q_ARG(bool, on));
             if (requestId != 0) {
@@ -4532,6 +4549,12 @@ const char* autoGainReasonText(AetherSDR::hl2::AutoGainReason r)
     case R::AtFloor:        return "AT FLOOR and still clipping";
     case R::Dwell:          return "clean — waiting before giving gain back";
     case R::ReleaseHold:    return "clean — holding at this band's known limit";
+    // The two the wideband reading adds, and they are deliberately different
+    // sentences: one is a measurement that said no, the other is no
+    // measurement at all, and an operator can act on the second (is the
+    // bandscope running?) but not on the first.
+    case R::HeadroomHold:   return "clean — not enough measured headroom for a step";
+    case R::HeadroomAbsent: return "held — no wideband headroom reading";
     case R::Release:        return "giving gain back";
     case R::Idle:           return "clean — nothing held";
     }
@@ -4841,6 +4864,46 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // answer to "why is nothing happening" as much as "stale" is.
     put("autoRfGainState", QStringLiteral("Auto RF gain state"),
         QString::fromLatin1(autoGainReasonText(m_autoGainReason)));
+
+    // ---- WHAT THE LOOP IS RELEASING AGAINST ----
+    //
+    // Three rows, and together they answer "why has it not given my gain back"
+    // in a way neither the state string nor the raw headroom row can alone.
+    //
+    // ABSENT WHEN THE LAW DOES NOT USE IT. A loop running "ramp", "probe" or
+    // "binary" releases on the clip flag alone, and showing a headroom
+    // requirement beside it would describe a rule that is not in force.
+    if (m_autoGainConfig.requireHeadroomToRelease) {
+        const AetherSDR::hl2::HeadroomObservation h =
+            AetherSDR::hl2::bandscopeHeadroom(
+                m_bandscopeBlock,
+                m_bandscopeBlockClock.isValid()
+                    ? m_bandscopeBlockClock.elapsed() : -1);
+        // How much room the step needs: the step, plus the gate's sampling
+        // bias, plus the configured margin. This is the number the reading is
+        // actually compared against, so publishing it saves an operator from
+        // doing the arithmetic in their head against three other rows.
+        put("autoRfGainReleaseNeedsDb",
+            QStringLiteral("Auto RF gain: headroom needed to release (dB)"),
+            QString::number(m_autoGainConfig.releaseStepDb
+                                + m_autoGainConfig.headroomBiasDb
+                                + m_autoGainConfig.releaseHeadroomMarginDb,
+                            'f', 2));
+        // And how much of that requirement is the duty cycle's bias budget
+        // rather than the step -- which is the part that looks arbitrary until
+        // it is named.
+        put("autoRfGainHeadroomBiasDb",
+            QStringLiteral("Auto RF gain: gated-peak bias budgeted (dB)"),
+            QString::number(m_autoGainConfig.headroomBiasDb, 'f', 2));
+        // ABSENT, not zero, when there is no current reading. Zero headroom is
+        // an instruction to attenuate; no reading is an instruction to wait,
+        // and rendering the second as the first would be the worst available
+        // mistake on this row.
+        put("autoRfGainHeadroomDb",
+            QStringLiteral("Auto RF gain: measured headroom (dB below clip)"),
+            h.isMeasurement() ? QVariant(QString::number(h.headroomDb, 'f', 2))
+                              : QVariant());
+    }
 
     section("txInhibited", QStringLiteral("Transmit"));
     // The register bit is ACTIVE LOW and MetisProtocol already decodes it, so
@@ -5688,10 +5751,14 @@ void Hl2Backend::setAutoRfGain(bool on)
         // session would hold the loop off for no reason, or -- worse -- fail to.
         m_sinceUnkey.invalidate();
         m_autoRfGainEnabled = true;
+        // A law that releases on a measurement needs the stream that carries
+        // it. Ordered AFTER m_autoRfGainEnabled, which is what it reads.
+        applyBandscopeForAutoGain();
         qCInfo(lcHl2) << "HL2 auto RF gain: ARMED at baseline" << m_lnaGainDb
                       << "dB, floor" << m_autoGainConfig.maxOffsetDb << "dB below";
     } else {
         m_autoRfGainEnabled = false;
+        applyBandscopeForAutoGain();
         m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
         m_autoGainState = AetherSDR::hl2::AutoGainState{};
         // ONE ACTION, from any state. A switch that left the radio attenuated
@@ -5734,21 +5801,78 @@ bool Hl2Backend::setAutoRfGainMode(const QString& mode)
         cfg = probingReleaseConfig();
     } else if (m == QLatin1String("binary")) {
         cfg = binaryHighLowConfig();
+    } else if (m == QLatin1String("bandscope")) {
+        // THE DEFAULT, and the one law here whose release condition rests on a
+        // measurement rather than on a gamble. The bias budget is computed from
+        // the gate period MetisClient actually runs, never from a literal, so
+        // the two cannot drift apart.
+        cfg = bandscopeReleaseConfig(
+            gatedPeakBiasDbForPeriod(MetisClient::bandscopeSamplePeriodMs()));
     } else {
         qWarning().noquote()
             << QStringLiteral("Hl2Backend: auto RF gain mode \"%1\" is not one of "
-                              "ramp|probe|binary. The law has not been changed.")
+                              "bandscope|ramp|probe|binary. The law has not been "
+                              "changed.")
                    .arg(mode);
         return false;
     }
     m_autoGainConfig = cfg;
     m_autoGainMode = (m == QLatin1String("default")) ? QStringLiteral("ramp")
                    : (m == QLatin1String("probing")) ? QStringLiteral("probe") : m;
+    // A law that needs the wideband reading needs the stream that carries it.
+    // Called unconditionally so that switching AWAY from bandscope mode also
+    // releases the gate, rather than leaving it running for a law that ignores
+    // it.
+    applyBandscopeForAutoGain();
     qCInfo(lcHl2) << "HL2 auto RF gain: law set to" << m_autoGainMode
                   << "- step" << m_autoGainConfig.attackStepDb
                   << "dB, floor" << m_autoGainConfig.maxOffsetDb
-                  << "dB, probe confirm" << m_autoGainConfig.probeConfirmMs << "ms";
+                  << "dB, probe confirm" << m_autoGainConfig.probeConfirmMs << "ms"
+                  << ", headroom required" << m_autoGainConfig.requireHeadroomToRelease;
     return true;
+}
+
+// THE GATE THE MEASURED RELEASE DEPENDS ON, armed and released with the law
+// that needs it.
+//
+// A law with requireHeadroomToRelease set and no bandscope running would hold
+// its offset forever and report HeadroomAbsent, which is safe but is not a
+// feature. So arming such a law arms the gate.
+//
+// IT DOES NOT STOMP A MANUAL ENABLE. An operator who turned the bandscope on
+// through the `bandscope.enable` extension owns it; this only ever releases a
+// gate THIS function started, which is what m_bandscopeOwnedByAutoGain records.
+// The alternative -- disarming the loop silently killing a diagnostic stream
+// the operator started for their own reasons -- is the kind of surprise the
+// extension's own comment exists to avoid.
+void Hl2Backend::applyBandscopeForAutoGain()
+{
+    const bool wanted = m_connected && m_autoRfGainEnabled
+                     && m_autoGainConfig.requireHeadroomToRelease;
+    if (wanted) {
+        if (m_bandscopeEnabled) {
+            // Already running. If the operator started it, it stays theirs and
+            // the loop simply reads what is there; claiming it here would mean
+            // disarming the loop later switched off a stream we never started.
+            return;
+        }
+        m_bandscopeOwnedByAutoGain = true;
+        m_bandscopeEnabled = true;
+    } else {
+        if (!m_bandscopeOwnedByAutoGain) {
+            return;             // never ours, so never ours to release
+        }
+        m_bandscopeOwnedByAutoGain = false;
+        m_bandscopeEnabled = false;
+    }
+    if (m_metis) {
+        QMetaObject::invokeMethod(m_metis, "setBandscopeEnabled",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(bool, m_bandscopeEnabled));
+    }
+    qCInfo(lcHl2) << "HL2 auto RF gain: wideband bandscope"
+                  << (m_bandscopeEnabled ? "enabled" : "released")
+                  << "for the measured release";
 }
 
 // One evaluation of the control law, on the telemetry publish that carried the
@@ -5784,6 +5908,21 @@ void Hl2Backend::stepAutoGain(const Hl2Telemetry& t)
     m_autoGainBaselineDb = m_lnaGainDb;
     m_autoGainSampleRateHz = m_sampleRateHz;
 
+    // THE WIDEBAND HEADROOM READING, from the newest accepted bandscope block.
+    //
+    // Classified HERE rather than in the policy because the age is a clock
+    // reading and Hl2AutoGainPolicy.h owns no clock -- the same division
+    // m_adcOverloadClock already observes for the overload warning.
+    //
+    // `m_bandscopeBlock.samples == 0` means no block has ever arrived, which
+    // bandscopeHeadroom() turns into Absent rather than into a level. An
+    // invalid clock is passed as a negative age for the same reason: "never
+    // observed" and "observed too long ago" are both Absent, and neither is a
+    // headroom of zero.
+    obs.headroom = bandscopeHeadroom(
+        m_bandscopeBlock,
+        m_bandscopeBlockClock.isValid() ? m_bandscopeBlockClock.elapsed() : -1);
+
     const AutoGainAction a = autoGainStep(m_autoGainState, obs, m_autoGainConfig);
     m_autoGainState = a.next;
     m_autoGainReason = a.reason;
@@ -5801,7 +5940,11 @@ void Hl2Backend::stepAutoGain(const Hl2Telemetry& t)
         setLnaAutoOffsetDb(m_autoGainState.offsetDb);
         qCDebug(lcHl2) << "HL2 auto RF gain:" << (a.deltaDb > 0 ? "attack" : "release")
                        << a.deltaDb << "dB -> offset" << m_autoGainState.offsetDb
-                       << "dB, window" << obs.overloadSamples << "/" << obs.samples;
+                       << "dB, window" << obs.overloadSamples << "/" << obs.samples
+                       << ", headroom"
+                       << (obs.headroom.isMeasurement()
+                               ? QString::number(obs.headroom.headroomDb, 'f', 1)
+                               : QStringLiteral("absent"));
     }
 }
 
@@ -6527,6 +6670,10 @@ void Hl2Backend::resetIoBoardSchedule()
 void Hl2Backend::resetBandscopeMirrors()
 {
     m_bandscopeEnabled = false;
+    // The gate does not survive a link edge, so neither does the auto-gain
+    // loop's claim on it. Left set, a disarm after the link came back would
+    // send a disable for a stream nothing had started.
+    m_bandscopeOwnedByAutoGain = false;
     m_ep4Packets = 0;
     m_ep4Drops = 0;
     m_ep4Rewinds = 0;

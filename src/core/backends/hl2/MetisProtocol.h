@@ -624,6 +624,15 @@ struct Hl2Telemetry {
     // is streaming. There is no idle poll for it. When the stream stops these
     // simply stop arriving -- which is honest, and is why nothing downstream
     // may read their absence as "clean".
+    //
+    // WHAT THE BIT ACTUALLY MEANS, corrected on aethersdr/AetherSDR#5354 after
+    // this row was first written: DATA[24] is `(&clip_cnt)`, the reduction AND
+    // of a TWO-BIT SATURATING counter cleared on each `resp_rqst`. It is true
+    // only when that counter saturated, so it means "at least THREE clip
+    // events in one reporting interval" -- not "a sample railed". A window
+    // with the bit clear is therefore NOT a window with no clipping, and this
+    // rate must not be labelled or read as one. Hl2AutoGainPolicy.h carries
+    // the full consequence.
     int adcSamples = 0;
     int adcOverloadSamples = 0;
     int adcWindowMs = 0;

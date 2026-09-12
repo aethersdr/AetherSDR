@@ -177,11 +177,16 @@ public:
 
     // Which of Hl2AutoGainPolicy.h's configurations the loop runs.
     //
-    // "ramp"   -- the shipped default: 3-6 dB attack, 1 dB release on a dwell.
-    // "probe"  -- probingReleaseConfig(): the #5535 release condition. 6 dB
-    //             both ways; a release is a PROBE that can fail, and the
-    //             interval between probes doubles on failure and collapses on
-    //             success.
+    // "bandscope" -- THE DEFAULT. bandscopeReleaseConfig(): probing's law with
+    //             the release licensed by a MEASURED wideband headroom reading
+    //             instead of taken on spec. Arming it also arms the bandscope
+    //             gate, because the law needs the stream that feeds it.
+    // "ramp"   -- 3-6 dB attack, 1 dB release on a dwell. The original law.
+    // "probe"  -- probingReleaseConfig(): 6 dB both ways; a release is a PROBE
+    //             that can fail, and the interval between probes doubles on
+    //             failure and collapses on success. This is what "bandscope"
+    //             degenerates to if the measurement is taken away, and it is
+    //             kept so the two can be compared on the bench.
     // "binary" -- binaryHighLowConfig(): the two-state per-band switch.
     //
     // ALL THREE ARE THE SAME FUNCTION AND THE SAME STATE MACHINE; only the
@@ -890,7 +895,9 @@ private:
     // reset path. The config struct cannot answer "which law is this" -- it is
     // just numbers -- and inferring it back from the numbers would be a second
     // copy of the choice.
-    QString m_autoGainMode = QStringLiteral("ramp");
+    // DEFAULTED IN THE CONSTRUCTOR, not here: bandscopeReleaseConfig() computes
+    // its bias budget with a logarithm and cannot be a constant initialiser.
+    QString m_autoGainMode = QStringLiteral("bandscope");
     // Band and baseline as the loop last saw them, so a change in either
     // reaches the policy as the input it is rather than as a surprise.
     QString m_autoGainBandKey;
@@ -902,6 +909,13 @@ private:
     // from here; invalid means "not keyed since this control was armed".
     QElapsedTimer m_sinceUnkey;
     void stepAutoGain(const Hl2Telemetry& t);
+    // Arm or release the bandscope gate for a law that needs the wideband
+    // headroom reading. See the definition for the ownership rule.
+    void applyBandscopeForAutoGain();
+    // TRUE only when the automatic control started the bandscope itself. An
+    // operator's own `bandscope.enable` is theirs, and disarming the loop must
+    // not switch off a diagnostic stream this object never started.
+    bool m_bandscopeOwnedByAutoGain = false;
     // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
     // rather than a real selection — kOcNone (0x00) is a legitimate value
     // meaning "every relay released", so it cannot double as the sentinel.
