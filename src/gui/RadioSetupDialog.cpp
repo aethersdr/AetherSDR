@@ -1,6 +1,8 @@
+#include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
 #include "CwDecodeSettings.h"
 #include "RttyDecodeSettings.h"
+#include "ScopedChildWidget.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
@@ -795,6 +797,19 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         if (m_calibrationReseed)
             m_calibrationReseed();
     });
+    // Droop Correction page — mirrors the Calibration page immediately above:
+    // gated on the CAPABILITY (RadioCapabilities::hostDroopCalibration, the
+    // ANAN-G2 today), with the ANAN namespace enforced at the request boundary.
+    QTreeWidgetItem* droopItem = addPage(radioCategory, QStringLiteral("Droop Correction"),
+        QStringLiteral("droop calibration ddc0 panadapter spectrum sweep decimation edge cic"),
+        [this] { return buildDroopCalibrationTab(); });
+    m_droopCalibrationPageIndex = m_pageIndexes.value(QStringLiteral("Droop Correction"));
+    droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this, droopItem] {
+        droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+        if (m_droopReseed)
+            m_droopReseed();
+    });
     addPage(hardwareCategory, QStringLiteral("Antennas"),
         QStringLiteral("antenna names ant1 ant2 rx in transverter"), [this] { return buildAntennaNamesTab(); });
     addPage(hardwareCategory, QStringLiteral("Transverters"),
@@ -829,6 +844,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     connect(m_navigation, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem* current, QTreeWidgetItem* previous) {
         if (!current) {
+            return;
+        }
+        if (!isCapabilityPageAvailable(current)) {
+            selectTab(QStringLiteral("Radio"));
             return;
         }
         if (!current->parent()) {
@@ -870,12 +889,14 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 // reaches the radio).
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
+                const bool droopRow = item == m_pageItems.value(m_droopCalibrationPageIndex);
                 const bool gated =
                     (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item))
                     || (isGpsPage(item)
                         && !isGpsSetupAvailable())
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
-                    || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration);
+                    || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
+                    || (droopRow && !droopCalibrationAvailable(m_model->backend()));
                 if (!gated) {
                     item->setHidden(!matches);
                 }
@@ -950,6 +971,8 @@ void RadioSetupDialog::showEvent(QShowEvent* event)
     // `freqcal` bridge call, a different radio) has to be re-read here.
     if (m_calibrationReseed)
         m_calibrationReseed();
+    if (m_droopReseed)
+        m_droopReseed();
 }
 
 bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
@@ -963,10 +986,16 @@ bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
 
 bool RadioSetupDialog::isCapabilityPageAvailable(const QTreeWidgetItem* item) const
 {
-    if (!m_model || !item || !m_model->isConnected()) {
-        return true;
+    if (!m_model || !item) {
+        return false;
     }
     const int index = item->data(0, Qt::UserRole).toInt();
+    if (index == m_droopCalibrationPageIndex) {
+        return droopCalibrationAvailable(m_model->backend());
+    }
+    if (!m_model->isConnected()) {
+        return true;
+    }
     const RadioCapabilities caps = m_model->backendCapabilities();
     if (index == m_filtersPageIndex) {
         return caps.hasSharpFilters;
@@ -1095,8 +1124,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     }
 
     const bool currentPageUnavailable = m_navigation
-        && ((!isCapabilityPageAvailable(m_navigation->currentItem())
-             && isFlexOnlyPage(m_navigation->currentItem()))
+        && (!isCapabilityPageAvailable(m_navigation->currentItem())
             || (!isGpsSetupAvailable()
                 && isGpsPage(m_navigation->currentItem())));
     if (currentPageUnavailable) {
@@ -1254,16 +1282,19 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 : QStringLiteral("Reboot the connected radio now?\n\n"
                                  "AetherSDR will disconnect and automatically reconnect "
                                  "once the radio finishes booting.");
-            const auto ret = QMessageBox::warning(
-                this,
-                QStringLiteral("Reboot Radio"),
-                body,
-                QMessageBox::Ok | QMessageBox::Cancel,
-                QMessageBox::Cancel);
-            if (ret == QMessageBox::Ok) {
-                m_model->rebootRadio();
-                close();
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<RadioModel> model(m_model);
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Warning, QStringLiteral("Reboot Radio"), body,
+                QMessageBox::Ok | QMessageBox::Cancel, this);
+            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+            const int ret = boxOwner.get()->exec();
+            if (!self || !boxOwner || !model || self->m_model != model.data()
+                || ret != QMessageBox::Ok) {
+                return;
             }
+            model->rebootRadio();
+            self->close();
         });
         m_rebootInfoField = makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
                                           kInfoLeftLabelWidth);
@@ -1602,6 +1633,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // from FlexRadio (.msi for v4.2+, .exe for older releases) or a
         // pre-extracted .ssdr file. The stager auto-detects which.
         connect(browseBtn, &QPushButton::clicked, this, [this] {
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<RadioModel> model(m_model);
             const QString path = QFileDialog::getOpenFileName(
                 this, "Select SmartSDR Installer or Firmware File", QString(),
                 "SmartSDR installer or firmware (*.msi *.exe *.ssdr);;"
@@ -1609,7 +1642,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 "EXE installer (*.exe);;"
                 "Extracted firmware (*.ssdr);;"
                 "All files (*)");
-            if (path.isEmpty()) return;
+            if (!self || !model || self->m_model != model.data() || path.isEmpty()) {
+                return;
+            }
 
             m_fwFilePath.clear();
             m_fwUploadBtn->setEnabled(false);
@@ -1628,39 +1663,81 @@ QWidget* RadioSetupDialog::buildRadioTab()
         connect(m_fwUploadBtn, &QPushButton::clicked, this, [this] {
             if (m_fwFilePath.isEmpty()) return;
 
-            const auto reply = QMessageBox::warning(this, "Firmware Update",
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<RadioModel> model(m_model);
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Warning, QStringLiteral("Firmware Update"),
                 QString("Upload %1 to %2?\n\n"
                         "The radio will reboot after the update.\n"
                         "Do not disconnect during the upload.")
                     .arg(QFileInfo(m_fwFilePath).fileName(), m_model->model()),
-                QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
-            if (reply != QMessageBox::Ok) return;
+                QMessageBox::Ok | QMessageBox::Cancel, this);
+            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+            const int reply = boxOwner.get()->exec();
+            if (!self || !boxOwner || !model || self->m_model != model.data()
+                || reply != QMessageBox::Ok) {
+                return;
+            }
 
-            if (!m_uploader)
+            // Wire the uploader once, at creation. These used to be connected
+            // inside this clicked handler, so every click added another copy.
+            if (!m_uploader) {
                 m_uploader = new FirmwareUploader(m_model, this);
+
+                connect(m_uploader, &FirmwareUploader::progressChanged, this,
+                    [this](int pct, const QString& status) {
+                        m_fwProgress->setValue(pct);
+                        m_fwStatusLabel->setText(status);
+                        m_fwStatusLabel->setAccessibleDescription(status);
+                    });
+                connect(m_uploader, &FirmwareUploader::finished, this,
+                    [this](FirmwareUploader::Outcome outcome, const QString& msg) {
+                        // Three outcomes, not two. A drained socket or a
+                        // post-upload disconnect confirms nothing either way, so
+                        // it must not be painted as either (#5572): only the
+                        // radio's own `file update failed=` settles it. The
+                        // message carries the distinction in words as well as in
+                        // colour — colour alone never states it (docs/a11y.md).
+                        m_fwStatusLabel->setText(msg);
+                        m_fwStatusLabel->setAccessibleDescription(msg);
+                        // One setStyleSheet site for all three outcomes: the
+                        // colour ratchet counts call sites, not just literals.
+                        QString colour;
+                        switch (outcome) {
+                        case FirmwareUploader::Outcome::Succeeded:
+                            m_fwProgress->setValue(100);
+                            colour = QStringLiteral("#80e080");
+                            m_fwUploadBtn->setEnabled(false);
+                            break;
+                        case FirmwareUploader::Outcome::Unconfirmed:
+                            // Bytes left the host and the radio is probably
+                            // applying them. Keep the progress bar — hiding it
+                            // reads as "nothing happened" — and do not offer a
+                            // retry: the uploader refuses one until reconnect.
+                            m_fwProgress->setValue(100);
+                            colour = QStringLiteral("{{color.accent.warning}}");
+                            m_fwUploadBtn->setEnabled(false);
+                            break;
+                        case FirmwareUploader::Outcome::Failed:
+                            m_fwProgress->hide();
+                            colour = QStringLiteral("#e08080");
+                            m_fwUploadBtn->setEnabled(true);
+                            break;
+                        }
+                        // applyStyleSheet, not setStyleSheet: the latter does
+                        // not expand {{tokens}} (ThemeManager.h:174), and it
+                        // keeps the label repainting on themeChanged.
+                        AetherSDR::ThemeManager::instance().applyStyleSheet(
+                            m_fwStatusLabel,
+                            QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(colour));
+                    });
+            }
 
             m_fwProgress->show();
             m_fwProgress->setValue(0);
             m_fwUploadBtn->setEnabled(false);
-            m_fwStatusLabel->setStyleSheet("QLabel { color: #6888a0; font-size: 10px; }");
-
-            connect(m_uploader, &FirmwareUploader::progressChanged, this,
-                [this](int pct, const QString& status) {
-                    m_fwProgress->setValue(pct);
-                    m_fwStatusLabel->setText(status);
-                });
-            connect(m_uploader, &FirmwareUploader::finished, this,
-                [this](bool ok, const QString& msg) {
-                    m_fwStatusLabel->setText(msg);
-                    m_fwUploadBtn->setEnabled(!ok);
-                    if (ok) {
-                        m_fwProgress->setValue(100);
-                        m_fwStatusLabel->setStyleSheet("QLabel { color: #80e080; font-size: 10px; }");
-                    } else {
-                        m_fwProgress->hide();
-                        m_fwStatusLabel->setStyleSheet("QLabel { color: #e08080; font-size: 10px; }");
-                    }
-                });
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                m_fwStatusLabel, QStringLiteral("QLabel { color: #6888a0; font-size: 10px; }"));
 
             m_uploader->upload(m_fwFilePath);
         });
@@ -1783,9 +1860,12 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         grid->addWidget(enforceBtn, 0, 1);
 
         // 128-bit hex token generator — plenty for a local same-user secret.
+        // global() is only a securely *seeded* general-purpose PRNG (Xoshiro),
+        // whose stream is recoverable from enough output; system() is the OS
+        // CSPRNG Qt documents for keys and secrets (#4181).
         auto genToken = []() -> QString {
-            quint64 a = QRandomGenerator::global()->generate64();
-            quint64 b = QRandomGenerator::global()->generate64();
+            quint64 a = QRandomGenerator::system()->generate64();
+            quint64 b = QRandomGenerator::system()->generate64();
             return QStringLiteral("%1%2")
                 .arg(a, 16, 16, QLatin1Char('0'))
                 .arg(b, 16, 16, QLatin1Char('0'));
@@ -1824,7 +1904,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         {
             grid->addWidget(new QLabel("Agent Automation (MCP):"), 1, 0);
             const bool bridgeOn = AutomationBridgeSettings::enabled()
-                || qEnvironmentVariableIsSet("AETHER_AUTOMATION");
+                || AutomationBridgeSettings::envForced();
             auto* mcpBtn = new QPushButton(bridgeOn ? "Enabled" : "Disabled");
             mcpBtn->setCheckable(true);
             mcpBtn->setChecked(bridgeOn);
@@ -1841,14 +1921,24 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                 "AETHER_AUTOMATION_ALLOW_TX. See docs/automation-bridge.md.");
             // Env-var force-enable wins and can't be turned off from the UI —
             // make that visible rather than letting a toggle silently no-op.
-            if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
+            if (AutomationBridgeSettings::envForced()) {
                 mcpBtn->setEnabled(false);
                 mcpBtn->setToolTip(mcpBtn->toolTip()
                     + "\n\nForced on by the AETHER_AUTOMATION launch environment variable.");
             }
+            m_automationBridgeBtn = mcpBtn;
             connect(mcpBtn, &QPushButton::toggled, this,
                     [this, mcpBtn, tokenEdit, genToken, tokenLoaded](bool on) {
                 mcpBtn->setText(on ? "Enabled" : "Disabled");
+                // Persist the click as the operator's INTENT right away, so a
+                // quit or a reopened dialog during the async token read still
+                // sees it. Enabling is not the same as listening, though: the
+                // socket only binds once the read lands, so
+                // MainWindow::startAutomationBridge() records the real outcome
+                // (AutomationBridgeSettings::recordStartOutcome) even if this
+                // dialog has closed — a failed bind clears the flag again
+                // rather than leaving enabled=true with nothing listening and
+                // every launch silently re-attempting the doomed start (#4181).
                 AutomationBridgeSettings::setEnabled(on);
                 // Enabling with no token yet → mint one so the bridge is never
                 // exposed without auth. Only when the async token read has
@@ -1936,9 +2026,12 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                     + "\n\nForced on by the AETHER_AUTOMATION_ALLOW_TX launch variable.");
             }
             connect(txCheck, &QCheckBox::toggled, this, [this, txCheck](bool on) {
+                const QPointer<RadioSetupDialog> self(this);
+                const QPointer<QCheckBox> txCheckGuard(txCheck);
                 if (on && !AutomationBridgeSettings::txAck()) {
                     // First-time enable → confirm. Operator must acknowledge.
-                    QMessageBox box(this);
+                    ScopedChildWidget<QMessageBox> boxOwner(this);
+                    QMessageBox& box = *boxOwner.get();
                     box.setIcon(QMessageBox::Warning);
                     box.setWindowTitle("Allow TX via MCP?");
                     box.setText("Allow an AI assistant / MCP client to key the transmitter?");
@@ -1958,10 +2051,13 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                     box.addButton("Cancel", QMessageBox::RejectRole);
                     box.setDefaultButton(qobject_cast<QPushButton*>(box.buttons().value(1)));
                     box.exec();
+                    if (!self || !txCheckGuard || !boxOwner) {
+                        return;
+                    }
                     if (box.clickedButton() != confirm) {
                         // Cancelled — revert without persisting or emitting.
-                        QSignalBlocker blocker(txCheck);
-                        txCheck->setChecked(false);
+                        QSignalBlocker blocker(txCheckGuard.data());
+                        txCheckGuard->setChecked(false);
                         return;
                     }
                     // Confirmed — remember the acknowledgement so we never
@@ -3455,6 +3551,201 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
     return page;
 }
 
+// ── Droop Correction tab ────────────────────────────────────────────────────
+
+QWidget* RadioSetupDialog::buildDroopCalibrationTab()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto themed = [&theme](QWidget* w, const QString& tpl) { theme.applyStyleSheet(w, tpl); };
+
+    static const QString kLabel =
+        QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 12px; }");
+    static const QString kButton =
+        QStringLiteral("QPushButton { background: {{color.background.1}}; "
+                       "border: 1px solid {{color.background.2}}; border-radius: 4px; "
+                       "color: {{color.text.primary}}; font-size: 12px; font-weight: bold; "
+                       "padding: 4px 10px; }"
+                       "QPushButton:hover { background: {{color.background.2}}; }"
+                       "QPushButton:disabled { color: {{color.text.secondary}}; }");
+
+    auto* group = new QGroupBox("DDC0 Droop Correction");
+    themed(group, QStringLiteral(
+        "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
+        "margin-top: 8px; padding-top: 12px; font-weight: bold; "
+        "color: {{color.text.secondary}}; }"
+        "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"));
+    auto* gvb = new QVBoxLayout(group);
+    gvb->setSpacing(8);
+
+    {
+        auto* intro = new QLabel(
+            "This radio's DDC has a real amplitude droop near the edges of the "
+            "displayed span, measured here rather than guessed. For the most "
+            "accurate correction, disconnect the antenna or terminate it in a "
+            "dummy load before starting — the sweep measures the receiver's own "
+            "noise floor as a flat reference, and a live signal during the "
+            "sweep will bias the correction for whichever rate it lands in.");
+        themed(intro, kLabel);
+        intro->setWordWrap(true);
+        gvb->addWidget(intro);
+    }
+
+    auto* noRadioLbl = new QLabel(
+        "Connect the radio first. The calibration belongs to one physical "
+        "radio, and there is no radio identity to store it against yet.");
+    themed(noRadioLbl, QStringLiteral(
+        "QLabel { color: {{color.accent.danger}}; font-size: 12px; font-weight: bold; }"));
+    noRadioLbl->setWordWrap(true);
+    noRadioLbl->setVisible(false);
+    gvb->addWidget(noRadioLbl);
+
+    auto* startStopBtn = new QPushButton("Start Sweep");
+    themed(startStopBtn, kButton);
+    startStopBtn->setFixedWidth(120);
+    // Description, NOT accessibleName: this button's text toggles between
+    // "Start Sweep" and "Stop", and a screen reader takes a button's name
+    // from its text unless one is set explicitly. A fixed name here would
+    // freeze the announcement at "Start sweep" while the button actually
+    // reads "Stop" -- worse than saying nothing. The description supplements
+    // the live text instead of replacing it.
+    startStopBtn->setAccessibleDescription(QStringLiteral(
+        "Steps the radio through every DDC0 sample rate and measures the "
+        "panadapter's edge droop at each one. Takes several minutes."));
+
+    auto* progressBar = new QProgressBar;
+    progressBar->setRange(0, 100);
+    progressBar->setValue(0);
+    progressBar->setTextVisible(false);
+    progressBar->setFixedHeight(startStopBtn->sizeHint().height());
+    // setTextVisible(false) leaves this with no text at all, so without a
+    // name it is announced as an unlabelled progress bar.
+    progressBar->setAccessibleName(QStringLiteral("Droop sweep progress"));
+
+    auto* rowLayout = new QHBoxLayout;
+    rowLayout->addWidget(startStopBtn);
+    rowLayout->addWidget(progressBar, 1);
+    gvb->addLayout(rowLayout);
+
+    auto* statusLbl = new QLabel("Idle — no sweep has been run this session.");
+    themed(statusLbl, kLabel);
+    statusLbl->setWordWrap(true);
+    // Same reasoning as the Start button, for the same reason in reverse: a
+    // QLabel's accessible name IS its text, and this label's text is the
+    // live sweep status (including the failure reasons the calibrator
+    // reports). Naming it would hide exactly the content worth hearing.
+    statusLbl->setAccessibleDescription(QStringLiteral("Droop sweep status"));
+    gvb->addWidget(statusLbl);
+
+    auto* summaryLbl = new QLabel;
+    themed(summaryLbl, QStringLiteral(
+        "QLabel { color: {{color.text.secondary}}; font-size: 11px; "
+        "font-family: monospace; }"));
+    summaryLbl->setWordWrap(true);
+    summaryLbl->setAccessibleDescription(QStringLiteral(
+        "Measured correction per DDC0 rate"));
+    gvb->addWidget(summaryLbl);
+
+    auto* applyBtn = new QPushButton("Apply");
+    themed(applyBtn, kButton);
+    applyBtn->setFixedWidth(90);
+    applyBtn->setEnabled(false);
+    // Static text, so a name is safe here -- and needed: "Apply" and
+    // "Discard" alone say nothing about what is being applied or discarded.
+    applyBtn->setAccessibleName(QStringLiteral("Apply the measured droop correction"));
+    applyBtn->setToolTip(QStringLiteral(
+        "Push the measured tables live and save them for this radio"));
+
+    auto* cancelBtn = new QPushButton("Discard");
+    themed(cancelBtn, kButton);
+    cancelBtn->setFixedWidth(90);
+    cancelBtn->setEnabled(false);
+    cancelBtn->setAccessibleName(QStringLiteral("Discard the measured droop correction"));
+    cancelBtn->setToolTip(QStringLiteral("Drop the measured (not yet applied) result"));
+
+    auto* applyRow = new QHBoxLayout;
+    applyRow->addWidget(applyBtn);
+    applyRow->addWidget(cancelBtn);
+    applyRow->addStretch(1);
+    gvb->addLayout(applyRow);
+
+    vbox->addWidget(group);
+
+    auto update = [this, startStopBtn, progressBar, statusLbl, summaryLbl,
+                   applyBtn, cancelBtn, noRadioLbl](const QVariantMap& state) {
+        const bool available = droopCalibrationAvailable(m_model->backend());
+        const bool running = available && state.value(QStringLiteral("running")).toBool();
+        const bool hasResult = available && state.value(QStringLiteral("hasResult")).toBool();
+        startStopBtn->setEnabled(available);
+        startStopBtn->setText(running ? QStringLiteral("Stop") : QStringLiteral("Start Sweep"));
+        startStopBtn->setProperty("droopRunning", running);
+        applyBtn->setEnabled(hasResult && !running);
+        cancelBtn->setEnabled(hasResult && !running);
+        noRadioLbl->setVisible(!available);
+        progressBar->setValue(available ? state.value(QStringLiteral("percent")).toInt() : 0);
+        QString message = state.value(QStringLiteral("message")).toString();
+        if (state.contains(QStringLiteral("error"))) {
+            message = state.value(QStringLiteral("error")).toString();
+        }
+        statusLbl->setText(message.isEmpty()
+            ? QStringLiteral("Idle — no sweep has been run this session.") : message);
+        QStringList lines;
+        if (available) {
+            const QVariantList corrections = state.value(QStringLiteral("corrections")).toList();
+            for (const QVariant& value : corrections) {
+                const QVariantMap correction = value.toMap();
+                lines << QStringLiteral("%1 ksps: %2–%3 dB correction")
+                    .arg(correction.value(QStringLiteral("rateKsps")).toInt())
+                    .arg(correction.value(QStringLiteral("minDb")).toDouble(), 0, 'f', 1)
+                    .arg(correction.value(QStringLiteral("maxDb")).toDouble(), 0, 'f', 1);
+            }
+        }
+        summaryLbl->setText(lines.join(QStringLiteral("\n")));
+    };
+    auto request = [this, update](const QString& action) {
+        update(requestDroopCalibration(m_model->backend(), action));
+    };
+    connect(startStopBtn, &QPushButton::clicked, this, [startStopBtn, request] {
+        request(startStopBtn->property("droopRunning").toBool()
+                    ? QStringLiteral("stop") : QStringLiteral("start"));
+    });
+    connect(applyBtn, &QPushButton::clicked, this, [request] {
+        request(QStringLiteral("apply"));
+    });
+    connect(cancelBtn, &QPushButton::clicked, this, [request] {
+        request(QStringLiteral("discard"));
+    });
+
+    // Rebind to the current neutral backend on reconnect. No captured ANAN
+    // object survives a family switch; both entry points re-check capability.
+    m_droopReseed = [this, update] {
+        QObject::disconnect(m_droopStatusConnection);
+        IRadioBackend* backend = m_model->backend();
+        if (backend && backend->capabilities().family == QLatin1String("anan")
+            && backend->capabilities().hostDroopCalibration) {
+            m_droopStatusConnection = connect(backend, &IRadioBackend::extensionStatus, this,
+                [this, backend, update](const QString& ns, const QString& kind,
+                                        const QVariantMap& state) {
+                    if (m_model->backend() == backend && ns == QLatin1String("anan")
+                        && kind == QLatin1String("droop")) {
+                        update(state);
+                    }
+                });
+            update(droopCalibrationAvailable(backend)
+                ? requestDroopCalibration(backend, QStringLiteral("status")) : QVariantMap{});
+        } else {
+            update({});
+        }
+    };
+    m_droopReseed();
+
+    vbox->addStretch(1);
+    return page;
+}
+
 // ── Audio tab ────────────────────────────────────────────────────────────────
 
 QWidget* RadioSetupDialog::buildAudioTab()
@@ -3898,10 +4189,12 @@ QWidget* RadioSetupDialog::buildAudioTab()
         browseBtn->setFixedWidth(30);
         browseBtn->setStyleSheet(modeBtnStyle);
         connect(browseBtn, &QPushButton::clicked, this, [this, dirEdit]() {
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<QLineEdit> dirEditGuard(dirEdit);
             QString dir = QFileDialog::getExistingDirectory(this, "Select Recording Directory",
                                                             dirEdit->text());
-            if (!dir.isEmpty()) {
-                dirEdit->setText(dir);
+            if (self && dirEditGuard && !dir.isEmpty()) {
+                dirEditGuard->setText(dir);
                 auto& s = AppSettings::instance();
                 s.setValue("QsoRecordingDir", dir);
                 s.save();
@@ -4594,6 +4887,30 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             edit->setMinimumHeight(24);
         };
 
+        auto styleKiwiCombo = [](QComboBox* combo) {
+            applyComboStyle(combo);
+            combo->setMinimumHeight(24);
+        };
+
+        // Receiver-family selector shared by the configured and new rows:
+        // index 0 = KiwiSDR, index 1 = Web-888 (docs/web888-cleanroom-design.md).
+        auto fillReceiverTypeCombo = [](QComboBox* combo) {
+            combo->addItem(QStringLiteral("KiwiSDR"));
+            combo->addItem(QStringLiteral("Web-888"));
+        };
+        auto receiverTypeComboIndex =
+            [](KiwiSdrProtocol::KiwiSdrReceiverFamily family) {
+                return family == KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+                    ? 1
+                    : 0;
+            };
+        auto receiverTypeComboFamily =
+            [](int index) {
+                return index == 1
+                    ? KiwiSdrProtocol::KiwiSdrReceiverFamily::Web888
+                    : KiwiSdrProtocol::KiwiSdrReceiverFamily::Kiwi;
+            };
+
         auto styleKiwiButton = [](QPushButton* button) {
             button->setStyleSheet(kKiwiActionButtonStyle);
             button->setMinimumWidth(96);
@@ -4607,7 +4924,9 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         };
 
         *refreshKiwi = [this, kiwiRowsLayout, stateText, styleKiwiEdit,
-                        styleKiwiButton, styleKiwiIconButton,
+                        styleKiwiButton, styleKiwiIconButton, styleKiwiCombo,
+                        fillReceiverTypeCombo, receiverTypeComboIndex,
+                        receiverTypeComboFamily,
                         kiwiPasswordDescription] {
             while (QLayoutItem* item = kiwiRowsLayout->takeAt(0)) {
                 if (QWidget* widget = item->widget()) {
@@ -4718,6 +5037,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 addFieldLabel(rowLayout, "NAME", 0);
                 addFieldLabel(rowLayout, "SERVER", 1);
                 addFieldLabel(rowLayout, "PASSWORD", 2);
+                addFieldLabel(rowLayout, "TYPE", 3);
 
                 auto* nameEdit = new QLineEdit(profile.name);
                 nameEdit->setMaxLength(16);
@@ -4748,7 +5068,18 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     passwordEdit->setEnabled(false);
                 }
                 styleKiwiEdit(passwordEdit);
-                rowLayout->addWidget(passwordEdit, 2, 2, 1, 2);
+                rowLayout->addWidget(passwordEdit, 2, 2);
+
+                auto* typeCombo = new GuardedComboBox;
+                fillReceiverTypeCombo(typeCombo);
+                typeCombo->setCurrentIndex(receiverTypeComboIndex(profile.family));
+                typeCombo->setAccessibleName("KiwiSDR receiver type");
+                typeCombo->setAccessibleDescription(
+                    "Receiver family for this endpoint: a KiwiSDR or a "
+                    "Web-888, which speaks the same protocol with small "
+                    "differences.");
+                styleKiwiCombo(typeCombo);
+                rowLayout->addWidget(typeCombo, 2, 3);
 
                 const KiwiSdrPasswordPersistenceState persistenceState =
                     m_kiwiSdrManager->profilePasswordPersistenceState(
@@ -4877,6 +5208,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 kiwiRowsLayout->addWidget(rowFrame);
 
                 auto updateProfile = [this, profile, nameEdit, endpointEdit,
+                                      typeCombo, receiverTypeComboFamily,
                                       autoCheck, keepTxAudioCheck,
                                       resumeDelayCheck] {
                     const QString name = nameEdit->text().trimmed();
@@ -4899,6 +5231,8 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     KiwiSdrAntennaProfile updated = profile;
                     updated.name = name;
                     updated.endpoint = endpoint;
+                    updated.family = receiverTypeComboFamily(
+                        typeCombo->currentIndex());
                     updated.autoConnect = autoCheck->isChecked();
                     updated.keepAudioDuringTx = keepTxAudioCheck->isChecked();
                     updated.resumeAudioAfterTxDelay =
@@ -4927,6 +5261,8 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 });
                 connect(resumeDelayCheck, &QCheckBox::toggled,
                         this, [updateProfile](bool) { updateProfile(); });
+                connect(typeCombo, &QComboBox::currentIndexChanged,
+                        this, [updateProfile](int) { updateProfile(); });
                 connect(connectButton, &QPushButton::clicked,
                         this, [this, profile, activeSession] {
                     if (activeSession) {
@@ -4956,6 +5292,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             addFieldLabel(rowLayout, "NAME", 0);
             addFieldLabel(rowLayout, "SERVER", 1);
             addFieldLabel(rowLayout, "PASSWORD", 2);
+            addFieldLabel(rowLayout, "TYPE", 3);
 
             auto* nameEdit = new QLineEdit;
             nameEdit->setMaxLength(16);
@@ -4984,6 +5321,16 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             styleKiwiEdit(passwordEdit);
             rowLayout->addWidget(passwordEdit, 2, 2);
 
+            auto* typeCombo = new GuardedComboBox;
+            fillReceiverTypeCombo(typeCombo);
+            typeCombo->setAccessibleName("New KiwiSDR receiver type");
+            typeCombo->setAccessibleDescription(
+                "Receiver family for the new endpoint: a KiwiSDR or a "
+                "Web-888, which speaks the same protocol with small "
+                "differences.");
+            styleKiwiCombo(typeCombo);
+            rowLayout->addWidget(typeCombo, 2, 3);
+
             auto* autoCheck = new QCheckBox;
             autoCheck->setText("Auto-connect");
             autoCheck->setAccessibleName("Auto connect new KiwiSDR antenna");
@@ -4994,6 +5341,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
 
             auto committed = std::make_shared<bool>(false);
             auto commitNewRow = [this, nameEdit, endpointEdit, passwordEdit,
+                                 typeCombo, receiverTypeComboFamily,
                                  autoCheck, committed] {
                 if (*committed) {
                     return;
@@ -5005,7 +5353,9 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                     return;
                 }
                 *committed = true;
-                const QString id = m_kiwiSdrManager->addProfile(name, endpoint);
+                const QString id = m_kiwiSdrManager->addProfile(
+                    name, endpoint, receiverTypeComboFamily(
+                                        typeCombo->currentIndex()));
                 if (id.isEmpty()) {
                     *committed = false;
                     return;
@@ -5028,12 +5378,25 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             rowLayout->addWidget(browseButton, 3, 1);
             connect(browseButton, &QPushButton::clicked, this,
                     [this, nameEdit, endpointEdit] {
-                KiwiPublicReceiverPicker picker(this);
-                if (picker.exec() == QDialog::Accepted
-                    && !picker.selectedEndpoint().isEmpty()) {
-                    endpointEdit->setText(picker.selectedEndpoint());
-                    if (nameEdit->text().trimmed().isEmpty()) {
-                        nameEdit->setText(picker.selectedName());
+                const QPointer<RadioSetupDialog> self(this);
+                const QPointer<QLineEdit> nameEditGuard(nameEdit);
+                const QPointer<QLineEdit> endpointEditGuard(endpointEdit);
+                ScopedChildWidget<KiwiPublicReceiverPicker> pickerOwner(this);
+                KiwiPublicReceiverPicker& picker = *pickerOwner.get();
+                const int result = picker.exec();
+                if (!self || !nameEditGuard || !endpointEditGuard || !pickerOwner
+                    || result != QDialog::Accepted) {
+                    return;
+                }
+                const QString endpoint = picker.selectedEndpoint();
+                const QString name = picker.selectedName();
+                if (!endpoint.isEmpty()) {
+                    endpointEditGuard->setText(endpoint);
+                    if (!self || !nameEditGuard) {
+                        return;
+                    }
+                    if (nameEditGuard->text().trimmed().isEmpty()) {
+                        nameEditGuard->setText(name);
                     }
                 }
             });
@@ -5110,39 +5473,49 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         styleKiwiButton(kiwiImportBtn);
         connect(kiwiImportBtn, &QPushButton::clicked, this,
                 [this, kiwiTransferDirectory, rememberKiwiTransferDirectory] {
-            QFileDialog dialog(this, QStringLiteral("Import KiwiSDR Receivers"),
-                               kiwiTransferDirectory(),
-                               QStringLiteral("CSV Files (*.csv)"));
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<KiwiSdrManager> manager(m_kiwiSdrManager);
+            ScopedChildWidget<QFileDialog> dialogOwner(
+                this, QStringLiteral("Import KiwiSDR Receivers"),
+                kiwiTransferDirectory(), QStringLiteral("CSV Files (*.csv)"));
+            QFileDialog& dialog = *dialogOwner.get();
             dialog.setAcceptMode(QFileDialog::AcceptOpen);
             dialog.setFileMode(QFileDialog::ExistingFile);
             dialog.setDefaultSuffix(QStringLiteral("csv"));
-            if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+            const int dialogResult = dialog.exec();
+            if (!self || !manager || !dialogOwner || dialogResult != QDialog::Accepted
+                || dialog.selectedFiles().isEmpty()) {
                 return;
             }
             const QString path = dialog.selectedFiles().first();
             rememberKiwiTransferDirectory(path);
 
             const KiwiSdrCsvImportResult result =
-                m_kiwiSdrManager->importFromFile(path);
+                manager->importFromFile(path);
+            if (!self || !manager) {
+                return;
+            }
             if (!result.ok() && result.addedCount == 0 && result.mergedCount == 0) {
-                QMessageBox box(QMessageBox::Warning,
-                                QStringLiteral("Import KiwiSDR Receivers"),
-                                QStringLiteral("No receivers were imported from %1.")
-                                    .arg(QFileInfo(path).fileName()),
-                                QMessageBox::Ok, this);
+                ScopedChildWidget<QMessageBox> boxOwner(
+                    QMessageBox::Warning, QStringLiteral("Import KiwiSDR Receivers"),
+                    QStringLiteral("No receivers were imported from %1.")
+                        .arg(QFileInfo(path).fileName()),
+                    QMessageBox::Ok, self.data());
+                QMessageBox& box = *boxOwner.get();
                 box.setDetailedText(result.errors.join(QLatin1Char('\n')));
                 box.exec();
                 return;
             }
 
-            QMessageBox box(result.errors.isEmpty()
-                                ? QMessageBox::Information : QMessageBox::Warning,
-                            QStringLiteral("Import KiwiSDR Receivers"),
-                            QStringLiteral("Added %1 and updated %2 receiver(s) from %3.")
-                                .arg(result.addedCount)
-                                .arg(result.mergedCount)
-                                .arg(QFileInfo(path).fileName()),
-                            QMessageBox::Ok, this);
+            ScopedChildWidget<QMessageBox> boxOwner(
+                result.errors.isEmpty() ? QMessageBox::Information : QMessageBox::Warning,
+                QStringLiteral("Import KiwiSDR Receivers"),
+                QStringLiteral("Added %1 and updated %2 receiver(s) from %3.")
+                    .arg(result.addedCount)
+                    .arg(result.mergedCount)
+                    .arg(QFileInfo(path).fileName()),
+                QMessageBox::Ok, self.data());
+            QMessageBox& box = *boxOwner.get();
             if (!result.errors.isEmpty()) {
                 box.setInformativeText(
                     QStringLiteral("%1 row(s) could not be imported.")
@@ -5162,32 +5535,47 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         styleKiwiButton(kiwiExportBtn);
         connect(kiwiExportBtn, &QPushButton::clicked, this,
                 [this, kiwiTransferDirectory, rememberKiwiTransferDirectory] {
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<KiwiSdrManager> manager(m_kiwiSdrManager);
             const QString fileName = QStringLiteral("AetherSDR_KiwiSDR_Receivers_%1.csv")
                                          .arg(QDateTime::currentDateTime().toString(
                                              QStringLiteral("yyyyMMdd_HHmmss")));
-            QFileDialog dialog(this, QStringLiteral("Export KiwiSDR Receivers"),
-                               QDir(kiwiTransferDirectory()).filePath(fileName),
-                               QStringLiteral("CSV Files (*.csv)"));
+            ScopedChildWidget<QFileDialog> dialogOwner(
+                this, QStringLiteral("Export KiwiSDR Receivers"),
+                QDir(kiwiTransferDirectory()).filePath(fileName),
+                QStringLiteral("CSV Files (*.csv)"));
+            QFileDialog& dialog = *dialogOwner.get();
             dialog.setAcceptMode(QFileDialog::AcceptSave);
             dialog.setDefaultSuffix(QStringLiteral("csv"));
-            if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+            const int dialogResult = dialog.exec();
+            if (!self || !manager || !dialogOwner || dialogResult != QDialog::Accepted
+                || dialog.selectedFiles().isEmpty()) {
                 return;
             }
             const QString path = dialog.selectedFiles().first();
             rememberKiwiTransferDirectory(path);
 
-            const KiwiSdrCsvExportResult result = m_kiwiSdrManager->exportToFile(path);
-            if (!result.ok()) {
-                QMessageBox::warning(this, QStringLiteral("Export KiwiSDR Receivers"),
-                                     result.error);
+            const KiwiSdrCsvExportResult result = manager->exportToFile(path);
+            if (!self || !manager) {
                 return;
             }
-            QMessageBox::information(
-                this, QStringLiteral("Export KiwiSDR Receivers"),
+            if (!result.ok()) {
+                ScopedChildWidget<QMessageBox> boxOwner(
+                    QMessageBox::Warning, QStringLiteral("Export KiwiSDR Receivers"),
+                    result.error, QMessageBox::Ok, self.data());
+                QMessageBox& box = *boxOwner.get();
+                box.exec();
+                return;
+            }
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Information, QStringLiteral("Export KiwiSDR Receivers"),
                 QStringLiteral("Exported %1 receiver(s) to %2. Passwords are not "
                                "included; re-enter them after importing elsewhere.")
                     .arg(result.exportedCount)
-                    .arg(QFileInfo(path).fileName()));
+                    .arg(QFileInfo(path).fileName()),
+                QMessageBox::Ok, self.data());
+            QMessageBox& box = *boxOwner.get();
+            box.exec();
         });
         kiwiTransferRow->addWidget(kiwiExportBtn);
         kiwiLayout->addLayout(kiwiTransferRow);
@@ -8532,7 +8920,7 @@ void RadioSetupDialog::selectTab(const QString& tabName)
     const QString pageName = kLegacyPageNames.value(tabName, tabName);
     const int index = m_pageIndexes.value(pageName, -1);
     if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
-        if (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item)) {
+        if (!isCapabilityPageAvailable(item)) {
             return;
         }
         if (isGpsPage(item) && !isGpsSetupAvailable()) {
@@ -8629,6 +9017,41 @@ void RadioSetupDialog::setFlexControlConnectionStatus(bool connected, const QStr
         m_flexControlCloseButton->setEnabled(connected);
     if (m_flexControlDetectButton)
         m_flexControlDetectButton->setEnabled(!connected);
+}
+
+void RadioSetupDialog::reportAutomationBridgeStartResult(bool ok)
+{
+    if (!m_automationBridgeBtn) {
+        return;  // the Network tab has not been built
+    }
+    if (AutomationBridgeSettings::envForced()) {
+        // The toggle is disabled and captioned "forced on" in this case, and
+        // the saved opt-in was not touched; repainting it Disabled would
+        // contradict both. The failure is in the log and the status bar.
+        return;
+    }
+    const bool wasEnabled = m_automationBridgeBtn->isChecked();
+    {
+        // MainWindow owns persistence and rejects stale callbacks. Reconcile
+        // even a dialog reopened during the pending read, whose initial toggle
+        // still reflects the old setting. Do not emit a second start/stop.
+        const QSignalBlocker blocker(m_automationBridgeBtn);
+        m_automationBridgeBtn->setChecked(ok);
+        m_automationBridgeBtn->setText(ok ? "Enabled" : "Disabled");
+    }
+    if (ok || !wasEnabled || !isVisible()) {
+        return;
+    }
+    // Do not blame a sibling instance: AutomationServer::start() unlinks a
+    // stale socket before listening, so on Unix a shared name is taken over,
+    // not refused. What reaches here is a path-length or permission failure,
+    // and the server already logged errorString().
+    QMessageBox::warning(this, QStringLiteral("Agent Automation (MCP)"),
+        QStringLiteral(
+            "The automation bridge could not bind its socket — see the "
+            "application log for the reason.\n\n"
+            "MCP clients will not be able to connect. The toggle has been "
+            "turned back off."));
 }
 
 // ── UI Enhancements tab ───────────────────────────────────────────────────────
@@ -8823,12 +9246,16 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     for (int i = 0; i < AetherSDR::kSliceColorCount; ++i) {
         connect(colorBtns[i], &QPushButton::clicked, page,
                 [i, pMgr, applyBtnColor, page]() mutable {
+            const QPointer<QWidget> pageGuard(page);
+            const QPointer<SliceColorManager> mgr(pMgr);
             QColor initial = pMgr->customColor(i);
             QColor chosen = QColorDialog::getColor(initial, page,
                                                    QStringLiteral("Slice %1 Color")
                                                        .arg(QChar('A' + i)));
-            if (!chosen.isValid()) return;
-            pMgr->setCustomColor(i, chosen);
+            if (!pageGuard || !mgr || !chosen.isValid()) {
+                return;
+            }
+            mgr->setCustomColor(i, chosen);
             applyBtnColor(i);
         });
     }
@@ -9043,15 +9470,19 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
     });
 
     connect(forgetAll, &QPushButton::clicked, this, [this]() {
-        if (QMessageBox::question(this, tr("Forget all SmartLink certificates"),
-                tr("Clear every pinned SmartLink cert fingerprint?\n\n"
-                   "Next connect to each radio will silently re-pin "
-                   "whatever certificate it presents (no mismatch warning)."))
-            != QMessageBox::Yes) {
+        const QPointer<RadioSetupDialog> self(this);
+        ScopedChildWidget<QMessageBox> boxOwner(
+            QMessageBox::Question, tr("Forget all SmartLink certificates"),
+            tr("Clear every pinned SmartLink cert fingerprint?\n\n"
+               "Next connect to each radio will silently re-pin "
+               "whatever certificate it presents (no mismatch warning)."),
+            QMessageBox::Yes | QMessageBox::No, this);
+        const int reply = boxOwner.get()->exec();
+        if (!self || !boxOwner || reply != QMessageBox::Yes) {
             return;
         }
         WanCertCache::forgetAllPinnedCerts();
-        refreshPinnedCertsTable();
+        self->refreshPinnedCertsTable();
     });
 
     root->addWidget(grp);

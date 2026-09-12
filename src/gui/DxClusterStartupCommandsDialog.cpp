@@ -1,5 +1,6 @@
 #include "DxClusterStartupCommandsDialog.h"
 #include "core/AppSettings.h"
+#include "ScopedChildWidget.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
@@ -83,10 +84,17 @@ DxClusterStartupCommandsDialog::DxClusterStartupCommandsDialog(
 void DxClusterStartupCommandsDialog::edit(
     const QString& title, const QString& appSettingsKey, QWidget* parent)
 {
-    DxClusterStartupCommandsDialog dlg(title, appSettingsKey, parent);
-    if (dlg.exec() != QDialog::Accepted) return;
+    const QString titleCopy = title;
+    const QString appSettingsKeyCopy = appSettingsKey;
+    ScopedChildWidget<DxClusterStartupCommandsDialog> dialogOwner(
+        titleCopy, appSettingsKeyCopy, parent);
+    DxClusterStartupCommandsDialog* const dialog = dialogOwner.get();
+    const int result = dialog->exec();
+    if (!dialogOwner || result != QDialog::Accepted) {
+        return;
+    }
     auto& s = AppSettings::instance();
-    s.setValue(appSettingsKey, dlg.m_edit->toPlainText());
+    s.setValue(appSettingsKeyCopy, dialog->m_edit->toPlainText());
     s.save();
 }
 

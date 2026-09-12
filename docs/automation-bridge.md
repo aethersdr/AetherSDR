@@ -1211,7 +1211,7 @@ comparing screenshots.
    "panIndex":1,"objectName":"",
    "fftAverage":0,"fftFps":25,"fftWeightedAvg":false,
    "fftHeatMap":true,"showGrid":true,
-   "fftLineWidth":2.0,"fftLineColor":"#00e5ff",
+   "fftLineWidth":1.0,"fftLineColor":"#00e5ff",
    "fftFillAlpha":0.7,"fftFillColor":"#00e5ff",
    "noiseFloorEnable":false,"noiseFloorPosition":75,
    "wfBlankerEnabled":false,"wfBlankerThreshold":1.15,"wfBlankerMode":0,
@@ -1679,7 +1679,7 @@ re-poll `get slices`.
 
 | `action` | `value` | effect |
 |---|---|---|
-| `add` | optional `<mhz>` | create a slice (radio-wide slot capacity is pre-checked; refused at the slice limit, naming any foreign occupant) |
+| `add` | optional `<mhz>` | request a slice through RadioModel (radio-wide slot capacity is pre-checked; refused at the slice limit, naming any foreign occupant). Omit the value for default placement; an explicit value follows the same parse and tunable-range rule as `tune`, so a malformed, non-finite, non-positive or out-of-band value is an error, never a default-frequency fallback |
 | `remove` | `<sliceId>` | remove a slice (refuses the last one) |
 | `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
 | `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
@@ -1697,6 +1697,19 @@ re-poll `get slices`.
 | `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
 | `fixture` | `<sliceId> [A-H]` | disconnected-only test fixture: synthesize an owned slice through the normal slice-status path, optionally with a single radio `index_letter`, so `dumpTree` can assert UI without a radio |
 | `clearfixture` | `<sliceId>` | remove a slice created by `fixture`; when the final fixture is removed, restores the pre-fixture disconnected model/max-slice state |
+
+Ordinary `add`/`remove` requests report acceptance, not completion. An accepted
+request can still be pending; re-poll `get slices` for authoritative ownership.
+Explicit invalid `add` values are refused after the capacity pre-check with
+the shared MHz wording (`"slice add requires a positive finite frequency in
+MHz"`, or the `tune`-style range message). A RadioModel refusal returns
+`"refused: radio did not accept slice creation"` or
+`"refused: radio did not accept slice removal"`; this includes unsupported
+backend operations and does not imply that a wire command was sent. The latter
+replaces the earlier non-Flex `"not supported on this radio (no Flex command
+plane)"` response, so scripts matching that text must update. Removal retains
+`"refused: cannot remove the last slice"` and `"no slice with id <sliceId>"`
+for the local last-slice and unknown-ID checks, respectively.
 
 For a manual SQL band/profile-restore check, compare `get slice`'s
 `squelch`/`squelchLevel` with `dumpTree`'s **RX applet → Squelch threshold**
@@ -3551,6 +3564,34 @@ mailbox, and the terminal, so a headless soak box never has to open it.
   checkbox actually took and returns `ok:false` if the modem refused (no audio
   engine, no attached slice) rather than reporting success for work that did not
   happen.
+- **`modem digi`** / **`modem digi status`** — WIDE1-1 fill-in digipeater
+  snapshot (`enabled`, call, alias, dupe window, beacon fields, heard/repeated
+  counters, and the **current air rate** `baud` / `profileId`). The fill-in
+  engine is baud-agnostic; 300 Hz HF and 1200 Hz VHF share one modem profile
+  (`modem profile hf300|vhf1200`). Read-only.
+- **`modem digi on` / `modem digi off`** — arm/disarm the fill-in. `on` ⚠️
+  keys the transmitter whenever a matching UI frame is heard, so it is refused
+  unless `AETHER_AUTOMATION_ALLOW_TX=1`. Verifies the checkbox actually took
+  (a missing digi callsign or a profile other than 1200 baud fails closed).
+  Fill-in starts disarmed on every launch; configuration and beacon preference
+  persist, but TX authorization does not. Disabling fill-in cancels its pending
+  repeats/beacons and active TX without discarding other producers' packets.
+  Disabling the modem, changing the attached slice, disconnecting the radio,
+  or switching to 300 baud also disarms fill-in. Both Digi enable checkboxes
+  are TX-keying controls for generic automation invocations.
+- **`modem digi beacon`** ⚠️ — fire one fill-in-style position beacon now
+  (same `AETHER_AUTOMATION_ALLOW_TX=1` rail). Fails if there is no callsign or
+  no GPS/manual position.
+
+```json
+→ {"cmd":"modem","action":"digi","value":"status"}
+← {"ok":true,"baud":1200,"profileId":"Vhf1200",
+   "digi":{"enabled":true,"call":"KI6BCJ-7","alias":"WIDE1-1",
+           "alsoMyCall":true,"alsoRelay":false,"dupeWindowSecs":30,
+           "beaconEnabled":false,"beaconIntervalMin":15,
+           "heard":12,"repeated":3,"droppedDupe":1,"droppedNoMatch":8,
+           "droppedOwn":0,"baud":1200,"profileId":"Vhf1200"}}
+```
 
 The `demod` block is what separates "no frames because the band is dead" from
 "no frames because the audio tap never started": `receiveGateOpen` plus a
@@ -3872,7 +3913,8 @@ the airtime model predicts for the current profile and paclen; comparing it with
 `rtt.avgMs` is how you tell whether the model matches the air. See
 [`HFMODEM.md`](HFMODEM.md).
 
-Bare-line forms: `modem profile hf300`, `modem on`, `link status`,
+Bare-line forms: `modem profile hf300`, `modem on`, `modem digi status`,
+`modem digi on`, `modem digi beacon`, `link status`,
 `link mycall KI6BCJ-7`, `link connect N0BBS-1 via WIDE1-1`, `link pms on`.
 
 ---
@@ -4169,6 +4211,24 @@ receiver capacity. It never enables transmit and remains available without
 
 The complete registry, generated from the `add(...)` table in `AutomationServer.cpp` by `tools/gen_bridge_docs.py`. CI fails if this drifts from the code.
 
+### ANAN droop calibration
+
+`droopcal status|start|stop|apply|discard` requires a connected ANAN backend
+with `hostDroopCalibration`. Other families refuse the request before any
+backend call. `start` measures the receiver noise floor across ANAN's six
+DDC0 rates; use an antenna termination as described in Radio Setup → Droop
+Correction. `stop` keeps the partial result, `apply` installs and saves it,
+and `discard` drops the staged measurements.
+
+The calibrator is owned by `AnanBackend`, not shared `RadioModel`. The dialog
+and bridge use `invokeExtension("anan", "droop.<action>")`; synchronous replies
+carry `running`, `rateIndex`, `totalRates`, `hasResult`, `percent`, `message`,
+and `corrections` (per-rate `rateKsps`, `minDb`, `maxDb`). Progress uses
+`extensionStatus("anan", "droop", fields)` with the same fields. Disconnect
+stops the sweep without issuing a restoration rate change. No calibration
+code changes RX audio or keys TX. Physical-radio persistence validation is
+still a separate radiocert task.
+
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
 <!-- Do not edit by hand — run tools/gen_bridge_docs.py. 73 verbs. -->
 
@@ -4209,6 +4269,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
+| `droopcal` | — | droopcal [status\|start\|stop\|apply\|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
 | `cwx` | — | cwx <send\|speed\|stop> [args] — CWX keyer (send is TX-gated) |
@@ -4223,7 +4284,7 @@ The complete registry, generated from the `add(...)` table in `AutomationServer.
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
-| `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>> — AetherModem demod profile, TXDELAY, RX tap, and decoder health |
+| `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod, TXDELAY, RX tap, WIDE1-1 fill-in, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
 | `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |

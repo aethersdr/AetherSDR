@@ -161,9 +161,18 @@ void SerialPortController::close()
     if (pttWasActive)
         emit externalPttChanged(false);
 
+    // Same for a paddle contact held at close: without a release the
+    // paddle-held flag on the radio model stays set and every TUNE start
+    // is refused until the next paddle event. (#5422)
+    if (m_lastDitActive || m_lastDahActive) {
+        emit cwPaddleChanged(false, false);
+    }
+
     m_lastCtsActive = false;
     m_lastDsrActive = false;
     m_lastDcdActive = false;
+    m_lastDitActive = false;
+    m_lastDahActive = false;
 
     // Deassert configured output pins
     if (m_dtrFn != PinFunction::None)
@@ -400,9 +409,16 @@ void SerialPortController::close()
         if (pttWasActive)
             emit externalPttChanged(false);
 
+        // Paddle release at close, same reason as the PTT release. (#5422)
+        if (m_lastDitActive || m_lastDahActive) {
+            emit cwPaddleChanged(false, false);
+        }
+
         m_lastCtsActive = false;
         m_lastDsrActive = false;
         m_lastDcdActive = false;
+        m_lastDitActive = false;
+        m_lastDahActive = false;
 
         if (m_dtrFn != PinFunction::None)
             m_port.setDataTerminalReady(!m_dtrActiveHigh);

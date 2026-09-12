@@ -146,8 +146,9 @@ Substantial features requested on the
 
 **Packet / APRS / mapping** (building on the new map engine + AFSK demod)
 
-- **APRS digipeater** tab (MVP: WIDE1-1 fill-in)
-  ([#3571](https://github.com/aethersdr/AetherSDR/issues/3571)).
+- **Digipeater Phase 2**: wide-area WIDEn-N/SSn-N, N trapping, viscous/direct-only
+  operation, and tiered beacons ([#3571](https://github.com/aethersdr/AetherSDR/issues/3571)).
+  The current MVP covers 1200-baud WIDE1-1 fill-in only. APRS-IS is separate scope.
 - **Live NEXRAD / weather-radar tile overlay** on the map
   ([#3574](https://github.com/aethersdr/AetherSDR/issues/3574)).
 - **IQ-stream transmission over TCI** for CW/RTTY skimmers

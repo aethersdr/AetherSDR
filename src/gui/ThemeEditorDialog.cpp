@@ -1,4 +1,5 @@
 #include "ThemeEditorDialog.h"
+#include "ScopedChildWidget.h"
 #include "Theme.h"
 #include "ThemeInspector.h"
 #include "TokenEditorWidget.h"
@@ -25,11 +26,13 @@
 #include <QLineEdit>
 #include <QHeaderView>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QTreeWidgetItem>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPointer>
 #include <QPushButton>
 #include <QSet>
 #include <QSignalBlocker>
@@ -53,6 +56,23 @@ QString userThemesDir()
     return QDir::toNativeSeparators(
         QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
         + QStringLiteral("/AetherSDR/themes"));
+}
+
+QMessageBox::StandardButton showModalMessage(
+    QMessageBox::Icon icon, QWidget* parent, const QString& title,
+    const QString& text, QMessageBox::StandardButtons buttons = QMessageBox::Ok,
+    QMessageBox::StandardButton defaultButton = QMessageBox::NoButton)
+{
+    ScopedChildWidget<QMessageBox> boxOwner(parent);
+    QMessageBox& box = *boxOwner.get();
+    box.setIcon(icon);
+    box.setWindowTitle(title);
+    box.setText(text);
+    box.setStandardButtons(buttons);
+    if (defaultButton != QMessageBox::NoButton) {
+        box.setDefaultButton(defaultButton);
+    }
+    return static_cast<QMessageBox::StandardButton>(box.exec());
 }
 
 // Build a tiny coloured square QIcon for use as a swatch on a list row.
@@ -533,10 +553,11 @@ void ThemeEditorDialog::onTokenEditedByEditor(const QString& key)
 
 void ThemeEditorDialog::onRenameThemeClicked()
 {
+    const QPointer<ThemeEditorDialog> self(this);
     auto& tm = ThemeManager::instance();
     const QString current = tm.activeTheme();
     if (tm.isBuiltInTheme(current)) {
-        QMessageBox::information(this, QStringLiteral("Cannot rename"),
+        showModalMessage(QMessageBox::Information, this, QStringLiteral("Cannot rename"),
             QStringLiteral("\"%1\" is a built-in theme and can't be renamed. "
                            "Use Save As… to create an editable copy under a "
                            "different name first.").arg(current));
@@ -547,7 +568,9 @@ void ThemeEditorDialog::onRenameThemeClicked()
         QStringLiteral("Rename theme"),
         QStringLiteral("New name for \"%1\":").arg(current),
         QLineEdit::Normal, current, &ok).trimmed();
-    if (!ok || newName.isEmpty() || newName == current) return;
+    if (!self || !ok || newName.isEmpty() || newName == current) {
+        return;
+    }
 
     // Check the NAME before attempting the rename, so a refusal can say what
     // was actually wrong.  ThemeManager enforces this too — that's the safety
@@ -556,12 +579,12 @@ void ThemeEditorDialog::onRenameThemeClicked()
     // directory permissions.
     QString why;
     if (!ThemeManager::isValidThemeName(newName, &why)) {
-        QMessageBox::warning(this, QStringLiteral("Rename failed"), why);
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Rename failed"), why);
         return;
     }
 
     if (!tm.renameTheme(current, newName)) {
-        QMessageBox::warning(this, QStringLiteral("Rename failed"),
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Rename failed"),
             QStringLiteral("Could not rename \"%1\" to \"%2\".  A theme with "
                            "that name may already exist, or the theme file "
                            "may be unwriteable.").arg(current, newName));
@@ -570,6 +593,7 @@ void ThemeEditorDialog::onRenameThemeClicked()
 
 void ThemeEditorDialog::onExportThemeClicked()
 {
+    const QPointer<ThemeEditorDialog> self(this);
     auto& tm = ThemeManager::instance();
     const QString current = tm.activeTheme();
     if (current.isEmpty()) return;
@@ -583,11 +607,13 @@ void ThemeEditorDialog::onExportThemeClicked()
     const QString path = QFileDialog::getSaveFileName(this,
         QStringLiteral("Export theme"), suggested,
         QStringLiteral("AetherSDR themes (*.aethertheme *.json)"));
-    if (path.isEmpty()) return;
+    if (!self || path.isEmpty()) {
+        return;
+    }
 
     QString err;
     if (!tm.exportThemeToFile(current, path, &err)) {
-        QMessageBox::warning(this, QStringLiteral("Export failed"),
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Export failed"),
             QStringLiteral("Could not write \"%1\":\n\n%2").arg(path, err));
         return;
     }
@@ -595,24 +621,31 @@ void ThemeEditorDialog::onExportThemeClicked()
 
 void ThemeEditorDialog::onImportThemeClicked()
 {
+    const QPointer<ThemeEditorDialog> self(this);
     const QString path = QFileDialog::getOpenFileName(this,
         QStringLiteral("Import theme"), QDir::homePath(),
         QStringLiteral("AetherSDR themes (*.aethertheme *.json)"));
-    if (path.isEmpty()) return;
+    if (!self || path.isEmpty()) {
+        return;
+    }
     importThemeFromPath(path);
 }
 
 void ThemeEditorDialog::importThemeFromPath(const QString& filePath)
 {
+    const QPointer<ThemeEditorDialog> self(this);
     auto& tm = ThemeManager::instance();
     QString err;
     const QString name = tm.importThemeFromFile(filePath, &err);
+    if (!self) {
+        return;
+    }
     if (name.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("Import failed"),
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Import failed"),
             QStringLiteral("Could not import \"%1\":\n\n%2").arg(filePath, err));
         return;
     }
-    QMessageBox::information(this, QStringLiteral("Theme imported"),
+    showModalMessage(QMessageBox::Information, this, QStringLiteral("Theme imported"),
         QStringLiteral("Installed \"%1\" and made it the active theme.").arg(name));
 }
 
@@ -655,14 +688,15 @@ void ThemeEditorDialog::dropEvent(QDropEvent* event)
 
 void ThemeEditorDialog::onDeleteThemeClicked()
 {
+    const QPointer<ThemeEditorDialog> self(this);
     auto& tm = ThemeManager::instance();
     const QString current = tm.activeTheme();
     if (tm.isBuiltInTheme(current)) {
-        QMessageBox::information(this, QStringLiteral("Cannot delete"),
+        showModalMessage(QMessageBox::Information, this, QStringLiteral("Cannot delete"),
             QStringLiteral("\"%1\" is a built-in theme and can't be deleted.").arg(current));
         return;
     }
-    const auto reply = QMessageBox::question(this,
+    const auto reply = showModalMessage(QMessageBox::Question, this,
         QStringLiteral("Delete theme"),
         QStringLiteral("Permanently delete \"%1\"?\n\n"
                        "The theme file at %2 will be removed. "
@@ -671,10 +705,12 @@ void ThemeEditorDialog::onDeleteThemeClicked()
                  userThemesDir() + QDir::separator()
                      + current + QStringLiteral(".json")),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (reply != QMessageBox::Yes) return;
+    if (!self || reply != QMessageBox::Yes) {
+        return;
+    }
 
     if (!tm.deleteTheme(current)) {
-        QMessageBox::warning(this, QStringLiteral("Delete failed"),
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Delete failed"),
             QStringLiteral("Could not delete \"%1\". The theme file may be "
                            "locked by another process.").arg(current));
         return;
@@ -694,22 +730,25 @@ void ThemeEditorDialog::onDeleteThemeClicked()
 
 void ThemeEditorDialog::onSaveAsClicked()
 {
-    bool ok = false;
+    const QPointer<ThemeEditorDialog> self(this);
     auto& tm = ThemeManager::instance();
     QString suggestion = tm.activeTheme();
     if (!suggestion.startsWith(QStringLiteral("My ")))
         suggestion = QStringLiteral("My %1").arg(suggestion);
 
+    bool ok = false;
     const QString name = QInputDialog::getText(this,
         QStringLiteral("Save Theme As"),
         QStringLiteral("Theme name:"),
         QLineEdit::Normal, suggestion, &ok).trimmed();
-    if (!ok || name.isEmpty()) return;
+    if (!self || !ok || name.isEmpty()) {
+        return;
+    }
 
     // Name first, so a rejected name is reported as a rejected name.
     QString why;
     if (!ThemeManager::isValidThemeName(name, &why)) {
-        QMessageBox::warning(this, QStringLiteral("Save failed"), why);
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Save failed"), why);
         return;
     }
 
@@ -718,15 +757,17 @@ void ThemeEditorDialog::onSaveAsClicked()
     // User-dir themes can be overwritten freely.
     const QStringList existing = tm.availableThemes();
     if (existing.contains(name)) {
-        const auto reply = QMessageBox::question(this,
+        const auto reply = showModalMessage(QMessageBox::Question, this,
             QStringLiteral("Theme exists"),
             QStringLiteral("A theme named \"%1\" already exists. Overwrite it?").arg(name),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (reply != QMessageBox::Yes) return;
+        if (!self || reply != QMessageBox::Yes) {
+            return;
+        }
     }
 
     if (!tm.saveCurrentThemeAs(name)) {
-        QMessageBox::warning(this, QStringLiteral("Save failed"),
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Save failed"),
             QStringLiteral("Could not write the theme file. Check that "
                            "%1 is writable.").arg(userThemesDir()));
         return;
@@ -737,6 +778,7 @@ void ThemeEditorDialog::onSaveAsClicked()
 
 void ThemeEditorDialog::onSaveAsBeforeCommit()
 {
+    const QPointer<ThemeEditorDialog> self(this);
     auto& tm = ThemeManager::instance();
     const QString current = tm.activeTheme();
     if (!tm.isBuiltInTheme(current)) {
@@ -746,15 +788,17 @@ void ThemeEditorDialog::onSaveAsBeforeCommit()
         return;
     }
 
-    bool ok = false;
     QString suggestion = QStringLiteral("My %1").arg(current);
+    bool ok = false;
     const QString name = QInputDialog::getText(this,
         QStringLiteral("Save Theme As"),
         QStringLiteral("\"%1\" is a built-in theme and can't be modified "
                        "directly.\nSave your changes as a new theme:")
             .arg(current),
         QLineEdit::Normal, suggestion, &ok).trimmed();
-    if (!ok || name.isEmpty()) return;  // user cancelled — buffer stays uncommitted
+    if (!self || !ok || name.isEmpty()) {
+        return;
+    }
 
     // Name first.  This path matters more than the plain Save As: the operator
     // has a pending token edit stashed in DeferredEdit, and every early return
@@ -762,31 +806,36 @@ void ThemeEditorDialog::onSaveAsBeforeCommit()
     // name and keep the edit instead of concluding the editor is broken.
     QString why;
     if (!ThemeManager::isValidThemeName(name, &why)) {
-        QMessageBox::warning(this, QStringLiteral("Save failed"), why);
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Save failed"), why);
         return;
     }
 
     // Disallow accidentally writing to another built-in or overwriting
     // an existing user theme without confirmation.
     if (tm.isBuiltInTheme(name)) {
-        QMessageBox::warning(this, QStringLiteral("Reserved name"),
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Reserved name"),
             QStringLiteral("\"%1\" is a built-in theme name and can't be used.")
                 .arg(name));
         return;
     }
     const QStringList existing = tm.availableThemes();
     if (existing.contains(name)) {
-        const auto reply = QMessageBox::question(this,
+        const auto reply = showModalMessage(QMessageBox::Question, this,
             QStringLiteral("Theme exists"),
             QStringLiteral("A theme named \"%1\" already exists. Overwrite it?").arg(name),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (reply != QMessageBox::Yes) return;
+        if (!self || reply != QMessageBox::Yes) {
+            return;
+        }
     }
 
     if (!tm.saveCurrentThemeAs(name)) {
-        QMessageBox::warning(this, QStringLiteral("Save failed"),
+        showModalMessage(QMessageBox::Warning, this, QStringLiteral("Save failed"),
             QStringLiteral("Could not write the theme file. Check that "
                            "%1 is writable.").arg(userThemesDir()));
+        return;
+    }
+    if (!self) {
         return;
     }
     // saveCurrentThemeAs() has switched the active theme and refreshed
@@ -1032,14 +1081,32 @@ void ThemeEditorDialog::onTokenContextMenu(const QPoint& pos)
     const QString scopeLabel = scopePath.isEmpty()
                                    ? QStringLiteral("(root)")
                                    : scopePath;
-    QMenu menu(this);
+    const QString activeTheme = tm.activeTheme();
+    const QPointer<ThemeEditorDialog> self(this);
+    const QPointer<QTreeWidget> tokenList(m_tokenList);
+    ScopedChildWidget<QMenu> menuOwner(this);
+    QMenu& menu = *menuOwner.get();
     QAction* clearAct = menu.addAction(
         QStringLiteral("Clear override at %1").arg(scopeLabel));
     QAction* picked = menu.exec(m_tokenList->viewport()->mapToGlobal(pos));
-    if (picked == clearAct) {
-        tm.removeOverride(scopePath, token);
-        // Refresh the row so the column flips back to italic "inherited".
-        populateRow(item);
+    if (!self || !menuOwner || !tokenList
+        || self->m_tokenList != tokenList.data() || picked != clearAct
+        || tm.activeTheme() != activeTheme) {
+        return;
+    }
+    tm.removeOverride(scopePath, token);
+    if (!self || !tokenList || self->m_tokenList != tokenList.data()) {
+        return;
+    }
+    // Find the current row after the nested loop; the original item may
+    // have been replaced. Keep selection and scroll position intact.
+    QTreeWidgetItemIterator rows(tokenList.data());
+    while (*rows) {
+        if ((*rows)->data(0, Qt::UserRole).toString() == token) {
+            self->populateRow(*rows);
+            break;
+        }
+        ++rows;
     }
 }
 

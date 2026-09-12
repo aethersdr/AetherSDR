@@ -33,6 +33,20 @@ public:
     static bool readOnly();
     static void setReadOnly(bool on);
 
+    // True when AETHER_AUTOMATION force-enabled the bridge at launch (the
+    // headless/CI override). An env-forced start is not an operator opt-in,
+    // so nothing below may rewrite the saved toggle because of one (#4181).
+    static bool envForced();
+    // Persist the outcome of an ASYNCHRONOUS bridge start (#4181). The saved
+    // `enabled` flag is the operator's opt-in as observed by the socket: a
+    // successful bind records true, a failed bind clears it so a doomed start
+    // is not silently re-attempted every launch. When `forced` (see
+    // envForced()) the setting is left untouched on either outcome. Returns
+    // the value now persisted. This is the policy seam the GUI calls from
+    // MainWindow::startAutomationBridge()'s token callback; it is here so it
+    // can be pinned by a socket-free test.
+    static bool recordStartOutcome(bool ok, bool forced);
+
     // Keychain coordinates for the bridge access token (see MqttSettings for
     // the analogous MQTT-password helpers).
     static QString keychainService();        // "AetherSDR"

@@ -487,6 +487,11 @@ bool testPureSeamReconnectRepublishesSlice()
         return false;
     }
 
+    if (!check(waitUntil([&] { return originalSlice->frequencyReportedKnown(); }),
+               "reconnect fixture must wait for the simulator's typed frequency publication")) {
+        radio.disconnectFromRadio();
+        return false;
+    }
     radio.disconnectFromRadio();
     if (!check(waitUntil([&] {
                    return !radio.isConnected()
@@ -497,6 +502,10 @@ bool testPureSeamReconnectRepublishesSlice()
     }
 
     radio.stageSessionModelsForReconnectForTest();
+    if (!check(!originalSlice->frequencyReportedKnown(),
+               "reconnect must invalidate the retained frequency observation")) {
+        return false;
+    }
     radio.connectionStateChanged(true);
     int occupancySignals = 0;
     QObject::connect(&radio, &RadioModel::slotOccupancyChanged,
@@ -514,6 +523,8 @@ bool testPureSeamReconnectRepublishesSlice()
     const std::optional<ResourceSnapshot> reclaimed = store.get(sliceAddress);
     const bool result = check(radio.slice(0) == originalSlice,
                               "the normalized backend seam must reclaim the existing SliceModel")
+        && check(originalSlice->frequencyReportedKnown(),
+                 "same-value backend report restores frequency observation on reclaim")
         && check(occupancySignals == 1,
                  "non-Flex slice reclaim must publish an occupancy edge")
         && check(reclaimed.has_value()
@@ -687,18 +698,20 @@ bool testSimBackendEndToEnd()
     const QJsonObject displayCadence =
         panValue.value(QStringLiteral("displayCadence")).toObject();
     if (!check(hasExactlyKeys(radioValue,
-                              {"id", "connected", "family", "identity", "capabilities"})
+                              {"id", "connected", "family", "identity", "capabilities", "meterDelivery"})
                    && hasExactlyKeys(identity,
                                      {"name", "model", "serial", "version", "manufacturer"})
                    && hasExactlyKeys(capabilities,
                                      {"maxSlices", "maxPanadapters", "sampleRatesHz",
                                       "tuningRangeHz", "declaredBands", "canTransmit",
                                       "maximumTransmitWatts", "hasTuner", "hasAmplifier",
-                                      "extensions"})
+                                      "extensions", "sliceFrequencyControl", "receiveModeControl",
+                                      "receiveFilterControl", "receiveAudioControl",
+                                      "receivePanCenterControl", "receivePanBandwidthControl"})
                    && hasExactlyKeys(sliceValue,
                                      {"id", "letter", "panadapterId", "owned",
-                                      "frequencyHz", "mode", "filter", "active",
-                                      "txSlice", "locked", "audio", "receive"})
+                                      "frequencyHz", "frequencyObservation", "mode", "filter", "active",
+                                      "txSlice", "locked", "audio", "receive", "receiveObservation"})
                    && hasExactlyKeys(sliceValue.value(QStringLiteral("filter")).toObject(),
                                      {"lowHz", "highHz"})
                    && hasExactlyKeys(sliceValue.value(QStringLiteral("audio")).toObject(),
@@ -710,7 +723,7 @@ bool testSimBackendEndToEnd()
                    && hasExactlyKeys(receive.value(QStringLiteral("squelch")).toObject(),
                                      {"enabled", "level"})
                    && hasExactlyKeys(panValue,
-                                     {"id", "centerHz", "centerKnown",
+                                     {"id", "centerHz", "centerKnown", "owned", "geometryObservation",
                                       "bandwidthHz", "dbmRange", "bandwidthLimitsHz",
                                       "receive", "displayCadence"})
                    && hasExactlyKeys(panValue.value(QStringLiteral("dbmRange")).toObject(),

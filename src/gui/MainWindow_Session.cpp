@@ -728,8 +728,10 @@ void MainWindow::wireRadioModel()
     // surface cannot spam the bar while still never failing silently.
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
             this, [this](bool connected) {
-        if (connected)
+        if (connected) {
             m_commandDroppedNoticeShown = false;
+            m_sliceLifecycleNoticesShown.clear();
+        }
     });
     connect(&m_radioModel, &RadioModel::commandDropped,
             this, [this](const QString&) {
@@ -935,6 +937,20 @@ void MainWindow::wireRadioModel()
         statusBar()->showMessage(
             QString("%1 supports a maximum of %2 panadapters")
                 .arg(model).arg(limit), 4000);
+    });
+    // Same shape as the commandDropped notice above: RadioModel's qCWarning
+    // carries every occurrence; the operator sees each distinct refusal once
+    // per connect session.
+    connect(&m_radioModel, &RadioModel::sliceLifecycleFailed, this,
+            [this](const QString& operation, int, const QString& reason) {
+        const QString key = operation + QLatin1Char('\n') + reason;
+        if (m_sliceLifecycleNoticesShown.contains(key))
+            return;
+        m_sliceLifecycleNoticesShown.insert(key);
+        const QString what = operation == QLatin1String("remove")
+            ? tr("Cannot remove slice: %1").arg(reason)
+            : tr("Cannot create slice: %1").arg(reason);
+        statusBar()->showMessage(what, 6000);
     });
     connect(&m_radioModel, &RadioModel::sliceCreateFailed,
             this, [this](int limit, const QString& model) {
@@ -1215,12 +1231,8 @@ void MainWindow::wireRadioModel()
                     << " down=" << down
                     << " schedMs=" << cwTraceMsAt(when);
             }
-            QMetaObject::invokeMethod(this, [this, down, when]() {
-                const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
-                const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
-                m_radioModel.sendCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
-                                           traceId, sourceMs, when);
-            }, Qt::QueuedConnection);
+            m_radioModel.queueCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
+                                       traceId, sourceMs, when);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
             // The radio's break-in setting decides whether key edges produce
@@ -1250,6 +1262,28 @@ void MainWindow::wireRadioModel()
     }
 
     // TX/RX transition → audio source switching
+    connect(&m_radioModel.transmitModel(), &TransmitModel::pttReleaseCancelled,
+            this, [this] {
+#ifdef HAVE_RADE
+        ++m_radeEooRequestId;
+        if (m_radeFallbackReleaseFence) {
+            m_radeFallbackReleaseFence->store(false, std::memory_order_release);
+        }
+        m_radePttRelease = {};
+        m_radeEooPending = false;
+        m_radeTxActive = false;
+        if (m_radeEngine) {
+            QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine] {
+                engine->resetTx();
+            }, Qt::QueuedConnection);
+        }
+#endif
+        // Cancellation must not wait for EOO, even when optimistic MOX was
+        // already false and neither of the state-edge handlers below fires.
+        if (m_audio) {
+            m_audio->setTransmitting(false);
+        }
+    });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             this, [this](bool tx) {
         // Keep TX audio source strictly aligned with the local MOX edge for all
@@ -1290,7 +1324,8 @@ void MainWindow::wireRadioModel()
                 // when this fires (RadioModel emits it synchronously with moxChanged).
                 // Suppress now; eooFinished posts setTransmitting(false) to the
                 // AudioEngine queue after the EOO packets.
-                if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()) {
+                if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()
+                    && m_radeEooPending && m_radePttRelease.current()) {
                     qCDebug(lcRade) << "MainWindow: txAudioGateChanged(false) suppressed — RADE EOO pending";
                 } else {
                     m_audio->setTransmitting(false);
@@ -2546,8 +2581,9 @@ QJsonObject MainWindow::automationActivateMemory(int memoryIndex,
 
 bool MainWindow::startAutomationBridge(const QString& sockName)
 {
-    if (m_automation && m_automation->isRunning())
-        return true;  // idempotent
+    if (m_automation) {
+        return true;  // already listening or waiting for the same async token read
+    }
 
     // AETHER_AUTOMATION_SOCKET (or the caller's sockName) pins an explicit
     // endpoint; otherwise the default is PID-suffixed so two instances don't
@@ -2560,8 +2596,9 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
                    : QStringLiteral("aethersdr-automation-%1")
                          .arg(QCoreApplication::applicationPid());
 
-    if (!m_automation)
-        m_automation = std::make_unique<AutomationServer>();
+    // Provably null here: the early return above covers every live server,
+    // listening or still waiting for its token.
+    m_automation = std::make_unique<AutomationServer>();
 
     // dumpTree reports the status-bar message (#4864) by reading a generic
     // dynamic property — core/ must not know the QStatusBar type
@@ -2733,9 +2770,17 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     QPointer<AutomationServer> guard(m_automation.get());
     const QString startName = name;
     AutomationBridgeSettings::loadToken(this, [this, guard, startName](const QString& tok) {
-        if (!guard || m_automation.get() != guard)
+        if (!guard || m_automation.get() != guard) {
             return;  // toggled off or restarted before the token arrived
-        guard->setAuthToken(tok);
+        }
+        // A token pushed while this read was pending (Rotate, or the dialog's
+        // auto-mint on enable) is newer than whatever the keychain returns —
+        // keep it, or a stale/empty read would bind the bridge with the
+        // wrong token while the Network tab shows the new one. A fresh server
+        // holds no token, so "empty" means nothing was pushed.
+        if (guard->authToken().isEmpty()) {
+            guard->setAuthToken(tok);
+        }
         if (tok.isEmpty()) {
             qWarning().noquote()
                 << "Automation bridge starting UNAUTHENTICATED — any same-user "
@@ -2745,6 +2790,24 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         if (!guard->start(startName)) {
             qWarning() << "Automation bridge failed to start (socket in use?)";
             m_automation.reset();
+            // Nothing is listening, so the persisted opt-in must not survive —
+            // otherwise every launch silently re-attempts the doomed start and
+            // the operator is never told (#4181). The env-var force-enable is
+            // not an opt-in we own; recordStartOutcome() leaves it alone then.
+            const bool forced = AutomationBridgeSettings::envForced();
+            AutomationBridgeSettings::recordStartOutcome(false, forced);
+            // On the launch path no Radio Setup dialog exists, so the result
+            // signal below can have no receiver. The status bar is the one
+            // surface always present to say why the toggle is off next time
+            // the operator looks; the server already logged errorString().
+            if (!forced) {
+                statusBar()->showMessage(
+                    QStringLiteral("Agent automation bridge could not bind its "
+                                   "socket (see the log) — the Radio Setup toggle "
+                                   "is now off."),
+                    15000);
+            }
+            emit automationBridgeStartResult(false);
             return;
         }
         // TX-automation gate — set AFTER start(), which reads
@@ -2763,8 +2826,19 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         guard->setReadOnly(
             qEnvironmentVariableIsSet("AETHER_AUTOMATION_READONLY")
             || AutomationBridgeSettings::readOnly());
+        // Persist at the owner that observed the successful bind. The modeless
+        // Radio Setup dialog may have closed while the token read was pending.
+        // An environment-forced start must not change the operator's opt-in.
+        AutomationBridgeSettings::recordStartOutcome(
+            true, AutomationBridgeSettings::envForced());
+        emit automationBridgeStartResult(true);
     });
-    return true;  // start initiated; the socket begins listening once the token resolves
+    // Normally the bridge is NOT listening yet — the socket binds inside the
+    // callback above, and callers wanting the outcome must watch
+    // automationBridgeStartResult. On the synchronous token paths (AETHER_MCP_TOKEN,
+    // legacy token, no keychain) the callback has already run, so a failed bind
+    // has already reset m_automation: report that rather than a stale "initiated".
+    return m_automation != nullptr;
 }
 
 void MainWindow::stopAutomationBridge()

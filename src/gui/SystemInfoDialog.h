@@ -99,9 +99,9 @@ private:
 
     void applyAlertStyle();
     void refreshMemoryChart();
-    int  selectedMemoryRangeSeconds() const;
     void refreshOverview();
-    int  selectedOverviewRangeSeconds() const;
+    // The window-level timeframe both refreshes draw to (#5496).
+    int  selectedRangeSeconds() const;
     // Colour a card's value for its band and expose the band as the label's
     // "level" property ("normal" / "warning" / "danger") for tests and the
     // automation bridge, which read properties and not stylesheets.
@@ -160,7 +160,8 @@ private:
     CpuHistoryRing*       m_cpuRing{&m_ownCpuRing};
     UiTickLagMeter        m_ownTickLagMeter;
     UiTickLagMeter*       m_tickLagMeter{&m_ownTickLagMeter};
-    QComboBox*            m_overviewRange{nullptr};
+    QLabel*               m_rangeLabel{nullptr};
+    QComboBox*            m_range{nullptr};
     QLabel*               m_cardCpuValue{nullptr};
     QLabel*               m_cardMaxThreadValue{nullptr};
     QLabel*               m_cardMaxThreadCaption{nullptr};
@@ -171,7 +172,6 @@ private:
     TimeSeriesGraphWidget* m_overviewThreadsGraph{nullptr};
     TimeSeriesGraphWidget* m_overviewTickGraph{nullptr};
     TimeSeriesGraphWidget* m_memoryGraph{nullptr};
-    QComboBox*            m_memoryRange{nullptr};
     QLabel*               m_memorySummary{nullptr};
     QLabel*               m_memoryResident{nullptr};
     QLabel*               m_memoryPeak{nullptr};

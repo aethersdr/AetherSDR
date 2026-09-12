@@ -52,6 +52,11 @@ broken real triage before, so do not "fix" them:
 
 - Callsign — FCC public record, and the primary way a report is identified
 - Radio model, firmware and software version (including 4-part build numbers)
+- TCI client identity — the `process="…"` and `version="…"` fields on the
+  `TciServer: client` line (#5087, maintainer ruling on #5130). The client's
+  executable path is never logged; it lives only in the Network Diagnostics
+  tooltip. `version="` is one of the two prefixes that exempt a 4-part
+  number from the IPv4 rule (the other is `ver=`).
 - Port numbers, slice/stream ids, frequencies, modes
 - Identifiers that merely end in a keyword, e.g. `keytoken=`
 - **C++ qualified names** — `WanConnection::sendCommand`, `std::vector`. 48 log

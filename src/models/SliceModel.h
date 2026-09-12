@@ -24,6 +24,25 @@ class SliceModel : public QObject {
     Q_PROPERTY(bool txSlice      READ isTxSlice  NOTIFY txSliceChanged)
 
 public:
+    struct ReceiveObservation {
+        std::optional<QString> mode;
+        std::optional<int> filterLowHz;
+        std::optional<int> filterHighHz;
+        std::optional<int> gain;
+        std::optional<bool> muted;
+        bool operator==(const ReceiveObservation&) const = default;
+    };
+    const ReceiveObservation& receiveObservation() const { return m_receiveObservation; }
+    // Records explicit filter intent without an optimistic value or a wire
+    // write. Adaptive filtering must still recognize a daemon operator edit.
+    void noteReceiveFilterIntent() { ++m_userFilterEpoch; }
+    // Conservative whole-MHz observation domain below JSON's 2^53-1 Hz
+    // integer limit. Keep target admission and MHz observation validation
+    // on this same bound; the general protocol integer domain is wider.
+    static constexpr qint64 kMaximumReportedFrequencyMhz = 9'007'199'254;
+    static constexpr qint64 kMaximumReportedFrequencyHz =
+        kMaximumReportedFrequencyMhz * 1'000'000;
+
     explicit SliceModel(int id, QObject* parent = nullptr);
     ~SliceModel() override;
 
@@ -39,6 +58,11 @@ public:
                                      : m_letter; }
     QString panId()      const { return m_panId; }       // e.g. "0x40000000"
     double  frequency()  const { return m_frequency; }   // MHz
+    // Separate from the optimistic desktop value. Only applyChanges writes
+    // this observation; a reused slice must wait for a fresh session report.
+    double reportedFrequency() const { return m_reportedFrequency; } // MHz
+    bool frequencyReportedKnown() const { return m_frequencyReportedKnown; }
+    void invalidateFrequencyObservation();
     QString mode()       const { return m_mode; }
     QStringList modeList() const { return m_modeList; }
     int     filterLow()  const { return m_filterLow; }   // Hz offset
@@ -365,6 +389,11 @@ public:
 signals:
     void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
+    // Supplemental observation notification when frequencyChanged does not
+    // fire (same-value reports, optimistic-value echoes, or invalidation).
+    void frequencyReported();
+    void receiveObservationChanged();
+    void receiveModeReported(); // including same-value reports after an intent
     // Emitted after a local setter has issued a frequency command. Unlike
     // frequencyChanged, radio-status application does not emit this signal.
     void frequencyCommandIssued(double mhz);
@@ -542,12 +571,15 @@ private:
     QString m_letter;          // per-client display letter from `index_letter`
     QString m_panId;           // panadapter assignment (e.g. "0x40000000")
     double  m_frequency{0.0};
+    double  m_reportedFrequency{0.0};
+    bool    m_frequencyReportedKnown{false};
+    ReceiveObservation m_receiveObservation;
     QString m_mode{"USB"};
     QString m_modeBeforeDigitalVoice;
     QStringList m_modeList;
     int     m_filterLow{-1500};
     int     m_filterHigh{1500};
-    quint64 m_userFilterEpoch{0};   // bumped only by setFilterWidth() (RFC #3878)
+    quint64 m_userFilterEpoch{0};   // setFilterWidth() and daemon filter intent (RFC #3878)
     // Adaptive RX filter — client-side config + runtime state (RFC #3878).
     // The filter edges themselves stay radio-authoritative (never persisted);
     // only enabled + the two bounds are persisted by the GUI.

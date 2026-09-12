@@ -1,3 +1,4 @@
+#include "core/DroopCalibration.h"
 #include "AutomationServer.h"
 #include "core/CtcssTones.h"
 #include "core/RadioCertification.h"
@@ -2711,7 +2712,8 @@ namespace {
 // (#4188 area 6). Some diagnostic verbs mix read and write actions, so the
 // action must be checked as well as the canonical verb name. Everything else
 // (drive/connect/capture/keying) is refused when m_readOnly is set.
-bool isReadOnlyRequest(const QString& name, const QString& action)
+bool isReadOnlyRequest(const QString& name, const QString& action,
+                       const QString& value = {})
 {
     static const QSet<QString> kSafe = {
         QStringLiteral("ping"),     QStringLiteral("verbs"),
@@ -2754,7 +2756,16 @@ bool isReadOnlyRequest(const QString& name, const QString& action)
     // `modem`/`link` mix introspection with actions that key the radio
     // (link connect transmits a SABM), so only the status reads are safe here.
     if (name == QLatin1String("modem") || name == QLatin1String("link")) {
-        return normalizedAction.isEmpty() || normalizedAction == QLatin1String("status");
+        if (normalizedAction.isEmpty() || normalizedAction == QLatin1String("status"))
+            return true;
+        // `modem digi` / `modem digi status` is introspection; `modem digi on`
+        // and `modem digi beacon` key the radio and stay gated.
+        if (name == QLatin1String("modem")
+            && normalizedAction == QLatin1String("digi")) {
+            const QString v = value.trimmed().toLower();
+            return v.isEmpty() || v == QLatin1String("status");
+        }
+        return false;
     }
     if (name == QLatin1String("tci")) {
         return normalizedAction == QLatin1String("status")
@@ -3289,6 +3300,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doFreqCal(a.action, a.value);
             });
 
+        add("droopcal", {},
+            "droopcal [status|start|stop|apply|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop)",
+            parseActionValue,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doDroopCal(a.action, a.value);
+            });
+
         add("targettune", {},
             "targettune <mhz> — absolute tune through band-stack preselection",
             parseValueOnly,
@@ -3469,7 +3487,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("modem", {"aethermodem"},
-            "modem <status|profile hf300|profile vhf1200|on|off|preamble <flags|auto>> — AetherModem demod profile, TXDELAY, RX tap, and decoder health",
+            "modem <status|profile hf300|profile vhf1200|on|off|preamble <flags|auto>|digi [status|on|off|beacon]> — AetherModem demod profile, TXDELAY, RX tap, WIDE1-1 fill-in digipeater, and decoder health",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doModemAutomation(QStringLiteral("modem"), a.action, a.value);
@@ -3890,7 +3908,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     // keying. Enforced HERE in the bridge (not the MCP client) so it can't be
     // bypassed by talking to the socket directly. Uses the resolved canonical
     // name so aliases are covered.
-    if (m_readOnly && !isReadOnlyRequest(spec->name, a.action)) {
+    if (m_readOnly && !isReadOnlyRequest(spec->name, a.action, a.value)) {
         qCWarning(lcAutomation) << "read-only mode: refused" << spec->name;
         return err(QStringLiteral("read-only mode: '") + spec->name
                    + QStringLiteral("' is blocked. This bridge is observe-only "
@@ -7181,14 +7199,23 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             return err(msg + QStringLiteral(")"));
         }
 
-        bool okF = false;
-        const double freq = arg.toDouble(&okF);
-        if (okF && freq > 0)
-            radio->addSliceOnPan(radio->panId(), freq);   // specific frequency
-        else
-            radio->addSlice();                            // default (TX freq / active pan)
+        // An omitted value asks for default placement; an explicit value gets
+        // the same parse/range rule as every other MHz-taking verb, so a
+        // malformed one is refused rather than becoming a default-frequency
+        // request — see refuseUntunableMhz().
+        double freq = 0.0;
+        if (!arg.isEmpty()) {
+            if (const auto refusal = refuseUntunableMhz(QStringLiteral("slice add"), arg, freq))
+                return *refusal;
+        }
+        const bool accepted = arg.isEmpty()
+            ? radio->addSlice()
+            : radio->addSliceOnPan(radio->panId(), freq);
+        if (!accepted) {
+            return err(QStringLiteral("refused: radio did not accept slice creation"));
+        }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("add")},
-                           {QStringLiteral("freq"), okF ? QJsonValue(freq) : QJsonValue()},
+                           {QStringLiteral("freq"), arg.isEmpty() ? QJsonValue() : QJsonValue(freq)},
                            {QStringLiteral("requested"), true},
                            {QStringLiteral("sliceCount"), radio->slices().size()}};
     }
@@ -7201,12 +7228,9 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
             return err(QStringLiteral("refused: cannot remove the last slice"));
         if (!radio->slice(id))
             return err(QStringLiteral("no slice with id ") + arg);
-        // `slice remove` is Flex wire text and no seam verb exists for it yet
-        // — refuse rather than report ok for a command the model will drop
-        // (M0, #5263).
-        if (!radio->hasCommandPlane())
-            return err(QStringLiteral("not supported on this radio (no Flex command plane)"));
-        radio->sendCommand(QStringLiteral("slice remove %1").arg(id));
+        if (!radio->removeSlice(id)) {
+            return err(QStringLiteral("refused: radio did not accept slice removal"));
+        }
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("remove")},
                            {QStringLiteral("id"), id}};
     }
@@ -7969,6 +7993,20 @@ QJsonObject AutomationServer::doFreqCal(const QString& action, const QString& va
 
     return err(QStringLiteral("freqcal: unknown action '%1' (get|set|from_vfo|reset)")
                    .arg(action));
+}
+
+QJsonObject AutomationServer::doDroopCal(const QString& action, const QString& value)
+{
+    Q_UNUSED(value);
+    const QString verb = action.isEmpty() ? QStringLiteral("status") : action.toLower();
+    if (verb != QLatin1String("status") && verb != QLatin1String("start")
+        && verb != QLatin1String("stop") && verb != QLatin1String("apply")
+        && verb != QLatin1String("discard")) {
+        return err(QStringLiteral("droopcal: unknown action '%1' (status|start|stop|apply|discard)")
+                       .arg(action));
+    }
+    return QJsonObject::fromVariantMap(requestDroopCalibration(
+        m_radioModel ? m_radioModel->backend() : nullptr, verb));
 }
 
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────
@@ -11709,15 +11747,26 @@ QJsonObject AutomationServer::doModemAutomation(const QString& verb,
     // mailbox OFF never keys, so it stays ungated.
     const QString normalizedAction = action.trimmed().toLower();
     const QString normalizedValue = value.trimmed();
-    const bool keysTransmitter = verb == QLatin1String("link")
-        && (normalizedAction == QLatin1String("connect")
-            || normalizedAction == QLatin1String("disconnect")
-            || (normalizedAction == QLatin1String("pms")
-                && normalizedValue.toLower() == QLatin1String("on")));
+    const QString valueLower = normalizedValue.toLower();
+    const bool keysTransmitter =
+        (verb == QLatin1String("link")
+         && (normalizedAction == QLatin1String("connect")
+             || normalizedAction == QLatin1String("disconnect")
+             || (normalizedAction == QLatin1String("pms")
+                 && valueLower == QLatin1String("on"))))
+        || (verb == QLatin1String("modem")
+            && normalizedAction == QLatin1String("digi")
+            && (valueLower == QLatin1String("on")
+                || valueLower == QLatin1String("enable")
+                || valueLower == QLatin1String("beacon")));
     if (keysTransmitter && !m_txAllowed) {
-        return err(QStringLiteral("'link %1' keys the transmitter — set "
+        const QString what = (verb == QLatin1String("modem")
+                              && normalizedAction == QLatin1String("digi"))
+            ? QStringLiteral("modem digi %1").arg(valueLower)
+            : QStringLiteral("link %1").arg(normalizedAction);
+        return err(QStringLiteral("'%1' keys the transmitter — set "
                                   "AETHER_AUTOMATION_ALLOW_TX=1 to allow")
-                       .arg(normalizedAction));
+                       .arg(what));
     }
     return m_modemAutomationHandler(verb, normalizedAction, normalizedValue);
 }

@@ -267,11 +267,14 @@ QString redactPii(const QString& msg)
     out.replace(*ipv6CompressedRe, QStringLiteral("[v6-redacted]"));
 
     // IPv4 addresses: 192.168.50.121 -> *.*.*. 121 (keep last octet).
-    // The word boundary skips v/V-prefixed version strings; the ver=
-    // lookbehind and trailing digit check skip firmware/software versions
-    // with build numbers such as software_ver=4.2.18.41174.
+    // The word boundary skips v/V-prefixed version strings; the ver= and
+    // version=" lookbehinds and the trailing digit check skip
+    // firmware/software versions with build numbers such as
+    // software_ver=4.2.18.41174 and the TCI client identity line's
+    // version="2.2.159.0" (#5087). Quoting alone exempts nothing — only
+    // those two literal prefixes do.
     static const QRegularExpression* ipRe = new QRegularExpression(
-        R"((?<!ver=)\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))(?!\d))");
+        R"((?<!ver=)(?<!version=")\b(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.((?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d))(?!\d))");
     out.replace(*ipRe, QStringLiteral("*.*.*. \\1"));
 
     // Radio serial: 4424-1213-8600-7836 -> ****-****-****-7836

@@ -307,21 +307,35 @@ def _remove_owned_socket(instance):
         pass  # app-owned socket cleanup is best-effort after process exit
 
 
-def _signal_owned_process(process, sig):
+def _signal_owned_process(process, *, force=False):
     """Signal the child's whole session, not just its PID.
 
     The child is launched with start_new_session=True, so it is a session
     leader (pgid == pid) and any helper subprocesses it spawns share that
     group; signalling the group reaps them too. Fall back to the single
-    process if the group is already gone or on Windows (no POSIX groups)."""
+    process if the group is already gone or on Windows (no POSIX groups).
+
+    The two platforms are NOT equivalent, and the fallback is weaker than it
+    looks. On Windows terminate()/kill() are TerminateProcess: no signal is
+    delivered, so a SIGTERM handler in the child never runs — including the
+    HL2 emergency unkey in src/core/backends/hl2/Hl2EmergencyStop.cpp, whose
+    SIGTERM/SIGINT registration is deliberately outside the #ifndef Q_OS_WIN.
+    TerminateProcess also does not reap descendants, so the group-reaping
+    property above is POSIX-only. This is not fixable at this seam:
+    CREATE_NEW_PROCESS_GROUP is set at launch, but CTRL_BREAK_EVENT only
+    reaches console applications, not a windowed Qt process. It is bounded in
+    practice because the app_instance launch path pins
+    AETHER_AUTOMATION_NO_TX=1 and drops AETHER_AUTOMATION_ALLOW_TX, so an
+    owned app cannot key through the bridge."""
     if sys.platform != "win32":
+        sig = signal.SIGKILL if force else signal.SIGTERM
         try:
             os.killpg(os.getpgid(process.pid), sig)
             return
         except (ProcessLookupError, PermissionError, OSError):
             pass  # group already reaped, or racing exit — fall back below
     try:
-        (process.kill if sig == signal.SIGKILL else process.terminate)()
+        (process.kill if force else process.terminate)()
     except OSError:
         pass
 
@@ -333,11 +347,11 @@ def _stop_owned_app():
         return {"ok": True, "running": False}
     process = instance["process"]
     if process.poll() is None:
-        _signal_owned_process(process, signal.SIGTERM)
+        _signal_owned_process(process)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            _signal_owned_process(process, signal.SIGKILL)
+            _signal_owned_process(process, force=True)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:

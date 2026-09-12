@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace AetherSDR::KiwiSdrProtocol {
 namespace {
@@ -410,20 +411,29 @@ bool setDoubleField(double* target, bool* hasTarget, double value,
 
 QString parseKiwiVersionFromServerHeader(const QString& serverHeader)
 {
-    const QString marker = QStringLiteral("KiwiSDR_");
-    const int markerIndex = serverHeader.indexOf(marker, 0, Qt::CaseInsensitive);
-    if (markerIndex < 0) {
-        return QString();
+    // KiwiSDR: "KiwiSDR_v1.x/…". Web-888 (RaspSDR/server fork) serves
+    // "ZynqSDR_Mongoose/2026.609"; the Web888_ marker covers variants that
+    // self-identify in the header the Kiwi way.
+    const QStringList markers = {QStringLiteral("KiwiSDR_"),
+                                 QStringLiteral("Web888_"),
+                                 QStringLiteral("ZynqSDR_Mongoose/")};
+    for (const QString& marker : markers) {
+        const int markerIndex =
+            serverHeader.indexOf(marker, 0, Qt::CaseInsensitive);
+        if (markerIndex < 0) {
+            continue;
+        }
+        const int valueStart = markerIndex + marker.size();
+        int valueEnd = serverHeader.indexOf(QLatin1Char('/'), valueStart);
+        if (valueEnd < 0) {
+            valueEnd = serverHeader.indexOf(QLatin1Char(' '), valueStart);
+        }
+        if (valueEnd < 0) {
+            valueEnd = serverHeader.size();
+        }
+        return serverHeader.mid(valueStart, valueEnd - valueStart).trimmed();
     }
-    const int valueStart = markerIndex + marker.size();
-    int valueEnd = serverHeader.indexOf(QLatin1Char('/'), valueStart);
-    if (valueEnd < 0) {
-        valueEnd = serverHeader.indexOf(QLatin1Char(' '), valueStart);
-    }
-    if (valueEnd < 0) {
-        valueEnd = serverHeader.size();
-    }
-    return serverHeader.mid(valueStart, valueEnd - valueStart).trimmed();
+    return QString();
 }
 
 bool mergeString(QString* target, const QString& source)
@@ -440,6 +450,38 @@ bool mergeString(QString* target, const QString& source)
 }
 
 } // namespace
+
+QString kiwiSdrReceiverFamilyId(KiwiSdrReceiverFamily family)
+{
+    switch (family) {
+    case KiwiSdrReceiverFamily::Web888:
+        return QStringLiteral("web888");
+    case KiwiSdrReceiverFamily::Kiwi:
+        break;
+    }
+    return QStringLiteral("kiwi");
+}
+
+QString kiwiSdrReceiverFamilyName(KiwiSdrReceiverFamily family)
+{
+    switch (family) {
+    case KiwiSdrReceiverFamily::Web888:
+        return QStringLiteral("Web-888");
+    case KiwiSdrReceiverFamily::Kiwi:
+        break;
+    }
+    return QStringLiteral("KiwiSDR");
+}
+
+KiwiSdrReceiverFamily kiwiSdrReceiverFamilyFromString(const QString& value)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized == QLatin1String("web888")
+        || normalized == QLatin1String("web-888")) {
+        return KiwiSdrReceiverFamily::Web888;
+    }
+    return KiwiSdrReceiverFamily::Kiwi;
+}
 
 SoundFrameHeader parseSoundFrameHeader(const QByteArray& frame)
 {
@@ -848,6 +890,53 @@ QString formatSoundCompressionCommand(bool compressed)
 QString formatWaterfallCompressionCommand(bool compressed)
 {
     return QStringLiteral("SET wf_comp=%1").arg(compressed ? 1 : 0);
+}
+
+InboundFrameTag classifyInboundFrameTag(const QByteArray& frame)
+{
+    // Dispatch is on the leading ASCII magic, never the WebSocket opcode:
+    // KiwiSDR ships control text as text frames, but Web-888 ships every
+    // server-to-client frame — MSG included — as binary.
+    if (frame.startsWith("MSG")) {
+        return InboundFrameTag::MsgText;
+    }
+    if (frame.startsWith("SND")) {
+        return InboundFrameTag::Sound;
+    }
+    if (frame.startsWith("W/F")) {
+        return InboundFrameTag::Waterfall;
+    }
+    if (frame.startsWith("EXT")) {
+        return InboundFrameTag::Extension;
+    }
+    return InboundFrameTag::Unknown;
+}
+
+double waterfallStartFixedPointScale(int zoomMax)
+{
+    return static_cast<double>(
+        kDefaultWaterfallFftBins << std::clamp(zoomMax, 0, 20));
+}
+
+quint32 waterfallStartFixedPoint(double fullLowMhz, double fullBandwidthMhz,
+                                 double rowLowMhz, double fixedPointScale)
+{
+    const double requested = fullBandwidthMhz > 0.0
+        ? ((rowLowMhz - fullLowMhz) / fullBandwidthMhz) * fixedPointScale
+        : 0.0;
+    return static_cast<quint32>(std::clamp(
+        std::isfinite(requested) ? std::round(requested) : 0.0,
+        0.0,
+        std::min(fixedPointScale - 1.0,
+                 static_cast<double>(std::numeric_limits<quint32>::max()))));
+}
+
+double waterfallStartFixedPointToLowMhz(double fullLowMhz,
+                                        double fullBandwidthMhz,
+                                        quint32 start, double fixedPointScale)
+{
+    return fullLowMhz
+        + (static_cast<double>(start) / fixedPointScale) * fullBandwidthMhz;
 }
 
 FrameObservation classifySoundFrame(const QByteArray& frame)

@@ -108,6 +108,22 @@ void testIpv4VersionExemption(const QString& dir)
            contents.contains(QStringLiteral("software_ver=4.2.18.41174")));
 }
 
+void testIpv4QuotedVersionFieldExemption(const QString& dir)
+{
+    // The TCI client identity line (#5087) spells its field version="…"; a
+    // 4-part authored ProductVersion must reach the bundle intact while the
+    // peer address on the same line is still masked.
+    const QString path = dir + "/ipv4_version_field.log";
+    const QString contents = writeAndRead(path, QtDebugMsg,
+                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("TciServer: client 127.0.0.1:61576 "
+                                                         "process=\"JTDX\" version=\"2.2.159.0\""));
+    report("IPv4 redaction skips version=\"…\" client versions",
+           contents.contains(QStringLiteral("version=\"2.2.159.0\""))
+           && contents.contains(QStringLiteral("*.*.*. 1:61576"))
+           && !contents.contains(QStringLiteral("127.0.0.1")));
+}
+
 void testIpv4ThreeOctetNotRedacted(const QString& dir)
 {
     // Three-octet strings like "0.9.8" never match the IPv4 regex (which requires four octets).
@@ -969,6 +985,7 @@ int main(int argc, char** argv)
     testLabelForEachMsgType(dir);
     testIpv4Redaction(dir);
     testIpv4VersionExemption(dir);
+    testIpv4QuotedVersionFieldExemption(dir);
     testIpv4ThreeOctetNotRedacted(dir);
     testIpv4QuotedFourOctetIsStillRedacted(dir);
     testSerialRedaction(dir);

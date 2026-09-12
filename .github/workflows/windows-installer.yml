@@ -42,10 +42,15 @@ jobs:
             -Repository $env:STORE_REPOSITORY -RunNumber $env:STORE_RUN_NUMBER `
             -RequestFlight ($env:STORE_REQUESTED_FLIGHT -eq 'true') `
             -ProductId $env:AETHERSDR_STORE_PRODUCT_ID -FlightId $env:AETHERSDR_STORE_FLIGHT_ID
-          foreach ($name in @('releaseArtifacts', 'productionDraft', 'publishFlight')) {
+          foreach ($name in @('releaseArtifacts', 'productionDraft', 'publishFlight', 'storeEligible')) {
             "$name=$($plan.$name.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           }
           "AETHERSDR_MSIX_VERSION=$($plan.msixVersion)" >> $env:GITHUB_ENV
+          if (-not $plan.storeEligible) {
+            # A plain Write-Warning stays inside this step's collapsed log; the
+            # annotation puts the reason on the run summary where it is seen.
+            Write-Host "::warning title=Store package skipped::$($plan.storeSkipReason)"
+          }
           Write-Host "Store package version: $($plan.msixVersion)"
 
       # pwsh, not Windows PowerShell: the suite is developed and verified on
@@ -384,6 +389,7 @@ jobs:
       # users depend on.  When MSIX matures we can promote it back into
       # the hard-required artifact set.
       - name: Create MSIX package
+        if: steps.store-plan.outputs.storeEligible == 'true'
         continue-on-error: true
         env:
           AETHERSDR_MSIX_IDENTITY_NAME: ${{ vars.AETHERSDR_MSIX_IDENTITY_NAME }}

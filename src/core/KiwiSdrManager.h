@@ -23,6 +23,9 @@ struct KiwiSdrAntennaProfile {
     QString id;
     QString name;
     QString endpoint;
+    // Receiver family served by this endpoint (KiwiSDR or the Web-888 fork).
+    KiwiSdrProtocol::KiwiSdrReceiverFamily family{
+        KiwiSdrProtocol::KiwiSdrReceiverFamily::Kiwi};
     bool autoConnect{false};
     // Keep this receiver's audio audible while the radio transmits (the
     // stream itself always keeps flowing during TX; this only opens the
@@ -117,7 +120,10 @@ public:
     QString profilePasswordPersistenceDetail(const QString& id) const;
 
 public slots:
-    QString addProfile(const QString& name, const QString& endpoint);
+    QString addProfile(
+        const QString& name, const QString& endpoint,
+        KiwiSdrProtocol::KiwiSdrReceiverFamily family =
+            KiwiSdrProtocol::KiwiSdrReceiverFamily::Kiwi);
     void updateProfile(const KiwiSdrAntennaProfile& profile);
     void setProfilePassword(const QString& id, const QString& password);
     void removeProfile(const QString& id);

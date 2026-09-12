@@ -44,7 +44,9 @@ try {
                 Assert-True ($plan.releaseArtifacts -eq $releaseExpected) "Release routing: $eventName $ref $requested"
                 Assert-True ($plan.productionDraft -eq $releaseExpected) "Production routing: $eventName $ref $requested"
                 Assert-True ($plan.publishFlight -eq ($eventName -eq 'workflow_dispatch' -and $requested)) 'Flight routing'
-                Assert-True ($plan.msixVersion -eq '26.9.203.0') 'Store version must reserve revision zero'
+                $expectedVersion = if ($releaseExpected) { '26.9.1.0' } else { '26.9.203.0' }
+                Assert-True ($plan.storeEligible) 'Supported production and development plans stay Store eligible'
+                Assert-True ($plan.msixVersion -eq $expectedVersion) "Version routing: $eventName $ref $requested"
             }
         }
     }
@@ -63,19 +65,64 @@ try {
     $inputs.EventName = 'workflow_dispatch'
     Assert-Throws { & $planScript @inputs -RequestFlight $true } 'require workflow_dispatch'
     $inputs.Repository = 'aethersdr/AetherSDR'
-    $flightVersion = [version](& $planScript @inputs -RequestFlight $true).msixVersion
-    $inputs.RunNumber = 204; $inputs.EventName = 'push'
-    Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.2.1 LANGUAGES CXX)'
-    $productionVersion = [version](& $planScript @inputs).msixVersion
-    Assert-True ($productionVersion -gt $flightVersion) 'Next production must outrank a flight'
-    Assert-True ($productionVersion.Revision -eq 0) 'CalVer hotfix must not occupy Store revision'
+    Assert-True ((& $planScript @inputs -RequestFlight $true).msixVersion -eq '26.9.203.0') 'Flight keeps development numbering'
+    $inputs.EventName = 'push'; $inputs.Ref = 'refs/tags/v26.9.2'
+    Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.2 LANGUAGES CXX)'
+    # 65536 is out of range for development numbering; production must not
+    # read the run number at all. The configured flight ID is likewise inert.
+    $inputs.FlightId = 'FLIGHT'
+    foreach ($run in @(205, 65536)) {
+        $inputs.RunNumber = $run
+        $plan = & $planScript @inputs
+        Assert-True ($plan.msixVersion -eq '26.9.2.0') 'Production version must ignore run number and flight ID'
+        Assert-True ($plan.storeEligible -and $plan.storeSkipReason -eq '') 'Supported production release is Store eligible'
+        Assert-True ($plan.productionDraft -and -not $plan.publishFlight) 'Production remains draft-only'
+    }
+    $inputs.RunNumber = 205
+    # Tag and source are compared by version value, not spelling.
+    $inputs.Ref = 'refs/tags/v26.9.2.0'
+    Assert-True ((& $planScript @inputs).msixVersion -eq '26.9.2.0') 'Explicit-zero tag matches a three-component source'
+    Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.2.0 LANGUAGES CXX)'
+    $inputs.Ref = 'refs/tags/v26.9.2'
+    Assert-True ((& $planScript @inputs).msixVersion -eq '26.9.2.0') 'Three-component tag matches an explicit-zero source'
+    Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.2 LANGUAGES CXX)'
+    # Store-ineligible releases must still reach the ZIP/EXE attachment path.
+    foreach ($tag in @('v26.9.1', 'v26.9.2-beta', 'v26.9.2a', 'v26.9.2.1', 'v')) {
+        $inputs.Ref = "refs/tags/$tag"
+        $plan = & $planScript @inputs
+        Assert-True ($plan.releaseArtifacts) 'Mismatched/suffixed tag keeps release artifacts enabled'
+        Assert-True (-not $plan.storeEligible -and -not $plan.productionDraft -and -not $plan.publishFlight) 'Mismatched/suffixed tag skips only Store paths'
+        Assert-True ($plan.msixVersion -eq '') 'Ineligible release must not invent a Store version'
+        Assert-True ($plan.storeSkipReason -match 'does not match') 'Tag mismatch explains Store skip'
+    }
+    foreach ($invalidVersion in @('26.9.2.1', '26.9.65536', '26.9')) {
+        Set-Content -LiteralPath $project -Value "project(AetherSDR VERSION $invalidVersion LANGUAGES CXX)"
+        $inputs.Ref = "refs/tags/v$invalidVersion"
+        $plan = & $planScript @inputs
+        Assert-True ($plan.releaseArtifacts) 'Unsupported Store version keeps ZIP/EXE enabled'
+        Assert-True (-not $plan.storeEligible -and -not $plan.productionDraft -and -not $plan.publishFlight) 'Unsupported Store version skips Store paths'
+        Assert-True ($plan.msixVersion -eq '') 'Unsupported Store version has no fallback numbering'
+        Assert-True ($plan.storeSkipReason -match 'Production Store versions require') 'Unsupported Store version explains skip'
+    }
+    $inputs.Ref = 'refs/tags/v26.9.2.0'
+    Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION 26.9.2.0 LANGUAGES CXX)'
+    Assert-True ((& $planScript @inputs).msixVersion -eq '26.9.2.0') 'Explicit zero revision stays unchanged'
+
+    # The workflow, not the planner, applies storeEligible: it must export the
+    # flag and gate MSIX creation on it, or an ineligible release would fall
+    # through to create-msix.ps1's project-version default.
+    $workflow = Get-Content -Raw (Join-Path $RepositoryRoot '.github/workflows/windows-installer.yml')
+    Assert-True ($workflow -match "@\('releaseArtifacts', 'productionDraft', 'publishFlight', 'storeEligible'\)") 'Workflow exports storeEligible'
+    Assert-True ($workflow -match "- name: Create MSIX package\s+if: steps\.store-plan\.outputs\.storeEligible == 'true'") 'Workflow gates MSIX creation on storeEligible'
+    Assert-True ($workflow -match 'storeSkipReason') 'Workflow surfaces the Store skip reason'
+    $inputs.EventName = 'workflow_dispatch'; $inputs.FlightId = 'FLIGHT'
     foreach ($valid in @(1, 65535)) {
         $inputs.RunNumber = $valid
-        Assert-True (([version](& $planScript @inputs).msixVersion).Build -eq $valid) 'Run number boundary'
+        Assert-True (([version](& $planScript @inputs -RequestFlight $true).msixVersion).Build -eq $valid) 'Development run number boundary'
     }
     foreach ($invalid in @(0, -1, 65536)) {
         $inputs.RunNumber = $invalid
-        Assert-Throws { & $planScript @inputs } 'MSIX component range 1\.\.65535'
+        Assert-Throws { & $planScript @inputs -RequestFlight $true } 'MSIX component range 1\.\.65535'
     }
     $inputs.RunNumber = 204
     Set-Content -LiteralPath $project -Value 'project(AetherSDR VERSION invalid)'

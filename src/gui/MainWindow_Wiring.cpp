@@ -2287,6 +2287,34 @@ void MainWindow::onSliceAdded(SliceModel* s)
     updateAetherDspModePolicy();
 }
 
+void MainWindow::requestSliceClose(int sliceId)
+{
+    // The ✕ button and the "Close Slice" menu are always offered, so the one
+    // refusal an operator will actually meet is named rather than silent.
+    // Everything else RadioModel::removeSlice() refuses is reported by the
+    // model itself (sliceLifecycleFailed / commandDropped), once per session.
+    if (m_radioModel.slices().size() <= 1) {
+        statusBar()->showMessage(tr("Cannot close the last slice"), 4000);
+        return;
+    }
+    // Capture before the request: a backend that confirms synchronously has
+    // already retired the SliceModel by the time removeSlice() returns.
+    const SliceModel* slice = m_radioModel.slice(sliceId);
+    const bool lockOnSlice = centerLockActiveForSlice(slice);
+    const QString panId = slice ? slice->panId() : QString();
+    // A refused or pending request leaves the current receiver — and its
+    // center lock — intact.
+    if (!m_radioModel.removeSlice(sliceId))
+        return;
+    // Accepted: drop the operator's lock intent now, exactly as the pre-seam
+    // close did before sending the wire command. Leaving it to onSliceRemoved
+    // would preserve the persisted letter inside a band-recall grace window,
+    // and a dormant intent re-locks whichever slice Flex next recycles into
+    // that letter (#3854 review).
+    if (lockOnSlice)
+        clearCenterLockForPan(panId, /*clearPersistedIntent=*/true);
+}
+
 void MainWindow::onSliceRemoved(int id)
 {
     if (m_applyingLayout) return;
@@ -4718,9 +4746,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setWfBlankerThreshold,
             Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::backgroundImageRequested,
-            this, [sw] {
+            sw, [sw] {
+        const QPointer<SpectrumWidget> spectrum(sw);
         const QString path = getBackgroundImagePath(sw->window(), "Choose Background Image");
-        if (path.isEmpty()) return;
+        if (!spectrum || path.isEmpty()) {
+            return;
+        }
         sw->setBackgroundImage(path);
         auto& s = AppSettings::instance();
         s.setValue(sw->settingsKey("BackgroundImage"), path);
@@ -4766,7 +4797,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setFftFillAlpha(0.70f);
         sw->setFftFillColor(QColor(0x00, 0xe5, 0xff));
         sw->setFftLineColor(QColor(0x00, 0xe5, 0xff));
-        sw->setFftLineWidth(2.0f);
+        sw->setFftLineWidth(1.0f);
         sw->setFftWeightedAvg(false);
         sw->setFftHeatMap(true);
         sw->setWfColorScheme(0);
@@ -4817,7 +4848,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("DisplayFftFillAlpha"),        "0.70");
         s.setValue(sw->settingsKey("DisplayFftFillColor"),        "#00e5ff");
         s.setValue(sw->settingsKey("DisplayFftLineColor"),        "#00e5ff");
-        s.setValue(sw->settingsKey("DisplayFftLineWidth"),        "2.0");
+        s.setValue(sw->settingsKey("DisplayFftLineWidth"),        "1.0");
         s.setValue(sw->settingsKey("DisplayFftHeatMap"),          "True");
         s.setValue(sw->settingsKey("DisplayWfColorScheme"),       "0");
         s.setValue(sw->settingsKey("DisplayWfColorGain"),         "50");
@@ -5295,12 +5326,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::sliceCloseRequested,
             this, [this](int sliceId) {
-        if (m_radioModel.slices().size() <= 1) return;
-        if (SliceModel* slice = m_radioModel.slice(sliceId);
-            centerLockActiveForSlice(slice)) {
-            clearCenterLockForPan(slice->panId(), true);
-        }
-        m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
+        requestSliceClose(sliceId);
     });
     connect(sw, &SpectrumWidget::sliceCreateRequested,
             this, [this, applet](double freqMhz) {
@@ -5713,12 +5739,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         syncKiwiSdrDiversityEscControls();
     });
     connect(w, &VfoWidget::closeSliceRequested, this, [this, sliceId]() {
-        if (m_radioModel.slices().size() <= 1) return;
-        if (SliceModel* slice = m_radioModel.slice(sliceId);
-            centerLockActiveForSlice(slice)) {
-            clearCenterLockForPan(slice->panId(), true);
-        }
-        m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
+        requestSliceClose(sliceId);
     });
     connect(w, &VfoWidget::stepTuneRequested, this, [this, sliceId](double mhz) {
         if (auto* sl = m_radioModel.slice(sliceId))

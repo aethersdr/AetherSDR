@@ -37,6 +37,19 @@ look, feel, and every function SmartSDR is capable of. The reference radio is a
 
 ## AI Agent Guidelines
 
+> **TEMPORARY — read before opening any PR that touches `src/core/backends/`,
+> `RadioModel`, `RadioSession`, `TransmitModel`, `ConnectionPanel`, discovery,
+> or `RadioCapabilities`.** The 2026-09-10 backend architecture review is
+> tracked in **#5554** (meta: every open seam/multi-radio issue plus the new
+> findings). Before you submit, check that your change does not add to any
+> item listed there — no new `usesFlexCommandPlane()` / family-string
+> branches, no new raw Flex wire text above the seam, no new `dynamic_cast`
+> to a concrete backend, no new capability declared without a verb behind
+> it, no copy of HL2 scaffolding into another host-DSP family, and no new
+> keying-class verb that skips the TX gate in `RadioModel`. If your PR
+> resolves one of those items, link it. This notice is removed when #5554's
+> §2 items each have their own issue and #5262 M1 has landed.
+
 When helping with AetherSDR:
 - Prefer C++20 / Qt6 idioms (std::ranges, concepts if clean, Qt signals/slots over lambdas when possible)
 - Keep classes small and single-responsibility
@@ -459,7 +472,23 @@ clients, with pluggable radio backends (`IRadioBackend`). Implementation
 follows the RFC's §10 staged order; **step 1 (`libaethercore`) and the
 step-2 seam have landed** — the engine is a static library, and
 `IRadioBackend` (`src/core/backends/`) now has **six** implementors,
-selected at connect time by a `family` string through `makeBackend()`:
+selected at connect time by a `family` string through `makeBackend()`.
+The seam's known gaps and the multi-radio migration order are tracked in
+#5262 (M0–M6) and the review meta-issue #5554 — read both before changing
+anything in this table's territory (see the temporary notice at the top of
+"AI Agent Guidelines"). **Every implementor honours the THREADING AND
+LIFETIME CONTRACT at the top of `IRadioBackend.h`** (backend lives on its
+owner's thread, every seam signal is emitted from it, workers are private,
+payloads declared and registered in one place, teardown bounded and
+ordered). What is pinned versus surveyed: `backend_seam_affinity_test`
+pins rules 1, 2 and 6 for the simulator and rule 1 plus a cold
+construct/teardown for every other family; `hl2_connect_reentrancy_test`
+pins rule 2 for HL2 while its DSP build runs on the I/O thread;
+`backend_family_switch_test` pins rule 5 across the production switch with
+a deterministic stale-delivery injection. Live-emission affinity for flex,
+anan, icom and rtl is a survey result until
+`tests/SeamThreadAffinityProbe.h` — which drops the same tripwire into any
+test that drives a backend — is carried by a test that drives one:
 
 | Family | Backend | Notes |
 |---|---|---|
@@ -486,13 +515,29 @@ available RTL-SDR USB enumeration; `--discover-sim` publishes only demo metadata
 Neither option connects a radio. Icom manual setup, SmartLink and external
 directories are excluded. Catalogue fields and lifecycle are specified in
 `docs/aetherd-control-resource-v1-catalogue.md`.
-Sessions now require explicit trusted authorization; the local transport grants
-observe permission, and reads/subscriptions enforce it. The revocation hook
+Sessions require explicit trusted authorization; the local transport defaults
+to observe permission, and reads/subscriptions enforce it. The daemon's explicit
+`--allow-local-control` flag additionally grants non-TX control to current-user
+local clients. Typed catalogue-selected `radio.connect` / `radio.disconnect`
+are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
+revision checks and limits. Clients cannot supply arbitrary endpoints or
+credentials. Every negotiated session, observer or controller, now shares a
+per-client request budget (100/s, burst 200, advertised in `limits`); exceeding
+it is terminal for that connection. The revocation hook
 discards pending observations and terminates local delivery; no wire or daemon
-path invokes it yet. Credential verification/provisioning and control/transmit
+path invokes it yet. Remote credential verification/provisioning and transmit
 grants are not implemented yet.
-Meters, read-only transmit state, authenticated non-TX control, and the desktop
-adapter have not landed; UI code still consumes models directly, and that
+`slice.setFrequency` now dispatches a bounded, revision-checked intent for an
+existing owned slice, with explicit backend observation provenance and fail-closed
+TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
+not optimistically update the model. Unknown coverage/readback remains unavailable.
+The receive-control milestone adds typed mode/filter/gain/mute and pan
+center/bandwidth intents for qualified existing owned resources, separate
+backend receive observations, bounded latest-value `meter` resources and a
+read-only `transmitState`; see `docs/aetherd-local-receive-control.md` for the
+per-backend support matrix and remaining no-op, geometry and TX-idle limits.
+This is not all-backend feature parity: unavailable operations remain absent.
+The desktop adapter has not landed; UI code still consumes models directly, and that
 remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.
@@ -1004,6 +1049,10 @@ The KiwiSDR browser is a clean-room, API-policy-aware public-receiver directory
 FlexRadio protocol path. Kiwi panadapters are receive-only (TX is inhibited).
 See `docs/kiwisdr-public-directory.md` (directory / API-policy behaviour) and
 `docs/kiwisdr-cleanroom-design.md` (clean-room design notes, Principle IV).
+
+The Kiwi path also serves the Web-888 (a KiwiSDR server fork) as a receiver
+family: profiles carry a receiver type, and the client applies the small wire
+deltas. See `docs/web888-cleanroom-design.md`.
 
 ---
 

@@ -40,6 +40,10 @@ int main(int argc, char** argv)
     QStringList blockedMessages;
     QObject::connect(&tx, &TransmitModel::commandReady,
                      [&commands](const QString& cmd) { commands.append(cmd); });
+    QObject::connect(&tx, &TransmitModel::tuneCommandIssued,
+                     [&commands](bool on) { commands.append(on ? "intent:tune:on" : "intent:tune:off"); });
+    QObject::connect(&tx, &TransmitModel::moxCommandIssued,
+                     [&commands](bool on) { commands.append(on ? "intent:mox:on" : "intent:mox:off"); });
     QObject::connect(&tx, &TransmitModel::pttBlocked,
                      [&blockedMessages](const QString& message) { blockedMessages.append(message); });
 
@@ -146,7 +150,7 @@ int main(int argc, char** argv)
     tx.startTwoToneTune();
     ok &= expect(commands == QStringList({
                      "transmit set tune_mode=two_tone",
-                     "transmit tune 1",
+                     "intent:tune:on",
                  })
                      && tx.activePttSource() == TransmitModel::PttSource::Tune,
                  "two-tone tune sets mode and tags the tune source before starting");
@@ -155,7 +159,7 @@ int main(int argc, char** argv)
     commands.clear();
     tx.toggleTwoToneTune();
     ok &= expect(commands == QStringList({
-                     "transmit tune 0",
+                     "intent:tune:off",
                      "transmit set tune_mode=single_tone",
                  }),
                  "two-tone tune toggle stops and restores single-tone mode");
@@ -165,15 +169,53 @@ int main(int argc, char** argv)
     tx.toggleTwoToneTune();
     ok &= expect(commands == QStringList({
                      "transmit set tune_mode=two_tone",
-                     "transmit tune 1",
+                     "intent:tune:on",
                  }),
                  "two-tone tune toggle starts two-tone when not tuning");
 
     commands.clear();
     tx.startTune();
-    ok &= expect(commands == QStringList({"transmit tune 1"})
+    ok &= expect(commands == QStringList({"intent:tune:on"})
                      && tx.activePttSource() == TransmitModel::PttSource::Tune,
                  "single-tone tune tags the tune source before starting");
+
+    // #5422: no CW source keys while TUNE is active — the radio keys a
+    // `cw key 1` (and CWX text) at TUNE power and is left in TX with no
+    // carrier after key-up. tx is tuning here from the local TUNE control.
+    ok &= expect(!tx.admitsCwKeyEdge(true) && tx.admitsCwKeyEdge(false)
+                     && !tx.admitsCwxSend(),
+                 "tune refuses CW key-down and CWX text, admits key-up");
+    commands.clear();
+    tx.stopTune();
+    ok &= expect(tx.admitsCwKeyEdge(true) && tx.admitsCwxSend()
+                     && commands == QStringList({"intent:tune:off"}),
+                 "stopping tune re-admits CW keying and CWX text");
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = true; }));
+    ok &= expect(!tx.admitsCwKeyEdge(true) && tx.admitsCwKeyEdge(false)
+                     && !tx.admitsCwxSend(),
+                 "tune reported by the radio alone refuses key-down and CWX, admits key-up");
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = false; }));
+    ok &= expect(tx.admitsCwKeyEdge(true) && tx.admitsCwxSend(),
+                 "radio tune=0 re-admits CW keying and CWX text");
+
+    // #5422, other direction: TUNE must not start while a CW source is keying
+    // (measured: it comes up with no carrier and leaves the radio in TX).
+    QString tuneBlock;
+    tx.setTuneAdmission([&tuneBlock] { return tuneBlock; });
+    tuneBlock = QStringLiteral("CW is keyed");
+    commands.clear();
+    blockedMessages.clear();
+    tx.startTune();
+    ok &= expect(commands.isEmpty() && !tx.isTuning()
+                     && blockedMessages == QStringList({"CW is keyed"}),
+                 "TUNE start is refused while CW is keyed");
+    tuneBlock.clear();
+    commands.clear();
+    tx.startTune();
+    ok &= expect(commands == QStringList({"intent:tune:on"}) && tx.isTuning(),
+                 "TUNE starts again once CW is released");
+    tx.stopTune();
+    tx.setTuneAdmission({});
 
     commands.clear();
     tx.setTuneMode("single_tone");
@@ -401,7 +443,7 @@ int main(int argc, char** argv)
     tx.setTxModeGetter([] { return QStringLiteral("USB"); });
     commands.clear();
     tx.requestPttOn(TransmitModel::PttSource::Wspr);
-    ok &= expect(commands == QStringList({"xmit 1"})
+    ok &= expect(commands == QStringList({"intent:mox:on"})
                  && quindar.phase() == ClientQuindarTone::Phase::Idle,
                  "WSPR PTT bypasses Quindar signaling");
 
