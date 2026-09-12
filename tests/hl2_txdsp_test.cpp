@@ -19,6 +19,7 @@
 // show up as "my audio is quiet" or "my signal is 2 kHz wide".
 
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
 #include <QCoreApplication>
 #include <QObject>
@@ -254,19 +255,36 @@ int main(int argc, char** argv)
         }
     }
 
-    // ---- ALC lifts speech-level audio to something that modulates ----
+    // ---- The mic slider lifts speech-level audio to something that modulates -
     //
     // This is the gap that made voice inaudible on the air: measured on the
     // radio, audio at -10 dBFS produced 1226 counts of forward power and audio
-    // at -30 dBFS produced 47, while ordinary speech sits near -32 dBFS. The
-    // ALC's job is to close that.
+    // at -30 dBFS produced 47, while ordinary speech sits near -32 dBFS. That
+    // measurement is why the gap must be closed by SOMETHING, and it has not
+    // changed.
+    //
+    // WHAT CLOSES IT HAS. This case used to assert that the ALC lifted a
+    // -34 dBFS tone toward full modulation on its own, at unity mic gain — up
+    // to 40 dB of makeup, applied on an absolute threshold, which is what lifted
+    // room noise level with speech (20.5 dB of separation in, 0.33 dB out) and
+    // is the defect this stage's ceiling now forbids. The ALC only reduces.
+    // The operator's mic slider closes the gap instead, which is why it reaches
+    // +40 dB, so this case is re-pointed at the slider rather than deleted: the
+    // same tone, the same destination, a different instrument.
+    //
+    // Two claims, and they are the pair: at the top of the slider the tone still
+    // reaches full modulation, and at unity it now passes straight through
+    // instead of being normalized.
     {
         constexpr double kQuiet = 0.02;         // about -34 dBFS, speech-ish
+        const double kSlider100Linear = micSliderToLinear(100);
         const auto plain = modulate(WdspChannel::Mode::Usb, kTone, kQuiet, 1.0, 1.5,
                                     nullptr, false);
         const auto alced = modulate(WdspChannel::Mode::Usb, kTone, kQuiet, 1.0, 1.5,
                                     nullptr, true);
-        if (!plain.empty() && !alced.empty()) {
+        const auto driven = modulate(WdspChannel::Mode::Usb, kTone, kQuiet,
+                                     kSlider100Linear, 1.5, nullptr, true);
+        if (!plain.empty() && !alced.empty() && !driven.empty()) {
             // Compare the settled tail: the ALC ramps in, so the opening block
             // is deliberately not representative.
             auto tailPeak = [](const std::vector<std::complex<float>>& v) {
@@ -277,43 +295,74 @@ int main(int argc, char** argv)
             };
             const double a = tailPeak(plain);
             const double b = tailPeak(alced);
-            std::fprintf(stderr, "ALC: quiet input peak %.4f -> %.4f (+%.1f dB)\n",
-                         a, b, 20.0 * std::log10((b + 1e-12) / (a + 1e-12)));
-            check(b > a * 5.0, "ALC lifts quiet audio substantially");
-            check(b > 0.5, "ALC brings quiet audio near full modulation");
-            // And it must never overshoot into clipping — an ALC that overshoots
-            // transmits splatter rather than merely clipping our own audio.
+            const double c = tailPeak(driven);
+            std::fprintf(stderr,
+                         "mic slider: quiet input peak %.4f -> ALC at unity %.4f "
+                         "(%+.1f dB) -> slider 100 %.4f (%+.1f dB)\n",
+                         a, b, 20.0 * std::log10((b + 1e-12) / (a + 1e-12)),
+                         c, 20.0 * std::log10((c + 1e-12) / (a + 1e-12)));
+            // The ALC adds nothing of its own. Anything but ~0 dB here is the
+            // makeup half coming back.
+            check(std::fabs(20.0 * std::log10((b + 1e-12) / (a + 1e-12))) < 1.0,
+                  "at unity mic gain the ALC passes speech-level audio through "
+                  "unchanged");
+            // The same bound the old assertion used, now asked of the control
+            // that is actually meant to close the gap.
+            check(c > 0.5, "the mic slider at 100 brings quiet audio near full "
+                           "modulation");
+            // And the stage must never overshoot into clipping — an ALC that
+            // overshoots transmits splatter rather than merely clipping our own
+            // audio. This is measured on the DRIVEN run, which is the only one
+            // that now reaches the ALC's target at all, and it is the whole of
+            // what the stage still promises.
             double mx = 0.0;
-            for (const auto& v : alced) mx = std::max(mx, static_cast<double>(std::abs(v)));
+            for (const auto& v : driven) mx = std::max(mx, static_cast<double>(std::abs(v)));
             check(mx <= 1.001, "ALC output never exceeds full scale");
         }
     }
 
-    // ── The ALC holds through pauses instead of winding up on room noise ────
+    // ── The mic path preserves the separation between speech and the room ───
     //
-    // The stage is makeup gain for a quiet mic, and it has to stay that without
-    // also being a second compressor fighting the speech processor. The property
-    // under test: audio too quiet to be speech must NOT be lifted, while audio
-    // loud enough to be speech still is.
+    // THE REGRESSION TEST FOR THE REPORTED FAULT, and the direct successor of a
+    // case that asserted the opposite. This block used to assert that the ALC
+    // HELD its gain below -45 dBFS and lifted above it — makeup gain with an
+    // absolute threshold, which sounds like a noise policy and is not one. The
+    // threshold sat below a real shack's noise floor, so between words the loop
+    // went on lifting until the room reached the same target peak as the voice:
+    // measured on the air, 20.5 dB of speech-to-floor separation went in and
+    // 0.33 dB came out. A stage that erases 20 dB of contrast is not protecting
+    // anything.
     //
-    // Without the hold, both cases below settle at the same output peak — that
-    // is exactly the failure, because it means the shack fan between words is
-    // being brought to the same level as the operator's voice.
+    // Rewritten rather than adjusted, because merely relaxing the old numbers
+    // would leave "the ALC held" being asserted by a stage that no longer holds
+    // anything — the first of its three assertions would still pass, for the
+    // wrong reason, measuring "nothing is ever lifted".
+    //
+    // The property now under test is the one the report is about: the ALC adds
+    // no gain at either level, and the DIFFERENCE between them survives the
+    // stage intact. 20 dB in, 20 dB out.
     {
-        auto settledPeak = [](double amplitude) {
+        struct Settled { double gainDb; double outPeak; };
+        auto settled = [](double amplitude) -> Settled {
             Hl2TxDsp tx;
             Hl2TxDsp::Config cfg;
             cfg.mode = WdspChannel::Mode::Usb;
             cfg.alcEnabled = true;
             std::string err;
             if (!tx.configure(cfg, &err)) {
-                std::fprintf(stderr, "FAIL: ALC hold configure: %s\n", err.c_str());
+                std::fprintf(stderr, "FAIL: ALC separation configure: %s\n",
+                             err.c_str());
                 ++g_failures;
-                return 0.0;
+                return {0.0, 0.0};
             }
             double lastGainDb = 0.0;
             QObject::connect(&tx, &Hl2TxDsp::alcGain, &tx,
                              [&lastGainDb](float db) { lastGainDb = db; });
+            std::vector<std::complex<float>> out;
+            QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                             [&out](const std::vector<std::complex<float>>& iq) {
+                out.insert(out.end(), iq.begin(), iq.end());
+            });
 
             const int fs = cfg.inputSampleRateHz;
             const int total = fs * 3;   // long enough for the slow release to settle
@@ -327,35 +376,51 @@ int main(int argc, char** argv)
                 }
                 tx.processAudioBlock(chunk, /*clientLeveled=*/false);
             }
-            return lastGainDb;
+            // Settled tail only, so the opening blocks are not representative.
+            double mx = 0.0;
+            for (std::size_t i = out.size() / 2; i < out.size(); ++i)
+                mx = std::max(mx, static_cast<double>(std::abs(out[i])));
+            return {lastGainDb, mx};
         };
 
-        // -54 dBFS: below the -45 dBFS hold threshold, so this is "the room",
-        // not the operator. The ALC must leave it where it is.
-        const double quietGainDb = settledPeak(0.002);
-        // -34 dBFS: above the threshold and about where real speech sits, per
-        // the measurements in Hl2TxDsp::Config. This must still be lifted.
-        const double speechGainDb = settledPeak(0.02);
+        // -54 dBFS: this is "the room" — the fan, the hiss, the pause between
+        // words. It sat below the old -45 dBFS hold threshold on purpose, and
+        // still sits below it in spirit: it is the leg that used to be hauled up.
+        const Settled room = settled(0.002);
+        // -34 dBFS: about where real speech sits, per the measurements quoted in
+        // Hl2TxDsp::Config. Exactly 20 dB above the room leg.
+        const Settled speech = settled(0.02);
 
+        const double outSeparationDb =
+            20.0 * std::log10((speech.outPeak + 1e-12) / (room.outPeak + 1e-12));
         std::fprintf(stderr,
-                     "ALC hold: below-threshold gain %.1f dB, speech-level gain %.1f dB\n",
-                     quietGainDb, speechGainDb);
-        check(quietGainDb < 1.0,
-              "ALC held its gain on audio too quiet to be speech");
-        check(speechGainDb > 20.0,
-              "ALC still lifts audio at speech level");
-        check(speechGainDb > quietGainDb + 20.0,
-              "ALC distinguishes speech from room noise");
+                     "separation: room gain %.2f dB (peak %.6f), speech gain %.2f dB "
+                     "(peak %.6f), 20.0 dB in -> %.2f dB out\n",
+                     room.gainDb, room.outPeak, speech.gainDb, speech.outPeak,
+                     outSeparationDb);
+        // Neither leg is lifted. The ceiling is unity, so on any input below the
+        // target the ALC's answer is 0 dB — for the room AND for the speech.
+        check(std::fabs(room.gainDb) < 1.0,
+              "the ALC adds no gain to room-level audio");
+        check(std::fabs(speech.gainDb) < 1.0,
+              "the ALC adds no gain to speech-level audio either");
+        // AND THE ONE THAT WOULD HAVE CAUGHT THE FAULT. Both legs at 0 dB is
+        // necessary but not sufficient: what the operator hears is the contrast,
+        // and the reported failure was 20.5 dB in arriving as 0.33 dB out.
+        check(outSeparationDb > 19.0 && outSeparationDb < 21.0,
+              "20 dB of input separation arrives as 20 dB of output separation");
     }
 
     // ── #4796: client-leveled audio bypasses the ALC entirely ──────────────
     //
     // A TCI/DAX client's level control is a digital attenuator on the audio it
-    // streams (WSJT-X's Pwr slider). Through the ALC that control was either
-    // normalized away (above the hold threshold) or frozen into a
-    // path-dependent gain (below it). With the bypass, output must simply be
-    // proportional to input — even 5 dB BELOW the hold threshold, where the
-    // ALC used to freeze.
+    // streams (WSJT-X's Pwr slider). Through the ALC's makeup half that control
+    // was either normalized away (above the then-current -45 dBFS hold
+    // threshold) or frozen into a path-dependent gain (below it). Output must
+    // simply be proportional to input — and the quiet leg is 5 dB below where
+    // that threshold used to sit, which is where the ALC used to freeze. That
+    // ceiling is now unity on every path rather than only this one, so these
+    // assertions read the same as they did; they are unchanged on purpose.
     {
         // -50 dBFS and -30 dBFS, both with the ALC configured ON, both marked
         // client-leveled. 20 dB apart in, 20 dB apart out.
@@ -455,11 +520,11 @@ int main(int argc, char** argv)
     //
     // Removing the ALC's makeup half is the #4796 fix. Removing its REDUCTION
     // half would leave the modulator's hard clamp as the only thing between a
-    // hot client and the band, and m_micGain reaches 10x (+20 dB — the TX gain
-    // slider at 100, Hl2TxLevelPolicy.h), so a full-scale client arrives ~17 dB
-    // into that clamp. Flat-topping an SSB modulator input is a splatter
-    // generator: the one failure mode here that harms other operators rather
-    // than the operator who caused it.
+    // hot client and the band: m_micGain now reaches 100x (+40 dB — the TX gain
+    // slider at 100, Hl2TxLevelPolicy.h), and even the 10x used below puts a
+    // full-scale client ~17 dB into that clamp. Flat-topping an SSB modulator
+    // input is a splatter generator: the one failure mode here that harms other
+    // operators rather than the operator who caused it.
     //
     // Distortion is measured as the CREST FACTOR of the analytic magnitude,
     // not as a harmonic bin. For a single tone |IQ| is constant, so peak/mean
@@ -472,7 +537,12 @@ int main(int argc, char** argv)
     // instrument is validated on every run rather than on the day it was
     // written.
     {
-        constexpr double kSlider100 = 10.0;   // micSliderToLinear(100) = +20 dB
+        // A raw linear +20 dB, NOT a slider position. This was written as
+        // micSliderToLinear(100) back when the slider topped out at +20 dB; the
+        // slider now reaches +40 dB (100x) and the name would be a lie. The
+        // value is what the case needs — enough to drive a full-scale client
+        // well into limiting — so it is kept and renamed rather than moved.
+        constexpr double kHotMicGain = 10.0;   // +20 dB, linear
         constexpr double kHarmTone  = 700.0;
         auto crest = [](const std::vector<std::complex<float>>& v) {
             double mx = 0.0, sum = 0.0;
@@ -489,7 +559,7 @@ int main(int argc, char** argv)
         };
 
         const auto hot = modulate(WdspChannel::Mode::Usb, kHarmTone, 1.0,
-                                  kSlider100, 1.5, nullptr, true, nullptr,
+                                  kHotMicGain, 1.5, nullptr, true, nullptr,
                                   /*clientLeveled=*/true);
         // 24 dB below the ALC target at unity mic gain: the limiter cannot
         // engage, so this is what "undistorted" reads on this instrument.
@@ -511,8 +581,8 @@ int main(int argc, char** argv)
             check(cleanCrest < 1.05,
                   "crest-factor instrument reads ~1.0 on an undistorted tone");
             check(mx < 0.95,
-                  "a full-scale client at TX gain 100 is limited below the "
-                  "clamp, not flat-topped by it");
+                  "a full-scale client at +20 dB of mic gain is limited below "
+                  "the clamp, not flat-topped by it");
             check(mx > 0.5,
                   "the limited transmission is still on the air (case is real)");
             check(hotCrest < 1.05,
@@ -534,22 +604,36 @@ int main(int argc, char** argv)
     // total bypass and on the ceiling; it fails ~21 dB wide on an
     // increase-gated ALC.
     //
-    // It is ALSO the discriminator for the other half of the change — the hold
-    // being made mic-path-only (`!clientLeveled` in processAudioBlock's `held`).
-    // THE QUIET LEG IS DELIBERATELY BELOW alcHoldBelowDbfs: -70 dBFS times this
-    // case's 10x mic gain is -50 dBFS at the ALC's measurement point, under the
-    // -45 dBFS hold threshold. Do not raise it. If the hold is left applying to
-    // client-leveled audio, the gain the loud leg pulled down can never be
-    // released again — the transmission strands at -21.41 dB — and with the
-    // quiet leg anywhere above the threshold this case cannot see that at all.
-    // Both wrong shapes fail here and nowhere else in this file.
+    // HALF OF THAT RATIONALE HAS RETIRED, and the half that has not is the
+    // reason this case is untouched by the unity-ceiling change.
+    //
+    // It used to be the discriminator for a second thing as well: the hold being
+    // made mic-path-only (`!clientLeveled` in processAudioBlock's `held`). There
+    // is no hold any more — it was deleted outright with the ALC's makeup half,
+    // because under a unity ceiling a quiet block wants target = 1.0, so after
+    // any reduction `reducing` is false and a hold would strand the gain exactly
+    // as described above. So that discriminator has nothing left to discriminate
+    // between, and the paragraph is kept as history rather than as a live claim.
+    //
+    // WHAT SURVIVES IS THE PROOF THAT THE UNITY CEILING CHANGED NOTHING HERE. On
+    // the client path the ceiling was already 1.0 and `held` was already false,
+    // so every assertion below reads the same before and after — which is what
+    // makes this case the evidence that a change to the mic path is a no-op on
+    // TCI/DAX.
+    //
+    // THE QUIET LEG IS STILL DELIBERATELY WHERE IT IS: -70 dBFS times this
+    // case's 10x mic gain is -50 dBFS at the ALC's measurement point, which was
+    // under the old -45 dBFS hold threshold. Do not raise it. It is what keeps
+    // the case able to catch a hold reappearing, on either path, by any route.
     //
     // One continuous transmission: full scale, then -70 dBFS held for four
     // release time constants. The tail must match the same level keyed fresh.
     {
-        constexpr double kSlider100 = 10.0;
+        // A raw linear +20 dB, not a slider position — see the note in the case
+        // above. The slider reaches +40 dB now; this value does not need to.
+        constexpr double kHotMicGain = 10.0;
         const auto fresh = modulate(WdspChannel::Mode::Usb, kTone, 0.000316,
-                                    kSlider100, 1.5, nullptr, true, nullptr,
+                                    kHotMicGain, 1.5, nullptr, true, nullptr,
                                     /*clientLeveled=*/true);
 
         Hl2TxDsp tx;
@@ -562,7 +646,7 @@ int main(int argc, char** argv)
                          err.c_str());
             ++g_failures;
         } else if (!fresh.empty()) {
-            tx.setMicGain(kSlider100);
+            tx.setMicGain(kHotMicGain);
             std::vector<std::complex<float>> out;
             QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
                              [&](const std::vector<std::complex<float>>& iq) {

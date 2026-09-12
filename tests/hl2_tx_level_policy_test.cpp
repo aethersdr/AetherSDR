@@ -57,12 +57,26 @@ int main()
     check(near(micSliderToGainDb(50), 0.0), "slider 50 is unity gain (0 dB)");
     check(near(micSliderToLinear(50), 1.0), "slider 50 is unity linear (1.0)");
 
-    check(near(micSliderToGainDb(100), 20.0), "slider 100 is +20 dB");
+    check(near(micSliderToGainDb(100), 40.0), "slider 100 is +40 dB");
     check(near(micSliderToGainDb(1), -19.6), "slider 1 is -19.6 dB");
 
+    // THE JOIN, which is what stops someone tidying this back to symmetric.
+    //
+    // The mapping is asymmetric on purpose: 0.4 dB per step below 50, 0.8 dB
+    // per step above it, so the travel is -20/+40 dB with unity still exactly
+    // at 50. A symmetric widening would be the obvious simplification and would
+    // move unity off 50, changing the transmit level of every existing install
+    // — the case above says why that may not happen, and these two say where
+    // the mapping would have to break to allow it. Continuous in value, with a
+    // deliberate step in slope.
+    check(near(micSliderToGainDb(49), -0.4), "one step below unity is -0.4 dB");
+    check(near(micSliderToGainDb(51), 0.8), "one step above unity is +0.8 dB");
+
     // A slider at the bottom means OFF. Without the special case it would be
-    // -20 dB, which the ALC's 40 dB of makeup would haul straight back up —
-    // making "0" sound much like "50".
+    // -20 dB — which, now that the ALC only reduces and has no makeup gain to
+    // haul it back up with, is a real -20 dB on the air rather than something
+    // indistinguishable from "50". The behaviour does not move; the reason for
+    // it is now simply that the bottom of a level control means off.
     check(near(micSliderToLinear(0), 0.0), "slider 0 mutes rather than attenuating");
     check(micSliderToLinear(1) > 0.0, "slider 1 is quiet but not muted");
 
@@ -78,8 +92,8 @@ int main()
     }
 
     // Out-of-range input is clamped, not extrapolated: a CAT client or a bridge
-    // verb can pass anything, and 200 must not become +60 dB on the air.
-    check(near(micSliderToGainDb(200), 20.0), "over-range level clamps to +20 dB");
+    // verb can pass anything, and 200 must not become +120 dB on the air.
+    check(near(micSliderToGainDb(200), 40.0), "over-range level clamps to +40 dB");
     check(near(micSliderToGainDb(-50), -20.0), "under-range level clamps to -20 dB");
     check(near(micSliderToLinear(-50), 0.0), "negative level mutes");
 
