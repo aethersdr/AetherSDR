@@ -546,6 +546,21 @@ void RadioModel::flushPendingOperatingState()
     persistOperatingState(true);
 }
 
+bool RadioModel::backendDeclaresExtension(const QString& ns) const
+{
+    // extensionNamespaces is the backend's declaration of which verb families it
+    // answers, and IRadioBackend.h states the contract normatively: "Clients
+    // discover available namespaces via capabilities().extensionNamespaces."
+    //
+    // M0 (#5263) gave the field its first production readers in MainWindow's
+    // `sim` gate, so M1's "a declared handshake nobody reads" was already not
+    // quite literal. The precise claim it leaves true is the one this fixes: no
+    // invokeExtension PRE-CHECK read it — every one asked the family string
+    // instead, which is a subtly different question and excludes any future
+    // backend that answers the same verbs without carrying that family name.
+    return m_backend && m_backend->capabilities().extensionNamespaces.contains(ns);
+}
+
 void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
                                         quint64 requestId, const QVariant& arg)
 {
@@ -557,7 +572,15 @@ void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
 
 void RadioModel::setPcAudioEnabled(bool on)
 {
-    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+    // Gated on the DECLARED NAMESPACE, not on the family string (#5262 M1).
+    // The question this asks is "will this backend answer the icom namespace?",
+    // and extensionNamespaces is the handshake that states it — a backend
+    // pre-checks it before issuing invokeExtension(). Keying off family instead
+    // is the trap docs/architecture/radio-capabilities-map.md names: a gate that
+    // "looks identical to one that works" while asking a different question.
+    // It also silently excludes anything that speaks the icom verbs without
+    // being family "icom" — a gateway, or an Icom variant backend.
+    if (!backendDeclaresExtension(QStringLiteral("icom"))) {
         return;
     }
     m_backend->invokeExtension(QStringLiteral("icom"),
@@ -566,7 +589,8 @@ void RadioModel::setPcAudioEnabled(bool on)
 
 void RadioModel::notePcAudioEnabled(bool on)
 {
-    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+    // Same rule as setPcAudioEnabled above: the namespace is the contract.
+    if (!backendDeclaresExtension(QStringLiteral("icom"))) {
         return;
     }
     m_backend->invokeExtension(QStringLiteral("icom"),
@@ -4056,8 +4080,10 @@ void RadioModel::finishRadioWake(const QString& message, bool success)
 
 bool RadioModel::wakeIcomRadio(int modelId, int address, QString* error)
 {
-    if (m_radioWakeActive || m_family != QLatin1String("icom") || !isConnected()
-        || !m_backend || m_lastInfo.address.isNull()) {
+    // Namespace, not family (#5262 M1): this reaches for the icom `power.wake`
+    // verb, so the question is whether the backend answers that namespace.
+    if (m_radioWakeActive || !backendDeclaresExtension(QStringLiteral("icom"))
+        || !isConnected() || m_lastInfo.address.isNull()) {
         if (error) { *error = tr("Connect to the Icom network first, and finish any active wake."); }
         return false;
     }
