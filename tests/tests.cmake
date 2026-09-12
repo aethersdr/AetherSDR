@@ -1923,6 +1923,26 @@ target_include_directories(firmware_uploader_test PRIVATE src)
 target_link_libraries(firmware_uploader_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME firmware_uploader_test COMMAND firmware_uploader_test)
 
+# Local Qt dialog + injected uploader callbacks; no radio connection or peer.
+add_executable(firmware_close_dialog_test
+    tests/firmware_close_dialog_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(firmware_close_dialog_test PRIVATE src tests)
+target_link_libraries(firmware_close_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME firmware_close_dialog_test COMMAND firmware_close_dialog_test)
+set_tests_properties(firmware_close_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
     src/core/ZipArchive.cpp
@@ -4967,6 +4987,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    firmware_close_dialog_test
     atu_seam_gate_test
     backend_capability_revision_test
     tx_operation_integration_test

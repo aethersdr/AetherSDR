@@ -34,6 +34,9 @@ public:
 
     bool isUploading() const { return m_uploading; }
 
+    enum class Phase { Idle, Preparing, Transferring, AwaitingConfirmation };
+    Phase phase() const;
+
     // What a finished operation actually established. A drained local socket,
     // `transfer=1.00`, and a command-channel disconnect are all consistent with
     // a successful install and with a silent failure, so none of them may be

@@ -53,6 +53,7 @@ public:
                               LpMeterConnection* lpMeter = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
+    void done(int result) override;
     // Like selectTab("Serial & Controllers"), but also scrolls the page so
     // the FlexControl Tuning Knob group is actually in view instead of just
     // landing at the top of a long, scroll-wrapped page (#4940 follow-up —
@@ -106,6 +107,9 @@ protected:
     void showEvent(QShowEvent* event) override;
 
 private:
+    friend class RadioSetupDialogTestAccess;
+    bool confirmFirmwareClose();
+    bool m_firmwareClosePromptOpen{false};
     bool isFlexOnlyPage(const QTreeWidgetItem* item) const;
     bool isCapabilityPageAvailable(const QTreeWidgetItem* item) const;
     bool isGpsSetupAvailable() const;

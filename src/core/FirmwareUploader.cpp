@@ -74,12 +74,28 @@ void FirmwareUploader::upload(const QString& filePath)
     }
 }
 
+FirmwareUploader::Phase FirmwareUploader::phase() const
+{
+    if (!m_uploading) {
+        return Phase::Idle;
+    }
+    if (m_waitingForConfirmation) {
+        return Phase::AwaitingConfirmation;
+    }
+    return m_requiresFreshConnection ? Phase::Transferring : Phase::Preparing;
+}
+
 void FirmwareUploader::cancel()
 {
     if (!m_uploading) {
         return;
     }
-    finishOperation(m_generation, Outcome::Failed, tr("Firmware upload cancelled"));
+    finishOperation(m_generation,
+                    m_waitingForConfirmation ? Outcome::Unconfirmed : Outcome::Failed,
+                    m_waitingForConfirmation
+                        ? tr("Firmware bytes were sent; stopped waiting for radio confirmation. "
+                             "Installation remains unconfirmed. Reconnect to check the firmware version.")
+                        : tr("Firmware upload cancelled before the transfer completed"));
 }
 
 bool FirmwareUploader::beginOperation(const QByteArray& fileData, const QString& fileName)
