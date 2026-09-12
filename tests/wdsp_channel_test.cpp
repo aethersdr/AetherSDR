@@ -404,6 +404,170 @@ bool runNotchAttenuationTest()
                    "the notch frequency axis is inverted");
 }
 
+// A STOP IS NOT A CLOSE, and this is what says so in observable terms.
+//
+// Two things a close-and-reopen would have discarded, both readable from
+// outside the class:
+//
+//   * the notch database — WDSP keeps it inside the channel, so a close frees
+//     it and Hl2RxDsp::configure() has to replay every notch by hand;
+//   * the allocation sequence — every rebuild re-plans FFTW and re-allocates
+//     the buffers, which on this codebase is the expensive half of a connect.
+//
+// Across a stop/start neither moves. Across a reconfigure() — the close-and-
+// reopen this class still does for a rate change (HERMES §13 Tier 4) — both
+// do, and the second half of this test pins that contrast so the first half
+// cannot pass by accident on a channel that was never really stopped.
+bool runStartStopTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.mode = WdspChannel::Mode::Usb;
+    // Blocking, as runVector() does and for the same reason: nothing here
+    // paces the loop, so in the non-blocking form this thread outruns WDSP's
+    // worker and every block underruns — the "audio came back" half of the
+    // test would then pass vacuously against silence it caused itself.
+    //
+    // Safe across the stop, which is the part worth stating. fexchange2's wait
+    // sits behind WDSP's exchange bit: while the down-slew is still running
+    // the bit is set and the worker is still producing, so the wait is
+    // satisfied; once the ramp finishes the bit clears and fexchange2 returns
+    // without reaching the wait at all. A stopped channel never blocks here.
+    config.blockForOutput = true;
+
+    std::string error;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, error.c_str()) ||
+        !require(channel->isRunning(), "a freshly opened channel was not running")) {
+        return false;
+    }
+
+    const double tuneHz = 7'000'000.0;
+    if (!require(channel->setNotchTuneFrequency(tuneHz),
+                 "could not set the notch tune frequency")) {
+        return false;
+    }
+    for (int index = 0; index < 3; ++index) {
+        if (!require(channel->addNotch(index, tuneHz + 1000.0 * (index + 1),
+                                       400.0, true),
+                     "could not seed a notch before the stop")) {
+            return false;
+        }
+    }
+    if (!require(channel->notchCount() == 3, "the seeded notches did not land")) {
+        return false;
+    }
+
+    std::vector<float> inputI(config.inputBlockSize);
+    std::vector<float> inputQ(config.inputBlockSize);
+    std::vector<float> outputLeft(channel->outputBlockSize());
+    std::vector<float> outputRight(channel->outputBlockSize());
+
+    const auto clock = [&](std::size_t blocks, std::size_t offset) {
+        double energy = 0.0;
+        for (std::size_t block = 0; block < blocks; ++block) {
+            fillComplexTone(inputI, inputQ, config.inputSampleRate, 1000.0,
+                            (offset + block) * config.inputBlockSize);
+            const WdspChannel::ProcessResult result =
+                channel->processIq(inputI, inputQ, outputLeft, outputRight);
+            if (result == WdspChannel::ProcessResult::Ok) {
+                energy += rms(outputLeft) + rms(outputRight);
+            }
+        }
+        return energy;
+    };
+
+    if (!require(clock(64, 0) > 0.01, "the running channel produced no audio")) {
+        return false;
+    }
+
+    // ── Stop ──────────────────────────────────────────────────────────────
+    const uint64_t allocationsBeforeStop = WdspChannel::allocationSequenceForTest();
+    if (!require(channel->setRunning(false), "the channel refused to stop") ||
+        !require(!channel->isRunning(), "the channel still reported itself running")) {
+        return false;
+    }
+
+    // The ramp needs clocking to play out — that is the half of the contract
+    // SetChannelState cannot perform on its own. Once it has, the output must
+    // be SILENCE and not the last block before the stop held forever, which is
+    // what fexchange2 leaves behind when it stops writing the buffer at all.
+    clock(64, 64);
+    const double tailEnergy = clock(32, 128);
+    if (!require(tailEnergy == 0.0,
+                 "a stopped channel kept producing output — the buffer is stale, "
+                 "not silent")) {
+        return false;
+    }
+
+    // Everything a close would have thrown away is still here.
+    double center = 0.0;
+    double width = 0.0;
+    bool active = false;
+    if (!require(channel->notchCount() == 3,
+                 "stopping the channel destroyed the notch database") ||
+        !require(channel->notchAt(2, &center, &width, &active) &&
+                     std::abs(center - (tuneHz + 3000.0)) < 1.0,
+                 "a notch did not survive the stop intact")) {
+        return false;
+    }
+
+    // ── Start again ───────────────────────────────────────────────────────
+    if (!require(channel->setRunning(true), "the channel refused to start") ||
+        !require(channel->isRunning(), "the channel did not report itself running")) {
+        return false;
+    }
+    if (!require(WdspChannel::allocationSequenceForTest() == allocationsBeforeStop,
+                 "a stop/start allocated — it rebuilt the channel instead of "
+                 "changing its state")) {
+        return false;
+    }
+    if (!require(clock(128, 160) > 0.01,
+                 "the restarted channel produced no audio") ||
+        !require(channel->notchCount() == 3,
+                 "restarting the channel destroyed the notch database")) {
+        return false;
+    }
+
+    // Setting the state it is already in succeeds and does nothing.
+    if (!require(channel->setRunning(true), "a redundant start was refused") ||
+        !require(WdspChannel::allocationSequenceForTest() == allocationsBeforeStop,
+                 "a redundant start allocated")) {
+        return false;
+    }
+
+    // ── The contrast: reconfigure() IS a close-and-reopen ──────────────────
+    // Same config, so nothing about the channel's shape changes — and both
+    // observables move anyway, because the channel was destroyed and rebuilt.
+    if (!require(channel->reconfigure(config, &error), error.c_str()) ||
+        !require(WdspChannel::allocationSequenceForTest() > allocationsBeforeStop,
+                 "reconfigure() did not rebuild the channel") ||
+        !require(channel->notchCount() == 0,
+                 "reconfigure() kept the notch database — the contrast this "
+                 "test rests on no longer holds")) {
+        return false;
+    }
+
+    // And a rebuild restores the state it found rather than starting a stopped
+    // channel behind the caller's back.
+    if (!require(channel->setRunning(false), "the rebuilt channel refused to stop") ||
+        !require(channel->reconfigure(config, &error), error.c_str()) ||
+        !require(!channel->isRunning(),
+                 "reconfigure() put a stopped channel back on the air")) {
+        return false;
+    }
+    // Checked against the CHANNEL, not just the mirror: clock it and require
+    // silence, so a reconfigure() that quietly restarted WDSP while isRunning()
+    // still said "stopped" fails here rather than on the air.
+    clock(32, 320);
+    if (!require(clock(32, 352) == 0.0,
+                 "a channel stopped across reconfigure() still produced audio")) {
+        return false;
+    }
+    return true;
+}
+
 bool runLifecycleTest()
 {
     const uint64_t baseline = WdspChannel::outstandingAllocationsForTest();
@@ -457,6 +621,7 @@ int main()
         }) ||
         !runLeakChecked("underrun test", runUnderrunTest) ||
         !runLeakChecked("reconfiguration test", runReconfigurationTest) ||
+        !runLeakChecked("start/stop test", runStartStopTest) ||
         !runLeakChecked("notch index test", runNotchIndexTest) ||
         !runLeakChecked("notch attenuation test", runNotchAttenuationTest) ||
         !require(WdspChannel::outstandingAllocationsForTest() == allocationBaseline,

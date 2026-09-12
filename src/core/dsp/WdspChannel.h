@@ -143,7 +143,52 @@ public:
                             std::span<float> outputLeft,
                             std::span<float> outputRight) noexcept;
 
+    // ── Start and stop, which are NOT teardown ────────────────────────────
+    //
+    // The T/R call. Stopping runs the Config mute envelope DOWN, flushes the
+    // chain, and leaves everything the channel owns in place: the FFTW plans,
+    // the filter masks, the notch database, the AGC and shift state, the noise
+    // blanker stage. Starting runs the envelope back up. Nothing is allocated
+    // or freed either way, which is the whole point — `allocationSequenceForTest()`
+    // does not move across a stop/start, and does move across a reconfigure().
+    //
+    // CloseChannel is not this and must not be used as this. It frees the
+    // channel, so a "stop" written as a close throws all of the above away and
+    // pays a rebuild to get it back — on this codebase that rebuild is FFTW
+    // planning (see loadWisdomOnce() in the .cpp), which is the expensive half
+    // of a connect. Closing is teardown, and this class does it in exactly one
+    // place: close(), reached from the destructor and from reconfigure().
+    //
+    // DMODE, and why a running stop cannot use the blocking form. WDSP's stop
+    // sets a down-slew flag and a flush flag; both are cleared by the NEXT
+    // fexchange2 calls (iobuffs.c), so the drain runs on the thread that is
+    // feeding the channel, not inside SetChannelState. The blocking form
+    // (dmode 1) is therefore correct only once the feed has been fenced off,
+    // which is what close() does behind beginControlOperation(). Called with
+    // the feed still live — and worse, from the feeding thread itself — it
+    // waits out its entire 100 ms timeout, then force-clears the flags and
+    // abandons the ramp, which is the click it exists to prevent. This takes
+    // the non-blocking form and lets processIq() play the ramp out.
+    //
+    // While stopped, processIq() still runs (that is what advances the ramp)
+    // and returns silence at the caller's normal cadence: once WDSP's exchange
+    // bit clears, fexchange2 writes nothing at all, so this class zeroes the
+    // output itself rather than letting the last block before the stop repeat.
+    //
+    // Control-path work, guarded exactly like setMode(): returns false if a
+    // control operation is already in flight, and must not be called from
+    // processIq(). Setting the state it is already in is a no-op that succeeds.
+    bool setRunning(bool running) noexcept;
+    [[nodiscard]] bool isRunning() const noexcept
+    {
+        return m_running.load(std::memory_order_relaxed);
+    }
+
     // The caller must stop feeding processIq() before a control operation.
+    // Rebuilds the channel, and therefore DESTROYS what setRunning() preserves
+    // (the notch database most visibly — see addNotch()'s note). It does
+    // restore the running state it found, the way WDSP's own rebuilds do, so
+    // reconfiguring a stopped channel does not put it back on the air.
     bool reconfigure(const Config& config, std::string* error = nullptr) noexcept;
     bool setMode(Mode mode) noexcept;
     bool setFilter(double lowHz, double highHz) noexcept;
@@ -337,6 +382,11 @@ private:
     std::atomic<unsigned> m_callbacksInFlight {0};
     std::atomic<bool> m_controlOperation {false};
     bool m_open = false;
+    // WDSP's channel state, mirrored. Atomic because processIq() consults it on
+    // the real-time path to decide whether it owns the output buffer this
+    // block, the same way it consults m_nbActive — the control handshake
+    // already orders the write, this keeps the read from being a data race.
+    std::atomic<bool> m_running {false};
 
     // ── Noise blanker state ───────────────────────────────────────────────
     //
