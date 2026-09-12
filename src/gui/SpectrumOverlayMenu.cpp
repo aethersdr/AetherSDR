@@ -752,7 +752,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     // live and keeps moving -- it shows what the radio is running, and a gain
     // change hidden from the operator is its own defect.
     //
-    // Hidden until a backend claims RadioCapabilities::hasAutoRfGain, and
+    // Hidden until a backend offers an IAutoRfGainControl, and
     // unchecked until the operator or a restored setting says otherwise.
     m_autoRfGainCheck = new QCheckBox(QStringLiteral("Auto"));
     m_autoRfGainCheck->setObjectName(QStringLiteral("antennaAutoRfGainCheck"));

@@ -56,6 +56,7 @@
 #include <QElapsedTimer>
 
 namespace AetherSDR {
+class IAutoRfGainControl;
 
 inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabilities)
 {
@@ -407,20 +408,23 @@ public:
     // (RadioCapabilities::hasHostNoiseBlanker). Non-permissive on the same
     // reasoning as hasManualNotch(): it can only add the NB button.
     bool hasHostNoiseBlanker() const;
-    // Whether the connected backend drives its own receive RF gain
-    // (RadioCapabilities::hasAutoRfGain). Non-permissive on the same grounds:
-    // it only ever ADDS the Auto checkbox.
-    bool hasAutoRfGain() const;
-    // Arm/disarm that control. Goes through the seam rather than any wire text:
-    // a backend that owns its gain in a hardware register is the only thing
-    // that can own the loop driving it.
-    void setAutoRfGain(bool on);
-    // How deaf that control may make the receiver, in dB below the operator's
-    // own gain setting.
-    void setAutoRfGainFloorDb(int floorDb);
-    // Which control law that loop runs, by backend-defined name. The seam
-    // carries the string through unexamined; only the backend knows its laws.
-    bool setAutoRfGainMode(const QString& mode);
+    // The connected backend's own automatic receive-gain control, or nullptr
+    // when there is no radio or it has none. See AutoRfGainControl.h.
+    //
+    // ONE ACCESSOR RATHER THAN A FAMILY OF FORWARDERS. This class is shared
+    // infrastructure and docs/HERMES.md asks that family bring-up not grow it;
+    // an interface handle keeps the whole vocabulary of the control on the
+    // backend's side of the seam, so adding a law or a bound to some future
+    // family's loop does not touch this header at all. It also means the
+    // armed state is a TYPED read rather than a string key looked up in a
+    // health snapshot, which is what two callers were doing.
+    //
+    // NOT PERMISSIVE ON DISCONNECT, for the same reason hasHostNoiseBlanker()
+    // is not: it can only ever ADD a control, so answering with no backend
+    // attached would show an Auto checkbox on a family that never claims one.
+    //
+    // BORROWED, NEVER CACHED — the pointer dies with the backend.
+    IAutoRfGainControl* autoRfGain() const;
     // The filter widths the radio declares, narrowest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a

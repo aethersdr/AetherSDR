@@ -103,7 +103,7 @@ public:
     // whether the radio runs its own DSP (RadioCapabilities::hasRadioSideDsp).
     void setRadioSideDspAvailable(bool available);
     // Whether the connected backend drives its own receive RF gain
-    // (RadioCapabilities::hasAutoRfGain). False HIDES the Auto checkbox beside
+    // (IRadioBackend::autoRfGainControl). False HIDES the Auto checkbox beside
     // the RF Gain slider rather than disabling it: on a family with no such
     // loop it would be a control wired to nothing, which is the HERMES 17
     // failure the capability comments repeatedly warn against.

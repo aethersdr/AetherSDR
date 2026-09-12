@@ -1,4 +1,5 @@
 #include "core/DroopCalibration.h"
+#include "core/backends/AutoRfGainControl.h"
 #include "AutomationServer.h"
 #include "core/CtcssTones.h"
 #include "core/RadioCertification.h"
@@ -3364,7 +3365,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("pan", {},
             "pan <create|add|remove|close|center|rfgain|autorfgain|float|dock> [value] — "
             "float/dock drive PanadapterStack's real reparent path (#4864); "
-            "autorfgain takes on|off, 'mode <ramp|probe|binary>' for which "
+            "autorfgain takes on|off, 'mode <bandscope|ramp|probe|binary>' for which "
             "control law, or 'floor <dB>' for how far below the "
             "operator's own RF gain an automatic control may go",
             parseActionRest,
@@ -10719,7 +10720,8 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         // with it without a rebuild.
         if (raw.startsWith(QLatin1String("floor"), Qt::CaseInsensitive)) {
             const QStringList fp = raw.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-            if (!radio->hasAutoRfGain()) {
+            auto* ag = radio->autoRfGain();
+            if (!ag) {
                 return err(QStringLiteral(
                     "pan autorfgain: this radio has no automatic RF gain control"));
             }
@@ -10732,13 +10734,13 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
             const int floorDb = fp.at(1).toInt(&okF);
             if (!okF)
                 return err(QStringLiteral("pan autorfgain floor requires an integer dB"));
-            radio->setAutoRfGainFloorDb(floorDb);
+            ag->setFloorDb(floorDb);
             return QJsonObject{{QStringLiteral("ok"), true},
                                {QStringLiteral("pan"), QStringLiteral("autorfgain")},
                                {QStringLiteral("floorDb"), floorDb},
                                {QStringLiteral("requested"), true}};
         }
-        // `pan autorfgain mode <ramp|probe|binary>` -- WHICH CONTROL LAW.
+        // `pan autorfgain mode <bandscope|ramp|probe|binary>` -- WHICH CONTROL LAW.
         //
         // Here for the same reason `floor` is: the release condition on this
         // radio is an open question (#5535), the three laws are the same pure
@@ -10748,16 +10750,18 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         // an operator one.
         if (raw.startsWith(QLatin1String("mode"), Qt::CaseInsensitive)) {
             const QStringList mp = raw.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-            if (!radio->hasAutoRfGain()) {
+            auto* ag = radio->autoRfGain();
+            if (!ag) {
                 return err(QStringLiteral(
                     "pan autorfgain: this radio has no automatic RF gain control"));
             }
             if (mp.size() < 2) {
                 return err(QStringLiteral(
-                    "pan autorfgain mode requires a law name: ramp, probe or binary"));
+                    "pan autorfgain mode requires a law name; this radio has: "
+                    "%1").arg(ag->laws().join(QLatin1String(", "))));
             }
             const QString name = mp.at(1);
-            if (!radio->setAutoRfGainMode(name)) {
+            if (!ag->setLaw(name)) {
                 return err(QStringLiteral(
                                "pan autorfgain mode: this radio has no law called "
                                "\"%1\". Nothing was changed.").arg(name));
@@ -10773,7 +10777,7 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         if (v.isEmpty()) {
             return QJsonObject{{QStringLiteral("ok"), true},
                                {QStringLiteral("pan"), QStringLiteral("autorfgain")},
-                               {QStringLiteral("available"), radio->hasAutoRfGain()},
+                               {QStringLiteral("available"), radio->autoRfGain() != nullptr},
                                {QStringLiteral("requested"), false}};
         }
         const bool on = (v == QLatin1String("on") || v == QLatin1String("true")
@@ -10782,13 +10786,14 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                           || v == QLatin1String("0"));
         if (!on && !off)
             return err(QStringLiteral("pan autorfgain takes on|off, "
-                                      "mode <ramp|probe|binary>, floor <dB>, "
+                                      "mode <bandscope|ramp|probe|binary>, floor <dB>, "
                                       "or nothing to report"));
-        if (!radio->hasAutoRfGain()) {
+        auto* ag = radio->autoRfGain();
+        if (!ag) {
             return err(QStringLiteral(
                 "pan autorfgain: this radio has no automatic RF gain control"));
         }
-        radio->setAutoRfGain(on);
+        ag->setArmed(on);
         // DELIBERATELY NOT AN ECHO OF THE ARMED STATE. The backend may decline
         // to arm and log why; reporting "requested" rather than "on" keeps this
         // verb honest about the difference. Read `health` for what actually

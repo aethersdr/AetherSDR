@@ -4357,39 +4357,18 @@ bool RadioModel::hasManualNotch() const
     return backendCapabilities().hasManualNotch;
 }
 
-bool RadioModel::hasAutoRfGain() const
+AetherSDR::IAutoRfGainControl* RadioModel::autoRfGain() const
 {
     // NOT permissive, for the same reason hasHostNoiseBlanker() is not: this
-    // flag can only ADD the Auto checkbox, so answering true with no backend
-    // attached would show it on a family that never claims it.
+    // can only ADD the Auto checkbox, so answering with no backend attached
+    // would show it on a family that never claims one.
+    //
+    // The backend decides the rest. This function names no family and knows
+    // nothing about what a law is.
     if (!m_backend || !isConnected()) {
-        return false;
+        return nullptr;
     }
-    return backendCapabilities().hasAutoRfGain;
-}
-
-void RadioModel::setAutoRfGain(bool on)
-{
-    if (!m_backend) {
-        return;
-    }
-    m_backend->setAutoRfGain(on);
-}
-
-void RadioModel::setAutoRfGainFloorDb(int floorDb)
-{
-    if (!m_backend) {
-        return;
-    }
-    m_backend->setAutoRfGainFloorDb(floorDb);
-}
-
-bool RadioModel::setAutoRfGainMode(const QString& mode)
-{
-    if (!m_backend) {
-        return false;
-    }
-    return m_backend->setAutoRfGainMode(mode);
+    return m_backend->autoRfGainControl();
 }
 
 bool RadioModel::hasHostNoiseBlanker() const
