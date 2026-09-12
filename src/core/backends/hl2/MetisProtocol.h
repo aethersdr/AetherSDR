@@ -991,6 +991,108 @@ constexpr Ep4SeqStep ep4SeqStep(std::uint32_t expected, std::uint32_t got) noexc
         step.rewind = true;                            // backward jump = reset
     return step;
 }
+// ---- the duty-cycle gate's timing constants ----
+//
+// Every number here was MEASURED on a v74.2 board — bench runs d94
+// (`d94-ep4-bandscope-existence`) and d95 (`d95-procedure-b-ep6-cost`) — and
+// not derived from the RTL. They are grouped because the gate in MetisClient is
+// only correct to the extent that they are, and each one carries the receiver
+// count it was measured at, because one of them turned out to depend on it.
+
+// EP4 packet rate at ONE RECEIVER: 380.951, 380.955, 380.952 and 380.955
+// packets/s at 48, 96, 192 and 384 kHz — flat to 3 ppm across an eightfold
+// sample-rate change, because the capture is clocked by `bs_cnt` off the
+// 76.8 MHz converter clock and not by the DDC.
+//
+// FLAT IN SAMPLE RATE IS NOT FLAT IN RECEIVER COUNT, and d95 measured the
+// difference: 320.0 packets/s at THREE receivers, exact to the datagram in
+// three separate 120 s legs, against 380.69 at one. `usopenhpsdr1.v`'s START
+// arbitration tests EP6 readiness BEFORE the bandscope in the same if/else-if
+// chain, so more receivers means fewer slots left for it.
+//
+// Nothing between or beyond one and three receivers has been measured.
+inline constexpr double kEp4PacketsPerSecond1Rx = 380.95238095238096;
+inline constexpr double kEp4PacketsPerSecond3Rx = 320.0;
+
+// 10.5 ms at one receiver — the interval between BLOCKS, not between the
+// packets of one. A block's four packets arrive ~2.62 ms apart, spanning
+// 7.87 ms; the next block begins 10.5 ms after the previous one did.
+inline constexpr double kEp4BlockIntervalMs =
+    1000.0 * kEp4PacketsPerBlock / kEp4PacketsPerSecond1Rx;
+// 12.5 ms, the SLOWEST cadence the radio has been seen to produce. The guard
+// below uses this one and not the configuration's own, because a deadline has
+// to assume the slowest behaviour that has actually been observed, and the
+// rate at two receivers — and at four, five and six — is not known.
+inline constexpr double kEp4BlockIntervalSlowestMs =
+    1000.0 * kEp4PacketsPerBlock / kEp4PacketsPerSecond3Rx;
+
+// The EP6 packet interval, which is what the arming delay is really measured in.
+constexpr double ep6PacketIntervalMs(int sampleRateHz, int numRx) noexcept
+{
+    const double pps = ep6PacketsPerSecond(sampleRateHz, numRx);
+    return pps > 0.0 ? 1000.0 / pps : 0.0;
+}
+
+// EP6 packets between a `run` transition (0x00 -> 0x03) and the first EP4
+// datagram. MEASURED AT 129, at BOTH 48 kHz and 384 kHz — 0.3297 s and
+// 0.0418 s, the same 129 packets. That is the signature of a counter clocked by
+// the stream and not of any timer, and it is why the guard below cannot be
+// expressed in milliseconds alone.
+//
+// 160 is 129 plus a 24 % margin.
+inline constexpr int kEp4ArmingEp6Packets = 160;
+
+// Constexpr ceiling, because std::ceil is not constexpr before C++23 and this
+// figure has to be available to a static_assert.
+constexpr int ep4CeilToInt(double v) noexcept
+{
+    const int t = static_cast<int>(v);
+    return (v > static_cast<double>(t)) ? t + 1 : t;
+}
+
+// How long the gate may wait for a complete bandscope block before giving up.
+//
+// THE MAX IS NOT DEFENSIVE — both terms are reachable and each is wrong alone.
+//
+//   * 10 x the slowest block interval (125 ms) covers a MID-STREAM enable,
+//     where `run` never drops and the first EP4 arrives in 2.41-2.61 ms,
+//     measured four times out of four. What follows it is a flushed block and a
+//     captured one: two block intervals, so ten is a fivefold margin.
+//   * 160 EP6 packet intervals covers the OTHER path into arming — a run-byte
+//     transition through 0x00, which is what setReceiverCount()'s stop/start
+//     does. There the first EP4 is 129 EP6 packets away, which is 0.339 s at
+//     48 kHz and 0.042 s at 384 kHz.
+//
+// A guard fixed at ten block intervals therefore times out ALWAYS at 48 kHz and
+// NEVER at 384 kHz: a spurious failure whose presence depends on the operator's
+// sample rate. Taking the max costs nothing where the stream did not restart.
+//
+// TWO THINGS THIS RESTS ON THAT NOBODY HAS MEASURED, both at receiver counts
+// above one, and both costing at worst one bandscopeTimeouts increment and a
+// retry on the next sampling period — never a wedged gate:
+//
+//   * whether the 129-packet arming delay is clocked by EP6 PACKETS or by EP6
+//     SAMPLES. At one receiver the two are proportional and d94 could not tell
+//     them apart. If it is samples, then at 3 RX / 48 kHz the delay is 0.339 s
+//     against a 167 ms guard, and the FIRST cycle after a receiver-count change
+//     would be abandoned. Every other measured combination is covered either
+//     way.
+//   * the EP4 rate at two, and at four or more, receivers. The block term uses
+//     the slowest of the two counts that were measured.
+constexpr int bandscopeGuardMs(int sampleRateHz, int numRx) noexcept
+{
+    const double byBlock  = 10.0 * kEp4BlockIntervalSlowestMs;
+    const double byPacket = kEp4ArmingEp6Packets * ep6PacketIntervalMs(sampleRateHz, numRx);
+    return ep4CeilToInt(byBlock > byPacket ? byBlock : byPacket);
+}
+
+// The two cases that made the max necessary, pinned where they cannot drift
+// from the constants above.
+static_assert(bandscopeGuardMs(48000, 1) == 420,
+              "48 kHz / 1 RX must clear the measured 129-packet (0.339 s) arming delay");
+static_assert(bandscopeGuardMs(384000, 1) == 125,
+              "384 kHz / 1 RX falls back to the block-interval term");
+
 // dBFS of half a code — 20*log10(1 / (2*kEp4FullScale)). A block of all-zero
 // codes has no representable level at all; the true answer is -inf, which no
 // readout can render and no arithmetic downstream survives. This floor says
