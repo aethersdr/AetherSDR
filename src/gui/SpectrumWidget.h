@@ -227,6 +227,9 @@ public:
     void showTxFilterNotification(const QString& title,
                                   const QString& detail,
                                   int durationMs);
+    void showAtuNotification(const QString& title,
+                             const QString& detail,
+                             int durationMs = 5000);
     void showInterlockNotification(const QString& message,
                                    const QString& key = QString(),
                                    int durationMs = 5000);
