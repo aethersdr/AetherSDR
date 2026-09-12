@@ -798,9 +798,29 @@ private:
     quint64 m_ep4Packets = 0;
     quint64 m_ep4Drops = 0;
     quint64 m_ep4Rewinds = 0;
-    // The last bandscope state requested of MetisClient, mirrored so
+    quint64 m_ep4Blocks = 0;
+    quint64 m_ep4Timeouts = 0;
+    // The last bandscope GATE state requested of MetisClient, mirrored so
     // healthSnapshot() need not reach across the I/O thread to read it.
     bool m_bandscopeEnabled = false;
+    // THE MOST RECENT ACCEPTED BANDSCOPE BLOCK, mirrored onto this thread from
+    // MetisClient::bandscopeBlockReady for exactly the reason m_drops is: that
+    // object lives on the I/O thread and healthSnapshot() is read from the GUI
+    // thread.
+    //
+    // DISPLAY ONLY. IRadioBackend.h's own rule for the rows this feeds —
+    // "Purely for display — nothing in the app makes a decision from it" —
+    // binds here and is the reason there is no accessor for it beyond the
+    // health rows. The levels are UNCALIBRATED and PRE-DDC: on the AD9866's own
+    // scale, commensurable with the gateware's clip flag and with nothing else.
+    // No antenna-referred comparison has ever been run.
+    //
+    // `samples == 0` means no block has been seen, which is what keeps the rows
+    // ABSENT rather than reading a fabricated zero — HealthSnapshot's
+    // "absent means not reported" contract.
+    AetherSDR::hl2::Ep4Stats m_bandscopeBlock;
+    // When that block arrived. Invalid until the first one does.
+    QElapsedTimer m_bandscopeBlockClock;
     // Transport counters, mirrored onto THIS thread from
     // MetisClient::linkCountersUpdated for the same reason m_drops is.
     //

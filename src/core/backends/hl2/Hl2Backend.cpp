@@ -453,6 +453,12 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_ep4Packets = 0;
         m_ep4Drops = 0;
         m_ep4Rewinds = 0;
+        m_ep4Blocks = 0;
+        m_ep4Timeouts = 0;
+        // Back to "never seen", which is what makes the level rows go ABSENT
+        // again rather than keep showing the previous radio's last reading.
+        m_bandscopeBlock = AetherSDR::hl2::Ep4Stats{};
+        m_bandscopeBlockClock.invalidate();
         m_linkStatsTimer->start();
         emit connected();
         // Publish initial slice/pan state AFTER connected(), not in connectRadio():
@@ -656,6 +662,22 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_ep4Packets = c.ep4Packets;
         m_ep4Drops = c.ep4Drops;
         m_ep4Rewinds = c.ep4Rewinds;
+        m_ep4Blocks = c.bandscopeBlocks;
+        m_ep4Timeouts = c.bandscopeTimeouts;
+    });
+
+    // ONE ACCEPTED BANDSCOPE BLOCK, mirrored onto the GUI thread. The same
+    // pattern as m_drops and m_link above and for the same reason: MetisClient
+    // lives on the hl2-io thread.
+    //
+    // It arrives about once a second — the gate's duty cycle, not the packet
+    // rate — so it needs no throttle of its own, and it drives NOTHING. There
+    // is no consumer but healthSnapshot()'s rows, which IRadioBackend.h binds
+    // to display.
+    connect(m_metis, &MetisClient::bandscopeBlockReady, this,
+            [this](const AetherSDR::hl2::Ep4Stats& block) {
+        m_bandscopeBlock = block;
+        m_bandscopeBlockClock.restart();
     });
 
     m_linkStatsTimer = new QTimer(this);
@@ -4370,10 +4392,14 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             return;
         }
         // The wideband bandscope (endpoint 0x04). NO UI AND NO SETTING, on
-        // purpose: it is a diagnostic that streams ~3.3 Mbit/s continuously
-        // while it runs, there is no duty-cycle gate yet, and nothing in the app
-        // reads a sample out of it. An operator who wants it asks for it here,
-        // once, and it is off again at the next connect.
+        // purpose: it is a diagnostic, nothing in the app makes a decision from
+        // it, and it is off again at the next connect. An operator who wants it
+        // asks for it here, once.
+        //
+        // What this starts is MetisClient's DUTY-CYCLE GATE, not the stream:
+        // one 2048-sample block per sampling period, 16 datagrams a second,
+        // 0.14 Mbit/s. Ungated the same stream is ~3.3 Mbit/s, about as much
+        // again as the IQ at 1 RX / 48 kHz.
         //
         // Completes locally, like freqcal.set above and for the same reason:
         // the run byte is fire-and-forget, nothing in Protocol 1 reads it back,
@@ -4957,6 +4983,58 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // that is supposed to read zero, a second one would be invisible.
     put("ep4Rewinds", QStringLiteral("EP4 sequence rewinds"),
         static_cast<qulonglong>(m_ep4Rewinds));
+    // The gate's own health. Blocks ACCEPTED is not ep4Packets/4: most of what
+    // arrives is armed, flushed or trailing, and none of that becomes a
+    // reading. Timeouts should read zero — the guard is sized from the measured
+    // arming delay in the gateware's own units (bandscopeGuardMs), so a
+    // non-zero value means the radio stopped answering the run byte.
+    put("bandscopeBlocks", QStringLiteral("Bandscope blocks accepted"),
+        static_cast<qulonglong>(m_ep4Blocks));
+    put("bandscopeTimeouts", QStringLiteral("Bandscope block timeouts"),
+        static_cast<qulonglong>(m_ep4Timeouts));
+
+    // ---- the headroom rows ----
+    //
+    // ABSENT UNTIL A BLOCK HAS ARRIVED, which is HealthSnapshot's "absent means
+    // not reported" contract doing the work no default value could: there is no
+    // number that honestly stands for "the converter's level has never been
+    // looked at", and 0.00 dBFS in particular would read as a hard clip.
+    //
+    // LABELLED UNCALIBRATED, PRE-DDC, and the label is the point. These come
+    // off the AD9866 before the DDC, the decimation and the NCO, on the
+    // converter's own scale. They are commensurable with the gateware's clip
+    // and good-level flags — the same rx_data register feeds both — and with
+    // NOTHING ELSE: not the S-meter, not the WDSP ADC peak, not any
+    // antenna-referred level. The comparison that would change that is the
+    // study's Procedure C; it needs a live antenna and it has not been run.
+    //
+    // And per IRadioBackend.h: "Purely for display — nothing in the app makes a
+    // decision from it." Nothing reads these rows back.
+    if (m_bandscopeBlock.samples > 0) {
+        const double peak = m_bandscopeBlock.peakDbfs();
+        const double rms  = m_bandscopeBlock.rmsDbfs();
+        put("adcPeakDbfs", QStringLiteral("ADC peak (uncalibrated pre-DDC dBFS)"),
+            QString::number(peak, 'f', 2));
+        put("adcRmsDbfs", QStringLiteral("ADC RMS (uncalibrated pre-DDC dBFS)"),
+            QString::number(rms, 'f', 2));
+        // Peak-to-RMS, which is the one figure here that IS scale-free: it
+        // survives the missing calibration intact, because both terms carry the
+        // same unknown offset and it cancels.
+        put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"),
+            QString::number(peak - rms, 'f', 2));
+        // Counted with ad9866.v's OWN two thresholds — rxclipp at +2047 and
+        // rxclipn at -2048 — and not a symmetric |code| >= 2048, which can
+        // never fire on a positive clip because +2048 is not a code a 12-bit
+        // two's-complement converter can produce.
+        put("adcClippedPerBlock", QStringLiteral("ADC samples at the rail (per 2048)"),
+            static_cast<qulonglong>(m_bandscopeBlock.clippedSamples));
+        // How old the reading is. A gated sensor's number is a snapshot, and a
+        // snapshot with no age on it invites being read as current.
+        put("adcObservedAgoMs", QStringLiteral("ADC level observed (ms ago)"),
+            static_cast<qulonglong>(m_bandscopeBlockClock.isValid()
+                                        ? m_bandscopeBlockClock.elapsed()
+                                        : 0));
+    }
     return h;
 }
 
