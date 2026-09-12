@@ -1330,5 +1330,11 @@
   "note": "Capability-gated client for the ANAN calibration extension. Uses only IRadioBackend requests and replies; concrete calibration ownership, rate control and DSP stay below the backend seam.",
   "split": "Client protocol adapter only; no vendor implementation dependency.",
   "confidence": "high"
+ },
+ "models/AprsDigipeaterModel.h": {
+  "tag": "universal",
+  "note": "Session-local APRS fill-in policy and bounded modem queue; no backend-specific commands or transport ownership.",
+  "split": "",
+  "confidence": "high"
  }
 }

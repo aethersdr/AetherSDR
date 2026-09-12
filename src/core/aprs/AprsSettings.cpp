@@ -134,4 +134,131 @@ void AprsSettings::setManualPosition(const QString& lat, const QString& lon)
     write(o);
 }
 
+namespace {
+
+QString truthy(bool on)
+{
+    return on ? QStringLiteral("True") : QStringLiteral("False");
+}
+
+bool readFlag(const QJsonObject& o, const char* key, bool def = false)
+{
+    const QString v = o.value(QLatin1String(key))
+                          .toString(def ? QStringLiteral("True")
+                                        : QStringLiteral("False"));
+    return v == QLatin1String("True");
+}
+
+} // namespace
+
+QString AprsSettings::digiCall()
+{
+    return readObj().value(QStringLiteral("digiCall")).toString();
+}
+
+QString AprsSettings::digiAlias()
+{
+    const QString a = readObj().value(QStringLiteral("digiAlias")).toString();
+    return a.isEmpty() ? QStringLiteral("WIDE1-1") : a;
+}
+
+bool AprsSettings::digiAlsoMyCall()
+{
+    return readFlag(readObj(), "digiAlsoMyCall", true);
+}
+
+bool AprsSettings::digiAlsoRelay()
+{
+    return readFlag(readObj(), "digiAlsoRelay");
+}
+
+int AprsSettings::digiDupeWindowSecs()
+{
+    const int s = readObj().value(QStringLiteral("digiDupeSecs"))
+                      .toString(QStringLiteral("30")).toInt();
+    return qBound(5, s > 0 ? s : 30, 300);
+}
+
+bool AprsSettings::digiBeaconEnabled()
+{
+    return readFlag(readObj(), "digiBeaconEnabled");
+}
+
+int AprsSettings::digiBeaconIntervalMinutes()
+{
+    const int m = readObj().value(QStringLiteral("digiBeaconIntervalMin"))
+                      .toString(QStringLiteral("15")).toInt();
+    return qBound(1, m > 0 ? m : 15, 24 * 60);
+}
+
+QString AprsSettings::digiBeaconText()
+{
+    return readObj().value(QStringLiteral("digiBeaconText"))
+        .toString(QStringLiteral("AetherDigi online (AX.25)"));
+}
+
+QString AprsSettings::digiBeaconPath()
+{
+    return readObj().value(QStringLiteral("digiBeaconPath"))
+        .toString(QStringLiteral("WIDE2-1"));
+}
+
+QString AprsSettings::digiBeaconSymbol()
+{
+    const QString sym = readObj().value(QStringLiteral("digiBeaconSymbol")).toString();
+    return sym.size() == 2 ? sym : QStringLiteral("\\#");
+}
+
+void AprsSettings::setDigiCall(const QString& call)
+{
+    setString("digiCall", call.trimmed().toUpper());
+}
+
+void AprsSettings::setDigiAlias(const QString& alias)
+{
+    setString("digiAlias", alias.trimmed().toUpper());
+}
+
+void AprsSettings::setDigiAlsoMyCall(bool on)
+{
+    setString("digiAlsoMyCall", truthy(on));
+}
+
+void AprsSettings::setDigiAlsoRelay(bool on)
+{
+    setString("digiAlsoRelay", truthy(on));
+}
+
+void AprsSettings::setDigiDupeWindowSecs(int secs)
+{
+    setString("digiDupeSecs", QString::number(qBound(5, secs, 300)));
+}
+
+void AprsSettings::setDigiBeaconEnabled(bool on)
+{
+    setString("digiBeaconEnabled", truthy(on));
+}
+
+void AprsSettings::setDigiBeaconIntervalMinutes(int minutes)
+{
+    setString("digiBeaconIntervalMin",
+              QString::number(qBound(1, minutes, 24 * 60)));
+}
+
+void AprsSettings::setDigiBeaconText(const QString& text)
+{
+    setString("digiBeaconText", text.trimmed());
+}
+
+void AprsSettings::setDigiBeaconPath(const QString& path)
+{
+    setString("digiBeaconPath", path.trimmed().toUpper());
+}
+
+void AprsSettings::setDigiBeaconSymbol(const QString& tableAndCode)
+{
+    setString("digiBeaconSymbol",
+              tableAndCode.size() == 2 ? tableAndCode : QStringLiteral("\\#"));
+}
+
 } // namespace AetherSDR

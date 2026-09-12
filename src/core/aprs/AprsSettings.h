@@ -23,6 +23,18 @@ public:
     static QString manualLat();          // decimal degrees as text, "" unset
     static QString manualLon();
 
+    // Fill-in digipeater (Digi tab). Nested in the same AetherModemAprs blob.
+    static QString digiCall();           // empty → fall back to myCall()
+    static QString digiAlias();          // "WIDE1-1"
+    static bool digiAlsoMyCall();
+    static bool digiAlsoRelay();
+    static int digiDupeWindowSecs();
+    static bool digiBeaconEnabled();
+    static int digiBeaconIntervalMinutes();
+    static QString digiBeaconText();
+    static QString digiBeaconPath();
+    static QString digiBeaconSymbol();   // two chars, default "\\#"
+
     static void setMyCall(const QString& call);
     static void setModemAutostart(bool on);
     static void setBeaconEnabled(bool on);
@@ -31,6 +43,17 @@ public:
     static void setSymbol(const QString& tableAndCode);
     static void setPath(const QString& path);
     static void setManualPosition(const QString& lat, const QString& lon);
+
+    static void setDigiCall(const QString& call);
+    static void setDigiAlias(const QString& alias);
+    static void setDigiAlsoMyCall(bool on);
+    static void setDigiAlsoRelay(bool on);
+    static void setDigiDupeWindowSecs(int secs);
+    static void setDigiBeaconEnabled(bool on);
+    static void setDigiBeaconIntervalMinutes(int minutes);
+    static void setDigiBeaconText(const QString& text);
+    static void setDigiBeaconPath(const QString& path);
+    static void setDigiBeaconSymbol(const QString& tableAndCode);
 
 private:
     static QJsonObject readObj();
