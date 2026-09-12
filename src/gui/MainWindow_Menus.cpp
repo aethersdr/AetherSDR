@@ -42,6 +42,7 @@
 #include "ProfileManagerDialog.h"
 #include "SettingsBrowserDialog.h"
 #include "ThemeEditorDialog.h"
+#include "BandscopeDialog.h"
 #include "TxBandDialog.h"
 #include "TxApplet.h"
 #include "UlanziDialMapperDialog.h"
@@ -1119,6 +1120,31 @@ void MainWindow::buildMenuBar()
     pskMapAction->setMenuRole(QAction::NoRole);
     connect(pskMapAction, &QAction::triggered,
             this, &MainWindow::showPskReporterMapDialog);
+
+    // The wideband converter view — docs/HERMES.md §13 item 18. ADDITIVE: a new
+    // entry that opens a new window. Nothing existing changes behaviour, and no
+    // other entry in this menu is touched.
+    //
+    // GATED ON THE CAPABILITY AND NOT ON A FAMILY. The action starts disabled
+    // and follows RadioCapabilities::widebandConverterView, which today exactly
+    // one backend engages. Disabled rather than hidden, and rather than the
+    // permissive-on-disconnect convention the other capability gates use: this
+    // is not a control a connected radio might be shy about reporting — with no
+    // radio there is no converter to look at, so an enabled entry would open a
+    // window that could only say so.
+    auto* bandscopeAct = viewMenu->addAction("Wideband Bandscope...");
+    bandscopeAct->setMenuRole(QAction::NoRole);
+    bandscopeAct->setToolTip(
+        "The radio's converter, before tuning and filtering");
+    bandscopeAct->setEnabled(false);
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, bandscopeAct,
+            [bandscopeAct](bool connected, const RadioCapabilities& caps) {
+        bandscopeAct->setEnabled(connected
+                                 && caps.widebandConverterView.has_value());
+    });
+    connect(bandscopeAct, &QAction::triggered, this, [this] {
+        showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
+    });
 
     auto* callsignLookupAct = viewMenu->addAction("Callsign Lookup...");
     callsignLookupAct->setMenuRole(QAction::NoRole);
