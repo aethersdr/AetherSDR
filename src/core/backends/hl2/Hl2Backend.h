@@ -261,9 +261,10 @@ private:
     // Shared by setTxPower() and setTune() so the mapping exists exactly once.
     void applyDrive(int percent);
     static double temperatureCelsius(int raw);
-    // Uncalibrated directional-coupler counts -> watts. See the table in the
-    // .cpp for what this curve is and, more importantly, what it is not.
-    static double directionalWatts(int raw);
+    // Uncalibrated directional-coupler counts -> watts now lives beside the
+    // curve itself, as AetherSDR::hl2::directionalWatts() in MetisProtocol —
+    // swrFromRaw() needs the same table and this layer already depends on that
+    // one. Call sites here resolve it unqualified from the enclosing namespace.
     // Watts -> dBm for the meter seam, floored so 0 W does not become -inf.
     static double wattsToDbm(double watts);
 

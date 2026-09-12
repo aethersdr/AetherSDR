@@ -2184,7 +2184,35 @@ replaces the table and nothing else.
 
 SWR remains the one directional quantity that is meaningful without
 calibration — it is a ratio from the same converter, so the unknown scale
-cancels.
+cancels. **The unknown scale cancels; the detector's CURVE does not.** A ratio
+of raw counts is scale-invariant, not curve-invariant, and the detector is a
+diode with a knee: `k = counts / sqrt(watts)` from the table above runs 512 at
+26 counts to a flat ~1516 above ~1200. The reverse channel always sits further
+down that knee than the forward one, so a raw-count ratio always reads
+*optimistically low* — at 265 forward counts a true 2.0:1 displayed 1.44
+(#4578). `swrFromRaw()` therefore maps both counts through `detectorVolts()`,
+the inverse of this same curve, before taking the ratio. Above the knee that
+converges to what the raw ratio already gave, so it is a low-end correction.
+
+Linearizing does **not** rescue the bottom. Two counts one LSB apart are two
+nearly-equal numbers on either side of the curve and the ratio still runs away —
+harder, if anything, because the knee's slope amplifies the reverse channel down
+there. That is what `kMinForwardCountsForSwr` is for, and it was re-derived at
+the same time: 16 counts admitted a live reading of SWR 256.00 on an antenna a
+RigExpert AA-170 measured at 1.50. The constant's own comment carries the
+criterion and the sweep.
+
+The two halves rest on different evidence, and the difference matters. The
+**linearization** is derived from the reference curve and has **not** been
+measured on any radio — it inherits every caveat the curve carries. The
+**gate** was measured: bench run D89 read `fwd_pwr` and `rev_pwr` out of a
+Hermes-Lite 2's response registers into a dummy load and found the reverse
+channel carries a fixed ~3.41-count offset with no reflected power plus 2.73
+counts of sd with RF, against the one count the original derivation assumed.
+The channels are independent, so that noise does not cancel in the ratio.
+Re-running the same criterion against the measured distributions gives **320**,
+not 96. That is one radio, and the offset is a per-unit diode property — what
+generalises is that it is not zero, not its value.
 
 ### 17.6 Meter pacing
 
