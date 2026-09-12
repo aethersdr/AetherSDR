@@ -3943,6 +3943,16 @@ add_test(NAME hl2_ep4_ingest_test COMMAND hl2_ep4_ingest_test)
 # enable/disable cycles go in through the same MetisClientTestAccess seam and
 # both timers are fired by hand. Qt6::Test is for QSignalSpy, which is how
 # "one block per arming cycle, never one per packet" is asserted.
+# The one contract BandscopeDialog borrows from ClientEqFftAnalyzer: reset()
+# followed by update() reports the transform unsmoothed. Same shape as the
+# parser targets above — compiles the analyzer directly, no Qt, no aethercore,
+# no widget, no radio.
+add_executable(bandscope_analyzer_test
+    tests/bandscope_analyzer_test.cpp
+    src/gui/ClientEqFftAnalyzer.cpp)
+target_include_directories(bandscope_analyzer_test PRIVATE src)
+add_test(NAME bandscope_analyzer_test COMMAND bandscope_analyzer_test)
+
 # The wideband converter view capability, and the verb its record names.
 # Socket-free: constructs an Hl2Backend, never connects it, and asserts that
 # the advertised verb reaches the branch that implements it rather than the
