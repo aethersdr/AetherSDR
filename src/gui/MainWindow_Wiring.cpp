@@ -5777,10 +5777,16 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 sl->setRecordOn(on);
         }
     });
-    // Client-side recording stopped by idle timeout → update VFO button
-    connect(m_qsoRecorder, &QsoRecorder::recordingStopped, w, [w]() {
+    // A stopped recording may have failed to write/finalize; only enable
+    // playback when the recorder has a successfully finalized file.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStopped, w, [this, w]() {
         w->setRecordOn(false);
-        w->setPlayEnabled(true);
+        w->setPlayEnabled(m_qsoRecorder->hasLastRecording());
+    });
+    connect(m_qsoRecorder, &QsoRecorder::recordingError, w, [this, w]() {
+        // Initial-header failures never emit recordingStopped.
+        w->setRecordOn(m_qsoRecorder->isRecording());
+        w->setPlayEnabled(m_qsoRecorder->hasLastRecording());
     });
     // Client-side playback
     connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {

@@ -60,7 +60,7 @@ QsoRecorder::~QsoRecorder()
     // stay SILENT: this runs during teardown, and the zero-capture diagnostic
     // below is wired to a modal dialog. Popping one while the window is being
     // destroyed is both useless and a good way to hang a quit.
-    if (m_recording)
+    if (m_recording || m_writeFailurePending)
         finalizeFile(FinalizeReport::Silent);
 }
 
@@ -123,7 +123,13 @@ void QsoRecorder::startRecording()
 
 void QsoRecorder::beginRecording(StartTrigger trigger)
 {
-    if (m_recording) return;
+    // A feed-side failure stops accepting audio immediately, but its owner-
+    // thread finalization is deliberately queued so the audio thread never
+    // seeks, flushes, closes, or emits. Do not let a new run reuse m_file
+    // before that finalization has retired it.
+    if (m_recording || m_writeFailurePending) {
+        return;
+    }
 
     // Refuse before touching the filesystem (#4629). Creating the file first
     // and discovering the silence later is precisely the failure being fixed:
@@ -163,7 +169,9 @@ void QsoRecorder::beginRecording(StartTrigger trigger)
 
 void QsoRecorder::stopRecording()
 {
-    if (!m_recording) return;
+    if (!m_recording && !m_writeFailurePending) {
+        return;
+    }
     m_idleTimer->stop();
     finalizeFile();
 }
@@ -202,8 +210,18 @@ void QsoRecorder::feedRxAudio(const QByteArray& pcm)
         || m_transmitting.load(std::memory_order_acquire)
         || m_cwOverActive.load(std::memory_order_acquire)) return;
     QByteArray converted = float32ToInt16(pcm);
-    m_file->write(converted);
-    m_dataBytes += static_cast<quint32>(converted.size());
+    if (converted.isEmpty()) {
+        return;
+    }
+    const qint64 requested = converted.size();
+    const qint64 written = writeFile(converted.constData(), requested);
+    const qint64 accepted = std::clamp(written, qint64{0}, requested);
+    m_dataBytes += static_cast<quint32>(accepted);
+    if (accepted != requested) {
+        const QString deviceError = m_file->errorString();
+        queueWriteFailure(QStringLiteral("RX audio write failed")
+                          + (deviceError.isEmpty() ? QString{} : QStringLiteral(": ") + deviceError));
+    }
 }
 
 void QsoRecorder::feedTxAudio(const QByteArray& int16Stereo)
@@ -227,8 +245,18 @@ void QsoRecorder::feedTxAudio(const QByteArray& int16Stereo)
              || m_cwOverActive.load(std::memory_order_acquire))) return;
     // The post-limiter TX monitor is already 24 kHz stereo int16 — the WAV's
     // native format — so write it directly, no float32 conversion (#3556).
-    m_file->write(int16Stereo);
-    m_dataBytes += static_cast<quint32>(int16Stereo.size());
+    if (int16Stereo.isEmpty()) {
+        return;
+    }
+    const qint64 requested = int16Stereo.size();
+    const qint64 written = writeFile(int16Stereo.constData(), requested);
+    const qint64 accepted = std::clamp(written, qint64{0}, requested);
+    m_dataBytes += static_cast<quint32>(accepted);
+    if (accepted != requested) {
+        const QString deviceError = m_file->errorString();
+        queueWriteFailure(QStringLiteral("TX audio write failed")
+                          + (deviceError.isEmpty() ? QString{} : QStringLiteral(": ") + deviceError));
+    }
 }
 
 // ── TX state tracking ───────────────────────────────────────────────────────
@@ -323,7 +351,21 @@ void QsoRecorder::startFile()
         return;
     }
 
-    writeWavHeader();
+    if (!writeWavHeader()) {
+        const QString error = QStringLiteral("Cannot initialize recording file: ")
+                              + m_file->errorString();
+        {
+            std::lock_guard<std::mutex> lock(m_writeMutex);
+            m_file->close();
+            m_file->deleteLater();
+            m_file = nullptr;
+            m_lastRecordingPath.clear();
+        }
+        emit recordingError(error);
+        return;
+    }
+
+    m_recordingGeneration.fetch_add(1, std::memory_order_acq_rel);
     m_recording = true;
 
     qCInfo(lcAudio) << "QsoRecorder: started recording to" << filePath;
@@ -332,27 +374,57 @@ void QsoRecorder::startFile()
 
 void QsoRecorder::finalizeFile(FinalizeReport report)
 {
+    bool writeFailed = false;
+    bool finalized = false;
+    QString writeFailure;
+    QString finalizeError;
+    QString filePath;
+    int durationSecs = 0;
+    quint32 dataBytes = 0;
     {
         std::lock_guard<std::mutex> lock(m_writeMutex);
         m_recording = false;
+        writeFailed = m_writeFailurePending.exchange(false, std::memory_order_acq_rel);
+        writeFailure = m_pendingWriteError;
+        m_pendingWriteError.clear();
+        if (!m_file) {
+            return;
+        }
+
+        finalized = patchWavHeader();
+        finalizeError = m_file->errorString();
+        filePath = m_file->fileName();
+        durationSecs = static_cast<int>(m_startTime.secsTo(QDateTime::currentDateTimeUtc()));
+        dataBytes = m_dataBytes;
+
+        m_file->close();
+        m_file->deleteLater();
+        m_file = nullptr;
+
+        if (finalized && !writeFailed) {
+            m_lastRecordingPath = filePath;
+        } else {
+            // Do not leave a prior successful path advertised after a failed
+            // run. Filename reuse can otherwise make it name this very file.
+            m_lastRecordingPath.clear();
+        }
     }
 
-    if (!m_file) return;
-
-    patchWavHeader();
-    QString filePath = m_file->fileName();
-    m_lastRecordingPath = filePath;
-    int durationSecs = static_cast<int>(m_startTime.secsTo(QDateTime::currentDateTimeUtc()));
-
-    const quint32 dataBytes = m_dataBytes;
-
-    m_file->close();
-    m_file->deleteLater();
-    m_file = nullptr;
-
     qCInfo(lcAudio) << "QsoRecorder: stopped recording," << durationSecs << "seconds,"
-                     << dataBytes << "bytes";
+                     << dataBytes << "bytes" << (finalized && !writeFailed ? "" : "(write failed)");
     emit recordingStopped(filePath, durationSecs);
+
+    if (!finalized || writeFailed) {
+        if (report == FinalizeReport::Diagnose) {
+            const QString detail = writeFailed ? writeFailure
+                : QStringLiteral("Could not finalize WAV header")
+                      + (finalizeError.isEmpty() ? QString{} : QStringLiteral(": ") + finalizeError);
+            qCWarning(lcAudio) << "QsoRecorder:" << detail << filePath;
+            emit recordingError(QStringLiteral("Recording write failed: %1\n\n%2")
+                                    .arg(detail, filePath));
+        }
+        return;
+    }
 
     // A recording that captured NOTHING is the #4629 symptom, and until now it
     // was reported to the operator exactly like a good one — the file exists,
@@ -419,7 +491,61 @@ QString QsoRecorder::sanitizeForPath(const QString& s)
     return out;
 }
 
-void QsoRecorder::writeWavHeader()
+void QsoRecorder::finalizeWriteFailure(quint64 generation)
+{
+    // Explicit stop/destruction may have already finalized the failed file.
+    // A stale queued callback must never touch a newer recording.
+    if (generation != m_recordingGeneration.load(std::memory_order_acquire)
+        || !m_writeFailurePending.load(std::memory_order_acquire)) {
+        return;
+    }
+    m_idleTimer->stop();
+    finalizeFile();
+}
+
+qint64 QsoRecorder::writeFile(const char* data, qint64 size)
+{
+    if (m_writeForTest) {
+        return m_writeForTest(*m_file, data, size);
+    }
+    return m_file->write(data, size);
+}
+
+bool QsoRecorder::seekFile(qint64 position)
+{
+    if (m_seekForTest) {
+        return m_seekForTest(*m_file, position);
+    }
+    return m_file->seek(position);
+}
+
+bool QsoRecorder::flushFile()
+{
+    if (m_flushForTest) {
+        return m_flushForTest(*m_file);
+    }
+    return m_file->flush();
+}
+
+void QsoRecorder::queueWriteFailure(const QString& detail)
+{
+    // Called under m_writeMutex from the audio feed. Stop this and every
+    // later feed before scheduling any owner-thread work; do not emit here.
+    // Publish the pending finalization first: beginRecording() observes that
+    // flag after it sees m_recording false, so it cannot replace m_file while
+    // this feed still owns it.
+    if (m_writeFailurePending.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+    m_pendingWriteError = detail;
+    m_recording.store(false, std::memory_order_release);
+    const quint64 generation = m_recordingGeneration.load(std::memory_order_acquire);
+    QMetaObject::invokeMethod(this, [this, generation]() {
+        finalizeWriteFailure(generation);
+    }, Qt::QueuedConnection);
+}
+
+bool QsoRecorder::writeWavHeader()
 {
     // Write a placeholder WAV header (44 bytes). The data size fields
     // will be patched in finalizeFile() once we know the total size.
@@ -447,23 +573,37 @@ void QsoRecorder::writeWavHeader()
     memcpy(header + 36, "data", 4);
     // header[40..43] = data size (patched later)
 
-    m_file->write(header, WAV_HEADER_SIZE);
+    if (writeFile(header, WAV_HEADER_SIZE) != WAV_HEADER_SIZE) {
+        return false;
+    }
+    return flushFile();
 }
 
-void QsoRecorder::patchWavHeader()
+bool QsoRecorder::patchWavHeader()
 {
-    if (!m_file || !m_file->isOpen()) return;
+    if (!m_file || !m_file->isOpen()) {
+        return false;
+    }
 
     // Seek back and patch the two size fields in the WAV header
-    m_file->seek(4);
+    if (!seekFile(4)) {
+        return false;
+    }
     quint32 riffSize = m_dataBytes + WAV_HEADER_SIZE - 8;
     char buf[4];
     qToLittleEndian<quint32>(riffSize, buf);
-    m_file->write(buf, 4);
+    if (writeFile(buf, 4) != 4) {
+        return false;
+    }
 
-    m_file->seek(40);
+    if (!seekFile(40)) {
+        return false;
+    }
     qToLittleEndian<quint32>(m_dataBytes, buf);
-    m_file->write(buf, 4);
+    if (writeFile(buf, 4) != 4) {
+        return false;
+    }
+    return flushFile();
 }
 
 // ── Playback ───────────────────────────────────────────────────────────────
