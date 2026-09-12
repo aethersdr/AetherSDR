@@ -85,10 +85,27 @@ int main(int argc, char** argv)
     check(rowValue(snap, "telemetrySource").toString() == QStringLiteral("none"),
           "no reply yet -> telemetrySource is 'none', not empty");
 
-    // ---- 3. Demand turns the poller on, and the interval is visible ----
-    check(rowValue(snap, "telemetryPollMs").toInt()
-              == hl2PollIntervalMs(Hl2LinkState::NotConnected, /*surfaceVisible=*/true),
-          "poll interval matches the cadence rule for a watched idle radio");
+    // ---- 3. NO TARGET IS NOT POLLING, and the row must say so ----
+    //
+    // This assertion used to read the other way: it required the row to equal
+    // hl2PollIntervalMs(NotConnected, true) = 1000, with no target set and
+    // therefore nothing whatever on the wire. It passed, because the poller
+    // reported the cadence rule's answer while onPollTimer() separately
+    // returned early for want of a destination — two halves that never
+    // compared notes. So `health` read "polling every 1000 ms, 0 unanswered"
+    // about a silent socket, and the test agreed with it.
+    //
+    // The row's own legend is "0 = not polling". Nowhere to send is not
+    // polling, whatever the cadence rule would say about the link state, and
+    // pinning the cadence rule here was pinning the wrong function: the rule is
+    // already pinned, without a socket, by hl2_telemetry_cadence_test.
+    //
+    // The positive case — a NAMED target actually producing the cadence rule's
+    // interval — needs a socket to be honest about, so it lives in the opt-in
+    // tests/hl2_telemetry_wire_socket_test.cpp rather than here.
+    check(rowValue(snap, "telemetryPollMs").toInt() == 0,
+          "no target and no broadcast fallback -> the poll interval is 0, "
+          "because 0 is what this row means by 'not polling'");
 
     // ---- 4. Absent is not zero, and absent is not a reading ----
     // `null` means "the radio never reported this". Zero would read as "fresh",
@@ -98,8 +115,10 @@ int main(int argc, char** argv)
           "lastReply stays absent — never a default-constructed reply standing in for one");
     check(!rowValue(snap, "telemetryAgeMs").isValid(),
           "age is ABSENT with no reply, not 0 — zero would read as 'fresh'");
-    check(rowValue(snap, "telemetryUnanswered").toInt() == 0,
-          "nothing has been asked yet, so nothing is counted unanswered");
+    // Three states, not two. A count of 0 printed while nothing is being asked
+    // reads as "we are asking and all is well"; absent says we are not asking.
+    check(!rowValue(snap, "telemetryUnanswered").isValid(),
+          "not polling -> unanswered is ABSENT, not 0 — 0 would read as 'asking, all fine'");
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_service_test: all checks passed\n");

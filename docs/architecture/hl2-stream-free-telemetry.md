@@ -171,6 +171,23 @@ the first draft; wiring it up showed that the state latches on as soon as any
 in-use radio answers, so an idle app would have polled a stranger's session
 forever with nothing on screen.)
 
+**How `HeldByOther` is entered** — **R**. From the radio, not from the picker.
+`Hl2Backend::setTelemetryPollTarget(addr, heldByOther)` was written to take the
+flag from `Hl2Discovery`, which parses the in-use byte; that wiring was never
+built, the only call site passed `false`, and the state was therefore
+unreachable — the situation the `telemetry` verb's whole rationale is about
+could not be entered. `Hl2Backend::telemetryLinkState()` now reads the same bit
+out of the poller's own replies (`DiscoveryReply::streaming`, discovery status
+byte `0x03`), which is fresher than a scan and already arrives on this path.
+Only consulted while we are *not* connected: our own session sets that bit too.
+
+**And a destination is part of the cadence** — **R**. The table above answers
+for a poller that has somewhere to send. With no target and the broadcast
+fallback off (its default), `Hl2TelemetryPoller::currentIntervalMs()` is `0`
+and no socket is bound — because `0` is what the `telemetryPollMs` row means by
+"not polling", and reporting `1000` while nothing left the socket is the same
+collapsed state §4 argues against, committed by the instrument itself.
+
 Two things this rule gets right that a single timer would not. It makes the
 poller's *duty* the complement of the in-band path's, so the two never compete
 for the same wire at the same time. And it puts the highest cadence in the

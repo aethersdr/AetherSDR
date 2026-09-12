@@ -6836,6 +6836,16 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
 // diagnosis.
 //
 // Read-only and TX-safe: it keys nothing and changes nothing.
+namespace {
+// One wording for the refusal, so the "off" and "aim" paths cannot drift.
+QString telemetryFamilyRefusal(const QString& family)
+{
+    return QStringLiteral("telemetry: stream-free polling is Hermes-Lite 2 only; "
+                          "this session's family is '%1'")
+        .arg(family.isEmpty() ? QStringLiteral("none") : family);
+}
+}  // namespace
+
 QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& value)
 {
     if (!m_radioModel)
@@ -6864,8 +6874,15 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
     //
     // So: name the radio, send nothing but read-only status requests to it, and
     // never connect.
+    //
+    // HL2 ONLY, enforced by RadioModel and reported here rather than silently
+    // succeeding. This verb is registered globally because the registry is, not
+    // because the poller is family-agnostic: driving it from a `sim` session put
+    // real port-1025 datagrams on the wire and grew HL2 attribution rows on that
+    // session's `health` that nothing could then remove.
     if (value.compare(QStringLiteral("off"), Qt::CaseInsensitive) == 0) {
-        m_radioModel->setTelemetryPollTarget(QHostAddress());
+        if (!m_radioModel->setTelemetryPollTarget(QHostAddress()))
+            return err(telemetryFamilyRefusal(m_radioModel->family()));
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("telemetry"), QStringLiteral("target")},
                            {QStringLiteral("target"), QJsonValue::Null}};
@@ -6875,7 +6892,8 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
     if (addr.isNull())
         return err(QStringLiteral("telemetry target: '%1' is not an IP address").arg(value));
 
-    m_radioModel->setTelemetryPollTarget(addr);
+    if (!m_radioModel->setTelemetryPollTarget(addr))
+        return err(telemetryFamilyRefusal(m_radioModel->family()));
     return QJsonObject{{QStringLiteral("ok"), true},
                        {QStringLiteral("telemetry"), QStringLiteral("target")},
                        {QStringLiteral("target"), addr.toString()},

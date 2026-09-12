@@ -49,7 +49,12 @@ Hl2TelemetryPoller::~Hl2TelemetryPoller() = default;
 
 void Hl2TelemetryPoller::setAllowBroadcastFallback(bool allow)
 {
+    if (m_allowBroadcast == allow)
+        return;
     m_allowBroadcast = allow;
+    // It changes whether a destination exists at all, and therefore the
+    // interval -- see currentIntervalMs().
+    applyCadence();
 }
 
 void Hl2TelemetryPoller::setExpectedMac(const std::array<std::uint8_t, 6>& mac)
@@ -89,8 +94,30 @@ void Hl2TelemetryPoller::setSurfaceVisible(bool visible)
     applyCadence();
 }
 
-int Hl2TelemetryPoller::currentIntervalMs() const noexcept
+QHostAddress Hl2TelemetryPoller::pollDestination() const
 {
+    // Unicast once a radio is known -- from setTarget(), from connectRadio(),
+    // or from whichever one answered a previous broadcast. With no target and
+    // no broadcast opt-in the answer is NOWHERE: a broadcast reaches the LOCAL
+    // SEGMENT, which is not necessarily where the radio is and may be where
+    // something that must not be polled is. See setTarget.
+    if (!m_target.isNull())
+        return m_target;
+    if (!m_lastResponder.isNull())
+        return m_lastResponder;
+    if (m_allowBroadcast)
+        return QHostAddress(QHostAddress::Broadcast);
+    return QHostAddress();
+}
+
+int Hl2TelemetryPoller::currentIntervalMs() const
+{
+    // Nowhere to send is not polling, whatever the cadence rule would say. The
+    // row's own legend is "0 = not polling", so returning 1000 here while
+    // onPollTimer() sent nothing made the readout lie about its own subject --
+    // in the feature whose thesis is that collapsed states are the bug.
+    if (pollDestination().isNull())
+        return 0;
     // The rule itself is in Hl2TelemetryCadence.h and is pinned by
     // hl2_telemetry_cadence_test. This class does not restate it.
     return hl2PollIntervalMs(m_state, m_surfaceVisible);
@@ -98,8 +125,9 @@ int Hl2TelemetryPoller::currentIntervalMs() const noexcept
 
 void Hl2TelemetryPoller::applyCadence()
 {
-    // A null target is not a reason to stop -- it selects broadcast. Only the
-    // cadence rule decides whether to poll.
+    // Zero when the cadence rule says be silent OR when there is nowhere to
+    // send. The second half is why no socket is bound without a destination:
+    // the branch below drops it.
     const int interval = currentIntervalMs();
 
     if (interval <= 0) {
@@ -141,18 +169,11 @@ void Hl2TelemetryPoller::onPollTimer()
         return;
 
     // WHERE TO SEND IS DECIDED FIRST, because the answer may be NOWHERE and the
-    // bookkeeping below must not run for a poll that never happened.
-    //
-    // Unicast once a radio is known -- from setTarget(), from connectRadio(),
-    // or from whichever one answered a previous broadcast. With no target and
-    // no broadcast opt-in, send nothing: a broadcast reaches the LOCAL SEGMENT,
-    // which is not necessarily where the radio is and may be where something
-    // that must not be polled is. See setTarget.
-    QHostAddress dest;
-    if (!m_target.isNull())              dest = m_target;
-    else if (!m_lastResponder.isNull())  dest = m_lastResponder;
-    else if (m_allowBroadcast)           dest = QHostAddress::Broadcast;
-    else {
+    // bookkeeping below must not run for a poll that never happened. Decided by
+    // pollDestination(), the same function currentIntervalMs() asks, so what
+    // the health row reports and what leaves the socket cannot diverge.
+    const QHostAddress dest = pollDestination();
+    if (dest.isNull()) {
         // Declining to send also retires any outstanding request: otherwise the
         // next real poll would inherit a pending one and report an unanswered
         // count for a datagram that was never on the wire.

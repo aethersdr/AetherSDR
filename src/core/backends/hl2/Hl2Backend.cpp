@@ -652,13 +652,8 @@ void Hl2Backend::publishLinkStats()
     emit linkStatsUpdated(s);
 }
 
-void Hl2Backend::updateTelemetryPollState()
+Hl2LinkState Hl2Backend::telemetryLinkState() const
 {
-    if (!m_telemetryService)
-        return;
-
-    // Only the link state. Demand belongs to the service: it is recorded by the
-    // health read itself, which every consumer performs and none can forget.
     // How long the EP6 counter has sat still. An invalid clock means nothing has
     // ever advanced it; while connected that is a stream which never came up,
     // which is a stall by any reading, so it is reported as one rather than
@@ -666,8 +661,36 @@ void Hl2Backend::updateTelemetryPollState()
     const long long sinceAdvance =
         m_rxAdvanceClock.isValid() ? m_rxAdvanceClock.elapsed() : kStreamStallDeclareMs;
 
-    m_telemetryService->setLinkState(
-        hl2LinkStateFor(m_connected, m_pollTargetHeldByOther, sinceAdvance));
+    // HELD BY ANOTHER CLIENT, from the RADIO rather than from a cached scan.
+    // The header named the picker as the caller that would pass this in, and
+    // nothing ever did: the only call site passed false, so HeldByOther was
+    // unreachable and the situation the `telemetry` verb's rationale is built
+    // around could not be entered. Every discovery reply carries the same bit
+    // the picker would have read (DiscoveryReply::streaming, status byte 0x03),
+    // it is fresher than a scan, and it already arrives on this path.
+    //
+    // Only meaningful while WE are not the ones streaming — our own session
+    // sets that bit too, and calling our own stream "somebody else's" would
+    // invert the reading entirely. hl2LinkStateFor() consults it only when
+    // disconnected for the same reason; the guard is repeated here so the
+    // argument we pass is true on its own terms.
+    std::optional<DiscoveryReply> reply;
+    if (m_telemetryService)
+        reply = m_telemetryService->lastReply();
+    const bool heldByOther =
+        m_pollTargetHeldByOther || (!m_connected && reply && reply->streaming);
+
+    return hl2LinkStateFor(m_connected, heldByOther, sinceAdvance);
+}
+
+void Hl2Backend::updateTelemetryPollState()
+{
+    if (!m_telemetryService)
+        return;
+
+    // Only the link state. Demand belongs to the service: it is recorded by the
+    // health read itself, which every consumer performs and none can forget.
+    m_telemetryService->setLinkState(telemetryLinkState());
 }
 
 void Hl2Backend::setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther)
@@ -4381,7 +4404,24 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // unreachable whenever this backend does not exist -- which is precisely
     // the state they are for. That was the defect: an instrument for the
     // no-connection case owned by the connection.
-    const Hl2Telemetry& t = m_telemetry;
+    //
+    // AND ONLY WHILE THE STREAM IS ACTUALLY DELIVERING THEM. m_telemetry is
+    // never cleared -- it accumulates from EP6 and the last value of every
+    // field simply stays -- so "in-band wins on key collision" meant the last
+    // readings from BEFORE a stall kept winning over the fresh port-1025 ones
+    // for as long as the process lived. A frozen temperature presented as live
+    // in-band telemetry is not a side effect of this feature, it is the exact
+    // failure the feature was built to expose, so it must not be the feature's
+    // own output. When the link is not Streaming these rows report nothing and
+    // the stream-free rows survive the merge.
+    //
+    // "Reports nothing" means an INVALID variant, which put() leaves out of
+    // `values` entirely; hl2MergeHealth treats an absent value as "not
+    // reported" and leaves the base's alone. Writing zeros here would erase
+    // the poller's readings instead of yielding to them.
+    static const Hl2Telemetry kNoInBandReadings{};
+    const bool inBandLive = telemetryLinkState() == Hl2LinkState::Streaming;
+    const Hl2Telemetry& t = inBandLive ? m_telemetry : kNoInBandReadings;
 
     section("connected", QStringLiteral("Radio"));
     put("connected", QStringLiteral("Connected"), m_connected);
@@ -4393,7 +4433,7 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         opt(t.firmwareVersion));
 
     section("adcOverload", QStringLiteral("Converter"));
-    put("adcOverload", QStringLiteral("ADC overload"), opt(m_telemetry.adcOverload));
+    put("adcOverload", QStringLiteral("ADC overload"), opt(t.adcOverload));
     put("lnaGainDb", QStringLiteral("LNA gain (dB)"), m_lnaGainDb);
 
     section("txInhibited", QStringLiteral("Transmit"));
@@ -4401,7 +4441,11 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // what is shown here is the plain-language sense: true means transmit is
     // being held off. Displaying the raw bit would read exactly backwards.
     put("txInhibited", QStringLiteral("TX inhibited"), opt(t.txInhibited));
-    put("ptt", QStringLiteral("PTT (radio)"), t.ptt);
+    // A plain bool, so unlike every field above it has no "not reported"
+    // value of its own: blanking `t` would publish false, and false WINS the
+    // merge and would overwrite the poller's fresh PTT with a claim that the
+    // radio is unkeyed. So the absence is spelled here instead.
+    put("ptt", QStringLiteral("PTT (radio)"), inBandLive ? QVariant(t.ptt) : QVariant());
     put("keyed", QStringLiteral("Keyed (app)"), m_keyed);
     put("tuning", QStringLiteral("Tune carrier"), m_tuning);
     // The FPGA's transmit sample buffer. The oracle calls its depth "the most
@@ -4595,13 +4639,28 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // hardware with the app connected and EP6 healthy, reading "port-1025".
     // Decided by the shared policy rather than restated here: a re-typed copy
     // of a rule proves only that two copies agree.
+    //
+    // BOTH INPUTS COME FROM HERE, and that is the correction. `haveStreamFree`
+    // was hardcoded false on the grounds that "the backend knows nothing about
+    // the stream-free path" — but this row WINS the merge, so hardcoding it
+    // made `port-1025` unreachable for as long as a backend existed: the
+    // service's answer was overwritten in every case, including the stalled one
+    // the design note calls the case that matters most. Attribution cannot be
+    // decided by either side alone, and the side that wins the merge is the
+    // side that has to ask both. The service is injected here precisely so it
+    // can be asked.
+    //
+    // hl2_telemetry_source_test already pinned hl2TelemetrySource(true, false,
+    // true) == port-1025 and passed; what was missing was any production path
+    // that passed those three arguments together. This is it.
     section("telemetrySource", QStringLiteral("Telemetry source"));
     put("telemetrySource", QStringLiteral("Source"),
         hl2TelemetrySource(m_connected,
-                           /*haveInBand=*/m_telemetry.temperatureRaw.has_value(),
-                           // The backend knows nothing about the stream-free
-                           // path; the service supplies that side at the merge.
-                           /*haveStreamFree=*/false));
+                           // Not "we hold a temperature reading" — we hold one
+                           // forever. Whether the in-band path is DELIVERING.
+                           /*haveInBand=*/inBandLive && t.temperatureRaw.has_value(),
+                           /*haveStreamFree=*/m_telemetryService
+                               && m_telemetryService->lastReply().has_value()));
 
     section("bandFilter", QStringLiteral("Front end"));
     put("bandFilter", QStringLiteral("J16 filter byte"),

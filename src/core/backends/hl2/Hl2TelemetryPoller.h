@@ -97,7 +97,15 @@ public:
     // Milliseconds between polls for the current state; 0 means "do not poll".
     // Public so a diagnostics surface can show the operator what it is doing
     // rather than leaving the cadence invisible.
-    [[nodiscard]] int currentIntervalMs() const noexcept;
+    //
+    // 0 ALSO WHEN THERE IS NOWHERE TO SEND, and that is not a refinement, it is
+    // the row's documented meaning. This used to return the cadence rule's
+    // answer with no reference to whether a destination existed, while
+    // onPollTimer() returned early when none did -- so after `telemetry target
+    // off` the health row read "polling every 1000 ms, 0 unanswered" with
+    // nothing whatever on the wire. Both halves now ask pollDestination(), so
+    // the readout and the socket cannot disagree.
+    [[nodiscard]] int currentIntervalMs() const;
 
     // The address the last accepted reply came from. Null until one has. Lets a
     // caller learn the radio's address from the poller rather than the other
@@ -124,6 +132,11 @@ private slots:
 
 private:
     void applyCadence();
+    // Where the next poll would go, or a null address for "nowhere". The ONE
+    // place that decision is made: currentIntervalMs() reports it and
+    // onPollTimer() acts on it, and a second copy of this chain is exactly how
+    // the two came to disagree.
+    [[nodiscard]] QHostAddress pollDestination() const;
 
     // The alternate control port. 1024 + 1: the gateware distinguishes them by
     // the low bit alone (`to_port[0]`, `eth_port[0]`).

@@ -20,6 +20,7 @@ constexpr int kStateIntervalMs = 1000;
 
 struct Hl2TelemetryService::Impl {
     Hl2TelemetryPoller* poller = nullptr;
+    QHostAddress target;       // mirrored so a CHANGE of radio can be detected
     Hl2LinkState state = Hl2LinkState::NotConnected;
     std::optional<DiscoveryReply> reply;
     QElapsedTimer at;          // when `reply` arrived
@@ -62,9 +63,16 @@ Hl2TelemetryService::~Hl2TelemetryService() = default;
 
 void Hl2TelemetryService::setTarget(const QHostAddress& addr)
 {
-    if (addr.isNull()) {
+    if (d->target != addr) {
         // Whatever we last read belonged to the radio we are no longer pointed
         // at. Forget it rather than letting a stale reading outlive its subject.
+        //
+        // ON ANY CHANGE, not only on a null address. Clearing only for "off"
+        // meant re-aiming from one radio to another kept the first radio's
+        // temperature, power and PTT and re-published them under the second
+        // radio's rows -- with a fresh `telemetryAgeMs` clock, because the age
+        // runs from arrival and nothing had invalidated it.
+        d->target = addr;
         d->reply.reset();
         d->at.invalidate();
         d->unanswered = 0;

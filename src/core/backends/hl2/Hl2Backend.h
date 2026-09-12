@@ -153,10 +153,14 @@ public:
     //
     // Separate from connectRadio() ON PURPOSE: the case this feature exists for
     // is a radio we are NOT connected to, because somebody else has the stream.
-    // The caller that knows this is the picker — Hl2Discovery already parses
-    // the in-use flag out of the same reply — so `heldByOther` is passed in
-    // rather than guessed here. A null address stops the poller and releases
-    // its socket.
+    // A null address stops the poller and releases its socket.
+    //
+    // `heldByOther` is a caller's ASSERTION and is no longer the only route
+    // into Hl2LinkState::HeldByOther. It was, and nothing ever passed it true —
+    // the picker was named as the caller that would and was never wired — so
+    // the whole held-by-another-client case was dead code. telemetryLinkState()
+    // now also reads the radio's own in-use bit out of the poller's replies,
+    // which is fresher than any scan and arrives on the path that needs it.
     void setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther);
     // Injected by RadioModel, which owns it. Null is legitimate: a backend
     // built before the service exists simply does not drive it.
@@ -282,6 +286,11 @@ private:
     // consulted. Called from publishLinkStats() (which already computes the
     // EP6-arriving signal on a fixed tick) and from connect/disconnect.
     void updateTelemetryPollState();
+    // What the IQ path is doing, for the cadence rule AND for the health
+    // snapshot's attribution row. ONE expression, asked by both: the two used
+    // to decide separately, and healthSnapshot() decided it was in-band while
+    // the cadence rule had already called the same stream stalled.
+    [[nodiscard]] Hl2LinkState telemetryLinkState() const;
     // Clamp 0..100, map onto the drive register, honour the transmit gate.
     // Shared by setTxPower() and setTune() so the mapping exists exactly once.
     void applyDrive(int percent);

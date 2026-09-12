@@ -45,8 +45,16 @@ public:
     explicit Hl2TelemetryService(QObject* parent = nullptr);
     ~Hl2TelemetryService() override;
 
-    // The radio to read. A null address means "we do not know one yet", and the
-    // poller broadcasts rather than stopping — see Hl2TelemetryPoller.
+    // The radio to read. A null address STOPS the poller: with no target and
+    // the broadcast fallback off (its default) there is nowhere to send, so the
+    // poller reports a zero interval and releases its socket. An earlier
+    // revision of this comment said a null address made it broadcast instead,
+    // which was true of neither the default nor the next comment in this file.
+    //
+    // ANY change of target drops whatever was last read. A reading belongs to
+    // the radio it came from, and carrying radio A's temperature into radio B's
+    // rows is the frozen-reading failure this feature exists to expose, wearing
+    // a different address.
     void setTarget(const QHostAddress& addr);
     void setExpectedMac(const std::array<std::uint8_t, 6>& mac);
     // Opt in to broadcasting when no target is set. OFF by default -- a

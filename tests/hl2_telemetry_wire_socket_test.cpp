@@ -87,6 +87,15 @@ int main(int argc, char** argv)
         svc.setTarget(QHostAddress(QStringLiteral("192.0.2.1")));
         svc.setLinkState(Hl2LinkState::NotConnected);
 
+        // The POSITIVE half of "0 = not polling", which needs a socket to be
+        // honest about and so cannot live in the socket-free service test: with
+        // a target named, the reported interval is the cadence rule's answer.
+        // Its negative half — no target, interval 0 — is pinned there.
+        svc.noteDemand();
+        check(svc.healthRows().values.value(QStringLiteral("telemetryPollMs")).toInt()
+                  == hl2PollIntervalMs(Hl2LinkState::NotConnected, /*surfaceVisible=*/true),
+              "a NAMED target reports the cadence rule's interval, not 0");
+
         QElapsedTimer waited;
         waited.start();
         int unanswered = 0;

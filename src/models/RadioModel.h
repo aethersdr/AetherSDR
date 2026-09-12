@@ -372,15 +372,19 @@ public:
     {
         return m_hl2Telemetry != nullptr;
     }
-    // Reading the rows is the poller's demand signal, so a caller that only
-    // wants to arm it (without rendering) can say so explicitly. A no-op when
-    // no poller exists.
-    void noteTelemetryDemand();
     // Aim the stream-free poller at a radio WITHOUT connecting. A null address
-    // stops it. Read-only: the poller sends the EF FE 02 status request and
-    // nothing else, never START/STOP and never a register write, which is what
-    // makes it safe to point at a radio another operator is using.
-    void setTelemetryPollTarget(const QHostAddress& addr);
+    // stops it AND releases the service, so the rows go away again. Read-only:
+    // the poller sends the EF FE 02 status request and nothing else, never
+    // START/STOP and never a register write, which is what makes it safe to
+    // point at a radio another operator is using.
+    //
+    // HL2 FAMILIES ONLY, and it returns false for anything else. The gate lives
+    // here rather than at the bridge verb because the invariant is this model's:
+    // without it a `telemetry target` on a Flex, Icom or Sim session constructed
+    // the HL2 service, which made hasStreamFreeTelemetry() true and grew HL2
+    // attribution rows on that family's `health` — reproduced live against the
+    // demo simulator, with real datagrams leaving a sim session.
+    bool setTelemetryPollTarget(const QHostAddress& addr);
 
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
@@ -1638,6 +1642,13 @@ private:
     // only place m_hl2Telemetry is created, so "which sessions pay for it" has
     // one answer and it is visible at its two call sites.
     hl2::Hl2TelemetryService& ensureHl2Telemetry();
+    // Destroy the service when nothing is using it any more, so its rows stop
+    // appearing. The mirror of ensureHl2Telemetry(): without it the service was
+    // built once and never released, `telemetry target off` left the rows
+    // standing for the life of the process, and a family switch from HL2 to
+    // Flex carried them across. Refuses while an HL2 backend holds the borrowed
+    // pointer setupBackend() handed it.
+    void releaseHl2TelemetryIfUnused();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
     void restoreClientOwnedCwState(const RestoredRadioState& state);
 

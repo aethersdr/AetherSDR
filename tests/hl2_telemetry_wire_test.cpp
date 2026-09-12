@@ -31,6 +31,7 @@
 #include <QString>
 #include <QEventLoop>
 #include <QTimer>
+#include <QVariant>
 
 #include <cstdio>
 
@@ -100,6 +101,40 @@ int main(int argc, char** argv)
     check(snap.order.contains(QStringLiteral("telemetrySource")),
           "the BACKEND publishes a telemetrySource row — without it the service "
           "always wins the merge and 'in-band' is unreachable");
+
+    // ---- and it does not publish it as a CONSTANT ----
+    //
+    // Publishing the row was only half the repair. The backend passed
+    // haveStreamFree=false literally, and because this row WINS the merge that
+    // made `port-1025` unreachable for as long as a backend existed — the
+    // stalled case the design note calls the one that matters most. With no
+    // connection and nothing having answered the poller, the honest answer is
+    // `none`; it was `none` before the fix too, so this check is a floor and
+    // the discriminating case is the one below it.
+    check(snap.values.value(QStringLiteral("telemetrySource")).toString()
+              == QStringLiteral("none"),
+          "disconnected, nothing polled -> telemetrySource is 'none'");
+
+    // ---- the in-band READINGS do not win the merge when in-band is silent ----
+    //
+    // m_telemetry accumulates from EP6 and is never cleared, so every field's
+    // last value simply stays; "in-band wins on key collision" therefore meant
+    // pre-stall readings beating fresh port-1025 ones for the life of the
+    // process. The rows must report nothing whenever the link is not Streaming.
+    //
+    // `ptt` is the one that discriminates a regression fastest: it is a plain
+    // bool with a default of false, so before the fix a disconnected backend
+    // published `ptt = false` — a positive claim that the radio is unkeyed,
+    // which WINS the merge and overwrites whatever the poller actually read
+    // from the radio.
+    for (const char* key : {"ptt", "temperatureRaw", "forwardPowerRaw",
+                            "reversePowerRaw", "biasCurrentRaw", "txFifoFillMsbs"}) {
+        const QString k = QString::fromLatin1(key);
+        check(snap.order.contains(k) && !snap.values.contains(k),
+              qPrintable(QStringLiteral("in-band '%1' is published as 'not reported' "
+                                        "while the stream is not delivering, so the "
+                                        "stream-free reading survives the merge").arg(k)));
+    }
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_wire_test: all checks passed\n");
