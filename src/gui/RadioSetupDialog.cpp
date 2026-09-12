@@ -1027,54 +1027,63 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
         m_multiFlexInfoField->setVisible(!connected || caps.hasMultiClientSessions);
     }
     if (m_remoteOnInfoField) {
-        applyCapabilitySurfaceVisibility(
-            m_remoteOnInfoField, connected, caps.hasRemoteOnControl);
+        applyCapabilitySurfaceAvailability(
+            m_remoteOnInfoField, connected, caps.hasRemoteOnControl,
+            tr("Not supported by this radio"));
     }
     if (m_rebootInfoField) {
-        applyCapabilitySurfaceVisibility(m_rebootInfoField, connected, caps.canReboot);
+        applyCapabilitySurfaceAvailability(m_rebootInfoField, connected, caps.canReboot,
+            tr("Not supported by this radio"));
     }
     if (m_licenseInfoGroup) {
         m_licenseInfoGroup->setVisible(!connected || caps.hasLicenseInfo);
     }
     if (m_firmwareUpdateGroup) {
-        applyCapabilitySurfaceVisibility(
+        applyCapabilityClusterVisibility(
             m_firmwareUpdateGroup, connected, caps.canUpgradeFirmware);
     }
     if (m_firmwareDisclaimer) {
-        applyCapabilitySurfaceVisibility(
+        applyCapabilityClusterVisibility(
             m_firmwareDisclaimer, connected, caps.canUpgradeFirmware);
     }
     if (m_networkIdentityGroup) {
-        applyCapabilitySurfaceVisibility(
+        applyCapabilityClusterVisibility(
             m_networkIdentityGroup, connected, caps.hasNetworkConfigurationReadback);
     }
     if (m_vitaReceiveBufferLabel) {
-        applyCapabilitySurfaceVisibility(
-            m_vitaReceiveBufferLabel, connected, caps.usesVita49Transport);
+        applyCapabilitySurfaceAvailability(
+            m_vitaReceiveBufferLabel, connected, caps.usesVita49Transport,
+            tr("Not supported by this radio"));
     }
     if (m_vitaReceiveBufferControls) {
-        applyCapabilitySurfaceVisibility(
-            m_vitaReceiveBufferControls, connected, caps.usesVita49Transport);
+        applyCapabilitySurfaceAvailability(
+            m_vitaReceiveBufferControls, connected, caps.usesVita49Transport,
+            tr("Not supported by this radio"));
     }
     if (m_vitaReceiveBufferStatus) {
-        applyCapabilitySurfaceVisibility(
-            m_vitaReceiveBufferStatus, connected, caps.usesVita49Transport);
+        applyCapabilitySurfaceAvailability(
+            m_vitaReceiveBufferStatus, connected, caps.usesVita49Transport,
+            tr("Not supported by this radio"));
     }
     if (m_networkMtuLabel) {
-        applyCapabilitySurfaceVisibility(
-            m_networkMtuLabel, connected, caps.usesVita49Transport);
+        applyCapabilitySurfaceAvailability(
+            m_networkMtuLabel, connected, caps.usesVita49Transport,
+            tr("Not supported by this radio"));
     }
     if (m_networkMtuControl) {
-        applyCapabilitySurfaceVisibility(
-            m_networkMtuControl, connected, caps.usesVita49Transport);
+        applyCapabilitySurfaceAvailability(
+            m_networkMtuControl, connected, caps.usesVita49Transport,
+            tr("Not supported by this radio"));
     }
     if (m_privateIpPolicyLabel) {
-        applyCapabilitySurfaceVisibility(
-            m_privateIpPolicyLabel, connected, caps.hasPrivateIpConnectionPolicy);
+        applyCapabilitySurfaceAvailability(
+            m_privateIpPolicyLabel, connected, caps.hasPrivateIpConnectionPolicy,
+            tr("Not supported by this radio"));
     }
     if (m_privateIpPolicyControl) {
-        applyCapabilitySurfaceVisibility(
-            m_privateIpPolicyControl, connected, caps.hasPrivateIpConnectionPolicy);
+        applyCapabilitySurfaceAvailability(
+            m_privateIpPolicyControl, connected, caps.hasPrivateIpConnectionPolicy,
+            tr("Not supported by this radio"));
     }
     if (m_ipDhcpButton) {
         const bool canConfigure = caps.hasClientNetworkConfig;

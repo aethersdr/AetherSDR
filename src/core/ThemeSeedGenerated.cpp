@@ -49,6 +49,8 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.button.foreground.disabled", QString("#506070"));
     m_tokens.insert("color.canvas.background", QString("#08080d"));
     m_tokens.insert("color.canvas.dots", QString("#50e6f0fa"));
+    m_tokens.insert("color.control.inactive", QString("#8ea8c0"));
+    m_tokens.insert("color.control.unavailable", QString("#3a4a5a"));
     m_tokens.insert("color.highlight.fg", QString("#000000"));
     m_tokens.insert("color.highlight.message", QString("#e58be5"));
     m_tokens.insert("color.highlight.rx", QString("#379baf"));

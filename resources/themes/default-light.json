@@ -63,6 +63,10 @@
             "label":     "{color.gray.300}",
             "disabled":  "{color.gray.500}"
           },
+          "control": {
+            "inactive":    "{color.gray.400}",
+            "unavailable": "{color.gray.600}"
+          },
           "border": {
             "subtle": "{color.gray.700}",
             "strong": "{color.gray.400}",
