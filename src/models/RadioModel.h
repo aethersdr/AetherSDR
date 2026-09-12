@@ -1747,6 +1747,7 @@ public:
 private:
     friend class RadioModelSliceLifecycleTestAccess;
     friend class TxOperationIntegrationTestAccess;
+    void expirePendingCallbacks(const QString& reason);
     void wireBackendReceiverState();
     bool dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback = {});
     quint64 m_backendReceiverGeneration = 0;

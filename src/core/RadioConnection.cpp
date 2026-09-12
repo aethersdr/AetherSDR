@@ -117,6 +117,7 @@ bool RadioConnection::isDemoTarget(const RadioInfo& info)
 
 void RadioConnection::startSyntheticDemoConnect()
 {
+    resetSessionState();
     m_syntheticDemo = true;
     setState(ConnectionState::Connecting);
     // Drive the connect sequence asynchronously (like a real socket connect),
@@ -228,6 +229,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
     m_localAddr = QHostAddress();
     m_localPort = 0;
     m_socket->abort();
+    resetSessionState();
 
     const QHostAddress preferredBindAddr =
         (bindMode == RadioBindMode::Explicit) ? explicitBindAddr : sessionBindAddr;
@@ -272,8 +274,18 @@ void RadioConnection::connectToHost(const QHostAddress& address,
     m_socket->connectToHost(address, port);
 }
 
+void RadioConnection::resetSessionState()
+{
+    // Partial lines and ping replies belong to exactly one TCP session.
+    m_readBuffer.clear();
+    m_handle = 0;
+    m_lastPingSeq = 0;
+    m_pingStopwatch.invalidate();
+}
+
 void RadioConnection::disconnectFromRadio()
 {
+    resetSessionState();
     if (m_heartbeat) m_heartbeat->stop();
     if (m_syntheticDemo) {
         // Demo teardown: no socket to close — just drop state and notify.
@@ -289,7 +301,7 @@ void RadioConnection::disconnectFromRadio()
         if (m_socket->state() != QAbstractSocket::UnconnectedState)
             m_socket->waitForDisconnected(2000);
     }
-    m_handle = 0;
+    resetSessionState();
 }
 
 void RadioConnection::gracefulDisconnect(quint32 handle,
@@ -494,6 +506,7 @@ void RadioConnection::onSocketConnected()
 
 void RadioConnection::onSocketDisconnected()
 {
+    resetSessionState();
     qCDebug(lcConnection) << "RadioConnection: TCP disconnected";
     if (m_heartbeat) m_heartbeat->stop();
     m_localAddr = QHostAddress();
@@ -509,8 +522,10 @@ void RadioConnection::onSocketError(QAbstractSocket::SocketError)
     qCWarning(lcConnection) << "RadioConnection: socket error:" << msg;
     setState(ConnectionState::Error);
     emit errorOccurred(msg);
-    if (m_socket->state() == QAbstractSocket::UnconnectedState)
+    if (m_socket->state() == QAbstractSocket::UnconnectedState) {
+        resetSessionState();
         setState(ConnectionState::Disconnected);
+    }
 }
 
 void RadioConnection::onReadyRead()
