@@ -16,6 +16,26 @@ constexpr qint64 kDemandWindowMs = 5000;
 // deliberately not borrowed from anything that stops when a connection does —
 // that mistake is why this class exists at all, one level down.
 constexpr int kStateIntervalMs = 1000;
+
+// THIS FAMILY DECLARES ITSELF. The only place the string "hl2" appears in the
+// stream-free telemetry feature outside src/core/backends/hl2/ is nowhere --
+// shared code asks OfflineHealthRegistry whether the selected family declared
+// anything, and this is the declaration.
+//
+// LINKAGE, because a self-registering translation unit that nothing references
+// can be dropped from a static archive with no error anywhere and the feature
+// then simply does not exist. This TU is reached: Hl2Backend.cpp names
+// Hl2TelemetryService in setOfflineHealthSource()'s dynamic_cast, and
+// RadioModel::makeBackend names hl2::Hl2Backend. offline_health_registry_test
+// asserts the declaration is actually present rather than trusting that chain.
+[[maybe_unused]] const bool kRegisteredWithOfflineHealthRegistry = [] {
+    OfflineHealthRegistry::declare(
+        QStringLiteral("hl2"),
+        [](QObject* parent) -> std::unique_ptr<IOfflineHealthSource> {
+            return std::make_unique<Hl2TelemetryService>(parent);
+        });
+    return true;
+}();
 }  // namespace
 
 struct Hl2TelemetryService::Impl {
@@ -116,6 +136,14 @@ void Hl2TelemetryService::noteDemand()
 std::optional<DiscoveryReply> Hl2TelemetryService::lastReply() const
 {
     return d->reply;
+}
+
+bool Hl2TelemetryService::hasOfflineTarget() const
+{
+    // The MIRRORED target, not the poller's destination: the poller can also
+    // choose a broadcast address when the fallback is opted in, and "somebody
+    // named a radio" is a different claim from "something would be sent".
+    return !d->target.isNull();
 }
 
 IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const

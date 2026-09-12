@@ -24,6 +24,7 @@
 // precedence over these at the merge point.
 
 #include "core/backends/IRadioBackend.h"        // HealthSnapshot
+#include "core/backends/OfflineHealthSource.h" // IOfflineHealthSource, the seam it implements
 #include "core/backends/hl2/Hl2TelemetryCadence.h"
 #include "core/backends/hl2/MetisProtocol.h"    // DiscoveryReply
 
@@ -38,7 +39,11 @@ namespace AetherSDR::hl2 {
 
 class Hl2TelemetryPoller;
 
-class Hl2TelemetryService : public QObject {
+// Implements IOfflineHealthSource, which is how anything above the seam reaches
+// it. Nothing in src/models or src/core names this class or this family: the
+// model holds the interface, and `Hl2TelemetryService.cpp` declares "hl2" to
+// the registry from down here where the name belongs.
+class Hl2TelemetryService : public QObject, public IOfflineHealthSource {
     Q_OBJECT
 
 public:
@@ -93,6 +98,20 @@ public:
     // radio has not answered" and "the radio answered with zeros" are different
     // claims and only one is a measurement.
     [[nodiscard]] std::optional<DiscoveryReply> lastReply() const;
+
+    // ---- IOfflineHealthSource ----
+    //
+    // Thin forwarders on purpose. The interface is the vocabulary shared code
+    // is allowed to use; these names are this family's. Keeping both means a
+    // later change to what "demand" means here cannot silently redefine the
+    // seam, and the HL2 tests go on driving the HL2 names.
+    void setOfflineTarget(const QHostAddress& addr) override { setTarget(addr); }
+    [[nodiscard]] bool hasOfflineTarget() const override;
+    void noteOfflineDemand() override { noteDemand(); }
+    [[nodiscard]] IRadioBackend::HealthSnapshot offlineHealthRows() const override
+    {
+        return healthRows();
+    }
 
 private:
     // Pimpl by unique_ptr, not a raw owning pointer: the destructor is the only

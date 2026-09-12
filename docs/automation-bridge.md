@@ -4268,7 +4268,7 @@ code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 74 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 75 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4343,6 +4343,7 @@ still a separate radiocert task.
 | `menu` | — | menu list \| open <name> — menu-bar menus |
 | `whoami` | — | bridge instance info: pid, socket, label, station, txAllowed |
 | `health` | — | backend health snapshot — what the RADIO reports, not what was asked for |
+| `telemetry` | — | telemetry target <ip> — aim the offline health source WITHOUT connecting (read-only; `telemetry target off` stops it) |
 | `log` | — | log <categories\|get\|set\|reset\|tail\|subscribe\|unsubscribe> [args] |
 | `mark` | — | mark <text> — timestamped annotation in the log ring |
 | `qrz` | — | qrz <status\|cached\|lookup\|spottext> [args] |

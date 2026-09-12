@@ -174,6 +174,9 @@ struct MemoryRecallDetails {
 // burndown (docs/architecture/aetherd-touchpoints.md) converts each gui→engine
 // touchpoint into a protocol/backend verb. Do NOT dump all 140 touchpoints
 // here at once.
+// Owned by the model, borrowed by a backend. See backends/OfflineHealthSource.h.
+class IOfflineHealthSource;
+
 class IRadioBackend : public QObject {
     Q_OBJECT
 
@@ -901,6 +904,28 @@ public:
         [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }
+
+    // Take a BORROWED pointer to the model's offline health source, if this
+    // backend has any use for one. Default no-op, and that default is the
+    // point: a family with no offline instrument never learns the concept
+    // exists, and the model does not have to know which families do.
+    //
+    // REPLACES A CONCRETE-BACKEND CAST. The model used to reach for
+    // `dynamic_cast<hl2::Hl2Backend*>` to hand the HL2 its telemetry service.
+    // #5554 §2.8 already lists that cast shape as a seam leak to be retired
+    // (`Hl2Backend`'s off-seam `dspSetupProgress` forcing one in `MainWindow`),
+    // and `docs/HERMES.md`'s coding-agent section forbids adding new ones. A
+    // virtual with a no-op default is what the seam is for.
+    //
+    // NOT AN OWNERSHIP TRANSFER. The source outlives every backend — that is
+    // its whole purpose — and nothing tells a backend the source has gone, so
+    // the owner must not destroy it while a backend could still be holding it.
+    // See `RadioModel::releaseOfflineHealthIfUnused()`.
+    //
+    // Declared here rather than on a family interface because the borrow is a
+    // seam event: it happens in `setupBackend()`, for whatever backend was just
+    // built, with no family name in sight.
+    virtual void setOfflineHealthSource(IOfflineHealthSource*) {}
 
     // WHAT THE DSP IS ACTUALLY CONFIGURED WITH, as opposed to what the model
     // says it asked for.

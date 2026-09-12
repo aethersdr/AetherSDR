@@ -824,6 +824,20 @@ void RadioModel::setupBackend(const QString& family)
     // RadioModel: `this`, or a value member such as m_transmitModel.
     m_radioDialLocked.reset();
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
+    // A switch to a family that declares no offline health source takes the old
+    // one with it. NO FAMILY IS NAMED: the registry answers whether the newly
+    // selected family declared anything, and a family that never registered one
+    // answers no — which is the same gate the old `m_family != "hl2"` test
+    // performed, without the family string test docs/HERMES.md forbids above
+    // the seam.
+    //
+    // Here rather than in teardownBackend(), which also runs on a plain
+    // disconnect — and answering a DISCONNECTED radio is the entire point of an
+    // offline source, so releasing it there would delete the instrument in the
+    // state it exists for. rebuildBackendForFamily() tears the old backend down
+    // before calling this, so nothing is holding the borrowed pointer by now.
+    if (!OfflineHealthRegistry::declaredFor(m_family))
+        releaseOfflineHealthIfUnused();
     // IRadioBackend contract rule 5. teardownBackend() bumps this before the
     // old backend dies, and every handler below that INTERPRETS a delivery from
     // a backend-owned object captures it and returns early once it no longer
@@ -856,6 +870,20 @@ void RadioModel::setupBackend(const QString& family)
                    "was unavailable when AetherSDR was compiled."));
             return;
         }
+        // Hand the backend the offline health source this model owns, if the
+        // family declared one. A BORROW, not a transfer: the source must
+        // outlive every backend, because its job is answering when there is no
+        // backend at all.
+        //
+        // Through the seam, with no cast and no family name. This replaces a
+        // `dynamic_cast<hl2::Hl2Backend*>` — the shape #5554 §2.8 lists as a
+        // seam leak to be retired. IRadioBackend::setOfflineHealthSource()
+        // defaults to a no-op, so a family with no use for one ignores it and
+        // a family that wants it recognises its own type on its own side of
+        // the seam.
+        if (auto* offline = ensureOfflineHealth())
+            m_backend->setOfflineHealthSource(offline);
+
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
             flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
             // Slice verbs route through the TX-inhibit-guarded slice sink (§6), so
@@ -4568,6 +4596,89 @@ IRadioBackend::HealthSnapshot RadioModel::backendHealthSnapshot() const
 {
     return m_backend ? m_backend->healthSnapshot()
                      : IRadioBackend::HealthSnapshot{};
+}
+
+IOfflineHealthSource* RadioModel::ensureOfflineHealth()
+{
+    if (!m_offlineHealth) {
+        // Parented to this model, so its lifetime is the model's — the whole
+        // point — while its EXISTENCE is conditional on the selected family
+        // having declared one. A family that declared nothing reaches here,
+        // gets null, and constructs nothing.
+        m_offlineHealth = OfflineHealthRegistry::create(m_family, this);
+    }
+    return m_offlineHealth.get();
+}
+
+IRadioBackend::HealthSnapshot RadioModel::offlineHealthRows()
+{
+    // Deliberately does NOT consult m_backend. See the header.
+    //
+    // And deliberately does NOT construct the source: a family-agnostic health
+    // read must not bring a poller into existence, so "no source" answers with
+    // no rows rather than with an armed one.
+    if (!m_offlineHealth) {
+        return IRadioBackend::HealthSnapshot{};
+    }
+    m_offlineHealth->noteOfflineDemand();
+    return m_offlineHealth->offlineHealthRows();
+}
+
+void RadioModel::releaseOfflineHealthIfUnused()
+{
+    if (!m_offlineHealth)
+        return;
+    // A backend may hold a BORROWED pointer to it, handed over in
+    // setupBackend(). Not a lifetime subtlety: setOfflineHealthSource() keeps a
+    // raw pointer and nothing tells the backend the source has gone, so while
+    // any backend exists this must not be destroyed.
+    if (m_backend)
+        return;
+    m_offlineHealth.reset();
+}
+
+bool RadioModel::setOfflineHealthTarget(const QHostAddress& addr)
+{
+    // THE GATE, and it names no family. Asking the registry is a different
+    // question from asking `m_family == "hl2"` in the same way #5618's
+    // `backendDeclaresExtension()` is a different question from asking whether
+    // a radio is an Icom: it reads a declaration instead of hard-coding who is
+    // expected to have made it. A family that declares an offline source in
+    // future gets this verb with no edit here.
+    //
+    // Refusing matters rather than being tidy: without this gate, aiming the
+    // poller from a Flex, Icom or Sim session constructed the source, which
+    // made hasOfflineHealth() true and grew another family's attribution rows
+    // on that session's `health` — reproduced live against the demo simulator,
+    // with real datagrams leaving a sim session.
+    if (!OfflineHealthRegistry::declaredFor(m_family))
+        return false;
+
+    if (addr.isNull()) {
+        if (!m_offlineHealth) {
+            // "Stop" on a session that never started is a no-op, not a reason
+            // to construct the source so it can be told to stop.
+            return true;
+        }
+        // Stop, then LET GO. Clearing the target alone left hasOfflineHealth()
+        // true, so `health` went on merging rows that described a poller with
+        // no radio, and there was no way back to the snapshot the session
+        // started with.
+        m_offlineHealth->setOfflineTarget(addr);
+        releaseOfflineHealthIfUnused();
+        return true;
+    }
+
+    IOfflineHealthSource* source = ensureOfflineHealth();
+    if (!source)
+        return false;
+    source->setOfflineTarget(addr);
+    // Deliberately does NOT touch m_backend, does not set m_family, and does
+    // not begin a connection. Aiming a read-only probe at a radio and
+    // connecting to it are different acts, and conflating them is what made
+    // this impossible to do safely against a radio somebody else was holding.
+    source->noteOfflineDemand();
+    return true;
 }
 
 // Shared key-on guard for the paths that do NOT go through setTransmit().
