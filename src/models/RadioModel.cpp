@@ -6556,6 +6556,14 @@ void RadioModel::onConnected()
     qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
     m_connectAttemptActive = false;  // the attempt landed (#4912)
     m_reconnectTimer.stop();
+    // Republish the declared capacity on the edge EVERY connect path reaches
+    // (#5603 review). connectToRadio() seeds it, but connectViaWan() and the
+    // LAN auto-reconnect timer never call that, and clearExtensionHandles() has
+    // already zeroed the backend's copy on the way down — so without this the
+    // control-protocol descriptor silently reverts to the model-table guess
+    // after any drop-and-reconnect while the GUI and bridge keep enforcing the
+    // declared number. That divergence is the thing this field exists to close.
+    publishRadioReportedCapacity();
     m_rebootInProgress = false;
     // Belt-and-braces (#4122 review): the connect entry points clear fixtures,
     // but isConnected() stays false for the whole Connecting phase, so a
@@ -7709,6 +7717,16 @@ void RadioModel::onDisconnected()
     // three paths at once, so a reconnect can never show the previous radio's
     // station label while the async info reply is in flight. (#4260 review)
     m_nickname.clear();
+    // Same three-path reasoning as the nickname above, and for the same class of
+    // bug: connectToRadio() is the ONLY place the declared capacity is seeded,
+    // so on the two paths that bypass it a second radio would inherit the first
+    // one's limits. Worse than stale — the precedence guards added for #5594
+    // item 3 then REFUSE the model-table correction that used to repair this
+    // when the new radio's model= status landed, so a leftover 8 would offer
+    // pan and slice creates a FLEX-6400 must refuse. Clearing here closes all
+    // three connect paths at once. (#5603 review)
+    m_declaredMaxSlices = 0;
+    m_maxPanadapters = 0;
     m_region.clear();
     m_ip.clear();
     m_netmask.clear();

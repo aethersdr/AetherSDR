@@ -24,14 +24,19 @@
 // The parser half (that max_* is read and the adjacent available_* is not) lives
 // in radio_discovery_test, which already has friend access to the parser.
 //
-// Socket-free: RadioModel is driven through connectToRadio() with a synthetic
-// RadioInfo; nothing binds, listens or connects.
+// No socket is bound or listened on, and no radio peer exists. connectToRadio()
+// does reach RadioConnection on its worker thread, so every RadioInfo below
+// carries TEST-NET-1 (RFC 5737, guaranteed unroutable) rather than a default
+// null address — the same precaution as demo_backend_swap_test.cpp:74. The
+// connect can then only fail, which is all these cases need.
 
 #include "core/RadioDiscovery.h"
 #include "models/ModelCapabilities.h"
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
+#include <QHostAddress>
+#include <QMetaObject>
 #include <QString>
 
 #include <cstdio>
@@ -57,6 +62,7 @@ int main(int argc, char** argv)
         RadioModel m;
         RadioInfo info;
         info.model = QStringLiteral("FLEX-6700");
+        info.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
         info.maxPanadapters = 3;
         info.maxSlices = 3;
         m.connectToRadio(info);
@@ -67,6 +73,17 @@ int main(int argc, char** argv)
               "the declared panadapter capacity wins over the model table");
         check(m.maxSlices() == 3,
               "the declared slice capacity wins over the model table");
+
+        // THE LEG THIS CHANGE JUSTIFIES ITSELF BY, and which nothing covered
+        // until #5603's third review: RadioResourceAdapter serializes
+        // backendCapabilities() onto the control protocol, so the descriptor
+        // has to carry the declared number too — not just the accessors the GUI
+        // reads. Deleting the publishRadioReportedCapacity() call leaves every
+        // other assertion in this file green.
+        check(m.backendCapabilities().maxPanadapters == 3,
+              "the declared panadapter capacity reaches the capability descriptor");
+        check(m.backendCapabilities().maxSlices == 3,
+              "the declared slice capacity reaches the capability descriptor");
     }
 
     // ---- pan and slice capacity are independent ----
@@ -75,6 +92,7 @@ int main(int argc, char** argv)
         RadioModel m;
         RadioInfo info;
         info.model = QStringLiteral("FLEX-6700");
+        info.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
         info.maxSlices = 8;
         info.maxPanadapters = 2;
         m.connectToRadio(info);
@@ -86,7 +104,8 @@ int main(int argc, char** argv)
     {
         RadioModel m;
         RadioInfo info;
-        info.model = QStringLiteral("FLEX-6700");   // maxSlices/maxPanadapters stay 0
+        info.model = QStringLiteral("FLEX-6700");
+        info.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1   // maxSlices/maxPanadapters stay 0
         m.connectToRadio(info);
         check(m.maxPanadapters() == 8 && m.maxSlices() == 8,
               "a radio that declares nothing falls back to the model table");
@@ -97,6 +116,7 @@ int main(int argc, char** argv)
         RadioModel m;
         RadioInfo big;
         big.model = QStringLiteral("FLEX-6700");
+        big.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
         big.maxPanadapters = 8;
         big.maxSlices = 8;
         m.connectToRadio(big);
@@ -106,10 +126,52 @@ int main(int argc, char** argv)
         // The previous radio's 8 must not survive into a 2-panadapter radio.
         RadioInfo byIp;
         byIp.model = QStringLiteral("FLEX-6400");
+        byIp.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
         m.connectToRadio(byIp);
         check(m.maxPanadapters() == capabilitiesFor(QStringLiteral("FLEX-6400")).maxSlices,
               "a connect that declares nothing falls back to the new radio's "
               "table rather than inheriting the previous radio's capacity");
+    }
+
+    // ---- a connect path that bypasses connectToRadio() cannot inherit ----
+    //
+    // connectToRadio() is NOT the only connect path: connectViaWan() takes no
+    // RadioInfo, and the LAN auto-reconnect timer drives the connection
+    // directly. RadioModel.cpp:7705-7710 records the same three-path lesson for
+    // m_nickname (#4260). The declared capacity is therefore cleared on the
+    // DISCONNECT side, which closes all three at once — and the descriptor is
+    // republished on the connected edge, which all three reach.
+    //
+    // Without the clear this is worse than stale: the precedence guards refuse
+    // the model-table correction that used to repair it, so a leftover 8 would
+    // offer creates a FLEX-6400 must refuse.
+    {
+        RadioModel m;
+        RadioInfo big;
+        big.model = QStringLiteral("FLEX-6700");
+        big.address = QHostAddress(QStringLiteral("192.0.2.2"));   // TEST-NET-1
+        big.maxPanadapters = 8;
+        big.maxSlices = 8;
+        m.connectToRadio(big);
+        check(m.maxPanadapters() == 8, "first radio declares 8");
+
+        // Drop the session the way every disconnect does. onDisconnected() is a
+        // private slot, so it is invoked by name rather than reached through a
+        // socket — the point is the state transition, not the transport.
+        QMetaObject::invokeMethod(&m, "onDisconnected", Qt::DirectConnection);
+        check(m.maxPanadapters() == capabilitiesFor(QString()).maxSlices,
+              "the declaration does not survive the disconnect");
+
+        // A smaller radio arrives on a path that never calls connectToRadio():
+        // its model lands on the status plane instead. The model table must be
+        // allowed to answer again.
+        m.handleStatusForTest(QStringLiteral("radio"),
+                              {{QStringLiteral("model"), QStringLiteral("FLEX-6400")}});
+        check(m.maxPanadapters() == capabilitiesFor(QStringLiteral("FLEX-6400")).maxSlices,
+              "after a disconnect a model= status restores the model-table "
+              "answer instead of the previous radio's declaration");
+        check(m.maxSlices() == capabilitiesFor(QStringLiteral("FLEX-6400")).maxSlices,
+              "and the slice capacity follows the same rule");
     }
 
     if (g_failures == 0)

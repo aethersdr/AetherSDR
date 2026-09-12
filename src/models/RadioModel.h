@@ -320,12 +320,6 @@ public:
         return m_maxSlices;
     }
     static int maxSlicesForModel(const QString& model);
-    // Hand the radio-declared capacity to the Flex backend so the capability
-    // DESCRIPTOR agrees with what this model enforces. RadioResourceAdapter
-    // serializes backendCapabilities() onto the aetherd control protocol, so
-    // without this a protocol client is told the model-table estimate while the
-    // GUI and the automation bridge use the radio's own number. (#5594 item 3)
-    void publishRadioReportedCapacity();
 
     // Per-model feature flags from the central ModelCapabilities table.
     // First consumer is the band selector (#695); future model-conditional
@@ -1838,6 +1832,15 @@ private:
     // counts — occupancy, not capacity — and turning them into a capacity means
     // pairing them with an object inventory that is not populated yet when the
     // first status lands. That derivation was tried and withdrawn; see #5603.
+    // Hand the radio-declared capacity to the Flex backend so the capability
+    // DESCRIPTOR agrees with what this model enforces. RadioResourceAdapter
+    // serializes backendCapabilities() onto the aetherd control protocol, so
+    // without this a protocol client is told the model-table estimate while the
+    // GUI and the automation bridge use the radio's own number. (#5594 item 3)
+    //
+    // Private: every caller is inside RadioModel, on the connect/seed edges.
+    void publishRadioReportedCapacity();
+
     int         m_declaredMaxSlices{0};
     int         m_maxPanadapters{0};
     QString     m_version;          // software version from discovery (e.g. "4.1.5")
