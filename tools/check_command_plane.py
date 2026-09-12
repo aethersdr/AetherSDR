@@ -75,7 +75,7 @@ from pathlib import Path
 # drop the number here in the same commit. When a file reaches 0, delete its row.
 BASELINE = {
     # ---- models ----
-    "src/models/RadioModel.cpp": 139,
+    "src/models/RadioModel.cpp": 137,
     "src/models/SliceModel.cpp": 63,
     "src/models/TransmitModel.cpp": 39,
     "src/models/CwxModel.cpp": 11,
@@ -83,39 +83,32 @@ BASELINE = {
     "src/models/EqualizerModel.cpp": 4,
     "src/models/FlexWaveformModel.cpp": 3,
     "src/models/UsbCableModel.cpp": 3,
-    "src/models/RadioModel.h": 1,
-    "src/models/SliceModel.h": 1,
     # ---- gui ----
-    "src/gui/RadioSetupDialog.cpp": 30,
-    "src/gui/MainWindow_Wiring.cpp": 22,
-    "src/gui/MainWindow.cpp": 20,
-    "src/gui/ProfileManagerDialog.cpp": 11,
+    "src/gui/RadioSetupDialog.cpp": 32,
+    "src/gui/MainWindow.cpp": 21,
+    "src/gui/MainWindow_Wiring.cpp": 20,
+    "src/gui/ProfileManagerDialog.cpp": 12,
+    "src/gui/MemoryDialog.cpp": 5,
     "src/gui/MainWindow_Controllers.cpp": 4,
+    "src/gui/MainWindow_Shortcuts.cpp": 4,
     "src/gui/TxBandDialog.cpp": 4,
-    "src/gui/DxClusterDialog.cpp": 3,
     "src/gui/MainWindow_Nets.cpp": 3,
-    "src/gui/MainWindow_Shortcuts.cpp": 3,
+    "src/gui/MemoryCommands.cpp": 3,
     "src/gui/MainWindow_DigitalModes.cpp": 2,
+    "src/gui/DxClusterDialog.cpp": 1,
     "src/gui/MainWindow_Spots.cpp": 1,
     "src/gui/PskReporterMapDialog.cpp": 1,
     "src/gui/SpectrumOverlayMenu.cpp": 1,
     "src/gui/SpotSettingsDialog.cpp": 1,
     # ---- core (above the seam; backends/ is excluded) ----
-    "src/core/TciServer.cpp": 8,
-    "src/core/VkampConnection.cpp": 8,
-    "src/core/AutomationServer.cpp": 5,
-    "src/core/TgxlConnection.cpp": 5,
-    "src/core/PgxlConnection.cpp": 3,
+    "src/core/TciServer.cpp": 11,
+    "src/core/AutomationServer.cpp": 6,
+    "src/core/WaveformInstaller.cpp": 3,
+    "src/core/DvkWavTransfer.cpp": 2,
+    "src/core/FirmwareUploader.cpp": 2,
+    "src/core/RigctlProtocol.cpp": 2,
     "src/core/WfmDemodulator.cpp": 2,
-    "src/core/DxClusterClient.cpp": 1,
-    "src/core/DxClusterClient.h": 1,
-    "src/core/FirmwareUploader.cpp": 1,
-    "src/core/PgxlConnection.h": 1,
-    "src/core/RigctlProtocol.cpp": 1,
-    "src/core/TgxlConnection.h": 1,
-    "src/core/VkampConnection.h": 1,
-    "src/core/WanConnection.cpp": 1,
-    "src/core/WanConnection.h": 1,
+    "src/core/TciProtocol.cpp": 1,
 }
 
 REPO = Path(__file__).resolve().parent.parent
@@ -133,42 +126,69 @@ BACKENDS_PREFIX = "src/core/backends/"
 # ratchet disarms while CI stays green. Observed on the first version.
 ABOVE_SEAM_DIR_FLOOR = 20
 
-# Always a Flex command-plane site.
-ALWAYS_RE = re.compile(r"emit\s+commandReady\s*\(|\bsendCmd\s*\(")
-# A sendCommand call, qualified or not.
-SEND_COMMAND_RE = re.compile(r"\bsendCommand\s*\(")
-# DEFINITIONS and declarations — not call sites.
-SEND_COMMAND_DEF_RE = re.compile(r"\b\w+::sendCommand\s*\(")
-SEND_CMD_DEF_RE = re.compile(r"\b\w+::sendCmd\s*\(|^\s*\w[\w:<>,\s&*]*\bsendCmd\s*\([^)]*\)\s*;\s*$",
-                             re.M)
+# ---- receiver classification -------------------------------------------------
+#
+# ALLOW-LIST, NOT DENY-LIST, and the direction is the point (#5619 review, Ozy).
+# `sendCommand` is a method name several unrelated device protocols share. A
+# deny-list gets the default wrong: the first version froze VkampConnection's
+# VK-amplifier poll and DxClusterDialog's telnet `show/dx` as if they were Flex
+# wire text, because they were not on it. Allow-listing the RadioModel receivers
+# inverts that — a NEW foreign protocol is ignored by default, which is correct,
+# and the residual risk becomes under-counting a Flex call made through an
+# unfamiliar receiver name. That risk is bounded by the census below, which was
+# taken over the whole above-seam tree rather than guessed.
+#
+# Receivers that ARE the Flex command plane (census of every qualified call):
+#     m_radioModel  61x sendCommand + 3x sendCmdPublic
+#     m_model       51x sendCommand + 12x sendCmdPublic
+#     model         10x sendCmdPublic + 1x sendCommand
+#     modelGuard     4x sendCommand
+#     this           1x sendCmd
+# Receivers that are OTHER DEVICES, each its own wire:
+#     client / m_dxCluster (DX cluster + RBN telnet), m_wanConn (SmartLink WAN),
+#     m_pgxlConn (PGXL amp), m_directConn (tuner), connection
+RADIO_MODEL_RECEIVERS = ("m_radioModel", "m_model", "model", "modelGuard", "this")
 
-# Files whose own `sendCommand` is a DIFFERENT DEVICE'S protocol. Named per file
-# rather than pattern-matched, because the distinction is semantic: it is about
-# which wire the string ends up on, which no regex can see.
-FOREIGN_SEND_COMMAND_FILES = {
-    # Writes to its own QTcpSocket with a "C<seq>|<cmd>" framing (:411).
-    "src/models/AntennaGeniusModel.cpp",
-    "src/models/AntennaGeniusModel.h",
+# Files whose UNQUALIFIED send* calls route to the Flex plane. Everything else
+# unqualified belongs to the object that defines it — AntennaGeniusModel writes
+# its own QTcpSocket, VkampConnection/TgxlConnection/PgxlConnection/WanConnection
+# each speak their own protocol.
+#
+# RadioModel.cpp is the sink itself; SliceModel.cpp reaches it through a one-line
+# helper whose body is `emit commandReady(cmd)` — the case the first version
+# missed, which froze the milestone's largest target at 2.
+PLANE_HELPER_FILES = {
+    "src/models/RadioModel.cpp",
+    "src/models/SliceModel.cpp",
 }
-# Receivers that are a different device even in an otherwise-counted file.
-FOREIGN_RECEIVER_RE = re.compile(r"m_directConn\s*->\s*sendCommand\s*\(")
+
+# The plane's own signal. Always a site, wherever it appears above the seam.
+EMIT_RE = re.compile(r"emit\s+commandReady\s*\(")
+# A qualified call on one of the RadioModel receivers. sendCmdPublic is included
+# explicitly: it forwards straight to sendCmd(), and the first version's
+# `\bsendCmd\s*\(` did not match it, so ~26 call sites across gui and core were
+# invisible to the freeze (#5619 review, Ozy).
+QUALIFIED_RE = re.compile(
+    r"\b(?:" + "|".join(RADIO_MODEL_RECEIVERS) + r")\s*(?:->|\.)\s*"
+    r"send(?:Command|Cmd|CmdPublic)\s*\(")
+# An unqualified call, only meaningful inside PLANE_HELPER_FILES.
+UNQUALIFIED_RE = re.compile(r"(?<![\w>.])send(?:Command|Cmd|CmdPublic)\s*\(")
+# Definitions and declarations are not call sites.
+DEF_RE = re.compile(r"\b\w+::send(?:Command|Cmd|CmdPublic)\s*\(")
 
 
 def count_for(path: Path) -> int:
     """Flex command-plane sites in one above-seam file, receiver resolved."""
     text = path.read_text(encoding="utf-8", errors="replace")
-    # Strip // comments and string-free enough for counting: a comment that says
-    # "emit commandReady" is not a call site. grep counted one in SliceModel.cpp.
+    # A comment that SAYS "emit commandReady" is not a call site; grep counted
+    # one in SliceModel.cpp.
     text = re.sub(r"//[^\n]*", "", text)
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
 
     rel = path.relative_to(REPO).as_posix()
-    n = len(ALWAYS_RE.findall(text))
-    n -= len(SEND_CMD_DEF_RE.findall(text))
-    if rel not in FOREIGN_SEND_COMMAND_FILES:
-        n += len(SEND_COMMAND_RE.findall(text))
-        n -= len(SEND_COMMAND_DEF_RE.findall(text))
-        n -= len(FOREIGN_RECEIVER_RE.findall(text))
+    n = len(EMIT_RE.findall(text)) + len(QUALIFIED_RE.findall(text))
+    if rel in PLANE_HELPER_FILES:
+        n += len(UNQUALIFIED_RE.findall(text)) - len(DEF_RE.findall(text))
     return max(n, 0)
 
 

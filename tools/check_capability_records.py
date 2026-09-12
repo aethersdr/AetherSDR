@@ -79,21 +79,30 @@ def direct_bool_fields(text: str) -> list[str]:
     depth = 0
     inside = False
     for line in lines[start:]:
+        # Braces are counted on COMMENT-STRIPPED text. A Doxygen member group
+        # (`/** @{ */` … `/** @} */`) puts braces in a comment, which the first
+        # version counted as real nesting: depth went to 2 and every bool inside
+        # the group became invisible to the ratchet (#5619 review, Ozy).
+        #
+        # Per-line stripping is enough for this header, which uses `//` and
+        # single-line `/* */` only. A MULTI-LINE /* */ containing an unbalanced
+        # brace would still fool it — noted rather than solved, because solving
+        # it properly means tracking comment state across lines and the header
+        # has never used that form.
+        code = re.sub(r"/\*.*?\*/", "", re.sub(r"//.*$", "", line))
         if not inside:
-            if "{" in line:
+            if "{" in code:
                 inside = True
-                depth += line.count("{") - line.count("}")
+                depth += code.count("{") - code.count("}")
             continue
         depth_before = depth
-        depth += line.count("{") - line.count("}")
+        depth += code.count("{") - code.count("}")
         # Depth 1 is the struct's own body; anything deeper is a nested type.
         #
         # The trailing comment is stripped FIRST. Guarding on a bare "(" in the
         # raw line looked right and silently dropped hasExtendedDsp, whose
         # comment reads "(NRS/RNN/NRF)" — an off-by-one in the frozen count that
         # would have banked a capability nobody could see.
-        code = re.sub(r"//.*$", "", line)
-        code = re.sub(r"/\*.*?\*/", "", code)
         if depth_before == 1 and "(" not in code:
             # EVERY declarator on the line, and every initialiser form. The
             # first version matched only `bool x = false;` — which is what the
