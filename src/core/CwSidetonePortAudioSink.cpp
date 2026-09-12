@@ -88,7 +88,14 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device,
                 return i;
             }
         }
-        qCInfo(lcAudio) << "CwSidetonePortAudioSink: no WASAPI endpoint-ID match for"
+        // qCWarning, not qCInfo: the success path above goes to
+        // lcAudioSummary, and if this leg stayed on lcAudio's filtered-out
+        // info level a default support bundle would show "matched by ID" when
+        // the match worked and NOTHING when it fell through to the non-unique
+        // friendly-name matching this block exists to replace. On the
+        // multi-connector HDMI hardware that motivated it, those two outcomes
+        // must not look alike. (#5200)
+        qCWarning(lcAudio) << "CwSidetonePortAudioSink: no WASAPI endpoint-ID match for"
                         << device.description() << "id=" << qtId
                         << "- falling back to name matching";
     }

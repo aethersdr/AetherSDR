@@ -40,6 +40,14 @@ void expect(bool ok, const char* what, long long got, long long want)
 
 constexpr int kRate = 48000;
 
+// A file-local pi, deliberately not the <cmath> macro: MSVC only defines that
+// when _USE_MATH_DEFINES is set before the include, and this TU pulls none of
+// the Qt GUI headers whose qmath.h provides a fallback. No Windows CI job
+// builds this target -- ci.yml and windows-installer.yml each build a named
+// target list -- so the break would surface only for a Windows developer
+// building the full tree. tests/asr_segmenter_test.cpp hit the same thing.
+constexpr double kPi = 3.14159265358979323846;
+
 // A 600 Hz tone at `amp` (0 == silence), continuing `phase` across calls so
 // consecutive blocks form one continuous waveform, exactly as the generator
 // feeds the sinks.
@@ -48,7 +56,7 @@ void render(std::vector<float>& buf, int frames, float amp, double& phase)
     buf.resize(std::size_t(frames) * 2);
     for (int i = 0; i < frames; ++i) {
         const float s = amp * float(std::sin(phase));
-        phase += 2.0 * M_PI * 600.0 / kRate;
+        phase += 2.0 * kPi * 600.0 / kRate;
         buf[2 * i]     = s;
         buf[2 * i + 1] = s;
     }
