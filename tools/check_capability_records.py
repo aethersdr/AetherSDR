@@ -91,21 +91,21 @@ def direct_bool_fields(text: str) -> list[str]:
     if start is None:
         raise SystemExit("check_capability_records: struct RadioCapabilities not found")
 
-    fields: list[str] = []
+    def code_of(raw: str) -> str:
+        """Comment-stripped text. Braces in comments are not nesting."""
+        return re.sub(r"/\*.*?\*/", "", re.sub(r"//.*$", "", raw))
+
+    # Accumulate the struct's OWN body (depth 1) as text, then split it into
+    # logical declarations on `;`. Matching per physical line missed a
+    # clang-format-wrapped declaration — `bool\n    x = false;` — which needs no
+    # intent to evade, and treated `bool a = false; bool b = false;` as one
+    # field (#5619 re-review, ten9876). Braces are still counted per line,
+    # which is what the depth tracking needs.
+    body: list[str] = []
     depth = 0
     inside = False
     for line in lines[start:]:
-        # Braces are counted on COMMENT-STRIPPED text. A Doxygen member group
-        # (`/** @{ */` … `/** @} */`) puts braces in a comment, which the first
-        # version counted as real nesting: depth went to 2 and every bool inside
-        # the group became invisible to the ratchet (#5619 review, Ozy).
-        #
-        # Per-line stripping is enough for this header, which uses `//` and
-        # single-line `/* */` only. A MULTI-LINE /* */ containing an unbalanced
-        # brace would still fool it — noted rather than solved, because solving
-        # it properly means tracking comment state across lines and the header
-        # has never used that form.
-        code = re.sub(r"/\*.*?\*/", "", re.sub(r"//.*$", "", line))
+        code = code_of(line)
         if not inside:
             if "{" in code:
                 inside = True
@@ -113,28 +113,38 @@ def direct_bool_fields(text: str) -> list[str]:
             continue
         depth_before = depth
         depth += code.count("{") - code.count("}")
-        # Depth 1 is the struct's own body; anything deeper is a nested type.
-        #
-        # The trailing comment is stripped FIRST. Guarding on a bare "(" in the
-        # raw line looked right and silently dropped hasExtendedDsp, whose
-        # comment reads "(NRS/RNN/NRF)" — an off-by-one in the frozen count that
-        # would have banked a capability nobody could see.
-        if depth_before == 1 and "(" not in code:
-            # EVERY declarator on the line, and every initialiser form. The
-            # first version matched only `bool x = false;` — which is what the
-            # header happens to use today, so it passed — and a brace init
-            # (`bool x{false};`), a second declarator (`bool a = false, b;`) and
-            # a bitfield (`bool x : 1;`) all walked straight past it (#5619
-            # review). Style-dependent evasions are exactly what a ratchet is
-            # for: the one bool that slips in will not match house style.
-            m = re.match(r"\s*bool\s+(?P<rest>[^;]*);", code)
-            if m:
-                for decl in m.group("rest").split(","):
-                    name = re.match(r"\s*([A-Za-z_]\w*)", decl)
-                    if name:
-                        fields.append(name.group(1))
+        # Depth 1 is the struct's own body. The CLOSING line of a multi-line
+        # initializer (`agcModes = {\n  …\n};`) is at depth 2 on entry but
+        # returns to 1, and it carries the terminating `;` — without it the
+        # unterminated fragment merges with the next declaration and swallows
+        # it. That cost hasModeIndependentSquelch exactly once, caught by
+        # diffing the parser against an independent reference rather than by
+        # the count looking wrong.
+        if depth_before == 1 or depth == 1:
+            body.append(code)
         if depth <= 0:
             break
+
+    fields: list[str] = []
+    for statement in " ".join(body).split(";"):
+        # `(` still excludes member functions and operator==. It also excludes a
+        # parenthesised initialiser (`bool x(false);`) — the most vexing parse,
+        # genuinely undecidable here, and a stated limitation rather than a
+        # heuristic that would misfire on real declarations.
+        if "(" in statement:
+            continue
+        # Leading attributes and qualifiers: `[[deprecated]] bool x`,
+        # `mutable bool x`. Stripped rather than enumerated, so a future
+        # qualifier does not silently create another evasion.
+        head = re.sub(r"^\s*(?:\[\[[^\]]*\]\]\s*|mutable\s+|static\s+|inline\s+)+",
+                      "", statement)
+        m = re.match(r"\s*bool\s+(?P<rest>.+)$", head, re.S)
+        if not m:
+            continue
+        for declarator in m.group("rest").split(","):
+            name = re.match(r"\s*([A-Za-z_]\w*)", declarator)
+            if name:
+                fields.append(name.group(1))
     return fields
 
 

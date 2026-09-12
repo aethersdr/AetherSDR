@@ -174,11 +174,26 @@ PLANE_HELPER_FILES = {
 
 RADIO_MODEL_RECEIVERS = ("m_radioModel", "m_model", "model", "modelGuard", "this")
 
+# ACCESSOR-CALL receivers: `radioModel().sendCommand(...)`. Real API on two
+# classes — MainWindow::radioModel() and RadioSession::radioModel() — so any
+# holder of a MainWindow* or RadioSession* reaches the plane without naming a
+# member. Zero incidence in the tree today, which is why this is head-room
+# rather than an under-count; it is closed anyway because a receiver that is
+# neither counted nor reported defeats the fail-closed invariant the allow-list
+# rests on (#5619 re-review, ten9876).
+RADIO_MODEL_ACCESSORS = ("radioModel", "model", "radio")
+
 # Receivers that are a DIFFERENT DEVICE. Named so that an unknown one can be an
 # error rather than a guess — see UNKNOWN_RECEIVER below.
 FOREIGN_RECEIVERS = (
     "client", "m_client", "m_rbnClient", "m_dxCluster",   # DX cluster + RBN telnet
-    "m_wanConn",                                          # SmartLink WAN channel
+    # WanConnection speaks the SAME V/H/R/S/M protocol as RadioConnection, over
+    # TLS — it is the Flex plane, not a foreign device. It is listed here anyway
+    # because RadioModel's calls THROUGH it are transport dispatch of a command
+    # some other site already produced; counting them would double-count. Its own
+    # internal sendCommand("ping") is SmartLink keepalive on its own socket.
+    # Right answer, different reason than "foreign" suggests.
+    "m_wanConn",
     "m_pgxlConn", "m_tgxlConn",                           # PGXL / TGXL amp + tuner
     "m_directConn",                                       # tuner direct connection
     "connection",
@@ -208,12 +223,15 @@ FOREIGN_RECEIVERS = (
 WIRE_TEXT_HELPERS = ("sendSet", "sendSetBit", "sendRemove")
 
 # The plane's own signal. Always a site, wherever it appears above the seam.
-EMIT_RE = re.compile(r"emit\s+commandReady\s*\(")
+EMIT_RE = re.compile(r"(?:emit|Q_EMIT)\s+commandReady\s*\(")
 # A qualified call on one of the RadioModel receivers. sendCmdPublic is included
 # explicitly: it forwards straight to sendCmd(), and an earlier matcher of
 # `\bsendCmd\s*\(` did not match it, hiding ~26 call sites.
 QUALIFIED_RE = re.compile(
     r"\b(?:" + "|".join(RADIO_MODEL_RECEIVERS) + r")\s*(?:->|\.)\s*"
+    r"send(?:Command|Cmd|CmdPublic)\s*\(")
+ACCESSOR_RE = re.compile(
+    r"\b(?:" + "|".join(RADIO_MODEL_ACCESSORS) + r")\s*\(\s*\)\s*(?:->|\.)\s*"
     r"send(?:Command|Cmd|CmdPublic)\s*\(")
 # A call to a generic passthrough helper, on any receiver.
 HELPER_RE = re.compile(
@@ -227,7 +245,7 @@ DEF_RE = re.compile(r"\b\w+::send(?:Command|Cmd|CmdPublic)\s*\(")
 # receivers that are in NEITHER list, which is a hard error rather than a silent
 # choice — see the UNKNOWN_RECEIVER note in main().
 ANY_QUALIFIED_RE = re.compile(
-    r"\b(\w+)\s*(?:->|\.)\s*send(?:Command|Cmd|CmdPublic)\s*\(")
+    r"\b(\w+)\s*(?:\(\s*\))?\s*(?:->|\.)\s*send(?:Command|Cmd|CmdPublic)\s*\(")
 
 
 def unknown_receivers(text: str) -> set[str]:
@@ -247,7 +265,8 @@ def unknown_receivers(text: str) -> set[str]:
     a hole.
     """
     seen = {m.group(1) for m in ANY_QUALIFIED_RE.finditer(text)}
-    return seen - set(RADIO_MODEL_RECEIVERS) - set(FOREIGN_RECEIVERS)
+    return (seen - set(RADIO_MODEL_RECEIVERS) - set(RADIO_MODEL_ACCESSORS)
+            - set(FOREIGN_RECEIVERS))
 
 
 UNCLASSIFIED: dict[str, list[str]] = {}
@@ -278,6 +297,7 @@ def count_for(path: Path) -> int:
     rel = path.relative_to(REPO).as_posix()
     n = (len(EMIT_RE.findall(text))
          + len(QUALIFIED_RE.findall(text))
+         + len(ACCESSOR_RE.findall(text))
          + len(HELPER_RE.findall(text)))
     if rel in PLANE_HELPER_FILES:
         n += len(UNQUALIFIED_RE.findall(text)) - len(DEF_RE.findall(text))
