@@ -173,6 +173,38 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/check_test_registration.py --strict
 
+      # ── #5262 M2: the capability descriptor's boolean population is FROZEN.
+      # A new capability lands as a per-feature record (std::optional<Record>:
+      # engaged = present, fields = shape), not another loose bool. Booleans
+      # fission when the second radio family arrives (hasRadioSideDsp became
+      # four tiers, hostModulates became two fields), and one a backend simply
+      # forgot to set reports a definite "no" indistinguishable from a
+      # considered one.
+      #
+      # This is a ratchet rather than a convention because the convention was
+      # written down and did not hold: #5299 alone added seven bools after M2
+      # was recorded. The count only falls; converting one means lowering
+      # FROZEN_BOOL_COUNT in the same commit.
+      - name: Capability record convention
+        if: ${{ !cancelled() }}
+        run: python tools/check_capability_records.py --strict
+
+      # ── #5262 M4: raw Flex wire text above the seam is FROZEN per file.
+      # Models emitting commandReady and widgets calling sendCommand hand
+      # RadioModel::sendCmd() a wire string that is SILENTLY DROPPED on
+      # HL2/Icom/ANAN/RTL — so every unconverted control is a live-looking dead
+      # control there. M0 (#5265) made the drop loud; this stops the backlog
+      # growing while the by-subsystem conversion works through it.
+      #
+      # Per file, not a total: a total would let one subsystem's conversion pay
+      # for another's regression, and a file absent from the baseline must stay
+      # at zero so a NEW control on the old plane fails even mid-migration.
+      # Growth under src/core/backends/flex/ is deliberately not counted — that
+      # is where the encode is supposed to end up.
+      - name: Command plane above the seam
+        if: ${{ !cancelled() }}
+        run: python tools/check_command_plane.py --strict
+
       # ── The per-PR test gate in ci.yml is FROZEN. ci.yml runs no Linux tests
       # and a short allow-list of platform-toolchain tests behind `ctest -R`
       # steps; the full suite runs unfiltered on every push to main
