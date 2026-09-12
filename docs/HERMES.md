@@ -1050,16 +1050,28 @@ canonical to-do table; §11.7 and §12.6 are partial views kept for provenance.
 Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 **L** a design conversation first.
 
-### Tier 1 — cheap, high value, do first
+### Tier 1 — closed
+
+**Every row here is closed, and five of the six were closed before the table was
+ever written.** Rows 1, 2, 5 and 6 shipped inside `f80429ba` — the squashed
+commit that brought up HL2 receive — and row 3 was finished by `ea851484` when
+transmit landed. The audit that produced this table read the oracles and the
+pre-squash tree; nobody re-read the merged tree afterwards, so six items sat
+here advertised as open work for weeks. Row 4 is different: it was built, taken
+to hardware, and **withdrawn**.
+
+The lesson is the table's own, not the items': **a backlog row is a claim about
+the tree, and it decays.** Check the symbol before you schedule the work.
+Audited against `origin/main` at `cfe2d557`.
 
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
-| 1 | Mute ramps `0.010/0.025/0.000/0.010` instead of all zeros | A3 §2 | The anti-click mechanism; invisible until you are debugging clicks | XS |
-| 2 | S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS | A3 §7 | Current meter is held flat by the AGC — it deflects but tracks nothing | XS |
-| 3 | Rename `kC0AdcAssign`; document the `0x0e` dual meaning | O §4 | It is TX LNA gain on HL2. Latent TX/PureSignal hazard | XS |
-| 4 | Pipeline reset `0x39[7:4]=0x8` after an NCO move | A2 §B2 | Decimation state smears a transient across band-scale jumps — which `a1cbe154` made routine | XS |
-| 5 | Normalize by `2^23-1`, not `2^23` | A1 §A2 | dBFS parity with piHPSDR. Numerically trivial, but parity is the point | XS |
-| 6 | `RXASetNC` / `RXASetMP` after `OpenChannel` | A3 §7 | Selectivity vs latency; matters to CW operators. We silently take defaults | XS |
+| ~~1~~ | ~~Mute ramps `0.010/0.025/0.000/0.010` instead of all zeros~~ **DONE** | A3 §2 | `WdspChannel::Config` carries exactly those four values and `WdspChannel::open` hands them to `OpenChannel`. **Not HL2-scoped** — it is the shared `WdspChannel::Config`, so ANAN and RTL — the other two families that open a WDSP channel — already open with the same anti-click envelope. Flex, Icom, Sim and Web-888 never touch this path | — |
+| ~~2~~ | ~~S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS~~ **DONE** | A3 §7 | `Hl2RxDsp` emits `meterUpdate` from `WdspChannel::meter(Meter::SignalPeak)`, which is `GetRXAMeter(..., RXA_S_PK)`; the AGC-holds-it-flat reasoning is written at the call site. `AnanRxDsp` reads the same meter. **No audio-RMS meter survives on either path** | — |
+| ~~3~~ | ~~Rename `kC0AdcAssign`; document the `0x0e` dual meaning~~ **DONE** | O §4 | The constant is `kC0AdcAssignOrTxGain`, and the comment above it splits the generic-openHPSDR reading (per-receiver ADC assignment) from the HL2 one (TX LNA gain, `[15]` enable / `[14]` mode / `[13:8]` value) and names the two unbuilt things that need `0x0e` to carry a real value: the T/R gain switch and PureSignal's feedback path. The hazard is now documented rather than latent | — |
+| ~~4~~ | ~~Pipeline reset `0x39[7:4]=0x8` after an NCO move~~ **WITHDRAWN** | A2 §B2 | Built and tried. `ccPipelineReset()` still encodes the bank and `hl2_metis_protocol_test` still pins its bytes, but `MetisClient::requestPipelineReset()` is a **deliberate no-op**: driving it per NCO move fired ~30 resets/second during a pan drag and wedged the board until a physical power cycle. It validated at 7 resets ~2 s apart; the drag path was never exercised. Two causes were never separated — the reset rate, and the zeros we wrote to `0x39[27:24]`/`[11:8]` on an unverified assumption. The preconditions for bringing it back are written at the function, and `CERTIFICATION.md` §1.7 carries the general lesson (validate at the rate the UI actually produces). **Do not re-open this as cheap work** | — |
+| ~~5~~ | ~~Normalize by `2^23-1`, not `2^23`~~ **DONE** | A1 §A2 | `kFullScale = (1 << 23) - 1` in `MetisProtocol.h`, applied in the EP6 sample decode. **Not HL2-scoped in effect** — `P2Protocol.h`'s `kFullScale24Bit` is the same constant with a comment pointing back here, so ANAN has the same dBFS scale. Both are asserted in `hl2_metis_protocol_test` and `anan_p2_protocol_test` | — |
+| ~~6~~ | ~~`RXASetNC` / `RXASetMP` after `OpenChannel`~~ **DONE** | A3 §7 | `WdspChannel::open` calls both from `Config::filterTaps` / `Config::minimumPhase`, under the setup lock, after the mode/passband/AGC configuration and before the channel is started. **Not HL2-scoped** — ANAN and RTL open through the same function, so they get the configured filter length instead of WDSP's default too. Flex, Icom, Sim and Web-888 are unaffected | — |
 | ~~6a~~ | ~~Rate-limit the ADC-overload warning~~ **DONE** | §15.7 | The edge gate stays and a 10 s rate limit sits behind it, carrying the count of transitions the window swallowed. Note the severity here was already overstated when this row was written — see §15.7 | — |
 
 ### Tier 2 — correctness gaps
