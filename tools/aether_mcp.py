@@ -313,7 +313,20 @@ def _signal_owned_process(process, *, force=False):
     The child is launched with start_new_session=True, so it is a session
     leader (pgid == pid) and any helper subprocesses it spawns share that
     group; signalling the group reaps them too. Fall back to the single
-    process if the group is already gone or on Windows (no POSIX groups)."""
+    process if the group is already gone or on Windows (no POSIX groups).
+
+    The two platforms are NOT equivalent, and the fallback is weaker than it
+    looks. On Windows terminate()/kill() are TerminateProcess: no signal is
+    delivered, so a SIGTERM handler in the child never runs — including the
+    HL2 emergency unkey in src/core/backends/hl2/Hl2EmergencyStop.cpp, whose
+    SIGTERM/SIGINT registration is deliberately outside the #ifndef Q_OS_WIN.
+    TerminateProcess also does not reap descendants, so the group-reaping
+    property above is POSIX-only. This is not fixable at this seam:
+    CREATE_NEW_PROCESS_GROUP is set at launch, but CTRL_BREAK_EVENT only
+    reaches console applications, not a windowed Qt process. It is bounded in
+    practice because the app_instance launch path pins
+    AETHER_AUTOMATION_NO_TX=1 and drops AETHER_AUTOMATION_ALLOW_TX, so an
+    owned app cannot key through the bridge."""
     if sys.platform != "win32":
         sig = signal.SIGKILL if force else signal.SIGTERM
         try:

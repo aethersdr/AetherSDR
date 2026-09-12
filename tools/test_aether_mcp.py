@@ -338,7 +338,17 @@ def test_owned_process_shutdown():
                 raise aether_mcp.subprocess.TimeoutExpired("mock", timeout)
             return self.returncode
 
+    def no_process_group(_pid):
+        raise ProcessLookupError("mock process has no OS process group")
+
     try:
+        # Stub os BEFORE the win32 loop, not after it. Process.pid is a fake
+        # that is entirely plausible on a real host, and this test exists to
+        # assert the platform guard — so it must not depend on that guard
+        # holding. If the guard ever regresses, a real process group would be
+        # signalled here, under the registered CTest.
+        aether_mcp.os = SimpleNamespace(**vars(original_os))
+        aether_mcp.os.getpgid = no_process_group
         aether_mcp.sys = SimpleNamespace(platform="win32")
         aether_mcp.signal = SimpleNamespace(SIGTERM=15)  # Deliberately no SIGKILL.
         for needs_kill, refuses_kill in ((False, False), (True, False), (True, True)):
@@ -357,9 +367,9 @@ def test_owned_process_shutdown():
         group_calls = []
         aether_mcp.sys = SimpleNamespace(platform="linux")
         aether_mcp.signal = SimpleNamespace(SIGTERM=15, SIGKILL=9)
-        aether_mcp.os = SimpleNamespace(
-            getpgid=lambda pid: pid,
-            killpg=lambda pid, sig: group_calls.append((pid, sig)))
+        aether_mcp.os = SimpleNamespace(**vars(original_os))
+        aether_mcp.os.getpgid = lambda pid: pid
+        aether_mcp.os.killpg = lambda pid, sig: group_calls.append((pid, sig))
         process = Process()
         aether_mcp._signal_owned_process(process)
         aether_mcp._signal_owned_process(process, force=True)
@@ -367,10 +377,7 @@ def test_owned_process_shutdown():
               group_calls == [(process.pid, 15), (process.pid, 9)] and not process.calls,
               str(group_calls))
 
-        def missing_group(_pid):
-            raise ProcessLookupError("mock process group already exited")
-
-        aether_mcp.os.getpgid = missing_group
+        aether_mcp.os.getpgid = no_process_group
         aether_mcp._signal_owned_process(process)
         aether_mcp._signal_owned_process(process, force=True)
         check("POSIX missing-group fallback retains terminate/kill",
