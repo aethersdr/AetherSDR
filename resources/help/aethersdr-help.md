@@ -210,6 +210,8 @@ The TX applet is the main transmit command surface. It includes:
 
 Before transmitting, this is the applet that should match your intention.
 
+While TUNE is active, CW keying is held off: a paddle, straight key, keyboard CW shortcut, or CWX text does not transmit until TUNE is pressed off, and TUNE will not start while a key or paddle is held or CWX text is being sent. (The radio would otherwise key CW at the tune power setting and stay in transmit with no carrier afterwards.)
+
 ### `PHN`
 
 The Phone applet is focused on voice-mode shaping and behavior:

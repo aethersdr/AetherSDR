@@ -4,6 +4,7 @@
 #include "MidiMappingDialog.h"
 #include "core/AppSettings.h"
 #include "FramelessMessageBox.h"
+#include "ScopedChildWidget.h"
 #include "core/MidiControlManager.h"
 #include "core/MidiSettings.h"
 
@@ -27,6 +28,7 @@
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QPointer>
 #include <QStandardPaths>
 
 namespace AetherSDR {
@@ -435,23 +437,31 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
 
 void MidiMappingDialog::importProfileFromFile()
 {
-    QFileDialog dialog(this, QStringLiteral("Import MIDI Profile"),
-                       midiTransferDirectory(),
-                       QStringLiteral("MIDI profiles (*.xml *.map);;All files (*)"));
+    const QPointer<MidiMappingDialog> self(this);
+    const QPointer<MidiControlManager> manager(m_manager);
+    ScopedChildWidget<QFileDialog> dialogOwner(this);
+    QFileDialog& dialog = *dialogOwner.get();
+    dialog.setWindowTitle(QStringLiteral("Import MIDI Profile"));
+    dialog.setDirectory(midiTransferDirectory());
+    dialog.setNameFilter(QStringLiteral("MIDI profiles (*.xml *.map);;All files (*)"));
     dialog.setAcceptMode(QFileDialog::AcceptOpen);
     dialog.setFileMode(QFileDialog::ExistingFile);
-    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+    const int dialogResult = dialog.exec();
+    if (!self || !dialogOwner || !manager || dialogResult != QDialog::Accepted
+        || dialog.selectedFiles().isEmpty()) {
         return;
+    }
     const QString path = dialog.selectedFiles().first();
     rememberMidiTransferDirectory(path);
 
     const MidiImportResult result = MidiSettings::instance().importProfile(
         path,
-        [this](const QString& id) { return m_manager->findParam(id) != nullptr; });
+        [manager](const QString& id) { return manager && manager->findParam(id) != nullptr; });
 
     const QString fileName = QFileInfo(path).fileName();
     if (!result.ok()) {
-        FramelessMessageBox box(this);
+        ScopedChildWidget<FramelessMessageBox> boxOwner(this);
+        FramelessMessageBox& box = *boxOwner.get();
         box.setIcon(QMessageBox::Warning);
         box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
         box.setText(QStringLiteral("No bindings were imported from %1.").arg(fileName));
@@ -485,7 +495,8 @@ void MidiMappingDialog::importProfileFromFile()
                QStringLiteral("%1 duplicate row(s) were dropped."));
 
     if (result.importedCount == 0) {
-        FramelessMessageBox box(this);
+        ScopedChildWidget<FramelessMessageBox> boxOwner(this);
+        FramelessMessageBox& box = *boxOwner.get();
         box.setIcon(QMessageBox::Warning);
         box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
         box.setText(QStringLiteral("No usable bindings in %1.").arg(fileName));
@@ -501,7 +512,8 @@ void MidiMappingDialog::importProfileFromFile()
     refreshProfileList();
     m_profileCombo->setCurrentText(result.profileName);
 
-    FramelessMessageBox box(this);
+    ScopedChildWidget<FramelessMessageBox> boxOwner(this);
+    FramelessMessageBox& box = *boxOwner.get();
     box.setIcon(informativeLines.isEmpty() ? QMessageBox::Information
                                            : QMessageBox::Warning);
     box.setWindowTitle(QStringLiteral("Import MIDI Profile"));
@@ -520,7 +532,12 @@ void MidiMappingDialog::importProfileFromFile()
 
 void MidiMappingDialog::exportProfileToFile()
 {
-    const auto& bindings = m_manager->bindings();
+    const QPointer<MidiMappingDialog> self(this);
+    const QPointer<MidiControlManager> manager(m_manager);
+    if (!manager) {
+        return;
+    }
+    const auto bindings = manager->bindings();
     if (bindings.isEmpty()) {
         FramelessMessageBox::information(this, QStringLiteral("Export MIDI Profile"),
                                          QStringLiteral("There are no bindings to export."));
@@ -533,13 +550,20 @@ void MidiMappingDialog::exportProfileToFile()
                                  .arg(QDateTime::currentDateTime().toString(
                                           QStringLiteral("yyyyMMdd_HHmmss")),
                                       QCoreApplication::applicationVersion());
-    QFileDialog dialog(this, QStringLiteral("Export MIDI Profile"),
-                       QDir(midiTransferDirectory()).filePath(fileName),
-                       QStringLiteral("MIDI profile XML (*.xml)"));
+    ScopedChildWidget<QFileDialog> dialogOwner(this);
+    QFileDialog& dialog = *dialogOwner.get();
+    dialog.setWindowTitle(QStringLiteral("Export MIDI Profile"));
+    const QString initialPath = QDir(midiTransferDirectory()).filePath(fileName);
+    dialog.setDirectory(QFileInfo(initialPath).absolutePath());
+    dialog.selectFile(QFileInfo(initialPath).fileName());
+    dialog.setNameFilter(QStringLiteral("MIDI profile XML (*.xml)"));
     dialog.setAcceptMode(QFileDialog::AcceptSave);
     dialog.setDefaultSuffix(QStringLiteral("xml"));
-    if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty())
+    const int dialogResult = dialog.exec();
+    if (!self || !dialogOwner || !manager || dialogResult != QDialog::Accepted
+        || dialog.selectedFiles().isEmpty()) {
         return;
+    }
     const QString path = dialog.selectedFiles().first();
     rememberMidiTransferDirectory(path);
 
@@ -663,19 +687,27 @@ void MidiMappingDialog::refreshProfileList()
 
 void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBinding* existing)
 {
+    const QString stableParamId(paramId);
+    const QPointer<MidiMappingDialog> self(this);
+    const QPointer<MidiControlManager> manager(m_manager);
+    if (!manager) {
+        return;
+    }
     // A stray controller touch must not complete a half-armed Learn while the
     // operator is typing in this form.
-    if (m_manager->isLearning())
-        m_manager->cancelLearn();
+    if (manager->isLearning()) {
+        manager->cancelLearn();
+    }
 
-    const MidiParam* param = m_manager->findParam(paramId);
+    const MidiParam* param = manager->findParam(stableParamId);
     const QString paramLabel = param
-        ? QString("[%1] %2").arg(param->category, param->displayName) : paramId;
+        ? QString("[%1] %2").arg(param->category, param->displayName) : stableParamId;
     // Learn forces relative=true on VFO CC captures (onMidiMessage); the form
     // mirrors that as a default so a typed VFO knob behaves like a learned one.
-    const bool isVfoKnob = MidiControlManager::isVfoTuneKnob(paramId);
+    const bool isVfoKnob = MidiControlManager::isVfoTuneKnob(stableParamId);
 
-    QDialog dlg(this);
+    ScopedChildWidget<QDialog> dialogOwner(this);
+    QDialog& dlg = *dialogOwner.get();
     dlg.setWindowTitle(existing ? "Edit MIDI Binding" : "Add MIDI Binding");
     dlg.setModal(true);
     dlg.setObjectName("midiManualBindingDialog");
@@ -777,15 +809,17 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
     connect(typeCombo, &QComboBox::currentIndexChanged, &dlg, refreshFieldStates);
     refreshFieldStates();
 
-    if (dlg.exec() != QDialog::Accepted)
+    const int dialogResult = dlg.exec();
+    if (!self || !dialogOwner || !manager || dialogResult != QDialog::Accepted) {
         return;
+    }
 
     MidiBinding b;
     b.channel  = channelCombo->currentData().toInt();
     b.msgType  = MidiBinding::MsgType(typeCombo->currentData().toInt());
     // Learn stores -1 for Pitch Bend (the message carries no number); mirror it.
     b.number   = (b.msgType == MidiBinding::PitchBend) ? -1 : numberSpin->value();
-    b.paramId  = paramId;
+    b.paramId  = stableParamId;
     b.inverted = invertCheck->isChecked();
     b.relative = relativeCheck->isChecked() && b.msgType == MidiBinding::CC;
 
@@ -796,7 +830,7 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
     // silently — name the loser and ask.
     QStringList shadowedNames;
     QStringList shadowedIds;
-    for (const auto& cur : m_manager->bindings()) {
+    for (const auto& cur : manager->bindings()) {
         // Overlap, not key() equality: key() folds the wildcard channel to
         // 0xFF while dispatch probes the exact-channel key first and falls
         // back to the wildcard — so an "Any" binding and a channel-specific
@@ -808,7 +842,7 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
             && (b.msgType == MidiBinding::PitchBend || cur.number == b.number)
             && (cur.channel < 0 || b.channel < 0 || cur.channel == b.channel);
         if (cur.paramId != b.paramId && sameSource) {
-            const MidiParam* cp = m_manager->findParam(cur.paramId);
+            const MidiParam* cp = manager->findParam(cur.paramId);
             shadowedNames << (cp ? QString("[%1] %2").arg(cp->category, cp->displayName)
                                  : cur.paramId);
             shadowedIds << cur.paramId;
@@ -824,15 +858,18 @@ void MidiMappingDialog::openManualEditor(const QString& paramId, const MidiBindi
                     "Replace the existing binding%3?")
                 .arg(b.sourceDisplayName(), shadowedNames.join("\n  "),
                      shadowedIds.size() > 1 ? QStringLiteral("s") : QString()));
+        if (!self || !manager) {
+            return;
+        }
         if (answer != FramelessMessageBox::Yes)
             return;
         for (const auto& id : shadowedIds)
-            m_manager->removeBinding(id);
+            manager->removeBinding(id);
     }
 
-    m_manager->addBinding(b);
+    manager->addBinding(b);
     refreshBindingTable();
-    MidiSettings::instance().saveBindings(m_manager->bindings());
+    MidiSettings::instance().saveBindings(manager->bindings());
 }
 
 } // namespace AetherSDR

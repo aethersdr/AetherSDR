@@ -245,7 +245,7 @@ For a look-but-don't-touch session — handing an assistant visibility
 without letting it change anything — check **"Observe only"** in Radio
 Setup → Network. The bridge then refuses **every** mutating verb and
 answers only pure-introspection reads (`ping`, `verbs`, `whoami`, `get`,
-`dumpTree`, `grab`, the read-only `log` actions, `floors`, the inventory-only
+`dumpTree`, `grab`, `cell`, the read-only `log` actions, `floors`, the inventory-only
 `streams` actions, and `hitTest`). In particular, it blocks `log set/reset`
 and `streams reset/resync/refresh`; the latter two stream actions clear local
 diagnostics or request a fresh radio inventory. It is
@@ -1957,6 +1957,63 @@ platform does not run Qt's built-in tooltip timer under automation.
 ```
 
 Use `{"cmd":"tooltip","target":"E","action":"hide"}` to dismiss it.
+
+Item views keep their tips on the items, not the widget, so the form above
+answers `target has no tooltip` when the table has no widget-level tip. The
+cell form sends the same help event at one cell's rectangle, to the view's viewport, which is what a
+real hover does:
+
+```text
+→ tooltip networkDiagnosticsTciClients cell 0 0
+← {"ok":true,"target":"networkDiagnosticsTciClients","class":"QTableWidget",
+   "row":0,"col":0,"text":"Your own label for this client (saved locally, keyed by IP)",
+   "accepted":true,"grabHint":"QTipLabel", ...}
+→ {"cmd":"tooltip","target":"networkDiagnosticsTciClients","action":"cell","value":"0 0"}
+```
+
+The row is scrolled into view first; the help event targets the visible part
+of the cell, including when the cell is wider than the viewport. A cell whose
+`Qt::ToolTipRole` is empty
+answers `cell has no tooltip`; a row or column the view hides (a search
+filter, `setColumnHidden`) answers
+`cell is not visible (hidden or outside viewport)`; a target that is not a
+`QAbstractItemView` answers `target is not an item view`; the text form with anything other than exactly `<row> <col>`
+after `cell` answers `tooltip cell takes exactly <row> <col>` (an override
+that literally starts with "cell" goes through the JSON `value` field, as
+for `hide`). This reserves `cell` as a keyword in the text form; existing
+widget tooltip overrides otherwise keep their behavior. A model reset or view
+replacement during scrolling answers `cell changed while scrolling`.
+Rows address the first level below the view's current root, as with `cell`.
+
+### `cell`
+Read one item-view cell as data — no hover, no timing. Works for any
+`QAbstractItemView` (`QTableWidget`, `QTreeWidget`, `QListWidget`, model
+views) because it reads the model's roles rather than `QTableWidget::item()`.
+`toolTip` is the item's `Qt::ToolTipRole`, the same text a hover would raise,
+so a per-cell tip is assertable in one round trip. `cell` is a pure read and
+is allowed in observe-only mode; the `tooltip ... cell` form is not.
+
+```text
+→ cell networkDiagnosticsTciClients 0 1
+← {"ok":true,"target":"networkDiagnosticsTciClients","class":"QTableWidget",
+   "row":0,"col":1,"text":"127.0.0.1:56564","toolTip":"","accessibleText":"",
+   "selected":false,"rows":1,"cols":7}
+→ {"cmd":"cell","target":"networkDiagnosticsTciClients","value":"0 1"}
+```
+
+`rows`/`cols` report the model's extent under the view's current root, and
+indices address that same level. With the default root these are top-level
+rows; descendants below the displayed root's first level are not addressable.
+Sorted/proxy views use their displayed model's row order.
+
+Both cell forms share these errors: `view has no model`,
+`cell needs integer row and column indices` (missing, extra, noninteger, or
+overflowing operands), `row N out of range [0,R)`,
+`column N out of range [0,C)`, `cell has no valid model index`, and
+`target is not an item view`. A missing target answers
+`widget or window not found`; the bare `cell` command without a target
+answers `cell requires a target item view`. Hidden views can be read with
+`cell`, but `tooltip` refuses them as `refused: '<target>' is not visible`.
 
 ### `scrollTo` (alias `ensureVisible`)
 Scroll the target's nearest `QScrollArea` ancestor so the widget sits in the
@@ -4185,7 +4242,7 @@ code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 73 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 74 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4198,6 +4255,7 @@ still a separate radiocert task.
 | `close` | — | close <target> — close the target's top-level window |
 | `hover` | — | hover <target> [leave] — synthetic mouse hover |
 | `tooltip` | — | tooltip <target> [hide\|text…] — force-show a native tooltip |
+| `cell` | — | cell <target> <row> <col> — read an item-view cell: text, tooltip, selection |
 | `scrollTo` | `ensureVisible` | scrollTo <target> — scroll a widget into its scroll-area viewport |
 | `drag` | `mouse` | drag <target> <dx> <dy> — synthesize press→move→release |
 | `wheel` | `scroll` | wheel <target> <x> <y> <steps> [modifiers] — synthesize a wheel event (positive steps = scroll up); drives wheel VFO tuning |
@@ -4238,7 +4296,7 @@ still a separate radiocert task.
 | `dss` | — | dss <snapshot\|reset\|inject\|scrollback\|live> [pan] [args] |
 | `streams` | — | streams [radio\|inventory\|resync\|refresh\|reset] — stream diagnostics |
 | `devices` | — | devices <list\|ulanzi\|ulanzi-start\|ulanzi-stop> — external-device diagnostics and lifecycle control |
-| `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod, TXDELAY, RX tap, WIDE1-1 fill-in, and decoder health |
+| `modem` | `aethermodem` | modem <status\|profile hf300\|profile vhf1200\|on\|off\|preamble <flags\|auto>\|digi [status\|on\|off\|beacon]> — AetherModem demod profile, TXDELAY, RX tap, WIDE1-1 fill-in digipeater, and decoder health |
 | `link` | `ax25` | link <status\|connect <call> [via <digi>]\|disconnect\|mycall <call>\|listen <call>\|alias <call>\|pms on\|off> — connected-mode AX.25 terminal + mailbox, with measured RTT vs configured T1 |
 | `memprofile` | — | memprofile <snapshot\|start\|sample\|status\|report\|samples\|stop\|reset> [intervalMs maxSamples] |
 | `tci` | — | tci start\|status\|stop\|send\|trace\|routes [@id] [rx=N] — TCI simulator (multi-client: @id names a client, rx=N its audio_start receiver) and protocol diagnostics |

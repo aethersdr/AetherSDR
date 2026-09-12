@@ -14,6 +14,7 @@
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMessageBox>
+#include "ScopedChildWidget.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -1022,8 +1023,10 @@ void TokenEditorWidget::onGradientRequestDeleteStop(int index)
     if (m_settingControlsFromToken) return;
     if (index < 0 || index >= m_gradientBuf.stops.size()) return;
     if (m_gradientBuf.stops.size() <= 2) {
-        QMessageBox::information(this, QStringLiteral("Cannot delete stop"),
-            QStringLiteral("A gradient needs at least two stops."));
+        ScopedChildWidget<QMessageBox> boxOwner(
+            QMessageBox::Information, QStringLiteral("Cannot delete stop"),
+            QStringLiteral("A gradient needs at least two stops."), QMessageBox::Ok, this);
+        boxOwner.get()->exec();
         return;
     }
     m_gradientBuf.stops.removeAt(index);

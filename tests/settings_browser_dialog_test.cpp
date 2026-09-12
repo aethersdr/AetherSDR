@@ -12,6 +12,7 @@
 #include "core/AppSettings.h"
 #include "core/SettingsDatabase.h"
 #include "core/SettingsPaths.h"
+#include "gui/FramelessMessageBox.h"
 #include "gui/SettingsBrowserDialog.h"
 
 #include <QApplication>
@@ -21,6 +22,7 @@
 #include <QMouseEvent>
 #include <QStyle>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QTest>
@@ -438,6 +440,187 @@ void testEditableRowShowsStoredBytes()
            "control: that row is the editable one (masked rows may diverge)");
 }
 
+void testAddKeyNestedDialogSurvivesPersistentParentClose()
+{
+    // Match MainWindow::showOrRaisePersistent(): the browser is a top-level
+    // persistent dialog that deletes itself on close, then opens Add Key.
+    QPointer<SettingsBrowserDialog> parent(new SettingsBrowserDialog);
+    parent->setAttribute(Qt::WA_DeleteOnClose);
+    parent->setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+    parent->show();
+
+    QPushButton* add = nullptr;
+    for (QPushButton* button : parent->findChildren<QPushButton*>()) {
+        if (button->accessibleName() == QStringLiteral("Add settings key")) {
+            add = button;
+            break;
+        }
+    }
+    expect(add != nullptr, "the persistent browser exposes Add Key");
+    if (add == nullptr) {
+        parent->close();
+        settle();
+        return;
+    }
+
+    QPointer<QWidget> child;
+    bool closeIssued = false;
+    bool timedOut = false;
+    QTimer closeParent;
+    closeParent.setSingleShot(true);
+    QObject::connect(&closeParent, &QTimer::timeout, &closeParent, [&] {
+        QWidget* modal = QApplication::activeModalWidget();
+        if (modal == nullptr || !parent) {
+            return;
+        }
+        child = modal;
+        closeIssued = true;
+        parent->close();
+    });
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QObject::connect(&watchdog, &QTimer::timeout, &watchdog, [&] {
+        timedOut = true;
+        if (QWidget* modal = QApplication::activeModalWidget()) {
+            modal->close();
+        }
+        if (parent) {
+            parent->close();
+        }
+    });
+    closeParent.start(0);
+    watchdog.start(1500);
+    QTest::mouseClick(add, Qt::LeftButton);
+    watchdog.stop();
+    settle();
+
+    expect(!timedOut, "Add Key parent-close scenario returns before its watchdog");
+    expect(closeIssued, "Add Key was open when its persistent parent closed");
+    expect(parent.isNull() && child.isNull(),
+           "closing the WA_DeleteOnClose browser deletes both browser and Add Key child");
+}
+
+void testViewerNestedDialogSurvivesPersistentParentClose()
+{
+    QPointer<SettingsBrowserDialog> parent(new SettingsBrowserDialog);
+    parent->setAttribute(Qt::WA_DeleteOnClose);
+    parent->setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+    parent->resize(900, 600);
+    parent->show();
+
+    QTreeWidget* tree = treeOf(*parent);
+    QTableWidget* table = tableOf(*parent);
+    if (tree == nullptr || table == nullptr
+        || !selectScope(tree, QStringLiteral("AA:BB:CC:DD:EE:01"))) {
+        expect(false, "persistent browser exposes the seeded viewer row");
+        parent->close();
+        settle();
+        return;
+    }
+    QApplication::processEvents();
+    const int row = rowForKey(table, QStringLiteral("CleanDoc"));
+    if (row < 0) {
+        expect(false, "persistent browser lists CleanDoc for viewer teardown");
+        parent->close();
+        settle();
+        return;
+    }
+
+    QPointer<QWidget> child;
+    bool closeIssued = false;
+    bool timedOut = false;
+    QTimer closeParent;
+    QObject::connect(&closeParent, &QTimer::timeout, &closeParent, [&] {
+        QWidget* modal = QApplication::activeModalWidget();
+        if (modal == nullptr || !parent) {
+            return;
+        }
+        child = modal;
+        closeIssued = true;
+        closeParent.stop();
+        parent->close();
+    });
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QObject::connect(&watchdog, &QTimer::timeout, &watchdog, [&] {
+        timedOut = true;
+        if (QWidget* modal = QApplication::activeModalWidget()) {
+            modal->close();
+        }
+        if (parent) {
+            parent->close();
+        }
+    });
+    closeParent.start(10);
+    watchdog.start(1500);
+    sendDoubleClick(table, row, 2);
+    for (int i = 0; i < 160 && !closeIssued && !timedOut; ++i) {
+        QTest::qWait(10);
+    }
+    closeParent.stop();
+    watchdog.stop();
+    settle();
+
+    expect(!timedOut, "viewer parent-close scenario returns before its watchdog");
+    expect(closeIssued, "document viewer was open when its persistent parent closed");
+    expect(parent.isNull() && child.isNull(),
+           "closing the WA_DeleteOnClose browser deletes both browser and viewer child");
+}
+
+void testStaticWarningSurvivesParentDeletion()
+{
+    QPointer<QWidget> parent(new QWidget);
+    parent->setAttribute(Qt::WA_DeleteOnClose);
+    parent->show();
+
+    QPointer<QWidget> warning;
+    bool closeIssued = false;
+    bool timedOut = false;
+    QTimer closeParent;
+    closeParent.setSingleShot(true);
+    QObject::connect(&closeParent, &QTimer::timeout, &closeParent, [&] {
+        QWidget* modal = QApplication::activeModalWidget();
+        if (modal == nullptr || !parent) {
+            return;
+        }
+        warning = modal;
+        closeIssued = true;
+        parent->close();
+    });
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QObject::connect(&watchdog, &QTimer::timeout, &watchdog, [&] {
+        timedOut = true;
+        if (QWidget* modal = QApplication::activeModalWidget()) {
+            modal->close();
+        }
+        if (parent) {
+            parent->close();
+        }
+    });
+    closeParent.start(0);
+    watchdog.start(1500);
+    // Ask for a non-default button set with an explicit default, so a stale
+    // "the operator pressed Yes" cannot masquerade as the cancellation the
+    // callers rely on: SettingsBrowserDialog::addKey()/deleteSelected() only
+    // write to the store when this returns Yes.
+    const QMessageBox::StandardButton result = FramelessMessageBox::warning(
+        parent, QStringLiteral("Lifetime test"),
+        QStringLiteral("Parent will close during this modal warning."),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    watchdog.stop();
+    settle();
+
+    expect(!timedOut, "static warning parent-close scenario returns before its watchdog");
+    expect(closeIssued, "static warning was open when its parent closed");
+    expect(parent.isNull() && warning.isNull(),
+           "closing the warning parent deletes both parent and static warning child");
+    expect(result == QMessageBox::NoButton,
+           "a warning whose parent dies mid-loop reports cancellation, never a button");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -480,6 +663,9 @@ int main(int argc, char** argv)
     testDoubleClickOpensOneViewer();
     testCorruptDocumentIsNotEditable();
     testArrayDocumentIsTreatedAsCorrupt();
+    testAddKeyNestedDialogSurvivesPersistentParentClose();
+    testViewerNestedDialogSurvivesPersistentParentClose();
+    testStaticWarningSurvivesParentDeletion();
 
     std::printf("\n%s\n", g_failures == 0 ? "PASS" : "FAIL");
     return g_failures == 0 ? 0 : 1;

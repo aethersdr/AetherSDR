@@ -2,6 +2,7 @@
 #include "RadioSetupDialog.h"
 #include "CwDecodeSettings.h"
 #include "RttyDecodeSettings.h"
+#include "ScopedChildWidget.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
@@ -1308,16 +1309,19 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 : QStringLiteral("Reboot the connected radio now?\n\n"
                                  "AetherSDR will disconnect and automatically reconnect "
                                  "once the radio finishes booting.");
-            const auto ret = QMessageBox::warning(
-                this,
-                QStringLiteral("Reboot Radio"),
-                body,
-                QMessageBox::Ok | QMessageBox::Cancel,
-                QMessageBox::Cancel);
-            if (ret == QMessageBox::Ok) {
-                m_model->rebootRadio();
-                close();
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<RadioModel> model(m_model);
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Warning, QStringLiteral("Reboot Radio"), body,
+                QMessageBox::Ok | QMessageBox::Cancel, this);
+            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+            const int ret = boxOwner.get()->exec();
+            if (!self || !boxOwner || !model || self->m_model != model.data()
+                || ret != QMessageBox::Ok) {
+                return;
             }
+            model->rebootRadio();
+            self->close();
         });
         m_rebootInfoField = makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
                                           kInfoLeftLabelWidth);
@@ -1656,6 +1660,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // from FlexRadio (.msi for v4.2+, .exe for older releases) or a
         // pre-extracted .ssdr file. The stager auto-detects which.
         connect(browseBtn, &QPushButton::clicked, this, [this] {
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<RadioModel> model(m_model);
             const QString path = QFileDialog::getOpenFileName(
                 this, "Select SmartSDR Installer or Firmware File", QString(),
                 "SmartSDR installer or firmware (*.msi *.exe *.ssdr);;"
@@ -1663,7 +1669,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 "EXE installer (*.exe);;"
                 "Extracted firmware (*.ssdr);;"
                 "All files (*)");
-            if (path.isEmpty()) return;
+            if (!self || !model || self->m_model != model.data() || path.isEmpty()) {
+                return;
+            }
 
             m_fwFilePath.clear();
             m_fwUploadBtn->setEnabled(false);
@@ -1682,13 +1690,21 @@ QWidget* RadioSetupDialog::buildRadioTab()
         connect(m_fwUploadBtn, &QPushButton::clicked, this, [this] {
             if (m_fwFilePath.isEmpty()) return;
 
-            const auto reply = QMessageBox::warning(this, "Firmware Update",
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<RadioModel> model(m_model);
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Warning, QStringLiteral("Firmware Update"),
                 QString("Upload %1 to %2?\n\n"
                         "The radio will reboot after the update.\n"
                         "Do not disconnect during the upload.")
                     .arg(QFileInfo(m_fwFilePath).fileName(), m_model->model()),
-                QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
-            if (reply != QMessageBox::Ok) return;
+                QMessageBox::Ok | QMessageBox::Cancel, this);
+            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+            const int reply = boxOwner.get()->exec();
+            if (!self || !boxOwner || !model || self->m_model != model.data()
+                || reply != QMessageBox::Ok) {
+                return;
+            }
 
             // Wire the uploader once, at creation. These used to be connected
             // inside this clicked handler, so every click added another copy.
@@ -2037,9 +2053,12 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                     + "\n\nForced on by the AETHER_AUTOMATION_ALLOW_TX launch variable.");
             }
             connect(txCheck, &QCheckBox::toggled, this, [this, txCheck](bool on) {
+                const QPointer<RadioSetupDialog> self(this);
+                const QPointer<QCheckBox> txCheckGuard(txCheck);
                 if (on && !AutomationBridgeSettings::txAck()) {
                     // First-time enable → confirm. Operator must acknowledge.
-                    QMessageBox box(this);
+                    ScopedChildWidget<QMessageBox> boxOwner(this);
+                    QMessageBox& box = *boxOwner.get();
                     box.setIcon(QMessageBox::Warning);
                     box.setWindowTitle("Allow TX via MCP?");
                     box.setText("Allow an AI assistant / MCP client to key the transmitter?");
@@ -2059,10 +2078,13 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                     box.addButton("Cancel", QMessageBox::RejectRole);
                     box.setDefaultButton(qobject_cast<QPushButton*>(box.buttons().value(1)));
                     box.exec();
+                    if (!self || !txCheckGuard || !boxOwner) {
+                        return;
+                    }
                     if (box.clickedButton() != confirm) {
                         // Cancelled — revert without persisting or emitting.
-                        QSignalBlocker blocker(txCheck);
-                        txCheck->setChecked(false);
+                        QSignalBlocker blocker(txCheckGuard.data());
+                        txCheckGuard->setChecked(false);
                         return;
                     }
                     // Confirmed — remember the acknowledgement so we never
@@ -4194,10 +4216,12 @@ QWidget* RadioSetupDialog::buildAudioTab()
         browseBtn->setFixedWidth(30);
         browseBtn->setStyleSheet(modeBtnStyle);
         connect(browseBtn, &QPushButton::clicked, this, [this, dirEdit]() {
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<QLineEdit> dirEditGuard(dirEdit);
             QString dir = QFileDialog::getExistingDirectory(this, "Select Recording Directory",
                                                             dirEdit->text());
-            if (!dir.isEmpty()) {
-                dirEdit->setText(dir);
+            if (self && dirEditGuard && !dir.isEmpty()) {
+                dirEditGuard->setText(dir);
                 auto& s = AppSettings::instance();
                 s.setValue("QsoRecordingDir", dir);
                 s.save();
@@ -5381,12 +5405,25 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             rowLayout->addWidget(browseButton, 3, 1);
             connect(browseButton, &QPushButton::clicked, this,
                     [this, nameEdit, endpointEdit] {
-                KiwiPublicReceiverPicker picker(this);
-                if (picker.exec() == QDialog::Accepted
-                    && !picker.selectedEndpoint().isEmpty()) {
-                    endpointEdit->setText(picker.selectedEndpoint());
-                    if (nameEdit->text().trimmed().isEmpty()) {
-                        nameEdit->setText(picker.selectedName());
+                const QPointer<RadioSetupDialog> self(this);
+                const QPointer<QLineEdit> nameEditGuard(nameEdit);
+                const QPointer<QLineEdit> endpointEditGuard(endpointEdit);
+                ScopedChildWidget<KiwiPublicReceiverPicker> pickerOwner(this);
+                KiwiPublicReceiverPicker& picker = *pickerOwner.get();
+                const int result = picker.exec();
+                if (!self || !nameEditGuard || !endpointEditGuard || !pickerOwner
+                    || result != QDialog::Accepted) {
+                    return;
+                }
+                const QString endpoint = picker.selectedEndpoint();
+                const QString name = picker.selectedName();
+                if (!endpoint.isEmpty()) {
+                    endpointEditGuard->setText(endpoint);
+                    if (!self || !nameEditGuard) {
+                        return;
+                    }
+                    if (nameEditGuard->text().trimmed().isEmpty()) {
+                        nameEditGuard->setText(name);
                     }
                 }
             });
@@ -5463,39 +5500,49 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         styleKiwiButton(kiwiImportBtn);
         connect(kiwiImportBtn, &QPushButton::clicked, this,
                 [this, kiwiTransferDirectory, rememberKiwiTransferDirectory] {
-            QFileDialog dialog(this, QStringLiteral("Import KiwiSDR Receivers"),
-                               kiwiTransferDirectory(),
-                               QStringLiteral("CSV Files (*.csv)"));
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<KiwiSdrManager> manager(m_kiwiSdrManager);
+            ScopedChildWidget<QFileDialog> dialogOwner(
+                this, QStringLiteral("Import KiwiSDR Receivers"),
+                kiwiTransferDirectory(), QStringLiteral("CSV Files (*.csv)"));
+            QFileDialog& dialog = *dialogOwner.get();
             dialog.setAcceptMode(QFileDialog::AcceptOpen);
             dialog.setFileMode(QFileDialog::ExistingFile);
             dialog.setDefaultSuffix(QStringLiteral("csv"));
-            if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+            const int dialogResult = dialog.exec();
+            if (!self || !manager || !dialogOwner || dialogResult != QDialog::Accepted
+                || dialog.selectedFiles().isEmpty()) {
                 return;
             }
             const QString path = dialog.selectedFiles().first();
             rememberKiwiTransferDirectory(path);
 
             const KiwiSdrCsvImportResult result =
-                m_kiwiSdrManager->importFromFile(path);
+                manager->importFromFile(path);
+            if (!self || !manager) {
+                return;
+            }
             if (!result.ok() && result.addedCount == 0 && result.mergedCount == 0) {
-                QMessageBox box(QMessageBox::Warning,
-                                QStringLiteral("Import KiwiSDR Receivers"),
-                                QStringLiteral("No receivers were imported from %1.")
-                                    .arg(QFileInfo(path).fileName()),
-                                QMessageBox::Ok, this);
+                ScopedChildWidget<QMessageBox> boxOwner(
+                    QMessageBox::Warning, QStringLiteral("Import KiwiSDR Receivers"),
+                    QStringLiteral("No receivers were imported from %1.")
+                        .arg(QFileInfo(path).fileName()),
+                    QMessageBox::Ok, self.data());
+                QMessageBox& box = *boxOwner.get();
                 box.setDetailedText(result.errors.join(QLatin1Char('\n')));
                 box.exec();
                 return;
             }
 
-            QMessageBox box(result.errors.isEmpty()
-                                ? QMessageBox::Information : QMessageBox::Warning,
-                            QStringLiteral("Import KiwiSDR Receivers"),
-                            QStringLiteral("Added %1 and updated %2 receiver(s) from %3.")
-                                .arg(result.addedCount)
-                                .arg(result.mergedCount)
-                                .arg(QFileInfo(path).fileName()),
-                            QMessageBox::Ok, this);
+            ScopedChildWidget<QMessageBox> boxOwner(
+                result.errors.isEmpty() ? QMessageBox::Information : QMessageBox::Warning,
+                QStringLiteral("Import KiwiSDR Receivers"),
+                QStringLiteral("Added %1 and updated %2 receiver(s) from %3.")
+                    .arg(result.addedCount)
+                    .arg(result.mergedCount)
+                    .arg(QFileInfo(path).fileName()),
+                QMessageBox::Ok, self.data());
+            QMessageBox& box = *boxOwner.get();
             if (!result.errors.isEmpty()) {
                 box.setInformativeText(
                     QStringLiteral("%1 row(s) could not be imported.")
@@ -5515,32 +5562,47 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         styleKiwiButton(kiwiExportBtn);
         connect(kiwiExportBtn, &QPushButton::clicked, this,
                 [this, kiwiTransferDirectory, rememberKiwiTransferDirectory] {
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<KiwiSdrManager> manager(m_kiwiSdrManager);
             const QString fileName = QStringLiteral("AetherSDR_KiwiSDR_Receivers_%1.csv")
                                          .arg(QDateTime::currentDateTime().toString(
                                              QStringLiteral("yyyyMMdd_HHmmss")));
-            QFileDialog dialog(this, QStringLiteral("Export KiwiSDR Receivers"),
-                               QDir(kiwiTransferDirectory()).filePath(fileName),
-                               QStringLiteral("CSV Files (*.csv)"));
+            ScopedChildWidget<QFileDialog> dialogOwner(
+                this, QStringLiteral("Export KiwiSDR Receivers"),
+                QDir(kiwiTransferDirectory()).filePath(fileName),
+                QStringLiteral("CSV Files (*.csv)"));
+            QFileDialog& dialog = *dialogOwner.get();
             dialog.setAcceptMode(QFileDialog::AcceptSave);
             dialog.setDefaultSuffix(QStringLiteral("csv"));
-            if (dialog.exec() != QDialog::Accepted || dialog.selectedFiles().isEmpty()) {
+            const int dialogResult = dialog.exec();
+            if (!self || !manager || !dialogOwner || dialogResult != QDialog::Accepted
+                || dialog.selectedFiles().isEmpty()) {
                 return;
             }
             const QString path = dialog.selectedFiles().first();
             rememberKiwiTransferDirectory(path);
 
-            const KiwiSdrCsvExportResult result = m_kiwiSdrManager->exportToFile(path);
-            if (!result.ok()) {
-                QMessageBox::warning(this, QStringLiteral("Export KiwiSDR Receivers"),
-                                     result.error);
+            const KiwiSdrCsvExportResult result = manager->exportToFile(path);
+            if (!self || !manager) {
                 return;
             }
-            QMessageBox::information(
-                this, QStringLiteral("Export KiwiSDR Receivers"),
+            if (!result.ok()) {
+                ScopedChildWidget<QMessageBox> boxOwner(
+                    QMessageBox::Warning, QStringLiteral("Export KiwiSDR Receivers"),
+                    result.error, QMessageBox::Ok, self.data());
+                QMessageBox& box = *boxOwner.get();
+                box.exec();
+                return;
+            }
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Information, QStringLiteral("Export KiwiSDR Receivers"),
                 QStringLiteral("Exported %1 receiver(s) to %2. Passwords are not "
                                "included; re-enter them after importing elsewhere.")
                     .arg(result.exportedCount)
-                    .arg(QFileInfo(path).fileName()));
+                    .arg(QFileInfo(path).fileName()),
+                QMessageBox::Ok, self.data());
+            QMessageBox& box = *boxOwner.get();
+            box.exec();
         });
         kiwiTransferRow->addWidget(kiwiExportBtn);
         kiwiLayout->addLayout(kiwiTransferRow);
@@ -9211,12 +9273,16 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     for (int i = 0; i < AetherSDR::kSliceColorCount; ++i) {
         connect(colorBtns[i], &QPushButton::clicked, page,
                 [i, pMgr, applyBtnColor, page]() mutable {
+            const QPointer<QWidget> pageGuard(page);
+            const QPointer<SliceColorManager> mgr(pMgr);
             QColor initial = pMgr->customColor(i);
             QColor chosen = QColorDialog::getColor(initial, page,
                                                    QStringLiteral("Slice %1 Color")
                                                        .arg(QChar('A' + i)));
-            if (!chosen.isValid()) return;
-            pMgr->setCustomColor(i, chosen);
+            if (!pageGuard || !mgr || !chosen.isValid()) {
+                return;
+            }
+            mgr->setCustomColor(i, chosen);
             applyBtnColor(i);
         });
     }
@@ -9431,15 +9497,19 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
     });
 
     connect(forgetAll, &QPushButton::clicked, this, [this]() {
-        if (QMessageBox::question(this, tr("Forget all SmartLink certificates"),
-                tr("Clear every pinned SmartLink cert fingerprint?\n\n"
-                   "Next connect to each radio will silently re-pin "
-                   "whatever certificate it presents (no mismatch warning)."))
-            != QMessageBox::Yes) {
+        const QPointer<RadioSetupDialog> self(this);
+        ScopedChildWidget<QMessageBox> boxOwner(
+            QMessageBox::Question, tr("Forget all SmartLink certificates"),
+            tr("Clear every pinned SmartLink cert fingerprint?\n\n"
+               "Next connect to each radio will silently re-pin "
+               "whatever certificate it presents (no mismatch warning)."),
+            QMessageBox::Yes | QMessageBox::No, this);
+        const int reply = boxOwner.get()->exec();
+        if (!self || !boxOwner || reply != QMessageBox::Yes) {
             return;
         }
         WanCertCache::forgetAllPinnedCerts();
-        refreshPinnedCertsTable();
+        self->refreshPinnedCertsTable();
     });
 
     root->addWidget(grp);

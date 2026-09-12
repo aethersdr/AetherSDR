@@ -341,8 +341,12 @@ void TransmitModel::startTune(PttSource source)
     if (!m_tuneAvailable) {
         return;
     }
-    if (!runPttPreflight(source, false))
+    if (!runPttPreflight(source, false)) {
         return;
+    }
+    if (!tuneAdmitted()) {
+        return;
+    }
     const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
     if (m_keyingAdmission && (!permit || !permit())) {
         return;
@@ -377,8 +381,12 @@ void TransmitModel::startTwoToneTune(PttSource source)
     if (!m_tuneAvailable) {
         return;
     }
-    if (!runPttPreflight(source, false))
+    if (!runPttPreflight(source, false)) {
         return;
+    }
+    if (!tuneAdmitted()) {
+        return;
+    }
     const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
     if (m_keyingAdmission && (!permit || !permit())) {
         return;
@@ -921,6 +929,28 @@ void TransmitModel::setTxModeGetter(TxModeGetter getter)
 void TransmitModel::setPttPreflight(PttPreflight preflight)
 {
     m_pttPreflight = std::move(preflight);
+}
+
+void TransmitModel::setTuneAdmission(TuneAdmission admission)
+{
+    m_tuneAdmission = std::move(admission);
+}
+
+bool TransmitModel::tuneAdmitted()
+{
+    if (m_tune) {
+        return true;   // already tuning: a repeated start is not a new admission
+    }
+    if (!m_tuneAdmission) {
+        return true;
+    }
+    const QString message = m_tuneAdmission().trimmed();
+    if (message.isEmpty()) {
+        return true;
+    }
+    emit pttBlocked(message);
+    emit tuneChanged(m_tune);   // a TUNE toggle may have flipped before calling
+    return false;
 }
 
 void TransmitModel::setPttOffHook(PttOffHook hook)

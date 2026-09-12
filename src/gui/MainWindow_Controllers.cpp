@@ -2443,7 +2443,7 @@ void MainWindow::wireExternalControllers()
     });
     connect(m_serialPort, &SerialPortController::cwKeyChanged,
             this, [this](bool down) {
-        m_radioModel.sendCwKey(down);
+        m_radioModel.sendCwKey(down, QStringLiteral("serial:cwkey"));
     });
     connect(m_serialPort, &SerialPortController::cwPaddleChanged,
             this, [this](bool dit, bool dah) {
@@ -2453,6 +2453,13 @@ void MainWindow::wireExternalControllers()
         // state — it emits timed element edges AND drives the sidetone gate
         // directly. Otherwise the paddle acts as a straight key. The backend
         // decides whether those edges use a radio-side keyer or host IQ.
+        // No CW while TUNE is active (#5422): drop the press before the
+        // keyer starts; a release still flows. See pushCwPaddleState().
+        m_radioModel.setCwPaddleHeld(dit || dah);
+        if ((dit || dah) && !m_radioModel.transmitModel().admitsCwKeyEdge(true)) {
+            qCWarning(lcCw) << "CW paddle press refused: TUNE is active (#5422) source=serial";
+            return;
+        }
         if (m_iambicKeyer && m_iambicKeyer->isRunning()) {
             m_iambicKeyer->setPaddleState(dit, dah);
         } else {
