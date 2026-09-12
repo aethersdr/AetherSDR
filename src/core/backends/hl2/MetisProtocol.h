@@ -819,6 +819,24 @@ inline std::array<std::uint8_t, 64> metisStop(bool watchdogEnabled = true) noexc
         0x00 | (watchdogEnabled ? 0x00 : kRunWatchdogDisable)));
 }
 
+// The run byte re-sent MID-STREAM to move `wide_spectrum` without disturbing
+// `run`. A pure function, and that is the point rather than a convenience:
+// this byte goes out twice a second for the whole session, while the operator
+// is listening, and bit 0 clearing by accident stops the IQ stream — so the
+// composition has to be reachable by a socket-free test. Composed inside
+// MetisClient it was not, and a test could only re-derive the same expression
+// and agree with itself (PR #5650 review, blocker 1).
+//
+// NOT metisStart(): connect's byte stays `0x01`, which hl2_metis_protocol_test
+// asserts and three fake-radio fixtures sniff. Asserted in that same file.
+inline std::array<std::uint8_t, 64> metisRunCommand(bool wideSpectrum,
+                                                    bool watchdogEnabled = true) noexcept
+{
+    return metisCommand(static_cast<std::uint8_t>(
+        0x01 | (wideSpectrum ? kRunWideSpectrum : 0x00)
+             | (watchdogEnabled ? 0x00 : kRunWatchdogDisable)));
+}
+
 // 63-byte discovery request: EF FE 02 + 60 zero bytes (broadcast to :1024).
 std::array<std::uint8_t, 63> discoveryRequest() noexcept;
 

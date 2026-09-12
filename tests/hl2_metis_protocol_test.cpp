@@ -192,6 +192,35 @@ int main()
         check(start[0] == 0xEF && start[1] == 0xFE && start[2] == 0x04 && start[3] == 0x01,
               "metis start = EF FE 04 01");
         check(metisStop()[3] == 0x00, "metis stop cmd = 0x00");
+
+        // ---- the mid-stream run byte (PR #5650 review, blocker 1) ----
+        //
+        // THE MOST DANGEROUS BYTE IN THE BANDSCOPE WORK. It leaves the host
+        // twice a second for the whole session while the operator is
+        // listening, and bit 0 is `run`: clear it by accident and the HL2's IQ
+        // stream stops mid-QSO, silently, twice a second. Asserted here on the
+        // pure function rather than re-derived from the same constants in a
+        // test body, which is an assertion about two constexprs and would agree
+        // with a wrong implementation.
+        check(metisRunCommand(true)[3] == 0x03,
+              "bandscope ON: run high AND wide_spectrum high");
+        check(metisRunCommand(false)[3] == 0x01,
+              "bandscope OFF: wide_spectrum clear, run STILL HIGH");
+        check((metisRunCommand(true)[3] & 0x01) != 0 && (metisRunCommand(false)[3] & 0x01) != 0,
+              "run is never cleared to move the bandscope bit");
+        // The watchdog-disable leg, untested in any form before this.
+        check(metisRunCommand(true, false)[3] == 0x83,
+              "bandscope ON with the watchdog disabled = 0x83");
+        check(metisRunCommand(false, false)[3] == 0x81,
+              "bandscope OFF with the watchdog disabled = 0x81");
+        // And connect is NOT widened: metisStart stays the byte three
+        // fake-radio fixtures sniff, which is why this is a separate function.
+        check(metisStart()[3] == 0x01 && metisStart(false)[3] == 0x81,
+              "metisStart() is not widened by the bandscope");
+        check(metisRunCommand(true)[0] == 0xEF && metisRunCommand(true)[1] == 0xFE
+                  && metisRunCommand(true)[2] == 0x04 && metisRunCommand(true).size() == 64,
+              "the run byte is framed and padded like every other metis command");
+
         const auto disc = discoveryRequest();
         check(disc.size() == 63 && disc[0] == 0xEF && disc[1] == 0xFE && disc[2] == 0x02,
               "discovery request = EF FE 02 + pad");

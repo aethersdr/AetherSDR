@@ -869,8 +869,13 @@ void MetisClient::setMox(bool keyed)
         // Abandon whatever cycle was in flight rather than let it finish: the
         // packets still to come would be transmit-contaminated, and half a
         // clean block merged with half a keyed one is worse than no block.
+        // expectTrailing matches onBandscopeGuardTimeout's rule rather than
+        // passing an unconditional true: a cycle still ARMING has seen no EP4
+        // packet, so there is nothing in the WIDE states to flush, and a flag
+        // set here would swallow the first packet of the next cycle instead.
+        // Keying up inside the arming window is exactly when that happens.
         if (m_bsState != BandscopeState::Idle)
-            bandscopeDisarm(/*expectTrailing=*/true);
+            bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
     } else {
         // Start the post-unkey hold-off. d83's measured transient runs
         // 178-285 ms past the falling edge; kBandscopeUnkeyHoldoffMs clears it.
@@ -1450,13 +1455,13 @@ void MetisClient::sendBandscopeRunByte(bool wideSpectrum)
     // The run byte is a bit field and `run` must STAY set: this goes out while
     // already streaming, where re-asserting bit 0 is a no-op in the gateware's
     // RUNSTOP decode but clearing it would stop the IQ the operator is
-    // listening to. Built through metisCommand rather than metisStart so that
-    // connect's byte, which three fake-radio fixtures sniff as d[3] == 0x01, is
-    // not widened.
-    const std::uint8_t watchdogBit = m_watchdogEnabled ? 0x00 : kRunWatchdogDisable;
-    const std::uint8_t runByte = static_cast<std::uint8_t>(
-        0x01 | (wideSpectrum ? kRunWideSpectrum : 0x00) | watchdogBit);
-    countTx(sendTo(*m_socket, metisCommand(runByte), m_host, m_port));
+    // listening to. The composition lives in metisRunCommand() rather than here
+    // precisely because of that: expressed inline it was unreachable by any
+    // socket-free test, and the only assertion possible was one that re-derived
+    // the expression and agreed with itself. It is asserted for all four bit
+    // combinations in tests/hl2_metis_protocol_test.cpp.
+    countTx(sendTo(*m_socket, metisRunCommand(wideSpectrum, m_watchdogEnabled),
+                   m_host, m_port));
 }
 
 int MetisClient::bandscopeGuardIntervalMs() const noexcept
@@ -1561,6 +1566,14 @@ void MetisClient::setBandscopeEnabled(bool on)
     if (on == m_params.bandscope)
         return;
     m_params.bandscope = on;
+    // The flag bandscopeDisarm sets here does NOT survive the next line:
+    // applyBandscopeGate() takes the !m_params.bandscope branch into
+    // resetBandscopeGate(), which clears it. That is harmless only because the
+    // trailing packet then lands in `case Idle` and is dropped there anyway —
+    // so do not read this as the flag doing work on this path. Left as the
+    // sibling calls spell it rather than passed false, because the argument
+    // states the condition truthfully and it is the reset, not the caller,
+    // that makes it moot.
     if (!on)
         bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Idle);
     applyBandscopeGate();
