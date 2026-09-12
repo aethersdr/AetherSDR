@@ -207,11 +207,49 @@ void AppSettings::load()
         m_loadNotice.clear();
     }
 
-    // ── Open the database, with corruption quarantine + backup restore ──────
+    // ── Open the database, with evidence-gated corruption recovery ─────────
+    // An unavailable check is not a corruption report. In particular, a
+    // healthy owner-read-only database can open and read successfully before
+    // createSchema() is refused at PRAGMA user_version. Quarantining it would
+    // discard the user's current store and roll back to an older backup/XML.
+    const auto validateIntegrity = [this](bool& confirmedCorrupt) {
+        if (m_db->isNewerSchema()) {
+            return true;
+        }
+        const SettingsDatabase::IntegrityCheckResult quick = m_db->quickCheck();
+        if (quick == SettingsDatabase::IntegrityCheckResult::Ok) {
+            return true;
+        }
+
+        // Keep the full check as the second source of evidence after the cheap
+        // probe fails. Its result governs recovery: a successful full check
+        // accepts the store, while only its demonstrated corruption result can
+        // authorize moving the original store aside.
+        const SettingsDatabase::IntegrityCheckResult full = m_db->integrityCheck();
+        if (full == SettingsDatabase::IntegrityCheckResult::Ok) {
+            confirmedCorrupt = false;
+            return true;
+        }
+        confirmedCorrupt = full == SettingsDatabase::IntegrityCheckResult::Corrupt;
+        return false;
+    };
+    const auto failClosed = [this](const QString& summary) {
+        const QString error = m_db->lastError().isEmpty()
+                                  ? QStringLiteral("an unspecified SQLite error")
+                                  : m_db->lastError();
+        m_db->close();
+        QWriteLocker locker(&m_lock);
+        m_loadNotice = QStringLiteral(
+            "%1 The existing settings database was left in place; changes will "
+            "not be saved in this session. (%2)")
+                           .arg(summary, error);
+    };
+
     bool opened = m_db->open(m_filePath);
-    if (opened && !m_db->isNewerSchema() && !m_db->quickCheck()
-        && !m_db->integrityCheck()) {
-        qWarning() << "AppSettings: settings database failed integrity check";
+    bool confirmedCorrupt = !opened && m_db->lastOpenWasCorrupt();
+    if (opened && !validateIntegrity(confirmedCorrupt)) {
+        qWarning() << "AppSettings: settings database integrity check did not"
+                      " establish a usable store:" << m_db->lastError();
         opened = false;
     }
     if (!opened && m_db->lastOpenWasBusy()) {
@@ -223,28 +261,43 @@ void AppSettings::load()
         // session; the next launch retries.
         qWarning() << "AppSettings: settings database is locked by another"
                       " process — read-only session, retry next launch";
+        failClosed(QStringLiteral("The settings database is locked by another "
+                                  "process; retry on the next launch."));
         return;
     }
-    if (!opened && QFile::exists(m_filePath)) {
-        // Confirmed unusable (unreadable or failed integrity). Quarantine and
-        // restore are serialized under a lock file so two instances cannot
-        // both decide to "recover" — the second one fails its session instead.
+    if (!opened && QFile::exists(m_filePath) && confirmedCorrupt) {
+        // SQLite explicitly reported corruption/not-a-database, or a check
+        // returned a damage report. Only that evidence authorizes quarantine.
+        // Recovery is serialized so two instances cannot both act on it.
         QLockFile recoveryLock(m_filePath + QStringLiteral(".recovery.lock"));
         if (!recoveryLock.tryLock(0)) {
             qWarning() << "AppSettings: another instance is recovering the"
                           " settings store — read-only session";
+            failClosed(QStringLiteral("Another instance is recovering the "
+                                      "settings database."));
             return;
         }
         quarantineCorruptStore();
         const bool restored = restoreNewestVerifiedBackup();
         opened = m_db->open(m_filePath);
-        if (opened && restored && !m_db->quickCheck()) {
+        confirmedCorrupt = !opened && m_db->lastOpenWasCorrupt();
+        if (opened && !validateIntegrity(confirmedCorrupt)) {
             opened = false;
         }
         if (!opened) {
             qWarning() << "AppSettings: could not establish a usable settings database";
+            failClosed(restored
+                           ? QStringLiteral("The restored settings backup could not be "
+                                            "opened safely.")
+                           : QStringLiteral("A replacement settings database could not "
+                                            "be created safely."));
             return;  // Failed — never overwrite what's left on disk
         }
+    } else if (!opened && QFile::exists(m_filePath)) {
+        qWarning() << "AppSettings: settings database could not be opened safely:"
+                   << m_db->lastError();
+        failClosed(QStringLiteral("The settings database could not be opened safely."));
+        return;
     } else if (!opened) {
         // No file and still cannot create one (permissions, disk full).
         qWarning() << "AppSettings: cannot create settings database at" << m_filePath;
@@ -263,7 +316,17 @@ void AppSettings::load()
             m_loadNotice = QStringLiteral(
                 "Settings are running read-only from the previous settings file; "
                 "the settings database could not be created.");
+        } else {
+            const QString databaseError = m_db->lastError().isEmpty()
+                                              ? QStringLiteral("an unspecified SQLite error")
+                                              : m_db->lastError();
+            QWriteLocker locker(&m_lock);
+            m_loadNotice = QStringLiteral(
+                "The settings database could not be created; changes will not be "
+                "saved in this session. (%1)")
+                               .arg(databaseError);
         }
+        m_db->close();
         return;  // Failed state — saves refused, retry next launch
     }
 
