@@ -6562,6 +6562,11 @@ void RadioModel::onConnected()
     if (AppSettings::instance().value("InhibitSleepWhileConnected", "False").toString() == "True")
         m_sleepInhibitor.acquire("AetherSDR connected to radio");
 
+    // A fresh command session is the one thing that makes a firmware retry
+    // unambiguous again: any `file update` status arriving now belongs to this
+    // connection, not to an attempt dispatched before the radio rebooted (#5572).
+    m_firmwareRetryBlocked = false;
+
     emit connectionStateChanged(true);
     // A Flex dumps its memory slots as status during the handshake below. A
     // radio without any has nothing to dump, so the bank is what populates the

@@ -167,6 +167,21 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+
+    // Firmware-upload retry barrier (#5572). A dispatched firmware upload has
+    // no attempt identifier in the `file update` status, so a late failure from
+    // a previous attempt cannot be told apart from a fresh one on the same
+    // command session. The barrier therefore has to outlive the uploader, and
+    // the uploader is parented to RadioSetupDialog — which carries
+    // WA_DeleteOnClose, so closing the window would otherwise drop the barrier
+    // and hand the operator exactly the ambiguous retry it exists to forbid.
+    // It lives here because the connection is what it is really keyed to: only
+    // a genuine disconnect→reconnect clears it (see setConnected()).
+    bool firmwareRetryBlocked() const { return m_firmwareRetryBlocked; }
+    void blockFirmwareRetryUntilReconnect() { m_firmwareRetryBlocked = true; }
+    // Only for an outcome the radio itself settled (`file update failed=`),
+    // which leaves nothing pending to misattribute to the next attempt.
+    void clearFirmwareRetryBlock() { m_firmwareRetryBlocked = false; }
     // "idle" / "connecting" / "connected" — the bridge's third value, so a
     // caller can tell a connect that is working from one that is not happening
     // at all. `isConnected()` is unchanged (#5413 item 3). Derived from
@@ -1949,6 +1964,10 @@ private:
     QHash<QString, int> m_panTransmitInhibitedTxSlices;
     int  m_tuneInhibitBandId{-1};  // band ID whose TX outputs were inhibited during tune
     bool m_tuneInhibitActive{false};
+    // #5572 firmware-upload retry barrier. Set when an upload is dispatched to
+    // the radio; cleared only when a NEW connection is established, so it
+    // survives the Radio Setup dialog (and its uploader) being closed.
+    bool m_firmwareRetryBlocked{false};
 
     int bandIdForFrequency(double freqMhz) const;  // map TX freq → band ID
     void applyTuneInhibit();    // suppress selected TX outputs before tune

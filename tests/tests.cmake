@@ -1914,6 +1914,15 @@ target_include_directories(waveform_upload_state_test PRIVATE src)
 target_link_libraries(waveform_upload_state_test PRIVATE Qt6::Core)
 add_test(NAME waveform_upload_state_test COMMAND waveform_upload_state_test)
 
+# #5572 — socket-free firmware upload lifecycle. The injected writer exercises
+# production queue accounting and terminal handlers without a radio peer.
+add_executable(firmware_uploader_test
+    tests/firmware_uploader_test.cpp
+)
+target_include_directories(firmware_uploader_test PRIVATE src)
+target_link_libraries(firmware_uploader_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME firmware_uploader_test COMMAND firmware_uploader_test)
+
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
     src/core/ZipArchive.cpp

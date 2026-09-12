@@ -1663,31 +1663,65 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
             if (reply != QMessageBox::Ok) return;
 
-            if (!m_uploader)
+            // Wire the uploader once, at creation. These used to be connected
+            // inside this clicked handler, so every click added another copy.
+            if (!m_uploader) {
                 m_uploader = new FirmwareUploader(m_model, this);
+
+                connect(m_uploader, &FirmwareUploader::progressChanged, this,
+                    [this](int pct, const QString& status) {
+                        m_fwProgress->setValue(pct);
+                        m_fwStatusLabel->setText(status);
+                        m_fwStatusLabel->setAccessibleDescription(status);
+                    });
+                connect(m_uploader, &FirmwareUploader::finished, this,
+                    [this](FirmwareUploader::Outcome outcome, const QString& msg) {
+                        // Three outcomes, not two. A drained socket or a
+                        // post-upload disconnect confirms nothing either way, so
+                        // it must not be painted as either (#5572): only the
+                        // radio's own `file update failed=` settles it. The
+                        // message carries the distinction in words as well as in
+                        // colour — colour alone never states it (docs/a11y.md).
+                        m_fwStatusLabel->setText(msg);
+                        m_fwStatusLabel->setAccessibleDescription(msg);
+                        // One setStyleSheet site for all three outcomes: the
+                        // colour ratchet counts call sites, not just literals.
+                        QString colour;
+                        switch (outcome) {
+                        case FirmwareUploader::Outcome::Succeeded:
+                            m_fwProgress->setValue(100);
+                            colour = QStringLiteral("#80e080");
+                            m_fwUploadBtn->setEnabled(false);
+                            break;
+                        case FirmwareUploader::Outcome::Unconfirmed:
+                            // Bytes left the host and the radio is probably
+                            // applying them. Keep the progress bar — hiding it
+                            // reads as "nothing happened" — and do not offer a
+                            // retry: the uploader refuses one until reconnect.
+                            m_fwProgress->setValue(100);
+                            colour = QStringLiteral("{{color.accent.warning}}");
+                            m_fwUploadBtn->setEnabled(false);
+                            break;
+                        case FirmwareUploader::Outcome::Failed:
+                            m_fwProgress->hide();
+                            colour = QStringLiteral("#e08080");
+                            m_fwUploadBtn->setEnabled(true);
+                            break;
+                        }
+                        // applyStyleSheet, not setStyleSheet: the latter does
+                        // not expand {{tokens}} (ThemeManager.h:174), and it
+                        // keeps the label repainting on themeChanged.
+                        AetherSDR::ThemeManager::instance().applyStyleSheet(
+                            m_fwStatusLabel,
+                            QStringLiteral("QLabel { color: %1; font-size: 10px; }").arg(colour));
+                    });
+            }
 
             m_fwProgress->show();
             m_fwProgress->setValue(0);
             m_fwUploadBtn->setEnabled(false);
-            m_fwStatusLabel->setStyleSheet("QLabel { color: #6888a0; font-size: 10px; }");
-
-            connect(m_uploader, &FirmwareUploader::progressChanged, this,
-                [this](int pct, const QString& status) {
-                    m_fwProgress->setValue(pct);
-                    m_fwStatusLabel->setText(status);
-                });
-            connect(m_uploader, &FirmwareUploader::finished, this,
-                [this](bool ok, const QString& msg) {
-                    m_fwStatusLabel->setText(msg);
-                    m_fwUploadBtn->setEnabled(!ok);
-                    if (ok) {
-                        m_fwProgress->setValue(100);
-                        m_fwStatusLabel->setStyleSheet("QLabel { color: #80e080; font-size: 10px; }");
-                    } else {
-                        m_fwProgress->hide();
-                        m_fwStatusLabel->setStyleSheet("QLabel { color: #e08080; font-size: 10px; }");
-                    }
-                });
+            AetherSDR::ThemeManager::instance().applyStyleSheet(
+                m_fwStatusLabel, QStringLiteral("QLabel { color: #6888a0; font-size: 10px; }"));
 
             m_uploader->upload(m_fwFilePath);
         });
