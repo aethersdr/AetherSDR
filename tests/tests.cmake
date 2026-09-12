@@ -2200,6 +2200,14 @@ add_executable(anan_droop_correction_test
 target_include_directories(anan_droop_correction_test PRIVATE src)
 add_test(NAME anan_droop_correction_test COMMAND anan_droop_correction_test)
 
+add_executable(anan_droop_defaults_test
+    tests/anan_droop_defaults_test.cpp
+    src/core/backends/anan/AnanDroopDefaults.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_defaults_test PRIVATE src)
+add_test(NAME anan_droop_defaults_test COMMAND anan_droop_defaults_test)
+
 # AnanDroopCalibrator's pure math (median-in-power averaging, central-window
 # reference, clamp) -- no live radio needed. Ported from this feature's
 # original offline prototype (formerly tools/test_anan_droop_calibration.py,
