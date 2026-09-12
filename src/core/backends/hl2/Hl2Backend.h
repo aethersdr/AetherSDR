@@ -212,6 +212,13 @@ private:
     // Drop the IO-board schedule on linkDown: armed timer, coalesced value and
     // remembered band all describe a session and must not survive one.
     void resetIoBoardSchedule();
+    // Every bandscope mirror back to "this session never had one". Called from
+    // all THREE link edges, not just connect: between a drop and the next
+    // connect, a snapshot built from stale mirrors answers "Wideband bandscope
+    // (EP4): true" and prints ADC levels for a session that no longer exists —
+    // the exact failure the connect-time reset exists to prevent, arrived at
+    // from the other side (PR #5650 review).
+    void resetBandscopeMirrors();
     // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
     // the band containing freqHz (falling back to the restored defaults),
     // and record the operator's current values into the maps for the band
