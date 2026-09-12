@@ -49,7 +49,7 @@ the baseline, so they remain reproducible after this patch.
 | `NetworkDiagnosticsDialog.cpp:1387` | Scoped menu and persistent selected-row indexes. Diagnostics is delete-on-close and the log model can change. |
 | `RxApplet.cpp:454` | Scoped TX-antenna menu with original-slice survival/identity check. Ordinary owner deletion is not claimed as a production route; slice rebinding is the stale-intent hazard. |
 | `RxApplet.cpp:1064` | AGC menu retained: ordinary applet ownership; the callback uses current calibration state. |
-| `RxApplet.cpp:3235` | Scoped custom-filter dialog/menu and original slice/preset-button checks. Actions are connected with the preset button as context so a rebuilt preset cannot retain a callback. |
+| `RxApplet.cpp:3235` | Scoped custom-filter dialog/menu and original slice/preset-button checks. Actions are connected with the preset button as context so a rebuilt preset cannot retain a callback. The menu itself was **parentless** (`QMenu menu;`) at the baseline, so it was never the invalid-free case #5568 warns against conflating by grep; it is parented here only to give the nested dialog scoped cleanup. Re-parenting adds no styling: `RxApplet`'s sole widget-level stylesheet is `QSlider::sub-page` (`RxApplet.cpp:306`), which a `QMenu` cannot match. |
 | `SettingsBrowserDialog.cpp:666,799` | Scoped document viewer and Add Key; browser is delete-on-close. Double-click opening is deferred one event turn so Qt's table handler finishes before its table can be deleted. |
 | `StripChainWidget.cpp:688` | Retained: retained strip owns the chain. |
 | `StripRxChainWidget.cpp:593` | Retained: retained strip owns the chain. |
@@ -73,6 +73,8 @@ post-loop accesses. File/color pickers likewise require caller survival checks.
 | MIDI import/export | Scoped file pickers/messages and owner, manager and editor survival checks; snapshot exported bindings before the picker. |
 | Net Scheduler import/export/remove | Scoped messages, owner checks after pickers, and ID relookup before changing a schedule. |
 | Radio Setup TX acknowledgment / Kiwi picker / CSV transfer | Scoped exact dialog constructors and owner/child/manager guards. Closing the acknowledgment does not persist TX permission. |
+| Radio Setup reboot / firmware browse+upload / recording directory / slice colour / forget-all SmartLink certificates | Scoped boxes and owner, model and child guards. `RadioSetupDialog` is shown through `showOrRaisePersistent()` (`MainWindow.cpp:3395`), so it is delete-on-close and every one of these resumed into `this` or a child. The three `QMessageBox::` statics were the stack-allocated `showNewMessageBox` case, not merely stale pointers. Reboot, firmware upload and cert clearing keep `Cancel`/`No` as the default. |
+| Radio Setup automation-bridge bind failure | Retained: nothing runs after the notice. |
 | Waveforms notices/removal / file selection | Scoped `PersistentDialog` helpers and caller survival checks. |
 | Memory import/export/removal | Scoped notices and confirmations, owner/model checks and guarded asynchronous completion notices. |
 | Profile Manager / Profile Import-Export | Scoped notices/confirmations and owner/model/transfer/picker checks. |
@@ -101,7 +103,13 @@ FramelessMessageBox; Qt and the linked engine library are not instrumented.
 The Rx component test separately injects owner destruction and slice rebinding;
 it does not claim a production applet-deletion route. Paired accepted-dialog
 cases require one write to the live original slice and zero writes after rebind.
-The scoped-widget test checks parent deletion and forwarded constructor values against the direct Qt constructor, including platform-specific title behavior. Net Scheduler Add and actual table double-click Edit both close the delete-on-close parent while the editor is active.
+The scoped-widget test checks parent deletion and forwarded constructor values
+against the direct Qt constructor under the same parent, including
+platform-specific title behavior. The shared-warning case additionally asserts
+that a box whose parent dies mid-loop reports `NoButton` rather than a pressed
+button: `SettingsBrowserDialog::addKey()` and `deleteSelected()` only write to
+the store on `Yes`, so that return value is the barrier against a post-teardown
+write, not a detail. Net Scheduler Add and actual table double-click Edit both close the delete-on-close parent while the editor is active.
 
 Native macOS verification used a fresh `AETHER_SETTINGS_DIR`,
 `AETHER_AUTOMATION_NO_TX=1` and the explicit `connect local serial DEMO-0001`

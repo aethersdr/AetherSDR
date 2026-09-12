@@ -602,8 +602,14 @@ void testStaticWarningSurvivesParentDeletion()
     });
     closeParent.start(0);
     watchdog.start(1500);
-    FramelessMessageBox::warning(parent, QStringLiteral("Lifetime test"),
-                                 QStringLiteral("Parent will close during this modal warning."));
+    // Ask for a non-default button set with an explicit default, so a stale
+    // "the operator pressed Yes" cannot masquerade as the cancellation the
+    // callers rely on: SettingsBrowserDialog::addKey()/deleteSelected() only
+    // write to the store when this returns Yes.
+    const QMessageBox::StandardButton result = FramelessMessageBox::warning(
+        parent, QStringLiteral("Lifetime test"),
+        QStringLiteral("Parent will close during this modal warning."),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     watchdog.stop();
     settle();
 
@@ -611,6 +617,8 @@ void testStaticWarningSurvivesParentDeletion()
     expect(closeIssued, "static warning was open when its parent closed");
     expect(parent.isNull() && warning.isNull(),
            "closing the warning parent deletes both parent and static warning child");
+    expect(result == QMessageBox::NoButton,
+           "a warning whose parent dies mid-loop reports cancellation, never a button");
 }
 
 } // namespace

@@ -111,15 +111,22 @@ void forwardedConstructorLifetime()
     AetherSDR::ScopedChildWidget<QMessageBox> child(
         QMessageBox::Information, QStringLiteral("Original title"),
         QStringLiteral("Original text"), QMessageBox::Ok, parent.get());
-    // Compare with Qt's direct constructor: macOS may normalize message-box
-    // window titles even though the caller supplied an explicit title.
-    QMessageBox direct(QMessageBox::Information, QStringLiteral("Original title"),
-                       QStringLiteral("Original text"), QMessageBox::Ok);
+    // Compare with Qt's direct constructor under the SAME parent, so the check
+    // isolates argument forwarding rather than parentage: macOS may normalize
+    // message-box window titles even though the caller supplied an explicit
+    // one, and an unparented control would diverge for that reason instead.
+    // Heap-allocated deliberately — a stack QMessageBox parented here is the
+    // invalid free this header exists to prevent, and the parent is destroyed
+    // below.
+    auto* direct = new QMessageBox(QMessageBox::Information,
+                                   QStringLiteral("Original title"),
+                                   QStringLiteral("Original text"),
+                                   QMessageBox::Ok, parent.get());
     check("forwarded constructor preserves dialog configuration",
-          child.get()->windowTitle() == direct.windowTitle()
-              && child.get()->text() == direct.text()
-              && child.get()->icon() == direct.icon()
-              && child.get()->standardButtons() == direct.standardButtons()
+          child.get()->windowTitle() == direct->windowTitle()
+              && child.get()->text() == direct->text()
+              && child.get()->icon() == direct->icon()
+              && child.get()->standardButtons() == direct->standardButtons()
               && child.get()->parentWidget() == parent.get());
     QTimer::singleShot(0, child.get(), [&] { parent.reset(); });
     child.get()->exec();

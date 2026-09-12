@@ -468,9 +468,6 @@ void MidiMappingDialog::importProfileFromFile()
         box.setStandardButtons(QMessageBox::Ok);
         box.setDetailedText(result.errors.join(QLatin1Char('\n')));
         box.exec();
-        if (!self || !boxOwner || !manager) {
-            return;
-        }
         return;
     }
 
@@ -509,9 +506,6 @@ void MidiMappingDialog::importProfileFromFile()
         if (!detailLines.isEmpty())
             box.setDetailedText(detailLines.join(QLatin1Char('\n')));
         box.exec();
-        if (!self || !boxOwner || !manager) {
-            return;
-        }
         return;
     }
 
@@ -534,9 +528,6 @@ void MidiMappingDialog::importProfileFromFile()
     if (!detailLines.isEmpty())
         box.setDetailedText(detailLines.join(QLatin1Char('\n')));
     box.exec();
-    if (!self || !boxOwner || !manager) {
-        return;
-    }
 }
 
 void MidiMappingDialog::exportProfileToFile()

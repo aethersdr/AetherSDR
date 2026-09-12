@@ -1282,16 +1282,19 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 : QStringLiteral("Reboot the connected radio now?\n\n"
                                  "AetherSDR will disconnect and automatically reconnect "
                                  "once the radio finishes booting.");
-            const auto ret = QMessageBox::warning(
-                this,
-                QStringLiteral("Reboot Radio"),
-                body,
-                QMessageBox::Ok | QMessageBox::Cancel,
-                QMessageBox::Cancel);
-            if (ret == QMessageBox::Ok) {
-                m_model->rebootRadio();
-                close();
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<RadioModel> model(m_model);
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Warning, QStringLiteral("Reboot Radio"), body,
+                QMessageBox::Ok | QMessageBox::Cancel, this);
+            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+            const int ret = boxOwner.get()->exec();
+            if (!self || !boxOwner || !model || self->m_model != model.data()
+                || ret != QMessageBox::Ok) {
+                return;
             }
+            model->rebootRadio();
+            self->close();
         });
         m_rebootInfoField = makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
                                           kInfoLeftLabelWidth);
@@ -1630,6 +1633,8 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // from FlexRadio (.msi for v4.2+, .exe for older releases) or a
         // pre-extracted .ssdr file. The stager auto-detects which.
         connect(browseBtn, &QPushButton::clicked, this, [this] {
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<RadioModel> model(m_model);
             const QString path = QFileDialog::getOpenFileName(
                 this, "Select SmartSDR Installer or Firmware File", QString(),
                 "SmartSDR installer or firmware (*.msi *.exe *.ssdr);;"
@@ -1637,7 +1642,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 "EXE installer (*.exe);;"
                 "Extracted firmware (*.ssdr);;"
                 "All files (*)");
-            if (path.isEmpty()) return;
+            if (!self || !model || self->m_model != model.data() || path.isEmpty()) {
+                return;
+            }
 
             m_fwFilePath.clear();
             m_fwUploadBtn->setEnabled(false);
@@ -1656,13 +1663,21 @@ QWidget* RadioSetupDialog::buildRadioTab()
         connect(m_fwUploadBtn, &QPushButton::clicked, this, [this] {
             if (m_fwFilePath.isEmpty()) return;
 
-            const auto reply = QMessageBox::warning(this, "Firmware Update",
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<RadioModel> model(m_model);
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Warning, QStringLiteral("Firmware Update"),
                 QString("Upload %1 to %2?\n\n"
                         "The radio will reboot after the update.\n"
                         "Do not disconnect during the upload.")
                     .arg(QFileInfo(m_fwFilePath).fileName(), m_model->model()),
-                QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
-            if (reply != QMessageBox::Ok) return;
+                QMessageBox::Ok | QMessageBox::Cancel, this);
+            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+            const int reply = boxOwner.get()->exec();
+            if (!self || !boxOwner || !model || self->m_model != model.data()
+                || reply != QMessageBox::Ok) {
+                return;
+            }
 
             if (!m_uploader)
                 m_uploader = new FirmwareUploader(m_model, this);
@@ -2016,7 +2031,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
                     AutomationBridgeSettings::setTxAck(true);
                 }
                 AutomationBridgeSettings::setTxAllowed(on);
-                emit self->automationBridgeTxAllowedChanged(on);
+                emit automationBridgeTxAllowedChanged(on);
             });
             grid->addWidget(txCheck, 3, 1);
         }
@@ -4140,10 +4155,12 @@ QWidget* RadioSetupDialog::buildAudioTab()
         browseBtn->setFixedWidth(30);
         browseBtn->setStyleSheet(modeBtnStyle);
         connect(browseBtn, &QPushButton::clicked, this, [this, dirEdit]() {
+            const QPointer<RadioSetupDialog> self(this);
+            const QPointer<QLineEdit> dirEditGuard(dirEdit);
             QString dir = QFileDialog::getExistingDirectory(this, "Select Recording Directory",
                                                             dirEdit->text());
-            if (!dir.isEmpty()) {
-                dirEdit->setText(dir);
+            if (self && dirEditGuard && !dir.isEmpty()) {
+                dirEditGuard->setText(dir);
                 auto& s = AppSettings::instance();
                 s.setValue("QsoRecordingDir", dir);
                 s.save();
@@ -9195,12 +9212,16 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     for (int i = 0; i < AetherSDR::kSliceColorCount; ++i) {
         connect(colorBtns[i], &QPushButton::clicked, page,
                 [i, pMgr, applyBtnColor, page]() mutable {
+            const QPointer<QWidget> pageGuard(page);
+            const QPointer<SliceColorManager> mgr(pMgr);
             QColor initial = pMgr->customColor(i);
             QColor chosen = QColorDialog::getColor(initial, page,
                                                    QStringLiteral("Slice %1 Color")
                                                        .arg(QChar('A' + i)));
-            if (!chosen.isValid()) return;
-            pMgr->setCustomColor(i, chosen);
+            if (!pageGuard || !mgr || !chosen.isValid()) {
+                return;
+            }
+            mgr->setCustomColor(i, chosen);
             applyBtnColor(i);
         });
     }
@@ -9415,15 +9436,19 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
     });
 
     connect(forgetAll, &QPushButton::clicked, this, [this]() {
-        if (QMessageBox::question(this, tr("Forget all SmartLink certificates"),
-                tr("Clear every pinned SmartLink cert fingerprint?\n\n"
-                   "Next connect to each radio will silently re-pin "
-                   "whatever certificate it presents (no mismatch warning)."))
-            != QMessageBox::Yes) {
+        const QPointer<RadioSetupDialog> self(this);
+        ScopedChildWidget<QMessageBox> boxOwner(
+            QMessageBox::Question, tr("Forget all SmartLink certificates"),
+            tr("Clear every pinned SmartLink cert fingerprint?\n\n"
+               "Next connect to each radio will silently re-pin "
+               "whatever certificate it presents (no mismatch warning)."),
+            QMessageBox::Yes | QMessageBox::No, this);
+        const int reply = boxOwner.get()->exec();
+        if (!self || !boxOwner || reply != QMessageBox::Yes) {
             return;
         }
         WanCertCache::forgetAllPinnedCerts();
-        refreshPinnedCertsTable();
+        self->refreshPinnedCertsTable();
     });
 
     root->addWidget(grp);

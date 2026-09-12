@@ -1518,12 +1518,20 @@ void WaveformsDialog::installWaveformFile(const QString& title,
         }
     }
 
-    if (!m_installer) {
-        m_installer = new WaveformInstaller(modelGuard, this);
+    if (m_installer && m_installer->isInstalling()) {
+        return;
     }
 
-    if (m_installer->isInstalling()) {
-        return;
+    // Rebuild the installer if the radio changed under us — it caches the
+    // model it was constructed with, and the picker above is a nested loop
+    // during which the model can be swapped (#5568 review).
+    if (m_installer && m_installerModel != modelGuard) {
+        m_installer->deleteLater();
+        m_installer = nullptr;
+    }
+    if (!m_installer) {
+        m_installer = new WaveformInstaller(modelGuard, this);
+        m_installerModel = modelGuard;
     }
 
     m_installBtn->setEnabled(false);

@@ -612,6 +612,10 @@ void SettingsBrowserDialog::onTableActivated(int row)
     if (featureItem == nullptr) {
         return;
     }
+    // A double-click delivers cellActivated AND cellDoubleClicked on some
+    // platforms — one viewer per gesture (PR #4631 review). Both arrive
+    // before the deferred open below runs, so the flag is claimed here and
+    // released by openDocumentViewer() when its modal loop ends.
     if (m_docViewerOpen) {
         return;
     }
@@ -621,7 +625,6 @@ void SettingsBrowserDialog::onTableActivated(int row)
     // modal loop can delete its table. Snapshot the document, not its row.
     m_docViewerOpen = true;
     QTimer::singleShot(0, this, [this, scope, feature, rawValue] {
-        m_docViewerOpen = false;
         openDocumentViewer(scope.family, scope.radioId, feature, rawValue);
     });
 }
@@ -631,13 +634,8 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
                                                const QString& feature,
                                                const QString& rawValue)
 {
-    // A double-click delivers cellActivated AND cellDoubleClicked on some
-    // platforms — one viewer per gesture (PR #4631 review).
-    if (m_docViewerOpen) {
-        return;
-    }
-    m_docViewerOpen = true;
-
+    // m_docViewerOpen is claimed by onTableActivated() before this call is
+    // deferred; it is released after exec() below.
     auto& s = AppSettings::instance();
     int schemaVersion = 0;
     const QJsonObject doc =
@@ -919,8 +917,8 @@ void SettingsBrowserDialog::deleteSelected()
     case ScopeKind::None:
         return;
     }
-    if (FramelessMessageBox::question(this, "Delete Setting?", prompt)
-        != FramelessMessageBox::Yes || !self) {
+    const auto answer = FramelessMessageBox::question(this, "Delete Setting?", prompt);
+    if (!self || answer != FramelessMessageBox::Yes) {
         return;
     }
 
