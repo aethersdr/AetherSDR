@@ -4193,6 +4193,26 @@ add_executable(bandscope_analyzer_test
 target_include_directories(bandscope_analyzer_test PRIVATE src)
 add_test(NAME bandscope_analyzer_test COMMAND bandscope_analyzer_test)
 
+# BandscopeTrace's paint path, executed offscreen. Nothing else in the
+# bandscope work runs a line of paintEvent, and a widget whose drawing has never
+# been executed is the weakest part of it. Links the dialog's TU (which holds
+# both classes) plus PersistentDialog and the analyzer; no radio, no sockets.
+add_executable(bandscope_trace_render_test
+    tests/bandscope_trace_render_test.cpp
+    src/gui/BandscopeDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/ClientEqFftAnalyzer.cpp
+)
+target_include_directories(bandscope_trace_render_test PRIVATE src)
+target_link_libraries(bandscope_trace_render_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test)
+set_target_properties(bandscope_trace_render_test PROPERTIES AUTOMOC ON)
+add_test(NAME bandscope_trace_render_test COMMAND bandscope_trace_render_test)
+set_tests_properties(bandscope_trace_render_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # The wideband converter view capability, and the verb its record names.
 # Socket-free: constructs an Hl2Backend, never connects it, and asserts that
 # the advertised verb reaches the branch that implements it rather than the
