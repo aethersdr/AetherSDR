@@ -154,6 +154,62 @@ int main(int argc, char** argv)
               "a reconnect notification exposes the new session model");
     }
 
+    // ---- flex: a declared capacity beats the model table (#5594 item 3) ----
+    //
+    // The radio states max_slices / max_panadapters in its discovery packet;
+    // RadioModel hands them here so the capability DESCRIPTOR agrees with what
+    // the model enforces, because RadioResourceAdapter serializes it onto the
+    // control protocol. (The model-side half — parsing, precedence, fallback —
+    // is pinned in radio_capacity_declaration_test.)
+    {
+        FlexBackend backend;
+        QSignalSpy caps(&backend, &IRadioBackend::capabilitiesChanged);
+        QString model = QStringLiteral("FLEX-8600");
+        backend.setModelProvider([&model] { return model; });
+
+        check(backend.capabilities().maxSlices == 4
+                  && backend.capabilities().maxPanadapters == 4,
+              "with nothing declared the model table supplies both counts");
+
+        // Declared values that differ from the table, and from each other —
+        // pan capacity is no longer assumed equal to slice capacity.
+        caps.clear();
+        backend.setRadioReportedCapacity(3, 2);
+        check(backend.capabilities().maxSlices == 3,
+              "a declared slice capacity beats the model table");
+        check(backend.capabilities().maxPanadapters == 2,
+              "a declared panadapter capacity beats the model table, and is not "
+              "assumed equal to the slice count");
+        check(caps.count() == 1, "a declared capacity announces exactly one revision");
+
+        // The caller republishes on every capacity-bearing edge; only a real
+        // change may announce.
+        backend.setRadioReportedCapacity(3, 2);
+        check(caps.count() == 1, "an unchanged capacity announces nothing");
+
+        backend.setRadioReportedCapacity(3, 4);
+        check(backend.capabilities().maxPanadapters == 4
+                  && backend.capabilities().maxSlices == 3,
+              "one field may move without disturbing the other");
+        check(caps.count() == 2, "a moved capacity announces again");
+
+        // "The radio did not say" is 0, and must not be read as a capacity of
+        // zero — that would describe a radio that can do nothing.
+        backend.setRadioReportedCapacity(0, 0);
+        check(backend.capabilities().maxSlices == 3
+                  && backend.capabilities().maxPanadapters == 4,
+              "0 means 'not declared' and leaves the last known capacity alone");
+        check(caps.count() == 2, "'not declared' announces nothing");
+
+        // A different radio on the next session must not inherit these limits.
+        backend.clearExtensionHandles();
+        model = QStringLiteral("FLEX-6400");
+        check(backend.capabilities().maxSlices == 2
+                  && backend.capabilities().maxPanadapters == 2,
+              "after a disconnect the capacity falls back to the new radio's "
+              "model table rather than the previous radio's declaration");
+    }
+
     // ---- rtl: a static declaration, asserted rather than assumed ----
     //
     // Optional backend (AETHER_BACKEND_RTL): skipped, not failed, where librtlsdr

@@ -3739,7 +3739,16 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_nickname = info.nickname;
     m_callsign = info.callsign;
     m_declaredBands = parseDeclaredBands(info.bands);   // empty for real Flex
-    m_maxSlices = maxSlicesForModel(m_model);
+    // #5594 item 3: the radio's own declaration wins over the model table.
+    // Both are captured here, at the connect edge, because a capacity is a fact
+    // about the hardware and licence rather than something that moves during a
+    // session. 0 means this radio did not say — older firmware, or a connect by
+    // IP where no discovery packet is ever seen — and the table still answers.
+    m_declaredMaxSlices = info.maxSlices > 0 ? info.maxSlices : 0;
+    m_maxPanadapters = info.maxPanadapters > 0 ? info.maxPanadapters : 0;
+    m_maxSlices = m_declaredMaxSlices > 0 ? m_declaredMaxSlices
+                                          : maxSlicesForModel(m_model);
+    publishRadioReportedCapacity();
     if (reloadAntennaAliases())
         emit antennaAliasesChanged();
     setKnownGuiClients(info.guiClientHandles,
@@ -7298,7 +7307,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                             else if (key == "options")     m_radioOptions = val;
                             else if (key == "model") {
                                 m_model = val;
-                                m_maxSlices = maxSlicesForModel(m_model);
+                                // #5594 item 3: only when the radio declared nothing. A model-string
+                                // change must not overwrite a capacity the radio stated for itself —
+                                // the table is the fallback, not an override.
+                                if (m_declaredMaxSlices <= 0)
+                                    m_maxSlices = maxSlicesForModel(m_model);
                             }
                             else if (key == "chassis_serial") m_chassisSerial = val;
                             else if (key == "software_ver")   m_version = val;
@@ -11251,15 +11264,42 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
     if (m_flexBackend) m_flexBackend->decodeRadioStatus(kvs);
 }
 
+void RadioModel::publishRadioReportedCapacity()
+{
+    if (!m_flexBackend)
+        return;
+    // Only what the radio actually spoke on. m_maxSlices carries the model-table
+    // estimate when nothing was declared, and pushing that down would pin the
+    // backend to a number no radio ever reported — the descriptor would then
+    // look authoritative while being a guess.
+    m_flexBackend->setRadioReportedCapacity(
+        m_declaredMaxSlices > 0 ? m_maxSlices : 0,
+        m_maxPanadapters);
+}
+
 void RadioModel::applyRadioChanges(const RadioDelta& d)
 {
     bool changed = false;
-    if (d.model) { m_model = *d.model; m_maxSlices = maxSlicesForModel(m_model); changed = true; }
+    if (d.model) {
+        m_model = *d.model;
+        // #5594 item 3: the table is the fallback, never an override. A radio
+        // that declared its capacity in discovery keeps it when its model name
+        // lands on the status plane a moment later.
+        if (m_declaredMaxSlices <= 0)
+            m_maxSlices = maxSlicesForModel(m_model);
+        changed = true;
+    }
     if (d.slicesAvailable) {
         // slices=N reports available (unused) slots; total capacity = open + available
         const int available = *d.slicesAvailable;
         const int currentSliceCount = static_cast<int>(m_slices.size());
-        const int modelLimit = m_model.isEmpty() ? 0 : maxSlicesForModel(m_model);
+        // Ceiling: what the radio DECLARED if it did, else the per-model
+        // estimate. Without this the ratchet below could raise the capacity back
+        // above a declared limit — a radio that says it runs 2 would be offered
+        // 4 the moment two slices were open. (#5594 item 3)
+        const int modelLimit = m_declaredMaxSlices > 0
+            ? m_declaredMaxSlices
+            : (m_model.isEmpty() ? 0 : maxSlicesForModel(m_model));
         const int reportedTotal = currentSliceCount + available;
         if (modelLimit > 0 && reportedTotal > modelLimit) {
             qCWarning(lcProtocol) << "RadioModel: ignoring impossible slice capacity"
@@ -11275,6 +11315,7 @@ void RadioModel::applyRadioChanges(const RadioDelta& d)
             available);
         if (updatedMax != m_maxSlices) {
             m_maxSlices = updatedMax;
+            publishRadioReportedCapacity();
         }
         changed = true;
     }

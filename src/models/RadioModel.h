@@ -320,6 +320,12 @@ public:
         return m_maxSlices;
     }
     static int maxSlicesForModel(const QString& model);
+    // Hand the radio-declared capacity to the Flex backend so the capability
+    // DESCRIPTOR agrees with what this model enforces. RadioResourceAdapter
+    // serializes backendCapabilities() onto the aetherd control protocol, so
+    // without this a protocol client is told the model-table estimate while the
+    // GUI and the automation bridge use the radio's own number. (#5594 item 3)
+    void publishRadioReportedCapacity();
 
     // Per-model feature flags from the central ModelCapabilities table.
     // First consumer is the band selector (#695); future model-conditional
@@ -482,6 +488,14 @@ public:
             if (reported > 0)
                 return reported;
         }
+        // What the radio said in its discovery packet beats a per-model
+        // estimate: the table is keyed off the model string and is the same for
+        // every radio of that kind, while this is what THIS radio reports for
+        // its own hardware and licence. 0 means it never said (older firmware,
+        // or a connect by IP with no discovery packet), and then the table is
+        // still the best answer available. (#5594 item 3)
+        if (m_maxPanadapters > 0)
+            return m_maxPanadapters;
         return capabilitiesFor(m_model).maxSlices;
     }
 
@@ -1814,6 +1828,18 @@ private:
     QString     m_model;
     QStringList m_declaredBands;    // optional "bands=" declaration (see declaredBands())
     int         m_maxSlices{4};
+    // What the radio DECLARED it can run, from the discovery keys max_slices /
+    // max_panadapters (#5594 item 3). 0 = the radio did not say, so the FlexLib
+    // model table remains the fallback.
+    //
+    // A declared capacity is a fact about the hardware and licence, so it is
+    // taken at the connect edge and does not move. The radio ALSO reports
+    // `slices=N` / `panadapters=N` in its live status, but those are the FREE
+    // counts — occupancy, not capacity — and turning them into a capacity means
+    // pairing them with an object inventory that is not populated yet when the
+    // first status lands. That derivation was tried and withdrawn; see #5603.
+    int         m_declaredMaxSlices{0};
+    int         m_maxPanadapters{0};
     QString     m_version;          // software version from discovery (e.g. "4.1.5")
     QString     m_versionLabel;     // display-only word for it (Gateware on an HL2)
     QString     m_protocolVersion;  // protocol version from V line (e.g. "1.4.0.0")
