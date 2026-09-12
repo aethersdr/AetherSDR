@@ -16,6 +16,8 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
+#include <QMetaObject>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -24,14 +26,20 @@
 #include <QVBoxLayout>
 #ifdef Q_OS_LINUX
 #include "core/LogManager.h"
-#include <QMessageBox>
-#include <QMetaObject>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTimer>
 #endif
 
 namespace AetherSDR {
+
+// Shared "attention" style for the status label's advisory states — Linux
+// needs-permission and Windows unsupported-variant.  Resolved through
+// ThemeManager against color.accent.warning, which docs/style/
+// theme-style-guide.md designates for warning foregrounds, so the advisory
+// re-paints with the active theme instead of pinning one amber. (#3485)
+static const char kAttentionLabelStyle[] =
+    "QLabel { color: {{color.accent.warning}}; }";
 
 // Cached product image — loaded once, shared by dialBodyRect (for
 // aspect-correct sizing) and the canvas paintEvent.  Falls back to a
@@ -190,6 +198,19 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
             this, &UlanziDialMapperDialog::onGrantAccessClicked);
     bottomRow->addWidget(m_grantAccessBtn);
 #endif
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+    // Shown only when a known-unsupported OEM variant is the sole dial
+    // present.  The status label is one short line in a fixed-width row, so
+    // the actual procedure lives behind this button. (#3485)
+    m_variantHelpBtn = new QPushButton(tr("Setup..."));
+    m_variantHelpBtn->setToolTip(
+        tr("How to drive this dial through Ulanzi Studio and the AetherSDR "
+           "TCI plugin."));
+    m_variantHelpBtn->setVisible(false);
+    connect(m_variantHelpBtn, &QPushButton::clicked,
+            this, &UlanziDialMapperDialog::onVariantHelpClicked);
+    bottomRow->addWidget(m_variantHelpBtn);
+#endif
 
     bottomRow->addStretch(1);
 
@@ -235,7 +256,26 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
         connect(m_manager, &UlanziDialBackend::accessRequired,
                 this, &UlanziDialMapperDialog::onAccessRequired);
 #endif
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+        connect(m_manager, &UlanziDialBackend::unsupportedVariantChanged,
+                this, &UlanziDialMapperDialog::onUnsupportedVariant);
+#endif
         onConnectionChanged(m_manager->isConnected(), m_manager->deviceName());
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+        // The manager started long before this dialog existed, so the variant
+        // signal has already fired — recover the state.  This must NOT read
+        // the getter directly: the backend lives on the ExtControllers thread
+        // and unsupportedVariantName() would race rescan().  Hop to the
+        // backend's own thread, take the (mutex-guarded) snapshot there, and
+        // deliver it back through a queued call. (#3485)
+        QMetaObject::invokeMethod(m_manager, [this, mgr = m_manager]() {
+            const QString variant = mgr->unsupportedVariantName();
+            QMetaObject::invokeMethod(this, [this, variant]() {
+                if (!variant.isEmpty())
+                    onUnsupportedVariant(variant);
+            }, Qt::QueuedConnection);
+        }, Qt::QueuedConnection);
+#endif
     } else {
         m_statusLabel->setText(tr("Manager unavailable (Linux build only)"));
     }
@@ -645,6 +685,18 @@ void UlanziDialMapperDialog::showEvent(QShowEvent* event)
 void UlanziDialMapperDialog::onConnectionChanged(bool connected, const QString& name)
 {
     if (!m_statusLabel) return;
+    m_connected = connected;
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+    // A supported dial is open, so the unsupported-variant advisory no longer
+    // applies; and while disconnected, let the advisory own the status line
+    // rather than overwriting it with a bare "Disconnected". (#3485)
+    if (connected) {
+        m_unsupportedVariant.clear();
+        if (m_variantHelpBtn) m_variantHelpBtn->setVisible(false);
+    } else if (!m_unsupportedVariant.isEmpty()) {
+        return;
+    }
+#endif
     QString display = name;
     if (display.endsWith(QStringLiteral(" Keyboard"), Qt::CaseInsensitive))
         display.chop(QStringLiteral(" Keyboard").size());
@@ -668,8 +720,7 @@ void UlanziDialMapperDialog::onAccessRequired(const QString& deviceName)
     QString display = deviceName;
     if (display.endsWith(QStringLiteral(" Keyboard"), Qt::CaseInsensitive))
         display.chop(QStringLiteral(" Keyboard").size());
-    m_statusLabel->setText(tr("%1 detected — needs permission").arg(display));
-    m_statusLabel->setStyleSheet("QLabel { color: #e0a030; }");
+    showAttentionStatus(tr("%1 detected — needs permission").arg(display));
     if (m_grantAccessBtn) {
         m_grantAccessBtn->setVisible(true);
         m_grantAccessBtn->setEnabled(true);
@@ -756,6 +807,107 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
                          kScript, QStringLiteral("aethersdr"), kRule});
 }
 #endif  // Q_OS_LINUX
+
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
+void UlanziDialMapperDialog::onUnsupportedVariant(const QString& deviceName)
+{
+    if (!m_statusLabel) return;
+
+    // Empty name = the variant went away (unplugged, or scanning stopped).
+    // Withdraw the advisory rather than leaving a stale "detected". (#3485)
+    if (deviceName.isEmpty()) {
+        m_unsupportedVariant.clear();
+        if (m_variantHelpBtn) m_variantHelpBtn->setVisible(false);
+        if (!m_connected)
+            onConnectionChanged(false, QString());
+        return;
+    }
+
+    // Don't downgrade a live connection — this state only applies while
+    // nothing supported is open.
+    if (m_connected) return;
+
+    m_unsupportedVariant = deviceName;
+    refreshVariantStatus();
+}
+
+void UlanziDialMapperDialog::refreshVariantStatus()
+{
+    if (m_unsupportedVariant.isEmpty()) return;
+
+    // Wording matters here.  These units are NOT broken — they are driven
+    // through Ulanzi Studio's plugin over TCI, and a user whose dial is
+    // already working that way must not be told it is "unsupported".  So the
+    // label names the path that WORKS rather than the one that does not.
+    //
+    // Budget: the status label gets 212 px of the fixed 640 px bottom row
+    // (measured on the running dialog: status 212, Setup 69, "Last event:" 93,
+    // Reset 127, Close 57) and it neither wraps nor elides, so overflow is a
+    // silent mid-word cut — an earlier attempt put the device name here and
+    // clipped at 'Ulanzi D100H (KEHWIN "Dial_Lite",'.  Measured with
+    // QFontMetrics in the label's own font: "Use Ulanzi Studio" 204 px (fits),
+    // "Studio plugin only" 216 px and "Unsupported variant" 228 px (both
+    // overflow).  Re-measure before lengthening.  The device name lives in the
+    // button tooltip and the Setup dialog, which have room. (#3485)
+    showAttentionStatus(tr("Use Ulanzi Studio"));
+
+    if (m_variantHelpBtn) {
+        m_variantHelpBtn->setToolTip(
+            tr("%1 — cannot be driven over HID. Click for setup "
+               "instructions.")
+                .arg(m_unsupportedVariant));
+        m_variantHelpBtn->setVisible(true);
+    }
+}
+
+
+void UlanziDialMapperDialog::onVariantHelpClicked()
+{
+    // Rich text for the numbered steps.  Deliberately NO download link: the
+    // packaged plugin is not yet published as an AetherSDR release asset, and
+    // a shipping dialog must not point at a contributor's personal repository
+    // (raised by @jensenpat in review).  The in-tree plugin and its install
+    // steps live at plugins/ulanzi-aethersdr/. (#3485)
+    QMessageBox box(this);
+    box.setWindowTitle(tr("Ulanzi Dial — Setup Required"));
+    box.setIcon(QMessageBox::Information);
+    box.setTextFormat(Qt::RichText);
+    box.setText(tr("<b>%1</b> cannot be driven over HID.")
+                    .arg(m_unsupportedVariant.toHtmlEscaped()));
+    box.setInformativeText(
+        tr("<p>This variant's vendor collection stays silent unless Ulanzi "
+           "Studio performs its activation handshake, and its keyboard and "
+           "mouse collections are captured by Windows — so AetherSDR cannot "
+           "read it directly.</p>"
+           "<p>Drive it through Ulanzi Studio instead:</p>"
+           "<ol>"
+           "<li>Enable TCI: <b>Settings → Autostart TCI with AetherSDR</b>.</li>"
+           "<li>Build the plugin from <code>plugins/ulanzi-aethersdr/</code> in "
+           "the AetherSDR source tree, following the README there.</li>"
+           "<li>Copy the built plugin folder into "
+           "<code>%APPDATA%\\Ulanzi\\UlanziDeck\\Plugins\\</code>.</li>"
+           "<li>Quit Ulanzi Studio from the system tray and relaunch it.</li>"
+           "</ol>"));
+    box.setTextInteractionFlags(Qt::TextBrowserInteraction);
+    box.exec();
+}
+#endif  // Q_OS_WIN && HAVE_HIDAPI
+
+// The one amber call site, shared by every advisory status (Linux
+// needs-permission, Windows unsupported-variant) — the colour ratchet
+// tracks setStyleSheet call sites, so new advisory states reuse this one.
+void UlanziDialMapperDialog::showAttentionStatus(const QString& text)
+{
+    if (!m_statusLabel) return;
+    m_statusLabel->setText(text);
+    // Safety net for a larger system font or a longer translation: without
+    // this the label cuts mid-word with no ellipsis and no tooltip, which is
+    // how the first two attempts at this advisory shipped unreadable text.
+    // The full string always stays reachable on hover. (#3485)
+    m_statusLabel->setToolTip(text);
+    ThemeManager::instance().applyStyleSheet(m_statusLabel,
+                                             QString::fromLatin1(kAttentionLabelStyle));
+}
 
 } // namespace AetherSDR
 
