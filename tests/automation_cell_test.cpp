@@ -86,8 +86,13 @@ int main(int argc, char** argv)
     };
     const auto error = [&](const QByteArray& line, const QString& fragment) {
         const QJsonObject result = request(line);
-        return !result.value("ok").toBool()
+        const bool refused = !result.value("ok").toBool()
             && result.value("error").toString().contains(fragment);
+        if (!refused) {
+            std::printf("Unexpected response: %s\n",
+                        QJsonDocument(result).toJson(QJsonDocument::Compact).constData());
+        }
+        return refused;
     };
     TipTable table(30, 2);
     table.setObjectName(QStringLiteral("cells"));
@@ -188,7 +193,15 @@ int main(int argc, char** argv)
     table.scrollToTop();
     const QMetaObject::Connection reset = QObject::connect(
         table.verticalScrollBar(), &QScrollBar::valueChanged, &table,
-        [&table](int) { table.setRowCount(0); });
+        [&table](int) {
+            // Keep the same dimensions but replace the item identity. A raw
+            // QModelIndex still addresses row 29 after this reset, so merely
+            // checking visualRect would show the new tip and report the old one.
+            table.clearContents();
+            auto* replacement = new QTableWidgetItem(QStringLiteral("replacement"));
+            replacement->setToolTip(QStringLiteral("replacement tip"));
+            table.setItem(29, 0, replacement);
+        });
     check(error("tooltip cells cell 29 0", "changed"), "model reset during scroll is refused");
     QObject::disconnect(reset);
 
