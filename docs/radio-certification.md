@@ -246,7 +246,7 @@ from Tune Power, not RF Power.
 | Signal | HL2 source | Why it matters |
 |---|---|---|
 | ADC overload | `0x00[24]` | clipping the converter; invisible in any audio meter |
-| ADC clip count | discovery `0x1B[1:0]` | saturating counter — "did we clip at all recently" |
+| ADC clip count | discovery `0x1B[1:0]` | **not "recently" at idle.** Its only clear is the EP6 response, so with no stream running it saturates and stays there — an idle poll returns a latch, not a level. While streaming, "recently" is the last EP6 response (~1.3 ms at 48 kHz, one receiver). And it is the same one bit as the row above: response address 0 bit 24 is `(&clip_cnt)`, the reduction AND of this counter. `docs/HERMES.md` §11.4 derives both |
 | TX IQ FIFO status | RADDR `0x00`, `DATA[15:8]` | recovery flag + coarse fill (top 7 bits), **not a depth** — see `MetisProtocol.cpp`. Not servo-ready |
 | TX inhibit | `0x00[25]`, **active low** | the radio refusing to key, distinct from us not asking |
 
