@@ -5894,6 +5894,28 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
             // with its slice synchronously — so #5263's own "conversion beats
             // gating where the seam verb exists" applies to these two GUI
             // sites as an M4 item.
+            //
+            // Deliberately NOT permissive on disconnect, unlike every gate in
+            // applyCapabilitiesToUi() (which spells that rule out at the
+            // cmdPlane/`!connected ||` gate in MainWindow.cpp). Those gate
+            // ENABLEMENT of a visible control, where staying permissive with no
+            // radio attached is right. This gates an ACTION that writes
+            // m_splitActive ahead of its send, so admitting the press while
+            // disconnected would reinstate exactly the latch this guard exists
+            // to remove. The cost is that an offline press reports "this radio
+            // doesn't support that control" when there is no radio; the wording
+            // is the price of sharing one notice with the drop path.
+            //
+            // Which families this refuses is a property of the predicate, not a
+            // list kept here: hasCommandPlane() is m_wanConn || m_connection,
+            // and RadioModel::buildBackend() harvests m_connection in exactly
+            // two branches — dynamic_cast<FlexBackend*>, and the else-if
+            // dynamic_cast<SimBackend*> that vends the synthetic connection per
+            // RFC #4288 Route A. So Flex (LAN, and WAN via m_wanConn) and Sim
+            // pass unchanged, and every family that vends no RadioConnection
+            // refuses: hl2, icom, anan and rtl alike. Nothing here enumerates
+            // them, and a future backend that vends one passes with no edit to
+            // this site.
             if (!m_radioModel.hasCommandPlane()) {
                 qCWarning(lcDevices)
                     << "VFO split toggle ignored: this backend takes no Flex"

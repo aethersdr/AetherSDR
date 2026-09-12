@@ -2927,6 +2927,15 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
 // loud on 2026-08-27, so that trade was invisible at the time; it is not
 // invisible now. A gate calls this so a refused control says exactly what a
 // dropped one says.
+//
+// The latch is now SHARED between two producers: this helper's gate callers and
+// the commandDropped path. One refusal per connect session therefore consumes
+// the notice for both, so an operator who trips a capability gate first sees
+// nothing for a genuinely dropped command later in the same session. That is
+// the pre-existing one-shot semantics extended to a second producer rather than
+// a new rule, and the message is deliberately generic enough to stand for
+// either cause — but it is a real consequence and is recorded here rather than
+// left to be rediscovered.
 void MainWindow::showUnsupportedControlNotice()
 {
     if (m_commandDroppedNoticeShown)
