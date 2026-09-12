@@ -723,8 +723,10 @@ void AnanBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
     Q_UNUSED(sliceId);
-    // 0..100 operator units -> 0..60 dB ceiling, same map Hl2Backend uses
-    // (kAgcCeilingDbPerUnit = 0.6) -- a WDSP-range fact, not an HL2 fact.
+    // 0..100 operator units -> 0..60 dB ceiling, same map the HL2 uses
+    // (Hl2DbReference::kAgcCeilingDbPerUnit = 0.6) -- a WDSP-range fact, not an
+    // HL2 fact. The HL2 additionally REFERS this ceiling to its LNA gain, which
+    // is an HL2 fact and deliberately not copied here.
     const QString m = mode.trimmed().toLower();
     int wdspMode = 3;   // medium, WDSP's own default
     if (m == QLatin1String("off"))  wdspMode = 0;
