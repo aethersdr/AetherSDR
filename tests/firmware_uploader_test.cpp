@@ -501,25 +501,32 @@ void checkBarrierReleasedOnlyByRadioSettledOutcomes()
               && !AetherSDR::FirmwareUploaderTestAccess::barrierActive(rejected),
           "a radio-reported rejection is unambiguous and releases the barrier");
 
-    // Closing Radio Setup mid-upload now calls cancel() rather than letting
-    // destruction abort the socket silently. Bytes were already dispatched and
-    // the radio never reported on them, so that path must NOT release the
-    // barrier — the next attempt still needs a fresh command session.
+    // A local drain does not establish installation. Closing the dialog at
+    // this phase must preserve the unknown outcome and refuse same-session retry.
     AetherSDR::FirmwareUploader cancelled(nullptr);
     QVector<FinishedEvent> cancelledFinished;
     QObject::connect(&cancelled, &AetherSDR::FirmwareUploader::finished,
                      [&cancelledFinished](Outcome outcome, const QString& message) {
                          cancelledFinished.append({outcome, message});
                      });
-    AetherSDR::FirmwareUploaderTestAccess::start(
+    const auto cancelledGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
         cancelled, nonPeriodicBytes(8), [](const char*, qint64 requested) { return requested; });
     AetherSDR::FirmwareUploaderTestAccess::dispatched(cancelled);
+    AetherSDR::FirmwareUploaderTestAccess::acknowledge(cancelled, cancelledGeneration, 8);
+    check(cancelled.phase() == AetherSDR::FirmwareUploader::Phase::AwaitingConfirmation,
+          "the cancellation fixture reaches the post-drain confirmation phase");
     cancelled.cancel();
-    check(cancelledFinished.size() == 1 && cancelledFinished.front().outcome == Outcome::Failed
-              && !cancelled.isUploading(),
-          "cancelling a dispatched upload emits exactly one terminal result");
+    cancelled.cancel();
+    AetherSDR::FirmwareUploaderTestAccess::status(
+        cancelled, cancelledGeneration, QStringLiteral("file update"),
+        {{QStringLiteral("failed"), QStringLiteral("0")}});
+    check(cancelledFinished.size() == 1
+              && cancelledFinished.front().outcome == Outcome::Unconfirmed
+              && cancelledFinished.front().message.contains(QStringLiteral("unconfirmed"))
+              && cancelled.phase() == AetherSDR::FirmwareUploader::Phase::Idle,
+          "post-drain cancellation emits one unconfirmed result, even with late callbacks");
     check(AetherSDR::FirmwareUploaderTestAccess::barrierActive(cancelled),
-          "cancelling a dispatched upload leaves its outcome unobserved, so the barrier holds");
+          "post-drain cancellation keeps the retry barrier armed");
 
     AetherSDR::FirmwareUploader stalled(nullptr);
     const auto stalledGeneration = AetherSDR::FirmwareUploaderTestAccess::start(

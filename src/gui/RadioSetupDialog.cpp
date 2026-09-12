@@ -1136,35 +1136,85 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     }
 }
 
-void RadioSetupDialog::closeEvent(QCloseEvent* event)
+bool RadioSetupDialog::confirmFirmwareClose()
 {
-    // A firmware upload does not survive this dialog. The uploader is parented
-    // here and this dialog carries WA_DeleteOnClose, so closing mid-transfer
-    // destroys the uploader and its socket and aborts the image part-written —
-    // silently, with the pre-upload warning having only ever mentioned not
-    // *disconnecting*. The radio is then holding a partial update whose outcome
-    // nobody observed, which is the exact ambiguity #5572's retry barrier
-    // exists to contain. Make the operator say it out loud first.
-    if (m_uploader && m_uploader->isUploading()) {
-        const auto reply = QMessageBox::warning(
-            this, tr("Firmware Update In Progress"),
-            tr("A firmware upload is still in progress.\n\n"
-               "Closing this window aborts it part-way through the image. The "
-               "radio may be left with an incomplete update, and you will need "
-               "to reconnect to it before you can retry.\n\n"
-               "Close anyway?"),
-            QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
-        if (reply != QMessageBox::Ok) {
-            event->ignore();
+    // A nested close/reject must not destroy the owner underneath this prompt.
+    if (m_firmwareClosePromptOpen) {
+        return false;
+    }
+    if (!m_uploader || !m_uploader->isUploading()) {
+        return true;
+    }
+    const QPointer<RadioSetupDialog> self(this);
+    const QPointer<FirmwareUploader> uploader(m_uploader);
+    ScopedChildWidget<QMessageBox> boxOwner(
+        QMessageBox::Warning, tr("Firmware Update In Progress"), QString(),
+        QMessageBox::Ok | QMessageBox::Cancel, this);
+    QMessageBox* box = boxOwner.get();
+    box->setDefaultButton(QMessageBox::Cancel);
+    box->setEscapeButton(QMessageBox::Cancel);
+    const auto refreshPrompt = [uploader, box] {
+        if (!uploader) {
             return;
         }
-        // End the attempt explicitly rather than letting destruction do it
-        // silently: cancel() emits one terminal result, and because the radio
-        // never settled the outcome it leaves the retry barrier armed — so the
-        // next attempt still has to go through a fresh command session.
-        m_uploader->cancel();
+        switch (uploader->phase()) {
+        case FirmwareUploader::Phase::Preparing:
+            box->setText(tr("The firmware upload is being prepared. No image bytes have been sent."
+                            "\n\nClose this window and cancel the attempt?"));
+            break;
+        case FirmwareUploader::Phase::Transferring:
+            box->setText(tr("A firmware upload is in progress. Closing this window stops the transfer "
+                            "and may leave the radio with an incomplete image. The update outcome "
+                            "will remain unknown; reconnect before retrying.\n\nClose anyway?"));
+            break;
+        case FirmwareUploader::Phase::AwaitingConfirmation:
+            box->setText(tr("Firmware bytes have left the local write buffer, but the radio has not "
+                            "confirmed installation. Closing this window stops waiting for confirmation; "
+                            "it does not undo the update.\n\nReconnect to check the firmware version "
+                            "before retrying. Close anyway?"));
+            break;
+        case FirmwareUploader::Phase::Idle:
+            box->setText(tr("The firmware upload attempt has ended. Close this window?"));
+            break;
+        }
+    };
+    refreshPrompt();
+    // The upload can advance or finish while exec() runs its nested event loop.
+    connect(uploader, &FirmwareUploader::progressChanged, box, refreshPrompt);
+    connect(uploader, &FirmwareUploader::finished, box, refreshPrompt);
+    m_firmwareClosePromptOpen = true;
+    const int reply = box->exec();
+    if (!self) {
+        return false;
     }
+    m_firmwareClosePromptOpen = false;
+    if (!boxOwner || reply != QMessageBox::Ok) {
+        return false;
+    }
+    if (uploader) {
+        // Classify the CURRENT phase; it may have changed inside the prompt.
+        // cancel() is a no-op if a terminal radio result already arrived.
+        uploader->cancel();
+    }
+    return !self.isNull();
+}
 
+void RadioSetupDialog::done(int result)
+{
+    // QDialog routes Escape, reject() and accept() through done(), bypassing
+    // closeEvent. Keep those paths behind the same confirmation without
+    // redirecting reject() to close() (which recurses during Qt's close path).
+    if (confirmFirmwareClose()) {
+        PersistentDialog::done(result);
+    }
+}
+
+void RadioSetupDialog::closeEvent(QCloseEvent* event)
+{
+    if (!confirmFirmwareClose()) {
+        event->ignore();
+        return;
+    }
     // Persist any uncommitted "user cleared IP" edits in the Peripherals
     // tab before the base class flushes geometry to AppSettings.
     for (const auto& saver : m_peripheralRowSavers)
