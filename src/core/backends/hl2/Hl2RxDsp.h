@@ -4,10 +4,14 @@
 #include <QObject>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <numbers>
+#include <optional>
 #include <vector>
 
 #include "core/backends/hl2/Hl2Spectrum.h"
@@ -158,6 +162,55 @@ public:
     [[nodiscard]] int appliedNoiseBlankerLevel() const
     {
         return m_nbAppliedLevel.load(std::memory_order_relaxed);
+    }
+
+    // ── The POST-DDC half of the ADC pairing (HERMES.md §13 item 16) ──────
+    //
+    // WDSP's RXA_ADC_PK for this chain, in dB relative to WIRE full scale.
+    // RXA.c's adcmeter runs FIRST in xrxa — after the shift and the input
+    // half-band resampler, ahead of nbp0 — so it measures the IQ entering the
+    // RXA chain: this ONE slice, decimated to kWdspDspSampleRateHz, before any
+    // channel filtering, demodulation or AGC. That is a deliberately different
+    // question from the HL2's own pre-DDC overload flag, which watches the
+    // whole 0-38.4 MHz the converter sees. Hl2AdcPairing.h holds the reasoning
+    // and pairs the two; this is only the reading.
+    //
+    // NOT CALIBRATED. dBFS here is referred to the wire's full scale, not to
+    // anything at the antenna — see Hl2DbReference, whose fullScaleDbm is 0.0
+    // with isCalibrated() false.
+    //
+    // SAMPLED ON THE DSP THREAD, at the one instant the value means something:
+    // immediately after a block has been processed, in the same place the
+    // S-meter is read. A timer in the backend would call GetRXAMeter from the
+    // GUI thread against a channel another thread may be closing.
+    //
+    // ATOMIC for the same reason the applied-noise-blanker pair above is:
+    // Hl2Backend answers healthSnapshot() from the GUI thread while this object
+    // lives on the I/O thread. Relaxed is enough — nothing is ordered against
+    // them, and a torn pairing of value and timestamp costs at worst a
+    // millisecond of reported age.
+    //
+    // nullopt until a block has actually been processed. There is no number
+    // that honestly stands for "this chain's level has never been looked at",
+    // and 0.00 dBFS in particular would read as a hard clip.
+    [[nodiscard]] std::optional<double> adcPeakDbfs() const
+    {
+        const float v = m_adcPeakDbfs.load(std::memory_order_relaxed);
+        if (!std::isfinite(v)) {
+            return std::nullopt;
+        }
+        return static_cast<double>(v);
+    }
+    // How old that reading is. A number with no age on it invites being read as
+    // current, and this one stops advancing the moment the IQ stream does.
+    [[nodiscard]] std::optional<std::int64_t> adcPeakObservedAgoMs() const
+    {
+        const std::int64_t at = m_adcPeakAtNs.load(std::memory_order_relaxed);
+        if (at == 0) {
+            return std::nullopt;
+        }
+        const std::int64_t ago = (steadyNowNs() - at) / 1'000'000;
+        return ago < 0 ? 0 : ago;
     }
 
     // ── Manual notch filters ──────────────────────────────────────────────
@@ -330,6 +383,13 @@ private:
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
 
+    [[nodiscard]] static std::int64_t steadyNowNs() noexcept
+    {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
     double m_shiftHz = 0.0;   // current slice offset from the NCO, Hz
@@ -341,6 +401,13 @@ private:
     int  m_nbLevel = 50;      // 0..100, the slice model's units
     std::atomic<bool> m_nbAppliedOn {false};
     std::atomic<int>  m_nbAppliedLevel {50};
+    // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and
+    // 0 are the "never observed" sentinels, which is why neither is a value the
+    // accessors can return. A steady_clock stamp rather than a QElapsedTimer
+    // because a QElapsedTimer's members are not atomic and this is read from
+    // another thread.
+    std::atomic<float> m_adcPeakDbfs {std::numeric_limits<float>::quiet_NaN()};
+    std::atomic<std::int64_t> m_adcPeakAtNs {0};
     Config m_config;
 
     // Notch set, mirrored so reconfigure() can replay it — see the note on
