@@ -3808,6 +3808,16 @@ target_include_directories(hl2_ep4_ingest_test PRIVATE src tests)
 target_link_libraries(hl2_ep4_ingest_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_ep4_ingest_test COMMAND hl2_ep4_ingest_test)
 
+# HL2 wideband bandscope duty-cycle gate — the four-state machine, its guard
+# timer and the transmit interlocks. Socket-free and event-loop-free: recorded
+# enable/disable cycles go in through the same MetisClientTestAccess seam and
+# both timers are fired by hand. Qt6::Test is for QSignalSpy, which is how
+# "one block per arming cycle, never one per packet" is asserted.
+add_executable(hl2_ep4_gate_test tests/hl2_ep4_gate_test.cpp)
+target_include_directories(hl2_ep4_gate_test PRIVATE src tests)
+target_link_libraries(hl2_ep4_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_ep4_gate_test COMMAND hl2_ep4_gate_test)
+
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
 add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
