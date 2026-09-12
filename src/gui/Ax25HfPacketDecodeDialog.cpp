@@ -2168,8 +2168,9 @@ void Ax25HfPacketDecodeDialog::captureGeneratedTxAudio(
             .arg(generatedPath, error));
     }
 
-    if (!m_radio
-        || m_radio->backendCapabilities().family != QLatin1String("icom")) {
+    // Namespace, not family (#5262 M1): the verb below lives in the icom
+    // namespace, so the gate asks whether this backend declares it.
+    if (!m_radio || !m_radio->backendDeclaresExtension(QStringLiteral("icom"))) {
         return;
     }
 

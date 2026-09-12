@@ -3715,15 +3715,16 @@ target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Cor
 add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_test)
 
 
-# #5594 item 3: the capacity a Flex declares in discovery (max_slices /
-# max_panadapters), and that it is never confused with the adjacent
-# available_* availability keys. Socket-free.
 # #5262 M1: family-specific verbs gate on the declared extension namespace, not
 # on the family string. Socket-free.
 add_executable(extension_namespace_gate_test tests/extension_namespace_gate_test.cpp)
 target_include_directories(extension_namespace_gate_test PRIVATE src)
 target_link_libraries(extension_namespace_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME extension_namespace_gate_test COMMAND extension_namespace_gate_test)
+
+# #5594 item 3: the capacity a Flex declares in discovery (max_slices /
+# max_panadapters), and that it is never confused with the adjacent
+# available_* availability keys. Socket-free.
 
 add_executable(radio_capacity_declaration_test tests/radio_capacity_declaration_test.cpp)
 target_include_directories(radio_capacity_declaration_test PRIVATE src)
