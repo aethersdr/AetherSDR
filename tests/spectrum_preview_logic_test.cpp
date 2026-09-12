@@ -1066,7 +1066,254 @@ int testDssSupplementalCoverageCalibration()
     return 0;
 }
 
+int testStampFrameForHistoryRow()
+{
+    using namespace AetherSDR;
+    const FrequencyFrame requested{14.2, 0.1};
+    const FrequencyFrame confirmed{14.0, 0.2};
+
+    const FrequencyFrame withRequested =
+        stampFrameForHistoryRow(requested, confirmed);
+    if (!nearlyEqual(withRequested.centerMhz, requested.centerMhz)
+        || !nearlyEqual(withRequested.bandwidthMhz, requested.bandwidthMhz)) {
+        return fail("a valid per-row frame must be stamped as-is");
+    }
+
+    // Zero bandwidth, negative bandwidth, and non-finite center all mark a
+    // caller's per-row frame as absent -- the row must fall back to the last
+    // backend-confirmed geometry, never an on-screen zoom guess.
+    const FrequencyFrame zeroBandwidth{14.2, 0.0};
+    const FrequencyFrame negativeBandwidth{14.2, -0.1};
+    const FrequencyFrame nonFiniteCenter{
+        std::numeric_limits<double>::quiet_NaN(), 0.1};
+    for (const FrequencyFrame& invalid :
+         {zeroBandwidth, negativeBandwidth, nonFiniteCenter}) {
+        const FrequencyFrame stamped =
+            stampFrameForHistoryRow(invalid, confirmed);
+        if (!nearlyEqual(stamped.centerMhz, confirmed.centerMhz)
+            || !nearlyEqual(stamped.bandwidthMhz, confirmed.bandwidthMhz)) {
+            return fail(
+                "an absent per-row frame must fall back to the confirmed frame");
+        }
+    }
+    return 0;
+}
+
+int testPrimaryRowFrameForNativeTile()
+{
+    using namespace AetherSDR;
+
+    // THE invariant: whatever frame the primary row claims, every pixel in it
+    // must have bin data behind it -- i.e. the claim never reaches outside the
+    // tile that produced it. remapHistoryRowInto() tests the primary frame
+    // first and only falls through to the supplemental row OUTSIDE it, so a
+    // claim wider than the source makes the zero-filled remainder permanently
+    // unreachable.
+    const auto claimStaysInsideTile =
+        [](const FrequencyFrame& claimed, double lowMhz, double highMhz) {
+            constexpr double kSlackMhz = 1.0e-9;
+            const double claimedStart =
+                claimed.centerMhz - claimed.bandwidthMhz / 2.0;
+            const double claimedEnd = claimedStart + claimed.bandwidthMhz;
+            return claimedStart >= lowMhz - kSlackMhz
+                && claimedEnd <= highMhz + kSlackMhz;
+        };
+
+    // Flex: the tile extends beyond both pan edges, so cropping to the
+    // viewport loses nothing and keeps the row at full display resolution.
+    // This path must be untouched -- it is the one that works today.
+    const FrequencyFrame flexViewport{14.200, 0.200};
+    const FrequencyFrame flexClaim =
+        primaryRowFrameForNativeTile(flexViewport, 14.050, 14.350);
+    if (!nearlyEqual(flexClaim.centerMhz, flexViewport.centerMhz)
+        || !nearlyEqual(flexClaim.bandwidthMhz, flexViewport.bandwidthMhz)) {
+        return fail("an oversized tile must still be cropped to the viewport");
+    }
+    if (!claimStaysInsideTile(flexClaim, 14.050, 14.350)) {
+        return fail("the cropped Flex claim must stay inside its tile");
+    }
+
+    // Exact-span, steady: tile bounds equal the viewport. Both paths give the
+    // same answer; pin it so a steady Icom never rebases its rows.
+    const FrequencyFrame steadyViewport{14.100, 0.100};
+    const FrequencyFrame steadyClaim =
+        primaryRowFrameForNativeTile(steadyViewport, 14.050, 14.150);
+    if (!nearlyEqual(steadyClaim.centerMhz, 14.100)
+        || !nearlyEqual(steadyClaim.bandwidthMhz, 0.100)) {
+        return fail("an exactly-matching tile must claim that same frame");
+    }
+
+    // The IC-7300MK2 pan drag (jensenpat, #5142 review). The drag-hold guard
+    // in setFrequencyRangeInternal() defers every incoming echo, so the
+    // confirmed viewport is FROZEN while each cooked scope sweep arrives at a
+    // moving centre -- divergence grows with drag distance. Every one of these
+    // rows must claim only what its own sweep covered; claiming the stale
+    // viewport is what committed wide black rectangles to retained history.
+    const FrequencyFrame frozenViewport{14.100, 0.100};
+    for (const double sweepCenterMhz :
+         {14.104, 14.112, 14.125, 14.150, 14.220, 14.060}) {
+        const double lowMhz = sweepCenterMhz - 0.050;
+        const double highMhz = sweepCenterMhz + 0.050;
+        const FrequencyFrame claimed =
+            primaryRowFrameForNativeTile(frozenViewport, lowMhz, highMhz);
+        if (!claimStaysInsideTile(claimed, lowMhz, highMhz)) {
+            return fail(
+                "a sweep that does not cover the viewport must not claim it");
+        }
+        if (!nearlyEqual(claimed.centerMhz, sweepCenterMhz)
+            || !nearlyEqual(claimed.bandwidthMhz, 0.100)) {
+            return fail("a short tile must claim its own producer extent");
+        }
+    }
+
+    // A tile short on one side only is still short: partial overlap is the
+    // case that zero-fills one edge and hides it behind a full-width claim.
+    const FrequencyFrame partial =
+        primaryRowFrameForNativeTile(frozenViewport, 14.070, 14.140);
+    if (!claimStaysInsideTile(partial, 14.070, 14.140)) {
+        return fail("a partially overlapping tile must not claim the viewport");
+    }
+
+    // Degenerate producer extents: nothing better to offer than the viewport,
+    // and the caller skips its rasterisation loop for these anyway.
+    const FrequencyFrame emptyTile =
+        primaryRowFrameForNativeTile(frozenViewport, 14.100, 14.100);
+    const FrequencyFrame invertedTile =
+        primaryRowFrameForNativeTile(frozenViewport, 14.150, 14.050);
+    const FrequencyFrame nonFiniteTile = primaryRowFrameForNativeTile(
+        frozenViewport, std::numeric_limits<double>::quiet_NaN(), 14.150);
+    for (const FrequencyFrame& claimed :
+         {emptyTile, invertedTile, nonFiniteTile}) {
+        if (!nearlyEqual(claimed.centerMhz, frozenViewport.centerMhz)
+            || !nearlyEqual(claimed.bandwidthMhz,
+                            frozenViewport.bandwidthMhz)) {
+            return fail("an unusable tile extent must leave the viewport frame");
+        }
+    }
+
+    // Before the first backend echo the viewport frame is not yet meaningful;
+    // the tile is the only real geometry available.
+    const FrequencyFrame noViewport =
+        primaryRowFrameForNativeTile(FrequencyFrame{0.0, 0.0}, 14.050, 14.150);
+    if (!nearlyEqual(noViewport.centerMhz, 14.100)
+        || !nearlyEqual(noViewport.bandwidthMhz, 0.100)) {
+        return fail("an invalid viewport must defer to the tile extent");
+    }
+    return 0;
+}
+
 } // namespace
+
+// jensenpat's #5142 review, item 4: a deterministic regression over the whole
+// temporal sequence -- initial confirmed centre, an optimistic horizontal drag
+// that freezes it, several delayed exact-span sweeps arriving at MOVING
+// centres, then release. The defect he reproduced on an IC-7300MK2 is not a
+// single bad decision; it only appears once the viewport stops tracking the
+// sweeps, so a per-call test cannot see it.
+//
+// Asserted for every sweep in the sequence:
+//   * the row's claimed frame never reaches outside the tile that fed it, so
+//     no column it claims was zero-filled (his items 1 and 2);
+//   * a tile that DOES cover the viewport still takes the viewport frame, so
+//     the Flex path is unchanged;
+//   * a short sweep falls back to its own extent, which is what keeps the
+//     supplemental row reachable for the columns it cannot fill.
+int testNativeTileDragSequenceNeverClaimsUncoveredSpan()
+{
+    using namespace AetherSDR;
+    constexpr int kDestWidth = 800;
+    constexpr int kBins = 512;
+
+    // Viewport frozen at the pre-drag centre -- setFrequencyRangeInternal()
+    // rejects the moving centres while the drag is held.
+    const FrequencyFrame frozenViewport{14.200, 0.192};
+
+    struct Sweep { double centerMhz; double spanMhz; };
+    static constexpr Sweep kSweeps[] = {
+        {14.200, 0.192},   // exactly the viewport
+        {14.205, 0.192},   // drifted right, partial overlap
+        {14.215, 0.192},   // drifted further
+        {14.190, 0.192},   // drifted left
+        {14.200, 0.400},   // an oversized (Flex-like) tile
+        {14.400, 0.192},   // disjoint -- no overlap at all
+        {14.220, 0.048},   // narrow sweep well inside the viewport
+    };
+
+    for (const Sweep& sweep : kSweeps) {
+        const double lowMhz = sweep.centerMhz - sweep.spanMhz / 2.0;
+        const double highMhz = sweep.centerMhz + sweep.spanMhz / 2.0;
+        const FrequencyFrame rowFrame =
+            primaryRowFrameForNativeTile(frozenViewport, lowMhz, highMhz);
+
+        // The invariant. This is what failed before the fix: the row took the
+        // frozen viewport frame regardless, zero-filled everything the sweep
+        // did not reach, and stamped it as covered -- so remapHistoryRowInto()
+        // preferred those zeros permanently.
+        if (!nativeTileRowIsFullyCovered(rowFrame, lowMhz, highMhz,
+                                         kDestWidth, kBins))
+            return fail("a committed row claims columns its sweep never covered");
+
+        const double viewStart =
+            frozenViewport.centerMhz - frozenViewport.bandwidthMhz / 2.0;
+        const double viewEnd =
+            frozenViewport.centerMhz + frozenViewport.bandwidthMhz / 2.0;
+        const bool coversViewport = lowMhz <= viewStart && highMhz >= viewEnd;
+
+        if (coversViewport
+            && !nearlyEqual(rowFrame.centerMhz, frozenViewport.centerMhz, 1.0e-9))
+            return fail("a covering tile was not laid out against the viewport");
+        if (!coversViewport
+            && !nearlyEqual(rowFrame.bandwidthMhz, sweep.spanMhz, 1.0e-9))
+            return fail("a short sweep did not fall back to its own extent");
+    }
+
+    // Release: the radio acknowledges the final centre and the viewport catches
+    // up. The next sweep must settle on it directly.
+    const FrequencyFrame settled{14.220, 0.192};
+    const double settledLow = settled.centerMhz - settled.bandwidthMhz / 2.0;
+    const double settledHigh = settled.centerMhz + settled.bandwidthMhz / 2.0;
+    const FrequencyFrame settledRow =
+        primaryRowFrameForNativeTile(settled, settledLow, settledHigh);
+    if (!nearlyEqual(settledRow.centerMhz, settled.centerMhz, 1.0e-9)
+        || !nearlyEqual(settledRow.bandwidthMhz, settled.bandwidthMhz, 1.0e-9))
+        return fail("the post-release row did not settle on the acknowledged centre");
+    if (!nativeTileRowIsFullyCovered(settledRow, settledLow, settledHigh,
+                                     kDestWidth, kBins))
+        return fail("the post-release row claims columns it did not cover");
+    return 0;
+}
+
+// The rendering path is shared, so the invariant is asserted for every
+// producer's tile shape rather than Icom's alone -- jensenpat asked for that
+// in the same review. Only the tile geometry differs between them.
+int testNativeTileCoverageAcrossProducers()
+{
+    using namespace AetherSDR;
+    constexpr int kDestWidth = 640;
+    constexpr int kBins = 256;
+    const FrequencyFrame viewport{14.200, 0.192};
+
+    struct Producer { const char* name; double centerMhz; double spanMhz; };
+    static constexpr Producer kProducers[] = {
+        {"flex-oversized-tile", 14.200, 0.400},
+        {"icom-exact-span",     14.207, 0.192},
+        {"anan-ddc-span",       14.200, 0.192},
+        {"hl2-narrow",          14.200, 0.048},
+        {"sim-echoed",          14.200, 0.192},
+        {"kiwi-offset",         14.180, 0.100},
+    };
+
+    for (const Producer& producer : kProducers) {
+        const double lowMhz = producer.centerMhz - producer.spanMhz / 2.0;
+        const double highMhz = producer.centerMhz + producer.spanMhz / 2.0;
+        const FrequencyFrame rowFrame =
+            primaryRowFrameForNativeTile(viewport, lowMhz, highMhz);
+        if (!nativeTileRowIsFullyCovered(rowFrame, lowMhz, highMhz,
+                                         kDestWidth, kBins))
+            return fail("a producer's tile shape claims uncovered columns");
+    }
+    return 0;
+}
 
 int main()
 {
@@ -1132,5 +1379,18 @@ int main()
         result != 0) {
         return result;
     }
-    return testStablePresentationAnchor();
+    if (const int result = testStablePresentationAnchor(); result != 0) {
+        return result;
+    }
+    if (const int result = testStampFrameForHistoryRow(); result != 0) {
+        return result;
+    }
+    if (const int result = testPrimaryRowFrameForNativeTile(); result != 0) {
+        return result;
+    }
+    if (const int result = testNativeTileDragSequenceNeverClaimsUncoveredSpan();
+        result != 0) {
+        return result;
+    }
+    return testNativeTileCoverageAcrossProducers();
 }
