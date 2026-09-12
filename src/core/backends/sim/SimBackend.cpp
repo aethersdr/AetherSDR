@@ -254,6 +254,16 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    // Synthetic receiver: this is the API's bounded numeric domain, not an
+    // advertised hardware tuning range. Off-scene signals simply become silent.
+    caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
+                                  1, 1'000'000'000'000};
+    caps.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
+                                                {QStringLiteral("USB"), QStringLiteral("LSB")}};
+    caps.receiveFilterControl = std::nullopt; // demo passband setters only echo state
+    caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
+    caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
+    caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
     caps.canReboot = false;
     caps.hasRemoteOnControl = false;
     caps.canUpgradeFirmware = false;
@@ -273,6 +283,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.model  = demoModelName();
     caps.fmTonePresentation = FmTonePresentation::Legacy;
     caps.fmDtcsCodes = {};
+    caps.canCreateSlices = false;
     caps.maxSlices = 1;          // Phase 1: a single slice. Phase 2 raises this.
     // Four receivers since #4887 phase 4 — enough to exercise the workspace
     // canvas's per-pan items and measure the multi-pan render budget in CI
@@ -306,6 +317,7 @@ RadioCapabilities SimBackend::capabilities() const
     // Synthesised signals come out exactly where the demo says they are; there
     // is no oscillator to be wrong about.
     caps.hostFrequencyCalibration = false;
+    caps.hostDroopCalibration = false;   // synthesised bins have no DDC to droop
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;

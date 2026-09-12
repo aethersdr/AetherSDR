@@ -35,6 +35,12 @@ There is no intermediate ring buffer: each librtlsdr callback converts and
 processes its block on the reader thread. This bounds memory use but means DSP
 must keep pace with USB input.
 
+The compiled [prepared receiver registry](rtl-receiver-registry.md) implements
+RFC #5468 F4's bounded multi-receiver ownership, asynchronous WDSP preparation,
+sample-boundary publication and acknowledged retirement. The live backend does
+not select it yet; RF extraction and audio integration belong to M1, so the
+current DDC and receiver count remain unchanged.
+
 ## Connection and state
 
 RTL-SDR is discovered as a local device; it is deliberately not accepted by

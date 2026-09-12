@@ -1,4 +1,5 @@
 #include "MapView.h"
+#include "DarkBasemapLayer.h"
 #include "MapProviderNetworkAccessManager.h"
 #include "CityLightsItem.h"
 #include "MapMarkerBatchItem.h"
@@ -13,6 +14,8 @@
 #include "core/ThemeManager.h"
 
 #include <QGeoView/QGVCamera.h>
+#include <QGeoView/QGVDrawItem.h>
+#include <QGeoView/QGVMapQGItem.h>
 #include <QGeoView/QGVLayer.h>
 #include <QGeoView/QGVLayerOSM.h>
 #include <QGeoView/QGVMap.h>
@@ -23,6 +26,8 @@
 #include <QCoreApplication>
 #include <QAbstractAnimation>
 #include <QDateTime>
+#include <QGraphicsScene>
+#include <QPainter>
 #include <QCursor>
 #include <QDir>
 #include <QEasingCurve>
@@ -49,6 +54,45 @@ namespace AetherSDR {
 Q_LOGGING_CATEGORY(lcFlatMapRendering, "aether.map.flat.rendering")
 
 namespace {
+// Black alpha compositing implements RGB multiplication, independent of the
+// app theme. This viewport-sized layer sits below every data overlay.
+class BasemapDimmer final : public QGVDrawItem {
+public:
+    BasemapDimmer() { setSelectable(false); }
+    QPainterPath projShape() const override
+    {
+        QPainterPath path;
+        path.addRect(m_rect);
+        return path;
+    }
+    void projPaint(QPainter* painter) override
+    {
+        painter->fillRect(m_rect, Qt::black);
+    }
+protected:
+    void onProjection(QGVMap* map) override
+    {
+        QGVDrawItem::onProjection(map);
+        resetBoundary();
+        m_rect = map->getCamera().projRect().normalized();
+        for (QGraphicsItem* item : map->geoView()->scene()->items()) {
+            if (QGVMapQGItem::geoObjectFromQGItem(item) == this) {
+                item->setCacheMode(QGraphicsItem::NoCache);
+                break;
+            }
+        }
+        refresh();
+    }
+    void onCamera(const QGVCameraState& oldState, const QGVCameraState& newState) override
+    {
+        resetBoundary();
+        m_rect = newState.projRect().normalized();
+        refresh();
+        QGVDrawItem::onCamera(oldState, newState);
+    }
+private:
+    QRectF m_rect;
+};
 constexpr int kWeatherRadarTransitionMs = 260;
 // Initial view when no home position is known yet: whole world.
 const QGV::GeoRect kWorldRect{ 70.0, -170.0, -60.0, 170.0 };
@@ -123,7 +167,8 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
     }
     layout->addWidget(m_map);
 
-    auto* osmLayer = new QGVLayerOSM();
+    auto* osmLayer = new DarkBasemapLayer();
+    m_basemapLayer = osmLayer;
     // Deliberately tighter than QGVLayerTiles' upstream defaults, in both
     // dimensions — the decoded-image cache in QGVLayerTilesOnline is what pays
     // for it, since re-entering an area now costs a memcpy rather than a fetch
@@ -150,6 +195,10 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
     // ordering the playback composite is painted underneath the OSM tiles.
     osmLayer->sendToBack();
     m_map->addItem(osmLayer);
+    m_basemapDimmer = new BasemapDimmer();
+    m_basemapDimmer->setZValue(-32200);
+    m_basemapDimmer->setOpacity(0.0);
+    m_map->addItem(m_basemapDimmer);
     m_map->geoView()->setHorizontalWrapEnabled(true);
     m_map->geoView()->setVerticalBoundsEnabled(true);
 
@@ -740,6 +789,17 @@ void MapView::setCityLightsImage(const QImage& image, const QRectF& bounds)
     m_cityLightsItem->setImage(image, bounds);
 }
 
+void MapView::setBasemapDarkEnabled(bool enabled)
+{
+    m_basemapLayer->setDarkEnabled(enabled);
+    m_terminatorItem->setDarkBasemapEnabled(enabled);
+}
+
+void MapView::setBasemapBrightness(int percent)
+{
+    m_basemapDimmer->setOpacity(1.0 - std::clamp(percent, 20, 100) / 100.0);
+}
+
 void MapView::setCityLightsBrightness(int percent)
 {
     m_cityLightsItem->setOpacity(std::clamp(percent, 0, 100) / 100.0);
@@ -962,16 +1022,37 @@ void MapView::layoutOverlayButtons()
         btn->raise();
         y += btn->height() + kGap;
     }
-    if (m_legend != nullptr) {
-        m_legend->move(kMargin, height() - m_legend->height() - kMargin);
-        m_legend->raise();
-    }
     if (m_attribution != nullptr) {
+        m_attribution->setWordWrap(false);
+        m_attribution->setMinimumWidth(0);
+        m_attribution->setMaximumWidth(std::max(1, width() - 2 * kMargin));
+        m_attribution->adjustSize();
+        m_attribution->setFixedWidth(m_attribution->width());
+        m_attribution->setWordWrap(true);
         m_attribution->adjustSize();
         m_attribution->move(
             width() - m_attribution->width() - kMargin,
             height() - m_attribution->height() - kMargin);
         m_attribution->raise();
+    }
+    if (m_legend != nullptr) {
+        m_legend->setWordWrap(false);
+        m_legend->setMinimumWidth(0);
+        m_legend->setMaximumWidth(std::max(1, width() - 2 * kMargin));
+        m_legend->adjustSize();
+        m_legend->setFixedWidth(m_legend->width());
+        m_legend->setWordWrap(true);
+        m_legend->adjustSize();
+        int bottom = height() - kMargin;
+        // The sidebar leaves less map width: stack the legend above the
+        // attribution when the two no longer fit beside each other.
+        if (m_attribution != nullptr
+            && m_legend->width() + m_attribution->width() + kGap
+                   > width() - 2 * kMargin) {
+            bottom -= m_attribution->height() + kGap;
+        }
+        m_legend->move(kMargin, bottom - m_legend->height());
+        m_legend->raise();
     }
 }
 

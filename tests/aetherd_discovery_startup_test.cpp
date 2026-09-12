@@ -7,6 +7,7 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QProcess>
+#include <QProcessEnvironment>
 
 #include <cstdio>
 
@@ -57,6 +58,41 @@ int main(int argc, char* argv[])
     QCoreApplication::setApplicationVersion(QStringLiteral(AETHERSDR_VERSION));
     if (child) {
         return readback();
+    }
+
+    if (argc != 2) {
+        std::fprintf(stderr, "expected daemon executable path\n");
+        return 1;
+    }
+    for (const bool control : {false, true}) {
+        // Invalid logical names fail before endpoint resolution: no socket is
+        // bound. Simulator-only mode also keeps a regressed startup free of
+        // native discovery or settings-load side effects. RadioModel's settings
+        // singleton construction would still create this private directory.
+        const QString rejectedSettings = profile.path()
+            + (control ? QStringLiteral("/rejected-control") : QStringLiteral("/rejected-observe"));
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QStringLiteral("AETHER_SETTINGS_DIR"), rejectedSettings);
+        QStringList arguments{QStringLiteral("--socket"), QStringLiteral("invalid/name"),
+                              QStringLiteral("--discover-sim")};
+        if (control) {
+            arguments.append(QStringLiteral("--allow-local-control"));
+        }
+        QProcess rejected;
+        rejected.setProcessEnvironment(environment);
+        rejected.start(QString::fromLocal8Bit(argv[1]), arguments);
+        if (!rejected.waitForFinished(15000)) {
+            rejected.kill();
+            rejected.waitForFinished(1000);
+            std::fprintf(stderr, "rejected daemon startup failed or timed out\n");
+            return 1;
+        }
+        if (rejected.exitStatus() != QProcess::NormalExit || rejected.exitCode() != 1
+            || !rejected.readAllStandardError().contains("cannot listen on local socket")
+            || QFileInfo::exists(rejectedSettings)) {
+            std::fprintf(stderr, "failed daemon startup touched model/settings state\n");
+            return 1;
+        }
     }
 
     for (const bool simulator : {false, true}) {

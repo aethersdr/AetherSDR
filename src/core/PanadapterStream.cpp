@@ -1779,6 +1779,10 @@ void PanadapterStream::unregisterIqStream(quint32 streamId)
 
 void PanadapterStream::sendToRadio(const QByteArray& packet)
 {
+    if (m_packetSinkForTest) {
+        m_packetSinkForTest(packet);
+        return;
+    }
     if (m_radioAddress.isNull() || m_radioPort == 0) {
         static int dropCount = 0;
         if (++dropCount <= 5)

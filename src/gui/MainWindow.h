@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DeferredSettingsWrites.h"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ⚠️  MainWindow is DECOMPOSED (#3351). Add member fields/declarations here ONLY
 //     when genuinely cross-cutting — a feature's method bodies live in the
@@ -286,8 +288,10 @@ public:
     // both at launch (AETHER_AUTOMATION env var, from main.cpp) and at
     // runtime from the Radio Setup → Network toggle. Idempotent: starting
     // while running is a no-op; stopping while stopped is a no-op.
-    // sockName empty → the default PID-suffixed name. Returns true if the
-    // bridge is listening afterwards.
+    // sockName empty → the default PID-suffixed name. Returns true once a
+    // start is initiated (or already pending/running) and false only when the
+    // bind already failed synchronously; observe the result signal below for
+    // the actual bind outcome.
     bool startAutomationBridge(const QString& sockName = QString());
     void stopAutomationBridge();
     // Persist a new shared-secret token and push it to the running bridge
@@ -306,6 +310,13 @@ signals:
     // restore. wirePanadapter() owns the pending dBm handshake state, while the
     // restore can originate in several MainWindow translation units.
     void bandStackRestoreStarting(const QString& panId);
+    // Outcome of an automation-bridge start (#4181). startAutomationBridge()
+    // returns as soon as the start is *initiated* — the socket only binds
+    // later, inside the async token-read callback — so this is the only
+    // signal that says whether the bridge is actually listening. Emitted from
+    // both branches of that callback; RadioSetupDialog uses it to reconcile
+    // the Network-tab toggle. MainWindow persists the result independently.
+    void automationBridgeStartResult(bool ok);
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -334,6 +345,8 @@ private slots:
     void onRadioMessage(const QString& text, MessageSeverity severity);
     void onSliceAdded(SliceModel* slice);
     void onSliceRemoved(int id);
+    // Ordinary RX close from the VFO ✕ / "Close Slice" menu (RFC #5468 P01).
+    void requestSliceClose(int sliceId);
 
     // Master volume — single entry point used by both the title bar slider
     // (TitleBar::masterVolumeChanged) and TCI clients (TciServer::
@@ -724,6 +737,8 @@ private:
     // SpectrumWidget setters that persist it, radio-authoritative values via the
     // same commands the live sliders send). Returns how many pans were written.
     int cloneDisplaySettingsToAllPans(PanadapterApplet* source);
+    AetherSDR::DeferredSettingsWrites m_pendingDisplayWrites;
+    void scheduleClientWaterfallRateSave(int panIndex, int rate);
     void wirePanDisplayStatus(PanadapterApplet* applet, PanadapterModel* pan);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
@@ -746,6 +761,9 @@ private:
     void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
+    // The RTTY pane's ✕: persist "operator does not want this window" and
+    // re-run the refresh, which stops the decoder (#5353).
+    void onRttyPanelCloseRequested();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
     void wireVfoWidget(VfoWidget* w, SliceModel* s);
     void wireVfoTelemetry(VfoWidget* vfo, SliceModel* s);
@@ -1585,6 +1603,10 @@ private:
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
     bool m_commandDroppedNoticeShown{false};  // one status-bar notice per connect session (M0, #5263)
+    // Slice lifecycle refusals already shown this connect session, keyed
+    // "<operation>\n<reason>": one notice per distinct refusal, so a control
+    // that re-requests (rigctl split on every set_split_vfo) cannot spam the bar.
+    QSet<QString> m_sliceLifecycleNoticesShown;
     // Auto-reconnect bookkeeping — see maybeAutoConnectToDiscoveredRadio().
     //
     // The slot is driven by radioUpdated as well as radioDiscovered, and
@@ -1787,8 +1809,12 @@ private:
     QMetaObject::Connection m_radeDaxReconcileConn;  // RADE slice dax= change → move the Rade hold
     QMetaObject::Connection m_freedvMoxConn;
     QMetaObject::Connection m_radeMoxFallbackConn;
+    QMetaObject::Connection m_radePttIntentConn;
     QString m_lastRadeRxCallsign;
     bool m_radeEooPending{false};
+    TransmitModel::PttRelease m_radePttRelease;
+    quint64 m_radeEooRequestId{0};
+    std::shared_ptr<std::atomic<bool>> m_radeFallbackReleaseFence;
     bool m_radeTxActive{false};
     void activateRADE(int sliceId);
     void deactivateRADE();

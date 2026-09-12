@@ -121,8 +121,12 @@ bool testAuthenticationAndGrants()
                "an authorized observer must read the real resource")) {
         return false;
     }
-    for (const QString& method : {QStringLiteral("slice.setFrequency"),
-                                  QStringLiteral("transmit.acquire"),
+    if (!check(errorCode(invoke(service, observer, QStringLiteral("slice.setFrequency")))
+                   == QStringLiteral("auth.grant_denied"),
+               "observer cannot use frequency control")) {
+        return false;
+    }
+    for (const QString& method : {QStringLiteral("transmit.acquire"),
                                   QStringLiteral("transmit.setMox")}) {
         if (!check(errorCode(invoke(service, observer, method))
                        == QStringLiteral("request.unknown_method"),

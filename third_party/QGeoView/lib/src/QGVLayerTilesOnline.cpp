@@ -117,11 +117,8 @@ void QGVLayerTilesOnline::request(const QGV::GeoTilePos& tilePos)
 
     if (const QImage* cached = mDecodedTileCache.object(url)) {
         ++mDecodedTileDeliveryCount;
-        QGVImage* tile = transparentFallbackEnabled()
-            ? new TransparentFallbackTile([this, tilePos] { return tileUncoveredPath(tilePos); })
-            : new QGVImage();
+        QGVImage* tile = createTileImage(tilePos, *cached);
         tile->setGeometry(tileProjectionRect(tilePos));
-        tile->loadImage(*cached);
         // AetherSDR patch: this re-enters onTile() SYNCHRONOUSLY, unlike every
         // other path here, which arrives from a queued reply. onTile() calls
         // addTile() and then removeAllAbove()/removeWhenCovered(), all of which
@@ -248,11 +245,8 @@ void QGVLayerTilesOnline::onReplyFinished(QNetworkReply* reply, const QGV::GeoTi
     for (const int copyX : copies) {
         const QGV::GeoTilePos copy(tilePos.zoom(),
                                    QPoint(copyX, tilePos.pos().y()));
-        QGVImage* tile = transparentFallbackEnabled()
-            ? new TransparentFallbackTile([this, copy] { return tileUncoveredPath(copy); })
-            : new QGVImage();
+        QGVImage* tile = createTileImage(copy, decodedImage);
         tile->setGeometry(tileProjectionRect(copy));
-        tile->loadImage(decodedImage);
         tile->setProperty("drawDebug",
                           QString("%1\ntile(%2,%3,%4)")
                                   .arg(url.toString())
@@ -261,6 +255,16 @@ void QGVLayerTilesOnline::onReplyFinished(QNetworkReply* reply, const QGV::GeoTi
                                   .arg(copy.pos().y()));
         onTile(copy, tile);
     }
+}
+
+QGVImage* QGVLayerTilesOnline::createTileImage(
+    const QGV::GeoTilePos& tilePos, const QImage& image)
+{
+    QGVImage* tile = transparentFallbackEnabled()
+        ? new TransparentFallbackTile([this, tilePos] { return tileUncoveredPath(tilePos); })
+        : new QGVImage();
+    tile->loadImage(image);
+    return tile;
 }
 
 void QGVLayerTilesOnline::removeReply(const QGV::GeoTilePos& tilePos)

@@ -1,4 +1,10 @@
 {
+ "core/control/RadioConnectionTarget.h": {
+  "tag": "universal",
+  "note": "Typed non-TX connection lifecycle seam; trusted target receives only catalogue observations after service authorization.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/control/RadioCatalogue.h": {
   "tag": "universal",
   "note": "Bounded read-only discovery resource projected from normalized observations; no vendor wire types or connection intents.",
@@ -98,6 +104,12 @@
  "core/ClientDeEss.h": {
   "tag": "universal",
   "note": "Client TX DSP de-esser (sidechain bandpass + dynamics, meters); radio-agnostic engine DSP chain stage",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/ClientDisplaySettings.h": {
+  "tag": "ui-support",
+  "note": "Radio-scoped client persistence for locally shaped waterfall cadence under the ClientDisplay feature document; UI settings plumbing, not radio-owned display state.",
   "split": "",
   "confidence": "high"
  },
@@ -289,19 +301,19 @@
  },
  "core/KiwiSdrClient.h": {
   "tag": "vendor(kiwi)",
-  "note": "KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself",
+  "note": "KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself; also serves the Web-888 fork as a receiver family (docs/web888-cleanroom-design.md)",
   "split": "",
   "confidence": "high"
  },
  "core/KiwiSdrManager.h": {
   "tag": "vendor(kiwi)",
-  "note": "KiwiSDR connection/profile manager: Kiwi protocol state, telemetry, waterfall/audio streams; vendor extension.",
+  "note": "KiwiSDR connection/profile manager: Kiwi protocol state, telemetry, waterfall/audio streams; vendor extension. Profiles carry a receiver family (KiwiSDR or Web-888).",
   "split": "",
   "confidence": "high"
  },
  "core/KiwiSdrProtocol.h": {
   "tag": "vendor(kiwi)",
-  "note": "KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting",
+  "note": "KiwiSDR websocket wire protocol: SND/W/F frame decode, ADPCM, MSG tokens, camp/auth, kiwi command formatting; family enum + inbound-frame classification shared by the Web-888 receiver family",
   "split": "",
   "confidence": "high"
  },
@@ -1299,6 +1311,24 @@
   "tag": "vendor(anan)",
   "note": "openHPSDR Ethernet Protocol 2 wire primitives for the ANAN-G2 backend. Family protocol code belongs below the radio seam.",
   "split": "",
+  "confidence": "high"
+ },
+ "core/backends/anan/AnanDroopCalibrator.h": {
+  "tag": "vendor(anan)",
+  "note": "ANAN-owned DDC0 calibration state machine; control and progress cross only the namespaced backend extension.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/anan/AnanDroopCorrection.h": {
+  "tag": "vendor(anan)",
+  "note": "ANAN-specific per-rate spectrum correction tables and edge-fade math.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/DroopCalibration.h": {
+  "tag": "mixed(anan)",
+  "note": "Capability-gated client for the ANAN calibration extension. Uses only IRadioBackend requests and replies; concrete calibration ownership, rate control and DSP stay below the backend seam.",
+  "split": "Client protocol adapter only; no vendor implementation dependency.",
   "confidence": "high"
  }
 }

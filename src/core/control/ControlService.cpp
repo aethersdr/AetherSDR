@@ -2,8 +2,10 @@
 
 #include <QJsonArray>
 #include <QSet>
+#include <QThread>
 
 #include <cmath>
+#include <limits>
 
 namespace AetherSDR::control {
 namespace {
@@ -46,7 +48,8 @@ std::optional<ProtocolError> parseSelector(
     const QSet<QString> supportedTypes{
         QStringLiteral("server"), QStringLiteral("radioSession"),
         QStringLiteral("radioCatalogue"),
-        QStringLiteral("slice"), QStringLiteral("panadapter")};
+        QStringLiteral("slice"), QStringLiteral("panadapter"),
+        QStringLiteral("meter"), QStringLiteral("transmitState")};
     if (!supportedTypes.contains(type)) {
         return ProtocolError{QStringLiteral("request.invalid_params"),
                              QStringLiteral("unsupported resource type"),
@@ -78,9 +81,14 @@ std::optional<ProtocolError> parseSelector(
             return ProtocolError{QStringLiteral("request.invalid_params"),
                                  QStringLiteral("radioSession selector requires id only"), {}, false};
         }
+    } else if (type == QStringLiteral("transmitState")) {
+        if (radioSession.isEmpty() || !idValue.isUndefined()) {
+            return ProtocolError{QStringLiteral("request.invalid_params"),
+                                 QStringLiteral("transmitState requires radioSession only"), {}, false};
+        }
     } else if (radioSession.isEmpty() || (!wildcardAllowed && id.isEmpty())) {
         return ProtocolError{QStringLiteral("request.invalid_params"),
-                             QStringLiteral("slice and panadapter selectors require radioSession and id"),
+                             QStringLiteral("child resource selectors require radioSession and id"),
                              {}, false};
     }
 
@@ -93,22 +101,95 @@ ResourceAddress exactAddress(const ResourceSelector& selector)
     return {selector.type, selector.radioSession, selector.id};
 }
 
+DiscoveredRadio catalogueRadio(const QJsonObject& entry)
+{
+    DiscoveredRadio radio;
+    radio.family = entry.value(QStringLiteral("family")).toString();
+    radio.serial = entry.value(QStringLiteral("serial")).toString();
+    radio.name = entry.value(QStringLiteral("name")).toString();
+    radio.model = entry.value(QStringLiteral("model")).toString();
+    radio.nickname = entry.value(QStringLiteral("nickname")).toString();
+    radio.version = entry.value(QStringLiteral("version")).toString();
+    radio.transport = entry.value(QStringLiteral("transport")).toString();
+    radio.address = entry.value(QStringLiteral("address")).toString();
+    radio.port = static_cast<quint16>(entry.value(QStringLiteral("port")).toInt());
+    return radio;
+}
+
 } // namespace
 
-ControlService::ControlService(ControlResourceStore* resources)
-    : m_resources(resources)
+ControlService::ControlService(ControlResourceStore* resources,
+                               RadioConnectionTarget* connectionTarget,
+                               SliceFrequencyTarget* frequencyTarget)
+    : m_resources(resources), m_connectionTarget(connectionTarget),
+      m_targetBound(connectionTarget != nullptr), m_frequencyTarget(frequencyTarget),
+      m_frequencyTargetBound(frequencyTarget != nullptr)
 {
     Q_ASSERT(m_resources);
+}
+
+bool ControlService::bindConnectionTarget(RadioConnectionTarget* target)
+{
+    if (m_resources->thread() != QThread::currentThread()
+        || !target || target->thread() != QThread::currentThread()) {
+        return false;
+    }
+    if (m_targetBound || m_dispatchStarted) {
+        return false;
+    }
+    m_connectionTarget = target;
+    m_targetBound = true;
+    return true;
+}
+
+bool ControlService::bindFrequencyTarget(SliceFrequencyTarget* target)
+{
+    if (m_resources->thread() != QThread::currentThread()
+        || !target || target->thread() != QThread::currentThread()
+        || m_frequencyTargetBound || m_dispatchStarted) {
+        return false;
+    }
+    m_frequencyTarget = target;
+    m_frequencyTargetBound = true;
+    return true;
+}
+
+bool ControlService::bindReceiveTarget(ReceiveControlTarget* target)
+{
+    if (m_resources->thread() != QThread::currentThread() || !target
+        || target->thread() != QThread::currentThread()
+        || m_receiveTargetBound || m_dispatchStarted) {
+        return false;
+    }
+    m_receiveTarget = target;
+    m_receiveTargetBound = true;
+    return true;
 }
 
 ServiceReply ControlService::handle(
     const QByteArray& bytes, ControlSession* session) const
 {
-    if (!session || session->isRevoked()) {
+    if (!session || session->thread() != QThread::currentThread()
+        || m_resources->thread() != QThread::currentThread()
+        || (m_connectionTarget && m_connectionTarget->thread() != QThread::currentThread())
+        || (m_frequencyTarget && m_frequencyTarget->thread() != QThread::currentThread())
+        || (m_receiveTarget && m_receiveTarget->thread() != QThread::currentThread())) {
+        return failure({}, {QStringLiteral("engine.failed"),
+                            QStringLiteral("service owning thread required"), {}, false}, true);
+    }
+    m_dispatchStarted = true;
+    if (session->isRevoked()) {
         return failure({},
                        {QStringLiteral("auth.invalid"),
                         QStringLiteral("session authorization is unavailable"), {}, false},
                        true);
+    }
+    // Charge every post-handshake frame before parsing or semantic refusal.
+    // Otherwise malformed JSON, repeated hello and wrong session IDs bypass
+    // the advertised budget. This transport-level error deliberately has no id.
+    if (session->isNegotiated() && !session->consumeRequest()) {
+        return failure({}, {QStringLiteral("transport.limit_exceeded"),
+                            QStringLiteral("request rate exceeded"), {}, false}, true);
     }
     const ParseResult parsed = ControlProtocolCodec::parseRequest(bytes);
     if (!parsed.ok()) {
@@ -168,6 +249,18 @@ ServiceReply ControlService::handle(
         }
         return {ControlProtocolCodec::successResponse(
                     request.id, capabilities(*session)), false};
+    }
+    if (request.method == QStringLiteral("radio.connect")
+        || request.method == QStringLiteral("radio.disconnect")) {
+        return handleConnection(request, *session);
+    }
+    if (request.method == QStringLiteral("slice.setFrequency")) {
+        return handleFrequency(request, *session);
+    }
+    for (const auto& [operation, method] : kReceiveMethods) {
+        if (request.method == QLatin1String(method)) {
+            return handleReceive(request, *session, operation);
+        }
     }
     if (request.method == QStringLiteral("resource.get")) {
         if (const std::optional<ProtocolError> error = session->observationError()) {
@@ -256,10 +349,251 @@ ServiceReply ControlService::handle(
                     {{QStringLiteral("method"), request.method}}, false});
 }
 
+ServiceReply ControlService::handleConnection(
+    const ProtocolRequest& request, const ControlSession& session) const
+{
+    const auto reject = [&request](const QString& code, const QString& message) {
+        return failure(request.id, {code, message, {}, false});
+    };
+    // Do not let observers probe the target, catalogue, or lifecycle state.
+    if (!session.canControl()) {
+        return reject(QStringLiteral("auth.grant_denied"), QStringLiteral("control grant required"));
+    }
+    if (!m_connectionTarget) {
+        return reject(QStringLiteral("capability.unavailable"), QStringLiteral("connection control unavailable"));
+    }
+    const bool connecting = request.method == QStringLiteral("radio.connect");
+    const QSet<QString> keys = connecting
+        ? QSet<QString>{QStringLiteral("radioSession"), QStringLiteral("radioId"),
+                        QStringLiteral("catalogueRevision")}
+        : QSet<QString>{QStringLiteral("radioSession")};
+    if (const std::optional<ProtocolError> error = onlyKeys(request.params, keys)) {
+        return failure(request.id, *error);
+    }
+    const QJsonValue radioSession = request.params.value(QStringLiteral("radioSession"));
+    if (!radioSession.isString()) {
+        return reject(QStringLiteral("request.invalid_params"), QStringLiteral("radioSession must be a string"));
+    }
+    // v1 deliberately exposes only the daemon's one engine session; the exact
+    // match bounds the value. A resource inserted for another session cannot
+    // redirect this target.
+    if (radioSession.toString() != QStringLiteral("radio-1")
+        || !m_resources->get({QStringLiteral("radioSession"), {}, radioSession.toString()})) {
+        return reject(QStringLiteral("resource.not_found"), QStringLiteral("radio session unavailable"));
+    }
+    if (!connecting) {
+        m_connectionTarget->disconnectRadio();
+        return {ControlProtocolCodec::successResponse(request.id,
+                    {{QStringLiteral("accepted"), true}}), false};
+    }
+
+    const QJsonValue id = request.params.value(QStringLiteral("radioId"));
+    const QJsonValue revision = request.params.value(QStringLiteral("catalogueRevision"));
+    const double revisionNumber = revision.toDouble();
+    if (!id.isString() || id.toString().size() != 64
+        || !revision.isDouble() || !std::isfinite(revisionNumber)
+        || revisionNumber < 1 || revisionNumber > 9007199254740991.0
+        || std::floor(revisionNumber) != revisionNumber) {
+        return reject(QStringLiteral("request.invalid_params"), QStringLiteral("radioId and catalogueRevision are required"));
+    }
+    const std::optional<ResourceSnapshot> catalogue =
+        m_resources->get({QStringLiteral("radioCatalogue"), {}, {}});
+    if (!catalogue || !catalogue->value.value(QStringLiteral("running")).toBool()) {
+        return reject(QStringLiteral("capability.unavailable"), QStringLiteral("radio catalogue unavailable"));
+    }
+    if (catalogue->revision != static_cast<quint64>(revisionNumber)) {
+        return reject(QStringLiteral("request.conflict"), QStringLiteral("radio catalogue changed; refresh selection"));
+    }
+    QJsonObject selected;
+    const QJsonArray entries = catalogue->value.value(QStringLiteral("entries")).toArray();
+    for (const QJsonValue& value : entries) {
+        const QJsonObject entry = value.toObject();
+        if (entry.value(QStringLiteral("id")) == id) {
+            selected = entry;
+            break;
+        }
+    }
+    if (selected.isEmpty()) {
+        return reject(QStringLiteral("resource.not_found"), QStringLiteral("radio is no longer available"));
+    }
+    if (selected.value(QStringLiteral("inUse")).toBool()
+        || m_connectionTarget->state() != RadioConnectionTarget::State::Idle) {
+        return reject(QStringLiteral("request.conflict"), QStringLiteral("radio or engine session is busy"));
+    }
+    // These fields come exclusively from the bounded catalogue's validated
+    // observations. None can be overridden by the requesting client.
+    const DiscoveredRadio radio = catalogueRadio(selected);
+    if (!m_connectionTarget->supports(radio)) {
+        return reject(QStringLiteral("capability.unavailable"), QStringLiteral("radio connection is unsupported"));
+    }
+    m_connectionTarget->connectRadio(radio);
+    return {ControlProtocolCodec::successResponse(request.id,
+                {{QStringLiteral("accepted"), true}}), false};
+}
+
+ServiceReply ControlService::handleFrequency(
+    const ProtocolRequest& request, const ControlSession& session) const
+{
+    const auto reject = [&request](const char* code, const char* message) {
+        return failure(request.id, {QString::fromLatin1(code),
+                                   QString::fromLatin1(message), {}, false});
+    };
+    if (!session.canControl()) {
+        return reject("auth.grant_denied", "control grant required");
+    }
+    if (!m_frequencyTarget) {
+        return reject("capability.unavailable", "slice frequency control unavailable");
+    }
+    if (const std::optional<ProtocolError> error = onlyKeys(
+            request.params, {QStringLiteral("radioSession"), QStringLiteral("slice"),
+                             QStringLiteral("expectedRevision"), QStringLiteral("hz")})) {
+        return failure(request.id, *error);
+    }
+    const QJsonValue radioSession = request.params.value(QStringLiteral("radioSession"));
+    const QJsonValue slice = request.params.value(QStringLiteral("slice"));
+    const QJsonValue revision = request.params.value(QStringLiteral("expectedRevision"));
+    const QJsonValue frequency = request.params.value(QStringLiteral("hz"));
+    const auto positiveInteger = [](const QJsonValue& value) {
+        const double number = value.toDouble();
+        return value.isDouble() && std::isfinite(number)
+            && number >= 1 && number <= 9'007'199'254'740'991.0
+            && std::floor(number) == number;
+    };
+    bool idOk = false;
+    const int sliceId = slice.toString().toInt(&idOk);
+    if (!radioSession.isString() || !slice.isString()
+        || !idOk || sliceId < 0 || QString::number(sliceId) != slice.toString()
+        || !positiveInteger(revision) || !positiveInteger(frequency)) {
+        return reject("request.invalid_params", "session, canonical slice id, integer revision and hz required");
+    }
+    if (radioSession.toString() != QStringLiteral("radio-1")
+        || !m_resources->get({QStringLiteral("radioSession"), {}, radioSession.toString()})) {
+        return reject("resource.not_found", "radio session unavailable");
+    }
+    const std::optional<ResourceSnapshot> snapshot = m_resources->get(
+        {QStringLiteral("slice"), radioSession.toString(), slice.toString()});
+    if (!snapshot) {
+        return reject("resource.not_found", "slice unavailable");
+    }
+    if (snapshot->revision != static_cast<quint64>(revision.toDouble())) {
+        return reject("request.conflict", "slice changed; refresh before deciding whether to retry");
+    }
+    if (const std::optional<ProtocolError> error = m_frequencyTarget->setFrequency(
+            sliceId, static_cast<qint64>(frequency.toDouble()))) {
+        return failure(request.id, *error);
+    }
+    return {ControlProtocolCodec::successResponse(request.id,
+                {{QStringLiteral("accepted"), true}}), false};
+}
+
+ServiceReply ControlService::handleReceive(const ProtocolRequest& request,
+    const ControlSession& session, ReceiveOperation operation) const
+{
+    const auto reject = [&request](const char* code, const char* message) {
+        return failure(request.id, {QString::fromLatin1(code), QString::fromLatin1(message), {}, false});
+    };
+    if (!session.canControl()) {
+        return reject("auth.grant_denied", "control grant required");
+    }
+    if (!m_receiveTarget) {
+        return reject("capability.unavailable", "receive control unavailable");
+    }
+    const bool pan = operation == ReceiveOperation::PanCenter || operation == ReceiveOperation::PanBandwidth;
+    const QString idKey = pan ? QStringLiteral("panadapter") : QStringLiteral("slice");
+    QSet<QString> keys{QStringLiteral("radioSession"), idKey, QStringLiteral("expectedRevision")};
+    switch (operation) {
+    case ReceiveOperation::Mode: keys.insert(QStringLiteral("mode")); break;
+    case ReceiveOperation::Filter:
+        keys.insert(QStringLiteral("lowHz")); keys.insert(QStringLiteral("highHz")); break;
+    case ReceiveOperation::AudioGain: keys.insert(QStringLiteral("gain")); break;
+    case ReceiveOperation::AudioMute: keys.insert(QStringLiteral("muted")); break;
+    case ReceiveOperation::PanCenter:
+    case ReceiveOperation::PanBandwidth: keys.insert(QStringLiteral("hz")); break;
+    }
+    if (const auto error = onlyKeys(request.params, keys)) {
+        return failure(request.id, *error);
+    }
+    for (const QString& key : keys) {
+        if (!request.params.contains(key)) {
+            return reject("request.invalid_params", "missing receive-control parameter");
+        }
+    }
+    const auto integer = [](const QJsonValue& value, double minimum, double maximum) {
+        const double number = value.toDouble();
+        return value.isDouble() && std::isfinite(number) && number >= minimum
+            && number <= maximum && std::floor(number) == number;
+    };
+    const QJsonValue sessionId = request.params.value(QStringLiteral("radioSession"));
+    const QJsonValue id = request.params.value(idKey);
+    const QJsonValue revision = request.params.value(QStringLiteral("expectedRevision"));
+    bool canonicalSlice = false;
+    const int sliceId = id.toString().toInt(&canonicalSlice);
+    if (!sessionId.isString() || !id.isString() || id.toString().isEmpty()
+        || id.toString().size() > ProtocolLimits::kMaxRequestIdChars
+        || (!pan && (!canonicalSlice || sliceId < 0 || QString::number(sliceId) != id.toString()))
+        || !integer(revision, 1, 9'007'199'254'740'991.0)) {
+        return reject("request.invalid_params", "canonical resource identity and integer revision required");
+    }
+    const QJsonValue mode = request.params.value(QStringLiteral("mode"));
+    const QJsonValue low = request.params.value(QStringLiteral("lowHz"));
+    const QJsonValue high = request.params.value(QStringLiteral("highHz"));
+    const QJsonValue gain = request.params.value(QStringLiteral("gain"));
+    const QJsonValue muted = request.params.value(QStringLiteral("muted"));
+    const QJsonValue hz = request.params.value(QStringLiteral("hz"));
+    bool valid = true;
+    switch (operation) {
+    case ReceiveOperation::Mode:
+        valid = mode.isString() && !mode.toString().isEmpty() && mode.toString().size() <= 32;
+        for (const QChar c : mode.toString()) {
+            valid = valid && ((c >= QLatin1Char('A') && c <= QLatin1Char('Z'))
+                              || (c >= QLatin1Char('0') && c <= QLatin1Char('9')));
+        }
+        break;
+    case ReceiveOperation::Filter:
+        valid = integer(low, std::numeric_limits<int>::min(), std::numeric_limits<int>::max())
+            && integer(high, std::numeric_limits<int>::min(), std::numeric_limits<int>::max());
+        break;
+    case ReceiveOperation::AudioGain:
+        valid = integer(gain, std::numeric_limits<int>::min(), std::numeric_limits<int>::max()); break;
+    case ReceiveOperation::AudioMute: valid = muted.isBool(); break;
+    case ReceiveOperation::PanCenter:
+    case ReceiveOperation::PanBandwidth: valid = integer(hz, 1, 9'007'199'254'740'991.0); break;
+    }
+    if (!valid) {
+        return reject("request.invalid_params", "invalid typed receive-control value");
+    }
+    if (sessionId.toString() != QStringLiteral("radio-1")
+        || !m_resources->get({QStringLiteral("radioSession"), {}, sessionId.toString()})) {
+        return reject("resource.not_found", "radio session unavailable");
+    }
+    const auto snapshot = m_resources->get({pan ? QStringLiteral("panadapter") : QStringLiteral("slice"),
+                                            sessionId.toString(), id.toString()});
+    if (!snapshot) {
+        return reject("resource.not_found", "receive resource unavailable");
+    }
+    if (snapshot->revision != static_cast<quint64>(revision.toDouble())) {
+        return reject("request.conflict", "resource changed; refresh before deciding whether to retry");
+    }
+    std::optional<ProtocolError> error;
+    switch (operation) {
+    case ReceiveOperation::Mode: error = m_receiveTarget->setMode(sliceId, mode.toString()); break;
+    case ReceiveOperation::Filter: error = m_receiveTarget->setFilter(sliceId, low.toInt(), high.toInt()); break;
+    case ReceiveOperation::AudioGain: error = m_receiveTarget->setAudioGain(sliceId, gain.toInt()); break;
+    case ReceiveOperation::AudioMute: error = m_receiveTarget->setAudioMute(sliceId, muted.toBool()); break;
+    case ReceiveOperation::PanCenter: error = m_receiveTarget->setPanCenter(id.toString(), hz.toInteger()); break;
+    case ReceiveOperation::PanBandwidth: error = m_receiveTarget->setPanBandwidth(id.toString(), hz.toInteger()); break;
+    }
+    return error ? failure(request.id, *error) : ServiceReply{
+        ControlProtocolCodec::successResponse(request.id, {{QStringLiteral("accepted"), true}}), false};
+}
+
 QJsonObject ControlService::capabilities(const ControlSession& session) const
 {
     const bool observe = session.canObserve();
-    const QJsonArray grants = observe ? QJsonArray{QStringLiteral("observe")} : QJsonArray{};
+    QJsonArray grants = observe ? QJsonArray{QStringLiteral("observe")} : QJsonArray{};
+    if (session.canControl()) {
+        grants.append(QStringLiteral("control"));
+    }
     QJsonArray available = observe ? QJsonArray{
         QStringLiteral("server.read"),
         QStringLiteral("radioSession.read"),
@@ -270,6 +604,40 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
         QStringLiteral("resource.unsubscribe")} : QJsonArray{};
     if (observe && m_resources->get({QStringLiteral("radioCatalogue"), {}, {}})) {
         available.append(QStringLiteral("radioCatalogue.read"));
+    }
+    if (observe && m_resources->get({QStringLiteral("transmitState"), QStringLiteral("radio-1"), {}})) {
+        available.append(QStringLiteral("transmitState.read"));
+    }
+    if (observe && !m_resources->snapshot({{QStringLiteral("meter"), QStringLiteral("radio-1"), {}}}).isEmpty()) {
+        available.append(QStringLiteral("meter.read"));
+    }
+    if (session.canControl() && m_connectionTarget) {
+        if (m_connectionTarget->state() == RadioConnectionTarget::State::Idle) {
+            const std::optional<ResourceSnapshot> catalogue =
+                m_resources->get({QStringLiteral("radioCatalogue"), {}, {}});
+            if (catalogue && catalogue->value.value(QStringLiteral("running")).toBool()) {
+                const QJsonArray entries = catalogue->value.value(QStringLiteral("entries")).toArray();
+                for (const QJsonValue& entry : entries) {
+                    if (!entry.toObject().value(QStringLiteral("inUse")).toBool()
+                        && m_connectionTarget->supports(catalogueRadio(entry.toObject()))) {
+                        available.append(QStringLiteral("radio.connect"));
+                        break;
+                    }
+                }
+            }
+        } else {
+            available.append(QStringLiteral("radio.disconnect"));
+        }
+    }
+    if (session.canControl() && m_frequencyTarget && m_frequencyTarget->available()) {
+        available.append(QStringLiteral("slice.setFrequency"));
+    }
+    if (session.canControl() && m_receiveTarget) {
+        for (const auto& [operation, method] : kReceiveMethods) {
+            if (m_receiveTarget->available(operation)) {
+                available.append(QString::fromLatin1(method));
+            }
+        }
     }
     return {
         {QStringLiteral("sessionId"), session.sessionId()},
@@ -282,6 +650,8 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
         {QStringLiteral("limits"), QJsonObject{
              {QStringLiteral("maxMessageBytes"), ProtocolLimits::kMaxMessageBytes},
              {QStringLiteral("maxSubscriptions"), ControlSession::kMaxSubscriptions},
+             {QStringLiteral("requestsPerSecond"), ControlSession::kRequestsPerSecond},
+             {QStringLiteral("requestBurst"), ControlSession::kRequestBurst},
              {QStringLiteral("maxSelectorsPerSubscription"),
               kMaxSelectorsPerSubscription},
              {QStringLiteral("maxQueuedOutputBytes"),

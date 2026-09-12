@@ -1528,7 +1528,7 @@ private:
     bool m_showGrid{true};          // false = hide grid lines
     int  m_freqGridSpacingKhz{0};   // 0=Auto, or 1/2/5/10/25/50/100 kHz (#1390)
     int  m_freqScaleFontPt{8};      // freq-scale label size, 8..14 pt (#3501)
-    float m_fftLineWidth{2.0f};     // spectrum trace width in pixels
+    float m_fftLineWidth{1.0f};     // spectrum trace width in pixels (RFC #5561)
 
     // ── Waterfall display controls (radio-side via "display panafall set") ─
     int   m_wfColorGain{50};         // 0-100, maps intensity to color range

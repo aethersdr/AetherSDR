@@ -6,6 +6,7 @@
 #include <QStringList>
 #include <QVector>
 #include <QVariantMap>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -24,6 +25,48 @@ struct DeclaredBandRange {
     double highHz = 0.0;
 
     bool operator==(const DeclaredBandRange&) const = default;
+};
+
+// Frequency observations describe the state owned by the backend, not a
+// promise that a queued hardware/DSP write has completed. Zero bounds mean
+// this backend has not established a range for the headless control method.
+struct SliceFrequencyControl {
+    enum class Authority { Unknown, Radio, Engine };
+    Authority authority{Authority::Unknown};
+    qint64 minimumHz{0};
+    qint64 maximumHz{0};
+};
+
+// Optional per-feature records (#5262 M2). Absence means no headless verb;
+// neither UI ranges nor an inherited no-op establish support. Authority is
+// configuration provenance, never hardware acknowledgement/DSP completion.
+struct ReceiveModeControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    QStringList modes;
+};
+struct ReceiveFilterMode {
+    QString mode;
+    int minimumLowHz{0};
+    int maximumLowHz{0};
+    int minimumHighHz{0};
+    int maximumHighHz{0};
+    int minimumWidthHz{0};
+    int maximumWidthHz{0};
+};
+struct ReceiveFilterControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    QList<ReceiveFilterMode> modes;
+};
+struct ReceiveAudioControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    // Both gain (0..100) and mute must act on the shared slice's RX audio.
+};
+struct ReceivePanRangeControl {
+    SliceFrequencyControl::Authority authority{SliceFrequencyControl::Authority::Unknown};
+    qint64 minimumHz{0};
+    qint64 maximumHz{0};
+    // Declaring center support promises no implicit slice retune. Declaring
+    // bandwidth support promises no slice creation/removal or retune.
 };
 
 // A stable, radio-owned receive-filter preset. `id` is the identity used on
@@ -118,6 +161,12 @@ struct RadioCapabilities {
     QString manufacturer;
 
     // Receive
+    // Independent slice creation on an existing pan through the neutral backend
+    // hook. RadioModel consults this only without a command plane; Flex and Sim
+    // retain their command adapters regardless of this value. Do not use this
+    // field alone to gate +RX in the UI. Separate from maxSlices: a paired
+    // receiver/pan topology can support several slices but not this operation.
+    bool canCreateSlices = false;
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
@@ -134,6 +183,12 @@ struct RadioCapabilities {
     // that told them it was not available.
     double tuningMinHz = 0.0;
     double tuningMaxHz = 0.0;
+    SliceFrequencyControl sliceFrequencyControl;
+    std::optional<ReceiveModeControl> receiveModeControl;
+    std::optional<ReceiveFilterControl> receiveFilterControl;
+    std::optional<ReceiveAudioControl> receiveAudioControl;
+    std::optional<ReceivePanRangeControl> receivePanCenterControl;
+    std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
 
     // Optional per-band native coverage. Empty means "not reported" and keeps
     // canonical band labels. This is distinct from txPowerBands: receive-only
@@ -323,6 +378,17 @@ struct RadioCapabilities {
     // NOT "does this radio have a frequency error" — every radio does. What
     // varies is whether correcting it is the client's job.
     bool hostFrequencyCalibration = false;
+
+    // The client corrects a REAL DDC0 CIC/decimation droop on this radio's
+    // own panadapter samples (AnanDroopCorrection.h) because nothing in the
+    // wire protocol characterises or corrects it on-radio. True only for the
+    // ANAN-G2 today. Gates the Droop Correction settings tab and the
+    // `droopcal` bridge verb, mirroring hostFrequencyCalibration above.
+    //
+    // NOT "does this radio have a droop" — the physics is per-model, not
+    // per-family-policy the way frequency correction is. What varies is
+    // whether the client has measured and can correct it.
+    bool hostDroopCalibration = false;
 
     // Peripherals / features every family may or may not have
     bool canReboot = false;        // supports a client-triggered radio reboot
@@ -744,7 +810,9 @@ struct RadioCapabilities {
     bool hasFullDuplex = false;
 
     // The radio accepts installable waveform/mode plugins (SmartSDR waveforms),
-    // so a client can offer to manage them.
+    // so a client can offer to manage them. Also gates the AetherModem D-STAR
+    // tab: that page drives the local ThumbDV helper against a SmartSDR D-STAR
+    // waveform, which is empty on every family that cannot load waveforms.
     bool hasWaveforms = false;
 
     // Several GUI clients can hold independent sessions on the radio at once,

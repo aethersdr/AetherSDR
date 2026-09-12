@@ -1,7 +1,9 @@
 #include "SpectrumWidget.h"
+#include "ScopedChildWidget.h"
 
 #include "SliceToneCues.h"
 #include "gui/FftHeatMap.h"
+#include "gui/FftLineWidth.h"
 #include "gui/SpectrumGrid.h"
 #include "DbmRangeTransition.h"
 #include "DssDcEdgeMath.h"
@@ -2558,7 +2560,7 @@ void SpectrumWidget::loadSettings()
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
     m_freqScaleFontPt = std::clamp(
         s.value(settingsKey("DisplayFreqScaleFontPt"), "8").toInt(), 8, 14);
-    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
+    m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "1.0").toFloat();
     m_noiseFloorEnable = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
     const int legacyNoiseFloorPosition = std::clamp(
         s.value(settingsKey("DisplayNoiseFloorPosition"), "75").toInt(), 1, 99);
@@ -9470,7 +9472,13 @@ static double snapToStep(double mhz, int stepHz)
 void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 {
     PerfInputScope perfScope("mousePress");
-    const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
+    // A menu's nested event loop can destroy this panadapter during shutdown.
+    const QPointer<SpectrumWidget> self(this);
+    const auto dragStatePublisher = makeScopeExit([self] {
+        if (self) {
+            self->publishPerfDragState();
+        }
+    });
     (void)dragStatePublisher;
 
     // A prior off-screen-pill press is relevant only to Qt's immediately
@@ -9923,7 +9931,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 // Follow display mode so menu labels match the pill above (#2606).
                 const QString letter =
                     SliceLabel::unicodeForm(so.sliceId, so.perClientLetter);
-                QMenu menu(this);
+                ScopedChildWidget<QMenu> menuOwner(this);
+                QMenu& menu = *menuOwner.get();
                 menu.addAction(QString("Close Slice %1").arg(letter), this,
                     [this, id = so.sliceId]{ emit sliceCloseRequested(id); });
                 menu.addAction(QString("Move Slice %1 Here").arg(letter), this,
@@ -9937,8 +9946,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 menu.addSeparator();
                 addCenterLockAction(&menu, so, true);
                 addSliceLinkControls(menu);
-                menu.exec(ev->globalPosition().toPoint());
                 ev->accept();
+                menu.exec(ev->globalPosition().toPoint());
                 return;
             }
         }
@@ -9964,7 +9973,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             }
         }
 
-        QMenu menu(this);
+        ScopedChildWidget<QMenu> menuOwner(this);
+        QMenu& menu = *menuOwner.get();
 
         // Spot-on-label context menu
         if (hitSpotIdx >= 0) {
@@ -10144,8 +10154,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             });
         }
 
-        menu.exec(ev->globalPosition().toPoint());
         ev->accept();
+        menu.exec(ev->globalPosition().toPoint());
         return;
     }
 
@@ -11217,7 +11227,9 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
         freqMhz = std::round(freqMhz / stepMhz) * stepMhz;
     }
     auto& as = AppSettings::instance();
-    QDialog dlg(this);
+    const QPointer<SpectrumWidget> self(this);
+    ScopedChildWidget<QDialog> dialogOwner(this);
+    QDialog& dlg = *dialogOwner.get();
     dlg.setWindowTitle("Add Spot");
     AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
                       "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; padding: 4px; }"
@@ -11274,7 +11286,10 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     freqSpin->setFocus();
     freqSpin->selectAll();
 
-    if (dlg.exec() != QDialog::Accepted) return;
+    const int result = dlg.exec();
+    if (!self || !dialogOwner || result != QDialog::Accepted) {
+        return;
+    }
 
     const double finalFreqMhz = freqSpin->value();
     const QString callsign = callEdit->text().trimmed().toUpper();
@@ -13998,14 +14013,30 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             // top of it unaffected. Only the CONTENT width (excluding the
             // dBm strip, which isn't spectrum data) is faded.
             if (m_edgeTaperEnabled) {
-                // 0.05 (5% margin per side) -- the same proportion the
-                // now-reverted bin-crop attempt used, which the operator
-                // already confirmed looked good on the bench. A later,
-                // untested guess that HALVING it (2.5%) would look gentler
-                // was wrong -- the same opacity swing over half the pixel
-                // distance is a STEEPER ramp, which read as a harder visible
-                // edge, not a softer one. Back to the confirmed value.
-                static constexpr double kEdgeTaperFraction = 0.05;
+                // 0.09 (9% margin per side) -- derived, not guessed: once
+                // AnanDroopCorrection applies a real per-bin dB correction
+                // (measured by AnanDroopCalibrator's sweep) to most of
+                // the span, this fade only needs to cover the residual
+                // sliver where that correction was CLAMPED -- i.e. the bins
+                // close enough to the CIC null that boosting them further
+                // would amplify noise, not recover signal, so they stay
+                // genuinely uncorrected. The sweep reported a
+                // clamped fraction of ~0.079-0.082 across all 6 DDC0 rates
+                // (consistent, since it's the same relative filter shape at
+                // every rate) -- 0.09 is that worst case plus a small
+                // margin. fftSize is fixed at 1024 for every rate, and this
+                // fraction applies uniformly to pixel width, so a bin-count
+                // fraction and a pixel-width fraction are the same number
+                // with no unit conversion needed. paintEvent()'s software
+                // path carries the SAME constant and must be changed with
+                // this one -- they are one fade drawn by two renderers, and
+                // letting them drift means the same radio hides a different
+                // fraction of its span depending only on whether RHI came
+                // up. Superseded value: 0.05,
+                // from the pre-AnanDroopCorrection era when this fade was
+                // the ONLY mitigation and had to cover the whole droop
+                // region, not just its unrecoverable edge.
+                static constexpr double kEdgeTaperFraction = 0.09;
                 const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
                 QColor bgOpaque = bg; bgOpaque.setAlpha(255);
                 QColor bgClear = bg; bgClear.setAlpha(0);
@@ -14738,9 +14769,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
                     static_cast<float>(specH) * fbDpr,              // hPx
                     static_cast<float>(n),                          // columnCount
                     1.0f,                                           // hasData
-                    // Match the old vertex bake: stroke half-widths were
-                    // DEVICE-pixel offsets with no dpr scaling.
-                    m_fftLineWidth,                                 // coreHalfWidthPx
+                    // The slider is a FULL width in device px (the QPainter
+                    // path sets a cosmetic pen of exactly m_fftLineWidth), and
+                    // the shader takes a HALF width, so halve it here. Passing
+                    // the full value as the half drew every trace at twice its
+                    // labelled width on the GPU path (RFC #5561 §A). Device
+                    // pixels, no dpr scaling, as the old vertex bake did.
+                    AetherSDR::fftLineHalfWidth(m_fftLineWidth),      // coreHalfWidthPx
                     kFftLineFeatherPx,                              // featherPx
                     kFftLineCoreAlpha,
                     kFftLineFeatherAlpha,
@@ -15177,10 +15212,13 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     // flags/TNF/spot markers/SWR overlay below, so those stay fully
     // visible on top of it, same ordering as the GPU path.
     if (m_edgeTaperEnabled) {
-        // 0.05 (5% margin per side) -- see renderGpuFrame()'s own comment
-        // for why this exact fraction, and why guessing a gentler-looking
-        // smaller value was wrong.
-        static constexpr double kEdgeTaperFraction = 0.05;
+        // 0.09 (9% margin per side) -- see renderGpuFrame()'s own comment
+        // for the derivation, and why guessing a gentler-looking smaller
+        // value was wrong. This value is PAIRED with that one on purpose:
+        // it is the same fade, drawn by whichever path is live, and the two
+        // drifting apart means the same radio fades a different fraction of
+        // its span depending only on whether RHI came up. Change both.
+        static constexpr double kEdgeTaperFraction = 0.09;
         const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
         QColor bgOpaque = bg; bgOpaque.setAlpha(255);
         QColor bgClear = bg; bgClear.setAlpha(0);

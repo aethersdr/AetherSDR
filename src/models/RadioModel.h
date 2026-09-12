@@ -30,6 +30,7 @@
 #include "TnfModel.h"
 #include "SpotModel.h"
 #include "CwxModel.h"
+#include "core/TxCoordinator.h"
 #include "DvkModel.h"
 #include "UsbCableModel.h"
 #include "DaxIqModel.h"
@@ -166,6 +167,21 @@ public:
     // stays the unadorned token that rigctl and the bridge serve.
     QString versionLabel() const { return m_versionLabel; }
     bool isConnected() const;
+
+    // Firmware-upload retry barrier (#5572). A dispatched firmware upload has
+    // no attempt identifier in the `file update` status, so a late failure from
+    // a previous attempt cannot be told apart from a fresh one on the same
+    // command session. The barrier therefore has to outlive the uploader, and
+    // the uploader is parented to RadioSetupDialog — which carries
+    // WA_DeleteOnClose, so closing the window would otherwise drop the barrier
+    // and hand the operator exactly the ambiguous retry it exists to forbid.
+    // It lives here because the connection is what it is really keyed to: only
+    // a genuine disconnect→reconnect clears it (see setConnected()).
+    bool firmwareRetryBlocked() const { return m_firmwareRetryBlocked; }
+    void blockFirmwareRetryUntilReconnect() { m_firmwareRetryBlocked = true; }
+    // Only for an outcome the radio itself settled (`file update failed=`),
+    // which leaves nothing pending to misattribute to the next attempt.
+    void clearFirmwareRetryBlock() { m_firmwareRetryBlocked = false; }
     // "idle" / "connecting" / "connected" — the bridge's third value, so a
     // caller can tell a connect that is working from one that is not happening
     // at all. `isConnected()` is unchanged (#5413 item 3). Derived from
@@ -732,6 +748,9 @@ public:
     // 2.3 backend-signal handlers, single-sourced (#4065 review).
     PanadapterModel* resolvePan(const QString& panId) const;
     QList<PanadapterModel*> panadapters() const { return m_panadapters.values(); }
+    // Exact live identity + confirmed ownership for an untrusted local intent.
+    // Returns the backend's own id, not an invented or caller-supplied wire id.
+    std::optional<QString> receiveControlPanId(const QString& modelPanId) const;
 
     // Radio-authoritative display inventory vs what we own (#3856 Layer B).
     // Built from the accumulated "display pan"/"display waterfall" status maps;
@@ -811,6 +830,9 @@ public:
     void acceptPresentedWanCert();
     void rejectPresentedWanCert();
     void setTransmit(bool tx, TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
+    // Snapshot for engine-owned deferred release. This is not a credential or
+    // an invitation to borrow whichever operation happens to be current later.
+    TxCoordinator::Operation transmitOperation() const { return m_txOperation; }
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     void sendCwKey(bool down, const QString& debugSource = {},
@@ -838,11 +860,18 @@ public:
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
                        quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
                        std::chrono::steady_clock::time_point scheduledAt = {});
+    // Producer-thread entry: capture the session before queueing onto the model.
+    // Old queued iambic edges cannot borrow the replacement radio's authority.
+    void queueCwKeyEdge(bool down, const QString& debugSource,
+                       quint64 debugTraceId, quint64 debugSourceMs,
+                       std::chrono::steady_clock::time_point scheduledAt);
     void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
-    void addSlice();           // Create a new slice on the active panadapter
-    void addSliceOnPan(const QString& panId); // Create a new slice on a specific pan
-    void addSliceOnPan(const QString& panId, double freqMhz); // Create slice on specific pan/frequency
+    bool addSlice();           // Create a new slice on the active panadapter
+    bool addSliceOnPan(const QString& panId); // Create a new slice on a specific pan
+    bool addSliceOnPan(const QString& panId, double freqMhz);
+    // Ordinary RX close. Confirmation is sliceRemoved, never this return value.
+    bool removeSlice(int sliceId);
     void createPanadapter();   // Create a new independent panadapter
     void removePanadapter(const QString& panId);
     void setPanBandwidth(double bandwidthMhz);
@@ -918,6 +947,7 @@ public:
     // `wfRate` is the 1..100 waterfall RATE control value, low slow / high
     // fast — NOT the milliseconds its Flex wire name (`line_duration`) claims.
     // See core/WaterfallRate.h. (#4606)
+    bool requestPanAverage(const QString& panId, int average);
     bool requestPanDisplayRates(const QString& panId, int fps, int wfRate);
     bool requestPanBand(const QString& panId, const QString& bandKey);
 
@@ -1149,6 +1179,8 @@ signals:
     // Emitted when the radio rejects a slice create command (e.g. limit reached across
     // all Multi-Flex clients — our local slice count may be below maxSlices()).
     void sliceCreateFailed(int limit, const QString& model);
+    void sliceLifecycleFailed(const QString& operation, int sliceId,
+                              const QString& reason);
     // Emitted when a pan needs xpixels/ypixels pushed (after profile change, reconnect, etc.)
     void panDimensionsNeeded(const QString& panId);
     // Emitted when the radio reports its antenna list (e.g. "ANT1,ANT2,RX_A,RX_B").
@@ -1212,6 +1244,9 @@ signals:
     void txAudioGateChanged(bool transmitting);
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
+    // Accepted local PTT intent, including re-engage during a deferred tail.
+    // Not radio readback: never use this to publish observed transmit state.
+    void localTransmitEngaged();
     // A backend's explicit keyed-state readback, including unchanged answers
     // hidden by the change-gated radioTransmittingChanged signal.
     void radioTransmitConfirmed(bool transmitting);
@@ -1549,6 +1584,9 @@ private:
     // run again on a family change — not just at construction.
     void setupBackend(const QString& family);
     void teardownBackend();
+    // The family switch itself: drop session models, tear down, build, announce.
+    // One body, called by connectToRadio() and rebuildBackendForTest().
+    void rebuildBackendForFamily(const QString& family);
     // Push the backend's RadioCapabilities into the models that own each flag,
     // then emit capabilitiesChanged. Called on every connect/disconnect edge and
     // whenever the backend revises its own capabilities.
@@ -1660,17 +1698,31 @@ public:
         }
     }
 
-    // Install a backend directly, bypassing buildBackend()'s family wiring.
-    //
-    // The DSP read-back path — AutomationServer's `get dsp` — needs exactly one
-    // thing from this model: backend()->dspChains(). Reaching it through
-    // buildBackend() would mean constructing a real family backend, i.e. a wire
-    // object and its I/O thread, inside a test whose whole point is that it
-    // opens no socket. Takes ownership. Nothing in production calls this; the
-    // family string is set alongside because the read-back reports it.
+    // Install a socket-free backend with the same normalized receiver-state
+    // bindings used by production. Replacement drops old session models.
     void setBackendForTest(std::unique_ptr<IRadioBackend> backend, const QString& family);
+    // The production family switch WITHOUT the dial that follows it: calls the
+    // same rebuildBackendForFamily() connectToRadio() calls, so the two cannot
+    // drift. Builds the REAL backend for `family` through makeBackend(), so a
+    // test can cycle every family through construction, the full setupBackend()
+    // wiring and teardown with no socket, no device and no radio. Returns false
+    // when the family has no backend in this build (RTL without librtlsdr).
+    bool rebuildBackendForTest(const QString& family);
+    // Replace only the ordinary lifecycle command transport, including replies.
+    // Tests can pin Flex/Sim encoding without constructing a wire object/peer.
+    void setSliceLifecycleCommandSinkForTest(
+        std::function<bool(const QString&, ResponseCallback)> sink)
+    {
+        m_sliceLifecycleCommandSinkForTest = std::move(sink);
+    }
 
 private:
+    friend class RadioModelSliceLifecycleTestAccess;
+    friend class TxOperationIntegrationTestAccess;
+    void wireBackendReceiverState();
+    bool dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback = {});
+    quint64 m_backendReceiverGeneration = 0;
+    std::function<bool(const QString&, ResponseCallback)> m_sliceLifecycleCommandSinkForTest;
     PanadapterModel* resolveBackendPan(const QString& backendPanId);
     // Connect a slice's operator-issued AUDIO and TX-slice intents to the
     // backend seam. Must be called from EVERY site that constructs a
@@ -1713,6 +1765,30 @@ private:
     qint64 m_lastAudioMs{0};
     TunerModel       m_tunerModel;
     TransmitModel    m_transmitModel;
+    // Transitional desktop actor: existing integrations still enter through
+    // the desktop methods. Per-client authority is a subsequent Stage 4 step;
+    // no daemon client can register or obtain this actor.
+    TxCoordinator m_txCoordinator;
+    TxCoordinator::Actor m_desktopTxActor;
+    TxCoordinator::Operation m_txOperation;
+    enum class TxActivity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
+    unsigned m_txActivities{0};
+    bool m_txSessionClosing{false};
+    quint64 m_txCommandEpoch{0};
+    quint64 m_tuneCommandEpoch{0};
+    quint64 m_atuCommandEpoch{0};
+    quint64 m_cwKeyDeliveryEpoch{0};
+    quint64 m_cwPttDeliveryEpoch{0};
+    std::atomic<quint64> m_cwInputSession{0};
+    std::chrono::steady_clock::time_point m_cwInputNotBefore{};
+    static qint64 txMonotonicMs();
+    bool beginLocalTxActivity(TxActivity activity);
+    void endLocalTxActivity(TxActivity activity);
+    void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
+    void resetTxOperations();
+    void applyBackendTransmitDelta(const TransmitDelta& delta);
+    bool sendNetCwTcp(const QString& command, const TxCoordinator::Operation& operation,
+                     bool keying, std::function<void()> delivered);
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;
@@ -1729,9 +1805,10 @@ private:
     int      m_netCwIndex{1};           // sequential dedup index
     QElapsedTimer m_netCwClock;          // 16-bit relative ms clock for time=0x....
     qint64   m_netCwLastSendMs{-1};
-    void sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
+    bool sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
                           quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
-                          std::chrono::steady_clock::time_point scheduledAt = {});
+                          std::chrono::steady_clock::time_point scheduledAt = {},
+                          std::function<void()> delivered = {});
     QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;
@@ -1802,7 +1879,6 @@ private:
     QString     m_lastInterlockNotificationKey;
     qint64      m_lastInterlockNotificationMs{0};
     qint64      m_interlockNotificationArmedUntilMs{0};
-    TransmitModel::PttSource m_pendingTransmitPreflightSource{TransmitModel::PttSource::Mox};
     TransmitModel::PttSource m_interlockNotificationSource{TransmitModel::PttSource::Mox};
     int         m_digitalVoiceTxSliceId{-1};
     QString     m_lastDigitalVoiceTxSelectionKey;
@@ -1893,6 +1969,10 @@ private:
     QHash<QString, int> m_panTransmitInhibitedTxSlices;
     int  m_tuneInhibitBandId{-1};  // band ID whose TX outputs were inhibited during tune
     bool m_tuneInhibitActive{false};
+    // #5572 firmware-upload retry barrier. Set when an upload is dispatched to
+    // the radio; cleared only when a NEW connection is established, so it
+    // survives the Radio Setup dialog (and its uploader) being closed.
+    bool m_firmwareRetryBlocked{false};
 
     int bandIdForFrequency(double freqMhz) const;  // map TX freq → band ID
     void applyTuneInhibit();    // suppress selected TX outputs before tune

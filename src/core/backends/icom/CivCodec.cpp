@@ -810,6 +810,13 @@ std::vector<std::uint8_t> cmdReadAttenuator(std::uint8_t to)
     return buildFrame(to, cmd::kAttenuator);
 }
 
+std::vector<std::uint8_t> cmdReadRxAntenna(std::uint8_t to)
+{
+    // IC-7300MK2: a bare 12 query returned 12 00 00/01 in the live
+    // Persist run. The 12 00 form returned only FB on earlier firmware.
+    return buildFrame(to, cmd::kRxAntenna);
+}
+
 std::vector<std::uint8_t> cmdSetRxAntenna(std::uint8_t to, bool rxAntenna)
 {
     const std::array<std::uint8_t, 1> body{

@@ -533,6 +533,60 @@ bool runCrashRecoveryTest()
                  "server must recover the stale lock and endpoint left by a crash");
 }
 
+bool runReserveEndpointTest()
+{
+    // Startup ordering: aetherd reserves its endpoint before settings/model
+    // construction (which can pump nested event loops) and serves only after
+    // every target is bound. An early client must be closed without a session
+    // or a reply, must not stop a later client from negotiating, and serving
+    // must begin exactly once per listen.
+    const QString name = uniqueName(QStringLiteral("aetherd-reserve-"));
+    LocalControlServer server;
+    if (!check(server.listen(name, LocalControlServer::ListenMode::ReserveEndpoint),
+               "reserved endpoint must listen")) {
+        return false;
+    }
+    QLocalSocket early;
+    if (!check(connectSocket(&early, server), "early client must reach the reserved endpoint")) {
+        return false;
+    }
+    QByteArray request = QJsonDocument(helloRequest()).toJson(QJsonDocument::Compact);
+    request.append('\n');
+    early.write(request);
+    early.flush();
+    if (!check(waitUntil([&early] {
+            return early.state() == QLocalSocket::UnconnectedState;
+        }), "early client must be closed while the endpoint is only reserved")
+        || !check(!early.canReadLine() && early.bytesAvailable() == 0,
+                  "a reserved endpoint must not answer hello or create a session")) {
+        return false;
+    }
+    if (!check(server.startServing(), "serving must begin once targets are bound")
+        || !check(!server.startServing(), "serving cannot begin twice")) {
+        return false;
+    }
+    QLocalSocket retry;
+    if (!check(connectSocket(&retry, server), "retrying client must connect once serving")) {
+        return false;
+    }
+    const QJsonObject welcome = exchange(&retry, helloRequest());
+    if (!check(!welcome.value(QStringLiteral("result")).toObject()
+                    .value(QStringLiteral("sessionId")).toString().isEmpty(),
+               "retrying client must negotiate after startServing")) {
+        return false;
+    }
+    server.close();
+    if (!check(!server.startServing(), "a closed server cannot serve")
+        || !check(server.listen(name), "the default listen mode must serve immediately")) {
+        return false;
+    }
+    QLocalSocket immediate;
+    return check(connectSocket(&immediate, server), "client must connect after relisten")
+        && check(!exchange(&immediate, helloRequest()).value(QStringLiteral("result")).toObject()
+                      .value(QStringLiteral("sessionId")).toString().isEmpty(),
+                 "default listen mode must admit sessions without a separate startServing");
+}
+
 bool runEndpointValidationTest()
 {
     LocalControlServer server;
@@ -564,5 +618,6 @@ int main(int argc, char* argv[])
         && runBackpressureTest()
         && runStaleEndpointTest()
         && runCrashRecoveryTest()
+        && runReserveEndpointTest()
         && runEndpointValidationTest() ? 0 : 1;
 }

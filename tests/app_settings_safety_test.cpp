@@ -866,10 +866,68 @@ int main(int argc, char** argv)
     }
 
     const QString scenario = QString::fromLocal8Bit(argv[1]);
-    if (scenario == QStringLiteral("save-before-load")) {
+    if (scenario == QStringLiteral("explicit-profile-outside-test-mode")) {
+        // Match a real automation launch, but seed ONLY a file-backed INI
+        // fixture. CFPreferences can ignore HOME even when fileName() reports
+        // a private path, so never create a native preference sentinel here.
+        QStandardPaths::setTestModeEnabled(false);
+        const QString localLegacy = SettingsPaths::configDir()
+            + QStringLiteral("/legacy-qsettings.ini");
+        const QString sentinel = profile.path() + QStringLiteral("/profile-only");
+        {
+            QSettings fixture(localLegacy, QSettings::IniFormat);
+            fixture.setValue(QStringLiteral("lastRadioSerial"), sentinel);
+            fixture.sync();
+            expect(fixture.status() == QSettings::NoError, "create private profile fixture");
+        }
+        QFile original(localLegacy);
+        expect(original.open(QIODevice::ReadOnly), "read private fixture before migration");
+        const QByteArray bytes = original.readAll();
+        original.close();
+        AppSettings::instance().load();
+        expect(AppSettings::instance().value("LastConnectedRadioSerial").toString() == sentinel,
+               "explicit profile imports its own source outside Qt test mode");
+        QFile remaining(localLegacy);
+        expect(remaining.open(QIODevice::ReadOnly) && remaining.readAll() == bytes,
+               "profile legacy source stays byte-identical");
+    } else if (scenario == QStringLiteral("explicit-profile-path-isolation")) {
+#if defined(Q_OS_MAC) || defined(Q_OS_WIN)
+        // Windows known folders do not honor HOME overrides. Keep Qt test
+        // mode there, and skip rather than create a fixture outside our root.
+#ifdef Q_OS_MAC
+        QStandardPaths::setTestModeEnabled(false);
+#endif
+        const QString oldPath = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
+            + QStringLiteral("/AetherSDR/AetherSDR.settings");
+        if (!QFileInfo(oldPath).absoluteFilePath().startsWith(profile.path() + '/')) {
+            std::fprintf(stderr, "[SKIP] native path cannot be redirected into private profile\n");
+            return 77;
+        }
+        const QByteArray original = settingsDocument(3, QStringLiteral("NATIVE-XML"));
+        expect(writeFile(oldPath, original), "create isolated legacy path fixture");
+        AppSettings::instance().load();
+        QFile remaining(oldPath);
+        expect(remaining.open(QIODevice::ReadOnly) && remaining.readAll() == original,
+               "explicit profile never moves or edits the ordinary legacy XML");
+        expect(!AppSettings::instance().contains(QStringLiteral("Key000")),
+               "ordinary legacy XML is not imported into explicit profile");
+#else
+        return 77; // Legacy path relocation exists only on macOS and Windows.
+#endif
+    } else if (scenario == QStringLiteral("save-before-load")) {
         testSaveBeforeLoad();
     } else if (scenario == QStringLiteral("xml-import-parity")) {
         testXmlImportParity();
+    } else if (scenario == QStringLiteral("isolated-legacy-import")) {
+        const QString localLegacy = SettingsPaths::configDir()
+            + QStringLiteral("/legacy-qsettings.ini");
+        expect(writeFile(localLegacy, "[General]\nlastRadioSerial=PROFILE-SENTINEL\n"),
+               "write legacy fixture inside explicit profile");
+        AppSettings::instance().load();
+        expect(AppSettings::instance().value("LastConnectedRadioSerial").toString()
+                   == QStringLiteral("PROFILE-SENTINEL"),
+               "explicit profile imports only its own legacy preferences");
+        expect(QFile::exists(localLegacy), "local legacy source stays frozen");
     } else if (scenario == QStringLiteral("first-run")) {
         testFirstRunInitialization();
     } else if (scenario == QStringLiteral("database-file-permissions")) {

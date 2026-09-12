@@ -4,6 +4,7 @@
 #include "ControlResourceStore.h"
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QJsonObject>
 #include <QList>
@@ -18,11 +19,13 @@ namespace AetherSDR::control {
 
 // Supplied by trusted embedding/transport code, never decoded from hello.
 // The local endpoint supplies Observer after enforcing current-user access.
-// No control or transmit grant exists until its handlers and guards land.
+// Control remains independent of observation; transmit is not representable.
 enum class SessionAuthorization {
     Unauthenticated,
     AuthenticatedWithoutGrants,
     Observer,
+    Controller,
+    ObserverController,
 };
 
 // Per-client protocol state. Resource events are session-sequenced and held in
@@ -32,16 +35,20 @@ class ControlSession final : public QObject {
 
 public:
     static constexpr int kMaxSubscriptions = 64;
+    static constexpr int kRequestsPerSecond = 100;
+    static constexpr int kRequestBurst = 200;
 
     explicit ControlSession(ControlResourceStore* resources,
                             qint64 maxQueuedOutputBytes,
                             SessionAuthorization authorization = SessionAuthorization::Unauthenticated,
-                            QObject* parent = nullptr);
+                            QObject* parent = nullptr,
+                            std::function<qint64()> monotonicNanoseconds = {});
 
     [[nodiscard]] const QString& sessionId() const { return m_sessionId; }
     [[nodiscard]] bool isNegotiated() const { return !m_sessionId.isEmpty(); }
     [[nodiscard]] bool isAuthenticated() const;
     [[nodiscard]] bool canObserve() const;
+    [[nodiscard]] bool canControl() const;
     [[nodiscard]] bool isRevoked() const { return m_revoked; }
     // Terminal for this session. Clears subscriptions and queued frames before
     // notifying the transport to abort its own output buffer. A new verified
@@ -77,6 +84,7 @@ signals:
 private:
     friend class ControlService;
     void completeNegotiation();
+    [[nodiscard]] bool consumeRequest();
     [[nodiscard]] std::optional<ProtocolError> observationError() const;
 
     struct PendingMessage {
@@ -103,6 +111,13 @@ private:
     const SessionAuthorization m_authorization;
     QString m_sessionId;
     bool m_revoked{false};
+    // Optional trusted clock injection for deterministic boundary tests. Never
+    // supplied by the wire; production uses elapsed monotonic nanoseconds.
+    std::function<qint64()> m_monotonicNanoseconds;
+    QElapsedTimer m_requestClock;
+    qint64 m_lastRequestTime{0};
+    double m_requestTokens{kRequestBurst};
+    bool m_requestLimitExceeded{false};
     bool m_outputTransportBound{false};
     qint64 m_maxQueuedOutputBytes{0};
     quint64 m_sequence{0};
