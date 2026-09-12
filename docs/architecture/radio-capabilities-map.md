@@ -68,6 +68,29 @@ are in [local receive control](../aetherd-local-receive-control.md#qualified-bac
 `control_receive_test` pins declarations and action-time admission; the optional
 RTL declaration check runs only when the RTL backend is built.
 
+### Wideband converter view
+
+`widebandConverterView` is the optional record for *"this radio can deliver the
+raw output of its converter, before the DDC, across the whole first Nyquist
+zone"*. It carries the converter's sample rate, the record length, and the
+extension namespace and verb that deliver ONE record on request — so the
+consumer never names a family.
+
+| Backend | Declares | Why |
+|---|---|---|
+| HL2 | ✅ **while connected** | openHPSDR protocol 1 endpoint `0x04`, 76.8 MHz / 2048 samples, verb `hl2` / `bandscope.frame`. Only while connected: the verb raises the run byte's `wide_spectrum` bit at a radio that is already streaming, and `MetisClient` refuses it otherwise |
+| ANAN | — | Protocol 2. The specification is *believed* to carry a wideband stream and the hardware shares the HL2's lineage, but `P2Protocol.h` defines no such endpoint and nobody here has measured one. Absence means **not implemented**, not "cannot" |
+| Flex | — | Structural: the radio computes the panadapter and sends the result, so there is no raw converter stream on the host to build a wideband view from |
+| Icom / RTL / Sim | — | No such stream |
+
+Read by `BandscopeDialog` (the View ▸ Wideband Bandscope window) and by nothing
+else. **The record is what gates the menu entry** — not `family == "hl2"`, which
+is the construct `docs/HERMES.md` §"For coding agents" forbids above the seam
+and whose sanctioned alternative is exactly this.
+
+`wideband_converter_view_test` pins the HL2 declaration, its connected-only
+condition, and that the record names a verb the backend actually answers.
+
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|
 | `canCreateSlices` | ✅ | ❌ | ❌ | `RadioModel::addSliceOnPan`, only without a command plane | Admission to the neutral backend's independent slice-creation hook on an existing pan. Flex and Sim use their existing command adapters without consulting this field, so the values shown are declarations, not a UI availability rule; do not gate +RX on this field alone. Capacity remains `maxSlices`; paired/fixed receiver topologies do not gain independent creation. Icom, ANAN and RTL explicitly declare false; RTL remains one slice in RFC #5468 P01. |

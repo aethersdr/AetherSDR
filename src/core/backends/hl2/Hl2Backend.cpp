@@ -708,6 +708,37 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_bandscopeBlockClock.restart();
     });
 
+    // The on-demand frame's two answers. Both consume the outstanding request
+    // id, so exactly one of extensionResult / extensionError goes out per
+    // bandscope.frame call and the next caller is not blocked by a request
+    // that was already answered.
+    connect(m_metis, &MetisClient::bandscopeFrameReady, this,
+            [this](const QList<float>& samples) {
+        const quint64 id = m_bandscopeFrameRequest;
+        m_bandscopeFrameRequest = 0;
+        if (id == 0)
+            return;   // the request was already failed out from under us
+        emit extensionResult(id, QVariantMap{
+            {QStringLiteral("samples"), QVariant::fromValue(samples)},
+            // The converter's sample rate, so the consumer does not have to
+            // know the gateware's clock to label an axis. First Nyquist zone:
+            // the 2048-point transform of this spans DC..38.4 MHz.
+            {QStringLiteral("sampleRateHz"), AetherSDR::hl2::kAdcSampleRateHz},
+            // UNCALIBRATED AND PRE-DDC — carried in the reply so a consumer
+            // cannot claim otherwise by omission. Nothing has compared these
+            // levels against a real band (the study's Procedure C, which needs
+            // a live antenna and is not scheduled).
+            {QStringLiteral("calibrated"), false},
+        });
+    });
+    connect(m_metis, &MetisClient::bandscopeFrameFailed, this,
+            [this](const QString& reason) {
+        const quint64 id = m_bandscopeFrameRequest;
+        m_bandscopeFrameRequest = 0;
+        if (id != 0)
+            emit extensionError(id, reason);
+    });
+
     m_linkStatsTimer = new QTimer(this);
     m_linkStatsTimer->setInterval(kLinkStatsIntervalMs);
     connect(m_linkStatsTimer, &QTimer::timeout, this, &Hl2Backend::publishLinkStats);
@@ -1597,6 +1628,23 @@ Hl2Backend::~Hl2Backend()
     delete m_metis;
 }
 
+AetherSDR::WidebandConverterView widebandConverterViewRecord() noexcept
+{
+    AetherSDR::WidebandConverterView wide;
+    // The converter's numbers and not a display choice: 76.8 MHz is
+    // hermeslite_core.v's CLK_FREQ, so the view spans DC..38.4 MHz, and 2048 is
+    // the depth of the capture FIFO the gateware drains four datagrams at a
+    // time.
+    wide.sampleRateHz = kAdcSampleRateHz;
+    wide.blockSamples = kEp4BlockSamples;
+    // MUST match the namespace in extensionNamespaces and the verb string
+    // invokeExtension() compares against. wideband_converter_view_test asserts
+    // exactly that, because nothing else would notice until an operator did.
+    wide.frameNamespace = QStringLiteral("hl2");
+    wide.frameVerb = QStringLiteral("bandscope.frame");
+    return wide;
+}
+
 RadioCapabilities Hl2Backend::capabilities() const
 {
     RadioCapabilities c;
@@ -1895,6 +1943,23 @@ RadioCapabilities Hl2Backend::capabilities() const
     // an extension call, so leaving it empty while the verbs work would report
     // the opposite of the truth.
     c.extensionNamespaces << QStringLiteral("hl2");
+    // The wideband converter view (docs/HERMES.md §13 item 18). Declared rather
+    // than assumed by a consumer reading the family string: an applet that
+    // tests `family == "hl2"` is the shape §"For coding agents" forbids, and
+    // this record is the exception that section names.
+    //
+    // Declared ONLY while connected, and the reason is not caution. The verb
+    // behind it raises the run byte's wide_spectrum bit at a radio that is
+    // already streaming; with no stream there is nothing to raise it against
+    // and MetisClient refuses. A capability offered then would be a control the
+    // operator could press to no effect.
+    //
+    // The numbers are the converter's, not a display choice: 76.8 MHz is
+    // hermeslite_core.v's CLK_FREQ, so the view spans DC..38.4 MHz, and 2048 is
+    // the depth of the capture FIFO the gateware drains four datagrams at a
+    // time.
+    if (m_connected)
+        c.widebandConverterView = widebandConverterViewRecord();
     // No on-radio configuration store. The HL2 holds no state across a
     // connection beyond its registers — everything the operator can change
     // lives in this application, so there is nothing for a profile to name.
@@ -4825,6 +4890,44 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             }
             return;
         }
+        // ONE wideband frame, on demand. THE REQUEST/REPLY VERB, unlike every
+        // other verb in this namespace: the reply carries 2048 converter
+        // samples and it cannot be answered locally, because the radio has to
+        // be asked for a block and the block takes an arming cycle to arrive.
+        // That is exactly the asynchronous case IRadioBackend's requestId
+        // contract was written for.
+        //
+        // ON DEMAND, NOT CONTINUOUS, and that is the design and not an
+        // omission. A continuous consumer would be a second permanent load on
+        // the hl2-io thread — which already carries EP2 pacing, EP6 ingest,
+        // WDSP and the panadapter FFT — and that cost has NOT BEEN MEASURED.
+        // A frame per request costs one arming cycle: wide_spectrum up for
+        // ~13 ms, four datagrams kept, down again.
+        if (verb == QLatin1String("bandscope.frame")) {
+            if (requestId == 0) {
+                // Nothing to send the samples to. Refusing is the honest
+                // answer: the alternative is putting a block on the wire and
+                // throwing it away.
+                return;
+            }
+            if (!m_connected) {
+                emit extensionError(requestId,
+                                    QStringLiteral("Not connected to a radio."));
+                return;
+            }
+            if (m_bandscopeFrameRequest != 0) {
+                // One outstanding at a time. The second caller is told so
+                // rather than silently inheriting the first one's frame.
+                emit extensionError(
+                    requestId,
+                    QStringLiteral("A bandscope frame is already pending."));
+                return;
+            }
+            m_bandscopeFrameRequest = requestId;
+            QMetaObject::invokeMethod(m_metis, "requestBandscopeFrame",
+                                      Qt::QueuedConnection);
+            return;
+        }
         // Noise-blanker READBACK, per receiver. Exists because the bridge's
         // `get dsp` reports the SLICE MODEL's nb flag, which is set the moment
         // the operator clicks and says nothing about whether the intent reached
@@ -6737,6 +6840,12 @@ void Hl2Backend::resetBandscopeMirrors()
     // rather than keep showing the previous session's last reading.
     m_bandscopeBlock = AetherSDR::hl2::Ep4Stats{};
     m_bandscopeBlockClock.invalidate();
+    // Any frame request from the previous link is answered by MetisClient's own
+    // teardown; dropping the id here only stops a stale one blocking the next
+    // caller. It belongs in here rather than at the connect edge alone, for the
+    // same reason the counters above do: a link that went down and came back
+    // without a start() behind it is still a new link to whoever is asking.
+    m_bandscopeFrameRequest = 0;
 }
 
 void Hl2Backend::applyBandFilter(const char* reason)
