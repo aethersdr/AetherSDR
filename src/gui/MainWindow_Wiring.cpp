@@ -18,6 +18,7 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include "core/backends/AutoRfGainControl.h"
 #include "core/ClientDisplaySettings.h"
 #include <QHBoxLayout>
 #include <QLabel>
@@ -5390,6 +5391,33 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         auto& s = AppSettings::instance();
         s.setValue(rfGainSettingsKey(sw), QString::number(gain));
         s.save();
+    });
+
+    // AUTO RF GAIN. Through the model, for the same reason the gain itself is:
+    // a backend that owns the loop in its own state is the only thing that can
+    // arm it, and there is no wire text for this on any family.
+    //
+    // NOTHING IS PERSISTED HERE, unlike the RF Gain slider immediately above.
+    // The switch is the BACKEND's to remember, in its own operating state --
+    // docs/HERMES.md asks that a value the radio cannot store be persisted in
+    // the family's OperatingState path and "never in a flat AppSettings key",
+    // and a preference recorded per-family in shared GUI settings was exactly
+    // that. So this lambda commands and reflects, and owns no storage.
+    connect(menu, &SpectrumOverlayMenu::autoRfGainChanged,
+            this, [this, sw](bool on) {
+        auto* autoGain = m_radioModel.autoRfGain();
+        if (autoGain) {
+            autoGain->setArmed(on);
+        }
+        // READ BACK WHAT ACTUALLY HAPPENED. The backend may DECLINE to arm --
+        // the HL2 refuses from a gain baseline inside the register region where
+        // #5354 measured +48 dB reading identically to +18 dB -- and a checkbox
+        // that stayed ticked over a control that is not running would be the
+        // #5395 defect exactly: a UI reporting one state while the radio is in
+        // another. So ask the control rather than assuming the request took.
+        if (auto* m = sw->overlayMenu()) {
+            m->setAutoRfGainEnabled(autoGain && autoGain->isArmed());
+        }
     });
     connect(menu, &SpectrumOverlayMenu::loopAToggled,
             this, [this, applet](bool on) {

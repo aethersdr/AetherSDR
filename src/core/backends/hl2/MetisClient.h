@@ -61,6 +61,19 @@ public:
         // register is rebuilt from — see setSampleRate() for why a field that
         // shares a register with another has to be carried, not re-defaulted.
         std::uint8_t ocFilterByte = kOcNone;
+        // Whether the DUTY-CYCLE GATE should be running — the operator's
+        // standing intent, not the instantaneous state of the run byte, which
+        // the gate raises and lowers about sixteen times a second's worth of
+        // packets in every second.
+        //
+        // It lives in Params for the same reason ocFilterByte does, and the
+        // reason is measured rather than tidy: setReceiverCount() tears the
+        // stream down with 0x00 and brings it back with 0x01, and RUNSTOP
+        // clears `wide_spectrum` along with `run`. Without carrying it here,
+        // adding a panadapter would silently switch the sensor off and nothing
+        // would say so. See setSampleRate()'s standing comment: a field that
+        // shares a rebuild with another has to be carried, not re-defaulted.
+        bool bandscope = false;
     };
 
     // A discovered radio: its Metis reply plus the address to connect to.
@@ -85,6 +98,33 @@ public:
         quint64 rxPackets = 0;      // EP6 datagrams accepted
         quint64 txPackets = 0;      // datagrams sent (EP2 + start/stop)
         quint64 drops = 0;          // cumulative EP6 sequence gaps
+        // ---- the wideband bandscope (EP4), off by default ----
+        //
+        // A THIRD set of counters and not a widening of the three above: EP4 is
+        // a different endpoint with its own 20-bit sequence counter and its own
+        // reset, so folding it into rxPackets/drops would report a gap on every
+        // packet and hide which stream a loss belongs to.
+        quint64 ep4Packets = 0;     // bandscope datagrams accepted
+        quint64 ep4Drops = 0;       // cumulative EP4 sequence gaps
+        // Backward jumps of ep4_seq_no, which are a RESET and not a loss. Kept
+        // apart from ep4Drops because exactly one is expected per stream start
+        // (the gateware re-aligns the counter's low two bits while the capture
+        // FIFO fills) and none afterwards — 15,003 recorded packets saw one per
+        // start and zero thereafter. A second one mid-session is a real
+        // anomaly, and it would be invisible inside a counter that is supposed
+        // to stay at zero.
+        quint64 ep4Rewinds = 0;
+        // ---- the duty-cycle gate ----
+        // Blocks the gate ACCEPTED — four in-phase packets, after the stale
+        // block was flushed. Not ep4Packets/4: most of what arrives is armed,
+        // flushed or trailing, and none of that becomes a reading.
+        quint64 bandscopeBlocks = 0;
+        // Arming cycles abandoned because no complete block arrived inside
+        // bandscopeGuardMs(). Expected to read ZERO: the guard is sized from
+        // the measured arming delay in the gateware's own units, so a non-zero
+        // value means the radio stopped answering the run byte, not that the
+        // guard is tight. See bandscopeGuardMs() for the two cases it spans.
+        quint64 bandscopeTimeouts = 0;
         // Over the publish window only, so a stall that has ended stops being
         // reported as if it were still happening. Negative = nothing measured.
         int meanGapMs = -1;
@@ -190,6 +230,66 @@ public:
     // Queue a one-shot filter-pipeline reset (MetisProtocol kC0Sync) to be sent
     // on the next EP2 frame, ahead of the round robin.
     Q_INVOKABLE void requestPipelineReset();
+
+    // Run or stop the wideband bandscope's DUTY-CYCLE GATE (endpoint 0x04).
+    //
+    // What this turns on is a SAMPLER, not the stream. Left running
+    // continuously the bandscope is 380.95 datagrams a second — measured, flat
+    // to 3 ppm across 48/96/192/384 kHz — which is ~3.3 Mbit/s of wire rate
+    // beside EP6, about as much again as the IQ stream itself at 1 RX / 48 kHz
+    // (see the table at kEp6LinkBudgetFraction). The gate raises the run byte's
+    // wide_spectrum bit once per kBandscopeSampleMs, keeps ONE block, and lowers
+    // it again: 16 datagrams a second, 0.14 Mbit/s.
+    //
+    // That the gate exists for BANDWIDTH and not for stream integrity is now a
+    // measurement rather than a hope. Bench run d95 (Procedure B) found the
+    // bandscope costs EP6 nothing: 0 drops in 2,113,847 EP6 datagrams with it
+    // on against 0 in 3,123,233 with it off, gap distribution unchanged. There
+    // is no correctness argument for a shorter duty cycle and no integrity
+    // argument against a longer one.
+    //
+    // DEFAULT OFF, and there is no UI and no setting: this is reached only
+    // through Hl2Backend::invokeExtension("hl2", "bandscope.enable", ...).
+    //
+    // Re-asserting `run` in the same byte is a no-op in the gateware's decode,
+    // so nothing here restarts or perturbs the IQ stream. It is a no-op unless
+    // the stream is already running: the run byte is only meaningful to a radio
+    // that has been started, and metisStop() clears both bits anyway.
+    Q_INVOKABLE void setBandscopeEnabled(bool on);
+
+    // The gate's sampling period, for a consumer that has to reason about what
+    // the duty cycle costs the reading.
+    //
+    // EXPOSED BECAUSE THE BIAS DEPENDS ON IT. A peak taken over one block per
+    // period understates the full-rate peak by an amount that is a function of
+    // exactly this number (Hl2BandscopeHeadroom.h::gatedPeakBiasDbForPeriod),
+    // and a consumer that hard-coded the resulting decibels would silently stop
+    // matching the gate the moment this changed. Reading it here is what keeps
+    // the two in step.
+    [[nodiscard]] static constexpr int bandscopeSamplePeriodMs() noexcept
+    {
+        return kBandscopeSampleMs;
+    }
+    // Whether the GATE is running — the operator's standing intent, which is the
+    // only bandscope state that is stable long enough to report. The run byte
+    // itself is up for ~11 ms in every kBandscopeSampleMs and nothing in
+    // Protocol 1 reads it back, so a readout of the instantaneous bit would be
+    // both unknowable and useless.
+    //
+    // Survives setReceiverCount()'s stop/start (Params::bandscope); cleared by
+    // start() and stop().
+    [[nodiscard]] bool bandscopeEnabled() const noexcept { return m_params.bandscope; }
+    [[nodiscard]] quint64 ep4Packets() const noexcept { return m_link.ep4Packets; }
+    [[nodiscard]] quint64 ep4Drops() const noexcept { return m_ep4Drops; }
+    [[nodiscard]] quint64 ep4Rewinds() const noexcept { return m_ep4Rewinds; }
+    [[nodiscard]] quint64 bandscopeBlocks() const noexcept { return m_bsBlocks; }
+    [[nodiscard]] quint64 bandscopeTimeouts() const noexcept { return m_bsTimeouts; }
+
+    // How long one arming cycle may take before the gate abandons it, in
+    // milliseconds, for the rate and receiver count currently configured.
+    // Exposed so the sizing can be asserted against the two measured arming
+    // delays rather than inspected through a QTimer.
+    [[nodiscard]] int bandscopeGuardIntervalMs() const noexcept;
 
     // Receivers this client can both RUN and TUNE: the RX1..RX7 NCO registers
     // are one contiguous run (0x02..0x08) and RX8..RX12 are not. See ccRxFreq().
@@ -305,17 +405,74 @@ signals:
     // bits of the fill level, and no sample count at all. See
     // Hl2Telemetry::apply().
     void telemetryUpdated(const AetherSDR::hl2::Hl2Telemetry& t);
+    // ONE ACCEPTED BANDSCOPE BLOCK — 2048 contiguous converter samples, merged
+    // from the four in-phase EP4 packets the gate kept. Never per packet: a
+    // packet is a quarter of the record and its peak is not the record's.
+    //
+    // UNCALIBRATED, PRE-DDC. The levels in here are on the AD9866's own scale,
+    // commensurable with the gateware's clip and good-level flags and with
+    // nothing else. No antenna-referred comparison has been run (the study's
+    // Procedure C, which needs a live antenna and is not scheduled), so nothing
+    // downstream may treat these as absolute — and per IRadioBackend.h's own
+    // rule for the rows they feed, nothing may make a DECISION from them at all.
+    void bandscopeBlockReady(const AetherSDR::hl2::Ep4Stats& block);
     // No EP6 arrived within kConnectTimeoutMs of start() — the radio is off,
     // unreachable, or already streaming to a different client.
     void connectFailed(const QString& reason);
 
 private slots:
+    // The sampling period elapsed: start one arming cycle if the interlocks allow.
+    void onBandscopeTick();
+    // An arming cycle took longer than bandscopeGuardIntervalMs(). Abandon it.
+    void onBandscopeGuardTimeout();
     void onReadyRead();
     void onEp2PacerTick();
     void onWatchdogTick();
 
 private:
     void sendControlPacket();           // one round-robin EP2 C&C packet
+    // One datagram off this socket, whatever endpoint it came from: the EP6/EP4
+    // branch, the sequence accounting, telemetry and the IQ decode. Split out of
+    // onReadyRead's drain loop so the whole ingest path can be driven from
+    // recorded bytes with no socket bound — see MetisClientTestAccess.
+    void handleDatagram(std::span<const std::uint8_t> bytes);
+    // Account one bandscope datagram: its sequence step, and the counters. Takes
+    // the already-parsed sequence alongside the bytes, because the caller has
+    // had to parse it to know the datagram was EP4 at all.
+    void handleEp4(std::uint32_t seq, std::span<const std::uint8_t> bytes);
+    // ---- the duty-cycle gate (see setBandscopeEnabled) ----
+    //
+    // Idle -> Arming -> Flushing -> Capturing -> Idle, once per
+    // kBandscopeSampleMs. Arming raises wide_spectrum; Flushing throws away the
+    // block that was already in the capture FIFO when it went up; Capturing
+    // keeps the next one and lowers the bit again.
+    enum class BandscopeState { Idle, Arming, Flushing, Capturing };
+    // One arriving EP4 datagram, offered to the gate. Separate from handleEp4's
+    // counters on purpose: those describe the WIRE and count every datagram
+    // whatever the gate is doing, and a reading is a different thing from an
+    // arrival.
+    //
+    // Not noexcept, and neither is handleEp4 any longer: this one EMITS, and a
+    // queued connection copies the block into a QVariant to cross the thread.
+    void bandscopeOnPacket(std::uint32_t seq, std::span<const std::uint8_t> bytes);
+    // Begin one arming cycle: raise wide_spectrum, clear the accumulator, arm
+    // the guard. Refused, and silently, while the interlocks below say so.
+    void bandscopeArm();
+    // Lower wide_spectrum and return to Idle. `expectTrailing` records that one
+    // more packet is still coming — see m_bsTrailingPending.
+    void bandscopeDisarm(bool expectTrailing);
+    // True while a bandscope block would be a picture of our own transmitter.
+    [[nodiscard]] bool bandscopeInterlocked() const noexcept;
+    // One run-byte datagram with wide_spectrum set or clear and `run` kept set.
+    // The only place the gate touches the wire.
+    void sendBandscopeRunByte(bool wideSpectrum);
+    // Start or stop the period timer to match m_params.bandscope. Called by
+    // setBandscopeEnabled() and again after setReceiverCount()'s restart, which
+    // is what carries the sensor across a panadapter being added.
+    void applyBandscopeGate();
+    // Drop every piece of in-flight cycle state and stop both timers, leaving
+    // m_params.bandscope alone. The counters are cumulative and survive.
+    void resetBandscopeGate() noexcept;
     // Accumulate one socket wakeup into the gap window. Called at the TOP of
     // onReadyRead, because the instant the wakeup happened is what it measures.
     void accountReceiveWakeup();
@@ -415,6 +572,56 @@ private:
     std::uint32_t m_expectedRxSeq = 0;   // for EP6 drop detection
     bool m_haveRxSeq = false;
     quint64 m_drops = 0;
+    // The SAME triple for EP4, and deliberately not shared with the one above.
+    // ep4_seq_no is a separate 20-bit counter in the gateware with its own
+    // reset (`if (~run)` zeroes both independently), so a client that tracked
+    // one expectation across both endpoints would report a gap on every single
+    // packet of whichever stream it saw second.
+    std::uint32_t m_expectedEp4Seq = 0;
+    bool m_haveEp4Seq = false;
+    quint64 m_ep4Drops = 0;
+    quint64 m_ep4Rewinds = 0;
+
+    // ---- the duty-cycle gate ----
+    //
+    // How often one block is taken. THE BOUND, stated because REPORTING.md §7
+    // asks for it: the release law the eventual consumer would run requires
+    // 3000 ms of dwell before any step, so a sampler slower than ~1 Hz would
+    // make that dwell a property of this timer rather than of the plant. The
+    // CHOICE is 1000 ms — one sample per dwell-third, 16 datagrams/s,
+    // 0.14 Mbit/s. Nothing measured supports a faster one.
+    static constexpr int kBandscopeSampleMs = 1000;
+    // How long after unkey a block is still refused. FIND-16 / d83's measured
+    // post-unkey transient is 178-285 ms, median 229; 300 ms clears it. The HL2
+    // receives while it transmits and hears itself at enormous strength, so a
+    // block taken inside this window is a picture of our own PA and not of the
+    // band.
+    static constexpr int kBandscopeUnkeyHoldoffMs = 300;
+
+    BandscopeState m_bsState = BandscopeState::Idle;
+    QTimer* m_bandscopeTimer = nullptr;   // paces one arming cycle per sample period
+    QTimer* m_bandscopeGuard = nullptr;   // single-shot: this cycle's deadline
+    // Packets consumed in the current Flushing / Capturing run, which is also
+    // the phase (seq % 4) the next packet of that run must carry.
+    int m_bsPhase = 0;
+    Ep4Stats m_bsBlock;                   // the block being accumulated
+    // EXACTLY ONE EP4 PACKET ARRIVES AFTER THE DISABLE, 24-61 us later, in four
+    // of four measured cycles: the packet already inside usopenhpsdr1.v's WIDE
+    // states, which START cannot interrupt. It belongs to the block we have
+    // already emitted.
+    //
+    // Consumed and discarded by the gate wherever it lands. It is deliberately
+    // NOT cleared when the next cycle arms: the trailing packet is the previous
+    // capture's last word, and if the gate re-armed before it was seen — a
+    // shorter sample period, or a stalled event loop — the flag is the only
+    // thing stopping a packet seconds old from seeding the next block. If it
+    // is instead LOST, the flag eats the first packet of the next cycle, which
+    // costs one block interval out of a guard sized in hundreds.
+    bool m_bsTrailingPending = false;
+    quint64 m_bsBlocks = 0;
+    quint64 m_bsTimeouts = 0;
+    // Since the MOX falling edge; invalid until the first unkey of the session.
+    QElapsedTimer m_sinceUnkey;
     bool m_running = false;
     bool m_linkUp = false;
     // Reused per-packet decode buffers, one vector per running receiver. Sized
@@ -427,6 +634,19 @@ private:
     // publishTelemetry() does not flood the GUI thread. (#4449 review)
     QElapsedTimer m_telemetryEmitClock;
     static constexpr qint64 kTelemetryMinIntervalMs = 100;
+    // ADC-overload numerator and denominator for the CURRENT publish window.
+    //
+    // They live here rather than in Hl2Telemetry because they are window
+    // accumulators owned by this loop, while Hl2Telemetry::apply() is a
+    // per-response merge that has no idea where a window begins. They are
+    // stamped onto the telemetry struct and zeroed at each emit.
+    //
+    // THIS IS THE ONLY PLACE THE RATE STILL EXISTS. Everything downstream sees
+    // the coalesced ~10 Hz emit, which samples a bit that cycles up to ~190
+    // times a second -- so a consumer that counted overloads there would be
+    // measuring its own sampling phase. See Hl2Telemetry's own comment.
+    int m_adcWindowSamples = 0;
+    int m_adcWindowOverload = 0;
 
     // ---- transport counters (see LinkCounters) ----
     LinkCounters  m_link;
@@ -448,3 +668,6 @@ private:
 Q_DECLARE_METATYPE(AetherSDR::hl2::Hl2Telemetry)
 // Same reason: LinkCounters crosses the I/O thread to the GUI thread queued.
 Q_DECLARE_METATYPE(AetherSDR::hl2::MetisClient::LinkCounters)
+// Same reason again: one accepted bandscope block crosses to the GUI thread
+// queued, and Ep4Stats is declared in the Qt-free MetisProtocol.h.
+Q_DECLARE_METATYPE(AetherSDR::hl2::Ep4Stats)

@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include "MainWindow.h"
+#include "core/backends/AutoRfGainControl.h"
 
 #include "MainWindowHelpers.h"
 #include "WindowGeometryRestore.h"
@@ -7286,6 +7287,10 @@ QString MainWindow::rfGainSettingsKey(SpectrumWidget* sw) const
     return base + QLatin1Char('_') + family;
 }
 
+// Family-scoped ALWAYS, with no Flex exception. rfGainSettingsKey() leaves Flex
+// un-suffixed because its key predates the scoping and had to stay readable by
+// an older build; this one is new, so there is no history to preserve and no
+// reason to let two families share a switch that only one of them has.
 void MainWindow::applyTuningRangeToOverlayMenu(SpectrumOverlayMenu* menu) const
 {
     if (!menu)
@@ -7792,6 +7797,18 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
         // The per-pan DAX button and panel, which the capability gate previously
         // missed — so an HL2 kept IQ Ch / DAX Ch selectors that reach nothing.
         menu->setDaxStreamsAvailable(m_radioModel.hasDaxStreams());
+        // The Auto checkbox beside RF Gain. Non-permissive when disconnected,
+        // so it appears only once a backend has actually claimed the loop.
+        //
+        // AVAILABILITY AND ARMED STATE TOGETHER, on this one existing fanout.
+        // The switch is persisted by the BACKEND in its own operating state
+        // (docs/HERMES.md: never a flat AppSettings key), so it can already be
+        // armed by the time this runs on a reconnect -- and a checkbox that
+        // did not reflect that would report a control as off while it was
+        // holding the operator's gain down.
+        auto* autoGain = m_radioModel.autoRfGain();
+        menu->setAutoRfGainAvailable(autoGain != nullptr);
+        menu->setAutoRfGainEnabled(autoGain && autoGain->isArmed());
     }
     // A MASK, not a rewrite: the operator's stored HW preference survives a
     // session on a radio that has no hardware black level, and comes back by

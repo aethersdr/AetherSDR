@@ -11,6 +11,7 @@
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/Hl2OverloadPolicy.h"
 #include "core/backends/hl2/Hl2DspSetupPolicy.h"
+#include "core/backends/hl2/Hl2GainSplit.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -339,6 +340,17 @@ QByteArray floatBytes(const std::vector<float>& v)
 
 Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
 {
+    // THE DEFAULT CONTROL LAW, set here rather than as a member initialiser
+    // because its sampling-bias budget is a logarithm of the gate period and
+    // therefore not a constant expression. See setAutoRfGainMode.
+    //
+    // Setting a law is not arming one: m_autoRfGainEnabled stays false, no
+    // stream starts, and nothing about this installation's behaviour changes
+    // until an operator switches the control on.
+    m_autoGainConfig = AetherSDR::hl2::bandscopeReleaseConfig(
+        AetherSDR::hl2::gatedPeakBiasDbForPeriod(
+            MetisClient::bandscopeSamplePeriodMs()));
+
     // No parent: moveToThread() refuses an object that has one, and both of
     // these belong on the I/O thread rather than the GUI thread. They are
     // destroyed explicitly in the destructor after the thread is joined.
@@ -438,6 +450,23 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // rather than as one that has not come up yet.
         m_link = LinkStats{};
         m_linkRxPacketsAtLastTick = 0;
+        // The bandscope belongs to the SESSION: MetisClient::start() comes up
+        // with wide_spectrum clear and ep4_seq_no restarted, so carrying the
+        // previous link's state here would report a stream nothing enabled.
+        m_bandscopeEnabled = false;
+        // The gate does not survive a connect, so neither does the loop's
+        // claim on it. Left set, a disarm after reconnecting would send a
+        // disable for a stream nothing had started.
+        m_bandscopeOwnedByAutoGain = false;
+        m_ep4Packets = 0;
+        m_ep4Drops = 0;
+        m_ep4Rewinds = 0;
+        m_ep4Blocks = 0;
+        m_ep4Timeouts = 0;
+        // Back to "never seen", which is what makes the level rows go ABSENT
+        // again rather than keep showing the previous radio's last reading.
+        m_bandscopeBlock = AetherSDR::hl2::Ep4Stats{};
+        m_bandscopeBlockClock.invalidate();
         m_linkStatsTimer->start();
         emit connected();
         // Publish initial slice/pan state AFTER connected(), not in connectRadio():
@@ -484,6 +513,20 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // it is published rather than assumed, so the indicator starts from a
         // stated value instead of whatever the widget happened to hold.
         publishWideState();
+        // THE OPERATOR'S AUTOMATIC-GAIN SWITCH, restored last.
+        //
+        // Last because setAutoRfGain() refuses to arm from a baseline above
+        // kAutoRfGainMaxBaselineDb, and the restored baseline only reaches
+        // m_lnaGainDb in pushInitialState() above. Arming earlier would consult
+        // a number that had not been restored yet and refuse — or worse, not.
+        //
+        // A REFUSAL HERE IS CORRECT AND IS LOGGED BY setAutoRfGain: the control
+        // stays off, the operator's preference stays recorded, and they are
+        // told why. What must not happen is arming silently against a gain axis
+        // this radio is not trusted on.
+        if (m_autoRfGainWanted && !m_autoRfGainEnabled) {
+            setAutoRfGain(true);
+        }
     });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
         if (m_connected) {
@@ -592,6 +635,28 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
                               ? c.maxGapMs - c.meanGapMs
                               : -1;
         m_link.localEndpoint = c.localEndpoint;
+        // The bandscope's counters ride this same publish rather than a signal
+        // or a timer of their own — the point of putting them on LinkCounters.
+        // They stay off LinkStats: see the members' comment in the header.
+        m_ep4Packets = c.ep4Packets;
+        m_ep4Drops = c.ep4Drops;
+        m_ep4Rewinds = c.ep4Rewinds;
+        m_ep4Blocks = c.bandscopeBlocks;
+        m_ep4Timeouts = c.bandscopeTimeouts;
+    });
+
+    // ONE ACCEPTED BANDSCOPE BLOCK, mirrored onto the GUI thread. The same
+    // pattern as m_drops and m_link above and for the same reason: MetisClient
+    // lives on the hl2-io thread.
+    //
+    // It arrives about once a second — the gate's duty cycle, not the packet
+    // rate — so it needs no throttle of its own, and it drives NOTHING. There
+    // is no consumer but healthSnapshot()'s rows, which IRadioBackend.h binds
+    // to display.
+    connect(m_metis, &MetisClient::bandscopeBlockReady, this,
+            [this](const AetherSDR::hl2::Ep4Stats& block) {
+        m_bandscopeBlock = block;
+        m_bandscopeBlockClock.restart();
     });
 
     m_linkStatsTimer = new QTimer(this);
@@ -989,7 +1054,10 @@ bool Hl2Backend::createPanadapter()
             static_cast<double>(kIqSampleRatesHz[0]) / 1.0e6,
             static_cast<double>(m_sampleRateHz) / 1.0e6);
         emit panRfGainInfoChanged(ids->panId, kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb);
-        emit panRfGainChanged(ids->panId, m_lnaGainDb);
+        // EFFECTIVE, not baseline: a pan created while an automatic control is
+        // holding gain down must come up showing the same number as its
+        // siblings, not the operator's untouched baseline (Hl2GainSplit.h).
+        emit panRfGainChanged(ids->panId, lnaEffectiveDb());
     }
     // A new receiver can change whether the set spans bands.
     applyBandFilter("add receiver");
@@ -1840,7 +1908,11 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     // command banks, which are register contents. Everything else in this
     // function keeps startFreqHz in the true-RF domain.
     mp.rxFrequencyHz = ncoCommandHz(startFreqHz);
-    mp.lnaGainDb = m_lnaGainDb;
+    // EFFECTIVE. resetPersistedState() zeroes the automatic offset, so on the
+    // ordinary connect path this equals the baseline; taking it through the
+    // split anyway means no future caller can leave a connect seeding the
+    // register with a number the rest of the session does not agree with.
+    mp.lnaGainDb = lnaEffectiveDb();
     mp.numRx = rateLimited;
     m_boardMaxRx = request.params.value(QStringLiteral("boardMaxRx")).toInt();
     if (m_boardMaxRx <= 0) {
@@ -1895,7 +1967,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         << QString::number(startFreqHz / 1.0e6, 'f', 6) << " MHz, trigger=connect";
     // Seed the reference from the gain we are about to command, so the very
     // first spectrum frame is already on the same footing as every later one.
-    m_dbRef.setLnaGainDb(m_lnaGainDb);
+    m_dbRef.setLnaGainDb(lnaEffectiveDb());
 
     // ---- build the receivers, BEFORE start() ----
     //
@@ -3377,6 +3449,14 @@ void Hl2Backend::setKeying(bool key)
     }
 
     const bool keyChanged = m_keyed != key;
+    // The receive path keeps describing the operator's own transmission for a
+    // measured 178-285 ms after this point (FINDINGS.md FIND-16, run
+    // d83-unkey-transient), so anything the converter reports inside that
+    // window is about the transmitter rather than the antenna. The automatic
+    // gain control reads this; nothing else does.
+    if (keyChanged && !key) {
+        m_sinceUnkey.start();
+    }
     m_keyed = key;
     if (keyChanged) {
         // Manual PTT is already mirrored optimistically by RadioModel, but CW
@@ -4212,6 +4292,42 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             }
             return;
         }
+        // The wideband bandscope (endpoint 0x04). NO UI AND NO SETTING, on
+        // purpose: it is a diagnostic, nothing in the app makes a decision from
+        // it, and it is off again at the next connect. An operator who wants it
+        // asks for it here, once.
+        //
+        // What this starts is MetisClient's DUTY-CYCLE GATE, not the stream:
+        // one 2048-sample block per sampling period, 16 datagrams a second,
+        // 0.14 Mbit/s. Ungated the same stream is ~3.3 Mbit/s, about as much
+        // again as the IQ at 1 RX / 48 kHz.
+        //
+        // Completes locally, like freqcal.set above and for the same reason:
+        // the run byte is fire-and-forget, nothing in Protocol 1 reads it back,
+        // and fabricating a device round trip to await would be inventing a
+        // confirmation the wire cannot give.
+        if (verb == QLatin1String("bandscope.enable")) {
+            // Refused while disconnected, and REPORTED as refused: MetisClient
+            // ignores a run byte with no stream behind it, so echoing the
+            // request back would be this side inventing a state the radio was
+            // never told about.
+            const bool on = arg.toBool() && m_connected;
+            m_bandscopeEnabled = on;
+            // AN EXPLICIT OPERATOR ACTION TAKES THE GATE BACK, in both
+            // directions: turning it on makes it theirs to turn off, and
+            // turning it off must not leave the loop believing it still owns a
+            // stream that is no longer running. Either way the automatic
+            // control stops being the owner; see applyBandscopeForAutoGain.
+            m_bandscopeOwnedByAutoGain = false;
+            QMetaObject::invokeMethod(m_metis, "setBandscopeEnabled",
+                                      Qt::QueuedConnection, Q_ARG(bool, on));
+            if (requestId != 0) {
+                emit extensionResult(requestId, QVariantMap{
+                    {QStringLiteral("enabled"), on},
+                });
+            }
+            return;
+        }
         // Noise-blanker READBACK, per receiver. Exists because the bridge's
         // `get dsp` reports the SLICE MODEL's nb flag, which is set the moment
         // the operator clicks and says nothing about whether the intent reached
@@ -4271,6 +4387,39 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         emit extensionError(requestId, QStringLiteral("hl2: no extension verbs implemented"));
 }
 
+namespace {
+// The control law's reason enum in the operator's words. Kept here rather than
+// in the policy header so the header stays free of anything presentational --
+// it has no Qt and no strings, and a health row is not a control decision.
+const char* autoGainReasonText(AetherSDR::hl2::AutoGainReason r)
+{
+    using R = AetherSDR::hl2::AutoGainReason;
+    switch (r) {
+    case R::Disarmed:       return "off";
+    case R::Warmup:         return "warming up";
+    case R::Keyed:          return "held — transmitting";
+    case R::UnkeyHoldoff:   return "held — settling after unkey";
+    case R::Void:           return "waiting — too few observations";
+    case R::Stale:          return "held — no observations (is the radio streaming?)";
+    case R::Cooldown:       return "clipping — waiting out the attack cooldown";
+    case R::AttackHot:      return "reducing gain — clipping most of the time";
+    case R::AttackMarginal: return "reducing gain — clipping occasionally";
+    case R::AtFloor:        return "AT FLOOR and still clipping";
+    case R::Dwell:          return "clean — waiting before giving gain back";
+    case R::ReleaseHold:    return "clean — holding at this band's known limit";
+    // The two the wideband reading adds, and they are deliberately different
+    // sentences: one is a measurement that said no, the other is no
+    // measurement at all, and an operator can act on the second (is the
+    // bandscope running?) but not on the first.
+    case R::HeadroomHold:   return "clean — not enough measured headroom for a step";
+    case R::HeadroomAbsent: return "held — no wideband headroom reading";
+    case R::Release:        return "giving gain back";
+    case R::Idle:           return "clean — nothing held";
+    }
+    return "unknown";
+}
+}  // namespace
+
 IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 {
     HealthSnapshot h;
@@ -4304,7 +4453,127 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 
     section("adcOverload", QStringLiteral("Converter"));
     put("adcOverload", QStringLiteral("ADC overload"), opt(m_telemetry.adcOverload));
-    put("lnaGainDb", QStringLiteral("LNA gain (dB)"), m_lnaGainDb);
+    // THE VALUE ON THE WIRE. Kept under its original key because that is what
+    // this row has always meant — what the AD9866 is running — and because a
+    // reader that wanted the operator's stored number would be reaching for the
+    // wrong one either way. The two rows below say which is which, and while no
+    // automatic control is armed all three agree.
+    put("lnaGainDb", QStringLiteral("LNA gain (dB)"), lnaEffectiveDb());
+    put("lnaBaselineDb", QStringLiteral("LNA baseline (dB, operator)"), m_lnaGainDb);
+    put("lnaAutoOffsetDb", QStringLiteral("LNA auto offset (dB below baseline)"),
+        m_lnaAutoOffsetDb);
+    // THE CLIP RATE, AND ITS DENOMINATOR BESIDE IT ON PURPOSE.
+    //
+    // "ADC overload" above is one bit, sampled at 10 Hz, from a flag that
+    // cycles up to ~190 times a second: it answers "was it railing at the
+    // instant we last looked", which on a dithering band is nearly a coin
+    // toss. These rows answer "how often is it railing, out of how many
+    // chances" -- the question an operator turning the RF Gain slider on a
+    // live antenna is actually asking.
+    //
+    // The percentage row is ABSENT rather than zero whenever the window
+    // carried too few observations to have a rate. That is the same rule the
+    // `values`-omission above encodes and it is load-bearing here: three of
+    // three responses railing is not 100 %, and none of two is not 0 %.
+    //
+    // AND THE WHOLE SECTION GOES QUIET WHEN THE RADIO STOPS STREAMING. The
+    // gateware clears the counter behind this bit only inside the EP6
+    // response cycle, so there is no idle poll for it -- unlike temperature,
+    // power and PTT, which do keep converting at idle. "Observed" says how
+    // long ago the last window with any observations in it arrived, so a
+    // frozen zero cannot be read as a quiet band.
+    put("adcClipWindowSamples", QStringLiteral("ADC observations (last window)"),
+        m_adcWindowSamples > 0 ? QVariant(m_adcWindowSamples) : QVariant());
+    put("adcClipWindowOverload", QStringLiteral("ADC clipped observations (last window)"),
+        m_adcWindowSamples > 0 ? QVariant(m_adcOverloadWindowSamples) : QVariant());
+    {
+        const auto pct = AetherSDR::hl2::adcClipRatePercent(
+            m_adcWindowSamples, m_adcOverloadWindowSamples, kAdcMinWindowSamples);
+        put("adcClipWindowPct", QStringLiteral("ADC clip rate (last window, %)"),
+            pct ? QVariant(*pct) : QVariant());
+    }
+    put("adcClipWindowMs", QStringLiteral("Window length (ms)"),
+        m_adcWindowMs > 0 ? QVariant(m_adcWindowMs) : QVariant());
+    put("adcClipTotalSamples", QStringLiteral("ADC observations (since connect)"),
+        m_adcTotalSamples > 0 ? QVariant(m_adcTotalSamples) : QVariant());
+    put("adcClipTotalOverload", QStringLiteral("ADC clipped observations (since connect)"),
+        m_adcTotalSamples > 0 ? QVariant(m_adcTotalOverloadSamples) : QVariant());
+    {
+        // Deliberately computed through the SAME function as the window row,
+        // so the two can never disagree about what a rate is or when there
+        // isn't one. int is safe: the totals are clamped into it only for the
+        // ratio, and a session would need billions of observations to matter.
+        const auto pct = AetherSDR::hl2::adcClipRatePercent(
+            static_cast<int>(m_adcTotalSamples > 1'000'000'000u
+                                 ? 1'000'000'000u : m_adcTotalSamples),
+            static_cast<int>(m_adcTotalOverloadSamples > 1'000'000'000u
+                                 ? 1'000'000'000u : m_adcTotalOverloadSamples),
+            kAdcMinWindowSamples);
+        put("adcClipSessionPct", QStringLiteral("ADC clip rate (since connect, %)"),
+            pct ? QVariant(*pct) : QVariant());
+    }
+    put("adcObservedMsAgo", QStringLiteral("ADC last observed (ms ago)"),
+        m_adcWindowClock.isValid() ? QVariant(qint64(m_adcWindowClock.elapsed()))
+                                   : QVariant());
+    put("autoRfGain", QStringLiteral("Auto RF gain"), m_autoRfGainEnabled);
+    put("autoRfGainFloorDb", QStringLiteral("Auto RF gain floor (dB below baseline)"),
+        m_autoGainConfig.maxOffsetDb);
+    // WHICH LAW, not which numbers. The rows above show what the loop is doing;
+    // this one shows which controller is doing it, and without it a bench
+    // reading a trace has no way to tell a slow ramp from a failed probe.
+    put("autoRfGainMode", QStringLiteral("Auto RF gain mode"), m_autoGainMode);
+    put("autoRfGainProbeIntervalMs",
+        QStringLiteral("Auto RF gain probe interval (ms, 0 = not probing)"),
+        m_autoGainConfig.probeConfirmMs > 0
+            ? QVariant(qint64(m_autoGainState.dwellRequiredMs > 0
+                                  ? m_autoGainState.dwellRequiredMs
+                                  : m_autoGainConfig.releaseDwellMs))
+            : QVariant(qint64(0)));
+    // What the loop is doing THIS INSTANT, in the operator's words rather than
+    // the enum's. Reported even while disarmed, because "disarmed" is the
+    // answer to "why is nothing happening" as much as "stale" is.
+    put("autoRfGainState", QStringLiteral("Auto RF gain state"),
+        QString::fromLatin1(autoGainReasonText(m_autoGainReason)));
+
+    // ---- WHAT THE LOOP IS RELEASING AGAINST ----
+    //
+    // Three rows, and together they answer "why has it not given my gain back"
+    // in a way neither the state string nor the raw headroom row can alone.
+    //
+    // ABSENT WHEN THE LAW DOES NOT USE IT. A loop running "ramp", "probe" or
+    // "binary" releases on the clip flag alone, and showing a headroom
+    // requirement beside it would describe a rule that is not in force.
+    if (m_autoGainConfig.requireHeadroomToRelease) {
+        const AetherSDR::hl2::HeadroomObservation h =
+            AetherSDR::hl2::bandscopeHeadroom(
+                m_bandscopeBlock,
+                m_bandscopeBlockClock.isValid()
+                    ? m_bandscopeBlockClock.elapsed() : -1);
+        // How much room the step needs: the step, plus the gate's sampling
+        // bias, plus the configured margin. This is the number the reading is
+        // actually compared against, so publishing it saves an operator from
+        // doing the arithmetic in their head against three other rows.
+        put("autoRfGainReleaseNeedsDb",
+            QStringLiteral("Auto RF gain: headroom needed to release (dB)"),
+            QString::number(m_autoGainConfig.releaseStepDb
+                                + m_autoGainConfig.headroomBiasDb
+                                + m_autoGainConfig.releaseHeadroomMarginDb,
+                            'f', 2));
+        // And how much of that requirement is the duty cycle's bias budget
+        // rather than the step -- which is the part that looks arbitrary until
+        // it is named.
+        put("autoRfGainHeadroomBiasDb",
+            QStringLiteral("Auto RF gain: gated-peak bias budgeted (dB)"),
+            QString::number(m_autoGainConfig.headroomBiasDb, 'f', 2));
+        // ABSENT, not zero, when there is no current reading. Zero headroom is
+        // an instruction to attenuate; no reading is an instruction to wait,
+        // and rendering the second as the first would be the worst available
+        // mistake on this row.
+        put("autoRfGainHeadroomDb",
+            QStringLiteral("Auto RF gain: measured headroom (dB below clip)"),
+            h.isMeasurement() ? QVariant(QString::number(h.headroomDb, 'f', 2))
+                              : QVariant());
+    }
 
     section("txInhibited", QStringLiteral("Transmit"));
     // The register bit is ACTIVE LOW and MetisProtocol already decodes it, so
@@ -4531,6 +4800,74 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // this is the first number to look at when it does.
     put("droppedPackets", QStringLiteral("Dropped EP6 packets"),
         static_cast<qulonglong>(m_drops));
+    // The wideband bandscope. Reported unconditionally rather than only when it
+    // is on, because "off" is the answer the reader of a health dialog needs
+    // first — an absent row would leave "is this costing me link budget?"
+    // unanswered rather than answered "no".
+    put("bandscopeEnabled", QStringLiteral("Wideband bandscope (EP4)"),
+        m_bandscopeEnabled);
+    put("ep4Packets", QStringLiteral("Bandscope packets"),
+        static_cast<qulonglong>(m_ep4Packets));
+    put("ep4Drops", QStringLiteral("Dropped EP4 packets"),
+        static_cast<qulonglong>(m_ep4Drops));
+    // Kept apart from the drops above, not folded in. Exactly one rewind is
+    // expected per stream start — the gateware re-aligns ep4_seq_no's low two
+    // bits while the capture FIFO fills — and none after it. Inside a counter
+    // that is supposed to read zero, a second one would be invisible.
+    put("ep4Rewinds", QStringLiteral("EP4 sequence rewinds"),
+        static_cast<qulonglong>(m_ep4Rewinds));
+    // The gate's own health. Blocks ACCEPTED is not ep4Packets/4: most of what
+    // arrives is armed, flushed or trailing, and none of that becomes a
+    // reading. Timeouts should read zero — the guard is sized from the measured
+    // arming delay in the gateware's own units (bandscopeGuardMs), so a
+    // non-zero value means the radio stopped answering the run byte.
+    put("bandscopeBlocks", QStringLiteral("Bandscope blocks accepted"),
+        static_cast<qulonglong>(m_ep4Blocks));
+    put("bandscopeTimeouts", QStringLiteral("Bandscope block timeouts"),
+        static_cast<qulonglong>(m_ep4Timeouts));
+
+    // ---- the headroom rows ----
+    //
+    // ABSENT UNTIL A BLOCK HAS ARRIVED, which is HealthSnapshot's "absent means
+    // not reported" contract doing the work no default value could: there is no
+    // number that honestly stands for "the converter's level has never been
+    // looked at", and 0.00 dBFS in particular would read as a hard clip.
+    //
+    // LABELLED UNCALIBRATED, PRE-DDC, and the label is the point. These come
+    // off the AD9866 before the DDC, the decimation and the NCO, on the
+    // converter's own scale. They are commensurable with the gateware's clip
+    // and good-level flags — the same rx_data register feeds both — and with
+    // NOTHING ELSE: not the S-meter, not the WDSP ADC peak, not any
+    // antenna-referred level. The comparison that would change that is the
+    // study's Procedure C; it needs a live antenna and it has not been run.
+    //
+    // And per IRadioBackend.h: "Purely for display — nothing in the app makes a
+    // decision from it." Nothing reads these rows back.
+    if (m_bandscopeBlock.samples > 0) {
+        const double peak = m_bandscopeBlock.peakDbfs();
+        const double rms  = m_bandscopeBlock.rmsDbfs();
+        put("adcPeakDbfs", QStringLiteral("ADC peak (uncalibrated pre-DDC dBFS)"),
+            QString::number(peak, 'f', 2));
+        put("adcRmsDbfs", QStringLiteral("ADC RMS (uncalibrated pre-DDC dBFS)"),
+            QString::number(rms, 'f', 2));
+        // Peak-to-RMS, which is the one figure here that IS scale-free: it
+        // survives the missing calibration intact, because both terms carry the
+        // same unknown offset and it cancels.
+        put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"),
+            QString::number(peak - rms, 'f', 2));
+        // Counted with ad9866.v's OWN two thresholds — rxclipp at +2047 and
+        // rxclipn at -2048 — and not a symmetric |code| >= 2048, which can
+        // never fire on a positive clip because +2048 is not a code a 12-bit
+        // two's-complement converter can produce.
+        put("adcClippedPerBlock", QStringLiteral("ADC samples at the rail (per 2048)"),
+            static_cast<qulonglong>(m_bandscopeBlock.clippedSamples));
+        // How old the reading is. A gated sensor's number is a snapshot, and a
+        // snapshot with no age on it invites being read as current.
+        put("adcObservedAgoMs", QStringLiteral("ADC level observed (ms ago)"),
+            static_cast<qulonglong>(m_bandscopeBlockClock.isValid()
+                                        ? m_bandscopeBlockClock.elapsed()
+                                        : 0));
+    }
     return h;
 }
 
@@ -4557,6 +4894,29 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_driveByBand.clear();
     m_lnaDefaultDb = 20;          // Hl2Backend.h: m_lnaGainDb's constructed default
     m_lnaGainDb = 20;
+    // The automatic offset is session state and a radio swap ends the session:
+    // radio B must not come up attenuated by a decision taken about radio A's
+    // antenna. (Hl2GainSplit.h)
+    m_lnaAutoOffsetDb = 0;
+    // A radio swap ends the session, and an automatic control armed about radio
+    // A's antenna has nothing to say about radio B's.
+    m_autoRfGainEnabled = false;
+    m_autoGainState = AetherSDR::hl2::AutoGainState{};
+    m_autoGainConfig = AetherSDR::hl2::AutoGainConfig{};
+    m_autoGainMode = QStringLiteral("ramp");
+    m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
+    m_autoGainBandKey.clear();
+    m_autoGainBaselineDb = 0;
+    m_autoGainSampleRateHz = 0;
+    m_sinceUnkey.invalidate();
+    // The clip totals are a per-session denominator and must not carry radio
+    // A's observations into radio B's rate.
+    m_adcWindowSamples = 0;
+    m_adcOverloadWindowSamples = 0;
+    m_adcWindowMs = 0;
+    m_adcTotalSamples = 0;
+    m_adcTotalOverloadSamples = 0;
+    m_adcWindowClock.invalidate();
     m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default
@@ -4665,6 +5025,16 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         m_lnaDefaultDb = qBound(kLnaGainMinDb,
                                 rfGain.value(QStringLiteral("defaultDb")).toInt(),
                                 kLnaGainMaxDb);
+    // ARMED LATER, NOT HERE. Restore runs before the link is up, and the
+    // control refuses to arm from a baseline it does not trust -- a decision it
+    // cannot make until the restored baseline has actually been applied. So
+    // this records the WISH and the connect edge acts on it.
+    //
+    // Absent means off, which is the right default: a session that predates
+    // this key never armed anything, and reading a missing key as "on" would
+    // switch a control on for an operator who never asked.
+    m_autoRfGainWanted =
+        rfGain.value(QStringLiteral("autoEnabled")).toBool(false);
     const QJsonObject lnaByBand =
         rfGain.value(QStringLiteral("lnaDbByBand")).toObject();
     for (auto it = lnaByBand.constBegin(); it != lnaByBand.constEnd(); ++it)
@@ -4845,8 +5215,18 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         driveByBand.insert(m_currentBandKey, m_rfPowerPercent);
     }
 
+    // THE OPERATOR'S AUTOMATIC-GAIN SWITCH, and it belongs HERE rather than in
+    // an AppSettings key. docs/HERMES.md is explicit: a value the radio cannot
+    // store goes in this family's OperatingState, "never in a flat AppSettings
+    // key". It rides the rfGain object because that is the axis it acts on.
+    //
+    // THE SWITCH ONLY. The OFFSET the loop is holding is deliberately NOT
+    // persisted and is absent from this object: an automatic transient that
+    // outlived the session that produced it would be indistinguishable, next
+    // launch, from a gain the operator chose. See m_lnaAutoOffsetDb.
     QJsonObject rfGain{{QStringLiteral("defaultDb"), m_lnaDefaultDb},
-                       {QStringLiteral("lnaDbByBand"), lnaByBand}};
+                       {QStringLiteral("lnaDbByBand"), lnaByBand},
+                       {QStringLiteral("autoEnabled"), m_autoRfGainEnabled}};
     QJsonObject txSetpoints{{QStringLiteral("driveByBand"), driveByBand}};
     if (m_driveDefaultPercent >= 0)
         txSetpoints.insert(QStringLiteral("defaultPercent"), m_driveDefaultPercent);
@@ -4882,25 +5262,298 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     return state;
 }
 
-// The one true LNA application: register write, dB-reference lockstep, and
-// the every-pan echo. Shared by the operator path (setPanRfGain) and the
-// band-memory path so the two can't drift (PR #4619 review).
+// The one true LNA BASELINE application: it sets the operator's number and
+// re-derives what the wire carries. Shared by the operator path (setPanRfGain)
+// and the band-memory path so the two can't drift (PR #4619 review).
+//
+// This is deliberately the ONLY writer of m_lnaGainDb outside the connect seed,
+// and it is deliberately not what an automatic control calls — see
+// setLnaAutoOffsetDb() and Hl2GainSplit.h for why an automatic writer on this
+// path destroys the per-band memory and the persisted operating state.
+void Hl2Backend::applyLnaGainDb(int gainDb)
+{
+    m_lnaGainDb = gainDb;
+    pushEffectiveLnaGain();
+}
+
+int Hl2Backend::lnaEffectiveDb() const noexcept
+{
+    return AetherSDR::hl2::effectiveLnaGain(m_lnaGainDb, m_lnaAutoOffsetDb,
+                                            kLnaGainMinDb, kLnaGainMaxDb)
+        .effectiveDb;
+}
+
+// The automatic attenuation below the operator's baseline. NON-NEGATIVE by
+// construction: this axis has no representation for a gain above the number the
+// operator set, so no automatic control built on it can make the radio louder
+// than they asked (Hl2GainSplit.h).
+//
+// It does NOT touch m_lnaGainDb, m_lnaDbByBand, m_lnaSessionPin or
+// notifyOperatingStateChanged(). That is the whole point: nothing here is the
+// operator's intent, so nothing here may be persisted as if it were.
+void Hl2Backend::setLnaAutoOffsetDb(int offsetDb)
+{
+    const int requested = offsetDb < 0 ? 0 : offsetDb;
+    if (requested == m_lnaAutoOffsetDb)
+        return;
+    m_lnaAutoOffsetDb = requested;
+    pushEffectiveLnaGain();
+}
+
+// Register write, dB-reference lockstep, and the every-pan echo — all three on
+// the EFFECTIVE value, never on the baseline.
 //
 // The dB reference moves IN LOCKSTEP with the gain: spectrum and S-meter are
 // both rendered through m_dbRef, so without this every gain change would
 // slide the whole trace — an operator backing off 10 dB would watch the
-// noise floor drop and read it as the band going quiet.
-void Hl2Backend::applyLnaGainDb(int gainDb)
+// noise floor drop and read it as the band going quiet. That argument applies
+// to an automatic step exactly as it does to a manual one, which is why the
+// offset goes through here rather than round it.
+// Arm or disarm the automatic control. RADIO-WIDE: there is one AD9866.
+void Hl2Backend::setAutoRfGain(bool on)
 {
-    m_lnaGainDb = gainDb;
-    m_dbRef.setLnaGainDb(m_lnaGainDb);
+    if (on == m_autoRfGainEnabled) {
+        return;
+    }
+    if (on) {
+        // REFUSED, NOT CLAMPED. See kAutoRfGainMaxBaselineDb. Moving the
+        // operator's own number so the feature could be switched on would be a
+        // UI reporting one value while the wire carried another.
+        if (m_lnaGainDb > kAutoRfGainMaxBaselineDb) {
+            qWarning().noquote()
+                << QStringLiteral(
+                       "Hl2Backend: auto RF gain declined — the RF Gain baseline is "
+                       "%1 dB and this radio's gain axis is not trusted above %2 dB "
+                       "(#5354: +48 dB measures like +18 dB). Lower RF Gain to %2 dB "
+                       "or below and try again. Your setting has not been changed.")
+                       .arg(m_lnaGainDb)
+                       .arg(kAutoRfGainMaxBaselineDb);
+            return;
+        }
+        m_autoGainState = AetherSDR::hl2::AutoGainState{};
+        m_autoGainBandKey = m_currentBandKey;
+        m_autoGainBaselineDb = m_lnaGainDb;
+        m_autoGainSampleRateHz = m_sampleRateHz;
+        m_autoGainReason = AetherSDR::hl2::AutoGainReason::Warmup;
+        // Not keyed since arming. A stale unkey stamp from earlier in the
+        // session would hold the loop off for no reason, or -- worse -- fail to.
+        m_sinceUnkey.invalidate();
+        m_autoRfGainEnabled = true;
+        m_autoRfGainWanted = true;
+        // A law that releases on a measurement needs the stream that carries
+        // it. Ordered AFTER m_autoRfGainEnabled, which is what it reads.
+        applyBandscopeForAutoGain();
+        qCInfo(lcHl2) << "HL2 auto RF gain: ARMED at baseline" << m_lnaGainDb
+                      << "dB, floor" << m_autoGainConfig.maxOffsetDb << "dB below";
+    } else {
+        m_autoRfGainEnabled = false;
+        // The operator turning it OFF is a preference, and is persisted as one.
+        // A REFUSAL does not reach here -- that path returns before this -- so a
+        // radio that declined to arm keeps the operator's "on" recorded and
+        // arms on the next connect that allows it.
+        m_autoRfGainWanted = false;
+        applyBandscopeForAutoGain();
+        m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
+        m_autoGainState = AetherSDR::hl2::AutoGainState{};
+        // ONE ACTION, from any state. A switch that left the radio attenuated
+        // after being turned off would be a control that does not undo itself.
+        setLnaAutoOffsetDb(0);
+        qCInfo(lcHl2) << "HL2 auto RF gain: disarmed, baseline" << m_lnaGainDb
+                      << "dB restored";
+    }
+}
+
+// The operator's floor. Applied live: pulling it in while the loop is holding
+// more than the new floor makes the policy surrender the excess on its next
+// evaluation, in one step rather than at the release rate, because that is a
+// bound being enforced rather than the loop deciding to release.
+void Hl2Backend::setAutoRfGainFloorDb(int floorDb)
+{
+    const int clamped = floorDb < 0 ? 0
+                      : (floorDb > kAutoRfGainFloorMaxDb ? kAutoRfGainFloorMaxDb
+                                                         : floorDb);
+    if (clamped == m_autoGainConfig.maxOffsetDb) {
+        return;
+    }
+    m_autoGainConfig.maxOffsetDb = clamped;
+    qCInfo(lcHl2) << "HL2 auto RF gain: floor set to" << clamped
+                  << "dB below the operator's baseline";
+}
+
+// Which of Hl2AutoGainPolicy.h's configurations the loop runs. Applied live:
+// the state is NOT reset, because the offset the radio is actually holding is
+// real whichever law asked for it, and the policy's own ceiling check gives
+// back any excess on its next evaluation, in one step.
+bool Hl2Backend::setAutoRfGainMode(const QString& mode)
+{
+    using namespace AetherSDR::hl2;
+    const QString m = mode.trimmed().toLower();
+    AutoGainConfig cfg;
+    if (m == QLatin1String("ramp") || m == QLatin1String("default")) {
+        cfg = AutoGainConfig{};
+    } else if (m == QLatin1String("probe") || m == QLatin1String("probing")) {
+        cfg = probingReleaseConfig();
+    } else if (m == QLatin1String("binary")) {
+        cfg = binaryHighLowConfig();
+    } else if (m == QLatin1String("bandscope")) {
+        // THE DEFAULT, and the one law here whose release condition rests on a
+        // measurement rather than on a gamble. The bias budget is computed from
+        // the gate period MetisClient actually runs, never from a literal, so
+        // the two cannot drift apart.
+        cfg = bandscopeReleaseConfig(
+            gatedPeakBiasDbForPeriod(MetisClient::bandscopeSamplePeriodMs()));
+    } else {
+        qWarning().noquote()
+            << QStringLiteral("Hl2Backend: auto RF gain mode \"%1\" is not one of "
+                              "bandscope|ramp|probe|binary. The law has not been "
+                              "changed.")
+                   .arg(mode);
+        return false;
+    }
+    m_autoGainConfig = cfg;
+    m_autoGainMode = (m == QLatin1String("default")) ? QStringLiteral("ramp")
+                   : (m == QLatin1String("probing")) ? QStringLiteral("probe") : m;
+    // A law that needs the wideband reading needs the stream that carries it.
+    // Called unconditionally so that switching AWAY from bandscope mode also
+    // releases the gate, rather than leaving it running for a law that ignores
+    // it.
+    applyBandscopeForAutoGain();
+    qCInfo(lcHl2) << "HL2 auto RF gain: law set to" << m_autoGainMode
+                  << "- step" << m_autoGainConfig.attackStepDb
+                  << "dB, floor" << m_autoGainConfig.maxOffsetDb
+                  << "dB, probe confirm" << m_autoGainConfig.probeConfirmMs << "ms"
+                  << ", headroom required" << m_autoGainConfig.requireHeadroomToRelease;
+    return true;
+}
+
+// THE GATE THE MEASURED RELEASE DEPENDS ON, armed and released with the law
+// that needs it.
+//
+// A law with requireHeadroomToRelease set and no bandscope running would hold
+// its offset forever and report HeadroomAbsent, which is safe but is not a
+// feature. So arming such a law arms the gate.
+//
+// IT DOES NOT STOMP A MANUAL ENABLE. An operator who turned the bandscope on
+// through the `bandscope.enable` extension owns it; this only ever releases a
+// gate THIS function started, which is what m_bandscopeOwnedByAutoGain records.
+// The alternative -- disarming the loop silently killing a diagnostic stream
+// the operator started for their own reasons -- is the kind of surprise the
+// extension's own comment exists to avoid.
+void Hl2Backend::applyBandscopeForAutoGain()
+{
+    const bool wanted = m_connected && m_autoRfGainEnabled
+                     && m_autoGainConfig.requireHeadroomToRelease;
+    if (wanted) {
+        if (m_bandscopeEnabled) {
+            // Already running. If the operator started it, it stays theirs and
+            // the loop simply reads what is there; claiming it here would mean
+            // disarming the loop later switched off a stream we never started.
+            return;
+        }
+        m_bandscopeOwnedByAutoGain = true;
+        m_bandscopeEnabled = true;
+    } else {
+        if (!m_bandscopeOwnedByAutoGain) {
+            return;             // never ours, so never ours to release
+        }
+        m_bandscopeOwnedByAutoGain = false;
+        m_bandscopeEnabled = false;
+    }
+    if (m_metis) {
+        QMetaObject::invokeMethod(m_metis, "setBandscopeEnabled",
+                                  Qt::QueuedConnection,
+                                  Q_ARG(bool, m_bandscopeEnabled));
+    }
+    qCInfo(lcHl2) << "HL2 auto RF gain: wideband bandscope"
+                  << (m_bandscopeEnabled ? "enabled" : "released")
+                  << "for the measured release";
+}
+
+// One evaluation of the control law, on the telemetry publish that carried the
+// observation. Every decision is in Hl2AutoGainPolicy.h; this function only
+// gathers the inputs, applies the instruction, and owns the clocks.
+void Hl2Backend::stepAutoGain(const Hl2Telemetry& t)
+{
+    using namespace AetherSDR::hl2;
+    if (!m_autoRfGainEnabled) {
+        return;
+    }
+    AutoGainObservation obs;
+    obs.samples = t.adcSamples;
+    obs.overloadSamples = t.adcOverloadSamples;
+    // The window length is an INPUT, not an assumption. The publish interval is
+    // a floor rather than a period -- a late I/O thread makes it longer -- and a
+    // cooldown measured in windows rather than milliseconds would drift with it.
+    obs.elapsedMs = t.adcWindowMs > 0 ? t.adcWindowMs : 0;
+    // Both keying sources. The application's own m_keyed covers the instant
+    // before the radio has echoed anything back; the radio's PTT bit covers a
+    // key this application did not originate.
+    obs.keyed = m_keyed || t.ptt;
+    obs.msSinceUnkey = m_sinceUnkey.isValid() ? m_sinceUnkey.elapsed() : -1;
+    // How much attenuation physically exists below the operator's baseline. The
+    // policy does not know the register geometry and must not.
+    obs.availableOffsetDb = m_lnaGainDb - kLnaGainMinDb;
+    obs.bandChanged = (m_currentBandKey != m_autoGainBandKey);
+    obs.baselineMoved = (m_lnaGainDb != m_autoGainBaselineDb);
+    // The denominator changed, so the old windows are not comparable.
+    obs.resetWarmup = obs.bandChanged || obs.baselineMoved
+                   || (m_sampleRateHz != m_autoGainSampleRateHz);
+    m_autoGainBandKey = m_currentBandKey;
+    m_autoGainBaselineDb = m_lnaGainDb;
+    m_autoGainSampleRateHz = m_sampleRateHz;
+
+    // THE WIDEBAND HEADROOM READING, from the newest accepted bandscope block.
+    //
+    // Classified HERE rather than in the policy because the age is a clock
+    // reading and Hl2AutoGainPolicy.h owns no clock -- the same division
+    // m_adcOverloadClock already observes for the overload warning.
+    //
+    // `m_bandscopeBlock.samples == 0` means no block has ever arrived, which
+    // bandscopeHeadroom() turns into Absent rather than into a level. An
+    // invalid clock is passed as a negative age for the same reason: "never
+    // observed" and "observed too long ago" are both Absent, and neither is a
+    // headroom of zero.
+    obs.headroom = bandscopeHeadroom(
+        m_bandscopeBlock,
+        m_bandscopeBlockClock.isValid() ? m_bandscopeBlockClock.elapsed() : -1);
+
+    const AutoGainAction a = autoGainStep(m_autoGainState, obs, m_autoGainConfig);
+    m_autoGainState = a.next;
+    m_autoGainReason = a.reason;
+    if (a.warnFloorOnce) {
+        qWarning().noquote()
+            << QStringLiteral(
+                   "Hl2Backend: auto RF gain is at its floor (%1 dB below your "
+                   "setting) and the converter is STILL clipping. No amount of LNA "
+                   "will fix this — the front end needs attenuation ahead of the "
+                   "radio, or a band-pass filter for whatever is outside the "
+                   "passband.")
+                   .arg(m_autoGainState.offsetDb);
+    }
+    if (a.deltaDb != 0) {
+        setLnaAutoOffsetDb(m_autoGainState.offsetDb);
+        qCDebug(lcHl2) << "HL2 auto RF gain:" << (a.deltaDb > 0 ? "attack" : "release")
+                       << a.deltaDb << "dB -> offset" << m_autoGainState.offsetDb
+                       << "dB, window" << obs.overloadSamples << "/" << obs.samples
+                       << ", headroom"
+                       << (obs.headroom.isMeasurement()
+                               ? QString::number(obs.headroom.headroomDb, 'f', 1)
+                               : QStringLiteral("absent"));
+    }
+}
+
+void Hl2Backend::pushEffectiveLnaGain()
+{
+    const int effective = lnaEffectiveDb();
+    m_dbRef.setLnaGainDb(effective);
     if (m_metis)
         QMetaObject::invokeMethod(m_metis, "setLnaGainDb", Qt::QueuedConnection,
-            Q_ARG(int, m_lnaGainDb));
+            Q_ARG(int, effective));
     // Echo what the hardware actually took, to every pan — a slider that
-    // asked for something outside the register's range finds out here.
+    // asked for something outside the register's range finds out here, and so
+    // does an operator whose gain is being held down by an automatic control.
     for (const auto& ids : m_ids.all())
-        emit panRfGainChanged(ids.panId, m_lnaGainDb);
+        emit panRfGainChanged(ids.panId, effective);
 }
 
 void Hl2Backend::rememberCurrentBandState()
@@ -5160,7 +5813,7 @@ void Hl2Backend::pushInitialState()
     for (const auto& ids : m_ids.all()) {
         emit panRfGainInfoChanged(ids.panId,
                                   kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb);
-        emit panRfGainChanged(ids.panId, m_lnaGainDb);
+        emit panRfGainChanged(ids.panId, lnaEffectiveDb());
     }
 
     // Keying state is ours, not the radio's: a reconnect must never come up
@@ -5315,6 +5968,28 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     }
 
     m_telemetry = t;
+    // THE RATE, ACCUMULATED RATHER THAN SAMPLED. The edge counter below sees
+    // this flag at 10 Hz; these two came off every EP6 frame in MetisClient's
+    // receive loop, which is the only place the ~190 Hz observation still
+    // exists. Nothing here drives anything -- they are published and that is
+    // all -- but they are what an operator needs to watch the input on a live
+    // antenna before deciding whether an automatic loop is worth arming.
+    m_adcWindowSamples = t.adcSamples;
+    m_adcOverloadWindowSamples = t.adcOverloadSamples;
+    m_adcWindowMs = t.adcWindowMs;
+    if (t.adcSamples > 0) {
+        m_adcTotalSamples += static_cast<quint64>(t.adcSamples);
+        m_adcTotalOverloadSamples += static_cast<quint64>(t.adcOverloadSamples);
+        // Restarted only on a window that CARRIED observations. A telemetry
+        // update with an empty denominator is not evidence that the converter
+        // was looked at, so it must not refresh the age of the last look.
+        m_adcWindowClock.start();
+    }
+    // THE CONTROL LAW, on the tick that carried the observation. Deliberately
+    // above the warning below rather than beside it: the warning reports what
+    // was seen, the loop acts on it, and an operator reading the log should see
+    // the action attributed to the window that caused it.
+    stepAutoGain(t);
     if (t.adcOverload && *t.adcOverload != m_adcOverload) {
         m_adcOverload = *t.adcOverload;
         if (m_adcOverload)

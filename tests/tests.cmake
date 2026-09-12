@@ -623,6 +623,26 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# HL2 wideband bandscope (EP4) parser — the 12-bit ADC codes, the 20-bit
+# sequence counter and its forward-gap guard. Same shape as the target above:
+# compiles MetisProtocol.cpp directly, no Qt, no aethercore, no socket. Its
+# sequence expectations replay tests/Hl2Ep4ArrivalsD94.h, a recorded bench leg.
+add_executable(hl2_ep4_bandscope_test
+    tests/hl2_ep4_bandscope_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_ep4_bandscope_test PRIVATE src tests)
+add_test(NAME hl2_ep4_bandscope_test COMMAND hl2_ep4_bandscope_test)
+
+# HL2 bandscope headroom — the pure decisions built on the parser above: what a
+# block says about converter headroom, what the gate's duty cycle costs that
+# reading, and how it pairs with the continuous clip flag. Same shape again:
+# MetisProtocol.cpp for Ep4Stats::peakDbfs(), no Qt, no socket.
+add_executable(hl2_bandscope_headroom_test
+    tests/hl2_bandscope_headroom_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_bandscope_headroom_test PRIVATE src tests)
+add_test(NAME hl2_bandscope_headroom_test COMMAND hl2_bandscope_headroom_test)
+
 # HL2 IO-board push scheduling — pure policy, standalone (no Qt, no radio).
 add_executable(hl2_io_board_policy_test
     tests/hl2_io_board_policy_test.cpp
@@ -3790,6 +3810,24 @@ target_include_directories(hl2_band_filter_frame_test PRIVATE src)
 target_link_libraries(hl2_band_filter_frame_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_band_filter_frame_test COMMAND hl2_band_filter_frame_test)
 
+# HL2 wideband bandscope ingest — EP4 and EP6 accounted separately on one
+# socket. Binds nothing: recorded datagrams go straight into MetisClient's
+# drain path through the MetisClientTestAccess friend seam.
+add_executable(hl2_ep4_ingest_test tests/hl2_ep4_ingest_test.cpp)
+target_include_directories(hl2_ep4_ingest_test PRIVATE src tests)
+target_link_libraries(hl2_ep4_ingest_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_ep4_ingest_test COMMAND hl2_ep4_ingest_test)
+
+# HL2 wideband bandscope duty-cycle gate — the four-state machine, its guard
+# timer and the transmit interlocks. Socket-free and event-loop-free: recorded
+# enable/disable cycles go in through the same MetisClientTestAccess seam and
+# both timers are fired by hand. Qt6::Test is for QSignalSpy, which is how
+# "one block per arming cycle, never one per packet" is asserted.
+add_executable(hl2_ep4_gate_test tests/hl2_ep4_gate_test.cpp)
+target_include_directories(hl2_ep4_gate_test PRIVATE src tests)
+target_link_libraries(hl2_ep4_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_ep4_gate_test COMMAND hl2_ep4_gate_test)
+
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
 add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
@@ -4717,6 +4755,23 @@ add_executable(hl2_band_memory_test
 )
 target_include_directories(hl2_band_memory_test PRIVATE src)
 add_test(NAME hl2_band_memory_test COMMAND hl2_band_memory_test)
+# The LNA baseline/effective split. Two halves in one binary: the pure
+# arithmetic (Hl2GainSplit.h, no link) and the backend behaviour that proves the
+# operator's persisted number does not move (needs aethercore + Qt, and the
+# TestSettingsProfile helper in tests/, exactly as hl2_gain_restore_test does).
+add_executable(hl2_gain_split_test
+    tests/hl2_gain_split_test.cpp
+)
+target_include_directories(hl2_gain_split_test PRIVATE src tests)
+target_link_libraries(hl2_gain_split_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_gain_split_test COMMAND hl2_gain_split_test)
+# The automatic-gain control law. Pure function, no link at all: no Qt, no
+# socket, no clock, and therefore nothing to link against.
+add_executable(hl2_auto_gain_policy_test
+    tests/hl2_auto_gain_policy_test.cpp
+)
+target_include_directories(hl2_auto_gain_policy_test PRIVATE src)
+add_test(NAME hl2_auto_gain_policy_test COMMAND hl2_auto_gain_policy_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -5127,6 +5182,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rtl_slice_settings_test
     weather_radar_loading_test
     hl2_gain_restore_test
+    hl2_gain_split_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test

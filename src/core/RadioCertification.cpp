@@ -1,4 +1,5 @@
 #include "core/RadioCertification.h"
+#include "core/backends/AutoRfGainControl.h"
 
 #include "core/RadioCertificationMath.h"
 #include "core/AppSettings.h"
@@ -487,6 +488,28 @@ void RadioCertification::stageControlEffect(const Options& o)
             "no active panadapter, so the route the operator's RF Gain slider "
             "actually uses does not exist to be driven");
     } else {
+        // DISARM ANY AUTOMATIC GAIN CONTROL FOR THE DURATION.
+        //
+        // This exercise moves RF gain 8 dB, spins 1.2 s twice for the S-meter's
+        // EMA to settle, and puts the gain back. That is roughly 2.8 s of live
+        // event loop, and a backend loop moving the gain inside it would make
+        // `echoed != target` and fire the one hard finding this stage has --
+        // "the RF Gain control did not reach the backend" -- which is exactly
+        // the permanent false positive this stage was rewritten to eliminate.
+        // It would also invalidate startGain and therefore the restore.
+        //
+        // Restored afterwards on every path out of this block, because a
+        // certification run must not leave the operator's radio in a different
+        // state from the one it found.
+        // The ARMED state, not merely the presence of the control. A radio that
+        // has the feature but never had it switched on must not have it
+        // switched ON by a certification run.
+        auto* autoGain = m_radio->autoRfGain();
+        const bool autoGainWasOn = autoGain && autoGain->isArmed();
+        if (autoGainWasOn) {
+            autoGain->setArmed(false);
+            spin(200);
+        }
         const int startGain = pan->rfGain();
         const int low = pan->rfGainLow();
         const int high = pan->rfGainHigh();
@@ -507,6 +530,13 @@ void RadioCertification::stageControlEffect(const Options& o)
         const int echoed = pan->rfGain();
         m_radio->setPanRfGainFor(panId, startGain);   // leave it where we found it
         spin(400);
+        // Re-arm AFTER the gain is back where it was, so the loop's first
+        // window is about the operator's own setting rather than this stage's
+        // probe value.
+        if (autoGainWasOn && autoGain) {
+            autoGain->setArmed(true);
+        }
+        m[QStringLiteral("autoRfGainSuspended")] = autoGainWasOn;
 
         const bool haveLevels = before > -998.0 && after > -998.0;
         const double delta = after - before;

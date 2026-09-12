@@ -314,6 +314,47 @@ int main(int argc, char** argv)
     check(errSpy.count() == 1, "awaited invokeExtension -> one extensionError");
     check(errSpy.first().at(0).toULongLong() == 42u, "extensionError carries the requestId");
 
+    // ---- the wideband bandscope (EP4) is reachable, reported, and OFF ----
+    //
+    // The HL2 has a second radio->host stream that runs at ~3.3 Mbit/s while
+    // it is on and that nothing in the app reads a sample from yet. So it has
+    // no UI, no setting and no default: an operator asks for it through this
+    // verb or it never runs. What is asserted here is the part a
+    // health dialog has to be able to answer — is it on, and is it costing me
+    // anything — including the "no" a missing row could not give.
+    {
+        QSignalSpy resSpy(&backend, &IRadioBackend::extensionResult);
+        const auto before = backend.healthSnapshot();
+        check(before.values.contains(QStringLiteral("bandscopeEnabled"))
+                  && !before.values.value(QStringLiteral("bandscopeEnabled")).toBool(),
+              "the bandscope is reported, and reported OFF, without being asked for");
+        check(before.values.value(QStringLiteral("ep4Packets")).toULongLong() == 0u,
+              "no EP4 packets arrive while it is off");
+        // A row of its OWN, not folded into ep4Drops: exactly one rewind is
+        // expected per stream start and none after, so a second one is an
+        // anomaly that a counter meant to read zero would hide.
+        check(before.values.contains(QStringLiteral("ep4Drops"))
+                  && before.values.contains(QStringLiteral("ep4Rewinds")),
+              "drops and rewinds are separate rows");
+
+        backend.invokeExtension(QStringLiteral("hl2"),
+                                QStringLiteral("bandscope.enable"), 43, QVariant(true));
+        check(resSpy.count() == 1, "bandscope.enable completes locally, like freqcal.set");
+        check(resSpy.first().at(0).toULongLong() == 43u, "...carrying its requestId back");
+        check(resSpy.first().at(1).toMap().value(QStringLiteral("enabled")).toBool(),
+              "...and reporting the state it applied");
+        check(errSpy.count() == 1, "bandscope.enable is not an unimplemented verb");
+        check(backend.healthSnapshot().values
+                  .value(QStringLiteral("bandscopeEnabled")).toBool(),
+              "health follows the request");
+
+        backend.invokeExtension(QStringLiteral("hl2"),
+                                QStringLiteral("bandscope.enable"), 0, QVariant(false));
+        check(!backend.healthSnapshot().values
+                   .value(QStringLiteral("bandscopeEnabled")).toBool(),
+              "and follows it back off");
+    }
+
     // ---- EP6 silence watchdog: the fake radio stopped at kCap, so once the
     // silence window elapses the link must be reported down instead of sitting
     // in a permanently "connected" state. ----
