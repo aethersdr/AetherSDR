@@ -310,7 +310,7 @@ gradually — over-processing can make voices sound robotic or hollow.
 
 - **Quick toggle:** The DSP buttons on the VFO bar (NR2, RN2, NR4, MNR, BNR, DFNR)
 - **Overlay panel:** Right-click the spectrum display, open the DSP panel
-- **Full settings:** Settings menu → AetherDSP Settings (or right-click any DSP applet)
+- **Full settings:** `Settings → AetherDSP Settings...` (or right-click any DSP applet)
 - **Right-click shortcut:** Right-click the NR2 button on the VFO bar for a quick parameter popup
 
 ---

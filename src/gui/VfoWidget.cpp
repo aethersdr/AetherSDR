@@ -3445,14 +3445,71 @@ void VfoWidget::setAetherDspActive(bool active)
     updateDspTabAccent();
 }
 
-// ── Per-slice VFO marker display prefs (#1526) ───────────────────────────────
+// ── VFO marker display prefs (#1526, #5570) ─────────────────────────────────
+
+namespace {
+constexpr auto kVfoDisplayDefaultsKey = "VfoDisplayDefaults";
+
+int normalizedMarkerWidth(int widthPx)
+{
+    if (widthPx <= 0) {
+        return 0;
+    }
+    if (widthPx <= 1) {
+        return 1;
+    }
+    return 3;
+}
+
+QJsonObject vfoDisplayDefaultsObject()
+{
+    const QByteArray stored = AppSettings::instance()
+        .value(kVfoDisplayDefaultsKey, QStringLiteral("{}"))
+        .toString().toUtf8();
+    const QJsonDocument doc = QJsonDocument::fromJson(stored);
+    return doc.isObject() ? doc.object() : QJsonObject{};
+}
+
+void saveVfoDisplayDefaultsObject(const QJsonObject& object)
+{
+    auto& settings = AppSettings::instance();
+    settings.setValue(
+        kVfoDisplayDefaultsKey,
+        QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
+    settings.save();
+}
+} // namespace
+
+int VfoWidget::defaultMarkerWidth()
+{
+    return normalizedMarkerWidth(
+        vfoDisplayDefaultsObject().value(QStringLiteral("markerWidth")).toInt(3));
+}
+
+bool VfoWidget::defaultFilterEdgesHidden()
+{
+    return vfoDisplayDefaultsObject()
+        .value(QStringLiteral("filterEdgesHidden")).toBool(false);
+}
+
+void VfoWidget::setDefaultMarkerWidth(int widthPx)
+{
+    QJsonObject object = vfoDisplayDefaultsObject();
+    object.insert(QStringLiteral("markerWidth"), normalizedMarkerWidth(widthPx));
+    saveVfoDisplayDefaultsObject(object);
+}
+
+void VfoWidget::setDefaultFilterEdgesHidden(bool hide)
+{
+    QJsonObject object = vfoDisplayDefaultsObject();
+    object.insert(QStringLiteral("filterEdgesHidden"), hide);
+    saveVfoDisplayDefaultsObject(object);
+}
 
 void VfoWidget::setMarkerWidth(int widthPx)
 {
     // Snap to one of the supported states: 0 (off), 1, 3.
-    if (widthPx <= 0)      widthPx = 0;
-    else if (widthPx <= 1) widthPx = 1;
-    else                   widthPx = 3;
+    widthPx = normalizedMarkerWidth(widthPx);
 
     if (m_markerWidth != widthPx) {
         m_markerWidth = widthPx;
@@ -3485,15 +3542,18 @@ void VfoWidget::loadDisplayPrefs()
     const QString keyH = QStringLiteral("Slice%1_FilterEdgesHidden").arg(m_slice->sliceId());
     if (s.contains(keyW)) {
         m_markerWidth = s.value(keyW, "1").toString().toInt();
-    } else {
+    } else if (s.contains(keyT)) {
         // Migrate from the old MarkerThin bool: True (thin) → 1, False (thick) → 3.
         m_markerWidth = (s.value(keyT, "False").toString() == "True") ? 1 : 3;
-        if (s.contains(keyT))
-            s.remove(keyT);
+        s.remove(keyT);
+    } else {
+        m_markerWidth = defaultMarkerWidth();
     }
     if (m_markerWidth != 0 && m_markerWidth != 1 && m_markerWidth != 3)
         m_markerWidth = 1;
-    m_filterEdgesHidden = s.value(keyH, "False").toString() == "True";
+    m_filterEdgesHidden = s.contains(keyH)
+        ? s.value(keyH, "False").toString() == "True"
+        : defaultFilterEdgesHidden();
 }
 
 void VfoWidget::saveDisplayPrefs()

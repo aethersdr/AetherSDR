@@ -570,27 +570,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 #endif
     if (obj == m_cwxIndicator && event->type() == QEvent::MouseButtonPress) {
         if (!m_cwxIndicator->isEnabled()) return true;
-        bool show = !m_cwxPanel->isVisible();
-        // Close DVK (mutual exclusion)
-        if (show && m_dvkPanel->isVisible()) {
-            m_dvkPanel->hide();
-            updateKeyerAvailability();
-        }
-        m_cwxPanel->setVisible(show);
-        m_cwxIndicator->setStyleSheet(show
-            ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
-            : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
-        if (show) {
-            auto sizes = m_splitter->sizes();
-            if (sizes.size() >= 4) {
-                int cwxW = 250;
-                int total = sizes[0] + sizes[1] + sizes[2];
-                sizes[0] = cwxW;
-                sizes[1] = 0;
-                sizes[2] = total - cwxW;
-                m_splitter->setSizes(sizes);
-            }
-        }
+        toggleCwKeyerPanel();
         return true;
     }
     if (obj == m_dvkIndicator && event->type() == QEvent::MouseButtonPress) {
@@ -700,6 +680,33 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         return true;
     }
     return QMainWindow::eventFilter(obj, event);
+}
+
+void MainWindow::toggleCwKeyerPanel()
+{
+    if (!m_cwxPanel || !m_cwxIndicator || !m_cwxIndicator->isEnabled()) {
+        return;
+    }
+
+    const bool show = !m_cwxPanel->isVisible();
+    // CW and voice keyer panels share the left splitter slot.
+    if (show && m_dvkPanel && m_dvkPanel->isVisible()) {
+        m_dvkPanel->hide();
+    }
+
+    m_cwxPanel->setVisible(show);
+    updateKeyerAvailability();
+    if (show && m_splitter) {
+        auto sizes = m_splitter->sizes();
+        if (sizes.size() >= 4) {
+            constexpr int kKeyerWidth = 250;
+            const int total = sizes[0] + sizes[1] + sizes[2];
+            sizes[0] = kKeyerWidth;
+            sizes[1] = 0;
+            sizes[2] = qMax(0, total - kKeyerWidth);
+            m_splitter->setSizes(sizes);
+        }
+    }
 }
 
 

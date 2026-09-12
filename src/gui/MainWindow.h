@@ -788,6 +788,9 @@ private:
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
     // and persists visibility via AppSettings("AetherialStripVisible").
     void toggleAetherialStrip();
+    // Shared by the status-bar affordance and Tools menu so both keep the
+    // keyer panels mutually exclusive and restore the splitter identically.
+    void toggleCwKeyerPanel();
     // Cutoff-line drag handler shared between the floating ClientEqEditor
     // and the embedded EQ panel inside AetherialAudioStrip.  Writes TX
     // filter cutoffs to TransmitModel, or RX filter offsets to the
@@ -849,6 +852,9 @@ private:
     // review). Returns the dialog so a caller needing a page-specific reveal
     // (e.g. revealFlexControlSettings()) can act on it further.
     RadioSetupDialog* openRadioSetupPage(const QString& page = {});
+    // Explicit operator disconnect: suppress reconnect, clear remembered
+    // routing, and tear down the current radio session.
+    void disconnectFromRadioByUser();
 
     // Reorder the main splitter so the applet panel sits on the left or
     // right of the panadapter stack.  Wired from the dock-side icons in
@@ -1494,7 +1500,7 @@ private:
     // applyCapabilitiesToUi() can hide it on a radio with no DAX streams.
     // Null on platforms without a DAX bridge, where the entry is never created.
     QAction*         m_autoDaxAction{nullptr};
-    // File ▸ Waveforms... and Settings ▸ multiFLEX... — held so
+    // Tools ▸ Waveforms... and Settings ▸ multiFLEX... — held so
     // applyCapabilitiesToUi() can hide them on a radio with no installable
     // waveforms / no multi-client sessions.
     QAction*         m_waveformsAction{nullptr};
@@ -1704,7 +1710,7 @@ private:
     std::atomic<quint64> m_lastCwPaddleTraceId{0};
     std::atomic<quint64> m_lastCwPaddleSourceMs{0};
     qint64 m_bsConnectGraceUntilMs{0};   // suppress auto-save right after connect
-    bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (View menu)
+    bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (Settings menu)
     bool m_pttHoldActive{false};           // true while the PTT-hold key is held (#3879)
     bool m_cwStraightKeyActive{false};
     bool m_cwLeftPaddleActive{false};

@@ -640,6 +640,10 @@ public:
     // markerWidth: 0 = off, 1 = 1 px, 3 = 3 px.
     int  markerWidth() const { return m_markerWidth; }
     bool filterEdgesHidden() const { return m_filterEdgesHidden; }
+    static int defaultMarkerWidth();
+    static bool defaultFilterEdgesHidden();
+    static void setDefaultMarkerWidth(int widthPx);
+    static void setDefaultFilterEdgesHidden(bool hide);
     void setMarkerWidth(int widthPx);
     void setFilterEdgesHidden(bool hide);
 private:

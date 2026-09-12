@@ -135,7 +135,7 @@ void SupportDialog::buildUI()
     layout->addLayout(actionRow);
 
     // ── Instructions ──────────────────────────────────────────────────────
-    // "File an Issue" and "Reset Settings" now live directly on the Help menu;
+    // "File an Issue" lives on Help and "Reset Settings" on Settings;
     // point the user there rather than duplicating the buttons here.
     auto* instructions = new QLabel(
         "<p style='color:#c8d8e8; font-size: 13px;'>"

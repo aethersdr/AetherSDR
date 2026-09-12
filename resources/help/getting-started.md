@@ -26,7 +26,7 @@ Make sure:
 
 1. Start AetherSDR.
 2. Wait for the `Connect to Radio` dialog to show radios on the `On This Network` page.
-3. If the dialog is not visible, open `Settings -> Connect to Radio...`.
+3. If the dialog is not visible, open `File -> Connect to Radio...`.
 4. Select the radio you want.
 5. Click `Connect`.
 
@@ -35,11 +35,11 @@ If nothing appears in the discovered list:
 1. Confirm the radio and computer are on the same network segment.
 2. Check that guest Wi-Fi isolation, VPN software, or firewall rules are not blocking discovery.
 3. Try `Connect by IP` if you know the radio's address or are reaching it through a VPN.
-4. Open `Settings -> Network...` for diagnostics if discovery still fails.
+4. Open `Tools -> Network Diagnostics...` if discovery still fails.
 
 ### SmartLink remote connection
 
-1. Open `Settings -> Connect to Radio...`.
+1. Open `File -> Connect to Radio...`.
 2. Switch to `Remote with SmartLink`.
 3. Sign in to SmartLink.
 4. Select the remote radio you want to use.
@@ -82,7 +82,7 @@ If you are watching signals, tuning, or comparing activity across a band, this i
 
 ### Right-side applet panel
 
-The right side is the applet panel. Think of applets as focused control modules rather than separate operating modes. The panel can be shown or hidden from `View -> Applet Panel`, and the applets can be reordered to match your workflow.
+The right side is the applet panel. Think of applets as focused control modules rather than separate operating modes. Use the Applet Panel dock control in the title bar to show, hide, or float it, and reorder the applets to match your workflow.
 
 Common applets include:
 
@@ -144,9 +144,9 @@ These usually change the client, the station workflow, or the presentation of th
 
 - `View -> UI Scale`
 - `View -> Band Plan`
-- `View -> Applet Panel`
+- the Applet Panel dock control in the title bar
 - `View -> Minimal Mode`
-- Keyboard shortcut enablement and shortcut configuration
+- `Settings -> Keyboard Shortcuts` and `Settings -> Configure Shortcuts...`
 - `PC Audio` and local output device choices
 - SmartLink login state
 - Station name
@@ -156,9 +156,9 @@ These usually change the client, the station workflow, or the presentation of th
 
 These affect the connected radio or the whole client session more broadly:
 
-- `Settings -> Radio Setup...`
+- `Settings -> Radio Setup...` on Windows and Linux, or `AetherSDR -> Preferences...` on macOS
 - `Settings -> TX Band Settings...`
-- `Settings -> USB Cables...`
+- `Radio Setup -> USB Cables`
 - multiFLEX enablement
 - network and remote-operation behavior
 

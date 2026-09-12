@@ -21,7 +21,7 @@ class QWidget;
 
 namespace AetherSDR {
 
-// Global enable for keyboard shortcuts (View menu toggle).
+// Global enable for keyboard shortcuts (Settings menu toggle).
 extern bool s_keyboardShortcutsEnabled;
 
 // True while a slider holds the keyboard-shortcut lease (#745) —
