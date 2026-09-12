@@ -15,6 +15,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QLocale>
 #include <QRegularExpression>
 #include <QStyledItemDelegate>
@@ -228,8 +229,8 @@ SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, CpuHistoryRing* c
     auto* header = new QHBoxLayout;
     header->addStretch(1);
     m_rangeLabel = new QLabel(QStringLiteral("Timeframe"), bodyWidget());
-    m_rangeLabel->setAccessibleName(QStringLiteral("Chart timeframe"));
     m_range = new QComboBox(bodyWidget());
+    m_rangeLabel->setBuddy(m_range);
     m_range->setObjectName(QStringLiteral("systemInfoTimeframe"));
     m_range->setAccessibleName(QStringLiteral("Chart timeframe"));
     m_range->setAccessibleDescription(
@@ -726,6 +727,10 @@ void SystemInfoDialog::refreshMemoryChart()
     // reached the history cannot look as though it did.
     const MemoryHistoryRing::Record* latest = m_memoryRing->latest();
     if (latest == nullptr) {
+        // The shared selector also applies before the first sample arrives.
+        if (m_memoryGraph != nullptr) {
+            m_memoryGraph->setSeries({}, selectedRangeSeconds());
+        }
         return;
     }
     if (m_memorySummary != nullptr) {

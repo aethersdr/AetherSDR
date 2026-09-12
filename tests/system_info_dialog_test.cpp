@@ -16,6 +16,7 @@
 #include "core/ThemeManager.h"
 #include "gui/SparklineDelegate.h"
 #include "gui/SystemInfoDialog.h"
+#include "gui/TimeSeriesGraphWidget.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -483,6 +484,85 @@ int main(int argc, char** argv)
         tailing.hide();
         QCoreApplication::processEvents();
         LogManager::instance().shutdownLogging();
+    }
+
+    // One selector must update every chart, including a non-current page and
+    // an empty history. Compare the painted range captions with a reference
+    // chart; this exercises the production slots without exposing private data.
+    {
+        SystemInfoDialog shared;
+        auto* range = shared.findChild<QComboBox*>(QStringLiteral("systemInfoTimeframe"));
+        auto* tabs = shared.findChild<QTabWidget*>();
+        report("one shared timeframe exists outside the tab pages",
+               range != nullptr && tabs != nullptr
+                   && shared.findChildren<QComboBox*>().size() == 1
+                   && !tabs->isAncestorOf(range));
+        if (range != nullptr && tabs != nullptr) {
+            QLabel* rangeLabel = nullptr;
+            for (QLabel* label : shared.findChildren<QLabel*>()) {
+                if (label->buddy() == range) {
+                    rangeLabel = label;
+                }
+            }
+            report("the timeframe label is associated with its control", rangeLabel != nullptr);
+            const auto caption = [](QWidget* graph) {
+                const QPixmap pixels = graph->grab();
+                const qreal scale = pixels.devicePixelRatio();
+                return pixels.toImage().copy(pixels.width() - qRound(180 * scale),
+                                             qRound(6 * scale), qRound(166 * scale), qRound(18 * scale))
+                    .convertToFormat(QImage::Format_RGB32);
+            };
+            const char* graphNames[] = {
+                "systemInfoMemoryGraph", "systemInfoOverviewCpuGraph",
+                "systemInfoOverviewMemoryGraph", "systemInfoOverviewThreadsGraph",
+                "systemInfoOverviewTickGraph"};
+            const auto checkCharts = [&] {
+                for (const char* name : graphNames) {
+                    QWidget* graph = shared.findChild<QWidget*>(QLatin1String(name));
+                    report("shared chart exists", graph != nullptr);
+                    if (graph != nullptr) {
+                        const QImage actual = caption(graph);
+                        TimeSeriesGraphWidget reference{QString(), QString()};
+                        reference.setFont(graph->font());
+                        reference.resize(graph->size());
+                        reference.setSeries({}, range->currentData().toInt());
+                        report(name, actual == caption(&reference));
+                    }
+                }
+            };
+            range->setCurrentIndex(3);
+            checkCharts();  // no collector or sample has run yet
+            MemorySample sample;
+            sample.wallMs = 1'700'000'000'000LL;
+            sample.valid = true;
+            sample.residentBytes = 200ull * 1024 * 1024;
+            report("shared chart receives a memory sample",
+                   QMetaObject::invokeMethod(&shared, "applyMemorySample", Qt::DirectConnection,
+                                            Q_ARG(AetherSDR::MemorySample, sample)));
+            for (int index : {0, 2, 1, 3}) {
+                range->setCurrentIndex(index);
+                checkCharts();
+            }
+
+            shared.show();
+            QCoreApplication::processEvents();
+            const int tabY = tabs->y();
+            for (int index = 0; index < tabs->count(); ++index) {
+                tabs->setCurrentIndex(index);
+                QCoreApplication::processEvents();
+                const QString title = tabs->tabText(index);
+                const bool charted = title == QLatin1String("Overview") || title == QLatin1String("Memory");
+                report("timeframe visibility follows the charted page", range->isVisible() == charted);
+                report("timeframe label visibility follows its control",
+                       rangeLabel != nullptr && rangeLabel->isVisible() == charted);
+                report("hiding the timeframe does not move the tab strip", tabs->y() == tabY);
+                if (charted) {
+                    range->setCurrentIndex(index == 0 ? 0 : 3);
+                    checkCharts();
+                }
+            }
+            shared.hide();
+        }
     }
 
     // ── Memory tab (#2554 acceptance criterion 4) ──────────────────────────
