@@ -4746,9 +4746,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setWfBlankerThreshold,
             Qt::UniqueConnection);
     connect(menu, &SpectrumOverlayMenu::backgroundImageRequested,
-            this, [sw] {
+            sw, [sw] {
+        const QPointer<SpectrumWidget> spectrum(sw);
         const QString path = getBackgroundImagePath(sw->window(), "Choose Background Image");
-        if (path.isEmpty()) return;
+        if (!spectrum || path.isEmpty()) {
+            return;
+        }
         sw->setBackgroundImage(path);
         auto& s = AppSettings::instance();
         s.setValue(sw->settingsKey("BackgroundImage"), path);

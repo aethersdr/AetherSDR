@@ -4760,6 +4760,35 @@ add_test(NAME rx_applet_squelch_reconciliation_test
 set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Socket-free production-widget lifetime regression coverage (#5568).
+add_executable(gui_nested_lifetime_test
+    tests/gui_nested_lifetime_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+    src/gui/NetSchedulerDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(gui_nested_lifetime_test PRIVATE src tests)
+target_link_libraries(gui_nested_lifetime_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME gui_nested_lifetime_test COMMAND gui_nested_lifetime_test)
+set_tests_properties(gui_nested_lifetime_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp
@@ -4936,6 +4965,7 @@ set(AETHER_SETTINGS_CONSUMERS
     tx_operation_integration_test
     backend_slice_lifecycle_test
     client_display_settings_test
+    gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
     weather_radar_loading_test

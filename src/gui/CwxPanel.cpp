@@ -783,6 +783,8 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
     if (auto* bubble = dynamic_cast<CwxBubble*>(obj)) {
         if (event->type() == QEvent::ContextMenu) {
             auto* ce = static_cast<QContextMenuEvent*>(event);
+            // History can be cleared while the nested menu loop runs.
+            const QString resend = bubble->rawText();
             QMenu menu(this);
             AetherSDR::ThemeManager::instance().applyStyleSheet(&menu, "QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
                 "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.spectrum}}; }"
@@ -794,7 +796,7 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
             if (chosen == resendAction) {
                 // Resend the raw text (modifiers intact) so per-word speeds
                 // are preserved rather than re-keyed at base WPM. (#272)
-                resendText(bubble->rawText());
+                resendText(resend);
             } else if (chosen == clearAction) {
                 clearHistory();
             }
