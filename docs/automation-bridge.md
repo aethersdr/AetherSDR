@@ -4314,7 +4314,7 @@ still a separate radiocert task.
 | `sim` | — | sim <swr\|dropslice\|stallscope\|disconnect\|malformed\|clear> [arg] — demo fault injection (RFC #4288; only valid when the demo is connected) |
 | `record` | — | record <start\|stop\|status\|path\|dir> [args] |
 | `testtone` | — | testtone <on\|off> [freqHz levelDb] |
-| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|autorfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864); autorfgain takes on\|off, 'mode <ramp\|probe\|binary>' for which control law, or 'floor <dB>' for how far below the operator's own RF gain an automatic control may go |
+| `pan` | — | pan <create\|add\|remove\|close\|center\|rfgain\|autorfgain\|float\|dock> [value] — float/dock drive PanadapterStack's real reparent path (#4864); autorfgain takes on\|off, 'mode <bandscope\|ramp\|probe\|binary>' for which control law, or 'floor <dB>' for how far below the operator's own RF gain an automatic control may go |
 | `workspace` | — | workspace <status\|enable\|disable\|edit\|place\|list\|switch\|create\|bind\|import-floats\|pan-layout\|palette\|window\|move\|add> — the canvas, its workspaces and its extra windows as data; arg shapes in docs/automation-bridge.md (#4887 ph4/ph6/ph7) |
 | `layout` | — | layout <rearrange <id>\|get> — splitter layout exerciser |
 | `scale` | — | scale [pct] — report/persist the UI scale factor |
