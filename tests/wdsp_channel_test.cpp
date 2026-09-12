@@ -573,6 +573,148 @@ bool runStartStopTest()
     return true;
 }
 
+// A START TAKEN WITH A DOWN-RAMP STILL PENDING MUST NOT KILL THE CHANNEL.
+//
+// This is the case runStartStopTest cannot see, because it clocks 96 blocks
+// between its stop and its start — well past the ramp. Raised in review of
+// #5628 and fixed in the vendored source; this is the test that holds the fix.
+//
+// THE MECHANISM. WDSP's stop sets slew.downflag; the ramp only advances when
+// the host clocks fexchange*. Upstream's SetChannelState case 1 armed the
+// up-slew and re-armed exchange but never cleared downflag, and the two flags
+// are read INDEPENDENTLY on opposite sides of fexchange2 — up gates the input,
+// down gates the output. So a start taken before the host had clocked the ramp
+// out left it pending on a channel WDSP now considered running. The next few
+// blocks finished it, and downslew2's completion arm does
+//     InterlockedBitTestAndReset (&ch[channel].exchange, 0);
+// so finishing that ramp CLEARED EXCHANGE. Every later fexchange2 then failed
+// its opening `if (exchange)` test and returned having written nothing and
+// reported no error: the channel was permanently silent, isRunning() said true,
+// and only a reconfigure() recovered it. AetherSDR patch 5 makes case 1 cancel
+// the pending ramp (third_party/wdsp/AETHERSDR-PATCHES.md).
+//
+// HOW THIS GOES RED. Not on the mirror — isRunning() reports true either way,
+// which is the whole complaint. It clocks the channel after the restart and
+// requires real energy out of it, which is the only observable that separates
+// "running" from "believes it is running". With patch 5 reverted every one of
+// the three scenarios below fails on that assertion with energy exactly 0.
+//
+// All three ways in are covered, because they differ in WHERE the ramp is when
+// the start arrives and a fix could plausibly catch one and miss another.
+bool runRestartDuringRampTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.mode = WdspChannel::Mode::Usb;
+    // Blocking, for the reason runStartStopTest gives: unpaced, the
+    // non-blocking form outruns WDSP's worker and every block underruns, and
+    // the "audio came back" assertion would pass or fail on silence this test
+    // caused itself. Safe here too — a channel whose exchange bit is clear
+    // returns from fexchange2 before it ever reaches the wait, which is exactly
+    // the state the FAILING path leaves it in.
+    config.blockForOutput = true;
+
+    struct Scenario {
+        const char* name;
+        std::size_t blocksBetween;  // clocked between the stop and the start
+        bool viaReconfigure;        // reach the stopped state through reconfigure()
+    };
+    // 256 samples at 48 kHz is 5.33 ms a block, against muteSlewDownSec 0.010
+    // plus downslew2's block-sized ZERO and OFF tails — roughly four blocks of
+    // ramp. So one block is squarely INSIDE the window and zero blocks is the
+    // ramp never started at all. Both are what a T/R edge produces (§13 row 9a).
+    const Scenario scenarios[] = {
+        {"stop then start with no clocking at all", 0, false},
+        {"stop then start inside the down-slew window", 1, false},
+        {"start after reconfigure() of a stopped channel", 0, true},
+    };
+
+    for (const Scenario& scenario : scenarios) {
+        std::string error;
+        std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+        if (!require(channel != nullptr, error.c_str())) {
+            return false;
+        }
+
+        std::vector<float> inputI(config.inputBlockSize);
+        std::vector<float> inputQ(config.inputBlockSize);
+        std::vector<float> outputLeft(channel->outputBlockSize());
+        std::vector<float> outputRight(channel->outputBlockSize());
+        std::size_t offset = 0;
+        const auto clock = [&](std::size_t blocks) {
+            double energy = 0.0;
+            for (std::size_t block = 0; block < blocks; ++block, ++offset) {
+                fillComplexTone(inputI, inputQ, config.inputSampleRate, 1000.0,
+                                offset * config.inputBlockSize);
+                if (channel->processIq(inputI, inputQ, outputLeft, outputRight) ==
+                    WdspChannel::ProcessResult::Ok) {
+                    energy += rms(outputLeft) + rms(outputRight);
+                }
+            }
+            return energy;
+        };
+        // Every require() below is scenario-generic, so name the scenario on the
+        // way out or a failure says nothing about which of the three it was.
+        const auto fail = [&](const char* stage) {
+            std::cerr << "       scenario: " << scenario.name << ", stage: "
+                      << stage << '\n';
+            return false;
+        };
+
+        if (!require(clock(64) > 0.01, "the running channel produced no audio")) {
+            return fail("baseline");
+        }
+
+        if (scenario.viaReconfigure) {
+            // The third way in, and the one no caller has to do anything odd to
+            // reach: open() always starts the channel, so reconfigure() of a
+            // STOPPED one has to stop it again afterwards — arming a down-ramp
+            // from that moment with nothing left to clock it.
+            if (!require(channel->setRunning(false),
+                         "the channel refused to stop") ||
+                !require(channel->reconfigure(config, &error), error.c_str()) ||
+                !require(!channel->isRunning(),
+                         "reconfigure() put a stopped channel back on the air")) {
+                return fail("reconfigure");
+            }
+        } else {
+            if (!require(channel->setRunning(false),
+                         "the channel refused to stop")) {
+                return fail("stop");
+            }
+            clock(scenario.blocksBetween);
+        }
+
+        const uint64_t allocationsBeforeStart =
+            WdspChannel::allocationSequenceForTest();
+        if (!require(channel->setRunning(true), "the channel refused to start") ||
+            !require(channel->isRunning(),
+                     "the channel did not report itself running") ||
+            !require(WdspChannel::allocationSequenceForTest() ==
+                         allocationsBeforeStart,
+                     "the start rebuilt the channel instead of changing its "
+                     "state — the recovery this test forbids")) {
+            return fail("start");
+        }
+
+        // Discard the up-ramp (muteSlewUpSec 0.025 is under five blocks), then
+        // ask the CHANNEL, not the mirror. This is the assertion that fails
+        // without patch 5.
+        clock(64);
+        const double energy = clock(64);
+        if (!require(energy > 0.01,
+                     "a channel restarted before its down-ramp had been clocked "
+                     "out went permanently silent while isRunning() reported "
+                     "true — WDSP finished the stale ramp and cleared exchange")) {
+            std::cerr << "       scenario: " << scenario.name
+                      << ", post-restart energy " << energy << '\n';
+            return false;
+        }
+    }
+    return true;
+}
+
 // close() must not hold the FFTW setup lock while WDSP's stop wait runs.
 //
 // close() asks WDSP to stop-and-flush in the BLOCKING form, and behind the
@@ -698,7 +840,17 @@ bool runStoppedCloseTest()
         std::cerr << "       running close took " << runningMs << " ms\n";
         return false;
     }
-    if (!require(runningMs - stoppedMs >= 50.0,
+    // 30 ms, not 50. The two assertions are not equally robust and the
+    // difference is the soft one: runningMs is a floor under a fixed 100 ms
+    // constant, so noise can only push it toward passing, but this one needs
+    // the STOPPED close — which still runs CloseChannel, i.e. worker-thread
+    // joins and FFTW plan destruction under g_setupMutex — to land inside
+    // runningMs - 30, and noise on stoppedMs pushes toward failure. Native
+    // runs have ~95 ms of margin here; the sanitizer lane and a loaded runner
+    // are where a 50 ms threshold would have gone soft. 30 ms still cannot pass
+    // unless a 100 ms wait was actually skipped: with the wait still paid the
+    // difference is ~0. Raised in review of #5628.
+    if (!require(runningMs - stoppedMs >= 30.0,
                  "stopping a channel before teardown did not remove WDSP's "
                  "stop-and-flush wait")) {
         std::cerr << "       running close " << runningMs << " ms, stopped close "
@@ -762,6 +914,7 @@ int main()
         !runLeakChecked("underrun test", runUnderrunTest) ||
         !runLeakChecked("reconfiguration test", runReconfigurationTest) ||
         !runLeakChecked("start/stop test", runStartStopTest) ||
+        !runLeakChecked("restart-during-ramp test", runRestartDuringRampTest) ||
         !runLeakChecked("close setup-lock test", runCloseSetupLockTest) ||
         !runLeakChecked("stopped-close test", runStoppedCloseTest) ||
         !runLeakChecked("notch index test", runNotchIndexTest) ||

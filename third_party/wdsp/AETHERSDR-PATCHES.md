@@ -2,9 +2,9 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries six local changes in the otherwise exact `Source/*.[ch]`
-snapshot — three teardown corrections, two null/lifetime fixes, and one added
-accessor set:
+AetherSDR carries seven local changes in the otherwise exact `Source/*.[ch]`
+snapshot — three teardown corrections, two null/lifetime fixes, one added
+accessor set, and one channel-state fix:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -127,6 +127,56 @@ accessor set:
    console that offers those controls. Reported as TAPR/OpenHPSDR-wdsp#4 with
    a fix in TAPR/OpenHPSDR-wdsp#5; drop this when a release carries the guard.
 
+7. `upstream/channel.c`: `SetChannelState()` case 1 now cancels a pending
+   down-ramp (`flush_slews()` under `csEXCH`) before it arms the up-ramp.
+
+   Upstream's case 1 sets `slew.upflag`, `iob.ch_upslew` and `exchange` and
+   clears `exec_bypass`, but never touches `iob.pc->slew.downflag`. The two
+   flags are read independently on opposite sides of `fexchange0`/`fexchange2`
+   — `upflag` gates the input, `downflag` gates the output — and the ramp only
+   advances when the host clocks `fexchange*`. So a stop followed by a start
+   before the host has clocked the down-ramp to completion leaves `downflag`
+   set on a channel whose `state` is now 1, and the next few blocks finish the
+   stale ramp. `downslew0`/`downslew2`'s completion arm does
+   `InterlockedBitTestAndReset (&ch[channel].exchange, 0)`, so finishing that
+   ramp **clears `exchange`**: every later `fexchange*` fails its opening
+   `if (exchange)` test and returns having written nothing and reported no
+   error, while `state` still reads 1. The channel is silently dead until it is
+   closed and rebuilt, and no flag a host can read says so.
+
+   The asymmetry is the point — only the *down* flag's completion clears
+   `exchange`, so the mirror case (a stop taken with `upflag` still pending)
+   needs nothing.
+
+   `flush_slews()` rather than a bare clear of `downflag`, because the flag is
+   not the whole ramp: `slew.dstate`/`dcount` are the state machine, and
+   clearing the flag alone strands `dstate` mid-ramp for the *next* stop to
+   resume from. It resets both directions, which is also what the up-ramp being
+   armed wants. It clears `upflag`, hence the ordering: flush first, arm
+   second. `csEXCH` because `dstate`/`dcount` are plain ints owned by
+   `fexchange*`'s critical section — the same reason `SetChannelTDelayUp`/`Down`
+   and `SetChannelTSlewUp`/`Down` already take it around their own
+   `flush_slews()` — and because it makes the whole of case 1 atomic against
+   `fexchange*`. No new lock-order edge: `csEXCH` is the inner of the two
+   channel sections (`flushChannel` takes `csDSP` then `csEXCH`), nothing is
+   taken inside it and nothing waits there, and the port maps
+   `CRITICAL_SECTION` to a **recursive** pthread mutex. `ch[channel].flushflag`
+   is deliberately left alone: the flush request belongs to the parked
+   `flushChannel` thread, which only a completed ramp can release.
+
+   **Unchanged by the 2.10 refresh.** Upstream's `channel.c` is byte-identical
+   between `Release Version 2.00` and `Release Version 2.10` — as are
+   `channel.h`, `iobuffs.c` and `main.c` — so 2.10 neither fixes this nor moves
+   the code it is stated against, and the patch carries over verbatim.
+
+   Found in review of #5628. Without it, `WdspChannel::setRunning(true)` on a
+   channel whose stop has not been clocked out — the T/R edge `docs/HERMES.md`
+   §13 row 9a contemplates — silently kills the channel while `isRunning()`
+   reports true. `wdsp_channel_test`'s `runRestartDuringRampTest` covers all
+   three ways in (no clocking at all, a restart inside the slew window, and a
+   start after `reconfigure()` of a stopped channel) and fails on every one
+   with this patch reverted.
+
 Without the first two, opening and closing one RX channel leaks one `notchdb`
 object and two NURBS objects. `wdsp_channel_test` detects that deterministically.
 Without the third, every channel open reads and writes freed memory; ASan fails
@@ -139,6 +189,15 @@ change is the model slot.
 Without the sixth, `nnr_controls_test`'s scenario segfaults: a model file with
 the wrong dimensions in the working directory leaves slot 0 not-ready, and the
 first alpha or knee write goes through a null `df`.
+Without the seventh, a stop immediately followed by a start — before the host has
+clocked the down-ramp out — silently and permanently disables the channel;
+`wdsp_channel_test` shows it deterministically.
+
+**Marking convention.** Patches 4 and 7 carry `// AetherSDR patch N:` comments
+at every edited site, so `grep -rn "AetherSDR patch" third_party/wdsp/` finds
+them all. Patches 1-3 carry no marker — 1 and 2 are single added `_aligned_free`
+lines and 3 is a single added assignment — and are findable only from this file.
+New patches use the marker.
 
 When refreshing WDSP, first check whether upstream contains equivalent frees.
 If it does, drop the corresponding local patch. Otherwise reapply only these
