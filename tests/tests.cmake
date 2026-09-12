@@ -2206,6 +2206,15 @@ target_include_directories(kiwi_sdr_waterfall_setup_test PRIVATE src)
 target_link_libraries(kiwi_sdr_waterfall_setup_test PRIVATE aethercore Qt6::Core)
 add_test(NAME kiwi_sdr_waterfall_setup_test COMMAND kiwi_sdr_waterfall_setup_test)
 
+# Socket-free regression: KiwiSDR zoom_cap (request ceiling) must not replace
+# zoom_max (start fixed-point scale); v1.900 shared waterfalls send both.
+add_executable(kiwi_sdr_waterfall_zoom_cap_test
+    tests/kiwi_sdr_waterfall_zoom_cap_test.cpp
+)
+target_include_directories(kiwi_sdr_waterfall_zoom_cap_test PRIVATE src)
+target_link_libraries(kiwi_sdr_waterfall_zoom_cap_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kiwi_sdr_waterfall_zoom_cap_test COMMAND kiwi_sdr_waterfall_zoom_cap_test)
+
 add_executable(kiwi_sdr_trace_math_test
     tests/kiwi_sdr_trace_math_test.cpp
 )
