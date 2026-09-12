@@ -282,6 +282,14 @@ public:
     QJsonObject automationKiwiSdrSnapshot() const;
     // Status-bar TX-timer state for the bridge `get txtimer` verb.
     QJsonObject automationTxTimerSnapshot() const;
+    // Unified-title-bar introspection + drive-the-real-control actions for the
+    // agent automation bridge (`titlebar` model / `titlebar` verb).
+    QJsonObject automationAppletPanelSnapshot() const;
+    bool automationAppletPanelAction(const QString& action, const QString& value,
+                                     QString* error);
+    QJsonObject automationTitleBarSnapshot() const;
+    bool automationTitleBarAction(const QString& action, const QString& target,
+                                  QString* error);
 
     // Agent automation bridge (#3646) lifecycle. Construction + full
     // handler wiring lives in startAutomationBridge() so it can be driven
@@ -327,10 +335,6 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
-#if defined(Q_OS_WIN)
-    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
-    void applyWindowsCustomFrame();
-#endif
 
 private slots:
     // Radio/connection events
@@ -528,6 +532,12 @@ private:
     void wirePanLifecycle();
     void wireCatPorts();            // MainWindow_Session.cpp
     void wireDaxIq();               // MainWindow_Session.cpp
+    // Push the current radio picture (discovered LAN + SmartLink radios, which
+    // one this client owns) into the title bar's radio tabs.  Coalesced onto
+    // the event loop: discovery re-announces every radio every 5 s and each
+    // announcement would otherwise rebuild the strip.
+    void scheduleRadioTabRefresh();      // MainWindow_Session.cpp
+    void refreshRadioTabs();             // MainWindow_Session.cpp
     // Re-establish the connections bound to the backend's PanadapterStream after
     // RadioModel swapped backends for a different radio family.
     void rewirePanStreamAfterBackendSwap();   // MainWindow_Session.cpp
@@ -781,7 +791,6 @@ private:
     // restoreGeometry() on this window, passing the same blob; a no-op off
     // Windows, without the custom frame, or for a maximized/fullscreen blob.
     // (#4328 — see src/gui/WindowGeometryRestore.h.)
-    void reanchorCustomFrameGeometry(const QByteArray& geometryBlob);
     void toggleMinimalModeFromAction();
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
@@ -875,6 +884,19 @@ private:
     // its own Qt::Window.  Persists "AppletPanelFloating" and updates the
     // title-bar pop-out icon highlight.
     void toggleAppletPanelFloating(bool floating);
+
+    // The one entry point for applet-panel layout changes.  Floating, dock
+    // side and visibility are three fields of ONE state; the three title-bar
+    // controls, Ctrl+Shift+S and the bridge all express a complete desired
+    // state here rather than each toggling a field of their own.  Routing
+    // them separately is what let the fields disagree — a dock-side click
+    // while floating used to dock the panel and then immediately hide it,
+    // stranding an invisible panel that took two more clicks to recover.
+    void applyAppletPanelState(bool floating, bool dockedLeft, bool visible);
+
+    // Current applet-panel state, read off the real widgets rather than the
+    // settings store so a caller sees what is actually on screen.
+    void appletPanelState(bool* floating, bool* dockedLeft, bool* visible) const;
 
     void showMemoryDialog();
     void showQuickAddMemoryDialog(const QString& preferredPanId = {});
@@ -1616,6 +1638,13 @@ private:
     // forever.
     QString m_autoConnectSerial;                 // an auto-connect is in flight for this serial
     QHash<QString, int> m_autoConnectAttempts;   // consecutive failed auto-connects, per serial
+    // Title-bar radio tabs.  The refresh is coalesced through this flag rather
+    // than a timer object so the pending state is visible to the automation
+    // bridge's own state dump.
+    bool m_radioTabRefreshPending{false};
+    // Last SmartLink radio list, cached because the title bar has to redraw the
+    // tabs on LAN discovery events too and SmartLink only pushes on change.
+    QList<WanRadioInfo> m_smartLinkRadios;
     static constexpr int kMaxAutoConnectAttempts = 3;
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
     QString m_terminalConnectionError; // preserved until the next explicit connect

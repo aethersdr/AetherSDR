@@ -76,6 +76,8 @@
 #include "core/AutomationServer.h"
 
 #include <QStatusBar>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -190,6 +192,102 @@ void logXvtrWaterfallDecision(quint32 streamId,
 }
 
 } // namespace
+
+void MainWindow::scheduleRadioTabRefresh()
+{
+    if (m_radioTabRefreshPending) {
+        return;
+    }
+    m_radioTabRefreshPending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_radioTabRefreshPending = false;
+        refreshRadioTabs();
+    });
+}
+
+void MainWindow::refreshRadioTabs()
+{
+    if (!m_titleBar || !m_connPanel) {
+        return;
+    }
+
+    const bool connected = m_radioModel.isConnected();
+    const QString activeSerial = connected ? m_radioModel.serial() : QString();
+    const QJsonObject switcher = QJsonDocument::fromJson(AppSettings::instance()
+        .value("RadioSwitcher", "{}").toString().toUtf8()).object();
+    const QJsonArray hidden = switcher.value(QStringLiteral("hiddenRadios")).toArray();
+
+    QList<RadioTabEntry> tabs;
+    QSet<QString> seen;
+
+    auto statusFor = [&](const QString& serial, bool inUse) {
+        if (connected && serial == activeSerial) {
+            return RadioTabStatus::Connected;
+        }
+        return inUse ? RadioTabStatus::InUse : RadioTabStatus::Available;
+    };
+
+    // LAN radios — the picker's own list, so the strip and the picker can never
+    // disagree about what is on the network.
+    for (const RadioInfo& info : m_connPanel->automationLocalRadios()) {
+        if (info.serial.isEmpty() || seen.contains(info.serial)) {
+            continue;
+        }
+        seen.insert(info.serial);
+        RadioTabEntry entry;
+        entry.id = info.serial;
+        entry.name = info.nickname.isEmpty() ? info.model : info.nickname;
+        if (entry.name.isEmpty()) {
+            entry.name = info.name;
+        }
+        entry.detail = info.callsign;
+        entry.transport = info.address.isNull() ? QStringLiteral("LAN")
+                                                : info.address.toString();
+        entry.status = statusFor(info.serial, info.inUse);
+        tabs.append(entry);
+    }
+
+    // SmartLink radios — same treatment, tagged by transport so the popover can
+    // tell a WAN radio from one on this LAN.
+    for (const WanRadioInfo& wan : std::as_const(m_smartLinkRadios)) {
+        if (wan.serial.isEmpty() || seen.contains(wan.serial)) {
+            continue;
+        }
+        seen.insert(wan.serial);
+        RadioTabEntry entry;
+        entry.id = wan.serial;
+        entry.name = wan.nickname.isEmpty() ? wan.model : wan.nickname;
+        entry.detail = wan.callsign;
+        entry.transport = QStringLiteral("SmartLink");
+        entry.status = statusFor(wan.serial,
+                                 wan.status.compare(QStringLiteral("Available"),
+                                                    Qt::CaseInsensitive) != 0);
+        tabs.append(entry);
+    }
+
+    // A radio reached over a routed/VPN address never shows up in discovery, so
+    // without this the operator would be connected with no tab to show for it.
+    if (connected && !activeSerial.isEmpty() && !seen.contains(activeSerial)) {
+        RadioTabEntry entry;
+        entry.id = activeSerial;
+        entry.name = m_radioModel.nickname().isEmpty() ? m_radioModel.model()
+                                                       : m_radioModel.nickname();
+        entry.name = m_connPanel->radioDisplayName(m_radioModel.lastRadioInfo(), entry.name);
+        entry.transport = QStringLiteral("Manual");
+        entry.status = RadioTabStatus::Connected;
+        tabs.prepend(entry);
+    }
+
+    for (RadioTabEntry& entry : tabs) {
+        entry.canRename = entry.status == RadioTabStatus::Connected
+            || m_connPanel->canRenameRadio(entry.id);
+        entry.visibleInTabs = entry.status == RadioTabStatus::Connected
+            || !hidden.contains(entry.id);
+    }
+    m_titleBar->setRadioTabs(tabs);
+    m_titleBar->setDiscoveredRadios(tabs);
+    m_titleBar->setActiveRadio(activeSerial);
+}
 
 void MainWindow::wireDiscovery()
 {
@@ -383,6 +481,104 @@ void MainWindow::wireDiscovery()
     // "Auto-reconnect to last radio" setting.
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
+
+    // ── Title-bar radio tabs ───────────────────────────────────────────────
+    // The strip mirrors the picker: every radio the app can see gets a tab, and
+    // whichever one this client owns is the active one.  Refreshes are
+    // coalesced, so the six signals below cost one rebuild per event-loop turn
+    // no matter how many of them fire together.
+    for (auto signal : {&RadioDiscovery::radioDiscovered,
+                        &RadioDiscovery::radioUpdated}) {
+        connect(&m_discovery, signal, this,
+                [this](const RadioInfo&) { scheduleRadioTabRefresh(); });
+    }
+    connect(&m_discovery, &RadioDiscovery::radioLost, this,
+            [this](const QString&) { scheduleRadioTabRefresh(); });
+    for (auto signal : {&hl2::Hl2Discovery::radioDiscovered,
+                        &hl2::Hl2Discovery::radioUpdated}) {
+        connect(&m_hl2Discovery, signal, this,
+                [this](const RadioInfo&) { scheduleRadioTabRefresh(); });
+    }
+    connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioLost, this,
+            [this](const QString&) { scheduleRadioTabRefresh(); });
+    connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
+            [this](bool) { scheduleRadioTabRefresh(); });
+    connect(&m_smartLink, &SmartLinkClient::radioListReceived, this,
+            [this](const QList<WanRadioInfo>& radios) {
+        m_smartLinkRadios = radios;
+        scheduleRadioTabRefresh();
+    });
+
+    if (m_titleBar) {
+        // Clicking a tab means "make that the radio I'm using".  Connecting to
+        // a different radio while one is live would drop the current session
+        // without asking, so route through the picker instead and let the
+        // operator confirm — the tab is a selector, not a disconnect button.
+        connect(m_titleBar, &TitleBar::radioTabActivated, this,
+                [this](const QString& radioId) {
+            if (m_radioModel.isConnected() && m_radioModel.serial() == radioId) {
+                return;   // already the active session — nothing to do
+            }
+            showConnectionDialog();
+            m_connPanel->selectRadio(radioId);
+        });
+        connect(m_titleBar, &TitleBar::connectManuallyRequested,
+                this, [this]() {
+            showConnectionDialog();
+            m_connPanel->selectManualConnection();
+        });
+        connect(m_connPanel, &ConnectionPanel::radioNicknameChanged,
+                this, &MainWindow::scheduleRadioTabRefresh);
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::rescanRequested,
+                m_connPanel, &ConnectionPanel::retryDiscoveryRequested);
+        connect(m_titleBar->radioTabBar(), &RadioTabBar::radioActionRequested,
+                this, [this](const QString& radioId, const QString& action) {
+            const bool active = m_radioModel.isConnected() && m_radioModel.serial() == radioId;
+            if (action == QStringLiteral("disconnect")) {
+                if (active) {
+                    emit m_connPanel->disconnectRequested();
+                }
+            } else if (action == QStringLiteral("rename")) {
+                if (m_connPanel->canRenameRadio(radioId)) {
+                    m_connPanel->renameRadio(radioId);
+                } else if (active && m_connPanel->canRenameRadio(m_radioModel.lastRadioInfo())) {
+                    m_connPanel->renameRadio(m_radioModel.lastRadioInfo());
+                } else if (active) {
+                    openRadioSetupPage(QStringLiteral("Radio"));
+                }
+            } else if (action == QStringLiteral("setup")) {
+                if (active) {
+                    openRadioSetupPage();
+                }
+            } else if (action == QStringLiteral("remove") || action == QStringLiteral("restore")) {
+                if (active && action == QStringLiteral("remove")) {
+                    return;
+                }
+                auto& settings = AppSettings::instance();
+                QJsonObject document = QJsonDocument::fromJson(settings
+                    .value("RadioSwitcher", "{}").toString().toUtf8()).object();
+                QJsonArray hidden = document.value(QStringLiteral("hiddenRadios")).toArray();
+                QJsonArray updated;
+                for (const QJsonValue& serial : hidden) {
+                    if (serial.toString() != radioId) {
+                        updated.append(serial);
+                    }
+                }
+                if (action == QStringLiteral("remove")) {
+                    updated.append(radioId);
+                }
+                if (updated == hidden) {
+                    return;
+                }
+                document.insert(QStringLiteral("hiddenRadios"), updated);
+                settings.setValue("RadioSwitcher", QString::fromUtf8(
+                    QJsonDocument(document).toJson(QJsonDocument::Compact)));
+                settings.save();
+                scheduleRadioTabRefresh();
+            }
+        });
+    }
+    scheduleRadioTabRefresh();
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,
             this, [this]{
         m_userDisconnected = true;
@@ -2650,6 +2846,18 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
         [this]() { return automationKiwiSdrSnapshot(); });
     m_automation->setTxTimerSnapshotHandler(
         [this]() { return automationTxTimerSnapshot(); });
+    m_automation->setTitleBarSnapshotHandler(
+        [this]() { return automationTitleBarSnapshot(); });
+    m_automation->setTitleBarActionHandler(
+        [this](const QString& action, const QString& target, QString* error) {
+            return automationTitleBarAction(action, target, error);
+        });
+    m_automation->setAppletPanelSnapshotHandler(
+        [this]() { return automationAppletPanelSnapshot(); });
+    m_automation->setAppletPanelActionHandler(
+        [this](const QString& action, const QString& value, QString* error) {
+            return automationAppletPanelAction(action, value, error);
+        });
     m_automation->setTciRouteSnapshotHandler([this]() {
         if (!tciServer()) {
             return QJsonObject{

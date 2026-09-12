@@ -24,6 +24,11 @@
     </qresource>
     <qresource prefix="/images">
         <file alias="aurora-cutout.png">aurora-cutout.png</file>
+        <!-- Brand mark for the unified title bar.  The 96 px master is the
+             canonical logo PNG from the design system; the title bar scales it
+             to 22 px and clips it circular at paint time so HiDPI keeps the
+             full source resolution. -->
+        <file alias="logo-96.png">images/logo-96.png</file>
     </qresource>
     <qresource prefix="/themes">
         <file alias="default-dark.json">themes/default-dark.json</file>

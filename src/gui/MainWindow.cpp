@@ -26,6 +26,11 @@
 #include "ClientDisconnectDialog.h"
 #include "ConnectedStationsDialog.h"
 #include "TitleBar.h"
+#include "WindowCaptionButtons.h"
+#include "WindowChrome.h"
+#ifdef Q_OS_MACOS
+#include "mac/NativeWindowTitle.h"
+#endif
 #include "PanRecenterPolicy.h"
 #include "PanadapterApplet.h"
 #ifdef AETHER_ASR_ENABLED
@@ -353,7 +358,7 @@ QString statusBarStationLabelStyle(int fontPx)
     return QStringLiteral(
         "QLabel { color: {{color.text.primary}}; font-size: %1px; "
         "background: {{color.background.0}}; "
-        "border: 1px solid rgba(255,255,255,128); padding: 2px 12px; }")
+        "border: 1px solid {{color.border.strong}}; padding: 2px 12px; }")
         .arg(fontPx);
 }
 
@@ -608,21 +613,6 @@ bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
 }
 
 // memoryRevealTargetMatches moved to MainWindow_Wiring.cpp (#3351 Phase 1d).
-
-#ifdef Q_OS_WIN
-bool mainWindowCustomFrameEnabled()
-{
-    return AppSettings::instance()
-        .value("FramelessWindow", "True").toString() == "True";
-}
-
-int windowsResizeBorderThickness(HWND hwnd)
-{
-    const UINT dpi = GetDpiForWindow(hwnd);
-    return GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
-        + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
-}
-#endif
 
 // flexWheelModeForAction / flexControlButtonAction moved to
 // MainWindow_Controllers.cpp (#3351 Phase 1a) — only controller code calls them.
@@ -1154,43 +1144,15 @@ MainWindow::MainWindow(QWidget* parent)
             s.setValue("FramelessMigratedV0823", "True");
             s.save();
         }
-        if (s.value("FramelessWindow", "True").toString() == "True") {
-#ifndef Q_OS_WIN
-            setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
-#endif
-        }
+        WindowChrome::configure(this,
+            s.value("FramelessWindow", "True").toString() == "True");
 
-        // Theming layer-0 backdrop (Phase 5 PR 3 — "fade to desktop"
-        // experiment).  Disabling the default opaque window background
-        // lets MainWindow::paintEvent() honour color.background.app's
-        // alpha.  Today's installs see no visual change because the
-        // bundled themes ship the token fully opaque (#0f0f1a / #f5f5f8) —
-        // the architectural hook just lets operators dial alpha down
-        // through the Theme Editor to A/B test which applets/docks still
-        // need their own opaque backgrounds.
-        setAttribute(Qt::WA_TranslucentBackground, true);
+        setAttribute(Qt::WA_TranslucentBackground, false);
         setAutoFillBackground(false);
         connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                 this, qOverload<>(&QWidget::update));
 
-        // 8-axis edge resize for frameless mode — same install pattern
-        // as the floating dialogs (SpotHub, RadioSetup, MemoryDialog).
-        // The filter is application-wide and matches by window, because
-        // MainWindow's direct children (QStatusBar, the central widget,
-        // QSizeGrip) are all native windows that would otherwise swallow
-        // every edge event before the top level saw it — see the
-        // FramelessResizer header (#4827).  topMoveReserve = TitleBar::kHeight
-        // reserves the whole title bar for its own drag-to-move handler and
-        // the menu bar / min-max-close controls it hosts, rather than the
-        // resizer's 6 px top-edge margin (previously the default 0, which
-        // put that margin *inside* the 32 px title bar and shadowed the
-        // first few px of all of them — #4886).  MainWindow therefore has
-        // no top-edge resize at all in frameless mode, only left/right/
-        // bottom; that trade was already implicit before this PR, since the
-        // filter was dead on every edge here until now.  Stays installed
-        // across frameless toggles — when the system frame is back on, the
-        // platform owns resize and our filter no-ops.
-        FramelessResizer::install(this, 6, TitleBar::kHeight);
+        FramelessResizer::install(this, 8);
 
         // One-shot migration: collapse the legacy "CwDecodeOverlay" flat
         // key into the nested AppSettings["CwDecoder"] blob (#2417).  The
@@ -1536,9 +1498,6 @@ MainWindow::MainWindow(QWidget* parent)
     buildMenuBar();
     buildUI();
     loadCenterLockSettings();
-#ifdef Q_OS_WIN
-    applyWindowsCustomFrame();
-#endif
     registerShortcutActions();
 
     m_swrSweepTimer.setTimerType(Qt::PreciseTimer);
@@ -3562,17 +3521,10 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
 // wireAetherDspWidget() lives in MainWindow_Wiring.cpp (#3351 Phase 1d).
 void MainWindow::paintEvent(QPaintEvent* event)
 {
-    // Layer-0 app backdrop.  WA_TranslucentBackground (set in the
-    // constructor) disables Qt's default opaque window fill, so this
-    // paintEvent is the single source of pixels for any region the rest
-    // of the widget tree doesn't paint.  Honours alpha so operators can
-    // edit color.background.app down toward translucency and see the
-    // desktop bleed through anywhere a child widget doesn't have its own
-    // opaque background — useful for A/B testing which applets/docks
-    // still need explicit fills before a "glass-mode" theme is viable.
     QPainter p(this);
     const QColor bg = ThemeManager::instance().color("color.background.app");
     p.setCompositionMode(QPainter::CompositionMode_Source);
+
     p.fillRect(rect(), bg.isValid() ? bg : QColor("#0f0f1a"));
     QMainWindow::paintEvent(event);
 }
@@ -3580,6 +3532,23 @@ void MainWindow::paintEvent(QPaintEvent* event)
 void MainWindow::showEvent(QShowEvent* event)
 {
     QMainWindow::showEvent(event);
+#ifdef Q_OS_MACOS
+    mac::updateNativeTitleVisibility(this);
+#endif
+
+    // The caption controls are keyboard-reachable, which puts them first in the
+    // window's tab order — so Qt hands them the initial focus and the window
+    // opens with a focus ring drawn around a traffic light.  Drop it: a freshly
+    // opened window should show no focus ring until the operator tabs or
+    // clicks.  They stay fully reachable by Tab, which is what the a11y
+    // contract actually requires.
+    QTimer::singleShot(0, this, [this]() {
+        auto* caption = m_titleBar ? m_titleBar->captionButtons() : nullptr;
+        QWidget* focused = QApplication::focusWidget();
+        if (caption && focused && caption->isAncestorOf(focused)) {
+            focused->clearFocus();
+        }
+    });
 
     if (m_startupGeometryReapplied || m_startupGeometryForFirstShow.isEmpty()) {
         return;
@@ -3605,14 +3574,7 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // Pop-out applet containers are restored and shown during construction.
     // Re-apply the main-window geometry after this window is mapped so Qt
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
-    //
-    // Then undo Qt's phantom-caption clamp now the window is mapped and the custom
-    // frame's real (zero) top margin applies.  A false return means Qt itself
-    // refused the blob — most often its large-screen-variation bail — and in
-    // that case the saved rect is exactly what we must not force. (#4328)
-    if (restoreGeometry(m_startupGeometryForFirstShow)) {
-        reanchorCustomFrameGeometry(m_startupGeometryForFirstShow);
-    }
+    restoreGeometry(m_startupGeometryForFirstShow);
 
     // Test the frame's center against each screen's full geometry rather than
     // the top-left against availableGeometry().  A top-left landing in a
@@ -3637,63 +3599,6 @@ void MainWindow::reapplyStartupGeometryAfterShow()
         move(available.center().x() - width() / 2,
              available.center().y() - height() / 2);
     }
-}
-
-void MainWindow::reanchorCustomFrameGeometry(const QByteArray& geometryBlob)
-{
-#ifdef Q_OS_WIN
-    // Call this after every restoreGeometry() on this window, never instead of
-    // one.  Qt's restore runs the saved rect through checkRestoredGeometry(),
-    // which reserves PM_TitleBarHeight above the top edge and shaves
-    // 2 + PM_TitleBarHeight off a window that would otherwise fill the work
-    // area — both correct for a native caption, both pure loss once
-    // WM_NCCALCSIZE has taken ours away.  The result is a title-bar-sized gap
-    // above the window (#4328), and a matching one below it for anyone who
-    // sized the window to their screen.  Re-run the clamp here without the
-    // caption term.  See src/gui/WindowGeometryRestore.h for the arithmetic.
-    if (!mainWindowCustomFrameEnabled()) {
-        return;  // native caption present — Qt's reservation is honest.
-    }
-
-    SavedWindowGeometry saved;
-    if (!parseSavedWindowGeometry(geometryBlob, &saved)) {
-        return;
-    }
-
-    // Read the saved state, not the live one.  Qt applies the maximized and
-    // fullscreen rects without the clamp, so there is nothing to undo — and
-    // reading windowState() instead would make this depend on whether the
-    // platform has finished applying it yet.
-    //
-    // Known limitation: a session that exits maximized still restores DOWN
-    // into the clamped normalGeometry Qt stored, so the gap reappears on the
-    // first un-maximize and closeEvent() then saves it.  Fixing that means
-    // re-applying the saved normal rect on the WindowStateChange out of
-    // maximized, which is a bigger change to a state machine that also carries
-    // the minimal-mode guards — deliberately out of scope here.
-    if (saved.maximized || saved.fullScreen) {
-        return;
-    }
-
-    // Prefer the screen the user actually left the window on; if that monitor
-    // is gone, fall back to wherever Qt just put us.  Either way the rect is
-    // clamped into that screen's work area, so the custom title bar — the only
-    // mouse drag handle a frameless window has — can never land under a
-    // taskbar that moved or appeared between sessions.
-    const QScreen* target = QGuiApplication::screenAt(saved.normalRect.center());
-    if (!target) {
-        target = screen();
-    }
-    if (!target) {
-        return;
-    }
-
-    // setGeometry() rather than move(): the custom frame's margins are zero, so
-    // frame rect == client rect, and the size has to go back too.
-    setGeometry(clampFrameToWorkArea(saved.normalRect, target->availableGeometry()));
-#else
-    Q_UNUSED(geometryBlob);
-#endif
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
@@ -3733,122 +3638,6 @@ void MainWindow::updateStatusBarMinimumWidth()
         qBound(1024, statusMinWidth, qMax(1024, screenWidthCap));
     setMinimumSize(boundedMinWidth, qMax(400, minimumHeight()));
 }
-
-#if defined(Q_OS_WIN)
-void MainWindow::applyWindowsCustomFrame()
-{
-    HWND hwnd = reinterpret_cast<HWND>(winId());
-    if (!hwnd) {
-        return;
-    }
-
-    LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
-    const LONG_PTR desiredStyle = style
-        | WS_CAPTION
-        | WS_THICKFRAME
-        | WS_SYSMENU
-        | WS_MINIMIZEBOX
-        | WS_MAXIMIZEBOX;
-    if (style != desiredStyle) {
-        SetWindowLongPtr(hwnd, GWL_STYLE, desiredStyle);
-    }
-
-    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER
-                 | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-}
-
-bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
-{
-    MSG* msg = static_cast<MSG*>(message);
-    if (!msg || !result || !mainWindowCustomFrameEnabled()) {
-        return QMainWindow::nativeEvent(eventType, message, result);
-    }
-
-    if (msg->message == WM_NCCALCSIZE && msg->wParam) {
-        if (IsZoomed(msg->hwnd) && windowHandle()
-            && windowHandle()->visibility() != QWindow::FullScreen) {
-            auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
-            RECT* clientArea = &params->rgrc[0];
-            const int border = windowsResizeBorderThickness(msg->hwnd);
-            clientArea->top += border;
-            clientArea->bottom -= border;
-            clientArea->left += border;
-            clientArea->right -= border;
-        }
-        *result = 0;
-        return true;
-    }
-
-    if (msg->message == WM_NCHITTEST) {
-        RECT windowRect;
-        if (!GetWindowRect(msg->hwnd, &windowRect)) {
-            return QMainWindow::nativeEvent(eventType, message, result);
-        }
-
-        const POINT nativePos{GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
-        if (nativePos.x < windowRect.left || nativePos.x > windowRect.right
-            || nativePos.y < windowRect.top || nativePos.y > windowRect.bottom) {
-            return QMainWindow::nativeEvent(eventType, message, result);
-        }
-
-        const bool canResize = !IsZoomed(msg->hwnd)
-            && !(windowState() & Qt::WindowFullScreen);
-        if (canResize) {
-            const int border = windowsResizeBorderThickness(msg->hwnd);
-            const bool onLeft = nativePos.x >= windowRect.left
-                && nativePos.x < windowRect.left + border;
-            const bool onRight = nativePos.x > windowRect.right - border
-                && nativePos.x <= windowRect.right;
-            const bool onTop = nativePos.y >= windowRect.top
-                && nativePos.y < windowRect.top + border;
-            const bool onBottom = nativePos.y > windowRect.bottom - border
-                && nativePos.y <= windowRect.bottom;
-
-            if (onTop && onLeft) {
-                *result = HTTOPLEFT;
-                return true;
-            }
-            if (onTop && onRight) {
-                *result = HTTOPRIGHT;
-                return true;
-            }
-            if (onBottom && onLeft) {
-                *result = HTBOTTOMLEFT;
-                return true;
-            }
-            if (onBottom && onRight) {
-                *result = HTBOTTOMRIGHT;
-                return true;
-            }
-            if (onLeft) {
-                *result = HTLEFT;
-                return true;
-            }
-            if (onRight) {
-                *result = HTRIGHT;
-                return true;
-            }
-            if (onTop) {
-                *result = HTTOP;
-                return true;
-            }
-            if (onBottom) {
-                *result = HTBOTTOM;
-                return true;
-            }
-        }
-
-        if (m_titleBar && m_titleBar->isVisible()
-            && m_titleBar->isSystemMoveAreaAt(QCursor::pos())) {
-            *result = HTCAPTION;
-            return true;
-        }
-    }
-
-    return QMainWindow::nativeEvent(eventType, message, result);
-}
-#endif
 
 void MainWindow::changeEvent(QEvent* event)
 {
@@ -4381,6 +4170,153 @@ QJsonObject MainWindow::automationTxTimerSnapshot() const
         return QJsonObject{{QStringLiteral("visible"), false},
                            {QStringLiteral("running"), false}};
     return QJsonObject::fromVariantMap(m_titleBar->txTimerState());
+}
+
+QJsonObject MainWindow::automationAppletPanelSnapshot() const
+{
+    if (!m_appletPanel)
+        return QJsonObject{{QStringLiteral("present"), false}};
+
+    bool floating = false, dockedLeft = false, visible = false;
+    appletPanelState(&floating, &dockedLeft, &visible);
+
+    QJsonObject snapshot{
+        {QStringLiteral("present"),  true},
+        {QStringLiteral("floating"), floating},
+        {QStringLiteral("side"),     dockedLeft ? QStringLiteral("left")
+                                                : QStringLiteral("right")},
+        {QStringLiteral("visible"),  visible},
+    };
+    // Geometry is what proves the panel actually landed where the state says
+    // it did — a caller asserting only on the flags would miss a panel that
+    // is "docked left" but zero-width.
+    const QRect g = m_appletPanel->geometry();
+    snapshot.insert(QStringLiteral("geometry"),
+                    QJsonObject{{QStringLiteral("x"), g.x()},
+                                {QStringLiteral("y"), g.y()},
+                                {QStringLiteral("w"), g.width()},
+                                {QStringLiteral("h"), g.height()}});
+    if (m_splitter && !floating) {
+        snapshot.insert(QStringLiteral("splitterIndex"),
+                        m_splitter->indexOf(m_appletPanel));
+        snapshot.insert(QStringLiteral("panIndex"),
+                        m_splitter->indexOf(m_panStack));
+    }
+    return snapshot;
+}
+
+bool MainWindow::automationAppletPanelAction(const QString& action,
+                                             const QString& value,
+                                             QString* error)
+{
+    auto fail = [error](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (!m_appletPanel)
+        return fail(QStringLiteral("applet panel not built"));
+
+    bool floating = false, dockedLeft = false, visible = false;
+    appletPanelState(&floating, &dockedLeft, &visible);
+
+    if (action == QLatin1String("dock")) {
+        if (value == QLatin1String("left"))
+            applyAppletPanelState(false, true, true);
+        else if (value == QLatin1String("right"))
+            applyAppletPanelState(false, false, true);
+        else
+            return fail(QStringLiteral("dock needs left|right"));
+    } else if (action == QLatin1String("float")) {
+        if (value == QLatin1String("on"))
+            applyAppletPanelState(true, dockedLeft, true);
+        else if (value == QLatin1String("off"))
+            applyAppletPanelState(false, dockedLeft, true);
+        else
+            return fail(QStringLiteral("float needs on|off"));
+    } else if (action == QLatin1String("show")) {
+        applyAppletPanelState(floating, dockedLeft, true);
+    } else if (action == QLatin1String("hide")) {
+        // Hiding is only meaningful docked — a hidden float window is the
+        // unreachable state applyAppletPanelState() refuses to represent.
+        applyAppletPanelState(false, dockedLeft, false);
+    } else {
+        return fail(QStringLiteral("unknown applet action: ") + action);
+    }
+    return true;
+}
+
+QJsonObject MainWindow::automationTitleBarSnapshot() const
+{
+    if (!m_titleBar)
+        return QJsonObject{{QStringLiteral("present"), false}};
+    QJsonObject snapshot = QJsonObject::fromVariantMap(m_titleBar->barState());
+    snapshot.insert(QStringLiteral("present"), true);
+    return snapshot;
+}
+
+bool MainWindow::automationTitleBarAction(const QString& action,
+                                          const QString& target,
+                                          QString* error)
+{
+    auto fail = [error](const QString& why) {
+        if (error) *error = why;
+        return false;
+    };
+    if (!m_titleBar) {
+        return fail(QStringLiteral("no title bar"));
+    }
+    RadioTabBar* tabs = m_titleBar->radioTabBar();
+    if (!tabs) {
+        return fail(QStringLiteral("no radio tab bar"));
+    }
+
+    if (action == QLatin1String("selectRadio")) {
+        if (target.isEmpty()) {
+            return fail(QStringLiteral("selectRadio needs a radio id"));
+        }
+        // Drive the real tab widget rather than the model behind it: the point
+        // of the verb is to prove the control the operator clicks works, and a
+        // model-only path would pass even if the tab were unreachable.
+        const auto tabWidgets = tabs->findChildren<RadioTab*>();
+        for (RadioTab* tab : tabWidgets) {
+            if (tab->entry().id == target) {
+                tab->click();
+                return true;
+            }
+        }
+        return fail(QStringLiteral("no radio tab with id '") + target
+                    + QStringLiteral("'"));
+    }
+    if (action == QLatin1String("showDiscovery")) {
+        tabs->showDiscoveryPopover();
+        return true;
+    }
+    if (action == QLatin1String("minimize") || action == QLatin1String("maximize")
+        || action == QLatin1String("close")) {
+        WindowCaptionButtons* caption = m_titleBar->captionButtons();
+        if (!caption || !caption->isVisible()) {
+            if (action == QLatin1String("minimize")) {
+                showMinimized();
+            } else if (action == QLatin1String("maximize")) {
+                if (m_titleBar->isMinimalMode()) {
+                    toggleMinimalMode(false);
+                } else if (isMaximized()) {
+                    showNormal();
+                } else {
+                    showMaximized();
+                }
+            } else {
+                close();
+            }
+            return true;
+        }
+        if (action == QLatin1String("minimize")) emit caption->minimizeRequested();
+        else if (action == QLatin1String("maximize")) emit caption->maximizeRestoreRequested();
+        else emit caption->closeRequested();
+        return true;
+    }
+    return fail(QStringLiteral("unknown titlebar action '") + action
+                + QStringLiteral("'"));
 }
 
 // The agent automation-bridge lifecycle (startAutomationBridge / stop /
@@ -4959,35 +4895,32 @@ void MainWindow::buildUI()
     // applet panel; clicking the inactive-side icon moves it there (and
     // shows it if hidden).
     auto handleDockClick = [this](bool wantLeft) {
-        // If currently floating, dock back first so the float window is
-        // torn down via the canonical path; otherwise reparenting the
-        // contents into the splitter leaves an empty float window alive
-        // and visible (the "black box" in #2584).
-        if (m_appletPanelFloatWindow) {
-            toggleAppletPanelFloating(false);
-        }
-        const bool dockedLeft = AppSettings::instance()
-            .value("AppletPanelDockedLeft", "False").toString() == "True";
-        const bool visible = m_appletPanel && m_appletPanel->isVisible();
-        if (visible && dockedLeft == wantLeft) {
-            setAppletPanelVisible(false);
-        } else {
-            if (!visible) setAppletPanelVisible(true);
-            if (dockedLeft != wantLeft) setAppletPanelDockedLeft(wantLeft);
-        }
+        bool floating = false, dockedLeft = false, visible = false;
+        appletPanelState(&floating, &dockedLeft, &visible);
+        // Clicking the wall the panel already occupies is the "hide" gesture.
+        // That only reads as "hide" when the panel is genuinely docked there
+        // and on screen — while floating, or while hidden, the same click
+        // means "bring it back to this wall", which is why the floating case
+        // must not fall through to the hide branch.
+        const bool alreadyThere = !floating && visible && dockedLeft == wantLeft;
+        applyAppletPanelState(/*floating=*/false, wantLeft, !alreadyThere);
     };
     connect(m_titleBar, &TitleBar::dockAppletLeftRequested,  this, [handleDockClick]() { handleDockClick(true);  });
     connect(m_titleBar, &TitleBar::dockAppletRightRequested, this, [handleDockClick]() { handleDockClick(false); });
-    // Pop-out icon: toggle floating via the shared helper so the icon, the
-    // Ctrl+Shift+S shortcut, and the float-window close-X stay in sync.
+    // Pop-out icon: flip only the floating field, leaving the wall alone, so
+    // the icon, the Ctrl+Shift+S shortcut and the float-window close-X all
+    // agree on what one activation does.
     connect(m_titleBar, &TitleBar::popOutAppletRequested, this, [this]() {
-        toggleAppletPanelFloating(m_appletPanelFloatWindow == nullptr);
+        bool floating = false, dockedLeft = false, visible = false;
+        appletPanelState(&floating, &dockedLeft, &visible);
+        applyAppletPanelState(!floating, dockedLeft, true);
     });
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->setHandleWidth(0);
 
     auto* central = new QWidget(this);
+    central->setObjectName(QStringLiteral("mainCentralWidget"));
     auto* vbox = new QVBoxLayout(central);
     vbox->setContentsMargins(0, 0, 0, 0);
     vbox->setSpacing(0);
@@ -5365,17 +5298,14 @@ void MainWindow::buildUI()
     m_sizeGrip->raise();
     m_sizeGrip->setVisible(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(statusBar(), "QStatusBar { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(statusBar(), "QStatusBar { background: {{color.background.0}}; border-top: 1px solid {{color.border.strong}}; }"
         "QStatusBar::item { border: none; }"
         "QLabel { background: transparent; }");
 
-    const QString valStyle  = "QLabel { color: #8aa8c0; font-size: 21px; }";
-    const QString sepStyle  = "QLabel { color: #304050; font-size: 21px; }";
-    const QString greyInd   = "QLabel { color: #404858; font-weight: bold; font-size: 21px; }";
-    const QString greenInd  = "QLabel { color: #00e060; font-weight: bold; font-size: 21px; }";
-    const QString redInd    = "QLabel { color: #e04040; font-weight: bold; font-size: 21px; }";
-    const QString greyIndLg = "QLabel { color: #404858; font-weight: bold; font-size: 24px; }";
-    const QString greenIndLg= "QLabel { color: #00e060; font-weight: bold; font-size: 24px; }";
+    const QString sepStyle =
+        "QLabel { color: {{color.border.strong}}; font-size: 21px; }";
+    const QString greyIndLg =
+        "QLabel { color: {{color.text.disabled}}; font-weight: bold; font-size: 24px; }";
 
     // Use a container with HBoxLayout for 3-section layout:
     // [left items] → stretch → [STATION centered] → stretch → [right items]
@@ -5386,7 +5316,7 @@ void MainWindow::buildUI()
 
     auto addSep = [&]() -> QLabel* {
         auto* sep = new QLabel(" · ");
-        sep->setStyleSheet(sepStyle);
+        ThemeManager::instance().applyStyleSheet(sep, sepStyle);
         hbox->addWidget(sep);
         return sep;
     };
@@ -5403,9 +5333,14 @@ void MainWindow::buildUI()
         m_automationChip->setObjectName(QStringLiteral("automationChip"));
         m_automationChip->setAccessibleName(
             QStringLiteral("Agent automation bridge active: %1").arg(agent));
-        m_automationChip->setStyleSheet(
-            "QLabel { color: #0b0e12; background: #f0a000; font-weight: bold;"
-            " font-size: 18px; border-radius: 4px; padding: 2px 10px; }");
+        ThemeManager::instance().applyStyleSheet(
+            m_automationChip,
+            QStringLiteral(
+                "QLabel { color: {{color.toggle.warning.foreground.checked}};"
+                " background: {{color.toggle.warning.background.checked}};"
+                " border: 1px solid {{color.toggle.warning.border.checked}};"
+                " font-weight: bold; font-size: 18px; border-radius: 4px;"
+                " padding: 2px 10px; }"));
         m_automationChip->setToolTip(
             QStringLiteral("Agent automation bridge active — other MultiFlex stations see this client as \"%1\"")
                 .arg(agent));
@@ -5426,7 +5361,8 @@ void MainWindow::buildUI()
         QPainter pp(&pm);
         pp.setRenderHint(QPainter::Antialiasing);
 
-        const QColor stroke(255, 255, 255, 210);
+        const QColor stroke = ThemeManager::instance().color(
+            this, QStringLiteral("color.text.primary"));
 
         // Polyline: noise floor at y=22, multiple peaks of varying height,
         // with extra detail between peaks for the "real FFT" texture.
@@ -5473,7 +5409,7 @@ void MainWindow::buildUI()
     hbox->addSpacing(8);
 
     m_tnfIndicator = new QLabel("TNF");
-    m_tnfIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_tnfIndicator, greyIndLg);
     m_tnfIndicator->setCursor(Qt::PointingHandCursor);
     m_tnfIndicator->setToolTip(buildTnfTooltip(m_radioModel.tnfModel()));
     m_tnfIndicator->installEventFilter(this);
@@ -5489,7 +5425,7 @@ void MainWindow::buildUI()
             this, [updateTnfTooltip](int) { updateTnfTooltip(); });
 
     m_cwxIndicator = new QLabel("CWX");
-    m_cwxIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_cwxIndicator, greyIndLg);
     m_cwxIndicator->setCursor(Qt::PointingHandCursor);
     m_cwxIndicator->setToolTip("CW Keyer — click to toggle");
     m_cwxIndicator->installEventFilter(this);
@@ -5497,7 +5433,7 @@ void MainWindow::buildUI()
 
 #ifdef AETHER_ASR_ENABLED
     m_asrIndicator = new QLabel("ASR");
-    m_asrIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_asrIndicator, greyIndLg);
     m_asrIndicator->setCursor(Qt::PointingHandCursor);
     m_asrIndicator->setToolTip("Speech-to-text (Copy Assist) — click to toggle");
     m_asrIndicator->installEventFilter(this);
@@ -5505,14 +5441,14 @@ void MainWindow::buildUI()
 #endif
 
     m_dvkIndicator = new QLabel("DVK");
-    m_dvkIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_dvkIndicator, greyIndLg);
     m_dvkIndicator->setCursor(Qt::PointingHandCursor);
     m_dvkIndicator->setToolTip("Digital Voice Keyer — click to toggle");
     m_dvkIndicator->installEventFilter(this);
     hbox->addWidget(m_dvkIndicator);
 
     m_fdxIndicator = new QLabel("FDX");
-    m_fdxIndicator->setStyleSheet(greyIndLg);
+    ThemeManager::instance().applyStyleSheet(m_fdxIndicator, greyIndLg);
     m_fdxIndicator->setCursor(Qt::PointingHandCursor);
     m_fdxIndicator->setToolTip("Full Duplex — RX stays active during TX (click to toggle)");
     m_fdxIndicator->installEventFilter(this);
@@ -5706,9 +5642,12 @@ void MainWindow::buildUI()
             }
 #endif
             if (cpuPct >= 0.0) {
-                QString color = "#8aa8c0";
-                if (cpuPct >= 80.0) color = "#e05050";
-                else if (cpuPct >= 50.0) color = "#f0c040";
+                QString color = "{{color.text.secondary}}";
+                if (cpuPct >= 80.0) {
+                    color = "{{color.accent.danger}}";
+                } else if (cpuPct >= 50.0) {
+                    color = "{{color.accent.warning}}";
+                }
                 m_cpuLabel->setText(QString("CPU: %1%").arg(cpuPct, 0, 'f', 1));
                 applyStatusBarCompactLabelStyle(m_cpuLabel, color);
             }
@@ -5906,7 +5845,10 @@ void MainWindow::buildUI()
     m_txIndicator->setAccessibleName("Cancel transmit");
     m_txIndicator->setAccessibleDescription("Click to send key up, PTT off, Tune off, and MOX off.");
     m_txIndicator->installEventFilter(this);
-    m_txIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 21px; }");
+    ThemeManager::instance().applyStyleSheet(
+        m_txIndicator,
+        QStringLiteral("QLabel { color: {{color.text.disabled}};"
+                       " font-weight: bold; font-size: 21px; }"));
     hbox->addWidget(m_txIndicator);
 
     addSep();
@@ -9343,12 +9285,27 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // Move m_appletPanel either before m_panStack (left dock) or to the end
     // (right dock).  insertWidget()/addWidget() on an already-attached child
     // reparents it to the new index without destroy/recreate.
-    if (left) {
-        const int panIdx = m_splitter->indexOf(centralPanWidget());
-        if (panIdx < 0) return;
-        m_splitter->insertWidget(panIdx, m_appletPanel);
-    } else {
-        m_splitter->addWidget(m_appletPanel);
+    //
+    // Both calls must be skipped when the panel is ALREADY on the requested
+    // wall, because neither is idempotent: insertWidget() detaches the panel
+    // first, which shifts the centre widget down one index, so re-inserting
+    // at the now-stale panIdx drops the panel on the far side and silently
+    // flips the dock.  Re-asserting the current side is a legitimate call
+    // (it happens on un-float and on restore), so the guard lives here
+    // rather than in the callers.
+    //
+    // Rebase note (#4906 onto the #4941 canvas trunk): the reference widget
+    // is centralPanWidget() — the workspace canvas when the mode is on, the
+    // pan stack otherwise — not m_panStack, which leaves the splitter
+    // entirely in canvas mode.
+    const int panIdx    = m_splitter->indexOf(centralPanWidget());
+    const int appletIdx = m_splitter->indexOf(m_appletPanel);
+    if (panIdx < 0) return;
+    const bool alreadyOnWall =
+        appletIdx >= 0 && (left ? appletIdx < panIdx : appletIdx > panIdx);
+    if (!alreadyOnWall) {
+        if (left) m_splitter->insertWidget(panIdx, m_appletPanel);
+        else      m_splitter->addWidget(m_appletPanel);
     }
 
     // Re-apply stretch/collapse rules by widget identity (indices shifted).
@@ -9391,6 +9348,29 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     AppSettings::instance().setValue("AppletPanelDockedLeft", left ? "True" : "False");
     AppSettings::instance().save();
 
+    // Everything above changed geometry and NOTHING invalidated, which is the
+    // whole of the see-through-strip bug: the panel does not resize when it
+    // changes walls, it TRANSLATES, so the panadapter has to slide the same
+    // 260 px the other way.  The strip the pan slides into is covered by the
+    // pan alone, and its swapchain can still be sized for the transient
+    // layout — so that strip is painted by nobody and, under
+    // WA_TranslucentBackground, shows the desktop.  Docking RIGHT never
+    // showed it because there the strip needing new cover is taken by the
+    // applet panel, an ordinary widget that paints correctly; that asymmetry
+    // is why the report was always "panel on the left".
+    // Scoped to an actual wall change.  applyAppletPanelState() routes show,
+    // hide, un-float, pop-out, Ctrl+Shift+S and the bridge verb all through
+    // this function, and refreshAfterLayoutShift() is a per-panadapter native
+    // re-realize — far too expensive to pay on transitions where no panadapter
+    // moved.  It is also the wrong moment on the hide path, which applies
+    // visibility after this returns.
+    if (!alreadyOnWall) {
+        if (m_panStack)
+            m_panStack->refreshAfterLayoutShift();
+        if (m_splitter)
+            m_splitter->update();
+    }
+
     if (m_titleBar)
         m_titleBar->setAppletDockState(m_appletPanel->isVisible(), left);
 }
@@ -9402,7 +9382,21 @@ void MainWindow::setAppletPanelVisible(bool visible)
     // AppletPanel::setFixedWidth(260) means Qt restores the same width on
     // un-hide automatically — the splitter just shrinks PanStack (stretch=1)
     // by 260 and gives the slot back to the applet.
+    const bool changed = m_appletPanel->isVisible() != visible;
     m_appletPanel->setVisible(visible);
+
+    // The panadapter gains or loses the panel's 260 px here, which is the same
+    // geometry change that strands its native surface on a dock flip — so the
+    // refresh belongs here too, where the width actually changes, rather than
+    // being fired blanket from setAppletPanelDockedLeft() on transitions that
+    // move nothing.  Guarded on a real change so a redundant setVisible() is
+    // still free.
+    if (changed) {
+        if (m_panStack)
+            m_panStack->refreshAfterLayoutShift();
+        if (m_splitter)
+            m_splitter->update();
+    }
 
     AppSettings::instance().setValue("AppletPanelVisible", visible ? "True" : "False");
     AppSettings::instance().save();
@@ -9434,6 +9428,68 @@ void MainWindow::toggleAppletPanelFloating(bool floating)
     }
 }
 
+void MainWindow::appletPanelState(bool* floating, bool* dockedLeft,
+                                  bool* visible) const
+{
+    // Floating and visibility come off the widgets — the settings store lags
+    // by a save and cannot be trusted mid-transition.  The dock side has no
+    // widget to read while the panel is floating (it is out of the splitter),
+    // so that one field falls back to the persisted wall it will return to.
+    if (floating)
+        *floating = m_appletPanelFloatWindow != nullptr;
+    if (visible)
+        *visible = m_appletPanel && m_appletPanel->isVisible();
+    if (dockedLeft) {
+        *dockedLeft = AppSettings::instance()
+            .value("AppletPanelDockedLeft", "False").toString() == "True";
+        if (!m_appletPanelFloatWindow && m_splitter && m_appletPanel && m_panStack) {
+            const int appletIdx = m_splitter->indexOf(m_appletPanel);
+            const int panIdx    = m_splitter->indexOf(m_panStack);
+            if (appletIdx >= 0 && panIdx >= 0)
+                *dockedLeft = appletIdx < panIdx;
+        }
+    }
+}
+
+void MainWindow::applyAppletPanelState(bool floating, bool dockedLeft, bool visible)
+{
+    if (!m_appletPanel)
+        return;
+
+    // A floating panel is always shown.  Hiding one leaves an empty float
+    // window with no affordance to bring the contents back, which is the
+    // "white space" state — so this combination is not representable.
+    if (floating)
+        visible = true;
+
+    if (floating) {
+        // Record the wall to return to without moving the panel while it
+        // lives in its own window; dockAppletPanel() reads this back.
+        AppSettings::instance().setValue("AppletPanelDockedLeft",
+                                         dockedLeft ? "True" : "False");
+        AppSettings::instance().save();
+        setAppletPanelVisible(true);
+        if (!m_appletPanelFloatWindow)
+            toggleAppletPanelFloating(true);
+    } else {
+        // Tear the float window down first so the panel is back in the
+        // splitter before the side and visibility are applied to it.
+        if (m_appletPanelFloatWindow)
+            toggleAppletPanelFloating(false);
+        // QSplitter will not re-slot a HIDDEN child: calling
+        // setAppletPanelDockedLeft() while the panel is hidden persists the
+        // new side but leaves the widget in its old slot, so it reappears on
+        // the wrong wall when shown.  Show it first whenever the wall has to
+        // change, then apply the caller's final visibility.
+        bool currentLeft = false;
+        appletPanelState(nullptr, &currentLeft, nullptr);
+        if (currentLeft != dockedLeft && !m_appletPanel->isVisible())
+            setAppletPanelVisible(true);
+        setAppletPanelDockedLeft(dockedLeft);
+        setAppletPanelVisible(visible);
+    }
+}
+
 void MainWindow::trackPersistentDialog(PersistentDialog* dialog)
 {
     if (!dialog) {
@@ -9455,27 +9511,11 @@ void MainWindow::setFramelessWindow(bool on)
     // geometry so the window stays where the user put it.
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
-    Qt::WindowFlags flags = windowFlags();
-#ifdef Q_OS_WIN
-    if (flags & Qt::FramelessWindowHint) {
-        flags &= ~Qt::FramelessWindowHint;
-        setWindowFlags(flags);
-        setGeometry(geom);
-        if (wasVisible) {
-            show();
-        }
-    }
-    applyWindowsCustomFrame();
-#else
-    if (on)
-        flags |= Qt::FramelessWindowHint;
-    else
-        flags &= ~Qt::FramelessWindowHint;
-    setWindowFlags(flags);
+    WindowChrome::configure(this, on);
     setGeometry(geom);
-    if (wasVisible)
+    if (wasVisible) {
         show();
-#endif
+    }
 
     // Keep the bottom-right size grip in sync — only useful when frameless.
     if (m_sizeGrip) m_sizeGrip->setVisible(on);
@@ -9726,13 +9766,9 @@ void MainWindow::toggleMinimalMode(bool on)
 
         QByteArray geom = QByteArray::fromBase64(
             s.value("MinimalModeGeometry", "").toByteArray());
-        // Re-anchor as well as restore: this window is already mapped, so Qt
-        // reapplies its caption-reserving clamp on every entry and the #4328
-        // gap would come straight back on one Ctrl+M round trip — then stick,
-        // because closeEvent() saves whatever origin is current.
-        if (!geom.isEmpty() && restoreGeometry(geom))
-            reanchorCustomFrameGeometry(geom);
-
+        if (!geom.isEmpty()) {
+            restoreGeometry(geom);
+        }
         // Defer clearing the guard so any AppKit-deferred WindowStateChange
         // queued by the showNormal() / setFixedWidth() calls above is drained
         // through changeEvent's early-return before the guard drops.
@@ -9787,17 +9823,13 @@ void MainWindow::toggleMinimalMode(bool on)
         // Restore full geometry
         QByteArray geom = QByteArray::fromBase64(
             s.value("FullModeGeometry", "").toByteArray());
-        const bool restored = !geom.isEmpty() && restoreGeometry(geom);
+        if (!geom.isEmpty()) {
+            restoreGeometry(geom);
+        }
 
         // Belt-and-suspenders: if FullModeGeometry encoded a state, ensure
         // we land windowed.
         showNormal();
-
-        // After showNormal(), not before: leaving maximized drops us onto Qt's
-        // clamped normal geometry, which is the rect that carries the #4328
-        // phantom-caption offset.  Re-anchoring first would just be undone.
-        if (restored)
-            reanchorCustomFrameGeometry(geom);
 
         // The round trip ends where it started: minimal entered from
         // canvas mode returns to canvas mode.  Deferred one event-loop
@@ -10793,6 +10825,32 @@ void MainWindow::floatAppletPanel()
             .value("AppletPanelFloatGeometry", "").toByteArray());
     if (!geom.isEmpty()) {
         m_appletPanelFloatWindow->restoreGeometry(geom);
+        // restoreGeometry() faithfully restores a MAXIMIZED/FULLSCREEN state
+        // if one was ever captured — and the geometry is re-saved on every
+        // Move/Resize, so a single accidental maximize (double-clicking the
+        // float window's title bar is enough) poisons the setting and every
+        // later pop-out opens the panel full-screen.  A 260 px applet rail
+        // maximized across the display is never what the operator wants, so
+        // the state is dropped on restore and a clean geometry is written
+        // back, healing an already-poisoned config on first use.
+        if (m_appletPanelFloatWindow->isMaximized()
+            || m_appletPanelFloatWindow->isFullScreen()) {
+            const QRect restoredNormalGeometry =
+                m_appletPanelFloatWindow->normalGeometry();
+            m_appletPanelFloatWindow->setWindowState(
+                m_appletPanelFloatWindow->windowState()
+                & ~(Qt::WindowMaximized | Qt::WindowFullScreen));
+            if (restoredNormalGeometry.isValid()
+                && !restoredNormalGeometry.isEmpty()) {
+                m_appletPanelFloatWindow->setGeometry(restoredNormalGeometry);
+            } else {
+                m_appletPanelFloatWindow->resize(320, 720);
+            }
+            AppSettings::instance().setValue(
+                "AppletPanelFloatGeometry",
+                m_appletPanelFloatWindow->saveGeometry().toBase64());
+            AppSettings::instance().save();
+        }
     } else {
         m_appletPanelFloatWindow->resize(320, 720);
     }

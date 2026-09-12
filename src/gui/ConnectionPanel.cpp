@@ -14,6 +14,7 @@
 #include "ComboStyle.h"   // shared themed combo look (painted arrow)
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
+#include "PersistentDialog.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -25,7 +26,7 @@
 #include <QLineEdit>
 #include <QFormLayout>
 #include <QGuiApplication>
-#include <QInputDialog>
+#include <QDialogButtonBox>
 #include <QMenu>
 #include <QFrame>
 #include <QGroupBox>
@@ -1591,6 +1592,109 @@ QList<RadioInfo> ConnectionPanel::automationLocalRadios() const
     return m_radios;
 }
 
+bool ConnectionPanel::selectRadio(const QString& serial)
+{
+    for (int index = 0; index < m_radios.size(); ++index) {
+        if (m_radios[index].serial == serial) {
+            setCurrentMode(LocalMode);
+            m_radioList->setCurrentRow(index);
+            return true;
+        }
+    }
+    for (int index = 0; index < m_wanRadios.size(); ++index) {
+        if (m_wanRadios[index].serial == serial) {
+            setCurrentMode(SmartLinkMode);
+            m_wanList->setCurrentRow(index);
+            return true;
+        }
+    }
+    return false;
+}
+
+void ConnectionPanel::selectManualConnection()
+{
+    setCurrentMode(ManualMode);
+}
+
+bool ConnectionPanel::canRenameRadio(const QString& serial) const
+{
+    for (const RadioInfo& radio : m_radios) {
+        if (radio.serial == serial) {
+            return canRenameRadio(radio);
+        }
+    }
+    return false;
+}
+
+bool ConnectionPanel::canRenameRadio(const RadioInfo& radio) const
+{
+    return !radio.serial.isEmpty() && !hl2::Hl2Discovery::nicknameLivesOnRadio(radio);
+}
+
+QString ConnectionPanel::radioDisplayName(const RadioInfo& radio, const QString& fallback) const
+{
+    return canRenameRadio(radio)
+        ? hl2::Hl2Discovery::effectiveNickname(radio.family, radio.serial, fallback)
+        : fallback;
+}
+
+void ConnectionPanel::renameRadio(const QString& serial)
+{
+    for (const RadioInfo& radio : m_radios) {
+        if (radio.serial == serial) {
+            renameRadio(radio);
+            return;
+        }
+    }
+}
+
+void ConnectionPanel::renameRadio(const RadioInfo& radio)
+{
+    if (!canRenameRadio(radio)) {
+        return;
+    }
+    const QString serial = radio.serial;
+    auto* dialog = new PersistentDialog(tr("Rename radio"), QStringLiteral("RadioNicknameDialogGeometry"), this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setObjectName(QStringLiteral("radioNicknameDialog"));
+    auto* form = new QVBoxLayout(dialog->bodyWidget());
+    auto* label = new QLabel(tr("Nickname for %1 (leave blank to reset):").arg(radio.model), dialog->bodyWidget());
+    auto* editor = new QLineEdit(dialog->bodyWidget());
+    editor->setObjectName(QStringLiteral("radioNicknameEditor"));
+    editor->setAccessibleName(tr("Radio nickname"));
+    editor->setText(hl2::Hl2Discovery::effectiveNickname(radio.family, serial, QString()));
+    editor->selectAll();
+    label->setBuddy(editor);
+    form->addWidget(label);
+    form->addWidget(editor);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, dialog->bodyWidget());
+    buttons->button(QDialogButtonBox::Save)->setAccessibleName(tr("Save radio nickname"));
+    buttons->button(QDialogButtonBox::Save)->setObjectName(QStringLiteral("saveRadioNickname"));
+    form->addWidget(buttons);
+    ThemeManager::instance().applyStyleSheet(dialog, QStringLiteral(
+        "QDialog, QLabel { background: {{color.background.1}}; color: {{color.text.primary}}; }"
+        "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}};"
+        " border: 1px solid {{color.border.strong}}; padding: 6px; }"
+        "QPushButton { background: {{color.background.2}}; color: {{color.text.primary}}; padding: 6px 14px; }"
+        "QPushButton:focus, QLineEdit:focus { border: 1px solid {{color.border.accent}}; }"));
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, dialog, &QDialog::accept);
+    connect(dialog, &QDialog::accepted, this, [this, radio, serial, editor]() {
+        hl2::Hl2Discovery::setNickname(radio.family, serial, editor->text().trimmed());
+        for (int current = 0; current < m_radios.size(); ++current) {
+            if (m_radios[current].serial == serial) {
+                m_radios[current].nickname = hl2::Hl2Discovery::effectiveNickname(
+                    radio.family, serial, radio.model);
+                m_radioList->item(current)->setText(formatLocalRadioLabel(m_radios[current]));
+                break;
+            }
+        }
+        emit radioNicknameChanged();
+    });
+    dialog->show();
+    editor->setFocus(Qt::OtherFocusReason);
+}
+
 bool ConnectionPanel::automationConnectLocalSerial(const QString& serial, QString* error)
 {
     const QString wanted = serial.trimmed();
@@ -1923,19 +2027,8 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
         return;
 
     if (chosen == setNick) {
-        bool ok = false;
-        const QString current = hl2::Hl2Discovery::effectiveNickname(
-            radio.family, radio.serial, QString());
-        const QString name = QInputDialog::getText(
-            this, tr("Set Nickname"),
-            tr("Nickname for %1:").arg(radio.model),
-            QLineEdit::Normal, current, &ok);
-        if (ok) {
-            // setNickname commits eagerly — a naming the operator just
-            // confirmed shouldn't be lost to a crash or a kill.
-            hl2::Hl2Discovery::setNickname(radio.family, radio.serial,
-                                           name.trimmed());
-        }
+        renameRadio(radio.serial);
+        return;
     } else if (clearNick && chosen == clearNick) {
         hl2::Hl2Discovery::setNickname(radio.family, radio.serial, QString());
     }
@@ -1946,8 +2039,14 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
     updated.nickname =
         hl2::Hl2Discovery::effectiveNickname(radio.family, radio.serial,
                                              radio.model);
-    m_radios[row] = updated;
-    item->setText(formatLocalRadioLabel(updated));
+    for (int current = 0; current < m_radios.size(); ++current) {
+        if (m_radios[current].serial == radio.serial) {
+            m_radios[current] = updated;
+            m_radioList->item(current)->setText(formatLocalRadioLabel(updated));
+            break;
+        }
+    }
+    emit radioNicknameChanged();
 }
 
 void ConnectionPanel::onRadioDiscovered(const RadioInfo& radio)
@@ -2042,7 +2141,7 @@ void ConnectionPanel::addDemoRadio()
     // backend entirely. One selector, and this is it.
     demo.family = SimBackend::familyName();
     demo.version = QStringLiteral("0.0.0.0");
-    demo.nickname = QStringLiteral("Simulator (not on the air)");
+    demo.nickname = radioDisplayName(demo, QStringLiteral("Simulator (not on the air)"));
     demo.callsign = QStringLiteral("DEMO");
     demo.address = QHostAddress(QHostAddress::LocalHost);   // synthetic; never dialed
     demo.port = 4992;
