@@ -1222,6 +1222,10 @@ foreach(APP_SETTINGS_SCENARIO
         corrupt-db-restore-backup
         corrupt-db-reimport-xml
         locked-db-fails-closed
+        readonly-db-fails-closed
+        readonly-db-with-backup-fails-closed
+        unavailable-integrity-check
+        filesystem-failure-fails-closed
         newer-schema-readonly
         dirty-row-save
         display-slice-depth-default
@@ -1232,6 +1236,10 @@ foreach(APP_SETTINGS_SCENARIO
         NAME app_settings_safety_${APP_SETTINGS_SCENARIO}
         COMMAND app_settings_safety_test ${APP_SETTINGS_SCENARIO})
 endforeach()
+set_tests_properties(
+    app_settings_safety_readonly-db-fails-closed
+    app_settings_safety_readonly-db-with-backup-fails-closed
+    PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(nr2_settings_model_test
     tests/nr2_settings_model_test.cpp
