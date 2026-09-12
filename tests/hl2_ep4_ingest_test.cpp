@@ -13,15 +13,25 @@
 //   * the counter's start-of-stream rewind is a RESET, not a loss, and it is
 //     counted where it can be seen rather than folded into ep4Drops.
 //
+// Section 8 carries the same claim one layer up, at the IRadioBackend seam:
+// the rows a health dialog reads, and the verb that is the only way to ask for
+// the stream. It lives here rather than in tests/hl2_backend_test.cpp, which
+// has no build target — see the banner at the top of that file.
+//
 // The sequences replayed here are recorded arrivals from a real v74.2 board
 // (tests/Hl2Ep4ArrivalsD94.h), not invented ones.
 
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
+#include "core/backends/hl2/Hl2Backend.h"
+#include "core/AppSettings.h"
 
 #include "Hl2Ep4ArrivalsD94.h"
+#include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
+#include <QString>
+#include <QVariant>
 
 #include <array>
 #include <cstdint>
@@ -83,7 +93,13 @@ static void feedEp4(MetisClient& c, std::uint32_t seq)
 
 int main(int argc, char** argv)
 {
+    // Before QCoreApplication and before the first AppSettings touch: section 8
+    // builds an Hl2Backend, whose construction reads the settings store.
+    TestSettingsProfile profile(QStringLiteral("aether-hl2-ep4-ingest"));
+    if (!profile.isValid())
+        return 1;
     QCoreApplication app(argc, argv);
+    AetherSDR::AppSettings::instance().load();
 
     // ---- 1 · an EP4 datagram is counted as EP4 and as nothing else ----
     {
@@ -196,17 +212,98 @@ int main(int argc, char** argv)
         c.setBandscopeEnabled(false);
         check(!c.bandscopeEnabled(), "and disabling clears it");
 
-        // The byte the radio would actually receive. Built here from the same
-        // primitives setBandscopeEnabled uses, because the assertion that
-        // matters is that `run` STAYS SET while the bandscope bit moves:
-        // clearing bit 0 would stop the IQ stream the operator is listening to.
-        const auto on = metisCommand(static_cast<std::uint8_t>(0x01 | kRunWideSpectrum));
-        check(on[3] == 0x03, "the enable byte is 0x03: run high, wide_spectrum high");
-        check((on[3] & 0x01) != 0, "the run bit is never cleared to move the bandscope bit");
-        // And connect is untouched — the property three fake-radio fixtures
-        // sniff as d[3] == 0x01 and hl2_metis_protocol_test asserts outright.
-        check(metisStart()[3] == 0x01, "metisStart() is not widened by the bandscope");
+        // The byte the radio would actually receive is asserted where it is
+        // COMPOSED — metisRunCommand(), in hl2_metis_protocol_test. It used to
+        // be re-derived here from the same two constants, which is an assertion
+        // about `0x01 | kRunWideSpectrum` and not about anything MetisClient
+        // does: the implementation could drop the run bit and this would still
+        // pass (PR #5650 review, blocker 1). What belongs here is the one thing
+        // this target can actually see — that the function MetisClient sends
+        // through keeps `run` set while the bandscope bit moves.
+        check(metisRunCommand(true)[3] == 0x03 && metisRunCommand(false)[3] == 0x01,
+              "the byte MetisClient sends keeps run set on both edges");
         check(metisStop()[3] == 0x00, "metisStop() still clears run AND wide_spectrum");
+    }
+
+
+    // ---- 8 · the backend's EP4 seam, with no link ----
+    //
+    // Section 7 is MetisClient's own refusal. This is the same question one
+    // layer up, at IRadioBackend: what a health dialog can read, and what the
+    // one verb does. Both are reachable on a default-constructed backend — no
+    // socket, no peer, no discovery, no event loop — because invokeExtension
+    // dispatches on the namespace and verb before it consults anything else,
+    // and healthSnapshot() reads members rather than the wire.
+    //
+    // What is NOT here, and cannot be: the POSITIVE path. Hl2Backend gates the
+    // enable on m_connected, which is set only from MetisClient::linkUp, which
+    // needs a real EP6 datagram from a real peer. "Enable, and watch the health
+    // row follow" is a fake-radio assertion; it is certified against hardware
+    // instead, and it is not faked here.
+    {
+        AetherSDR::hl2::Hl2Backend backend;
+
+        const auto snap = backend.healthSnapshot();
+        const auto has = [&snap](const char* key) {
+            return snap.values.contains(QString::fromLatin1(key));
+        };
+        // Reported WITHOUT being asked for, and reported off. An absent row
+        // would leave "is this costing me link budget?" unanswered rather than
+        // answered "no", which is the answer a reader of that dialog needs
+        // first.
+        check(has("bandscopeEnabled")
+                  && !snap.values.value(QStringLiteral("bandscopeEnabled")).toBool(),
+              "the bandscope is reported, and reported OFF, before anything asks");
+        check(snap.values.value(QStringLiteral("ep4Packets")).toULongLong() == 0u,
+              "no EP4 packets are claimed while it is off");
+        // A row of its OWN, not folded into ep4Drops: exactly one rewind is
+        // expected per stream start and none after, so a second one is an
+        // anomaly that a counter meant to read zero would hide.
+        check(has("ep4Drops") && has("ep4Rewinds"),
+              "drops and rewinds are separate rows");
+        check(has("bandscopeBlocks") && has("bandscopeTimeouts"),
+              "the gate's own health is reported too");
+        // The headroom rows are ABSENT until a block has arrived — the
+        // "absent means not reported" contract doing the work no default could,
+        // since 0.00 dBFS would read as a hard clip rather than as "never
+        // looked at".
+        check(!has("adcPeakDbfs") && !has("adcRmsDbfs") && !has("adcCrestDb"),
+              "the headroom rows are ABSENT, not zero, before any block");
+
+        // The verb. Counted rather than spied so this target needs no Qt6::Test.
+        int results = 0;
+        int errors = 0;
+        quint64 lastId = 0;
+        QVariant lastPayload;
+        QObject::connect(&backend, &AetherSDR::IRadioBackend::extensionResult, &backend,
+                         [&](quint64 id, const QVariant& payload) {
+            ++results; lastId = id; lastPayload = payload;
+        });
+        QObject::connect(&backend, &AetherSDR::IRadioBackend::extensionError, &backend,
+                         [&](quint64, const QString&) { ++errors; });
+
+        backend.invokeExtension(QStringLiteral("hl2"),
+                                QStringLiteral("bandscope.enable"), 43, QVariant(true));
+        check(errors == 0, "bandscope.enable is an implemented verb, not the error stub");
+        check(results == 1, "...it completes locally, like freqcal.set, with no round trip");
+        check(lastId == 43u, "...carrying its requestId back");
+        check(lastPayload.toMap().contains(QStringLiteral("enabled")),
+              "...and reporting the state it applied");
+        // REFUSED while disconnected, and reported as refused. MetisClient
+        // ignores a run byte with no stream behind it, so echoing the request
+        // back would be this side inventing a state the radio was never told
+        // about. This is the assertion the connected case cannot make.
+        check(!lastPayload.toMap().value(QStringLiteral("enabled")).toBool(),
+              "a bandscope enable with no link is refused, not echoed");
+        check(!backend.healthSnapshot().values
+                   .value(QStringLiteral("bandscopeEnabled")).toBool(),
+              "and the health row reports the refusal, not the request");
+
+        // requestId 0 is the fire-and-forget form the UI uses on release.
+        backend.invokeExtension(QStringLiteral("hl2"),
+                                QStringLiteral("bandscope.enable"), 0, QVariant(false));
+        check(results == 1, "requestId 0 asks for no reply and gets none");
+        check(errors == 0, "...and is still not the error stub");
     }
 
     if (g_failures == 0)
