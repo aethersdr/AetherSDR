@@ -449,7 +449,19 @@ int main(int argc, char** argv)
         cw.setCwSpeed(30);
         ok &= expect(cwCmds == QStringList({"cw wpm 30", "cw break_in_delay 48"}),
                      "hold on: the committed delay is re-asserted after the wpm command");
-        ok &= expect(cw.cwDelay() == 48, "hold on: the committed delay is adopted locally");
+
+        // The re-assert must not write the model's delay. The radio's floor is
+        // enforced on the write side too (#5519: `Parameter out of range`), so a
+        // local adopt can display a value the radio refused — and when a speed
+        // change does not move the floor the radio sends no break_in_delay
+        // status, so nothing would ever correct it (#5288 review, blocker 2).
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 12; }));  // radio walks it
+        cw.setCwSpeed(33);
+        ok &= expect(cwCmds == QStringList({"cw wpm 33", "cw break_in_delay 48"}),
+                     "hold on: the re-assert still goes out after the radio walked the delay");
+        ok &= expect(cw.cwDelay() == 12,
+                     "hold on: the re-assert does NOT overwrite radio truth locally");
 
         // The radio's echo of the walked-down floor still arrives. With hold on
         // the model still does NOT fight it from the status path (Principle II)
@@ -463,9 +475,18 @@ int main(int argc, char** argv)
         // Every subsequent operator speed change re-asserts from the committed
         // value (not from whatever the radio last echoed).
         cwCmds.clear();
-        cw.setCwSpeed(31);
-        ok &= expect(cwCmds == QStringList({"cw wpm 31", "cw break_in_delay 48"}),
+        cw.setCwSpeed(34);
+        ok &= expect(cwCmds == QStringList({"cw wpm 34", "cw break_in_delay 48"}),
                      "hold on: each operator speed change re-asserts the committed delay");
+
+        // Nit: the floor only moves when the speed does, and the knob/shortcut
+        // paths clamp, so a detent held against the bound calls setCwSpeed()
+        // with an unchanged value. That must not re-send (#5288 review).
+        cwCmds.clear();
+        cw.setCwSpeed(34);
+        cw.setCwSpeed(34);
+        ok &= expect(cwCmds == QStringList({"cw wpm 34", "cw wpm 34"}),
+                     "hold on: an unchanged speed re-sends wpm but never the delay");
     }
 
     // A committed delay of 0 is deliberate QSK — never re-asserted.
@@ -529,8 +550,49 @@ int main(int argc, char** argv)
         ok &= expect(cwCmds == QStringList({"cw wpm 29"}), "hold off again: no re-assert");
     }
 
-    // resetState() (radio swap) clears the committed delay but keeps the
-    // client-side hold preference — #5288 Blocker 2, the cross-session leak.
+    // Armed vs on: the preference persists across a disconnect and the held
+    // delay does not, so "on but holding nothing" is a real, reachable state and
+    // the UI has to be able to tell it apart (#5288 review, blocker 1).
+    {
+        TransmitModel cw;
+        QList<bool> armedEdges;
+        QObject::connect(&cw, &TransmitModel::holdBreakInDelayArmedChanged,
+                         [&armedEdges](bool a) { armedEdges.append(a); });
+
+        ok &= expect(!cw.holdBreakInDelayArmed(), "a fresh model is not armed");
+        cw.setHoldBreakInDelay(true);
+        ok &= expect(cw.holdBreakInDelay() && !cw.holdBreakInDelayArmed(),
+                     "enabling hold turns it on but does not arm it");
+        ok &= expect(armedEdges.isEmpty(), "enabling hold emits no arming edge");
+
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 40; }));
+        ok &= expect(!cw.holdBreakInDelayArmed(),
+                     "a radio-reported delay does not arm the hold");
+
+        cw.setCwDelay(48);
+        ok &= expect(cw.holdBreakInDelayArmed() && armedEdges == QList<bool>({true}),
+                     "the operator setting a delay arms the hold, once");
+        cw.setCwDelay(60);
+        ok &= expect(armedEdges == QList<bool>({true}),
+                     "a further delay change does not re-emit the arming edge");
+
+        // Deliberate full QSK is committed but is not something to hold.
+        cw.setCwDelay(0);
+        ok &= expect(!cw.holdBreakInDelayArmed()
+                         && armedEdges == QList<bool>({true, false}),
+                     "a committed delay of 0 (QSK) disarms the hold");
+
+        cw.setCwDelay(72);
+        cw.resetState();
+        ok &= expect(cw.holdBreakInDelay() && !cw.holdBreakInDelayArmed(),
+                     "after a disconnect the hold is still ON but no longer armed");
+        ok &= expect(armedEdges == QList<bool>({true, false, true, false}),
+                     "resetState emits the disarming edge so the UI can show it");
+    }
+
+    // resetState() (every disconnect, via RadioModel::onDisconnected) clears the
+    // committed delay but keeps the client-side hold preference — #5288
+    // Blocker 2, the cross-session leak.
     {
         TransmitModel cw;
         QStringList cwCmds;

@@ -69,7 +69,18 @@ private:
 
 static const QString kBlueActive =
     "QPushButton:checked { background-color: #0070c0; color: #ffffff; "
-    "border: 1px solid #0090e0; }";
+    "border: 1px solid #0090e0; }"
+    // "Checked but holding nothing" is a real state for the Hold Dly toggle
+    // (the preference persists across a disconnect, the held delay does not —
+    // #5288), so it must not look identical to "checked and protecting".
+    // Alpha-dims the accent above rather than naming a second colour: no new
+    // hardcoded colour and no new setStyleSheet() call site for the ratchet
+    // (tools/audit_colours.py), and it tracks the accent if that is retokenised.
+    // Buttons without the property simply do not match this rule.
+    "QPushButton[holdUnarmed=\"true\"]:checked { "
+    "background-color: rgba(0, 112, 192, 0.35); "
+    "color: rgba(255, 255, 255, 0.6); "
+    "border: 1px dashed rgba(0, 144, 224, 0.5); }";
 
 static const QString kGreenActive =
     "QPushButton:checked { background-color: #006040; color: #00ff88; "
@@ -789,9 +800,16 @@ void PhoneCwApplet::buildCwPanel()
         m_holdDelayBtn->setCheckable(true);
         m_holdDelayBtn->setFixedHeight(22);
         m_holdDelayBtn->setAccessibleName("Hold break-in delay");
+        // Scope the claim: this rides behind the speed commands THIS client
+        // sends. A speed change made at the radio's front panel or by another
+        // client arrives as status, and Principle II keeps us off that path, so
+        // the delay still walks there. #5519's triage asked for the limit to be
+        // stated so "Hold Dly" is not read as an absolute guarantee to an amp.
         m_holdDelayBtn->setAccessibleDescription(
-            "Re-assert the set CW break-in delay after a speed change, so the "
-            "radio's speed-linked QSK floor cannot hot-switch an inline amplifier");
+            "Re-send the break-in delay you set after each CW speed change made "
+            "here, so the radio's speed-linked QSK floor does not hot-switch an "
+            "inline amplifier. Speed changes made at the radio or by another "
+            "client are not covered.");
         row->addWidget(m_holdDelayBtn);
 
         // Both blue toggles share one style call site — the hardcoded-colour
@@ -848,6 +866,7 @@ void PhoneCwApplet::buildCwPanel()
             AppSettings::instance().save();
             if (m_model)
                 m_model->setHoldBreakInDelay(on);
+            updateHoldDelayAffordance();
         });
 
         // Pitch steps and bounds follow the connected radio capabilities.
@@ -956,9 +975,10 @@ void PhoneCwApplet::buildCwPanel()
     // two sites against its base. Styling the widgets together costs one apiece
     // for the panel — and the next control is free.
     //
-    // m_iambicBtn and the two pan labels are deliberately left alone: they use
-    // kBlueActive and kDimLabelStyle, and folding one-offs in here would trade
-    // a site for a conditional.
+    // The two pan labels are deliberately left alone: they use kDimLabelStyle,
+    // and folding one-offs in here would trade a site for a conditional.
+    // m_iambicBtn used to be in that list; it is now styled with m_holdDelayBtn
+    // by the shared kBlueActive loop in buildCwPanel().
     for (QPushButton* btn : {m_sidetoneBtn, m_breakinBtn, m_apfBtn})
         btn->setStyleSheet(QString(kButtonBase) + kGreenActive);
     for (QLineEdit* edit : {m_delayEdit, m_speedEdit, m_sidetoneEdit, m_apfEdit})
@@ -996,6 +1016,7 @@ void PhoneCwApplet::setTransmitModel(TransmitModel* model)
         m_model->setHoldBreakInDelay(hold);
         const QSignalBlocker b(m_holdDelayBtn);
         m_holdDelayBtn->setChecked(hold);
+        updateHoldDelayAffordance();
     }
 
     // Phone signals
@@ -1060,7 +1081,14 @@ void PhoneCwApplet::setTransmitModel(TransmitModel* model)
             [this](bool on) {
         const QSignalBlocker b(m_holdDelayBtn);
         m_holdDelayBtn->setChecked(on);
+        updateHoldDelayAffordance();
     });
+    // Arming is what actually decides whether the toggle is protecting anything,
+    // and it moves independently of the checked state — on the operator's first
+    // delay, and on every disconnect. Mirror it too, or the button keeps showing
+    // the state it had when it was last toggled.
+    connect(m_model, &TransmitModel::holdBreakInDelayArmedChanged, this,
+            [this](bool) { updateHoldDelayAffordance(); });
 
     syncPhoneFromModel();
     syncCwFromModel();
@@ -1191,6 +1219,40 @@ void PhoneCwApplet::syncPhoneFromModel()
 
 // ── CW sync ──────────────────────────────────────────────────────────────────
 
+// "Hold Dly" has three states, not two: off, on-and-holding-a-delay, and
+// on-but-holding-nothing. The third is reachable every session — the preference
+// is persisted in AppSettings, the held delay is cleared by
+// TransmitModel::resetState() on every disconnect — and on a feature whose whole
+// job is keeping an amplifier's relay out of QSK, a checked button that is
+// silently inert is the wrong thing to show (#5288 review, blocker 1).
+//
+// Styled by property selector so the ratchet stays flat; the tooltip and the
+// accessible description carry the same distinction for non-visual use.
+void PhoneCwApplet::updateHoldDelayAffordance()
+{
+    if (!m_holdDelayBtn) return;
+    const bool on    = m_model && m_model->holdBreakInDelay();
+    const bool armed = m_model && m_model->holdBreakInDelayArmed();
+    const bool unarmed = on && !armed;
+
+    if (m_holdDelayBtn->property("holdUnarmed").toBool() != unarmed) {
+        m_holdDelayBtn->setProperty("holdUnarmed", unarmed);
+        // A dynamic property does not restyle an already-polished widget.
+        m_holdDelayBtn->style()->unpolish(m_holdDelayBtn);
+        m_holdDelayBtn->style()->polish(m_holdDelayBtn);
+    }
+
+    m_holdDelayBtn->setToolTip(
+        !on ? tr("Off: the radio's speed-linked QSK floor may move the break-in "
+                 "delay when you change CW speed.")
+        : unarmed ? tr("On, but holding nothing yet — set a break-in delay and it "
+                       "will be re-sent after each CW speed change you make here. "
+                       "The held value is cleared when the radio disconnects.")
+        : tr("Holding %1 ms: re-sent after each CW speed change made here. Speed "
+             "changes made at the radio or by another client are not covered.")
+             .arg(m_model->cwDelay()));
+}
+
 void PhoneCwApplet::syncCwFromModel()
 {
     if (!m_model) return;
@@ -1216,6 +1278,7 @@ void PhoneCwApplet::syncCwFromModel()
     m_breakinBtn->setChecked(m_model->cwBreakIn());
     m_iambicBtn->setChecked(m_model->cwIambic());
     m_holdDelayBtn->setChecked(m_model->holdBreakInDelay());
+    updateHoldDelayAffordance();
 
     if (!m_pitchEdit->hasFocus())
         m_pitchEdit->setText(QString::number(m_model->cwPitch()));

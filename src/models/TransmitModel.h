@@ -104,6 +104,12 @@ public:
     int     monGainCw()     const { return m_monGainCw; }
     int     monPanCw()      const { return m_monPanCw; }
     bool    holdBreakInDelay() const { return m_holdBreakInDelay; }
+    // The opt-in is ARMED only once the operator has set a delay this session.
+    // holdBreakInDelay() alone says the operator asked for protection; this says
+    // whether there is anything to protect with. They differ after every
+    // disconnect and every app start, because the preference is persisted and
+    // the held value deliberately is not (#5288 review).
+    bool    holdBreakInDelayArmed() const { return m_cwDelayHeld > 0; }
 
     // ── Interlock / TX settings getters ──────────────────────────────────────
     int     accTxDelay()     const { return m_accTxDelay; }
@@ -317,7 +323,9 @@ public:
     // into hot-switching. Enabling it captures nothing on its own — until the
     // operator sets a delay this session there is nothing to hold. Not radio
     // state: PhoneCwApplet persists it in AppSettings and re-applies it on bind;
-    // resetState() leaves it be.
+    // resetState() leaves it be. Because the preference persists and the held
+    // value does not, on-but-unarmed is a real state — see
+    // holdBreakInDelayArmed(), which the applet renders distinctly.
     void setHoldBreakInDelay(bool on);
 
 signals:
@@ -396,6 +404,10 @@ signals:
     void cwBreakInCommandIssued(bool on);
     // The "hold break-in delay" opt-in changed. UI-only mirror; no wire effect.
     void holdBreakInDelayChanged(bool on);
+    // Whether the opt-in currently has a delay to re-assert changed. Lets the UI
+    // distinguish "on and protecting" from "on but holding nothing" instead of
+    // showing one checked state for both (#5288 review).
+    void holdBreakInDelayArmedChanged(bool armed);
     void apdStateChanged();
     void apdSamplerChanged(const QString& txAnt);
     void apdEqualizerResetReceived();
@@ -492,8 +504,10 @@ private:
     // floor or hold a value the operator never picked. When m_holdBreakInDelay
     // is set, setCwSpeed() re-asserts this after a speed change so SmartSDR's
     // speed-linked floor walk can't hot-switch an inline amp. -1 = the operator
-    // has set no delay this session (nothing to hold). Cleared by resetState()
-    // (radio swap) so one radio's value is never re-asserted at the next (#5288).
+    // has set no delay this session (nothing to hold). Cleared by resetState(),
+    // which RadioModel::onDisconnected() calls on EVERY disconnect — not only a
+    // radio swap — so one session's value is never re-asserted in the next
+    // (#5288). holdBreakInDelayArmed() exposes that gap to the UI.
     int  m_cwDelayHeld{-1};
     // Client-side opt-in, default off. Persisted by PhoneCwApplet in
     // AppSettings("CwHoldBreakInDelay"), not radio state — survives resetState().
