@@ -276,12 +276,15 @@ AnanBackend::AnanBackend(QObject* parent)
         emit capabilitiesChanged();
     });
 
-    connect(m_dsp, &AnanRxDsp::audioReady, this, [this](const std::vector<float>& pcm) {
-        const QByteArray bytes = floatBytes(pcm);
-        emit sliceAudioFrameReady(kSliceId, bytes);
+    connect(m_dsp, &AnanRxDsp::pcmReady, this, [this](const PcmFrame& frame) {
+        const QByteArray bytes = frame.legacyStereo24();
+        if (bytes.isEmpty()) {
+            return;
+        }
+        publishLegacySliceAudio(kSliceId, bytes);
         // One DDC, so "mixing" the speaker feed is the identity -- no
         // separate mix stage needed for a single receiver.
-        emit audioFrameReady(bytes);
+        publishLegacyAudio(bytes);
     });
     connect(m_dsp, &AnanRxDsp::spectrumReady, this, [this](const std::vector<float>& binsDbfs) {
         std::vector<float> dbm(binsDbfs.size());
@@ -599,6 +602,7 @@ void AnanBackend::startP2ClientSession(quint64 generation)
 
 void AnanBackend::disconnectRadio()
 {
+    retirePcmStreams();
     m_droopCalibrator.stop(false);
     m_droopCalibrator.setLandedRate(0);
     ++m_connectGeneration;   // orphan any in-flight finishDspSetup callback

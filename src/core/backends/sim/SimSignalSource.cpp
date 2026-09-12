@@ -1,5 +1,7 @@
 #include "core/backends/sim/SimSignalSource.h"
 
+#include <QDebug>
+
 namespace AetherSDR {
 
 SimSignalSource::SimSignalSource(QObject* parent) : QObject(parent)
@@ -38,6 +40,21 @@ SimSignalSource::SimSignalSource(QObject* parent) : QObject(parent)
 
 void SimSignalSource::start()
 {
+    startSession(0);
+}
+
+void SimSignalSource::startSession(quint64 session)
+{
+    // Both callers pass the backend's monotonic pcmSession(), so a repeated
+    // value is a wiring bug, not a benign retry: PcmProducer refuses a session
+    // at or below the current one and the OLD epoch stays live, which used to
+    // look like working audio purely by ordering luck.
+    const bool speakerOk = m_speakerPcm.start(PcmPurpose::Speaker, -1, {}, session);
+    const bool sliceOk = m_slicePcm.start(PcmPurpose::Slice, kSliceId, {}, session);
+    if (!speakerOk || !sliceOk) {
+        qWarning() << "SimSignalSource: producer refused session" << session
+                   << "(speaker =" << speakerOk << ", slice =" << sliceOk << ")";
+    }
     m_clock.invalidate();   // fresh pacing baseline; first frames next tick
     m_debtNs = 0;
     m_timer.start();
@@ -45,6 +62,8 @@ void SimSignalSource::start()
 
 void SimSignalSource::stop()
 {
+    m_speakerPcm.invalidate();
+    m_slicePcm.invalidate();
     m_timer.stop();
     m_clock.invalidate();
     m_debtNs = 0;
@@ -109,10 +128,14 @@ void SimSignalSource::onTick()
             ? QVector<float>(NoiseMixer::kFrameLen, 0.0f)
             : m_audio.mixFrame();
         const QByteArray stereo = toStereoBytes(frame);
-        emit audioFrameReady(stereo);
+        if (const auto frame = m_speakerPcm.legacyStereo24(stereo)) {
+            emit audioFrameReady(*frame);
+        }
         // Per-slice audio too — the TCI receiver channels are fed from
         // sliceAudioFrameReady (see the SimBackend original for the history).
-        emit sliceAudioFrameReady(kSliceId, stereo);
+        if (const auto frame = m_slicePcm.legacyStereo24(stereo)) {
+            emit sliceAudioFrameReady(kSliceId, *frame);
+        }
 
         // A panadapter row a few times a second (~21 fps at the 5.33 ms
         // frame). The stallscope fault freezes the spectrum while audio keeps

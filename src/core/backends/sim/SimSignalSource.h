@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/PcmFrame.h"
+
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QList>
@@ -49,6 +51,7 @@ public:
 
 public slots:
     void start();
+    void startSession(quint64 session);
     void stop();
 
     void setKeyed(bool keyed);            // mute while keyed (Principle VI)
@@ -78,11 +81,13 @@ public slots:
 
 signals:
     // 24 kHz stereo float32, the format AudioEngine::feedAudioData() eats.
-    void audioFrameReady(const QByteArray& stereo);
-    void sliceAudioFrameReady(int sliceId, const QByteArray& stereo);
+    void audioFrameReady(const AetherSDR::PcmFrame& stereo);
+    void sliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& stereo);
     void spectrumFrameReady(int panId, const QByteArray& bins);
 
 private:
+    PcmProducer m_speakerPcm;
+    PcmProducer m_slicePcm;
     void onTick();
     void updateBirdieFromVfo();
     static QByteArray toStereoBytes(const QVector<float>& mono);

@@ -1764,7 +1764,7 @@ AudioEngine::AudioEngine(QObject* parent)
                 return;
             if (frames <= 0 || sampleRateHz <= 0) return;
             // CwDecoder::feedAudio expects 24 kHz stereo float32 — the
-            // same shape PanadapterStream::audioDataReady() emits on
+            // same shape PanadapterStream::pcmFrameReady() carries on
             // the RX side.  Decimate 48→24 by averaging consecutive
             // pairs; the sidetone is a single sine well below 12 kHz
             // so the cheap two-tap LPF is sufficient for ggmorse.  For
@@ -4361,6 +4361,30 @@ QByteArray AudioEngine::resampleStereo(const QByteArray& pcm,
         dst[2 * i + 1] = rSrc[i];
     }
     return result;
+}
+
+void AudioEngine::feedPcmFrame(const PcmFrame& frame)
+{
+    if (frame.stream().purpose != PcmPurpose::Speaker
+        || frame.stream().format != PcmFormat{} || !m_pcmIngress.accept(frame)) {
+        return;
+    }
+    const QByteArray pcm = frame.legacyStereo24();
+    if (!pcm.isEmpty()) {
+        feedAudioData(pcm);
+    }
+}
+
+void AudioEngine::feedKiwiPcmFrame(const QString& sourceId, const PcmFrame& frame)
+{
+    if (frame.stream().purpose != PcmPurpose::Auxiliary
+        || frame.stream().format != PcmFormat{} || !m_kiwiPcmIngress.accept(frame)) {
+        return;
+    }
+    const QByteArray pcm = frame.legacyStereo24();
+    if (!pcm.isEmpty()) {
+        feedKiwiSdrAudioData(sourceId, pcm);
+    }
 }
 
 void AudioEngine::feedAudioData(const QByteArray& pcm)

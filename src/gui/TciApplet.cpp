@@ -320,7 +320,7 @@ void TciApplet::setRadioModel(RadioModel* model)
     }
 
     // Slice → DAX channel mapping drives both DAX and TCI RX indicators.
-    // TCI RX1-8 carry the same DAX channels (PanadapterStream::daxAudioReady
+    // TCI RX1-8 carry the same DAX channels (PanadapterStream::daxPcmReady
     // fans out to both DaxBridge and TciServer), so reuse the DAX channel
     // assignments for the slice letters here. The TCI receiver (trx) index is
     // NOT capped at 4: trx is a positional slice index bounded by

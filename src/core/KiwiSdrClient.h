@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/PcmFrame.h"
+
 #include "KiwiSdrProtocol.h"
 
 #include <QByteArray>
@@ -142,6 +144,7 @@ signals:
                              const QString& mode, int filterLowHz,
                              int filterHighHz, const QString& panId);
     void decodedAudioReady(const QByteArray& pcm24kStereoFloat);
+    void pcmFrameReady(const AetherSDR::PcmFrame& frame);
     void waterfallRowReady(const QString& panId, const QVector<float>& binsDbm,
                            double lowFreqMhz, double highFreqMhz,
                            quint32 timecode);
@@ -159,6 +162,8 @@ protected:
     virtual void sendWaterfallCommand(const QString& command);
 
 private:
+    PcmProducer m_pcmProducer;
+    void publishDecodedAudio(const QByteArray& pcm);
     friend class KiwiSdrWaterfallSetupTest;
     enum class StreamKind {
         Sound,

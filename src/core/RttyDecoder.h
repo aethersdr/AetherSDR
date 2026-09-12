@@ -12,11 +12,11 @@ namespace AetherSDR {
 
 // Client-side RTTY (Baudot/ITA2) decoder using mark/space bandpass filters.
 // Runs decoding on a worker thread. Feed it 24 kHz stereo float32 PCM
-// (the same format audioDataReady emits) and it emits decoded text.
+// (the same format rxDemodAudioReady carries) and it emits decoded text.
 //
 // Usage:
 //   decoder.start();
-//   connect(panStream, &PanadapterStream::audioDataReady, &decoder, &RttyDecoder::feedAudio);
+//   connect(&radioModel, &RadioModel::rxDemodAudioReady, ...); // unwrap with PcmFrame::legacyStereo24()
 //   connect(&decoder, &RttyDecoder::textDecoded, panel, &PanadapterApplet::appendRttyText);
 
 class RttyDecoder : public QObject {

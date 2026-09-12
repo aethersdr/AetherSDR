@@ -919,20 +919,7 @@ void RadioModel::setupBackend(const QString& family)
             [this](int, const QByteArray&) {
         m_lastSpectrumMs = QDateTime::currentMSecsSinceEpoch();
     });
-    connect(m_backend.get(), &IRadioBackend::audioFrameReady, this,
-            [this](const QByteArray&) {
-        m_lastAudioMs = QDateTime::currentMSecsSinceEpoch();
-    });
-
-    // Demodulated RX audio from backends that produce it in-process (HL2).
-    // Signal-to-signal: the payload is already the engine's native format.
-    connect(m_backend.get(), &IRadioBackend::audioFrameReady,
-            this, &RadioModel::backendAudioFrameReady);
-
-    // Per-slice demodulated audio. Signal-to-signal like the mixed feed above:
-    // the payload is already the engine's native format.
-    connect(m_backend.get(), &IRadioBackend::sliceAudioFrameReady,
-            this, &RadioModel::backendSliceAudioFrameReady);
+    wireBackendPcm();
 
     // Pick the one producer for the normalized RX-audio bus. Done here, once
     // per backend, so every consumer of rxDemodAudioReady is family-blind and
@@ -1861,6 +1848,9 @@ void RadioModel::teardownBackend()
 {
     resetTxOperations();
     ++m_backendReceiverGeneration;
+    if (m_backend) {
+        m_backend->retirePcmStreams();
+    }
     // Answer, then drop, every command still waiting on the backend that is
     // about to die. The generation guard on commandResponse means a reply
     // arriving after this point is discarded, so without this the callback —
@@ -2073,6 +2063,7 @@ RadioModel::RadioModel(QObject* parent)
     });
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateTuneAvailability);
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateTuneAvailability);
+    qRegisterMetaType<PcmFrame>();
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
@@ -3129,6 +3120,30 @@ int RadioModel::activeTxSliceNum() const
     return -1;
 }
 
+void RadioModel::wireBackendPcm()
+{
+    const quint64 generation = m_backendReceiverGeneration;
+    connect(m_backend.get(), &IRadioBackend::audioFrameReady, this,
+            [this, generation](const PcmFrame& frame) {
+        if (generation != m_backendReceiverGeneration
+            || frame.stream().purpose != PcmPurpose::Speaker
+            || !m_backendPcmGate.accept(frame)) {
+            return;
+        }
+        m_lastAudioMs = QDateTime::currentMSecsSinceEpoch();
+        emit backendAudioFrameReady(frame);
+    });
+    connect(m_backend.get(), &IRadioBackend::sliceAudioFrameReady, this,
+            [this, generation](int sliceId, const PcmFrame& frame) {
+        if (generation != m_backendReceiverGeneration
+            || frame.stream().purpose != PcmPurpose::Slice
+            || frame.stream().sliceId != sliceId || !m_slicePcmGate.accept(frame)) {
+            return;
+        }
+        emit backendSliceAudioFrameReady(sliceId, frame);
+    });
+}
+
 void RadioModel::wireRxDemodAudioBus()
 {
     // Exactly one producer, ever. Drop the previous binding first: on a family
@@ -3143,15 +3158,25 @@ void RadioModel::wireRxDemodAudioBus()
         // Chained off backendAudioFrameReady rather than the backend's own
         // signal so both relays cross the thread boundary identically.
         m_rxDemodBusConn = connect(this, &RadioModel::backendAudioFrameReady,
-                                   this, &RadioModel::rxDemodAudioReady);
+                                   this, [this](const PcmFrame& frame) {
+            if (!m_demodPcmGate.accept(frame)) {
+                return;
+            }
+            emit rxDemodAudioReady(frame);
+        });
         return;
     }
     if (m_panStream) {
         // Flex: the VITA-49 slice audio, unchanged and still feeding the engine
         // by its own existing connection. This is an ADDITIONAL subscriber to
         // the same signal, so the audible path is untouched.
-        m_rxDemodBusConn = connect(m_panStream, &PanadapterStream::audioDataReady,
-                                   this, &RadioModel::rxDemodAudioReady);
+        m_rxDemodBusConn = connect(m_panStream, &PanadapterStream::pcmFrameReady,
+                                   this, [this](const PcmFrame& frame) {
+            if (!m_demodPcmGate.accept(frame)) {
+                return;
+            }
+            emit rxDemodAudioReady(frame);
+        });
     }
 }
 
@@ -9645,6 +9670,8 @@ void RadioModel::setBackendForTest(std::unique_ptr<IRadioBackend> backend,
     teardownBackend();
     m_backend = std::move(backend);
     m_family = family;
+    wireBackendPcm();
+    wireRxDemodAudioBus();
     wireBackendReceiverState();
     // Injected backends bypass onConnected(), but replacement must still drain
     // the old session before test callers can exercise the new one.

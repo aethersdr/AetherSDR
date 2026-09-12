@@ -27,7 +27,7 @@ class TransmitModel;
 // Records QSO audio (both RX and TX sides) to WAV files.
 //
 // Usage:
-//   - Connect feedRxAudio() (float32 RX) to PanadapterStream::audioDataReady
+//   - Connect feedRxAudio() (float32 RX) to RadioModel::rxDemodAudioReady
 //   - Connect feedTxAudio() (int16 post-limiter TX monitor) to
 //     AudioEngine::txFinalMonitorPcmReady — the source that carries SSB/phone TX
 //     (txRawPcmReady is RADE-only and would leave SSB recordings silent, #3556)

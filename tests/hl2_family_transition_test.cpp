@@ -108,10 +108,12 @@ int main(int argc, char** argv)
     {
         int busBlocks = 0;
         QObject::connect(&model, &RadioModel::rxDemodAudioReady,
-                         &model, [&busBlocks](const QByteArray&) { ++busBlocks; });
+                         &model, [&busBlocks](const PcmFrame&) { ++busBlocks; });
 
         const QByteArray frame(256, '\0');
-        emit model.backendAudioFrameReady(frame);
+        AetherSDR::PcmProducer pcmProducer;
+        pcmProducer.start();
+        emit model.backendAudioFrameReady(*pcmProducer.legacyStereo24(frame));
         check(busBlocks == 1,
               "RX bus: a seam backend's audio reaches rxDemodAudioReady exactly once");
 
@@ -121,7 +123,8 @@ int main(int argc, char** argv)
         // catching a doubled count later would. (PR #4537 review.)
         model.connectToRadio(flexInfo());
         busBlocks = 0;
-        emit model.backendAudioFrameReady(frame);
+        pcmProducer.start();
+        emit model.backendAudioFrameReady(*pcmProducer.legacyStereo24(frame));
         check(busBlocks == 0,
               "RX bus: the seam relay is dropped when a Flex takes over");
 
@@ -129,7 +132,8 @@ int main(int argc, char** argv)
         // on the seam relay, which is the case Qt cannot clean up for us.
         model.connectToRadio(hl2Info());
         busBlocks = 0;
-        emit model.backendAudioFrameReady(frame);
+        pcmProducer.start();
+        emit model.backendAudioFrameReady(*pcmProducer.legacyStereo24(frame));
         check(busBlocks == 1,
               "RX bus: still exactly one producer after a family round-trip");
     }

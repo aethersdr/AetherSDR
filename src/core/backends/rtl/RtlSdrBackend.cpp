@@ -1,4 +1,6 @@
 #include "core/backends/rtl/RtlSdrBackend.h"
+
+#include <QPointer>
 #include "core/backends/rtl/RtlSdrWorker.h"
 #include "core/backends/rtl/RtlSdrDdc.h"
 #include "core/backends/RadioDelta.h"
@@ -394,9 +396,12 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
     connect(m_worker.get(), &RtlSdrWorker::waterfallRowReady,
             this, &IRadioBackend::waterfallRowReady);
     connect(m_worker.get(), &RtlSdrWorker::audioFrameReady,
-            this, [this](const QByteArray& pcm) {
-                emit audioFrameReady(pcm);
-                emit sliceAudioFrameReady(0, pcm);
+            this, [this, producer = QPointer<RtlSdrWorker>(m_worker.get())](const QByteArray& pcm) {
+                if (!producer || producer.data() != m_worker.get()) {
+                    return;
+                }
+                publishLegacyAudio(pcm);
+                publishLegacySliceAudio(0, pcm);
             });
     connect(m_worker.get(), &RtlSdrWorker::readError,
             this, [this](const QString& err) {
@@ -418,6 +423,7 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
 
 void RtlSdrBackend::disconnectRadio()
 {
+    retirePcmStreams();
     if (!m_connected) {
         return;
     }

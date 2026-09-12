@@ -10,7 +10,7 @@
 // The WWV signal synthesizer helpers below are COPIED (not included) from
 // tests/wwv_decoder_test.cpp — the gate-passed WS-1 vector generator. Only the
 // clean-signal path is reused (no AWGN / WAV writer / decoder driver): the
-// engine ingests float32 INTERLEAVED STEREO (the daxAudioReady payload), so
+// engine ingests float32 INTERLEAVED STEREO (the daxPcmReady payload), so
 // each mono sample is duplicated L=R into the QByteArray and fed in ~200 ms
 // blocks. A fake host clock is injected and advanced per block so the decoded
 // second edge can be compared against a known skew.
@@ -239,7 +239,7 @@ void feedStereoVia(const std::function<void(const QByteArray&)>& sink,
     }
 }
 
-// Channel-keyed feed (Flex / daxAudioReady).
+// Channel-keyed feed (Flex / daxPcmReady).
 void feedStereo(AetherClockEngine& eng, int channel, const std::vector<float>& mono,
                 qint64 epochMs, qint64 skewMs,
                 qint64& samplesFed, qint64& fakeNow, bool advanceClock) {

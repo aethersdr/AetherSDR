@@ -2005,10 +2005,10 @@ void MainWindow::wireKiwiSdr()
                 m_radioModel.transmitModel().cwPitch());
         });
         if (m_audio) {
-            connect(m_kiwiSdrManager, &KiwiSdrManager::decodedAudioReady,
+            connect(m_kiwiSdrManager, &KiwiSdrManager::pcmFrameReady,
                     m_audio, [audio = m_audio](const QString& id,
-                                                const QByteArray& pcm) {
-                audio->feedKiwiSdrAudioData(id, pcm);
+                                                const PcmFrame& pcm) {
+                audio->feedKiwiPcmFrame(id, pcm);
             }, Qt::QueuedConnection);
             connect(m_kiwiSdrManager, &KiwiSdrManager::audioSourceEnabledChanged,
                     m_audio, [audio = m_audio](const QString& id, bool enabled) {
