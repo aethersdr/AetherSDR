@@ -1,5 +1,7 @@
 #include "core/backends/icom/IcomCivBackend.h"
 
+#include <QPointer>
+
 #include <QDateTime>
 #include <QHash>
 #include <QJsonDocument>
@@ -919,7 +921,12 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
             [this, sessionGeneration](const CivFrame& frame) {
                 onCivFrame(frame, sessionGeneration);
             });
-    connect(m_session.get(), &IcomSession::audioReady, this, &IcomCivBackend::onAudio);
+    connect(m_session.get(), &IcomSession::audioReady, this,
+            [this, producer = QPointer<IcomSession>(m_session.get())](const std::vector<float>& pcm) {
+        if (producer && producer.data() == m_session.get()) {
+            onAudio(pcm);
+        }
+    });
 
     if (!m_session->start(p))
         emit connectionError(QStringLiteral("could not open the Icom session"));
@@ -927,6 +934,7 @@ void IcomCivBackend::connectRadio(const RadioConnectRequest& request)
 
 void IcomCivBackend::disconnectRadio()
 {
+    retirePcmStreams();
     finishAx25PostResampleCapture();
     finishMemoryRefresh(false);
     m_tuneTimer->stop();
@@ -3200,8 +3208,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
 
 void IcomCivBackend::onAudio(const std::vector<float>& mono)
 {
-    if (mono.empty() || !m_rxResampler)
+    if (mono.empty() || mono.size() > static_cast<std::size_t>(PcmFrame::kMaxFrames)
+        || !m_rxResampler) {
         return;
+    }
+    for (float sample : mono) {
+        if (!std::isfinite(sample)) {
+            return; // do not poison the persistent input converter
+        }
+    }
 
     // 48 kHz MONO from the radio -> 24 kHz interleaved STEREO for the engine.
     //
@@ -3217,7 +3232,7 @@ void IcomCivBackend::onAudio(const std::vector<float>& mono)
         return;
 
     // The speaker feed.
-    emit audioFrameReady(stereo24k);
+    publishLegacyAudio(stereo24k);
 
     // And the PER-SLICE feed, which is a different consumer and not optional:
     // the TCI receiver channels are routed by slice, because a mixed feed
@@ -3226,7 +3241,7 @@ void IcomCivBackend::onAudio(const std::vector<float>& mono)
     //
     // Emitted PRE-mute and PRE-gain by contract — muting a slice must silence
     // the monitor without stopping a decoder that is running on it.
-    emit sliceAudioFrameReady(sliceId(), stereo24k);
+    publishLegacySliceAudio(sliceId(), stereo24k);
 }
 
 void IcomCivBackend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,

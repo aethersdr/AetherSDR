@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/PcmFrame.h"
+
 #include <QObject>
 #include <QAudioSink>
 #include <QAudioSource>
@@ -679,8 +681,11 @@ public:
     }
 
 public slots:
-    // Receives stripped PCM from PanadapterStream::audioDataReady().
+    // Legacy internal/playback ingress: native float32 stereo at 24 kHz.
+    // Live producers use feedPcmFrame so validation survives queued delivery.
     void feedAudioData(const QByteArray& pcm);
+    void feedPcmFrame(const AetherSDR::PcmFrame& frame);
+    void feedKiwiPcmFrame(const QString& sourceId, const AetherSDR::PcmFrame& frame);
     // Receives decoded KiwiSDR PCM after a clean protocol decoder exists.
     // Same format as feedAudioData(): 24 kHz stereo float32.
     void feedKiwiSdrAudioData(const QByteArray& pcm24kStereoFloat);
@@ -1199,6 +1204,9 @@ private:
     QElapsedTimer m_lastTxMicChannelLog;
     QElapsedTimer m_lastDaxRadioChannelLog;
     std::unique_ptr<Resampler> m_txResampler;  // RADE e.g. 48k -> 24k (lazy init)
+
+    PcmFrameGate m_pcmIngress;
+    PcmFrameGate m_kiwiPcmIngress;
 
     // DSP lifecycle mutex: held during feedAudioData() DSP section AND
     // during enable/disable to prevent use-after-free (#502)

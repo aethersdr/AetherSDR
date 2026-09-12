@@ -38,6 +38,13 @@ SimSignalSource::SimSignalSource(QObject* parent) : QObject(parent)
 
 void SimSignalSource::start()
 {
+    startSession(0);
+}
+
+void SimSignalSource::startSession(quint64 session)
+{
+    m_speakerPcm.start(PcmPurpose::Speaker, -1, {}, session);
+    m_slicePcm.start(PcmPurpose::Slice, kSliceId, {}, session);
     m_clock.invalidate();   // fresh pacing baseline; first frames next tick
     m_debtNs = 0;
     m_timer.start();
@@ -45,6 +52,8 @@ void SimSignalSource::start()
 
 void SimSignalSource::stop()
 {
+    m_speakerPcm.invalidate();
+    m_slicePcm.invalidate();
     m_timer.stop();
     m_clock.invalidate();
     m_debtNs = 0;
@@ -109,10 +118,14 @@ void SimSignalSource::onTick()
             ? QVector<float>(NoiseMixer::kFrameLen, 0.0f)
             : m_audio.mixFrame();
         const QByteArray stereo = toStereoBytes(frame);
-        emit audioFrameReady(stereo);
+        if (const auto frame = m_speakerPcm.legacyStereo24(stereo)) {
+            emit audioFrameReady(*frame);
+        }
         // Per-slice audio too — the TCI receiver channels are fed from
         // sliceAudioFrameReady (see the SimBackend original for the history).
-        emit sliceAudioFrameReady(kSliceId, stereo);
+        if (const auto frame = m_slicePcm.legacyStereo24(stereo)) {
+            emit sliceAudioFrameReady(kSliceId, *frame);
+        }
 
         // A panadapter row a few times a second (~21 fps at the 5.33 ms
         // frame). The stallscope fault freezes the spectrum while audio keeps

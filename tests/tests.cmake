@@ -66,6 +66,19 @@ unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
 
+# Typed producer PCM, queued lifetime and compatibility: QtCore only, no sockets.
+add_executable(pcm_frame_test tests/pcm_frame_test.cpp)
+target_include_directories(pcm_frame_test PRIVATE src)
+target_link_libraries(pcm_frame_test PRIVATE Qt6::Core)
+add_test(NAME pcm_frame_test COMMAND pcm_frame_test)
+set_tests_properties(pcm_frame_test PROPERTIES TIMEOUT 30)
+
+# Actual backend/model/audio/parser wiring with injected PCM; binds no sockets.
+add_executable(pcm_compatibility_test tests/pcm_compatibility_test.cpp)
+target_link_libraries(pcm_compatibility_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pcm_compatibility_test COMMAND pcm_compatibility_test)
+set_tests_properties(pcm_compatibility_test PROPERTIES TIMEOUT 60)
+
 # Pure shared-capture geometry policy: no sockets, settings, DSP or hardware.
 add_executable(shared_capture_policy_test
     tests/shared_capture_policy_test.cpp
@@ -4987,6 +5000,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    pcm_compatibility_test
     firmware_close_dialog_test
     atu_seam_gate_test
     backend_capability_revision_test

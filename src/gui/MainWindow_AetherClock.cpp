@@ -67,9 +67,14 @@ void MainWindow::setupAetherClock()
                     auto* ps = m_radioModel.panStream();
                     if (ps && !m_clockDaxConn)
                         m_clockDaxConn = connect(
-                            ps, &PanadapterStream::daxAudioReady,
-                            m_clockEngine, &AetherClockEngine::feedRxAudio,
-                            Qt::QueuedConnection);
+                            ps, &PanadapterStream::daxPcmReady,
+                            m_clockEngine,
+                            [engine = m_clockEngine](int channel, const PcmFrame& frame) {
+                                const QByteArray pcm = frame.legacyStereo24();
+                                if (!pcm.isEmpty()) {
+                                    engine->feedRxAudio(channel, pcm);
+                                }
+                            }, Qt::QueuedConnection);
                     // Seam-native per-slice audio (MainWindow_Session.cpp:1811
                     // feeds TciServer from the same signal for the same
                     // reason). A backend that demodulates in-process has no
@@ -82,8 +87,12 @@ void MainWindow::setupAetherClock()
                             &m_radioModel,
                             &RadioModel::backendSliceAudioFrameReady,
                             m_clockEngine,
-                            &AetherClockEngine::feedRxSliceAudio,
-                            Qt::QueuedConnection);
+                            [engine = m_clockEngine](int sliceId, const PcmFrame& frame) {
+                                const QByteArray pcm = frame.legacyStereo24();
+                                if (!pcm.isEmpty()) {
+                                    engine->feedRxSliceAudio(sliceId, pcm);
+                                }
+                            }, Qt::QueuedConnection);
                 } else {
                     if (m_clockDaxConn) {
                         disconnect(m_clockDaxConn);

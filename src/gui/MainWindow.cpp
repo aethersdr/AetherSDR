@@ -1292,8 +1292,8 @@ MainWindow::MainWindow(QWidget* parent)
         // and so has no stream connection to drop. (PR #4537 review.)
         m_rxMutedForPlayback = mute;
         if (mute) {
-            disconnect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-                       m_audio, &AudioEngine::feedAudioData);
+            disconnect(m_radioModel.panStream(), &PanadapterStream::pcmFrameReady,
+                       m_audio, &AudioEngine::feedPcmFrame);
         } else {
             // Only restore the stream→sink feed for backends that actually use it.
             // A backend that emits its own seam audio (the demo, RFC #4288 Route A)
@@ -1301,8 +1301,8 @@ MainWindow::MainWindow(QWidget* parent)
             // double-feed that wirePanStreamRxAudioSinks() deliberately skips, and
             // Qt permits duplicates, so every unmute would stack another copy.
             if (!backendFeedsEngineDirectly()) {
-                connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-                        m_audio, &AudioEngine::feedAudioData,
+                connect(m_radioModel.panStream(), &PanadapterStream::pcmFrameReady,
+                        m_audio, &AudioEngine::feedPcmFrame,
                         Qt::UniqueConnection);
             }
         }
@@ -1482,15 +1482,15 @@ MainWindow::MainWindow(QWidget* parent)
         m_rxMutedForPlayback = mute;   // seam backends — see the recorder handler
         if (mute) {
             disconnect(m_radioModel.panStream(),
-                       &PanadapterStream::audioDataReady,
-                       m_audio, &AudioEngine::feedAudioData);
+                       &PanadapterStream::pcmFrameReady,
+                       m_audio, &AudioEngine::feedPcmFrame);
         } else {
             // Same rule as the QSO-recorder unmute above: never resurrect the
             // stream→sink feed for a backend that supplies its own seam audio.
             if (!backendFeedsEngineDirectly()) {
                 connect(m_radioModel.panStream(),
-                        &PanadapterStream::audioDataReady,
-                        m_audio, &AudioEngine::feedAudioData,
+                        &PanadapterStream::pcmFrameReady,
+                        m_audio, &AudioEngine::feedPcmFrame,
                         Qt::UniqueConnection);
             }
         }
@@ -6961,7 +6961,7 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     // happen not to emit the signal today.
     if (dynamic_cast<SimBackend*>(backend) != nullptr) {
         connect(backend, &IRadioBackend::audioFrameReady,
-                m_audio, &AudioEngine::feedAudioData);
+                m_audio, &AudioEngine::feedPcmFrame);
     }
 
     // HL2 only, and deliberately: the client-side WDSP chains are this family's

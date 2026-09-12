@@ -576,8 +576,12 @@ void MainWindow::activateRADE(int sliceId)
     // Filter by the RADE slice's DAX channel so other slices' DAX audio is ignored.
     // Look up the channel live so it tracks if the user changes DAX assignment.
     int sid = sliceId;
-    connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
-            m_radeEngine, [this, sid](int channel, const QByteArray& pcm) {
+    connect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
+            m_radeEngine, [this, sid](int channel, const PcmFrame& frame) {
+        const QByteArray pcm = frame.legacyStereo24();
+        if (pcm.isEmpty()) {
+            return;
+        }
         auto* s = m_radioModel.slice(sid);
         if (s && channel == s->daxChannel())
             m_radeEngine->feedRxAudio(channel, pcm);
@@ -761,7 +765,7 @@ void MainWindow::deactivateRADE()
                    m_radeEngine, nullptr);
         disconnect(m_radeEngine, &RADEEngine::txModemReady,
                    m_audio, nullptr);
-        disconnect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
+        disconnect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
                    m_radeEngine, nullptr);
         disconnect(m_radeEngine, &RADEEngine::rxSpeechReady,
                    m_audio, nullptr);
@@ -1206,8 +1210,13 @@ bool MainWindow::startDax()
     }));
 
     // Wire DAX RX: PanadapterStream routes registered DAX streams here
-    connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
-            m_daxBridge, &DaxBridge::feedDaxAudio);
+    connect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
+            m_daxBridge, [bridge = m_daxBridge](int channel, const PcmFrame& frame) {
+        const QByteArray pcm = frame.legacyStereo24();
+        if (!pcm.isEmpty()) {
+            bridge->feedDaxAudio(channel, pcm);
+        }
+    });
 
     // DAX-IQ stream-status routing, the VITA-49 IQ feed, level meter, and the
     // enable/disable/rate connections are wired ONCE at construction (see the
@@ -1275,7 +1284,7 @@ void MainWindow::stopDax()
     m_daxSliceConns.clear();
     m_daxSliceLastCh.clear();
 
-    disconnect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
+    disconnect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
                m_daxBridge, nullptr);
     disconnect(m_daxBridge, &DaxBridge::txAudioReady,
                this, nullptr);

@@ -31,12 +31,16 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // disconnected backend emits nothing (sim_backend_test pins it; the
     // unguarded forward was a latent flake that fired on the slower build).
     connect(m_signalSource, &SimSignalSource::audioFrameReady,
-            this, [this](const QByteArray& pcm) {
-                if (m_connected) emit audioFrameReady(pcm);
+            this, [this](const PcmFrame& frame) {
+                if (m_connected && frame.stream().session == pcmSession()) {
+                    publishLegacyAudio(frame.legacyStereo24());
+                }
             });
     connect(m_signalSource, &SimSignalSource::sliceAudioFrameReady,
-            this, [this](int sliceId, const QByteArray& pcm) {
-                if (m_connected) emit sliceAudioFrameReady(sliceId, pcm);
+            this, [this](int sliceId, const PcmFrame& frame) {
+                if (m_connected && frame.stream().session == pcmSession()) {
+                    publishLegacySliceAudio(sliceId, frame.legacyStereo24());
+                }
             });
     connect(m_signalSource, &SimSignalSource::spectrumFrameReady,
             this, [this](int panId, const QByteArray& bins) {
@@ -114,7 +118,9 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
         m_wirePanIds = QStringList{wirePanIdFor(0)};
         m_pansAwaitingGeometry.clear();
         pushPanIndicesToSource();
-        QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::start,
+        QMetaObject::invokeMethod(m_signalSource, [source = m_signalSource, session = pcmSession()] {
+            source->startSession(session);
+        },
                                   Qt::QueuedConnection);
         QTimer::singleShot(150, this, [this]() {
             if (m_connected) emitInitialState();
@@ -383,12 +389,15 @@ void SimBackend::connectRadio(const RadioConnectRequest& /*request*/)
     emit connected();
     emit capabilitiesChanged();
     emitInitialState();
-    QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::start,
+    QMetaObject::invokeMethod(m_signalSource, [source = m_signalSource, session = pcmSession()] {
+            source->startSession(session);
+        },
                               Qt::QueuedConnection);   // synthetic RX begins
 }
 
 void SimBackend::disconnectRadio()
 {
+    retirePcmStreams();
     if (!m_connected) {
         return;
     }

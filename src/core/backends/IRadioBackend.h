@@ -1,6 +1,9 @@
 #pragma once
 
 #include "core/RadioSettingsIdentity.h"
+#include "core/PcmFrame.h"
+
+#include <map>
 
 #include <QByteArray>
 #include <QMap>
@@ -174,8 +177,30 @@ class IRadioBackend : public QObject {
     Q_OBJECT
 
 public:
-    explicit IRadioBackend(QObject* parent = nullptr) : QObject(parent) {}
+    explicit IRadioBackend(QObject* parent = nullptr) : QObject(parent)
+    {
+        connect(this, &IRadioBackend::connected, this, [this] {
+            m_slicePcm.clear();
+            ++m_pcmSession;
+            m_pcmLive = m_speakerPcm.start(PcmPurpose::Speaker, -1, {}, m_pcmSession);
+        });
+        connect(this, &IRadioBackend::disconnected, this, [this] {
+            retirePcmStreams();
+        });
+        connect(this, &IRadioBackend::sliceRemoved, this, [this](int id) {
+            m_slicePcm.erase(id);
+        });
+    }
     ~IRadioBackend() override = default;
+
+    // Owner-thread retirement before disconnect/teardown can pump events.
+    // Revokes already queued compatibility frames without touching the radio.
+    void retirePcmStreams()
+    {
+        m_pcmLive = false;
+        m_speakerPcm.invalidate();
+        m_slicePcm.clear();
+    }
 
     // ---- identity & capability (feeds the protocol `welcome`, §4.1) ----
     virtual RadioCapabilities capabilities() const = 0;
@@ -1116,7 +1141,7 @@ signals:
     // Flex does NOT emit this: its per-slice audio already arrives as DAX
     // channels, which are per-slice by construction. Only a backend that
     // demodulates in this process has to say which slice a buffer belongs to.
-    void sliceAudioFrameReady(int sliceId, const QByteArray& pcm);
+    void sliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
 
 
     // The pan's front end is WIDE: the hardware band filter cannot serve every
@@ -1230,7 +1255,55 @@ signals:
     // then a backend may relay the existing in-tree frame types.
     void spectrumFrameReady(int panId, const QByteArray& frame);
     void waterfallRowReady(int panId, const QByteArray& row);
-    void audioFrameReady(const QByteArray& pcm);
+    void audioFrameReady(const AetherSDR::PcmFrame& pcm);
+
+protected:
+    quint64 pcmSession() const { return m_pcmSession; }
+
+    // Compatibility publishers for current 24 kHz backends. Call on the owner
+    // thread, after rejecting obsolete worker deliveries. Native-rate producers
+    // will publish their own PcmFrame without using these fixed-format adapters.
+    void publishLegacyAudio(const QByteArray& pcm)
+    {
+        if (!m_pcmLive || !isConnected()) {
+            return;
+        }
+        if (const auto frame = m_speakerPcm.legacyStereo24(pcm)) {
+            emit audioFrameReady(*frame);
+        }
+    }
+    bool publishLegacySliceAudio(int sliceId, const QByteArray& pcm)
+    {
+        if (!m_pcmLive || !isConnected() || sliceId < 0) {
+            return false;
+        }
+        auto it = m_slicePcm.find(sliceId);
+        if (it == m_slicePcm.end()) {
+            if (m_slicePcm.size() >= PcmFrameGate::kMaxStreams) {
+                return false;
+            }
+            auto producer = std::make_unique<PcmProducer>();
+            producer->start(PcmPurpose::Slice, sliceId, {}, m_pcmSession);
+            const auto frame = producer->legacyStereo24(pcm);
+            if (!frame) {
+                return false;
+            }
+            m_slicePcm.emplace(sliceId, std::move(producer));
+            emit sliceAudioFrameReady(sliceId, *frame);
+            return true;
+        }
+        if (const auto frame = it->second->legacyStereo24(pcm)) {
+            emit sliceAudioFrameReady(sliceId, *frame);
+            return true;
+        }
+        return false;
+    }
+
+private:
+    bool m_pcmLive = false;
+    quint64 m_pcmSession = 0;
+    PcmProducer m_speakerPcm;
+    std::map<int, std::unique_ptr<PcmProducer>> m_slicePcm;
 };
 
 }  // namespace AetherSDR

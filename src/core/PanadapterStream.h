@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/PcmFrame.h"
+#include <map>
+
 #include "PacketLossConcealment.h"
 #include "VitaBinCoverage.h"
 
@@ -214,6 +217,7 @@ signals:
     void daxStreamUnregistered(int channel, quint32 streamId);
 
     void daxAudioReady(int channel, const QByteArray& pcm);
+    void daxPcmReady(int channel, const AetherSDR::PcmFrame& frame);
     void iqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
     void spectrumReady(quint32 streamId, const QVector<float>& binsDbm, qint64 emittedNs);
     // One row of waterfall data (intensity values, Width bins).
@@ -222,9 +226,10 @@ signals:
                            quint32 timecode, qint64 emittedNs);
     // Emitted once per waterfall tile with the radio's computed auto black level.
     void waterfallAutoBlackLevel(quint32 streamId, quint32 autoBlack);
-    // Raw PCM payload (header stripped) from IF-Data (audio) VITA-49 packets.
-    // Format: 16-bit signed, stereo, 24 kHz, little-endian.
+    // Compatibility output after IF-Data decode: owning native-endian
+    // float32 stereo at 24 kHz. Production routes use pcmFrameReady instead.
     void audioDataReady(const QByteArray& pcm);
+    void pcmFrameReady(const AetherSDR::PcmFrame& frame);
     // Meter data: parallel arrays of (meter_index, raw_int16_value).
     void meterDataReady(const QVector<quint16>& ids, const QVector<qint16>& vals);
     // Emitted after the receive buffer is (re)applied on a bind or a live
@@ -235,6 +240,11 @@ private slots:
     void onDatagramReady();
 
 private:
+    friend class PcmCompatibilityTestAccess;
+    PcmProducer m_pcmProducer;
+    std::map<quint32, std::unique_ptr<PcmProducer>> m_daxPcm;
+    void publishLegacyDaxAudio(quint32 streamId, int channel, const QByteArray& pcm);
+    void publishLegacyAudio(const QByteArray& pcm);
     void processDatagram(const QByteArray& data);
     // Raise the kernel receive buffer (SO_RCVBUF) on the bound VITA-49 socket so
     // bursts / brief drain stalls don't overflow it and surface as false

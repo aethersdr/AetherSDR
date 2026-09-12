@@ -141,6 +141,8 @@ void AnanRxDsp::installChannel(RebuildResult result)
                                      static_cast<double>(m_config.audioSampleRateHz));
     m_dcBlockL.r = pole;
     m_dcBlockR.r = pole;
+    m_pcmProducer.start(PcmPurpose::Speaker, -1,
+                        {m_config.audioSampleRateHz, PcmLayout::Stereo});
     m_dcBlockL.reset();
     m_dcBlockR.reset();
     // Fresh smoothing state for the new channel -- see smoothSpectrumBins()'s
@@ -368,7 +370,11 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
             m_stereo[2 * k] = m_dcBlockL.process(m_left[k]);
             m_stereo[2 * k + 1] = m_dcBlockR.process(m_right[k]);
         }
-        emit audioReady(m_stereo);
+        QVector<float> samples(m_stereo.begin(), m_stereo.end());
+        if (const auto frame = m_pcmProducer.produce(std::move(samples))) {
+            emit pcmReady(*frame);
+            emit audioReady(m_stereo);
+        }
         emit meterUpdate(static_cast<float>(
             m_channel->meter(WdspChannel::Meter::SignalPeak)));
     }

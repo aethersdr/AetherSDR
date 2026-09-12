@@ -780,6 +780,7 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
 
 void KiwiSdrClient::openWebSockets()
 {
+    m_pcmProducer.start(PcmPurpose::Auxiliary);
     const QString scheme = m_secureWebSocket
         ? QStringLiteral("wss")
         : QStringLiteral("ws");
@@ -1195,6 +1196,7 @@ bool KiwiSdrClient::diagnosticSoundCompressionRequested()
 
 void KiwiSdrClient::cleanupSockets()
 {
+    m_pcmProducer.invalidate();
     if (m_keepaliveTimer) {
         m_keepaliveTimer->stop();
     }
@@ -1949,6 +1951,14 @@ void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
     }
 }
 
+void KiwiSdrClient::publishDecodedAudio(const QByteArray& pcm)
+{
+    if (const auto frame = m_pcmProducer.legacyStereo24(pcm)) {
+        emit pcmFrameReady(*frame);
+        emit decodedAudioReady(frame->legacyStereo24());
+    }
+}
+
 void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
 {
     m_soundFrameSeen = true;
@@ -2166,10 +2176,10 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
                                           kMaxSequenceGapPaddingFrames);
         if (!compressedSound && !m_lastDecodedSoundPcm.isEmpty()) {
             for (quint64 i = 0; i < padFrames; ++i) {
-                emit decodedAudioReady(m_lastDecodedSoundPcm);
+                publishDecodedAudio(m_lastDecodedSoundPcm);
             }
         }
-        emit decodedAudioReady(pcm);
+        publishDecodedAudio(pcm);
         m_lastDecodedSoundPcm = pcm;
         emit meterReadingReady(meterReading);
     }

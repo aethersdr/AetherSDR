@@ -4361,6 +4361,30 @@ QByteArray AudioEngine::resampleStereo(const QByteArray& pcm,
     return result;
 }
 
+void AudioEngine::feedPcmFrame(const PcmFrame& frame)
+{
+    if (frame.stream().purpose != PcmPurpose::Speaker
+        || frame.stream().format != PcmFormat{} || !m_pcmIngress.accept(frame)) {
+        return;
+    }
+    const QByteArray pcm = frame.legacyStereo24();
+    if (!pcm.isEmpty()) {
+        feedAudioData(pcm);
+    }
+}
+
+void AudioEngine::feedKiwiPcmFrame(const QString& sourceId, const PcmFrame& frame)
+{
+    if (frame.stream().purpose != PcmPurpose::Auxiliary
+        || frame.stream().format != PcmFormat{} || !m_kiwiPcmIngress.accept(frame)) {
+        return;
+    }
+    const QByteArray pcm = frame.legacyStereo24();
+    if (!pcm.isEmpty()) {
+        feedKiwiSdrAudioData(sourceId, pcm);
+    }
+}
+
 void AudioEngine::feedAudioData(const QByteArray& pcm)
 {
     captureAutomationAudio(QStringLiteral("raw"), QStringLiteral("flex"),

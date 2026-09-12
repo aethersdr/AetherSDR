@@ -487,12 +487,12 @@ int main(int argc, char** argv)
     qint64 sliceAudioBytes = 0;
     int speakerBuffers = 0;
     QObject::connect(&backend, &IRadioBackend::sliceAudioFrameReady, &app,
-                     [&](int, const QByteArray& pcm) {
+                     [&](int, const PcmFrame& pcm) {
                          ++sliceAudioBuffers;
-                         sliceAudioBytes += pcm.size();
+                         sliceAudioBytes += pcm.legacyStereo24().size();
                      });
     QObject::connect(&backend, &IRadioBackend::audioFrameReady, &app,
-                     [&](const QByteArray&) { ++speakerBuffers; });
+                     [&](const PcmFrame&) { ++speakerBuffers; });
 
     // ACCUMULATED, not last-wins. Each delta carries only the fields that
     // moved, so a plain "keep the newest" would show one setting and forget the

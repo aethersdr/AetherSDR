@@ -778,10 +778,12 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
     });
 
     connect(dsp, &Hl2RxDsp::audioReady, this,
-            [this, ui](const std::vector<float>& pcm) {
+            [this, ui, producer = QPointer<Hl2RxDsp>(dsp)](const std::vector<float>& pcm) {
         const auto* ids = m_ids.byUi(ui);
-        if (!ids)
+        const Receiver* receiver = ids ? rx(ids->ddcIndex) : nullptr;
+        if (!producer || !receiver || receiver->dsp != producer.data()) {
             return;
+        }
         // THIS SLICE's audio, before the mixer touches it. Per-slice consumers
         // (a TCI receiver channel, a decoder) need one slice's audio and cannot
         // un-mix the speaker sum. Pre-mute and pre-gain on purpose — see the
@@ -790,7 +792,9 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         // Emitted even while keyed. The mixer drops keyed audio for the speaker
         // (we hear our own transmitter), but a per-slice consumer decides that
         // for itself, and the TX path already mutes the demodulator.
-        emit sliceAudioFrameReady(ids->uiNumber, floatBytes(pcm));
+        if (!publishLegacySliceAudio(ids->uiNumber, floatBytes(pcm))) {
+            return; // malformed PCM must not enter the stateful speaker mixer
+        }
 
         mixReceiverAudio(ids->ddcIndex, pcm);
     });
@@ -1203,9 +1207,10 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
         && r->audioPanPercent == kAudioPanCentre) {
         // The queue was empty before the insert above, so it holds exactly the
         // block we were handed: emit that directly. This is the steady state and
-        // the reason the fast path exists — no copy, no clamp.
+        // the reason the fast path exists — no remix or clamp. The PCM
+        // adapter takes an owning copy for queued consumers.
         if (q.size() == pcm.size()) {
-            emit audioFrameReady(floatBytes(pcm));
+            publishLegacyAudio(floatBytes(pcm));
             q.clear();
             return;
         }
@@ -1222,7 +1227,7 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
         // cannot swap the channels of what follows it.
         m_mixAccum.assign(q.cbegin(), q.cend());
         q.clear();
-        emit audioFrameReady(floatBytes(m_mixAccum));
+        publishLegacyAudio(floatBytes(m_mixAccum));
         return;
     }
 
@@ -1297,7 +1302,7 @@ void Hl2Backend::mixReceiverAudio(int ddc, const std::vector<float>& pcm)
     for (float& s : m_mixAccum)
         s = std::clamp(s, -kMixCeiling, kMixCeiling);
 
-    emit audioFrameReady(floatBytes(m_mixAccum));
+    publishLegacyAudio(floatBytes(m_mixAccum));
 }
 
 void Hl2Backend::releaseReceiverDsps()
@@ -2388,6 +2393,7 @@ void Hl2Backend::invalidateTxDspConfiguration()
 
 void Hl2Backend::disconnectRadio()
 {
+    retirePcmStreams();
     invalidateTxDspConfiguration();
     // Invalidate any DSP build still in flight. Without this, a disconnect
     // during the opens would be followed by finishDspSetup() starting a wire
