@@ -30,7 +30,8 @@ public:
     ClientComp(const ClientComp&)            = delete;
     ClientComp& operator=(const ClientComp&) = delete;
 
-    // Main thread — call before first process() and on sample-rate change.
+    // Audio owner — call before first process() and on sample-rate change.
+    // Never call concurrently with process(); parameter setters remain atomic.
     void prepare(double sampleRate);
 
     // Main thread — global enable / bypass. Lock-free.
@@ -86,7 +87,12 @@ public:
     bool  limiterActive() const noexcept;     // true while limiter is clamping
 
     // Sample rate this comp was prepared at.
-    double sampleRate() const noexcept { return m_sampleRate; }
+    // Audio owner: mirror a presented auxiliary source into UI-facing meters.
+    // Copies atomic snapshots only; parameters and processing histories stay local.
+    void copyMeteringFrom(const ClientComp& source) noexcept;
+
+    double sampleRate() const noexcept
+    { return m_sampleRate.load(std::memory_order_relaxed); }
 
 private:
     struct Atomics {
@@ -132,7 +138,8 @@ private:
     void recacheIfDirty() noexcept;
     float staticCurveGainDb(float envDb) const noexcept;
 
-    double   m_sampleRate{24000.0};
+    // Audio owner writes in prepare(); UI reads the displayed processing rate.
+    std::atomic<double> m_sampleRate{24000.0};
     Atomics  m_atomics;
     Cached   m_cached;
     Meters   m_meters;

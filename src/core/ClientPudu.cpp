@@ -185,6 +185,13 @@ float ClientPudu::outputPeakDb() const noexcept
 float ClientPudu::wetRmsDb() const noexcept
 { return m_meters.wetRmsDb.load(std::memory_order_relaxed); }
 
+void ClientPudu::copyMeteringFrom(const ClientPudu& source) noexcept
+{
+    m_meters.inputPeakDb.store(source.inputPeakDb(), std::memory_order_relaxed);
+    m_meters.outputPeakDb.store(source.outputPeakDb(), std::memory_order_relaxed);
+    m_meters.wetRmsDb.store(source.wetRmsDb(), std::memory_order_relaxed);
+}
+
 void ClientPudu::recacheIfDirty() noexcept
 {
     const uint64_t v = m_atomics.version.load(std::memory_order_acquire);

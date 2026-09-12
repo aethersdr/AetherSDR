@@ -52,6 +52,8 @@ public:
     ClientPudu(const ClientPudu&)            = delete;
     ClientPudu& operator=(const ClientPudu&) = delete;
 
+    // Audio owner only; never concurrently with process(). GUI rate reads
+    // and parameter setters remain safe while a new producer is prepared.
     void prepare(double sampleRate);
 
     void setEnabled(bool on) noexcept;
@@ -90,7 +92,12 @@ public:
     // actively adding content.
     float wetRmsDb() const noexcept;
 
-    double sampleRate() const noexcept { return m_sampleRate; }
+    // Audio owner: mirror a presented auxiliary source into UI-facing meters.
+    // Copies atomic snapshots only; parameters and processing histories stay local.
+    void copyMeteringFrom(const ClientPudu& source) noexcept;
+
+    double sampleRate() const noexcept
+    { return m_sampleRate.load(std::memory_order_relaxed); }
 
     // Public because the cpp-local biquad helper takes references.
     // Not part of the user-facing API.
@@ -146,7 +153,8 @@ private:
         float dcY1{0.0f};
     };
 
-    double  m_sampleRate{24000.0};
+    // Audio owner writes in prepare(); UI reads the displayed processing rate.
+    std::atomic<double> m_sampleRate{24000.0};
     Atomics m_atomics;
     Cached  m_cached;
     Meters  m_meters;

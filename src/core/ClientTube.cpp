@@ -152,6 +152,13 @@ float ClientTube::outputPeakDb() const noexcept
 float ClientTube::driveAppliedDb() const noexcept
 { return m_meters.driveAppliedDb.load(std::memory_order_relaxed); }
 
+void ClientTube::copyMeteringFrom(const ClientTube& source) noexcept
+{
+    m_meters.inputPeakDb.store(source.inputPeakDb(), std::memory_order_relaxed);
+    m_meters.outputPeakDb.store(source.outputPeakDb(), std::memory_order_relaxed);
+    m_meters.driveAppliedDb.store(source.driveAppliedDb(), std::memory_order_relaxed);
+}
+
 void ClientTube::recacheIfDirty() noexcept
 {
     const uint64_t v = m_atomics.version.load(std::memory_order_acquire);

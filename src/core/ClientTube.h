@@ -39,6 +39,8 @@ public:
     ClientTube(const ClientTube&)            = delete;
     ClientTube& operator=(const ClientTube&) = delete;
 
+    // Audio owner only; never concurrently with process(). GUI rate reads
+    // and parameter setters remain safe while a new producer is prepared.
     void prepare(double sampleRate);
 
     void setEnabled(bool on) noexcept;
@@ -89,7 +91,12 @@ public:
     float outputPeakDb() const noexcept;
     float driveAppliedDb() const noexcept;   // dynamic instantaneous drive
 
-    double sampleRate() const noexcept { return m_sampleRate; }
+    // Audio owner: mirror a presented auxiliary source into UI-facing meters.
+    // Copies atomic snapshots only; parameters and processing histories stay local.
+    void copyMeteringFrom(const ClientTube& source) noexcept;
+
+    double sampleRate() const noexcept
+    { return m_sampleRate.load(std::memory_order_relaxed); }
 
 private:
     struct Atomics {
@@ -129,7 +136,8 @@ private:
     void recacheIfDirty() noexcept;
     float shape(float x) const noexcept;   // waveshaper per Model + bias
 
-    double m_sampleRate{24000.0};
+    // Audio owner writes in prepare(); UI reads the displayed processing rate.
+    std::atomic<double> m_sampleRate{24000.0};
     Atomics m_atomics;
     Cached  m_cached;
     Meters  m_meters;
