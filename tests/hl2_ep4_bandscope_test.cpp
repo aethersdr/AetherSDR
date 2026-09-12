@@ -200,6 +200,35 @@ int main()
         check(square.clippedSamples == kEp4BlockSamples,
               "both rails count as clipped, +2047 included");
 
+        // OUR dB SCALE AND THE CONVERTER'S, CHECKED AGAINST EACH OTHER at the
+        // two magnitudes the gateware itself names. ad9866.v derives both of
+        // its level flags from the same rx_data register these codes come from:
+        //
+        //     rxclip    = |code| at 2048 (rxclipp +2047 / rxclipn -2048)
+        //     rxgoodlvl = |code| at 1536
+        //
+        // so a bandscope level and the ADC-overload bit in the EP6 telemetry
+        // are commensurable BY CONSTRUCTION — but only if this side normalises
+        // by the converter's full scale. This is the cheapest possible check
+        // that it does.
+        const auto goodLvl = ep4Stats(makeEp4(0, {1536, -1536}));
+        check(goodLvl.has_value(), "a good-level packet parses");
+        check(goodLvl->peakAbs == 1536, "rxgoodlvl's threshold survives the decode");
+        check(approx(goodLvl->peakDbfs(), -2.4988, 1e-4),
+              "the gateware's rxgoodlvl (|code| 1536) is -2.50 dBFS on our scale");
+        check(goodLvl->clippedSamples == 0, "rxgoodlvl is not rxclip");
+
+        // AND THE COPY-PASTE THIS EXISTS TO CATCH. kFullScale is the EP6
+        // 24-bit DDC scale; applying it to a 12-bit pre-DDC code reads every
+        // bandscope block as ~66 dB quieter than it is, and the error is
+        // invisible on any band that is not at the rail.
+        const double wrongScale =
+            20.0 * std::log10(2047.0 / static_cast<double>(kFullScale));
+        check(wrongScale < -70.0,
+              "normalising by the EP6 24-bit scale would read full scale as < -70 dBFS");
+        check(!approx(square.peakDbfs(), wrongScale, 1.0),
+              "...which is not what full scale reads here");
+
         // Silence has no representable level. It must not read as full scale,
         // and it must not read as an infinity nothing downstream can render.
         const auto quiet = ep4Stats(makeEp4(0, {0}));
