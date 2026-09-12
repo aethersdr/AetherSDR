@@ -1932,6 +1932,27 @@ target_include_directories(qso_recorder_pc_audio_guard_test PRIVATE
 target_link_libraries(qso_recorder_pc_audio_guard_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME qso_recorder_pc_audio_guard_test COMMAND qso_recorder_pc_audio_guard_test)
 
+# #5648 — post-open QFile failures are finalized on the recorder owner thread;
+# no socket, device, or radio is involved.
+add_executable(qso_recorder_write_error_test
+    tests/qso_recorder_write_error_test.cpp
+    src/core/QsoRecorder.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(qso_recorder_write_error_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_write_error_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_write_error_test COMMAND qso_recorder_write_error_test)
+
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
 )
@@ -5146,6 +5167,7 @@ set(AETHER_SETTINGS_CONSUMERS
     panadapter_model_rx_antenna_test
     qso_recorder_slice_lifetime_test
     qso_recorder_pc_audio_guard_test
+    qso_recorder_write_error_test
     band_plan_license_filter_test
     kiwisdr_dx_spots_test
     passive_spots_policy_test
