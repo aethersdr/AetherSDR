@@ -366,6 +366,10 @@ void MetisClient::stop()
             && bank[2] == (kI2cStopAtEnd | kIoBoardI2cAddr);
     });
     m_ioBoardTxFreqSent = false;
+    // The radio's response register does not survive a metis-stop, and neither
+    // does the quarantine's reason for existing: nothing the next stream
+    // delivers can be a reply to a request from this one.
+    m_ccRequest.reset();
     if (m_linkUp) {
         m_linkUp = false;
         emit linkDown();
@@ -609,6 +613,64 @@ void MetisClient::requestPipelineReset()
     // on hardware, not just discrete tunes.
 }
 
+bool MetisClient::requestRegister(int addr, quint32 data, bool subsystemRead)
+{
+    // Addresses whose DATA can transmit or wedge, refused at this layer so that
+    // no caller reaches them by way of a "read". See the header for what a
+    // future writer has to change, and why deleting these is not it.
+    //
+    //   0x09  TX drive level, onboard PA enable, ATU. ccTxDrive()'s register.
+    //   0x39  sync / reset. Carries the watchdog enable at [27:24] and the
+    //         master enable at [11:8]; writing it wedged a radio once already
+    //         (see requestPipelineReset above).
+    constexpr int kTxDriveAddr = kC0TxDrive >> 1;   // 0x09
+    constexpr int kSyncAddr    = kC0Sync >> 1;      // 0x39
+    if (addr == kTxDriveAddr || addr == kSyncAddr)
+        return false;
+
+    // Response slots live inside the EP6 frame, and the EP6 emit path is gated
+    // on `run`. Before the stream is up there is no clock on which a reply
+    // could arrive, so arming here would guarantee a timeout and blame the
+    // radio for it.
+    if (!m_running || !m_linkUp)
+        return false;
+
+    Hl2ControlRequest::Request r;
+    r.addr = addr;
+    r.data = data;
+    r.echo = subsystemRead ? Hl2ControlRequest::Echo::SubsystemRead
+                           : Hl2ControlRequest::Echo::Exact;
+    return m_ccRequest.arm(r);
+}
+
+void MetisClient::publishControlVerdict()
+{
+    const auto reply = m_ccRequest.takeReply();
+    if (!reply)
+        return;
+    if (reply->outcome == Hl2ControlRequest::Outcome::Answered) {
+        emit controlReplyReady(reply->addr, reply->data);
+    } else {
+        emit controlRequestFailed(
+            reply->addr, reply->outcome == Hl2ControlRequest::Outcome::Refused);
+    }
+}
+
+void MetisClient::tickControlRequest()
+{
+    // ONE CALL PER EP6 FRAME, not per packet: the gateware opens exactly one
+    // response slot per 512-byte frame (usopenhpsdr1.v, SYNC_RESP), so this is
+    // the same clock the radio answers on.
+    m_ccRequest.onEp6Frame();
+    publishControlVerdict();
+}
+
+void MetisClient::ingestControlResponse(const Ep6Response& resp)
+{
+    m_ccRequest.onResponse(resp);
+    publishControlVerdict();
+}
+
 void MetisClient::setMox(bool keyed)
 {
     if (keyed && !m_txAllowed) {
@@ -708,6 +770,18 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
     if (!m_oneShot.empty()) {
         b = m_oneShot.front();
         m_oneShot.pop_front();
+    } else if (const auto rqst = m_ccRequest.wireBank()) {
+        // AFTER the one-shots, ahead of the round robin. After, because a
+        // one-shot is a write the operator asked for and a read-back that
+        // overtook it would return the value from before the change. Ahead of
+        // the rotation, because the rotation never ends and the request would
+        // otherwise never go out.
+        //
+        // wireBank() is non-empty only in Queued, so this fires exactly once
+        // per armed request — the RQST bit never reaches a bank the round robin
+        // re-asserts, which would re-request three times a rotation for ever.
+        b = *rqst;
+        m_ccRequest.onRequestSent();
     } else {
         // The rotation is every receiver's NCO, then gain, then ADC assignment:
         // numRx + 2 slots. Each receiver's NCO is RE-ASSERTED rather than sent
@@ -926,9 +1000,23 @@ void MetisClient::onReadyRead()
             if (bytes.size() < fs + 8)
                 break;
             if (const auto resp = parseEp6Response(bytes.data() + fs)) {
-                m_telemetry.apply(*resp);
-                telemetryChanged = true;
+                if (resp->ack) {
+                    // An ACK's raddr is a COMMAND address and its data is our
+                    // own echo. Feeding that to Hl2Telemetry would invent a
+                    // firmware version and a FIFO depth out of bytes we sent;
+                    // Hl2Telemetry::apply refuses it too, belt and braces.
+                    ingestControlResponse(*resp);
+                } else {
+                    m_telemetry.apply(*resp);
+                    telemetryChanged = true;
+                }
             }
+            // One response slot per FRAME, so the RQST deadline advances here
+            // and not once per packet. AFTER the parse, so a reply that lands
+            // on the deadline frame is an answer and not a timeout, and ticked
+            // even when the frame carries no parseable C&C — a frame that
+            // arrived is a slot that passed.
+            tickControlRequest();
         }
         // Coalesce to ~10 Hz: telemetry free-runs continuously, so a frame
         // skipped by the throttle is superseded within the interval and the
