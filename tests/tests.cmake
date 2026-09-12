@@ -3943,6 +3943,15 @@ add_test(NAME hl2_ep4_ingest_test COMMAND hl2_ep4_ingest_test)
 # enable/disable cycles go in through the same MetisClientTestAccess seam and
 # both timers are fired by hand. Qt6::Test is for QSignalSpy, which is how
 # "one block per arming cycle, never one per packet" is asserted.
+# The wideband converter view capability, and the verb its record names.
+# Socket-free: constructs an Hl2Backend, never connects it, and asserts that
+# the advertised verb reaches the branch that implements it rather than the
+# unknown-verb fallthrough. Needs aethercore and Qt because Hl2Backend does.
+add_executable(wideband_converter_view_test tests/wideband_converter_view_test.cpp)
+target_include_directories(wideband_converter_view_test PRIVATE src)
+target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
+
 add_executable(hl2_ep4_gate_test tests/hl2_ep4_gate_test.cpp)
 target_include_directories(hl2_ep4_gate_test PRIVATE src tests)
 target_link_libraries(hl2_ep4_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
