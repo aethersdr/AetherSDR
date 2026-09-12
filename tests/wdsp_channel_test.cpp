@@ -1,12 +1,17 @@
 #include "core/dsp/WdspChannel.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <limits>
+#include <memory>
+#include <mutex>
 #include <numbers>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -568,6 +573,141 @@ bool runStartStopTest()
     return true;
 }
 
+// close() must not hold the FFTW setup lock while WDSP's stop wait runs.
+//
+// close() asks WDSP to stop-and-flush in the BLOCKING form, and behind the
+// control fence that wait always runs to WDSP's 100 ms timeout — nothing is
+// left calling fexchange* to release Sem_Flush, so the flushChannel thread
+// never wakes to clear the flag (see close()'s own comment). It used to sit out
+// that timeout holding the process-global setup mutex, which exists only to
+// serialise the FFTW planner, so N channels closing while running queued N
+// timeouts end to end.
+//
+// PINNED WITHOUT A STOPWATCH. Hold the setup lock here, start a reconfigure()
+// on another thread, and watch for the channel's run flag to go false. close()
+// stores that flag between SetChannelState and CloseChannel, so it can only be
+// observed from a thread holding the lock if the stop ran OUTSIDE it. Put the
+// stop back under the lock and the flag stays true, the poll runs out, and this
+// fails — with no timing margin to tune and nothing to go soft under load.
+bool runCloseSetupLockTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+
+    std::string error;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, error.c_str()) ||
+        !require(channel->isRunning(),
+                 "a freshly opened channel was not running")) {
+        return false;
+    }
+
+    bool reconfigured = false;
+    bool stoppedWhileLockHeld = false;
+    {
+        std::unique_lock<std::mutex> setupLock = WdspChannel::fftwSetupLock();
+        std::thread closer([&] {
+            // reconfigure() rather than the destructor, so the object is still
+            // alive for the poll below. It holds beginControlOperation() across
+            // its close(), which is the same fence the destructor raises.
+            reconfigured = channel->reconfigure(config, nullptr);
+        });
+        // Generous, and only ever spent in full on the FAILING path: WDSP's
+        // wait is 100 ms and has to complete exactly once.
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (!channel->isRunning()) {
+                stoppedWhileLockHeld = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        // Before the join: reconfigure()'s CloseChannel and its re-open both
+        // want this lock, so it cannot finish until we let go.
+        setupLock.unlock();
+        closer.join();
+    }
+    return require(stoppedWhileLockHeld,
+                   "close() held the FFTW setup lock across WDSP's stop wait") &&
+           require(reconfigured,
+                   "reconfigure() failed while the FFTW setup lock was held");
+}
+
+// A channel stopped by its OWNER before teardown does not pay the 100 ms.
+//
+// This is the mechanism behind the production change in Hl2RxDsp/AnanRxDsp:
+// SetChannelState no-ops when the state already matches, so close()'s blocking
+// stop is skipped entirely on a channel that is already stopped. Measured
+// against its own contrast — the same close, on a channel left running.
+//
+// MINIMUM of three runs, not a mean. The quantity being pinned is a fixed
+// 100 ms constant inside WDSP; scheduling noise can only ever add to a sample,
+// so the minimum is the load-robust estimator here.
+bool runStoppedCloseTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+
+    bool ok = true;
+    const auto closeMs = [&](bool stopFirst) -> double {
+        std::string error;
+        std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+        if (!require(channel != nullptr, error.c_str())) {
+            ok = false;
+            return 0.0;
+        }
+        if (stopFirst &&
+            !require(channel->setRunning(false), "setRunning(false) was refused")) {
+            ok = false;
+            return 0.0;
+        }
+        if (!require(channel->isRunning() != stopFirst,
+                     "the channel's run state did not follow setRunning()")) {
+            ok = false;
+            return 0.0;
+        }
+        const auto start = std::chrono::steady_clock::now();
+        channel.reset();   // ~WdspChannel -> fence -> close()
+        return std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - start).count();
+    };
+
+    double runningMs = std::numeric_limits<double>::max();
+    double stoppedMs = std::numeric_limits<double>::max();
+    for (int iteration = 0; iteration < 3 && ok; ++iteration) {
+        runningMs = std::min(runningMs, closeMs(false));
+        if (!ok) {
+            return false;
+        }
+        stoppedMs = std::min(stoppedMs, closeMs(true));
+    }
+    if (!ok) {
+        return false;
+    }
+
+    // Stated first, because the contrast is only meaningful if the timeout is
+    // still there to be skipped. If WDSP ever learns to satisfy this wait on
+    // its own, this is the line that says so rather than the one below quietly
+    // passing for the wrong reason.
+    if (!require(runningMs >= 80.0,
+                 "closing a RUNNING channel no longer reaches WDSP's "
+                 "stop-and-flush timeout")) {
+        std::cerr << "       running close took " << runningMs << " ms\n";
+        return false;
+    }
+    if (!require(runningMs - stoppedMs >= 50.0,
+                 "stopping a channel before teardown did not remove WDSP's "
+                 "stop-and-flush wait")) {
+        std::cerr << "       running close " << runningMs << " ms, stopped close "
+                  << stoppedMs << " ms\n";
+        return false;
+    }
+    return true;
+}
+
 bool runLifecycleTest()
 {
     const uint64_t baseline = WdspChannel::outstandingAllocationsForTest();
@@ -622,6 +762,8 @@ int main()
         !runLeakChecked("underrun test", runUnderrunTest) ||
         !runLeakChecked("reconfiguration test", runReconfigurationTest) ||
         !runLeakChecked("start/stop test", runStartStopTest) ||
+        !runLeakChecked("close setup-lock test", runCloseSetupLockTest) ||
+        !runLeakChecked("stopped-close test", runStoppedCloseTest) ||
         !runLeakChecked("notch index test", runNotchIndexTest) ||
         !runLeakChecked("notch attenuation test", runNotchAttenuationTest) ||
         !require(WdspChannel::outstandingAllocationsForTest() == allocationBaseline,
