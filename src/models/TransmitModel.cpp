@@ -37,6 +37,27 @@ void TransmitModel::resetState()
     m_txSliceMode.clear();
     setTuneAvailable(true);
 
+    // The committed break-in delay belonged to the session that just ended; drop
+    // it so setCwSpeed() does not re-assert a delay the operator never set in
+    // this one (#5288 review — cross-session leak). RadioModel::onDisconnected()
+    // is the only caller, so this fires on EVERY disconnect — a transient drop
+    // and reconnect to the same radio, not just a radio swap.
+    //
+    // The m_holdBreakInDelay opt-in is a client preference, not radio state, and
+    // is left untouched — PhoneCwApplet re-applies it from AppSettings. That
+    // asymmetry is deliberate but it leaves the feature on-but-unarmed, so say
+    // so out loud: the applet renders that state distinctly rather than showing
+    // one checked button for both (#5288 review, blocker 1).
+    // Clear BEFORE emitting: the applet's slot reads holdBreakInDelayArmed()
+    // synchronously, so emitting first hands it the state we are in the middle
+    // of leaving and the button keeps showing "holding 48 ms" after the delay is
+    // gone. (Caught driving the GUI, not in review.)
+    const bool wasArmed = (m_cwDelayHeld > 0);
+    m_cwDelayHeld = -1;   // also covers the 0 (deliberate QSK) case
+    if (wasArmed) {
+        emit holdBreakInDelayArmedChanged(false);
+    }
+
     emit apdStateChanged();
     emit transmittingChanged(false);
     emit moxChanged(false);
@@ -137,6 +158,11 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.cwSpeed, m_cwSpeed)) { phoneChanged = true; cwSpeedChanged_ = true; }
     if (assign(d.cwPitch, m_cwPitch)) { phoneChanged = true; cwPitchChanged_ = true; }
     phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
+    // Radio status is authoritative on the live break-in delay: adopt it, full
+    // stop. The "hold" protection against SmartSDR's speed-linked QSK-floor
+    // walk lives on the operator-intent path (setCwSpeed), never here — a
+    // command issued from this status-apply path is the feedback loop
+    // Principle II forbids (#5288 review).
     phoneChanged |= assign(d.cwDelay, m_cwDelay);
     phoneChanged |= assign(d.cwSidetone, m_cwSidetone);
     phoneChanged |= assign(d.cwIambic, m_cwIambic);
@@ -783,13 +809,57 @@ void TransmitModel::setTxFilter(int lowHz, int highHz)
 void TransmitModel::setCwSpeed(int wpm)
 {
     wpm = qBound(5, wpm, 100);
-    if (m_cwSpeed != wpm) {
+    const bool speedChanged = (m_cwSpeed != wpm);
+    if (speedChanged) {
         m_cwSpeed = wpm;
         emit phoneStateChanged();
         emit cwSpeedChanged(m_cwSpeed);
     }
     emit cwSpeedCommandIssued(wpm);
     emit commandReady(QString("cw wpm %1").arg(wpm));
+
+    // Hold break-in delay (#5288, opt-in): SmartSDR re-pins break_in_delay to a
+    // WPM-derived QSK floor on a speed change and walks it down as WPM rises —
+    // on an inline amplifier that can't tolerate QSK that is silent
+    // hot-switching. This is the operator's own speed command, so re-asserting
+    // the delay they set is a request on the command path like any other setter
+    // — not the client overriding radio truth (which is why it is here and not
+    // in applyChanges). Ride it out right behind the `cw wpm` so the floor never
+    // takes lasting effect. If the radio rejects it as below the new floor it
+    // keeps its own larger value, the next status echo is adopted normally, and
+    // the amp still sees more delay than the operator asked for — safe. A set
+    // delay of 0 is deliberate QSK: m_cwDelayHeld is not > 0, nothing fires.
+    //
+    // Gated on a REAL speed change, not on the setter being called: the floor
+    // only moves when the speed does, and the knob paths clamp
+    // (MainWindow_Controllers.cpp's WheelCwSpeed, MainWindow_Shortcuts' +/-5)
+    // so a detent held against 5 or 100 would otherwise re-send on every tick.
+    //
+    // Note what this deliberately does NOT do: it does not write m_cwDelay. An
+    // earlier revision adopted the held value locally "so the slider does not
+    // dip between the two echoes", but it never achieved that — the radio's
+    // floor echo still arrives and applyChanges still adopts it, so the dip
+    // happens either way. What the local write did do was display a value the
+    // radio had refused: the floor is enforced on the write side too
+    // (`Parameter out of range`, #5519), and when a speed change does not move
+    // the floor the radio sends no break_in_delay status at all, so nothing
+    // ever corrected the model. m_cwDelay stays radio truth, full stop
+    // (#5288 review, blocker 2).
+    if (speedChanged && m_holdBreakInDelay && m_cwDelayHeld > 0) {
+        emit commandReady(QString("cw break_in_delay %1").arg(m_cwDelayHeld));
+        // Log only the real divergence — the radio's delay having actually moved
+        // off what the operator set — not every prophylactic re-send. qCWarning,
+        // not qCInfo: aether.transmit is a QtWarningMsg category, so Info would
+        // not reach a default support bundle, and a client value held against
+        // radio status is exactly the divergence Principle II's rationale says
+        // must be logged (#5288 review).
+        if (m_cwDelay != m_cwDelayHeld) {
+            qCWarning(lcTransmit).nospace()
+                << "TransmitModel: break-in delay had moved to " << m_cwDelay
+                << " ms; hold re-asserted the operator's " << m_cwDelayHeld
+                << " ms after CW speed -> " << wpm << " wpm";
+        }
+    }
 }
 
 void TransmitModel::setCwPitch(int hz)
@@ -817,11 +887,35 @@ void TransmitModel::setCwBreakIn(bool on)
 void TransmitModel::setCwDelay(int ms)
 {
     ms = qBound(0, ms, 2000);
+    // The operator's explicit word on the break-in delay — the value the "hold"
+    // opt-in (#5288) re-asserts after a speed change. Recorded even when hold is
+    // off so enabling it later picks up the current delay with no surprise; a
+    // deliberate 0 (full QSK) is recorded too and simply never re-asserted.
+    const bool wasArmed = (m_cwDelayHeld > 0);
+    m_cwDelayHeld = ms;
+    if (wasArmed != (m_cwDelayHeld > 0)) {
+        emit holdBreakInDelayArmedChanged(m_cwDelayHeld > 0);
+    }
     if (m_cwDelay != ms) {
         m_cwDelay = ms;
         emit phoneStateChanged();
     }
     emit commandReady(QString("cw break_in_delay %1").arg(ms));
+}
+
+void TransmitModel::setHoldBreakInDelay(bool on)
+{
+    if (m_holdBreakInDelay == on) {
+        return;
+    }
+    m_holdBreakInDelay = on;
+    // Deliberately does NOT seed m_cwDelayHeld — that would capture whatever the
+    // radio last reported (or the construction default, if this is the settings
+    // restore firing before any radio data) and re-assert a value the operator
+    // never chose, the "authoritative but radio-seeded" flaw the first revision
+    // had. The hold protects the delay the operator SET (setCwDelay); until
+    // they set one this session there is simply nothing to hold.
+    emit holdBreakInDelayChanged(on);
 }
 
 void TransmitModel::setCwSidetone(bool on)
