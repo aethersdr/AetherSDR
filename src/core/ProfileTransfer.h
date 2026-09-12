@@ -19,6 +19,7 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
+class ProfileTransferTestAccess;
 
 struct MemoryGroupSelection {
     QString owner;
@@ -195,6 +196,8 @@ inline std::optional<quint16> parseTransferPort(const QString& replyBody)
 class ProfileTransfer : public QObject {
     Q_OBJECT
 
+    friend class ProfileTransferTestAccess;
+
 public:
     enum class Operation {
         ExportDatabase,
@@ -229,6 +232,8 @@ private:
     void fail(const QString& error);
     void finish(QString path);
     void cleanup();
+    void destroySocket(bool abortConnection);
+    void destroyServer();
 
     ExportSelection expandSelection(ExportSelection selection) const;
     bool validateCommonPreconditions(Operation operation, QString* error) const;

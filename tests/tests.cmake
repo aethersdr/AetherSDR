@@ -1906,6 +1906,15 @@ target_include_directories(profile_transfer_test PRIVATE src)
 target_link_libraries(profile_transfer_test PRIVATE Qt6::Core)
 add_test(NAME profile_transfer_test COMMAND profile_transfer_test)
 
+# #5612 — aborting an in-progress upload during cleanup or socket replacement
+# must not let a synchronous disconnect re-enter ProfileTransfer.
+add_executable(profile_transfer_cleanup_test
+    tests/profile_transfer_cleanup_test.cpp
+)
+target_include_directories(profile_transfer_cleanup_test PRIVATE src)
+target_link_libraries(profile_transfer_cleanup_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME profile_transfer_cleanup_test COMMAND profile_transfer_cleanup_test)
+
 add_executable(waveform_upload_state_test
     tests/waveform_upload_state_test.cpp
     src/core/WaveformUploadState.cpp
