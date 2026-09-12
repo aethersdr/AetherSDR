@@ -63,7 +63,25 @@ public:
 
     void dump(const char* tag, int sampleRateHz)
     {
-        if (!m_enabled || m_count == 0) { return; }
+        if (!m_enabled) { return; }
+
+        // An armed probe that saw nothing still has to reset — and still has
+        // to SAY so. Returning early on m_count == 0 skipped the reset below,
+        // so a stream that recorded no edges leaked its whole sample count
+        // into the next stream: after 10 s of silence the next stream's first
+        // edge reported samplePos 480001 instead of ~0, and the positions this
+        // class advertises as "the stream's own clock" were off by that much.
+        // The silent return also made an under-threshold sidetone (see
+        // kThreshold) indistinguishable from a probe that was never armed.
+        if (m_count == 0) {
+            qCInfo(lcAudio).nospace()
+                << "EDGEPROBE " << tag << " rate= " << sampleRateHz
+                << " edges= 0 — armed, but no sample exceeded the "
+                << kThreshold << " threshold (sidetone level too low?)";
+            reset();
+            return;
+        }
+
         qCInfo(lcAudio) << "EDGEPROBE" << tag << "rate=" << sampleRateHz
                         << "edges=" << m_count
                         << (m_count == kMaxEdges ? "(TRUNCATED)" : "");
@@ -72,19 +90,32 @@ public:
                 << "EDGEPROBE " << tag << ' '
                 << (*m_edges)[i].samplePos << ((*m_edges)[i].rising ? " R" : " F");
         }
+        reset();
+    }
+
+    struct Edge { qint64 samplePos; bool rising; };
+
+    // Edges captured since the last dump(), and the edge at `i` (0 <= i <
+    // edgeCount()).  Exposed so cw_sidetone_edge_probe_test can assert what
+    // the probe recorded and WHERE — the sample position is the whole product
+    // of this class, and a position that silently carries a previous stream's
+    // offset is the defect these accessors exist to pin.  Production code has
+    // no reason to call either. (#5200)
+    int  edgeCount() const { return m_count; }
+    Edge edgeAt(int i) const { return (*m_edges)[i]; }
+
+private:
+
+    // Every exit from dump() goes through here — the reset used to live at
+    // the bottom of dump() and was skipped by the empty-stream early return.
+    void reset()
+    {
         m_count = 0;
         m_samplePos = 0;
+        m_quietStart = 0;
         m_tone = false;
         m_quietRun = 0;
     }
-
-    // Edges captured since the last dump().  Exposed so a test can assert the
-    // probe still records after the buffer moved to a conditional allocation;
-    // production code has no reason to call it. (#5200)
-    int edgeCount() const { return m_count; }
-
-private:
-    struct Edge { qint64 samplePos; bool rising; };
 
     void record(qint64 pos, bool rising)
     {

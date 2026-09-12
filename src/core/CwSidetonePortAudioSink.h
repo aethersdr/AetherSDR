@@ -53,6 +53,12 @@ private:
     // generator that renders silence. Logged by stop().
     std::atomic<quint64>               m_cbCount{0};
     std::atomic<quint32>               m_cbPeakMicro{0};   // |sample| * 1e6
+    // Stream-prime callbacks exempt from underflow counting. Filling a
+    // freshly started ring reports paOutputUnderflow on essentially every
+    // host, on a stream that has missed no deadline — counting it made the
+    // stop() warning fire on every session, keyed or not. (#5200)
+    static constexpr quint64 kPrimeCallbacks = 2;
+
     // paOutputUnderflow / paOutputOverflow counts. The callback used to
     // discard statusFlags, which left the #4890 element-timing tail
     // (2 outliers in 196, +/-8-11 ms) attributable only by guess: an
