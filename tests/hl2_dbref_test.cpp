@@ -51,13 +51,18 @@ int main()
     check(near(ref.toDbm(-13.0 + 20.0), reported),
           "a 20 dB gain increase does not move the reported dBm");
 
-    ref.setLnaGainDb(-12.0);                            // the AD9866 floor
+    ref.setLnaGainDb(-12.0);                            // the AD9866 floor, real
     check(near(ref.toDbm(-13.0 - 12.0), reported),
           "a 12 dB gain cut does not move the reported dBm");
 
-    ref.setLnaGainDb(48.0);                             // the AD9866 ceiling
+    // COMMANDED 48, not 48 dB of gain: the AD9866 folds code & 0x1F above code
+    // 31, so this applies 16 dB on real hardware (upstream #177). What is
+    // asserted here is the ARITHMETIC — given the gain it is told about, the
+    // reference removes it exactly. The gap between the commanded code and the
+    // applied gain is a seam problem, named in the class header.
+    ref.setLnaGainDb(48.0);
     check(near(ref.toDbm(-13.0 + 48.0), reported),
-          "full-range gain swing does not move the reported dBm");
+          "the reference removes whatever gain it is told about, exactly");
 
     // The spectrum path applies offsetDb() per frame rather than toDbm() per
     // bin; the two must agree or the trace and the S-meter would disagree.
@@ -109,9 +114,11 @@ int main()
               "a regulator step leaves the antenna-referred ceiling unmoved");
     }
 
-    // The AD9866's own limits, where referring saturates. A negative ceiling
-    // would be the AGC attenuating a signal it was asked to amplify.
-    agc.setLnaGainDb(48.0);                             // the AD9866 ceiling
+    // The commanded limits, where referring saturates. A negative ceiling would
+    // be the AGC attenuating a signal it was asked to amplify. 48 is a
+    // commanded code rather than 48 dB of gain (see above and the class
+    // header); the clamp is what is under test, not the board's response.
+    agc.setLnaGainDb(48.0);
     check(agc.agcCeilingDb(kDefaultThresholdUnits) >= 0.0,
           "the referred ceiling never goes negative at full LNA gain");
     check(near(agc.agcCeilingDb(0), 0.0),
@@ -120,7 +127,7 @@ int main()
     // Referring UPWARD past the slider's nominal 60 dB top is correct, not an
     // overrun: an operator 12 dB down on the LNA needs 12 dB more AGC gain to
     // hear the same signal at the same level.
-    agc.setLnaGainDb(-12.0);                            // the AD9866 floor
+    agc.setLnaGainDb(-12.0);                            // the AD9866 floor, real
     check(near(agc.agcCeilingDb(100), 60.0 + 32.0),
           "a 32 dB LNA cut refers AGC-T 100 above the slider's nominal top");
     check(agc.agcCeilingDb(100) <= Hl2DbReference::kAgcCeilingDbMax,
