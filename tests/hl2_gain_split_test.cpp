@@ -283,7 +283,7 @@ int main(int argc, char** argv)
     // switching it off restores the operator's number in one action.
     {
         Session s(rememberedGain());
-        check(s.backend.capabilities().hasAutoRfGain,
+        check(s.backend.autoRfGainControl() != nullptr,
               "the HL2 declares the automatic RF-gain capability");
         check(!s.backend.autoRfGainEnabled(),
               "and it is OFF on a fresh session, with no setting to say otherwise");
