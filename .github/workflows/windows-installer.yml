@@ -131,6 +131,24 @@ jobs:
         if: steps.cache-hidapi.outputs.cache-hit != 'true'
         run: .\scripts\setup\setup-hidapi.ps1
 
+      # PortAudio is what makes the CW sidetone run on the callback ("pull")
+      # path with WASAPI, the same transport macOS and Linux already ship.
+      # Without it HAVE_PORTAUDIO is undefined, CwSidetonePortAudioSink.cpp is
+      # not compiled, and the shipped installer silently falls through to the
+      # push-model QAudioSink — which is what every Windows build did before
+      # #5200, including the #3193 WASAPI preference that was never active.
+      # Static lib, so nothing to bundle in the Deploy step. (#5200)
+      - name: Cache PortAudio
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-portaudio
+        with:
+          path: third_party/portaudio
+          key: portaudio-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-portaudio.ps1') }}
+
+      - name: Setup PortAudio (CW sidetone callback sink)
+        if: steps.cache-portaudio.outputs.cache-hit != 'true'
+        run: .\scripts\setup\setup-portaudio.ps1
+
       - name: Cache DeepFilterNet3
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
@@ -238,6 +256,28 @@ jobs:
             exit 1
           }
           Select-String -Path configure.log -Pattern 'GPU spectrum rendering enabled'
+
+      # Same shape as the GPU-spectrum guard above, and for the same reason:
+      # the WIN32 PortAudio detection is soft-optional, so a missing or
+      # half-restored third_party/portaudio makes CMake skip the callback sink
+      # without failing. This workflow is the one place that matters most --
+      # it produces what users install, so a silent skip would ship the
+      # push-model QAudioSink while the release notes claim the callback path.
+      # Fail here instead. (#5200)
+      - name: Assert PortAudio sidetone sink actually enabled
+        run: |
+          if (-not (Select-String -Path configure.log -Pattern 'PortAudio \(third_party\) found' -Quiet)) {
+            Write-Host "ERROR: setup-portaudio.ps1 ran but CMake did not find third_party/portaudio."
+            Write-Host "The installer would ship the push-model QAudioSink sidetone. Refusing."
+            Write-Host "--- third_party/portaudio ---"
+            if (Test-Path third_party\portaudio) {
+              Get-ChildItem -Recurse third_party\portaudio | Select-Object -ExpandProperty FullName
+            } else {
+              Write-Host "(third_party/portaudio does not exist)"
+            }
+            exit 1
+          }
+          Select-String -Path configure.log -Pattern 'PortAudio \(third_party\) found'
 
       - name: Build Opus (RADE dependency)
         # ExternalProject dependency ordering via BUILD_BYPRODUCTS is correct,

@@ -4113,8 +4113,10 @@ void AudioEngine::setMuted(bool muted)
 }
 
 // Pick the sidetone backend based on build flag + AppSettings override.
-// PortAudio when available (lower latency on Linux/macOS); QAudioSink
-// fallback otherwise or when explicitly requested by the user.
+// PortAudio when available (the callback path: lower latency on every
+// platform that builds it — Windows joined Linux/macOS in #5200, where the
+// shipped installer started providing it); QAudioSink fallback otherwise or
+// when explicitly requested by the user.
 static std::unique_ptr<CwSidetoneSinkBackend> makeSidetoneBackend(QObject* qparent)
 {
     const QString pref =
