@@ -16,6 +16,55 @@ sideband-selection rules. Those two describe the most expensive bug of the
 project — one that survived a full session of correct-looking measurements —
 and §15.6 is the checklist that would have caught it on day one.
 
+### For coding agents — keep bring-up inside the family backend
+
+This file is also the on-ramp for a coding agent bringing up a host-DSP radio.
+The expensive failures were not missing Metis bits. They were edits that made
+Flex or Icom behave like Hermes-Lite.
+
+**Default home of a change:** `src/core/backends/<family>/` (wire, DSP, restore
+document, family tests). If the radio cannot store a value, persist it in that
+family's `OperatingState` / `clientSettingsDomains` path (`RadioStateMemory`),
+never in a flat `AppSettings` key and never in `TransmitModel` / `SliceModel`
+constructors. "Localize to this radio" does **not** mean edit `RadioModel.cpp`.
+That class is shared infrastructure.
+
+**Do not**, as part of family bring-up:
+
+- Teach `RadioModel`, `TransmitModel`, `SliceModel`, or `PanadapterModel` a
+  family-specific restore, default, or command string.
+- Change shared applets, `SpectrumWidget`, `MainWindow_*`, or Radio Setup
+  layout/defaults so "this radio looks right."
+- Add `family == "hl2"` / `usesFlexCommandPlane()` branches above the seam
+  (see #5554).
+- Land Flex-owned settings into client persistence because HL2 has nowhere to
+  put them.
+
+**The exception — hide what this radio cannot do.** If a Flex-only control is
+visible and dead, declare a **capability** (`RadioCapabilities` + map + a
+consumer that already exists, or a new verb that actually works). Gate
+visibility on the flag; restore the permissive value on disconnect. Do not
+invent a parallel family widget in the shared chrome.
+
+**When the seam itself is missing a verb** (no caller of `setKeying`, meters
+never subscribed — §14.4): that is a **separate, capability-shaped PR**, not a
+drive-by in the wire patch. Name the other families in the PR body and prove
+they still take the Flex/Icom path.
+
+**Pre-PR grep (fail the change if any hit is unexplained):**
+
+```text
+src/models/RadioModel.*  src/models/TransmitModel.*  src/models/SliceModel.*
+src/gui/MainWindow*.cpp  src/gui/*Applet*  src/gui/SpectrumWidget.*
+src/gui/RadioSetupDialog.*
+```
+
+Unexplained hits mean the work is not localized. Split it or stop.
+
+Worked counterexamples: #5505 (shared mic persist → Icom write), #5462 (family
+feature + shared GUI + release files), #4448 (seam null-guards — allowed because
+Flex objects were absent, not because HL2 wanted different UX).
+
 ---
 
 ## 1. What makes HL2 different, and why it broke things
@@ -1050,16 +1099,29 @@ canonical to-do table; §11.7 and §12.6 are partial views kept for provenance.
 Effort is rough: **XS** under an hour, **S** a session, **M** a few sessions,
 **L** a design conversation first.
 
-### Tier 1 — cheap, high value, do first
+### Tier 1 — closed
+
+**Every row here is closed, and five of the six were closed before the table was
+ever written.** All five DONE rows shipped inside `f80429ba` — the squashed
+commit that brought up HL2 receive. `ea851484` (transmit) only rewrote the
+pre-TX caveat on the `0x0e` comment; the rename and the generic-vs-HL2 split
+were already there. The audit that produced this table read the oracles and the
+pre-squash tree; nobody re-read the merged tree afterwards, so six items sat
+here advertised as open work for weeks. Row 4 is different: it was built, taken
+to hardware, and **withdrawn**.
+
+The lesson is the table's own, not the items': **a backlog row is a claim about
+the tree, and it decays.** Check the symbol before you schedule the work.
+Audited against this branch's merge base, `6f46eea7`.
 
 | # | Item | Source | Why it matters | Effort |
 |---|---|---|---|---|
-| 1 | Mute ramps `0.010/0.025/0.000/0.010` instead of all zeros | A3 §2 | The anti-click mechanism; invisible until you are debugging clicks | XS |
-| 2 | S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS | A3 §7 | Current meter is held flat by the AGC — it deflects but tracks nothing | XS |
-| 3 | Rename `kC0AdcAssign`; document the `0x0e` dual meaning | O §4 | It is TX LNA gain on HL2. Latent TX/PureSignal hazard | XS |
-| 4 | Pipeline reset `0x39[7:4]=0x8` after an NCO move | A2 §B2 | Decimation state smears a transient across band-scale jumps — which `a1cbe154` made routine | XS |
-| 5 | Normalize by `2^23-1`, not `2^23` | A1 §A2 | dBFS parity with piHPSDR. Numerically trivial, but parity is the point | XS |
-| 6 | `RXASetNC` / `RXASetMP` after `OpenChannel` | A3 §7 | Selectivity vs latency; matters to CW operators. We silently take defaults | XS |
+| ~~1~~ | ~~Mute ramps `0.010/0.025/0.000/0.010` instead of all zeros~~ **DONE** | A3 §2 | `WdspChannel::Config` carries exactly those four values and `WdspChannel::open` hands them to `OpenChannel`. **Not HL2-scoped** — it is the shared `WdspChannel::Config`, so ANAN already opens with the same anti-click envelope, and the RTL registry will once it is wired (`RtlReceiverRegistry` has no production caller today). Flex, Icom, Sim and Web-888 never touch this path | — |
+| ~~2~~ | ~~S-meter from `GetRXAMeter(RXA_S_PK)`, not post-AGC audio RMS~~ **DONE** | A3 §7 | `Hl2RxDsp` emits `meterUpdate` from `WdspChannel::meter(Meter::SignalPeak)`, which is `GetRXAMeter(..., RXA_S_PK)`; the AGC-holds-it-flat reasoning is written at the call site. `AnanRxDsp` reads the same meter. **No audio-RMS meter survives on either path** | — |
+| ~~3~~ | ~~Rename `kC0AdcAssign`; document the `0x0e` dual meaning~~ **DONE** | O §4 | The constant is `kC0AdcAssignOrTxGain`, and the comment above it splits the generic-openHPSDR reading (per-receiver ADC assignment) from the HL2 one (TX LNA gain, `[15]` enable / `[14]` mode / `[13:8]` value) and names the two unbuilt things that need `0x0e` to carry a real value: the T/R gain switch and PureSignal's feedback path. The hazard is now documented rather than latent | — |
+| ~~4~~ | ~~Pipeline reset `0x39[7:4]=0x8` after an NCO move~~ **WITHDRAWN** | A2 §B2 | Built and tried. `ccPipelineReset()` still encodes the bank and `hl2_metis_protocol_test` still pins its bytes, but `MetisClient::requestPipelineReset()` is a **deliberate no-op**: driving it per NCO move fired ~30 resets/second during a pan drag and wedged the board until a physical power cycle. It validated at 7 resets ~2 s apart; the drag path was never exercised. Two causes were never separated — the reset rate, and the zeros we wrote to `0x39[27:24]`/`[11:8]` on an unverified assumption. The preconditions for bringing it back are written at the function, and `CERTIFICATION.md` §1.7 carries the general lesson (validate at the rate the UI actually produces). **Do not re-open this as cheap work** | — |
+| ~~5~~ | ~~Normalize by `2^23-1`, not `2^23`~~ **DONE** | A1 §A2 | `kFullScale = (1 << 23) - 1` in `MetisProtocol.h`, applied in the EP6 sample decode. **Not HL2-scoped in effect** — `P2Protocol.h`'s `kFullScale24Bit` is the same constant with a comment pointing back here, so ANAN has the same dBFS scale. Both are asserted in `hl2_metis_protocol_test` and `anan_p2_protocol_test` | — |
+| ~~6~~ | ~~`RXASetNC` / `RXASetMP` after `OpenChannel`~~ **DONE** | A3 §7 | `WdspChannel::open` calls both from `Config::filterTaps` / `Config::minimumPhase`, under the setup lock, after the mode/passband/AGC configuration and before the channel is started. **Not HL2-scoped** — ANAN opens through the same function, so it gets the configured filter length instead of WDSP's default too; the RTL registry will once it is wired. Flex, Icom, Sim and Web-888 are unaffected | — |
 | ~~6a~~ | ~~Rate-limit the ADC-overload warning~~ **DONE** | §15.7 | The edge gate stays and a 10 s rate limit sits behind it, carrying the count of transitions the window swallowed. Note the severity here was already overstated when this row was written — see §15.7 | — |
 
 ### Tier 2 — correctness gaps
