@@ -53,10 +53,32 @@ key from being followed by the preceding intent's stale key-up. This does not
 turn local intent into radio readback: existing Flex interlock, Icom PTT
 readback and command-edge fallback provenance are unchanged.
 
+Direct `TransmitModel::setMox(true)` now runs the same source-aware preflight
+as the operator PTT path, before optimistic state or admission. This intentionally
+closes the former direct-call bypass: non-DAX voice MOX needs an assigned TX
+slice. A connection attempt is not a connected session; admission stays closed
+until connection completion. Tests of dispatch use an injected backend with
+the explicit slice/admission prerequisites instead of an unanswered connection.
+
 The compatibility actor tracks active primary intent kinds. CWX queue drain
 does not end a separately held MOX intent. QSK interlock gaps do not release
 the CWX batch. CWX clear/reset fences remaining segments and late replies
 through its existing drain epoch as well as the engine operation.
+Unsupported radio-side CWX and tunerless ATU are refused before acquisition.
+Terminal ATU status closes local intent even when an in-progress report was
+missed; synchronous status observers cannot use that old completion to end a
+new ATU command. This status has no operation ID and is not qualified readback
+for multi-client arbitration.
+
+CWX rejection or invalid reply cancels the current batch and disarms its drain
+watch; stale replies are fenced by both epoch and operation. Cancelled speed
+expansion restores the base WPM without sending later text. Neutral radio-side
+text dispatch happens before sidetone notification, so a rejected batch does
+not start a misleading local playback. Non-Flex acceptance completes the local
+handoff after all segments, not RF transmission. An unsynced Flex macro likewise
+completes only its local handoff: its text length is unknown, so it cannot arm
+the indexed drain watch. Both remain explicitly unsuitable as another client's
+TX-admission evidence.
 
 ## Normal release versus cancellation
 
@@ -74,11 +96,16 @@ fallback may finish its own audio tail but gains no authority to release a
 later carrier.
 
 NetCW retains the existing timestamp, packet-count, dedup index, four UDP
-copies and TCP backstop. Each UDP copy captures the original transport and
-checks its fence at terminal dispatch. Normal key-up retains the operation
-until the final queued key-up copy reaches that transport, so a short element
+copies and TCP backstop. UDP copies, the TCP backstop and the no-stream TCP
+fallback capture the original transport and check their fences at dispatch.
+Normal key-up retains the operation until both participating transport queues
+consume it (including the final UDP copy), so a short element
 does not lose its already-queued key-down. This is transport completion, not
 proof of RF reception or radio-idle state.
+Iambic producer-thread input captures a session generation before queueing onto
+the model; reset/reconnect and the scheduled-time floor reject old-session edges
+before either Flex or non-Flex delivery. This is session isolation, not yet
+per-producer authorization within a shared desktop operation.
 
 Disconnect, forced disconnect and backend replacement cancel before transport
 reuse. Session admission closes before any cancellation, pending-command reply
@@ -112,6 +139,9 @@ bind a socket, discover hardware or transmit RF. It covers typed dispatch,
 refusals, deferred release, replacement, reentrant intent, Quindar, CWX and
 queued NetCW delivery. Existing model, ATU, Icom, CAT/TUNE, applet and bridge
 watchdog tests remain part of the targeted regression set.
+The private test-only terminal writers in `PanadapterStream` and
+`RadioConnection` allow these queue tests to exercise production dispatch without
+initializing sockets or substituting synthetic radio firmware.
 
 Native Demo/MCP checks with TX disabled can establish launch, identity,
 receive-path and refusal behavior. They cannot establish over-the-air CW

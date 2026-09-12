@@ -1222,23 +1222,9 @@ void RadioModel::setupBackend(const QString& family)
     // synchronously from the matching decode*Status() calls in the status
     // handlers (main-thread AutoConnection → DirectConnection).
     connect(m_backend.get(), &IRadioBackend::transmitChanged, this,
-            [this](const TransmitDelta& delta) {
-                // A backend-reported MOX edge is radio state, not local intent.
-                // Keep it out of TransmitModel::moxChanged, whose consumers
-                // own this client's audio, DAX, recorder and serial PTT.
-                if (delta.mox)
-                    publishBackendTransmitEdge(*delta.mox);
-                m_transmitModel.applyChanges(delta);
-                if (delta.atuStatusRaw && (m_txActivities & static_cast<unsigned>(TxActivity::Atu))) {
-                    if (m_transmitModel.atuStatus() == ATUStatus::InProgress) {
-                        m_atuOperationObserved = true;
-                    } else if (m_atuOperationObserved && m_transmitModel.atuStatus() != ATUStatus::None
-                               && m_transmitModel.atuStatus() != ATUStatus::NotStarted) {
-                        endLocalTxActivity(TxActivity::Atu);
-                    }
-                }
-                if (delta.cwSpeed && !usesFlexCommandPlane()) {
-                    m_cwxModel.adoptSpeed(*delta.cwSpeed);
+            [this, generation](const TransmitDelta& delta) {
+                if (generation == m_backendReceiverGeneration) {
+                    applyBackendTransmitDelta(delta);
                 }
             });
     connect(m_backend.get(), &IRadioBackend::keyingStateConfirmed,
@@ -2522,11 +2508,12 @@ RadioModel::RadioModel(QObject* parent)
             m_transmitModel.setCwSpeed(wpm);
         }
     });
-    connect(&m_cwxModel, &CwxModel::transmissionRequested, this,
-            [this](const QString& text, int wpm) {
-        if (!m_backend || usesFlexCommandPlane()
-            || !backendCapabilities().hasRadioSideCwKeyer) {
-            return;
+    m_cwxModel.setTextSender([this](const QString& text, int wpm) {
+        if (usesFlexCommandPlane()) {
+            return true;
+        }
+        if (!m_backend || !backendCapabilities().hasRadioSideCwKeyer) {
+            return false;
         }
         Q_UNUSED(wpm);
         const QString rejection = m_backend->sendCwText(text);
@@ -2535,13 +2522,38 @@ RadioModel::RadioModel(QObject* parent)
                 tr("CW text not sent: %1").arg(rejection),
                 MessageSeverity::Warning);
         }
+        return rejection.isEmpty();
     });
     connect(&m_cwxModel, &CwxModel::transmissionCancelled, this, [this] {
+        const TxCoordinator::Operation operation = m_txOperation;
+        const int epoch = m_cwxModel.drainEpoch();
+        m_cwxActive = false;
+        m_cwxDrainArmed = false;
         if (m_backend && !usesFlexCommandPlane()
             && backendCapabilities().hasRadioSideCwKeyer) {
             m_backend->abortCwText();
         }
-        endLocalTxActivity(TxActivity::Cwx);
+        if (operation.sameOperation(m_txOperation) && epoch == m_cwxModel.drainEpoch()) {
+            endLocalTxActivity(TxActivity::Cwx);
+        }
+    });
+    connect(&m_cwxModel, &CwxModel::transmissionDispatched, this,
+            [this](int epoch, bool untrackedMacro) {
+        if (epoch != m_cwxModel.drainEpoch()) {
+            return;
+        }
+        if (!usesFlexCommandPlane() || untrackedMacro) {
+            // CI-V has no text-progress readback, and an unsynced Flex macro
+            // has no client-side end index. Complete only the local handoff.
+            // This must never become another client's radio-idle authority.
+            if (untrackedMacro && m_cwxDrainArmed) {
+                // An unknown-length tail appended to a tracked batch makes
+                // that old end index incomplete. Don't let it cut off the tail.
+                m_cwxDrainArmed = false;
+                m_cwxModel.resetDrainWatch();
+            }
+            endLocalTxActivity(TxActivity::Cwx);
+        }
     });
     // Final cwx send of each macro/text block goes via replyCommandReady so we
     // can capture the radio_index from the reply.  CwxModel::handleSendReply
@@ -2557,8 +2569,12 @@ RadioModel::RadioModel(QObject* parent)
         // m_cwxDrainArmed is owned solely by the CWX send/drain lifecycle, so
         // the queueEmpty release below survives QSK break-in flicker. (#3949)
         m_cwxDrainArmed = true;
-        sendCmd(cmd, [this, epoch, nChars](int respVal, const QString& body){
-            m_cwxModel.handleSendReply(respVal, body, epoch, nChars);
+        const TxCoordinator::Operation operation = m_txOperation;
+        sendCmd(cmd, [this, operation, epoch, nChars](int respVal, const QString& body){
+            if (operation.sameOperation(m_txOperation)
+                && operation.permitsDispatch(txMonotonicMs())) {
+                m_cwxModel.handleSendReply(respVal, body, epoch, nChars);
+            }
         });
     });
     // When the radio signals its CWX buffer is drained, release TX. (#2450)
@@ -4506,6 +4522,30 @@ bool RadioModel::refuseKeyWithInterlock(const QString& message, const QString& k
     return false;
 }
 
+void RadioModel::applyBackendTransmitDelta(const TransmitDelta& delta)
+{
+    const TxCoordinator::Operation operation = m_txOperation;
+    const quint64 atuEpoch = m_atuCommandEpoch;
+    // Backend MOX is radio state, not local intent; don't echo it into the
+    // signal that drives this client's audio, DAX, recorder and serial PTT.
+    if (delta.mox) {
+        publishBackendTransmitEdge(*delta.mox);
+    }
+    m_transmitModel.applyChanges(delta);
+    if (delta.atuStatusRaw && operation.sameOperation(m_txOperation)
+        && atuEpoch == m_atuCommandEpoch
+        && (m_txActivities & static_cast<unsigned>(TxActivity::Atu))) {
+        const ATUStatus status = m_transmitModel.atuStatus();
+        if (status != ATUStatus::InProgress && status != ATUStatus::None
+            && status != ATUStatus::NotStarted) {
+            endLocalTxActivity(TxActivity::Atu);
+        }
+    }
+    if (delta.cwSpeed && !usesFlexCommandPlane()) {
+        m_cwxModel.adoptSpeed(*delta.cwSpeed);
+    }
+}
+
 bool RadioModel::forwardNonFlexCwKeying(bool down)
 {
     if (!m_backend) {
@@ -4989,6 +5029,8 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
                                  std::chrono::steady_clock::time_point scheduledAt,
                                  std::function<void()> delivered)
 {
+    const bool keying = baseCmd.endsWith(QLatin1String(" 1"));
+    const TxCoordinator::Operation operation = keying ? m_txOperation : m_txCoordinator.cleanupFence();
     if (m_netCwStreamId == 0) {
         // No netcw stream — fall back to TCP immediate
         const QString fallbackCmd = baseCmd.contains("cw key")
@@ -5003,8 +5045,7 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
                 << " source=" << (debugSource.isEmpty() ? QStringLiteral("unknown") : debugSource)
                 << " cmd=\"" << fallbackCmd << "\"";
         }
-        sendCmd(fallbackCmd);
-        return false;
+        return sendNetCwTcp(fallbackCmd, operation, keying, std::move(delivered));
     }
 
     // Build the full command with timing metadata and dedup index
@@ -5152,15 +5193,22 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
     // Capture the original transport AND operation. A delayed copy must not
     // borrow a replacement backend (or a newer owner's key) after reconnect.
     // Check again on the worker, not merely before queueing the thread hop.
-    const bool keying = baseCmd.endsWith(QLatin1String(" 1"));
-    const TxCoordinator::Operation operation = keying ? m_txOperation : m_txCoordinator.cleanupFence();
     const QPointer<PanadapterStream> stream = m_panStream;
     const QPointer<RadioModel> receiver = this;
-    const auto sendCopy = [stream, operation, keying, logUdpSend, receiver, delivered](const QByteArray& packet, int copy, int delay) {
+    // Complete normal key-up only after BOTH transport queues have consumed
+    // the edge. Otherwise the faster UDP queue can invalidate a short TCP down.
+    const int parts = (stream ? 1 : 0) + ((m_connection || m_wanConn) ? 1 : 0);
+    const auto pending = std::make_shared<int>(parts);
+    const auto partDelivered = [pending, delivered] {
+        if (--*pending == 0 && delivered) {
+            delivered();
+        }
+    };
+    const auto sendCopy = [stream, operation, keying, logUdpSend, receiver, partDelivered](const QByteArray& packet, int copy, int delay) {
         if (!stream) {
             return;
         }
-        QMetaObject::invokeMethod(stream, [stream, operation, keying, packet, copy, delay, logUdpSend, receiver, delivered] {
+        QMetaObject::invokeMethod(stream, [stream, operation, keying, packet, copy, delay, logUdpSend, receiver, partDelivered] {
             if (!stream || (keying ? !operation.permitsDispatch(txMonotonicMs()) : !operation.permitsCleanup())) {
                 return;
             }
@@ -5169,8 +5217,8 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
             // Normal key-up is not cancellation. Keep its operation alive
             // until queued key-downs and the final key-up copy have reached
             // this worker; otherwise a short element can lose its down edge.
-            if (copy == 3 && !keying && receiver && delivered) {
-                QMetaObject::invokeMethod(receiver, delivered, Qt::QueuedConnection);
+            if (copy == 3 && !keying && receiver) {
+                QMetaObject::invokeMethod(receiver, partDelivered, Qt::QueuedConnection);
             }
         }, Qt::QueuedConnection);
     };
@@ -5182,7 +5230,44 @@ bool RadioModel::sendNetCwCommand(const QString& baseCmd, const QString& debugSo
     // FlexLib sends the same decorated netcw command over TCP after the UDP
     // copies.  With the 16-bit timestamp format above, the radio can dedupe
     // by index=N and the TCP path provides a reliable delivery backstop.
-    sendCmd(fullCmd);
+    sendNetCwTcp(fullCmd, operation, keying, partDelivered);
+    return parts != 0;
+}
+
+bool RadioModel::sendNetCwTcp(const QString& command, const TxCoordinator::Operation& operation,
+                            bool keying, std::function<void()> delivered)
+{
+    const QPointer<RadioModel> receiver = this;
+    const auto notifyDelivered = [receiver, keying, delivered] {
+        if (!keying && receiver && delivered) {
+            QMetaObject::invokeMethod(receiver, delivered, Qt::QueuedConnection);
+        }
+    };
+    const auto permitted = [operation, keying] {
+        return keying ? operation.permitsDispatch(txMonotonicMs()) : operation.permitsCleanup();
+    };
+    if (m_wanConn) {
+        // WAN's TLS writer is synchronous on the model's thread, unlike LAN.
+        // Capture its identity and check authority immediately at that writer.
+        const QPointer<WanConnection> connection = m_wanConn;
+        if (connection && permitted()) {
+            connection->sendCommand(command);
+            notifyDelivered();
+        }
+        return true;
+    }
+    const QPointer<RadioConnection> connection = m_connection;
+    if (!connection) {
+        return false;
+    }
+    const quint32 seq = m_seqCounter.fetch_add(1);
+    QMetaObject::invokeMethod(connection, [connection, seq, command, permitted, notifyDelivered] {
+        if (!connection || !permitted()) {
+            return;
+        }
+        connection->writeCommand(seq, command);
+        notifyDelivered();
+    }, Qt::QueuedConnection);
     return true;
 }
 
@@ -6428,6 +6513,8 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
 
 void RadioModel::onConnected()
 {
+    m_cwInputSession.fetch_add(1, std::memory_order_release);
+    m_cwInputNotBefore = std::chrono::steady_clock::now();
     m_txSessionClosing = false;
     qCDebug(lcProtocol) << "RadioModel: connected (family=" << m_family << ")";
     m_connectAttemptActive = false;  // the attempt landed (#4912)

@@ -841,6 +841,11 @@ public:
     void sendCwKeyEdge(bool down, const QString& debugSource = {},
                        quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
                        std::chrono::steady_clock::time_point scheduledAt = {});
+    // Producer-thread entry: capture the session before queueing onto the model.
+    // Old queued iambic edges cannot borrow the replacement radio's authority.
+    void queueCwKeyEdge(bool down, const QString& debugSource,
+                       quint64 debugTraceId, quint64 debugSourceMs,
+                       std::chrono::steady_clock::time_point scheduledAt);
     void cwAutoTune(int sliceId, bool intermittent); // int=1 start loop, int=0 stop
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
     bool addSlice();           // Create a new slice on the active panadapter
@@ -1750,17 +1755,21 @@ private:
     enum class TxActivity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
     unsigned m_txActivities{0};
     bool m_txSessionClosing{false};
-    bool m_atuOperationObserved{false};
     quint64 m_txCommandEpoch{0};
     quint64 m_tuneCommandEpoch{0};
     quint64 m_atuCommandEpoch{0};
     quint64 m_cwKeyDeliveryEpoch{0};
     quint64 m_cwPttDeliveryEpoch{0};
+    std::atomic<quint64> m_cwInputSession{0};
+    std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
     void endLocalTxActivity(TxActivity activity);
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();
+    void applyBackendTransmitDelta(const TransmitDelta& delta);
+    bool sendNetCwTcp(const QString& command, const TxCoordinator::Operation& operation,
+                     bool keying, std::function<void()> delivered);
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;

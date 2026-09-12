@@ -726,8 +726,6 @@ void MainWindow::deactivateRADE()
     }
     m_radioModel.transmitModel().invalidatePttRelease();
     m_radePttRelease = {};
-    m_radeEooPending = false;
-    m_radeTxActive = false;
     syncKiwiSdrTransmitMute();
 
     m_audio->setRadeMode(false);

@@ -45,6 +45,10 @@ public:
     using TransmissionPermit = std::function<bool()>;
     using TransmissionAdmission = std::function<TransmissionPermit()>;
     void setTransmissionAdmission(TransmissionAdmission admission) { m_transmissionAdmission = std::move(admission); }
+    // Optional neutral backend dispatch. False rejects the batch before the
+    // sidetone notification; the radio-specific command path stays separate.
+    using TextSender = std::function<bool(const QString&, int)>;
+    void setTextSender(TextSender sender) { m_textSender = std::move(sender); }
 
     // Actions
     void send(const QString& text);      // Send mode: full string
@@ -118,12 +122,17 @@ signals:
     // self-contained even if speed changes mid-transmission.
     void transmissionRequested(const QString& text, int wpm);
     void transmissionCancelled();        // erase / clearBuffer / interrupt
+    // All synchronous sends in this batch have been handed off. This is NOT
+    // radio-idle evidence. untrackedMacro has no client-side drain index.
+    void transmissionDispatched(int epoch, bool untrackedMacro);
     void queueEmpty();                   // radio CWX buffer drained — TX teardown required
 
 private:
     TransmissionPermit admitTransmission();
     void emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit);
+    bool notifyTransmission(const QString& text, int wpm, const TransmissionPermit& permit);
     TransmissionAdmission m_transmissionAdmission;
+    TextSender m_textSender;
 
     int     m_speed{20};
     int     m_delay{5};

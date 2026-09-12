@@ -19,6 +19,17 @@ using namespace AetherSDR;
 namespace AetherSDR {
 class TxOperationIntegrationTestAccess {
 public:
+    static void transmitDelta(RadioModel& radio, const TransmitDelta& delta)
+    {
+        radio.applyBackendTransmitDelta(delta);
+    }
+    static bool cwxDrainArmed(const RadioModel& radio) { return radio.m_cwxDrainArmed; }
+    static void injectTcp(RadioModel& radio, RadioConnection& connection, QStringList& commands)
+    {
+        connection.m_commandSinkForTest = [&commands](quint32, const QString& command) { commands << command; };
+        radio.m_family = QStringLiteral("flex");
+        radio.m_connection = &connection;
+    }
     static void teardownWithPendingReply(RadioModel& radio, RadioModel::ResponseCallback callback)
     {
         radio.m_pendingCallbacks.insert(1234, std::move(callback));
@@ -49,6 +60,7 @@ class RecordingBackend final : public IRadioBackend {
 public:
     RadioCapabilities caps;
     bool connected{false};
+    QString cwRejection;
     QStringList* commands;
     explicit RecordingBackend(QStringList& record) : commands(&record)
     {
@@ -69,7 +81,7 @@ public:
     void setTune(bool on, int) override { *commands << (on ? "tune:on" : "tune:off"); }
     void setAtu(bool on) override { *commands << (on ? "atu:on" : "atu:off"); }
     void setCwKeying(bool on, bool, int) override { *commands << (on ? "cw:on" : "cw:off"); }
-    QString sendCwText(const QString& text) override { *commands << "cwx:" + text; return {}; }
+    QString sendCwText(const QString& text) override { *commands << "cwx:" + text; return cwRejection; }
     void abortCwText() override { *commands << "cwx:abort"; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
@@ -380,6 +392,123 @@ void cwxCancellationFence()
     check(cleared && sends == 0, "CWX cancellation fences remaining segments and local keyer delivery");
 }
 
+void cwxCompletionAndRefusal()
+{
+    {
+        Fixture f;
+        f.backend->caps.hasRadioSideCwKeyer = false;
+        f.radio.cwxModel().send("CQ");
+        check(f.commands.isEmpty() && !f.radio.transmitOperation().permitsCleanup(),
+              "unsupported CWX refuses before acquiring an operation");
+    }
+    for (const bool reject : {false, true}) {
+        Fixture f;
+        if (reject) {
+            f.backend->cwRejection = QStringLiteral("test rejection");
+        }
+        int notifications = 0;
+        QObject::connect(&f.radio.cwxModel(), &CwxModel::transmissionRequested, &f.radio,
+                         [&](const QString&, int) { ++notifications; });
+        f.radio.cwxModel().send("CQ +TEST DE CALL");
+        check(!f.radio.transmitOperation().permitsDispatch(std::numeric_limits<qint64>::max()),
+              "radio-side CWX closes local dispatch after acceptance or rejection");
+        check(reject ? notifications == 0 : notifications > 1,
+              "rejected CWX neither announces sidetone nor sends later segments");
+        if (!reject) {
+            check(f.commands.filter("cwx:").size() == notifications,
+                  "accepted CWX retains admission through every segment");
+        }
+    }
+    {
+        Fixture f;
+        f.backend->caps.hasTuner = false;
+        f.radio.transmitModel().atuStart();
+        check(!f.commands.contains("atu:on")
+                  && !f.radio.transmitOperation().permitsDispatch(std::numeric_limits<qint64>::max()),
+              "tunerless ATU refuses before acquiring an operation");
+    }
+    for (const bool observedProgress : {false, true}) {
+        Fixture f;
+        f.radio.transmitModel().atuStart();
+        const TxCoordinator::Operation operation = f.radio.transmitOperation();
+        TransmitDelta delta;
+        if (observedProgress) {
+            delta.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS");
+            TxOperationIntegrationTestAccess::transmitDelta(f.radio, delta);
+        }
+        delta.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL");
+        TxOperationIntegrationTestAccess::transmitDelta(f.radio, delta);
+        check(!operation.permitsDispatch(std::numeric_limits<qint64>::max()),
+              "terminal ATU status completes local intent even if in-progress was missed");
+    }
+}
+
+void cwxFailureAndSpeedRestore()
+{
+    for (const int failure : {0, 1, 2, 3}) {
+        CwxModel cwx;
+        int cancelled = 0;
+        QObject::connect(&cwx, &CwxModel::transmissionCancelled, &cwx, [&] { ++cancelled; });
+        const int epoch = cwx.drainEpoch();
+        cwx.handleSendReply(0, "10,1", epoch, 3);
+        cwx.handleSendReply(failure == 0 ? 1 : 0,
+                           failure == 1 ? "bad" : failure == 3 ? "2147483647,1" : "10,1",
+                           epoch, failure == 2 ? 0 : 3);
+        check(cancelled == 1 && cwx.cwxEndIndex() == -1 && cwx.drainEpoch() != epoch,
+              "rejected, malformed, empty or overflowing reply cancels the current CWX batch");
+        cwx.handleSendReply(1, {}, epoch, 1);
+        check(cancelled == 1, "stale rejected reply cannot cancel a replacement CWX batch");
+    }
+    CwxModel cwx;
+    bool allowed = true;
+    QStringList commands;
+    cwx.setTransmissionAdmission([&] { return [&] { return allowed; }; });
+    QObject::connect(&cwx, &CwxModel::commandReady, &cwx, [&](const QString& command) {
+        commands << command;
+        if (command == "cwx wpm 23") {
+            allowed = false;
+        }
+    });
+    cwx.send("+CQ");
+    check(commands == QStringList({"cwx wpm 23", "cwx wpm 20"}),
+          "cancelled expansion restores base WPM without sending more text");
+}
+
+void flexCwxLifecycle()
+{
+    QStringList tcp;
+    RadioConnection connection;
+    Fixture f;
+    TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+    f.radio.cwxModel().sendMacro(1);
+    check(!f.radio.transmitOperation().permitsDispatch(std::numeric_limits<qint64>::max()),
+          "unsynced Flex macro closes local handoff without claiming a drain observation");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(tcp.contains("cwx macro send 1"), "unsynced macro preserves radio-side expansion");
+
+    f.radio.cwxModel().send("CQ");
+    const TxCoordinator::Operation operation = f.radio.transmitOperation();
+    const int epoch = f.radio.cwxModel().drainEpoch();
+    check(TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
+              && operation.permitsDispatch(std::numeric_limits<qint64>::max()),
+          "known Flex text keeps its operation until drain or failure");
+    f.radio.cwxModel().handleSendReply(1, {}, epoch, 2);
+    check(!TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
+              && !operation.permitsDispatch(std::numeric_limits<qint64>::max()),
+          "Flex reply failure disarms drain and releases the exact local activity");
+    f.radio.cwxModel().send("NEW");
+    const TxCoordinator::Operation replacement = f.radio.transmitOperation();
+    f.radio.cwxModel().handleSendReply(1, {}, epoch, 2);
+    check(replacement.permitsDispatch(std::numeric_limits<qint64>::max())
+              && TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio),
+          "old failed reply cannot release a replacement Flex CWX operation");
+    f.radio.cwxModel().handleSendReply(0, "10,1", f.radio.cwxModel().drainEpoch(), 3);
+    f.radio.cwxModel().sendMacro(2);
+    check(!TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
+              && f.radio.cwxModel().cwxEndIndex() == -1,
+          "unknown-length macro tail cannot be truncated by an earlier batch's drain index");
+}
+
 void queuedNetCwEdges()
 {
     QList<QByteArray> packets;
@@ -412,6 +541,61 @@ void queuedNetCwEdges()
     loop.exec();
     check(packets.isEmpty(), "disconnect cancels even the first queued NetCW copy before transport dispatch");
 }
+
+void queuedCwSessionAndTcpFences()
+{
+    {
+        Fixture f;
+        const auto when = std::chrono::steady_clock::now();
+        f.radio.queueCwKeyEdge(true, "test", 0, 0, when);
+        f.radio.queueCwKeyEdge(false, "test", 0, 0, when);
+        f.radio.forceDisconnect();
+        auto replacement = std::make_unique<RecordingBackend>(f.commands);
+        f.radio.setBackendForTest(std::move(replacement), QStringLiteral("test"));
+        f.radio.sendCwKeyEdge(true);
+        const TxCoordinator::Operation fresh = f.radio.transmitOperation();
+        const qsizetype before = f.commands.size();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(f.commands.size() == before && fresh.permitsDispatch(std::numeric_limits<qint64>::max()),
+              "queued old-session iambic down/up cannot key or unkey a replacement operation");
+        f.radio.queueCwKeyEdge(false, "test", 0, 0, std::chrono::steady_clock::now());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(f.commands.last() == "cw:off" && !fresh.permitsDispatch(std::numeric_limits<qint64>::max()),
+              "fresh-session queued iambic release still reaches the backend");
+    }
+    for (const bool withUdp : {false, true}) {
+        QStringList tcp;
+        QList<QByteArray> udp;
+        RadioConnection connection;
+        PanadapterStream stream;
+        Fixture f;
+        TxOperationIntegrationTestAccess::injectTcp(f.radio, connection, tcp);
+        if (withUdp) {
+            TxOperationIntegrationTestAccess::injectNetCwTransport(f.radio, stream,
+                [&](const QByteArray& packet) { udp << packet; });
+        }
+        f.radio.sendCwKeyEdge(true);
+        const TxCoordinator::Operation operation = f.radio.transmitOperation();
+        f.radio.sendCwKeyEdge(false);
+        check(tcp.isEmpty() && operation.permitsDispatch(std::numeric_limits<qint64>::max()),
+              "short NetCW element retains authority until queued TCP delivery");
+        QEventLoop loop;
+        QTimer::singleShot(60, &loop, &QEventLoop::quit);
+        loop.exec();
+        check(tcp.size() == 2 && tcp.first().contains(withUdp ? "cw key 1 " : "cw key immediate 1")
+                  && tcp.last().contains(withUdp ? "cw key 0 " : "cw key immediate 0")
+                  && !operation.permitsDispatch(std::numeric_limits<qint64>::max()),
+              "TCP fallback/backstop delivers normal down/up and completes the matching operation");
+        tcp.clear();
+        udp.clear();
+        f.radio.sendCwKeyEdge(true);
+        f.radio.forceDisconnect();
+        QTimer::singleShot(60, &loop, &QEventLoop::quit);
+        loop.exec();
+        check(tcp.filter("cw key").isEmpty() && udp.isEmpty(),
+              "reset fences queued TCP fallback/backstop and UDP before their final writers");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -428,6 +612,10 @@ int main(int argc, char** argv)
     reentrantIntents();
     quindarNormalRelease();
     cwxCancellationFence();
+    cwxCompletionAndRefusal();
+    cwxFailureAndSpeedRestore();
+    flexCwxLifecycle();
     queuedNetCwEdges();
+    queuedCwSessionAndTcpFences();
     return failures ? 1 : 0;
 }

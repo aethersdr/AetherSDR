@@ -21,6 +21,13 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
         || !refuseKeyInReceiveOnlyMode()) {
         return false;
     }
+    const RadioCapabilities caps = backendCapabilities();
+    if ((activity == TxActivity::Cwx && !caps.hasRadioSideCwKeyer)
+        || (activity == TxActivity::Atu && !caps.hasTuner)) {
+        emitInterlockNotification(tr("This radio does not support the requested transmit operation."),
+                                  QStringLiteral("tx-operation-unsupported"));
+        return false;
+    }
     const QString gate = activity == TxActivity::Tune || activity == TxActivity::Atu
         ? QStringLiteral("tune-start")
         : activity == TxActivity::Mox ? QStringLiteral("xmit") : QStringLiteral("cw-key");
@@ -34,18 +41,12 @@ bool RadioModel::beginLocalTxActivity(TxActivity activity)
         return false;
     }
     m_txOperation = admission.operation;
-    if (activity == TxActivity::Atu && !(m_txActivities & static_cast<unsigned>(TxActivity::Atu))) {
-        m_atuOperationObserved = false;
-    }
     m_txActivities |= static_cast<unsigned>(activity);
     return true;
 }
 
 void RadioModel::endLocalTxActivity(TxActivity activity)
 {
-    if (activity == TxActivity::Atu) {
-        m_atuOperationObserved = false;
-    }
     m_txActivities &= ~static_cast<unsigned>(activity);
     if (m_txActivities == 0) {
         // Existing desktop sequencers explicitly end their local intent. This
@@ -94,10 +95,25 @@ void RadioModel::resetTxOperations()
     // Close admission BEFORE cancellation/reply/model notifications can reenter
     // us; operation recovery alone only covers a previously active operation.
     m_txSessionClosing = true;
+    m_cwInputSession.fetch_add(1, std::memory_order_release);
+    m_cwInputNotBefore = std::chrono::steady_clock::now();
     m_transmitModel.cancelPttRelease();
     m_txCoordinator.reset();
     m_cwxModel.resetDrainWatch();
     m_txActivities = 0;
+}
+
+void RadioModel::queueCwKeyEdge(bool down, const QString& source, quint64 traceId,
+                              quint64 sourceMs, std::chrono::steady_clock::time_point scheduledAt)
+{
+    const quint64 session = m_cwInputSession.load(std::memory_order_acquire);
+    QMetaObject::invokeMethod(this, [this, session, down, source, traceId, sourceMs, scheduledAt] {
+        if (session != m_cwInputSession.load(std::memory_order_acquire)
+            || m_txSessionClosing || scheduledAt < m_cwInputNotBefore) {
+            return;
+        }
+        sendCwKeyEdge(down, source, traceId, sourceMs, scheduledAt);
+    }, Qt::QueuedConnection);
 }
 
 } // namespace AetherSDR

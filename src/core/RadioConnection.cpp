@@ -338,6 +338,10 @@ void RadioConnection::gracefulDisconnect(quint32 handle,
 
 void RadioConnection::writeCommand(quint32 seq, const QString& command)
 {
+    if (m_commandSinkForTest) {
+        m_commandSinkForTest(seq, command);
+        return;
+    }
     if (m_syntheticDemo) {
         if (!isConnected()) return;
         // Keepalive: RadioModel pings the radio and force-disconnects after 5

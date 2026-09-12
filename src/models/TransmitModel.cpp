@@ -1012,6 +1012,8 @@ TransmitModel::PttRelease TransmitModel::capturePttRelease()
             [this, ownerThread = thread()] {
                 if (QThread::currentThread() == ownerThread) {
                     setMox(false);
+                } else {
+                    qCWarning(lcProtocol) << "PTT release refused off the model owning thread";
                 }
             }};
 }
