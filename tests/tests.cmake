@@ -3803,6 +3803,12 @@ add_test(NAME hl2_band_filter_frame_test COMMAND hl2_band_filter_frame_test)
 # HL2 wideband bandscope ingest — EP4 and EP6 accounted separately on one
 # socket. Binds nothing: recorded datagrams go straight into MetisClient's
 # drain path through the MetisClientTestAccess friend seam.
+# Its section 8 carries the same claim up to the IRadioBackend seam — the
+# health rows and the bandscope.enable verb on a default-constructed
+# Hl2Backend, which needs no socket because m_connected is the only thing a
+# peer buys. The positive path is certified against hardware, not faked here.
+# That section lives in this target and not in tests/hl2_backend_test.cpp,
+# which the retired-fixtures block below leaves with no target at all.
 add_executable(hl2_ep4_ingest_test tests/hl2_ep4_ingest_test.cpp)
 target_include_directories(hl2_ep4_ingest_test PRIVATE src tests)
 target_link_libraries(hl2_ep4_ingest_test PRIVATE aethercore Qt6::Core Qt6::Network)
