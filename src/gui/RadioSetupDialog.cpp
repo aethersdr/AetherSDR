@@ -1137,6 +1137,33 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
 {
+    // A firmware upload does not survive this dialog. The uploader is parented
+    // here and this dialog carries WA_DeleteOnClose, so closing mid-transfer
+    // destroys the uploader and its socket and aborts the image part-written —
+    // silently, with the pre-upload warning having only ever mentioned not
+    // *disconnecting*. The radio is then holding a partial update whose outcome
+    // nobody observed, which is the exact ambiguity #5572's retry barrier
+    // exists to contain. Make the operator say it out loud first.
+    if (m_uploader && m_uploader->isUploading()) {
+        const auto reply = QMessageBox::warning(
+            this, tr("Firmware Update In Progress"),
+            tr("A firmware upload is still in progress.\n\n"
+               "Closing this window aborts it part-way through the image. The "
+               "radio may be left with an incomplete update, and you will need "
+               "to reconnect to it before you can retry.\n\n"
+               "Close anyway?"),
+            QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (reply != QMessageBox::Ok) {
+            event->ignore();
+            return;
+        }
+        // End the attempt explicitly rather than letting destruction do it
+        // silently: cancel() emits one terminal result, and because the radio
+        // never settled the outcome it leaves the retry barrier armed — so the
+        // next attempt still has to go through a fresh command session.
+        m_uploader->cancel();
+    }
+
     // Persist any uncommitted "user cleared IP" edits in the Peripherals
     // tab before the base class flushes geometry to AppSettings.
     for (const auto& saver : m_peripheralRowSavers)

@@ -501,6 +501,26 @@ void checkBarrierReleasedOnlyByRadioSettledOutcomes()
               && !AetherSDR::FirmwareUploaderTestAccess::barrierActive(rejected),
           "a radio-reported rejection is unambiguous and releases the barrier");
 
+    // Closing Radio Setup mid-upload now calls cancel() rather than letting
+    // destruction abort the socket silently. Bytes were already dispatched and
+    // the radio never reported on them, so that path must NOT release the
+    // barrier — the next attempt still needs a fresh command session.
+    AetherSDR::FirmwareUploader cancelled(nullptr);
+    QVector<FinishedEvent> cancelledFinished;
+    QObject::connect(&cancelled, &AetherSDR::FirmwareUploader::finished,
+                     [&cancelledFinished](Outcome outcome, const QString& message) {
+                         cancelledFinished.append({outcome, message});
+                     });
+    AetherSDR::FirmwareUploaderTestAccess::start(
+        cancelled, nonPeriodicBytes(8), [](const char*, qint64 requested) { return requested; });
+    AetherSDR::FirmwareUploaderTestAccess::dispatched(cancelled);
+    cancelled.cancel();
+    check(cancelledFinished.size() == 1 && cancelledFinished.front().outcome == Outcome::Failed
+              && !cancelled.isUploading(),
+          "cancelling a dispatched upload emits exactly one terminal result");
+    check(AetherSDR::FirmwareUploaderTestAccess::barrierActive(cancelled),
+          "cancelling a dispatched upload leaves its outcome unobserved, so the barrier holds");
+
     AetherSDR::FirmwareUploader stalled(nullptr);
     const auto stalledGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
         stalled, nonPeriodicBytes(8), [](const char*, qint64 requested) { return requested; });
