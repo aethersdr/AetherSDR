@@ -11,18 +11,25 @@ name: Static Checks
 # #4585's colour ratchet was folded in below per #4657, and colour-ratchet.yml
 # deleted, rather than left as a fourth near-identical workflow.
 #
-# `Static checks` is NOT yet a required status check. The required contexts
-# are build / check-windows / check-macos; adding this one is the LAST action
-# of the #5405 rollout, after that PR merges, and until it happens the frozen
-# per-PR test gate below (tools/check_ci_test_gate.py) is advisory — a red run
-# here does not block a merge. Do not describe it as enforced before the flip
-# is made and verified.
+# `Static checks` IS a required status check (flipped 2026-09-12). The required
+# contexts are build / check-windows / check-macos / Static checks, so a red run
+# here blocks a merge and every gate below is enforcing, not advisory — the
+# frozen per-PR test gate (tools/check_ci_test_gate.py) included.
+#
+# This was the LAST action of the #5405 rollout and it sat undone from
+# 2026-09-04 to 2026-09-12. For eight days the gate that PR existed to enforce
+# was itself unenforced, which is worth remembering the next time a rollout ends
+# in a manual step: nothing in CI can tell you the manual step was skipped, and
+# this file confidently said "NOT yet required" the whole time without anything
+# checking whether that was still true.
 #
 # The `paths:` filter is gone, and that ordering is deliberate: a required
 # check a PR never triggers blocks that PR forever, so the filter has to go
 # BEFORE the flip, not with it. (Making it required first is what briefly
 # blocked eleven open PRs.) Every step is stdlib Python in seconds, so running
-# on every pull request costs less than one blocked docs-only PR.
+# on every pull request costs less than one blocked docs-only PR. That ordering
+# held: at the flip every open PR had already run this workflow, so none was
+# stranded on a check it could not trigger.
 
 on:
   pull_request:

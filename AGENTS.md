@@ -596,7 +596,9 @@ rules (pre-drafted in
 [`docs/aetherd-agents-md-staging.md`](docs/aetherd-agents-md-staging.md));
 if a rule isn't in this file, its step hasn't landed. Architecture changes
 ahead of the RFC steps remain maintainer-only (see Autonomous Agent
-Boundaries above). The CI-enforced rules so far:
+Boundaries above). The CI-enforced rules so far — all three run in the
+`Static checks` job, which became a **required status check on 2026-09-12**, so
+a red run blocks the merge rather than merely reporting:
 
 - **EB1/EB2/EB3** above (`tools/check_engine_boundary.py`, warning for
   tracked baselines, error for new violations).
