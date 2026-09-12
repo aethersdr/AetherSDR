@@ -3937,15 +3937,16 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
 
 // The Phone applet's MIC slider, 0..100, onto the modulator's linear pre-ALC gain.
 //
-// 50 IS UNITY, and that is load-bearing rather than cosmetic. RadioModel now
-// restores this radio's own stored mic level at connect (RadioStateMemory,
-// ClientSettingsDomain::TxSetpoints), so the slider can arrive here carrying the
-// operator's last position rather than a fresh 50 — but 50 is what a radio with
-// nothing stored is restored to, and that session must still leave the
-// modulator exactly where its own default (m_micGain = 1.0) puts it. A mapping
-// with unity anywhere else would silently change the transmit level of every
-// existing HL2 install, both the first time this code shipped and the first
-// launch after the level began persisting.
+// 50 IS UNITY, and that is load-bearing rather than cosmetic. This backend now
+// remembers its own radio's slider position across sessions — captured into the
+// txSetpoints extension in currentOperatingState(), applied by
+// pushInitialState() — so the level can arrive here as the operator's last
+// position rather than a fresh 50. But 50 is still what a radio with NOTHING
+// stored comes up on, and that session must leave the modulator exactly where
+// its own default (m_micGain = 1.0) puts it. A mapping with unity anywhere else
+// would silently change the transmit level of every existing HL2 install, both
+// the first time this code shipped and the first launch after the level began
+// persisting.
 //
 // Above and below that, +/-20 dB linear in dB — 0.4 dB per slider step, which is
 // fine enough to set by ear and wide enough to cover the range between a headset
@@ -3979,6 +3980,7 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
 void Hl2Backend::setMicGain(int level)
 {
     level = std::clamp(level, 0, 100);
+    const bool moved = level != m_micLevel;
     m_micLevel = level;
 
     const double linear = micSliderToLinear(level);
@@ -3986,6 +3988,20 @@ void Hl2Backend::setMicGain(int level)
     if (m_txDsp)
         QMetaObject::invokeMethod(m_txDsp, "setMicGain", Qt::QueuedConnection,
             Q_ARG(double, linear));
+
+    // The capture half of this radio's TxSetpoints memory. RadioModel debounces
+    // this into one RadioStateMemory::store — the backend never touches the
+    // settings store itself (IRadioBackend's contract).
+    //
+    // ONLY ON CHANGE, and the gate is load-bearing rather than an optimisation.
+    // RadioModel::setupBackend() re-asserts the model's level into every freshly
+    // built host-modulating backend, so an unconditional notify here would
+    // schedule a store on every backend rebuild — writing the value back under
+    // whichever radio connected next, which is the cross-family bleed this
+    // shape exists to prevent. A value-identical echo is not the operator
+    // moving the slider, exactly as in setTxPower() above.
+    if (moved)
+        notifyOperatingStateChanged();
 }
 
 void Hl2Backend::setTxPower(int percent)
@@ -4583,6 +4599,11 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_alcPeakDbfs = std::numeric_limits<double>::quiet_NaN();
     m_fwdPeakWatts = 0.0;
     m_txMicPeakMaxDbfs = -140.0f;
+    // The STAGED restore is reset, even though m_micLevel below is not: it
+    // names radio A's document and this call may be radio B arriving with no
+    // memory. Clearing it is what makes applyRestoredState({}) mean "this radio
+    // has nothing stored" for the mic level too.
+    m_restoredMicLevel = -1;
     // DELIBERATELY NOT RESET: m_micLevel and m_appliedMicGainLinear.
     //
     // Those two are not observations and not radio state — they are the
@@ -4684,6 +4705,28 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         txSetpoints.value(QStringLiteral("driveByBand")).toObject();
     for (auto it = driveByBand.constBegin(); it != driveByBand.constEnd(); ++it)
         m_driveByBand.insert(it.key(), qBound(0, it.value().toInt(), 100));
+
+    // The mic level, DROPPED rather than clamped when it is out of range —
+    // the same rule as the AGC threshold above, and for a sharper reason. This
+    // control's floor is the MUTE: clamping a hand-edited -10 would put the
+    // operator silently off the air on a slider reading 0, which is the
+    // readback-agrees-with-the-failure shape this backend keeps refusing. A
+    // document this client cannot read must not be allowed to set a level at
+    // all; leaving m_restoredMicLevel at -1 lets setupBackend()'s re-assert
+    // stand, which is the operator's live slider position.
+    //
+    // contains() first, because toInt() answers 0 — the mute — for a missing
+    // key and for "banana" alike.
+    if (txSetpoints.contains(QStringLiteral("micLevel"))) {
+        const QJsonValue raw = txSetpoints.value(QStringLiteral("micLevel"));
+        const int level = raw.toInt(-1);
+        if (raw.isDouble() && level >= 0 && level <= 100) {
+            m_restoredMicLevel = level;
+        } else {
+            qCInfo(lcHl2) << "HL2: dropping invalid restored mic level"
+                          << raw.toVariant();
+        }
+    }
 
     // The TX passband. Validated as a PAIR and adopted only if the pair is
     // sane — a half-restored passband would be a value the operator never
@@ -4879,6 +4922,35 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
         txSetpoints.insert(QStringLiteral("filterLowHz"), m_txFilterLowHz);
         txSetpoints.insert(QStringLiteral("filterHighHz"), m_txFilterHighHz);
     }
+
+    // The Phone/CW MIC slider. FLAT, like the TX passband above and unlike the
+    // drive map beside it: the right mic level is a property of the operator's
+    // voice and their microphone, not of the band they are on.
+    //
+    // WHY THIS RADIO REMEMBERS IT AND OTHERS MUST NOT. On a host-modulating
+    // backend this gain exists nowhere but this host — the HL2 has no mic-gain
+    // register and keeps nothing across a power cycle, so the client is the
+    // only memory there is. It is also the operator's only control over where
+    // their audio lands relative to the ALC's hold threshold, which setKeying()'s
+    // unkey diagnostic calls a silent cliff, so an operating procedure that
+    // begins "set mic gain once" is defeated by a control that forgets
+    // overnight.
+    //
+    // A Flex and an Icom persist mic gain IN THE RADIO (Constitution II/III) —
+    // on an Icom setMicGain is a live CI-V 14 0B / LAN MOD write into a front-
+    // panel setting. Neither declares ClientSettingsDomain::TxSetpoints, so
+    // neither reaches this document at all, in either direction. That is the
+    // whole reason the level rides this radio's own extension sub-object rather
+    // than a shared field or a flat AppSettings key: the gate is structural,
+    // not a family string somebody has to remember to check.
+    //
+    // UNCONDITIONAL, unlike the passband pair above. There is no "the operator
+    // has not chosen" state to protect here: 50 is the position a radio with
+    // nothing stored comes up on, and writing it back is a no-op that restores
+    // to the same place. The mute at 0 is a real choice and must round-trip, so
+    // it cannot be filtered out as "absent" — see the -1 sentinel on
+    // m_restoredMicLevel.
+    txSetpoints.insert(QStringLiteral("micLevel"), m_micLevel);
     state.extension = QJsonObject{{QStringLiteral("rfGain"), rfGain},
                                   {QStringLiteral("txSetpoints"), txSetpoints}};
     state.extensionSchemaVersion = 1;
@@ -5124,6 +5196,37 @@ void Hl2Backend::pushInitialState()
             Q_ARG(WdspChannel::Mode,
                   modeFromString(txRx ? txRx->mode : QStringLiteral("USB"))));
         QMetaObject::invokeMethod(m_txDsp, "reset", Qt::QueuedConnection);
+    }
+
+    // THIS RADIO'S REMEMBERED MIC LEVEL — the operator's slider position from
+    // the last session on this same HL2, staged by applyRestoredState().
+    //
+    // HERE rather than in applyRestoredState() because m_txDsp is only built by
+    // connectRadio(), and here rather than above the seam because this is the
+    // one family the value belongs to. It runs AFTER
+    // RadioModel::setupBackend()'s re-assert of the live slider, which is the
+    // correct order: the re-assert exists to keep a mid-session family swap
+    // from parting the slider from the modulator, and a connect that has a
+    // document for THIS radio knows better than the model does.
+    //
+    // NOTHING HAPPENS WITH NOTHING STORED. A fresh radio leaves the sentinel at
+    // -1 and the seam's answer stands, so the operator who has never touched
+    // the control still transmits at the 50 that maps to the modulator's own
+    // 1.0 default — byte-identically to before this code existed.
+    //
+    // THE SLIDER FOLLOWS, and that is not optional. setMicGain() moves the
+    // modulator only; without the echo the control would read the model's
+    // stale position while the radio transmitted at the restored one, which is
+    // the lying-readback failure inverted. transmitChanged is the observed-state
+    // route RadioModel already owns (applyBackendTransmitDelta) — the same one
+    // the band-memory drive push uses above — so this needs no new wiring and
+    // creates no second source of truth.
+    if (m_restoredMicLevel >= 0) {
+        setMicGain(m_restoredMicLevel);
+        TransmitDelta delta;
+        delta.micLevel = m_restoredMicLevel;
+        emit transmitChanged(delta);
+        qCInfo(lcHl2) << "HL2: restored mic level" << m_restoredMicLevel;
     }
     // How far this pan may be zoomed, which on this radio is simply the range of
     // DDC rates it can run. Pushed here for the same reason everything else in

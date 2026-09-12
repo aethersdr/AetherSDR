@@ -930,6 +930,21 @@ private:
     // 50 is unity; see setMicGain().
     int m_micLevel = 50;
 
+    // The mic level applyRestoredState() accepted from THIS radio's document,
+    // held until pushInitialState() can apply it. -1 = nothing stored.
+    //
+    // STAGED RATHER THAN APPLIED ON THE SPOT, for the same reason the frequency
+    // and passband beside it are staged: applyRestoredState() runs before
+    // connectRadio(), so m_txDsp does not exist yet and a setMicGain() here
+    // would reach nothing. pushInitialState() is where "the radio cannot be
+    // asked for it, so the app must assert it" is already the rule.
+    //
+    // -1 AND NOT 0, because 0 is the MUTE on this control
+    // (hl2::micSliderToLinear) and a position the operator can deliberately
+    // park on. A sentinel inside the control's own 0..100 range would make
+    // "nothing stored" indistinguishable from "stored, off the air".
+    int m_restoredMicLevel = -1;
+
     // ---- Voice-chain mirrors, for healthSnapshot() ----
     //
     // Same reason as m_drops and m_linkCounters above: these originate on the
