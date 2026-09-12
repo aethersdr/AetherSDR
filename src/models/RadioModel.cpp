@@ -1402,8 +1402,11 @@ void RadioModel::setupBackend(const QString& family)
         if (generation != m_backendReceiverGeneration) return;
         auto it = m_pendingCallbacks.find(seq);
         if (it != m_pendingCallbacks.end()) {
-            it.value()(code, body);
+            ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
+            if (callback) {
+                callback(code, body);
+            }
         }
     });
 
@@ -1851,21 +1854,7 @@ void RadioModel::teardownBackend()
     if (m_backend) {
         m_backend->retirePcmStreams();
     }
-    // Answer, then drop, every command still waiting on the backend that is
-    // about to die. The generation guard on commandResponse means a reply
-    // arriving after this point is discarded, so without this the callback —
-    // a std::function capturing this and whatever the caller held — would sit
-    // in the map for the life of the process, and the caller would wait for a
-    // reply that can no longer be delivered. kNoCommandPlaneCode is the same
-    // answer sendCmd() gives when there is no command plane to write to.
-    if (!m_pendingCallbacks.isEmpty()) {
-        const QMap<quint32, ResponseCallback> pending = std::move(m_pendingCallbacks);
-        m_pendingCallbacks.clear();
-        for (const ResponseCallback& cb : pending) {
-            if (cb)
-                cb(kNoCommandPlaneCode, QStringLiteral("the radio connection was replaced"));
-        }
-    }
+    expirePendingCallbacks(QStringLiteral("the radio connection was replaced"));
     m_sliceLifecycleCommandSinkForTest = {};
     m_memoryRefreshActive = false;
     m_memoryImportFailures = 0;
@@ -1903,6 +1892,23 @@ void RadioModel::teardownBackend()
     // died, not about the app. A Flex arriving after an HL2 must not inherit
     // "this wire has no round trip to time".
     m_backendLinkShape = {};
+}
+
+void RadioModel::expirePendingCallbacks(const QString& reason)
+{
+    // Clear before invoking arbitrary callbacks. A callback may synchronously
+    // issue another command, which must not invalidate this detached iteration.
+    if (m_pendingCallbacks.isEmpty()) {
+        return;
+    }
+
+    const QMap<quint32, ResponseCallback> pending = std::move(m_pendingCallbacks);
+    m_pendingCallbacks.clear();
+    for (const ResponseCallback& callback : pending) {
+        if (callback) {
+            callback(kNoCommandPlaneCode, reason);
+        }
+    }
 }
 
 namespace {
@@ -6914,6 +6920,9 @@ void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHand
         const QString command = QString("client disconnect 0x%1").arg(handle, 0, 16);
         qCDebug(lcProtocol) << "RadioModel: disconnecting occupied client" << Qt::hex << handle;
         sendCmd(command, [handle, step](int code, const QString& body) {
+            if (code == kNoCommandPlaneCode) {
+                return;
+            }
             if (code != 0) {
                 qCWarning(lcProtocol) << "RadioModel: client disconnect failed for"
                                       << Qt::hex << handle
@@ -6947,8 +6956,14 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
     // Subscribe to radio and client topics early — before client gui — to get
     // mf_enable and the live connected-client list directly from the radio.
     // 400 ms is enough for the radio's status burst to arrive on a LAN path.
-    sendCmd("sub radio all", [this](int, const QString&) {
-        sendCmd("sub client all", [this](int, const QString&) {
+    sendCmd("sub radio all", [this](int code, const QString&) {
+        if (code == kNoCommandPlaneCode) {
+            return;
+        }
+        sendCmd("sub client all", [this](int clientCode, const QString&) {
+            if (clientCode == kNoCommandPlaneCode) {
+                return;
+            }
             resolveLiveGuiClientIdCollision();
             // Fast path: when multiFLEX is enabled the radio explicitly allows
             // multiple GUI clients, so the conflict check below
@@ -7659,6 +7674,7 @@ void RadioModel::onDisconnected()
 {
     resetTxOperations();
     (void)m_txCoordinator.acknowledgeStopped(m_txOperation);
+    expirePendingCallbacks(QStringLiteral("the radio connection was disconnected"));
     qCDebug(lcProtocol) << "RadioModel: disconnected";
     m_guiClientRegistrationState.reset();
 

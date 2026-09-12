@@ -3629,6 +3629,14 @@ add_test(NAME vu_meter_settings_test COMMAND vu_meter_settings_test)
 # aetherd RFC step 2.2b regression guard: FlexBackend ctor/dtor thread ownership
 # + #502 teardown ordering. FlexBackend pulls RadioConnection/PanadapterStream
 # and their deep deps, so link the engine library rather than list sources.
+# Session boundary parser regression: in-memory QTcpSocket subclass only;
+# no descriptor, listener, network peer, or radio is opened.
+add_executable(radio_connection_session_test tests/radio_connection_session_test.cpp)
+target_include_directories(radio_connection_session_test PRIVATE src)
+target_link_libraries(radio_connection_session_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(radio_connection_session_test PROPERTIES AUTOMOC ON)
+add_test(NAME radio_connection_session_test COMMAND radio_connection_session_test)
+
 add_executable(flex_backend_lifecycle_test tests/flex_backend_lifecycle_test.cpp)
 target_include_directories(flex_backend_lifecycle_test PRIVATE src)
 target_link_libraries(flex_backend_lifecycle_test PRIVATE aethercore Qt6::Core)
