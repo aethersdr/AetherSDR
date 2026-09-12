@@ -79,6 +79,26 @@ target_link_libraries(pcm_compatibility_test PRIVATE aethercore Qt6::Core)
 add_test(NAME pcm_compatibility_test COMMAND pcm_compatibility_test)
 set_tests_properties(pcm_compatibility_test PROPERTIES TIMEOUT 60)
 
+# Socket/device-free production RX queue, processing-domain and output checks.
+add_executable(audio_engine_rates_test tests/audio_engine_rates_test.cpp)
+target_link_libraries(audio_engine_rates_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_rates_test COMMAND audio_engine_rates_test)
+set_tests_properties(audio_engine_rates_test PROPERTIES TIMEOUT 120)
+
+# Production auxiliary ingress/retirement versus DSP initialization; no sockets/devices.
+add_executable(audio_engine_pcm_lifetime_test tests/audio_engine_pcm_lifetime_test.cpp)
+target_link_libraries(audio_engine_pcm_lifetime_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_pcm_lifetime_test COMMAND audio_engine_pcm_lifetime_test)
+set_tests_properties(audio_engine_pcm_lifetime_test PROPERTIES TIMEOUT 120)
+
+add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
+    src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
+    src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
+    src/core/ClientPudu.cpp src/core/ClientPhaseRotator.cpp)
+target_include_directories(rx_client_effects_test PRIVATE src)
+add_test(NAME rx_client_effects_test COMMAND rx_client_effects_test)
+set_tests_properties(rx_client_effects_test PROPERTIES TIMEOUT 30)
+
 # Pure shared-capture geometry policy: no sockets, settings, DSP or hardware.
 add_executable(shared_capture_policy_test
     tests/shared_capture_policy_test.cpp
@@ -5090,6 +5110,8 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    audio_engine_rates_test
+    audio_engine_pcm_lifetime_test
     pcm_compatibility_test
     firmware_close_dialog_test
     atu_seam_gate_test

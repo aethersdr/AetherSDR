@@ -180,7 +180,7 @@ void backendAndAudioRouting()
     future.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo});
     audio.feedPcmFrame(*future.produce({0.2f, -0.2f}));
     check(audio.automationAudioCaptureSnapshot(false).value("chunks").toArray().size() == 2,
-          "A1 AudioEngine refuses native 48 kHz until A2");
+          "AudioEngine refuses a competing 48 kHz producer while its speaker route is owned");
     source->retirePcmStreams();
     const int retiredTaps = taps;
     const int retiredSlices = slices;

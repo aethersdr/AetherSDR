@@ -159,6 +159,9 @@ void ClientComp::reset() noexcept
 {
     m_envLin = 0.0f;
     m_limEnvLin = 0.0f;
+    if (m_phaseRotator) {
+        m_phaseRotator->reset();
+    }
 }
 
 float ClientComp::inputPeakDb() const noexcept
@@ -171,6 +174,15 @@ float ClientComp::limiterGrDb() const noexcept
 { return m_meters.limiterGrDb.load(std::memory_order_relaxed); }
 bool  ClientComp::limiterActive() const noexcept
 { return m_meters.limiterActive.load(std::memory_order_relaxed); }
+
+void ClientComp::copyMeteringFrom(const ClientComp& source) noexcept
+{
+    m_meters.inputPeakDb.store(source.inputPeakDb(), std::memory_order_relaxed);
+    m_meters.outputPeakDb.store(source.outputPeakDb(), std::memory_order_relaxed);
+    m_meters.gainReductionDb.store(source.gainReductionDb(), std::memory_order_relaxed);
+    m_meters.limiterGrDb.store(source.limiterGrDb(), std::memory_order_relaxed);
+    m_meters.limiterActive.store(source.limiterActive(), std::memory_order_relaxed);
+}
 
 void ClientComp::recacheIfDirty() noexcept
 {

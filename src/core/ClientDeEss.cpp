@@ -156,6 +156,13 @@ float ClientDeEss::sidechainPeakDb() const noexcept
 float ClientDeEss::gainReductionDb() const noexcept
 { return m_meters.gainReductionDb.load(std::memory_order_relaxed); }
 
+void ClientDeEss::copyMeteringFrom(const ClientDeEss& source) noexcept
+{
+    m_meters.inputPeakDb.store(source.inputPeakDb(), std::memory_order_relaxed);
+    m_meters.sidechainPeakDb.store(source.sidechainPeakDb(), std::memory_order_relaxed);
+    m_meters.gainReductionDb.store(source.gainReductionDb(), std::memory_order_relaxed);
+}
+
 void ClientDeEss::recacheIfDirty() noexcept
 {
     const uint64_t v = m_atomics.version.load(std::memory_order_acquire);

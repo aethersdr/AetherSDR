@@ -1872,24 +1872,8 @@ static double kbpsFromBytes(qint64 bytesDelta, double elapsedSeconds)
     return (bytesDelta * 8.0) / (1000.0 * elapsedSeconds);
 }
 
-static double audioBufferMs(qsizetype bytes, int sampleRate)
+static QString formatAudioBuffer(qsizetype bytes, double ms)
 {
-    if (sampleRate <= 0) {
-        return 0.0;
-    }
-
-    static constexpr int kStereoChannels = 2;
-    static constexpr int kFloatBytesPerSample = 4;
-    return (bytes * 1000.0) / (sampleRate * kStereoChannels * kFloatBytesPerSample);
-}
-
-static QString formatAudioBuffer(qsizetype bytes, int sampleRate)
-{
-    if (sampleRate <= 0) {
-        return QString("%1 bytes").arg(bytes);
-    }
-
-    const double ms = audioBufferMs(bytes, sampleRate);
     return QString("%1 bytes (%2 ms)").arg(bytes).arg(ms, 0, 'f', 1);
 }
 
@@ -2204,7 +2188,6 @@ void NetworkDiagnosticsHistory::sampleNow()
     sample.packetLossPct = m_model->packetLossPercent();
 
     if (m_audio) {
-        const int sampleRate = m_audio->rxBufferSampleRate();
         const quint64 underruns = m_audio->rxBufferUnderrunCount();
         quint64 underrunDelta = 0;
         if (underruns >= m_lastAudioUnderrunCount) {
@@ -2213,7 +2196,7 @@ void NetworkDiagnosticsHistory::sampleNow()
         m_lastAudioUnderrunCount = underruns;
         sample.audioGapMs = m_model->audioPacketGapMs();
         sample.audioJitterMs = m_model->audioPacketJitterMs();
-        sample.audioBufferMs = audioBufferMs(m_audio->rxBufferBytes(), sampleRate);
+        sample.audioBufferMs = m_audio->rxBufferMs();
         sample.underrunsPerSecond = static_cast<double>(underrunDelta) / elapsedSeconds;
     }
 
@@ -2745,14 +2728,13 @@ void NetworkDiagnosticsDialog::refresh()
     }
 
     if (m_audio) {
-        const int sampleRate = m_audio->rxBufferSampleRate();
         const quint64 underruns = m_audio->rxBufferUnderrunCount();
         const QVector<PanadapterStream::AudioStreamDiagnostics> audioStreams =
             m_model->audioStreamDiagnostics();
         const QStringList sliceLabels = audibleSliceLabels(m_model);
-        m_audioBufferLabel->setText(formatAudioBuffer(m_audio->rxBufferBytes(), sampleRate));
-        m_overviewAudioValue->setText(QString("%1 ms").arg(audioBufferMs(m_audio->rxBufferBytes(), sampleRate), 0, 'f', 1));
-        m_audioBufferPeakLabel->setText(formatAudioBuffer(m_audio->rxBufferPeakBytes(), sampleRate));
+        m_audioBufferLabel->setText(formatAudioBuffer(m_audio->rxBufferBytes(), m_audio->rxBufferMs()));
+        m_overviewAudioValue->setText(QString("%1 ms").arg(m_audio->rxBufferMs(), 0, 'f', 1));
+        m_audioBufferPeakLabel->setText(formatAudioBuffer(m_audio->rxBufferPeakBytes(), m_audio->rxBufferPeakMs()));
         m_audioUnderrunLabel->setText(QString::number(underruns));
         m_audioUnderrunRateLabel->setText(QString::number(sample.underrunsPerSecond, 'f', 0));
 
