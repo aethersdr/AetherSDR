@@ -40,6 +40,16 @@ public:
     int   drainEpoch()  const { return m_drainEpoch; }
     QString macro(int idx) const;  // 0-based (0=F1, 11=F12)
 
+    // Read-only TX availability for text keying (#5422). RadioModel wires this
+    // to TransmitModel::admitsCwxSend() so no text is queued while TUNE is
+    // active (the radio would key it at TUNE power). Unset = always available.
+    // This predicate never acquires a coordinator operation.
+    using SendAvailability = std::function<bool()>;
+    void setSendAvailability(SendAvailability availability) { m_sendAvailability = std::move(availability); }
+    // Ask before committing anything (history bubble, editor clear, speed
+    // changes): true when a send would be admitted right now. (#5422)
+    bool canSend() const { return !m_sendAvailability || m_sendAvailability(); }
+
     // Actual-send operation fence, separate from a UI's read-only can-send
     // predicate. Checking whether a button is enabled must never acquire TX.
     using TransmissionPermit = std::function<bool()>;
@@ -131,6 +141,7 @@ private:
     TransmissionPermit admitTransmission();
     void emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit);
     bool notifyTransmission(const QString& text, int wpm, const TransmissionPermit& permit);
+    SendAvailability m_sendAvailability;
     TransmissionAdmission m_transmissionAdmission;
     TextSender m_textSender;
 

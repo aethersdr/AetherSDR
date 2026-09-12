@@ -151,10 +151,16 @@ public:
     Q_INVOKABLE void setLnaGainDb(int db);
     // Select the companion filter board's band filter (MetisProtocol kOc* bits).
     //
-    // Latched into the config register and sent on the next round, and ALSO
-    // pushed as a one-shot so the relays move with the band change rather than
-    // up to three EP2 frames later. Filter switching that lags the retune is
-    // the failure mode that matters on transmit.
+    // Latched into the config register, and that is the whole mechanism: the
+    // config bank rides bank A of EVERY EP2 frame, so the relays follow within
+    // one frame (~2.6 ms at 48 kHz). Filter switching that lags the retune is
+    // the failure mode that matters on transmit, and bank A is what prevents it.
+    //
+    // Deliberately NOT also queued as a one-shot. A one-shot fills bank B, which
+    // the radio applies AFTER bank A, and it would carry a SNAPSHOT -- so a
+    // copy queued here would overwrite the live config for that frame with
+    // whatever the register held at the moment the band changed. See the
+    // definition and aethersdr/AetherSDR#4579.
     // Takes int, not uint8_t: this crosses threads via
     // QMetaObject::invokeMethod, which matches Q_ARG against the type name moc
     // recorded from this declaration, and `std::uint8_t` does not normalize to

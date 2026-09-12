@@ -9,6 +9,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include "ScopedChildWidget.h"
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -395,15 +396,14 @@ void AgcCalibrationDialog::onStartStop()
     // The user can disable NR and try again. Mirrors the quiet-spot guard
     // pattern in the engine and matches the in-hint warning text.
     if (nrSuppressesCalibration()) {
-        QMessageBox::warning(
-            this,
-            QStringLiteral("Disable NR for AGC-T calibration"),
+        ScopedChildWidget<QMessageBox> boxOwner(
+            QMessageBox::Warning, QStringLiteral("Disable NR for AGC-T calibration"),
             QStringLiteral(
                 "Noise Reduction is active and is crushing the audio noise "
                 "floor that the AGC knee detector measures. Turn off any of "
                 "NR / NR2 / RN2 / NR4 / DFNR / MNR / BNR, then try Auto Sweep "
-                "again."),
-            QMessageBox::Ok);
+                "again."), QMessageBox::Ok, this);
+        boxOwner.get()->exec();
         return;
     }
     m_curve->clear();

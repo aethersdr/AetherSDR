@@ -174,6 +174,49 @@ void refusedStartsAndUnconditionalStops()
           "key-up, bypass and clear remain available after capability loss");
 }
 
+void cwTuneMutualExclusion()
+{
+    Fixture f;
+    TransmitModel& tx = f.radio.transmitModel();
+
+    tx.startTune();
+    check(f.commands == QStringList({"tune:on"}) && tx.isTuning(),
+          "TUNE starts through the coordinator before the CW exclusion applies");
+    f.commands.clear();
+    f.radio.sendCwKey(true, QStringLiteral("test-straight-key"));
+    f.radio.sendCwKeyEdge(true, QStringLiteral("test-iambic-key"));
+    f.radio.cwxModel().send(QStringLiteral("CQ"));
+    check(f.commands.isEmpty(),
+          "active TUNE refuses straight-key, iambic and CWX key-down intent");
+    f.radio.sendCwKey(false, QStringLiteral("test-straight-key"));
+    f.radio.sendCwKeyEdge(false, QStringLiteral("test-iambic-key"));
+    check(f.commands == QStringList({"cw:off", "cw:off"}) && tx.isTuning(),
+          "CW key-up cleanup remains available without ending the TUNE operation");
+    tx.stopTune();
+
+    f.commands.clear();
+    f.radio.sendCwKey(true, QStringLiteral("test-straight-key"));
+    tx.startTune();
+    check(f.commands == QStringList({"cw:on"}) && !tx.isTuning(),
+          "an active CW key operation refuses TUNE before optimistic state or dispatch");
+    f.radio.sendCwKey(false, QStringLiteral("test-straight-key"));
+    tx.startTune();
+    check(f.commands == QStringList({"cw:on", "cw:off", "tune:on"}) && tx.isTuning(),
+          "TUNE is re-admitted after the CW key operation releases");
+    tx.stopTune();
+
+    f.commands.clear();
+    f.radio.setCwPaddleHeld(true);
+    tx.startTune();
+    check(f.commands.isEmpty() && !tx.isTuning(),
+          "a held paddle refuses TUNE during the keyer's inter-element gap");
+    f.radio.setCwPaddleHeld(false);
+    tx.startTune();
+    check(f.commands == QStringList({"tune:on"}) && tx.isTuning(),
+          "releasing the paddle re-admits TUNE");
+    tx.stopTune();
+}
+
 void delayedReleaseAndReplacement()
 {
     Fixture f;
@@ -396,6 +439,20 @@ void cwxCancellationFence()
 void cwxCompletionAndRefusal()
 {
     {
+        CwxModel cwx;
+        int operationAdmissions = 0;
+        cwx.setSendAvailability([] { return false; });
+        cwx.setTransmissionAdmission([&] {
+            ++operationAdmissions;
+            return CwxModel::TransmissionPermit{[] { return true; }};
+        });
+        cwx.send(QStringLiteral("CQ"));
+        cwx.sendChar(QStringLiteral("E"));
+        cwx.sendMacro(1);
+        check(operationAdmissions == 0,
+              "CWX TUNE refusal happens before acquiring a coordinator operation");
+    }
+    {
         Fixture f;
         f.backend->caps.hasRadioSideCwKeyer = false;
         f.radio.cwxModel().send("CQ");
@@ -493,6 +550,10 @@ void flexCwxLifecycle()
     check(TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
               && operation.permitsDispatch(std::numeric_limits<qint64>::max()),
           "known Flex text keeps its operation until drain or failure");
+    f.commands.clear();
+    f.radio.transmitModel().startTune();
+    check(f.commands.isEmpty() && !f.radio.transmitModel().isTuning(),
+          "an in-flight Flex CWX batch refuses TUNE before coordinator re-entry");
     f.radio.cwxModel().handleSendReply(1, {}, epoch, 2);
     check(!TxOperationIntegrationTestAccess::cwxDrainArmed(f.radio)
               && !operation.permitsDispatch(std::numeric_limits<qint64>::max()),
@@ -633,6 +694,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     primaryRoutes();
     refusedStartsAndUnconditionalStops();
+    cwTuneMutualExclusion();
     delayedReleaseAndReplacement();
     flexEncoding();
     teardownAdmission();

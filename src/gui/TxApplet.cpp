@@ -1,5 +1,6 @@
 #include "TxApplet.h"
 #include "AtuPreTuneDialog.h"
+#include "ScopedChildWidget.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "HGauge.h"
@@ -874,7 +875,10 @@ void TxApplet::openPreTuneDialog()
 void TxApplet::confirmAndClearAtuMemories()
 {
     if (!m_model) return;
-    QMessageBox box(this->window());
+    const QPointer<TxApplet> self(this);
+    const QPointer<TransmitModel> model(m_model);
+    ScopedChildWidget<QMessageBox> boxOwner(this->window());
+    QMessageBox& box = *boxOwner.get();
     box.setWindowTitle("Clear ATU memories");
     box.setIcon(QMessageBox::Warning);
     box.setText("Clear the radio's entire ATU memory database?");
@@ -886,8 +890,10 @@ void TxApplet::confirmAndClearAtuMemories()
     auto* clearBtn = box.addButton("Clear all bands", QMessageBox::DestructiveRole);
     box.addButton("Cancel", QMessageBox::RejectRole);
     box.exec();
-    if (box.clickedButton() == clearBtn)
-        m_model->atuClearMemories();
+    if (self && boxOwner && model && self->m_model == model.data()
+        && box.clickedButton() == clearBtn) {
+        model->atuClearMemories();
+    }
 }
 
 void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)

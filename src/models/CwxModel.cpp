@@ -103,6 +103,10 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
 
 CwxModel::TransmissionPermit CwxModel::admitTransmission()
 {
+    if (!canSend()) {
+        qCWarning(lcCw) << "CWX send refused: TUNE is active (#5422)";
+        return {};
+    }
     const TransmissionPermit permit = m_transmissionAdmission ? m_transmissionAdmission() : TransmissionPermit{};
     if (m_transmissionAdmission && (!permit || !permit())) {
         return {};

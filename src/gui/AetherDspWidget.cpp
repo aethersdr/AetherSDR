@@ -6,6 +6,7 @@
 #include "models/Rn2SettingsModel.h"
 #include "GuardedSlider.h"
 #include "Theme.h"
+#include "ScopedChildWidget.h"
 
 #include <QRegularExpression>
 #include <QSet>
@@ -1301,7 +1302,9 @@ bool AetherDspWidget::ensureBnrLicenseAccepted()
     if (NvidiaBnrSettings::licenseAccepted())
         return true;
 
-    QMessageBox box(this);
+    const QPointer<AetherDspWidget> self(this);
+    ScopedChildWidget<QMessageBox> boxOwner(this);
+    QMessageBox& box = *boxOwner.get();
     box.setWindowTitle(tr("NVIDIA Software License — BNR"));
     box.setIcon(QMessageBox::Information);
     box.setTextFormat(Qt::RichText);
@@ -1321,6 +1324,9 @@ bool AetherDspWidget::ensureBnrLicenseAccepted()
     auto* acceptBtn = box.addButton(tr("Accept"), QMessageBox::AcceptRole);
     box.addButton(tr("Decline"), QMessageBox::RejectRole);
     box.exec();
+    if (!self || !boxOwner) {
+        return false;
+    }
     if (box.clickedButton() == acceptBtn) {
         NvidiaBnrSettings::setLicenseAccepted(true);
         return true;

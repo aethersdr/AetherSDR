@@ -1,4 +1,5 @@
 #include "NetworkDiagnosticsDialog.h"
+#include "ScopedChildWidget.h"
 #include "LogSyntaxHighlighter.h"
 #include "TimeSeriesGraphWidget.h"
 #include "core/AudioEngine.h"
@@ -25,6 +26,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
+#include <QPersistentModelIndex>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -791,6 +793,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         audioLayout->insertWidget(0, audioNote);
 
         m_audioStreamsTable = new QTableWidget(0, 9, audioPage);
+        m_audioStreamsTable->setObjectName(QStringLiteral("networkDiagnosticsAudioStreams"));
         m_audioStreamsTable->setHorizontalHeaderLabels({
             "Stream", "Source", "Format", "Rate", "Slow Delivery",
             "Late", "Packet Gaps", "Worst Gap", "Last Packet"
@@ -1082,6 +1085,7 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     layout->addWidget(m_tciClientSummary);
 
     m_tciClientTable = new QTableWidget(0, 7, this);
+    m_tciClientTable->setObjectName(QStringLiteral("networkDiagnosticsTciClients"));
     m_tciClientTable->setHorizontalHeaderLabels(
         {QStringLiteral("Name"), QStringLiteral("Endpoint"),
          QStringLiteral("Likely role"),
@@ -1209,6 +1213,7 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     }
 
     m_tciLogTable = new QTableWidget(0, 3, this);
+    m_tciLogTable->setObjectName(QStringLiteral("networkDiagnosticsTciLog"));
     m_tciLogTable->setHorizontalHeaderLabels(
         {QStringLiteral("Time"), QStringLiteral("Dir/Cmd"),
          QStringLiteral("Message")});
@@ -1376,7 +1381,12 @@ void NetworkDiagnosticsDialog::onTciLogContextMenu(const QPoint& pos)
     if (!m_tciLogTable)
         return;
     const QModelIndex idx = m_tciLogTable->indexAt(pos);
-    const auto sel = m_tciLogTable->selectionModel()->selectedRows();
+    const auto selected = m_tciLogTable->selectionModel()->selectedRows();
+    QList<QPersistentModelIndex> selectedRows;
+    selectedRows.reserve(selected.size());
+    for (const QModelIndex& row : selected) {
+        selectedRows.append(QPersistentModelIndex(row));
+    }
 
     QString cmdHere;
     if (idx.isValid()) {
@@ -1384,12 +1394,16 @@ void NetworkDiagnosticsDialog::onTciLogContextMenu(const QPoint& pos)
             cmdHere = tciCmdOf(it->text());
     }
 
-    QMenu menu(this);
+    const QPointer<NetworkDiagnosticsDialog> self(this);
+    const QPointer<QTableWidget> table(m_tciLogTable);
+    ScopedChildWidget<QMenu> menuOwner(this);
+    QMenu& menu = *menuOwner.get();
     QAction* removeAct = nullptr;
-    if (!sel.isEmpty())
-        removeAct = menu.addAction(sel.size() == 1
+    if (!selectedRows.isEmpty()) {
+        removeAct = menu.addAction(selectedRows.size() == 1
             ? QStringLiteral("Remove this row")
-            : QStringLiteral("Remove %1 selected rows").arg(sel.size()));
+            : QStringLiteral("Remove %1 selected rows").arg(selectedRows.size()));
+    }
     QAction* suppressAct = nullptr;
     if (!cmdHere.isEmpty())
         suppressAct = menu.addAction(
@@ -1399,17 +1413,27 @@ void NetworkDiagnosticsDialog::onTciLogContextMenu(const QPoint& pos)
     QAction* clearAct = menu.addAction(QStringLiteral("Clear log"));
 
     QAction* chosen = menu.exec(m_tciLogTable->viewport()->mapToGlobal(pos));
-    if (!chosen)
+    if (!self || !menuOwner || !table
+        || self->m_tciLogTable != table.data() || !chosen) {
         return;
+    }
     if (chosen == clearAct) {
-        m_tciLogTable->setRowCount(0);
+        table->setRowCount(0);
     } else if (removeAct && chosen == removeAct) {
         QList<int> rows;
-        for (const QModelIndex& i : sel) rows << i.row();
+        for (const QPersistentModelIndex& row : selectedRows) {
+            if (row.isValid() && row.model() == table->model()) {
+                rows << row.row();
+            }
+        }
         std::sort(rows.begin(), rows.end(), std::greater<int>());
-        for (int r : rows) m_tciLogTable->removeRow(r);
+        for (int r : rows) {
+            if (r >= 0 && r < table->rowCount()) {
+                table->removeRow(r);
+            }
+        }
     } else if (suppressAct && chosen == suppressAct) {
-        tciSuppress(cmdHere);
+        self->tciSuppress(cmdHere);
     }
 }
 
@@ -1454,6 +1478,8 @@ void NetworkDiagnosticsDialog::onTciSaveLog()
 {
     if (!m_tciLogTable)
         return;
+    const QPointer<NetworkDiagnosticsDialog> self(this);
+    const QPointer<QTableWidget> table(m_tciLogTable);
     const QString stamp =
         QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
     const QString dir =
@@ -1463,18 +1489,19 @@ void NetworkDiagnosticsDialog::onTciSaveLog()
     const QString path = QFileDialog::getSaveFileName(
         this, QStringLiteral("Save TCI log"), suggested,
         QStringLiteral("Log files (*.log);;All files (*)"));
-    if (path.isEmpty())
+    if (!self || !table || self->m_tciLogTable != table.data() || path.isEmpty()) {
         return;
+    }
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qWarning() << "TCI monitor: cannot write" << path;
         return;
     }
     QTextStream ts(&f);
-    for (int r = 0; r < m_tciLogTable->rowCount(); ++r) {
-        const auto* t = m_tciLogTable->item(r, 0);
-        const auto* c = m_tciLogTable->item(r, 1);
-        const auto* m = m_tciLogTable->item(r, 2);
+    for (int r = 0; r < table->rowCount(); ++r) {
+        const auto* t = table->item(r, 0);
+        const auto* c = table->item(r, 1);
+        const auto* m = table->item(r, 2);
         ts << (t ? t->text() : QString()) << '\t'
            << (c ? c->text() : QString()) << '\t'
            << (m ? m->text() : QString()) << '\n';

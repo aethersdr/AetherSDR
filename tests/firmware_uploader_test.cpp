@@ -501,6 +501,33 @@ void checkBarrierReleasedOnlyByRadioSettledOutcomes()
               && !AetherSDR::FirmwareUploaderTestAccess::barrierActive(rejected),
           "a radio-reported rejection is unambiguous and releases the barrier");
 
+    // A local drain does not establish installation. Closing the dialog at
+    // this phase must preserve the unknown outcome and refuse same-session retry.
+    AetherSDR::FirmwareUploader cancelled(nullptr);
+    QVector<FinishedEvent> cancelledFinished;
+    QObject::connect(&cancelled, &AetherSDR::FirmwareUploader::finished,
+                     [&cancelledFinished](Outcome outcome, const QString& message) {
+                         cancelledFinished.append({outcome, message});
+                     });
+    const auto cancelledGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
+        cancelled, nonPeriodicBytes(8), [](const char*, qint64 requested) { return requested; });
+    AetherSDR::FirmwareUploaderTestAccess::dispatched(cancelled);
+    AetherSDR::FirmwareUploaderTestAccess::acknowledge(cancelled, cancelledGeneration, 8);
+    check(cancelled.phase() == AetherSDR::FirmwareUploader::Phase::AwaitingConfirmation,
+          "the cancellation fixture reaches the post-drain confirmation phase");
+    cancelled.cancel();
+    cancelled.cancel();
+    AetherSDR::FirmwareUploaderTestAccess::status(
+        cancelled, cancelledGeneration, QStringLiteral("file update"),
+        {{QStringLiteral("failed"), QStringLiteral("0")}});
+    check(cancelledFinished.size() == 1
+              && cancelledFinished.front().outcome == Outcome::Unconfirmed
+              && cancelledFinished.front().message.contains(QStringLiteral("unconfirmed"))
+              && cancelled.phase() == AetherSDR::FirmwareUploader::Phase::Idle,
+          "post-drain cancellation emits one unconfirmed result, even with late callbacks");
+    check(AetherSDR::FirmwareUploaderTestAccess::barrierActive(cancelled),
+          "post-drain cancellation keeps the retry barrier armed");
+
     AetherSDR::FirmwareUploader stalled(nullptr);
     const auto stalledGeneration = AetherSDR::FirmwareUploaderTestAccess::start(
         stalled, nonPeriodicBytes(8), [](const char*, qint64 requested) { return requested; });
