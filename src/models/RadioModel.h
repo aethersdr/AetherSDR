@@ -1368,6 +1368,11 @@ public:
     //
     // A no-op when nothing is connected, rather than a crash or a queued call
     // that lands on the next radio.
+    // Whether the connected backend DECLARES it answers an extension namespace.
+    // The gate to use before an invokeExtension() of a family-specific verb —
+    // extensionNamespaces is the handshake for exactly that, and a family-string
+    // comparison asks a subtly different question. (#5262 M1)
+    [[nodiscard]] bool backendDeclaresExtension(const QString& ns) const;
     void invokeBackendExtension(const QString& ns, const QString& verb,
                                 quint64 requestId = 0, const QVariant& arg = {});
     // True when the radio speaks the SmartSDR text-command plane — the only

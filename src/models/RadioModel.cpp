@@ -546,6 +546,15 @@ void RadioModel::flushPendingOperatingState()
     persistOperatingState(true);
 }
 
+bool RadioModel::backendDeclaresExtension(const QString& ns) const
+{
+    // extensionNamespaces is the backend's declaration of which verb families it
+    // answers. Reading it here is what stops it being "a declared handshake
+    // nobody reads" (#5262 M1) — and, unlike a family-string comparison, it
+    // stays true for any future backend that implements the same verbs.
+    return m_backend && m_backend->capabilities().extensionNamespaces.contains(ns);
+}
+
 void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
                                         quint64 requestId, const QVariant& arg)
 {
@@ -557,7 +566,15 @@ void RadioModel::invokeBackendExtension(const QString& ns, const QString& verb,
 
 void RadioModel::setPcAudioEnabled(bool on)
 {
-    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+    // Gated on the DECLARED NAMESPACE, not on the family string (#5262 M1).
+    // The question this asks is "will this backend answer the icom namespace?",
+    // and extensionNamespaces is the handshake that states it — a backend
+    // pre-checks it before issuing invokeExtension(). Keying off family instead
+    // is the trap docs/architecture/radio-capabilities-map.md names: a gate that
+    // "looks identical to one that works" while asking a different question.
+    // It also silently excludes anything that speaks the icom verbs without
+    // being family "icom" — a gateway, or an Icom variant backend.
+    if (!backendDeclaresExtension(QStringLiteral("icom"))) {
         return;
     }
     m_backend->invokeExtension(QStringLiteral("icom"),
@@ -566,7 +583,8 @@ void RadioModel::setPcAudioEnabled(bool on)
 
 void RadioModel::notePcAudioEnabled(bool on)
 {
-    if (!m_backend || m_backend->capabilities().family != QLatin1String("icom")) {
+    // Same rule as setPcAudioEnabled above: the namespace is the contract.
+    if (!backendDeclaresExtension(QStringLiteral("icom"))) {
         return;
     }
     m_backend->invokeExtension(QStringLiteral("icom"),
