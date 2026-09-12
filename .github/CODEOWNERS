@@ -242,11 +242,8 @@ docs/VERIFYING-RELEASES.md   @aethersdr/maintainers
 # secrets, feeds bytes into a signed artifact, or forms part of the CodeQL
 # scanner's trust chain. The second limb covers producer workflows whose output
 # a Tier-1 release step consumes, even if the producer itself holds no secret:
-# poisoning the input defeats the consumer's gate -- no workflow currently in
-# the tree matches that limb, but it stays stated because this is a criterion to
-# apply to the next workflow, not an inventory of the present ones. The third
-# exists because a scan is only as trustworthy as what it runs inside.
-# Specifically:
+# poisoning the input defeats the consumer's gate. The third exists because a
+# scan is only as trustworthy as what it runs inside. Specifically:
 #   - docker-ci-image.yml builds ghcr.io/aethersdr/aethersdr-ci, and codeql.yml
 #     runs INSIDE that image. A Tier-2 edit to the image could subvert the scan
 #     without touching codeql.yml. It holds no release secret and produces no

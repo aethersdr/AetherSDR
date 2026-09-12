@@ -107,7 +107,8 @@ MIDI, and generic USB-serial adapters:
 - Griffin PowerMate USB knob
 - Contour ShuttleXpress and ShuttlePro v2 jog controllers
 - MIDI controllers with learn mode, manual mapping entry, importable/exportable profiles (including vendor-supplied SmartSDR `.map` files), and relative-encoder support
-- Elgato Stream Deck+ natively over USB HID, driving the LCD keys and the four encoder dials
+- Elgato Stream Deck+ natively over USB HID (hidapi builds), driving the LCD keys and the four encoder dials
+- Other Stream Deck models, on any platform, through the TCI server or the automation bridge using the control-surface software of your choice — AetherSDR provides the protocol, not the button layer
 - USB-serial PTT/CW interfaces for foot switches, straight keys, iambic paddles,
   amplifier keying lines, and external sequencers
 
