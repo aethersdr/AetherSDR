@@ -343,11 +343,36 @@ void BandscopeDialog::onFrame(const QVariant& reply)
     analyzer.reset();
     analyzer.update(samples.constData(), int(samples.size()));
 
+    // THE ANALYZER'S SCALE IS 6.02 dB LOW AND THIS WINDOW IS WHERE THAT STOPS
+    // BEING A DETAIL. ClientEqFftAnalyzer normalises by 2/N, the single-sided
+    // normalisation for an UNWINDOWED transform, and never removes the Hann
+    // window's 0.5 coherent gain — so on its raw scale a converter sitting on
+    // its rail reads -6, kTopDb = 0 is unreachable by any sine, and this
+    // window's "Peak … dBFS" would disagree by 6 dB with the ADC-peak row in
+    // Radio Health, which is a true time-domain peak of the same block in the
+    // same units. The one comparison this window exists to enable is against
+    // the clip threshold, so that error is the whole feature.
+    //
+    // Corrected HERE and not in the analyzer on purpose: the EQ editor has
+    // drawn the uncorrected scale since it shipped and reads it only as a
+    // shape. See ClientEqFftAnalyzer::coherentGainCorrectionDb().
+    //
+    // WHAT THIS DOES AND DOES NOT BUY. After it, a single sinusoid's bin is its
+    // own amplitude in dBFS and agrees with the time-domain peak. A broadband
+    // signal still does not: its energy is spread over many bins, so the peak
+    // BIN sits below the peak SAMPLE by however wide the signal is. The two
+    // readouts are on the same scale now; they are not the same measurement.
+    //
+    // ARITHMETIC, NOT A MEASUREMENT. No radio has answered this verb, so the
+    // correction has never been checked against a converter driven to a known
+    // level. What is checked is that it is the exact inverse of the window this
+    // analyzer builds (`bandscope_analyzer_test`).
+    const float corrDb = analyzer.coherentGainCorrectionDb();
     const std::vector<float>& db = analyzer.magnitudesDb();
     QVector<float> bins;
     bins.reserve(qsizetype(db.size()));
     for (const float v : db)
-        bins.push_back(v);
+        bins.push_back(v + corrDb);
     m_trace->setFrame(bins, sampleRateHz);
 
     // The peak and where it is: the one number an operator reads this window
