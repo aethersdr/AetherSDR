@@ -100,15 +100,15 @@ that generates its own audio and spectrum.
 ## Tested Controller Devices
 
 AetherSDR supports external station-control hardware through USB serial, USB HID,
-MIDI, Stream Deck/StreamController plugins, and generic USB-serial adapters:
+MIDI, and generic USB-serial adapters:
 
 - FlexRadio FlexControl USB tuning knob
 - Icom RC-28 USB remote encoder
 - Griffin PowerMate USB knob
 - Contour ShuttleXpress and ShuttlePro v2 jog controllers
 - MIDI controllers with learn mode, manual mapping entry, importable/exportable profiles (including vendor-supplied SmartSDR `.map` files), and relative-encoder support
-- Elgato Stream Deck devices through the bundled macOS/Windows Stream Deck plugin
-- Stream Deck devices on Linux through the bundled StreamController plugin
+- Elgato Stream Deck+ natively over USB HID (hidapi builds), driving the LCD keys and the four encoder dials
+- Other Stream Deck models, on any platform, through the TCI server or the automation bridge using the control-surface software of your choice — AetherSDR provides the protocol, not the button layer
 - USB-serial PTT/CW interfaces for foot switches, straight keys, iambic paddles,
   amplifier keying lines, and external sequencers
 

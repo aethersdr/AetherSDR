@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include <QPointer>
 
 class QLabel;
 class QAction;
@@ -66,6 +67,11 @@ private:
     QWidget*           m_listContainer{nullptr};
     QVBoxLayout*       m_listLayout{nullptr};
     WaveformInstaller* m_installer{nullptr};
+    // The model m_installer was built for. The guards in installWaveformFile()
+    // establish that a model swap across a file picker is reachable, so a
+    // cached installer must not keep uploading to the previous radio (#5568
+    // review).
+    QPointer<RadioModel> m_installerModel;
 
     QLabel*      m_dstarStatusLabel{nullptr};
     QLabel*      m_dstarDetailLabel{nullptr};

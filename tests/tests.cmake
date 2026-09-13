@@ -66,6 +66,39 @@ unset(_aether_stray_targets)
 unset(_aether_stray_registrations)
 
 
+# Typed producer PCM, queued lifetime and compatibility: QtCore only, no sockets.
+add_executable(pcm_frame_test tests/pcm_frame_test.cpp)
+target_include_directories(pcm_frame_test PRIVATE src)
+target_link_libraries(pcm_frame_test PRIVATE Qt6::Core)
+add_test(NAME pcm_frame_test COMMAND pcm_frame_test)
+set_tests_properties(pcm_frame_test PROPERTIES TIMEOUT 30)
+
+# Actual backend/model/audio/parser wiring with injected PCM; binds no sockets.
+add_executable(pcm_compatibility_test tests/pcm_compatibility_test.cpp)
+target_link_libraries(pcm_compatibility_test PRIVATE aethercore Qt6::Core)
+add_test(NAME pcm_compatibility_test COMMAND pcm_compatibility_test)
+set_tests_properties(pcm_compatibility_test PROPERTIES TIMEOUT 60)
+
+# Socket/device-free production RX queue, processing-domain and output checks.
+add_executable(audio_engine_rates_test tests/audio_engine_rates_test.cpp)
+target_link_libraries(audio_engine_rates_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_rates_test COMMAND audio_engine_rates_test)
+set_tests_properties(audio_engine_rates_test PROPERTIES TIMEOUT 120)
+
+# Production auxiliary ingress/retirement versus DSP initialization; no sockets/devices.
+add_executable(audio_engine_pcm_lifetime_test tests/audio_engine_pcm_lifetime_test.cpp)
+target_link_libraries(audio_engine_pcm_lifetime_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_pcm_lifetime_test COMMAND audio_engine_pcm_lifetime_test)
+set_tests_properties(audio_engine_pcm_lifetime_test PROPERTIES TIMEOUT 120)
+
+add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
+    src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
+    src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
+    src/core/ClientPudu.cpp src/core/ClientPhaseRotator.cpp)
+target_include_directories(rx_client_effects_test PRIVATE src)
+add_test(NAME rx_client_effects_test COMMAND rx_client_effects_test)
+set_tests_properties(rx_client_effects_test PROPERTIES TIMEOUT 30)
+
 # Pure shared-capture geometry policy: no sockets, settings, DSP or hardware.
 add_executable(shared_capture_policy_test
     tests/shared_capture_policy_test.cpp
@@ -160,6 +193,14 @@ target_include_directories(control_connection_test PRIVATE src)
 target_compile_definitions(control_connection_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_connection_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME control_connection_test COMMAND control_connection_test)
+
+# #5594 (M1): backends announce capability revisions. Socket-free — FlexBackend's
+# radio-status decode is driven directly, and the RTL case asserts the opposite
+# claim (a declaration that is fixed per session emits nothing).
+add_executable(backend_capability_revision_test tests/backend_capability_revision_test.cpp)
+target_include_directories(backend_capability_revision_test PRIVATE src tests)
+target_link_libraries(backend_capability_revision_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME backend_capability_revision_test COMMAND backend_capability_revision_test)
 
 # ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
 # backend records setAtu(); no sockets, no radio.
@@ -562,6 +603,18 @@ endif()
 add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)
 target_link_libraries(wdsp_channel_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_test COMMAND wdsp_channel_test)
+
+# Socket-free shared-pool admission and injected receiver lifetime tests. These
+# foundations are compiled/tested even when the optional RTL USB driver is off.
+add_executable(wdsp_channel_reservation_test tests/wdsp_channel_reservation_test.cpp)
+target_link_libraries(wdsp_channel_reservation_test PRIVATE aethercore)
+add_test(NAME wdsp_channel_reservation_test COMMAND wdsp_channel_reservation_test)
+set_tests_properties(wdsp_channel_reservation_test PROPERTIES TIMEOUT 120)
+
+add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
+target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtl_receiver_registry_test COMMAND rtl_receiver_registry_test)
+set_tests_properties(rtl_receiver_registry_test PROPERTIES TIMEOUT 120)
 
 # HL2 Metis protocol — pure wire encode/decode, standalone (no Qt / aethercore).
 add_executable(hl2_metis_protocol_test
@@ -1189,6 +1242,17 @@ target_include_directories(nr2_settings_model_test PRIVATE src tests)
 target_link_libraries(nr2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(nr2_settings_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME nr2_settings_model_test COMMAND nr2_settings_model_test)
+
+# #3821: a focused replacement for the retired spectral_nr_test coverage.
+# The pure DSP rows prove a warm reset retains the converged noise estimate,
+# flushes stale overlap-add audio, and bounds a post-TX AGC level step. The
+# AudioEngine row drives the production raw-interlock edge and verifies through
+# bridge-visible diagnostics that it performs only the warm reset. Socket-free:
+# no audio device, radio transport, listener, peer process, or transmission.
+add_executable(nr2_tx_rx_reset_test tests/nr2_tx_rx_reset_test.cpp)
+target_include_directories(nr2_tx_rx_reset_test PRIVATE src tests)
+target_link_libraries(nr2_tx_rx_reset_test PRIVATE aethercore Qt6::Core)
+add_test(NAME nr2_tx_rx_reset_test COMMAND nr2_tx_rx_reset_test)
 
 add_executable(rn2_settings_model_test
     tests/rn2_settings_model_test.cpp
@@ -1886,6 +1950,15 @@ target_include_directories(profile_transfer_test PRIVATE src)
 target_link_libraries(profile_transfer_test PRIVATE Qt6::Core)
 add_test(NAME profile_transfer_test COMMAND profile_transfer_test)
 
+# #5612 — aborting an in-progress upload during cleanup or socket replacement
+# must not let a synchronous disconnect re-enter ProfileTransfer.
+add_executable(profile_transfer_cleanup_test
+    tests/profile_transfer_cleanup_test.cpp
+)
+target_include_directories(profile_transfer_cleanup_test PRIVATE src)
+target_link_libraries(profile_transfer_cleanup_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME profile_transfer_cleanup_test COMMAND profile_transfer_cleanup_test)
+
 add_executable(waveform_upload_state_test
     tests/waveform_upload_state_test.cpp
     src/core/WaveformUploadState.cpp
@@ -1893,6 +1966,35 @@ add_executable(waveform_upload_state_test
 target_include_directories(waveform_upload_state_test PRIVATE src)
 target_link_libraries(waveform_upload_state_test PRIVATE Qt6::Core)
 add_test(NAME waveform_upload_state_test COMMAND waveform_upload_state_test)
+
+# #5572 — socket-free firmware upload lifecycle. The injected writer exercises
+# production queue accounting and terminal handlers without a radio peer.
+add_executable(firmware_uploader_test
+    tests/firmware_uploader_test.cpp
+)
+target_include_directories(firmware_uploader_test PRIVATE src)
+target_link_libraries(firmware_uploader_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME firmware_uploader_test COMMAND firmware_uploader_test)
+
+# Local Qt dialog + injected uploader callbacks; no radio connection or peer.
+add_executable(firmware_close_dialog_test
+    tests/firmware_close_dialog_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(firmware_close_dialog_test PRIVATE src tests)
+target_link_libraries(firmware_close_dialog_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME firmware_close_dialog_test COMMAND firmware_close_dialog_test)
+set_tests_properties(firmware_close_dialog_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
@@ -1959,6 +2061,48 @@ add_executable(mono_dsp_stereo_adapter_test
 target_include_directories(mono_dsp_stereo_adapter_test PRIVATE src)
 target_link_libraries(mono_dsp_stereo_adapter_test PRIVATE Qt6::Core)
 add_test(NAME mono_dsp_stereo_adapter_test COMMAND mono_dsp_stereo_adapter_test)
+
+# Socket/device-free tests of the real optional wrappers. The local C API
+# substitutes only apply half-gain and expose sample counts; these tests do
+# not load a downloaded model, SDK pack or GPU and do not claim inference.
+add_library(nr_test_nvafx_api SHARED tests/nr_test_nvafx_api.cpp)
+set_target_properties(nr_test_nvafx_api PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+add_executable(nr_rate_domain_test
+    tests/nr_rate_domain_test.cpp
+    tests/nr_test_df_api.cpp
+    src/core/DeepFilterFilter.cpp
+    src/core/NvidiaAfxFilter.cpp
+    src/core/MonoDspStereoAdapter.cpp
+    src/core/Resampler.cpp
+)
+target_compile_definitions(nr_rate_domain_test PRIVATE HAVE_DFNR HAVE_NVIDIA_AFX)
+target_include_directories(nr_rate_domain_test PRIVATE
+    src third_party/deepfilter/include third_party/r8brain)
+target_link_libraries(nr_rate_domain_test PRIVATE Qt6::Core ${CMAKE_DL_LIBS})
+set_target_properties(nr_rate_domain_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/nr-rate-domain-tests")
+add_dependencies(nr_rate_domain_test nr_test_nvafx_api)
+add_test(NAME nr_rate_domain_test
+    COMMAND nr_rate_domain_test $<TARGET_FILE:nr_test_nvafx_api>)
+
+if(ENABLE_SPECBLEACH)
+    add_executable(specbleach_rate_domain_test
+        tests/specbleach_rate_domain_test.cpp
+        src/core/SpecbleachFilter.cpp
+        src/core/MonoDspStereoAdapter.cpp
+        ${SPECBLEACH_SOURCES}
+    )
+    target_compile_definitions(specbleach_rate_domain_test PRIVATE HAVE_SPECBLEACH)
+    target_include_directories(specbleach_rate_domain_test PRIVATE src
+        third_party/libspecbleach/include third_party/libspecbleach/src
+        ${FFTW3_INCLUDE_DIRS} ${FFTW3_H_DIR})
+    target_link_libraries(specbleach_rate_domain_test PRIVATE Qt6::Core ${FFTW3F_LIB})
+    if(MSVC AND SPECBLEACH_STATIC_LIB)
+        add_dependencies(specbleach_rate_domain_test specbleach_build)
+        target_link_libraries(specbleach_rate_domain_test PRIVATE ${SPECBLEACH_STATIC_LIB})
+    endif()
+    add_test(NAME specbleach_rate_domain_test COMMAND specbleach_rate_domain_test)
+endif()
 
 # tests/TestEventLoop.h is test infrastructure that makes correctness claims, so
 # it carries its own proof — including a negative case that pins the #4693
@@ -2170,6 +2314,17 @@ add_executable(pan_recenter_policy_test
 target_include_directories(pan_recenter_policy_test PRIVATE src)
 add_test(NAME pan_recenter_policy_test COMMAND pan_recenter_policy_test)
 
+add_executable(waterfall_time_marker_settings_test tests/waterfall_time_marker_settings_test.cpp)
+target_include_directories(waterfall_time_marker_settings_test PRIVATE src)
+target_link_libraries(waterfall_time_marker_settings_test PRIVATE aethercore Qt6::Core)
+add_test(NAME waterfall_time_marker_settings_test COMMAND waterfall_time_marker_settings_test)
+
+# Pure row/timestamp geometry, no sockets or radio peer.
+add_executable(waterfall_time_markers_test tests/waterfall_time_markers_test.cpp)
+target_include_directories(waterfall_time_markers_test PRIVATE src)
+target_link_libraries(waterfall_time_markers_test PRIVATE Qt6::Core)
+add_test(NAME waterfall_time_markers_test COMMAND waterfall_time_markers_test)
+
 add_executable(waterfall_history_buffer_test
     tests/waterfall_history_buffer_test.cpp
     src/gui/WaterfallHistoryBuffer.cpp
@@ -2335,6 +2490,12 @@ add_executable(waveform_install_gate_test
 target_include_directories(waveform_install_gate_test PRIVATE src)
 target_link_libraries(waveform_install_gate_test PRIVATE Qt6::Core)
 add_test(NAME waveform_install_gate_test COMMAND waveform_install_gate_test)
+
+# D-STAR capability/build visibility and delayed-start admission. Pure policy:
+# no QApplication, settings, helper process, serial device, or sockets.
+add_executable(dstar_availability_gate_test tests/dstar_availability_gate_test.cpp)
+target_include_directories(dstar_availability_gate_test PRIVATE src)
+add_test(NAME dstar_availability_gate_test COMMAND dstar_availability_gate_test)
 
 # DVK indicator availability — TX-slice mode + the radio's DVK entitlement.
 # Header-only, pure logic.
@@ -2879,6 +3040,13 @@ add_test(NAME automation_json_id_test COMMAND automation_json_id_test)
 # Read-only external-device diagnostic registry and provider dispatch. The
 # platform-specific Ulanzi HID snapshot is supplied by MainWindow on macOS;
 # this test pins the bridge contract without requiring physical hardware.
+# Direct handleLine injection; no sockets are opened and no radio is constructed.
+add_executable(automation_cell_test tests/automation_cell_test.cpp)
+target_include_directories(automation_cell_test PRIVATE src)
+target_link_libraries(automation_cell_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME automation_cell_test COMMAND automation_cell_test)
+set_tests_properties(automation_cell_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(automation_device_diagnostics_test
     tests/automation_device_diagnostics_test.cpp
 )
@@ -3067,6 +3235,18 @@ target_include_directories(cw_sidetone_device_match_test PRIVATE src)
 target_link_libraries(cw_sidetone_device_match_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_device_match_test COMMAND cw_sidetone_device_match_test)
 
+# The env-gated sample-exact edge probe both sidetone sinks feed (#5200). No
+# PortAudio and no audio device: scan() takes a plain interleaved stereo float
+# buffer, so the instrument is a pure function of its samples and runs on every
+# runner. The load-bearing row is the empty-stream reset — dump() used to skip
+# its reset when a stream recorded no edges, leaking that stream's whole sample
+# count into the next one, which silently displaced every position the probe
+# reported afterwards.
+add_executable(cw_sidetone_edge_probe_test tests/cw_sidetone_edge_probe_test.cpp)
+target_include_directories(cw_sidetone_edge_probe_test PRIVATE src)
+target_link_libraries(cw_sidetone_edge_probe_test PRIVATE Qt6::Core)
+add_test(NAME cw_sidetone_edge_probe_test COMMAND cw_sidetone_edge_probe_test)
+
 # #4281 — who owns the Client-Side QSO recorder's TX slot. Pure, header-only,
 # so the truth table is a compile-time assertion; the run-time rows carry the
 # labels. The static_assert on the function's own type is the regression pin:
@@ -3234,6 +3414,28 @@ target_include_directories(aprs_messenger_test PRIVATE src)
 target_link_libraries(aprs_messenger_test PRIVATE Qt6::Core)
 add_test(NAME aprs_messenger_test COMMAND aprs_messenger_test)
 
+add_executable(aprs_fill_in_digipeater_test
+    tests/aprs_fill_in_digipeater_test.cpp
+    src/core/aprs/AprsFillInDigipeater.cpp
+    src/core/tnc/Ax25.cpp
+)
+target_include_directories(aprs_fill_in_digipeater_test PRIVATE src)
+target_link_libraries(aprs_fill_in_digipeater_test PRIVATE Qt6::Core)
+add_test(NAME aprs_fill_in_digipeater_test COMMAND aprs_fill_in_digipeater_test)
+
+# Socket-free injected APRS frames, producer cancellation and queue admission.
+add_executable(aprs_digipeater_model_test
+    tests/aprs_digipeater_model_test.cpp
+    src/models/AprsDigipeaterModel.cpp
+    src/core/aprs/AprsFillInDigipeater.cpp
+    src/core/aprs/AprsBeacon.cpp
+    src/core/aprs/AprsPacket.cpp
+    src/core/tnc/Ax25.cpp
+)
+target_include_directories(aprs_digipeater_model_test PRIVATE src)
+target_link_libraries(aprs_digipeater_model_test PRIVATE Qt6::Core)
+add_test(NAME aprs_digipeater_model_test COMMAND aprs_digipeater_model_test)
+
 add_executable(tnc_terminal_test
     tests/tnc_terminal_test.cpp
     src/core/tnc/Ax25.cpp
@@ -3315,6 +3517,20 @@ if(UNIX)
 endif()
 set_target_properties(meter_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME meter_model_test COMMAND meter_model_test)
+
+# The meter join: kMeterSurfaces against kMeterTable, and the HL2 wiring that
+# has to exist for a surface row to be true. Header-only on the consumer side
+# and text on the producer side, so it links neither RadioCertification nor the
+# backend — see the file's own header for why that is the only way the two
+# tables can be compared at all.
+add_executable(meter_surfaces_test
+    tests/meter_surfaces_test.cpp
+)
+target_include_directories(meter_surfaces_test PRIVATE src)
+target_compile_definitions(meter_surfaces_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(meter_surfaces_test PRIVATE Qt6::Core)
+add_test(NAME meter_surfaces_test COMMAND meter_surfaces_test)
 
 add_executable(health_applet_test
     tests/health_applet_test.cpp
@@ -3591,6 +3807,30 @@ target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
 
+# HL2 RQST/ACK state machine (docs/HERMES.md §13 item 13, oracle §5) — pure
+# policy, standalone (no Qt, no socket, no radio). The clock is EP6 frames.
+add_executable(hl2_rqst_ack_test
+    tests/hl2_rqst_ack_test.cpp
+    src/core/backends/hl2/Hl2ControlRequest.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_rqst_ack_test PRIVATE src)
+add_test(NAME hl2_rqst_ack_test COMMAND hl2_rqst_ack_test)
+
+# RQST/ACK where it meets the wire — socket-free, on MetisClient's own packet
+# builder and its EP6 response path.
+add_executable(hl2_rqst_ack_client_test tests/hl2_rqst_ack_client_test.cpp)
+target_include_directories(hl2_rqst_ack_client_test PRIVATE src)
+target_link_libraries(hl2_rqst_ack_client_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_rqst_ack_client_test COMMAND hl2_rqst_ack_client_test)
+
+# HL2 band filter / EP2 frame composition — socket-free, on MetisClient's own
+# packet builder. A band change must not leave two disagreeing config banks in
+# one frame (#4579).
+add_executable(hl2_band_filter_frame_test tests/hl2_band_filter_frame_test.cpp)
+target_include_directories(hl2_band_filter_frame_test PRIVATE src)
+target_link_libraries(hl2_band_filter_frame_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_band_filter_frame_test COMMAND hl2_band_filter_frame_test)
+
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
 add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
@@ -3610,6 +3850,22 @@ target_include_directories(radiomodel_pan_range_null_test PRIVATE src)
 target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_test)
 
+
+# #5262 M1: family-specific verbs gate on the declared extension namespace, not
+# on the family string. Socket-free.
+add_executable(extension_namespace_gate_test tests/extension_namespace_gate_test.cpp)
+target_include_directories(extension_namespace_gate_test PRIVATE src)
+target_link_libraries(extension_namespace_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME extension_namespace_gate_test COMMAND extension_namespace_gate_test)
+
+# #5594 item 3: the capacity a Flex declares in discovery (max_slices /
+# max_panadapters), and that it is never confused with the adjacent
+# available_* availability keys. Socket-free.
+
+add_executable(radio_capacity_declaration_test tests/radio_capacity_declaration_test.cpp)
+target_include_directories(radio_capacity_declaration_test PRIVATE src)
+target_link_libraries(radio_capacity_declaration_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME radio_capacity_declaration_test COMMAND radio_capacity_declaration_test)
 
 add_executable(radiomodel_tnf_removal_status_test tests/radiomodel_tnf_removal_status_test.cpp)
 target_include_directories(radiomodel_tnf_removal_status_test PRIVATE src)
@@ -4054,6 +4310,21 @@ target_compile_definitions(memory_csv_compat_test PRIVATE
 target_link_libraries(memory_csv_compat_test PRIVATE Qt6::Core)
 add_test(NAME memory_csv_compat_test COMMAND memory_csv_compat_test)
 
+# Socket-free engine ownership/cancellation policy; no radio or peer process.
+add_executable(tx_coordinator_test
+    tests/tx_coordinator_test.cpp
+    src/core/TxCoordinator.cpp
+)
+target_include_directories(tx_coordinator_test PRIVATE src)
+target_link_libraries(tx_coordinator_test PRIVATE Qt6::Core)
+add_test(NAME tx_coordinator_test COMMAND tx_coordinator_test)
+
+# Socket-free: production models with injected backend command recorders.
+add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
+target_include_directories(tx_operation_integration_test PRIVATE src tests)
+target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_operation_integration_test COMMAND tx_operation_integration_test)
+
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp
     src/models/TransmitModel.cpp
@@ -4434,6 +4705,28 @@ add_executable(hl2_overload_policy_test
 )
 target_include_directories(hl2_overload_policy_test PRIVATE src)
 add_test(NAME hl2_overload_policy_test COMMAND hl2_overload_policy_test)
+# HERMES.md §13 item 16: the pre-DDC overload flag paired with WDSP's post-DDC
+# RXA_ADC_PK. Header-only and Qt-free, like the overload policy above and for
+# the same reason — the interesting branches need a saturated converter, which
+# no test can arrange.
+add_executable(hl2_adc_pairing_test
+    tests/hl2_adc_pairing_test.cpp
+)
+target_include_directories(hl2_adc_pairing_test PRIVATE src)
+add_test(NAME hl2_adc_pairing_test COMMAND hl2_adc_pairing_test)
+
+# The same pairing, at the seam rather than as a table. adcPairing() is pure and
+# hl2_adc_pairing_test covers it exhaustively; what that cannot cover is WHEN
+# Hl2Backend's sampling argument changes relative to when Hl2RxDsp actually
+# stops and starts sampling, because the flags are set synchronously and the
+# mute they imply rides a queued connection. This drives a real Hl2RxDsp across
+# that window, so it needs the core library and an event loop.
+add_executable(hl2_adc_sampling_seam_test
+    tests/hl2_adc_sampling_seam_test.cpp
+)
+target_include_directories(hl2_adc_sampling_seam_test PRIVATE src)
+target_link_libraries(hl2_adc_sampling_seam_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_adc_sampling_seam_test COMMAND hl2_adc_sampling_seam_test)
 add_executable(hl2_dsp_setup_policy_test
     tests/hl2_dsp_setup_policy_test.cpp
 )
@@ -4487,6 +4780,58 @@ add_executable(hl2_band_memory_test
 )
 target_include_directories(hl2_band_memory_test PRIVATE src)
 add_test(NAME hl2_band_memory_test COMMAND hl2_band_memory_test)
+# HL2 stream-free telemetry poll cadence -- pure header policy, no Qt, no socket.
+# The rule is the only part of the poller with a judgement in it; see
+# docs/architecture/hl2-stream-free-telemetry.md section 3 for the derivation.
+add_executable(hl2_telemetry_cadence_test
+    tests/hl2_telemetry_cadence_test.cpp
+)
+target_include_directories(hl2_telemetry_cadence_test PRIVATE src)
+add_test(NAME hl2_telemetry_cadence_test COMMAND hl2_telemetry_cadence_test)
+
+# The tick/mirror ALIASING the cadence rule cannot catch on its own: a counter
+# mirrored at 1 Hz, sampled by a 1 Hz tick, reports a healthy stream as stalled.
+# Pure, no Qt -- it replays a publish/tick trace, and keeps the OLD predicate as
+# a negative control so the trace is proved to discriminate rather than assumed
+# to.
+add_executable(hl2_link_state_alias_test
+    tests/hl2_link_state_alias_test.cpp
+)
+target_include_directories(hl2_link_state_alias_test PRIVATE src)
+add_test(NAME hl2_link_state_alias_test COMMAND hl2_link_state_alias_test)
+
+# telemetrySource policy + the health-snapshot merge, as pure functions both
+# call sites use. Truth table rather than a scenario: the row exists to tell two
+# states apart, so a test seeing only one answer proves nothing.
+add_executable(hl2_telemetry_source_test tests/hl2_telemetry_source_test.cpp)
+target_include_directories(hl2_telemetry_source_test PRIVATE src)
+target_link_libraries(hl2_telemetry_source_test PRIVATE Qt6::Core)
+add_test(NAME hl2_telemetry_source_test COMMAND hl2_telemetry_source_test)
+
+# The WIRE between the cadence rule and the backend that must ask it. Links
+# aethercore because it constructs a real Hl2Backend -- the point is that the
+# BACKEND drives the service, which no service-level test can check.
+add_executable(hl2_telemetry_wire_test tests/hl2_telemetry_wire_test.cpp)
+target_include_directories(hl2_telemetry_wire_test PRIVATE src tests)
+target_link_libraries(hl2_telemetry_wire_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_telemetry_wire_test COMMAND hl2_telemetry_wire_test)
+
+# HL2 stream-free telemetry SERVICE -- must answer with no backend and no
+# connection, which is the state the whole feature exists for. Needs Qt (timer)
+# but no aethercore and no radio.
+#
+# SOCKET-FREE, and by construction rather than by care: it never gives the
+# service a target, and with no target and the broadcast fallback off the
+# poller sends nothing. Nothing is bound, nothing is sent, and no peer exists.
+add_executable(hl2_telemetry_service_test
+    tests/hl2_telemetry_service_test.cpp
+    src/core/backends/hl2/Hl2TelemetryService.cpp
+    src/core/backends/hl2/Hl2TelemetryPoller.cpp
+    src/core/backends/hl2/MetisProtocol.cpp
+)
+target_include_directories(hl2_telemetry_service_test PRIVATE src)
+target_link_libraries(hl2_telemetry_service_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME hl2_telemetry_service_test COMMAND hl2_telemetry_service_test)
 add_executable(slice_link_policy_test
     tests/slice_link_policy_test.cpp
 )
@@ -4680,6 +5025,35 @@ add_test(NAME rx_applet_squelch_reconciliation_test
 set_tests_properties(rx_applet_squelch_reconciliation_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Socket-free production-widget lifetime regression coverage (#5568).
+add_executable(gui_nested_lifetime_test
+    tests/gui_nested_lifetime_test.cpp
+    src/gui/RxApplet.cpp
+    src/gui/VfoWidget.cpp
+    src/gui/FrequencyEntryParser.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/FilterPassbandWidget.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/PhaseKnob.cpp
+    src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
+    src/gui/MeterViewController.cpp
+    src/gui/AdaptiveFilterControls.cpp
+    src/gui/GuardedSlider.h
+    src/gui/NetSchedulerDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+)
+target_include_directories(gui_nested_lifetime_test PRIVATE src tests)
+target_link_libraries(gui_nested_lifetime_test PRIVATE
+    aethercore Qt6::Widgets Qt6::Test
+)
+add_test(NAME gui_nested_lifetime_test COMMAND gui_nested_lifetime_test)
+set_tests_properties(gui_nested_lifetime_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(tx_applet_power_reconciliation_test
     tests/tx_applet_power_reconciliation_test.cpp
     src/gui/TxApplet.cpp
@@ -4851,9 +5225,19 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    audio_engine_rates_test
+    audio_engine_pcm_lifetime_test
+    pcm_compatibility_test
+    firmware_close_dialog_test
     atu_seam_gate_test
+    backend_capability_revision_test
+    radio_capacity_declaration_test
+    extension_namespace_gate_test
+    tx_operation_integration_test
     backend_slice_lifecycle_test
+    waterfall_time_marker_settings_test
     client_display_settings_test
+    gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
     weather_radar_loading_test
@@ -4873,6 +5257,7 @@ set(AETHER_SETTINGS_CONSUMERS
     panadapter_message_overlay_test
     app_settings_safety_test
     nr2_settings_model_test
+    nr2_tx_rx_reset_test
     rn2_settings_model_test
     panadapter_model_rx_antenna_test
     qso_recorder_slice_lifetime_test
@@ -4938,6 +5323,7 @@ endforeach()
 # library as AetherSDR so moving QtWidgets out of aethercore cannot silently
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
+    automation_cell_test
     automation_server_gesture_test
     automation_device_diagnostics_test
     automation_json_id_test

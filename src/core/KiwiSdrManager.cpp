@@ -1339,12 +1339,16 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
         }
         emit profileWaterfallAvailabilityChanged(id, available, detail);
     }, Qt::QueuedConnection);
-    connect(c, &KiwiSdrClient::decodedAudioReady,
-            this, [this, id, c](const QByteArray& pcm) {
+    connect(c, &KiwiSdrClient::pcmFrameReady,
+            this, [this, id, c](const PcmFrame& frame) {
         if (client(id) != c) {
             return;
         }
-        emit decodedAudioReady(id, pcm);
+        const QByteArray pcm = frame.legacyStereo24();
+        if (!pcm.isEmpty()) {
+            emit pcmFrameReady(id, frame);
+            emit decodedAudioReady(id, pcm);
+        }
     }, Qt::QueuedConnection);
     connect(c, &KiwiSdrClient::waterfallRowReady,
             this, [this, id, c](const QString& panId, const QVector<float>& binsDbm,

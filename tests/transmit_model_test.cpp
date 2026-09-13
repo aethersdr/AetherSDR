@@ -40,6 +40,10 @@ int main(int argc, char** argv)
     QStringList blockedMessages;
     QObject::connect(&tx, &TransmitModel::commandReady,
                      [&commands](const QString& cmd) { commands.append(cmd); });
+    QObject::connect(&tx, &TransmitModel::tuneCommandIssued,
+                     [&commands](bool on) { commands.append(on ? "intent:tune:on" : "intent:tune:off"); });
+    QObject::connect(&tx, &TransmitModel::moxCommandIssued,
+                     [&commands](bool on) { commands.append(on ? "intent:mox:on" : "intent:mox:off"); });
     QObject::connect(&tx, &TransmitModel::pttBlocked,
                      [&blockedMessages](const QString& message) { blockedMessages.append(message); });
 
@@ -146,7 +150,7 @@ int main(int argc, char** argv)
     tx.startTwoToneTune();
     ok &= expect(commands == QStringList({
                      "transmit set tune_mode=two_tone",
-                     "transmit tune 1",
+                     "intent:tune:on",
                  })
                      && tx.activePttSource() == TransmitModel::PttSource::Tune,
                  "two-tone tune sets mode and tags the tune source before starting");
@@ -155,7 +159,7 @@ int main(int argc, char** argv)
     commands.clear();
     tx.toggleTwoToneTune();
     ok &= expect(commands == QStringList({
-                     "transmit tune 0",
+                     "intent:tune:off",
                      "transmit set tune_mode=single_tone",
                  }),
                  "two-tone tune toggle stops and restores single-tone mode");
@@ -165,15 +169,53 @@ int main(int argc, char** argv)
     tx.toggleTwoToneTune();
     ok &= expect(commands == QStringList({
                      "transmit set tune_mode=two_tone",
-                     "transmit tune 1",
+                     "intent:tune:on",
                  }),
                  "two-tone tune toggle starts two-tone when not tuning");
 
     commands.clear();
     tx.startTune();
-    ok &= expect(commands == QStringList({"transmit tune 1"})
+    ok &= expect(commands == QStringList({"intent:tune:on"})
                      && tx.activePttSource() == TransmitModel::PttSource::Tune,
                  "single-tone tune tags the tune source before starting");
+
+    // #5422: no CW source keys while TUNE is active — the radio keys a
+    // `cw key 1` (and CWX text) at TUNE power and is left in TX with no
+    // carrier after key-up. tx is tuning here from the local TUNE control.
+    ok &= expect(!tx.admitsCwKeyEdge(true) && tx.admitsCwKeyEdge(false)
+                     && !tx.admitsCwxSend(),
+                 "tune refuses CW key-down and CWX text, admits key-up");
+    commands.clear();
+    tx.stopTune();
+    ok &= expect(tx.admitsCwKeyEdge(true) && tx.admitsCwxSend()
+                     && commands == QStringList({"intent:tune:off"}),
+                 "stopping tune re-admits CW keying and CWX text");
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = true; }));
+    ok &= expect(!tx.admitsCwKeyEdge(true) && tx.admitsCwKeyEdge(false)
+                     && !tx.admitsCwxSend(),
+                 "tune reported by the radio alone refuses key-down and CWX, admits key-up");
+    tx.applyChanges(td([](TransmitDelta& d){ d.tune = false; }));
+    ok &= expect(tx.admitsCwKeyEdge(true) && tx.admitsCwxSend(),
+                 "radio tune=0 re-admits CW keying and CWX text");
+
+    // #5422, other direction: TUNE must not start while a CW source is keying
+    // (measured: it comes up with no carrier and leaves the radio in TX).
+    QString tuneBlock;
+    tx.setTuneAdmission([&tuneBlock] { return tuneBlock; });
+    tuneBlock = QStringLiteral("CW is keyed");
+    commands.clear();
+    blockedMessages.clear();
+    tx.startTune();
+    ok &= expect(commands.isEmpty() && !tx.isTuning()
+                     && blockedMessages == QStringList({"CW is keyed"}),
+                 "TUNE start is refused while CW is keyed");
+    tuneBlock.clear();
+    commands.clear();
+    tx.startTune();
+    ok &= expect(commands == QStringList({"intent:tune:on"}) && tx.isTuning(),
+                 "TUNE starts again once CW is released");
+    tx.stopTune();
+    tx.setTuneAdmission({});
 
     commands.clear();
     tx.setTuneMode("single_tone");
@@ -394,6 +436,239 @@ int main(int argc, char** argv)
                      "applying radio status does not emit mic operator intent");
     }
 
+    // ── CW break-in delay: "hold" against SmartSDR's speed-linked QSK floor ──
+    //
+    // SmartSDR re-pins break_in_delay to a WPM-derived QSK floor on a speed
+    // change and walks it down as WPM rises — on an inline amplifier that can't
+    // tolerate QSK, silent hot-switching. The opt-in "hold" re-asserts the
+    // operator's committed delay from the SPEED-COMMAND path (setCwSpeed), never
+    // from applyChanges: a command issued out of the status-apply path is the
+    // client→radio feedback loop Principle II forbids (#5288 review). With hold
+    // off — the default — the status path only ever adopts.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        QObject::connect(&cw, &TransmitModel::commandReady,
+                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+
+        // Hold off (default): the radio walks break_in_delay down on a speed
+        // change and the status path adopts it verbatim — nothing on the wire.
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 20; d.cwDelay = 48; }));
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 32; d.cwDelay = 11; }));
+        ok &= expect(cw.cwDelay() == 11 && cwCmds.isEmpty(),
+                     "hold off: a speed-coupled delay drop is adopted, no command emitted");
+
+        // The synthetic delta RadioModel::restoreClientOwnedCwState builds
+        // carries cwSpeed and cwDelay together in one applyChanges call. It must
+        // adopt wholesale — no re-assert, no command (the cross-session leak the
+        // first revision had, #5288 Blocker 2).
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwSpeed = 25; d.cwDelay = 100; }));
+        ok &= expect(cw.cwSpeed() == 25 && cw.cwDelay() == 100 && cwCmds.isEmpty(),
+                     "a combined speed+delay status delta is adopted wholesale");
+
+        // Local speed change, hold off: only the wpm command goes out.
+        cw.setCwDelay(300);
+        cwCmds.clear();
+        cw.setCwSpeed(28);
+        ok &= expect(cwCmds == QStringList({"cw wpm 28"}),
+                     "hold off: setCwSpeed emits only the wpm command");
+    }
+
+    // Hold on: re-assert the committed delay on the operator's own speed change.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        QObject::connect(&cw, &TransmitModel::commandReady,
+                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+
+        cw.setCwDelay(48);                 // operator commits a delay above QSK
+        cw.setHoldBreakInDelay(true);
+        cwCmds.clear();
+
+        // wpm command first, then the committed delay rides out right behind it
+        // so the radio's floor walk never lands. Adopted locally so the slider
+        // does not dip between the two echoes.
+        cw.setCwSpeed(30);
+        ok &= expect(cwCmds == QStringList({"cw wpm 30", "cw break_in_delay 48"}),
+                     "hold on: the committed delay is re-asserted after the wpm command");
+
+        // The re-assert must not write the model's delay. The radio's floor is
+        // enforced on the write side too (#5519: `Parameter out of range`), so a
+        // local adopt can display a value the radio refused — and when a speed
+        // change does not move the floor the radio sends no break_in_delay
+        // status, so nothing would ever correct it (#5288 review, blocker 2).
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 12; }));  // radio walks it
+        cw.setCwSpeed(33);
+        ok &= expect(cwCmds == QStringList({"cw wpm 33", "cw break_in_delay 48"}),
+                     "hold on: the re-assert still goes out after the radio walked the delay");
+        ok &= expect(cw.cwDelay() == 12,
+                     "hold on: the re-assert does NOT overwrite radio truth locally");
+
+        // The radio's echo of the walked-down floor still arrives. With hold on
+        // the model still does NOT fight it from the status path (Principle II)
+        // — it adopts. The re-assert above is the one-shot protection, and more
+        // delay than asked for is safe for the amp anyway.
+        cwCmds.clear();
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 11; }));
+        ok &= expect(cw.cwDelay() == 11 && cwCmds.isEmpty(),
+                     "hold on: applyChanges still only adopts, never re-commands");
+
+        // Every subsequent operator speed change re-asserts from the committed
+        // value (not from whatever the radio last echoed).
+        cwCmds.clear();
+        cw.setCwSpeed(34);
+        ok &= expect(cwCmds == QStringList({"cw wpm 34", "cw break_in_delay 48"}),
+                     "hold on: each operator speed change re-asserts the committed delay");
+
+        // Nit: the floor only moves when the speed does, and the knob/shortcut
+        // paths clamp, so a detent held against the bound calls setCwSpeed()
+        // with an unchanged value. That must not re-send (#5288 review).
+        cwCmds.clear();
+        cw.setCwSpeed(34);
+        cw.setCwSpeed(34);
+        ok &= expect(cwCmds == QStringList({"cw wpm 34", "cw wpm 34"}),
+                     "hold on: an unchanged speed re-sends wpm but never the delay");
+    }
+
+    // A committed delay of 0 is deliberate QSK — never re-asserted.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        QObject::connect(&cw, &TransmitModel::commandReady,
+                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+
+        cw.setHoldBreakInDelay(true);
+        cw.setCwDelay(0);
+        cwCmds.clear();
+        cw.setCwSpeed(35);
+        ok &= expect(cwCmds == QStringList({"cw wpm 35"}),
+                     "a committed delay of 0 (QSK) is never re-asserted");
+    }
+
+    // Enabling hold captures nothing on its own — it holds only what the
+    // operator SETS via setCwDelay. The setter is a no-op on no-change; the
+    // committed value follows the latest setCwDelay.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        QObject::connect(&cw, &TransmitModel::commandReady,
+                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+        QList<bool> holdEdges;
+        QObject::connect(&cw, &TransmitModel::holdBreakInDelayChanged,
+                         [&holdEdges](bool on) { holdEdges.append(on); });
+
+        // Delay only ever arrived from the radio; operator never touched it.
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 40; }));
+        cw.setHoldBreakInDelay(true);
+        ok &= expect(holdEdges == QList<bool>({true}),
+                     "holdBreakInDelayChanged fires once on enable");
+        cwCmds.clear();
+        cw.setCwSpeed(26);
+        ok &= expect(cwCmds == QStringList({"cw wpm 26"}),
+                     "hold on but no operator-set delay: nothing is re-asserted (not the radio's 40)");
+
+        // The operator now sets a delay explicitly — that is what hold protects.
+        cw.setCwDelay(72);
+        cwCmds.clear();
+        cw.setCwSpeed(27);
+        ok &= expect(cwCmds == QStringList({"cw wpm 27", "cw break_in_delay 72"}),
+                     "once the operator sets a delay, hold re-asserts it");
+
+        // A further explicit setCwDelay redefines the committed value.
+        cw.setCwDelay(90);
+        cwCmds.clear();
+        cw.setCwSpeed(28);
+        ok &= expect(cwCmds == QStringList({"cw wpm 28", "cw break_in_delay 90"}),
+                     "the committed delay tracks the operator's latest setCwDelay");
+
+        // Toggling hold off stops the re-assert; a redundant set emits nothing.
+        cw.setHoldBreakInDelay(false);
+        cw.setHoldBreakInDelay(false);
+        ok &= expect(holdEdges == QList<bool>({true, false}),
+                     "holdBreakInDelayChanged fires only on a real transition");
+        cwCmds.clear();
+        cw.setCwSpeed(29);
+        ok &= expect(cwCmds == QStringList({"cw wpm 29"}), "hold off again: no re-assert");
+    }
+
+    // Armed vs on: the preference persists across a disconnect and the held
+    // delay does not, so "on but holding nothing" is a real, reachable state and
+    // the UI has to be able to tell it apart (#5288 review, blocker 1).
+    {
+        TransmitModel cw;
+        QList<bool> armedEdges;
+        // Also record what the GETTER says at the moment the signal fires: a
+        // slot that reads holdBreakInDelayArmed() must not see the state being
+        // left behind. Emitting before the member is updated is how the button
+        // kept reading "holding 48 ms" after a disconnect had cleared it.
+        QList<bool> armedAtEmit;
+        QObject::connect(&cw, &TransmitModel::holdBreakInDelayArmedChanged,
+                         [&](bool a) {
+                             armedEdges.append(a);
+                             armedAtEmit.append(cw.holdBreakInDelayArmed());
+                         });
+
+        ok &= expect(!cw.holdBreakInDelayArmed(), "a fresh model is not armed");
+        cw.setHoldBreakInDelay(true);
+        ok &= expect(cw.holdBreakInDelay() && !cw.holdBreakInDelayArmed(),
+                     "enabling hold turns it on but does not arm it");
+        ok &= expect(armedEdges.isEmpty(), "enabling hold emits no arming edge");
+
+        cw.applyChanges(td([](TransmitDelta& d) { d.cwDelay = 40; }));
+        ok &= expect(!cw.holdBreakInDelayArmed(),
+                     "a radio-reported delay does not arm the hold");
+
+        cw.setCwDelay(48);
+        ok &= expect(cw.holdBreakInDelayArmed() && armedEdges == QList<bool>({true}),
+                     "the operator setting a delay arms the hold, once");
+        cw.setCwDelay(60);
+        ok &= expect(armedEdges == QList<bool>({true}),
+                     "a further delay change does not re-emit the arming edge");
+
+        // Deliberate full QSK is committed but is not something to hold.
+        cw.setCwDelay(0);
+        ok &= expect(!cw.holdBreakInDelayArmed()
+                         && armedEdges == QList<bool>({true, false}),
+                     "a committed delay of 0 (QSK) disarms the hold");
+
+        cw.setCwDelay(72);
+        cw.resetState();
+        ok &= expect(cw.holdBreakInDelay() && !cw.holdBreakInDelayArmed(),
+                     "after a disconnect the hold is still ON but no longer armed");
+        ok &= expect(armedEdges == QList<bool>({true, false, true, false}),
+                     "resetState emits the disarming edge so the UI can show it");
+        ok &= expect(armedAtEmit == armedEdges,
+                     "holdBreakInDelayArmed() already agrees with every edge as it is emitted");
+    }
+
+    // resetState() (every disconnect, via RadioModel::onDisconnected) clears the
+    // committed delay but keeps the client-side hold preference — #5288
+    // Blocker 2, the cross-session leak.
+    {
+        TransmitModel cw;
+        QStringList cwCmds;
+        QObject::connect(&cw, &TransmitModel::commandReady,
+                         [&cwCmds](const QString& c) { cwCmds.append(c); });
+
+        cw.setHoldBreakInDelay(true);
+        cw.setCwDelay(300);               // committed for radio A's session
+        cw.resetState();
+
+        ok &= expect(cw.holdBreakInDelay(), "resetState keeps the hold preference");
+        cwCmds.clear();
+        cw.setCwSpeed(25);
+        ok &= expect(cwCmds == QStringList({"cw wpm 25"}),
+                     "resetState clears the committed delay — radio A's value is not re-asserted at radio B");
+
+        // Radio B's first explicit delay rebuilds the committed value.
+        cw.setCwDelay(60);
+        cwCmds.clear();
+        cw.setCwSpeed(26);
+        ok &= expect(cwCmds == QStringList({"cw wpm 26", "cw break_in_delay 60"}),
+                     "after reset the committed delay rebuilds from the new session");
+    }
+
     ClientQuindarTone quindar;
     quindar.prepare(24000.0);
     quindar.setEnabled(true);
@@ -401,9 +676,70 @@ int main(int argc, char** argv)
     tx.setTxModeGetter([] { return QStringLiteral("USB"); });
     commands.clear();
     tx.requestPttOn(TransmitModel::PttSource::Wspr);
-    ok &= expect(commands == QStringList({"xmit 1"})
+    ok &= expect(commands == QStringList({"intent:mox:on"})
                  && quindar.phase() == ClientQuindarTone::Phase::Idle,
                  "WSPR PTT bypasses Quindar signaling");
+
+    // ── ATU tune failure and user abort tests ──
+    {
+        TransmitModel atuTx;
+        QList<QPair<ATUStatus, QString>> failures;
+        QObject::connect(&atuTx, &TransmitModel::atuTuneFailed,
+                         [&failures](ATUStatus s, const QString& msg) {
+                             failures.append(qMakePair(s, msg));
+                         });
+
+        // 1. InProgress -> FailBypass emits atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
+        ok &= expect(failures.size() == 1
+                     && failures.first().first == ATUStatus::FailBypass
+                     && !failures.first().second.isEmpty(),
+                     "InProgress -> FailBypass emits atuTuneFailed");
+
+        // 2. InProgress -> Fail emits atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL"); }));
+        ok &= expect(failures.size() == 1
+                     && failures.first().first == ATUStatus::Fail
+                     && !failures.first().second.isEmpty(),
+                     "InProgress -> Fail emits atuTuneFailed");
+
+        // 3. InProgress -> Successful does NOT emit atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_SUCCESSFUL"); }));
+        ok &= expect(failures.isEmpty(),
+                     "InProgress -> Successful does not emit atuTuneFailed");
+
+        // 4. InProgress -> OK does NOT emit atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_OK"); }));
+        ok &= expect(failures.isEmpty(),
+                     "InProgress -> OK does not emit atuTuneFailed");
+
+        // 5. User aborts via atuBypass() while in progress -> FailBypass/Aborted does NOT emit atuTuneFailed
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_IN_PROGRESS"); }));
+        atuTx.atuBypass();
+        failures.clear();
+        atuTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
+        ok &= expect(failures.isEmpty(),
+                     "User-aborted tune does not emit atuTuneFailed on FailBypass");
+
+        // 6. Direct FailBypass on connect without prior InProgress does NOT emit atuTuneFailed
+        TransmitModel freshTx;
+        failures.clear();
+        QObject::connect(&freshTx, &TransmitModel::atuTuneFailed,
+                         [&failures](ATUStatus s, const QString& msg) {
+                             failures.append(qMakePair(s, msg));
+                         });
+        freshTx.applyChanges(td([](TransmitDelta& d) { d.atuStatusRaw = QStringLiteral("TUNE_FAIL_BYPASS"); }));
+        ok &= expect(failures.isEmpty(),
+                     "Initial status FailBypass without InProgress does not emit atuTuneFailed");
+    }
 
     return ok ? 0 : 1;
 }

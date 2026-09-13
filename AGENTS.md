@@ -596,9 +596,36 @@ rules (pre-drafted in
 [`docs/aetherd-agents-md-staging.md`](docs/aetherd-agents-md-staging.md));
 if a rule isn't in this file, its step hasn't landed. Architecture changes
 ahead of the RFC steps remain maintainer-only (see Autonomous Agent
-Boundaries above). The CI-enforced rules so far are EB1/EB2/EB3 above
-(`tools/check_engine_boundary.py`, warning for tracked baselines, error
-for new violations).
+Boundaries above). The CI-enforced rules so far — all three run in the
+`Static checks` job, which became a **required status check on 2026-09-12**, so
+a red run blocks the merge rather than merely reporting. Note what that does
+*not* change: a finding against a TRACKED EB2/EB3 baseline still warns, and only
+a new violation or a grown baseline errors:
+
+- **EB1/EB2/EB3** above (`tools/check_engine_boundary.py`, warning for
+  tracked baselines, error for new violations).
+- **The capability-boolean freeze** (#5262 M2,
+  `tools/check_capability_records.py`). `RadioCapabilities`' boolean
+  population is frozen and may only shrink. **A new capability lands as a
+  per-feature record** — `std::optional<FeatureRecord>`, engaged =
+  present, fields = shape, the `cwText*` pattern generalized — not as
+  another loose bool. Two reasons, both of which have already cost us:
+  a bool encodes a yes/no that turns out to have shape and then fissions
+  when the second radio family arrives (`hasRadioSideDsp` became four
+  tiers, `hostModulates` became two fields), and a bool a backend simply
+  forgot to set reports a definite "no" indistinguishable from a
+  considered one. Converting one to a record means lowering
+  `FROZEN_BOOL_COUNT` in the same commit.
+- **The command-plane freeze** (#5262 M4,
+  `tools/check_command_plane.py`). Raw Flex wire text above the seam is
+  frozen per file and may only shrink; **a file not already in the
+  baseline must stay at zero.** This is why the GUI↔Radio Sync note below
+  describes the plane being migrated away from rather than a pattern to
+  copy: on HL2/Icom/ANAN/RTL that text is silently dropped, so a new
+  control written this way looks live and does nothing. New controls use
+  a typed intent through `IRadioBackend`. Growth under
+  `src/core/backends/flex/` is deliberately not counted — that is where
+  the encode is moving to.
 
 **Engine boundary ratchet — EB3 (vendor includes).** As of RFC step 2.4,
 `check_engine_boundary.py` also enforces that nothing above the radio seam
@@ -958,6 +985,15 @@ setter genuinely persists (e.g. waterfall *appearance*: color gain, black
 level), that value must be client-only — never a value the radio also echoes.
 
 ### GUI↔Radio Sync (No Feedback Loops)
+
+> **The `commandReady` plane is FROZEN and is being removed** (#5262 M4).
+> It is described here because most of the tree still uses it, not as the
+> pattern for new work: the wire text below is Flex-only and is silently
+> dropped on HL2/Icom/ANAN/RTL, so a new control written this way is a
+> live-looking dead control on four of six radio families. A new control
+> emits a **typed intent** through `IRadioBackend` instead, and
+> `tools/check_command_plane.py` fails a file that grows its raw-command
+> count (or any file that gains one from zero).
 
 - Model setters emit `commandReady(cmd)` → `RadioModel` sends to radio
 - Radio status pushes update models via `applyStatus(kvs)`

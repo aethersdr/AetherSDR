@@ -1942,12 +1942,20 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
 
     // Reflect the change immediately: re-label this row from the saved setting
     // rather than waiting for the next discovery sweep.
-    RadioInfo updated = radio;
-    updated.nickname =
-        hl2::Hl2Discovery::effectiveNickname(radio.family, radio.serial,
-                                             radio.model);
-    m_radios[row] = updated;
-    item->setText(formatLocalRadioLabel(updated));
+    // Discovery may remove or reorder rows while either nested loop runs.
+    // Resolve the radio again instead of retaining a QListWidgetItem pointer.
+    for (int i = 0; i < m_radios.size(); ++i) {
+        RadioInfo& updated = m_radios[i];
+        if (updated.family != radio.family || updated.serial != radio.serial) {
+            continue;
+        }
+        updated.nickname = hl2::Hl2Discovery::effectiveNickname(
+            updated.family, updated.serial, updated.model);
+        if (QListWidgetItem* currentItem = m_radioList->item(i)) {
+            currentItem->setText(formatLocalRadioLabel(updated));
+        }
+        break;
+    }
 }
 
 void ConnectionPanel::onRadioDiscovered(const RadioInfo& radio)

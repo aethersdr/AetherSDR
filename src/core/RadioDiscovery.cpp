@@ -213,6 +213,13 @@ RadioInfo RadioDiscovery::parseDiscoveryPacket(const QByteArray& data) const
             info.inUse = (value == "1");
         } else if (key == "mf_enable") {
             info.multiFlexEnabled = (value != "0");
+        } else if (key == "max_slices") {
+            info.maxSlices = value.toInt();
+        } else if (key == "max_panadapters") {
+            // The radio's own capacity. Deliberately NOT available_panadapters,
+            // which is the free count and would read as a capacity that shrinks
+            // every time any client opens a panadapter. (#5594 item 3)
+            info.maxPanadapters = value.toInt();
         } else if (key == "max_licensed_version") {
             info.maxLicensedVersion = value.toInt();
         } else if (key == "is_system_model") {

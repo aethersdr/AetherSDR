@@ -543,6 +543,171 @@ void testTxMeterRedefinitionsPreserveTheirSlice()
     }
 }
 
+// TX:ALCGAIN — how hard the ALC is working, which is the quantity TX:ALC does
+// NOT carry. Hl2TxDsp::processAudioBlock says why in its own words: a post-ALC
+// level meter "sits pinned near the target by definition and tells the operator
+// nothing — it reports the ALC's success, not their input level."
+//
+// Routed exactly like ALC and COMPPEAK, because a gain is a property of ONE
+// transmitter and a radio may publish a TX waveform block per active slice. The
+// difference from swAlc is the conversion: there is none. TX:ALC accepts dBFS
+// or Percent because Icom reports a percentage of its own full scale; nothing
+// in the tree reports a GAIN in anything but dB, so a mapping here would be
+// inventing a second unit to be wrong about.
+void testAlcGainIsRoutedAndConvertedByNobody()
+{
+    MeterModel model;
+    report("ALC gain starts at unity with no sample behind it",
+           nearlyEqual(model.alcGainDb(), 0.0f) && !model.hasAlcGainValue());
+
+    model.defineMeter(slcMeter(10, 0));
+    model.defineMeter(txMeter(21, "ALCGAIN", "dB", 8));
+    model.setActiveTxSlice(0);
+
+    float emitted = 999.0f;
+    int emissions = 0;
+    QObject::connect(&model, &MeterModel::alcGainChanged, [&](float db) {
+        emitted = db;
+        ++emissions;
+    });
+
+    model.updateValues({21}, {rawDb(18.5f)});
+    report("an ALCGAIN sample reaches the accessor and the signal unconverted",
+           nearlyEqual(model.alcGainDb(), 18.5f) && nearlyEqual(emitted, 18.5f)
+               && emissions == 1 && model.hasAlcGainValue());
+
+    // Reduction is the other half of the same meter, and it is what an operator
+    // driving the chain too hard needs to see.
+    model.updateValues({21}, {rawDb(-6.0f)});
+    report("a NEGATIVE ALC gain is carried, not floored",
+           nearlyEqual(model.alcGainDb(), -6.0f) && emissions == 2);
+
+    // 0 dB IS A READING — the ALC is holding at unity — so it must be
+    // distinguishable from "nothing has ever been fed". That is the same
+    // distinction hasSupplyVoltage() and hasCompressionMeterValue() draw, and
+    // for the same reason: without it the initialiser renders as a measurement.
+    model.updateValues({21}, {rawDb(0.0f)});
+    report("unity gain is a value, not a silence",
+           nearlyEqual(model.alcGainDb(), 0.0f) && model.hasAlcGainValue()
+               && emissions == 3);
+}
+
+// Both reset paths, plus undefine. A gain must never outlive the meter it
+// describes: a stranded +30 dB on a gauge after a slice change or a disconnect
+// is precisely the stuck-needle reading a meter inventory cannot tell from a
+// live one.
+void testAlcGainClearsOnEveryPathThatInvalidatesIt()
+{
+    // Path 1 — the active TX slice moves to a transmitter this reading does not
+    // describe.
+    {
+        MeterModel model;
+        model.defineMeter(slcMeter(10, 0));
+        model.defineMeter(txMeter(21, "ALCGAIN", "dB", 8));
+        model.defineMeter(slcMeter(30, 1));
+        model.defineMeter(txMeter(41, "ALCGAIN", "dB", 9));
+        model.setActiveTxSlice(0);
+        model.updateValues({21}, {rawDb(12.0f)});
+
+        int emissions = 0;
+        QObject::connect(&model, &MeterModel::alcGainChanged,
+                         [&](float) { ++emissions; });
+        model.setActiveTxSlice(1);
+        report("a TX slice change clears the ALC gain and says so",
+               nearlyEqual(model.alcGainDb(), 0.0f) && !model.hasAlcGainValue()
+                   && emissions == 1);
+        model.setActiveTxSlice(1);
+        report("re-selecting the same TX slice does not emit another clear",
+               emissions == 1);
+    }
+
+    // Path 2 — disconnect.
+    {
+        MeterModel model;
+        model.defineMeter(slcMeter(10, 0));
+        model.defineMeter(txMeter(21, "ALCGAIN", "dB", 8));
+        model.setActiveTxSlice(0);
+        model.updateValues({21}, {rawDb(12.0f)});
+        model.clear();
+        report("disconnect resets the ALC gain to unity with no sample behind it",
+               nearlyEqual(model.alcGainDb(), 0.0f) && !model.hasAlcGainValue());
+    }
+
+    // Path 3 — the radio withdraws the meter.
+    {
+        MeterModel model;
+        model.defineMeter(slcMeter(10, 0));
+        model.defineMeter(txMeter(21, "ALCGAIN", "dB", 8));
+        model.setActiveTxSlice(0);
+        model.updateValues({21}, {rawDb(12.0f)});
+
+        int emissions = 0;
+        QObject::connect(&model, &MeterModel::alcGainChanged,
+                         [&](float) { ++emissions; });
+        model.removeMeter(21);
+        report("removing the active ALCGAIN meter clears the gain and says so",
+               nearlyEqual(model.alcGainDb(), 0.0f) && !model.hasAlcGainValue()
+                   && emissions == 1);
+    }
+}
+
+// The HL2's actual declaration, in its actual order. Every case above uses the
+// Flex shape ("TX-", sourceIndex 8) because that is where the per-slice routing
+// rules came from, and a meter that routes correctly there can still be
+// unreachable on a one-transmitter radio: this backend declares source "TX"
+// with sourceIndex 0, and it interleaves a RAD meter between the SLC block and
+// the TX ones, which ENDS the manifest slice context. So the registration falls
+// through to the implicit-slice path, and the reading is only visible because
+// the resolver volunteers a single implicit modulator.
+//
+// That is a chain of three defaults, none of them stated at the declaration
+// site, and getting any of them wrong publishes a meter the operator never
+// sees — the 2->3 gap MeterSurfaces.h calls "completely invisible: nothing is
+// wrong anywhere you would think to look."
+void testHl2StyleDeclarationReachesTheAlcGainAccessor()
+{
+    MeterModel model;
+    const auto hl2Meter = [](int index, const QString& name, const QString& unit) {
+        MeterDef def;
+        def.index = index;
+        def.source = "TX";
+        def.sourceIndex = 0;
+        def.name = name;
+        def.unit = unit;
+        return def;
+    };
+    MeterDef slc;
+    slc.index = 1;
+    slc.source = "SLC";
+    slc.sourceIndex = 0;
+    slc.name = "LEVEL";
+    slc.unit = "dBm";
+    MeterDef paTemp;
+    paTemp.index = 5;
+    paTemp.source = "RAD";
+    paTemp.sourceIndex = 0;
+    paTemp.name = "PATEMP";
+    paTemp.unit = "degC";
+
+    model.defineMeter(slc);
+    model.defineMeter(paTemp);                         // ends the SLC context
+    model.defineMeter(hl2Meter(7, "ALC", "dBFS"));
+    model.defineMeter(hl2Meter(8, "COMPPEAK", "dB"));
+    model.defineMeter(hl2Meter(9, "ALCGAIN", "dB"));
+    model.setActiveTxSlice(0);
+
+    // Through updateValueByName, which is the entry point a backend that
+    // decodes its own telemetry actually uses — meterUpdate("TX:ALCGAIN", db)
+    // is split on the colon and arrives here.
+    report("an HL2-shaped TX:ALCGAIN declaration is reachable by name",
+           model.updateValueByName(QStringLiteral("TX"), QStringLiteral("ALCGAIN"),
+                                   14.0f));
+    report("...and its value reaches the accessor unconverted",
+           nearlyEqual(model.alcGainDb(), 14.0f) && model.hasAlcGainValue());
+    report("...without disturbing the ALC level meter beside it",
+           nearlyEqual(model.swAlc(), -20.0f));
+}
+
 void testAlcClearsToPresentationFloor()
 {
     for (const QString& unit : {QStringLiteral("dBFS"), QStringLiteral("Percent")}) {
@@ -1305,6 +1470,9 @@ int main(int argc, char** argv)
     testZeroSourceAlcUsesSliceContext();
     testSingleImplicitAlcFollowsTransmitToAnySlice();
     testTxMeterRedefinitionsPreserveTheirSlice();
+    testAlcGainIsRoutedAndConvertedByNobody();
+    testAlcGainClearsOnEveryPathThatInvalidatesIt();
+    testHl2StyleDeclarationReachesTheAlcGainAccessor();
     testAlcClearsToPresentationFloor();
     testTxMeterIdentityReuseAndContextLifetime();
     testExplicitAlcIsNotVolunteeredToAnotherSlice();

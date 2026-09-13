@@ -9,6 +9,8 @@
 #include "core/backends/TransmitDelta.h"
 
 #include <functional>
+#include <atomic>
+#include <memory>
 
 class QTimer;
 
@@ -40,11 +42,24 @@ class TransmitModel : public QObject {
 
 public:
     explicit TransmitModel(QObject* parent = nullptr);
+    ~TransmitModel() override;
 
     // ── Transmit getters ────────────────────────────────────────────────────
     int     rfPower()       const { return m_rfPower; }
     int     tunePower()     const { return m_tunePower; }
     bool    isTuning()      const { return m_tune; }
+    // CW admission while TUNE is active (#5422). Measured on a FLEX-8400 fw
+    // 4.2.20: a `cw key 1` that arrives while the radio holds a tune carrier
+    // keys the transmitter at TUNE power (the CW RF power setting is ignored),
+    // and on key-up the radio stays in TX with no carrier and tune=1 until
+    // TUNE is pressed off. CWX text keys at TUNE power the same way. So no CW
+    // source keys while tuning: key-down is refused, key-up is never refused
+    // (a guard that flips while a key is held must not strand a keyed
+    // transmitter — fail closed is key UP). m_tune is optimistic from
+    // startTune() and reconciled from radio status, so the guard closes from
+    // the TUNE click itself, not after the round trip.
+    bool    admitsCwKeyEdge(bool down) const { return !down || !m_tune; }
+    bool    admitsCwxSend() const { return !m_tune; }
     bool    isMox()         const { return m_mox; }
     bool    isTransmitting() const { return m_transmitting; }
     double  transmitFreq()  const { return m_transmitFreq; }  // MHz, from "transmit freq=..."
@@ -103,6 +118,13 @@ public:
     bool    cwlEnabled()    const { return m_cwlEnabled; }
     int     monGainCw()     const { return m_monGainCw; }
     int     monPanCw()      const { return m_monPanCw; }
+    bool    holdBreakInDelay() const { return m_holdBreakInDelay; }
+    // The opt-in is ARMED only once the operator has set a delay this session.
+    // holdBreakInDelay() alone says the operator asked for protection; this says
+    // whether there is anything to protect with. They differ after every
+    // disconnect and every app start, because the preference is persisted and
+    // the held value deliberately is not (#5288 review).
+    bool    holdBreakInDelayArmed() const { return m_cwDelayHeld > 0; }
 
     // ── Interlock / TX settings getters ──────────────────────────────────────
     int     accTxDelay()     const { return m_accTxDelay; }
@@ -235,13 +257,37 @@ public:
     void setTxModeGetter(TxModeGetter getter);
     using PttPreflight = std::function<QString(PttSource)>;
     void setPttPreflight(PttPreflight preflight);
+    // TUNE admission (#5422). RadioModel returns a non-empty message while a
+    // client CW source is keying (key edge down, paddle held, CWX in flight);
+    // startTune()/startTwoToneTune() are then refused and pttBlocked() carries
+    // the message. Measured on a FLEX-8400 fw 4.2.20: TUNE started on top of
+    // active CW keying comes up with no carrier and leaves the radio in TX with
+    // tune=1 — the same latched state as a key edge during TUNE, from the
+    // other direction. Unset = always admitted.
+    using TuneAdmission = std::function<QString()>;
+    void setTuneAdmission(TuneAdmission admission);
 
-    // Pre-unkey hook: when set, requestPttOff() calls hook() instead of
-    // setMox(false) directly. Hook MUST eventually release PTT via setTransmit(false).
-    // Designed for RADE EOO intercept.
-    using PttOffHook = std::function<void()>;
+    enum class KeyingIntent { Mox, Tune, Atu };
+    // Installed by the engine. Admission precedes optimistic state and every
+    // keying signal; a standalone model has no transport to authorize.
+    using KeyingPermit = std::function<bool()>;
+    using KeyingAdmission = std::function<KeyingPermit(KeyingIntent, bool)>;
+    void setKeyingAdmission(KeyingAdmission admission) { m_keyingAdmission = std::move(admission); }
+
+    // A deferred release owns its original cancellation fence. A new key-on,
+    // explicit stop, reset or destruction invalidates it, including on audio
+    // workers. Never reconstruct a release from the then-current operation.
+    struct PttRelease {
+        std::function<bool()> isCurrent;
+        std::function<void()> finish;
+        bool current() const { return isCurrent && isCurrent(); }
+        void release() const { if (current() && finish) { finish(); } }
+    };
+    using PttOffHook = std::function<void(PttRelease)>;
     void setPttOffHook(PttOffHook hook);
     void clearPttOffHook();
+    void invalidatePttRelease();
+    void cancelPttRelease();
 
     void atuStart();
     void atuBypass();
@@ -310,6 +356,17 @@ public:
     void setMonGainCw(int gain);
     void setMonPanCw(int pan);
 
+    // Opt-in (client-side, default off): when set, setCwSpeed() re-asserts the
+    // delay the operator last SET (setCwDelay) right after the `cw wpm` command,
+    // so SmartSDR's speed-linked QSK-floor walk cannot drop an inline amplifier
+    // into hot-switching. Enabling it captures nothing on its own — until the
+    // operator sets a delay this session there is nothing to hold. Not radio
+    // state: PhoneCwApplet persists it in AppSettings and re-applies it on bind;
+    // resetState() leaves it be. Because the preference persists and the held
+    // value does not, on-but-unarmed is a real state — see
+    // holdBreakInDelayArmed(), which the applet renders distinctly.
+    void setHoldBreakInDelay(bool on);
+
 signals:
     void stateChanged();
     // (rfPowerChanged is declared once below — main already has it for the
@@ -317,12 +374,11 @@ signals:
     // reuse that same signal rather than a duplicate. #4449 recovery.)
     // Keying and tune as INTENT rather than as a Flex command string.
     //
-    // setMox() and startTune() emit "xmit N" / "transmit tune N" through
-    // commandReady, which is a Flex TCP command and reaches a backend with no
-    // command channel not at all. These carry the same intent for backends that
-    // key through IRadioBackend. RadioModel routes them only for non-Flex
-    // families, so Flex keeps its single command and does not key twice.
+    // All backends receive these through RadioModel's coordinator and typed
+    // seam. Keying is never duplicated through commandReady.
     void moxCommandIssued(bool on);
+    // Immediate teardown/cancellation, distinct from a normal tail request.
+    void pttReleaseCancelled();
     void tuneCommandIssued(bool on);
     void hostModulationChanged(bool on);
     void hasTunerChanged(bool present);
@@ -384,6 +440,12 @@ signals:
     void cwPitchCommandIssued(int hz);
     void cwSpeedCommandIssued(int wpm);
     void cwBreakInCommandIssued(bool on);
+    // The "hold break-in delay" opt-in changed. UI-only mirror; no wire effect.
+    void holdBreakInDelayChanged(bool on);
+    // Whether the opt-in currently has a delay to re-assert changed. Lets the UI
+    // distinguish "on and protecting" from "on but holding nothing" instead of
+    // showing one checked state for both (#5288 review).
+    void holdBreakInDelayArmedChanged(bool armed);
     void apdStateChanged();
     void apdSamplerChanged(const QString& txAnt);
     void apdEqualizerResetReceived();
@@ -400,6 +462,7 @@ signals:
     void txSliceModeChanged(const QString& mode);
     void commandReady(const QString& cmd);
     void pttBlocked(const QString& message);
+    void atuTuneFailed(AetherSDR::ATUStatus status, const QString& message);
     // Quindar active-phase signal (#2262).  Emitted on the GUI thread
     // immediately when intro/outro starts and again when each finishes,
     // sized from the tone's current duration.  Used by the strip's
@@ -411,16 +474,23 @@ private:
     static ATUStatus parseAtuTuneStatus(const QString& s);
     bool isPhoneModeForQuindar() const;
     bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
+    bool tuneAdmitted();   // #5422: false (pttBlocked emitted, toggle resynced) while CW is keyed
     void cancelPendingQuindarOff();
-    void dispatchMoxOff();
+    void dispatchMoxOff(const PttRelease& release);
+    PttRelease capturePttRelease();
 
     // PTT coordinator state (#2262)
     class ClientQuindarTone* m_quindarTone{nullptr};
     TxModeGetter             m_txModeGetter;
     PttPreflight             m_pttPreflight;
+    TuneAdmission            m_tuneAdmission;   // #5422
+    KeyingAdmission          m_keyingAdmission;
     QTimer*                  m_pendingMoxOffTimer{nullptr};
     bool                     m_quindarOutroInFlight{false};
     PttOffHook               m_pttOffHook;
+    std::shared_ptr<std::atomic<bool>> m_pttReleaseFence;
+    quint64 m_moxIntentEpoch{0};
+    quint64 m_tuneIntentEpoch{0};
 
     // APD state
     bool m_apdEnabled{false};
@@ -474,6 +544,20 @@ private:
     int  m_cwPitch{600};      // 100–6000 Hz
     bool m_cwBreakIn{false};
     int  m_cwDelay{500};      // 0–2000 ms
+    // The break-in delay the operator explicitly set: the last value passed to
+    // setCwDelay(). Written there and nowhere else — never from a radio status,
+    // never on enabling the hold — so it cannot drift onto a WPM-derived QSK
+    // floor or hold a value the operator never picked. When m_holdBreakInDelay
+    // is set, setCwSpeed() re-asserts this after a speed change so SmartSDR's
+    // speed-linked floor walk can't hot-switch an inline amp. -1 = the operator
+    // has set no delay this session (nothing to hold). Cleared by resetState(),
+    // which RadioModel::onDisconnected() calls on EVERY disconnect — not only a
+    // radio swap — so one session's value is never re-asserted in the next
+    // (#5288). holdBreakInDelayArmed() exposes that gap to the UI.
+    int  m_cwDelayHeld{-1};
+    // Client-side opt-in, default off. Persisted by PhoneCwApplet in
+    // AppSettings("CwHoldBreakInDelay"), not radio state — survives resetState().
+    bool m_holdBreakInDelay{false};
     bool m_cwSidetone{true};
     bool m_cwIambic{true};
     int  m_cwIambicMode{0};   // 0=A, 1=B
@@ -502,6 +586,7 @@ private:
     ATUStatus m_atuStatus{ATUStatus::None};
     bool      m_memoriesEnabled{false};
     bool      m_usingMemory{false};
+    bool      m_userAbortedAtu{false};
 
     // TX profiles
     QStringList m_profileList;

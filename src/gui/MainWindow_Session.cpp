@@ -217,15 +217,15 @@ void MainWindow::wireDiscovery()
     // Qt::UniqueConnection cannot catch it: these are two DIFFERENT signals
     // arriving at the same slot, so nothing looks duplicate to Qt.
     connect(&m_radioModel, &RadioModel::backendAudioFrameReady,
-            m_audio, [this](const QByteArray& pcm) {
+            m_audio, [this](const PcmFrame& pcm) {
         if (backendFeedsEngineDirectly()) return;   // demo feeds the engine directly
         // Playback mute. The Flex path mutes by disconnecting the stream's
-        // audioDataReady from feedAudioData; against a null PanadapterStream
+        // pcmFrameReady from feedPcmFrame; against a null PanadapterStream
         // that disconnect is a silent no-op, so a seam backend would keep
         // feeding live receive UNDER the playback. Reachable in practice only
         // now that the recorder captures RX on such a radio at all. (#4537.)
         if (m_rxMutedForPlayback) return;
-        m_audio->feedAudioData(pcm);
+        m_audio->feedPcmFrame(pcm);
     });
 
     connect(&m_hl2Discovery, &hl2::Hl2Discovery::radioDiscovered,
@@ -737,15 +737,7 @@ void MainWindow::wireRadioModel()
         }
     });
     connect(&m_radioModel, &RadioModel::commandDropped,
-            this, [this](const QString&) {
-        if (m_commandDroppedNoticeShown)
-            return;
-        m_commandDroppedNoticeShown = true;
-        statusBar()->showMessage(
-            tr("This radio doesn't support that control — nothing was sent to "
-               "the radio. Further unsupported controls are logged."),
-            8000);
-    });
+            this, [this](const QString&) { showUnsupportedControlNotice(); });
     // Slice Link: disconnect teardown never emits sliceRemoved (stale slices
     // are staged for reconnect reclaim), so dissolve the link explicitly.
     // Both transitions dissolve — a link never crosses a session boundary
@@ -1234,12 +1226,8 @@ void MainWindow::wireRadioModel()
                     << " down=" << down
                     << " schedMs=" << cwTraceMsAt(when);
             }
-            QMetaObject::invokeMethod(this, [this, down, when]() {
-                const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
-                const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
-                m_radioModel.sendCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
-                                           traceId, sourceMs, when);
-            }, Qt::QueuedConnection);
+            m_radioModel.queueCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
+                                       traceId, sourceMs, when);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
             // The radio's break-in setting decides whether key edges produce
@@ -1269,6 +1257,28 @@ void MainWindow::wireRadioModel()
     }
 
     // TX/RX transition → audio source switching
+    connect(&m_radioModel.transmitModel(), &TransmitModel::pttReleaseCancelled,
+            this, [this] {
+#ifdef HAVE_RADE
+        ++m_radeEooRequestId;
+        if (m_radeFallbackReleaseFence) {
+            m_radeFallbackReleaseFence->store(false, std::memory_order_release);
+        }
+        m_radePttRelease = {};
+        m_radeEooPending = false;
+        m_radeTxActive = false;
+        if (m_radeEngine) {
+            QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine] {
+                engine->resetTx();
+            }, Qt::QueuedConnection);
+        }
+#endif
+        // Cancellation must not wait for EOO, even when optimistic MOX was
+        // already false and neither of the state-edge handlers below fires.
+        if (m_audio) {
+            m_audio->setTransmitting(false);
+        }
+    });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             this, [this](bool tx) {
         // Keep TX audio source strictly aligned with the local MOX edge for all
@@ -1309,7 +1319,8 @@ void MainWindow::wireRadioModel()
                 // when this fires (RadioModel emits it synchronously with moxChanged).
                 // Suppress now; eooFinished posts setTransmitting(false) to the
                 // AudioEngine queue after the EOO packets.
-                if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()) {
+                if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()
+                    && m_radeEooPending && m_radePttRelease.current()) {
                     qCDebug(lcRade) << "MainWindow: txAudioGateChanged(false) suppressed — RADE EOO pending";
                 } else {
                     m_audio->setTransmitting(false);
@@ -2222,7 +2233,7 @@ void MainWindow::wireCatPorts()
     tciServer()->wireSpotModel();
 
     // Wire RX audio from PanadapterStream → TCI server for audio streaming.
-    // TCI audio feeds exclusively from DAX (not audioDataReady) so that
+    // TCI audio feeds exclusively from DAX (not pcmFrameReady) so that
     // audio_mute doesn't kill TCI audio (#1331). Stream-bound, so it goes through
     // the shared helper the post-swap rebind also calls (#4448).
     wirePanStreamTciSinks();
@@ -2253,8 +2264,9 @@ void MainWindow::wireCatPorts()
     // through wirePanStreamTciSinks() above — so there is no double-feed and no
     // change to the Flex path.
     connect(&m_radioModel, &RadioModel::backendSliceAudioFrameReady,
-            this, [this](int sliceId, const QByteArray& pcm) {
-        if (tciServer())
+            this, [this](int sliceId, const PcmFrame& frame) {
+        const QByteArray pcm = frame.legacyStereo24();
+        if (tciServer() && !pcm.isEmpty())
             tciServer()->onDaxAudioReady(sliceId + 1, pcm);
     });
 
@@ -2269,11 +2281,11 @@ void MainWindow::wireCatPorts()
 
 }
 
-// The RX-audio sinks fed by PanadapterStream::audioDataReady, in one place so
+// The RX-audio sinks fed by PanadapterStream::pcmFrameReady, in one place so
 // buildUI() and rewirePanStreamAfterBackendSwap() bind an identical set. The
 // stream is owned by the Flex backend and is destroyed/rebuilt on a family
 // swap (RadioModel::teardownBackend/setupBackend), which drops these — and Flex
-// RX audio itself rides audioDataReady, so a missed one is silence, not a
+// RX audio itself rides pcmFrameReady, so a missed one is silence, not a
 // degraded feature. Keeping the list here (not open-coded in two places) is why
 // a new sink added to buildUI cannot silently go un-rebound after a swap.
 // Deliberately NOT IRadioBackend::ownsRxAudio(), despite the near-identical
@@ -2322,8 +2334,8 @@ void MainWindow::wirePanStreamRxAudioSinks()
     // The backend's own audio wins; the stream's other RX taps below stay wired.
     // Primary RX audio → QAudioSink (skipped when the backend owns its audio).
     if (!backendFeedsEngineDirectly()) {
-        connect(ps, &PanadapterStream::audioDataReady,
-                m_audio, &AudioEngine::feedAudioData,
+        connect(ps, &PanadapterStream::pcmFrameReady,
+                m_audio, &AudioEngine::feedPcmFrame,
                 Qt::UniqueConnection);
     }
 
@@ -2354,20 +2366,27 @@ void MainWindow::wireRxDemodAudioSinks()
 {
     if (m_qsoRecorder) {
         connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-                m_qsoRecorder, &QsoRecorder::feedRxAudio);
+                m_qsoRecorder, [recorder = m_qsoRecorder](const PcmFrame& frame) {
+            const QByteArray pcm = frame.legacyStereo24();
+            if (!pcm.isEmpty()) {
+                recorder->feedRxAudio(pcm);
+            }
+        });
     }
 
     // CW decoder RX feed — gated live on the toggle (#2417).
     connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_cwDecoder, [this](const QByteArray& pcm) {
-                if (CwDecodeSettings::rxEnabled())
+            &m_cwDecoder, [this](const PcmFrame& frame) {
+                const QByteArray pcm = frame.legacyStereo24();
+                if (!pcm.isEmpty() && CwDecodeSettings::rxEnabled())
                     m_cwDecoder.feedAudio(pcm);
             });
 
     // RTTY decoder RX feed — gated on the decoder being running.
     connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_rttyDecoder, [this](const QByteArray& pcm) {
-                if (m_rttyDecoder.isRunning())
+            &m_rttyDecoder, [this](const PcmFrame& frame) {
+                const QByteArray pcm = frame.legacyStereo24();
+                if (!pcm.isEmpty() && m_rttyDecoder.isRunning())
                     m_rttyDecoder.feedAudio(pcm);
             });
 }
@@ -2391,8 +2410,13 @@ void MainWindow::wirePanStreamTciSinks()
     auto* ps = m_radioModel.panStream();
     if (!ps || !tciServer())
         return;
-    connect(ps, &PanadapterStream::daxAudioReady,
-            tciServer(), &TciServer::onDaxAudioReady);
+    connect(ps, &PanadapterStream::daxPcmReady,
+            tciServer(), [server = tciServer()](int channel, const PcmFrame& frame) {
+        const QByteArray pcm = frame.legacyStereo24();
+        if (!pcm.isEmpty()) {
+            server->onDaxAudioReady(channel, pcm);
+        }
+    });
     connect(ps, &PanadapterStream::iqDataReady,
             tciServer(), &TciServer::onIqDataReady);
     connect(ps, &PanadapterStream::waterfallRowReady,
@@ -2894,6 +2918,36 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
         // Observation only: never restore a client setting into DATA OFF MOD.
         m_radioModel.notePcAudioEnabled(pcAudioEnabled);
     }
+}
+
+// One notice per connect session, latch reset on the connect edge (M0, #5263).
+//
+// Held here rather than inline in the commandDropped lambda because a
+// capability gate REFUSES BEFORE THE SEND: `sendCmd` is never reached, so
+// `commandDropped` never fires, and a control converted from "drops silently"
+// to "refuses" would otherwise have taken the operator's only feedback away
+// with it. #5266 landed its four gates on 2026-08-26 and #5265 made the drop
+// loud on 2026-08-27, so that trade was invisible at the time; it is not
+// invisible now. A gate calls this so a refused control says exactly what a
+// dropped one says.
+//
+// The latch is now SHARED between two producers: this helper's gate callers and
+// the commandDropped path. One refusal per connect session therefore consumes
+// the notice for both, so an operator who trips a capability gate first sees
+// nothing for a genuinely dropped command later in the same session. That is
+// the pre-existing one-shot semantics extended to a second producer rather than
+// a new rule, and the message is deliberately generic enough to stand for
+// either cause — but it is a real consequence and is recorded here rather than
+// left to be rediscovered.
+void MainWindow::showUnsupportedControlNotice()
+{
+    if (m_commandDroppedNoticeShown)
+        return;
+    m_commandDroppedNoticeShown = true;
+    statusBar()->showMessage(
+        tr("This radio doesn't support that control — nothing was sent to "
+           "the radio. Further unsupported controls are logged."),
+        8000);
 }
 
 } // namespace AetherSDR

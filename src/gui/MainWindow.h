@@ -517,6 +517,10 @@ private:
     void syncTxWaterfallSliceToSpectrums();
     void updateSplitState();
     void disableSplit();
+    // One status-bar notice per connect session for a control this radio
+    // cannot honor. Shared by the commandDropped path and by the
+    // capability gates that refuse BEFORE the send (M0, #5263).
+    void showUnsupportedControlNotice();
     // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
     // from the constructor, in original order, defined in its subject TU.
     void wireModemAudioCompletion(); // MainWindow_Wiring.cpp
@@ -540,12 +544,12 @@ private:
     // True when the connected backend supplies RX audio over the IRadioBackend
     // seam rather than through PanadapterStream — i.e. the demo (RFC #4288
     // Route A), which is the one backend that owns BOTH. Every site that wires
-    // PanadapterStream::audioDataReady → AudioEngine::feedAudioData must consult
+    // PanadapterStream::pcmFrameReady → AudioEngine::feedPcmFrame must consult
     // this, or the two sources sum at the sink (wobble + distortion).
     bool backendFeedsEngineDirectly();        // MainWindow_Session.cpp
     // Live RX is muted while the QSO recorder or the PUDU monitor plays audio
     // back through the same sink. The Flex path achieves that by disconnecting
-    // PanadapterStream::audioDataReady; a seam backend has no such connection
+    // PanadapterStream::pcmFrameReady; a seam backend has no such connection
     // to drop, so its relay consults this instead. See the muteRxRequested
     // handlers in MainWindow.cpp. (PR #4537 review.)
     bool m_rxMutedForPlayback{false};
@@ -1802,7 +1806,7 @@ private:
 // AetherClock (MainWindow_AetherClock.cpp)
     AetherClockEngine* m_clockEngine{nullptr};
     AetherClockModel* m_clockModel{nullptr};
-    QMetaObject::Connection m_clockDaxConn;  // daxAudioReady feed — live only while the engine runs
+    QMetaObject::Connection m_clockDaxConn;  // daxPcmReady feed — live only while the engine runs
     QMetaObject::Connection m_clockSliceAudioConn;  // seam per-slice audio feed — same lifetime
     void setupAetherClock();
 
@@ -1815,8 +1819,12 @@ private:
     QMetaObject::Connection m_radeDaxReconcileConn;  // RADE slice dax= change → move the Rade hold
     QMetaObject::Connection m_freedvMoxConn;
     QMetaObject::Connection m_radeMoxFallbackConn;
+    QMetaObject::Connection m_radePttIntentConn;
     QString m_lastRadeRxCallsign;
     bool m_radeEooPending{false};
+    TransmitModel::PttRelease m_radePttRelease;
+    quint64 m_radeEooRequestId{0};
+    std::shared_ptr<std::atomic<bool>> m_radeFallbackReleaseFence;
     bool m_radeTxActive{false};
     void activateRADE(int sliceId);
     void deactivateRADE();

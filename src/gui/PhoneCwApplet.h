@@ -162,6 +162,10 @@ private:
 
     QPushButton* m_breakinBtn{nullptr};
     QPushButton* m_iambicBtn{nullptr};
+    QPushButton* m_holdDelayBtn{nullptr};   // "Hold Dly" — opt-in, AppSettings-backed
+    // Renders the three states of the Hold Dly toggle (off / on-and-holding /
+    // on-but-holding-nothing) in style, tooltip and accessible description.
+    void updateHoldDelayAffordance();
 
     QString m_alcMeterUnit{QStringLiteral("dBFS")};
     float m_compressionMaximumDb{25.0f};

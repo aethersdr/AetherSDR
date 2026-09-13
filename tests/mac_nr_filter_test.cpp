@@ -49,9 +49,10 @@ private:
     uint32_t m_state;
 };
 
-std::vector<float> runFilter(const std::vector<float>& input, float strength)
+std::vector<float> runFilter(const std::vector<float>& input, float strength,
+                              int sampleRate = kRate)
 {
-    AetherSDR::MacNRFilter filter;
+    AetherSDR::MacNRFilter filter(sampleRate);
     if (!filter.isValid()) {
         return {};
     }
@@ -59,8 +60,9 @@ std::vector<float> runFilter(const std::vector<float>& input, float strength)
 
     std::vector<float> output;
     output.reserve(input.size());
-    for (int frame = 0; frame < static_cast<int>(input.size() / 2); frame += kBlockFrames) {
-        const int count = std::min(kBlockFrames,
+    const int blockFrames = sampleRate / 100;
+    for (int frame = 0; frame < static_cast<int>(input.size() / 2); frame += blockFrames) {
+        const int count = std::min(blockFrames,
                                    static_cast<int>(input.size() / 2) - frame);
         QByteArray block(count * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
         std::copy_n(input.data() + 2 * frame, 2 * count,
@@ -74,6 +76,61 @@ std::vector<float> runFilter(const std::vector<float>& input, float strength)
                       values + processed.size() / static_cast<int>(sizeof(float)));
     }
     return output;
+}
+
+void test_native48_full_bandwidth_and_reset()
+{
+    constexpr int rate = 48000;
+    constexpr int total = rate * 3;
+    std::vector<float> input(2 * total);
+    for (int frame = 0; frame < total; ++frame) {
+        input[2 * frame] = 0.2f * std::sin(kTwoPi * 16000.0f * frame / rate);
+        input[2 * frame + 1] = 0.2f * std::cos(kTwoPi * 17000.0f * frame / rate);
+    }
+    const std::vector<float> output = runFilter(input, 0.0f, rate);
+    double error = 0.0;
+    if (output.size() == input.size()) {
+        // At native48 the FFT/hop doubles, retaining the existing elapsed
+        // processing delay (1024 samples; 512 samples at legacy24).
+        for (int frame = rate; frame < total; ++frame) {
+            for (int channel = 0; channel < 2; ++channel) {
+                error = std::max(error, std::abs(static_cast<double>(
+                    output[2 * frame + channel] - input[2 * (frame - 1024) + channel])));
+            }
+        }
+    } else {
+        error = 1.0;
+    }
+    char detail[128]{};
+    std::snprintf(detail, sizeof(detail), "max independent16/17k error=%.6f", error);
+    report("native48 retains independent stereo above12k", error < 1.0e-5, detail);
+
+    AetherSDR::MacNRFilter invalid(44100);
+    report("unsupported MNR domain fails initialization", !invalid.isValid(), "44100 Hz");
+    AetherSDR::MacNRFilter filter(rate);
+    filter.setStrength(0.6f);
+    const QByteArray block(reinterpret_cast<const char*>(input.data()), 4096 * sizeof(float));
+    const QByteArray first = filter.process(block);
+    filter.process(block);
+    filter.reset();
+    report("native48 reset discards all processing history",
+           filter.sampleRate() == rate && first == filter.process(block), "replayed initial block");
+
+    NoiseSource noise(0x52a7u);
+    for (int frame = 0; frame < total; ++frame) {
+        input[2 * frame] = input[2 * frame + 1] = 0.05f * noise.gaussian();
+    }
+    const std::vector<float> suppressed = runFilter(input, 1.0f, rate);
+    double inPower = 0.0;
+    double outPower = 0.0;
+    for (int frame = rate; frame < total && suppressed.size() == input.size(); ++frame) {
+        inPower += input[2 * frame] * input[2 * frame];
+        outPower += suppressed[2 * frame] * suppressed[2 * frame];
+    }
+    const double attenuation = 10.0 * std::log10(outPower / std::max(inPower, 1e-12));
+    std::snprintf(detail, sizeof(detail), "native48 white noise attenuation=%.2f dB", attenuation);
+    report("native48 executes enabled noise reduction", std::isfinite(attenuation)
+           && attenuation < -10.0 && attenuation > -30.0, detail);
 }
 
 double rms(const std::vector<float>& samples, int firstFrame, int lastFrame, int channel)
@@ -444,6 +501,7 @@ int main()
     test_silence_gap_preserves_learned_noise_floor();
     test_near_silence_does_not_seed_noise_floor();
     test_enable_during_speech_avoids_deep_ducking();
+    test_native48_full_bandwidth_and_reset();
     std::printf(g_failed == 0 ? "\nPASSED\n" : "\nFAILED (%d)\n", g_failed);
     return g_failed == 0 ? 0 : 1;
 }

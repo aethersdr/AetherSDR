@@ -108,10 +108,12 @@ int main(int argc, char** argv)
     {
         int busBlocks = 0;
         QObject::connect(&model, &RadioModel::rxDemodAudioReady,
-                         &model, [&busBlocks](const QByteArray&) { ++busBlocks; });
+                         &model, [&busBlocks](const PcmFrame&) { ++busBlocks; });
 
         const QByteArray frame(256, '\0');
-        emit model.backendAudioFrameReady(frame);
+        AetherSDR::PcmProducer pcmProducer;
+        pcmProducer.start();
+        emit model.backendAudioFrameReady(*pcmProducer.legacyStereo24(frame));
         check(busBlocks == 1,
               "RX bus: a seam backend's audio reaches rxDemodAudioReady exactly once");
 
@@ -121,7 +123,8 @@ int main(int argc, char** argv)
         // catching a doubled count later would. (PR #4537 review.)
         model.connectToRadio(flexInfo());
         busBlocks = 0;
-        emit model.backendAudioFrameReady(frame);
+        pcmProducer.start();
+        emit model.backendAudioFrameReady(*pcmProducer.legacyStereo24(frame));
         check(busBlocks == 0,
               "RX bus: the seam relay is dropped when a Flex takes over");
 
@@ -129,7 +132,8 @@ int main(int argc, char** argv)
         // on the seam relay, which is the case Qt cannot clean up for us.
         model.connectToRadio(hl2Info());
         busBlocks = 0;
-        emit model.backendAudioFrameReady(frame);
+        pcmProducer.start();
+        emit model.backendAudioFrameReady(*pcmProducer.legacyStereo24(frame));
         check(busBlocks == 1,
               "RX bus: still exactly one producer after a family round-trip");
     }
@@ -226,10 +230,11 @@ int main(int argc, char** argv)
     // fresh one, so the new Hl2TxDsp starts at its own 1.0 default. But the
     // seam carrying mic gain to a host-modulating backend fires on operator
     // INTENT — the slider moving — and a rebuild is not the slider moving.
-    // TransmitModel is never reset and micLevel is not persisted, so without an
-    // explicit re-assert the slider goes on reading the operator's value while
-    // the modulator sits at unity, and the radio transmits several dB below
-    // what every readout claims.
+    // TransmitModel is never reset — resetState() leaves micLevel alone — and
+    // the level's persistence restores it at CONNECT, which a mid-session
+    // backend rebuild is not. So without an explicit re-assert the slider goes
+    // on reading the operator's value while the modulator sits at unity, and
+    // the radio transmits several dB below what every readout claims.
     //
     // That is exactly the readback-agrees-with-the-failure shape the mic-gain
     // fix exists to eliminate, displaced one seam over, so it gets its own pin.

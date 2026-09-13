@@ -29,7 +29,8 @@ AetherSDR currently supports these control paths:
   - Griffin PowerMate
   - Contour ShuttleXpress
   - Contour ShuttlePro v2
-- **Stream Deck integration** through external plugins that talk to AetherSDR's TCI server.
+  - Elgato Stream Deck+ (dials, LCD keys and touchscreen)
+- **Stream Deck integration**, built in for the Stream Deck+ and over TCI for other models.
 - **Serial PTT and CW accessories** such as foot switches, straight keys, paddles, and amplifier keying lines through USB-serial adapters.
 
 Some of these features only appear when the build includes the needed support. If a menu item is missing, your build may not include that feature.
@@ -369,7 +370,7 @@ AetherSDR's HID encoder support is currently more automatic than the FlexControl
 - The supported HID knobs are detected automatically.
 - Rotation works when the device is recognized.
 - There is **not currently a dedicated polished in-app setup page** just for these HID encoder devices.
-- If you want easy, visible, per-control mapping, **MIDI** or **Stream Deck** is usually the easier path today.
+- If you want easy, visible, per-control mapping, **MIDI** is usually the easier path today.
 
 ## MIDI controllers
 
@@ -528,155 +529,75 @@ running the same controller.
 
 ## Stream Deck integration
 
-AetherSDR's current Stream Deck support is based on **external plugins** that talk to AetherSDR's **TCI WebSocket server**.
+AetherSDR supports Stream Deck hardware in one of two ways, depending on the model.
 
-That is important because the current setup is **not** a built-in “Stream Deck tab” inside the main AetherSDR window.
+### Stream Deck+ — built in, no plugin needed
 
-### Before you install any Stream Deck plugin
+The **Elgato Stream Deck+** is driven directly by AetherSDR over USB HID. Nothing
+to download and nothing to install: plug it in, enable HID encoder support, and
+AetherSDR talks to the device itself.
 
-Start with this step inside AetherSDR:
+`Settings > FlexControl...` → enable HID encoders
+
+AetherSDR drives:
+
+- The **four encoder dials**, with a separate action for turning and for pushing
+- The **eight LCD keys**, including the button labels it draws on them
+- The **touchscreen strip** above the dials
+
+Dial, dial-push and LCD-key actions are all assignable — see the HID encoder
+sections earlier in this page for how mapping works.
+
+This path needs a build with **hidapi** support. If the HID encoder settings are
+missing, your build does not include it.
+
+### Other Stream Deck models — through TCI
+
+Every other Stream Deck (original, MK.2, XL, Mini, and Stream Deck hardware on
+Linux) is not spoken to directly. Those models are driven through AetherSDR's
+**TCI WebSocket server** by whatever control-surface software you prefer, using
+the host app for your platform — the Elgato Stream Deck software, StreamController
+on Linux, OpenDeck, or anything else that can send TCI.
+
+AetherSDR does not ship a plugin for any of these. It provides the protocol; the
+button layer is yours to choose or build.
+
+To make the radio reachable, turn on:
 
 `Settings > Autostart TCI with AetherSDR`
 
-That gives the Stream Deck plugin a control connection to the radio. If you prefer not to autostart it, make sure the TCI server is running before you try to use the plugin.
+That starts the TCI server with AetherSDR so a control surface has something to
+connect to. If you prefer not to autostart it, start the TCI server yourself
+before using the surface.
 
-### macOS and Windows: official Elgato Stream Deck plugin
+The TCI surface covers TX, band and frequency changes, modes, audio, DSP, slice
+controls and DVK. AetherSDR's **automation bridge** is the other option, and is
+the richer of the two — it reaches the whole application rather than the radio
+model alone.
 
-AetherSDR includes an official plugin for the **Elgato Stream Deck desktop application**.
+#### Which slice a TCI control acts on
 
-#### What it requires
+Slice-aware TCI commands address **TRX0**, the first slice, unless the surface
+you are using says otherwise.
 
-To use the official plugin path, the repository currently documents these requirements:
-
-- **Stream Deck software 6.4 or later**
-- **macOS 13 or later**, or
-- **Windows 10 or later**
-
-#### How to install it
-
-1. In AetherSDR, enable `Settings > Autostart TCI with AetherSDR`.
-2. Download `com.aethersdr.radio.streamDeckPlugin` from the latest AetherSDR release.
-3. Double-click the plugin file.
-4. The Elgato app installs it automatically.
-5. Drag AetherSDR actions onto your Stream Deck buttons.
-
-No build step, npm, or command line is required just to use the plugin.
-
-#### What it controls
-
-Actions are grouped into categories in the Stream Deck action list, in this
-order:
-
-- TCI connection status
-- TX
-- Slice controls, including slice targeting
-- Frequency, covering bands and step actions
-- Modes
-- Audio, both master and per-slice
-- DSP
-- DVK record and playback
-- Dials, for Stream Deck + encoder hardware
-
-#### Choosing which slice the buttons control
-
-By default every slice-aware action controls **TRX0** — the first slice —
-which is how the plugin has always behaved.
-
-The **Slice Target** action changes that. Press it to cycle through:
-
-- **TRX0** — always the first slice
-- **TX** — whichever slice currently holds transmit
-- **ACTIVE** — whichever slice has focus in the AetherSDR window
-
-The button's label shows the current choice, and the choice is remembered
-across restarts. It applies to the mode, DSP, squelch, lock, RIT/XIT, split,
-slice volume and slice mute actions, and to the VFO dial.
-
-There is no option to target a specific slice by number. AetherSDR tells a
-control surface how many slices exist only once, when it first connects, and
-never mentions slices being added or removed — so a numbered choice would go
-out of date as soon as you added a slice, and would then quietly act on the
-first slice instead of the one you picked. **TX** and **ACTIVE** are always
-reported as they change, so they cannot go stale.
-
-**PTT, MOX and TUNE deliberately ignore this setting.** They always key
-whichever slice already holds transmit, because AetherSDR decides that itself —
-a control surface cannot choose the slice it transmits on, by design, so that a
-button press can never move you to another band or antenna mid-transmission.
-
-#### Dials
-
-Alongside the keypad actions, the plugin provides dial (encoder) actions for
-Stream Deck + hardware: VFO tuning, RF power, tune carrier power, and volume.
-
-Each dial's push gesture has its own function. The VFO dial cycles the tuning
-step, the RF power and tune power dials cycle their step between 1 W and 5 W,
-and the volume dial mutes the targeted slice.
-
-RF power and tune carrier power are separate radio settings, so they have
-separate dials — setting a low tune level leaves your operating power alone.
-
-#### Linux via OpenDeck (experimental)
-
-Because the `com.aethersdr.radio.streamDeckPlugin` package above is built
-to the official Elgato Stream Deck SDK, it is also loadable by **OpenDeck**,
-a third-party Elgato-SDK-compatible controller app for Linux that targets
-various Stream-Deck-compatible devices (e.g. Ajazz / Mirabox hardware).
-Installation follows the same steps as above — download the package and
-load it into OpenDeck the same way you would the official Elgato app.
-This path is **experimental and community-reported**: it has not been
-verified by the AetherSDR team on specific hardware, unlike the officially
-supported macOS/Windows + Elgato Stream Deck software combination. If it
-does not load or a device is unrecognized, prefer the StreamController
-path below.
-
-### Linux: StreamController plugin
-
-On Linux, AetherSDR includes a separate plugin for **StreamController**, which is a Linux alternative to the Windows/macOS Elgato software.
-
-#### Why Linux uses a different plugin
-
-StreamController does **not** use the same plugin format as the official Elgato Stream Deck software. That is why AetherSDR ships a separate StreamController plugin.
-
-#### What it requires
-
-The included AetherSDR StreamController plugin currently declares:
-
-- **minimum app version 1.0.0**
-- plugin version `1.0.0`
-- a default TCI connection to `ws://localhost:50001`
-
-#### What it controls
-
-The StreamController plugin exposes **40+ actions** for:
-
-- TX
-- Band changes
-- Frequency actions
-- Mode changes
-- Audio
-- DSP
-- Slice actions
-- DVK
-
-#### Dial support on Linux
-
-The current StreamController plugin supports **dial input** for:
-
-- **RF Power**
-- **Tune Power**
-
-The rest of the actions are primarily button or key style actions.
+**PTT, MOX and TUNE are different: they always key whichever slice already holds
+transmit.** AetherSDR decides that itself. A control surface cannot pick the slice
+it transmits on, by design, so that a button press can never move you to another
+band or antenna mid-transmission.
 
 ### Stream Deck troubleshooting
 
-If a Stream Deck button does nothing, check these items:
+If a Stream Deck+ dial or key does nothing:
+
+- Confirm your build includes hidapi and HID encoders are enabled
+- Unplug and reconnect the device
+- Confirm the operating system sees the device
+
+If a button on any other Stream Deck model does nothing:
 
 - Is AetherSDR connected to a radio?
 - Is TCI running?
-- Does the plugin expect the same TCI port AetherSDR is using?
-- On Linux, are you using the **StreamController** plugin rather than the Elgato-format plugin?
-- On macOS or Windows, did the plugin install into the official Elgato app successfully?
+- Is your control surface pointed at the same TCI port AetherSDR is using?
 
 ## Serial PTT, CW keying, foot switches, and paddles
 
@@ -764,7 +685,7 @@ If you are **building AetherSDR from source**, the repository currently calls ou
   - USB HID encoder support in the main application
   - other HID-based control paths that are compiled into that build
 
-For ordinary Stream Deck use through the external TCI plugins described earlier, the more important requirement is that **TCI is available and running**.
+For a Stream Deck+ the relevant requirement is **hidapi**. For any other Stream Deck model, driven over TCI as described earlier, the requirement is instead that **TCI is available and running**.
 
 If these pieces were not present when the program was built, the related menus or controller paths may be missing.
 
@@ -795,10 +716,8 @@ When a control does not behave the way you expect, use this order:
 
 ### Stream Deck problem
 
-- Confirm TCI is running
-- Confirm the plugin is installed in the correct host app
-- Confirm the TCI port matches
-- On Linux, use the StreamController plugin, not the Elgato-format plugin
+- On a Stream Deck+, confirm your build includes hidapi and HID encoders are enabled
+- On any other model, confirm TCI is running and the TCI port matches
 
 ## A good beginner path
 

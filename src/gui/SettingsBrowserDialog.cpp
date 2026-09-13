@@ -1,4 +1,5 @@
 #include "SettingsBrowserDialog.h"
+#include "ScopedChildWidget.h"
 #include "FramelessMessageBox.h"
 #include "core/AppSettings.h"
 #include "core/SettingsCredentialPolicy.h"
@@ -20,6 +21,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QShortcut>
 #include <QShowEvent>
@@ -27,6 +29,7 @@
 #include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTreeWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <functional>
@@ -609,9 +612,21 @@ void SettingsBrowserDialog::onTableActivated(int row)
     if (featureItem == nullptr) {
         return;
     }
-    openDocumentViewer(scope.family, scope.radioId,
-                       featureItem->data(kRoleKey).toString(),
-                       featureItem->data(kRoleRawValue).toString());
+    // A double-click delivers cellActivated AND cellDoubleClicked on some
+    // platforms — one viewer per gesture (PR #4631 review). Both arrive
+    // before the deferred open below runs, so the flag is claimed here and
+    // released by openDocumentViewer() when its modal loop ends.
+    if (m_docViewerOpen) {
+        return;
+    }
+    const QString feature = featureItem->data(kRoleKey).toString();
+    const QString rawValue = featureItem->data(kRoleRawValue).toString();
+    // Let QAbstractItemView finish dispatching the double-click before a
+    // modal loop can delete its table. Snapshot the document, not its row.
+    m_docViewerOpen = true;
+    QTimer::singleShot(0, this, [this, scope, feature, rawValue] {
+        openDocumentViewer(scope.family, scope.radioId, feature, rawValue);
+    });
 }
 
 void SettingsBrowserDialog::openDocumentViewer(const QString& family,
@@ -619,13 +634,8 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
                                                const QString& feature,
                                                const QString& rawValue)
 {
-    // A double-click delivers cellActivated AND cellDoubleClicked on some
-    // platforms — one viewer per gesture (PR #4631 review).
-    if (m_docViewerOpen) {
-        return;
-    }
-    m_docViewerOpen = true;
-
+    // m_docViewerOpen is claimed by onTableActivated() before this call is
+    // deferred; it is released after exec() below.
     auto& s = AppSettings::instance();
     int schemaVersion = 0;
     const QJsonObject doc =
@@ -663,7 +673,9 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
         displayDoc = QJsonDocument::fromJson(redacted.toUtf8()).object();
     }
 
-    QDialog viewer(this);
+    const QPointer<SettingsBrowserDialog> self(this);
+    ScopedChildWidget<QDialog> viewerOwner(this);
+    QDialog& viewer = *viewerOwner.get();
     viewer.setWindowTitle(QStringLiteral("%1 — %2 / %3").arg(
         feature, family, scopeLabelForRadioId(radioId)));
     viewer.setMinimumSize(520, 420);
@@ -781,6 +793,9 @@ void SettingsBrowserDialog::openDocumentViewer(const QString& family,
     });
 
     viewer.exec();
+    if (!self) {
+        return;
+    }
     m_docViewerOpen = false;
     populateTable();
 }
@@ -796,7 +811,9 @@ void SettingsBrowserDialog::addKey()
                                   : QStringLiteral("Station: %1").arg(
                                         AppSettings::instance().stationName());
 
-    QDialog dlg(this);
+    const QPointer<SettingsBrowserDialog> self(this);
+    ScopedChildWidget<QDialog> dialogOwner(this);
+    QDialog& dlg = *dialogOwner.get();
     dlg.setWindowTitle("Add Key");
     dlg.setStyleSheet(kDialogStyle);
     auto* form = new QFormLayout(&dlg);
@@ -812,7 +829,8 @@ void SettingsBrowserDialog::addKey()
     connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
     form->addRow(box);
-    if (dlg.exec() != QDialog::Accepted) {
+    const int result = dlg.exec();
+    if (!self || !dialogOwner || result != QDialog::Accepted) {
         return;
     }
 
@@ -841,6 +859,9 @@ void SettingsBrowserDialog::addKey()
                != FramelessMessageBox::Yes) {
         return;
     }
+    if (!self || !dialogOwner) {
+        return;
+    }
     if (scope.kind == ScopeKind::App) {
         s.setValue(key, valueEdit->text());
     } else {
@@ -864,6 +885,7 @@ void SettingsBrowserDialog::addKey()
 
 void SettingsBrowserDialog::deleteSelected()
 {
+    const QPointer<SettingsBrowserDialog> self(this);
     const Scope scope = currentScope();
     const int row = m_table->currentRow();
     if (row < 0) {
@@ -895,8 +917,8 @@ void SettingsBrowserDialog::deleteSelected()
     case ScopeKind::None:
         return;
     }
-    if (FramelessMessageBox::question(this, "Delete Setting?", prompt)
-        != FramelessMessageBox::Yes) {
+    const auto answer = FramelessMessageBox::question(this, "Delete Setting?", prompt);
+    if (!self || answer != FramelessMessageBox::Yes) {
         return;
     }
 
@@ -925,11 +947,12 @@ void SettingsBrowserDialog::deleteSelected()
 
 void SettingsBrowserDialog::exportSanitized()
 {
+    const QPointer<SettingsBrowserDialog> self(this);
     const QString path = QFileDialog::getSaveFileName(
         this, "Export Sanitized Settings",
         QDir::home().filePath(QStringLiteral("AetherSDR-settings.txt")),
         "Text files (*.txt);;All files (*)");
-    if (path.isEmpty()) {
+    if (!self || path.isEmpty()) {
         return;
     }
     QFile file(path);

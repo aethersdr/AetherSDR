@@ -97,6 +97,29 @@ constexpr MeterSpec kMeterTable[] = {
                                              "FWDPWR"},
     {"TX",  "ALC",      true,  true,  false, "host ALC; MeterModel::swAlc() consumes it "
                                              "and the Phone/CW ALC gauges render it"},
+    // The GAIN the host ALC is applying, which is a different measurement from
+    // the row above and not a duplicate of it: TX:ALC is the post-ALC peak and
+    // sits near the target whatever the operator does, while this moves with
+    // how hard the stage is working. Host-side like its neighbours, so a
+    // zero-drive key still feeds it — needsForwardPower is false for the same
+    // reason TX:ALC's is.
+    //
+    // ADDING THE SURFACE WITHOUT ADDING THIS ROW IS THE 1.38 DEFECT. The unit
+    // verdict is a join between kMeterSurfaces and this table on the key, so a
+    // meter present in one and absent from the other is either never checked or
+    // checked against nothing — and the last time the two disagreed the run
+    // reported UNIT MISMATCH on a correct meter and ranked it above every real
+    // finding. tests/meter_surfaces_test.cpp now covers it.
+    //
+    // COVERED IS NOT GATED, and the difference matters to whoever adds the
+    // next surface. ci.yml's only ctest steps are the frozen list in
+    // .github/ci-test-gate.txt, and this test is deliberately not on it, so
+    // it does not run on a PR. It runs unfiltered on every push to main
+    // (full-suite.yml) and weekly under the sanitizers — which catches the
+    // divergence, but after the merge rather than before it.
+    {"TX",  "ALCGAIN",  true,  true,  false, "gain the host ALC is applying, in dB; "
+                                             "MeterModel::alcGainDb() consumes it and "
+                                             "no GUI surface renders it yet (#5636)"},
     {"TX",  "COMPPEAK", true,  true,  false, "host speech processor, polled onto the "
                                              "meter at 20 Hz; reads 0 with PROC off, "
                                              "which is a value and not a silence"},
@@ -501,10 +524,26 @@ void RadioCertification::stageControlEffect(const Options& o)
         target = qBound(low, target, high);
         const int stepDb = target - startGain;
 
+        // THE SAME DISCIPLINE, APPLIED TO THE THING THE OPERATOR HEARS.
+        // The AGC-T is a setpoint about the signal at the ANTENNA; the backend
+        // refers it to the LNA gain (Hl2DbReference::agcCeilingDb) so a gain
+        // change moves the derived WDSP ceiling and leaves the operator's own
+        // number alone. The tempting wrong fix — compensating by rewriting the
+        // operator's 0..100 — would make their AGC slider walk on every gain
+        // change, and item 14's regulator steps the gain several times a day.
+        //
+        // The derived ceiling is not on the seam, so this cannot measure it.
+        // What it CAN certify is that the operator's number did not move, which
+        // is the half that would be visible to them and the half a bad fix
+        // breaks. EXPECTED DELTA ZERO, same as the S-level above.
+        SliceModel* agcSlice = m_radio->slice(0);
+        const int agcTBefore = agcSlice ? agcSlice->agcThreshold() : -1;
+
         const double before = settledSLevel();
         m_radio->setPanRfGainFor(panId, target);
         const double after = settledSLevel();
         const int echoed = pan->rfGain();
+        const int agcTAfter = agcSlice ? agcSlice->agcThreshold() : -1;
         m_radio->setPanRfGainFor(panId, startGain);   // leave it where we found it
         spin(400);
 
@@ -533,6 +572,11 @@ void RadioCertification::stageControlEffect(const Options& o)
             "dominated by converter noise that does not rise with the gain. Only "
             "the raw pre-reference dBFS distinguishes them and the seam does not "
             "expose it").arg(-stepDb);
+        if (agcSlice) {
+            m[QStringLiteral("agcThresholdBefore")] = agcTBefore;
+            m[QStringLiteral("agcThresholdAfter")] = agcTAfter;
+            m[QStringLiteral("agcThresholdExpectedDelta")] = 0;
+        }
 
         if (stepDb == 0) {
             m[QStringLiteral("rfGainNotExercised")] = QStringLiteral(
@@ -552,6 +596,16 @@ void RadioCertification::stageControlEffect(const Options& o)
             problems << QStringLiteral(
                 "no S-meter reading either side of the RF gain step — the gain "
                 "reached the backend but its effect could not be measured");
+        }
+        // Reported whether or not the levels came back: this one does not
+        // depend on a meter, so a quiet band cannot excuse it.
+        if (agcSlice && stepDb != 0 && agcTAfter != agcTBefore) {
+            problems << QStringLiteral(
+                "an RF gain step of %1 dB moved the operator's AGC threshold "
+                "from %2 to %3. The gain is compensated below the slider, in "
+                "the derived WDSP ceiling — moving the operator's own setpoint "
+                "makes it walk every time the gain changes")
+                .arg(stepDb).arg(agcTBefore).arg(agcTAfter);
         }
     }
 

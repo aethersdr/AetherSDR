@@ -160,6 +160,17 @@ inline constexpr std::size_t kTxSampleBytes = 8;
 // C0 register-address bytes (address << 1). Bit 0 is MOX, not part of the
 // address, so every constant here is even and keying is applied separately with
 // withMox() — see kC0MoxBit.
+//
+// The host->radio C0 byte splits THREE ways, not two. dsopenhpsdr1.v decodes it
+// in one state (CMDCTRL):
+//
+//     resprqst <= eth_data[7];      // ask the radio to answer this command
+//     addr     <= eth_data[6:1];    // SIX bits of register address, not seven
+//     ptt      <= eth_data[0];      // MOX
+//
+// so the address space is 0x00..0x3F and bit 7 is a flag, not address bit 6.
+// Nothing below 0x40 collides with it, which is why every constant here has
+// been safe while nothing set it. See kC0RespRqstBit and Hl2ControlRequest.
 inline constexpr std::uint8_t kC0Config = 0x00;   // addr 0x00: sample rate + #RX + ADC select
 inline constexpr std::uint8_t kC0Rx1Freq = 0x04;  // addr 0x02: RX1 NCO frequency (Hz, 32-bit BE)
 inline constexpr std::uint8_t kC0TxFreq  = 0x02;  // addr 0x01: TX1 NCO frequency (Hz, 32-bit BE)
@@ -169,6 +180,30 @@ inline constexpr std::uint8_t kC0TxDrive = 0x12;  // addr 0x09: TX drive level +
 // radio reads it from whatever bank happens to be in flight. So keying is a
 // property of the frame, and every bank has to carry it while transmitting.
 inline constexpr std::uint8_t kC0MoxBit = 0x01;
+
+// C0 bit 7, host->radio: RESPONSE REQUEST. Set it on a C&C bank and the radio
+// answers that one command with an ACK frame on EP6 (C0[7] set there too).
+// Clear on every bank this client has ever sent until Hl2ControlRequest, which
+// is why no ACK has ever arrived and why nothing downstream has had to cope
+// with one.
+//
+// It is NOT a read bit. There is no read-only command in this direction: the
+// gateware latches cmd_data and applies the write whatever bit 7 says, and the
+// response is an ECHO of what was written (control.v, RESP_START:
+// resp_cmd_data_next = cmd_data). The only genuine reads are the AD9866 SPI and
+// I2C subsystem commands, which encode a read opcode inside the data and whose
+// reply carries the read value in place of the echo (RESP_READ).
+inline constexpr std::uint8_t kC0RespRqstBit = 0x80;
+
+// Highest register address the six-bit C0 field can carry.
+inline constexpr int kMaxRegisterAddress = 0x3F;
+
+// Radio->host ACK address meaning "I could not do that". The response FSM
+// substitutes 6'h3f for the command address when a subsystem was not ready
+// (control.v, RESP_ACK), so this is a refusal and not a register. We never
+// REQUEST 0x3F — it is the extended-address escape (see ep2WriteTxIq) — so the
+// two readings never collide on our wire.
+inline constexpr int kRespAddrError = 0x3F;
 
 // TX drive level occupies DATA[31:24] (C1). The Hermes-Lite 2 gateware decodes
 // only the top nibble [31:28], but the byte-wide field is what the reference
@@ -355,12 +390,42 @@ Cc ccTxDrive(int level, bool paEnable = false) noexcept;
 // ordinary register-then-value slave expects. ONE-BYTE WRITES ONLY — there is
 // no burst mode, so an N-byte value costs N C&C banks.
 //
-// RQST (C0[7]) IS DELIBERATELY LEFT CLEAR. The wiki calls it optional for a
-// write, and setting it makes the radio answer with an ACK response — which
-// Hl2Telemetry::apply() dispatches on RADDR *without* consulting the ACK flag.
-// Today an I2C reply (RADDR 0x3c/0x3d) lands harmlessly in its `default:`, but
-// a write that provokes no reply at all cannot perturb the telemetry decoder
-// under any future edit to that switch. This path stays write-only.
+// RQST (C0[7]) IS LEFT CLEAR ON THESE BANKS, AND THE REASON HAS CHANGED.
+//
+// It used to be a decoder hazard: `Hl2Telemetry::apply()` dispatched on RADDR
+// *without* consulting the ACK flag, so an I2C reply (RADDR 0x3c/0x3d) landed
+// harmlessly in its `default:` only by accident of that switch's shape, and any
+// future edit to it could have made an echo of our own outgoing bytes read as
+// telemetry. THAT BUG IS FIXED — `apply()` now returns early on `r.ack`
+// (MetisProtocol.cpp) — so the hazard is closed and is no longer the reason.
+//
+// What decides whether an address may carry RQST now is the ALLOW-LIST in
+// `MetisClient::requestRegister`, and NEITHER 0x3c NOR 0x3d IS ON IT. That is a
+// deliberate omission, not an oversight: an arbitrary-data RQST at 0x3d is a
+// direct I2C write to the companion board described immediately below — the one
+// that switches amplifiers, antenna relays and transverters — and 0x3c reaches
+// the Versa clock that the board's own clocking depends on. Neither is
+// re-asserted by anything, so a wrong value there persists.
+//
+// The encoders in this section therefore stay write-only because nothing needs
+// an acknowledgement for them, and because nothing may ask for one. If a future
+// item does need one, the change is to that allow-list, with a note there
+// saying what the acknowledgement is worth — not a flag added here.
+// addr 0x3b: a raw SPI transaction against the AD9866 itself (gateware
+// `ad9866ctrl.v`, which decodes `6'h3b`). A WRITE, and only a write — an
+// earlier note here called it the read path, which the RTL contradicts:
+// `ad9866ctrl` has no data output, `assign sdo = 1'b0;`, and control.v's
+// RESP_READ carries `cmd_resp_data_i2c` for the AD9866 branch behind the
+// gateware's own `// FIXME: suppor read cmd_resp_data_ad9866`. The reply is our
+// echo or the 0x3F refusal.
+//
+// What it writes: gated on `cmd_data[31:24] == 8'h06`, it puts
+// `{3'b000, cmd_data[20:16], cmd_data[7:0]}` on the converter's SPI bus — any
+// AD9866 register, any byte, INCLUDING the TX-gain register 0x0a that the
+// gateware's own 0x09 handler drives. It is therefore a transmit-path write
+// that nothing re-asserts, and MetisClient::requestRegister does NOT allow-list
+// it. No encoder here either: nothing writes it.
+inline constexpr std::uint8_t kC0Ad9866Spi = 0x76;  // addr 0x3b << 1
 inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
 inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1
 inline constexpr std::uint8_t kI2cCookieWrite = 0x06;  // C1
@@ -417,6 +482,26 @@ static_assert(kIoBoardTxFreqBanks
                                               - kIoBoardRegTxFreqMsb + 1),
               "IO board frequency bank count must span Msb..Lsb exactly");
 std::array<Cc, kIoBoardTxFreqBanks> ccIoBoardTxFrequency(std::uint64_t hz) noexcept;
+// A C&C bank addressing an arbitrary six-bit register with arbitrary data.
+//
+// Deliberately the last resort, not the first: every register with a known
+// meaning has a named encoder above, and one of those says what it is doing in
+// the call. This exists because Hl2ControlRequest has to be able to address a
+// register the caller names at runtime, and refuses an address outside
+// 0x00..0x3F rather than letting it alias into the RQST bit.
+Cc ccRegister(int addr, std::uint32_t data) noexcept;
+
+// Set or clear the response-request bit (C0 bit 7) on a C&C bank.
+//
+// Orthogonal to withMox(), which touches bit 0 only, so the two compose in
+// either order and neither can set the other's bit.
+inline Cc withRespRqst(Cc cc, bool request) noexcept
+{
+    cc[0] = static_cast<std::uint8_t>(request ? (cc[0] | kC0RespRqstBit)
+                                              : (cc[0] & ~kC0RespRqstBit));
+    return cc;
+}
+
 // Set MOX (C0 bit 0) on a C&C bank. Keying is per-FRAME, so this is applied to
 // whichever bank is being sent rather than to one dedicated register.
 inline Cc withMox(Cc cc, bool keyed) noexcept
@@ -456,6 +541,17 @@ inline constexpr int kTxSamplesPerPacket = 126;
 // The radio free-runs through the classic addresses, so telemetry arrives
 // without asking. Verified against hpsdrsim's responder, whose C0 sequence is
 // 0, 8, 16, 24, 32 — i.e. RADDR 0..4 at C0[6:3].
+//
+// On a real HL2 the free-running address is only TWO bits wide: control.v
+// declares `logic [1:0] resp_addr` and composes C0 as
+// {3'b000, resp_addr, ext_cwkey, 1'b0, ptt_resp}, so C0[6:5] are hardwired zero
+// and the cycle is 0,1,2,3. Reading four bits at C0[6:3] therefore gives the
+// same number on this hardware and stays right on a generic Hermes — but do not
+// expect RADDR 4 from an HL2. Slot 3 is `debug` and carries nothing we consume.
+//
+// ONE RESPONSE SLOT PER EP6 FRAME, not per packet: usopenhpsdr1.v toggles
+// resp_rqst once in SYNC_RESP, which runs once per 512-byte frame. That is the
+// only clock a reply can arrive on, and it stops dead when the stream stops.
 struct Ep6Response {
     bool ack = false;
     int raddr = 0;
@@ -501,15 +597,188 @@ struct Hl2Telemetry {
     bool ptt = false;
 
     // Merge a decoded response in, leaving untouched fields alone.
+    //
+    // IGNORES ACK responses apart from their PTT bit, and that is load-bearing
+    // rather than tidiness. In an ACK, `raddr` is the six-bit address of the
+    // command being answered and `data` is the echo of what we wrote — so an
+    // ACK for register 0x00 would otherwise be decoded here as a firmware
+    // version, an ADC-overload flag and a TX FIFO depth, all invented from our
+    // own outgoing bytes. Harmless until something set the RQST bit; this
+    // guard is what makes it stay harmless now that Hl2ControlRequest does.
     void apply(const Ep6Response& r) noexcept;
 };
 
+// Directional-coupler counts -> watts, through the reference calibration curve.
+// See the table in the .cpp for what this curve is and, much more importantly,
+// what it is NOT — it is not a calibration of any particular radio.
+//
+// Lives here rather than in Hl2Backend because swrFromRaw() now needs the same
+// curve, and MetisProtocol is the layer Hl2Backend already depends on. Putting
+// one copy at the lower layer costs no new dependency edge; the alternatives
+// both cost one (see the note above swrFromRaw()).
+double directionalWatts(int raw) noexcept;
+
+// Detector output in arbitrary VOLTAGE units: sqrt(directionalWatts(raw)).
+//
+// This is the inverse of the count->power curve, taken back to voltage because
+// SWR is a voltage ratio. The units are arbitrary and deliberately so — only
+// the ratio of two of these is ever used, so any consistent scale works, and
+// pretending the number is volts would be the same mistake as pretending the
+// counts are watts.
+double detectorVolts(int raw) noexcept;
+
+// Minimum forward-power reading, in raw converter counts, below which an SWR
+// ratio is quantisation noise rather than a measurement.
+//
+// With no carrier, forward and reverse are both near zero and dominated by
+// noise; reverse frequently exceeds forward and the ratio saturates. An
+// operator glancing at that sees a catastrophic mismatch on an antenna that is
+// fine. Raw counts because that is what we have — this is a noise floor, not a
+// calibrated power level.
+//
+// It lives in this header, beside the curve it is derived from, so EVERY
+// consumer shares one threshold. It was previously local to the meter path,
+// so the Radio Health snapshot computed an unguarded ratio and bounced at its
+// 500 ms refresh while the meter beside it stayed silent — two surfaces
+// disagreeing about the same radio because only one of them had the guard.
+//
+// ---- why not 16 (#4578, nigelfenton's half), and how 96 was first reached ----
+//
+// 16 was a guess about where noise stops, and it is too low by six times. A TX
+// Cal sweep aborted on its first step at a reported SWR of 256.00 on an antenna
+// a RigExpert AA-170 and a real carrier both measured at 1.50 — a LIVE reading,
+// admitted by this gate, computed from counts barely above it. Every layer's
+// absent-handling worked; the number itself was admitted and wrong.
+//
+// CRITERION, because there is no single correct answer and the choice has to be
+// arguable: one count of quantisation on EITHER channel must not move the
+// reported SWR by more than 0.25 — half the finest distinction anything
+// downstream makes (1.5 against 2.0 against 2.5, and the 3.0 at which a sweep
+// aborts) — for every true SWR from 1.0 to 3.0. Above 3.0 the exact value stops
+// mattering because every consumer has already stopped.
+//
+// Swept against directionalWatts()'s own curve, worst case over that band:
+//
+//     forward counts    16     32     64     96    128    256    512
+//     worst SWR error  0.85   0.50   0.30   0.20   0.16   0.10   0.05
+//
+// 96 is the smallest count at and above which the criterion holds UNDER THE
+// ONE-COUNT MODEL. That model was subsequently measured and found wrong; the
+// paragraph beginning "and then it WAS measured" below carries the correction
+// and the value this constant actually holds. The sweep is kept because it is
+// still the right arithmetic for the question it asks, and because the two
+// derivations agreeing where they overlap is what makes the correction
+// credible rather than a second opinion.
+//
+// NOT ~1200, which #4578 suggested. Gating on FORWARD counts does nothing to
+// lift the REVERSE channel out of the knee: at a true 1.5 the reverse sits a
+// factor of five below forward in voltage, so getting it above 1200 counts
+// needs about 16 W forward — past the top of this table and past what an HL2
+// produces. At 1200 forward counts a true 2.0 still displayed 1.76 under the
+// old raw ratio. It buys nothing and costs SWR below ~0.67 W.
+//
+// ---- and then it WAS measured, and 96 was too low (bench run D89) ----
+//
+// The paragraph that used to end this comment said 96 was derived analytically,
+// that it assumed a ONE-COUNT channel-to-channel disagreement nobody had put an
+// instrument on, and that if the real disagreement were larger then 96 was
+// still too low. That measurement has now been made, on a Hermes-Lite 2 into a
+// dummy load, reading fwd_pwr and rev_pwr straight out of the response
+// registers with no client application in the path. The prediction was right
+// and the direction was the unfavourable one.
+//
+// TWO THINGS WERE MEASURED THAT THE ONE-COUNT MODEL CANNOT EXPRESS.
+//
+// (1) NOISE, and it is not one count. With RF in the load the reverse channel
+//     has a standard deviation of 2.73 counts and a full range of 0..12 counts
+//     (2311 settled samples over 15 drive levels). It does not shrink at low
+//     drive, because it does not come from the signal: with the PA keyed and
+//     the drive register at zero the same channel reads 0.67, and unkeyed it
+//     reads 0.63..0.70 (6418 samples over 300 s). The forward channel's
+//     residual standard deviation is 3.77 counts.
+//
+// (2) OFFSET, which is not noise at all and which the criterion above has no
+//     term for. Fitting the reverse channel against the forward one across 16
+//     legs spanning 1.3 to 822 forward counts gives
+//
+//         rev = 3.41 + 0.00097 * fwd        (residual sd 0.21 counts)
+//
+//     so with NO reflected power the reverse channel still reads ~3.4 counts.
+//     That is a bias. Averaging does not remove it and a gate does not remove
+//     it either — a gate only shrinks its weight against a growing forward
+//     reading. The intercept was stable to 0.05 counts across seven captures
+//     over forty minutes and is identical keyed and unkeyed, so it is the
+//     converter and not the PA.
+//
+// WHAT THAT DOES TO THE READING. On a dummy load the true answer is known and
+// near 1.0, so every departure IS the instrument. At 96 forward counts this
+// radio's reverse channel is ~97% offset, and the linearized form reports
+//
+//     gate 96 -> 1.40      gate 160 -> 1.25      gate 320 -> 1.14
+//
+// against a load measured at 1.03..1.06 by the same instrument where it is
+// trustworthy. 0.40 of error at 96 counts is 1.6x the 0.25 the criterion above
+// was chosen to hold, and the empirical settling curve agrees: pooling every
+// keyed sample and binning by forward count, the linearized median first comes
+// within 0.25 of the truth in the 200..260 bin and its 95th percentile in the
+// 260..340 bin.
+//
+// SO THE CRITERION IS UNCHANGED AND ITS ANSWER MOVED. Re-derived by resampling
+// the MEASURED distributions rather than perturbing by an assumed count:
+//
+//     forward counts        16     32     64     96    160    256    320
+//     p95 error (measured) 6.35   1.95   0.91   0.65   0.38   0.26   0.20
+//     p95 error (1-count)  1.57   0.50   0.30   0.20    ...    ...   ...
+//
+// The second row is the old model and is reproduced exactly by the new tool
+// where the two overlap, which is why the first row is a correction and not a
+// disagreement. 320 is the smallest gridded count whose 95th-percentile error
+// stays within 0.25 everywhere above it. 256 misses by 0.008 and is a
+// defensible round alternative; 160 is the answer if the criterion is read at
+// the MEDIAN rather than as the worst case its wording states.
+//
+// THE COST, which is the real argument against going further: SWR reads absent
+// below ~74 mW forward on the reference curve, 1.5% of the HL2's rated 5 W and
+// 18 dB down, against ~12 mW at 96 and ~1.6 mW at 16.
+//
+// STILL NOT MEASURED, and it bounds what the above is worth: this is ONE radio,
+// one coupler and one dummy load. The offset is a per-unit property of a diode
+// detector and there is no reason to expect 3.4 counts on another board — only
+// to expect that it is not zero, which is the part the one-count model got
+// wrong. A per-unit calibration would replace this constant along with the
+// curve. See also kMeasuredReverseFloorCounts below, which the test uses to run
+// the offset criterion rather than restate it.
+//
+// A BETTER FIX THAN A GATE EXISTS AND IS NOT DONE HERE. Both channels are
+// readable while unkeyed and their floors are stable, so sampling them just
+// before a transmission and subtracting would remove the bias outright. On the
+// measured distributions that drops the gate this criterion needs from 320 to
+// 200 at the 95th percentile and from 160 to 16 at the median. It is a larger
+// change than raising a constant, it needs a place to hold the floor and a
+// policy for when to re-measure it, and it is recorded rather than attempted.
+inline constexpr int kMinForwardCountsForSwr = 320;
+
+// The reverse channel's reading with NO reflected power, in counts — the
+// intercept of rev = 3.41 + 0.00097*fwd fitted across bench run D89's 16 legs.
+//
+// Here so that hl2_metis_protocol_test can RUN the offset criterion instead of
+// restating it, exactly as it already runs the quantisation one: if a future
+// per-unit calibration replaces the curve, or if anyone lowers the gate, the
+// assertion re-derives rather than inheriting a stale comment.
+//
+// MEASURED ON ONE RADIO (Hermes-Lite 2, gateware v74, N2ADR filter board, into
+// a dummy load at 7.1 MHz). It is NOT a constant of the design and nothing may
+// use it to correct a reading — it is a lower bound on what the gate has to
+// tolerate, and it is used for exactly that.
+inline constexpr double kMeasuredReverseFloorCounts = 3.41;
+
 // Standing-wave ratio from raw forward/reverse counts.
 //
-// The counts are UNCALIBRATED ADC readings, but SWR is a RATIO, so the unknown
-// scale factor cancels as long as both come from the same converter — which is
-// why SWR is meaningful here while absolute watts are not (oracle §6: "don't
-// pretend uncalibrated counts are watts").
+// The counts are UNCALIBRATED ADC readings, and SWR is a RATIO — but a ratio of
+// raw counts is scale-invariant, NOT curve-invariant, and the detector's curve
+// is not linear. Both counts are therefore mapped through detectorVolts()
+// before the ratio is taken. See the comment on the definition for the whole
+// argument, including the part of the old reasoning that is still correct.
 //
 // Returns nullopt when there is no forward power to speak of: SWR is undefined
 // with no carrier, and 1.0 would read as a perfect match rather than "unknown".
@@ -550,6 +819,44 @@ struct DiscoveryReply {
     // 19 and not 20, and what the byte at 20 actually is.
     std::uint8_t numRx = 0;
     [[nodiscard]] bool isHermesLite2() const noexcept { return boardId == 0x06; }
+
+    // ---- Telemetry, discovery-reply offsets 0x17-0x29 ----
+    //
+    // The SAME quantities the EP6 response cycle carries, in the SAME raw
+    // units, but all at once and WITHOUT a stream — which is the whole point:
+    // this is the only route that answers while another client holds the radio,
+    // and the only one that answers at all when the stream is broken.
+    //
+    // Every field is optional because a reply may be short, or may come from a
+    // gateware built without EXTENDED_RESP (control.v:826), where these bytes
+    // are hard zeros rather than readings. nullopt is "this reply did not carry
+    // it"; 0 is a measurement. A forward-power reading of zero is real.
+    //
+    // Offsets are the gateware's, derived from usopenhpsdr1.v's DOWN-counting
+    // emitter (offset = 0x3B - dbyte_no) at 883a338 and cross-checked against
+    // hermeslite.py's independent decoder. See the test for the full map.
+    std::optional<std::uint32_t> responseData;   // 0x17-0x1a, `resp_data`
+    std::optional<bool> extCwKey;                // 0x1b[7]
+    std::optional<bool> ptt;                     // 0x1b[6]  `ptt_resp` = cw_on|ext_ptt
+    std::optional<bool> paExtTr;                 // 0x1b[5]
+    std::optional<bool> paIntTr;                 // 0x1b[4]
+    std::optional<bool> txOn;                    // 0x1b[3]
+    std::optional<bool> cwOn;                    // 0x1b[2]
+    // 0x1b[1:0]. NOT a count of clips — see the two-state warning in the .cpp.
+    std::optional<int>  adcClipCount;
+    std::optional<int>  temperatureRaw;          // 0x1c-0x1d, 12 bits
+    std::optional<int>  forwardPowerRaw;         // 0x1e-0x1f, 12 bits
+    std::optional<int>  reversePowerRaw;         // 0x20-0x21, 12 bits
+    std::optional<int>  biasCurrentRaw;          // 0x22-0x23, 12 bits
+    std::optional<int>  txFifoFillMsbs;          // 0x24[6:0], as in Hl2Telemetry
+    std::optional<bool> txFifoRecovery;          // 0x24[7],   as in Hl2Telemetry
+    std::optional<int>  txBufferLatencyMs;       // 0x26[6:0]
+    // 0x28[4:0]. SAFETY-RELEVANT: 31 does not mean "the longest hang"; it
+    // disables the gateware's PTT auto-unkey entirely (softerhardware/
+    // Hermes-Lite2 issue #178). Reading it without a stream is how an
+    // application can tell the operator their radio's own dead-man's switch is
+    // off — which is a thing worth knowing before keying, not after.
+    std::optional<int>  pttHangTimeMs;
 };
 // Parse a >=60-byte Metis discovery reply (EF FE <st> MAC[6] gwver board ...).
 std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> pkt) noexcept;

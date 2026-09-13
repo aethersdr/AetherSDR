@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <algorithm>
 #include <vector>
 
 using namespace AetherSDR::hl2;
@@ -234,6 +235,129 @@ int main()
         check(sr && sr->numRx == 0, "short reply -> numRx defaults to 0 (no OOB read)");
         std::array<std::uint8_t, 4> junk{0x00, 0x11, 0x22, 0x33};
         check(!parseDiscoveryReply(junk).has_value(), "non-Metis bytes rejected");
+    }
+
+    // ---- discovery reply: the telemetry it has always carried ----
+    //
+    // The 60 bytes the radio already sends at every discovery carry PA
+    // temperature, forward and reverse power, PA bias, PTT, ADC clip and the TX
+    // FIFO — and this parser has been reading offsets 0-10 and 19 and throwing
+    // the rest away. It is the same information the EP6 cycle carries, in the
+    // same raw units, but obtainable WITHOUT a stream: the only route that
+    // answers while another client holds the radio, and the only one that
+    // answers when the stream is broken. That is roadmap item #15, and settling
+    // that it needs nothing from item #13 is docs/gating.md in the lab.
+    //
+    // OFFSETS ARE PINNED TO THE GATEWARE, NOT TO A TOOL. usopenhpsdr1.v:261-307
+    // emits the reply from a DOWN-counting state, so
+    //
+    //     packet offset = 0x3B - dbyte_no
+    //
+    // anchored on two knowns this file already asserts: `6'h32: VERSION_MAJOR`
+    // is offset 9 and `6'h31: idhermeslite ? 8'h06 : 8'h01` is offset 10. The
+    // same arithmetic puts `6'h28: NR` at 0x13, which is the receiver-count
+    // offset the block above already pins independently.
+    //
+    // hermeslite.py (KF7O/N2ADR) decodes the same packet and agrees field for
+    // field — including composing the gateware version as r[0x09].r[0x15],
+    // which is `6'h32` and `6'h26`. It is the CROSS-CHECK, not the source: two
+    // decoders that share no code landing on the same map is evidence; one
+    // decoder copied into another is not.
+    {
+        auto put16 = [](std::uint8_t* p, std::uint16_t v) {
+            p[0] = static_cast<std::uint8_t>(v >> 8);
+            p[1] = static_cast<std::uint8_t>(v & 0xFF);
+        };
+
+        std::array<std::uint8_t, 60> t{};
+        t[0] = 0xEF; t[1] = 0xFE; t[2] = 0x02;
+        t[10] = 0x06;
+        t[19] = 0x04;
+
+        // 6'h24..6'h21 -> 0x17-0x1a: resp_data, the port-1025 command response.
+        t[0x17] = 0xDE; t[0x18] = 0xAD; t[0x19] = 0xBE; t[0x1a] = 0xEF;
+        // 6'h20 -> 0x1b: resp_control, assigned combinationally at control.v:899
+        // as {ext_cwkey, ptt_resp, pa_exttr, pa_inttr, tx_on, cw_on, clip_cnt}.
+        // 0xC9 = 1100 1001: ext_cwkey, ptt, no pa_exttr, no pa_inttr, tx_on,
+        // no cw_on, clip_cnt = 1.
+        t[0x1b] = 0xC9;
+        put16(&t[0x1c], 0x0ABC);      // temperature, 12 bits: top nibble is zero
+        put16(&t[0x1e], 0x0123);      // forward power
+        put16(&t[0x20], 0x0456);      // reverse power
+        put16(&t[0x22], 0x0789);      // PA bias current
+        t[0x24] = 0xC0;               // dsiq_status: recovery set, fill 0x40
+        t[0x25] = 0x5A;               // pkt_cnt
+        t[0x26] = 0x0A;               // {1'b0, tx_buffer_latency[6:0]} = 10 ms
+        t[0x27] = 0x00;               // cw_hang_time[7:0]
+        t[0x28] = 0x1F;               // {cw_hang[9:8], 1'b0, ptt_hang_time[4:0]}
+        t[0x29] = 0x44;               // {sample_rate, cmd_ptt, tx_wait, receivers}
+
+        const auto d = parseDiscoveryReply(t);
+        check(d.has_value(), "60-byte telemetry reply parses");
+
+        check(d && d->temperatureRaw.value_or(-1) == 0x0ABC,
+              "temperature from 0x1c-0x1d (gateware 6'h1f,6'h1e)");
+        check(d && d->forwardPowerRaw.value_or(-1) == 0x0123,
+              "forward power from 0x1e-0x1f (6'h1d,6'h1c)");
+        check(d && d->reversePowerRaw.value_or(-1) == 0x0456,
+              "reverse power from 0x20-0x21 (6'h1b,6'h1a)");
+        check(d && d->biasCurrentRaw.value_or(-1) == 0x0789,
+              "PA bias current from 0x22-0x23 (6'h19,6'h18)");
+
+        // Each of the four analogue fields is 12 bits with a zero top nibble,
+        // so a decode that read one byte too early or too late would pick up a
+        // neighbour's low byte and still look like a plausible reading. The
+        // four distinct values above are what makes that visible.
+        check(d && d->temperatureRaw != d->forwardPowerRaw
+                && d->forwardPowerRaw != d->reversePowerRaw
+                && d->reversePowerRaw != d->biasCurrentRaw,
+              "the four analogue fields do not alias each other");
+
+        check(d && d->ptt.value_or(false), "PTT from resp_control bit 6");
+        check(d && d->txOn.value_or(false), "tx_on from resp_control bit 3");
+        check(d && d->cwOn.value_or(true) == false, "cw_on clear from bit 2");
+        check(d && d->extCwKey.value_or(false), "ext_cwkey from bit 7");
+        check(d && d->paExtTr.value_or(true) == false, "pa_exttr clear from bit 5");
+        check(d && d->paIntTr.value_or(true) == false, "pa_inttr clear from bit 4");
+        check(d && d->adcClipCount.value_or(-1) == 1, "clip count from bits [1:0]");
+
+        // Same word, same layout, same meaning as the EP6 path decodes — so the
+        // stream-free reading and the in-band reading are the same quantity and
+        // can be compared without a conversion.
+        check(d && d->txFifoFillMsbs.value_or(-1) == 0x40,
+              "TX FIFO fill from 0x24[6:0], not the whole byte");
+        check(d && d->txFifoRecovery.value_or(false),
+              "TX FIFO recovery flag from 0x24[7]");
+
+        check(d && d->txBufferLatencyMs.value_or(-1) == 0x0A,
+              "tx_buffer_latency from 0x26[6:0]");
+        // ptt_hang_time = 31 is the value that DISABLES the gateware's PTT
+        // auto-unkey (softerhardware/Hermes-Lite2 #178), so it is exactly the
+        // one an application must be able to read. It must come from [4:0] and
+        // not swallow the cw_hang_time bits sharing the byte.
+        check(d && d->pttHangTimeMs.value_or(-1) == 31,
+              "ptt_hang_time from 0x28[4:0] — the value that disables auto-unkey");
+        t[0x28] = 0xC4;               // cw_hang_time[9:8] = 3, ptt_hang_time = 4
+        check(parseDiscoveryReply(t)->pttHangTimeMs.value_or(-1) == 4,
+              "ptt_hang_time ignores the cw_hang_time bits in the same byte");
+        t[0x28] = 0x1F;
+
+        check(d && d->responseData.value_or(0) == 0xDEADBEEFu,
+              "resp_data from 0x17-0x1a, big-endian");
+
+        // A short reply carries none of it, and must say so rather than read
+        // out of bounds or report zeros as readings. This is the distinction
+        // the whole struct is optional for: "the radio did not tell us" and
+        // "the radio told us zero" are different claims, and only one of them
+        // is a measurement.
+        std::array<std::uint8_t, 20> shortT{};
+        shortT[0] = 0xEF; shortT[1] = 0xFE; shortT[2] = 0x02; shortT[10] = 0x06;
+        const auto s = parseDiscoveryReply(shortT);
+        check(s.has_value(), "short reply still parses its header");
+        check(s && !s->temperatureRaw.has_value() && !s->forwardPowerRaw.has_value()
+                && !s->ptt.has_value() && !s->txFifoFillMsbs.has_value()
+                && !s->pttHangTimeMs.has_value(),
+              "short reply: telemetry is ABSENT, not zero");
     }
 
     // ---- EP2 packet framing ----
@@ -671,14 +795,193 @@ int main()
         const auto flat = swrFromRaw(1000, 0);
         check(flat.has_value() && std::fabs(*flat - 1.0) < 1e-9,
               "no reflection -> 1.0:1");
-        // Voltage form: rho = 1/3 -> SWR 2.0. The power form would have given
-        // 1.0/(1-sqrt(1/3)) ~= 2.37 here, i.e. a different and wrong number.
-        const auto two = swrFromRaw(3000, 1000);
-        check(two.has_value() && std::fabs(*two - 2.0) < 1e-9,
-              "rho = 1/3 -> 2.0:1 (voltage form, no square root)");
+
+        // The voltage form, restated on counts that mean something.
+        //
+        // This assertion used to be swrFromRaw(3000, 1000) == 2.0 exactly: a
+        // RAW-COUNT ratio of 1/3, asserted to be SWR 2.0. That locked in #4578's
+        // bug — it asserted that the detector is linear, which it is not, and
+        // any correct implementation had to fail it. What is being pinned here
+        // is the voltage form itself, so the case is now written in counts that
+        // correspond to a known true SWR THROUGH the calibration curve:
+        //
+        //   forward 1000 counts -> directionalWatts 0.504594 W -> V 0.710348
+        //   true SWR 2.0 -> rho 1/3 -> V_rev 0.236782 -> 0.056066 W -> 277.9 counts
+        //
+        // so 1000/278 is a true 2.0:1, and the voltage form must return it.
+        // The POWER form would give 1/(1-sqrt(1/3)) ~= 2.37 from the same rho,
+        // i.e. a different and wrong number — that is what the original
+        // assertion was really protecting and it is still protected.
+        const auto two = swrFromRaw(1000, 278);
+        check(two.has_value() && std::fabs(*two - 2.0) < 0.01,
+              "1000/278 counts is a true 2.0:1 through the curve (voltage form, no square root)");
+
         const auto bad = swrFromRaw(100, 500);
         check(bad.has_value() && *bad > 100.0,
               "reverse above forward clamps to a very high SWR, not negative");
+
+        // ---- #4578 half A: the knee, where the raw-count ratio reads low ----
+        //
+        // 265 forward counts (~50 mW) with a TRUE 2.0:1 puts 48 counts on the
+        // reverse channel — derived through the same curve as above. The raw
+        // ratio (265+48)/(265-48) is 1.442: a 28% under-read, in the direction
+        // that hides a mismatch. Linearizing both channels first recovers 1.99.
+        const auto knee = swrFromRaw(265, 48);
+        check(knee.has_value() && std::fabs(*knee - 2.0) < 0.05,
+              "knee: 265/48 counts is a true 2.0:1 and must not read 1.44");
+        check(knee.has_value() && *knee > 1.9,
+              "knee: the reading must not be OPTIMISTIC — that is the unsafe direction");
+
+        // ---- above the knee the change is inert ----
+        //
+        // 4953 forward counts is the top of the calibration table, where k has
+        // flattened. A true 2.0:1 there is 1623 reverse counts; the raw ratio
+        // already gives 1.975. The linearized form must land within a few
+        // hundredths of that, so this change is provably a LOW-END correction
+        // and not a rescaling of every reading an operator has ever seen.
+        const auto high = swrFromRaw(4953, 1623);
+        const double rawRatioHigh = (4953.0 + 1623.0) / (4953.0 - 1623.0);   // 1.9748
+        check(high.has_value() && std::fabs(*high - 2.0) < 0.01,
+              "above the knee: 4953/1623 counts is a true 2.0:1");
+        check(high.has_value() && std::fabs(*high - rawRatioHigh) < 0.05,
+              "above the knee: linearized and raw-ratio forms agree — a low-end correction only");
+
+        // ---- #4578 half B: linearizing does NOT rescue near-equal counts ----
+        //
+        // Reported independently by nigelfenton with a RigExpert AA-170
+        // cross-check: a TX Cal sweep aborted on its first step at SWR 256.00
+        // where the analyser and a real carrier both read 1.50.
+        //
+        // Two counts one LSB apart are two nearly-equal numbers before AND
+        // after the curve, so the ratio still runs away. It in fact runs away
+        // HARDER: at 20/19 the raw ratio gives 39.0 and the linearized form
+        // gives 78.0, because the knee's slope amplifies the reverse channel
+        // relative to the forward one down here. Whatever the computation does,
+        // the number is refused by the publish gate, not repaired by the maths.
+        const auto lsb = swrFromRaw(20, 19);
+        check(lsb.has_value() && *lsb > 30.0,
+              "one LSB apart at 20 counts still runs away — linearization does not subsume the gate");
+        check(20 < kMinForwardCountsForSwr,
+              "20 forward counts is below the publish gate: nothing is published from there");
+        const auto equal = swrFromRaw(20, 20);
+        check(equal.has_value() && *equal > 100.0,
+              "equal counts hit the clamp and saturate — the 255.99 the meter shows");
+        check(20 < kMinForwardCountsForSwr,
+              "equal counts at 20 forward are below the publish gate too");
+
+        // ---- the gate value is derived from the curve, and this is the
+        //      derivation, run ----
+        //
+        // CRITERION: one count of quantisation on EITHER channel must not move
+        // the reported SWR by more than 0.25 — half the finest distinction any
+        // consumer of this number makes (1.5 vs 2.0 vs 2.5, and the 3.0 abort a
+        // TX Cal sweep uses) — for every true SWR from 1.0 to 3.0. Above 3.0 the
+        // exact value stops mattering: every consumer has already aborted.
+        //
+        // DERIVED ANALYTICALLY FROM THE REFERENCE CURVE, NOT MEASURED ON
+        // HARDWARE. It assumes the channel-to-channel disagreement is one count.
+        // The real noise amplitude on this radio's reverse channel has never
+        // been measured; if it is larger than one count the gate is too low.
+        //
+        // At the old value of 16 the same criterion gives 0.85 SWR units of
+        // error — a reading that cannot tell 1.5 from 2.35.
+        {
+            constexpr double kTol = 0.25;
+            // Integer reverse count nearest a given true SWR at a given forward
+            // count, by bisection on the shipped detectorVolts() — so this
+            // inverts the curve the code actually uses rather than restating it.
+            auto revCountsFor = [](int fwd, double trueSwr) {
+                const double rho = (trueSwr - 1.0) / (trueSwr + 1.0);
+                const double want = rho * detectorVolts(fwd);
+                int lo = 0, hi = fwd;
+                while (lo < hi) {
+                    const int mid = lo + (hi - lo) / 2;
+                    if (detectorVolts(mid) < want) lo = mid + 1; else hi = mid;
+                }
+                if (lo > 0 && std::fabs(detectorVolts(lo - 1) - want)
+                            < std::fabs(detectorVolts(lo) - want))
+                    --lo;
+                return lo;
+            };
+            auto worstErrorAt = [&](int fwd) {
+                double worst = 0.0;
+                for (int i = 0; i <= 40; ++i) {
+                    const double t = 1.0 + 0.05 * i;
+                    const int rev = revCountsFor(fwd, t);
+                    for (int df = -1; df <= 1; ++df) {
+                        for (int dr = -1; dr <= 1; ++dr) {
+                            const auto v = swrFromRaw(fwd + df, rev + dr < 0 ? 0 : rev + dr);
+                            if (v) worst = std::max(worst, std::fabs(*v - t));
+                        }
+                    }
+                }
+                return worst;
+            };
+            // Smallest forward count at or above which the criterion holds for
+            // EVERY higher count too — scanned downward so a local dip below
+            // the tolerance cannot be mistaken for the crossing.
+            int firstUsable = 9;
+            for (int c = 1200; c > 8; --c) {
+                if (worstErrorAt(c) >= kTol) { firstUsable = c + 1; break; }
+            }
+            check(kMinForwardCountsForSwr >= firstUsable,
+                  "the publish gate is at or above the count the quantisation criterion requires");
+            check(worstErrorAt(kMinForwardCountsForSwr) < kTol,
+                  "at the publish gate, one count of quantisation is worth less than 0.25 SWR");
+            if (kMinForwardCountsForSwr < firstUsable)
+                std::fprintf(stderr,
+                             "      gate is %d, criterion needs %d (worst error at the gate: %.3f)\n",
+                             kMinForwardCountsForSwr, firstUsable,
+                             worstErrorAt(kMinForwardCountsForSwr));
+
+            // ---- the OFFSET criterion, which the bench added (#4578, D89) ----
+            //
+            // The sweep above perturbs both channels symmetrically about a
+            // reverse count that is CORRECT for the true SWR being tested. That
+            // is the right question about quantisation and it cannot see a
+            // BIAS: a reverse channel that reads ~3.4 counts with no reflected
+            // power at all shifts every reading one way, and no symmetric
+            // perturbation of a correct value expresses that.
+            //
+            // So this is a second, independent criterion on the same constant,
+            // and it is the one the measurement produced. Into a load whose
+            // true SWR is 1.0, with the reverse channel sitting at its measured
+            // floor, the gate must not admit a reading further than the same
+            // 0.25 from the truth.
+            //
+            // It is RUN, not restated: it reads kMeasuredReverseFloorCounts and
+            // calls the shipped swrFromRaw, so replacing the calibration curve
+            // or lowering the gate re-derives it. At the previous value of 96
+            // this fails at 1.40 — which is how the bench found that 96, itself
+            // a six-fold raise from 16, was still not enough.
+            {
+                const auto atGate = swrFromRaw(
+                    kMinForwardCountsForSwr,
+                    static_cast<int>(kMeasuredReverseFloorCounts + 0.5));
+                check(atGate.has_value(),
+                      "the gate's own forward count must produce a reading at all");
+                check(atGate && std::fabs(*atGate - 1.0) < kTol,
+                      "at the publish gate, a MATCHED load with the measured "
+                      "reverse-channel floor reads within 0.25 of 1.0");
+                if (atGate && std::fabs(*atGate - 1.0) >= kTol)
+                    std::fprintf(stderr,
+                                 "      gate is %d; a matched load with the measured "
+                                 "reverse floor %.2f counts reads %.3f, off by %.3f\n",
+                                 kMinForwardCountsForSwr,
+                                 kMeasuredReverseFloorCounts, *atGate,
+                                 std::fabs(*atGate - 1.0));
+
+                // AND THE DIRECTION, because it decides whether this is a
+                // safety problem or a nuisance: the offset makes the reading
+                // read HIGH on a matched load, which is the SAFE direction for
+                // a mismatch warning and the opposite of half A's under-read.
+                // Pinning it stops a future "fix" from turning an over-read
+                // into an under-read while still satisfying the bound above.
+                check(!atGate || *atGate >= 1.0,
+                      "the reverse-channel offset makes a matched load read "
+                      "HIGH, never low — the safe direction");
+            }
+        }
     }
 
     // ---- Direct I2C writes on the external bus (I2C2 / addr 0x3d) ----

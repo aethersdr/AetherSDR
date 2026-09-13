@@ -144,11 +144,19 @@ static QString findModel(const QString& packDir)
 }
 
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
-NvidiaAfxFilter::NvidiaAfxFilter(const QString& packDir)
-    : m_api(std::make_unique<Api>())
-    , m_up(std::make_unique<Resampler>(24000, 48000))
-    , m_down(std::make_unique<Resampler>(48000, 24000))
+NvidiaAfxFilter::NvidiaAfxFilter(const QString& packDir, int sampleRate)
+    : m_sampleRate(sampleRate)
+    , m_api(std::make_unique<Api>())
+    , m_stereoAdapter(0, sampleRate)
 {
+    if (!m_stereoAdapter.isValid()) {
+        m_lastError = QStringLiteral("Unsupported sample rate: %1").arg(sampleRate);
+        return;
+    }
+    if (sampleRate == 24000) {
+        m_up = std::make_unique<Resampler>(24000, 48000);
+        m_down = std::make_unique<Resampler>(48000, 24000);
+    }
     const QString dir = resolvePackDir(packDir);
     if (!QDir(dir).exists()) {
         m_lastError = QStringLiteral("AFX pack directory not found: %1").arg(dir);
@@ -300,25 +308,28 @@ void NvidiaAfxFilter::setIntensity(float ratio)
 }
 
 // ─── Audio-thread processing (mirrors DeepFilterFilter) ──────────────────────
-QByteArray NvidiaAfxFilter::process(const QByteArray& pcm24kStereo)
+QByteArray NvidiaAfxFilter::process(const QByteArray& pcmStereo)
 {
-    if (!m_ready || m_afxFrame <= 0 || pcm24kStereo.isEmpty())
-        return pcm24kStereo;
+    if (!m_ready || m_afxFrame <= 0 || pcmStereo.isEmpty())
+        return pcmStereo;
 
     if (m_paramsDirty.exchange(false))
         m_api->SetFloat(m_handle, P_INTENSITY, m_intensity.load());
 
-    const auto* src = reinterpret_cast<const float*>(pcm24kStereo.constData());
-    const int stereoFrames = pcm24kStereo.size() / (2 * static_cast<int>(sizeof(float)));
-    m_stereoAdapter.pushDryStereo(pcm24kStereo);
+    const auto* src = reinterpret_cast<const float*>(pcmStereo.constData());
+    const int stereoFrames = pcmStereo.size() / (2 * static_cast<int>(sizeof(float)));
+    m_stereoAdapter.pushDryStereo(pcmStereo);
 
-    // 1. 24 kHz stereo float32 → 48 kHz mono float32. Keep the dry stereo
+    // 1. Downmix and convert legacy24 to48; native48 needs no SRC. Keep dry stereo
     // queued so the BNR attenuation can be applied without collapsing pan.
-    m_mono24k.resize(stereoFrames);
+    m_monoInput.resize(stereoFrames);
     for (int i = 0; i < stereoFrames; ++i) {
-        m_mono24k[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
+        m_monoInput[i] = 0.5f * (src[i * 2] + src[i * 2 + 1]);
     }
-    QByteArray mono48k = m_up->process(m_mono24k.data(), stereoFrames);
+    QByteArray mono48k = m_up
+        ? m_up->process(m_monoInput.data(), stereoFrames)
+        : QByteArray(reinterpret_cast<const char*>(m_monoInput.data()),
+                     stereoFrames * static_cast<int>(sizeof(float)));
     const auto* mono = reinterpret_cast<const float*>(mono48k.constData());
     const int monoSamples = mono48k.size() / static_cast<int>(sizeof(float));
 
@@ -355,9 +366,12 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcm24kStereo)
         } else {
             m_inAccum.clear();
         }
-        // 3. 48 kHz mono float32 → 24 kHz mono float32, then re-apply the
-        // shared BNR envelope to the delayed dry stereo.
-        const QByteArray downsampled = m_down->process(out, consumed);
+        // 3. Convert only legacy24, then restore the existing delayed stereo
+        // level balance at the configured rate.
+        const QByteArray downsampled = m_down
+            ? m_down->process(out, consumed)
+            : QByteArray(reinterpret_cast<const char*>(out),
+                         consumed * static_cast<int>(sizeof(float)));
         const auto* downsampledMono = reinterpret_cast<const float*>(downsampled.constData());
         const int downsampledFrames = downsampled.size() / static_cast<int>(sizeof(float));
         m_outAccum.append(m_stereoAdapter.takeProcessedMono(downsampledMono, downsampledFrames));
@@ -366,7 +380,7 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcm24kStereo)
     // 4. Return exactly the input byte count. Use a read cursor instead of an
     //    O(n) front-erase every block; compact only once the consumed prefix
     //    grows past the unread tail.
-    const int needed = pcm24kStereo.size();
+    const int needed = pcmStereo.size();
     if (m_outAccum.size() - m_outReadPos >= needed) {
         QByteArray result(m_outAccum.constData() + m_outReadPos, needed);
         m_outReadPos += needed;
@@ -390,8 +404,10 @@ void NvidiaAfxFilter::reset()
     m_outAccum.clear();
     m_outReadPos = 0;
     m_stereoAdapter.reset();
-    m_up   = std::make_unique<Resampler>(24000, 48000);
-    m_down = std::make_unique<Resampler>(48000, 24000);
+    if (m_sampleRate == 24000) {
+        m_up = std::make_unique<Resampler>(24000, 48000);
+        m_down = std::make_unique<Resampler>(48000, 24000);
+    }
 }
 
 } // namespace AetherSDR

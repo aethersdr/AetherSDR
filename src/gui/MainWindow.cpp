@@ -1292,8 +1292,8 @@ MainWindow::MainWindow(QWidget* parent)
         // and so has no stream connection to drop. (PR #4537 review.)
         m_rxMutedForPlayback = mute;
         if (mute) {
-            disconnect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-                       m_audio, &AudioEngine::feedAudioData);
+            disconnect(m_radioModel.panStream(), &PanadapterStream::pcmFrameReady,
+                       m_audio, &AudioEngine::feedPcmFrame);
         } else {
             // Only restore the stream→sink feed for backends that actually use it.
             // A backend that emits its own seam audio (the demo, RFC #4288 Route A)
@@ -1301,8 +1301,8 @@ MainWindow::MainWindow(QWidget* parent)
             // double-feed that wirePanStreamRxAudioSinks() deliberately skips, and
             // Qt permits duplicates, so every unmute would stack another copy.
             if (!backendFeedsEngineDirectly()) {
-                connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
-                        m_audio, &AudioEngine::feedAudioData,
+                connect(m_radioModel.panStream(), &PanadapterStream::pcmFrameReady,
+                        m_audio, &AudioEngine::feedPcmFrame,
                         Qt::UniqueConnection);
             }
         }
@@ -1482,15 +1482,15 @@ MainWindow::MainWindow(QWidget* parent)
         m_rxMutedForPlayback = mute;   // seam backends — see the recorder handler
         if (mute) {
             disconnect(m_radioModel.panStream(),
-                       &PanadapterStream::audioDataReady,
-                       m_audio, &AudioEngine::feedAudioData);
+                       &PanadapterStream::pcmFrameReady,
+                       m_audio, &AudioEngine::feedPcmFrame);
         } else {
             // Same rule as the QSO-recorder unmute above: never resurrect the
             // stream→sink feed for a backend that supplies its own seam audio.
             if (!backendFeedsEngineDirectly()) {
                 connect(m_radioModel.panStream(),
-                        &PanadapterStream::audioDataReady,
-                        m_audio, &AudioEngine::feedAudioData,
+                        &PanadapterStream::pcmFrameReady,
+                        m_audio, &AudioEngine::feedPcmFrame,
                         Qt::UniqueConnection);
             }
         }
@@ -1656,10 +1656,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── Panadapter stream → audio engine ──────────────────────────────────
     // All VITA-49 traffic arrives on the single client udpport socket owned by
-    // PanadapterStream, which strips IF-Data headers and emits audioDataReady().
+    // PanadapterStream, which strips IF-Data headers and emits pcmFrameReady().
     // The QAudioSink feed is wired in one helper so a Flex-backend swap can
     // rebind it (the stream is destroyed/rebuilt on a family change;
-    // audioDataReady carries Flex RX audio itself, so a missed rebind is
+    // pcmFrameReady carries Flex RX audio itself, so a missed rebind is
     // silence rather than a degraded feature).
     wirePanStreamRxAudioSinks();
     // The taps that listen alongside the speaker — QSO recorder RX, CW and RTTY
@@ -2830,7 +2830,7 @@ MainWindow::~MainWindow()
     // ~QWidget::deleteChildren(), which runs *after* MainWindow's value members
     // (including m_radioModel) have already been destroyed — crash on quit
     // (#2385). Tear it down explicitly here: audio is stopped (no more
-    // daxAudioReady cross-thread signals), m_radioModel is still alive (DAX
+    // daxPcmReady cross-thread signals), m_radioModel is still alive (DAX
     // stream-remove commands reach the radio), and we null out TciApplet's raw
     // back-reference first so no dangling pointer remains in the widget tree.
     if (m_appletPanel && m_appletPanel->tciApplet())
@@ -4225,6 +4225,7 @@ void MainWindow::cancelTransmitFromIndicator()
     m_cwStraightKeyActive = false;
     m_cwLeftPaddleActive = false;
     m_cwRightPaddleActive = false;
+    m_radioModel.setCwPaddleHeld(false);   // bypasses pushCwPaddleState, so reset here too (#5422)
     m_lastCwPaddleTraceId.store(0, std::memory_order_relaxed);
     m_lastCwPaddleSourceMs.store(0, std::memory_order_relaxed);
 
@@ -4312,6 +4313,18 @@ void MainWindow::pushCwPaddleState(const QString& source,
             << " leftDit=" << m_cwLeftPaddleActive
             << " rightDah=" << m_cwRightPaddleActive
             << " localIambic=" << (m_iambicKeyer && m_iambicKeyer->isRunning());
+    }
+
+    // No CW while TUNE is active (#5422): a press is dropped here so the
+    // local keyer is never started against a tune carrier; a release (both
+    // paddles up) still flows so nothing is left keyed. sendCwKey and
+    // sendCwKeyEdge carry the same rule as the backstop for every caller.
+    m_radioModel.setCwPaddleHeld(m_cwLeftPaddleActive || m_cwRightPaddleActive);
+    if ((m_cwLeftPaddleActive || m_cwRightPaddleActive)
+        && !m_radioModel.transmitModel().admitsCwKeyEdge(true)) {
+        qCWarning(lcCw).noquote() << "CW paddle press refused: TUNE is active (#5422) source="
+                                  << actionSource;
+        return;
     }
 
     if (m_iambicKeyer && m_iambicKeyer->isRunning()) {
@@ -6948,7 +6961,7 @@ void MainWindow::wireBackendSeam(IRadioBackend* backend)
     // happen not to emit the signal today.
     if (dynamic_cast<SimBackend*>(backend) != nullptr) {
         connect(backend, &IRadioBackend::audioFrameReady,
-                m_audio, &AudioEngine::feedAudioData);
+                m_audio, &AudioEngine::feedPcmFrame);
     }
 
     // HL2 only, and deliberately: the client-side WDSP chains are this family's
@@ -7665,6 +7678,10 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // ── Flex platform features that are not DSP ─────────────────────────────
     if (m_waveformsAction) {
         m_waveformsAction->setVisible(!connected || caps.hasWaveforms);
+    }
+    if (m_ax25HfPacketDecodeDialog) {
+        m_ax25HfPacketDecodeDialog->setDstarTabAvailable(
+            connected, caps.hasWaveforms);
     }
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
@@ -10738,7 +10755,7 @@ SliceModel* MainWindow::swrSweepTargetSlice(int requestedSliceId) const
 // SWR sweep methods live in MainWindow_SwrSweep.cpp (#3351 Phase 1e).
 // RADE / FreeDV / DAX methods live in MainWindow_DigitalModes.cpp (#3351 Phase 1e).
 
-// StreamDeck native integration removed — use TCI StreamController plugin instead.
+// StreamDeck native integration removed — drive it over TCI instead.
 
 // ─── Applet-panel pop-out (#1713 Phase 6) ───────────────────────────────────
 //

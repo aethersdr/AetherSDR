@@ -44,6 +44,7 @@
 #include <functional>
 #include <complex>
 #include <cstdio>
+#include <cstring>
 #include <numbers>
 #include <vector>
 
@@ -127,8 +128,18 @@ double runTone(AnanRxDsp& dsp, double wireOffsetHz, double shiftHz)
     dsp.setShift(shiftHz);
 
     std::vector<float> audio;
+    AetherSDR::PcmFrame typed;
+    int typedCount = 0;
+    int legacyCount = 0;
+    bool exact = true;
+    const auto typedConn = QObject::connect(&dsp, &AnanRxDsp::pcmReady, &dsp,
+        [&](const AetherSDR::PcmFrame& frame) { typed = frame; ++typedCount; });
     const auto conn = QObject::connect(&dsp, &AnanRxDsp::audioReady,
-                     [&audio](const std::vector<float>& stereo) {
+                     [&](const std::vector<float>& stereo) {
+        ++legacyCount;
+        exact = exact && typed.current() && typed.stream().format.sampleRateHz == kAudioRate
+            && typed.samples().size() == static_cast<qsizetype>(stereo.size())
+            && std::memcmp(typed.samples().constData(), stereo.data(), stereo.size() * sizeof(float)) == 0;
         for (std::size_t k = 0; k + 1 < stereo.size(); k += 2)
             audio.push_back(stereo[k]);            // left channel
     });
@@ -151,6 +162,9 @@ double runTone(AnanRxDsp& dsp, double wireOffsetHz, double shiftHz)
         dsp.processIqBlock(iq);
     }
     QObject::disconnect(conn);
+    QObject::disconnect(typedConn);
+    check(exact && typedCount > 0 && typedCount == legacyCount,
+          "ANAN typed output matches every legacy sample and actual producer rate");
     return dominantHz(audio, kAudioRate);
 }
 

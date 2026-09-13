@@ -4211,7 +4211,7 @@ void TciServer::onWaterfallRowReady(quint32 streamId, const QVector<float>& bins
 
 // ── DAX channel management for TCI audio (#1331) ─────────────────────────────
 //
-// TCI audio feeds from daxAudioReady (not audioDataReady) so that audio_mute
+// TCI audio feeds from daxPcmReady (not pcmFrameReady) so that audio_mute
 // doesn't kill TCI audio. We auto-assign a DAX channel to each slice that
 // doesn't already have one, and release it when the last TCI audio client
 // disconnects.
@@ -4231,11 +4231,13 @@ void TciServer::ensureDaxForTci()
     if (!m_model || !m_model->isConnected()) return;
 
     // In-process backend (HL2): there is no DAX plane to arrange. RX audio
-    // reaches onDaxAudioReady() on channel 1 straight from the backend's
-    // demodulator (MainWindow wires backendAudioFrameReady), and the
-    // channel→TRX fallback there maps channel 1 to trx 0 — which is the whole
-    // mapping on a single-slice radio. Assigning slice DAX channels here would
-    // emit Flex `slice set … dax=` commands into a socket that ignores them.
+    // reaches onDaxAudioReady() straight from the backend's demodulator —
+    // MainWindow wires backendSliceAudioFrameReady per slice, as channel
+    // sliceId + 1 (#4545) — and the channel→TRX fallback there maps channel N
+    // to trx N-1. backendAudioFrameReady is the MIXED speaker feed and does not
+    // reach TCI; routing TCI from it was the single-receiver bug #4545 fixed.
+    // Assigning slice DAX channels here would emit Flex `slice set … dax=`
+    // commands into a socket that ignores them.
     if (!m_model->panStream()) return;
 
     QSet<int> channelsNeeded;
@@ -4271,7 +4273,7 @@ void TciServer::ensureDaxForTci()
     // Acquire the needed channels from the centralized manager (#3305). It
     // creates the radio-side stream only when the channel gains its FIRST
     // holder — never a duplicate subscription (duplicate streams made
-    // daxAudioReady fire twice per period, doubling apparent audio speed) —
+    // daxPcmReady fire twice per period, doubling apparent audio speed) —
     // and reuses anything the DAX bridge or a previous arm already created.
     // Acquire is idempotent, so re-arm paths can call this freely.
     //

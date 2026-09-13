@@ -1,4 +1,5 @@
 #include "NetworkDiagnosticsDialog.h"
+#include "ScopedChildWidget.h"
 #include "LogSyntaxHighlighter.h"
 #include "TimeSeriesGraphWidget.h"
 #include "core/AudioEngine.h"
@@ -25,6 +26,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPlainTextEdit>
+#include <QPersistentModelIndex>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRegularExpression>
@@ -791,6 +793,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         audioLayout->insertWidget(0, audioNote);
 
         m_audioStreamsTable = new QTableWidget(0, 9, audioPage);
+        m_audioStreamsTable->setObjectName(QStringLiteral("networkDiagnosticsAudioStreams"));
         m_audioStreamsTable->setHorizontalHeaderLabels({
             "Stream", "Source", "Format", "Rate", "Slow Delivery",
             "Late", "Packet Gaps", "Worst Gap", "Last Packet"
@@ -1082,6 +1085,7 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     layout->addWidget(m_tciClientSummary);
 
     m_tciClientTable = new QTableWidget(0, 7, this);
+    m_tciClientTable->setObjectName(QStringLiteral("networkDiagnosticsTciClients"));
     m_tciClientTable->setHorizontalHeaderLabels(
         {QStringLiteral("Name"), QStringLiteral("Endpoint"),
          QStringLiteral("Likely role"),
@@ -1209,6 +1213,7 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     }
 
     m_tciLogTable = new QTableWidget(0, 3, this);
+    m_tciLogTable->setObjectName(QStringLiteral("networkDiagnosticsTciLog"));
     m_tciLogTable->setHorizontalHeaderLabels(
         {QStringLiteral("Time"), QStringLiteral("Dir/Cmd"),
          QStringLiteral("Message")});
@@ -1376,7 +1381,12 @@ void NetworkDiagnosticsDialog::onTciLogContextMenu(const QPoint& pos)
     if (!m_tciLogTable)
         return;
     const QModelIndex idx = m_tciLogTable->indexAt(pos);
-    const auto sel = m_tciLogTable->selectionModel()->selectedRows();
+    const auto selected = m_tciLogTable->selectionModel()->selectedRows();
+    QList<QPersistentModelIndex> selectedRows;
+    selectedRows.reserve(selected.size());
+    for (const QModelIndex& row : selected) {
+        selectedRows.append(QPersistentModelIndex(row));
+    }
 
     QString cmdHere;
     if (idx.isValid()) {
@@ -1384,12 +1394,16 @@ void NetworkDiagnosticsDialog::onTciLogContextMenu(const QPoint& pos)
             cmdHere = tciCmdOf(it->text());
     }
 
-    QMenu menu(this);
+    const QPointer<NetworkDiagnosticsDialog> self(this);
+    const QPointer<QTableWidget> table(m_tciLogTable);
+    ScopedChildWidget<QMenu> menuOwner(this);
+    QMenu& menu = *menuOwner.get();
     QAction* removeAct = nullptr;
-    if (!sel.isEmpty())
-        removeAct = menu.addAction(sel.size() == 1
+    if (!selectedRows.isEmpty()) {
+        removeAct = menu.addAction(selectedRows.size() == 1
             ? QStringLiteral("Remove this row")
-            : QStringLiteral("Remove %1 selected rows").arg(sel.size()));
+            : QStringLiteral("Remove %1 selected rows").arg(selectedRows.size()));
+    }
     QAction* suppressAct = nullptr;
     if (!cmdHere.isEmpty())
         suppressAct = menu.addAction(
@@ -1399,17 +1413,27 @@ void NetworkDiagnosticsDialog::onTciLogContextMenu(const QPoint& pos)
     QAction* clearAct = menu.addAction(QStringLiteral("Clear log"));
 
     QAction* chosen = menu.exec(m_tciLogTable->viewport()->mapToGlobal(pos));
-    if (!chosen)
+    if (!self || !menuOwner || !table
+        || self->m_tciLogTable != table.data() || !chosen) {
         return;
+    }
     if (chosen == clearAct) {
-        m_tciLogTable->setRowCount(0);
+        table->setRowCount(0);
     } else if (removeAct && chosen == removeAct) {
         QList<int> rows;
-        for (const QModelIndex& i : sel) rows << i.row();
+        for (const QPersistentModelIndex& row : selectedRows) {
+            if (row.isValid() && row.model() == table->model()) {
+                rows << row.row();
+            }
+        }
         std::sort(rows.begin(), rows.end(), std::greater<int>());
-        for (int r : rows) m_tciLogTable->removeRow(r);
+        for (int r : rows) {
+            if (r >= 0 && r < table->rowCount()) {
+                table->removeRow(r);
+            }
+        }
     } else if (suppressAct && chosen == suppressAct) {
-        tciSuppress(cmdHere);
+        self->tciSuppress(cmdHere);
     }
 }
 
@@ -1454,6 +1478,8 @@ void NetworkDiagnosticsDialog::onTciSaveLog()
 {
     if (!m_tciLogTable)
         return;
+    const QPointer<NetworkDiagnosticsDialog> self(this);
+    const QPointer<QTableWidget> table(m_tciLogTable);
     const QString stamp =
         QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss"));
     const QString dir =
@@ -1463,18 +1489,19 @@ void NetworkDiagnosticsDialog::onTciSaveLog()
     const QString path = QFileDialog::getSaveFileName(
         this, QStringLiteral("Save TCI log"), suggested,
         QStringLiteral("Log files (*.log);;All files (*)"));
-    if (path.isEmpty())
+    if (!self || !table || self->m_tciLogTable != table.data() || path.isEmpty()) {
         return;
+    }
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qWarning() << "TCI monitor: cannot write" << path;
         return;
     }
     QTextStream ts(&f);
-    for (int r = 0; r < m_tciLogTable->rowCount(); ++r) {
-        const auto* t = m_tciLogTable->item(r, 0);
-        const auto* c = m_tciLogTable->item(r, 1);
-        const auto* m = m_tciLogTable->item(r, 2);
+    for (int r = 0; r < table->rowCount(); ++r) {
+        const auto* t = table->item(r, 0);
+        const auto* c = table->item(r, 1);
+        const auto* m = table->item(r, 2);
         ts << (t ? t->text() : QString()) << '\t'
            << (c ? c->text() : QString()) << '\t'
            << (m ? m->text() : QString()) << '\n';
@@ -1845,25 +1872,19 @@ static double kbpsFromBytes(qint64 bytesDelta, double elapsedSeconds)
     return (bytesDelta * 8.0) / (1000.0 * elapsedSeconds);
 }
 
-static double audioBufferMs(qsizetype bytes, int sampleRate)
+static QString formatAudioBuffer(qsizetype bytes, double ms)
 {
-    if (sampleRate <= 0) {
-        return 0.0;
-    }
-
-    static constexpr int kStereoChannels = 2;
-    static constexpr int kFloatBytesPerSample = 4;
-    return (bytes * 1000.0) / (sampleRate * kStereoChannels * kFloatBytesPerSample);
+    return QString("%1 bytes (%2 ms)").arg(bytes).arg(ms, 0, 'f', 1);
 }
 
-static QString formatAudioBuffer(qsizetype bytes, int sampleRate)
+// The peak row pairs two INDEPENDENT maxima: peak bytes and peak duration are
+// tracked separately on purpose, so that a later rate change cannot reinterpret
+// historical bytes through the current rate. They therefore need not come from
+// the same instant, and rendering them as "N bytes (M ms)" would assert that M
+// is N's duration. Show them as two separate maxima instead.
+static QString formatAudioBufferPeaks(qsizetype bytes, double ms)
 {
-    if (sampleRate <= 0) {
-        return QString("%1 bytes").arg(bytes);
-    }
-
-    const double ms = audioBufferMs(bytes, sampleRate);
-    return QString("%1 bytes (%2 ms)").arg(bytes).arg(ms, 0, 'f', 1);
+    return QString("%1 bytes peak / %2 ms peak").arg(bytes).arg(ms, 0, 'f', 1);
 }
 
 static QString formatMsValue(int value)
@@ -2177,7 +2198,6 @@ void NetworkDiagnosticsHistory::sampleNow()
     sample.packetLossPct = m_model->packetLossPercent();
 
     if (m_audio) {
-        const int sampleRate = m_audio->rxBufferSampleRate();
         const quint64 underruns = m_audio->rxBufferUnderrunCount();
         quint64 underrunDelta = 0;
         if (underruns >= m_lastAudioUnderrunCount) {
@@ -2186,7 +2206,7 @@ void NetworkDiagnosticsHistory::sampleNow()
         m_lastAudioUnderrunCount = underruns;
         sample.audioGapMs = m_model->audioPacketGapMs();
         sample.audioJitterMs = m_model->audioPacketJitterMs();
-        sample.audioBufferMs = audioBufferMs(m_audio->rxBufferBytes(), sampleRate);
+        sample.audioBufferMs = m_audio->rxBufferMs();
         sample.underrunsPerSecond = static_cast<double>(underrunDelta) / elapsedSeconds;
     }
 
@@ -2718,14 +2738,13 @@ void NetworkDiagnosticsDialog::refresh()
     }
 
     if (m_audio) {
-        const int sampleRate = m_audio->rxBufferSampleRate();
         const quint64 underruns = m_audio->rxBufferUnderrunCount();
         const QVector<PanadapterStream::AudioStreamDiagnostics> audioStreams =
             m_model->audioStreamDiagnostics();
         const QStringList sliceLabels = audibleSliceLabels(m_model);
-        m_audioBufferLabel->setText(formatAudioBuffer(m_audio->rxBufferBytes(), sampleRate));
-        m_overviewAudioValue->setText(QString("%1 ms").arg(audioBufferMs(m_audio->rxBufferBytes(), sampleRate), 0, 'f', 1));
-        m_audioBufferPeakLabel->setText(formatAudioBuffer(m_audio->rxBufferPeakBytes(), sampleRate));
+        m_audioBufferLabel->setText(formatAudioBuffer(m_audio->rxBufferBytes(), m_audio->rxBufferMs()));
+        m_overviewAudioValue->setText(QString("%1 ms").arg(m_audio->rxBufferMs(), 0, 'f', 1));
+        m_audioBufferPeakLabel->setText(formatAudioBufferPeaks(m_audio->rxBufferPeakBytes(), m_audio->rxBufferPeakMs()));
         m_audioUnderrunLabel->setText(QString::number(underruns));
         m_audioUnderrunRateLabel->setText(QString::number(sample.underrunsPerSecond, 'f', 0));
 

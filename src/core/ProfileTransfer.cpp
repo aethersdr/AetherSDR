@@ -217,20 +217,17 @@ void ProfileTransfer::finish(QString path)
 
 void ProfileTransfer::cleanup()
 {
+    // Enter the terminal state before tearing down QObjects. Their methods can
+    // emit synchronously, and no callback may start a second terminal outcome.
+    m_busy = false;
+    m_cancelled = false;
+
     m_timeout->stop();
     m_idleTimer->stop();
     m_overallTimer->stop();
 
-    if (m_socket) {
-        m_socket->abort();
-        m_socket->deleteLater();
-        m_socket = nullptr;
-    }
-    if (m_server) {
-        m_server->close();
-        m_server->deleteLater();
-        m_server = nullptr;
-    }
+    destroySocket(true);
+    destroyServer();
     if (m_saveFile) {
         m_saveFile->cancelWriting();
         m_saveFile->deleteLater();
@@ -243,12 +240,45 @@ void ProfileTransfer::cleanup()
     m_bytesQueued = 0;
     m_bytesTotal = 0;
     m_uploadPort = 0;
-    m_busy = false;
-    m_cancelled = false;
     m_usedFallbackPort = false;
     m_downloadFinalized = false;
     m_importCompletionScheduled = false;
     m_phase = Phase::Idle;
+}
+
+void ProfileTransfer::destroySocket(bool abortConnection)
+{
+    if (!m_socket) {
+        return;
+    }
+
+    QTcpSocket* socket = m_socket;
+    m_socket = nullptr;
+    QObject::disconnect(socket, nullptr, this, nullptr);
+    if (abortConnection) {
+        socket->abort();
+    } else {
+        socket->disconnectFromHost();
+    }
+    socket->deleteLater();
+}
+
+void ProfileTransfer::destroyServer()
+{
+    if (!m_server) {
+        return;
+    }
+
+    // Same detach-then-act ordering as destroySocket(). close() does not emit
+    // synchronously, but a newConnection already queued before cleanup would
+    // otherwise reach onDownloadConnection() with m_server null; today only the
+    // !m_busy guard stops it dereferencing that. Severing the handler makes the
+    // teardown safe by construction rather than by guard ordering.
+    QTcpServer* server = m_server;
+    m_server = nullptr;
+    QObject::disconnect(server, nullptr, this, nullptr);
+    server->close();
+    server->deleteLater();
 }
 
 ExportSelection ProfileTransfer::expandSelection(ExportSelection selection) const
@@ -398,11 +428,7 @@ void ProfileTransfer::onUploadPortReceived(int code, const QString& body)
 
 void ProfileTransfer::connectUploadSocket(quint16 port)
 {
-    if (m_socket) {
-        m_socket->abort();
-        m_socket->deleteLater();
-        m_socket = nullptr;
-    }
+    destroySocket(true);
 
     m_uploadPort = port;
     m_socket = new QTcpSocket(this);
@@ -500,10 +526,7 @@ void ProfileTransfer::onUploadDisconnected()
         return;
     }
 
-    if (m_socket) {
-        m_socket->deleteLater();
-        m_socket = nullptr;
-    }
+    destroySocket(false);
     m_uploadPayload.clear();
 
     if (m_phase == Phase::UploadMetaSubset) {

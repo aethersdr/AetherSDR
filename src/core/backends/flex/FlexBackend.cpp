@@ -128,6 +128,23 @@ void FlexBackend::setModelProvider(std::function<QString()> provider)
     m_modelProvider = std::move(provider);
 }
 
+void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
+{
+    const bool slicesMoved = maxSlices > 0 && maxSlices != m_reportedMaxSlices;
+    const bool pansMoved = maxPanadapters > 0 && maxPanadapters != m_reportedMaxPanadapters;
+    if (!slicesMoved && !pansMoved)
+        return;
+    if (slicesMoved)
+        m_reportedMaxSlices = maxSlices;
+    if (pansMoved)
+        m_reportedMaxPanadapters = maxPanadapters;
+    // A real revision of the descriptor the control protocol serializes, so it
+    // is announced like any other (#5594 item 1). Guarded above: the caller
+    // republishes on every capacity-bearing edge, and an announcement per call
+    // would be the storm the model guard already avoids.
+    emit capabilitiesChanged();
+}
+
 RadioCapabilities FlexBackend::capabilities() const
 {
     RadioCapabilities caps;
@@ -164,10 +181,20 @@ RadioCapabilities FlexBackend::capabilities() const
     // FlexBackend refines these from live radio status as touchpoints convert.
     const ModelCapabilities mc = capabilitiesFor(caps.model);
     caps.canCreateSlices = true;
-    caps.maxSlices = mc.maxSlices;
-    // approx: pan capacity is not strictly slice count on real Flex hardware;
-    // refined from live radio status in a later touchpoint conversion.
-    caps.maxPanadapters = mc.maxSlices;
+    // What the radio declared wins over the model table when it said anything
+    // (#5594 item 3). The table is a per-model estimate keyed off the model
+    // string; these are what THIS radio reports for its own hardware and
+    // licence. Both fall back to the table at 0, so firmware that never sends
+    // the discovery keys behaves exactly as before.
+    caps.maxSlices = m_reportedMaxSlices > 0 ? m_reportedMaxSlices : mc.maxSlices;
+    // Pan capacity is no longer assumed equal to slice capacity. That was a
+    // documented approximation ("pan capacity tracks the radio's SCU/slice
+    // capacity, which is identical across every current model",
+    // ModelCapabilities.h) — true of the current line-up, but an assumption the
+    // radio settles for itself: a FLEX-8600 broadcasts max_panadapters=4 and
+    // max_slices=4 as separate keys, and nothing guarantees they stay equal.
+    caps.maxPanadapters =
+        m_reportedMaxPanadapters > 0 ? m_reportedMaxPanadapters : mc.maxSlices;
     caps.hasExtendedDsp = mc.hasExtendedDsp();
     // The LMS/FFT family is base Flex firmware, not an 8000-series extra —
     // every radio with hasRadioSideDsp below also has NRL/ANFL/ANFT.
@@ -464,6 +491,25 @@ void FlexBackend::setKeying(bool key)
     // Keying is only translated here; the interlock/authorization decision is
     // made above the seam (RFC §6). Matches RadioModel::setTransmit's wire form.
     send(QStringLiteral("xmit %1").arg(key ? 1 : 0));
+}
+
+void FlexBackend::setTune(bool on, int tunePowerPercent)
+{
+    // FlexLib 4.2.18 Radio.TXTune. Power is a separate radio setting; do not
+    // re-send it here. Host-modulating backends need it on this same verb.
+    Q_UNUSED(tunePowerPercent);
+    send(QStringLiteral("transmit tune %1").arg(on ? 1 : 0));
+}
+
+void FlexBackend::setAtu(bool start)
+{
+    // FlexLib 4.2.18 Radio.ATUTuneStart / ATUTuneBypass.
+    send(start ? QStringLiteral("atu start") : QStringLiteral("atu bypass"));
+}
+
+void FlexBackend::abortCwText()
+{
+    send(QStringLiteral("cwx clear"));
 }
 
 void FlexBackend::invokeExtension(const QString& ns, const QString& verb,
@@ -1074,6 +1120,19 @@ void FlexBackend::clearExtensionHandles()
     // handle can't survive into a reconnect (possibly a different radio).
     m_ampHandle.clear();
     m_tunerHandle.clear();
+    // #5594 (M1): a reconnect must be able to announce its model again, even if
+    // it is the same radio — capabilities were republished from scratch at the
+    // connect edge, so the previous session's announcement describes nothing.
+    m_announcedModel.clear();
+    // #5594 item 3: and it must not inherit the previous radio's capacity — a
+    // FLEX-6700 followed by a FLEX-6400 would otherwise keep reporting 8.
+    //
+    // Deliberately silent. Every other capacity change announces, but this one
+    // runs on the disconnect edge, where RadioModel republishes capabilities
+    // through connectionStateChanged anyway; announcing here as well would be a
+    // duplicate on a path where no client can act on it.
+    m_reportedMaxSlices = 0;
+    m_reportedMaxPanadapters = 0;
 }
 
 void FlexBackend::decodeApdStatus(const QMap<QString, QString>& kvs)
@@ -1149,6 +1208,32 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
     carry(kvs, "daxiq_capacity", d.daxiqCapacity);
     carry(kvs, "daxiq_available", d.daxiqAvailable);
     emit radioChanged(d);
+
+    // #5594 (M1): announce the capability revision this status just caused.
+    //
+    // The Flex capability table is DERIVED FROM THE MODEL NAME — capabilities()
+    // runs capabilitiesFor(caps.model) to seed maxSlices, the DSP tier and the
+    // rest — and the model name is not known at the connect edge. It arrives
+    // here, in a `radio ...` status, some time after. Until now nothing said so,
+    // so every consumer that bound to capabilitiesChanged saw the pre-model
+    // table forever; RadioModel's own comment at the meterDefined handler
+    // records the symptom this produced (a mic gauge hidden at connect and
+    // un-hidden only if an unrelated status happened to land afterwards).
+    //
+    // Deliberately AFTER emit radioChanged(d): a consumer woken by
+    // capabilitiesChanged calls capabilities(), which reads the model back
+    // through m_modelProvider, and that provider only returns the new name once
+    // RadioModel has applied this delta. Same thread, direct delivery, so the
+    // apply above has already happened by the time this line runs.
+    //
+    // Change-guarded against the LAST ANNOUNCED name, not merely against the
+    // key being present: a Flex repeats `radio ...` status on unrelated edits
+    // (callsign, nickname, the audio gains above), and re-announcing on each
+    // would make a republish storm out of typing in a text field.
+    if (d.model && *d.model != m_announcedModel) {
+        m_announcedModel = *d.model;
+        emit capabilitiesChanged();
+    }
 }
 
 void FlexBackend::decodeGpsStatus(const QString& rawBody)

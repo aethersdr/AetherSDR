@@ -1,4 +1,5 @@
 #include "FramelessMessageBox.h"
+#include "ScopedChildWidget.h"
 
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
@@ -81,7 +82,8 @@ QMessageBox::StandardButton FramelessMessageBox::showMessage(
     Icon icon, QWidget* parent, const QString& title, const QString& text,
     StandardButtons buttons, StandardButton defaultButton)
 {
-    FramelessMessageBox box(parent);
+    ScopedChildWidget<FramelessMessageBox> boxOwner(parent);
+    FramelessMessageBox& box = *boxOwner.get();
     box.setIcon(icon);
     box.setWindowTitle(title);
     box.setText(text);

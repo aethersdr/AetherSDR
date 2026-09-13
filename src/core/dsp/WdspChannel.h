@@ -3,9 +3,11 @@
 #include <QMetaType>
 
 #include <atomic>
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -102,8 +104,32 @@ public:
         EngineError
     };
 
+    // Control-side, all-or-nothing admission against the SAME pool used by
+    // create(). Unconsumed slots return automatically; no FFTW work is done.
+    class Reservation final
+    {
+    public:
+        Reservation(Reservation&& other) noexcept;
+        Reservation& operator=(Reservation&& other) noexcept;
+        ~Reservation();
+        Reservation(const Reservation&) = delete;
+        Reservation& operator=(const Reservation&) = delete;
+        [[nodiscard]] std::size_t remaining() const noexcept { return m_count; }
+
+    private:
+        friend class WdspChannel;
+        Reservation() = default;
+        void release() noexcept;
+        std::array<int, 32> m_ids {};
+        std::size_t m_count = 0;
+    };
+
+    [[nodiscard]] static std::optional<Reservation> reserveChannels(std::size_t count);
+
     static std::unique_ptr<WdspChannel> create(const Config& config,
                                                std::string* error = nullptr) noexcept;
+    static std::unique_ptr<WdspChannel> create(const Config& config,
+        Reservation& reservation, std::string* error = nullptr) noexcept;
 
     ~WdspChannel();
 

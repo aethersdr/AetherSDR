@@ -8,7 +8,9 @@
 #include <QJsonObject>
 #include <QMetaObject>
 #include <QPointer>
+#include <QDateTime>
 #include <QQueue>
+#include <QSet>
 #include <QStringList>
 #include <QThread>
 
@@ -17,6 +19,7 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QPlainTextEdit;
 class QPushButton;
 class QRadioButton;
 class QSpinBox;
@@ -30,7 +33,9 @@ class QVBoxLayout;
 namespace AetherSDR {
 
 class AprsBeacon;
+class AprsDigipeaterModel;
 class AprsMessagesDialog;
+class AprsRateGraph;
 class AprsMessenger;
 class AprsStationList;
 class AudioEngine;
@@ -144,12 +149,21 @@ public:
     QJsonObject automationCommand(const QString& verb, const QString& action,
                                   const QString& value);
 
+    // D-STAR in AetherModem is a SmartSDR waveform surface (ThumbDV helper +
+    // radio-side D-STAR waveform). Hide the tab when the connected radio
+    // cannot load waveforms, or when this build has no helper. True on
+    // disconnect (permissive) and when RadioCapabilities::hasWaveforms is
+    // true. Hiding also stops a running helper so it is not orphaned.
+    void setDstarTabAvailable(bool connected, bool hasWaveforms);
+
 protected:
     // Command history (Up/Down) on the terminal input line.
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void setModemProfile(Ax25ModemProfile profile, bool persist);
+    void syncBaudRadios(Ax25ModemProfile profile);
+    QJsonObject digiAutomationStatus() const;
     void setDecodeEnabled(bool enabled);
     // True when the backend runs the modulator on this host (HL2) rather than
     // taking modulator input from a Flex DAX stream. Such a radio has no DAX
@@ -176,7 +190,7 @@ private:
     void paceTransmitAudio();
     void disconnectPttConfirmation();
     void handleTxAudioFinished(quint64 token, int drainMs);
-    void finishTransmit(bool aborted, const QString& reason);
+    void finishTransmit(bool aborted, const QString& reason, bool preserveQueue = false);
 
     // APRS client (APRS tab): station table, timed beacon, messaging.
     void buildAprsUi(QWidget* page, QVBoxLayout* pageLayout);
@@ -195,6 +209,12 @@ private:
                          const QString& hint);
     void updateAprsEnvelopeButton();
     void handleGpsUpdate();
+
+    // Fill-in digipeater (Digi tab).
+    QWidget* buildDigiPage();
+    void applyDigiConfigFromUi(bool persist);
+    void appendDigiLog(const QString& kind, const QString& line);
+    void refreshDigiStatus();
 
     // Personal Mailbox System (PMS) tab + service wiring.
     QWidget* buildMailboxPage();
@@ -253,9 +273,11 @@ private:
     Ax25DemodConfig m_shimConfig;
     QStackedWidget* m_tabStack{nullptr};
     QAbstractButton* m_ax25Tab{nullptr};
+    QAbstractButton* m_digiTab{nullptr};
     QAbstractButton* m_kissTab{nullptr};
     QAbstractButton* m_dstarTab{nullptr};
     QWidget* m_aprsPage{nullptr};
+    QWidget* m_digiPage{nullptr};
     QWidget* m_terminalPage{nullptr};
     DStarModemPage* m_dstarPage{nullptr};
 #ifdef HAVE_MQTT
@@ -334,7 +356,7 @@ private:
     QSpinBox* m_tncPort{nullptr};
     QLabel* m_tncStatusDot{nullptr};
     QLabel* m_tncStatusValue{nullptr};
-    QQueue<QByteArray> m_kissTxQueue;
+    bool m_txFromDigi{false};
     // Number of 250 ms radio-busy retries currently elapsed on the head-of-
     // queue frame. Capped (kMaxKissTxBusyRetries) so a stuck-transmitting
     // radio can't spin maybeStartNextKissTx() forever and starve later
@@ -368,6 +390,31 @@ private:
     QLineEdit* m_aprsMsgText{nullptr};
     QPushButton* m_aprsMsgSend{nullptr};
     QPushButton* m_aprsEnvelope{nullptr};
+
+    // Fill-in digipeater (Digi tab).
+    AprsDigipeaterModel* m_digi{nullptr};
+    QRadioButton* m_digiHf300{nullptr};
+    QRadioButton* m_digiVhf1200{nullptr};
+    QCheckBox* m_digiEnable{nullptr};
+    QLineEdit* m_digiCall{nullptr};
+    QLineEdit* m_digiAlias{nullptr};
+    QCheckBox* m_digiAlsoMyCall{nullptr};
+    QCheckBox* m_digiAlsoRelay{nullptr};
+    QSpinBox* m_digiDupeSecs{nullptr};
+    QCheckBox* m_digiBeaconEnable{nullptr};
+    QSpinBox* m_digiBeaconInterval{nullptr};
+    QLineEdit* m_digiBeaconText{nullptr};
+    QLineEdit* m_digiBeaconPath{nullptr};
+    QComboBox* m_digiBeaconSymbol{nullptr};
+    QPushButton* m_digiBeaconNow{nullptr};
+    QComboBox* m_digiWindow{nullptr};
+    AprsRateGraph* m_digiHeardGraph{nullptr};
+    AprsRateGraph* m_digiRepeatGraph{nullptr};
+    AprsRateGraph* m_digiDropGraph{nullptr};
+    QPlainTextEdit* m_digiLog{nullptr};
+    QLabel* m_digiStatusValue{nullptr};
+    QSet<QString> m_digiUniqueSources;
+    QDateTime m_digiLastRepeatUtc;
 
     // TNC Terminal service (connected-mode AX.25 client) and its controls.
     TncTerminal* m_terminal{nullptr};

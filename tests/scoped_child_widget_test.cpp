@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QDialog>
 #include <QMenu>
+#include <QMessageBox>
 #include <QKeyEvent>
 #include <QPointer>
 #include <QTimer>
@@ -104,6 +105,34 @@ void nestedDialogLifetime()
           returnedFromDialog && menuObserver.isNull() && dialogObserver.isNull());
 }
 
+void forwardedConstructorLifetime()
+{
+    auto parent = std::make_unique<QWidget>();
+    AetherSDR::ScopedChildWidget<QMessageBox> child(
+        QMessageBox::Information, QStringLiteral("Original title"),
+        QStringLiteral("Original text"), QMessageBox::Ok, parent.get());
+    // Compare with Qt's direct constructor under the SAME parent, so the check
+    // isolates argument forwarding rather than parentage: macOS may normalize
+    // message-box window titles even though the caller supplied an explicit
+    // one, and an unparented control would diverge for that reason instead.
+    // Heap-allocated deliberately — a stack QMessageBox parented here is the
+    // invalid free this header exists to prevent, and the parent is destroyed
+    // below.
+    auto* direct = new QMessageBox(QMessageBox::Information,
+                                   QStringLiteral("Original title"),
+                                   QStringLiteral("Original text"),
+                                   QMessageBox::Ok, parent.get());
+    check("forwarded constructor preserves dialog configuration",
+          child.get()->windowTitle() == direct->windowTitle()
+              && child.get()->text() == direct->text()
+              && child.get()->icon() == direct->icon()
+              && child.get()->standardButtons() == direct->standardButtons()
+              && child.get()->parentWidget() == parent.get());
+    QTimer::singleShot(0, child.get(), [&] { parent.reset(); });
+    child.get()->exec();
+    check("forwarded constructor retains guarded parent ownership", !child);
+}
+
 void selectedActionLifetime()
 {
     QWidget parent;
@@ -151,6 +180,7 @@ int main(int argc, char** argv)
     dialogLifetime(false, true);
     dialogLifetime(true, false);
     nestedDialogLifetime();
+    forwardedConstructorLifetime();
     selectedActionLifetime();
     actionLifetime();
     return failures ? 1 : 0;

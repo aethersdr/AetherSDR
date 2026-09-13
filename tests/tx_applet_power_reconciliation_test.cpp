@@ -223,7 +223,7 @@ void testAtuSuccessTogglesToBypass()
     if (!atu)
         return;
 
-    QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    QSignalSpy commandSpy(&model, &TransmitModel::atuCommandIssued);
     TransmitDelta matched;
     matched.transmitFreq = 14.100;
     matched.atuEnabled = true;
@@ -232,7 +232,7 @@ void testAtuSuccessTogglesToBypass()
     atu->click();
     report("successful same-frequency ATU click requests bypass",
            !commandSpy.isEmpty()
-               && commandSpy.takeLast().at(0).toString() == QStringLiteral("atu bypass"));
+               && !commandSpy.takeLast().at(0).toBool());
 
     TransmitDelta bypassed;
     bypassed.atuEnabled = false;
@@ -242,7 +242,7 @@ void testAtuSuccessTogglesToBypass()
     atu->click();
     report("bypassed ATU click starts a fresh tune",
            !commandSpy.isEmpty()
-               && commandSpy.takeLast().at(0).toString() == QStringLiteral("atu start"));
+               && commandSpy.takeLast().at(0).toBool());
 }
 
 void testAtuCapabilityUsesThreeVisibleStates()
@@ -278,6 +278,7 @@ void testAtuCapabilityUsesThreeVisibleStates()
                && inactiveSuccessStyle == inactiveMemoryStyle);
 
     QSignalSpy commandSpy(&model, &TransmitModel::commandReady);
+    QSignalSpy atuIntents(&model, &TransmitModel::atuCommandIssued);
     model.setHasTuner(false);
     model.setHasTunerMemories(false);
     QApplication::processEvents();
@@ -293,7 +294,7 @@ void testAtuCapabilityUsesThreeVisibleStates()
                && memory->styleSheet() != inactiveMemoryStyle);
     atu->click();
     mem->click();
-    report("unavailable tuner controls emit no commands", commandSpy.isEmpty());
+    report("unavailable tuner controls emit no commands", commandSpy.isEmpty() && atuIntents.isEmpty());
     report("unavailable tuner controls explain the state",
            atu->toolTip()
                    == QStringLiteral("Antenna tuner controls are unavailable for this radio")
@@ -366,12 +367,13 @@ void testTuneAvailability()
         return;
     }
     QSignalSpy commands(&model, &TransmitModel::commandReady);
+    QSignalSpy tuneIntents(&model, &TransmitModel::tuneCommandIssued);
     model.setTuneAvailable(false);
     report("unsupported Tune button is disabled", !tune->isEnabled());
     model.startTune();
     model.startTwoToneTune();
     report("both Tune paths refuse without commands or optimistic state",
-           commands.isEmpty() && !model.isTuning());
+           commands.isEmpty() && tuneIntents.isEmpty() && !model.isTuning());
     model.setTuneAvailable(true);
     report("capable mode restores Tune", tune->isEnabled());
     model.startTune();

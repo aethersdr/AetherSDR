@@ -296,10 +296,43 @@ else()
     message(STATUS "Qt6Keychain not found — credential persistence disabled")
 endif()
 
-# PortAudio (optional fallback for audio)
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(PORTAUDIO portaudio-2.0)
+# PortAudio (optional fallback for audio; on Windows it is the CW sidetone's
+# callback-model path — without it the sidetone runs on the push-model
+# QAudioSink and the WASAPI-preference logic from #3193 never compiles, #5200)
+# Windows: run scripts/setup/setup-portaudio.ps1 first to build the static lib
+# Linux:   apt install portaudio19-dev
+# macOS:   brew install portaudio
+if(WIN32)
+    set(PORTAUDIO_ROOT "${CMAKE_SOURCE_DIR}/third_party/portaudio")
+    # Check BOTH artefacts the link below depends on. Testing only the header
+    # let a half-populated third_party/portaudio (interrupted setup run, cache
+    # restored without lib/) configure as "found", satisfy the CI assert, and
+    # then die at link. setup-portaudio.ps1's own early-exit guard tests the
+    # .lib, so this keeps the two in agreement. (#5200)
+    if(EXISTS "${PORTAUDIO_ROOT}/include/portaudio.h"
+       AND EXISTS "${PORTAUDIO_ROOT}/lib/portaudio_static_x64.lib")
+        set(PORTAUDIO_FOUND TRUE)
+        set(PORTAUDIO_INCLUDE_DIRS "${PORTAUDIO_ROOT}/include")
+        # Static lib, so its host-API system dependencies must be named here
+        # (matches INTERFACE_LINK_LIBRARIES of PortAudio's own CMake export).
+        set(PORTAUDIO_LIBRARIES
+            "${PORTAUDIO_ROOT}/lib/portaudio_static_x64.lib"
+            winmm dsound ole32 uuid setupapi)
+        # CI greps configure output for this exact line — a soft-optional
+        # dependency that vanishes must fail the gate, not silently skip
+        # compiling the sink (same rule as the GPU-spectrum assert).
+        message(STATUS "PortAudio (third_party) found — CW sidetone callback sink enabled")
+    else()
+        # Soft-optional (build proceeds), but VISIBLY: without this the
+        # sidetone silently lands on the push-model QAudioSink path.
+        message(WARNING "PortAudio not found — run scripts/setup/setup-portaudio.ps1; "
+                        "the CW sidetone will use the push-model QAudioSink")
+    endif()
+else()
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(PORTAUDIO portaudio-2.0)
+    endif()
 endif()
 
 # FFTW3 (required by vendored WDSP; also used by NR2 spectral noise reduction)
@@ -714,6 +747,7 @@ set(CORE_SOURCES
     src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
+    src/core/backends/hl2/Hl2ControlRequest.cpp # RQST/ACK: one outstanding, echo-matched (§13 item 13)
     src/core/backends/hl2/Hl2EmergencyStop.cpp # release the radio from a signal handler
     src/core/backends/hl2/Hl2Receivers.cpp   # per-receiver index-space map (docs/HERMES.md §12.5)
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
@@ -721,6 +755,8 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)
+    src/core/backends/hl2/Hl2TelemetryPoller.cpp # stream-free telemetry on port 1025 (#15)
+    src/core/backends/hl2/Hl2TelemetryService.cpp # owns the poller ABOVE the backend (#15)
     src/core/backends/hl2/Hl2Settings.cpp    # owned config object, "Hl2" root key (Principle V)
     src/core/backends/hl2/Hl2FreqCal.cpp     # manual frequency calibration (no such register exists)
     src/core/backends/anan/P2Protocol.cpp    # aetherd ANAN P2 Phase 1b (openHPSDR Protocol 2 wire codec)
@@ -747,6 +783,7 @@ set(CORE_SOURCES
     src/core/backends/icom/IcomSettings.cpp  # owned config, "Icom" root key (Principle V)
     src/core/backends/icom/IcomCredentials.cpp # password -> keychain, NEVER settings
     src/core/dsp/WdspChannel.cpp
+    src/core/backends/rtl/RtlReceiverRegistry.cpp # RFC #5468 prepared receiver ownership; no USB dependency
     ${AETHER_SETTINGS_SOURCES}
     src/core/RadioStateMemory.cpp   # RFC #4603 client-side radio memory
     src/core/RtlSliceSettings.cpp   # RFC #5468 persistence foundation
@@ -766,6 +803,7 @@ set(CORE_SOURCES
     src/core/AudioOutputRouter.cpp
     src/core/AetherDspModePolicy.cpp
     src/core/SharedCapturePolicy.cpp
+    src/core/RxClientEffects.cpp
     src/core/AudioEngine.cpp
     src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
@@ -791,6 +829,7 @@ set(CORE_SOURCES
     src/core/CwSidetoneQAudioSink.cpp
     src/core/CwxLocalKeyer.cpp
     src/core/IambicKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/core/SpectralNR.cpp
     src/core/MonoDspStereoAdapter.cpp
     src/core/PanadapterStream.cpp
@@ -926,6 +965,7 @@ set(CORE_SOURCES
     src/core/aprs/AprsMessenger.cpp
     src/core/aprs/AprsBeacon.cpp
     src/core/aprs/AprsSettings.cpp
+    src/core/aprs/AprsFillInDigipeater.cpp
 )
 
 if(APPLE)
@@ -947,9 +987,11 @@ elseif(UNIX)
 endif()
 
 set(MODEL_SOURCES
+    src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
+    src/models/RadioModel_TxCoordinator.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
     src/models/ModelCapabilities.cpp
@@ -1030,6 +1072,7 @@ set(GUI_SOURCES
     src/gui/PanadapterMessageOverlay.h
     src/gui/PanadapterRenderScheduler.cpp
     src/gui/SpectrumWidget.cpp
+    src/gui/SpectrumWidget_TimeMarkers.cpp
     src/gui/WaterfallHistoryBuffer.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
@@ -1045,6 +1088,7 @@ set(GUI_SOURCES
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/SystemInfoDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
+    src/gui/AprsRateGraph.cpp
     src/gui/DStarAccessibility.cpp
     src/gui/DStarModemPage.cpp
     src/gui/AprsMessagesDialog.cpp

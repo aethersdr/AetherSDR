@@ -85,9 +85,17 @@ void pump(int ms)
 bool sawForceUnkey(const QStringList& commands)
 {
     return std::ranges::any_of(commands, [](const QString& command) {
-        return command == QStringLiteral("xmit 0")
-            || command == QStringLiteral("transmit tune 0");
+        return command == QStringLiteral("intent:mox:off")
+            || command == QStringLiteral("intent:tune:off");
     });
+}
+
+void recordKeyingIntents(RadioModel& radio, QStringList& commands)
+{
+    QObject::connect(&radio.transmitModel(), &AetherSDR::TransmitModel::moxCommandIssued,
+                     &radio, [&commands](bool on) { commands << (on ? "intent:mox:on" : "intent:mox:off"); });
+    QObject::connect(&radio.transmitModel(), &AetherSDR::TransmitModel::tuneCommandIssued,
+                     &radio, [&commands](bool on) { commands << (on ? "intent:tune:on" : "intent:tune:off"); });
 }
 
 // (1) TX permission enabled, but a local feature (WSPR in production) keys
@@ -96,6 +104,7 @@ void testEnabledBridgeDoesNotUnkeyManualTransmit()
 {
     RadioModel radio;
     QStringList commands;
+    recordKeyingIntents(radio, commands);
     QObject::connect(&radio.transmitModel(),
                      &AetherSDR::TransmitModel::commandReady,
                      [&commands](const QString& command) {
@@ -122,6 +131,7 @@ void testBridgeActionDoesNotAdoptPreExistingTransmit()
 {
     RadioModel radio;
     QStringList commands;
+    recordKeyingIntents(radio, commands);
     QObject::connect(&radio.transmitModel(),
                      &AetherSDR::TransmitModel::commandReady,
                      [&commands](const QString& command) {
@@ -158,6 +168,7 @@ void testBridgeActionOnIdleRadioIsPoliced()
 {
     RadioModel radio;
     QStringList commands;
+    recordKeyingIntents(radio, commands);
     QObject::connect(&radio.transmitModel(),
                      &AetherSDR::TransmitModel::commandReady,
                      [&commands](const QString& command) {

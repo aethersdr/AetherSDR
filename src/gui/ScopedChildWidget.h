@@ -2,6 +2,7 @@
 
 #include <QPointer>
 #include <QWidget>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -11,8 +12,9 @@ namespace AetherSDR {
 template <typename Widget>
 class ScopedChildWidget final {
 public:
-    explicit ScopedChildWidget(QWidget* parent)
-        : m_widget(new Widget(parent))
+    template <typename... Args>
+    explicit ScopedChildWidget(Args&&... args)
+        : m_widget(new Widget(std::forward<Args>(args)...))
     {
     }
 

@@ -129,6 +129,21 @@ Cc ccAdcAssign() noexcept
     return {kC0AdcAssignOrTxGain, 0x00, 0x00, 0x00, 0x00};
 }
 
+Cc ccRegister(int addr, std::uint32_t data) noexcept
+{
+    // Masked, not clamped: an out-of-range address is a caller bug, and the
+    // callers that matter (Hl2ControlRequest::arm) refuse it outright before
+    // reaching here. Masking is the belt to that brace — what it must never do
+    // is let bit 6 of an address spill into the RQST flag at C0[7], or bit 0 of
+    // the shifted byte become MOX.
+    const auto c0 = static_cast<std::uint8_t>((addr & kMaxRegisterAddress) << 1);
+    return {c0,
+            static_cast<std::uint8_t>((data >> 24) & 0xFF),
+            static_cast<std::uint8_t>((data >> 16) & 0xFF),
+            static_cast<std::uint8_t>((data >> 8) & 0xFF),
+            static_cast<std::uint8_t>(data & 0xFF)};
+}
+
 Cc ccPipelineReset() noexcept
 {
     // DATA[7:4] = 0x8 -> C4 = 0x80. Everything else stays zero, which is "no
@@ -243,7 +258,22 @@ std::optional<Ep6Response> parseEp6Response(const std::uint8_t* frame) noexcept
 
 void Hl2Telemetry::apply(const Ep6Response& r) noexcept
 {
+    // PTT first: C0[0] is ptt_resp in BOTH branches of control.v's iresp
+    // composition, so it is the one field an ACK still carries honestly.
+    //
+    // NOT a belt-and-braces PTT path for MetisClient, and the comment used to
+    // imply it was: that client routes every ACK to ingestControlResponse and
+    // never here, so on that wiring this line only ever runs for free-running
+    // telemetry — where every one of control.v's four RADDR slots carries
+    // ptt_resp anyway, so nothing is lost. It is kept
+    // because apply() is a public decoder with other callers and tests, and
+    // because dropping a field an ACK genuinely carries would be the wrong
+    // default for them.
     ptt = r.ptt;
+    // Everything below reads `raddr` as a free-running telemetry slot. In an ACK
+    // it is a command address and `data` is our own echo — see the header.
+    if (r.ack)
+        return;
     switch (r.raddr) {
     case 0x00:
         firmwareVersion = static_cast<int>(r.data & 0xFF);
@@ -305,6 +335,85 @@ void Hl2Telemetry::apply(const Ep6Response& r) noexcept
     }
 }
 
+double directionalWatts(int raw) noexcept
+{
+    // MOVED here from Hl2Backend with #4578: swrFromRaw() below needs this same
+    // curve to linearize the detector, and MetisProtocol is the layer Hl2Backend
+    // already includes. One copy, at the lower layer, no new dependency edge.
+    //
+    // Quisk's `power_meter_std_calibrations['HL2FilterE3']` verbatim
+    // (quisk_conf_defaults.py): measured [ADC count, watts] pairs for a
+    // Hermes-Lite 2 with an N2ADR companion filter board, rev E3. Quisk is the
+    // reference client and tier 3 on the source-precedence ladder, and this is
+    // the only published curve for this coupler.
+    //
+    // WHAT THIS IS NOT: a calibration of THIS radio. The oracle (§6) is explicit
+    // that these counts need a per-unit calibration against a dummy load to mean
+    // watts, because the coupler, the toroid winding and the detector diode all
+    // vary between boards. A reading from this curve is the right ORDER OF
+    // MAGNITUDE and roughly the right shape; it is not a measurement.
+    //
+    // It is still much better than the alternative, which was publishing
+    // nothing: an operator had no way to tell 100 mW from 5 W, and on a radio
+    // where a mis-set drive level is silent that is the difference between
+    // "working" and "not transmitting". The meters are labelled uncalibrated
+    // (defineMeters) so nobody reads them as a power measurement.
+    //
+    // A future per-unit calibration replaces this table and nothing else.
+    struct Point { double counts; double watts; };
+    static constexpr Point kCurve[] = {
+        {    0.000000, 0.000000 }, {   25.865385, 0.002550 },
+        {  101.024540, 0.012752 }, {  265.290123, 0.050601 },
+        {  647.915584, 0.216458 }, { 1196.593548, 0.665480 },
+        { 1603.703226, 1.155723 }, { 2012.327160, 1.811892 },
+        { 2616.772727, 3.008585 }, { 3173.818182, 4.392743 },
+        { 3382.792208, 4.979133 }, { 3721.071429, 6.024751 },
+        { 4093.178571, 7.289948 }, { 4502.496429, 8.820838 },
+        { 4952.746071, 10.673214 },
+    };
+    constexpr std::size_t kN = std::size(kCurve);
+
+    const double counts = static_cast<double>(raw);
+    if (counts <= kCurve[0].counts)
+        return 0.0;
+    // Above the top of the table, extrapolate along the last segment rather
+    // than clamping. Clamping would pin the meter at 10.7 W and hide the one
+    // reading an operator most needs to see — that they are past where the
+    // curve was ever measured.
+    if (counts >= kCurve[kN - 1].counts) {
+        const Point& a = kCurve[kN - 2];
+        const Point& b = kCurve[kN - 1];
+        const double slope = (b.watts - a.watts) / (b.counts - a.counts);
+        return b.watts + (counts - b.counts) * slope;
+    }
+    for (std::size_t i = 1; i < kN; ++i) {
+        if (counts <= kCurve[i].counts) {
+            const Point& a = kCurve[i - 1];
+            const Point& b = kCurve[i];
+            const double span = b.counts - a.counts;
+            if (span <= 0.0)
+                return b.watts;
+            return a.watts + (counts - a.counts) * (b.watts - a.watts) / span;
+        }
+    }
+    return kCurve[kN - 1].watts;
+}
+
+
+
+double detectorVolts(int raw) noexcept
+{
+    // The inverse of the count->power curve, taken back to VOLTAGE, in
+    // arbitrary units — only ratios of two of these are ever used.
+    //
+    // sqrt() of directionalWatts() rather than a second table, deliberately:
+    // the interpolation scheme is then the SAME scheme by construction, and the
+    // two functions cannot drift apart when a per-unit calibration replaces the
+    // points. A separate voltage table would be a second thing to keep in step.
+    const double w = directionalWatts(raw);
+    return w > 0.0 ? std::sqrt(w) : 0.0;
+}
+
 std::optional<double> swrFromRaw(int forwardRaw, int reverseRaw) noexcept
 {
     // No carrier, no SWR. Returning 1.0 here would render as a perfect match
@@ -322,13 +431,57 @@ std::optional<double> swrFromRaw(int forwardRaw, int reverseRaw) noexcept
     // (one branch uses the voltage form (Vf+Vr)/(Vf-Vr), another a sqrt form
     // whose arguments are the wrong way round and would return a NEGATIVE SWR),
     // so it is not usable as the tie-breaker.
-    const double fwd = static_cast<double>(forwardRaw);
-    double rev = static_cast<double>(reverseRaw < 0 ? 0 : reverseRaw);
+    //
+    // ---- and the caveat that reasoning does not cover (#4578) ----
+    //
+    // All of the above is about the FORM of the expression and it is correct.
+    // What it does not establish is that the counts may be used RAW. This
+    // function used to compute (fwd + rev) / (fwd - rev) directly on counts,
+    // defended by "a ratio of two readings from the same converter, so the
+    // unknown scale cancels". A ratio of raw counts is scale-invariant; it is
+    // not CURVE-invariant, and a diode detector's curve is not a straight line.
+    //
+    // Write a count as c = k(c)·V. Then
+    //
+    //     rho_shown / rho_true = k(c_rev) / k(c_fwd)
+    //
+    // and k, from directionalWatts()'s own table (k = counts / sqrt(watts)),
+    // rises from 512 at 26 counts to a flat ~1516 above ~1200:
+    //
+    //     counts   26   101   265   648  1197  2012  4953
+    //     k       512   895  1179  1393  1467  1495  1516
+    //
+    // c_rev is below c_fwd always, so k(c_rev) <= k(c_fwd) always, so the shown
+    // reflection coefficient is always LOW and the shown SWR always optimistic
+    // — never conservative. That is the unsafe direction on a meter whose whole
+    // job is to warn about a mismatch. Reported by ten9876 (#4578): at 265
+    // forward counts a true 2.0:1 displayed 1.44.
+    //
+    // The repair is to undo the curve before taking the ratio: detectorVolts()
+    // is sqrt(directionalWatts()), the inverse curve in arbitrary voltage units,
+    // and rho is the ratio of two of those. Everything else here is unchanged —
+    // the nullopt on no carrier, the clamp, and the voltage form with no square
+    // root. Above the knee this converges to what the raw ratio already gave
+    // (at 4953 counts a true 2.0 read 1.975 before and 2.000 after), so it is a
+    // low-end correction and not a rescaling of every reading in the log.
+    //
+    // What this does NOT fix, and must not be read as fixing: two counts one LSB
+    // apart are two nearly-equal numbers on either side of the curve, so the
+    // ratio still runs away down at the noise floor — harder, if anything, since
+    // the knee's slope amplifies the reverse channel relative to the forward one
+    // there. At 20/19 counts the raw ratio gave 39.0 and this gives 78.0. That
+    // case is refused by kMinForwardCountsForSwr, which is why that constant had
+    // to be re-derived at the same time; it is not repaired here.
+    const double fwd = detectorVolts(forwardRaw);
+    if (!(fwd > 0.0))
+        return std::nullopt;          // below the bottom of the curve entirely
+    double rev = detectorVolts(reverseRaw < 0 ? 0 : reverseRaw);
     // Reverse above forward is physically impossible; it means noise on a tiny
     // reading. Clamp rather than emit a negative or infinite SWR.
     if (rev >= fwd)
         rev = fwd * 0.999;
-    return (fwd + rev) / (fwd - rev);
+    const double rho = rev / fwd;
+    return (1.0 + rho) / (1.0 - rho);
 }
 
 std::array<std::uint8_t, 64> metisCommand(std::uint8_t cmd) noexcept
@@ -350,7 +503,22 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
     if (pkt.size() < 11 || pkt[0] != 0xEF || pkt[1] != 0xFE)
         return std::nullopt;
     DiscoveryReply r;
-    r.streaming = (pkt[2] == 0x03);                      // 0x02 idle, 0x03 already sending
+    // 0x02 idle, 0x03 already sending. NOT only that: on the HL2 gateware at
+    // 883a338 this byte is
+    //
+    //   usopenhpsdr1.v:266
+    //   discover_data_next = usethasmi_erase_done ? 8'h03
+    //                      : (usethasmi_send_more ? 8'h04
+    //                      : (run ? 8'h03 : 8'h02));
+    //
+    // so 0x03 means "streaming" OR "a gateware flash erase just completed", and
+    // 0x04 — which nothing here decodes — means a flash write is in progress.
+    // Reading 0x03 as `streaming` is therefore a judgement, not what the byte
+    // says: an application that discovers while someone is flashing the radio
+    // will be told the radio is busy sending IQ. Harmless while nobody flashes
+    // over Ethernet, wrong the moment anybody does, and named here so the next
+    // reader does not have to re-derive it from the RTL.
+    r.streaming = (pkt[2] == 0x03);
     for (std::size_t i = 0; i < 6; ++i)
         r.mac[i] = pkt[3 + i];
     r.gatewareVersion = pkt[9];
@@ -381,6 +549,95 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
     // Short replies omit it; leave 0 so callers apply their own default.
     if (pkt.size() > 19)
         r.numRx = pkt[19];
+
+    // ---- Telemetry, offsets 0x17-0x29 ----
+    //
+    // The radio has been sending all of this at every discovery and we have
+    // been discarding it since the parser was written. It is the same set the
+    // EP6 response cycle carries, in the same raw units — but obtainable
+    // WITHOUT a stream, which is the only way to read the radio while another
+    // client holds it or while our own stream is broken. Roadmap item #15; it
+    // needs nothing from item #13's RQST/ACK machinery, because none of these
+    // are command responses. resp_control is a combinational assign
+    // (control.v:899) and the discovery path has no `run` gate
+    // (dsopenhpsdr1.v:185-207).
+    //
+    // Offsets come from usopenhpsdr1.v:261-307, which emits the reply from a
+    // DOWN-counting state: offset = 0x3B - dbyte_no. Anchored on the two bytes
+    // parsed above — 6'h32 (VERSION_MAJOR) at 9 and 6'h31 (board) at 10 — with
+    // the same arithmetic putting 6'h28 (NR) at 0x13. hermeslite.py decodes the
+    // same packet identically and is the cross-check, not the source.
+    //
+    // Everything here stays absent unless the reply is long enough to have
+    // carried it. A gateware built without EXTENDED_RESP (control.v:826) sends
+    // hard zeros in these bytes rather than readings, and we cannot tell that
+    // apart from a genuine zero at this layer — a caller that needs to must
+    // compare across polls, and this comment is the warning that it is not
+    // free. Our board sets EXTENDED_RESP(1)
+    // (gateware/variants/hl2b5up_main/hermeslite.v:110).
+    const auto be16 = [](std::span<const std::uint8_t> p, std::size_t at) {
+        return static_cast<int>((std::uint32_t(p[at]) << 8) | std::uint32_t(p[at + 1]));
+    };
+
+    if (pkt.size() > 0x1a) {
+        r.responseData = (std::uint32_t(pkt[0x17]) << 24) | (std::uint32_t(pkt[0x18]) << 16)
+                       | (std::uint32_t(pkt[0x19]) << 8)  |  std::uint32_t(pkt[0x1a]);
+    }
+    if (pkt.size() > 0x1b) {
+        // control.v:899:
+        //   resp_control = {ext_cwkey, ptt_resp, pa_exttr, pa_inttr,
+        //                   tx_on, cw_on, clip_cnt}
+        const std::uint8_t c = pkt[0x1b];
+        r.extCwKey = (c & 0x80) != 0;
+        r.ptt      = (c & 0x40) != 0;          // ptt_resp = cw_on | ext_ptt (control.v:456)
+        r.paExtTr  = (c & 0x20) != 0;
+        r.paIntTr  = (c & 0x10) != 0;
+        r.txOn     = (c & 0x08) != 0;
+        r.cwOn     = (c & 0x04) != 0;
+        // TWO MEANINGS, and which one applies depends on whether the radio is
+        // streaming. `clip_cnt` is cleared on every EP6 packet (control.v:465)
+        // and by NOTHING else, so:
+        //   streaming  -> clip windows in the last EP6 interval (~2.6 ms), 0-3
+        //   idle       -> "clipped at least once since the last stream ended",
+        //                 saturated at 3 and unclearable by a discovery poller
+        // It is also not a count: rxclip is a sticky rail latch added as a
+        // LEVEL (control.v:479, ad9866.v:232-241), so three clock edges
+        // saturate it. Treat this as a flag with a range, never as a rate — the
+        // window length in wall-clock terms is not established. A caller must
+        // pair it with `streaming` above before showing it to anyone.
+        r.adcClipCount = static_cast<int>(c & 0x03);
+    }
+    // The four slow-ADC readings, each 12 bits in a big-endian pair with a zero
+    // top nibble. Same converter and same scaling as the EP6 cycle's
+    // temperatureRaw / forwardPowerRaw / reversePowerRaw / biasCurrentRaw, so
+    // the stream-free reading and the in-band reading are directly comparable
+    // with no conversion — which is what makes the two a cross-check on each
+    // other rather than two unrelated numbers.
+    if (pkt.size() > 0x23) {
+        r.temperatureRaw  = be16(pkt, 0x1c);
+        r.forwardPowerRaw = be16(pkt, 0x1e);
+        r.reversePowerRaw = be16(pkt, 0x20);
+        r.biasCurrentRaw  = be16(pkt, 0x22);
+    }
+    if (pkt.size() > 0x24) {
+        // dsiq_status, identical to the byte the EP6 path decodes at DATA[15:8]
+        // — one recovery flag covering underrun AND blocked writes, then the
+        // top 7 bits of the fill level. See Hl2Telemetry::apply().
+        r.txFifoRecovery = (pkt[0x24] & 0x80) != 0;
+        r.txFifoFillMsbs = static_cast<int>(pkt[0x24] & 0x7F);
+    }
+    if (pkt.size() > 0x26)
+        r.txBufferLatencyMs = static_cast<int>(pkt[0x26] & 0x7F);   // 6'h15: {1'b0, [6:0]}
+    if (pkt.size() > 0x28) {
+        // 6'h13: {cw_hang_time[9:8], 1'b0, ptt_hang_time[4:0]}. The mask is
+        // 0x1F and not a byte, and that is load-bearing rather than tidy: 31 in
+        // this field does not mean "the longest hang time", it DISABLES the
+        // gateware's PTT auto-unkey altogether (softerhardware/Hermes-Lite2
+        // issue #178). A decode that let cw_hang_time's two high bits bleed in
+        // would report a disabled dead-man's switch as some other number, or
+        // some other number as disabled.
+        r.pttHangTimeMs = static_cast<int>(pkt[0x28] & 0x1F);
+    }
     return r;
 }
 

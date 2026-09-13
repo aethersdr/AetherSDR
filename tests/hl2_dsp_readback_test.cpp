@@ -18,6 +18,7 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QJsonObject>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -48,6 +49,8 @@ struct Hl2DspReadbackTestAccess {
         // at destruction. A wire transition alone does not reconfigure DSP.
         QMetaObject::invokeMethod(backend.m_metis, "linkUp", Qt::BlockingQueuedConnection);
     }
+    static void pushInitialState(Hl2Backend& backend) { backend.pushInitialState(); }
+    static int micLevel(const Hl2Backend& backend) { return backend.m_micLevel; }
     static void connectFailed(Hl2Backend& backend)
     {
         QMetaObject::invokeMethod(backend.m_metis, "connectFailed", Qt::BlockingQueuedConnection,
@@ -270,6 +273,30 @@ int main(int argc, char** argv)
         check(!unconfigured(backend.dspChains()), "transient silence retains config");
         Access::linkUp(backend);
         check(!unconfigured(backend.dspChains()), "link resume preserves the same valid config");
+    }
+
+    // A restored MIC level is a one-shot connect seed. MetisClient re-emits
+    // linkUp after transient EP6 silence without a new connectRadio(), so
+    // leaving the staged value armed would replay stale disk state over an
+    // operator change made during the live session.
+    {
+        using Access = AetherSDR::hl2::Hl2DspReadbackTestAccess;
+        Hl2Backend backend;
+        AetherSDR::RestoredRadioState restored;
+        restored.extensionSchemaVersion = 1;
+        restored.extension = QJsonObject{
+            {QStringLiteral("txSetpoints"),
+             QJsonObject{{QStringLiteral("micLevel"), 70}}}};
+        backend.applyRestoredState(restored);
+
+        Access::pushInitialState(backend);
+        check(Access::micLevel(backend) == 70,
+              "the stored MIC level seeds the first link-up");
+
+        backend.setMicGain(80);
+        Access::pushInitialState(backend);
+        check(Access::micLevel(backend) == 80,
+              "a transient link-up does not replay stale MIC state");
     }
 
     if (g_failures == 0) {

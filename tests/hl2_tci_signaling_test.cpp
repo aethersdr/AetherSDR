@@ -71,6 +71,21 @@ static RadioInfo flexInfo()
     return i;
 }
 
+// The TX-signaling contract is independent of connection establishment. Use
+// the production backend seam without opening a Metis transport or pretending
+// an unanswered TEST-NET connection is a completed radio session.
+static void prepareTxFixture(RadioModel& model)
+{
+    model.setBackendForTest(std::make_unique<hl2::Hl2Backend>(), QStringLiteral("hl2"));
+    if (!model.automationApplySliceFixture(0, QStringLiteral("A")) || !model.slice(0)) {
+        qFatal("Could not install the TX slice fixture");
+    }
+    SliceDelta delta;
+    delta.txSlice = true;
+    delta.mode = QStringLiteral("USB");
+    model.slice(0)->applyChanges(delta);
+}
+
 // Grants access to the private predicate that gates every DAX arrangement in
 // TciServer. Declared as a friend in TciServer.h.
 //
@@ -135,13 +150,12 @@ public:
 static void testTransmitEdgeIsPublished()
 {
     RadioModel model;
-    model.connectToRadio(hl2Info());
+    prepareTxFixture(model);
 
     QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
 
     // Exactly the call TciServer::handleTrxRequest makes for a WSJT-X key.
-    // PttSource::Dax is what lets it through the local interlock preflight with
-    // no slice assigned, so this reaches the seam on a link-less model.
+    // The injected model has the explicit prerequisites to reach the seam.
     model.setTransmit(true, TransmitModel::PttSource::Dax);
     check(edges.size() == 1, "HL2 key publishes one radioTransmittingChanged");
     check(!edges.isEmpty() && edges.first().first().toBool(),
@@ -167,7 +181,7 @@ static void testTransmitEdgeIsPublished()
 static void testMoxPathPublishesTheSameEdge()
 {
     RadioModel model;
-    model.connectToRadio(hl2Info());
+    prepareTxFixture(model);
 
     QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
 
@@ -188,13 +202,11 @@ static void testMoxPathPublishesTheSameEdge()
 static void testTunePathPublishesTheSameEdge()
 {
     RadioModel model;
-    model.connectToRadio(hl2Info());
+    prepareTxFixture(model);
 
     QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
 
-    // PttSource::Dax for the same reason the key test uses it: it is the one
-    // source localPttInterlockMessage() lets through with no TX slice assigned,
-    // and TCI/DAX-initiated tune is a real path (see TransmitModel::startTune).
+    // TCI/DAX-initiated tune is a real path (see TransmitModel::startTune).
     model.transmitModel().startTune(TransmitModel::PttSource::Dax);
     check(edges.size() == 1 && edges.first().first().toBool(),
           "HL2 TUNE-on publishes radioTransmittingChanged(true)");
@@ -215,11 +227,15 @@ static void testFlexEdgeStaysInterlockOwned()
     model.connectToRadio(flexInfo());
 
     QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
+    QSignalSpy moxCommands(&model.transmitModel(), &TransmitModel::moxCommandIssued);
     model.setTransmit(true, TransmitModel::PttSource::Dax);
+    model.transmitModel().noteActivePttSource(TransmitModel::PttSource::Dax);
     model.transmitModel().setMox(true);
     model.transmitModel().startTune(TransmitModel::PttSource::Dax);
     check(edges.isEmpty(),
           "Flex publishes no raw-TX edge from a command; interlock owns it");
+    check(moxCommands.size() == 1,
+          "Flex MOX assertion reaches command dispatch, not a preflight refusal");
 }
 
 // ── Which command plane the radio speaks ──────────────────────────────────
@@ -274,7 +290,7 @@ static void testRefusedKeyPublishesNoTransmitEdge()
     qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
 
     RadioModel model;
-    model.connectToRadio(hl2Info());
+    prepareTxFixture(model);
     check(!model.backendCapabilities().canTransmit,
           "fixture precondition: the HL2 transmit gate is closed");
 

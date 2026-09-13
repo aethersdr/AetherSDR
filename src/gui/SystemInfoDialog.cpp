@@ -15,6 +15,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QLocale>
 #include <QRegularExpression>
 #include <QStyledItemDelegate>
@@ -218,12 +219,65 @@ SystemInfoDialog::SystemInfoDialog(MemoryHistoryRing* history, CpuHistoryRing* c
         m_tickLagMeter = tickLagMeter;
     }
     auto* layout = new QVBoxLayout(bodyWidget());
+
+    // One timeframe for every chart in the dialog, in the window header where
+    // the network dialog keeps its own (#5496). Two per-tab selectors with the
+    // same four choices could disagree: a range chosen on Overview was not
+    // the range Memory then showed. Hidden while a tab with no chart is
+    // current — Threads has a fixed 60 s window and Logs has no time axis —
+    // which is how the network dialog handles its Logs and TCI pages.
+    auto* header = new QHBoxLayout;
+    header->addStretch(1);
+    m_rangeLabel = new QLabel(QStringLiteral("Timeframe"), bodyWidget());
+    m_range = new QComboBox(bodyWidget());
+    m_rangeLabel->setBuddy(m_range);
+    m_range->setObjectName(QStringLiteral("systemInfoTimeframe"));
+    m_range->setAccessibleName(QStringLiteral("Chart timeframe"));
+    m_range->setAccessibleDescription(
+        QStringLiteral("Choose how much recent history the charts display."));
+    m_range->setFixedWidth(132);
+    // The issue's four (#2554); the rings hold an hour raw, so nothing longer
+    // is offered.
+    m_range->addItem(QStringLiteral("1 minute"), 60);
+    m_range->addItem(QStringLiteral("5 minutes"), 5 * 60);
+    m_range->addItem(QStringLiteral("15 minutes"), 15 * 60);
+    m_range->addItem(QStringLiteral("1 hour"), 60 * 60);
+    m_range->setCurrentIndex(1);   // 5 minutes: 200 points at 1.5 s
+    // Hidden, not removed: the row keeps its height while Threads or Logs is
+    // current, so the tab strip does not jump under the pointer.
+    for (QWidget* w : {static_cast<QWidget*>(m_rangeLabel), static_cast<QWidget*>(m_range)}) {
+        QSizePolicy policy = w->sizePolicy();
+        policy.setRetainSizeWhenHidden(true);
+        w->setSizePolicy(policy);
+    }
+    // Both refreshes, not only the current tab's: switching tabs must never
+    // show a chart still drawn to the previous range.
+    connect(m_range, &QComboBox::currentIndexChanged, this,
+            &SystemInfoDialog::refreshMemoryChart);
+    connect(m_range, &QComboBox::currentIndexChanged, this,
+            &SystemInfoDialog::refreshOverview);
+    header->addWidget(m_rangeLabel);
+    header->addWidget(m_range);
+    layout->addLayout(header);
+
     auto* tabs = new QTabWidget(bodyWidget());
     // The issue's order: Overview / Threads / Memory / (Painters) / Logs.
     tabs->addTab(buildOverviewTab(), QStringLiteral("Overview"));
-    tabs->addTab(buildThreadsTab(), QStringLiteral("Threads"));
+    QWidget* threadsTab = buildThreadsTab();
+    tabs->addTab(threadsTab, QStringLiteral("Threads"));
     tabs->addTab(buildMemoryTab(), QStringLiteral("Memory"));
-    tabs->addTab(buildLogsTab(), QStringLiteral("Logs"));
+    QWidget* logsTab = buildLogsTab();
+    tabs->addTab(logsTab, QStringLiteral("Logs"));
+    // By page, not by index: the order has changed once already (#5427 put
+    // Overview first) and the rule is about which pages draw a chart.
+    const auto showTimeframeForPage = [this, tabs, threadsTab, logsTab](int) {
+        QWidget* page = tabs->currentWidget();
+        const bool showTimeframe = page != threadsTab && page != logsTab;
+        m_rangeLabel->setVisible(showTimeframe);
+        m_range->setVisible(showTimeframe);
+    };
+    connect(tabs, &QTabWidget::currentChanged, this, showTimeframeForPage);
+    showTimeframeForPage(tabs->currentIndex());
     layout->addWidget(tabs);
 
     auto* buttonRow = new QHBoxLayout;
@@ -567,36 +621,14 @@ QWidget* SystemInfoDialog::buildMemoryTab()
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
 
-    // Header row: what is being measured, and — top-right, where the network
-    // dialog keeps its own — how much history the chart shows. The selector
-    // lives on this tab rather than the window because Threads has a fixed
-    // 60 s window and Logs has none; the network dialog reaches the same
-    // outcome by hiding its combo on those pages.
+    // Header row: what is being measured. How much history the chart shows
+    // is the window's timeframe above the tabs, shared with Overview (#5496).
     auto* header = new QHBoxLayout;
     m_memorySummary = new QLabel(QStringLiteral("Sampling…"), page);
     m_memorySummary->setObjectName(QStringLiteral("systemInfoMemorySummary"));
     m_memorySummary->setAccessibleName(QStringLiteral("Process memory summary"));
     header->addWidget(m_memorySummary);
     header->addStretch(1);
-    auto* rangeLabel = new QLabel(QStringLiteral("Timeframe"), page);
-    rangeLabel->setAccessibleName(QStringLiteral("Chart timeframe"));
-    m_memoryRange = new QComboBox(page);
-    m_memoryRange->setObjectName(QStringLiteral("systemInfoTimeframe"));
-    m_memoryRange->setAccessibleName(QStringLiteral("Chart timeframe"));
-    m_memoryRange->setAccessibleDescription(
-        QStringLiteral("Choose how much recent memory history the chart displays."));
-    m_memoryRange->setFixedWidth(132);
-    // The issue's four; the ring holds an hour raw, so nothing longer is offered
-    // until the compacting history arrives with the Overview tab.
-    m_memoryRange->addItem(QStringLiteral("1 minute"), 60);
-    m_memoryRange->addItem(QStringLiteral("5 minutes"), 5 * 60);
-    m_memoryRange->addItem(QStringLiteral("15 minutes"), 15 * 60);
-    m_memoryRange->addItem(QStringLiteral("1 hour"), 60 * 60);
-    m_memoryRange->setCurrentIndex(1);   // 5 minutes: 200 points at 1.5 s
-    connect(m_memoryRange, &QComboBox::currentIndexChanged, this,
-            &SystemInfoDialog::refreshMemoryChart);
-    header->addWidget(rangeLabel);
-    header->addWidget(m_memoryRange);
     layout->addLayout(header);
 
     // Readouts: the numbers, not only the line. Virtual is a readout only —
@@ -665,12 +697,12 @@ QWidget* SystemInfoDialog::buildMemoryTab()
     return page;
 }
 
-int SystemInfoDialog::selectedMemoryRangeSeconds() const
+int SystemInfoDialog::selectedRangeSeconds() const
 {
-    if (m_memoryRange == nullptr) {
+    if (m_range == nullptr) {
         return 5 * 60;
     }
-    return m_memoryRange->currentData().toInt();
+    return m_range->currentData().toInt();
 }
 
 void SystemInfoDialog::applyMemorySample(const MemorySample& sample)
@@ -695,6 +727,10 @@ void SystemInfoDialog::refreshMemoryChart()
     // reached the history cannot look as though it did.
     const MemoryHistoryRing::Record* latest = m_memoryRing->latest();
     if (latest == nullptr) {
+        // The shared selector also applies before the first sample arrives.
+        if (m_memoryGraph != nullptr) {
+            m_memoryGraph->setSeries({}, selectedRangeSeconds());
+        }
         return;
     }
     if (m_memorySummary != nullptr) {
@@ -732,7 +768,7 @@ void SystemInfoDialog::refreshMemoryChart()
     if (m_memoryGraph == nullptr) {
         return;
     }
-    const int rangeSeconds = selectedMemoryRangeSeconds();
+    const int rangeSeconds = selectedRangeSeconds();
     // The window ends at the newest sample, not at the wall clock: a dialog
     // whose sampling is paused shows the history it has, in place, instead of
     // sliding it off the left edge while nothing new arrives.
@@ -763,28 +799,7 @@ QWidget* SystemInfoDialog::buildOverviewTab()
     auto* page = new QWidget;
     auto* layout = new QVBoxLayout(page);
 
-    // Timeframe top-right, as on the Memory tab and in the network dialog;
-    // per tab rather than per window for the reason the Memory tab gives.
-    auto* header = new QHBoxLayout;
-    header->addStretch(1);
-    auto* rangeLabel = new QLabel(QStringLiteral("Timeframe"), page);
-    rangeLabel->setAccessibleName(QStringLiteral("Chart timeframe"));
-    m_overviewRange = new QComboBox(page);
-    m_overviewRange->setObjectName(QStringLiteral("systemInfoOverviewTimeframe"));
-    m_overviewRange->setAccessibleName(QStringLiteral("Chart timeframe"));
-    m_overviewRange->setAccessibleDescription(
-        QStringLiteral("Choose how much recent history the Overview charts display."));
-    m_overviewRange->setFixedWidth(132);
-    m_overviewRange->addItem(QStringLiteral("1 minute"), 60);
-    m_overviewRange->addItem(QStringLiteral("5 minutes"), 5 * 60);
-    m_overviewRange->addItem(QStringLiteral("15 minutes"), 15 * 60);
-    m_overviewRange->addItem(QStringLiteral("1 hour"), 60 * 60);
-    m_overviewRange->setCurrentIndex(1);
-    connect(m_overviewRange, &QComboBox::currentIndexChanged, this,
-            &SystemInfoDialog::refreshOverview);
-    header->addWidget(rangeLabel);
-    header->addWidget(m_overviewRange);
-    layout->addLayout(header);
+    // The charts' timeframe is the window's, above the tabs (#5496).
 
     // Four cards across, the network dialog's row.
     auto* cards = new QHBoxLayout;
@@ -893,14 +908,6 @@ QWidget* SystemInfoDialog::buildOverviewTab()
     return scroll;
 }
 
-int SystemInfoDialog::selectedOverviewRangeSeconds() const
-{
-    if (m_overviewRange == nullptr) {
-        return 5 * 60;
-    }
-    return m_overviewRange->currentData().toInt();
-}
-
 void SystemInfoDialog::setCardLevel(QLabel* value, SystemInfo::CardLevel level)
 {
     if (value == nullptr) {
@@ -960,7 +967,7 @@ void SystemInfoDialog::refreshOverview()
 {
     const CpuHistoryRing::Record* cpu = m_cpuRing->latest();
     const MemoryHistoryRing::Record* mem = m_memoryRing->latest();
-    const int rangeSeconds = selectedOverviewRangeSeconds();
+    const int rangeSeconds = selectedRangeSeconds();
     const double gapSeconds = CpuHistoryRing::connectGapSecondsFor(rangeSeconds);
     ThemeManager& theme = ThemeManager::instance();
 

@@ -276,12 +276,15 @@ AnanBackend::AnanBackend(QObject* parent)
         emit capabilitiesChanged();
     });
 
-    connect(m_dsp, &AnanRxDsp::audioReady, this, [this](const std::vector<float>& pcm) {
-        const QByteArray bytes = floatBytes(pcm);
-        emit sliceAudioFrameReady(kSliceId, bytes);
+    connect(m_dsp, &AnanRxDsp::pcmReady, this, [this](const PcmFrame& frame) {
+        const QByteArray bytes = frame.legacyStereo24();
+        if (bytes.isEmpty()) {
+            return;
+        }
+        publishLegacySliceAudio(kSliceId, bytes);
         // One DDC, so "mixing" the speaker feed is the identity -- no
         // separate mix stage needed for a single receiver.
-        emit audioFrameReady(bytes);
+        publishLegacyAudio(bytes);
     });
     connect(m_dsp, &AnanRxDsp::spectrumReady, this, [this](const std::vector<float>& binsDbfs) {
         std::vector<float> dbm(binsDbfs.size());
@@ -599,6 +602,7 @@ void AnanBackend::startP2ClientSession(quint64 generation)
 
 void AnanBackend::disconnectRadio()
 {
+    retirePcmStreams();
     m_droopCalibrator.stop(false);
     m_droopCalibrator.setLandedRate(0);
     ++m_connectGeneration;   // orphan any in-flight finishDspSetup callback
@@ -719,8 +723,10 @@ void AnanBackend::setSliceFilter(int sliceId, int lowHz, int highHz)
 void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
 {
     Q_UNUSED(sliceId);
-    // 0..100 operator units -> 0..60 dB ceiling, same map Hl2Backend uses
-    // (kAgcCeilingDbPerUnit = 0.6) -- a WDSP-range fact, not an HL2 fact.
+    // 0..100 operator units -> 0..60 dB ceiling, same map the HL2 uses
+    // (Hl2DbReference::kAgcCeilingDbPerUnit = 0.6) -- a WDSP-range fact, not an
+    // HL2 fact. The HL2 additionally REFERS this ceiling to its LNA gain, which
+    // is an HL2 fact and deliberately not copied here.
     const QString m = mode.trimmed().toLower();
     int wdspMode = 3;   // medium, WDSP's own default
     if (m == QLatin1String("off"))  wdspMode = 0;

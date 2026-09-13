@@ -1,4 +1,6 @@
 #include "core/backends/rtl/RtlSdrBackend.h"
+
+#include <QPointer>
 #include "core/backends/rtl/RtlSdrWorker.h"
 #include "core/backends/rtl/RtlSdrDdc.h"
 #include "core/backends/RadioDelta.h"
@@ -91,6 +93,19 @@ RtlSdrBackend::~RtlSdrBackend()
 
 RadioCapabilities RtlSdrBackend::capabilities() const
 {
+    // #5594 (M1) item 4: this backend deliberately never emits
+    // capabilitiesChanged, and that is the honest answer rather than a gap.
+    //
+    // Every field below is either a compile-time constant for the R820T/RTL2832U
+    // pair or comes from the USB descriptor strings (m_vendor, m_product /
+    // m_modelName, and m_serial), read during connectRadio() before connected()
+    // and cleared on disconnect or a configuration failure before connection.
+    // The declaration is fixed for the whole session: no mid-session revision, and
+    // a synthetic emission would be noise dressed up as a contract.
+    //
+    // If a future tuner-dependent field is added here (a per-tuner gain table,
+    // a direct-sampling range that depends on the IC), it becomes revisable and
+    // this comment stops being true.
     RadioCapabilities c;
     c.family = QStringLiteral("rtl");
     c.model  = m_modelName;
@@ -381,9 +396,12 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
     connect(m_worker.get(), &RtlSdrWorker::waterfallRowReady,
             this, &IRadioBackend::waterfallRowReady);
     connect(m_worker.get(), &RtlSdrWorker::audioFrameReady,
-            this, [this](const QByteArray& pcm) {
-                emit audioFrameReady(pcm);
-                emit sliceAudioFrameReady(0, pcm);
+            this, [this, producer = QPointer<RtlSdrWorker>(m_worker.get())](const QByteArray& pcm) {
+                if (!producer || producer.data() != m_worker.get()) {
+                    return;
+                }
+                publishLegacyAudio(pcm);
+                publishLegacySliceAudio(0, pcm);
             });
     connect(m_worker.get(), &RtlSdrWorker::readError,
             this, [this](const QString& err) {
@@ -405,6 +423,7 @@ void RtlSdrBackend::connectRadio(const RadioConnectRequest& request)
 
 void RtlSdrBackend::disconnectRadio()
 {
+    retirePcmStreams();
     if (!m_connected) {
         return;
     }

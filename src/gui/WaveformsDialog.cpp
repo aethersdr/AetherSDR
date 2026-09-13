@@ -7,6 +7,7 @@
 #include "models/FlexWaveformModel.h"
 #include "models/RadioModel.h"
 #include "gui/WaveformInstallGate.h"   // #4210 pure Docker-install gate policy
+#include "ScopedChildWidget.h"
 
 #include <QAction>
 #include <QCheckBox>
@@ -27,6 +28,7 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QProgressBar>
+#include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
@@ -774,7 +776,9 @@ QWidget* makeEmptyWaveformsState(QWidget* parent = nullptr)
 
 void showDockerWfpNotReadyDialog(QWidget* parent, const QString& statusText)
 {
-    PersistentDialog dialog(QObject::tr("Docker Waveform Unavailable"), QString(), parent);
+    ScopedChildWidget<PersistentDialog> dialogOwner(
+        QObject::tr("Docker Waveform Unavailable"), QString(), parent);
+    PersistentDialog& dialog = *dialogOwner.get();
     theme::setContainer(&dialog, QStringLiteral("dialog/waveforms/wfpNotReady"));
     dialog.setWindowModality(Qt::WindowModal);
     dialog.setModal(true);
@@ -818,7 +822,9 @@ bool confirmRadioWaveformRemoval(QWidget* parent, const QString& name, bool isCo
         ? QObject::tr("Remove")
         : QObject::tr("Uninstall");
 
-    PersistentDialog dialog(title, QString(), parent);
+    const QPointer<QWidget> parentGuard(parent);
+    ScopedChildWidget<PersistentDialog> dialogOwner(title, QString(), parent);
+    PersistentDialog& dialog = *dialogOwner.get();
     theme::setContainer(&dialog, QStringLiteral("dialog/waveforms/removeConfirm"));
     dialog.setWindowModality(Qt::WindowModal);
     dialog.setModal(true);
@@ -849,14 +855,16 @@ bool confirmRadioWaveformRemoval(QWidget* parent, const QString& name, bool isCo
 
     root->addLayout(buttons);
 
-    return dialog.exec() == QDialog::Accepted;
+    const int result = dialog.exec();
+    return parentGuard && dialogOwner && result == QDialog::Accepted;
 }
 
 void showWaveformInstallResultDialog(QWidget* parent,
                                      const QString& title,
                                      const QString& messageText)
 {
-    PersistentDialog dialog(title, QString(), parent);
+    ScopedChildWidget<PersistentDialog> dialogOwner(title, QString(), parent);
+    PersistentDialog& dialog = *dialogOwner.get();
     theme::setContainer(&dialog, QStringLiteral("dialog/waveforms/installResult"));
     dialog.setWindowModality(Qt::WindowModal);
     dialog.setModal(true);
@@ -1489,31 +1497,41 @@ void WaveformsDialog::installWaveformFile(const QString& title,
         return;
     }
 
+    const QPointer<WaveformsDialog> self(this);
+    const QPointer<RadioModel> modelGuard(m_radioModel);
     const QString path = QFileDialog::getOpenFileName(
         this,
         title,
         initialPath,
         filter);
 
-    if (path.isEmpty()) {
+    if (!self || !modelGuard || self->m_radioModel != modelGuard.data() || path.isEmpty()) {
         return;
     }
 
     if (docker) {
-        const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
-        const QString blocker = dockerInstallBlockerText(m_radioModel, wfModel);
+        const FlexWaveformModel& wfModel = modelGuard->flexWaveformModel();
+        const QString blocker = dockerInstallBlockerText(modelGuard, wfModel);
         if (!blocker.isEmpty()) {
             showDockerWfpNotReadyDialog(this, blocker);
             return;
         }
     }
 
-    if (!m_installer) {
-        m_installer = new WaveformInstaller(m_radioModel, this);
+    if (m_installer && m_installer->isInstalling()) {
+        return;
     }
 
-    if (m_installer->isInstalling()) {
-        return;
+    // Rebuild the installer if the radio changed under us — it caches the
+    // model it was constructed with, and the picker above is a nested loop
+    // during which the model can be swapped (#5568 review).
+    if (m_installer && m_installerModel != modelGuard) {
+        m_installer->deleteLater();
+        m_installer = nullptr;
+    }
+    if (!m_installer) {
+        m_installer = new WaveformInstaller(modelGuard, this);
+        m_installerModel = modelGuard;
     }
 
     m_installBtn->setEnabled(false);
@@ -1613,19 +1631,21 @@ void WaveformsDialog::onDStarStartStopClicked()
 
 void WaveformsDialog::onDStarBrowseClicked()
 {
+    const QPointer<WaveformsDialog> self(this);
+    const QPointer<QLineEdit> executableEdit(m_dstarExecutableEdit);
     const QString initialPath =
         dstarExecutableBrowseStartPath(m_dstarExecutableEdit->text().trimmed());
     const QString path = QFileDialog::getOpenFileName(
         this,
         tr("Select Digital Voice Service Executable"),
         initialPath);
-    if (path.isEmpty()) {
+    if (!self || !executableEdit || self->m_dstarExecutableEdit != executableEdit.data() || path.isEmpty()) {
         return;
     }
-    m_dstarExecutableEdit->setText(path);
-    m_dstarExecutableEdit->setCursorPosition(path.size());
-    m_dstarExecutableEdit->setFocus();
-    saveDStarSettings();
+    executableEdit->setText(path);
+    executableEdit->setCursorPosition(path.size());
+    executableEdit->setFocus();
+    self->saveDStarSettings();
 }
 
 void WaveformsDialog::refreshStatus()

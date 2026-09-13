@@ -8,8 +8,13 @@
 #include <QThread>
 #include <QTimer>
 
+#include "core/backends/hl2/Hl2AdcPairing.h"
+#include "core/backends/hl2/Hl2CapabilityAnnouncer.h"
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
+#include "core/backends/hl2/Hl2TelemetryCadence.h"  // Hl2LinkState (#15)
+#include "core/backends/hl2/Hl2TelemetryService.h"  // borrowed, owned by RadioModel
+#include "core/backends/hl2/Hl2TelemetrySource.h"   // the shared attribution rule
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
@@ -145,6 +150,23 @@ public:
                                         Hl2TxDsp* txDsp);
     LinkStats linkStats() const override;
 
+    // Point the stream-free telemetry poller at a radio (roadmap #15).
+    //
+    // Separate from connectRadio() ON PURPOSE: the case this feature exists for
+    // is a radio we are NOT connected to, because somebody else has the stream.
+    // A null address stops the poller and releases its socket.
+    //
+    // `heldByOther` is a caller's ASSERTION and is no longer the only route
+    // into Hl2LinkState::HeldByOther. It was, and nothing ever passed it true —
+    // the picker was named as the caller that would and was never wired — so
+    // the whole held-by-another-client case was dead code. telemetryLinkState()
+    // now also reads the radio's own in-use bit out of the poller's replies,
+    // which is fresher than any scan and arrives on the path that needs it.
+    void setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther);
+    // Injected by RadioModel, which owns it. Null is legitimate: a backend
+    // built before the service exists simply does not drive it.
+    void setTelemetryService(Hl2TelemetryService* svc) { m_telemetryService = svc; }
+
 signals:
     // Connect-time progress for the CLIENT-SIDE DSP build, and deliberately not
     // on the IRadioBackend seam: WDSP is this backend's alone (a Flex
@@ -164,6 +186,7 @@ signals:
 
 private:
     friend struct Hl2DspReadbackTestAccess;
+    friend struct Hl2PcmTestAccess;
     void invalidateTxDspConfiguration();
     // Publish linkStats() on the fixed cadence the seam promises. Driven by a
     // timer here rather than by MetisClient's receive path so the tick survives
@@ -256,19 +279,67 @@ private:
     void seedReceiverAgc();
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
+
+    // ---- stream-free telemetry (roadmap #15) ----
+    //
+    // Drive the poller's LinkState from what the IQ path is actually doing, so
+    // the cadence rule in Hl2TelemetryCadence.h is CONNECTED rather than merely
+    // consulted. Called from publishLinkStats() (which already computes the
+    // EP6-arriving signal on a fixed tick) and from connect/disconnect.
+    void updateTelemetryPollState();
+    // What the IQ path is doing, for the cadence rule AND for the health
+    // snapshot's attribution row. ONE expression, asked by both: the two used
+    // to decide separately, and healthSnapshot() decided it was in-band while
+    // the cadence rule had already called the same stream stalled.
+    [[nodiscard]] Hl2LinkState telemetryLinkState() const;
     // Clamp 0..100, map onto the drive register, honour the transmit gate.
     // Shared by setTxPower() and setTune() so the mapping exists exactly once.
     void applyDrive(int percent);
     static double temperatureCelsius(int raw);
-    // Uncalibrated directional-coupler counts -> watts. See the table in the
-    // .cpp for what this curve is and, more importantly, what it is not.
-    static double directionalWatts(int raw);
+    // Uncalibrated directional-coupler counts -> watts now lives beside the
+    // curve itself, as AetherSDR::hl2::directionalWatts() in MetisProtocol —
+    // swrFromRaw() needs the same table and this layer already depends on that
+    // one. Call sites here resolve it unqualified from the enclosing namespace.
     // Watts -> dBm for the meter seam, floored so 0 W does not become -inf.
     static double wattsToDbm(double watts);
 
     MetisClient* m_metis = nullptr;
     Hl2TxDsp* m_txDsp = nullptr;
     bool m_connected = false;
+
+    // ---- stream-free telemetry (roadmap #15) ----
+    //
+    // Reads the radio over the alternate control port while the in-band EP6
+    // path cannot: another client holds the radio, our stream has stalled, or
+    // we are not connected. Its own socket, never MetisClient's — the point is
+    // to keep working when that one has stopped.
+    // BORROWED, not owned. The service's lifetime is RadioModel's, because it
+    // has to answer when this backend does not exist -- which is the state the
+    // stream-free path is for. Owning it here was the original defect.
+    Hl2TelemetryService* m_telemetryService = nullptr;
+    // What the picker last said about this radio. Only meaningful while we are
+    // not connected: it is the difference between "idle radio nobody is using"
+    // and "someone else's session", which is the case A-telemetry is about.
+    bool m_pollTargetHeldByOther = false;
+    // WHEN the mirrored EP6 counter last went up, not what it was at some
+    // previous tick.
+    //
+    // This was a tick-to-tick comparison and that was a category error. The
+    // counter is mirrored by linkCountersUpdated at 1 Hz and the tick that read
+    // it also ran at 1 Hz, so whenever two ticks fell between two publishes the
+    // second saw no change and declared a healthy stream stalled -- and the app
+    // polled port 1025 through its own live session. Observed on hardware
+    // 2026-09-04; reproduced in hl2_link_state_alias_test; the rule and its
+    // threshold are in Hl2TelemetryCadence.h.
+    //
+    // Restarted from the MIRROR, which runs at the publish rate, so the value
+    // this records does not depend on the tick rate at all.
+    QElapsedTimer m_rxAdvanceClock;
+    quint64 m_rxPacketsAtLastAdvance = 0;
+    // How often the poll state is re-evaluated. Independent of the link-stats
+    // cadence on purpose: see the timer's construction for why sharing that
+    // one would silence the poller in exactly the states it is for.
+    static constexpr int kTelemetryPollStateIntervalMs = 1000;
 
     // ---- manual frequency calibration (Hl2FreqCal) ----
     //
@@ -522,6 +593,14 @@ private:
     // How many receivers this radio may run right now: the board's reported
     // count, capped by the link budget at the current sample rate.
     [[nodiscard]] int receiverCeiling() const;
+    // Announce a capability revision if — and only if — receiverCeiling() has
+    // actually moved since the last announcement (#5594, M1). The ceiling is
+    // reported as both maxSlices and maxPanadapters, and it FALLS when the
+    // operator zooms out: at 384 kHz a fourth receiver cannot be delivered on
+    // 100BASE-T, so the honest limit is 3. Guarded because a zoom sweep crosses
+    // several rates in a drag and an announcement per rate would be a storm;
+    // the great majority of zooms do not move the ceiling at all.
+    void announceReceiverCeilingRevision();
     // Re-evaluate the shared band filter and publish the resulting WIDE state.
     void publishWideState();
     // Destroy the DSP chains but KEEP each receiver's operator-set state. The
@@ -615,6 +694,10 @@ private:
     // because createPanadapter() has to answer "may I add one?" on this thread,
     // and the wire object lives on the I/O thread.
     int m_boardMaxRx = 0;
+    // Guards capabilitiesChanged() against a zoom sweep (#5594, M1). The
+    // decision lives in Hl2CapabilityAnnouncer.h so it is pinned socket-free;
+    // this class only supplies receiverCeiling() and does the emitting.
+    ReceiverCeilingAnnouncer m_ceilingAnnouncer;
     // What to assume when the board never reported its receiver count — a short
     // discovery reply, or a unicast probe that went unanswered. The shipping
     // hl2b5up_main gateware is built with NR=4 (variants/hl2b5up_main/
@@ -747,6 +830,12 @@ private:
     bool m_cwAutoKeyed = false;
     QTimer* m_cwHangTimer = nullptr;
     bool m_txMonitor = false;
+    // Both flags above are set SYNCHRONOUSLY while the setAudioMuted they imply
+    // rides a queued connection to the DSP thread, so at key-up they say
+    // "sampling" a block before it is true. This gate holds the moment sampling
+    // was asked to resume and answers from the stamp on the reading instead;
+    // healthSnapshot() feeds its answer to adcPairing(). See SliceSamplingGate.
+    hl2::SliceSamplingGate m_sliceSampling;
     bool m_toneFromTune = false;
     // Last drive the operator asked for through setTxPower(), so TUNE can drop to
     // tune power and put it back on release. Seeded to the same value
@@ -915,6 +1004,22 @@ private:
     // 50 is unity; see setMicGain().
     int m_micLevel = 50;
 
+    // The mic level applyRestoredState() accepted from THIS radio's document,
+    // held until pushInitialState() can apply it once. -1 = nothing stored or
+    // the connect-time seed has already been consumed.
+    //
+    // STAGED RATHER THAN APPLIED ON THE SPOT, for the same reason the frequency
+    // and passband beside it are staged: applyRestoredState() runs before
+    // connectRadio(), so m_txDsp does not exist yet and a setMicGain() here
+    // would reach nothing. pushInitialState() is where "the radio cannot be
+    // asked for it, so the app must assert it" is already the rule.
+    //
+    // -1 AND NOT 0, because 0 is the MUTE on this control
+    // (hl2::micSliderToLinear) and a position the operator can deliberately
+    // park on. A sentinel inside the control's own 0..100 range would make
+    // "nothing stored" indistinguishable from "stored, off the air".
+    int m_restoredMicLevel = -1;
+
     // ---- Voice-chain mirrors, for healthSnapshot() ----
     //
     // Same reason as m_drops and m_linkCounters above: these originate on the
@@ -951,11 +1056,15 @@ private:
     // cannot drift silently.
     double m_alcHoldBelowDbfs = -45.0;
 
+    // The slice AGC threshold -> WDSP gain ceiling map used to live here as
+    // kAgcCeilingDbPerUnit. It is now Hl2DbReference::kAgcCeilingDbPerUnit,
+    // reached only through m_dbRef.agcCeilingDb(), because the ceiling has to
+    // be REFERRED to the LNA gain the same way the displayed dBm is: derive it
+    // anywhere else and an RF gain change moves the heard level even though it
+    // provably cannot move the displayed one. See that header.
+
     // Fraction of the half-span the slice may occupy before the NCO re-centres.
     // 0.8 leaves the outer 20% of each side for filter roll-off.
-    // Slice AGC threshold (0..100) -> WDSP gain ceiling in dB. 0.6 spans
-    // 0..60 dB; see the measurement in setSliceAgc().
-    static constexpr double kAgcCeilingDbPerUnit = 0.6;
     static constexpr double kUsablePassbandFraction = 0.8;
     // Ceiling on host-mixed slice audio. N demodulated receivers are summed
     // here, so N loud slices can sum past full scale where one never could.

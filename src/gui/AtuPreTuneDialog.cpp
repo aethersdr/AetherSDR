@@ -19,6 +19,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include "ScopedChildWidget.h"
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStackedWidget>
@@ -488,6 +489,7 @@ QVector<double> AtuPreTuneDialog::centersForBand(const BandRow& row) const
 
 void AtuPreTuneDialog::onStartClicked()
 {
+    const QPointer<AtuPreTuneDialog> self(this);
     if (!m_radio) {
         reject();
         return;
@@ -558,15 +560,20 @@ void AtuPreTuneDialog::onStartClicked()
     // checked).
     if (m_points.size() > kMaxPointsSoftCap) {
         const int estSecs = m_points.size() * kSecondsPerPointEstimate;
-        const auto reply = QMessageBox::warning(this,
-            "Large Pre-Tune Sweep",
+        ScopedChildWidget<QMessageBox> boxOwner(
+            QMessageBox::Warning, "Large Pre-Tune Sweep",
             QString("Selected bands total %1 points "
                     "(estimated %2 min %3 s of intermittent TX).\n\n"
                     "Continue?")
                 .arg(m_points.size())
                 .arg(estSecs / 60)
                 .arg(estSecs % 60, 2, 10, QChar('0')),
-            QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
+            QMessageBox::Ok | QMessageBox::Cancel, this);
+        boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+        const int reply = boxOwner.get()->exec();
+        if (!self || !boxOwner) {
+            return;
+        }
         if (reply != QMessageBox::Ok) return;
     }
 
@@ -577,13 +584,18 @@ void AtuPreTuneDialog::onStartClicked()
     if (m_mode == Mode::Auto && m_radio) {
         const int tunePower = m_radio->transmitModel().tunePower();
         if (tunePower > kAutoModeTunePowerWarnW) {
-            const auto reply = QMessageBox::warning(this,
-                "High Tune Power",
+            ScopedChildWidget<QMessageBox> boxOwner(
+                QMessageBox::Warning, "High Tune Power",
                 QString("Tune power is %1 W — higher than the recommended "
                         "%2 W ceiling for unattended Auto mode.\n\n"
                         "Continue?")
                     .arg(tunePower).arg(kAutoModeTunePowerWarnW),
-                QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
+                QMessageBox::Ok | QMessageBox::Cancel, this);
+            boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
+            const int reply = boxOwner.get()->exec();
+            if (!self || !boxOwner) {
+                return;
+            }
             if (reply != QMessageBox::Ok) return;
         }
     }

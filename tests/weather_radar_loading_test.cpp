@@ -761,6 +761,17 @@ private slots:
 
     void flatControllerLoopRetainsEveryPaint()
     {
+#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
+        // MapDisplayWidget::flatMapViewportMode() deliberately keeps the flat
+        // map on QGraphicsView's raster viewport in this configuration, so
+        // m_flatView owns no QOpenGLWidget for this case to sample. The target
+        // as registered does not define AETHER_GPU_SPECTRUM, so this only
+        // fires for someone compiling the map sources the way the app is
+        // compiled. Without it, that build reads as a regression rather than
+        // as the raster path the app deliberately selects.
+        QSKIP("macOS GPU-spectrum builds keep the flat map on the raster "
+              "viewport; there is no QOpenGLWidget to read pixels from");
+#endif
         if (!qEnvironmentVariableIsSet("AETHERSDR_TEST_RADAR_GL")) {
             QSKIP("Opt in with AETHERSDR_TEST_RADAR_GL=1 and a native GUI platform");
         }

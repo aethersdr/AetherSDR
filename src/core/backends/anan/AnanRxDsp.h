@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/PcmFrame.h"
+
 #include <QElapsedTimer>
 #include <QObject>
 
@@ -269,6 +271,7 @@ public slots:
     void processIqBlock(const std::vector<std::complex<float>>& iq);
 
 signals:
+    void pcmReady(const AetherSDR::PcmFrame& frame);
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
     // WDSP's own signal-strength meter (SignalPeak), NOT the RMS of the
@@ -277,6 +280,7 @@ signals:
     void meterUpdate(float dbfs);
 
 private:
+    PcmProducer m_pcmProducer;
     bool spectrumFrameDue();
 
     // Shared install step for a successful RebuildResult -- resizes scratch

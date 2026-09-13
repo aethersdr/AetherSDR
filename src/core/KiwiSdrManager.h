@@ -180,6 +180,7 @@ signals:
     // the per-source DSP state (disabling alone only quiesces it — #3668 review).
     void audioSourceRemoved(const QString& id);
     void decodedAudioReady(const QString& id, const QByteArray& pcm24kStereoFloat);
+    void pcmFrameReady(const QString& id, const AetherSDR::PcmFrame& frame);
     void waterfallRowReady(const QString& id, const QString& panId,
                            const QVector<float>& binsDbm,
                            double lowFreqMhz, double highFreqMhz,

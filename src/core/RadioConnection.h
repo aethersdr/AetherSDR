@@ -26,6 +26,8 @@ enum class ConnectionState {
 // Call init() after moveToThread() to create the socket and timer.
 class RadioConnection : public QObject {
     Q_OBJECT
+    friend class TxOperationIntegrationTestAccess;
+    std::function<void(quint32, const QString&)> m_commandSinkForTest;
 
 public:
     explicit RadioConnection(QObject* parent = nullptr);

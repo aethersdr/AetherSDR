@@ -175,7 +175,7 @@ void testEmitsAudioWhenConnected()
     const int expectBytes =
         NoiseMixer::kFrameLen * 2 * static_cast<int>(sizeof(float));
     const auto lastArgs = audioSpy.constLast();
-    const int bytes = lastArgs.isEmpty() ? -1 : lastArgs.at(0).toByteArray().size();
+    const int bytes = lastArgs.isEmpty() ? -1 : lastArgs.at(0).value<AetherSDR::PcmFrame>().legacyStereo24().size();
     report("audio frame is 24 kHz stereo float32 sized", bytes == expectBytes);
 }
 
@@ -189,7 +189,7 @@ void testKeyingMutesAudio()
     // Frames still FLOW (stream stays alive) but are all-zero when keyed.
     bool allSilent = audioSpy.count() > 0;
     for (const auto& call : audioSpy) {
-        const QByteArray pcm = call.at(0).toByteArray();
+        const QByteArray pcm = call.at(0).value<AetherSDR::PcmFrame>().legacyStereo24();
         const auto* f = reinterpret_cast<const float*>(pcm.constData());
         const int n = pcm.size() / static_cast<int>(sizeof(float));
         for (int i = 0; i < n; ++i)
