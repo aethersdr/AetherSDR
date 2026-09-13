@@ -1623,10 +1623,43 @@ RadioCapabilities Hl2Backend::capabilities() const
     // backend would have mapped it to, so listing only one spelling would leave
     // the other keying.
     //
-    // THIS IS A DECLARATION, NOT A RESTRICTION. It reports what the modulator
-    // does today. When a mode genuinely transmits — the WDSP TXA chain carries
-    // all of these — its entry comes back off this list and nothing else here
-    // has to change.
+    // THIS DECLARATION ALSO WITHDRAWS TUNE IN THESE MODES. Say so here rather
+    // than let an operator discover it.
+    //
+    // refuseKeyInReceiveOnlyMode() is not a MOX-and-CW guard.
+    // RadioModel::beginLocalTxActivity() runs it for EVERY TxActivity, ahead of
+    // the per-activity capability checks, so TxActivity::Tune is refused too —
+    // and that one is a real loss, not a theoretical one. setTune() below raises
+    // the carrier from the GATEWARE test-tone generator at zero offset
+    // (MetisClient::setTxTestTone), a path that never reaches Hl2TxDsp, exactly
+    // like the CW keyer exempted above. This radio could put a clean tune
+    // carrier on the air with the TX slice in AM or FM; after this list it will
+    // not, and the operator is told "Choose a transmit mode first" and has to
+    // move the slice to a mode that transmits. (TxActivity::Atu was already
+    // refused here for want of hasTuner, so the plain TUNE button is the only
+    // behaviour this changes.)
+    //
+    // ACCEPTED, deliberately, on two grounds:
+    //
+    //   * It is what this capability already MEANS. The IC-705 declares WFM
+    //     receive-only (#5040) and is refused on this same guard, with a second
+    //     wire backstop in IcomCivBackend::refuseKeyingInReceiveOnlyMode() that
+    //     its setTune() converges on through setKeying() — "shared by every path
+    //     here that can start an emission", in its own words. HL2 is inheriting
+    //     a settled contract, not inventing one.
+    //   * receiveOnlyModes is ONE list of mode names with no per-activity
+    //     granularity, so exempting tune is not expressible from a backend at
+    //     all: it would mean changing RadioModel above the family seam, for
+    //     every family at once. That is a maintainer's call.
+    //
+    // The CW/tune asymmetry is in the SHAPE of the list, not in the reasoning
+    // behind it: CW stays off because CW is a MODE this radio transmits
+    // correctly, and tune is an ACTIVITY, which a list of mode names has no
+    // vocabulary for.
+    //
+    // What the list itself reports is only what the modulator does today. When a
+    // mode genuinely transmits — the WDSP TXA chain carries all of these — its
+    // entry comes back off this list and the tune refusal lifts with it.
     c.receiveOnlyModes = {QStringLiteral("AM"),   QStringLiteral("SAM"),
                           QStringLiteral("DSB"),  QStringLiteral("FM"),
                           QStringLiteral("NFM"),  QStringLiteral("WBFM"),

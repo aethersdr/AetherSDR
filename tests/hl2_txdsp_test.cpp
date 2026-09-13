@@ -228,6 +228,13 @@ int main(int argc, char** argv)
     // If someone later teaches this chain a real AM or FM modulator, this block
     // FAILS, which is the point: the failure is the reminder to take that mode
     // back off the receive-only list.
+    //
+    // SIX enumerators here cover EIGHT declared strings: Hl2Backend's
+    // modeFromString() maps NFM onto Mode::Fm and WFM onto Mode::Wbfm, so those
+    // two spellings have no enumerator of their own to modulate. That the
+    // DECLARATION still carries both — the guard compares the string the slice
+    // holds, not the enumerator — is asserted in hl2_family_transition_test,
+    // which reads capabilities() off a live backend. This file cannot see it.
     {
         const double usbBand[2] = {300.0, 2700.0};
         const auto reference = modulate(WdspChannel::Mode::Usb, kTone, 0.25,
