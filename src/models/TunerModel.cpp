@@ -21,6 +21,16 @@ void TunerModel::setHandle(const QString& handle)
     m_handle = handle;
     bool nowPres = isPresent();
     qCDebug(lcTuner) << "TunerModel: handle set to" << m_handle;
+    // Losing the handle is how the relayed side says the tuner is gone (radio
+    // disconnect, or the amplifier object being removed). A tune reported
+    // before that goes unfinished as far as this client is concerned: the
+    // tuner completes on its own and sits idle while the flag stays true.
+    // Left latched it would pass abortTune()'s guard and start a tune on an
+    // idle tuner. A direct connection that is still up re-reports the truth
+    // on its next poll a second later.
+    if (m_handle.isEmpty()) {
+        clearTuning();
+    }
     if (wasPres != nowPres)
         emit presenceChanged(nowPres);
     emit stateChanged();
@@ -87,6 +97,24 @@ void TunerModel::applyChanges(const TunerDelta& d)
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────
+
+void TunerModel::applyDirectTuning(const QMap<QString, QString>& kvs)
+{
+    if (!kvs.contains(QStringLiteral("tuning"))) return;
+    const bool tuning = kvs.value(QStringLiteral("tuning")) == QLatin1String("1");
+    if (m_tuning == tuning) return;
+    m_tuning = tuning;
+    emit tuningChanged(m_tuning);
+    emit stateChanged();
+}
+
+void TunerModel::clearTuning()
+{
+    if (!m_tuning) return;
+    m_tuning = false;
+    emit tuningChanged(false);
+    emit stateChanged();
+}
 
 void TunerModel::setOperate(bool on)
 {
@@ -218,6 +246,10 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                 m_alert.clear();
                 emit alertChanged(m_alert);
             }
+            // And the tune: a latched `tuning` is not merely stale display,
+            // it is what unlocks abortTune() — which on this transport sends
+            // `autotune`, and `autotune` on an idle tuner starts one.
+            clearTuning();
             // Same for the port readings: without the direct connection they
             // stop being refreshed, and a frozen frequency is worse than
             // falling back to what the radio can still tell us.
@@ -232,6 +264,7 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
         // Update relay values from direct state pushes
         connect(m_directConn, &TgxlConnection::stateUpdated, this,
                 [this](const QMap<QString, QString>& kvs) {
+            applyDirectTuning(kvs);
             bool changed = false;
             if (kvs.contains("relayC1")) {
                 int v = kvs.value("relayC1").toInt();
@@ -276,6 +309,7 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
         // the `state` push, so this is their one arrival point.
         connect(m_directConn, &TgxlConnection::statusUpdated, this,
                 [this](const QMap<QString, QString>& kvs) {
+            applyDirectTuning(kvs);
             if (kvs.contains(QStringLiteral("modeA"))
                 || kvs.contains(QStringLiteral("modeB"))) {
                 auto readPort = [&kvs](QChar side) {

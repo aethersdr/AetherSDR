@@ -208,6 +208,32 @@ int main(int argc, char** argv)
         CHECK(at.count() == 1);
     }
 
+    // ---- a tune that is never seen to end must not latch ----
+    // The radio relays tuning=1, then drops mid-tune. The tuner finishes on
+    // its own and sits idle, but nothing tells this client so. Left latched,
+    // the flag passes abortTune()'s guard — and abortTune() sends `autotune`,
+    // which on an idle tuner STARTS one and keys the transmitter through the
+    // TGXL's interlock cable. Losing the handle is how the relayed side says
+    // the tuner is gone, so that is where the flag has to go.
+    {
+        TunerModel t;
+        t.setHandle("0x2000");
+        QSignalSpy at(&t, &TunerModel::autotuneRequested);
+        QSignalSpy tuning(&t, &TunerModel::tuningChanged);
+
+        TunerDelta start; start.tuning = true;
+        t.applyChanges(start);
+        CHECK(t.isTuning());
+        CHECK(tuning.count() == 1);
+
+        t.setHandle({});                     // radio gone mid-tune
+        CHECK(!t.isTuning());
+        CHECK(tuning.count() == 2 && tuning.takeLast().at(0).toBool() == false);
+
+        t.abortTune();                       // the press that used to key TX
+        CHECK(at.count() == 0);
+    }
+
     if (g_failures == 0) {
         std::printf("tuner_model_test: all checks passed\n");
         return 0;

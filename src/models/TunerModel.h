@@ -93,6 +93,19 @@ public:
     // Manual relay adjustment: relay 0=C1, 1=L, 2=C2; direction +1 or -1
     void adjustRelay(int relay, int direction);
 
+private:
+    // `tuning` off the direct connection. Both direct frames carry it, and it
+    // gates abortTune() — which on this transport keys the transmitter — so
+    // it has to come from the device rather than only from the radio relaying
+    // for it.
+    void applyDirectTuning(const QMap<QString, QString>& kvs);
+    // Forgets a tune we can no longer see the end of. Clearing to false is
+    // the safe direction: abortTune() goes inert rather than commanding a
+    // tuner whose state we are guessing at.
+    void clearTuning();
+
+public:
+
     // Command methods — emit neutral intents (operate/bypass/autotune) that
     // RadioModel translates to the Flex TGXL relay via invokeExtension. The
     // direct port-9010 fast-path (autoTune when a direct conn is up, and the

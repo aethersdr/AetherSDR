@@ -58,8 +58,11 @@ int main(int argc, char** argv)
 
     QTcpServer server;
     if (!server.listen(QHostAddress::LocalHost, 0)) {
-        std::fprintf(stderr, "FAIL: could not listen on loopback\n");
-        return 1;
+        // A sandbox that cannot bind loopback has not found a defect; skip,
+        // the way the sibling widget test skips without an accessibility
+        // backend. tests.cmake maps 77 to SKIP.
+        std::fprintf(stderr, "No loopback bind available — skipping\n");
+        return 77;
     }
 
     TgxlConnection conn;
@@ -173,6 +176,36 @@ int main(int argc, char** argv)
     CHECK(model.portB().source == QLatin1String("FLEX-8600"));
     CHECK(qFuzzyCompare(model.portB().freqKhz + 1.0, 1.0));
 
+    // ── `tuning`, off the direct wire ─────────────────────────────────
+    //
+    // Both direct frames carry it, and abortTune() is gated on it — on this
+    // transport that guard is the only thing between a STOP press and
+    // `autotune`, which on an idle tuner starts one and keys the transmitter.
+    // Sourced only from the radio's relayed status, it never moves on a
+    // direct-only station: the key never becomes STOP, and pressing it aborts
+    // while still reading TUNE.
+    CHECK(!model.isTuning());
+    {
+        QSignalSpy tuning(&model, &TunerModel::tuningChanged);
+        peer->write("S0|state bypassA=0 bypassRxA=0 antA=0 bypassB=0 bypassRxB=0 "
+                    "antB=0 state=1 tuning=1 bypass=0 relayC1=44 relayL=12 relayC2=8\n");
+        peer->flush();
+        CHECK(spin([&] { return model.isTuning(); }));
+        CHECK(tuning.count() == 1);
+
+        // The status frame carries it too, and ends the tune.
+        peer->write("S233|status fwd=21.42 peak=21.42 max=61.76 swr=-60.0000 "
+                    "pttA=0 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
+                    "bypassA=0 bypassRxA=0 antA=0 "
+                    "pttB=0 bandB=0 modeB=0 flexB=FLEX-8600 freqB=0.000 "
+                    "bypassB=0 bypassRxB=0 antB=0 "
+                    "state=1 active=1 tuning=0 bypass=0 ag=0 "
+                    "relayC1=44 relayL=12 relayC2=8\n");
+        peer->flush();
+        CHECK(spin([&] { return !model.isTuning(); }));
+        CHECK(tuning.count() == 2);
+    }
+
     // Keying on the direct path drives the lamps without the radio relaying it.
     QSignalSpy ptt(&model, &TunerModel::pttChanged);
     peer->write("S231|status fwd=36.88 peak=36.88 max=61.76 swr=-60.0000 "
@@ -201,11 +234,20 @@ int main(int argc, char** argv)
     spin([&] { return ports.count() > settled; }, 300);
     CHECK(ports.count() == settled);
 
+    // A tune we will not see the end of is dropped on disconnect. Latched, it
+    // would pass abortTune()'s guard and command a tuner this client can no
+    // longer see.
+    peer->write("S0|state bypassA=0 bypassRxA=0 antA=0 bypassB=0 bypassRxB=0 "
+                "antB=0 state=1 tuning=1 bypass=0 relayC1=44 relayL=12 relayC2=8\n");
+    peer->flush();
+    CHECK(spin([&] { return model.isTuning(); }));
+
     // Losing the tuner drops the readings rather than freezing them: they
     // stop being refreshed, and a stale frequency claims a radio is there.
     peer->close();
     CHECK(spin([&] { return !model.hasPortInfo(); }));
     CHECK(!model.portA().live);
+    CHECK(spin([&] { return !model.isTuning(); }));
 
     conn.disconnect();
 

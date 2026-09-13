@@ -3002,6 +3002,8 @@ target_include_directories(tgxl_direct_protocol_test PRIVATE src)
 target_link_libraries(tgxl_direct_protocol_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
 set_target_properties(tgxl_direct_protocol_test PROPERTIES AUTOMOC ON)
 add_test(NAME tgxl_direct_protocol_test COMMAND tgxl_direct_protocol_test)
+# Exit 77 == no loopback bind available; see relay_bar_a11y_test above.
+set_tests_properties(tgxl_direct_protocol_test PROPERTIES SKIP_RETURN_CODE 77)
 
 # Docked/expanded parity for the TGXL applet: the split is presentation only,
 # so the rail tile must still gain STOP-while-tuning and the full-width alert

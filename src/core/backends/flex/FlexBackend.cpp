@@ -1100,21 +1100,16 @@ void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, Q
     // missing second field leaves B empty, and anything past the second is
     // ignored rather than treated as an error.
     if (kvs.contains(QStringLiteral("ant"))) {
+        // split() always yields at least one element, so at(0) is safe.
         const QStringList ants = kvs.value(QStringLiteral("ant")).split(QLatin1Char(','));
-        if (!ants.isEmpty()) {
-            d.portAAnt = ants.at(0).trimmed();
-            d.portBAnt = ants.size() > 1 ? ants.at(1).trimmed() : QString();
-        }
+        d.portAAnt = ants.at(0).trimmed();
+        d.portBAnt = ants.size() > 1 ? ants.at(1).trimmed() : QString();
     }
 
-    // PTT-per-port. FlexLib lower-cases every key before its switch, so its
-    // "ptta"/"pttb" cases say nothing about the wire's casing — but the
-    // `// note: tolower call above` it puts on exactly those two cases (and on
-    // no other) flags that the wire key is mixed-case, which matches every
-    // other camel key here (antA, relayC1). Both spellings are accepted: the
-    // camel one is what the radio is expected to send, and the lower one costs
-    // a string compare to be certain a firmware that disagrees still lights the
-    // indicator rather than leaving it dark with no way to tell why.
+    // PTT-per-port. Casing unconfirmed — FlexLib lower-cases every key before
+    // matching, so its "ptta"/"pttb" cases do not pin the wire's spelling.
+    // Both are accepted; a string compare is cheaper than a lamp that stays
+    // dark with no way to tell why.
     if (kvs.contains(QStringLiteral("pttA")))
         d.pttA = (kvs.value(QStringLiteral("pttA")) == QLatin1String("1"));
     else if (kvs.contains(QStringLiteral("ptta")))
