@@ -125,6 +125,9 @@ private:
     // Sizes the three discrete keys: one seed size for all of them, scaled
     // like every other metric on the panel.
     void applyKeySize(qreal scale);
+    // Shrinks the rail's two captions until they fit the width the rail has
+    // given them.
+    void fitRailCaptions();
     // Operate / bypass / standby drive three different port-area presentations
     // (per-port state, a spanning bypass overlay, or the standby banner).
     // Both callers of it need the same three-way decision, so it lives here.

@@ -72,6 +72,17 @@ constexpr int kKeyFontDesignPx = 13;
 // drawn at, which puts them nearer the keys beside them. It scales with
 // everything else, so the reduction holds at every panel size.
 constexpr int kDialDesignDiameter = 46;
+
+// The rail's captions are the tuner's own state words, and the rail's width
+// belongs to the applet panel rather than to this applet. Rather than pick a
+// size that happens to fit the rail widths we test at, the caption is shrunk
+// until it fits the button it actually has — which also covers a display
+// scale that makes the rail narrower in logical pixels than it looks, and a
+// translation whose words run longer than English's.
+constexpr int kRailCaptionMaxPx = 10;
+constexpr int kRailCaptionMinPx = 7;
+// Frame, border radius and a little air.
+constexpr int kRailCaptionPadding = 8;
 // Breathing room around the widest caption, in design pixels.
 constexpr int kKeyPaddingDesignPx = 18;
 
@@ -326,10 +337,7 @@ void TunerApplet::buildUI()
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, kTuneIdleStyle);
     btnCol->addWidget(m_tuneBtn);
 
-    // Abbreviated from the outset: the state that replaces this arrives from
-    // the tuner, and until it does the caption still has to fit the button.
-    m_operateBtn = new QPushButton(tr("OPR"));
-    m_operateBtn->setAccessibleName(tr("Operate"));
+    m_operateBtn = new QPushButton(tr("OPERATE"));
     m_operateBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
@@ -671,12 +679,7 @@ void TunerApplet::applyDensityAtScale(qreal scale)
         btn->setFont(keyFont);
     }
     applyKeySize(f ? s : 1.0);
-    // The rail's own two keys keep the compact size they always had.
-    for (auto* btn : {m_tuneBtn, m_operateBtn}) {
-        QFont railFont = btn->font();
-        railFont.setPixelSize(10);
-        btn->setFont(railFont);
-    }
+    fitRailCaptions();
     theme.applyStyleSheet(m_panelControls, QString());
     if (auto* row = qobject_cast<QHBoxLayout*>(m_panelControls->layout())) {
         row->setSpacing(px(6));
@@ -735,6 +738,32 @@ void TunerApplet::calibrateNaturalHeight()
     }
 }
 
+void TunerApplet::fitRailCaptions()
+{
+    for (auto* btn : {m_tuneBtn, m_operateBtn}) {
+        if (!btn || btn->width() <= 0 || btn->text().isEmpty()) continue;
+        const int available = btn->width() - kRailCaptionPadding;
+
+        // Bold is what the style sheet draws these in, so the measurement has
+        // to be bold too — the widget's own font is not, and measuring it
+        // reports a caption several pixels narrower than the one on screen.
+        QFont probe = btn->font();
+        probe.setBold(true);
+        int chosen = kRailCaptionMinPx;
+        for (int px = kRailCaptionMaxPx; px >= kRailCaptionMinPx; --px) {
+            probe.setPixelSize(px);
+            if (QFontMetrics(probe).horizontalAdvance(btn->text()) <= available) {
+                chosen = px;
+                break;
+            }
+        }
+        if (btn->font().pixelSize() == chosen) continue;
+        QFont applied = btn->font();
+        applied.setPixelSize(chosen);
+        btn->setFont(applied);
+    }
+}
+
 void TunerApplet::applyKeySize(qreal scale)
 {
     if (!m_stbyBtn || m_keySeedWidth <= 0) return;
@@ -780,6 +809,7 @@ void TunerApplet::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     layOutAlertOverlay();
+    fitRailCaptions();
 
     // Re-derive the metrics for the new size, but only when the scale has
     // actually moved: a resize arrives for every pixel of a window drag and
@@ -1048,20 +1078,17 @@ void TunerApplet::syncFromModel()
     const bool bypass = m_model->isBypass();
 
     if (operate && !bypass) {
-        m_operateBtn->setText(tr("OPR"));
-        m_operateBtn->setAccessibleName(tr("Operate"));
+        m_operateBtn->setText(tr("OPERATE"));
         theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
             "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
             "QPushButton:hover { background: #007040; }");
     } else if (operate && bypass) {
-        m_operateBtn->setText(tr("BYP"));
-        m_operateBtn->setAccessibleName(tr("Bypass"));
+        m_operateBtn->setText(tr("BYPASS"));
         theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #8a6000; border: 1px solid #a07000; "
             "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
             "QPushButton:hover { background: #9a7000; }");
     } else {
-        m_operateBtn->setText(tr("STBY"));
-        m_operateBtn->setAccessibleName(tr("Standby"));
+        m_operateBtn->setText(tr("STANDBY"));
         theme.applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
             "QPushButton:hover { background: {{color.background.1}}; }");
@@ -1069,6 +1096,8 @@ void TunerApplet::syncFromModel()
 
     // Expanded presentation: the same three states, but shown as the lit key
     // plus the port area's own presentation rather than one button's caption.
+    fitRailCaptions();
+
     theme.applyStyleSheet(m_stbyBtn, !operate ? kStandbyActiveStyle : kPanelKeyIdleStyle);
     theme.applyStyleSheet(m_bypBtn, (operate && bypass) ? kBypassActiveStyle : kPanelKeyIdleStyle);
     applyTunerStateToPorts(operate, bypass);

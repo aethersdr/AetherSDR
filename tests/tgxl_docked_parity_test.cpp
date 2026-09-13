@@ -97,41 +97,45 @@ int main(int argc, char** argv)
     }
     CHECK(aVisibleKeyReads(&applet, QStringLiteral("TUNE")));
 
-    // ── Every caption fits the rail's button, in every state ─────────────
+    // ── Every state word fits the rail's button, at every rail width ─────
     //
-    // The rail's button is narrow and its captions are the tuner's states, so
-    // spelled out they do not fit: "OPERATE" was drawn as "OPERATI". They use
-    // the same abbreviations as the expanded panel's keys — which the operator
-    // has already learned there — and the accessible name keeps the full word,
-    // because the abbreviation is a fit problem and a reader has no width to
-    // run out of.
+    // The rail's captions are the tuner's own state words and the rail's width
+    // belongs to the applet panel, not to this applet — so the caption is
+    // shrunk to fit the button it actually gets rather than sized for the rail
+    // widths that happen to be tested. "OPERATE" was drawn as "OPERATI" on a
+    // narrower rail than the one it was checked against.
+    //
+    // Measured bold, because bold is what the style sheet draws: the widget's
+    // own font is not, and measuring that reports a caption several pixels
+    // narrower than the one on screen.
     {
-        struct State { bool operate; bool bypass; const char* caption; const char* spoken; };
-        const State states[] = {
-            {true,  false, "OPR",  "Operate"},
-            {true,  true,  "BYP",  "Bypass"},
-            {false, false, "STBY", "Standby"},
-        };
-        for (const State& st : states) {
-            TunerDelta d;
-            d.operate = st.operate;
-            d.bypass = st.bypass;
-            model.applyChanges(d);
-            settle();
+        const char* words[] = {"OPERATE", "BYPASS", "STANDBY"};
+        const bool operateFlag[] = {true, true, false};
+        const bool bypassFlag[] = {false, true, false};
 
-            bool found = false;
-            for (auto* btn : applet.findChildren<QPushButton*>()) {
-                if (!btn->isVisible() || btn->text() != QLatin1String(st.caption)) continue;
-                found = true;
-                const QFontMetrics fm(btn->font());
-                // A few pixels of frame each side; anything tighter is the
-                // clipping this replaced.
-                CHECK(fm.horizontalAdvance(btn->text()) <= btn->width() - 6);
-                CHECK(btn->accessibleName() == QLatin1String(st.spoken));
+        for (int railWidth : {150, 180, 240, 300}) {
+            applet.resize(railWidth, 150);
+            settle();
+            for (int i = 0; i < 3; ++i) {
+                TunerDelta d;
+                d.operate = operateFlag[i];
+                d.bypass = bypassFlag[i];
+                model.applyChanges(d);
+                settle();
+
+                bool found = false;
+                for (auto* btn : applet.findChildren<QPushButton*>()) {
+                    if (!btn->isVisible() || btn->text() != QLatin1String(words[i])) continue;
+                    found = true;
+                    QFont bold = btn->font();
+                    bold.setBold(true);
+                    const int need = QFontMetrics(bold).horizontalAdvance(btn->text());
+                    CHECK(need <= btn->width() - 6);
+                }
+                CHECK(found);   // the full word, not an abbreviation
             }
-            CHECK(found);
         }
-        // And back to a known state for what follows.
+        applet.resize(300, 150);
         TunerDelta d; d.operate = true; d.bypass = false;
         model.applyChanges(d);
         settle();
