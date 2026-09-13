@@ -22,9 +22,18 @@ using namespace AetherSDR;
 class StubBackend : public IRadioBackend
 {
 public:
-    explicit StubBackend(QVariantList chains) : m_chains(std::move(chains)) {}
+    explicit StubBackend(QVariantList chains, bool twoTone = false)
+        : m_chains(std::move(chains)), m_twoTone(twoTone) {}
 
-    RadioCapabilities capabilities() const override { return {}; }
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities c;
+        if (m_twoTone) {
+            c.twoToneGenerator = RadioCapabilities::TwoToneGenerator{
+                QStringLiteral("stub two-tone route")};
+        }
+        return c;
+    }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override {}
     bool isConnected() const override { return false; }
@@ -45,6 +54,7 @@ public:
 
 private:
     QVariantList m_chains;
+    bool m_twoTone = false;
 };
 
 
@@ -84,10 +94,37 @@ int main(int argc, char** argv) {
     check(meters().value("paTemp").isDouble() && meters().value("paTemp").toDouble() == 0
         && meters().value("temperature").toObject().value("status") == "fresh",
         "a real zero-degree sample is distinguished from an absent reading");
+    // ONE DOCUMENT, ONE ANSWER ABOUT ONE SENSOR. `radiocert persist` embeds the
+    // `radio` block, so a scalar there and a qualified null in `get meters`
+    // means the same snapshot states both. Prove they agree in both directions:
+    // a real zero reads zero here too, and an absent sensor reads null.
+    const auto radioPaTemp = [&]() {
+        return request("get radio").value("radio").toObject().value("paTemp");
+    };
+    check(radioPaTemp().isDouble() && radioPaTemp().toDouble() == 0,
+        "radioSnapshot reports a real zero-degree sample as zero");
+    radio.meterModel().removeMeter(1);
+    check(radioPaTemp().isNull() && meters().value("paTemp").isNull()
+        && persist.value("radio").toObject().value("paTemp").isNull(),
+        "an undeclared sensor is null in radioSnapshot exactly as in get meters");
+
+    // CAPABILITY-SHAPED, NOT FAMILY-SHAPED. The refusal must follow "this
+    // backend has no two-tone generator", which is what makes it cover HL2 and
+    // every other single-carrier tune producer rather than only Icom.
     const auto twoTone = request("txtest twotone");
     check(!twoTone.value("ok").toBool()
         && twoTone.value("error").toString().contains("not implemented")
         && !radio.transmitModel().isTuning() && !radio.transmitModel().isMox(),
-        "Icom cannot label its single-tone generator as two-tone or key on refusal");
+        "a backend without a two-tone generator cannot label one tone as two");
+    // The HL2 case, which is what makes this a capability and not a family
+    // check: a non-Icom family whose tune producer is still a single carrier
+    // must be refused. A `family() == "icom"` guard waves this one through.
+    radio.setBackendForTest(std::make_unique<StubBackend>(QVariantList{}, /*twoTone=*/false), "hl2");
+    check(request("txtest twotone").value("error").toString().contains("not implemented")
+        && !radio.transmitModel().isTuning(),
+        "a non-Icom family without a two-tone route is refused just the same");
+    radio.setBackendForTest(std::make_unique<StubBackend>(QVariantList{}, /*twoTone=*/true), "icom");
+    check(!request("txtest twotone").value("error").toString().contains("not implemented"),
+        "and a backend that DOES declare the generator is not refused by family");
     return failures ? 1 : 0;
 }

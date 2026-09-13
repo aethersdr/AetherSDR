@@ -73,14 +73,25 @@ class Tx:
             flags = [self.g("transmit", field) for field in ("tuning", "mox", "transmitting")]
             flags.append(self.g("radio", "transmitting"))
             if all(value is False for value in flags):
-                serial = self.g("radio", "serial")
-                if not isinstance(serial, str) or not serial.startswith("icom:"):
+                # ASK THE BACKEND, DO NOT SNIFF A DISPLAY STRING. The previous
+                # form matched serial.startswith("icom:"), which couples a TX
+                # gate to a label nothing guarantees. A backend that answers
+                # `civ scheduler` with a stateFreshness block IS the CI-V
+                # backend this extra confirmation is written for; anything else
+                # errors and takes the flags-only path, exactly as before.
+                #
+                # `freshness` keeps the reply to the confirmation block: this
+                # runs in a loop while the transmitter may still be keyed and
+                # does not need the 128-row transaction ring.
+                diagnostics = self.cmd(cmd="civ", action="scheduler",
+                                       value="freshness").get("result", {})
+                freshness = diagnostics.get("stateFreshness")
+                if not isinstance(freshness, dict):
                     return True
                 # Icom model flags may lead the CI-V OFF reply. Require a new
                 # accepted publication in this observation window, not an old
                 # idle baseline. Polling/ACKs alone cannot release the guard.
-                diagnostics = self.cmd(cmd="civ", action="scheduler").get("result", {})
-                ptt = diagnostics.get("stateFreshness", {}).get("fields", {}).get("ptt", {})
+                ptt = freshness.get("fields", {}).get("ptt", {})
                 age = ptt.get("ageMs")
                 if (ptt.get("status") == "confirmed" and ptt.get("value") is False
                         and type(age) in (int, float) and 0 <= age < SAFETY_FRESH_MS
@@ -163,7 +174,6 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
     fwd, swr, temp, volts, alc = [], [], [], [], []
     pacur = None  # (value, age) freshest
     pacur_reliable = True
-    micp = []
     stop_reason = None
     peaks, samples = [], []
     t0 = time.monotonic() if keyed_at is None else keyed_at
@@ -179,6 +189,21 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
             fwd_age = m.get("fwdPowerAgeMs", 1e9)
             fwd_val = m.get("fwdPower", 0)
             instant = m.get("fwdPowerInstant")
+            # TWO DIFFERENT QUESTIONS, TWO DIFFERENT WINDOWS.
+            #
+            # "May this sample be recorded as evidence of THIS burst?" is the
+            # post-key rule: a reading older than the key command describes the
+            # previous burst and must not enter an aggregate. That is fresh_peak.
+            #
+            # "Is this a reason to stop transmitting?" is not the same question.
+            # A reading that says the antenna is bad or the PA is over the
+            # ceiling is a reason to unkey whether or not it predates the key
+            # command -- an alarming stale sample is still alarming. Narrowing
+            # the abort to the post-key window would have blinded the watt
+            # backstop for the first few hundred ms of every burst and discarded
+            # a 600 ms-old SWR of 4.0 entirely (#5516 review).
+            alarming = (type(fwd_age) in (int, float) and 0 <= fwd_age < FRESH_MS
+                        and type(instant) in (int, float) and math.isfinite(instant))
             fresh_peak = (type(instant) in (int, float) and math.isfinite(instant)
                           and type(fwd_age) in (int, float) and 0 <= fwd_age < SAFETY_FRESH_MS
                           and fwd_age <= elapsed * 1000)
@@ -186,7 +211,7 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
                 peaks.append(instant)
             if fresh_peak and fwd_val > 0.3:
                 fwd.append(fwd_val)
-            if max_watts is not None and fresh_peak and instant > max_watts:
+            if max_watts is not None and alarming and instant > max_watts:
                 stop_reason = (f"measured forward power {instant:.1f} W exceeds "
                                f"{max_watts:.1f} W ceiling")
             # swr is null when no live sample exists, and swrAgeMs is -1
@@ -196,8 +221,10 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
             swr_val = m.get("swr")
             if 0 <= swr_age < min(SAFETY_FRESH_MS, elapsed * 1000) and swr_val is not None:
                 swr.append(swr_val)
-                if swr_val > max_swr:
-                    stop_reason = f"SWR {swr_val:.2f} exceeds {max_swr:.2f} ceiling"
+            # Ceiling check on the wide window, for the reason above: only
+            # aggregation is restricted to samples that postdate the key.
+            if 0 <= swr_age < FRESH_MS and swr_val is not None and swr_val > max_swr:
+                stop_reason = f"SWR {swr_val:.2f} exceeds {max_swr:.2f} ceiling"
             for name, values in (("PATEMP", temp), ("+13.8A", volts), ("ALC", alc)):
                 report = reported_meter(m, name, max_age_ms=min(FRESH_MS, elapsed * 1000))
                 meter_reports[name] = report
@@ -220,7 +247,10 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
                     and str(x.get("unit", "")).lower() in ("dbm", "w", "watts")
                     and x.get("reliable") is not False
                     for x in m.get("all", []))):
-                stop_reason = "no fresh calibrated FWDPWR sample before safety deadline"
+                # `or`, as the SWR deadline below already does: a ceiling stop
+                # that already fired names the actual hazard, and overwriting it
+                # with the generic deadline message loses that.
+                stop_reason = stop_reason or "no fresh calibrated FWDPWR sample before safety deadline"
             if (elapsed >= POWER_SAMPLE_DEADLINE_S
                     and (swr_val is None or not 0 <= swr_age < min(SAFETY_FRESH_MS, elapsed * 1000))
                     and not swr_gap_is_observed(m, elapsed * 1000, bool(swr))):
@@ -391,7 +421,8 @@ def main():
             agg.update(set=tp, unkeyed=ok_unkey, atu=tx.g("transmit", "atuStatus"))
             rows.append(agg)
             print(f"{tp:>5} {str(agg['fwd']):>6} {str(agg['swr']):>5} {str(agg['paCurrent']):>7} "
-                  f"{str(agg['paTemp']):>7} {str(agg['volts']):>6} {str(agg['alc']):>7} {agg['alcUnit']} {agg['n_fwd']:>3}")
+                  f"{str(agg['paTemp']):>7} {str(agg['volts']):>6} {str(agg['alc']):>7} "
+                  f"{str(agg['alcUnit']):>7} {agg['n_fwd']:>3}")
             if not ok_unkey:
                 print("  *** UNKEY FAILED — ABORT ***"); abort = True; break
             if agg["stopReason"]:

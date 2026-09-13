@@ -205,19 +205,48 @@ def test_cw_swr_gap_requires_fresh_zero_carrier_and_prior_ratio():
 
 def test_icom_unkey_requires_new_confirmed_ptt_off():
     from unittest.mock import patch
-    class IcomBridge:
-        def __init__(self, ptt): self.ptt = ptt
+    class CivBridge:
+        """A backend that answers `civ scheduler` with a freshness block."""
+        def __init__(self, ptt): self.ptt = ptt; self.asked = []
         def request(self, request):
             if request.get("cmd") == "get":
-                return {"ok": True, "value": "icom:test" if request.get("property") == "serial" else False}
+                return {"ok": True, "value": False}
+            self.asked.append(request)
             return {"ok": True, "result": {"stateFreshness": {"fields": {"ptt": self.ptt}}}}
+    class PlainBridge:
+        """Any backend without CI-V diagnostics: flags-only, as before."""
+        def request(self, request):
+            if request.get("cmd") == "get":
+                return {"ok": True, "value": False}
+            return {"ok": False, "error": "sim backend: unknown namespace 'icom'"}
     with patch.object(subject.time, "sleep"):
         for state in ({}, {"status": "pending", "value": False, "ageMs": 0},
                       {"status": "confirmed", "value": True, "ageMs": 0},
                       {"status": "confirmed", "value": False, "ageMs": 400}):
-            check(not subject.Tx(IcomBridge(state)).ensure_unkeyed(), state)
-        check(subject.Tx(IcomBridge({"status": "confirmed", "value": False, "ageMs": 0})).ensure_unkeyed(),
-              "new confirmed PTT-off was rejected")
+            check(not subject.Tx(CivBridge(state)).ensure_unkeyed(), state)
+        bridge = CivBridge({"status": "confirmed", "value": False, "ageMs": 0})
+        check(subject.Tx(bridge).ensure_unkeyed(), "new confirmed PTT-off was rejected")
+        # The gate is keyed on the backend answering, not on a display string,
+        # and it asks for the freshness block rather than the transaction ring.
+        check(all(r.get("value") == "freshness" for r in bridge.asked), bridge.asked)
+        check(subject.Tx(PlainBridge()).ensure_unkeyed(),
+              "a backend without CI-V diagnostics must not be held by the Icom gate")
+
+
+def test_alarming_sample_still_aborts_outside_the_post_key_window():
+    from unittest.mock import patch
+    # 600 ms old: too old to be THIS burst's evidence, plenty alarming enough
+    # to stop transmitting. Aggregates must stay empty; the run must stop.
+    with patch.object(subject.time, "monotonic", side_effect=[1, 1, 1.1, 1.1, 1.1, 2]):
+        result = subject.sample_window(FakeTx(meter_snapshot(swr=4.0, swr_age=600)),
+                                       dur=1.5, settle=-1, keyed_at=0, max_swr=2.5)
+    check("SWR 4.00 exceeds" in str(result["stopReason"]), result)
+    check(result["swr"] is None, "a pre-key SWR leaked into the aggregate")
+    with patch.object(subject.time, "monotonic", side_effect=[1, 1, 1.1, 1.1, 1.1, 2]):
+        result = subject.sample_window(FakeTx(meter_snapshot(fwd=99, fwd_age=600)),
+                                       dur=1.5, settle=-1, keyed_at=0, max_watts=10)
+    check("exceeds 10.0 W ceiling" in str(result["stopReason"]), result)
+    check(result["fwd"] is None, "a pre-key power sample leaked into the aggregate")
 
 
 def test_native_meter_reporting():
@@ -260,6 +289,7 @@ def test_old_swr_cannot_qualify_a_later_carrier_gap():
 if __name__ == "__main__":
     test_cw_swr_gap_requires_fresh_zero_carrier_and_prior_ratio()
     test_icom_unkey_requires_new_confirmed_ptt_off()
+    test_alarming_sample_still_aborts_outside_the_post_key_window()
     test_native_meter_reporting()
     test_previous_burst_sample_cannot_satisfy_safety()
     test_old_swr_cannot_qualify_a_later_carrier_gap()

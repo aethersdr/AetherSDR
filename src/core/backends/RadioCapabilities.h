@@ -417,6 +417,31 @@ struct RadioCapabilities {
     bool hasFmRepeaterOffset = true;
     // Some audio-tone tune implementations cannot key a CW carrier.
     bool hasCwTune = true;
+
+    // The radio can generate a genuine TWO-TONE test signal, not merely a tune
+    // carrier. A RECORD rather than a bool, per #5262 M2: the interesting part
+    // is not the yes/no but the route, and the all-defaults-false trap is
+    // exactly the failure mode here — a backend that forgets to declare would
+    // otherwise report a confident "no two-tone" that nobody had considered.
+    // Absent means "not declared", which is also the correct refusal.
+    //
+    // This is a capability and not a family check because the question is about
+    // the tune generator behind the verb, not the vendor: a Flex takes
+    // `transmit set tune_mode=two_tone` and synthesises two tones on-radio,
+    // while every other backend today drives the same button into a single
+    // carrier — the HL2's built-in test tone at zero offset, Icom's setTune().
+    //
+    // Absent makes `txtest twotone` REFUSE rather than key. That refusal exists
+    // for evidence integrity, not RF safety: a single carrier recorded as a
+    // two-tone run is an IMD/ALC measurement of a waveform that was never on
+    // the air, and it outlives the run in whatever report cites it (#5516).
+    struct TwoToneGenerator {
+        // The command that SELECTS the waveform, recorded because that route —
+        // not the act of keying — is what separates a real two-tone from a tune
+        // carrier. Diagnostic: nothing branches on the string.
+        QString selectionCommand;
+    };
+    std::optional<TwoToneGenerator> twoToneGenerator;
     FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
     QStringList fmToneModes;
     QList<int> fmDtcsCodes;

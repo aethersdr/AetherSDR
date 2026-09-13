@@ -291,19 +291,9 @@ private:
     [[nodiscard]] std::string semanticKey(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
-    [[nodiscard]] QVariantMap schedulerDiagnostics() const;
+    [[nodiscard]] QVariantMap schedulerDiagnostics(std::size_t traceLimit = 128) const;
     void confirmState(const QString& key, const QVariant& value);
     [[nodiscard]] QVariantMap stateFreshness() const;
-    struct ConfirmedState {
-        QVariant value;
-        qint64 atMs = -1;
-        std::uint64_t session = 0;
-        std::uint64_t context = 0;
-        bool pending = false;
-    };
-    QString m_diagnosticInstanceId;
-    QMap<QString, ConfirmedState> m_confirmedState;
-    std::uint64_t m_stateContext = 0;
     [[nodiscard]] QVariantList schedulerTransactionTrace(
         std::size_t limit = 32) const;
     [[nodiscard]] QVariantMap incidentSnapshot(const QString& kind,
@@ -346,6 +336,24 @@ private:
     std::unique_ptr<IcomSession> m_session;
     std::uint64_t m_sessionGeneration = 0;
     const IcomModel* m_model = nullptr;
+
+    // ---- Confirmation provenance (the `stateFreshness` diagnostic) ----------
+    //
+    // What the RADIO last told us about a tracked value, and when. Separate from
+    // the published state above precisely because publication is optimistic in
+    // places and this is not: only a decoded receive frame lands here.
+    struct ConfirmedState {
+        QVariant value;
+        qint64 atMs = -1;
+        std::uint64_t session = 0;   // cleared with the session generation
+        std::uint64_t context = 0;   // bumped by frequency/mode/VFO changes
+        bool pending = false;        // a write is out; intent is not evidence
+    };
+    // A fresh UUID per backend instance, so a reader can tell a reconnect in the
+    // same process from a continuation of the same observation stream.
+    QString m_diagnosticInstanceId;
+    QMap<QString, ConfirmedState> m_confirmedState;
+    std::uint64_t m_stateContext = 0;
 
     // ---- CI-V address resolution (see IcomSettings::CivSelection) ------------
     //

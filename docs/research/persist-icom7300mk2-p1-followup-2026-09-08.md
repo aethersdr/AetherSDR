@@ -10,10 +10,10 @@ control matrix.
 
 | Area | Repair / evidence | Remaining boundary |
 |---|---|---|
-| State freshness | Accepted frequency, mode/data/filter tuple, SQL, AGC, RF-power and PTT publications carry confirmation age and session/context identity. Pending writes and startup defaults cannot imply readiness. Unchanged valid replies refresh age. | Six tracked fields only. Filter width/PBT, unselected VFO, meters and other controls are not included in the readiness flag. Readiness is diagnostic, not permission to transmit. |
+| State freshness | Accepted frequency, mode/data/filter tuple, SQL, AGC, RF-power and PTT publications carry confirmation age and session/context identity. Pending writes and startup defaults cannot imply readiness. Unchanged valid replies refresh age. | Six tracked fields only. Filter width/PBT, unselected VFO, meters and other controls are not included in the readiness flag. Readiness is diagnostic, not permission to transmit. **SQL is reported but does not gate readiness** — see the model-dependency note below. |
 | Transaction history | Monotonic event IDs survive scheduler reset; a backend UUID separates different instances. The bounded export includes retained endpoints for collector gap detection. | Only 128 retained events. Deduplicate by backend UUID/event ID; initial history is not newly observed traffic. CI-V has no transaction IDs, so delayed unsolicited replies cannot prove physical-intent correlation. |
 | TX safety/reporting | The first-sample deadline starts before the key command. Prior-burst samples cannot qualify. Fresh zero-carrier CW gaps may omit the SWR ratio only after a valid ratio in the same burst, with both power and SWR telemetry under 500 ms. Icom unkey requires a fresh accepted PTT-off reply as well as model flags. | The 0.9-second initial deadline, 500 ms safety freshness and measured-watt limit are unchanged. Missing replies, positive power without SWR, and bursts that never establish SWR still stop. |
-| Waveform labeling | Icom `setTune()` feeds a single sine; Flex `tune_mode` has no Icom route. The bridge now refuses `txtest twotone` on Icom before keying. Earlier reports are corrected. | Actual Icom two-tone/IMD generation remains unsupported. Ordinary TUNE remains a single-tone path. |
+| Waveform labeling | Icom `setTune()` feeds a single sine; Flex `tune_mode` has no Icom route. The bridge now refuses `txtest twotone` on any backend that does not declare a `twoToneGenerator`, before keying. Earlier reports are corrected. | Actual Icom two-tone/IMD generation remains unsupported. Ordinary TUNE remains a single-tone path. The HL2 is covered by the same capability gate; it has no two-tone route either. |
 | Meter provenance | Undefined or never-fed PA temperature is null, not zero. Low-rate vitals have status, unit and age. The TX harness reports native ALC units rather than substituting legacy `swAlc` dBFS. | Native radio meters and widget observations are not independent RF instrument measurements. |
 
 No poll cadence, queue priority, retry count, audio pipeline or default radio
@@ -78,7 +78,19 @@ confirmed, the app quit normally, and the radio lock was released.
 An early startup snapshot showed fallback filter edges -3300…-300 Hz, whereas
 the settled original was -3000…0 Hz. No filter recall was used to overwrite that
 settled state. Six-field readiness must not be presented as full filter-width
-readiness. During cleanup, setting AGC before a mode change was superseded by
+readiness.
+
+**The readiness timings above are IC-7300MK2 results and do not generalise.**
+Review of #5516 established that `level::kSquelch` is re-read periodically only
+under the model profile's `pollCwSquelchAndTxBandwidth`, which the MK2 alone
+sets. On an IC-705 or IC-9700 squelch is read once at connect, so an aggregate
+that required it would have gone false roughly five seconds into every session
+and stayed there. SQL is therefore reported with its own status but excluded
+from `trackedStateReady`; each field now carries `gatesReadiness` so a reader
+never has to infer the membership of that conjunction. The underlying gap —
+nothing reconciles squelch against the radio outside the MK2 profile — is real,
+pre-existing, and left for its own issue, because closing it means adding a
+round trip to the shared CI-V stream. During cleanup, setting AGC before a mode change was superseded by
 the radio's mode-specific recall; restoration was corrected after each mode
 confirmation (AM Slow, DIGU Med, LSB Med). Intermediate mismatches were retained.
 The earlier expanded run's uncaptured hidden filter-bank definitions remain a
