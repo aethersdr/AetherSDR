@@ -31,7 +31,7 @@ void TunerModel::applyChanges(const TunerDelta& d)
     // Apply only the present fields, change-gated — faithful to the prior
     // applyStatus (which iterated the wire kv-set). The SmartSDR key names and
     // "1"/toInt parsing now live in FlexBackend::decodeTunerStatus; informational
-    // fields (nickname/version/ant/dhcp/netmask/gateway) are dropped there.
+    // fields (nickname/version/dhcp/netmask/gateway) are dropped there.
     // Edge-signal emit order matches the old QMap key-sorted iteration:
     // antennaAChanged (key "antA") precedes tuningChanged (key "tuning").
     // pttChanged is new, so it has no legacy position to preserve; it is
@@ -63,6 +63,8 @@ void TunerModel::applyChanges(const TunerDelta& d)
     if (d.relayL && m_relayL != *d.relayL)    { m_relayL = *d.relayL;   changed = true; }
     if (d.oneByThree && m_oneByThree != *d.oneByThree) { m_oneByThree = *d.oneByThree; changed = true; }
     if (d.ip && m_tgxlIp != *d.ip)                     { m_tgxlIp = *d.ip;              changed = true; }
+    if (d.portAAnt && m_portAAnt != *d.portAAnt) { m_portAAnt = *d.portAAnt; changed = true; }
+    if (d.portBAnt && m_portBAnt != *d.portBAnt) { m_portBAnt = *d.portBAnt; changed = true; }
     if (d.pttA && m_pttA != *d.pttA) { m_pttA = *d.pttA; changed = true; pttMoved = true; }
     if (d.pttB && m_pttB != *d.pttB) { m_pttB = *d.pttB; changed = true; pttMoved = true; }
 

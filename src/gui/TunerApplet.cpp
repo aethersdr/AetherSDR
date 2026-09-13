@@ -609,6 +609,7 @@ void TunerApplet::updatePortRows()
     if (m_model && m_model->hasDirectConnection() && m_model->hasPortInfo()) {
         applyPortInfo(m_portA, m_model->portA());
         applyPortInfo(m_portB, m_model->portB());
+        updateActivePort();
         return;
     }
 
@@ -630,13 +631,11 @@ void TunerApplet::updatePortRows()
     m_portB->setFrequencyMhz(0.0);
     m_portB->setBandText(QString());
 
-    m_portA->setActive(m_radioConnected);
-    m_portB->setActive(false);
-
     if (m_model) {
         m_portA->setPtt(m_model->pttA());
         m_portB->setPtt(m_model->pttB());
     }
+    updateActivePort();
 }
 
 void TunerApplet::applyPortInfo(TgxlPortRow* row, const TunerPortInfo& info)
@@ -658,8 +657,40 @@ void TunerApplet::applyPortInfo(TgxlPortRow* row, const TunerPortInfo& info)
     row->setBandText(mhz > 0.0 ? BandSettings::bandForFrequency(mhz) : QString());
 
     row->setPtt(info.ptt);
-    // The port the tuner is actually hearing a radio on is the one to outline.
-    row->setActive(info.live);
+}
+
+void TunerApplet::updateActivePort()
+{
+    if (!m_portA || !m_portB) return;
+
+    // Which port transmits is settled by matching the TX slice's antenna
+    // against each port's configured one — the comparison FlexLib itself
+    // makes before it will autotune (Tuner.AutoTune checks TXAnt against
+    // PortAAnt/PortBAnt). The tuner's own status cannot answer it: with one
+    // radio cabled to both ports, modeA and modeB both read 1 and `active`
+    // never moves, so an outline driven from those lights up both rows.
+    const QString tx = m_txAntenna.trimmed();
+    const QString aAnt = m_model ? m_model->portAAnt().trimmed() : QString();
+    const QString bAnt = m_model ? m_model->portBAnt().trimmed() : QString();
+
+    const bool aIsTx = !tx.isEmpty() && !aAnt.isEmpty()
+                       && aAnt.compare(tx, Qt::CaseInsensitive) == 0;
+    const bool bIsTx = !tx.isEmpty() && !bAnt.isEmpty()
+                       && bAnt.compare(tx, Qt::CaseInsensitive) == 0;
+
+    // Neither matching means the radio is transmitting on an antenna that
+    // does not run through the tuner at all — FlexLib declines to autotune in
+    // exactly that case. Outlining nothing is the honest answer; outlining a
+    // port would claim RF is passing through it.
+    m_portA->setActive(aIsTx);
+    m_portB->setActive(bIsTx);
+}
+
+void TunerApplet::setTxAntenna(const QString& antenna)
+{
+    if (m_txAntenna == antenna) return;
+    m_txAntenna = antenna;
+    updateActivePort();
 }
 
 void TunerApplet::setTunerModel(TunerModel* model)
@@ -695,6 +726,9 @@ void TunerApplet::setTunerModel(TunerModel* model)
                                    && m_model->hasAntennaSwitch());
     };
     connect(m_model, &TunerModel::portsChanged, this, &TunerApplet::updatePortRows);
+    // stateChanged carries the port->antenna map, which arrives after the
+    // applet is first built and decides which row is outlined.
+    connect(m_model, &TunerModel::stateChanged, this, &TunerApplet::updateActivePort);
     connect(m_model, &TunerModel::directConnectionChanged, this,
             [this](bool) { updatePortRows(); });
 

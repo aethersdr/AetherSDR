@@ -21,6 +21,7 @@
 #include <QApplication>
 #include <QEventLoop>
 #include <QLabel>
+#include <QPair>
 #include <QTimer>
 #include <QVector>
 
@@ -228,6 +229,60 @@ void testAlertSeverityRule()
 
 }
 
+// Which port the applet outlines. The tuner cannot answer this: with one
+// radio cabled to both ports its status reports modeA=1 AND modeB=1, and
+// `active` never moves — so an outline driven from those lights up both rows
+// at once, which is what this rule replaced. The answer is the port whose
+// configured antenna matches the transmit slice's, the same comparison
+// FlexLib makes before it will autotune.
+//
+// Mirrors TunerApplet::updateActivePort so the rule is pinned independently
+// of the widget tree it drives.
+QPair<bool, bool> activePorts(const QString& tx, const QString& aAnt, const QString& bAnt)
+{
+    const bool a = !tx.trimmed().isEmpty() && !aAnt.trimmed().isEmpty()
+                   && aAnt.trimmed().compare(tx.trimmed(), Qt::CaseInsensitive) == 0;
+    const bool b = !tx.trimmed().isEmpty() && !bAnt.trimmed().isEmpty()
+                   && bAnt.trimmed().compare(tx.trimmed(), Qt::CaseInsensitive) == 0;
+    return {a, b};
+}
+
+void testActivePortRule()
+{
+    const QString A = QStringLiteral("ANT1"), B = QStringLiteral("ANT2");
+
+    auto onAnt1 = activePorts(A, A, B);
+    expect(onAnt1.first && !onAnt1.second,
+           QStringLiteral("transmitting on ANT1 outlines port A only"));
+
+    // The reported bug: switching to ANT2 lit port B while port A stayed lit.
+    auto onAnt2 = activePorts(B, A, B);
+    expect(!onAnt2.first && onAnt2.second,
+           QStringLiteral("transmitting on ANT2 outlines port B only"));
+
+    // Never both — one port transmits at a time, whatever the tuner reports
+    // about which ports can hear a radio.
+    for (const QString& tx : {A, B}) {
+        auto p = activePorts(tx, A, B);
+        expect(!(p.first && p.second), QStringLiteral("never two outlines (tx=%1)").arg(tx));
+    }
+
+    // An antenna that does not run through the tuner outlines nothing rather
+    // than guessing a port — FlexLib declines to autotune in exactly this case.
+    auto offTuner = activePorts(QStringLiteral("ANT3"), A, B);
+    expect(!offTuner.first && !offTuner.second,
+           QStringLiteral("an antenna not on the tuner outlines neither port"));
+
+    // Before the radio or the tuner has reported, nothing is outlined: an
+    // outline claims RF is passing through that port.
+    auto unknownTx = activePorts(QString(), A, B);
+    expect(!unknownTx.first && !unknownTx.second,
+           QStringLiteral("no transmit antenna yet outlines neither port"));
+    auto unknownMap = activePorts(A, QString(), QString());
+    expect(!unknownMap.first && !unknownMap.second,
+           QStringLiteral("no port map yet outlines neither port"));
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -247,6 +302,7 @@ int main(int argc, char** argv)
     testPortRowReadings();
     testDialAnnouncements();
     testAlertSeverityRule();
+    testActivePortRule();
 
     if (g_failures == 0) {
         std::cout << "tgxl_panel_widgets_test: all checks passed\n";

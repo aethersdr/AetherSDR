@@ -1686,6 +1686,9 @@ void MainWindow::refreshTunerPortFrequency()
     // seen would be worse than reporting nothing.
     SliceModel* tx = m_radioModel.isConnected() ? m_radioModel.txSlice() : nullptr;
     m_appletPanel->tunerApplet()->setPortAFrequencyMhz(tx ? tx->frequency() : 0.0);
+    // The same slice's antenna decides which port the applet outlines, so it
+    // is refreshed on every path that can change the transmit slice.
+    m_appletPanel->tunerApplet()->setTxAntenna(tx ? tx->txAntenna() : QString());
 }
 
 void MainWindow::onSliceAdded(SliceModel* s)
@@ -2266,6 +2269,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
             [this](double) { refreshTunerPortFrequency(); });
     connect(s, &SliceModel::txSliceChanged, this,
             [this](bool) { refreshTunerPortFrequency(); });
+    // Switching the transmit antenna moves which tuner port carries RF, with
+    // no change of slice or frequency to notice it by.
+    connect(s, &SliceModel::txAntennaChanged, this,
+            [this](const QString&) { refreshTunerPortFrequency(); });
     refreshTunerPortFrequency();
 
     // Reset band-stack auto-save dwell timer on every active-slice tune

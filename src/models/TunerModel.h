@@ -60,6 +60,10 @@ public:
     const TunerPortInfo& portA() const { return m_portA; }
     const TunerPortInfo& portB() const { return m_portB; }
     bool hasPortInfo()  const { return m_havePortInfo; }
+    // Radio antenna each port is wired to ("ANT1"/"ANT2"), from the relayed
+    // status. Empty until the radio reports it.
+    QString portAAnt()  const { return m_portAAnt; }
+    QString portBAnt()  const { return m_portBAnt; }
     bool    pttA()      const { return m_pttA; }      // port A keyed
     bool    pttB()      const { return m_pttB; }      // port B keyed
     bool    isOperate() const { return m_operate; }
@@ -129,6 +133,8 @@ private:
     QString m_serialNum;
     QString m_tgxlIp;
     QString m_alert;
+    QString m_portAAnt;
+    QString m_portBAnt;
     TunerPortInfo m_portA;
     TunerPortInfo m_portB;
     bool          m_havePortInfo{false};

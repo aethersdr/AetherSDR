@@ -69,6 +69,12 @@ public:
     // frequency, and guessing one would be inventing telemetry.
     void setPortAFrequencyMhz(double mhz);
     void setRadioConnected(bool connected);
+    // The transmit slice's antenna ("ANT1"/"ANT2"). The tuner's own status
+    // cannot say which port carries transmit — with one radio cabled to both
+    // it reports both live — so the port is identified by matching this
+    // against each port's configured antenna, the same comparison FlexLib
+    // makes before it will autotune.
+    void setTxAntenna(const QString& antenna);
 
 public slots:
     // Feed forward power (W) and SWR from MeterModel::txMetersChanged.
@@ -96,6 +102,9 @@ private:
     void applyTuneButtonStyle(const char* styleTemplate);
     void updatePortRows();
     void applyPortInfo(TgxlPortRow* row, const TunerPortInfo& info);
+    // Outlines exactly the port carrying transmit, or neither when that is
+    // not yet knowable. Never both: only one port can be transmitting.
+    void updateActivePort();
     void setAlertText(const QString& text);
     // The tuner sends no severity with an alert, so it is read off the text.
     void applyAlertStyle();
@@ -178,6 +187,7 @@ private:
 
     QString m_radioModelName;
     double  m_portAFreqMhz{0.0};
+    QString m_txAntenna;
     bool    m_radioConnected{false};
 
     // Antenna switch buttons (TGXL 3x1)

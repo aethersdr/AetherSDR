@@ -26,6 +26,13 @@ struct TunerDelta {
     std::optional<QString> serialNum;    // "serial_num"
     std::optional<QString> model;
     std::optional<QString> ip;
+    // Which radio antenna each RF port is wired to, from the "ant" field
+    // ("ANT1,ANT2"). This is what says which port carries transmit: the port
+    // whose antenna matches the TX slice's. Nothing in the tuner's own direct
+    // status distinguishes them — with one radio cabled to both ports it
+    // reports both as live.
+    std::optional<QString> portAAnt;
+    std::optional<QString> portBAnt;
     std::optional<bool>    pttA;         // "ptta" — port A keyed
     std::optional<bool>    pttB;         // "pttb" — port B keyed
     std::optional<bool>    operate;      // "1"

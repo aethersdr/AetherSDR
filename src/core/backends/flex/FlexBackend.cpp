@@ -1095,6 +1095,18 @@ void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, Q
         d.model = kvs.value(QStringLiteral("model"));
     if (kvs.contains(QStringLiteral("ip")))
         d.ip = kvs.value(QStringLiteral("ip"));
+    // Per-port antenna, "ANT1,ANT2". Split exactly as FlexLib's
+    // Tuner.ParseAntenna does: first field is port A, second is port B, a
+    // missing second field leaves B empty, and anything past the second is
+    // ignored rather than treated as an error.
+    if (kvs.contains(QStringLiteral("ant"))) {
+        const QStringList ants = kvs.value(QStringLiteral("ant")).split(QLatin1Char(','));
+        if (!ants.isEmpty()) {
+            d.portAAnt = ants.at(0).trimmed();
+            d.portBAnt = ants.size() > 1 ? ants.at(1).trimmed() : QString();
+        }
+    }
+
     // PTT-per-port. FlexLib lower-cases every key before its switch, so its
     // "ptta"/"pttb" cases say nothing about the wire's casing — but the
     // `// note: tolower call above` it puts on exactly those two cases (and on
