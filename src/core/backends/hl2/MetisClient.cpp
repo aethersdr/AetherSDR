@@ -256,6 +256,14 @@ bool MetisClient::start(const Params& params)
     m_expectedEp4Seq = 0;
     m_ep4Drops = 0;
     m_ep4Rewinds = 0;
+    // The gate's counters belong to the session for the same reason the wire
+    // ones do. Left standing they survive a reconnect while every sibling is
+    // zeroed here and m_link is replaced below, so resetBandscopeMirrors()
+    // shows 0 and the FIRST block of the new session publishes the PREVIOUS
+    // session's total plus one — a row that jumps instead of counting.
+    // (PR #5650 review, K5PTB.)
+    m_bsBlocks = 0;
+    m_bsTimeouts = 0;
     // A CONNECT is where the gate's standing intent is cleared, and one of only
     // two places: a receiver-count restart CARRIES it (Params::bandscope), a
     // stop ends the session it belonged to. Cleared after `m_params = params`
@@ -380,6 +388,18 @@ void MetisClient::onWatchdogTick()
         // reported TimedOut for a request the radio may well have applied
         // before it went away.
         dropControlRequest();
+        // AND END THE GATE'S INTENT, exactly as stop() does. This path does NOT
+        // call stop(): m_running and m_params.bandscope would both survive, and
+        // if EP6 resumes before RadioModel's reconnect timer fires, handleDatagram
+        // emits linkUp() again with no start() behind it. Hl2Backend's linkUp
+        // handler then clears its mirrors on the premise that a session begins
+        // with wide_spectrum clear — false on this one path — and the health row
+        // reports the bandscope OFF while the gate is still cycling and
+        // publishing fresh ADC levels. It also stops the gate arming against a
+        // radio that has gone quiet, which only manufactures block timeouts.
+        // (PR #5650 review, K5PTB.)
+        resetBandscopeGate();
+        m_params.bandscope = false;
         emit linkDown();
     }
 }
@@ -1433,7 +1453,9 @@ void MetisClient::bandscopeOnPacket(std::uint32_t seq,
         m_link.bandscopeBlocks = m_bsBlocks;
         emit bandscopeBlockReady(m_bsBlock);
         // Down again immediately. The duty cycle is the whole point: one block
-        // per kBandscopeSampleMs is 16 datagrams a second against 381.
+        // per kBandscopeSampleMs is TWELVE datagrams a second against 381 —
+        // 3 discarded in Arming, 4 flushed, 4 kept, 1 trailing. See the count's
+        // derivation at setBandscopeEnabled's header in MetisClient.h.
         bandscopeDisarm(/*expectTrailing=*/true);
         return;
     }
@@ -1450,6 +1472,20 @@ bool MetisClient::bandscopeInterlocked() const noexcept
 
 void MetisClient::sendBandscopeRunByte(bool wideSpectrum)
 {
+    // COMPOSED AND RECORDED BEFORE THE SOCKET TEST, so a socket-free test can
+    // see what this call site would have put on the wire.
+    //
+    // metisRunCommand()'s BITS are asserted in tests/hl2_metis_protocol_test.cpp
+    // for all four combinations; what the record pins is the other half — that
+    // the gate passes it the right ARGUMENTS. Without it the tests reach here
+    // with m_socket == nullptr and return above the only observable, so
+    // `metisCommand(kRunWideSpectrum)` (run dropped, the IQ stops every time the
+    // gate toggles) and `metisRunCommand(true, ...)` (never lowered, the ungated
+    // ~3.3 Mbit/s stream this gate exists to prevent) both passed every target.
+    // That hole was disclosed on PR #5650 as one we could not close without a
+    // send seam; this is the seam, and both mutants now fail hl2_ep4_gate_test.
+    const auto cmd = metisRunCommand(wideSpectrum, m_watchdogEnabled);
+    m_lastBandscopeRunByte = cmd[3];
     if (!m_socket)
         return;
     // The run byte is a bit field and `run` must STAY set: this goes out while
@@ -1458,10 +1494,8 @@ void MetisClient::sendBandscopeRunByte(bool wideSpectrum)
     // listening to. The composition lives in metisRunCommand() rather than here
     // precisely because of that: expressed inline it was unreachable by any
     // socket-free test, and the only assertion possible was one that re-derived
-    // the expression and agreed with itself. It is asserted for all four bit
-    // combinations in tests/hl2_metis_protocol_test.cpp.
-    countTx(sendTo(*m_socket, metisRunCommand(wideSpectrum, m_watchdogEnabled),
-                   m_host, m_port));
+    // the expression and agreed with itself.
+    countTx(sendTo(*m_socket, cmd, m_host, m_port));
 }
 
 int MetisClient::bandscopeGuardIntervalMs() const noexcept

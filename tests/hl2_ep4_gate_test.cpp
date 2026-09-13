@@ -28,6 +28,7 @@
 
 #include <QCoreApplication>
 #include <QSignalSpy>
+#include <QThread>
 
 #include <cstdint>
 #include <cstdio>
@@ -57,10 +58,28 @@ struct MetisClientTestAccess {
         return client.m_bsState == MetisClient::BandscopeState::Arming;
     }
     static bool trailingPending(MetisClient& client) { return client.m_bsTrailingPending; }
+    // THE BYTE THE GATE COMPOSED, not the byte a socket sent: sendBandscopeRunByte
+    // records it before its `!m_socket` return, which is what makes the call
+    // site's ARGUMENTS assertable at this layer at all.
+    static std::uint8_t lastRunByte(MetisClient& client)
+    {
+        return client.m_lastBandscopeRunByte;
+    }
     static void setSampleRate(MetisClient& client, SampleRate rate)
     {
         client.m_params.sampleRate = rate;
     }
+    // What a first EP6 datagram sets: the link is up and the silence clock is
+    // running. Injected rather than fed so the watchdog path can be driven
+    // without an EP6 frame builder in this file — these are the only two
+    // members handleDatagram touches on that edge.
+    static void setLinkUp(MetisClient& client)
+    {
+        client.m_linkUp = true;
+        client.m_sinceLastEp6.restart();
+    }
+    static void watchdogTick(MetisClient& client) { client.onWatchdogTick(); }
+    static int silenceTimeoutMs() noexcept { return MetisClient::kSilenceTimeoutMs; }
 };
 }  // namespace AetherSDR::hl2
 
@@ -231,6 +250,13 @@ int main(int argc, char** argv)
         c.setBandscopeEnabled(true);
         check(c.bandscopeEnabled(), "enabling a running client starts the gate");
         check(!MetisClientTestAccess::idle(c), "and arms immediately, not a second from now");
+        // THE ARGUMENTS, not the bits: metisRunCommand's encoding is pinned in
+        // hl2_metis_protocol_test. What is unpinned without this is which
+        // arguments the gate hands it — and `run` dropped here stops the IQ the
+        // operator is listening to. Masked with 0x03 so the check does not
+        // depend on the watchdog-disable bit.
+        check((MetisClientTestAccess::lastRunByte(c) & 0x03) == 0x03,
+              "arming sends run|wide_spectrum");
 
         for (std::uint32_t s = 0; s < 8; ++s) {
             feed(c, s);
@@ -247,6 +273,8 @@ int main(int argc, char** argv)
         // And the gate is down again: everything after this belongs to no block
         // until the next sampling period.
         check(MetisClientTestAccess::idle(c), "the gate lowers the bit as soon as it has one");
+        check((MetisClientTestAccess::lastRunByte(c) & 0x03) == 0x01,
+              "the lowering byte keeps run set");
         for (std::uint32_t s = 8; s < 40; ++s)
             feed(c, s);
         check(spy.count() == 1, "a radio that keeps sending does not make the gate keep blocks");
@@ -450,6 +478,8 @@ int main(int argc, char** argv)
         check(MetisClientTestAccess::idle(c),
               "keying abandons the cycle in flight rather than finishing it");
         check(spy.count() == 0, "half a clean block merged with half a keyed one is not a reading");
+        check((MetisClientTestAccess::lastRunByte(c) & 0x03) == 0x01,
+              "keying lowers wide_spectrum, run still set");
 
         // And nothing re-arms while keyed.
         MetisClientTestAccess::tick(c);
@@ -462,6 +492,26 @@ int main(int argc, char** argv)
         MetisClientTestAccess::tick(c);
         check(MetisClientTestAccess::idle(c), "no arming inside the post-unkey hold-off");
         check(c.bandscopeTimeouts() == 0, "a refused arming is not a timeout");
+    }
+
+    // ---- 10b · keying while ARMING leaves no trailing packet to expect ----
+    //
+    // Section 10 keys MID-CAPTURE, where a trailing packet really is in flight.
+    // The other case is the one the round-one fix was for, and nothing pinned
+    // it: reverting setMox to bandscopeDisarm(/*expectTrailing=*/true) passed
+    // all four targets. A cycle still ARMING has seen no EP4 packet, so there is
+    // nothing inside usopenhpsdr1.v's WIDE states to flush, and a flag set here
+    // would swallow the FIRST packet of the next cycle instead of the last of
+    // this one. (PR #5650 review, K5PTB.)
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        c.enableTransmit(true);
+        c.setBandscopeEnabled(true);
+        check(MetisClientTestAccess::arming(c), "armed, no EP4 seen yet");
+        c.setMox(true);
+        check(!MetisClientTestAccess::trailingPending(c),
+              "keying while ARMING leaves no flag to swallow the next cycle's first packet");
     }
 
     // ---- 11 · a refused key is not a key ----
@@ -523,6 +573,45 @@ int main(int argc, char** argv)
         check(spy.count() == 1, "and nothing that still arrives becomes a block");
         check(c.bandscopeBlocks() == 1, "the cumulative counter is not reset by stopping");
         check(c.linkCounters().ep4Packets == 39, "the wire counters keep counting");
+    }
+
+    // ---- 14 · a SILENCE-WATCHDOG link loss ends the gate's intent ----
+    //
+    // The path that is not stop(). onWatchdogTick() surfaces 2 s of EP6 silence
+    // as link loss without tearing the session down, so m_running and
+    // m_params.bandscope would both survive it — and if EP6 resumes before
+    // RadioModel's 5 s reconnect timer fires, handleDatagram emits linkUp again
+    // with no start() behind it. Hl2Backend's linkUp handler resets its mirrors
+    // on the premise that a session begins with wide_spectrum clear, so the
+    // health row would read OFF beside a gate still cycling and still publishing
+    // ADC levels. The gate would also keep arming at a radio that has gone
+    // quiet, manufacturing block timeouts. (PR #5650 review, K5PTB, who
+    // reproduced the OFF-beside-a-fresh-reading row through a real Hl2Backend.)
+    //
+    // Real wall clock: m_sinceLastEp6 is a QElapsedTimer and cannot be
+    // backdated. Overshooting is safe — elapsed() only grows — so the wait is
+    // robust under load rather than flaky.
+    {
+        MetisClient c;
+        QSignalSpy down(&c, &MetisClient::linkDown);
+        MetisClientTestAccess::setStreaming(c);
+        MetisClientTestAccess::setLinkUp(c);
+        c.setBandscopeEnabled(true);
+        check(c.bandscopeEnabled(), "the gate is running on a live link");
+        check(!MetisClientTestAccess::idle(c), "and armed");
+
+        QThread::msleep(static_cast<unsigned long>(
+            MetisClientTestAccess::silenceTimeoutMs() + 100));
+        MetisClientTestAccess::watchdogTick(c);
+        check(down.count() == 1, "the silence watchdog reported link loss");
+        check(!c.bandscopeEnabled(),
+              "...and the gate's standing intent ended with the link, as stop() ends it");
+        check(MetisClientTestAccess::idle(c), "...leaving no cycle in flight");
+
+        // The premise Hl2Backend's linkUp reset depends on: whatever brings the
+        // link back, the gate is not still running behind it.
+        MetisClientTestAccess::tick(c);
+        check(MetisClientTestAccess::idle(c), "and nothing re-arms on the dead link");
     }
 
     if (g_failures == 0)
