@@ -2663,6 +2663,8 @@ void SpectrumWidget::loadSettings()
         m_kiwiSdrWaterfallActive ? m_kiwiDssFloorDepth : m_flexDssFloorDepth);
     m_singleClickTune = s.value("SingleClickTune", "False").toString() == "True";
     m_showTuneGuides  = s.value("ShowTuneGuides", "False").toString() == "True";
+    // Per-pan (not global like the flat keys above) — see setShowWsjtxFreq().
+    m_showWsjtxFreq   = s.value(settingsKey("WsjtxShowFreqOverlay"), "False").toString() == "True";
     m_extendedFrequencyLine = s.value("ExtendedFrequencyLine", "False").toString() == "True";
     m_extendedPassband = DisplaySettings::extendedPassband();
     m_extendedTnf = DisplaySettings::extendedTnf();
@@ -4450,6 +4452,20 @@ void SpectrumWidget::propagateGlobalDisplayToggle(
             applyToSibling(sw);
         }
     }
+}
+
+void SpectrumWidget::setShowWsjtxFreq(bool on) {
+    // Deliberately per-pan, NOT propagated to siblings (unlike
+    // setShowTuneGuides/setExtendedFrequencyLine above) — see the header
+    // comment. settingsKey() suffixes the AppSettings key by pan index
+    // (m_panIndex == 0 keeps the bare key for backward compat), the same
+    // scheme DisplayWfColorScheme/Display3DGain already use for per-pan
+    // display appearance.
+    m_showWsjtxFreq = on;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("WsjtxShowFreqOverlay"), on ? "True" : "False");
+    s.save();
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setExtendedFrequencyLine(bool on) {
@@ -10719,6 +10735,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             tuneGuideAction->setCheckable(true);
             tuneGuideAction->setChecked(m_showTuneGuides);
             connect(tuneGuideAction, &QAction::toggled, this, &SpectrumWidget::setShowTuneGuides);
+
+            // #4526: lives next to Show Tune Guides rather than a Spots-dialog
+            // checkbox, but unlike Show Tune Guides this is per-PAN, not
+            // global — showing it on the 20 m pan while hiding it on the
+            // 40 m pan is the normal case for a two-slice/two-instance WSJT-X
+            // setup. See SpectrumWidget::setShowWsjtxFreq().
+            QAction* wsjtxFreqAction = menu.addAction("Show WSJT-X Rx/Tx Frequency");
+            wsjtxFreqAction->setCheckable(true);
+            wsjtxFreqAction->setChecked(m_showWsjtxFreq);
+            connect(wsjtxFreqAction, &QAction::toggled, this, &SpectrumWidget::setShowWsjtxFreq);
 
             QAction* extendedLineAction = menu.addAction("Extended Frequency Line");
             extendedLineAction->setCheckable(true);

@@ -594,6 +594,26 @@ void MainWindow::wireSpotSubsystem()
         m_wsjtxInstanceLastSeenMs.clear();
         rebuildWsjtxMarkers();
     });
+    // A clean exit clears the marker immediately rather than waiting out the
+    // 45 s activity-timeout sweep below (RFC #4526 review item 3) — the
+    // sweep is the fallback for a WSJT-X crash/kill, not the normal path.
+    connect(m_wsjtxClient, &WsjtxClient::instanceClosed, this, [this](const QString& id) {
+        if (!m_wsjtxInstances.contains(id)) return;
+        m_wsjtxInstances.remove(id);
+        m_wsjtxInstanceLastSeenMs.remove(id);
+        rebuildWsjtxMarkers();
+    });
+    // Heartbeat carries no frequency data — it only proves the instance is
+    // still running through a quiet spell in Status traffic (e.g. Monitor
+    // off), so it refreshes the activity timeout WITHOUT touching
+    // m_wsjtxInstances or triggering a marker rebuild (RFC #4526 review item
+    // 4). An instance never seen via Status has nothing to place on the
+    // panadapter yet, so its Heartbeat is ignored rather than creating an
+    // entry with no frequency.
+    connect(m_wsjtxClient, &WsjtxClient::instanceHeartbeat, this, [this](const QString& id) {
+        if (!m_wsjtxInstances.contains(id)) return;
+        m_wsjtxInstanceLastSeenMs[id] = QDateTime::currentMSecsSinceEpoch();
+    });
 
     // N1MM/DXLog spots (#2906): the logger sends explicit add/update/delete, so
     // these bypass queueSpotCmd's freq dedup and key on
@@ -887,18 +907,15 @@ void MainWindow::readWsprReceiverSlice(const QHostAddress& radio, std::function<
 
 // Pushes the current set of live WSJT-X instances (m_wsjtxInstances) to every
 // panadapter's SpectrumWidget as WsjtxMarker entries (#4526). Called whenever
-// that set changes: a new/updated Status, an instance timing out, or the
-// listener stopping. AppSettings is the single source of truth for whether
-// the overlay paints at all — read fresh each call rather than cached, so
-// toggling "Show WSJT-X frequency overlay" in the Spots dialog takes effect
-// on the very next update without a separate settings-changed plumbing path
-// (SpectrumWidget::setShowWsjtxFreq() below still updates existing panes
-// immediately too, for the case where nothing new has arrived from WSJT-X).
+// that set changes: a new/updated Status, a Heartbeat, an instance closing or
+// timing out, or the listener stopping. The marker DATA is broadcast to every
+// pan uniformly — cheap, and each pan already culls to markers within its own
+// visible frequency span (drawWsjtxMarkers()). Whether a given pan actually
+// PAINTS them is a separate, per-pan decision the pan's own right-click menu
+// makes (SpectrumWidget::setShowWsjtxFreq(), persisted per pan index) — this
+// function never touches that flag.
 void MainWindow::rebuildWsjtxMarkers()
 {
-    const bool show =
-        AppSettings::instance().value("WsjtxShowFreqOverlay", "False").toString() == "True";
-
     QVector<SpectrumWidget::WsjtxMarker> markers;
     markers.reserve(m_wsjtxInstances.size());
     for (auto it = m_wsjtxInstances.cbegin(); it != m_wsjtxInstances.cend(); ++it) {
@@ -907,9 +924,7 @@ void MainWindow::rebuildWsjtxMarkers()
     }
 
     for (PanadapterApplet* applet : m_panStack->allApplets()) {
-        auto* sw = applet->spectrumWidget();
-        sw->setShowWsjtxFreq(show);
-        sw->setWsjtxMarkers(markers);
+        applet->spectrumWidget()->setWsjtxMarkers(markers);
     }
 }
 

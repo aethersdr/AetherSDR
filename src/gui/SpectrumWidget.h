@@ -965,7 +965,15 @@ public:
         bool    transmitting{false};
     };
     void setWsjtxMarkers(const QVector<WsjtxMarker>& markers);
-    void setShowWsjtxFreq(bool on) { m_showWsjtxFreq = on; markOverlayDirty(); }
+    // Per-pan, unlike setShowTuneGuides/setExtendedFrequencyLine (which
+    // propagate globally to every sibling SpectrumWidget). Deliberately NOT
+    // global here: the whole point of the overlay is one WSJT-X instance per
+    // band/slice, so an operator showing it on the 20 m pan and hiding it on
+    // the 40 m pan is the normal case, not an edge case. Persisted per pan
+    // index via settingsKey() — see setPanIndex(). Lives in this pan's own
+    // right-click menu next to Show Tune Guides (#4526 follow-up: moved here
+    // from a Spots-dialog checkbox).
+    void setShowWsjtxFreq(bool on);
     bool showWsjtxFreq() const { return m_showWsjtxFreq; }
 
     struct SpotCluster {

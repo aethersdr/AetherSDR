@@ -1,6 +1,7 @@
 #include "WsjtxClient.h"
 #include "LogManager.h"
 #include "WsjtxStatusFreq.h"
+#include "WsjtxWireHelpers.h"
 
 #include <QDataStream>
 #include <QNetworkInterface>
@@ -113,11 +114,25 @@ void WsjtxClient::parseMessage(const QByteArray& data)
     if (magic != WsjtxMagic) return;
 
     switch (msgType) {
-    case 1:  parseStatus(ds);  break;  // Status — dial freq, mode
+    case 0:  parseHeartbeat(ds); break;  // Heartbeat — instance is alive, no freq data
+    case 1:  parseStatus(ds);   break;  // Status — dial freq, mode, Rx/Tx offsets
     case 2:  parseDecode(ds);  break;  // Decode — the spots
     case 6:  parseClose(ds);   break;  // Close — instance exiting
     default: break;
     }
+}
+
+// ── Heartbeat message (type 0) — instance is alive ──────────────────────────
+// Fields: Id(QString), Max Schema Number(quint32), Version(QString),
+// Revision(QString). Carries no frequency data — only the id matters here,
+// as evidence the instance is still running through a quiet spell in Status
+// traffic (e.g. Monitor off). Everything after Id is left unread.
+
+void WsjtxClient::parseHeartbeat(QDataStream& ds)
+{
+    QString id;
+    if (!wsjtxReadQString(ds, id)) return;
+    emit instanceHeartbeat(id);
 }
 
 // ── Status message (type 1) — track dial frequency per instance ─────────────
@@ -125,50 +140,32 @@ void WsjtxClient::parseMessage(const QByteArray& data)
 void WsjtxClient::parseStatus(QDataStream& ds)
 {
     QString id;
-    if (!readQString(ds, id)) return;
+    if (!wsjtxReadQString(ds, id)) return;
 
     quint64 dialFreq;
     ds >> dialFreq;  // dial frequency in Hz
 
     QString mode;
-    if (!readQString(ds, mode)) return;
+    if (!wsjtxReadQString(ds, mode)) return;
 
     const double dialFreqHz = static_cast<double>(dialFreq);
     m_dialTracker.noteStatus(id, dialFreqHz);
 
-    // Fields added for the Rx/Tx frequency overlay (#4526): DX Call, Report,
-    // Tx Mode, Tx Enabled, Transmitting, Decoding, Rx DF, Tx DF. Everything
-    // after Tx DF (DE call/grid, watchdog, ...) is not needed here and is
-    // left unread. Consumed defensively — an older or truncated Status still
-    // updates the dial (and therefore Decode placement, #3595) even when
-    // these later fields are short; the overlay just falls back to "no
-    // offset known" for this update rather than dropping it.
-    QString dxCall, report, txMode;
-    bool txEnabled = false;
-    bool transmitting = false;
-    bool decoding = false;
-    bool haveOffsets =
-        readQString(ds, dxCall) &&
-        readQString(ds, report) &&
-        readQString(ds, txMode) &&
-        readBool(ds, txEnabled) &&
-        readBool(ds, transmitting) &&
-        readBool(ds, decoding);
-
-    quint32 rxDf = 0;
-    quint32 txDf = 0;
-    if (haveOffsets && !ds.atEnd()) {
-        ds >> rxDf >> txDf;
-    } else {
-        haveOffsets = false;
-    }
-
-    const WsjtxResolvedFreq resolved = resolveWsjtxFreq(dialFreqHz, haveOffsets, rxDf, txDf);
+    // DX Call/Report/Tx Mode/Tx Enabled/Transmitting/Decoding/Rx DF/Tx DF —
+    // added for the Rx/Tx frequency overlay (#4526). The field walk itself
+    // lives in WsjtxStatusFreq.h (parseWsjtxStatusBody()) rather than inline
+    // here, specifically so its exact field order is covered by
+    // tests/wsjtx_status_freq_test.cpp and not just exercised manually (RFC
+    // #4526 review item 1) — getting the order wrong fails silently:
+    // resolveWsjtxFreq() would fall back to the dial with no error anywhere.
+    const WsjtxStatusBody body = parseWsjtxStatusBody(ds);
+    const WsjtxResolvedFreq resolved =
+        resolveWsjtxFreq(dialFreqHz, body.hasOffsets, body.rxDfHz, body.txDfHz);
 
     WsjtxStatus status;
     status.id = id;
     status.mode = mode;
-    status.transmitting = transmitting;
+    status.transmitting = body.transmitting;
     status.rxFreqHz = resolved.rxFreqHz;
     status.txFreqHz = resolved.txFreqHz;
 
@@ -180,8 +177,12 @@ void WsjtxClient::parseStatus(QDataStream& ds)
 void WsjtxClient::parseClose(QDataStream& ds)
 {
     QString id;
-    if (!readQString(ds, id)) return;
+    if (!wsjtxReadQString(ds, id)) return;
     m_dialTracker.forget(id);
+    // Lets a consumer drop this instance's marker immediately rather than
+    // waiting out an activity-timeout sweep (RFC #4526 review item 3) — a
+    // clean exit is the common case, not the one the sweep exists for.
+    emit instanceClosed(id);
 }
 
 // ── Decode message (type 2) — extract spots ─────────────────────────────────
@@ -193,10 +194,10 @@ void WsjtxClient::parseDecode(QDataStream& ds)
     //         Message(QString), LowConfidence(bool), OffAir(bool)
 
     QString id;
-    if (!readQString(ds, id)) return;
+    if (!wsjtxReadQString(ds, id)) return;
 
     bool isNew;
-    if (!readBool(ds, isNew)) return;
+    if (!wsjtxReadBool(ds, isNew)) return;
     if (!isNew) return;  // skip replayed decodes
 
     quint32 timeMs;
@@ -206,13 +207,13 @@ void WsjtxClient::parseDecode(QDataStream& ds)
     ds >> timeMs >> snr >> deltaTime >> deltaFreqHz;
 
     QString mode;
-    if (!readQString(ds, mode)) return;
+    if (!wsjtxReadQString(ds, mode)) return;
 
     QString message;
-    if (!readQString(ds, message)) return;
+    if (!wsjtxReadQString(ds, message)) return;
 
     bool lowConfidence;
-    if (!readBool(ds, lowConfidence)) return;
+    if (!wsjtxReadBool(ds, lowConfidence)) return;
     // Skip low-confidence decodes
     if (lowConfidence) return;
 
@@ -293,34 +294,6 @@ QString WsjtxClient::extractCallsign(const QString& message) const
     }
 
     return {};
-}
-
-// ── QDataStream helpers ─────────────────────────────────────────────────────
-
-bool WsjtxClient::readQString(QDataStream& ds, QString& out)
-{
-    if (ds.atEnd()) return false;
-    quint32 len;
-    ds >> len;
-    if (len == 0xFFFFFFFF) {
-        out.clear();
-        return true;
-    }
-    if (len > 10000) return false;  // sanity check
-    QByteArray buf(static_cast<int>(len), '\0');
-    if (ds.readRawData(buf.data(), static_cast<int>(len)) != static_cast<int>(len))
-        return false;
-    out = QString::fromUtf8(buf);
-    return true;
-}
-
-bool WsjtxClient::readBool(QDataStream& ds, bool& out)
-{
-    if (ds.atEnd()) return false;
-    quint8 v;
-    ds >> v;
-    out = (v != 0);
-    return true;
 }
 
 } // namespace AetherSDR
