@@ -345,6 +345,11 @@ private slots:
     void onRadioMessage(const QString& text, MessageSeverity severity);
     void onSliceAdded(SliceModel* slice);
     void onSliceRemoved(int id);
+    // Push the transmit slice's frequency into TunerApplet's expanded port-A
+    // strip. Re-derived from scratch on every call rather than cached against
+    // a slice pointer: band recall DROPS and RE-CREATES the slice (keeping its
+    // id), so anything bound to the old object goes quietly stale.
+    void refreshTunerPortFrequency();
     // Ordinary RX close from the VFO ✕ / "Close Slice" menu (RFC #5468 P01).
     void requestSliceClose(int sliceId);
 

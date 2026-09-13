@@ -1156,6 +1156,7 @@ set(GUI_SOURCES
     src/gui/CrossNeedleMeterSettings.cpp
     src/gui/VuMeterSettings.cpp
     src/gui/TunerApplet.cpp
+    src/gui/TgxlPanelWidgets.cpp
     src/gui/TxApplet.cpp
     src/gui/AtuPreTuneDialog.cpp
     src/gui/SwrSweepLicenseDialog.cpp

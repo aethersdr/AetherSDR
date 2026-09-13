@@ -1,0 +1,222 @@
+// TGXL front-panel widgets — the presentation TunerApplet switches to when it
+// is popped out or placed on the workspace canvas.
+//
+// Two contracts are pinned here:
+//
+//  * TgxlPortRow renders a missing reading as "N/A" rather than as a stale or
+//    invented one. Port B runs on RF sense and never reports a frequency, and
+//    port A has none before the client is connected, so "no reading" is the
+//    normal case rather than an error path. Bypass, being tuner-wide, empties
+//    the per-port state cell and is carried in the spoken description instead.
+//
+//  * RelayDial carries RelayBar's accessibility contract (#4565) — an ATU
+//    sweep debounces to one settled announcement, and the last published value
+//    is forgotten on focus loss so a position that moved while unfocused is
+//    still announced when focus returns. The dial is a second view of the same
+//    relay bank, so the guarantee has to hold in both.
+
+#include "gui/TgxlPanelWidgets.h"
+
+#include <QAccessible>
+#include <QApplication>
+#include <QEventLoop>
+#include <QLabel>
+#include <QTimer>
+#include <QVector>
+
+#include <iostream>
+
+using namespace AetherSDR;
+
+namespace {
+
+int g_failures = 0;
+QVector<QString>* g_announcements = nullptr;
+
+void captureAccessibleValueUpdate(QAccessibleEvent* event)
+{
+    if (!g_announcements || event->type() != QAccessible::ValueChanged) return;
+    const auto* valueEvent = static_cast<const QAccessibleValueChangeEvent*>(event);
+    g_announcements->push_back(valueEvent->value().toString());
+}
+
+void expect(bool condition, const QString& message)
+{
+    if (!condition) {
+        std::cerr << "FAIL: " << message.toStdString() << '\n';
+        ++g_failures;
+    }
+}
+
+void waitForEvents(int milliseconds)
+{
+    QEventLoop loop;
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+// The row keeps its readings in child labels; find one by the text it shows.
+bool rowShowsText(const TgxlPortRow& row, const QString& text)
+{
+    const QList<QLabel*> labels = row.findChildren<QLabel*>();
+    for (const QLabel* label : labels) {
+        if (label->text() == text) return true;
+    }
+    return false;
+}
+
+void testPortRowReadings()
+{
+    TgxlPortRow row(QStringLiteral("A"));
+
+    // Nothing reported yet: both the band and the frequency read N/A.
+    expect(rowShowsText(row, QStringLiteral("N/A")),
+           QStringLiteral("a fresh row shows N/A"));
+
+    // A real frequency renders in the same MHz.kHz.Hz grouping as the VFO, so
+    // the same signal reads identically wherever it appears in the app.
+    row.setFrequencyMhz(7.1855);
+    expect(rowShowsText(row, QStringLiteral("7.185.500")),
+           QStringLiteral("7.1855 MHz renders as 7.185.500"));
+
+    // Sub-kHz digits are not dropped or rounded away.
+    row.setFrequencyMhz(14.074001);
+    expect(rowShowsText(row, QStringLiteral("14.074.001")),
+           QStringLiteral("14.074001 MHz keeps its Hz digit"));
+
+    // Losing the reading goes back to N/A rather than holding the last one —
+    // a frozen but plausible frequency is the worse failure.
+    row.setFrequencyMhz(0.0);
+    expect(!rowShowsText(row, QStringLiteral("14.074.001")),
+           QStringLiteral("a cleared frequency does not linger"));
+    expect(rowShowsText(row, QStringLiteral("N/A")),
+           QStringLiteral("a cleared frequency reads N/A"));
+
+    // An empty band is N/A too; a real one is shown verbatim.
+    row.setBandText(QStringLiteral("40m"));
+    expect(rowShowsText(row, QStringLiteral("40m")),
+           QStringLiteral("a reported band is shown"));
+    row.setBandText(QString());
+    expect(!rowShowsText(row, QStringLiteral("40m")),
+           QStringLiteral("a cleared band does not linger"));
+
+    // Bypass has no in-row marker of its own — the visual cue is a sibling
+    // widget spanning both strips — so the spoken description has to carry it
+    // or a screen-reader user cannot tell a bypassed tuner from a matching one.
+    row.setStateText(QStringLiteral("OPR"));
+    row.setBypassed(true);
+    expect(row.accessibleDescription().contains(QStringLiteral("bypassed")),
+           QStringLiteral("a bypassed port says so"));
+    row.setBypassed(false);
+    expect(!row.accessibleDescription().contains(QStringLiteral("bypassed")),
+           QStringLiteral("leaving bypass clears it"));
+
+    // An empty state hides the cell rather than leaving a blank box: bypass
+    // empties it because the condition is tuner-wide, not per port.
+    row.setStateText(QString());
+    expect(!rowShowsText(row, QStringLiteral("OPR")),
+           QStringLiteral("an empty state clears the cell"));
+
+    // The whole strip is one accessible sentence: a reader crossing six
+    // separate labels would otherwise lose which port they belong to.
+    row.setSourceText(QStringLiteral("FLEX-8600"));
+    row.setStateText(QStringLiteral("OPR"));
+    row.setPtt(true);
+    expect(row.accessibleName().contains(QStringLiteral("A")),
+           QStringLiteral("the row names its port"));
+    const QString description = row.accessibleDescription();
+    expect(description.contains(QStringLiteral("FLEX-8600")),
+           QStringLiteral("the description carries the source"));
+    expect(description.contains(QStringLiteral("OPR")),
+           QStringLiteral("the description carries the state"));
+    expect(!description.contains(QStringLiteral("not transmitting")),
+           QStringLiteral("a keyed port does not read as idle"));
+    row.setPtt(false);
+    expect(row.accessibleDescription().contains(QStringLiteral("not transmitting")),
+           QStringLiteral("an unkeyed port reads as idle"));
+}
+
+void testDialAnnouncements()
+{
+    QVector<QString> announcements;
+    g_announcements = &announcements;
+    QAccessible::installUpdateHandler(&captureAccessibleValueUpdate);
+
+    auto* dial = new RelayDial(QStringLiteral("C1"));
+    dial->setScrollEnabled(true);
+    dial->show();
+    dial->setFocus();
+    waitForEvents(50);
+
+    if (!dial->hasFocus()) {
+        // No focus means no announcement gate to test — the platform, not the
+        // widget, decided that. Say so rather than passing vacuously.
+        std::cerr << "SKIP: dial never took focus on this platform\n";
+        delete dial;
+        QAccessible::installUpdateHandler(nullptr);
+        g_announcements = nullptr;
+        return;
+    }
+
+    // A sweep of positions in one burst settles to a single announcement.
+    announcements.clear();
+    for (int v = 10; v <= 60; v += 10) dial->setValue(v);
+    waitForEvents(250);
+    expect(announcements.size() == 1,
+           QStringLiteral("a relay sweep debounces to one announcement, got %1")
+               .arg(announcements.size()));
+    expect(!announcements.isEmpty() && announcements.last() == QStringLiteral("60"),
+           QStringLiteral("the settled position is the one announced"));
+
+    // A value that moves away and back while unfocused must not be swallowed
+    // by the dedup when focus returns.
+    announcements.clear();
+    dial->clearFocus();
+    waitForEvents(20);
+    dial->setValue(120);
+    dial->setValue(60);            // back to the last announced position
+    dial->setFocus();
+    waitForEvents(20);
+    if (dial->hasFocus()) {
+        dial->setValue(60);        // no change, but the dedup was reset
+        dial->setValue(75);
+        waitForEvents(250);
+        expect(!announcements.isEmpty(),
+               QStringLiteral("a position that moved while unfocused is announced again"));
+    }
+
+    // Values still track regardless of focus — the dial reads hardware pushes.
+    dial->setValue(200);
+    expect(dial->value() == 200, QStringLiteral("the dial holds the value it was given"));
+
+    delete dial;
+    QAccessible::installUpdateHandler(nullptr);
+    g_announcements = nullptr;
+}
+
+}  // namespace
+
+int main(int argc, char** argv)
+{
+    QApplication app(argc, argv);
+
+    if (!QAccessible::isActive()) {
+        QAccessible::setActive(true);
+    }
+    if (!QAccessible::isActive()) {
+        // Same convention as the other a11y tests: no backend is a skip, not
+        // a failure. tests.cmake maps 77 to SKIP.
+        std::cerr << "No accessibility backend available — skipping\n";
+        return 77;
+    }
+
+    testPortRowReadings();
+    testDialAnnouncements();
+
+    if (g_failures == 0) {
+        std::cout << "tgxl_panel_widgets_test: all checks passed\n";
+        return 0;
+    }
+    std::cout << "tgxl_panel_widgets_test: " << g_failures << " failure(s)\n";
+    return 1;
+}

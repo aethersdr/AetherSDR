@@ -1095,6 +1095,22 @@ void FlexBackend::decodeTunerStatus(const QString& handle, const QMap<QString, Q
         d.model = kvs.value(QStringLiteral("model"));
     if (kvs.contains(QStringLiteral("ip")))
         d.ip = kvs.value(QStringLiteral("ip"));
+    // PTT-per-port. FlexLib lower-cases every key before its switch, so its
+    // "ptta"/"pttb" cases say nothing about the wire's casing — but the
+    // `// note: tolower call above` it puts on exactly those two cases (and on
+    // no other) flags that the wire key is mixed-case, which matches every
+    // other camel key here (antA, relayC1). Both spellings are accepted: the
+    // camel one is what the radio is expected to send, and the lower one costs
+    // a string compare to be certain a firmware that disagrees still lights the
+    // indicator rather than leaving it dark with no way to tell why.
+    if (kvs.contains(QStringLiteral("pttA")))
+        d.pttA = (kvs.value(QStringLiteral("pttA")) == QLatin1String("1"));
+    else if (kvs.contains(QStringLiteral("ptta")))
+        d.pttA = (kvs.value(QStringLiteral("ptta")) == QLatin1String("1"));
+    if (kvs.contains(QStringLiteral("pttB")))
+        d.pttB = (kvs.value(QStringLiteral("pttB")) == QLatin1String("1"));
+    else if (kvs.contains(QStringLiteral("pttb")))
+        d.pttB = (kvs.value(QStringLiteral("pttb")) == QLatin1String("1"));
     if (kvs.contains(QStringLiteral("operate")))
         d.operate = (kvs.value(QStringLiteral("operate")) == QLatin1String("1"));
     if (kvs.contains(QStringLiteral("bypass")))

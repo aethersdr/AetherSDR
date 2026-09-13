@@ -31,6 +31,8 @@ public:
     QString modelName() const { return m_model; }
     QString serialNum() const { return m_serialNum; }
     QString tgxlIp()    const { return m_tgxlIp; }
+    bool    pttA()      const { return m_pttA; }      // port A keyed
+    bool    pttB()      const { return m_pttB; }      // port B keyed
     bool    isOperate() const { return m_operate; }
     bool    isBypass()  const { return m_bypass; }
     bool    isTuning()  const { return m_tuning; }
@@ -74,6 +76,7 @@ signals:
     void tuningChanged(bool tuning);   // tuning started/stopped
     void antennaAChanged(int antA);    // antenna port changed (0-indexed)
     void metersChanged(float fwdPower, float swr);  // fwd power/SWR from direct TGXL
+    void pttChanged(bool pttA, bool pttB);  // either port's PTT line moved
     void presenceChanged(bool present); // tuner detected / lost
     void directConnectionChanged(bool connected);
     // Neutral relay intents. RadioModel translates each to the Flex TGXL wire
@@ -89,6 +92,8 @@ private:
     QString m_model;
     QString m_serialNum;
     QString m_tgxlIp;
+    bool    m_pttA{false};
+    bool    m_pttB{false};
     bool    m_operate{false};
     bool    m_bypass{false};
     bool    m_tuning{false};

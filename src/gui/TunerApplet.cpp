@@ -1,18 +1,49 @@
 #include "TunerApplet.h"
 #include "HGauge.h"
+#include "TgxlPanelWidgets.h"
 #include "models/TunerModel.h"
 #include "models/MeterModel.h"
+#include "models/BandSettings.h"
 
 #include <QPushButton>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSignalBlocker>
+#include <QSpacerItem>
 #include <QTimer>
 #include "core/ThemeManager.h"
 namespace AetherSDR {
 
+namespace {
 
+// The three states TUNE cycles through visually. Kept as named templates
+// because both presentations' TUNE buttons wear them and the tuning handler
+// swaps between them in two places.
+constexpr const char* kTuneIdleStyle =
+    "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+    "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
+    "QPushButton:hover { background: {{color.background.1}}; }";
+constexpr const char* kTuneBusyStyle =
+    "QPushButton { background: #cc2222; border: 1px solid {{color.accent.danger}}; "
+    "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }";
+
+// The expanded presentation's STBY / BYP keys: resting, and lit while the
+// tuner is in the state that key selects.
+constexpr const char* kPanelKeyIdleStyle =
+    "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+    "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"
+    "QPushButton:hover { background: {{color.background.1}}; }";
+constexpr const char* kStandbyActiveStyle =
+    "QPushButton { background: {{color.tgxl.key.standby.background}}; "
+    "border: 1px solid {{color.tgxl.key.standby.foreground}}; border-radius: 3px; "
+    "color: {{color.tgxl.key.standby.foreground}}; font-size: 11px; font-weight: bold; }";
+constexpr const char* kBypassActiveStyle =
+    "QPushButton { background: {{color.tgxl.key.bypass.background}}; "
+    "border: 1px solid {{color.tgxl.key.bypass.foreground}}; border-radius: 3px; "
+    "color: {{color.tgxl.key.bypass.foreground}}; font-size: 11px; font-weight: bold; }";
+
+}  // namespace
 
 // ── TunerApplet ─────────────────────────────────────────────────────────────
 
@@ -51,13 +82,27 @@ TunerApplet::TunerApplet(QWidget* parent)
     connect(m_postTuneTimer, &QTimer::timeout, this, [this]() {
         m_postTuneCapture = false;
         float result = (m_tuneSwr < 900.0f) ? m_tuneSwr : m_swr;
-        m_tuneBtn->setText(QString("SWR %1").arg(result, 0, 'f', 2));
+        applyTuneButtonText(QString("SWR %1").arg(result, 0, 'f', 2));
         QTimer::singleShot(2500, this, [this]() {
-            m_tuneBtn->setText("TUNE");
+            applyTuneButtonText("TUNE");
         });
     });
 
     buildUI();
+    applyDensity();
+}
+
+void TunerApplet::applyTuneButtonText(const QString& text)
+{
+    m_tuneBtn->setText(text);
+    m_panelTuneBtn->setText(text);
+}
+
+void TunerApplet::applyTuneButtonStyle(const char* styleTemplate)
+{
+    auto& theme = AetherSDR::ThemeManager::instance();
+    theme.applyStyleSheet(m_tuneBtn, styleTemplate);
+    theme.applyStyleSheet(m_panelTuneBtn, styleTemplate);
 }
 
 void TunerApplet::setAmplifierMode(bool hasAmp)
@@ -102,7 +147,8 @@ void TunerApplet::buildUI()
 
     // Body with margins
     auto* body = new QWidget;
-    auto* vbox = new QVBoxLayout(body);
+    m_vbox = new QVBoxLayout(body);
+    auto* vbox = m_vbox;
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
 
@@ -143,8 +189,53 @@ void TunerApplet::buildUI()
     swrRow->addWidget(m_swrGauge, 1);
     vbox->addLayout(swrRow);
 
+    // Port status strips — between the meters and the relay controls, where
+    // the tuner's own panel puts them. Expanded presentation only.
+    {
+        m_portRowsBox = new QWidget;
+        auto* area = new QVBoxLayout(m_portRowsBox);
+        area->setContentsMargins(0, 0, 0, 0);
+        area->setSpacing(0);
+
+        // Live: the two strips, with the tuner-wide bypass indicator beside
+        // them spanning both.
+        m_portLiveBox = new QWidget(m_portRowsBox);
+        auto* live = new QHBoxLayout(m_portLiveBox);
+        live->setContentsMargins(0, 0, 0, 0);
+        live->setSpacing(4);
+
+        auto* rows = new QVBoxLayout;
+        rows->setContentsMargins(0, 0, 0, 0);
+        rows->setSpacing(2);
+        m_portA = new TgxlPortRow(QStringLiteral("A"), m_portLiveBox);
+        m_portB = new TgxlPortRow(QStringLiteral("B"), m_portLiveBox);
+        rows->addWidget(m_portA);
+        rows->addWidget(m_portB);
+        live->addLayout(rows, 1);
+
+        m_bypassSpan = new QLabel(tr("BYP"), m_portLiveBox);
+        m_bypassSpan->setAlignment(Qt::AlignCenter);
+        m_bypassSpan->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        m_bypassSpan->setVisible(false);
+        m_bypassSpan->setAccessibleName(tr("Tuner bypassed"));
+        live->addWidget(m_bypassSpan);
+
+        area->addWidget(m_portLiveBox);
+
+        // Standby: one banner over the whole area.
+        m_standbyBanner = new QLabel(tr("STANDBY"), m_portRowsBox);
+        m_standbyBanner->setAlignment(Qt::AlignCenter);
+        m_standbyBanner->setVisible(false);
+        m_standbyBanner->setAccessibleName(tr("Tuner in standby"));
+        area->addWidget(m_standbyBanner);
+
+        vbox->addWidget(m_portRowsBox);
+    }
+
     // Bottom section: relay bars (75% left) + buttons (25% right)
-    auto* bottomRow = new QHBoxLayout;
+    m_dockedControls = new QWidget;
+    auto* bottomRow = new QHBoxLayout(m_dockedControls);
+    bottomRow->setContentsMargins(0, 0, 0, 0);
     bottomRow->setSpacing(4);
 
     // Left column: relay bars
@@ -167,9 +258,7 @@ void TunerApplet::buildUI()
 
     m_tuneBtn = new QPushButton("TUNE");
     m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, kTuneIdleStyle);
     btnCol->addWidget(m_tuneBtn);
 
     m_operateBtn = new QPushButton("OPERATE");
@@ -181,7 +270,10 @@ void TunerApplet::buildUI()
 
     bottomRow->addLayout(btnCol, 3);  // stretch 3 (30%)
 
-    vbox->addLayout(bottomRow);
+    vbox->addWidget(m_dockedControls);
+
+    // Expanded controls (dials + discrete keys), hidden while docked.
+    buildExpandedUI(vbox);
 
     // Antenna switch row (TGXL 3x1) — hidden until direct connection active
     {
@@ -221,24 +313,248 @@ void TunerApplet::buildUI()
         vbox->addWidget(m_antContainer);
     }
 
+    // Absorbs the spare height of a tall window so the dial row keeps its
+    // natural size rather than stretching down the panel (SpeApplet uses the
+    // same device).
+    m_bottomStretch = new QSpacerItem(0, 0, QSizePolicy::Minimum, QSizePolicy::Fixed);
+    vbox->addSpacerItem(m_bottomStretch);
+
+    updatePortRows();
+
     outer->addWidget(body);
 
     // TUNE button: send autotune command
-    connect(m_tuneBtn, &QPushButton::clicked, this, [this]() {
-        if (m_model) m_model->autoTune();
-    });
+    for (auto* tune : {m_tuneBtn, m_panelTuneBtn}) {
+        connect(tune, &QPushButton::clicked, this, [this]() {
+            if (m_model) m_model->autoTune();
+        });
+    }
 
-    // Manual relay adjustment via mousewheel scroll (#469)
+    // Manual relay adjustment via mousewheel scroll (#469) — the bar and the
+    // dial are two views of one relay bank, so both drive the same step.
     connect(static_cast<RelayBar*>(m_c1Bar), &RelayBar::relayAdjusted, this,
             [this](int dir) { if (m_model) m_model->adjustRelay(0, dir); });
     connect(static_cast<RelayBar*>(m_lBar), &RelayBar::relayAdjusted, this,
             [this](int dir) { if (m_model) m_model->adjustRelay(1, dir); });
     connect(static_cast<RelayBar*>(m_c2Bar), &RelayBar::relayAdjusted, this,
             [this](int dir) { if (m_model) m_model->adjustRelay(2, dir); });
+    connect(m_c1Dial, &RelayDial::relayAdjusted, this,
+            [this](int dir) { if (m_model) m_model->adjustRelay(0, dir); });
+    connect(m_lDial, &RelayDial::relayAdjusted, this,
+            [this](int dir) { if (m_model) m_model->adjustRelay(1, dir); });
+    connect(m_c2Dial, &RelayDial::relayAdjusted, this,
+            [this](int dir) { if (m_model) m_model->adjustRelay(2, dir); });
 
     // OPERATE button: cycle through OPERATE → BYPASS → STANDBY → OPERATE
     connect(m_operateBtn, &QPushButton::clicked, this,
             &TunerApplet::cycleOperateState);
+}
+
+// ── Expanded (floating / canvas) presentation ───────────────────────────────
+
+void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
+{
+    auto& theme = AetherSDR::ThemeManager::instance();
+
+    m_panelControls = new QWidget;
+    auto* row = new QHBoxLayout(m_panelControls);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(6);
+
+    // Three relay dials on the left.
+    auto* dials = new QHBoxLayout;
+    dials->setSpacing(6);
+    m_c1Dial = new RelayDial(QStringLiteral("C1"), m_panelControls);
+    m_c1Dial->setAccessibleName(tr("Tuner capacitor C1"));
+    m_lDial = new RelayDial(QStringLiteral("L"), m_panelControls);
+    m_lDial->setAccessibleName(tr("Tuner inductor L"));
+    m_c2Dial = new RelayDial(QStringLiteral("C2"), m_panelControls);
+    m_c2Dial->setAccessibleName(tr("Tuner capacitor C2"));
+    dials->addWidget(m_c1Dial);
+    dials->addWidget(m_lDial);
+    dials->addWidget(m_c2Dial);
+    row->addLayout(dials, 3);
+
+    // Discrete keys on the right. STBY and BYP each toggle their own state
+    // against OPERATE, so the state the panel is in is always one press from
+    // the state it came from — the rail's single cycling button cannot do
+    // that, which is why it stays the rail's button and not this one.
+    auto* keys = new QHBoxLayout;
+    keys->setSpacing(4);
+    auto makeKey = [this](const QString& text, const QString& tip) {
+        auto* btn = new QPushButton(text, m_panelControls);
+        // Wide as the column allows, but only as tall as a key needs — the
+        // window's spare height belongs to the stretch below, not to these.
+        btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        btn->setToolTip(tip);
+        btn->setAccessibleName(text);
+        btn->setAccessibleDescription(tip);
+        return btn;
+    };
+    m_stbyBtn = makeKey(tr("STBY"), tr("Toggle standby — the tuner stops following the radio"));
+    m_bypBtn  = makeKey(tr("BYP"),  tr("Toggle bypass — RF passes straight through the tuner"));
+    m_panelTuneBtn = makeKey(tr("TUNE"), tr("Start an auto-tune cycle"));
+    for (auto* key : {m_stbyBtn, m_bypBtn}) {
+        theme.applyStyleSheet(key, kPanelKeyIdleStyle);
+    }
+    theme.applyStyleSheet(m_panelTuneBtn, kTuneIdleStyle);
+    keys->addWidget(m_stbyBtn);
+    keys->addWidget(m_bypBtn);
+    keys->addWidget(m_panelTuneBtn);
+    row->addLayout(keys, 2);
+
+    vbox->addWidget(m_panelControls);
+
+    connect(m_stbyBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_model) return;
+        if (!m_model->isOperate()) {
+            // Already in standby — return to operate. Same order as
+            // cycleOperateState's standby leg so both paths command the
+            // tuner identically.
+            m_model->setBypass(false);
+            m_model->setOperate(true);
+        } else {
+            m_model->setBypass(false);
+            m_model->setOperate(false);
+        }
+    });
+    connect(m_bypBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_model) return;
+        if (m_model->isOperate() && m_model->isBypass()) {
+            m_model->setBypass(false);   // back to operate, still out of standby
+        } else {
+            m_model->setOperate(true);
+            m_model->setBypass(true);
+        }
+    });
+}
+
+void TunerApplet::setFloating(bool floating)
+{
+    if (floating == m_floating) return;
+    m_floating = floating;
+    applyDensity();
+}
+
+void TunerApplet::applyDensity()
+{
+    auto& theme = AetherSDR::ThemeManager::instance();
+    const bool f = m_floating;
+
+    m_vbox->setContentsMargins(f ? 12 : 4, f ? 10 : 2, f ? 12 : 4, f ? 10 : 2);
+    m_vbox->setSpacing(f ? 8 : 2);
+
+    // Expanded fills the window it was given; docked stays the fixed-height
+    // tile the rail stacks.
+    setSizePolicy(QSizePolicy::Preferred,
+                  f ? QSizePolicy::Preferred : QSizePolicy::Fixed);
+
+    for (auto* lbl : {m_pwrLabel, m_swrLabel}) {
+        lbl->setFixedWidth(f ? 96 : 72);
+        theme.applyStyleSheet(lbl, f
+            ? "QLabel { color: {{color.text.primary}}; font-size: 14px; font-weight: bold; }"
+            : "QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }");
+    }
+    for (auto* gauge : {m_fwdGauge, m_swrGauge}) {
+        gauge->setFixedHeight(f ? 34 : 24);
+    }
+
+    // The SWR bar carries its scale as a gradient across the empty track —
+    // the one piece of the panel that is a colour, not a layout, so it is
+    // resolved from the theme rather than copied off the hardware.
+    QGradientStops swrStops;
+    if (f) {
+        const ThemeGradient scale =
+            theme.gradient(this, QStringLiteral("color.tgxl.swrScale"));
+        for (const ThemeGradientStop& stop : scale.stops) {
+            swrStops.append({stop.at, stop.color});
+        }
+    }
+    static_cast<HGauge*>(m_swrGauge)->setTrackGradient(swrStops);
+
+    m_bottomStretch->changeSize(0, 0, QSizePolicy::Minimum,
+                                f ? QSizePolicy::Expanding : QSizePolicy::Fixed);
+
+    theme.applyStyleSheet(m_bypassSpan,
+        "QLabel { border: 2px solid {{color.accent.warning}}; border-radius: 3px; "
+        "background: {{color.background.1}}; color: {{color.accent.warning}}; "
+        "padding: 0 6px; font-size: 12px; font-weight: bold; }");
+    theme.applyStyleSheet(m_standbyBanner,
+        "QLabel { border: 2px solid {{color.tgxl.key.standby.foreground}}; "
+        "border-radius: 3px; background: {{color.tgxl.key.standby.background}}; "
+        "color: {{color.tgxl.key.standby.foreground}}; "
+        "letter-spacing: 2px; font-size: 20px; font-weight: bold; }");
+    // The banner stands in for both strips, so it claims their combined height
+    // — otherwise the panel jumps every time the tuner enters standby.
+    m_standbyBanner->setMinimumHeight(m_portA->sizeHint().height() * 2 + 2);
+
+    m_portRowsBox->setVisible(f);
+    m_panelControls->setVisible(f);
+    m_dockedControls->setVisible(!f);
+
+    for (auto* btn : {m_stbyBtn, m_bypBtn, m_panelTuneBtn}) {
+        btn->setMinimumHeight(f ? 34 : 0);
+    }
+
+    m_vbox->invalidate();
+    // The expanded control groups were just shown or hidden, and the state
+    // colouring on STBY/BYP lives in syncFromModel.
+    syncFromModel();
+}
+
+void TunerApplet::setRadioModelName(const QString& model)
+{
+    if (m_radioModelName == model) return;
+    m_radioModelName = model;
+    updatePortRows();
+}
+
+void TunerApplet::setPortAFrequencyMhz(double mhz)
+{
+    if (qFuzzyCompare(m_portAFreqMhz + 1.0, mhz + 1.0)) return;
+    m_portAFreqMhz = mhz;
+    updatePortRows();
+}
+
+void TunerApplet::setRadioConnected(bool connected)
+{
+    if (m_radioConnected == connected) return;
+    m_radioConnected = connected;
+    updatePortRows();
+}
+
+void TunerApplet::updatePortRows()
+{
+    if (!m_portA || !m_portB) return;
+
+    // Port A is the networked radio's port and port B is left on RF sense.
+    // The TGXL's status does not say which port is wired to what — FlexLib
+    // parses an "ant" field naming each port's ANTENNA, not its source — so
+    // this is the client's view of its own radio, not the tuner's report. It
+    // is labelled from the radio's model so it never claims a radio that is
+    // not there, and port B stays N/A rather than inventing a reading.
+    const QString modelName = m_radioModelName.trimmed();
+    m_portA->setSourceText(m_radioConnected && !modelName.isEmpty()
+                               ? modelName
+                               : tr("NO RADIO"));
+    m_portB->setSourceText(tr("RF SENSE"));
+
+    const bool haveFreq = m_radioConnected && m_portAFreqMhz > 0.0;
+    m_portA->setFrequencyMhz(haveFreq ? m_portAFreqMhz : 0.0);
+    m_portA->setBandText(haveFreq ? BandSettings::bandForFrequency(m_portAFreqMhz)
+                                  : QString());
+    m_portB->setFrequencyMhz(0.0);
+    m_portB->setBandText(QString());
+
+    // The transmit path runs through port A whenever a radio is on it, which
+    // is what the panel outlines.
+    m_portA->setActive(m_radioConnected);
+    m_portB->setActive(false);
+
+    if (m_model) {
+        m_portA->setPtt(m_model->pttA());
+        m_portB->setPtt(m_model->pttB());
+    }
 }
 
 void TunerApplet::setTunerModel(TunerModel* model)
@@ -260,6 +576,9 @@ void TunerApplet::setTunerModel(TunerModel* model)
         static_cast<RelayBar*>(m_c1Bar)->setScrollEnabled(on);
         static_cast<RelayBar*>(m_lBar)->setScrollEnabled(on);
         static_cast<RelayBar*>(m_c2Bar)->setScrollEnabled(on);
+        m_c1Dial->setScrollEnabled(on);
+        m_lDial->setScrollEnabled(on);
+        m_c2Dial->setScrollEnabled(on);
     };
     connect(m_model, &TunerModel::directConnectionChanged, this, updateScrollEnabled);
     updateScrollEnabled();
@@ -270,6 +589,11 @@ void TunerApplet::setTunerModel(TunerModel* model)
         m_antContainer->setVisible(m_model->hasDirectConnection()
                                    && m_model->hasAntennaSwitch());
     };
+    connect(m_model, &TunerModel::pttChanged, this, [this](bool a, bool b) {
+        m_portA->setPtt(a);
+        m_portB->setPtt(b);
+    });
+
     connect(m_model, &TunerModel::directConnectionChanged, this, updateAntVisible);
     connect(m_model, &TunerModel::antennaAChanged, this, [this, updateAntVisible](int antA) {
         updateAntVisible();
@@ -285,14 +609,11 @@ void TunerApplet::setTunerModel(TunerModel* model)
             m_postTuneCapture = false;
             m_postTuneTimer->stop();
             m_tuneSwr = 999.0f;  // reset high so capture tracking works
-            AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: #cc2222; border: 1px solid {{color.accent.danger}}; "
-                "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }");
-            m_tuneBtn->setText("TUNING...");
+            applyTuneButtonStyle(kTuneBusyStyle);
+            applyTuneButtonText("TUNING...");
         } else {
             // Restore normal style
-            AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-                "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-                "QPushButton:hover { background: {{color.background.1}}; }");
+            applyTuneButtonStyle(kTuneIdleStyle);
 
             // Don't display result immediately — the final settled SWR from
             // the TGXL often arrives after tuning=0 via TCP.  Start a short
@@ -301,10 +622,10 @@ void TunerApplet::setTunerModel(TunerModel* model)
                 m_wasTuning = false;
                 m_postTuneCapture = true;
                 m_tuneSwr = 999.0f;  // reset — we want the post-tune value, not the sweep
-                m_tuneBtn->setText("TUNING...");
+                applyTuneButtonText("TUNING...");
                 m_postTuneTimer->start();
             } else {
-                m_tuneBtn->setText("TUNE");
+                applyTuneButtonText("TUNE");
             }
         }
     });
@@ -323,26 +644,61 @@ void TunerApplet::syncFromModel()
     static_cast<RelayBar*>(m_c1Bar)->setValue(m_relayC1);
     static_cast<RelayBar*>(m_lBar)->setValue(m_relayL);
     static_cast<RelayBar*>(m_c2Bar)->setValue(m_relayC2);
+    m_c1Dial->setValue(m_relayC1);
+    m_lDial->setValue(m_relayL);
+    m_c2Dial->setValue(m_relayC2);
 
     // Operate/Bypass/Standby button — 3-state display
     // operate=1, bypass=0 → OPERATE (green)
     // operate=1, bypass=1 → BYPASS  (orange)
     // operate=0            → STANDBY (default)
-    if (m_model->isOperate() && !m_model->isBypass()) {
+    auto& theme = AetherSDR::ThemeManager::instance();
+    const bool operate = m_model->isOperate();
+    const bool bypass = m_model->isBypass();
+
+    if (operate && !bypass) {
         m_operateBtn->setText("OPERATE");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
+        theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
             "QPushButton:hover { background: #007040; }");
-    } else if (m_model->isOperate() && m_model->isBypass()) {
+    } else if (operate && bypass) {
         m_operateBtn->setText("BYPASS");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: #8a6000; border: 1px solid #a07000; "
+        theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #8a6000; border: 1px solid #a07000; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
             "QPushButton:hover { background: #9a7000; }");
     } else {
         m_operateBtn->setText("STANDBY");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        theme.applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
             "QPushButton:hover { background: {{color.background.1}}; }");
+    }
+
+    // Expanded presentation: the same three states, but shown as the lit key
+    // plus the port area's own presentation rather than one button's caption.
+    theme.applyStyleSheet(m_stbyBtn, !operate ? kStandbyActiveStyle : kPanelKeyIdleStyle);
+    theme.applyStyleSheet(m_bypBtn, (operate && bypass) ? kBypassActiveStyle : kPanelKeyIdleStyle);
+    applyTunerStateToPorts(operate, bypass);
+
+    updatePortRows();
+}
+
+void TunerApplet::applyTunerStateToPorts(bool operate, bool bypass)
+{
+    // Standby takes the whole area — with the tuner out of circuit, the
+    // strips have nothing live left to report.
+    const bool standby = !operate;
+    m_standbyBanner->setVisible(standby);
+    m_portLiveBox->setVisible(!standby);
+    if (standby) return;
+
+    // Bypass is tuner-wide, so it shows once beside both strips and the
+    // per-port state cell goes empty rather than repeating it. The frequency
+    // is still correct but is no longer being matched, so it reads in the
+    // bypass colour.
+    m_bypassSpan->setVisible(bypass);
+    for (auto* row : {m_portA, m_portB}) {
+        row->setStateText(bypass ? QString() : QStringLiteral("OPR"));
+        row->setBypassed(bypass);
     }
 }
 
@@ -393,7 +749,7 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
     // we take the last value > 1.01 (idle/no-RF reads ~1.00).
     if (m_postTuneCapture && swr > 1.01f) {
         m_tuneSwr = swr;
-        m_tuneBtn->setText(QString("SWR %1").arg(swr, 0, 'f', 2));
+        applyTuneButtonText(QString("SWR %1").arg(swr, 0, 'f', 2));
     }
 }
 

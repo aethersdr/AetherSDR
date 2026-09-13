@@ -2954,6 +2954,30 @@ set_tests_properties(relay_bar_a11y_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     SKIP_RETURN_CODE 77)
 
+# TGXL front-panel widgets — the presentation TunerApplet switches to when
+# popped out or placed on the canvas. Pins that a missing reading renders as
+# N/A rather than stale, and that RelayDial carries RelayBar's announcement
+# debounce (#4565). ThemeManager is linked for the dial's painted colours.
+add_executable(tgxl_panel_widgets_test
+    tests/tgxl_panel_widgets_test.cpp
+    src/gui/TgxlPanelWidgets.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(tgxl_panel_widgets_test PRIVATE src)
+target_link_libraries(tgxl_panel_widgets_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets
+)
+set_target_properties(tgxl_panel_widgets_test PROPERTIES AUTOMOC ON)
+add_test(NAME tgxl_panel_widgets_test COMMAND tgxl_panel_widgets_test)
+# Exit 77 == no accessibility backend; see relay_bar_a11y_test above.
+set_tests_properties(tgxl_panel_widgets_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    SKIP_RETURN_CODE 77)
+
 add_executable(fm_tone_presentation_test
     tests/fm_tone_presentation_test.cpp
 )
@@ -5311,6 +5335,7 @@ set(AETHER_SETTINGS_CONSUMERS
     vkamp_connection_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test
+    tgxl_panel_widgets_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
