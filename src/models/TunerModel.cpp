@@ -132,6 +132,39 @@ void TunerModel::autoTune()
     emit autotuneRequested();
 }
 
+void TunerModel::abortTune()
+{
+    if (!m_tuning) return;
+
+    // `autotune` is a toggle, not a start. Sent while the tuner is idle it
+    // begins a cycle; sent while tuning=1 it aborts the one running, and the
+    // tuner acknowledges that with a bare R<seq>|0| rather than the state
+    // push a start gets. Captured off the wire between the 4O3A
+    // TunerGeniusDesk application and the tuner (three aborts, three for
+    // three); FlexLib documents none of this — it exposes one tuner command
+    // and an ATUTuneStatus.TGXL_Aborted that nothing ever produces.
+    //
+    // So an abort is the same command as a start, and the guard above is what
+    // separates them. It is the tuning flag the firmware itself is keying
+    // off, so the two agree by construction: no tune running, nothing to
+    // abort, and no risk of this starting one instead.
+    //
+    // Crucially the tuner stays in OPERATE across an abort — bypass is never
+    // touched — so there is no state to restore afterwards.
+    qCDebug(lcTuner) << "TunerModel::abortTune: re-sending autotune to abort";
+    if (m_directConn && m_directConn->isConnected()) {
+        m_directConn->requestAutotune();
+        return;
+    }
+    if (m_handle.isEmpty()) {
+        qCDebug(lcTuner) << "TunerModel::abortTune: no direct conn and no handle, ignoring";
+        return;
+    }
+    // Relayed path: the radio passes `tgxl autotune` to the same firmware,
+    // which has no separate notion of start-vs-abort to lose in translation.
+    emit autotuneRequested();
+}
+
 void TunerModel::setAntennaA(int ant)
 {
     if (!m_directConn || !m_directConn->isConnected()) {
@@ -168,6 +201,32 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
                 emit presenceChanged(false);
             emit directConnectionChanged(false);
         });
+        // Alerts are pushed to every client, so this arrives whether or not
+        // it was this client that asked for the tune.
+        connect(m_directConn, &TgxlConnection::alertChanged, this,
+                [this](const QString& text) {
+            if (m_alert == text) return;
+            m_alert = text;
+            emit alertChanged(m_alert);
+        });
+        // Clear a stale alert on disconnect — it describes a tuner we can no
+        // longer see, and the tuner's own clear can never reach us now.
+        connect(m_directConn, &TgxlConnection::disconnected, this, [this]() {
+            if (!m_alert.isEmpty()) {
+                m_alert.clear();
+                emit alertChanged(m_alert);
+            }
+            // Same for the port readings: without the direct connection they
+            // stop being refreshed, and a frozen frequency is worse than
+            // falling back to what the radio can still tell us.
+            if (m_havePortInfo) {
+                m_havePortInfo = false;
+                m_portA = {};
+                m_portB = {};
+                emit portsChanged();
+            }
+        });
+
         // Update relay values from direct state pushes
         connect(m_directConn, &TgxlConnection::stateUpdated, this,
                 [this](const QMap<QString, QString>& kvs) {
@@ -210,9 +269,39 @@ void TunerModel::setDirectConnection(TgxlConnection* conn)
             }
             if (meters) emit metersChanged(m_fwdPower, m_swr);
         });
-        // Also parse antA + meters from 1/sec status poll responses
+        // Also parse antA + meters + the per-port block from 1/sec status
+        // poll responses. The port fields appear only in `status`, never in
+        // the `state` push, so this is their one arrival point.
         connect(m_directConn, &TgxlConnection::statusUpdated, this,
                 [this](const QMap<QString, QString>& kvs) {
+            if (kvs.contains(QStringLiteral("modeA"))
+                || kvs.contains(QStringLiteral("modeB"))) {
+                auto readPort = [&kvs](QChar side) {
+                    TunerPortInfo p;
+                    p.live = kvs.value(QStringLiteral("mode%1").arg(side)) == QLatin1String("1");
+                    p.source = kvs.value(QStringLiteral("flex%1").arg(side));
+                    p.freqKhz = kvs.value(QStringLiteral("freq%1").arg(side)).toDouble();
+                    p.ptt = kvs.value(QStringLiteral("ptt%1").arg(side)) == QLatin1String("1");
+                    return p;
+                };
+                const TunerPortInfo a = readPort(QLatin1Char('A'));
+                const TunerPortInfo b = readPort(QLatin1Char('B'));
+                const bool first = !m_havePortInfo;
+                if (first || a != m_portA || b != m_portB) {
+                    m_portA = a;
+                    m_portB = b;
+                    m_havePortInfo = true;
+                    emit portsChanged();
+                }
+                // The direct status carries keying for both ports too, so the
+                // lamps track without waiting on the radio to relay it.
+                if (m_pttA != a.ptt || m_pttB != b.ptt) {
+                    m_pttA = a.ptt;
+                    m_pttB = b.ptt;
+                    emit pttChanged(m_pttA, m_pttB);
+                    emit stateChanged();
+                }
+            }
             if (kvs.contains("antA")) {
                 int v = kvs.value("antA").toInt();
                 if (m_antennaA != v) {

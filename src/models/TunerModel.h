@@ -10,6 +10,29 @@ namespace AetherSDR {
 
 class TgxlConnection;
 
+// One RF port as the tuner itself reports it, from the direct port-9010
+// status. The Flex-relayed "amplifier" status carries none of this, so it is
+// available only while the direct connection is up — see hasPortInfo().
+//
+// `live` is the tuner's own validity flag for the port ("modeX" on the wire).
+// It tracks the reading exactly: across a capture, modeX=1 always accompanied
+// a real band and frequency and modeX=0 always accompanied zeroes. It does
+// NOT say what kind of source the port has — the tuner reports its `flexX`
+// radio name on both ports regardless, so a port that is not live is simply
+// one nothing is being heard on.
+struct TunerPortInfo {
+    bool    live{false};
+    QString source;        // "flexX" — the networked radio's name
+    double  freqKhz{0.0};  // "freqX", kHz; 0 when the tuner reports none
+    bool    ptt{false};    // "pttX"
+
+    bool operator==(const TunerPortInfo& o) const {
+        return live == o.live && source == o.source
+            && qFuzzyCompare(freqKhz + 1.0, o.freqKhz + 1.0) && ptt == o.ptt;
+    }
+    bool operator!=(const TunerPortInfo& o) const { return !(*this == o); }
+};
+
 // State model for a 4o3a Tuner Genius XL (TGXL) connected via the FlexRadio.
 //
 // Status arrives via TCP as "atu <handle> key=val ..." after "sub atu all".
@@ -31,6 +54,12 @@ public:
     QString modelName() const { return m_model; }
     QString serialNum() const { return m_serialNum; }
     QString tgxlIp()    const { return m_tgxlIp; }
+    QString alert()     const { return m_alert; }     // tuner alert, empty when none
+    // Per-port readings straight from the tuner. Only populated while the
+    // direct connection is up; hasPortInfo() says whether to trust them.
+    const TunerPortInfo& portA() const { return m_portA; }
+    const TunerPortInfo& portB() const { return m_portB; }
+    bool hasPortInfo()  const { return m_havePortInfo; }
     bool    pttA()      const { return m_pttA; }      // port A keyed
     bool    pttB()      const { return m_pttB; }      // port B keyed
     bool    isOperate() const { return m_operate; }
@@ -67,6 +96,9 @@ public:
     void setOperate(bool on);
     void setBypass(bool on);
     void autoTune();
+    // Break a tune already in progress — the same `autotune` the start uses,
+    // which the firmware treats as a toggle. No-op when not tuning.
+    void abortTune();
 
     // Antenna switch (TGXL 3x1): ant = 1, 2, or 3 (1-indexed for command)
     void setAntennaA(int ant);
@@ -76,6 +108,10 @@ signals:
     void tuningChanged(bool tuning);   // tuning started/stopped
     void antennaAChanged(int antA);    // antenna port changed (0-indexed)
     void metersChanged(float fwdPower, float swr);  // fwd power/SWR from direct TGXL
+    // Alert text from the tuner; empty means cleared. See TgxlConnection.
+    void alertChanged(const QString& text);
+    // Either port's reported source/frequency/keying moved.
+    void portsChanged();
     void pttChanged(bool pttA, bool pttB);  // either port's PTT line moved
     void presenceChanged(bool present); // tuner detected / lost
     void directConnectionChanged(bool connected);
@@ -92,6 +128,10 @@ private:
     QString m_model;
     QString m_serialNum;
     QString m_tgxlIp;
+    QString m_alert;
+    TunerPortInfo m_portA;
+    TunerPortInfo m_portB;
+    bool          m_havePortInfo{false};
     bool    m_pttA{false};
     bool    m_pttB{false};
     bool    m_operate{false};

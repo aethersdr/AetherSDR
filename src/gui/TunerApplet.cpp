@@ -5,6 +5,7 @@
 #include "models/MeterModel.h"
 #include "models/BandSettings.h"
 
+#include <QAccessible>
 #include <QPushButton>
 #include <QLabel>
 #include <QVBoxLayout>
@@ -72,20 +73,6 @@ TunerApplet::TunerApplet(QWidget* parent)
     connect(m_peakTimer, &QTimer::timeout, this, [this]() {
         m_peakFwd = 0.0f;
         static_cast<HGauge*>(m_fwdGauge)->clearPeak();
-    });
-
-    // Post-tune capture timer: after tuning=0 arrives, keep capturing SWR
-    // for 400ms so the final settled value from the TGXL has time to arrive.
-    m_postTuneTimer = new QTimer(this);
-    m_postTuneTimer->setSingleShot(true);
-    m_postTuneTimer->setInterval(400);
-    connect(m_postTuneTimer, &QTimer::timeout, this, [this]() {
-        m_postTuneCapture = false;
-        float result = (m_tuneSwr < 900.0f) ? m_tuneSwr : m_swr;
-        applyTuneButtonText(QString("SWR %1").arg(result, 0, 'f', 2));
-        QTimer::singleShot(2500, this, [this]() {
-            applyTuneButtonText("TUNE");
-        });
     });
 
     buildUI();
@@ -323,10 +310,30 @@ void TunerApplet::buildUI()
 
     outer->addWidget(body);
 
-    // TUNE button: send autotune command
+    // The alert overlay is a child of the applet rather than a row in its
+    // layout, so it can cover the whole thing. Created last so it sits on top
+    // of everything already added.
+    m_alertOverlay = new QLabel(this);
+    m_alertOverlay->setAlignment(Qt::AlignCenter);
+    m_alertOverlay->setWordWrap(true);
+    m_alertOverlay->setVisible(false);
+    m_alertOverlay->setAccessibleName(tr("Tuner alert"));
+    // Deliberately NOT transparent to mouse events. While it is up the
+    // controls beneath it cannot be seen, and a click that lands on something
+    // invisible is worse than one that lands on nothing. Nothing is lost:
+    // every alert the tuner sends arrives after the tune has already stopped.
+
+    // TUNE key: starts a tune, or stops the one already running. Which it
+    // does follows m_tuning, the same flag that decides the caption, so the
+    // key can never say STOP and start a tune.
     for (auto* tune : {m_tuneBtn, m_panelTuneBtn}) {
         connect(tune, &QPushButton::clicked, this, [this]() {
-            if (m_model) m_model->autoTune();
+            if (!m_model) return;
+            if (m_tuning) {
+                m_model->abortTune();
+                return;
+            }
+            m_model->autoTune();
         });
     }
 
@@ -475,6 +482,7 @@ void TunerApplet::applyDensity()
     m_bottomStretch->changeSize(0, 0, QSizePolicy::Minimum,
                                 f ? QSizePolicy::Expanding : QSizePolicy::Fixed);
 
+    applyAlertStyle();
     theme.applyStyleSheet(m_bypassSpan,
         "QLabel { border: 2px solid {{color.accent.warning}}; border-radius: 3px; "
         "background: {{color.background.1}}; color: {{color.accent.warning}}; "
@@ -523,16 +531,92 @@ void TunerApplet::setRadioConnected(bool connected)
     updatePortRows();
 }
 
+void TunerApplet::layOutAlertOverlay()
+{
+    if (!m_alertOverlay) return;
+    m_alertOverlay->setGeometry(rect());
+}
+
+void TunerApplet::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    layOutAlertOverlay();
+}
+
+void TunerApplet::applyAlertStyle()
+{
+    // The protocol carries no severity field, so it is inferred from the one
+    // thing available -- the text. "Tuned ..." is the completion notice and is
+    // the tuner reporting success; anything else is something the operator has
+    // to act on ("LOW RF POWER" is the other one seen). Unknown text therefore
+    // lands on the attention colour, which is the safe way round: a warning
+    // shown as good news is worse than the reverse.
+    if (!m_alertOverlay) return;
+    auto& theme = AetherSDR::ThemeManager::instance();
+    const QString tone = m_alertIsGood ? QStringLiteral("{{color.accent.success}}")
+                                       : QStringLiteral("{{color.accent.danger}}");
+    // Opaque ground: the overlay has to obscure the readings under it, not
+    // tint them. The applet's own darkest ground rather than a literal black,
+    // so it still reads correctly under a light theme.
+    const QString style = QStringLiteral(
+        "QLabel { background: {{color.background.0}}; color: %1; "
+        "border: none; padding: 8px; font-size: %2px; font-weight: bold; }")
+        .arg(tone)
+        .arg(m_floating ? 26 : 15);
+    theme.applyStyleSheet(m_alertOverlay, style);
+}
+
+void TunerApplet::setAlertText(const QString& text)
+{
+    const QString shown = text.trimmed();
+    if (m_alertOverlay->text() == shown) return;
+    m_alertOverlay->setText(shown);
+
+    m_alertIsGood = shown.startsWith(QLatin1String("Tuned"), Qt::CaseInsensitive);
+    applyAlertStyle();
+
+    // The tuner raises the alert and later clears it with an empty frame; the
+    // overlay simply follows those two, so its dwell time is whatever the
+    // device chose.
+    if (shown.isEmpty()) {
+        m_alertOverlay->hide();
+    } else {
+        layOutAlertOverlay();
+        m_alertOverlay->raise();
+        m_alertOverlay->show();
+    }
+
+    // Announce it: the strip appears and disappears on the tuner's schedule,
+    // and a reader that is not looking at it would otherwise never learn a
+    // tune had refused to run.
+    if (!shown.isEmpty()) {
+        m_alertOverlay->setAccessibleDescription(shown);
+        if (QAccessible::isActive()) {
+            QAccessibleEvent event(m_alertOverlay, QAccessible::Alert);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+}
+
 void TunerApplet::updatePortRows()
 {
     if (!m_portA || !m_portB) return;
 
-    // Port A is the networked radio's port and port B is left on RF sense.
-    // The TGXL's status does not say which port is wired to what — FlexLib
-    // parses an "ant" field naming each port's ANTENNA, not its source — so
-    // this is the client's view of its own radio, not the tuner's report. It
-    // is labelled from the radio's model so it never claims a radio that is
-    // not there, and port B stays N/A rather than inventing a reading.
+    // Preferred: the tuner's own per-port readings, which arrive on the
+    // direct port-9010 status. It reports what each port is actually hearing,
+    // where the client can only report the one radio it happens to be
+    // connected to.
+    if (m_model && m_model->hasDirectConnection() && m_model->hasPortInfo()) {
+        applyPortInfo(m_portA, m_model->portA());
+        applyPortInfo(m_portB, m_model->portB());
+        return;
+    }
+
+    // Fallback: the Flex-relayed "amplifier" status carries no per-port block
+    // at all, so without the direct connection this is the client's view of
+    // its own radio rather than the tuner's report. Port A is assumed to be
+    // the networked radio's and port B to be on RF sense — true of the common
+    // wiring, and the honest limit of what is knowable on this path.
     const QString modelName = m_radioModelName.trimmed();
     m_portA->setSourceText(m_radioConnected && !modelName.isEmpty()
                                ? modelName
@@ -546,8 +630,6 @@ void TunerApplet::updatePortRows()
     m_portB->setFrequencyMhz(0.0);
     m_portB->setBandText(QString());
 
-    // The transmit path runs through port A whenever a radio is on it, which
-    // is what the panel outlines.
     m_portA->setActive(m_radioConnected);
     m_portB->setActive(false);
 
@@ -555,6 +637,29 @@ void TunerApplet::updatePortRows()
         m_portA->setPtt(m_model->pttA());
         m_portB->setPtt(m_model->pttB());
     }
+}
+
+void TunerApplet::applyPortInfo(TgxlPortRow* row, const TunerPortInfo& info)
+{
+    // A port the tuner has no live reading on is one nothing is being heard
+    // on. It is labelled RF SENSE rather than with the radio name the tuner
+    // reports there anyway: `flexB` reads FLEX-8600 on a port carrying
+    // nothing, so trusting it would put a radio on a port that has none.
+    row->setSourceText(info.live && !info.source.trimmed().isEmpty()
+                           ? info.source.trimmed()
+                           : tr("RF SENSE"));
+
+    // freqX is kHz on the wire. The band comes from that frequency through
+    // the project's own band table rather than from the tuner's `bandX`
+    // index — one band value was all a capture ever showed, and a mapping
+    // guessed from a single sample would be wrong silently.
+    const double mhz = info.live ? info.freqKhz / 1000.0 : 0.0;
+    row->setFrequencyMhz(mhz);
+    row->setBandText(mhz > 0.0 ? BandSettings::bandForFrequency(mhz) : QString());
+
+    row->setPtt(info.ptt);
+    // The port the tuner is actually hearing a radio on is the one to outline.
+    row->setActive(info.live);
 }
 
 void TunerApplet::setTunerModel(TunerModel* model)
@@ -589,6 +694,13 @@ void TunerApplet::setTunerModel(TunerModel* model)
         m_antContainer->setVisible(m_model->hasDirectConnection()
                                    && m_model->hasAntennaSwitch());
     };
+    connect(m_model, &TunerModel::portsChanged, this, &TunerApplet::updatePortRows);
+    connect(m_model, &TunerModel::directConnectionChanged, this,
+            [this](bool) { updatePortRows(); });
+
+    connect(m_model, &TunerModel::alertChanged, this, &TunerApplet::setAlertText);
+    setAlertText(m_model->alert());
+
     connect(m_model, &TunerModel::pttChanged, this, [this](bool a, bool b) {
         m_portA->setPtt(a);
         m_portB->setPtt(b);
@@ -602,31 +714,21 @@ void TunerApplet::setTunerModel(TunerModel* model)
     updateAntVisible();
     updateAntennaButtons(m_model->antennaA());
 
-    // Tuning state changes → red button + SWR result flash
+    // Tuning state changes → the key's two states. The result of a tune is
+    // the overlay's to report, not the key's: the tuner sends it as text with
+    // its own dwell, and a key that also flashed a number would be a second
+    // place for the same reading to disagree.
     connect(m_model, &TunerModel::tuningChanged, this, [this](bool tuning) {
+        m_tuning = tuning;
         if (tuning) {
-            m_wasTuning = true;
-            m_postTuneCapture = false;
-            m_postTuneTimer->stop();
-            m_tuneSwr = 999.0f;  // reset high so capture tracking works
             applyTuneButtonStyle(kTuneBusyStyle);
-            applyTuneButtonText("TUNING...");
+            // The key is the abort while a tune is running, so it says what
+            // pressing it will do rather than reporting what the tuner is up
+            // to — the strips and the red styling already report that.
+            applyTuneButtonText(tr("STOP"));
         } else {
-            // Restore normal style
             applyTuneButtonStyle(kTuneIdleStyle);
-
-            // Don't display result immediately — the final settled SWR from
-            // the TGXL often arrives after tuning=0 via TCP.  Start a short
-            // capture window so updateMeters() can grab the settled value.
-            if (m_wasTuning) {
-                m_wasTuning = false;
-                m_postTuneCapture = true;
-                m_tuneSwr = 999.0f;  // reset — we want the post-tune value, not the sweep
-                applyTuneButtonText("TUNING...");
-                m_postTuneTimer->start();
-            } else {
-                applyTuneButtonText("TUNE");
-            }
+            applyTuneButtonText(tr("TUNE"));
         }
     });
 
@@ -729,7 +831,7 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
     // TGXL sends swr=0.0000 (return loss = 0 dB) at idle — no incident signal
     // to measure against. The model converts that to rho=1.0 → ratio=99.9, which
     // pegs the gauge. Snap to 1.0 (empty) whenever forward power is below the
-    // noise floor; m_swr retains the raw value for post-tune capture logic.
+    // noise floor; m_swr retains the raw value for the numeric row label.
     // Threshold matches the label threshold (5 W) — 1 W was too low and let
     // idle noise readings light up the SWR bar.
     if (fwdPower >= 5.0f) {
@@ -743,14 +845,6 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
         m_peakTimer->start();
     }
     updateValueLabels();
-
-    // During the post-tune capture window, record the last non-idle SWR.
-    // The TGXL reports the settled SWR shortly after tuning=0 arrives;
-    // we take the last value > 1.01 (idle/no-RF reads ~1.00).
-    if (m_postTuneCapture && swr > 1.01f) {
-        m_tuneSwr = swr;
-        applyTuneButtonText(QString("SWR %1").arg(swr, 0, 'f', 2));
-    }
 }
 
 void TunerApplet::updateValueLabels()

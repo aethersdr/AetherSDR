@@ -173,6 +173,41 @@ int main(int argc, char** argv)
         CHECK(ptt.count() == 0);
     }
 
+    // ---- abortTune sends autotune, and only while a tune is running ----
+    // `autotune` is a toggle in the firmware: it starts a cycle when idle and
+    // aborts the running one when tuning=1 (captured off the wire between the
+    // 4O3A TunerGeniusDesk app and the tuner). The guard is therefore the
+    // whole safety property — unguarded, an abort press on an idle tuner
+    // would START a tune and key the transmitter.
+    {
+        TunerModel t;
+        t.setHandle("0x2000");
+        QSignalSpy at(&t, &TunerModel::autotuneRequested);
+        QSignalSpy by(&t, &TunerModel::bypassRequested);
+
+        t.abortTune();                       // not tuning → nothing sent
+        CHECK(at.count() == 0);
+
+        TunerDelta start; start.tuning = true;
+        t.applyChanges(start);
+        CHECK(t.isTuning());
+
+        t.abortTune();
+        CHECK(at.count() == 1);
+
+        // An abort leaves the tuner in operate: bypass is never touched, so
+        // there is no state to put back afterwards.
+        CHECK(by.count() == 0);
+        CHECK(!t.isBypass());
+
+        // Once the tuner reports it has stopped, a further press is inert
+        // rather than starting a fresh tune.
+        TunerDelta done; done.tuning = false;
+        t.applyChanges(done);
+        t.abortTune();
+        CHECK(at.count() == 1);
+    }
+
     if (g_failures == 0) {
         std::printf("tuner_model_test: all checks passed\n");
         return 0;

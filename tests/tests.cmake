@@ -2978,6 +2978,22 @@ set_tests_properties(tgxl_panel_widgets_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     SKIP_RETURN_CODE 77)
 
+# The TGXL's direct port-9010 protocol — alert frames (`M|<text>`, empty body
+# clears) and the per-port status block — against a stub tuner on loopback.
+# Frames are verbatim from a TunerGeniusDesk capture (fw 1.2.17).
+add_executable(tgxl_direct_protocol_test
+    tests/tgxl_direct_protocol_test.cpp
+    src/core/TgxlConnection.cpp
+    src/models/TunerModel.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(tgxl_direct_protocol_test PRIVATE src)
+target_link_libraries(tgxl_direct_protocol_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(tgxl_direct_protocol_test PROPERTIES AUTOMOC ON)
+add_test(NAME tgxl_direct_protocol_test COMMAND tgxl_direct_protocol_test)
+
 add_executable(fm_tone_presentation_test
     tests/fm_tone_presentation_test.cpp
 )
@@ -5336,6 +5352,7 @@ set(AETHER_SETTINGS_CONSUMERS
     system_info_dialog_test
     spectrum_overlay_band_highlight_test
     tgxl_panel_widgets_test
+    tgxl_direct_protocol_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})

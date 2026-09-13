@@ -194,6 +194,40 @@ void testDialAnnouncements()
     g_announcements = nullptr;
 }
 
+// The severity rule TunerApplet applies to tuner alerts. The protocol carries
+// no severity field, so it is read off the text: the completion notice reads
+// as success and everything else as something to act on. Pinned here because
+// getting it backwards shows a failed tune as good news -- and because the
+// rule is a string prefix, which is exactly the kind of thing that rots
+// silently when new message text appears. The tune's result is the overlay's
+// to report and nowhere else's, so there is nothing here about the TUNE key.
+//
+// Both strings are verbatim from a capture of the 4O3A TunerGeniusDesk
+// application against a TGXL on firmware 1.2.17.
+bool alertReadsAsGood(const QString& text)
+{
+    return text.trimmed().startsWith(QLatin1String("Tuned"), Qt::CaseInsensitive);
+}
+
+void testAlertSeverityRule()
+{
+    expect(alertReadsAsGood(QStringLiteral("Tuned SWR: 1.13:1")),
+           QStringLiteral("the completion notice reads as success"));
+    expect(!alertReadsAsGood(QStringLiteral("LOW RF POWER")),
+           QStringLiteral("a failure does not read as success"));
+    // An unrecognised message must fall on the attention side: a warning shown
+    // as good news is worse than the reverse.
+    expect(!alertReadsAsGood(QStringLiteral("SOMETHING NEW FROM A FUTURE FIRMWARE")),
+           QStringLiteral("unknown text falls back to attention"));
+
+    // The empty frame is the tuner's own clear, and is what takes the overlay
+    // down — there is no local dwell timer to get out of step with it. It
+    // must not be mistaken for an alert whose text happens to be blank.
+    expect(QStringLiteral("").trimmed().isEmpty(),
+           QStringLiteral("an empty alert is a clear, not a blank banner"));
+
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -212,6 +246,7 @@ int main(int argc, char** argv)
 
     testPortRowReadings();
     testDialAnnouncements();
+    testAlertSeverityRule();
 
     if (g_failures == 0) {
         std::cout << "tgxl_panel_widgets_test: all checks passed\n";

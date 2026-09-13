@@ -12,6 +12,7 @@ namespace AetherSDR {
 
 class TunerModel;
 class MeterModel;
+struct TunerPortInfo;
 class RelayDial;
 class TgxlPortRow;
 
@@ -73,6 +74,10 @@ public slots:
     // Feed forward power (W) and SWR from MeterModel::txMetersChanged.
     void updateMeters(float fwdPower, float swr);
 
+protected:
+    // Keeps the alert overlay covering the applet as it resizes.
+    void resizeEvent(QResizeEvent* event) override;
+
 private:
     void buildUI();
     void buildExpandedUI(QVBoxLayout* vbox);
@@ -90,6 +95,11 @@ private:
     void applyTuneButtonText(const QString& text);
     void applyTuneButtonStyle(const char* styleTemplate);
     void updatePortRows();
+    void applyPortInfo(TgxlPortRow* row, const TunerPortInfo& info);
+    void setAlertText(const QString& text);
+    // The tuner sends no severity with an alert, so it is read off the text.
+    void applyAlertStyle();
+    void layOutAlertOverlay();
     // Operate / bypass / standby drive three different port-area presentations
     // (per-port state, a spanning bypass overlay, or the standby banner).
     // Both callers of it need the same three-way decision, so it lives here.
@@ -107,6 +117,11 @@ private:
     QLabel*  m_swrLabel{nullptr};
     QTimer*  m_labelClearTimer{nullptr};  // holds label visible after power drops
     bool     m_labelShowing{false};
+
+    // True only while the tuner is actually matching. It drives what the TUNE
+    // key says and what pressing it does, so the label and the action can
+    // never disagree about which one the operator is looking at.
+    bool     m_tuning{false};
 
     // Relay bars
     QWidget* m_c1Bar{nullptr};
@@ -137,6 +152,22 @@ private:
     // Standby takes the whole port area: with the tuner out of circuit there
     // is no per-port reading left to show.
     QLabel*      m_standbyBanner{nullptr};
+    // Tuner alerts ("LOW RF POWER"). Shown in both presentations: a tune that
+    // refused to run is the operator's problem to fix wherever the applet
+    // happens to be, so the rail tile does not get to stay silent about it.
+    // Tuner alerts take the whole applet for a moment rather than sharing a
+    // row with the readings: "Tuned SWR: 1.13:1" and "LOW RF POWER" are the
+    // outcome of the thing the operator just did, and a strip tucked above
+    // the port rows is missable at exactly the moment it matters. Not in any
+    // layout — it is a child of the applet, sized to cover it and raised.
+    //
+    // How long it stands is the tuner's call, not ours: it sends the text and
+    // later an empty frame to clear it, and the interval between them is its
+    // own (~1.9 s after a successful tune, ~3.0 s after LOW RF POWER). A
+    // local timer would have to guess that, and would fight the device the
+    // moment it changed its mind.
+    QLabel*      m_alertOverlay{nullptr};
+    bool         m_alertIsGood{false};
     RelayDial*   m_c1Dial{nullptr};
     RelayDial*   m_lDial{nullptr};
     RelayDial*   m_c2Dial{nullptr};
@@ -168,11 +199,6 @@ private:
     int m_relayL{0};
     int m_relayC2{0};
 
-    // Track tuning state for SWR result flash
-    bool m_wasTuning{false};
-    bool m_postTuneCapture{false};  // true during post-tune settling window
-    float m_tuneSwr{1.0f};   // last non-1.00 SWR seen while tuning
-    QTimer* m_postTuneTimer{nullptr};
 
     // setPowerScale() no-ops when neither input moved (#4845) — it's called
     // on every RadioModel::infoChanged, most of which carry no scale-relevant
