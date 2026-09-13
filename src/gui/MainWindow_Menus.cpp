@@ -1121,31 +1121,6 @@ void MainWindow::buildMenuBar()
     connect(pskMapAction, &QAction::triggered,
             this, &MainWindow::showPskReporterMapDialog);
 
-    // The wideband converter view — docs/HERMES.md §13 item 18. ADDITIVE: a new
-    // entry that opens a new window. Nothing existing changes behaviour, and no
-    // other entry in this menu is touched.
-    //
-    // GATED ON THE CAPABILITY AND NOT ON A FAMILY. The action starts disabled
-    // and follows RadioCapabilities::widebandConverterView, which today exactly
-    // one backend engages. Disabled rather than hidden, and rather than the
-    // permissive-on-disconnect convention the other capability gates use: this
-    // is not a control a connected radio might be shy about reporting — with no
-    // radio there is no converter to look at, so an enabled entry would open a
-    // window that could only say so.
-    auto* bandscopeAct = viewMenu->addAction("Wideband Bandscope...");
-    bandscopeAct->setMenuRole(QAction::NoRole);
-    bandscopeAct->setToolTip(
-        "The radio's converter, before tuning and filtering");
-    bandscopeAct->setEnabled(false);
-    connect(&m_radioModel, &RadioModel::capabilitiesChanged, bandscopeAct,
-            [bandscopeAct](bool connected, const RadioCapabilities& caps) {
-        bandscopeAct->setEnabled(connected
-                                 && caps.widebandConverterView.has_value());
-    });
-    connect(bandscopeAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
-    });
-
     auto* callsignLookupAct = viewMenu->addAction("Callsign Lookup...");
     callsignLookupAct->setMenuRole(QAction::NoRole);
     callsignLookupAct->setShortcut(QKeySequence("Ctrl+Shift+L"));
@@ -1362,6 +1337,39 @@ void MainWindow::buildMenuBar()
     toolsMenu->addAction(netSchedulerAction);
     toolsMenu->addAction(memoryAction);
     toolsMenu->addAction(waveformsAct);
+
+    // The wideband converter view — docs/HERMES.md §13 item 18. ADDITIVE: a new
+    // entry that opens a new window. Nothing existing changes behaviour, and no
+    // other entry in this menu is touched.
+    //
+    // IN TOOLS, BESIDE RADIO HEALTH, not in View. #5595 sorted the menu bar
+    // Tools-first: Tools holds the instrument windows (Add Panadapter, Radio
+    // Health, GPS Dashboard, Runtime Monitor, SWR Scan) and View keeps the
+    // presentation settings (themes, marker size, UI scale, band plan). A
+    // window showing the converter is an instrument. Created on toolsMenu
+    // directly rather than through the removeAction/addAction shim above,
+    // which exists to MIGRATE actions that used to live in View.
+    //
+    // GATED ON THE CAPABILITY AND NOT ON A FAMILY. The action starts disabled
+    // and follows RadioCapabilities::widebandConverterView, which today exactly
+    // one backend engages. Disabled rather than hidden, and rather than the
+    // permissive-on-disconnect convention the other capability gates use: this
+    // is not a control a connected radio might be shy about reporting — with no
+    // radio there is no converter to look at, so an enabled entry would open a
+    // window that could only say so.
+    auto* bandscopeAct = toolsMenu->addAction("Wideband Bandscope...");
+    bandscopeAct->setMenuRole(QAction::NoRole);
+    bandscopeAct->setToolTip(
+        "The radio's converter, before tuning and filtering");
+    bandscopeAct->setEnabled(false);
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, bandscopeAct,
+            [bandscopeAct](bool connected, const RadioCapabilities& caps) {
+        bandscopeAct->setEnabled(connected
+                                 && caps.widebandConverterView.has_value());
+    });
+    connect(bandscopeAct, &QAction::triggered, this, [this] {
+        showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
+    });
 
     toolsMenu->addSeparator();
     toolsMenu->addAction("Radio Health...", this, [this] {
