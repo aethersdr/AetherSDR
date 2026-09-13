@@ -127,10 +127,26 @@ int main(int argc, char** argv)
                 for (auto* btn : applet.findChildren<QPushButton*>()) {
                     if (!btn->isVisible() || btn->text() != QLatin1String(words[i])) continue;
                     found = true;
-                    QFont bold = btn->font();
-                    bold.setBold(true);
-                    const int need = QFontMetrics(bold).horizontalAdvance(btn->text());
-                    CHECK(need <= btn->width() - 6);
+
+                    // Measured off the size in the style sheet, not off
+                    // btn->font(): the fitted size is applied through the
+                    // sheet because a sheet's font-size beats setFont, so the
+                    // widget's font no longer reports what is drawn. Reading
+                    // it here would test the wrong number and pass while the
+                    // caption clipped.
+                    const QString sheet = btn->styleSheet();
+                    const int at = sheet.indexOf(QStringLiteral("font-size:"));
+                    CHECK(at >= 0);
+                    if (at < 0) continue;
+                    const int pixels = sheet.mid(at + 10).trimmed()
+                                            .split(QLatin1Char('p')).first().toInt();
+                    CHECK(pixels > 0);
+
+                    QFont drawn = btn->font();
+                    drawn.setBold(true);      // the sheet draws these bold
+                    drawn.setPixelSize(pixels);
+                    CHECK(QFontMetrics(drawn).horizontalAdvance(btn->text())
+                          <= btn->width() - 6);
                 }
                 CHECK(found);   // the full word, not an abbreviation
             }

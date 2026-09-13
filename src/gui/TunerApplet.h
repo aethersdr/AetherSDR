@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QHash>
+#include <QString>
 #include <QWidget>
 
 class QPushButton;
@@ -125,9 +127,12 @@ private:
     // Sizes the three discrete keys: one seed size for all of them, scaled
     // like every other metric on the panel.
     void applyKeySize(qreal scale);
-    // Shrinks the rail's two captions until they fit the width the rail has
-    // given them.
+    // Applies a rail button's style with a font size that fits its caption,
+    // and remembers the style so a later refit can re-apply it.
+    void applyRailStyle(QPushButton* btn, const QString& base);
+    // Re-fits both rail captions to the width the rail has given them.
     void fitRailCaptions();
+    int  fittedRailFontPx(QPushButton* btn) const;
     // Operate / bypass / standby drive three different port-area presentations
     // (per-port state, a spanning bypass overlay, or the standby banner).
     // Both callers of it need the same three-way decision, so it lives here.
@@ -167,6 +172,10 @@ private:
     QVBoxLayout* m_vbox{nullptr};
     bool         m_floating{false};
     qreal        m_appliedScale{1.0};
+    // The rail buttons' style sheets without their font-size, kept so the
+    // size can be re-chosen and the sheet re-applied when the rail's width
+    // or the caption changes.
+    QHash<QPushButton*, QString> m_railStyles;
     // What the contents need at scale 1.0, measured from the laid-out column
     // rather than assumed, so the height budget below tracks the panel as
     // rows are added to it instead of drifting out of date.

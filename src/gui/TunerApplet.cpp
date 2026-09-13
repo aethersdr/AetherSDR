@@ -155,9 +155,10 @@ void TunerApplet::applyTuneButtonText(const QString& text)
 
 void TunerApplet::applyTuneButtonStyle(const char* styleTemplate)
 {
-    auto& theme = AetherSDR::ThemeManager::instance();
-    theme.applyStyleSheet(m_tuneBtn, styleTemplate);
-    theme.applyStyleSheet(m_panelTuneBtn, styleTemplate);
+    // The rail's key carries its font size in its sheet (applyRailStyle); the
+    // panel's is sized by the scale, through its widget font.
+    applyRailStyle(m_tuneBtn, QString::fromLatin1(styleTemplate));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_panelTuneBtn, styleTemplate);
 }
 
 void TunerApplet::setAmplifierMode(bool hasAmp)
@@ -334,14 +335,18 @@ void TunerApplet::buildUI()
 
     m_tuneBtn = new QPushButton("TUNE");
     m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, kTuneIdleStyle);
+    applyRailStyle(m_tuneBtn, QString::fromLatin1(kTuneIdleStyle));
     btnCol->addWidget(m_tuneBtn);
 
     m_operateBtn = new QPushButton(tr("OPERATE"));
     m_operateBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }");
+    // No font-size here: applyRailStyle owns it. One left behind in a sheet
+    // is invisible until a caption grows long enough to need shrinking, and
+    // then silently wins.
+    applyRailStyle(m_operateBtn, QStringLiteral(
+        "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
+        "QPushButton:hover { background: {{color.background.1}}; }"));
     btnCol->addWidget(m_operateBtn);
 
     bottomRow->addLayout(btnCol, 3);  // stretch 3 (30%)
@@ -738,29 +743,50 @@ void TunerApplet::calibrateNaturalHeight()
     }
 }
 
+int TunerApplet::fittedRailFontPx(QPushButton* btn) const
+{
+    if (!btn || btn->text().isEmpty()) return kRailCaptionMaxPx;
+    // Before the rail has laid the button out there is no width to fit to;
+    // take the full size and let the resize that follows correct it.
+    if (btn->width() <= 0) return kRailCaptionMaxPx;
+    const int available = btn->width() - kRailCaptionPadding;
+
+    // Measured bold, because bold is what the sheet draws these in. The
+    // widget's own font is not bold, and measuring that reports a caption
+    // several pixels narrower than the one actually on screen.
+    QFont probe = btn->font();
+    probe.setBold(true);
+    for (int px = kRailCaptionMaxPx; px > kRailCaptionMinPx; --px) {
+        probe.setPixelSize(px);
+        if (QFontMetrics(probe).horizontalAdvance(btn->text()) <= available) {
+            return px;
+        }
+    }
+    return kRailCaptionMinPx;
+}
+
+void TunerApplet::applyRailStyle(QPushButton* btn, const QString& base)
+{
+    if (!btn) return;
+    m_railStyles.insert(btn, base);
+    // The size goes INTO the sheet rather than onto the widget's font. A
+    // style sheet's font-size beats setFont, so a caption sized by setFont
+    // and then handed a sheet is silently back at the sheet's size — which is
+    // how the rail's captions kept clipping after they were taught to shrink.
+    // Two rules: the size first, the caller's sheet second. The second sets
+    // no font-size, so it cannot undo the first.
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        btn, QStringLiteral("QPushButton { font-size: %1px; } ")
+                 .arg(fittedRailFontPx(btn)) + base);
+}
+
 void TunerApplet::fitRailCaptions()
 {
     for (auto* btn : {m_tuneBtn, m_operateBtn}) {
-        if (!btn || btn->width() <= 0 || btn->text().isEmpty()) continue;
-        const int available = btn->width() - kRailCaptionPadding;
-
-        // Bold is what the style sheet draws these in, so the measurement has
-        // to be bold too — the widget's own font is not, and measuring it
-        // reports a caption several pixels narrower than the one on screen.
-        QFont probe = btn->font();
-        probe.setBold(true);
-        int chosen = kRailCaptionMinPx;
-        for (int px = kRailCaptionMaxPx; px >= kRailCaptionMinPx; --px) {
-            probe.setPixelSize(px);
-            if (QFontMetrics(probe).horizontalAdvance(btn->text()) <= available) {
-                chosen = px;
-                break;
-            }
-        }
-        if (btn->font().pixelSize() == chosen) continue;
-        QFont applied = btn->font();
-        applied.setPixelSize(chosen);
-        btn->setFont(applied);
+        if (!btn) continue;
+        const auto it = m_railStyles.constFind(btn);
+        if (it == m_railStyles.constEnd()) continue;
+        applyRailStyle(btn, it.value());
     }
 }
 
@@ -1079,19 +1105,22 @@ void TunerApplet::syncFromModel()
 
     if (operate && !bypass) {
         m_operateBtn->setText(tr("OPERATE"));
-        theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
+        applyRailStyle(m_operateBtn, QStringLiteral(
+            "QPushButton { background: #006030; border: 1px solid #008040; "
             "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
-            "QPushButton:hover { background: #007040; }");
+            "QPushButton:hover { background: #007040; }"));
     } else if (operate && bypass) {
         m_operateBtn->setText(tr("BYPASS"));
-        theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #8a6000; border: 1px solid #a07000; "
+        applyRailStyle(m_operateBtn, QStringLiteral(
+            "QPushButton { background: #8a6000; border: 1px solid #a07000; "
             "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
-            "QPushButton:hover { background: #9a7000; }");
+            "QPushButton:hover { background: #9a7000; }"));
     } else {
         m_operateBtn->setText(tr("STANDBY"));
-        theme.applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        applyRailStyle(m_operateBtn, QStringLiteral(
+            "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
-            "QPushButton:hover { background: {{color.background.1}}; }");
+            "QPushButton:hover { background: {{color.background.1}}; }"));
     }
 
     // Expanded presentation: the same three states, but shown as the lit key
