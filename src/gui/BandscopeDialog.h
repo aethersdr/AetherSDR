@@ -9,6 +9,7 @@
 
 class QLabel;
 class QPushButton;
+class QTimer;
 
 namespace AetherSDR {
 
@@ -102,7 +103,9 @@ public:
 private:
     // Ask the backend for one frame. A no-op while one is already outstanding.
     void requestFrame();
-    // Tear down the reply connections for the outstanding request, if any.
+    // Tear down the reply connections for the outstanding request, if any, and
+    // stop the deadline. Leaves the Refresh button alone — the three callers
+    // want three different button states.
     void releaseRequest();
     void onFrame(const QVariant& reply);
     void showStatus(const QString& text);
@@ -111,6 +114,17 @@ private:
     BandscopeTrace* m_trace{nullptr};
     QLabel* m_status{nullptr};
     QPushButton* m_refresh{nullptr};
+    // The deadline on an outstanding request. WITHOUT IT A REQUEST CAN BE
+    // ORPHANED AND REFRESH NEVER COMES BACK: RadioModel destroys the backend
+    // outright when it is replaced (reconnect, family swap), Qt drops the two
+    // lambdas below without telling anyone, and nothing then clears
+    // m_requestId — so requestFrame() early-returns for the life of the window
+    // with the status stuck on "Waiting for a frame…". The window is closeable
+    // and WA_DeleteOnClose makes reopening recover, but the operator should not
+    // have to discover that. Not reproduced against a radio; reasoned from
+    // RadioModel's teardown path.
+    QTimer* m_deadline{nullptr};
+
     // The id of the outstanding extension request, or 0. Minted here rather
     // than taken from a shared counter because IRadioBackend's contract puts
     // correlation on the caller: "a caller that wants a reply connects to the
