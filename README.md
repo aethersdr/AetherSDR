@@ -10,7 +10,7 @@
 
 AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.9.2** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.9.3** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
@@ -24,7 +24,7 @@ AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each 
 
 - **GPU-accelerated spectrum & waterfall** — QRhi rendering on the GPU (OpenGL/Metal/D3D11) with a per-pixel FFT trace at up to **60 fps**, an optional **3D stacked-trace** spectrum mode (perspective FFT history, floor-anchored ridges), ~71% CPU reduction over CPU paint, GPU-composited slice flags, and multi-GPU adapter selection
 - **Multi-slice & multi-panadapter** — colour-coded VFO overlays, independent TX assignment, diversity/ESC beamforming; up to 8 detachable pans with native VITA-49 waterfall tiles, with selectable S-meter / **SmartMTR** meter views per flag
-- **KiwiSDR public-receiver browser** — find and connect to public KiwiSDR receivers worldwide through an API-policy-aware directory (diversity receive with receive-only TX inhibit)
+- **KiwiSDR and Web-888 public-receiver browser** — find and connect to public KiwiSDR and Web-888 receivers worldwide through an API-policy-aware directory (diversity receive with receive-only TX inhibit)
 - **Aetherial Audio Channel Strip** — a unified RX **and** TX DSP suite (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and a per-side scope
 - **Six client-side noise-reduction engines** — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), DFNR (DeepFilterNet3), BNR (NVIDIA GPU AI — the Maxine denoiser in-process on a local NVIDIA RTX/GeForce GPU, Linux + Windows; see [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)), and MNR (macOS)
 - **DAX virtual audio + IQ** — up to 8 RX audio channels (radio-dependent — 8 on a FLEX-6700, 4 on 6500/6600/8600, 2 on 6300/6400) + 1 TX, and 4 channels of raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, plus a per-slice **WFM demodulator** for satellite data
@@ -91,6 +91,10 @@ is a supported family yet, and FlexRadio remains the supported target:
   one. Only the IC-705 and IC-7300MK2 are verified against their own CI-V guides
   — an unrecognised model gets no scope and no transmit rather than optimistic
   defaults.
+- **ANAN-G2** — **experimental, receive-only**. openHPSDR Protocol 2 discovery
+  with a single receive path, spectrum and audio, live tuning and zoom, live DDC
+  rate changes, and host-calibrated DDC0 edge-droop compensation. Transmit is a
+  future phase.
 - **RTL-SDR** — **experimental, receive-only**. Discovers supported USB dongles
   through `librtlsdr` and provides one panadapter and one host-demodulated slice.
 
@@ -363,9 +367,12 @@ sudo cmake --install build
 Currently in flight:
 
 - **aetherd** — a vendor-neutral `IRadioBackend` seam so radio-family logic
-  lives behind a stable interface. Four backends ride it today (Flex, HL2,
-  networked Icom, and the demo simulator); the remaining step is the versioned
-  protocol that splits a headless engine from thin UI clients.
+  lives behind a stable interface. Six backends ride it today (Flex, HL2,
+  networked Icom, ANAN-G2, RTL-SDR, and the demo simulator). The versioned
+  protocol has begun landing: local receive control and bounded telemetry are
+  in, transmit coordination has started, and the daemon stays observe-only
+  unless explicitly granted control. The remaining step is the multi-client
+  transmit arbiter and a thin UI client to replace direct model access.
 - **Hermes-Lite 2** — an **experimental** non-Flex backend on that seam, now
   running four independent receivers, the SSB voice chain, CW/RTTY decoding,
   AX.25 packet, band switching with hardware filters, memory channels, manual
@@ -377,6 +384,12 @@ Currently in flight:
   brought up on the IC-705 and IC-7300, now with a scheduled command plane and a
   completed IC-7300MK2 control surface. Remaining work is transmit confirmation
   beyond the 705, per-model SET-menu mapping, and audio gain/VOX/break-in.
+- **ANAN-G2** and **RTL-SDR** — two further **experimental, receive-only**
+  backends on the same seam. The G2 speaks openHPSDR Protocol 2 with live DDC
+  rate changes and a multi-DDC-capable wire layer; RTL-SDR runs one
+  host-demodulated slice per dongle. Remaining work is multi-receiver fan-out on
+  the G2, and the capture-admission integration that gives RTL-SDR more than one
+  receiver.
 - **Workspace canvas** — an **experimental** alternative shell where pans and
   applets are freely placed items across one or more canvas windows. Off by
   default; remaining work is live cross-window drag and field time against the
