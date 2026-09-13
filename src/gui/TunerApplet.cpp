@@ -31,6 +31,8 @@ namespace {
 // each metric instead of to a QPainter. The limiting dimension wins, so the
 // panel keeps its proportions instead of stretching.
 constexpr qreal kDesignWidth  = 380.0;
+// Only a first guess at the contents' height: applyDensity replaces it with
+// the measured value as soon as there is a laid-out column to measure.
 constexpr qreal kDesignHeight = 250.0;
 constexpr qreal kMinScale = 0.8;   // below this the type stops being legible
 constexpr qreal kMaxScale = 3.0;
@@ -45,6 +47,9 @@ constexpr int kBottomGap = 8;
 // a cap on their height: the row is as tall as the dials, and without it the
 // keys stretch to match and become columns.
 constexpr qreal kKeyAspect = 16.0 / 9.0;
+constexpr int kKeyFontDesignPx = 13;
+// Breathing room around the widest caption, in design pixels.
+constexpr int kKeyPaddingDesignPx = 18;
 
 // The three states TUNE cycles through visually. Kept as named templates
 // because both presentations' TUNE buttons wear them and the tuning handler
@@ -176,6 +181,7 @@ void TunerApplet::buildUI()
     m_pwrLabel = new QLabel("PWR", this);
     m_pwrLabel->setFixedWidth(72);
     m_pwrLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_pwrLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     m_pwrLabel->setStyleSheet(kRowLabelStyle);
     m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "", "",
         {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
@@ -193,6 +199,7 @@ void TunerApplet::buildUI()
     m_swrLabel = new QLabel("SWR", this);
     m_swrLabel->setFixedWidth(72);
     m_swrLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_swrLabel->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     m_swrLabel->setStyleSheet(kRowLabelStyle);
     m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "", "",
         {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
@@ -247,7 +254,10 @@ void TunerApplet::buildUI()
         m_standbyBanner->setAccessibleName(tr("Tuner in standby"));
         area->addWidget(m_standbyBanner);
 
-        m_portRowsBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+        // Fixed, not Maximum: Maximum still lets the layout shrink it, and
+        // then a panel being dragged shorter squeezes the strips while the
+        // pad below them is still metres deep. See applyDensity's note.
+        m_portRowsBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         vbox->addWidget(m_portRowsBox);
     }
 
@@ -298,6 +308,7 @@ void TunerApplet::buildUI()
     {
         m_antContainer = new QWidget;
         m_antContainer->setVisible(false);
+        m_antContainer->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         auto* antRow = new QHBoxLayout(m_antContainer);
         antRow->setContentsMargins(0, 0, 0, 0);
         antRow->setSpacing(2);
@@ -413,13 +424,14 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
     dials->addWidget(m_c1Dial);
     dials->addWidget(m_lDial);
     dials->addWidget(m_c2Dial);
-    row->addLayout(dials, 3);
+    row->addLayout(dials);
 
     // Discrete keys on the right. STBY and BYP each toggle their own state
     // against OPERATE, so the state the panel is in is always one press from
     // the state it came from — the rail's single cycling button cannot do
     // that, which is why it stays the rail's button and not this one.
-    auto* keys = new QHBoxLayout;
+    m_keysLayout = new QHBoxLayout;
+    auto* keys = m_keysLayout;
     keys->setSpacing(4);
     auto makeKey = [this](const QString& text, const QString& tip) {
         auto* btn = new QPushButton(text, m_panelControls);
@@ -443,12 +455,29 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
     keys->addWidget(m_stbyBtn, 0, Qt::AlignVCenter);
     keys->addWidget(m_bypBtn, 0, Qt::AlignVCenter);
     keys->addWidget(m_panelTuneBtn, 0, Qt::AlignVCenter);
-    row->addLayout(keys, 2);
+    // Dials left, keys right, the slack between them. Every widget in this
+    // row is sized from the scale rather than by stretching, so the row needs
+    // somewhere to put spare width that is not inside either group.
+    row->addStretch(1);
+    row->addLayout(keys);
 
-    // The keys' width is only known once the row has been laid out, so the
-    // aspect is applied from there rather than computed up front.
-    m_panelControls->installEventFilter(this);
+    // Seed size: the widest caption at the design font, measured now, while
+    // the keys still have their natural size hints. "STOP" is included
+    // because TUNE becomes it mid-tune and the keys must not resize when it
+    // does.
+    {
+        QFont seedFont = m_stbyBtn->font();
+        seedFont.setPixelSize(kKeyFontDesignPx);
+        const QFontMetrics fm(seedFont);
+        int textWidth = 0;
+        for (const QString& caption : {m_stbyBtn->text(), m_bypBtn->text(),
+                                       m_panelTuneBtn->text(), tr("STOP")}) {
+            textWidth = qMax(textWidth, fm.horizontalAdvance(caption));
+        }
+        m_keySeedWidth = textWidth + kKeyPaddingDesignPx;
+    }
 
+    m_panelControls->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     vbox->addWidget(m_panelControls);
 
     connect(m_stbyBtn, &QPushButton::clicked, this, [this]() {
@@ -488,8 +517,20 @@ qreal TunerApplet::contentScale() const
     // scaling there would make one tile disagree with its neighbours.
     if (!m_floating) return 1.0;
     if (width() <= 0 || height() <= 0) return 1.0;
+
+    // The height term budgets for the contents ONLY — the pad's minimum is
+    // taken off first, and the divisor is what the contents actually need at
+    // scale 1.0. Those two together are what make the pad drain before
+    // anything above it moves: while the width is the limiting term the
+    // contents hold their size and the surplus is all pad, and the moment
+    // height becomes limiting the arithmetic lands the contents at exactly
+    // height - kBottomGap, so the pad is at its minimum rather than still
+    // holding space that the contents just gave up.
+    const qreal natural = m_naturalContentHeight > 1.0 ? m_naturalContentHeight
+                                                       : kDesignHeight;
     return qBound(kMinScale,
-                  qMin(width() / kDesignWidth, height() / kDesignHeight),
+                  qMin(width() / kDesignWidth,
+                       (height() - kBottomGap) / natural),
                   kMaxScale);
 }
 
@@ -561,6 +602,13 @@ void TunerApplet::applyDensity()
 
     // Expanding only when popped out: docked, the rail already fixes the
     // tile's height and there is no slack for a pad to take.
+    //
+    // This is the ONLY item in the column that may change height. Everything
+    // above it is vertically Fixed, so the layout has exactly one place to
+    // put spare height and exactly one place to take it from: dragging the
+    // panel shorter drains the pad to kBottomGap before anything else moves,
+    // instead of compressing the strips and dials on the way down. Sizing the
+    // contents is the scale's job, not the layout's.
     m_bottomStretch->changeSize(0, kBottomGap, QSizePolicy::Minimum,
                                 f ? QSizePolicy::Expanding : QSizePolicy::Fixed);
 
@@ -570,10 +618,10 @@ void TunerApplet::applyDensity()
 
     for (auto* btn : {m_stbyBtn, m_bypBtn, m_panelTuneBtn}) {
         QFont keyFont = btn->font();
-        keyFont.setPixelSize(px(13));
+        keyFont.setPixelSize(px(kKeyFontDesignPx));
         btn->setFont(keyFont);
     }
-    applyKeyAspect();
+    applyKeySize(f ? s : 1.0);
     // The rail's own two keys keep the compact size they always had.
     for (auto* btn : {m_tuneBtn, m_operateBtn}) {
         QFont railFont = btn->font();
@@ -618,32 +666,40 @@ void TunerApplet::layOutAlertOverlay()
     m_alertOverlay->setGeometry(rect());
 }
 
-bool TunerApplet::eventFilter(QObject* watched, QEvent* event)
+void TunerApplet::measureNaturalHeight()
 {
-    if (watched == m_panelControls
-        && (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest)) {
-        applyKeyAspect();
+    // What the contents occupy at scale 1.0, taken from the laid-out column
+    // rather than from its size hint — the hint under-reports by the margins
+    // the column adds around it, and a budget built on it lets the pad be
+    // squeezed past its minimum before the scale ever reacts.
+    //
+    // Everything above the pad is vertically fixed, so whatever the pad is
+    // not occupying is exactly the contents. Dividing out the scale they were
+    // drawn at leaves the panel's natural height, whatever rows it has.
+    if (!m_floating || !m_bottomStretch) return;
+    if (m_appliedScale <= 0.0) return;
+    const qreal content = height() - m_bottomStretch->geometry().height();
+    if (content > 1.0) {
+        m_naturalContentHeight = content / m_appliedScale;
     }
-    return QWidget::eventFilter(watched, event);
 }
 
-void TunerApplet::applyKeyAspect()
+void TunerApplet::applyKeySize(qreal scale)
 {
-    if (!m_panelControls || !m_stbyBtn) return;
-    if (QLayout* l = m_panelControls->layout()) {
-        l->activate();
-    }
+    if (!m_stbyBtn || m_keySeedWidth <= 0) return;
+
+    // All three keys are one size, grown from one seed. The seed is the
+    // widest caption's natural width, so the narrowest caption gets the same
+    // box as the widest rather than the box its own text happened to need,
+    // and the height follows at kKeyAspect.
+    const int w = qMax(1, qRound(m_keySeedWidth * scale));
+    const int h = qMax(1, qRound(w / kKeyAspect));
     for (auto* btn : {m_stbyBtn, m_bypBtn, m_panelTuneBtn}) {
-        const int w = btn->width();
-        if (w <= 0) continue;
-        const int h = qMax(1, qRound(w / kKeyAspect));
-        // Fixed, not a maximum: the keys are laid out with AlignVCenter so
-        // the layout takes their size hint rather than stretching them, and a
-        // maximum alone would leave them at whatever the hint happened to be.
-        // Only when it moved — this changes the size hint, and it runs from
-        // inside a layout event.
-        if (btn->minimumHeight() != h || btn->maximumHeight() != h) {
-            btn->setFixedHeight(h);
+        // Fixed in both axes: the keys are laid out with AlignVCenter so they
+        // sit level with the dials, and that makes the layout take their size
+        // hint rather than stretch them — a maximum alone would never bind.
+        if (btn->minimumSize() != QSize(w, h) || btn->maximumSize() != QSize(w, h)) {
+            btn->setFixedSize(w, h);
         }
     }
 }
@@ -661,6 +717,7 @@ void TunerApplet::resizeEvent(QResizeEvent* event)
         m_appliedScale = s;
         applyDensity();
     }
+    measureNaturalHeight();
 }
 
 void TunerApplet::applyAlertStyle()

@@ -290,20 +290,26 @@ void testActivePortRule()
 // ignored its scale would look exactly like the bug this replaced.
 void testScaling()
 {
-    // The discrete keys are letterbox-shaped: their width comes from the
-    // control row's split with the dials, and the height follows from it. The
-    // cap has to be applied as an explicit height rather than a maximum --
-    // the keys are laid out with AlignVCenter, so the layout takes their size
-    // hint instead of stretching them, and a maximum alone leaves them at
-    // whatever the hint happened to be (measured 2.25 rather than 1.78).
+    // The three discrete keys share one seed width, scaled like every other
+    // metric, so they stay identical to each other and grow with the panel.
+    // The seed must NOT come from the laid-out column: fixing a key's size
+    // makes the column's own size hint that fixed width, a one-way ratchet
+    // that leaves the keys stranded at whatever size they were first given.
     constexpr qreal kKeyAspect = 16.0 / 9.0;
-    for (int w : {45, 46, 82, 120}) {
+    constexpr int kSeed = 56;   // a representative widest-caption seed
+    int previousWidth = 0;
+    for (qreal scale : {0.8, 1.0, 1.45, 2.1}) {
+        const int w = qMax(1, qRound(kSeed * scale));
         const int h = qMax(1, qRound(w / kKeyAspect));
         const qreal got = qreal(w) / h;
         expect(qAbs(got - kKeyAspect) < 0.05,
-               QStringLiteral("a %1px key is %2px tall (aspect %3)").arg(w).arg(h)
-                   .arg(got, 0, 'f', 2));
-        expect(h < w, QStringLiteral("a %1px key is wider than it is tall").arg(w));
+               QStringLiteral("a key at scale %1 is %2x%3 (aspect %4)")
+                   .arg(scale).arg(w).arg(h).arg(got, 0, 'f', 2));
+        expect(h < w, QStringLiteral("a key at scale %1 is wider than tall").arg(scale));
+        expect(w > previousWidth,
+               QStringLiteral("a key grows with the scale (%1 -> %2)")
+                   .arg(previousWidth).arg(w));
+        previousWidth = w;
     }
 
     RelayDial dial(QStringLiteral("C1"));

@@ -6,6 +6,7 @@ class QPushButton;
 class QLabel;
 class QTimer;
 class QVBoxLayout;
+class QHBoxLayout;
 class QSpacerItem;
 
 namespace AetherSDR {
@@ -83,9 +84,6 @@ public slots:
 protected:
     // Keeps the alert overlay covering the applet as it resizes.
     void resizeEvent(QResizeEvent* event) override;
-    // Watches the control row so the keys can be re-proportioned once the
-    // layout has given them a width.
-    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void buildUI();
@@ -99,6 +97,8 @@ private:
     void applyDensity();
     // One uniform scale for every metric, from how much room the panel has.
     qreal contentScale() const;
+    // Refreshes m_naturalContentHeight from the laid-out column.
+    void measureNaturalHeight();
     // TUNE exists once per presentation, so tuning feedback (TUNING… / the
     // settled SWR / the restored idle style) has to reach both buttons. Every
     // site that touches a TUNE button goes through here so the two cannot
@@ -114,9 +114,9 @@ private:
     // The tuner sends no severity with an alert, so it is read off the text.
     void applyAlertStyle();
     void layOutAlertOverlay();
-    // Caps the discrete keys at kKeyAspect so they stay letterbox-shaped
-    // instead of growing into columns beside the taller dials.
-    void applyKeyAspect();
+    // Sizes the three discrete keys: one seed size for all of them, scaled
+    // like every other metric on the panel.
+    void applyKeySize(qreal scale);
     // Operate / bypass / standby drive three different port-area presentations
     // (per-port state, a spanning bypass overlay, or the standby banner).
     // Both callers of it need the same three-way decision, so it lives here.
@@ -156,6 +156,10 @@ private:
     QVBoxLayout* m_vbox{nullptr};
     bool         m_floating{false};
     qreal        m_appliedScale{1.0};
+    // What the contents need at scale 1.0, measured from the laid-out column
+    // rather than assumed, so the height budget below tracks the panel as
+    // rows are added to it instead of drifting out of date.
+    qreal        m_naturalContentHeight{0.0};
 
     QWidget*     m_dockedControls{nullptr};  // relay bars + cycling OPERATE
     QWidget*     m_panelControls{nullptr};   // dials + STBY/BYP/TUNE
@@ -198,6 +202,12 @@ private:
     QPushButton* m_stbyBtn{nullptr};
     QPushButton* m_bypBtn{nullptr};
     QPushButton* m_panelTuneBtn{nullptr};
+    QHBoxLayout* m_keysLayout{nullptr};
+    // The widest caption's natural width at scale 1.0, measured once before
+    // any key has been given a fixed size. Deriving it from the laid-out
+    // column instead is a one-way ratchet: fixing the keys makes the column's
+    // own size hint that fixed width, so they can never grow back.
+    int          m_keySeedWidth{0};
 
     QString m_radioModelName;
     double  m_portAFreqMhz{0.0};
