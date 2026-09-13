@@ -46,6 +46,13 @@ constexpr int kBottomGap = 8;
 // set by the control row's split with the dials, so the aspect is applied as
 // a cap on their height: the row is as tall as the dials, and without it the
 // keys stretch to match and become columns.
+// The keys stand as tall as the dials beside them, just short of matching.
+// This supersedes the 16:9 the keys were first given: the two cannot both
+// hold. A key this tall would be 164px wide at 16:9 on an 800px panel, and
+// three of those plus the dials overflow the control row by ~50px at every
+// panel size. Height is what was asked for, so height is what is honoured;
+// the width stays on the seed below and the keys come out nearer 1.2:1.
+constexpr qreal kKeyHeightOfDial = 0.95;
 constexpr qreal kKeyAspect = 16.0 / 9.0;
 constexpr int kKeyFontDesignPx = 13;
 
@@ -694,12 +701,17 @@ void TunerApplet::applyKeySize(qreal scale)
 {
     if (!m_stbyBtn || m_keySeedWidth <= 0) return;
 
-    // All three keys are one size, grown from one seed. The seed is the
-    // widest caption's natural width, so the narrowest caption gets the same
-    // box as the widest rather than the box its own text happened to need,
-    // and the height follows at kKeyAspect.
+    // All three keys are one size. The width grows from one seed — the widest
+    // caption's natural width — so the narrowest caption gets the same box as
+    // the widest rather than the box its own text happened to need.
     const int w = qMax(1, qRound(m_keySeedWidth * scale));
-    const int h = qMax(1, qRound(w / kKeyAspect));
+    // The height is tied to the dials rather than to that width, so the two
+    // control groups read as one row of peers at any panel size. Never taller
+    // than 16:9 would allow: that is the shape the keys fall back to if the
+    // dials are ever made large enough for the tie to make them square.
+    const int dial = qMax(1, qRound(kDialDesignDiameter * scale));
+    const int h = qBound(1, qRound(dial * kKeyHeightOfDial),
+                         qMax(1, qRound(w / kKeyAspect * 2.0)));
     for (auto* btn : {m_stbyBtn, m_bypBtn, m_panelTuneBtn}) {
         // Fixed in both axes: the keys are laid out with AlignVCenter so they
         // sit level with the dials, and that makes the layout take their size

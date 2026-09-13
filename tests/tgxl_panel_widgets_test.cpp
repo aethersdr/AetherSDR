@@ -295,17 +295,28 @@ void testScaling()
     // The seed must NOT come from the laid-out column: fixing a key's size
     // makes the column's own size hint that fixed width, a one-way ratchet
     // that leaves the keys stranded at whatever size they were first given.
-    constexpr qreal kKeyAspect = 16.0 / 9.0;
-    constexpr int kSeed = 56;   // a representative widest-caption seed
+    //
+    // Their height is tied to the dials instead of to their own width. The
+    // 16:9 they were first given cannot hold alongside that tie -- a key as
+    // tall as this would be 164px wide at 16:9 on an 800px panel, and three
+    // of those plus the dials overflow the control row at every panel size.
+    constexpr int kSeed = 52;          // a representative widest-caption seed
+    constexpr int kDialDesign = 46;    // the dial's design diameter
+    constexpr qreal kKeyHeightOfDial = 0.95;
     int previousWidth = 0;
     for (qreal scale : {0.8, 1.0, 1.45, 2.1}) {
         const int w = qMax(1, qRound(kSeed * scale));
-        const int h = qMax(1, qRound(w / kKeyAspect));
-        const qreal got = qreal(w) / h;
-        expect(qAbs(got - kKeyAspect) < 0.05,
-               QStringLiteral("a key at scale %1 is %2x%3 (aspect %4)")
-                   .arg(scale).arg(w).arg(h).arg(got, 0, 'f', 2));
-        expect(h < w, QStringLiteral("a key at scale %1 is wider than tall").arg(scale));
+        const int dial = qMax(1, qRound(kDialDesign * scale));
+        const int h = qMax(1, qRound(dial * kKeyHeightOfDial));
+
+        // The height is tied to the dial rather than to the key's own width,
+        // so the two control groups read as one row of peers at any size.
+        const qreal ofDial = qreal(h) / dial;
+        expect(qAbs(ofDial - kKeyHeightOfDial) < 0.02,
+               QStringLiteral("a key at scale %1 is %2 of the dial's height")
+                   .arg(scale).arg(ofDial, 0, 'f', 3));
+        expect(h < dial, QStringLiteral("a key stays shorter than the dial (scale %1)")
+                             .arg(scale));
         expect(w > previousWidth,
                QStringLiteral("a key grows with the scale (%1 -> %2)")
                    .arg(previousWidth).arg(w));
