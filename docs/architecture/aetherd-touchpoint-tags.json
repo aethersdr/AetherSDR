@@ -1133,6 +1133,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/AutoRfGainControl.h": {
+  "tag": "universal",
+  "note": "A backend's own automatic receive-gain control, as seam vocabulary — the switch, the floor bound, and the choice of law. Universal because no family name appears above the seam: a family that has such a control returns one from IRadioBackend::autoRfGainControl(), a family that does not returns nullptr and never learns the concept exists. Carries no wire concept at all, deliberately; the moment it carried one it would be describing a particular front end. An interface rather than a RadioCapabilities bool because that population is frozen shrink-only (#5262 M2) and because a bool fissions — the first GUI to draw the control needs the bound and the law set too.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/hl2/Hl2Discovery.h": {
   "tag": "vendor(hl2)",
   "note": "HPSDR Protocol 1 ('Metis') discovery for the Hermes-Lite 2, shaped to emit RadioInfo with family=\"hl2\" so the existing picker slots consume it unchanged. Family wire code that belongs below the seam; reached today from ConnectionPanel.cpp, MainWindow.h and RadioSetupDialog.cpp. Pre-existing coupling, frozen into the EB3 baseline — the fix is a family-neutral discovery aggregator behind IRadioBackend, not a wider baseline.",
