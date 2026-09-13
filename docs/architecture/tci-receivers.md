@@ -73,7 +73,9 @@ The receiver-index policy is only one half of the routing contract. Channel
 
 5. **Two channels per receiver.**
    AetherSDR advertises `channels_count:2`. Channel 0 is the receiver's RX
-   slice. Channel 1 is the resolved radio-global TX slice for that RX route.
+   slice. Channel 1 is the resolved radio-global TX slice for that RX route —
+   unless that slice is another client's declared receiver and no split is
+   requested, in which case channel 1 is echoed, not routed (#5193).
    The route uses stable Flex slice IDs internally even if public TRX indexes
    shift after topology changes.
 

@@ -9,10 +9,20 @@
 // map↔model interplay (positional fallback, live-slice resolution) is
 // exercised on hardware — see PR verification.
 
+//
+// #5193 section (below the TciTrxMap cases): TciRoutingState::resolveVfoB()
+// must never adopt a TX slice that another client operates as its receiver.
+// Same pure-logic shape — endpoint vectors in, RouteDecision out.
+
+#include "core/TciRoutingState.h"
 #include "core/TciTrxMap.h"
+
+#include <QVector>
 
 #include <iostream>
 
+using AetherSDR::TciRoutingState;
+using AetherSDR::TciSliceEndpoint;
 using AetherSDR::TciTrxMap;
 
 namespace {
@@ -88,6 +98,81 @@ int main()
                "null model has no TX slice (-1 sentinel)");
         expect(!map.trxHasLiveSlice(nullptr, 0),
                "null model carries no live slice");
+    }
+
+    // ---- #5193: VFO B never adopts another client's receiver -----------------
+    using Action = TciRoutingState::RouteAction;
+    using Owner = TciRoutingState::TxRouteOwner;
+
+    // CONSTRUCTED from the measured topology (#5193 repro, FLEX-8400, 2026-09-13):
+    // slice 0 = A, TX, operated by the RX1 WSJT-X instance; slice 1 = B, the
+    // RX2 instance's receiver. The RX2 instance's `vfo:1,1,<hz>` used to tune
+    // slice 0. Two-client topology => EchoOnly, and no route state is written.
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> twoClients { { 0, true, true }, { 1, false, false } };
+        const auto decision = routing.resolveVfoB(1, twoClients);
+        expect(decision.action == Action::EchoOnly,
+               "#5193: VFO B from the non-TX receiver echoes when the TX slice is another client's");
+        expect(decision.txSliceId < 0, "#5193: echo decision names no TX slice");
+        expect(routing.rxSliceId() < 0 && routing.txSliceId() < 0
+                   && routing.owner() == Owner::None,
+               "#5193: echo decision records no route (bare PTT stays bare)");
+        // The bare PTT that follows keys the slice the client named (#4547 contract).
+        expect(routing.resolvePttSlice(1, twoClients) == 1,
+               "#5193: bare PTT after an echo still keys the requested slice");
+    }
+
+    // Direction follows the TX flag, not the slice number (measured: TX moved
+    // to slice 1, the RX1 instance's channel-1 frame retuned slice 1).
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> txOnB { { 0, false, false }, { 1, true, true } };
+        expect(routing.resolveVfoB(0, txOnB).action == Action::EchoOnly,
+               "#5193: symmetric case - TX flag on the other client's slice also echoes");
+    }
+
+    // #1807 satellite contract, unchanged: one client, TX parked on a slice no
+    // client operates -> still adopted as VFO B (the assertion the retired
+    // tci_protocol_test carried, verbatim topology).
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> satellite { { 4, false }, { 7, true } };
+        const auto decision = routing.resolveVfoB(4, satellite);
+        expect(decision.action == Action::UseExisting && decision.txSliceId == 7
+                   && decision.owner == Owner::External,
+               "#1807: an unoperated external TX slice is still adopted as VFO B");
+        expect(routing.resolvePttSlice(4, satellite) == 7,
+               "#1807: PTT then resolves to the adopted external TX slice");
+    }
+
+    // A requested split still negotiates a route, but never onto another
+    // client's receiver: with the only TX slice claimed the decision falls
+    // through to Create (the server then applies its capacity rule), never
+    // UseExisting/PromoteExisting naming the claimed slice.
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> twoClients { { 0, true, true }, { 1, false, false } };
+        routing.setSplitRequested(true);
+        const auto decision = routing.resolveVfoB(1, twoClients);
+        expect(decision.action == Action::Create && decision.txSliceId < 0,
+               "#5193: split with a claimed TX slice requests a distinct slice, never the claimed one");
+        // A stale cached route pointing at the claimed slice is not promoted either.
+        TciRoutingState cached;
+        cached.bindCreatedRoute(1, 0);
+        cached.setSplitRequested(true);
+        const auto promoted = cached.resolveVfoB(1, twoClients);
+        expect(promoted.action != Action::PromoteExisting && promoted.action != Action::UseExisting,
+               "#5193: a cached route onto a claimed slice is not promoted");
+    }
+
+    // Flag ignored where it must be: an endpoint list without requester
+    // knowledge (all flags false) behaves exactly as before.
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> unflagged { { 0, true }, { 1, false } };
+        expect(routing.resolveVfoB(1, unflagged).action == Action::UseExisting,
+               "unflagged endpoints keep the pre-#5193 adoption (caller without requester)");
     }
 
     std::cout << (failures ? "FAILED" : "PASSED") << " (" << failures

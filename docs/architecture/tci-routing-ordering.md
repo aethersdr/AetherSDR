@@ -26,7 +26,7 @@ status and command replies remain authoritative for accepted radio state.
 | Startup barrier | Identity, topology, both VFO channels, stream settings, then `ready;` are emitted in one deterministic order. | Thetis queue can reorder coalesced state around `ready`; WSJT-X seeds requested frequencies from the init burst. | `TciProtocol::generateInitBurst()` and `tci_protocol_test`. |
 | Stable ownership | Routing state stores Flex slice IDs, never a retained contiguous TRX index. | #3715, #4160, lower-index slice churn. | `TciRoutingState`; TRX translation occurs at command/broadcast boundaries. |
 | VFO A | `vfo:<trx>,0` targets the RX slice represented by that TRX. | TCI 2.0, WSJT-X startup tuning. | `TciServer::handleVfoRequest()`. |
-| VFO B | `vfo:<trx>,1` targets a distinct TX slice when available. Resolution order is an external radio-selected TX slice, a previously tracked route, then a new slice on the RX pan. An arbitrary non-TX slice is never treated as spare because it may be an operator's independent receiver. | #1686, #1807, #2102, JTDX and WSJT-X Rig sequences. | `TciRoutingState::resolveVfoB()` and table-driven tests. |
+| VFO B | `vfo:<trx>,1` targets a distinct TX slice when available. Resolution order is an external radio-selected TX slice, a previously tracked route, then a new slice on the RX pan. An arbitrary non-TX slice is never treated as spare because it may be an operator's independent receiver. A TX slice that another connected client operates as its receiver (declared `audio_start` receiver) is never adopted either: without a split request the frame is answered with the RX slice's own frequency and nothing is tuned. | #1686, #1807, #2102, #5193 (two WSJT-X instances, Split = Rig: the non-TX instance's channel-1 frame retuned the other instance's slice), JTDX and WSJT-X Rig sequences. | `TciRoutingState::resolveVfoB()`; `tci_trxmap_test` routing section. |
 | No-op tuning | A requested frequency already present in authoritative model state is acknowledged immediately. | WSJT-X waits 2 s for VFO A and 1 s for VFO B; a no-op produces no Flex status edge. | `TciServer::tuneSliceAndConfirm()`. |
 | Changed tuning | A changed frequency is confirmed only after the Flex command succeeds. | Flex status precedes command reply; #3543 and startup tuning errors. | Command callback is the completion barrier; sender and observers receive the accepted coordinate. |
 | Split state | `split_enable` is explicit shared TCI state, not inferred from transient TX-slice topology. A true request is confirmed only after a distinct external, previously tracked, or newly created TX route is selected. | Thetis exposes one global `VFOSplit`; #1686. | `TciRoutingState::setSplitRequested()` and ordered route continuations in `TciServer::handleSplitRequest()`. |
@@ -60,7 +60,7 @@ uses the resulting stable Flex slice IDs.
 | TCI coordinate | Flex projection |
 |---|---|
 | `(trx, channel 0)` | RX slice represented by `trx` |
-| `(trx, channel 1)` | Resolved radio-global TX slice for that RX route |
+| `(trx, channel 1)` | Resolved radio-global TX slice for that RX route; echo-only when that slice is another client's receiver and no split is requested (#5193) |
 | `split_enable:<trx>` | Shared TCI split-request state, echoed under the requested receiver |
 | `trx:<trx>` | Explicit PTT intent for the route; acknowledgement is actual interlock state |
 | `tx_frequency` | Frequency of the radio-authoritative TX slice |

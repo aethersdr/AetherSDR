@@ -13,6 +13,17 @@ bool TciRoutingState::contains(const QVector<TciSliceEndpoint>& endpoints, int s
     return false;
 }
 
+bool TciRoutingState::operatedByAnotherClient(
+    const QVector<TciSliceEndpoint>& endpoints, int sliceId)
+{
+    for (const TciSliceEndpoint& endpoint : endpoints) {
+        if (endpoint.sliceId == sliceId) {
+            return endpoint.operatedByAnotherClient;
+        }
+    }
+    return false;
+}
+
 int TciRoutingState::currentTxSlice(const QVector<TciSliceEndpoint>& endpoints)
 {
     for (const TciSliceEndpoint& endpoint : endpoints) {
@@ -31,7 +42,32 @@ TciRoutingState::RouteDecision TciRoutingState::resolveVfoB(
     }
 
     const int currentTx = currentTxSlice(endpoints);
-    if (currentTx >= 0 && currentTx != rxSliceId) {
+
+    // A TX slice that another client is operating as ITS receiver is not this
+    // receiver's VFO B. Two WSJT-X instances on two slices each send
+    // `vfo:<trx>,1,<hz>` on every band change (Split = Rig sends it with split
+    // still false); because a Flex always marks exactly one TX slice, the
+    // adoption below used to fire for whichever instance was not on the TX
+    // slice and retune the OTHER instance's slice — and the radio's transmit
+    // frequency — to its band (#5193, measured 21/21 on a FLEX-8400). The
+    // single-client cases keep adopting: a satellite operator with TX parked
+    // on a second slice that no client operates (#1807) still tunes it as
+    // VFO B, and a requested split still negotiates a route below.
+    // Only a FOREIGN TX slice can be another client's receiver for this
+    // purpose: when the requester's own slice holds TX, the request follows
+    // the pre-existing Create/Promote path whatever other clients share that
+    // receiver (a second client on the same slice must not suppress the
+    // single-slice "request a distinct TX slice" contract).
+    const bool currentTxIsAnotherReceiver = currentTx >= 0 && currentTx != rxSliceId
+        && operatedByAnotherClient(endpoints, currentTx);
+    if (currentTxIsAnotherReceiver && !m_splitRequested) {
+        // Deliberately records nothing: this is a decision about one frame,
+        // not a route change, and writing m_rxSliceId here would make
+        // resolvePttSlice()'s routeApplies true for a route never bound.
+        return { RouteAction::EchoOnly, -1, TxRouteOwner::None };
+    }
+
+    if (currentTx >= 0 && currentTx != rxSliceId && !currentTxIsAnotherReceiver) {
         // Always track the current RX slice, even when the external TX slice is
         // unchanged. removeSlice() keys off m_rxSliceId, so a stale value would
         // let the wrong slice's removal tear the route down (and miss the real
@@ -44,7 +80,8 @@ TciRoutingState::RouteDecision TciRoutingState::resolveVfoB(
         return { RouteAction::UseExisting, currentTx, m_owner };
     }
 
-    if (m_txSliceId >= 0 && m_txSliceId != rxSliceId && contains(endpoints, m_txSliceId)) {
+    if (m_txSliceId >= 0 && m_txSliceId != rxSliceId && contains(endpoints, m_txSliceId)
+        && !operatedByAnotherClient(endpoints, m_txSliceId)) {
         m_rxSliceId = rxSliceId;
         return { RouteAction::PromoteExisting, m_txSliceId, m_owner };
     }
