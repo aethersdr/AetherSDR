@@ -1599,11 +1599,38 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
-    // The HL2 modulates on this host, so it transmits in whatever mode WDSP is
-    // told to build — there is no mode it receives and cannot send. The transmit
-    // gate (m_txAllowed) is the only thing that stops it, and that is
-    // canTransmit above.
-    c.receiveOnlyModes = {};
+    // THE MODES THIS RADIO DEMODULATES AND CANNOT MODULATE.
+    //
+    // The comment that stood here said the HL2 "transmits in whatever mode WDSP
+    // is told to build — there is no mode it receives and cannot send", and left
+    // the list empty on that basis. **The transmit chain is not WDSP.**
+    // Hl2TxDsp is a hand-written phasing SSB modulator: setMode() stores the
+    // mode and the only reader is isLowerSideband(), which returns true for Lsb,
+    // Cwl and Digl and false for everything else. So AM, SAM, DSB, FM, NFM, WBFM
+    // and DRM all take the upper-sideband branch and go on the air as SSB,
+    // announcing nothing.
+    //
+    // WHAT STAYS OFF THE LIST, deliberately:
+    //
+    //   * USB / LSB / DIGU / DIGL are the SSB family and modulate correctly.
+    //   * CW / CWU / CWL keys a carrier the GATEWARE shapes at the TX NCO
+    //     (MetisClient::setCwKeyDown). That path never reaches Hl2TxDsp, so the
+    //     sideband switch above does not apply to it and CW transmits correctly.
+    //
+    // These strings are the neutral vocabulary SliceModel carries, and both
+    // spellings of each mode appear because modeFromString() accepts both:
+    // refuseKeyInReceiveOnlyMode() compares what the slice holds, not what this
+    // backend would have mapped it to, so listing only one spelling would leave
+    // the other keying.
+    //
+    // THIS IS A DECLARATION, NOT A RESTRICTION. It reports what the modulator
+    // does today. When a mode genuinely transmits — the WDSP TXA chain carries
+    // all of these — its entry comes back off this list and nothing else here
+    // has to change.
+    c.receiveOnlyModes = {QStringLiteral("AM"),   QStringLiteral("SAM"),
+                          QStringLiteral("DSB"),  QStringLiteral("FM"),
+                          QStringLiteral("NFM"),  QStringLiteral("WBFM"),
+                          QStringLiteral("WFM"),  QStringLiteral("DRM")};
     c.hostModulates = true;
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks
