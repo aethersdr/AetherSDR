@@ -195,6 +195,47 @@ struct FrequencyFrame {
     return true;
 }
 
+// The ONE frequency frame the FFT-derived waterfall path works in, and the
+// counterpart to primaryRowFrameForNativeTile() for the other caller.
+//
+// pushWaterfallRow()'s pixels come from m_bins, which reprojectSpectrum() and
+// updateSpectrum() keep resampled to the CURRENT on-screen centre/bandwidth --
+// including the optimistic value a zoom gesture writes before the backend has
+// confirmed anything. So everything that row produces has to agree on that
+// same frame: the proportional bin-to-column stretch, the TX mask's per-column
+// frequency, the visible row, the DSS row, and the history stamp.
+//
+// Stamping such a row with the CONFIRMED frame labels guessed pixels with a
+// span they are not in, and remapHistoryRowInto() then shifts their content
+// once the viewport rebuilds (jensenpat, #5142 review). Note this is the
+// OPPOSITE case to a native tile: a tile carries real producer data and takes
+// the confirmed viewport only where it genuinely covers it, whereas these bins
+// ARE the guess and must be labelled as one.
+//
+// Confirmed geometry is still the fallback for the one case where there is no
+// on-screen frame yet -- before the first geometry push, where bandwidth is
+// still zero -- which is what stampFrameForHistoryRow() would have done anyway.
+[[nodiscard]] inline FrequencyFrame fftDerivedRowFrame(
+    const FrequencyFrame& onScreen, const FrequencyFrame& confirmed) noexcept
+{
+    return onScreen.isValid() ? onScreen : confirmed;
+}
+
+// The frequency destination column `x` represents, in the frame that row is
+// laid out in. The TX mask and the history stamp must both come from here, so
+// a future edit cannot move one without the other -- the same "one
+// implementation" reason nativeTileBinForColumn() exists.
+[[nodiscard]] inline double fftDerivedColumnFrequencyMhz(
+    const FrequencyFrame& rowFrame, int x, int destWidth) noexcept
+{
+    if (destWidth <= 0)
+        return std::numeric_limits<double>::quiet_NaN();
+    const double startMhz = rowFrame.centerMhz - rowFrame.bandwidthMhz / 2.0;
+    return startMhz
+        + (static_cast<double>(x) / static_cast<double>(destWidth))
+              * rowFrame.bandwidthMhz;
+}
+
 // A native waterfall tile supplies two independently calibrated rows: the
 // viewport row and the full-tile supplemental row. A blanked row must keep
 // their capture frames paired with the matching pixels.

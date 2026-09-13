@@ -12245,27 +12245,27 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         useTxFilterMask = txWaterfallMaskRange(txMaskLowMhz, txMaskHighMhz);
 
     const int srcSize = bins.size();
-    // On-screen geometry, NOT confirmed -- unlike updateWaterfallRow() (which
-    // lays out an explicitly-tiled row's own pixel data against confirmed
-    // geometry), panStartMhz here feeds ONLY the TX-mask test below; the
-    // actual bin-to-column mapping a few lines down is a plain proportional
-    // stretch of `bins` over destWidth and never consults it. `bins` itself
-    // is m_bins, which reprojectSpectrum()/updateSpectrum() keep resampled
-    // to the CURRENT on-screen m_centerMhz/m_bandwidthMhz, not the
-    // last-confirmed span -- so the mask must test against that same
-    // on-screen frame or it blanks the wrong columns relative to what's
-    // actually being plotted during a zoom's divergence window (ten9876,
-    // #5142 review, "Blocker 2").
-    const double panStartMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    // On-screen geometry, NOT confirmed -- unlike updateWaterfallRow(), which
+    // lays an explicitly-tiled row's own producer data out against confirmed
+    // geometry. `bins` here is m_bins, which reprojectSpectrum()/
+    // updateSpectrum() keep resampled to the CURRENT on-screen
+    // m_centerMhz/m_bandwidthMhz, not the last-confirmed span. Every consumer
+    // below therefore takes this one frame: the TX mask, the proportional
+    // bin-to-column stretch, the visible row, the DSS row, and -- since
+    // jensenpat's #5142 review -- the history stamp, which used to omit its
+    // frame and fall back to CONFIRMED geometry, labelling these guessed
+    // pixels with a span they are not in. See fftDerivedRowFrame().
+    const FrequencyFrame rowFrame = fftDerivedRowFrame(
+        FrequencyFrame{m_centerMhz, m_bandwidthMhz},
+        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz});
 
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
     QVector<quint8> levels(destWidth, 0);
     QVector<QRgb> scanline(destWidth, qRgb(0, 0, 0));
     for (int x = 0; x < destWidth; ++x) {
         if (useTxFilterMask) {
-            const double freqMhz = panStartMhz
-                + (static_cast<double>(x) / static_cast<double>(destWidth))
-                    * m_bandwidthMhz;
+            const double freqMhz =
+                fftDerivedColumnFrequencyMhz(rowFrame, x, destWidth);
             if (freqMhz < txMaskLowMhz || freqMhz > txMaskHighMhz) {
                 scanline[x] = qRgb(0, 0, 0);
                 continue;
@@ -12292,7 +12292,12 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         scanline[x] = colorLut[levels[x]];
     }
 
-    appendHistoryRow(levels.constData(), QDateTime::currentMSecsSinceEpoch());
+    // Explicit frame: without it this lands on appendHistoryRow()'s
+    // confirmed-geometry fallback, which is right for a caller that has no
+    // frame of its own and wrong for this one, whose pixels are already in
+    // rowFrame (jensenpat, #5142 review).
+    appendHistoryRow(levels.constData(), QDateTime::currentMSecsSinceEpoch(),
+                     rowFrame.centerMhz, rowFrame.bandwidthMhz);
     appendDssWaterfallRow(bins);
     if (m_wfLive) {
         appendVisibleRow(scanline.constData());

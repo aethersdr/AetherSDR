@@ -1315,6 +1315,55 @@ int testNativeTileCoverageAcrossProducers()
     return 0;
 }
 
+int testFftDerivedRowUsesOneFrameDuringDivergence()
+{
+    using namespace AetherSDR;
+    constexpr int kDestWidth = 800;
+
+    // A zoom gesture has written its guess to the on-screen frame; the backend
+    // has not confirmed it, so the two differ. This is the window the whole PR
+    // is about, and the window in which the FFT-derived path used to stamp
+    // history with confirmed geometry while laying its pixels out in on-screen
+    // geometry (jensenpat, #5142 review).
+    const FrequencyFrame confirmed{14.200, 0.192};
+    const FrequencyFrame onScreen{14.235, 0.048};
+
+    const FrequencyFrame rowFrame = fftDerivedRowFrame(onScreen, confirmed);
+    if (rowFrame.centerMhz != onScreen.centerMhz
+        || rowFrame.bandwidthMhz != onScreen.bandwidthMhz)
+        return fail("an FFT-derived row must be stamped in the frame its "
+                    "pixels are laid out in, not the confirmed one");
+
+    // The stamp and the TX mask must resolve the same frequency for the same
+    // column. Routing either one back through `confirmed` breaks this.
+    static constexpr std::array<int, 4> kColumns{0, 1, kDestWidth / 2,
+                                                kDestWidth - 1};
+    for (const int x : kColumns) {
+        const double fromRowFrame =
+            fftDerivedColumnFrequencyMhz(rowFrame, x, kDestWidth);
+        const double fromOnScreen =
+            fftDerivedColumnFrequencyMhz(onScreen, x, kDestWidth);
+        if (fromRowFrame != fromOnScreen)
+            return fail("the TX mask and the history stamp disagree about "
+                        "what frequency a column holds");
+        const double fromConfirmed =
+            fftDerivedColumnFrequencyMhz(confirmed, x, kDestWidth);
+        if (fromRowFrame == fromConfirmed)
+            return fail("the divergence case is not actually divergent -- "
+                        "this test would pass against the old behaviour");
+    }
+
+    // Before the first geometry push there is no on-screen frame to use;
+    // confirmed is the only answer, and it is what the old fallback gave.
+    const FrequencyFrame unset{0.0, 0.0};
+    const FrequencyFrame beforeFirstPush = fftDerivedRowFrame(unset, confirmed);
+    if (beforeFirstPush.centerMhz != confirmed.centerMhz
+        || beforeFirstPush.bandwidthMhz != confirmed.bandwidthMhz)
+        return fail("with no on-screen frame yet, the row must fall back to "
+                    "confirmed geometry");
+    return 0;
+}
+
 int main()
 {
     if (const int result = testDssRowSpanSupported(); result != 0) {
@@ -1392,5 +1441,8 @@ int main()
         result != 0) {
         return result;
     }
-    return testNativeTileCoverageAcrossProducers();
+    if (const int result = testNativeTileCoverageAcrossProducers(); result != 0) {
+        return result;
+    }
+    return testFftDerivedRowUsesOneFrameDuringDivergence();
 }
