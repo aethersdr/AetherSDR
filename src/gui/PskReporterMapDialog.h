@@ -63,6 +63,7 @@ private:
     // boundary was missed, or when the DAX TX stream is still being created.
     void deferBeaconToNextSlot(const QString& reason);
     void updateBeaconDefaults();
+    void applyBeaconLevelDefault();
     void setBeaconControlsEnabled(bool enabled);
     bool applyBeaconBand();
     // Re-sends mode and both passbands immediately before the key, and reports

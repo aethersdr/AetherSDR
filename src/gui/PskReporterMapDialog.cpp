@@ -665,6 +665,13 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     // hostModulates && canTransmit, which is the question actually being
     // asked: does OUR ALC see this audio.
     //
+    // ANAN is the near miss worth naming, because it looks like it should
+    // qualify and does not. AnanBackend also sets hostModulates=true — it has
+    // client-side WDSP exactly as the HL2 does — and is excluded only because
+    // it sets canTransmit=false two lines earlier. If a transmitting ANAN ever
+    // lands, it belongs on the -3 side of this and will arrive there by itself
+    // (PR #5651 review).
+    //
     // This moves only operators who never touched the control -- the spinbox
     // writes beaconLevelDbFs on valueChanged, so a deliberate setting has a
     // stored key and is read back below untouched.
@@ -677,11 +684,19 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_beaconLevel->setRange(-60, -3);
     m_beaconLevel->setSingleStep(1);
     m_beaconLevel->setSuffix(tr(" dBFS"));
-    const bool hostModulates =
-        m_radioModel && m_radioModel->transmitModel().hostModulation();
-    const int defaultLevelDbFs = hostModulates ? -3 : -20;
-    m_beaconLevel->setValue(
-        pskSettings().value("beaconLevelDbFs").toInt(defaultLevelDbFs));
+    // NOT read once. The dialog is constructed on first open and cached for the
+    // session (MainWindow_DigitalModes.cpp, a QPointer with no
+    // WA_DeleteOnClose), so an operator who opens PSK Reporter BEFORE
+    // connecting would otherwise keep -20 dBFS for the whole session, with
+    // nothing on screen to say the default never applied. applyBeaconLevel()
+    // is therefore also called from updateBeaconDefaults(), which already
+    // re-runs on every radio status change (PR #5651 review).
+    // The operator's stored choice first; applyBeaconLevelDefault() supplies
+    // one only when there is none, and refuses to overwrite a stored value.
+    if (pskSettings().contains("beaconLevelDbFs")) {
+        m_beaconLevel->setValue(pskSettings().value("beaconLevelDbFs").toInt());
+    }
+    applyBeaconLevelDefault();
     m_beaconLevel->setAccessibleName(tr("WSPR transmit audio level"));
     m_beaconLevel->setAccessibleDescription(
         tr("Generated audio level in decibels full scale, from -60 to -3"));
@@ -1358,6 +1373,25 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     updateBeaconDefaults();
 }
 
+// The beacon level's default, re-applied whenever the radio may have changed.
+//
+// ONLY WHEN THE OPERATOR HAS NEVER SET IT. The spinbox writes beaconLevelDbFs
+// on valueChanged, so a stored value is a deliberate choice and is never
+// overridden here — that is the difference between a default and a policy.
+void PskReporterMapDialog::applyBeaconLevelDefault()
+{
+    if (m_beaconLevel == nullptr || pskSettings().contains("beaconLevelDbFs")) {
+        return;
+    }
+    const bool hostModulates =
+        m_radioModel && m_radioModel->transmitModel().hostModulation();
+    // Blocked, because setValue() would otherwise fire valueChanged and write
+    // the very setting whose absence is the condition for being here — one
+    // connect would turn a default into a stored choice the operator never made.
+    const QSignalBlocker blocker(m_beaconLevel);
+    m_beaconLevel->setValue(hostModulates ? -3 : -20);
+}
+
 void PskReporterMapDialog::updateBeaconDefaults()
 {
     if (m_radioModel == nullptr || m_beaconArmed) {
@@ -1383,6 +1417,7 @@ void PskReporterMapDialog::updateBeaconDefaults()
             writePskSetting("beaconGrid", fromGps);
         }
     }
+    applyBeaconLevelDefault();
     const SliceModel* slice = m_radioModel->txSlice();
     if (slice != nullptr) {
         const QSignalBlocker blocker(m_beaconBand);
