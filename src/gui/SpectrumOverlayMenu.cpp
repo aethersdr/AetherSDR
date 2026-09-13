@@ -1,4 +1,5 @@
 #include "SpectrumOverlayMenu.h"
+#include "core/TxKeyingMarker.h"
 #include "DeclaredBandMenuPolicy.h"
 #include "DisplaySettings.h"
 #include "DspParamPopup.h"
@@ -909,6 +910,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     auto* sweepRow = new QHBoxLayout;
     sweepRow->setSpacing(4);
     m_swrStartBtn = new QPushButton("Start Sweep");
+    markTxKeying(m_swrStartBtn);   // runs the sweep → keys TX (#3646)
     m_swrStartBtn->setMinimumHeight(22);
     m_swrStartBtn->setStyleSheet(sweepBtnStyle);
     m_swrClearBtn = new QPushButton("Clear Sweep");

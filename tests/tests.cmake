@@ -1069,6 +1069,15 @@ target_include_directories(slice_label_test PRIVATE src)
 target_link_libraries(slice_label_test PRIVATE Qt6::Gui)
 add_test(NAME slice_label_test COMMAND slice_label_test)
 
+add_executable(vfo_display_defaults_test
+    tests/vfo_display_defaults_test.cpp
+    src/gui/VfoDisplayDefaults.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(vfo_display_defaults_test PRIVATE src tests)
+target_link_libraries(vfo_display_defaults_test PRIVATE Qt6::Core)
+add_test(NAME vfo_display_defaults_test COMMAND vfo_display_defaults_test)
+
 add_executable(vfo_flag_placement_test
     tests/vfo_flag_placement_test.cpp
 )
@@ -5004,6 +5013,7 @@ add_executable(rx_applet_squelch_reconciliation_test
     tests/rx_applet_squelch_reconciliation_test.cpp
     src/gui/RxApplet.cpp
     src/gui/VfoWidget.cpp
+    src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/DragValuePopup.cpp
     src/gui/FilterPassbandWidget.cpp
@@ -5030,6 +5040,7 @@ add_executable(gui_nested_lifetime_test
     tests/gui_nested_lifetime_test.cpp
     src/gui/RxApplet.cpp
     src/gui/VfoWidget.cpp
+    src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/DragValuePopup.cpp
     src/gui/FilterPassbandWidget.cpp
@@ -5225,6 +5236,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
     pcm_compatibility_test

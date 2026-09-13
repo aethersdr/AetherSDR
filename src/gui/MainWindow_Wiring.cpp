@@ -5407,7 +5407,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             QString("display pan set %1 loopb=%2").arg(applet->panId()).arg(on ? 1 : 0));
     });
     connect(menu, &SpectrumOverlayMenu::swrSweepStartRequested,
-            this, &MainWindow::startSwrSweep);
+            this, [this](int sliceId, int powerWatts,
+                         double lowMhz, double highMhz) {
+        startSwrSweep(sliceId, powerWatts, lowMhz, highMhz);
+    });
     connect(menu, &SpectrumOverlayMenu::swrSweepClearRequested,
             this, &MainWindow::clearSwrSweepPlot);
     connect(menu, &SpectrumOverlayMenu::swrSweepSaveCsvRequested,

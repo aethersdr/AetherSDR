@@ -7686,6 +7686,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
     }
+    updateToolsMenuState();
     if (m_aetherControlAction) {
         m_aetherControlAction->setVisible(!connected || caps.hasFlexControlIntegration);
     }
@@ -9878,6 +9879,107 @@ void MainWindow::showPanadapterInterlockNotification(const QString& message,
 // ─── Pan layout application ───────────────────────────────────────────────────
 
 // ─── Keyboard Shortcuts ───────────────────────────────────────────────────────
+
+// Single owner of the Tools menu's enable/visible/tooltip state.
+//
+// This runs from two places on purpose. QMenu::aboutToShow covers the operator
+// popping the menu; applyCapabilitiesToUi() covers everyone who never pops it —
+// above all the automation bridge, which resolves menu-bar actions in a CLOSED
+// menu bar (AutomationServer::doInvoke) and gates purely on isEnabled(). Gating
+// only in aboutToShow left every Tools action at its construction-time value for
+// that caller, which is how a disconnected radio could still reach the ATU
+// memory-clear confirm. Keeping one function means the two passes cannot drift
+// into different formulas for the same action.
+void MainWindow::updateToolsMenuState()
+{
+    const bool connected = m_radioModel.isConnected();
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    const auto& tx = m_radioModel.transmitModel();
+    const auto& tuner = m_radioModel.tunerModel();
+    const bool idle = !tx.isTuning() && !tx.isMox() && !tx.isTransmitting();
+    const bool txReady = connected && caps.canTransmit
+        && m_radioModel.txOwnedByUs() && idle;
+    const bool hasTxApplet = m_appletPanel && m_appletPanel->txApplet();
+
+    // An external TunerGenius XL in OPERATE puts the internal ATU out of the
+    // line, and TxApplet::updateAtuAvailability() greys the ATU and MEM buttons
+    // for exactly that reason (#443). The ATU right-click menu rides the
+    // disabled ATU button, so before Tools existed that gate was also the only
+    // route to these two actions — lifting them to the menu bar without the same
+    // condition would make Tools the one way left to pre-tune through a tuner
+    // that is in OPERATE.
+    const bool tgxlOperate = tuner.isPresent() && tuner.isOperate()
+        && !tuner.isBypass();
+    const bool memories = caps.hasTunerMemories && !tgxlOperate;
+
+    if (m_addPanAction) {
+        m_addPanAction->setEnabled(connected && m_panStack
+            && m_panStack->count() < m_radioModel.maxPanadapters());
+    }
+    if (m_aetherialAction) {
+        m_aetherialAction->setChecked(m_aetherialStrip
+            && m_aetherialStrip->isVisible());
+    }
+    if (m_cwKeyerAction) {
+        m_cwKeyerAction->setVisible(!connected || caps.hasRadioSideCwKeyer);
+        m_cwKeyerAction->setEnabled(m_cwxIndicator && m_cwxIndicator->isEnabled());
+        m_cwKeyerAction->setChecked(m_cwxPanel && m_cwxPanel->isVisible());
+    }
+#ifdef AETHER_ASR_ENABLED
+    if (m_copyAssistAction) {
+        const bool copyVisible = m_copyAssistApplet
+            && m_copyAssistApplet->isCopyAssistVisible();
+        m_copyAssistAction->setEnabled(
+            m_asrIndicator && (m_asrIndicator->isEnabled() || copyVisible));
+        m_copyAssistAction->setChecked(copyVisible);
+    }
+#endif
+
+    if (m_swrScanAction) {
+        m_swrScanAction->setEnabled(txReady);
+        m_swrScanAction->setToolTip(txReady ? QString()
+            : tr("Requires an idle, TX-capable radio with this client holding "
+                 "the interlock"));
+    }
+
+    // Every disabling condition names itself. A greyed control with no stated
+    // reason reads as broken (#5510), and Pre-tune now has five of them.
+    if (m_preTuneAction) {
+        m_preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
+            && hasTxApplet);
+        m_preTuneAction->setToolTip(
+            !caps.hasTunerMemories
+                ? tr("ATU memory controls are unavailable for this radio")
+            : tgxlOperate
+                ? tr("Disabled — TGXL is in OPERATE mode")
+            : !hasTxApplet
+                ? tr("The transmit applet is unavailable in this build")
+            : !tx.memoriesEnabled()
+                ? tr("Enable MEM before running the pre-tune sweep")
+            : !txReady
+                ? tr("Requires an idle, TX-capable radio with this client "
+                     "holding the interlock")
+            : QString());
+    }
+    if (m_clearAtuAction) {
+        m_clearAtuAction->setEnabled(connected && memories && hasTxApplet);
+        m_clearAtuAction->setToolTip(
+            !caps.hasTunerMemories
+                ? tr("ATU memory controls are unavailable for this radio")
+            : tgxlOperate
+                ? tr("Disabled — TGXL is in OPERATE mode")
+            : !hasTxApplet
+                ? tr("The transmit applet is unavailable in this build")
+            : !connected
+                ? tr("Connect to a radio first")
+            : QString());
+    }
+
+    if (m_gpsDashboardAction) {
+        m_gpsDashboardAction->setVisible(!connected
+            || (caps.hasGpsLocation && m_radioModel.hasGpsHardware()));
+    }
+}
 
 void MainWindow::updateKeyerAvailability()
 {

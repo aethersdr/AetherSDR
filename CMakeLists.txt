@@ -1081,6 +1081,7 @@ set(GUI_SOURCES
     src/gui/SliceColorManager.cpp
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
+    src/gui/VfoDisplayDefaults.cpp
     src/gui/SmartMtrWidget.cpp
     src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
