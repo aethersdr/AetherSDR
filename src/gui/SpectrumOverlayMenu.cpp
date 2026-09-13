@@ -758,7 +758,14 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_autoRfGainCheck = new QCheckBox(QStringLiteral("Auto"));
     m_autoRfGainCheck->setObjectName(QStringLiteral("antennaAutoRfGainCheck"));
     m_autoRfGainCheck->setAccessibleName(QStringLiteral("Automatic RF gain"));
-    m_autoRfGainCheck->setStyleSheet(kLabelStyle);
+    // NO STYLESHEET HERE, deliberately. kLabelStyle selects `QLabel`, and a
+    // QCheckBox is not one -- the rule that used to sit here matched nothing
+    // and styled nothing, while still counting against the hardcoded-colour
+    // ratchet, which tracks setStyleSheet CALL SITES rather than colours.
+    // Making this box match the labels beside it needs either a new call site
+    // (which the ratchet refuses) or a rule on an ancestor -- and the ancestors
+    // here are scoped `QWidget#name` on purpose, for the reason
+    // applyTransparentStyle documents. Left to the theme.
     m_autoRfGainCheck->setToolTip(
         "Automatic RF Gain — reduces gain when the radio's converter clips.\n"
         "The slider becomes the CEILING: this can only take gain away, never add.\n"
