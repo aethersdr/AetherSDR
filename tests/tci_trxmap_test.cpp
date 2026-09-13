@@ -166,6 +166,17 @@ int main()
                "#5193: a cached route onto a claimed slice is not promoted");
     }
 
+    // The requester's OWN slice holds TX and a second client shares that
+    // receiver: the flag must not turn the single-slice "request a distinct
+    // TX slice" contract into an echo.
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> sharedOwnTx { { 0, true, true }, { 1, false, false } };
+        const auto decision = routing.resolveVfoB(0, sharedOwnTx);
+        expect(decision.action == Action::Create,
+               "#5193: a shared receiver on the requester's own TX slice still requests a distinct slice");
+    }
+
     // Flag ignored where it must be: an endpoint list without requester
     // knowledge (all flags false) behaves exactly as before.
     {
