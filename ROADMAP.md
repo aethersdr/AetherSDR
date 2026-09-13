@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.9.2
+## Current cycle: post-v26.9.3
 
 ### In flight
 
@@ -17,15 +17,20 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   woven through `RadioModel`. FlexBackend owns the Flex wire objects
   and threads, and the Panadapter / Slice / Meter / Transmit / Amp / Tuner
   status+command paths decode behind the seam (RFC steps 2.1–2.4). The seam
-  now carries **four** backends — `FlexBackend`, `HL2Backend`, `IcomCIV`, and
-  the synthetic `SimBackend` — which is what took it from a design to a proven
-  interface. Bringing a third vendor up on it in v26.8.2 was also the seam's
+  now carries **six** backends — `FlexBackend`, `HL2Backend`, `IcomCIV`,
+  `AnanBackend`, `RtlSdrBackend`, and the synthetic `SimBackend` — which is what
+  took it from a design to a proven interface. Bringing a third vendor up on it in v26.8.2 was also the seam's
   best audit to date: it surfaced a meter path that ignored its own unit,
   receive-DSP controls with no verb behind them, and a capability conflating
-  "the host modulates" with "TX audio leaves through the seam". Remaining: the
-  versioned protocol (RFC step 3+) that lets a headless `aetherd` and thin UI
-  clients split apart; UI code still consumes models directly, and that remains
-  correct until it lands.
+  "the host modulates" with "TX audio leaves through the seam". The versioned protocol (RFC step 3+) has
+  since landed in increments: v26.9.3 added **Stage 3** capability-qualified
+  local receive control (mode, filter, audio gain and mute, panadapter center
+  and bandwidth) with bounded read-only telemetry, and opened **Stage 4** with
+  an engine-local `TxCoordinator` for primary desktop transmit intent. The
+  daemon stays observe-only unless `--allow-local-control` is passed. Remaining:
+  the multi-client TX arbiter and daemon transmit grants, per-client
+  propagation, and a replacement thin UI client — UI code still consumes models
+  directly, and that remains correct until that client exists.
 - **Icom networked radios — early** — `IcomCIV` speaks CI-V inside the RS-BA1
   UDP transport, brought up in v26.8.2 against a live **IC-705** (RX, scope,
   transmit, and FT8 both decoding and spotting on PSK Reporter) and an
@@ -48,6 +53,24 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   automation verb making the modulation sources assertable without parsing Radio
   Health text, and the once-a-second FT8 transmit dropout still under
   investigation.
+- **ANAN-G2 — experimental, receive-only** — openHPSDR Protocol 2 discovery
+  with a single receive path, spectrum and audio, live tuning and zoom, arrived
+  in v26.9.2. v26.9.3 removed the session rebuild behind a zoom change — `p2app`
+  services DDC-Specific packets in a continuous loop and its "something changed"
+  hook is empty, so a rate change is just a resend — and taught the wire layer
+  multi-DDC encode with per-sender-port demux, because the DDC I&Q packet
+  carries no index field. DDC0 edge droop is compensated from an in-app
+  calibration. The codec is multi-DDC capable but `AnanBackend` still drives
+  one; remaining is the `AnanRxDsp` fan-out, then transmit.
+- **RTL-SDR — experimental, receive-only** — `librtlsdr` discovery with one
+  panadapter and one host-demodulated slice (AM, FM, SSB, CW) on builds carrying
+  the libraries, from v26.9.2. v26.9.3 added a bounded receiver lifecycle
+  foundation and device-identity persistence, plus a `SharedCapturePolicy` that
+  requires every receiver's complete guarded passband to fit the shared capture
+  before a tune, filter, mode or rate change is admitted. That policy is written
+  and tested but not yet wired to a live backend. Remaining: selectable sharp
+  passband filtering, and the USB/DSP/audio/viewport integration that turns the
+  policy into real multi-receiver capture.
 - **Workspace canvas — experimental** — RFC #4887 landed complete in v26.8.3,
   all seven phases: pans and applets as freely placed, resizable, layered items
   on a canvas that can span several top-level windows, with named workspaces,
@@ -163,9 +186,96 @@ Substantial features requested on the
 
 ### Recently shipped
 
-Highlights from the last 30 days — full list in
+Highlights from recent releases — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **A Tools-first menu bar** — the top level becomes
+  `File · Settings · Profiles · Tools · View · Help`, collecting the operating
+  tools that were scattered across File, Settings, View and Help under one
+  **Tools** menu placed ahead of **View**, because operators reach for them more
+  often than for display settings. Existing actions and handlers are reused, so
+  shortcuts and lifecycle behavior are unchanged and only discoverability moves.
+  RFC #5570 (v26.9.3).
+- **Clock-aligned waterfall time markers** — thin UTC-labelled lines at 15 s to
+  15 minute intervals, snapped to clock boundaries and pinned to the signal rows
+  they were captured with, so they stay correct through scrolling, pause, resize
+  and a waterfall rate change. Off by default, persisted per panadapter slot
+  (v26.9.3).
+- **An APRS WIDE1-1 fill-in digipeater** — an AetherModem tab that substitutes
+  MYCALL with the H bit on the first matching unused hop. It requires the shared
+  1200-baud profile, a valid callsign and explicit per-session arming, and
+  deliberately never restores arming from settings; wide-area WIDEn-N
+  decrementing is still Phase 2 (v26.9.3).
+- **Weather radar and night lights on PSK Reporter** — NOAA radar with playback
+  and the NASA city-lights basemap, both behind retry handling so a transient
+  tile failure no longer leaves the layer blank. A dark map style and brightness
+  controls join them, and the controls move into a left sidebar (v26.9.3).
+- **Web-888 as its own receiver family** — the KiwiSDR receive path now
+  distinguishes Web-888, replaying its waterfall setup once the bare `wf_setup`
+  marker is fully processed and invalidating the cached view so an unchanged
+  zoom is actually resent. Saved receivers keep their family; legacy entries
+  default to KiwiSDR (v26.9.3).
+- **The Runtime Monitor Overview** — CPU Total, Max Thread, resident memory and
+  GUI Tick Lag as cards and charts over 1 min to 1 h. CPU is whole-process
+  cumulative time normalized by core count, so work from threads that start and
+  exit between samples is not lost (v26.9.3).
+- **aetherd gains control, not just observation** — Stage 3 adds
+  capability-qualified local receive methods (mode, filter, audio gain and mute,
+  panadapter center and bandwidth) with bounded read-only telemetry, and Stage 4
+  adds an engine-local `TxCoordinator` for primary desktop transmit intent. The
+  daemon stays observe-only unless `--allow-local-control` is passed, and no
+  transmit grants exist yet (v26.9.3).
+- **The `IRadioBackend` threading and lifetime contract is pinned by tests** —
+  and writing those tests exposed a rule-5 gap that the same change closes.
+  Backends now announce capability revisions, family verbs are gated on the
+  declared namespace, and the capability-bool population is frozen in CI so the
+  seam cannot quietly widen (v26.9.3).
+- **ANAN-G2 stops rebuilding the session to change zoom** — `p2app` shows the
+  radio services DDC-Specific packets in a continuous loop and its "something
+  changed" hook is empty, so a rate change is just a resend. One scroll-wheel
+  notch cost a mute, stop, 2000 ms settle and a 6000 ms connect window before
+  this. The wire layer also gained multi-DDC encode and per-port demux (v26.9.3).
+- **Concurrent TCI DAX IQ skimming** — four independent DAX IQ subscriptions let
+  compatible Flex setups feed several CW skimmers through one TCI server.
+  Receivers on one panadapter share its IQ stream, so four independent band
+  spectra still need four panadapters (v26.9.2).
+- **Experimental ANAN-G2 and RTL-SDR reception** — openHPSDR Protocol 2
+  discovery with a single receive path for the G2, and a single slice and
+  panadapter with host demodulation for RTL-SDR dongles. Both are receive-only
+  and neither is a supported family (v26.9.2).
+- **The SPE floating front panel** — a live amplifier LCD mirror with guarded
+  front-panel keys, alongside TelePost LP-100A wattmeter readings over local
+  serial or a serial-to-network proxy (v26.9.2).
+- **Icom identifies itself over the wire** — model identification now comes from
+  CI-V rather than an editable network nickname, with optional wake on connect
+  behind model-specific profiles for the IC-705, IC-7300MK2 and IC-9700. Wake
+  defaults off (v26.9.2).
+- **A broad IC-7300MK2 control cleanup** — TX bandwidth encoding, the 6–48 WPM
+  CW range, 5 Hz CW pitch steps, squelch that stays usable in CW and data modes,
+  and refusal rather than silent substitution when a control is unsupported.
+  Model-specific mappings stay separate so no MK2 behavior is imposed on other
+  Icom radios (v26.9.2).
+- **The KiwiSDR directory moves to a CDN mirror** — the public-receiver browser
+  reads from the AetherSDR mirror, and stale directory data is advisory so
+  operators keep browsing receivers that are still reachable (v26.9.2).
+- **Green Heron Everyware antenna control** — a native applet for compatible
+  antenna switches and rotators (v26.9.1).
+- **A globe projection for PSK Reporter** — operators can switch from the flat
+  map to a global view of received reports (v26.9.1).
+- **System Info Threads and Logs tabs** — runtime diagnosis moves inside the
+  app instead of requiring external tooling (v26.9.1).
+- **Radio-authoritative Icom memories** — read-only IC-9700 radio memory,
+  model-gated controls and telemetry, and safer reconnect and TX lifecycle
+  behavior, with DTCS and multi-radio NAT support (v26.9.1).
+- **Evidence-backed Icom capability profiles** — IC-705, IC-7300MK2 and IC-9700
+  behavior is described by independently attested facets instead of scattered
+  address checks, so an unknown or unprofiled radio hides unsupported controls
+  rather than borrowing another model's commands or calibration (v26.8.4).
+- **Real Icom RX filters, twin PBT and TX cuts** — read from the radio instead
+  of assumed (v26.8.4).
+- **Client-timed Hermes-Lite 2 CW** — host-scheduled key edges drive Protocol 1
+  CW safely, and client-owned CW operating state returns after a restart
+  (v26.8.4).
 - **The workspace canvas** — pans and applets become freely placed, resizable,
   layered items on a canvas that can span several top-level windows, with named
   workspaces, full-recall switching, radio-profile bindings and an Edit Layout

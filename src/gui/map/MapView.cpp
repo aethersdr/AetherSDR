@@ -164,6 +164,16 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
         m_map->geoView()->setViewportUpdateMode(
             QGraphicsView::FullViewportUpdate);
         m_openGlViewport = openGlViewport;
+    } else {
+        // Raster keeps QGraphicsView's default MinimalViewportUpdate, and that
+        // is deliberately NOT the SmartViewportUpdate that
+        // fallBackToRasterViewport() installs. That path is undoing the
+        // FullViewportUpdate set just above after an OpenGL viewport failed to
+        // come up, so Smart is a correction there, not a tuned optimum. A
+        // viewport that was never Full has nothing to correct, and Minimal is
+        // what every other ViewportMode::Raster user — the GPS dialog, and
+        // macOS GPU-spectrum builds via MapDisplayWidget's
+        // flatMapViewportMode() — has always run with.
     }
     layout->addWidget(m_map);
 
