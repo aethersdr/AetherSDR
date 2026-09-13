@@ -1,8 +1,56 @@
 #pragma once
 
+#include "WsjtxWireHelpers.h"
+
+#include <QDataStream>
+#include <QString>
 #include <QtGlobal>
 
 namespace AetherSDR {
+
+// The Status fields between Mode and Tx DF: DX Call, Report, Tx Mode,
+// Tx Enabled, Transmitting, Decoding, Rx DF, Tx DF (#4526 RFC review item 1 —
+// pulled out of WsjtxClient::parseStatus() specifically so the field ORDER
+// is covered by a socket-free unit test, not just exercised manually. Getting
+// this wrong — e.g. skipping straight from Mode to Tx Enabled without
+// consuming DX Call/Report/Tx Mode first — fails silently: every later field
+// reads garbage, hasOffsets ends up false, and resolveWsjtxFreq() quietly
+// falls back to the dial. That's a green line sitting exactly on the dial
+// with no error anywhere, which is why the parsing order itself needs a
+// test, not just the addition math below).
+struct WsjtxStatusBody {
+    bool    hasOffsets{false};
+    bool    transmitting{false};
+    quint32 rxDfHz{0};
+    quint32 txDfHz{0};
+};
+
+// Everything after Tx DF (DE call/grid, Tx Watchdog, Sub-mode, ...) is not
+// needed here and is left unread — the caller stops consuming the stream
+// once this returns, exactly as WsjtxClient::parseStatus() always has.
+inline WsjtxStatusBody parseWsjtxStatusBody(QDataStream& ds)
+{
+    WsjtxStatusBody body;
+    QString dxCall, report, txMode;
+    bool txEnabled = false;
+    bool decoding = false;
+    const bool ok =
+        wsjtxReadQString(ds, dxCall) &&
+        wsjtxReadQString(ds, report) &&
+        wsjtxReadQString(ds, txMode) &&
+        wsjtxReadBool(ds, txEnabled) &&
+        wsjtxReadBool(ds, body.transmitting) &&
+        wsjtxReadBool(ds, decoding);
+
+    if (ok && !ds.atEnd()) {
+        quint32 rxDf = 0, txDf = 0;
+        ds >> rxDf >> txDf;
+        body.rxDfHz = rxDf;
+        body.txDfHz = txDf;
+        body.hasOffsets = true;
+    }
+    return body;
+}
 
 // Resolves a WSJT-X Status message's Rx/Tx frequencies from the dial
 // frequency plus its audio offsets (#4526).

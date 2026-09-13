@@ -1569,26 +1569,13 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
     layout->addLayout(filterRow);
 
-    // ── Panadapter overlay (#4526) ──────────────────────────────────────
-    // Decoded-station markers above already exist via the Spot Filter row
-    // and SpotHub's normal spot rendering; this is the separate, persistent
-    // Rx/Tx frequency marker feature. Kept in this tab next to the address/
-    // port fields it depends on rather than a new Digital Modes panel, per
-    // the #4526 triage — a maintainer call on whether that split is worth a
-    // second dialog, not a decision to make unilaterally here.
-    auto* overlayRow = new QHBoxLayout;
-    m_wsjtxShowFreqOverlay = new QCheckBox("Show Rx/Tx frequency on panadapter and waterfall");
-    m_wsjtxShowFreqOverlay->setChecked(
-        s.value("WsjtxShowFreqOverlay", "False").toString() == "True");
-    ThemeManager::instance().applyStyleSheet(m_wsjtxShowFreqOverlay, cbStyle);
-    connect(m_wsjtxShowFreqOverlay, &QCheckBox::toggled, this, [this](bool on) {
-        auto& s = AppSettings::instance();
-        s.setValue("WsjtxShowFreqOverlay", on ? "True" : "False");
-        s.save();
-        emit settingsChanged();
-    });
-    overlayRow->addWidget(m_wsjtxShowFreqOverlay, 1);
-    layout->addLayout(overlayRow);
+    // Note: the Rx/Tx frequency overlay's on/off toggle (#4526) does NOT live
+    // here. It moved to each panadapter's own right-click menu ("Show WSJT-X
+    // Rx/Tx Frequency", next to "Show Tune Guides") and is per-pan rather
+    // than a single dialog-wide switch — see SpectrumWidget::setShowWsjtxFreq().
+    // "Post decoded stations as spots" above is unrelated and stays here,
+    // since it's about the WSJT-X listener's spot-posting behavior, not
+    // panadapter display.
 
     // ── Console output ──────────────────────────────────────────────────
     // Decodes label + spot lifetime slider

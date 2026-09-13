@@ -56,6 +56,16 @@ signals:
     // list further. Previously emitted with no consumer connected — see
     // MainWindow_Spots.cpp for the wiring this enables.
     void statusReceived(const WsjtxStatus& status);
+    // Close (type 6): this instance is exiting cleanly. Lets a consumer drop
+    // its marker immediately instead of waiting out an activity-timeout
+    // sweep (RFC #4526 review item 3).
+    void instanceClosed(const QString& id);
+    // Heartbeat (type 0, ~15s, no frequency data): evidence this instance is
+    // still alive even during a quiet spell in Status traffic — e.g. WSJT-X
+    // decoding is running but Monitor is off, so nothing new to report.
+    // Refreshes an activity timeout without asserting a frequency (RFC #4526
+    // review item 4).
+    void instanceHeartbeat(const QString& id);
 
 private slots:
     void onReadyRead();
@@ -63,11 +73,8 @@ private slots:
 private:
     static constexpr quint32 WsjtxMagic = 0xadbccbda;
 
-    // QDataStream helpers — parse big-endian Qt-serialized types
-    static bool readQString(QDataStream& ds, QString& out);
-    static bool readBool(QDataStream& ds, bool& out);
-
     void parseMessage(const QByteArray& data);
+    void parseHeartbeat(QDataStream& ds);
     void parseStatus(QDataStream& ds);
     void parseDecode(QDataStream& ds);
     void parseClose(QDataStream& ds);
@@ -87,3 +94,12 @@ private:
 };
 
 } // namespace AetherSDR
+
+// WsjtxClient lives on the SpotClients worker thread (#1929); statusReceived()
+// crosses to the GUI thread as a queued connection, so WsjtxStatus needs a
+// registered metatype or QObject::connect fails at RUNTIME with an
+// unregistered-type warning and the signal silently never arrives — no
+// compile error, no crash, just a marker that never appears (RFC #4526
+// review). Declared here, at file scope, matching the house pattern
+// (RecordStartDecision in QsoRecorder.h, etc.).
+Q_DECLARE_METATYPE(AetherSDR::WsjtxStatus)
