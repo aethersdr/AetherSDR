@@ -42,7 +42,7 @@ RelayDial::RelayDial(const QString& label, QWidget* parent)
     : QWidget(parent)
     , m_label(label)
 {
-    setMinimumSize(qRound(m_diameter * 0.7), qRound(m_diameter * 0.7));
+
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     setFocusPolicy(Qt::TabFocus);
     setToolTip(tr("Scroll or use Up/Down keys to adjust relay position"));
@@ -86,9 +86,16 @@ void RelayDial::setPreferredDiameter(int px)
     const int clamped = qBound(36, px, 260);
     if (m_diameter == clamped) return;
     m_diameter = clamped;
-    setMinimumSize(qRound(clamped * 0.7), qRound(clamped * 0.7));
     updateGeometry();
     update();
+}
+
+QSize RelayDial::minimumSizeHint() const
+{
+    // Fixed, not a fraction of the current diameter — see PanelKey's note.
+    // A minimum that follows the current size makes the panel's own minimum
+    // ratchet up every time it is enlarged.
+    return QSize(28, 28);
 }
 
 void RelayDial::setScrollEnabled(bool on)
@@ -197,6 +204,31 @@ void RelayDial::paintEvent(QPaintEvent*)
     p.drawText(QRectF(disc.left(), centre.y() + radius * 0.34,
                       disc.width(), fm.height()),
                Qt::AlignHCenter | Qt::AlignVCenter, QString::number(m_value));
+}
+
+// ── PanelKey ────────────────────────────────────────────────────────────────
+
+PanelKey::PanelKey(const QString& text, QWidget* parent)
+    : QPushButton(text, parent)
+{
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+}
+
+void PanelKey::setTargetSize(const QSize& size)
+{
+    if (m_target == size) return;
+    m_target = size;
+    updateGeometry();
+}
+
+QSize PanelKey::minimumSizeHint() const
+{
+    // Deliberately not derived from the target, and deliberately smaller than
+    // any caption needs: this figure becomes the panel's own minimum width,
+    // and anything that tracks the current size makes that minimum ratchet
+    // upward. A key squeezed this far is illegible, but the panel reaching
+    // that size at all means the scale has already bottomed out.
+    return QSize(24, 14);
 }
 
 // ── TgxlPortRow ─────────────────────────────────────────────────────────────

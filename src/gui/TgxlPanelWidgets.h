@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QPushButton>
 #include <QWidget>
 #include <QSize>
 #include <QString>
@@ -41,6 +42,7 @@ public:
     int  value() const { return m_value; }
 
     QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
     // Preferred diameter, so the dial grows with the panel around it rather
     // than sitting at one size in a window twice its natural height. The
     // painting is already radius-relative, so this is all the dial needs.
@@ -71,6 +73,34 @@ private:
     int  m_angleAccum{0};
     QTimer m_accessibilityTimer;
     int  m_lastAccessibleValue{std::numeric_limits<int>::min()};
+};
+
+// ── PanelKey ────────────────────────────────────────────────────────────────
+//
+// A control-row key (STBY / BYP / TUNE). Its size comes from the panel's
+// scale rather than from its caption, so the three keys are identical whatever
+// they say.
+//
+// It reports a small, scale-independent minimum. Giving a key a fixed size
+// instead makes the layout's minimum track whatever size the key currently
+// has, and that ratchets: the panel's own minimum grows with it, so it can be
+// made larger and then never made small again. Observed before this existed —
+// an 802px panel reported a 710px minimum, which then reported 631px, each
+// resize down blocked by a floor the previous size had raised.
+class PanelKey : public QPushButton {
+    Q_OBJECT
+
+public:
+    explicit PanelKey(const QString& text, QWidget* parent = nullptr);
+
+    // The size the panel's scale has chosen for this key.
+    void setTargetSize(const QSize& size);
+
+    QSize sizeHint() const override { return m_target; }
+    QSize minimumSizeHint() const override;
+
+private:
+    QSize m_target{0, 0};
 };
 
 // ── TgxlPortRow ─────────────────────────────────────────────────────────────

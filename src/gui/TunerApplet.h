@@ -14,6 +14,7 @@ namespace AetherSDR {
 class TunerModel;
 class MeterModel;
 struct TunerPortInfo;
+class PanelKey;
 class RelayDial;
 class TgxlPortRow;
 
@@ -81,6 +82,12 @@ public slots:
     // Feed forward power (W) and SWR from MeterModel::txMetersChanged.
     void updateMeters(float fwdPower, float swr);
 
+    // The floor the panel may be shrunk to. Derived from the minimum scale,
+    // not from the children's current sizes. Public because QWidget declares
+    // it so — narrowing an override's access hides it from every caller that
+    // works through the base class, the layout included.
+    QSize minimumSizeHint() const override;
+
 protected:
     // Keeps the alert overlay covering the applet as it resizes.
     void resizeEvent(QResizeEvent* event) override;
@@ -95,10 +102,11 @@ private:
     // Re-applies every presentation-dependent metric and swaps which control
     // group is shown, for the current m_floating.
     void applyDensity();
+    void applyDensityAtScale(qreal scale);
     // One uniform scale for every metric, from how much room the panel has.
     qreal contentScale() const;
-    // Refreshes m_naturalContentHeight from the laid-out column.
-    void measureNaturalHeight();
+    // Measures what the column costs at scale 1.0. Runs once.
+    void calibrateNaturalHeight();
     // TUNE exists once per presentation, so tuning feedback (TUNING… / the
     // settled SWR / the restored idle style) has to reach both buttons. Every
     // site that touches a TUNE button goes through here so the two cannot
@@ -199,9 +207,9 @@ private:
     RelayDial*   m_c1Dial{nullptr};
     RelayDial*   m_lDial{nullptr};
     RelayDial*   m_c2Dial{nullptr};
-    QPushButton* m_stbyBtn{nullptr};
-    QPushButton* m_bypBtn{nullptr};
-    QPushButton* m_panelTuneBtn{nullptr};
+    PanelKey*    m_stbyBtn{nullptr};
+    PanelKey*    m_bypBtn{nullptr};
+    PanelKey*    m_panelTuneBtn{nullptr};
     QHBoxLayout* m_keysLayout{nullptr};
     // The widest caption's natural width at scale 1.0, measured once before
     // any key has been given a fixed size. Deriving it from the laid-out

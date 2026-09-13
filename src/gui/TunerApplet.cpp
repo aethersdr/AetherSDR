@@ -30,7 +30,18 @@ namespace {
 // one painted face; this panel is a widget tree, so the scale is applied to
 // each metric instead of to a QPainter. The limiting dimension wins, so the
 // panel keeps its proportions instead of stretching.
-constexpr qreal kDesignWidth  = 380.0;
+// What the widest row costs at scale 1.0: three dials at 46 plus three keys
+// at 16:9 off 95% of that, their spacings, and the column's side margins.
+//
+// Measured rather than assumed would be better, and is what the height term
+// below does — but width cannot be measured the same way. The height budget
+// is stable because every contribution to it scales; the width's does not,
+// so dividing a measured width by the scale leaves a constant term behind
+// that grows as the scale falls, and the next scale reads larger, and it
+// runs away. Observed: a 686px panel drew its contents half again larger
+// than an 802px one. So this is a constant, and it has to be kept in step
+// with the metrics above it.
+constexpr qreal kDesignWidth  = 420.0;
 // Only a first guess at the contents' height: applyDensity replaces it with
 // the measured value as soon as there is a laid-out column to measure.
 constexpr qreal kDesignHeight = 250.0;
@@ -46,12 +57,12 @@ constexpr int kBottomGap = 8;
 // set by the control row's split with the dials, so the aspect is applied as
 // a cap on their height: the row is as tall as the dials, and without it the
 // keys stretch to match and become columns.
-// The keys stand as tall as the dials beside them, just short of matching.
-// This supersedes the 16:9 the keys were first given: the two cannot both
-// hold. A key this tall would be 164px wide at 16:9 on an 800px panel, and
-// three of those plus the dials overflow the control row by ~50px at every
-// panel size. Height is what was asked for, so height is what is honoured;
-// the width stays on the seed below and the keys come out nearer 1.2:1.
+// The keys stand as tall as the dials beside them, just short of matching,
+// and keep their 16:9 shape — so the height is what is chosen and the width
+// follows from it. That makes a key considerably wider than its caption
+// needs, and three of them beside the dials set what the control row costs;
+// kDesignWidth is measured from that rather than guessed, or the keys are
+// clipped on a narrow panel instead of merely cramped.
 constexpr qreal kKeyHeightOfDial = 0.95;
 constexpr qreal kKeyAspect = 16.0 / 9.0;
 constexpr int kKeyFontDesignPx = 13;
@@ -177,10 +188,22 @@ void TunerApplet::buildUI()
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
+    // Same reason as the column inside it — see m_vbox below. Both have to
+    // stand down, or the body's own minimum reaches the applet through this
+    // one and the floor ratchets anyway.
+    outer->setSizeConstraint(QLayout::SetNoConstraint);
 
     // Body with margins
     auto* body = new QWidget;
     m_vbox = new QVBoxLayout(body);
+    // The column must not dictate how small the panel can be. Its minimum is
+    // the sum of children the scale has just sized, so letting it constrain
+    // the widget makes the floor rise with the contents: enlarge the panel
+    // once and it can never be made small again. minimumSizeHint() answers
+    // that question instead, from the minimum scale rather than the current
+    // one. The contents may overflow for the single pass between a resize and
+    // the scale that resize triggers.
+    m_vbox->setSizeConstraint(QLayout::SetNoConstraint);
     auto* vbox = m_vbox;
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
@@ -383,7 +406,8 @@ void TunerApplet::buildUI()
     // TUNE key: starts a tune, or stops the one already running. Which it
     // does follows m_tuning, the same flag that decides the caption, so the
     // key can never say STOP and start a tune.
-    for (auto* tune : {m_tuneBtn, m_panelTuneBtn}) {
+    for (QPushButton* tune : {static_cast<QPushButton*>(m_tuneBtn),
+                              static_cast<QPushButton*>(m_panelTuneBtn)}) {
         connect(tune, &QPushButton::clicked, this, [this]() {
             if (!m_model) return;
             if (m_tuning) {
@@ -447,10 +471,7 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
     auto* keys = m_keysLayout;
     keys->setSpacing(4);
     auto makeKey = [this](const QString& text, const QString& tip) {
-        auto* btn = new QPushButton(text, m_panelControls);
-        // Wide as the column allows; the height follows from kKeyAspect once
-        // the layout has settled that width (see applyKeyAspect).
-        btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        auto* btn = new PanelKey(text, m_panelControls);
         btn->setToolTip(tip);
         btn->setAccessibleName(text);
         btn->setAccessibleDescription(tip);
@@ -463,11 +484,13 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
         theme.applyStyleSheet(key, kPanelKeyIdleStyle);
     }
     theme.applyStyleSheet(m_panelTuneBtn, kTuneIdleStyle);
-    // Centred, because a key capped shorter than the row would otherwise sit
-    // against its top edge rather than level with the dials.
-    keys->addWidget(m_stbyBtn, 0, Qt::AlignVCenter);
-    keys->addWidget(m_bypBtn, 0, Qt::AlignVCenter);
-    keys->addWidget(m_panelTuneBtn, 0, Qt::AlignVCenter);
+    // Centred in both axes: the layout then takes the key's own size hint —
+    // which the scale sets — instead of stretching it to fill the cell, and a
+    // key shorter than the row sits level with the dials rather than against
+    // the row's top edge.
+    keys->addWidget(m_stbyBtn, 0, Qt::AlignCenter);
+    keys->addWidget(m_bypBtn, 0, Qt::AlignCenter);
+    keys->addWidget(m_panelTuneBtn, 0, Qt::AlignCenter);
     // Dials left, keys right, the slack between them. Every widget in this
     // row is sized from the scale rather than by stretching, so the row needs
     // somewhere to put spare width that is not inside either group.
@@ -521,6 +544,11 @@ void TunerApplet::setFloating(bool floating)
 {
     if (floating == m_floating) return;
     m_floating = floating;
+    // Calibrate before the first scaled layout, so the divisor comes from a
+    // panel at scale 1.0 rather than from one the scale has already sized.
+    if (m_floating) {
+        calibrateNaturalHeight();
+    }
     applyDensity();
 }
 
@@ -539,19 +567,24 @@ qreal TunerApplet::contentScale() const
     // height becomes limiting the arithmetic lands the contents at exactly
     // height - kBottomGap, so the pad is at its minimum rather than still
     // holding space that the contents just gave up.
-    const qreal natural = m_naturalContentHeight > 1.0 ? m_naturalContentHeight
-                                                       : kDesignHeight;
+    const qreal naturalH = m_naturalContentHeight > 1.0 ? m_naturalContentHeight
+                                                        : kDesignHeight;
     return qBound(kMinScale,
                   qMin(width() / kDesignWidth,
-                       (height() - kBottomGap) / natural),
+                       (height() - kBottomGap) / naturalH),
                   kMaxScale);
 }
 
 void TunerApplet::applyDensity()
 {
+    applyDensityAtScale(contentScale());
+}
+
+void TunerApplet::applyDensityAtScale(qreal scale)
+{
     auto& theme = AetherSDR::ThemeManager::instance();
     const bool f = m_floating;
-    const qreal s = contentScale();
+    const qreal s = scale;
     // A design-pixel metric at the current scale.
     auto px = [s](int base) { return qMax(1, qRound(base * s)); };
 
@@ -679,21 +712,23 @@ void TunerApplet::layOutAlertOverlay()
     m_alertOverlay->setGeometry(rect());
 }
 
-void TunerApplet::measureNaturalHeight()
+void TunerApplet::calibrateNaturalHeight()
 {
-    // What the contents occupy at scale 1.0, taken from the laid-out column
-    // rather than from its size hint — the hint under-reports by the margins
-    // the column adds around it, and a budget built on it lets the pad be
-    // squeezed past its minimum before the scale ever reacts.
+    // What the column costs at scale 1.0 — the figure every later scale is a
+    // multiple of.
     //
-    // Everything above the pad is vertically fixed, so whatever the pad is
-    // not occupying is exactly the contents. Dividing out the scale they were
-    // drawn at leaves the panel's natural height, whatever rows it has.
-    if (!m_floating || !m_bottomStretch) return;
-    if (m_appliedScale <= 0.0) return;
-    const qreal content = height() - m_bottomStretch->geometry().height();
+    // Measured ONCE, and never revised. Re-deriving it from a scaled layout
+    // feeds the scale back into its own input: rounding and the widgets' own
+    // minimums stop the contents being exactly proportional to the scale, the
+    // leftover lands in the divisor, and the next scale reads larger. It does
+    // not settle — dragging a panel out and back and out again grew its
+    // contents every round trip before this became a one-shot.
+    if (m_naturalContentHeight > 1.0 || !m_vbox) return;
+    applyDensityAtScale(1.0);
+    m_vbox->activate();
+    const qreal content = m_vbox->sizeHint().height() - kBottomGap;
     if (content > 1.0) {
-        m_naturalContentHeight = content / m_appliedScale;
+        m_naturalContentHeight = content;
     }
 }
 
@@ -704,22 +739,38 @@ void TunerApplet::applyKeySize(qreal scale)
     // All three keys are one size. The width grows from one seed — the widest
     // caption's natural width — so the narrowest caption gets the same box as
     // the widest rather than the box its own text happened to need.
-    const int w = qMax(1, qRound(m_keySeedWidth * scale));
-    // The height is tied to the dials rather than to that width, so the two
-    // control groups read as one row of peers at any panel size. Never taller
-    // than 16:9 would allow: that is the shape the keys fall back to if the
-    // dials are ever made large enough for the tie to make them square.
+    // The height is tied to the dials, so the two control groups read as one
+    // row of peers at any panel size, and the width follows it at kKeyAspect.
     const int dial = qMax(1, qRound(kDialDesignDiameter * scale));
-    const int h = qBound(1, qRound(dial * kKeyHeightOfDial),
-                         qMax(1, qRound(w / kKeyAspect * 2.0)));
+    const int h = qMax(1, qRound(dial * kKeyHeightOfDial));
+    // Never narrower than the widest caption needs: 16:9 off this height is
+    // roomy enough that the floor should never bind, but a caption that
+    // outgrew it would be clipped rather than wrapped.
+    const int w = qMax(qRound(h * kKeyAspect), qRound(m_keySeedWidth * scale));
     for (auto* btn : {m_stbyBtn, m_bypBtn, m_panelTuneBtn}) {
-        // Fixed in both axes: the keys are laid out with AlignVCenter so they
-        // sit level with the dials, and that makes the layout take their size
-        // hint rather than stretch them — a maximum alone would never bind.
-        if (btn->minimumSize() != QSize(w, h) || btn->maximumSize() != QSize(w, h)) {
-            btn->setFixedSize(w, h);
-        }
+        btn->setTargetSize(QSize(w, h));
     }
+}
+
+QSize TunerApplet::minimumSizeHint() const
+{
+    if (!m_floating) return QWidget::minimumSizeHint();
+
+    // The floor is what the panel needs at kMinScale, not what its children
+    // happen to need right now. Letting the layout answer this instead makes
+    // the floor follow the current scale, and that ratchets: every metric
+    // sized by the scale raises the minimum as the panel grows, so a panel
+    // enlarged once can never be made small again. Measured before this
+    // existed — an 802px panel reported a 576px floor, and asking it for
+    // 392px got 576px back.
+    //
+    // The layout's own minimum may briefly exceed this and the contents
+    // overflow for that one pass; the resize that caused it then lowers the
+    // scale and they fit again.
+    const qreal natural = m_naturalContentHeight > 1.0 ? m_naturalContentHeight
+                                                       : kDesignHeight;
+    return QSize(qRound(kDesignWidth * kMinScale),
+                 qRound(natural * kMinScale) + kBottomGap);
 }
 
 void TunerApplet::resizeEvent(QResizeEvent* event)
@@ -735,7 +786,6 @@ void TunerApplet::resizeEvent(QResizeEvent* event)
         m_appliedScale = s;
         applyDensity();
     }
-    measureNaturalHeight();
 }
 
 void TunerApplet::applyAlertStyle()

@@ -303,24 +303,43 @@ void testScaling()
     constexpr int kSeed = 52;          // a representative widest-caption seed
     constexpr int kDialDesign = 46;    // the dial's design diameter
     constexpr qreal kKeyHeightOfDial = 0.95;
+    constexpr qreal kKeyAspect = 16.0 / 9.0;
     int previousWidth = 0;
     for (qreal scale : {0.8, 1.0, 1.45, 2.1}) {
-        const int w = qMax(1, qRound(kSeed * scale));
         const int dial = qMax(1, qRound(kDialDesign * scale));
+        // Height is chosen from the dial, width follows it at 16:9 — both
+        // rules hold at once, which they only can because the panel's design
+        // width budgets for keys this wide.
         const int h = qMax(1, qRound(dial * kKeyHeightOfDial));
+        const int w = qMax(qRound(h * kKeyAspect), qRound(kSeed * scale));
 
-        // The height is tied to the dial rather than to the key's own width,
-        // so the two control groups read as one row of peers at any size.
         const qreal ofDial = qreal(h) / dial;
         expect(qAbs(ofDial - kKeyHeightOfDial) < 0.02,
                QStringLiteral("a key at scale %1 is %2 of the dial's height")
                    .arg(scale).arg(ofDial, 0, 'f', 3));
-        expect(h < dial, QStringLiteral("a key stays shorter than the dial (scale %1)")
-                             .arg(scale));
+        const qreal aspect = qreal(w) / h;
+        expect(qAbs(aspect - kKeyAspect) < 0.06,
+               QStringLiteral("a key at scale %1 is %2x%3 (aspect %4)")
+                   .arg(scale).arg(w).arg(h).arg(aspect, 0, 'f', 3));
         expect(w > previousWidth,
                QStringLiteral("a key grows with the scale (%1 -> %2)")
                    .arg(previousWidth).arg(w));
         previousWidth = w;
+    }
+
+    // A PanelKey's minimum must not follow the size the scale gave it. When
+    // it did, the layout's minimum tracked the current scale and the panel's
+    // own floor ratcheted upward: an 802px panel reported a 710px floor and
+    // could never be made small again.
+    {
+        PanelKey key(QStringLiteral("STBY"));
+        key.setTargetSize(QSize(80, 45));
+        const QSize small = key.minimumSizeHint();
+        key.setTargetSize(QSize(240, 135));
+        expect(key.minimumSizeHint() == small,
+               QStringLiteral("a key's minimum ignores its target size"));
+        expect(key.sizeHint() == QSize(240, 135),
+               QStringLiteral("but its size hint follows it"));
     }
 
     RelayDial dial(QStringLiteral("C1"));
