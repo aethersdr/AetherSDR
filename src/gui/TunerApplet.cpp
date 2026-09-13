@@ -18,31 +18,51 @@ namespace AetherSDR {
 
 namespace {
 
+// The expanded panel's design size — the size at which every metric below is
+// its literal value. Actual metrics are that value times a single scale
+// derived from how much room the panel actually has, so growing the window
+// grows the contents rather than the padding around them.
+//
+// Same idea as CrossNeedleMeterWidget, which fits a fixed design canvas into
+// its widget and scales the painter onto it. That works because the meter is
+// one painted face; this panel is a widget tree, so the scale is applied to
+// each metric instead of to a QPainter. The limiting dimension wins, so the
+// panel keeps its proportions instead of stretching.
+constexpr qreal kDesignWidth  = 380.0;
+constexpr qreal kDesignHeight = 250.0;
+constexpr qreal kMinScale = 0.8;   // below this the type stops being legible
+constexpr qreal kMaxScale = 3.0;
+
+// The gap below the controls. Deliberately not scaled: it exists so they
+// clear the frame rather than sit against it, which is a constant few pixels
+// at any size.
+constexpr int kBottomGap = 8;
+
 // The three states TUNE cycles through visually. Kept as named templates
 // because both presentations' TUNE buttons wear them and the tuning handler
 // swaps between them in two places.
 constexpr const char* kTuneIdleStyle =
     "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-    "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
+    "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
     "QPushButton:hover { background: {{color.background.1}}; }";
 constexpr const char* kTuneBusyStyle =
     "QPushButton { background: #cc2222; border: 1px solid {{color.accent.danger}}; "
-    "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }";
+    "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }";
 
 // The expanded presentation's STBY / BYP keys: resting, and lit while the
 // tuner is in the state that key selects.
 constexpr const char* kPanelKeyIdleStyle =
     "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-    "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"
+    "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
     "QPushButton:hover { background: {{color.background.1}}; }";
 constexpr const char* kStandbyActiveStyle =
     "QPushButton { background: {{color.tgxl.key.standby.background}}; "
     "border: 1px solid {{color.tgxl.key.standby.foreground}}; border-radius: 3px; "
-    "color: {{color.tgxl.key.standby.foreground}}; font-size: 11px; font-weight: bold; }";
+    "color: {{color.tgxl.key.standby.foreground}}; font-weight: bold; }";
 constexpr const char* kBypassActiveStyle =
     "QPushButton { background: {{color.tgxl.key.bypass.background}}; "
     "border: 1px solid {{color.tgxl.key.bypass.foreground}}; border-radius: 3px; "
-    "color: {{color.tgxl.key.bypass.foreground}}; font-size: 11px; font-weight: bold; }";
+    "color: {{color.tgxl.key.bypass.foreground}}; font-weight: bold; }";
 
 }  // namespace
 
@@ -202,7 +222,10 @@ void TunerApplet::buildUI()
 
         m_bypassSpan = new QLabel(tr("BYP"), m_portLiveBox);
         m_bypassSpan->setAlignment(Qt::AlignCenter);
-        m_bypassSpan->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+        // Fills the height of the two strips beside it, which a box layout
+        // does for free — Expanding here would instead make the strip block
+        // compete with the bottom pad for slack and stretch both rows.
+        m_bypassSpan->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
         m_bypassSpan->setVisible(false);
         m_bypassSpan->setAccessibleName(tr("Tuner bypassed"));
         live->addWidget(m_bypassSpan);
@@ -216,6 +239,7 @@ void TunerApplet::buildUI()
         m_standbyBanner->setAccessibleName(tr("Tuner in standby"));
         area->addWidget(m_standbyBanner);
 
+        m_portRowsBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
         vbox->addWidget(m_portRowsBox);
     }
 
@@ -300,10 +324,11 @@ void TunerApplet::buildUI()
         vbox->addWidget(m_antContainer);
     }
 
-    // Absorbs the spare height of a tall window so the dial row keeps its
-    // natural size rather than stretching down the panel (SpeApplet uses the
-    // same device).
-    m_bottomStretch = new QSpacerItem(0, 0, QSizePolicy::Minimum, QSizePolicy::Fixed);
+    // One pad under the controls, absorbing whatever the scaling did not use.
+    // kBottomGap is its floor rather than a margin on the layout so there is a
+    // single thing deciding the space below the controls.
+    m_bottomStretch = new QSpacerItem(0, kBottomGap,
+                                      QSizePolicy::Minimum, QSizePolicy::Fixed);
     vbox->addSpacerItem(m_bottomStretch);
 
     updatePortRows();
@@ -443,13 +468,29 @@ void TunerApplet::setFloating(bool floating)
     applyDensity();
 }
 
+qreal TunerApplet::contentScale() const
+{
+    // Docked, the rail gives every tile the same width and a fixed height;
+    // scaling there would make one tile disagree with its neighbours.
+    if (!m_floating) return 1.0;
+    if (width() <= 0 || height() <= 0) return 1.0;
+    return qBound(kMinScale,
+                  qMin(width() / kDesignWidth, height() / kDesignHeight),
+                  kMaxScale);
+}
+
 void TunerApplet::applyDensity()
 {
     auto& theme = AetherSDR::ThemeManager::instance();
     const bool f = m_floating;
+    const qreal s = contentScale();
+    // A design-pixel metric at the current scale.
+    auto px = [s](int base) { return qMax(1, qRound(base * s)); };
 
-    m_vbox->setContentsMargins(f ? 12 : 4, f ? 10 : 2, f ? 12 : 4, f ? 10 : 2);
-    m_vbox->setSpacing(f ? 8 : 2);
+    // No bottom margin: m_bottomStretch owns the space under the controls.
+    m_vbox->setContentsMargins(f ? px(12) : 4, f ? px(10) : 2,
+                               f ? px(12) : 4, f ? 0 : 2);
+    m_vbox->setSpacing(f ? px(8) : 2);
 
     // Expanded fills the window it was given; docked stays the fixed-height
     // tile the rail stacks.
@@ -457,13 +498,22 @@ void TunerApplet::applyDensity()
                   f ? QSizePolicy::Preferred : QSizePolicy::Fixed);
 
     for (auto* lbl : {m_pwrLabel, m_swrLabel}) {
-        lbl->setFixedWidth(f ? 96 : 72);
-        theme.applyStyleSheet(lbl, f
-            ? "QLabel { color: {{color.text.primary}}; font-size: 14px; font-weight: bold; }"
-            : "QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }");
+        lbl->setFixedWidth(f ? px(96) : 72);
+        theme.applyStyleSheet(lbl, QStringLiteral(
+            "QLabel { color: {{color.text.primary}}; font-size: %1px; font-weight: bold; }")
+            .arg(f ? px(14) : 11));
     }
     for (auto* gauge : {m_fwdGauge, m_swrGauge}) {
-        gauge->setFixedHeight(f ? 34 : 24);
+        gauge->setFixedHeight(f ? px(34) : 24);
+        // The bar grows with the panel; without this its tick lettering would
+        // not, which is most of what "it just stretches" looks like.
+        static_cast<HGauge*>(gauge)->setMetricScale(f ? s : 1.0);
+    }
+
+    m_portA->setScale(f ? s : 1.0);
+    m_portB->setScale(f ? s : 1.0);
+    for (auto* dial : {m_c1Dial, m_lDial, m_c2Dial}) {
+        dial->setPreferredDiameter(px(76));
     }
 
     // The SWR bar carries its scale as a gradient across the empty track —
@@ -479,29 +529,46 @@ void TunerApplet::applyDensity()
     }
     static_cast<HGauge*>(m_swrGauge)->setTrackGradient(swrStops);
 
-    m_bottomStretch->changeSize(0, 0, QSizePolicy::Minimum,
-                                f ? QSizePolicy::Expanding : QSizePolicy::Fixed);
-
     applyAlertStyle();
-    theme.applyStyleSheet(m_bypassSpan,
+    theme.applyStyleSheet(m_bypassSpan, QStringLiteral(
         "QLabel { border: 2px solid {{color.accent.warning}}; border-radius: 3px; "
         "background: {{color.background.1}}; color: {{color.accent.warning}}; "
-        "padding: 0 6px; font-size: 12px; font-weight: bold; }");
-    theme.applyStyleSheet(m_standbyBanner,
+        "padding: 0 %1px; font-size: %2px; font-weight: bold; }")
+        .arg(px(6)).arg(px(12)));
+    theme.applyStyleSheet(m_standbyBanner, QStringLiteral(
         "QLabel { border: 2px solid {{color.tgxl.key.standby.foreground}}; "
         "border-radius: 3px; background: {{color.tgxl.key.standby.background}}; "
         "color: {{color.tgxl.key.standby.foreground}}; "
-        "letter-spacing: 2px; font-size: 20px; font-weight: bold; }");
+        "letter-spacing: 2px; font-size: %1px; font-weight: bold; }")
+        .arg(px(20)));
     // The banner stands in for both strips, so it claims their combined height
     // — otherwise the panel jumps every time the tuner enters standby.
     m_standbyBanner->setMinimumHeight(m_portA->sizeHint().height() * 2 + 2);
+
+    // Expanding only when popped out: docked, the rail already fixes the
+    // tile's height and there is no slack for a pad to take.
+    m_bottomStretch->changeSize(0, kBottomGap, QSizePolicy::Minimum,
+                                f ? QSizePolicy::Expanding : QSizePolicy::Fixed);
 
     m_portRowsBox->setVisible(f);
     m_panelControls->setVisible(f);
     m_dockedControls->setVisible(!f);
 
     for (auto* btn : {m_stbyBtn, m_bypBtn, m_panelTuneBtn}) {
-        btn->setMinimumHeight(f ? 34 : 0);
+        btn->setMinimumHeight(f ? px(34) : 0);
+        QFont keyFont = btn->font();
+        keyFont.setPixelSize(px(13));
+        btn->setFont(keyFont);
+    }
+    // The rail's own two keys keep the compact size they always had.
+    for (auto* btn : {m_tuneBtn, m_operateBtn}) {
+        QFont railFont = btn->font();
+        railFont.setPixelSize(10);
+        btn->setFont(railFont);
+    }
+    theme.applyStyleSheet(m_panelControls, QString());
+    if (auto* row = qobject_cast<QHBoxLayout*>(m_panelControls->layout())) {
+        row->setSpacing(px(6));
     }
 
     m_vbox->invalidate();
@@ -541,6 +608,15 @@ void TunerApplet::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     layOutAlertOverlay();
+
+    // Re-derive the metrics for the new size, but only when the scale has
+    // actually moved: a resize arrives for every pixel of a window drag and
+    // applyDensity re-applies a dozen style sheets.
+    const qreal s = contentScale();
+    if (!qFuzzyCompare(s, m_appliedScale)) {
+        m_appliedScale = s;
+        applyDensity();
+    }
 }
 
 void TunerApplet::applyAlertStyle()
@@ -795,17 +871,17 @@ void TunerApplet::syncFromModel()
     if (operate && !bypass) {
         m_operateBtn->setText("OPERATE");
         theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
+            "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
             "QPushButton:hover { background: #007040; }");
     } else if (operate && bypass) {
         m_operateBtn->setText("BYPASS");
         theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #8a6000; border: 1px solid #a07000; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
+            "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
             "QPushButton:hover { background: #9a7000; }");
     } else {
         m_operateBtn->setText("STANDBY");
         theme.applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
+            "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
             "QPushButton:hover { background: {{color.background.1}}; }");
     }
 

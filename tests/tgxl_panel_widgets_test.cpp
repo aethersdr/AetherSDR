@@ -283,6 +283,45 @@ void testActivePortRule()
            QStringLiteral("no port map yet outlines neither port"));
 }
 
+// The panel grows its contents with the window rather than its padding, so
+// the scaling primitives have to actually move. CrossNeedleMeterWidget gets
+// this for free by scaling a QPainter onto a fixed design canvas; a widget
+// tree cannot, so each metric is scaled instead -- and a metric that silently
+// ignored its scale would look exactly like the bug this replaced.
+void testScaling()
+{
+    RelayDial dial(QStringLiteral("C1"));
+    const int base = dial.sizeHint().width();
+    dial.setPreferredDiameter(base * 2);
+    expect(dial.sizeHint().width() == base * 2,
+           QStringLiteral("the dial takes its preferred diameter"));
+    expect(dial.minimumSize().width() < dial.sizeHint().width(),
+           QStringLiteral("the dial can still be squeezed below its preference"));
+
+    // Clamped at both ends: a panel dragged to a sliver must not ask for a
+    // dial of two pixels, nor one bigger than any sane window.
+    dial.setPreferredDiameter(1);
+    expect(dial.sizeHint().width() >= 36,
+           QStringLiteral("an absurdly small diameter is clamped, got %1")
+               .arg(dial.sizeHint().width()));
+    dial.setPreferredDiameter(100000);
+    expect(dial.sizeHint().width() <= 260,
+           QStringLiteral("an absurdly large diameter is clamped, got %1")
+               .arg(dial.sizeHint().width()));
+
+    // The port strip scales its cells with its type, or the text outgrows the
+    // box it sits in.
+    TgxlPortRow row(QStringLiteral("A"));
+    const int baseHint = row.sizeHint().height();
+    row.setScale(2.0);
+    expect(row.sizeHint().height() > baseHint,
+           QStringLiteral("the strip grows with its scale (%1 -> %2)")
+               .arg(baseHint).arg(row.sizeHint().height()));
+    row.setScale(1.0);
+    expect(row.sizeHint().height() == baseHint,
+           QStringLiteral("and returns to its compact size"));
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -303,6 +342,7 @@ int main(int argc, char** argv)
     testDialAnnouncements();
     testAlertSeverityRule();
     testActivePortRule();
+    testScaling();
 
     if (g_failures == 0) {
         std::cout << "tgxl_panel_widgets_test: all checks passed\n";

@@ -41,6 +41,10 @@ public:
     int  value() const { return m_value; }
 
     QSize sizeHint() const override;
+    // Preferred diameter, so the dial grows with the panel around it rather
+    // than sitting at one size in a window twice its natural height. The
+    // painting is already radius-relative, so this is all the dial needs.
+    void setPreferredDiameter(int px);
 
     // Enabled only while the direct port-9010 connection is up — the relays
     // cannot be stepped over the Flex-relayed status path.
@@ -61,6 +65,7 @@ private:
     static constexpr int kAccessibilityAnnouncementIntervalMs = 100;
 
     QString m_label;
+    int  m_diameter{76};
     int  m_value{0};
     bool m_scrollEnabled{false};
     int  m_angleAccum{0};
@@ -105,12 +110,17 @@ public:
     // Re-resolves every themed stylesheet for the current state. Called on
     // construction and whenever a value that carries its own colour changes.
     void applyTheme();
+    // Scales every metric on the strip — cell widths, padding and type — so a
+    // taller panel gets a proportionally larger strip rather than the same
+    // strip with more space around it. 1.0 is the compact rail size.
+    void setScale(qreal scale);
 
 protected:
     void paintEvent(QPaintEvent*) override;
 
 private:
     void updateAccessibleText();
+    int  px(int base) const;   // a design-pixel metric at the current scale
 
     QString m_portLetter;
     QLabel* m_portLabel{nullptr};
@@ -120,6 +130,7 @@ private:
     QLabel* m_freqLabel{nullptr};
     QLabel* m_stateLabel{nullptr};
 
+    qreal m_scale{1.0};
     bool m_ptt{false};
     bool m_active{false};
     bool m_bypassed{false};

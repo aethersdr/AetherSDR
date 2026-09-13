@@ -94,6 +94,8 @@ private:
     // Re-applies every presentation-dependent metric and swaps which control
     // group is shown, for the current m_floating.
     void applyDensity();
+    // One uniform scale for every metric, from how much room the panel has.
+    qreal contentScale() const;
     // TUNE exists once per presentation, so tuning feedback (TUNING… / the
     // settled SWR / the restored idle style) has to reach both buttons. Every
     // site that touches a TUNE button goes through here so the two cannot
@@ -147,6 +149,7 @@ private:
     // between the two layouts.
     QVBoxLayout* m_vbox{nullptr};
     bool         m_floating{false};
+    qreal        m_appliedScale{1.0};
 
     QWidget*     m_dockedControls{nullptr};  // relay bars + cycling OPERATE
     QWidget*     m_panelControls{nullptr};   // dials + STBY/BYP/TUNE
@@ -161,6 +164,12 @@ private:
     // Standby takes the whole port area: with the tuner out of circuit there
     // is no per-port reading left to show.
     QLabel*      m_standbyBanner{nullptr};
+    // Takes every pixel left over after the contents have been scaled. The
+    // controls keep the proportions the scale gave them instead of absorbing
+    // the slack themselves — a tall narrow window otherwise stretches the
+    // keys into columns while the dials stay small. Its minimum is the gap
+    // that keeps the controls off the frame.
+    QSpacerItem* m_bottomStretch{nullptr};
     // Tuner alerts ("LOW RF POWER"). Shown in both presentations: a tune that
     // refused to run is the operator's problem to fix wherever the applet
     // happens to be, so the rail tile does not get to stay silent about it.
@@ -183,7 +192,6 @@ private:
     QPushButton* m_stbyBtn{nullptr};
     QPushButton* m_bypBtn{nullptr};
     QPushButton* m_panelTuneBtn{nullptr};
-    QSpacerItem* m_bottomStretch{nullptr};
 
     QString m_radioModelName;
     double  m_portAFreqMhz{0.0};

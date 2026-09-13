@@ -42,7 +42,7 @@ RelayDial::RelayDial(const QString& label, QWidget* parent)
     : QWidget(parent)
     , m_label(label)
 {
-    setMinimumSize(52, 52);
+    setMinimumSize(qRound(m_diameter * 0.7), qRound(m_diameter * 0.7));
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     setFocusPolicy(Qt::TabFocus);
     setToolTip(tr("Scroll or use Up/Down keys to adjust relay position"));
@@ -78,7 +78,17 @@ QSize RelayDial::sizeHint() const
 {
     // Big enough for the needle sweep plus the name and the reading; the row
     // it sits in stays compact because this is what it asks for.
-    return QSize(76, 76);
+    return QSize(m_diameter, m_diameter);
+}
+
+void RelayDial::setPreferredDiameter(int px)
+{
+    const int clamped = qBound(36, px, 260);
+    if (m_diameter == clamped) return;
+    m_diameter = clamped;
+    setMinimumSize(qRound(clamped * 0.7), qRound(clamped * 0.7));
+    updateGeometry();
+    update();
 }
 
 void RelayDial::setScrollEnabled(bool on)
@@ -301,6 +311,30 @@ void TgxlPortRow::setActive(bool active)
     updateAccessibleText();
 }
 
+void TgxlPortRow::setScale(qreal scale)
+{
+    const qreal clamped = qBound(0.6, scale, 4.0);
+    if (qFuzzyCompare(m_scale, clamped)) return;
+    m_scale = clamped;
+
+    // Cell widths track the type inside them, or the text outgrows its box.
+    m_portLabel->setFixedWidth(px(18));
+    m_pttLabel->setFixedWidth(px(34));
+    m_bandLabel->setMinimumWidth(px(34));
+    m_stateLabel->setFixedWidth(px(38));
+    if (auto* row = qobject_cast<QHBoxLayout*>(layout())) {
+        row->setContentsMargins(px(6), px(3), px(6), px(3));
+        row->setSpacing(px(6));
+    }
+    applyTheme();
+    updateGeometry();
+}
+
+int TgxlPortRow::px(int base) const
+{
+    return qMax(1, qRound(base * m_scale));
+}
+
 void TgxlPortRow::applyTheme()
 {
     auto& theme = AetherSDR::ThemeManager::instance();
@@ -311,49 +345,53 @@ void TgxlPortRow::applyTheme()
 
     // Children carry their own border:none — the container rule above would
     // otherwise be inherited and box every label inside the row.
-    theme.applyStyleSheet(m_portLabel,
+    theme.applyStyleSheet(m_portLabel, QStringLiteral(
         "QLabel { border: none; background: transparent; color: {{color.text.primary}}; "
-        "font-size: 14px; font-weight: bold; }");
+        "font-size: %1px; font-weight: bold; }").arg(px(14)));
 
-    theme.applyStyleSheet(m_pttLabel, m_ptt
-        ? "QLabel { border: none; border-radius: 2px; padding: 1px 3px; "
-          "background: {{color.accent.danger}}; color: {{color.background.0}}; "
-          "font-size: 10px; font-weight: bold; }"
-        : "QLabel { border: none; border-radius: 2px; padding: 1px 3px; "
-          "background: {{color.background.2}}; color: {{color.text.label}}; "
-          "font-size: 10px; font-weight: bold; }");
+    theme.applyStyleSheet(m_pttLabel, QStringLiteral(
+        "QLabel { border: none; border-radius: 2px; padding: %1px %2px; "
+        "background: %3; color: %4; font-size: %5px; font-weight: bold; }")
+        .arg(px(1)).arg(px(3))
+        .arg(m_ptt ? QStringLiteral("{{color.accent.danger}}")
+                   : QStringLiteral("{{color.background.2}}"))
+        .arg(m_ptt ? QStringLiteral("{{color.background.0}}")
+                   : QStringLiteral("{{color.text.label}}"))
+        .arg(px(10)));
 
     const bool haveBand = m_bandLabel->text() != tr("N/A");
-    theme.applyStyleSheet(m_bandLabel, haveBand
-        ? "QLabel { border: none; border-radius: 2px; padding: 1px 4px; "
-          "background: {{color.background.success}}; color: {{color.text.primary}}; "
-          "font-size: 11px; font-weight: bold; }"
-        : "QLabel { border: none; border-radius: 2px; padding: 1px 4px; "
-          "background: {{color.background.2}}; color: {{color.text.label}}; "
-          "font-size: 11px; font-weight: bold; }");
+    theme.applyStyleSheet(m_bandLabel, QStringLiteral(
+        "QLabel { border: none; border-radius: 2px; padding: %1px %2px; "
+        "background: %3; color: %4; font-size: %5px; font-weight: bold; }")
+        .arg(px(1)).arg(px(4))
+        .arg(haveBand ? QStringLiteral("{{color.background.success}}")
+                      : QStringLiteral("{{color.background.2}}"))
+        .arg(haveBand ? QStringLiteral("{{color.text.primary}}")
+                      : QStringLiteral("{{color.text.label}}"))
+        .arg(px(11)));
 
-    theme.applyStyleSheet(m_sourceLabel,
+    theme.applyStyleSheet(m_sourceLabel, QStringLiteral(
         "QLabel { border: none; background: transparent; color: {{color.text.primary}}; "
-        "font-size: 12px; }");
+        "font-size: %1px; }").arg(px(12)));
 
     const bool haveFreq = m_freqLabel->text() != tr("N/A");
-    const char* freqStyle =
-        !haveFreq
-            ? "QLabel { border: none; background: transparent; color: {{color.text.label}}; "
-              "font-size: 13px; }"
-        : m_bypassed
-            ? "QLabel { border: none; background: transparent; color: {{color.accent.warning}}; "
-              "font-size: 13px; font-weight: bold; }"
-            : "QLabel { border: none; background: transparent; color: {{color.accent.success}}; "
-              "font-size: 13px; font-weight: bold; }";
-    theme.applyStyleSheet(m_freqLabel, freqStyle);
+    const QString freqTone = !haveFreq ? QStringLiteral("{{color.text.label}}")
+                           : m_bypassed ? QStringLiteral("{{color.accent.warning}}")
+                                        : QStringLiteral("{{color.accent.success}}");
+    theme.applyStyleSheet(m_freqLabel, QStringLiteral(
+        "QLabel { border: none; background: transparent; color: %1; "
+        "font-size: %2px; %3 }")
+        .arg(freqTone).arg(px(13))
+        .arg(haveFreq ? QStringLiteral("font-weight: bold;") : QString()));
 
     // OPR is the live state; BYP and STBY are not, so only OPR reads as such.
-    theme.applyStyleSheet(m_stateLabel, m_stateLabel->text() == QLatin1String("OPR")
-        ? "QLabel { border: none; background: transparent; color: {{color.accent.success}}; "
-          "font-size: 11px; font-weight: bold; }"
-        : "QLabel { border: none; background: transparent; color: {{color.text.secondary}}; "
-          "font-size: 11px; font-weight: bold; }");
+    theme.applyStyleSheet(m_stateLabel, QStringLiteral(
+        "QLabel { border: none; background: transparent; color: %1; "
+        "font-size: %2px; font-weight: bold; }")
+        .arg(m_stateLabel->text() == QLatin1String("OPR")
+                 ? QStringLiteral("{{color.accent.success}}")
+                 : QStringLiteral("{{color.text.secondary}}"))
+        .arg(px(11)));
 }
 
 void TgxlPortRow::paintEvent(QPaintEvent*)

@@ -185,6 +185,18 @@ public:
         update();
     }
 
+    // Scale the gauge's internal metrics — the tick strip above the bar and
+    // both font sizes — so a gauge given more height grows its lettering
+    // instead of just a taller bar. Opt-in, defaulting to 1.0, which
+    // reproduces the original fixed metrics exactly: every other applet's
+    // gauges are unaffected.
+    void setMetricScale(qreal scale) {
+        const qreal clamped = qBound(0.5, scale, 4.0);
+        if (qFuzzyCompare(m_metricScale, clamped)) return;
+        m_metricScale = clamped;
+        update();
+    }
+
     void setBallistics(const MeterSmoother::Ballistics& b) {
         m_smooth.setBallistics(b);
     }
@@ -308,7 +320,7 @@ protected:
 
         const int w = width();
         const int h = height();
-        const int barY = 12;
+        const int barY = qRound(12 * m_metricScale);
         const int barH = h - barY - 2;
         const int barX = 0;
         const int barW = w;
@@ -387,7 +399,7 @@ protected:
 
         // Tick labels along the top
         QFont tickFont = font();
-        tickFont.setPixelSize(9);
+        tickFont.setPixelSize(qMax(6, qRound(9 * m_metricScale)));
         p.setFont(tickFont);
 
         for (const auto& tick : m_ticks) {
@@ -402,12 +414,12 @@ protected:
             // Center label on tick position, clamp to widget bounds
             // Leave a small right margin so the last tick isn't flush to the edge
             int lx = qBound(2, tx - tw / 2, w - tw - 4);
-            p.drawText(lx, 10, tick.label);
+            p.drawText(lx, qRound(10 * m_metricScale), tick.label);
         }
 
         // Label in center of bar
         QFont lblFont = font();
-        lblFont.setPixelSize(10);
+        lblFont.setPixelSize(qMax(6, qRound(10 * m_metricScale)));
         lblFont.setBold(true);
         p.setFont(lblFont);
         p.setPen(QColor(0xff, 0xff, 0xff));
@@ -593,6 +605,7 @@ private:
     bool  m_reversed{false};
     bool  m_fillFromRight{false};
     QGradientStops m_trackStops;   // empty = flat track (the default)
+    qreal m_metricScale{1.0};      // 1.0 = the original fixed metrics
     QString m_label, m_unit;
     QVector<Tick> m_ticks;
 
