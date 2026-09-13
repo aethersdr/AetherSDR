@@ -50,8 +50,17 @@ private:
     // which is the exact comparison this window exists to make possible.
     //
     // The top is 0 dBFS because that is the converter's rail and the gateware's
-    // own clip threshold; the bottom is ClientEqFftAnalyzer::kFloorDb, below
-    // which its bins are floored rather than real.
+    // own clip threshold. REACHABLE ONLY BECAUSE THE CALLER CORRECTS THE SCALE:
+    // ClientEqFftAnalyzer's own bins are 6.02 dB low (its 2/N normalisation
+    // does not remove the Hann window's coherent gain), so BandscopeDialog::
+    // onFrame() adds coherentGainCorrectionDb() before the bins arrive here. A
+    // caller that forgets is not drawing dBFS and this comment is then a lie —
+    // `bandscope_analyzer_test` is what keeps it true.
+    //
+    // The bottom is -100 dB, which sits just under the analyzer's kFloorDb
+    // sentinel once that sentinel has been corrected (-100 + 6.02 = -93.98), so
+    // a record with no energy in it draws a flat line near the bottom of the
+    // plot rather than off the end of it.
     static constexpr float kTopDb = 0.0f;
     static constexpr float kBottomDb = -100.0f;
 };
@@ -102,7 +111,6 @@ private:
     BandscopeTrace* m_trace{nullptr};
     QLabel* m_status{nullptr};
     QPushButton* m_refresh{nullptr};
-
     // The id of the outstanding extension request, or 0. Minted here rather
     // than taken from a shared counter because IRadioBackend's contract puts
     // correlation on the caller: "a caller that wants a reply connects to the

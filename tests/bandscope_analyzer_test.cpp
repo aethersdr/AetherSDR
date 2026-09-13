@@ -1,5 +1,7 @@
-// The ONE contract BandscopeDialog depends on from ClientEqFftAnalyzer, pinned
-// so that a change to the analyzer breaks a test instead of the window.
+// The contracts BandscopeDialog depends on from ClientEqFftAnalyzer, pinned so
+// that a change to the analyzer breaks a test instead of the window. There are
+// two: reset()-then-update() is unsmoothed (case 2), and the absolute dB scale
+// is what the window thinks it is (case 2b).
 //
 // WHY THIS TEST EXISTS. The bandscope reuses ClientEqFftAnalyzer rather than
 // carrying a second radix-2 transform: it is already a 2048-point Hann-windowed
@@ -14,8 +16,17 @@
 // `m_primed` handling, not of its public API, and therefore exactly the kind of
 // thing that gets refactored away without anyone noticing what depended on it.
 //
+// The second contract was added after review found the window's displayed dBFS
+// 6.02 dB low: the analyzer's 2/N normalisation is the UNWINDOWED one and never
+// removed the Hann window's coherent gain, so a converter on its rail read -6
+// and the top of the bandscope's scale was unreachable. The old assertion here
+// — `loudDb > -12.0f` — passed with 6 dB to spare and certified the error.
+// Both scales are now pinned to 0.05 dB.
+//
 // Socket-free, Qt-free, radio-free. Nothing here has been near hardware and
-// nothing here needs to be: it is arithmetic.
+// nothing here needs to be: it is arithmetic. Which is also its limit — the
+// correction has never been checked against a converter driven to a known
+// level, because no radio has yet answered the verb that feeds this window.
 
 #include "gui/ClientEqFftAnalyzer.h"
 
@@ -93,9 +104,62 @@ int main()
         a.update(quiet.data(), kN);
         const float quietDb = a.magnitudesDb().at(200);
 
-        check(loudDb > -12.0f, "a full-scale tone reads near the top of the scale");
         check(std::fabs((loudDb - quietDb) - 40.0f) < 1.0f,
-              "and after reset() the quiet tone reads its OWN level, 40 dB below");
+              "after reset() the quiet tone reads its OWN level, 40 dB below");
+    }
+
+    // ---- 2b · WHERE FULL SCALE ACTUALLY LANDS, on both scales ----
+    //
+    // This used to be `check(loudDb > -12.0f)`, which is a bound so loose it
+    // passed with 6 dB to spare on a reading that WAS 6 dB wrong, and so it
+    // certified the bug it was the only test standing near.
+    //
+    // There are two scales here and both are pinned, because the whole defect
+    // was a caller assuming they were one scale:
+    //
+    //   * The analyzer's OWN bins are 6.02 dB low. update() normalises by 2/N —
+    //     the single-sided normalisation for an UNWINDOWED transform — and does
+    //     not remove the Hann window's 0.5 coherent gain. That is deliberate
+    //     now, because the EQ editor has drawn this scale since it shipped and
+    //     reads it only as a shape; it is pinned so the choice is visible
+    //     rather than accidental.
+    //   * coherentGainCorrectionDb() is the exact inverse of it, and the
+    //     bandscope adds it before drawing, which is what makes
+    //     BandscopeTrace::kTopDb = 0 mean the converter's rail.
+    //
+    // Tolerances are 0.05 dB, not 6. A change to buildWindow() or to `norm`
+    // now breaks this test instead of quietly moving a number an operator
+    // reads against a clip threshold.
+    //
+    // The correction is arithmetic. It has never been checked against a
+    // converter driven to a known level, because no radio has yet answered the
+    // verb that feeds this window.
+    {
+        ClientEqFftAnalyzer a;
+        const auto loud = tone(200, 1.0f);   // rail to rail
+        a.reset();
+        a.update(loud.data(), kN);
+        const float rawDb = a.magnitudesDb().at(200);
+        const float corr  = a.coherentGainCorrectionDb();
+
+        check(std::fabs(rawDb - (-6.0248f)) < 0.05f,
+              "a full-scale sine reads -6.02 dBFS on the analyzer's raw scale");
+        check(std::fabs(corr - 6.0248f) < 0.05f,
+              "and coherentGainCorrectionDb() is the Hann window's +6.02 dB");
+        check(std::fabs(rawDb + corr) < 0.05f,
+              "so corrected, a rail-to-rail sine lands at 0 dBFS — "
+              "the top of the bandscope's scale, and the converter's rail");
+
+        // The correction is a property of the window, not of the signal: it is
+        // the same number whatever is fed in, so applying it cannot distort the
+        // relative picture the trace draws.
+        const auto half = tone(200, 0.5f);
+        a.reset();
+        a.update(half.data(), kN);
+        check(std::fabs(a.coherentGainCorrectionDb() - corr) < 1e-4f,
+              "the correction does not depend on the record");
+        check(std::fabs((a.magnitudesDb().at(200) + corr) - (-6.0206f)) < 0.05f,
+              "and a half-scale sine sits 6.02 dB below the rail, as it should");
     }
 
     // ---- 3 · ...and the smoothing it defeats is really there ----
