@@ -656,7 +656,8 @@ private:
     // unchecked = edges hidden.
     class QPushButton* m_edgesBtn{nullptr};
     void loadDisplayPrefs();
-    void saveDisplayPrefs();
+    void saveMarkerWidthPref();
+    void saveFilterEdgesPref();
     // Adaptive RX filter controls (SSB-only, rebuilt with the Mode tab) — RFC #3878
     // Reusable adaptive-RX-filter control group (shared with the RX applet);
     // recreated on each SSB grid rebuild, bound to the slice as source of truth.

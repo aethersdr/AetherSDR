@@ -1006,12 +1006,22 @@ void MainWindow::buildMenuBar()
     auto* markerWidthMenu = viewMenu->addMenu("VFO Marker Size");
     auto* markerWidthGroup = new QActionGroup(markerWidthMenu);
     markerWidthGroup->setExclusive(true);
+    // Re-read on every open rather than only at build time: Settings ▸ Reset
+    // Settings… (same menu bar) clears the stored defaults underneath these,
+    // and an exclusive group showing a stale tick offers no way to resync —
+    // re-picking the already-checked entry is a no-op to the operator.
+    connect(markerWidthMenu, &QMenu::aboutToShow, this, [markerWidthGroup] {
+        const int width = VfoWidget::defaultMarkerWidth();
+        for (auto* action : markerWidthGroup->actions())
+            action->setChecked(action->data().toInt() == width);
+    });
     for (const auto& option : {
              std::pair<const char*, int>{"Off", 0},
              {"1 px", 1},
              {"3 px", 3}}) {
         auto* action = markerWidthMenu->addAction(option.first);
         action->setCheckable(true);
+        action->setData(option.second);
         action->setChecked(option.second == VfoWidget::defaultMarkerWidth());
         markerWidthGroup->addAction(action);
         connect(action, &QAction::triggered, this, [this, width = option.second] {
@@ -1026,11 +1036,17 @@ void MainWindow::buildMenuBar()
     auto* filterEdgesGroup = new QActionGroup(filterEdgesMenu);
     filterEdgesGroup->setExclusive(true);
     const bool filterEdgesHidden = VfoWidget::defaultFilterEdgesHidden();
+    connect(filterEdgesMenu, &QMenu::aboutToShow, this, [filterEdgesGroup] {
+        const bool hidden = VfoWidget::defaultFilterEdgesHidden();
+        for (auto* action : filterEdgesGroup->actions())
+            action->setChecked(action->data().toBool() == hidden);
+    });
     for (const auto& option : {
              std::pair<const char*, bool>{"Show", false},
              {"Hide", true}}) {
         auto* action = filterEdgesMenu->addAction(option.first);
         action->setCheckable(true);
+        action->setData(option.second);
         action->setChecked(option.second == filterEdgesHidden);
         filterEdgesGroup->addAction(action);
         connect(action, &QAction::triggered, this, [this, hide = option.second] {
@@ -1164,8 +1180,8 @@ void MainWindow::buildMenuBar()
     connect(packetDecoderAction, &QAction::triggered,
             this, &MainWindow::showAx25HfPacketDecodeDialog);
 
-    // Copy Assist has no View-menu entry: it's shown/hidden by the status-bar
-    // "ASR" toggle (and the keyboard shortcut) via showCopyAssist().
+    // Copy Assist's menu entry lives on Tools; the status-bar "ASR" toggle and
+    // the keyboard shortcut drive the same showCopyAssist() path.
 
     auto* smartSpotAct = viewMenu->addAction("Smart Spot Filtering");
     smartSpotAct->setCheckable(true);
@@ -1217,7 +1233,9 @@ void MainWindow::buildMenuBar()
                 heartbeatBlinkAct, &QAction::setChecked);
     }
 
-    // Keyboard behavior is configuration, not presentation.
+    // Destructive client-store reset: a Settings action, not a Help one (#5570).
+    // NoRole is required — macOS would otherwise read "Settings" as a
+    // Preferences action and reparent it into the application menu (#883).
     auto* resetSettingsAction = settingsMenu->addAction("Reset Settings...", this, [this] {
         SupportDialog::resetSettings(this);
     });
@@ -1226,33 +1244,48 @@ void MainWindow::buildMenuBar()
     // ── Tools menu ─────────────────────────────────────────────────────────
     // Operational windows and verbs live here. Reusing the existing QActions
     // preserves their shortcuts and signal paths while changing only IA.
-    auto* addPanAction = toolsMenu->addAction("Add Panadapter");
-    connect(addPanAction, &QAction::triggered, this, [this] {
-        if (!m_radioModel.isConnected()) {
-            return;
-        }
-        if (!m_panStack || m_panStack->count() >= m_radioModel.maxPanadapters()) {
-            showPanadapterSliceCapacityMessage();
-            return;
-        }
-        m_radioModel.createPanadapter();
+    // Ellipsis: this opens PanLayoutDialog rather than creating immediately,
+    // because layout ids are not 1:1 with pan counts (two pans is "2v" or "2h")
+    // and the arrangement is the operator's to pick. Shares one handler with the
+    // status-bar +PAN affordance so PanadapterLayout is written and applied on
+    // both routes instead of only one.
+    auto* addPanAction = toolsMenu->addAction("Add Panadapter...");
+    m_addPanAction = addPanAction;
+    addPanAction->setEnabled(false);
+    connect(addPanAction, &QAction::triggered,
+            this, &MainWindow::showAddPanadapterDialog);
+
+    // The three checkable panel toggles re-read their own state after the
+    // handler runs: triggered() fires *after* Qt has flipped the check mark, and
+    // every one of these handlers can legitimately decline (no active pan, keyer
+    // indicator disabled), which would otherwise leave the menu asserting a
+    // panel is open when it is not.
+    auto* aetherialAction = toolsMenu->addAction("Aetherial Audio");
+    m_aetherialAction = aetherialAction;
+    aetherialAction->setCheckable(true);
+    connect(aetherialAction, &QAction::triggered, this, [this] {
+        toggleAetherialStrip();
+        updateToolsMenuState();
     });
 
-    auto* aetherialAction = toolsMenu->addAction("Aetherial Audio");
-    aetherialAction->setCheckable(true);
-    connect(aetherialAction, &QAction::triggered,
-            this, &MainWindow::toggleAetherialStrip);
-
     auto* cwKeyerAction = toolsMenu->addAction("CW Keyer");
+    m_cwKeyerAction = cwKeyerAction;
     cwKeyerAction->setCheckable(true);
-    connect(cwKeyerAction, &QAction::triggered,
-            this, &MainWindow::toggleCwKeyerPanel);
+    cwKeyerAction->setEnabled(false);
+    connect(cwKeyerAction, &QAction::triggered, this, [this] {
+        toggleCwKeyerPanel();
+        updateToolsMenuState();
+    });
 
 #ifdef AETHER_ASR_ENABLED
     auto* copyAssistAction = toolsMenu->addAction("Copy Assist");
+    m_copyAssistAction = copyAssistAction;
     copyAssistAction->setCheckable(true);
-    connect(copyAssistAction, &QAction::triggered,
-            this, &MainWindow::showCopyAssist);
+    copyAssistAction->setEnabled(false);
+    connect(copyAssistAction, &QAction::triggered, this, [this] {
+        showCopyAssist();
+        updateToolsMenuState();
+    });
 #endif
 
     viewMenu->removeAction(packetDecoderAction);
@@ -1321,51 +1354,15 @@ void MainWindow::buildMenuBar()
         showSystemInfoDialog();
     });
 
-    connect(toolsMenu, &QMenu::aboutToShow, this,
-            [this, addPanAction, aetherialAction, cwKeyerAction,
-#ifdef AETHER_ASR_ENABLED
-             copyAssistAction,
-#endif
-             swrScanAction, preTuneAction, clearAtuAction,
-             gpsDashboardAction] {
-        const bool connected = m_radioModel.isConnected();
-        const RadioCapabilities caps = m_radioModel.backendCapabilities();
-        const auto& tx = m_radioModel.transmitModel();
-        const bool idle = !tx.isTuning() && !tx.isMox() && !tx.isTransmitting();
-        const bool txReady = connected && caps.canTransmit
-            && m_radioModel.txOwnedByUs() && idle;
+    m_gpsDashboardAction = gpsDashboardAction;
 
-        addPanAction->setEnabled(connected && m_panStack
-            && m_panStack->count() < m_radioModel.maxPanadapters());
-        aetherialAction->setChecked(m_aetherialStrip && m_aetherialStrip->isVisible());
-        cwKeyerAction->setVisible(!connected || caps.hasRadioSideCwKeyer);
-        cwKeyerAction->setEnabled(m_cwxIndicator && m_cwxIndicator->isEnabled());
-        cwKeyerAction->setChecked(m_cwxPanel && m_cwxPanel->isVisible());
-#ifdef AETHER_ASR_ENABLED
-        const bool copyVisible = m_copyAssistApplet
-            && m_copyAssistApplet->isCopyAssistVisible();
-        copyAssistAction->setEnabled(
-            m_asrIndicator && (m_asrIndicator->isEnabled() || copyVisible));
-        copyAssistAction->setChecked(copyVisible);
-#endif
-        const bool hasTxApplet = m_appletPanel && m_appletPanel->txApplet();
-        swrScanAction->setEnabled(txReady);
-        swrScanAction->setToolTip(txReady ? QString()
-            : tr("Requires an idle, TX-capable radio with this client holding the interlock"));
-        const bool memories = caps.hasTunerMemories;
-        preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
-            && hasTxApplet);
-        preTuneAction->setToolTip(!memories
-            ? tr("ATU memory controls are unavailable for this radio")
-            : (!tx.memoriesEnabled()
-                   ? tr("Enable MEM before running the pre-tune sweep")
-                   : (txReady ? QString()
-                              : tr("Requires an idle, TX-capable radio with this client holding the interlock"))));
-        clearAtuAction->setEnabled(connected && memories && hasTxApplet);
-        const bool gps = !connected
-            || (caps.hasGpsLocation && m_radioModel.hasGpsHardware());
-        gpsDashboardAction->setVisible(gps);
-    });
+    // Both passes call the same function: aboutToShow for the human, and
+    // applyCapabilitiesToUi() for everything that never pops the menu — most of
+    // all the automation bridge, which resolves menu-bar actions in a CLOSED
+    // menu bar and honours only isEnabled().
+    connect(toolsMenu, &QMenu::aboutToShow, this,
+            [this] { updateToolsMenuState(); });
+    updateToolsMenuState();
 
     auto* helpMenu = menuBar()->addMenu("&Help");
 

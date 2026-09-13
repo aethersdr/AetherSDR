@@ -1,4 +1,5 @@
 #include "VfoWidget.h"
+#include "VfoDisplayDefaults.h"
 #include "ScopedChildWidget.h"
 #include "AgcModeAvailability.h"
 #include "FmTonePresentation.h"
@@ -46,8 +47,6 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QGridLayout>
 #include <QMenu>
 #include <QDoubleSpinBox>
@@ -3448,62 +3447,33 @@ void VfoWidget::setAetherDspActive(bool active)
 // ── VFO marker display prefs (#1526, #5570) ─────────────────────────────────
 
 namespace {
-constexpr auto kVfoDisplayDefaultsKey = "VfoDisplayDefaults";
-
 int normalizedMarkerWidth(int widthPx)
 {
-    if (widthPx <= 0) {
-        return 0;
-    }
-    if (widthPx <= 1) {
-        return 1;
-    }
-    return 3;
-}
-
-QJsonObject vfoDisplayDefaultsObject()
-{
-    const QByteArray stored = AppSettings::instance()
-        .value(kVfoDisplayDefaultsKey, QStringLiteral("{}"))
-        .toString().toUtf8();
-    const QJsonDocument doc = QJsonDocument::fromJson(stored);
-    return doc.isObject() ? doc.object() : QJsonObject{};
-}
-
-void saveVfoDisplayDefaultsObject(const QJsonObject& object)
-{
-    auto& settings = AppSettings::instance();
-    settings.setValue(
-        kVfoDisplayDefaultsKey,
-        QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
-    settings.save();
+    return VfoDisplayDefaults::normalizeMarkerWidth(widthPx);
 }
 } // namespace
 
+// The global defaults live in VfoDisplayDefaults (one owned config object,
+// Principle V). These thin forwarders keep the existing VfoWidget:: call sites
+// — the View menu and loadDisplayPrefs() — unchanged.
 int VfoWidget::defaultMarkerWidth()
 {
-    return normalizedMarkerWidth(
-        vfoDisplayDefaultsObject().value(QStringLiteral("markerWidth")).toInt(3));
+    return VfoDisplayDefaults::markerWidth();
 }
 
 bool VfoWidget::defaultFilterEdgesHidden()
 {
-    return vfoDisplayDefaultsObject()
-        .value(QStringLiteral("filterEdgesHidden")).toBool(false);
+    return VfoDisplayDefaults::filterEdgesHidden();
 }
 
 void VfoWidget::setDefaultMarkerWidth(int widthPx)
 {
-    QJsonObject object = vfoDisplayDefaultsObject();
-    object.insert(QStringLiteral("markerWidth"), normalizedMarkerWidth(widthPx));
-    saveVfoDisplayDefaultsObject(object);
+    VfoDisplayDefaults::setMarkerWidth(widthPx);
 }
 
 void VfoWidget::setDefaultFilterEdgesHidden(bool hide)
 {
-    QJsonObject object = vfoDisplayDefaultsObject();
-    object.insert(QStringLiteral("filterEdgesHidden"), hide);
-    saveVfoDisplayDefaultsObject(object);
+    VfoDisplayDefaults::setFilterEdgesHidden(hide);
 }
 
 void VfoWidget::setMarkerWidth(int widthPx, bool persist)
@@ -3514,7 +3484,7 @@ void VfoWidget::setMarkerWidth(int widthPx, bool persist)
     if (m_markerWidth != widthPx) {
         m_markerWidth = widthPx;
         if (persist) {
-            saveDisplayPrefs();
+            saveMarkerWidthPref();
         }
         emit markerStyleChanged(m_markerWidth, m_filterEdgesHidden);
     }
@@ -3530,7 +3500,7 @@ void VfoWidget::setFilterEdgesHidden(bool hide, bool persist)
     if (m_filterEdgesHidden != hide) {
         m_filterEdgesHidden = hide;
         if (persist) {
-            saveDisplayPrefs();
+            saveFilterEdgesPref();
         }
         emit markerStyleChanged(m_markerWidth, m_filterEdgesHidden);
     }
@@ -3560,14 +3530,27 @@ void VfoWidget::loadDisplayPrefs()
         : defaultFilterEdgesHidden();
 }
 
-void VfoWidget::saveDisplayPrefs()
+// Each property is written on its own. Writing both would turn a global
+// default the operator applied from View into a per-slice override for the
+// *other* property: the menu applies without persisting, so the value sits in
+// m_markerWidth / m_filterEdgesHidden until some unrelated flag button saves
+// and silently pins it. A slice must only stop following a global default for
+// the property the operator actually changed on that slice.
+void VfoWidget::saveMarkerWidthPref()
 {
     if (!m_slice) return;
     auto& s = AppSettings::instance();
-    const QString keyW = QStringLiteral("Slice%1_MarkerWidth").arg(m_slice->sliceId());
-    const QString keyH = QStringLiteral("Slice%1_FilterEdgesHidden").arg(m_slice->sliceId());
-    s.setValue(keyW, QString::number(m_markerWidth));
-    s.setValue(keyH, m_filterEdgesHidden ? "True" : "False");
+    s.setValue(QStringLiteral("Slice%1_MarkerWidth").arg(m_slice->sliceId()),
+               QString::number(m_markerWidth));
+    s.save();
+}
+
+void VfoWidget::saveFilterEdgesPref()
+{
+    if (!m_slice) return;
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("Slice%1_FilterEdgesHidden").arg(m_slice->sliceId()),
+               m_filterEdgesHidden ? "True" : "False");
     s.save();
 }
 

@@ -795,6 +795,10 @@ private:
     // Shared by the status-bar affordance and Tools menu so both keep the
     // keyer panels mutually exclusive and restore the splitter identically.
     void toggleCwKeyerPanel();
+    void toggleVoiceKeyerPanel();
+    // Shared by the status-bar +PAN affordance and Tools ▸ Add Panadapter… so
+    // both route through PanLayoutDialog and the layout machinery.
+    void showAddPanadapterDialog();
     // Cutoff-line drag handler shared between the floating ClientEqEditor
     // and the embedded EQ panel inside AetherialAudioStrip.  Writes TX
     // filter cutoffs to TransmitModel, or RX filter offsets to the
@@ -1513,6 +1517,17 @@ private:
     QAction*         m_swrScanAction{nullptr};
     QAction*         m_preTuneAction{nullptr};
     QAction*         m_clearAtuAction{nullptr};
+    QAction*         m_addPanAction{nullptr};
+    QAction*         m_aetherialAction{nullptr};
+    QAction*         m_cwKeyerAction{nullptr};
+    QAction*         m_copyAssistAction{nullptr};
+    QAction*         m_gpsDashboardAction{nullptr};
+    // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from
+    // applyCapabilitiesToUi() *and* the menu's aboutToShow, because the
+    // automation bridge reaches menu-bar actions without popping the menu
+    // (AutomationServer.cpp doInvoke) and would otherwise only ever see the
+    // construction-time state. One function so the two passes cannot drift.
+    void updateToolsMenuState();
     QAction*         m_aetherControlAction{nullptr};
     QAction*         m_flexControlKnobAction{nullptr};
 

@@ -53,6 +53,7 @@ This menu contains configuration that changes station behavior, control surfaces
 - `Receive Sync` configures timing alignment between Flex and KiwiSDR presentation.
 - `MQTT...` configures MQTT integration when it is available in the build.
 - `MIDI Mapping...`: opens controller mapping when MIDI support is available.
+- `USB Cables...` jumps to cable definitions and USB cable behavior in Radio Setup.
 - Encoder mapping entries configure supported HID and Ulanzi controllers when available.
 - `SpotHub...`: opens the unified spots and spotting workflow dialog.
 - `multiFLEX...`: opens the multi-operator dashboard.

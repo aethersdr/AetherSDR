@@ -158,7 +158,7 @@ These affect the connected radio or the whole client session more broadly:
 
 - `Settings -> Radio Setup...` on Windows and Linux, or `AetherSDR -> Preferences...` on macOS
 - `Settings -> TX Band Settings...`
-- `Radio Setup -> USB Cables`
+- `Settings -> USB Cables...`
 - multiFLEX enablement
 - network and remote-operation behavior
 
