@@ -10,9 +10,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [v26.9.3] — 2026-09-13
 
-### Live map overlays, APRS digipeating and waterfall time markers · a vendor-neutral backend seam underneath
+### A Tools-first menu bar, live map overlays and APRS digipeating · a vendor-neutral backend seam underneath
 
-85 merged changes from 16 human contributors, AetherClaude and one Dependabot update within that total. The operator-facing half adds weather and night-lights overlays to PSK Reporter, a WIDE1-1 fill-in digipeater, clock-aligned waterfall markers and the Runtime Monitor Overview. The structural half routes slice, capability and transmit paths through the `IRadioBackend` seam and continues the headless-engine and audio rate-domain work.
+86 merged changes from 16 human contributors, AetherClaude and one Dependabot update within that total. The menu bar is reorganized around what operators actually reach for, and the rest of the operator-facing half adds weather and night-lights overlays to PSK Reporter, a WIDE1-1 fill-in digipeater, clock-aligned waterfall markers and the Runtime Monitor Overview. The structural half routes slice, capability and transmit paths through the `IRadioBackend` seam and continues the headless-engine and audio rate-domain work.
+
+### Menu bar and VFO defaults
+
+- **A Tools-first menu bar (#5595).** The top level becomes
+  `File · Settings · Profiles · Tools · View · Help`. Operating tools that were
+  scattered across File, Settings, View and Help — PSK Reporter, Memory,
+  Waveforms, Radio Health, the modem and KiwiSDR setup, guarded tuner
+  operations — collect under **Tools**, which sits ahead of **View** because
+  operators reach for them more often than for display settings. Existing
+  actions and handlers are reused, so shortcuts and lifecycle behavior are
+  unchanged; what changes is where things are found. Radio-sensitive entries
+  start disabled and track connection and capability changes, `Start SWR Scan…`
+  and `Pre-tune ATU Bands…` are marked as TX-keying, and Radio Setup keeps its
+  Qt Preferences role so macOS still presents it under the application menu.
+  The obsolete Settings placeholder loop that reported "not yet implemented"
+  for actions that in fact worked is removed.
+- **Global VFO appearance defaults (#5595).** View gains **VFO Marker Size**
+  (Off, 1 px, 3 px) and **VFO Filter Edge** (Show, Hide), stored atomically as
+  one feature-owned `VfoDisplayDefaults` document. Changing either updates live
+  VFOs without overwriting per-slice overrides, and an absent or malformed value
+  falls back to the historical 3 px marker with visible filter edges.
 
 ### Maps and reporting
 
@@ -113,7 +134,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Contributors
 
-Thanks to **@ten9876** (17 commits — maintainer; backend seam, capability gating, CI and FFT trace), **@rfoust** (14 commits — PSK Reporter maps, aetherd Stage 3/4, firmware and crash fixes), **@on8st** (13 commits — HL2 telemetry, meters, SWR and documentation), **@jensenpat** (8 commits — APRS digipeater, Icom, map retries and packaging), **@Ozy311** (8 commits — audio rate domains, RTL lifecycle and shared-capture policy), **@skerker** (5 commits — CW/TUNE interlock, Runtime Monitor and bridge tooltips), **@nigelfenton** (3 commits — Windows CW sidetone, Icom tune and Ulanzi devices), **@crypticpy** (3 commits — NR2 and window restore), **@tropo1234** (2 commits — ANAN-G2 wire layer and droop calibration), **@kgbvax** (2 commits — Web-888 receiver family), **@chibondking** (2 commits — CW break-in and diversity flag), **@aethersdr-agent** (2 commits — AetherClaude orchestrator; bridge token and RTTY pane), **@nonoo** (1 commit — ATU status), **@NF0T** (1 commit — FreeDV Reporter), **@K5PTB** (1 commit — Qt cache repair), **@WA8PAM** (1 commit — WSJT-X spot placement), **@Chipensaw** (1 commit — HF 300 and HDLC). Dependabot contributed one dependency update. Counts cover primary commit authors; co-author credit remains in the commit history.
+Thanks to **@ten9876** (17 commits — maintainer; backend seam, capability gating, CI and FFT trace), **@rfoust** (14 commits — PSK Reporter maps, aetherd Stage 3/4, firmware and crash fixes), **@on8st** (13 commits — HL2 telemetry, meters, SWR and documentation), **@jensenpat** (9 commits — the Tools-first menu bar, APRS digipeater, Icom, map retries and packaging), **@Ozy311** (8 commits — audio rate domains, RTL lifecycle and shared-capture policy), **@skerker** (5 commits — CW/TUNE interlock, Runtime Monitor and bridge tooltips), **@nigelfenton** (3 commits — Windows CW sidetone, Icom tune and Ulanzi devices), **@crypticpy** (3 commits — NR2 and window restore), **@tropo1234** (2 commits — ANAN-G2 wire layer and droop calibration), **@kgbvax** (2 commits — Web-888 receiver family), **@chibondking** (2 commits — CW break-in and diversity flag), **@aethersdr-agent** (2 commits — AetherClaude orchestrator; bridge token and RTTY pane), **@nonoo** (1 commit — ATU status), **@NF0T** (1 commit — FreeDV Reporter), **@K5PTB** (1 commit — Qt cache repair), **@WA8PAM** (1 commit — WSJT-X spot placement), **@Chipensaw** (1 commit — HF 300 and HDLC). Dependabot contributed one dependency update. Counts cover primary commit authors; co-author credit remains in the commit history.
 
 Welcome to first-time contributors **@crypticpy**, **@kgbvax**, **@WA8PAM**, **@Chipensaw**!
 

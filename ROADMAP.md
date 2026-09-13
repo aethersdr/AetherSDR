@@ -189,6 +189,13 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **A Tools-first menu bar** — the top level becomes
+  `File · Settings · Profiles · Tools · View · Help`, collecting the operating
+  tools that were scattered across File, Settings, View and Help under one
+  **Tools** menu placed ahead of **View**, because operators reach for them more
+  often than for display settings. Existing actions and handlers are reused, so
+  shortcuts and lifecycle behavior are unchanged and only discoverability moves.
+  RFC #5570 (v26.9.3).
 - **Clock-aligned waterfall time markers** — thin UTC-labelled lines at 15 s to
   15 minute intervals, snapped to clock boundaries and pinned to the signal rows
   they were captured with, so they stay correct through scrolling, pause, resize
