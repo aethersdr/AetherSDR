@@ -2994,6 +2994,33 @@ target_link_libraries(tgxl_direct_protocol_test PRIVATE Qt6::Core Qt6::Network Q
 set_target_properties(tgxl_direct_protocol_test PROPERTIES AUTOMOC ON)
 add_test(NAME tgxl_direct_protocol_test COMMAND tgxl_direct_protocol_test)
 
+# Docked/expanded parity for the TGXL applet: the split is presentation only,
+# so the rail tile must still gain STOP-while-tuning and the full-width alert
+# banner. What the rail deliberately omits is not asserted.
+add_executable(tgxl_docked_parity_test
+    tests/tgxl_docked_parity_test.cpp
+    src/gui/TunerApplet.cpp
+    src/gui/TgxlPanelWidgets.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/TunerModel.cpp
+    src/models/MeterModel.cpp
+    src/models/BandSettings.cpp
+    src/core/TgxlConnection.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(tgxl_docked_parity_test PRIVATE src)
+target_link_libraries(tgxl_docked_parity_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
+)
+set_target_properties(tgxl_docked_parity_test PROPERTIES AUTOMOC ON)
+add_test(NAME tgxl_docked_parity_test COMMAND tgxl_docked_parity_test)
+set_tests_properties(tgxl_docked_parity_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(fm_tone_presentation_test
     tests/fm_tone_presentation_test.cpp
 )
@@ -5353,6 +5380,7 @@ set(AETHER_SETTINGS_CONSUMERS
     spectrum_overlay_band_highlight_test
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
+    tgxl_docked_parity_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})
