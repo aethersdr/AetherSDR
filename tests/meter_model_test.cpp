@@ -616,9 +616,27 @@ void testAlcGainClearsOnEveryPathThatInvalidatesIt()
         report("a TX slice change clears the ALC gain and says so",
                nearlyEqual(model.alcGainDb(), 0.0f) && !model.hasAlcGainValue()
                    && emissions == 1);
-        model.setActiveTxSlice(1);
-        report("re-selecting the same TX slice does not emit another clear",
-               emissions == 1);
+        // THE NO-OP CONTRACT, PINNED WHERE IT CAN ACTUALLY FAIL.
+        //
+        // This used to re-select slice 1 and assert no second emission. That
+        // could not fail twice over: setActiveTxSlice() early-returns on an
+        // unchanged index so clearAlcGainState() is never reached, and there is
+        // no fresh sample by then so it would return false anyway
+        // (aethersdr-agent, #5636 review).
+        //
+        // What exercises the contract is a call that DOES reach
+        // clearAlcGainState() with a live sample present and must still not
+        // emit: removing an ALCGAIN meter that is not the active one.
+        model.setActiveTxSlice(0);
+        model.updateValues({21}, {rawDb(12.0f)});
+        const int before = emissions;
+        report("the active ALC gain is live again before the removal",
+               model.hasAlcGainValue() && nearlyEqual(model.alcGainDb(), 12.0f));
+        model.removeMeter(41);   // the INACTIVE slice-9 ALCGAIN
+        report("removing an inactive ALCGAIN meter emits no clear",
+               emissions == before);
+        report("and leaves the active reading standing",
+               model.hasAlcGainValue() && nearlyEqual(model.alcGainDb(), 12.0f));
     }
 
     // Path 2 — disconnect.
