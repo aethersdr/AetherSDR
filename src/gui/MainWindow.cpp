@@ -7686,6 +7686,17 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
     }
+    const bool hasTxApplet = m_appletPanel && m_appletPanel->txApplet();
+    if (m_swrScanAction) {
+        m_swrScanAction->setEnabled(connected && caps.canTransmit);
+    }
+    if (m_preTuneAction) {
+        m_preTuneAction->setEnabled(
+            connected && caps.canTransmit && caps.hasTunerMemories && hasTxApplet);
+    }
+    if (m_clearAtuAction) {
+        m_clearAtuAction->setEnabled(connected && caps.hasTunerMemories && hasTxApplet);
+    }
     if (m_aetherControlAction) {
         m_aetherControlAction->setVisible(!connected || caps.hasFlexControlIntegration);
     }

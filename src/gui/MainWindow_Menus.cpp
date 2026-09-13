@@ -43,7 +43,6 @@
 #include "SettingsBrowserDialog.h"
 #include "ThemeEditorDialog.h"
 #include "TxBandDialog.h"
-#include "SwrSweepLicenseDialog.h"
 #include "TxApplet.h"
 #include "UlanziDialMapperDialog.h"
 #include "VfoWidget.h"
@@ -1219,11 +1218,6 @@ void MainWindow::buildMenuBar()
     }
 
     // Keyboard behavior is configuration, not presentation.
-    viewMenu->removeAction(kbAct);
-    viewMenu->removeAction(configShortcutsAct);
-    settingsMenu->addSeparator();
-    settingsMenu->addAction(kbAct);
-    settingsMenu->addAction(configShortcutsAct);
     auto* resetSettingsAction = settingsMenu->addAction("Reset Settings...", this, [this] {
         SupportDialog::resetSettings(this);
     });
@@ -1271,16 +1265,15 @@ void MainWindow::buildMenuBar()
 
     toolsMenu->addSeparator();
     auto* swrScanAction = toolsMenu->addAction("Start SWR Scan...");
+    m_swrScanAction = swrScanAction;
+    swrScanAction->setEnabled(false);
     swrScanAction->setProperty(kTxKeyingProperty, true);
     connect(swrScanAction, &QAction::triggered, this, [this] {
-        // Always show the license dialog from Tools so the ellipsis is
-        // honest and a remembered overlay confirm cannot one-click TX.
-        if (!SwrSweepLicenseDialog::confirm(this, /*force=*/true)) {
-            return;
-        }
-        startSwrSweep();
+        startSwrSweep(-1, 1, 0.0, 0.0, /*forceLicenseConfirm=*/true);
     });
     auto* preTuneAction = toolsMenu->addAction("Pre-tune ATU Bands...");
+    m_preTuneAction = preTuneAction;
+    preTuneAction->setEnabled(false);
     preTuneAction->setProperty(kTxKeyingProperty, true);
     connect(preTuneAction, &QAction::triggered, this, [this] {
         if (m_appletPanel && m_appletPanel->txApplet()) {
@@ -1288,6 +1281,8 @@ void MainWindow::buildMenuBar()
         }
     });
     auto* clearAtuAction = toolsMenu->addAction("Clear ATU Memories...");
+    m_clearAtuAction = clearAtuAction;
+    clearAtuAction->setEnabled(false);
     connect(clearAtuAction, &QAction::triggered, this, [this] {
         if (m_appletPanel && m_appletPanel->txApplet()) {
             m_appletPanel->txApplet()->confirmAndClearAtuMemories();
@@ -1322,7 +1317,7 @@ void MainWindow::buildMenuBar()
         showGpsLocationDialog();
     });
     toolsMenu->addAction(networkAction);
-    auto* runtimeMonitorAction = toolsMenu->addAction("Runtime Monitor...", this, [this] {
+    toolsMenu->addAction("Runtime Monitor...", this, [this] {
         showSystemInfoDialog();
     });
 
@@ -1332,7 +1327,7 @@ void MainWindow::buildMenuBar()
              copyAssistAction,
 #endif
              swrScanAction, preTuneAction, clearAtuAction,
-             gpsDashboardAction, runtimeMonitorAction] {
+             gpsDashboardAction] {
         const bool connected = m_radioModel.isConnected();
         const RadioCapabilities caps = m_radioModel.backendCapabilities();
         const auto& tx = m_radioModel.transmitModel();
@@ -1367,7 +1362,6 @@ void MainWindow::buildMenuBar()
                    : (txReady ? QString()
                               : tr("Requires an idle, TX-capable radio with this client holding the interlock"))));
         clearAtuAction->setEnabled(connected && memories && hasTxApplet);
-        runtimeMonitorAction->setEnabled(true);
         const bool gps = !connected
             || (caps.hasGpsLocation && m_radioModel.hasGpsHardware());
         gpsDashboardAction->setVisible(gps);

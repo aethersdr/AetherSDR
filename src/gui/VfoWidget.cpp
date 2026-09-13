@@ -46,7 +46,8 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
-
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QGridLayout>
 #include <QMenu>
 #include <QDoubleSpinBox>
@@ -3447,6 +3448,8 @@ void VfoWidget::setAetherDspActive(bool active)
 // ── VFO marker display prefs (#1526, #5570) ─────────────────────────────────
 
 namespace {
+constexpr auto kVfoDisplayDefaultsKey = "VfoDisplayDefaults";
+
 int normalizedMarkerWidth(int widthPx)
 {
     if (widthPx <= 0) {
@@ -3458,10 +3461,21 @@ int normalizedMarkerWidth(int widthPx)
     return 3;
 }
 
-void saveVfoDisplayDefault(const QString& key, const QString& value)
+QJsonObject vfoDisplayDefaultsObject()
+{
+    const QByteArray stored = AppSettings::instance()
+        .value(kVfoDisplayDefaultsKey, QStringLiteral("{}"))
+        .toString().toUtf8();
+    const QJsonDocument doc = QJsonDocument::fromJson(stored);
+    return doc.isObject() ? doc.object() : QJsonObject{};
+}
+
+void saveVfoDisplayDefaultsObject(const QJsonObject& object)
 {
     auto& settings = AppSettings::instance();
-    settings.setValue(key, value);
+    settings.setValue(
+        kVfoDisplayDefaultsKey,
+        QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
     settings.save();
 }
 } // namespace
@@ -3469,31 +3483,27 @@ void saveVfoDisplayDefault(const QString& key, const QString& value)
 int VfoWidget::defaultMarkerWidth()
 {
     return normalizedMarkerWidth(
-        AppSettings::instance()
-            .value(QStringLiteral("DisplayVfoMarkerWidth"), QStringLiteral("1"))
-            .toString()
-            .toInt());
+        vfoDisplayDefaultsObject().value(QStringLiteral("markerWidth")).toInt(3));
 }
 
 bool VfoWidget::defaultFilterEdgesHidden()
 {
-    return AppSettings::instance()
-               .value(QStringLiteral("DisplayVfoFilterEdgesHidden"),
-                      QStringLiteral("False"))
-               .toString()
-           == QStringLiteral("True");
+    return vfoDisplayDefaultsObject()
+        .value(QStringLiteral("filterEdgesHidden")).toBool(false);
 }
 
 void VfoWidget::setDefaultMarkerWidth(int widthPx)
 {
-    saveVfoDisplayDefault(QStringLiteral("DisplayVfoMarkerWidth"),
-                          QString::number(normalizedMarkerWidth(widthPx)));
+    QJsonObject object = vfoDisplayDefaultsObject();
+    object.insert(QStringLiteral("markerWidth"), normalizedMarkerWidth(widthPx));
+    saveVfoDisplayDefaultsObject(object);
 }
 
 void VfoWidget::setDefaultFilterEdgesHidden(bool hide)
 {
-    saveVfoDisplayDefault(QStringLiteral("DisplayVfoFilterEdgesHidden"),
-                          hide ? QStringLiteral("True") : QStringLiteral("False"));
+    QJsonObject object = vfoDisplayDefaultsObject();
+    object.insert(QStringLiteral("filterEdgesHidden"), hide);
+    saveVfoDisplayDefaultsObject(object);
 }
 
 void VfoWidget::setMarkerWidth(int widthPx, bool persist)

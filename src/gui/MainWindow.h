@@ -998,7 +998,8 @@ private:
     BandSnapshot captureCurrentBandState() const;
     void restoreBandState(const BandSnapshot& snap);
     void startSwrSweep(int requestedSliceId = -1, int sweepPowerWatts = 1,
-                       double customLowMhz = 0.0, double customHighMhz = 0.0);
+                       double customLowMhz = 0.0, double customHighMhz = 0.0,
+                       bool forceLicenseConfirm = false);
     void clearSwrSweepPlot();
     void saveSwrSweepCsv();
     void advanceSwrSweep();
@@ -1509,6 +1510,9 @@ private:
     // waveforms / no multi-client sessions.
     QAction*         m_waveformsAction{nullptr};
     QAction*         m_multiFlexAction{nullptr};
+    QAction*         m_swrScanAction{nullptr};
+    QAction*         m_preTuneAction{nullptr};
+    QAction*         m_clearAtuAction{nullptr};
     QAction*         m_aetherControlAction{nullptr};
     QAction*         m_flexControlKnobAction{nullptr};
 
