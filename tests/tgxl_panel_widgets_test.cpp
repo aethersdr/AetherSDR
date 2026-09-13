@@ -290,6 +290,22 @@ void testActivePortRule()
 // ignored its scale would look exactly like the bug this replaced.
 void testScaling()
 {
+    // The discrete keys are letterbox-shaped: their width comes from the
+    // control row's split with the dials, and the height follows from it. The
+    // cap has to be applied as an explicit height rather than a maximum --
+    // the keys are laid out with AlignVCenter, so the layout takes their size
+    // hint instead of stretching them, and a maximum alone leaves them at
+    // whatever the hint happened to be (measured 2.25 rather than 1.78).
+    constexpr qreal kKeyAspect = 16.0 / 9.0;
+    for (int w : {45, 46, 82, 120}) {
+        const int h = qMax(1, qRound(w / kKeyAspect));
+        const qreal got = qreal(w) / h;
+        expect(qAbs(got - kKeyAspect) < 0.05,
+               QStringLiteral("a %1px key is %2px tall (aspect %3)").arg(w).arg(h)
+                   .arg(got, 0, 'f', 2));
+        expect(h < w, QStringLiteral("a %1px key is wider than it is tall").arg(w));
+    }
+
     RelayDial dial(QStringLiteral("C1"));
     const int base = dial.sizeHint().width();
     dial.setPreferredDiameter(base * 2);

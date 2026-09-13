@@ -10,6 +10,8 @@
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QEvent>
+#include <QLayout>
 #include <QSignalBlocker>
 #include <QSpacerItem>
 #include <QTimer>
@@ -37,6 +39,12 @@ constexpr qreal kMaxScale = 3.0;
 // clear the frame rather than sit against it, which is a constant few pixels
 // at any size.
 constexpr int kBottomGap = 8;
+
+// The discrete keys are letterbox-shaped rather than square. Their width is
+// set by the control row's split with the dials, so the aspect is applied as
+// a cap on their height: the row is as tall as the dials, and without it the
+// keys stretch to match and become columns.
+constexpr qreal kKeyAspect = 16.0 / 9.0;
 
 // The three states TUNE cycles through visually. Kept as named templates
 // because both presentations' TUNE buttons wear them and the tuning handler
@@ -415,8 +423,8 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
     keys->setSpacing(4);
     auto makeKey = [this](const QString& text, const QString& tip) {
         auto* btn = new QPushButton(text, m_panelControls);
-        // Wide as the column allows, but only as tall as a key needs — the
-        // window's spare height belongs to the stretch below, not to these.
+        // Wide as the column allows; the height follows from kKeyAspect once
+        // the layout has settled that width (see applyKeyAspect).
         btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         btn->setToolTip(tip);
         btn->setAccessibleName(text);
@@ -430,10 +438,16 @@ void TunerApplet::buildExpandedUI(QVBoxLayout* vbox)
         theme.applyStyleSheet(key, kPanelKeyIdleStyle);
     }
     theme.applyStyleSheet(m_panelTuneBtn, kTuneIdleStyle);
-    keys->addWidget(m_stbyBtn);
-    keys->addWidget(m_bypBtn);
-    keys->addWidget(m_panelTuneBtn);
+    // Centred, because a key capped shorter than the row would otherwise sit
+    // against its top edge rather than level with the dials.
+    keys->addWidget(m_stbyBtn, 0, Qt::AlignVCenter);
+    keys->addWidget(m_bypBtn, 0, Qt::AlignVCenter);
+    keys->addWidget(m_panelTuneBtn, 0, Qt::AlignVCenter);
     row->addLayout(keys, 2);
+
+    // The keys' width is only known once the row has been laid out, so the
+    // aspect is applied from there rather than computed up front.
+    m_panelControls->installEventFilter(this);
 
     vbox->addWidget(m_panelControls);
 
@@ -555,11 +569,11 @@ void TunerApplet::applyDensity()
     m_dockedControls->setVisible(!f);
 
     for (auto* btn : {m_stbyBtn, m_bypBtn, m_panelTuneBtn}) {
-        btn->setMinimumHeight(f ? px(34) : 0);
         QFont keyFont = btn->font();
         keyFont.setPixelSize(px(13));
         btn->setFont(keyFont);
     }
+    applyKeyAspect();
     // The rail's own two keys keep the compact size they always had.
     for (auto* btn : {m_tuneBtn, m_operateBtn}) {
         QFont railFont = btn->font();
@@ -602,6 +616,36 @@ void TunerApplet::layOutAlertOverlay()
 {
     if (!m_alertOverlay) return;
     m_alertOverlay->setGeometry(rect());
+}
+
+bool TunerApplet::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_panelControls
+        && (event->type() == QEvent::Resize || event->type() == QEvent::LayoutRequest)) {
+        applyKeyAspect();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void TunerApplet::applyKeyAspect()
+{
+    if (!m_panelControls || !m_stbyBtn) return;
+    if (QLayout* l = m_panelControls->layout()) {
+        l->activate();
+    }
+    for (auto* btn : {m_stbyBtn, m_bypBtn, m_panelTuneBtn}) {
+        const int w = btn->width();
+        if (w <= 0) continue;
+        const int h = qMax(1, qRound(w / kKeyAspect));
+        // Fixed, not a maximum: the keys are laid out with AlignVCenter so
+        // the layout takes their size hint rather than stretching them, and a
+        // maximum alone would leave them at whatever the hint happened to be.
+        // Only when it moved — this changes the size hint, and it runs from
+        // inside a layout event.
+        if (btn->minimumHeight() != h || btn->maximumHeight() != h) {
+            btn->setFixedHeight(h);
+        }
+    }
 }
 
 void TunerApplet::resizeEvent(QResizeEvent* event)

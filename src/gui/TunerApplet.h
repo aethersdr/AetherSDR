@@ -83,6 +83,9 @@ public slots:
 protected:
     // Keeps the alert overlay covering the applet as it resizes.
     void resizeEvent(QResizeEvent* event) override;
+    // Watches the control row so the keys can be re-proportioned once the
+    // layout has given them a width.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     void buildUI();
@@ -111,6 +114,9 @@ private:
     // The tuner sends no severity with an alert, so it is read off the text.
     void applyAlertStyle();
     void layOutAlertOverlay();
+    // Caps the discrete keys at kKeyAspect so they stay letterbox-shaped
+    // instead of growing into columns beside the taller dials.
+    void applyKeyAspect();
     // Operate / bypass / standby drive three different port-area presentations
     // (per-port state, a spanning bypass overlay, or the standby banner).
     // Both callers of it need the same three-way decision, so it lives here.
