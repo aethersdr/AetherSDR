@@ -28,7 +28,10 @@ void TunerModel::setHandle(const QString& handle)
     // Left latched it would pass abortTune()'s guard and start a tune on an
     // idle tuner. A direct connection that is still up re-reports the truth
     // on its next poll a second later.
-    if (m_handle.isEmpty()) {
+    // Not while a direct connection is up: it is still watching the tune and
+    // will report the end itself. Clearing here would drop the key back to
+    // TUNE mid-tune, and pressing it then aborts.
+    if (m_handle.isEmpty() && !hasDirectConnection()) {
         clearTuning();
     }
     if (wasPres != nowPres)

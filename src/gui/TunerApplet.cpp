@@ -143,6 +143,30 @@ TunerApplet::TunerApplet(QWidget* parent)
         static_cast<HGauge*>(m_fwdGauge)->clearPeak();
     });
 
+    // Relay-only completion notice. The first timer waits for the settled SWR
+    // to arrive after the tune ends — the meters lag the tuning edge — and the
+    // second takes the banner down again, because on this path there is no
+    // device clear to follow. Its dwell is chosen to sit near the tuner's own
+    // (~1.9 s after a tune), so the two paths feel alike.
+    m_relayResultTimer = new QTimer(this);
+    m_relayResultTimer->setSingleShot(true);
+    m_relayResultTimer->setInterval(500);
+    connect(m_relayResultTimer, &QTimer::timeout, this, [this]() {
+        if (m_model && m_model->hasDirectConnection()) return;
+        // Same wording as the tuner's own notice, so the severity rule reads
+        // it the same way and a tune result looks the same wherever it came
+        // from. It is our sentence, not a quotation: nothing on this path
+        // reported it.
+        setAlertText(tr("Tuned SWR: %1:1").arg(m_swr, 0, 'f', 2));
+        m_relayDwellTimer->start();
+    });
+    m_relayDwellTimer = new QTimer(this);
+    m_relayDwellTimer->setSingleShot(true);
+    m_relayDwellTimer->setInterval(2000);
+    connect(m_relayDwellTimer, &QTimer::timeout, this, [this]() {
+        setAlertText(QString());
+    });
+
     buildUI();
     applyDensity();
 }
@@ -410,6 +434,11 @@ void TunerApplet::buildUI()
     // layout, so it can cover the whole thing. Created last so it sits on top
     // of everything already added.
     m_alertOverlay = new QLabel(this);
+    // The body of an M| frame, verbatim from the tuner. QLabel's AutoText
+    // would render anything markup-shaped as rich text — including a remote
+    // <img>, which it would then fetch. Device input is not ours to trust
+    // (Principle VII), and PlainText is the house answer.
+    m_alertOverlay->setTextFormat(Qt::PlainText);
     m_alertOverlay->setAlignment(Qt::AlignCenter);
     m_alertOverlay->setWordWrap(true);
     m_alertOverlay->setVisible(false);
@@ -1058,7 +1087,12 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // place for the same reading to disagree.
     connect(m_model, &TunerModel::tuningChanged, this, [this](bool tuning) {
         m_tuning = tuning;
+        // A tune starting cancels any notice still pending or standing from
+        // the last one.
+        m_relayResultTimer->stop();
+        m_relayDwellTimer->stop();
         if (tuning) {
+            setAlertText(QString());
             applyTuneButtonStyle(kTuneBusyStyle);
             // The key is the abort while a tune is running, so it says what
             // pressing it will do rather than reporting what the tuner is up
@@ -1067,6 +1101,12 @@ void TunerApplet::setTunerModel(TunerModel* model)
         } else {
             applyTuneButtonStyle(kTuneIdleStyle);
             applyTuneButtonText(tr("TUNE"));
+            // Only where the tuner cannot tell us itself. With the direct
+            // connection up its own M| notice is on its way, and composing a
+            // second one would put two results on screen for one tune.
+            if (m_model && !m_model->hasDirectConnection()) {
+                m_relayResultTimer->start();
+            }
         }
     });
 
@@ -1102,6 +1142,11 @@ void TunerApplet::syncFromModel()
     auto& theme = AetherSDR::ThemeManager::instance();
     const bool operate = m_model->isOperate();
     const bool bypass = m_model->isBypass();
+    // Seeded here, not only from the tuningChanged edge: the edge is all that
+    // writes it today because the applet is built before any tuner status
+    // arrives, which makes this a no-op — and a latent bug the day the applet
+    // is rebuilt against a model already mid-tune.
+    m_tuning = m_model->isTuning();
 
     if (operate && !bypass) {
         m_operateBtn->setText(tr("OPERATE"));

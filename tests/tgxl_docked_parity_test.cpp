@@ -41,6 +41,16 @@ void settle(int ms = 120)
     }
 }
 
+// Spins until done() or the deadline, returning done()'s last answer.
+bool spin(std::function<bool()> done, int timeoutMs = 3000)
+{
+    QDeadlineTimer deadline(timeoutMs);
+    while (!done() && !deadline.hasExpired()) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
+    return done();
+}
+
 // The alert banner, found the way a screen reader would.
 QLabel* alertOverlay(QWidget* applet)
 {
@@ -96,6 +106,16 @@ int main(int argc, char** argv)
         settle();
     }
     CHECK(aVisibleKeyReads(&applet, QStringLiteral("TUNE")));
+
+    // Ending a tune on this model raises the relay-path completion notice
+    // (asserted properly further down). Drain it — waiting only for "not
+    // visible" would return instantly, before the notice has even been
+    // raised, and it would then appear in the middle of the next section.
+    QLabel* overlay = alertOverlay(&applet);
+    CHECK(overlay != nullptr);
+    if (!overlay) return 1;
+    CHECK(spin([&] { return overlay->isVisible(); }, 3000));
+    CHECK(spin([&] { return !overlay->isVisible(); }, 5000));
 
     // ── Every state word fits the rail's button, at every rail width ─────
     //
@@ -158,9 +178,6 @@ int main(int argc, char** argv)
     }
 
     // ── Tuner alerts reach the rail, full width ───────────────────────────
-    QLabel* overlay = alertOverlay(&applet);
-    CHECK(overlay != nullptr);
-    if (!overlay) return 1;
     CHECK(!overlay->isVisible());
 
     emit model.alertChanged(QStringLiteral("LOW RF POWER"));
@@ -192,6 +209,63 @@ int main(int argc, char** argv)
     emit model.alertChanged(QString());
     settle();
     CHECK(!overlay->isVisible());
+
+    // ── Device text is never markup ──────────────────────────────────────
+    //
+    // The banner shows the body of an M| frame verbatim. Under QLabel's
+    // AutoText a tuner sending something markup-shaped would have it rendered
+    // as rich text — and a remote <img> would be fetched. The frame is device
+    // input, so it is displayed literally (Principle VII).
+    {
+        CHECK(overlay->textFormat() == Qt::PlainText);
+        const QString hostile =
+            QStringLiteral("<img src=http://example.invalid/x.png> LOW RF POWER");
+        emit model.alertChanged(hostile);
+        settle();
+        CHECK(overlay->isVisible());
+        // Held as given, not parsed into an element.
+        CHECK(overlay->text() == hostile);
+        CHECK(overlay->textFormat() == Qt::PlainText);
+        emit model.alertChanged(QString());
+        settle();
+        CHECK(!overlay->isVisible());
+    }
+
+    // ── A relay-only station still gets the tune result ──────────────────
+    //
+    // The tuner's alert channel exists only on the direct connection: the
+    // relayed object carries no message, result or SWR field, and the radio's
+    // own atu status stays TUNE_MANUAL_BYPASS through a TGXL tune because the
+    // TGXL is the one tuning. Reporting the result only through that channel
+    // would leave every relay-only station with nothing after a tune, where
+    // before it had the figure on the key.
+    //
+    // This model has no direct connection, which is exactly that station.
+    {
+        applet.updateMeters(60.0f, 1.42f);      // a settled reading
+        {
+            TunerDelta d; d.tuning = true;
+            model.applyChanges(d);
+            settle();
+        }
+        // Nothing yet — the tune is still running.
+        CHECK(!overlay->isVisible());
+        {
+            TunerDelta d; d.tuning = false;
+            model.applyChanges(d);
+        }
+        // The notice waits for the settled SWR rather than reading the meters
+        // at the instant the tune ended.
+        CHECK(spin([&] { return overlay->isVisible(); }, 3000));
+        CHECK(overlay->text().startsWith(QLatin1String("Tuned SWR:")));
+        CHECK(overlay->text().contains(QLatin1String("1.42")));
+        // Worded like the tuner's own notice so the severity rule reads it the
+        // same way — a result is a result wherever it came from.
+        CHECK(overlay->geometry() == applet.rect());
+
+        // And it takes itself down: there is no device clear on this path.
+        CHECK(spin([&] { return !overlay->isVisible(); }, 5000));
+    }
 
     if (g_failures == 0) {
         std::printf("tgxl_docked_parity_test: all checks passed\n");

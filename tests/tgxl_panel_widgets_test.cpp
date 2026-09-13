@@ -118,6 +118,24 @@ void testPortRowReadings()
     expect(!rowShowsText(row, QStringLiteral("OPR")),
            QStringLiteral("an empty state clears the cell"));
 
+    // The port's source name comes off the wire verbatim (flexA/flexB), so
+    // like the alert banner it is displayed literally rather than left to
+    // QLabel's AutoText, which would render markup as rich text and fetch a
+    // remote <img>. Principle VII — device input is not ours to trust.
+    {
+        const QString hostile = QStringLiteral("<img src=http://example.invalid/x.png>");
+        row.setSourceText(hostile);
+        bool literal = false;
+        for (const QLabel* label : row.findChildren<QLabel*>()) {
+            if (label->text() != hostile) continue;
+            literal = true;
+            expect(label->textFormat() == Qt::PlainText,
+                   QStringLiteral("the source name is rendered literally"));
+        }
+        expect(literal, QStringLiteral("the source name is held as given"));
+        row.setSourceText(QStringLiteral("FLEX-8600"));
+    }
+
     // The whole strip is one accessible sentence: a reader crossing six
     // separate labels would otherwise lose which port they belong to.
     row.setSourceText(QStringLiteral("FLEX-8600"));

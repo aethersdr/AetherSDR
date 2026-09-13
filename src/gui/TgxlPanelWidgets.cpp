@@ -250,13 +250,19 @@ TgxlPortRow::TgxlPortRow(const QString& portLetter, QWidget* parent)
     m_pttLabel->setFixedWidth(34);
 
     m_bandLabel = new QLabel(tr("N/A"), this);
+    m_bandLabel->setTextFormat(Qt::PlainText);
     m_bandLabel->setAlignment(Qt::AlignCenter);
     m_bandLabel->setMinimumWidth(34);
 
     m_sourceLabel = new QLabel(QStringLiteral("—"), this);
+    // flexA/flexB come off the wire verbatim — see the note on the alert
+    // overlay. The rest of this strip is text we format ourselves, but it
+    // costs nothing to keep the whole row literal.
+    m_sourceLabel->setTextFormat(Qt::PlainText);
     m_sourceLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
     m_freqLabel = new QLabel(tr("N/A"), this);
+    m_freqLabel->setTextFormat(Qt::PlainText);
     m_freqLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     m_stateLabel = new QLabel(QStringLiteral("—"), this);

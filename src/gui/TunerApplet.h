@@ -215,6 +215,15 @@ private:
     // local timer would have to guess that, and would fight the device the
     // moment it changed its mind.
     QLabel*      m_alertOverlay{nullptr};
+    // A station reaching the tuner only through the radio gets no alert
+    // channel: the relayed object carries no message, result or SWR field,
+    // and the radio's own atu status stays TUNE_MANUAL_BYPASS throughout a
+    // TGXL tune because the TGXL is the one tuning. The settled SWR is still
+    // available there through the meters, so the completion notice is
+    // composed locally and shown in the same banner rather than that
+    // population losing the result entirely.
+    QTimer*      m_relayResultTimer{nullptr};
+    QTimer*      m_relayDwellTimer{nullptr};
     bool         m_alertIsGood{false};
     RelayDial*   m_c1Dial{nullptr};
     RelayDial*   m_lDial{nullptr};
