@@ -494,6 +494,14 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         publishWideState();
     });
     connect(m_metis, &MetisClient::linkDown, this, [this] {
+        // The PA temperature pole belongs to the SESSION. Left standing, the
+        // first sample of the next stream would be averaged against a reading
+        // from before the drop — kPaTempAlpha would drag a cold radio toward a
+        // temperature it had an hour ago, and the row would take several
+        // samples to tell the truth. Clearing it makes the next reading seed
+        // the filter instead of blending with history.
+        m_havePaTemp = false;
+        m_paTempC = 0.0;
         if (m_connected) {
             m_connected = false;
             m_ceilingAnnouncer.reset();   // #5594 (M1): re-seeded on the next connect
@@ -4769,8 +4777,16 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     }
 
     section("temperatureC", QStringLiteral("Analog / thermal"));
+    // `inBandLive`, like every row around it. m_paTempC is a SMOOTHED value
+    // with no age of its own: publishTelemetry() sets m_havePaTemp and nothing
+    // ever clears it, so without this gate the one row a human actually reads
+    // would keep showing a figure from a stream that stopped minutes ago while
+    // temperatureRaw beside it correctly reported nothing and yielded to the
+    // poller. The telemetrySource row two sections down already reasons this
+    // way — "we hold one forever" — and this row was the exception
+    // (aethersdr-agent, #5642 review).
     put("temperatureC", QStringLiteral("PA temperature (°C)"),
-        m_havePaTemp ? QVariant(m_paTempC) : QVariant());
+        (inBandLive && m_havePaTemp) ? QVariant(m_paTempC) : QVariant());
     put("temperatureRaw", QStringLiteral("Temperature (raw counts)"),
         opt(t.temperatureRaw));
     put("biasCurrentRaw", QStringLiteral("PA bias current (raw counts)"),

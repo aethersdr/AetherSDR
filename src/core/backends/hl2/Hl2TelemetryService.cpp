@@ -118,6 +118,31 @@ int Hl2TelemetryService::linkStateUpdateCount() const noexcept
 void Hl2TelemetryService::setLinkState(Hl2LinkState state)
 {
     ++d->linkStateUpdates;
+    // A REPLY FROM A SESSION WE HAVE LEFT IS OUR OWN VOICE COMING BACK.
+    //
+    // While connected and stalled the poller still runs, and the `run` bit in
+    // the reply it caches is set BY US — so `reply->streaming` is true and the
+    // reply describes our own session. setTarget() drops the cache only when
+    // the target CHANGES, and a plain disconnect leaves the address alone. The
+    // next `health` read then sees `!connected && reply && reply->streaming`
+    // and reports HeldByOther, rendering `radioInUse: true` for a radio nobody
+    // is using. It self-corrects on the next reply, but HeldByOther is
+    // demand-gated, so "the next reply" may be after the operator has already
+    // read the wrong answer (aethersdr-agent, #5642 review).
+    //
+    // Leaving Streaming or StreamStalled is exactly the transition that ends
+    // the session the cached reply belongs to, so that is where it is dropped.
+    // The age clock goes with it: an age that outlives its reading would say a
+    // stale figure is fresh.
+    const bool leftOurOwnSession =
+        (d->state == Hl2LinkState::Streaming
+         || d->state == Hl2LinkState::StreamStalled)
+        && state != Hl2LinkState::Streaming
+        && state != Hl2LinkState::StreamStalled;
+    if (leftOurOwnSession) {
+        d->reply.reset();
+        d->at.invalidate();
+    }
     d->state = state;
     d->poller->setLinkState(state);
 }

@@ -6906,6 +6906,32 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
     const QHostAddress addr(value);
     if (addr.isNull())
         return err(QStringLiteral("telemetry target: '%1' is not an IP address").arg(value));
+    // "IS AN IP LITERAL" IS NOT ENOUGH, and the design note's own §2.1a says
+    // why: the broadcast fallback was removed because it could not prove who
+    // would receive the datagram. An explicit target that accepts anything
+    // syntactically valid reopens the same hole by hand — this aims a 60-byte
+    // UDP datagram EVERY SECOND for as long as anything reads `health`, and
+    // each read renews the 5 s demand window (aethersdr-agent, #5642 review).
+    //
+    // Refused: multicast, broadcast and the unspecified address. Each of those
+    // reaches hosts nobody named, which is the property §2.1a objected to.
+    //
+    // A UNICAST ADDRESS OFF THIS SUBNET IS STILL ALLOWED, deliberately: this
+    // lab's own radio sits at 192.168.8.2 behind a gateway while the host is on
+    // 192.168.36.0/24, so a same-subnet rule would refuse the one radio the
+    // feature exists for. What protects the wrong-unicast case is the reply
+    // side, not the send side — Hl2TelemetryPoller checks the MAC in the
+    // answer, so a stranger who replies is discarded rather than believed.
+    // A stranger still receives an unsolicited probe; that is the residual
+    // cost, and it is stated rather than hidden.
+    if (addr == QHostAddress::Broadcast || addr.isMulticast()
+        || addr == QHostAddress::AnyIPv4 || addr == QHostAddress::Any) {
+        return err(QStringLiteral(
+                       "telemetry target: '%1' is a broadcast, multicast or "
+                       "unspecified address — this sends one datagram a second "
+                       "and must name a single radio")
+                       .arg(value));
+    }
 
     if (!m_radioModel->setOfflineHealthTarget(addr))
         return err(offlineHealthRefusal(m_radioModel->family()));
