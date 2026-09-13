@@ -3943,10 +3943,17 @@ add_test(NAME hl2_ep4_ingest_test COMMAND hl2_ep4_ingest_test)
 # enable/disable cycles go in through the same MetisClientTestAccess seam and
 # both timers are fired by hand. Qt6::Test is for QSignalSpy, which is how
 # "one block per arming cycle, never one per packet" is asserted.
-# The one contract BandscopeDialog borrows from ClientEqFftAnalyzer: reset()
-# followed by update() reports the transform unsmoothed. Same shape as the
-# parser targets above — compiles the analyzer directly, no Qt, no aethercore,
-# no widget, no radio.
+add_executable(hl2_ep4_gate_test tests/hl2_ep4_gate_test.cpp)
+target_include_directories(hl2_ep4_gate_test PRIVATE src tests)
+target_link_libraries(hl2_ep4_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_ep4_gate_test COMMAND hl2_ep4_gate_test)
+
+# The two contracts BandscopeDialog borrows from ClientEqFftAnalyzer: reset()
+# followed by update() reports the transform unsmoothed, and the absolute dB
+# scale is what the window thinks it is (the analyzer's own bins are 6.02 dB
+# low; coherentGainCorrectionDb() is the inverse the window applies). Same
+# shape as the parser targets above — compiles the analyzer directly, no Qt,
+# no aethercore, no widget, no radio.
 add_executable(bandscope_analyzer_test
     tests/bandscope_analyzer_test.cpp
     src/gui/ClientEqFftAnalyzer.cpp)
@@ -3981,11 +3988,6 @@ add_executable(wideband_converter_view_test tests/wideband_converter_view_test.c
 target_include_directories(wideband_converter_view_test PRIVATE src)
 target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
-
-add_executable(hl2_ep4_gate_test tests/hl2_ep4_gate_test.cpp)
-target_include_directories(hl2_ep4_gate_test PRIVATE src tests)
-target_link_libraries(hl2_ep4_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
-add_test(NAME hl2_ep4_gate_test COMMAND hl2_ep4_gate_test)
 
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)

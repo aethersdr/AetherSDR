@@ -1357,15 +1357,31 @@ void MainWindow::buildMenuBar()
     // is not a control a connected radio might be shy about reporting — with no
     // radio there is no converter to look at, so an enabled entry would open a
     // window that could only say so.
+    //
+    // AND IT SAYS WHY IT IS GREYED. The tooltip describes what the entry is;
+    // nothing there tells an operator looking at a disabled row what would
+    // change it. A QAction has no accessibleDescription, so a screen reader
+    // gets the text and nothing else — the status tip is the one string Qt
+    // announces for an action, and it is cleared again when the entry is live
+    // so the reason cannot outlive the condition that produced it.
     auto* bandscopeAct = toolsMenu->addAction("Wideband Bandscope...");
     bandscopeAct->setMenuRole(QAction::NoRole);
     bandscopeAct->setToolTip(
         "The radio's converter, before tuning and filtering");
     bandscopeAct->setEnabled(false);
+    bandscopeAct->setStatusTip(
+        "Unavailable: no radio is connected that provides a wideband "
+        "converter view.");
     connect(&m_radioModel, &RadioModel::capabilitiesChanged, bandscopeAct,
             [bandscopeAct](bool connected, const RadioCapabilities& caps) {
-        bandscopeAct->setEnabled(connected
-                                 && caps.widebandConverterView.has_value());
+        const bool on = connected && caps.widebandConverterView.has_value();
+        bandscopeAct->setEnabled(on);
+        bandscopeAct->setStatusTip(on
+            ? QString()
+            : (connected
+                   ? QStringLiteral("Unavailable: this radio does not provide "
+                                    "a wideband converter view.")
+                   : QStringLiteral("Unavailable: no radio is connected.")));
     });
     connect(bandscopeAct, &QAction::triggered, this, [this] {
         showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
