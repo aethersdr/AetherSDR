@@ -43,6 +43,7 @@
 // the scene anchor below.
 
 #include "core/backends/hl2/Hl2Backend.h"
+#include "TxTestAuthority.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include "TestDspBuildWait.h"
@@ -200,6 +201,7 @@ static float peakNear(const std::vector<float>& spec, int centreBin, int halfWid
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    TxTestAuthority authority;
     qRegisterMetaType<SliceDelta>();
 
     // Loopback by default: a simulator on this machine is the normal case, and
@@ -342,12 +344,12 @@ int main(int argc, char** argv)
 
     // ---- transmit a tone ----
     constexpr double kToneOffsetHz = 5000.0;
-    backend.setTxTestTone(kToneOffsetHz, 0.5);
-    backend.setKeying(true);
+    backend.setTxTestTone(kToneOffsetHz, 0.5, authority.operation);
+    backend.setKeying(true, authority.operation);
     spin(2500);
     const std::vector<float> keyed = lastSpectrum;
-    backend.setKeying(false);
-    backend.setTxTestTone(0.0, 0.0);
+    backend.setKeying(false, authority.operation);
+    backend.setTxTestTone(0.0, 0.0, authority.operation);
 
     check(keyed.size() == baseline.size() && !keyed.empty(),
           "spectrum still flowing while keyed");
@@ -398,7 +400,7 @@ int main(int argc, char** argv)
     {
         backend.setSliceMode(0, QStringLiteral("USB"));
         spin(300);
-        backend.setKeying(true);
+        backend.setKeying(true, authority.operation);
 
         std::vector<float> voice;
         constexpr double kAudioHz = 1500.0;
@@ -415,7 +417,7 @@ int main(int argc, char** argv)
                 out[2 * n] = v;
                 out[2 * n + 1] = v;      // AudioEngine duplicates across channels
             }
-            backend.submitTxAudio(pcm, kRate, /*clientLeveled=*/false);
+            backend.submitTxAudio(pcm, kRate, /*clientLeveled=*/false, authority.context);
             spin(20);
             // Capture WHILE transmitting. Sampling after the loop would read
             // silence: the queue drains in well under a second once audio stops,
@@ -424,7 +426,7 @@ int main(int argc, char** argv)
             if (blk == 80)
                 voice = lastSpectrum;
         }
-        backend.setKeying(false);
+        backend.setKeying(false, authority.operation);
 
         // Assert the capture happened. Without this the three checks below are
         // skipped in silence when `voice` never arrived, and the test still

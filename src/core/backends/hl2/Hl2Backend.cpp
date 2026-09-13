@@ -404,7 +404,8 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             return;
         }
         m_cwAutoKeyed = false;
-        setKeying(false);
+        const TxCoordinator::Completion completion = std::exchange(m_cwHangCompletion, {});
+        setKeying(false, m_cwHangOperation, completion);
     });
 
     // Raw IQ -> the per-receiver DSP chains. ONE connection for every receiver,
@@ -518,8 +519,8 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     // Modulated IQ -> the wire. Both live on the I/O thread, so this is a direct
     // call and the transmit path never touches the GUI thread.
     connect(m_txDsp, &Hl2TxDsp::iqReady, m_metis,
-            [this](const std::vector<std::complex<float>>& iq) {
-        m_metis->queueTxIq(iq);
+            [this](const std::vector<std::complex<float>>& iq, const TxCoordinator::Context& context) {
+        m_metis->queueTxIq(iq, context);
     });
     connect(m_txDsp, &Hl2TxDsp::micPeak, this,
             [this](float dbfs) {
@@ -3308,8 +3309,18 @@ void Hl2Backend::setPanFrameRate(const QString& panId, int fps)
         Q_ARG(int, fps));
 }
 
-void Hl2Backend::setKeying(bool key)
+void Hl2Backend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    applyKeying(key, operation, completion, false);
+}
+
+void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation,
+                            const TxCoordinator::Completion& completion, bool cwBreakIn)
+{
+    if (!TxCoordinator::Command{operation, key}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    m_lastTxOperation = operation;
     // Keying is gated twice on purpose. capabilities().canTransmit reflects the
     // gate, so the engine guard above the seam already refuses when transmit is
     // off; MetisClient refuses independently at the wire. Neither is trusted to
@@ -3326,13 +3337,14 @@ void Hl2Backend::setKeying(bool key)
     // this explicit handoff the pending CW hang timer would later unkey a PTT
     // that is still being held.
     //
-    // The automatic CW path sets m_cwAutoKeyed only AFTER its own setKeying(true)
+    // The automatic CW path sets m_cwAutoKeyed only AFTER its own applyKeying(true)
     // call below, so that internal key-up cannot be mistaken for manual intent.
     if (key && m_keyed && m_cwAutoKeyed) {
         if (m_cwHangTimer) {
             m_cwHangTimer->stop();
         }
         m_cwAutoKeyed = false;
+        m_cwHangCompletion = {};
     }
     // THE ALC'S HOLD THRESHOLD IS A SILENT CLIFF, so say when an operator has
     // fallen off it.
@@ -3437,11 +3449,12 @@ void Hl2Backend::setKeying(bool key)
     // asked for explicitly is theirs, and keying is how they transmit it —
     // clearing that indiscriminately broke exactly that case.
     if (key && !m_tuning && m_toneFromTune)
-        setTxTestTone(0.0, 0.0);
+        setTxTestTone(0.0, 0.0, operation);
     if (!key) {
         if (m_cwHangTimer) {
             m_cwHangTimer->stop();
         }
+        m_cwHangCompletion = {};
         m_cwAutoKeyed = false;
         // An unkey ends tune too, however it was started — so the drive register
         // has to come back HERE, not in setTune()'s release branch.
@@ -3474,9 +3487,15 @@ void Hl2Backend::setKeying(bool key)
             applyBandFilter("tune-end");
         }
     }
-    if (m_metis)
-        QMetaObject::invokeMethod(m_metis, "setMox", Qt::QueuedConnection,
-            Q_ARG(bool, key));
+    if (m_metis) {
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, key, operation, cwBreakIn] {
+            if (cwBreakIn) {
+                metis->setCwMox(key, operation);
+            } else {
+                metis->setMox(key, operation);
+            }
+        }, Qt::QueuedConnection);
+    }
     if (!key) {
         // Drop buffered audio on unkey so the next transmission does not open
         // with the tail of the previous one. BOTH stages hold audio and both
@@ -3488,19 +3507,37 @@ void Hl2Backend::setKeying(bool key)
         // of forward power for a moment, which was the previous transmission's
         // last half second going out on the air.
         if (m_txDsp) {
-            QMetaObject::invokeMethod(m_txDsp, "reset", Qt::QueuedConnection);
+            QMetaObject::invokeMethod(m_txDsp, [dsp = m_txDsp, operation] {
+                if (operation.permitsCleanup()) {
+                    dsp->reset();
+                }
+            }, Qt::QueuedConnection);
         }
         if (m_metis) {
-            QMetaObject::invokeMethod(m_metis, "flushTxIq", Qt::QueuedConnection);
+            QMetaObject::invokeMethod(m_metis, [metis = m_metis, operation] {
+                if (operation.permitsCleanup()) {
+                    metis->flushTxIq();
+                }
+            }, Qt::QueuedConnection);
         }
         if (m_metis) {
-            QMetaObject::invokeMethod(m_metis, "clearCwKeying", Qt::QueuedConnection);
+            QMetaObject::invokeMethod(m_metis, [metis = m_metis, operation] {
+                if (operation.permitsCleanup()) {
+                    metis->clearCwKeying();
+                }
+            }, Qt::QueuedConnection);
         }
+    }
+    if (m_metis) {
+        QMetaObject::invokeMethod(m_metis, [completion] { completion.finish(); }, Qt::QueuedConnection);
     }
 }
 
-void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs)
+void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     if (!m_txAllowed) {
         if (down) {
             qWarning() << "Hl2Backend: CW key refused — automation bridge is active "
@@ -3524,9 +3561,11 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs)
     if (m_cwHangTimer) {
         m_cwHangTimer->stop();
     }
+    m_cwHangCompletion = {}; // a fresh element supersedes that local hang
     if (m_metis) {
-        QMetaObject::invokeMethod(m_metis, "setCwKeyDown", Qt::QueuedConnection,
-            Q_ARG(bool, down));
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, down, operation, completion] {
+            metis->setCwKeyDown(down, operation);
+        }, Qt::QueuedConnection);
     }
 
     if (down) {
@@ -3535,7 +3574,7 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs)
         // an MOX/PTT the operator already asserted — matching Flex behavior and
         // piHPSDR's software-keyer path.
         if (breakIn && !m_keyed) {
-            setKeying(true);
+            applyKeying(true, operation, {}, true);
             m_cwAutoKeyed = true;
         }
         return;
@@ -3547,13 +3586,19 @@ void Hl2Backend::setCwKeying(bool down, bool breakIn, int breakInDelayMs)
         // emitted. The configured delay remains the dominant hang at normal
         // operating values.
         constexpr int kCwEnvelopeReleaseMs = 6;
+        m_cwHangOperation = operation;
+        m_cwHangCompletion = completion;
         m_cwHangTimer->start(std::max(kCwEnvelopeReleaseMs,
                                       std::clamp(breakInDelayMs, 0, 2000)));
     } else if (!m_keyed && m_metis) {
         // A break-in-off key press without manual PTT produced no RF. Do not
         // leave CW owning the IQ stream after its release, or a later voice MOX
         // would correctly key but transmit only silence.
-        QMetaObject::invokeMethod(m_metis, "clearCwKeying", Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_metis, [metis = m_metis, operation] {
+            if (operation.permitsCleanup()) {
+                metis->clearCwKeying();
+            }
+        }, Qt::QueuedConnection);
     }
 }
 
@@ -3694,8 +3739,11 @@ void Hl2Backend::applyFreqCalPpb(int ppb, bool persist)
 }
 
 void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                               bool clientLeveled)
+                               bool clientLeveled, const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     // Only modulate while actually keyed. Feeding the modulator unkeyed would
     // fill the transmit queue with audio that goes out the instant MOX asserts —
     // the operator would hear the last second of the shack on their first
@@ -3738,13 +3786,16 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
         mono[static_cast<std::size_t>(n)] = 0.5f * (l + r);
     }
     QMetaObject::invokeMethod(m_txDsp,
-                              [this, mono = std::move(mono), clientLeveled] {
-        m_txDsp->processAudioBlock(mono, clientLeveled);
+                              [dsp = m_txDsp, mono = std::move(mono), clientLeveled, context] {
+        dsp->processAudioBlock(mono, clientLeveled, context);
     }, Qt::QueuedConnection);
 }
 
-void Hl2Backend::setTxTestTone(double offsetHz, double amplitude)
+void Hl2Backend::setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation)
 {
+    if (!TxCoordinator::Command{operation, amplitude > 0.0}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     if (!m_metis)
         return;
     // Whoever calls this owns the tone. setTune() re-asserts ownership straight
@@ -3755,8 +3806,9 @@ void Hl2Backend::setTxTestTone(double offsetHz, double amplitude)
         qWarning() << "Hl2Backend: test tone refused — transmit not available";
         return;
     }
-    QMetaObject::invokeMethod(m_metis, "setTxTestTone", Qt::QueuedConnection,
-        Q_ARG(double, offsetHz), Q_ARG(double, amplitude));
+    QMetaObject::invokeMethod(m_metis, [metis = m_metis, offsetHz, amplitude, operation] {
+        metis->setTxTestTone(offsetHz, amplitude, operation);
+    }, Qt::QueuedConnection);
 }
 
 void Hl2Backend::setTxAudioMonitor(bool on)
@@ -3776,8 +3828,11 @@ void Hl2Backend::setTxAudioMonitor(bool on)
     }
 }
 
-void Hl2Backend::setTune(bool on, int tunePowerPercent)
+void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    if (!TxCoordinator::Command{operation, on}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     // A tune carrier is an unmodulated steady signal at the transmit frequency.
     // The HL2 has no tune generator of its own, so it is the built-in test tone
     // at ZERO offset — a carrier exactly on the TX NCO — with keying held for as
@@ -3808,12 +3863,12 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent)
         // would overwrite the saved RF power we have to restore on release.
         if (tunePowerPercent >= 0)
             applyDrive(tunePowerPercent);
-        setTxTestTone(0.0, kTuneCarrierAmplitude);
+        setTxTestTone(0.0, kTuneCarrierAmplitude, operation);
         m_toneFromTune = true;   // set AFTER: setTxTestTone clears the flag
-        setKeying(true);
+        setKeying(true, operation, completion);
     } else {
-        setKeying(false);   // clears m_tuning and restores the operator's RF power
-        setTxTestTone(0.0, 0.0);
+        setKeying(false, operation, completion);   // clears m_tuning and restores the operator's RF power
+        setTxTestTone(0.0, 0.0, operation);
     }
 }
 
@@ -5167,7 +5222,11 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission.
     m_keyed = false;
     m_tuning = false;
-    setKeying(false);
+    if (m_lastTxOperation.permitsCleanup()) {
+        setKeying(false, m_lastTxOperation);
+    }
+    // A fresh transport starts unkeyed by construction; an old connection's
+    // stop must not be queued into it with a newly acquired operation.
 }
 
 void Hl2Backend::defineMeters()

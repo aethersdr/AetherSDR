@@ -7,6 +7,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "TestSettingsProfile.h"
+#include "TxTestAuthority.h"
 
 #include <QCoreApplication>
 #include <algorithm>
@@ -139,6 +140,14 @@ struct IcomCivBackendTestAccess {
         return backend.m_lastOutboundCiv;
     }
 
+    static void dispatchReady(IcomCivBackend& backend)
+    {
+        // sendUserCommand samples its pump time before enqueue samples its own
+        // deadline. Crossing a millisecond leaves the write for the next tick.
+        // Drive that tick explicitly; this fixture never runs the event loop.
+        backend.pumpCiv(backend.nowMs());
+    }
+
     static std::size_t queuedRequestCount(const IcomCivBackend& backend)
     {
         return backend.m_civScheduler.m_queue.size();
@@ -236,11 +245,13 @@ int main(int argc, char** argv)
                       "MK2 periodic polling includes CW, squelch and active data TBW");
             }
             for (const bool reverse : {false, true}) {
+                TxTestAuthority authority;
                 IcomCivBackend cwBackend;
+                cwBackend.setTransmitContext(authority.context);
                 IcomCivBackendTestAccess::prepareSession(cwBackend, *ic7300Mk2);
                 IcomCivBackendTestAccess::selectCwMode(cwBackend, reverse);
                 const int power = IcomCivBackendTestAccess::power(cwBackend);
-                cwBackend.setTune(true, 3);
+                cwBackend.setTune(true, 3, authority.operation);
                 check(!IcomCivBackendTestAccess::tuning(cwBackend)
                           && IcomCivBackendTestAccess::power(cwBackend) == power
                           && IcomCivBackendTestAccess::lastOutboundCiv(cwBackend).isEmpty(),
@@ -306,6 +317,7 @@ int main(int argc, char** argv)
                     IcomCivBackendTestAccess::prepareSession(writer, *model);
                     IcomCivBackendTestAccess::deliverDataBandwidth(writer, profile->dataItem, 0x30);
                     writer.setTxFilter(profile->lowEdgesHz[l], profile->highEdgesHz[h]);
+                    IcomCivBackendTestAccess::dispatchReady(writer);
                     const QString expected = QStringLiteral("1a 05 00 %1 %2")
                         .arg((profile->dataItem / 10) * 16 + profile->dataItem % 10,
                              2, 16, QLatin1Char('0'))

@@ -1,6 +1,8 @@
 #pragma once
 
 #include "models/MeterModel.h"   // kMinForwardWattsForSwr — the keyed-RF floor
+#include "TxCoordinator.h"
+#include "models/TxController.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -99,17 +101,17 @@ public:
         int maxRfPowerPercent = -1;
     };
 
-    RadioCertification(RadioModel* radio, AudioEngine* audio);
+    RadioCertification(RadioModel* radio, AudioEngine* audio,
+                       std::shared_ptr<TxController> controller = {});
 
-    // Called on every key EDGE (true = keyed, false = unkeyed) so the caller can
-    // arm and disarm its own safety machinery per key.
-    //
-    // The automation server's force-unkey watchdog needs this: it disowns any
-    // transmission it finds unkeyed at poll time, so arming once around a
-    // diagnostic that unkeys between every stage left the rest of the run
-    // unpoliced, and timed the key limit against wall clock rather than
-    // continuous key time.
-    void setKeyObserver(std::function<void(bool)> observer);
+    // Called per key request (true = on, false = off or refused) so the caller
+    // can police the admitted operation. This is not qualified RF readback.
+    // A diagnostic may spend a long time idle between keys: arming once around
+    // the whole run would time the diagnostic, not an individual transmission.
+    // Key-on notification is after synchronous admission, before any event-loop
+    // wait. Previous identity/state let the observer reject an unrelated over.
+    using KeyObserver = std::function<void(bool, const TxCoordinator::Operation&, bool)>;
+    void setKeyObserver(KeyObserver observer);
 
     // Runs the whole sequence synchronously, spinning the event loop between
     // steps. Returns the report. Expect this to take tens of seconds and to key
@@ -118,6 +120,7 @@ public:
     QJsonObject run(const Options& options);
 
 private:
+    friend class RadioCertificationTestAccess;
     // One measurement, recorded whether or not it looked healthy.
     //
     // `concern` is the closest thing to a verdict: it is set when a value falls
@@ -240,7 +243,9 @@ private:
     // Every stage already opens with a null check, so this costs nothing.
     QPointer<RadioModel> m_radio;
     QPointer<AudioEngine> m_audio;
-    std::function<void(bool)> m_onKey;
+    const std::shared_ptr<TxController> m_txController;
+    TxController::Input m_keyInput;
+    KeyObserver m_onKey;
     int m_keyRefusals = 0;   // keys the radio refused; reported, never ignored
     QJsonArray m_stages;
 

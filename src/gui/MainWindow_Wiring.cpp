@@ -6022,8 +6022,8 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 void MainWindow::wireModemAudioCompletion()
 {
     connect(m_audio, &AudioEngine::modemTxAudioFinished,
-            this, [this](quint64 token) {
-        m_radioModel.finishTxAudio(token);
+            this, [this](quint64 token, const TxCoordinator::Context& context) {
+        m_radioModel.finishTxAudio(token, context);
     });
 }
 

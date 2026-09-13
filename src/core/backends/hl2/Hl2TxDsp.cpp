@@ -170,8 +170,16 @@ bool Hl2TxDsp::isLowerSideband() const
     }
 }
 
-void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono, bool clientLeveled)
+void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono, bool clientLeveled,
+                              const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_txContext.sameContext(context)) {
+        reset();
+        m_txContext = context;
+    }
     if (m_bandpass.empty() || mono.empty())
         return;
 
@@ -345,7 +353,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono, bool clientLeve
                      m_inBuffer.begin() + static_cast<std::ptrdiff_t>(consumed));
 
     if (!m_iq.empty())
-        emit iqReady(m_iq);
+        emit iqReady(m_iq, context);
     // PRE-modulation level: this is what a mic-gain control acts on, so it is
     // the number that tells an operator whether they are overdriving.
     emit micPeak(peak > 0.0f ? 20.0f * std::log10(peak) : -140.0f);

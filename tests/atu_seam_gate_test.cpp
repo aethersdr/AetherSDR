@@ -47,8 +47,8 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool) override {}
-    void setAtu(bool start) override { start ? ++atuStarts : ++atuBypasses; }
+    void setKeying(bool, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override {}
+    void setAtu(bool start, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { start ? ++atuStarts : ++atuBypasses; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
 

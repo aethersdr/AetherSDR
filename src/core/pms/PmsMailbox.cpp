@@ -50,7 +50,9 @@ PmsMailbox::PmsMailbox(QObject* parent)
     m_link->setPaclen(ax25::recommendedPaclen(1200));
     m_link->applyRecommendedTimers();
 
-    connect(m_link, &Ax25Connection::sendFrame, this, &PmsMailbox::transmitFrame);
+    connect(m_link, &Ax25Connection::sendFrame, this, [this](const QByteArray& frame) {
+        emit transmitFrame(frame, m_txProgram.derive());
+    });
     connect(m_link, &Ax25Connection::activity, this, &PmsMailbox::activity);
     connect(m_link, &Ax25Connection::connected, this, &PmsMailbox::onLinkConnected);
     connect(m_link, &Ax25Connection::disconnected, this, &PmsMailbox::onLinkDisconnected);
@@ -793,7 +795,7 @@ void PmsMailbox::sendBeaconNow()
     const QString text = QStringLiteral("%1  (connect to %2)")
         .arg(m_beaconText.trimmed(), localAddress().toString());
     const Frame frame = Frame::makeUI(dest, localAddress(), {}, text.toLatin1());
-    emit transmitFrame(frame.encode());
+    emit transmitFrame(frame.encode(), m_txProgram.derive());
     emit activity(QStringLiteral("PMS beacon sent: %1").arg(text));
 }
 

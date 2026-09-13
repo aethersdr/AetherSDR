@@ -623,6 +623,12 @@
   "split": "",
   "confidence": "high"
  },
+ "models/TxController.h": {
+  "tag": "universal",
+  "note": "Engine-owned producer input controller: captures original intent and routes typed TX operations through RadioModel and TxCoordinator, with no widget or vendor dependency.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/TxKeyingMarker.h": {
   "tag": "ui-support",
   "note": "QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state.",

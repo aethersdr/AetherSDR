@@ -7,6 +7,7 @@
 // the transmit gate's wire-level behaviour by hl2_tx_gate_test.)
 
 #include "core/backends/IRadioBackend.h"
+#include "TxTestAuthority.h"
 #include "TestSettingsProfile.h"
 #include "TestDspBuildWait.h"
 
@@ -129,6 +130,7 @@ int main(int argc, char** argv)
         }
     });
 
+    TxTestAuthority authority;
     Hl2Backend backend;
 
     // ---- transmit availability follows the AUTOMATION gate ----
@@ -278,13 +280,13 @@ int main(int argc, char** argv)
     // Whether this actually keys depends on the transmit gate above; what
     // matters here is that asking does not upset the connection either way.
     QSignalSpy keyStateSpy(&backend, &IRadioBackend::transmitChanged);
-    backend.setKeying(true);
+    backend.setKeying(true, authority.operation);
     check(backend.isConnected(), "setKeying(true) does not disrupt the link");
     check(!keyStateSpy.isEmpty()
               && keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(false),
           "key-down publishes observed MOX for backend-owned CW break-in");
     keyStateSpy.clear();
-    backend.setKeying(false);
+    backend.setKeying(false, authority.operation);
     check(backend.isConnected(), "setKeying(false) does not disrupt the link");
     check(!keyStateSpy.isEmpty()
               && !keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(true),
@@ -296,14 +298,14 @@ int main(int argc, char** argv)
     // later drop the still-held manual transmission.
     backend.setSliceMode(0, QStringLiteral("CW"));
     keyStateSpy.clear();
-    backend.setCwKeying(true, true, 30);
-    backend.setCwKeying(false, true, 30);
-    backend.setKeying(true);  // manual takeover while the hang is pending
+    backend.setCwKeying(true, true, 30, authority.operation);
+    backend.setCwKeying(false, true, 30, authority.operation);
+    backend.setKeying(true, authority.operation);  // manual takeover while the hang is pending
     keyStateSpy.clear();
     spin(60);                 // past the stale hang deadline
     check(keyStateSpy.isEmpty(),
           "manual MOX takeover cancels the pending CW hang unkey");
-    backend.setKeying(false);
+    backend.setKeying(false, authority.operation);
     check(!keyStateSpy.isEmpty()
               && !keyStateSpy.last().at(0).value<TransmitDelta>().mox.value_or(true),
           "manual release unkeys after taking ownership from CW Break-In");
@@ -663,7 +665,7 @@ int main(int argc, char** argv)
         // TUNE at 10% must DROP the drive, not inherit the RF slider. Before the
         // fix the register still held 255 and the tune went out at FULL power.
         lastDrive = -1;
-        tuner.setTune(true, 10);
+        tuner.setTune(true, 10, authority.operation);
         spin(200);
         check(lastDrive == driveFor(10),
               "#4549: TUNE drives at TUNE power, not the RF Power slider");
@@ -676,23 +678,23 @@ int main(int argc, char** argv)
         // the radio stayed at 10% until the slider next moved, and the next
         // voice transmission went out at tune power.
         lastDrive = -1;
-        tuner.setKeying(false);
+        tuner.setKeying(false, authority.operation);
         spin(200);
         check(lastDrive == driveFor(100),
               "#4549: an unkey that BYPASSES setTune() still restores RF power");
 
         // The ordinary path — releasing the TUNE toggle — restores too.
-        tuner.setTune(true, 10);
+        tuner.setTune(true, 10, authority.operation);
         spin(200);
         lastDrive = -1;
-        tuner.setTune(false, 10);
+        tuner.setTune(false, 10, authority.operation);
         spin(200);
         check(lastDrive == driveFor(100),
               "#4549: releasing TUNE restores RF power");
 
         // A power change made mid-tune is the operator's intent for after the
         // carrier drops: remembered, but not applied while the carrier is up.
-        tuner.setTune(true, 10);
+        tuner.setTune(true, 10, authority.operation);
         spin(200);
         lastDrive = -1;
         tuner.setTxPower(40);
@@ -700,7 +702,7 @@ int main(int argc, char** argv)
         check(lastDrive == -1,
               "#4549: a mid-tune power change does not disturb the tune carrier");
         lastDrive = -1;
-        tuner.setTune(false, 10);
+        tuner.setTune(false, 10, authority.operation);
         spin(200);
         check(lastDrive == driveFor(40),
               "#4549: the unkey restores the power set DURING the tune");

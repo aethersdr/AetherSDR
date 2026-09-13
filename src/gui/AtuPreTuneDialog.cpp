@@ -22,12 +22,14 @@
 #include "ScopedChildWidget.h"
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScopeGuard>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
@@ -149,12 +151,20 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
     m_settleTimer->setSingleShot(true);
     m_settleTimer->setInterval(kSettleMs);
     connect(m_settleTimer, &QTimer::timeout, this, [this]() {
-        if (!m_radio) return;
+        if (!m_radio || !m_sweepActive || !m_programInput.valid() || !m_pointInput.valid()) {
+            finishSweep(" Aborted: transmit authorization ended.");
+            return;
+        }
+        const QPointer<AtuPreTuneDialog> self(this);
+        const TxController::Input input = m_pointInput;
         m_waitingForAtu = true;
         m_tuneLastSwr = 0.0f;
         m_swrTracking = true;
         m_timeoutTimer->start(kPerPointTimeoutMs);
-        m_radio->transmitModel().atuStart();
+        if (!input.start() && self
+            && input.request().sameRequest(m_pointInput.request())) {
+            finishSweep(" Aborted: ATU request refused.");
+        }
     });
 
     m_timeoutTimer = new QTimer(this);
@@ -214,6 +224,48 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
 
     setFramelessMode(AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     FramelessResizer::install(this);
+    configureTxActions();
+}
+
+AtuPreTuneDialog::~AtuPreTuneDialog()
+{
+    cancelProgram();
+}
+
+void AtuPreTuneDialog::configureTxActions()
+{
+    registerTxKeyingAction(m_startBtn, [this](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) {
+            return {};
+        }
+        const TxController::Input input = controller->captureProgram(TxController::Activity::Atu);
+        return [this, controller, input] { startSweep(controller, input); };
+    });
+    for (QPushButton* button : {m_tuneBtn, m_continueAfterFailBtn, m_skipBtn}) {
+        const bool resume = button == m_continueAfterFailBtn;
+        const bool skip = button == m_skipBtn;
+        registerTxKeyingAction(button, [this, resume, skip](const std::shared_ptr<TxController>& controller,
+                const QString& action, const QString&) -> TxKeyingAction::Prepared {
+            if (action != QLatin1String("click") || !controller->sameController(m_programController)
+                || !m_sweepActive || !m_programInput.valid()) {
+                return {};
+            }
+            const TxCoordinator::Request original = m_programInput.request();
+            return [this, original, resume, skip] {
+                if (!original.valid() || !original.sameRequest(m_programInput.request())) {
+                    return;
+                }
+                if (skip) {
+                    onSkipClicked();
+                } else if (resume) {
+                    onContinueClicked();
+                } else {
+                    onTuneClicked();
+                }
+            };
+        });
+    }
 }
 
 void AtuPreTuneDialog::setFramelessMode(bool on)
@@ -489,7 +541,26 @@ QVector<double> AtuPreTuneDialog::centersForBand(const BandRow& row) const
 
 void AtuPreTuneDialog::onStartClicked()
 {
+    if (!m_radio) {
+        return;
+    }
+    const std::shared_ptr<TxController> controller = m_radio->localTxController();
+    if (controller) {
+        startSweep(controller, controller->captureProgram(TxController::Activity::Atu));
+    }
+}
+
+void AtuPreTuneDialog::startSweep(const std::shared_ptr<TxController>& controller,
+                                 const TxController::Input& input)
+{
     const QPointer<AtuPreTuneDialog> self(this);
+    if (m_preparingSweep || m_sweepActive || !input.valid() || !input.belongsTo(m_radio)) {
+        return;
+    }
+    m_preparingSweep = true;
+    const auto preparing = qScopeGuard([self] { if (self) { self->m_preparingSweep = false; } });
+    m_programController = controller;
+    m_programInput = input;
     if (!m_radio) {
         reject();
         return;
@@ -571,7 +642,7 @@ void AtuPreTuneDialog::onStartClicked()
             QMessageBox::Ok | QMessageBox::Cancel, this);
         boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
         const int reply = boxOwner.get()->exec();
-        if (!self || !boxOwner) {
+        if (!self || !boxOwner || !input.valid()) {
             return;
         }
         if (reply != QMessageBox::Ok) return;
@@ -593,7 +664,7 @@ void AtuPreTuneDialog::onStartClicked()
                 QMessageBox::Ok | QMessageBox::Cancel, this);
             boxOwner.get()->setDefaultButton(QMessageBox::Cancel);
             const int reply = boxOwner.get()->exec();
-            if (!self || !boxOwner) {
+            if (!self || !boxOwner || !input.valid()) {
                 return;
             }
             if (reply != QMessageBox::Ok) return;
@@ -618,26 +689,28 @@ void AtuPreTuneDialog::closeEvent(QCloseEvent* ev)
     // the same way Abort does so the radio isn't left transmitting and the
     // slice gets restored. (#2624)
     if (m_sweepActive) {
-        m_settleTimer->stop();
-        m_timeoutTimer->stop();
-        m_waitingForAtu = false;
-        if (m_radio)
-            m_radio->transmitModel().atuBypass();
-        restoreOriginalFrequency();
-        m_sweepActive = false;
+        const QPointer<AtuPreTuneDialog> self(this);
+        cancelProgram(true);
+        if (!self) { return; }
     }
     QDialog::closeEvent(ev);
 }
 
 void AtuPreTuneDialog::beginNextPoint()
 {
+    if (!m_radio || !m_sweepActive || !m_programInput.valid()) {
+        finishSweep(" Aborted: transmit authorization ended.");
+        return;
+    }
     m_continueAfterFailBtn->setVisible(false);
     m_currentIndex++;
     if (m_currentIndex >= m_points.size()) {
         finishSweep();
         return;
     }
-    const Point& p = m_points[m_currentIndex];
+    const Point p = m_points[m_currentIndex];
+    const QPointer<AtuPreTuneDialog> self(this);
+    const TxCoordinator::Request original = m_programInput.request();
 
     // On first point of each band, zoom the panadapter out to the full-band
     // view so the operator sees the whole band being swept rather than the
@@ -658,11 +731,18 @@ void AtuPreTuneDialog::beginNextPoint()
         // profile load is holding radio-state writes (#4142). The local model
         // advances only when the command reaches the wire.
         m_radio->requestPanCenter(m_originalPanId, center, width);
+        if (!self || !original.valid() || !original.sameRequest(m_programInput.request())) {
+            return;
+        }
     }
 
     // Move slice to target. SliceModel::setFrequency uses autopan=0 — no recenter.
-    if (SliceModel* s = m_radio->slice(m_txSliceId))
+    if (SliceModel* s = m_radio->slice(m_txSliceId)) {
         s->setFrequency(p.freqMhz);
+    }
+    if (!self || !original.valid() || !original.sameRequest(m_programInput.request())) {
+        return;
+    }
 
     const double freqKhz = p.freqMhz * 1000.0;
     m_sweepStatus->setText(
@@ -697,7 +777,11 @@ void AtuPreTuneDialog::onTuneClicked()
 
 void AtuPreTuneDialog::requestTuneNow()
 {
-    if (!m_radio) return;
+    if (!m_radio || !m_sweepActive || !m_programInput.valid()) {
+        finishSweep(" Aborted: transmit authorization ended.");
+        return;
+    }
+    m_pointInput = m_programInput.derive();
     m_sweepResult->setText("Tuning...");
     // Slice is already on target (set in beginNextPoint). Wait 300 ms for
     // the slice to settle before issuing atu start. (#2624)
@@ -713,15 +797,9 @@ void AtuPreTuneDialog::onSkipClicked()
 
 void AtuPreTuneDialog::onAbortClicked()
 {
-    m_settleTimer->stop();
-    m_timeoutTimer->stop();
-    m_waitingForAtu = false;
-
-    if (m_sweepActive && m_radio)
-        m_radio->transmitModel().atuBypass();
-    if (m_sweepActive)
-        restoreOriginalFrequency();
-    m_sweepActive = false;
+    const QPointer<AtuPreTuneDialog> self(this);
+    cancelProgram(m_sweepActive);
+    if (!self) { return; }
     accept();
 }
 
@@ -741,7 +819,6 @@ void AtuPreTuneDialog::onPerPointTimeout()
     m_sweepResult->setText(
         QString("No ATU status within %1 s — ATU may be stuck. Aborting.")
             .arg(kPerPointTimeoutMs / 1000));
-    if (m_radio) m_radio->transmitModel().atuBypass();
     QApplication::beep();  // terminal-fail cue for operators not watching (#2649 #7)
     finishSweep(" Aborted: per-point timeout.");
 }
@@ -749,6 +826,10 @@ void AtuPreTuneDialog::onPerPointTimeout()
 void AtuPreTuneDialog::onAtuStateChanged()
 {
     if (!m_waitingForAtu || !m_radio) return;
+    if (!m_programInput.valid()) {
+        finishSweep(" Aborted: transmit authorization ended.");
+        return;
+    }
     const ATUStatus s = m_radio->transmitModel().atuStatus();
 
     const bool success     = (s == ATUStatus::Successful || s == ATUStatus::OK);
@@ -861,12 +942,9 @@ void AtuPreTuneDialog::setAbortButtonCloseMode()
 
 void AtuPreTuneDialog::finishSweep(const QString& summaryExtra)
 {
-    m_settleTimer->stop();
-    m_timeoutTimer->stop();
-    m_waitingForAtu = false;
-    m_sweepActive = false;
-
-    restoreOriginalFrequency();
+    const QPointer<AtuPreTuneDialog> self(this);
+    cancelProgram(true);
+    if (!self) { return; }
 
     m_tuneBtn->setVisible(false);
     m_skipBtn->setVisible(false);
@@ -881,12 +959,41 @@ void AtuPreTuneDialog::finishSweep(const QString& summaryExtra)
     m_sweepProgress->clear();
 }
 
-void AtuPreTuneDialog::restoreOriginalFrequency()
+void AtuPreTuneDialog::cancelProgram(bool restore)
 {
-    if (!m_radio || m_txSliceId < 0) return;
+    const QPointer<AtuPreTuneDialog> self(this);
+    const bool wasPreparing = std::exchange(m_preparingSweep, true);
+    const auto preparing = qScopeGuard([self, wasPreparing] {
+        if (self) { self->m_preparingSweep = wasPreparing; }
+    });
+    m_settleTimer->stop();
+    m_timeoutTimer->stop();
+    m_waitingForAtu = false;
+    m_sweepActive = false;
+    m_swrTracking = false;
+
+    const TxController::Input root = std::exchange(m_programInput, {});
+    const TxController::Input point = std::exchange(m_pointInput, {});
+    const std::shared_ptr<TxController> controller = std::exchange(m_programController, {});
+    restore = restore && root.valid();
+    root.stop(); // close future derivation before ending the current point
+    point.abort();
+    if (self && restore && controller && controller->valid()) {
+        restoreOriginalFrequency(controller);
+    }
+}
+
+void AtuPreTuneDialog::restoreOriginalFrequency(const std::shared_ptr<TxController>& controller)
+{
+    if (!m_radio || !controller->valid() || m_txSliceId < 0) return;
     if (m_originalSliceFreqMhz <= 0.0) return;
-    if (SliceModel* s = m_radio->slice(m_txSliceId))
+    const QPointer<AtuPreTuneDialog> self(this);
+    if (SliceModel* s = m_radio->slice(m_txSliceId)) {
         s->setFrequency(m_originalSliceFreqMhz);
+    }
+    if (!self || !controller->valid()) {
+        return;
+    }
 
     // Restore the panadapter zoom captured at sweep start — same
     // optimistic-update pattern used for band transitions.

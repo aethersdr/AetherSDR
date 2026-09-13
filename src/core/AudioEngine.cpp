@@ -1937,9 +1937,10 @@ AudioEngine::AudioEngine(QObject* parent)
     connect(m_opusTxPaceTimer, &QTimer::timeout, this, [this]() {
         OpusTxPacer::DrainResult drain =
             m_opusTxPacer.takeDue(m_opusTxPaceClock.elapsed(),
+                                  TxCoordinator::monotonicMs(),
                                   m_txPacketCount);
-        for (const QByteArray& packet : drain.packets) {
-            emit txPacketReady(packet);
+        for (const OpusTxPacer::Packet& packet : drain.packets) {
+            emit txPacketReady(packet.payload, packet.context);
         }
     });
     m_opusTxPaceTimer->start();
@@ -9103,7 +9104,9 @@ void AudioEngine::onTxAudioReady()
         auto* fd = reinterpret_cast<float*>(f32.data());
         for (int i = 0; i < ns; ++i)
             fd[i] = i16[i] / 32768.0f;
-        emit txRawPcmReady(f32);
+        if (m_rawMicrophoneContext.permitsDispatch(TxCoordinator::monotonicMs())) {
+            emit txRawPcmReady(f32, m_rawMicrophoneContext);
+        }
         return;
     }
 
@@ -9186,6 +9189,15 @@ void AudioEngine::onTxAudioReady()
 
     emitScopeFromInt16Stereo(data, DEFAULT_SAMPLE_RATE, true);
 
+    // Local monitor/recorder/meter delivery above is independent of transport
+    // authority. Retain the capture's context through buffering and pacing.
+    const TxCoordinator::Context context = m_hostModulation
+        ? m_hostMicrophoneContext : m_microphoneContext;
+    if (!selectTxContext(context)) {
+        return;
+    }
+    emit txTransportPcmReady(data, /*clientLeveled=*/false, context);
+
     // ── Opus TX path: always active for remote_audio_tx ────────────────
     // Sends Opus during both RX (VOX/met_in_rx metering) and TX (voice).
     // The radio requires Opus on remote_audio_tx (enforces compression=OPUS).
@@ -9237,7 +9249,7 @@ void AudioEngine::onTxAudioReady()
             // The 10 ms pacer follows elapsed deadlines and drains a bounded
             // catch-up batch after a late timer event. Cap the queue to
             // ~200 ms if the producer still outruns that recovery.
-            if (m_opusTxPacer.enqueue(std::move(pkt))) {
+            if (m_opusTxPacer.enqueue({std::move(pkt), context})) {
                 ++m_opusTxDropsSinceLog;
                 if (!m_opusTxDropLogTimer.isValid()
                     || m_opusTxDropLogTimer.hasExpired(1000)) {
@@ -9266,7 +9278,7 @@ void AudioEngine::onTxAudioReady()
             floatBuf[i] = pcm[i] / 32768.0f;
 
         QByteArray packet = buildVitaTxPacket(floatBuf, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(packet);
+        emit txPacketReady(packet, context);
 
         m_txAccumulator.remove(0, TX_PCM_BYTES_PER_PACKET);
     }
@@ -9330,8 +9342,12 @@ QByteArray AudioEngine::buildVitaTxPacket(const float* samples, int numStereoSam
     return packet;
 }
 
-void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId)
+void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId,
+                                    const TxCoordinator::Context& context)
 {
+    if (!selectTxContext(context)) {
+        return;
+    }
     // Accumulate into a separate buffer for VOX/met_in_rx audio
     m_voxAccumulator.append(pcmData);
 
@@ -9348,7 +9364,7 @@ void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId)
         QByteArray packet = buildVitaTxPacket(floatBuf, TX_SAMPLES_PER_PACKET);
         m_txStreamId = savedId;
 
-        emit txPacketReady(packet);
+        emit txPacketReady(packet, context);
         m_voxAccumulator.remove(0, TX_PCM_BYTES_PER_PACKET);
     }
 }
@@ -9469,7 +9485,7 @@ void AudioEngine::setRadeMode(bool on)
     clearTxAccumulators();
 }
 
-void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
+void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context)
 {
     // A host-modulating backend (HL2) runs the modulator on THIS host and has
     // no Flex TX stream id — the AFSK belongs in the final-monitor tap, not in
@@ -9488,11 +9504,14 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     // discard everything.
     if (m_hostModulation) {
         feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
-                               /*forceRadioDaxRoute=*/true);
+                               /*forceRadioDaxRoute=*/true, context);
         return;
     }
 
     if (m_txStreamId == 0) return;
+    if (!selectTxContext(context)) {
+        return;
+    }
 
     // Gate modem audio on PTT (prevents radio pre-buffer build-up)
     if (!m_transmitting) {
@@ -9512,17 +9531,67 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
         auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
         QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(pkt);
+        emit txPacketReady(pkt, context);
         m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
     }
 }
 
-void AudioEngine::finishModemTxAudio(quint64 token)
+void AudioEngine::finishModemTxAudio(quint64 token, const TxCoordinator::Context& context)
 {
     // This method is queued onto the AudioEngine thread after every modem PCM
     // block. Emitting from here creates an ordered barrier: cross-thread
     // txFinalMonitorPcmReady deliveries are already ahead of this event.
-    emit modemTxAudioFinished(token);
+    if (context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        emit modemTxAudioFinished(token, context);
+    }
+}
+
+void AudioEngine::setMicrophoneContext(const TxCoordinator::Context& context)
+{
+    if (!m_microphoneContext.sameContext(context)) {
+        clearTxAccumulators();
+        if (m_txVoiceProcessor) {
+            m_txVoiceProcessor->reset();
+        }
+    }
+    m_microphoneContext = context;
+}
+
+void AudioEngine::setHostMicrophoneContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (m_hostModulation && !m_hostMicrophoneContext.sameContext(context)) {
+        clearTxAccumulators();
+        if (m_txVoiceProcessor) {
+            m_txVoiceProcessor->reset();
+        }
+    }
+    m_hostMicrophoneContext = context;
+}
+
+void AudioEngine::setRawMicrophoneContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_rawMicrophoneContext.sameContext(context) && m_txResampler) {
+        m_txResampler->reset();
+    }
+    m_rawMicrophoneContext = context;
+}
+
+bool AudioEngine::selectTxContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return false;
+    }
+    if (!m_accumulatorContext.sameContext(context)) {
+        clearTxAccumulators();
+        m_accumulatorContext = context;
+    }
+    return true;
 }
 
 void AudioEngine::setDaxTxMode(bool on)
@@ -9533,6 +9602,17 @@ void AudioEngine::setDaxTxMode(bool on)
                        << (on ? "enabled" : "disabled")
                        << "route=" << (m_daxTxUseRadioRoute ? "radio-dax" : "float32-dax-tx")
                        << "stream=0x" + QString::number(m_txStreamId, 16);
+    }
+}
+
+void AudioEngine::discardTxMedia(const TxCoordinator::Context& context)
+{
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, context] { discardTxMedia(context); }, Qt::QueuedConnection);
+        return;
+    }
+    if (m_accumulatorContext.sameContext(context)) {
+        clearTxAccumulators();
     }
 }
 
@@ -9548,6 +9628,8 @@ void AudioEngine::clearTxAccumulators()
     m_txFloatAccumulator.clear();
     m_daxPreTxBuffer.clear();
     m_opusTxPacer.clear();
+    m_opusTxAccumulator.clear();
+    m_accumulatorContext = {};
 }
 
 void AudioEngine::setTransmitting(bool tx)
@@ -9645,7 +9727,7 @@ void AudioEngine::setDaxTxUseRadioRoute(bool on)
                    << "stream=0x" + QString::number(m_txStreamId, 16);
 }
 
-void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
+void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm, const TxCoordinator::Context& context)
 {
     // The built-in WSPR source owns the DAX TX stream for its one-shot frame.
     // Ignore concurrent external DAX/TCI samples instead of interleaving two
@@ -9653,12 +9735,12 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
     if (m_wsprBeacon && m_wsprBeacon->isActive()) {
         return;
     }
-    feedDaxTxAudioInternal(inPcm, true, false);
+    feedDaxTxAudioInternal(inPcm, true, false, context);
 }
 
 void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                                          bool markExternalSource,
-                                         bool forceRadioDaxRoute)
+                                         bool forceRadioDaxRoute, const TxCoordinator::Context& context)
 {
     if (inPcm.isEmpty()) return;
     // A host-modulating backend (HL2) has no Flex TX stream id and never will —
@@ -9670,7 +9752,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
     // Mark TCI as the active TX-audio source. While this timer is fresh,
     // onTxAudioReady() suppresses the local mic capture path so the two
     // packet producers don't collide on the same UDP path to the radio.
-    if (markExternalSource) {
+    if (markExternalSource && context.permitsDispatch(TxCoordinator::monotonicMs())) {
         m_tciAudioTimer.start();
     }
 
@@ -9750,9 +9832,15 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         // false), which the engine generates at a known level and which keeps
         // the ALC so its on-air level does not change.
         emit txFinalMonitorPcmReady(out, /*clientLeveled=*/markExternalSource);
+        if (selectTxContext(context)) {
+            emit txTransportPcmReady(out, /*clientLeveled=*/markExternalSource, context);
+        }
         return;
     }
 
+    if (!selectTxContext(context)) {
+        return;
+    }
     const bool useRadioDaxRoute = forceRadioDaxRoute || m_daxTxUseRadioRoute;
     if (!useRadioDaxRoute) {
         // Low-latency route: keep radio on mic path (dax=0) and packetize
@@ -9772,7 +9860,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
             auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
             QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-            emit txPacketReady(pkt);
+            emit txPacketReady(pkt, context);
             m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
         }
         return;
@@ -9843,13 +9931,17 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                     m_txFloatAccumulator.constData(), payloadBytes);
 
         m_txPacketCount = (m_txPacketCount + 1) & 0xF;
-        emit txPacketReady(pkt);
+        emit txPacketReady(pkt, context);
         m_txFloatAccumulator.remove(0, MONO_BYTES_PER_PKT);
     }
 }
 
-void AudioEngine::startWsprPump()
+void AudioEngine::startWsprPump(const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    m_wsprContext = context;
     // Suppress the local mic capture path for the whole frame. onTxAudioReady()
     // only bails out on m_daxTxMode; the WSPR feed passes
     // markExternalSource=false (it is not TCI, and claiming so would corrupt
@@ -9869,11 +9961,19 @@ void AudioEngine::startWsprPump()
     m_wsprPumpTimer->start();
 }
 
+void AudioEngine::stopWsprPumpIfCurrent(const TxCoordinator::Context& context)
+{
+    if (m_wsprContext.sameContext(context)) {
+        stopWsprPump();
+    }
+}
+
 void AudioEngine::stopWsprPump()
 {
     m_wsprPumpTimer->stop();
     m_wsprPumpClock.invalidate();
     m_wsprPumpedFrames = 0;
+    m_wsprContext = {};
     m_txFloatAccumulator.clear();
     // The forced WSPR feed buffers in the radio-native int16 route, so drop that
     // residue too — a stop mid-symbol otherwise leaves a partial packet to be
@@ -9891,7 +9991,8 @@ void AudioEngine::stopWsprPump()
 void AudioEngine::pumpWsprBeacon()
 {
     if (!m_wsprBeacon || !m_wsprBeacon->isActive()
-        || !m_wsprPumpClock.isValid()) {
+        || !m_wsprPumpClock.isValid()
+        || !m_wsprContext.permitsDispatch(TxCoordinator::monotonicMs())) {
         stopWsprPump();
         return;
     }
@@ -9939,7 +10040,7 @@ void AudioEngine::pumpWsprBeacon()
     m_wsprFloatScratch.fill('\0');
     m_wsprBeacon->process(
         reinterpret_cast<float*>(m_wsprFloatScratch.data()), frames, 2);
-    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true);
+    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true, m_wsprContext);
     m_wsprPumpedFrames += frames;
 }
 

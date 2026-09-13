@@ -5,6 +5,7 @@
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
 #include "IcomTciUnkeySettle.h"
+#include "TxCoordinator.h"
 
 #include <QObject>
 #include <QPointer>
@@ -57,6 +58,7 @@ class TciServer : public QObject {
     Q_OBJECT
     friend class TciServerReviewTest;
     friend class Hl2TciSignalingTest;
+    friend class TxOperationIntegrationTestAccess;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -201,6 +203,8 @@ private:
     void handleVfoRequest(QWebSocket* client, const TciProtocol::VfoRequest& request);
     void handleSplitRequest(QWebSocket* client, const TciProtocol::SplitRequest& request);
     void handleTrxRequest(QWebSocket* client, const TciProtocol::TrxRequest& request);
+    void handleTrxRequest(QWebSocket* client, const TciProtocol::TrxRequest& request,
+                          const TxCoordinator::Request& txRequest);
     void tuneSliceAndConfirm(
         QWebSocket* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
@@ -247,6 +251,8 @@ private:
                                       const float* samples, int sampleCount);
 
     struct ClientState {
+        TxCoordinator::Producer txProducer;
+        TxCoordinator::Request pttRequest;
         QWebSocket*  socket{nullptr};
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo
@@ -365,6 +371,7 @@ private:
     {
         QPointer<QWebSocket> client;
         TciProtocol::TrxRequest request;
+        TxCoordinator::Request txRequest;
     };
     std::optional<PendingTrxRequest> m_pendingTrxRequest;
     struct PendingRouteCommand
@@ -400,6 +407,8 @@ private:
     QTimer*           m_txChronoTimer{nullptr}; // TX_CHRONO frame cadence
     QWebSocket*       m_txChronoClient{nullptr};
     QPointer<QWebSocket> m_tciPttClient;
+    TxCoordinator::Request m_tciPttRequest;
+    TxCoordinator::Context m_tciTxContext;
     int m_tciPttTrx { 0 };
     bool m_tciPttWantsAudio { false };
     bool m_tciPttRequestedOn { false };

@@ -19,6 +19,7 @@
 // show up as "my audio is quiet" or "my signal is 2 kHz wide".
 
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "TxTestAuthority.h"
 
 #include <QCoreApplication>
 #include <QObject>
@@ -60,6 +61,7 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
                                                  bool clientLeveled = false)
 {
     Hl2TxDsp tx;
+    TxTestAuthority authority;
     Hl2TxDsp::Config cfg;
     cfg.mode = mode;
     // Optional explicit passband. Hl2Backend pushes a sign-correct, mode-derived
@@ -104,7 +106,7 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
         const std::size_t n = std::min(kChunk, audio.size() - off);
         tx.processAudioBlock(std::vector<float>(audio.begin() + static_cast<std::ptrdiff_t>(off),
                                                 audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                             clientLeveled);
+                             clientLeveled, authority.context);
     }
     return out;
 }
@@ -302,6 +304,7 @@ int main(int argc, char** argv)
     {
         auto settledPeak = [](double amplitude) {
             Hl2TxDsp tx;
+            TxTestAuthority authority;
             Hl2TxDsp::Config cfg;
             cfg.mode = WdspChannel::Mode::Usb;
             cfg.alcEnabled = true;
@@ -325,7 +328,7 @@ int main(int argc, char** argv)
                         amplitude * std::sin(2.0 * M_PI * 1000.0
                                              * (off + static_cast<int>(n)) / fs));
                 }
-                tx.processAudioBlock(chunk, /*clientLeveled=*/false);
+                tx.processAudioBlock(chunk, /*clientLeveled=*/false, authority.context);
             }
             return lastGainDb;
         };
@@ -394,6 +397,7 @@ int main(int argc, char** argv)
     // between.
     {
         Hl2TxDsp tx;
+        TxTestAuthority authority;
         Hl2TxDsp::Config cfg;
         cfg.mode = WdspChannel::Mode::Usb;
         cfg.alcEnabled = true;   // configured ON — the bypass is per-block
@@ -421,7 +425,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    tx.processAudioBlock(chunk, /*clientLeveled=*/true);
+                    tx.processAudioBlock(chunk, /*clientLeveled=*/true, authority.context);
                 }
                 marks[stage + 1] = out.size();
             }
@@ -553,6 +557,7 @@ int main(int argc, char** argv)
                                     /*clientLeveled=*/true);
 
         Hl2TxDsp tx;
+        TxTestAuthority authority;
         Hl2TxDsp::Config cfg;
         cfg.mode = WdspChannel::Mode::Usb;
         cfg.alcEnabled = true;
@@ -587,7 +592,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    tx.processAudioBlock(chunk, /*clientLeveled=*/true);
+                    tx.processAudioBlock(chunk, /*clientLeveled=*/true, authority.context);
                 }
                 if (stage == 0)
                     afterLoud = out.size();

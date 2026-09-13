@@ -446,6 +446,9 @@ static void testSeamBackendPromoteAlwaysAnswers()
 static void testHostModulatedTxAudio()
 {
     AudioEngine audio;
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const auto operation = coordinator.acquire(coordinator.registerActor({true, 0}), TxCoordinator::monotonicMs()).operation;
+    const auto context = coordinator.mediaContext(coordinator.registerProducer(), operation);
 
     // The exact frame TciServer hands over: float32 interleaved stereo at
     // 24 kHz, already gain- and overflow-processed, L == R (WSJT-X duplicates).
@@ -463,7 +466,7 @@ static void testHostModulatedTxAudio()
         QSignalSpy monitor(&audio, &AudioEngine::txFinalMonitorPcmReady);
         QSignalSpy packets(&audio, &AudioEngine::txPacketReady);
         audio.setHostModulation(false);
-        audio.feedDaxTxAudio(in);
+        audio.feedDaxTxAudio(in, context);
         check(monitor.isEmpty() && packets.isEmpty(),
               "no TX stream and no host modulation: TCI audio is dropped");
     }
@@ -472,7 +475,7 @@ static void testHostModulatedTxAudio()
     QSignalSpy monitor(&audio, &AudioEngine::txFinalMonitorPcmReady);
     QSignalSpy packets(&audio, &AudioEngine::txPacketReady);
     audio.setHostModulation(true);
-    audio.feedDaxTxAudio(in);
+    audio.feedDaxTxAudio(in, context);
 
     check(monitor.size() == 1,
           "host modulation: TCI audio reaches the final-monitor tap");

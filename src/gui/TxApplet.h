@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QMetaObject>
+#include "models/TxController.h"
 
 class QMenu;
 class QPushButton;
@@ -65,6 +66,11 @@ public slots:
 
 private:
     void buildUI();
+    void configureTxActions();
+    TxController::Input localTxInput(TxController::Activity activity);
+    void requestTune(bool on, const TxController::Input& input);
+    void requestMox(bool on, const TxController::Input& input);
+    void requestAtu(const TxController::Input& input);
     void syncFromModel();
     void syncAtuIndicators();
     // Single owner of the ATU/MEM enabled state.
@@ -88,6 +94,7 @@ private:
 
     TransmitModel* m_model{nullptr};
     RadioModel*       m_radioModel{nullptr};
+    std::shared_ptr<TxController> m_txController;
     BandPlanManager*  m_bandPlanMgr{nullptr};
     AtuPreTuneDialog* m_preTuneDialog{nullptr};
 

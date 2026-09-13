@@ -89,11 +89,11 @@ public:
     void setPanAttenuator(const QString& panId, int step) override;
     void setSliceRxAntenna(int sliceId, const QString& antenna) override;
     void setRadioDialLock(bool locked) override;
-    void setKeying(bool key) override;
-    void setTune(bool on, int tunePowerPercent = -1) override;
+    void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
+    void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxPower(int percent) override;
-    QString sendCwText(const QString& text) override;
-    void abortCwText() override;
+    QString sendCwText(const QString& text, const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
+    void abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setCwSpeed(int wpm) override;
     void setCwPitch(int hz) override;
     void setCwBreakIn(bool on) override;
@@ -118,13 +118,13 @@ public:
     void refreshMemories(const QString& group) override;
     void setTransmitFrequencyCheck(bool on) override;
     void setVox(bool on, int level, int delayMs) override;
-    void setAtu(bool start) override;
+    void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setRitEnabled(bool on) override;
     void setXitEnabled(bool on) override;
     void setRitOffset(int hz) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                       bool clientLeveled) override;
-    int finishTxAudio() override;
+                       bool clientLeveled, const TxCoordinator::Context& context) override;
+    int finishTxAudio(const TxCoordinator::Context& context) override;
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg = {}) override;
 
@@ -191,7 +191,8 @@ private:
     [[nodiscard]] bool txAudioGateOpen() const;
     void reassertPanPreampWireStep(int step);
     [[nodiscard]] bool tunerSupported() const;
-    bool sendTunerCommandIfSupported(bool start);
+    bool sendTunerCommandIfSupported(bool start, const TxCoordinator::Operation& operation,
+                                     const TxCoordinator::Completion& completion);
     bool queueTunerReadIfSupported(std::uint8_t address,
                                    IcomCivScheduler::Priority priority);
     void publishCapabilities();
@@ -270,13 +271,15 @@ private:
     // mode it is currently in, in which case the caller must NOT key. Warns and
     // puts the transmit indicator back where the radio is. See the definition.
     bool refuseKeyingInReceiveOnlyMode();
-    void sendUserCommand(const std::vector<std::uint8_t>& frame);
+    void sendUserCommand(const std::vector<std::uint8_t>& frame,
+                         const std::optional<TxCoordinator::Command>& command = {});
+    void applyKeying(bool key, const std::optional<TxCoordinator::Command>& command);
     void queueRead(const std::vector<std::uint8_t>& frame, const std::string& key,
                    IcomCivScheduler::Priority priority, qint64 notBeforeMs = 0,
                    std::vector<std::uint8_t> replyDataPrefix = {});
     void queueWrite(const std::vector<std::uint8_t>& frame, const std::string& key,
                     IcomCivScheduler::Priority priority, bool supersedes = true,
-                    bool coalesce = true);
+                    bool coalesce = true, const std::optional<TxCoordinator::Command>& command = {});
     void queueEmergencyWriteNoReply(const std::vector<std::uint8_t>& frame,
                                     const std::string& key);
     void pumpCiv(qint64 nowMs);
@@ -388,6 +391,8 @@ private:
     // engine's rate rebuilds it rather than silently resampling from the wrong
     // ratio.
     std::unique_ptr<Resampler> m_txResampler;
+    TxCoordinator::Context m_txAudioContext;
+    TxCoordinator::Context m_tuneContext;
     int m_txResamplerFromHz = 0;
     int m_txResamplerToHz = 0;
     // The DEFAULT audio rate, not the only one. 48 kHz 16-bit mono LPCM is
@@ -418,6 +423,7 @@ private:
     bool m_dataMode = false;
     bool m_connected = false;
     bool m_keyed = false;
+    TxCoordinator::Operation m_lastTxOperation;
     bool m_transmitFrequencyCheck = false;
     // Set before an XFC ON enters the scheduler and cleared only by radio
     // readback of OFF (or completed teardown). Capability may change while a

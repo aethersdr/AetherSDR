@@ -8,6 +8,7 @@
 #include <QStringList>
 #include <QVector>
 #include <functional>
+#include "models/TxController.h"
 
 namespace AetherSDR {
 
@@ -47,6 +48,8 @@ public:
                                   // widgets) so TX gates read one source of
                                   // truth, not a hand-maintained id list that
                                   // drifts (#4057 review: atu_start was missed).
+        TxController::Activity txActivity{TxController::Activity::Mox};
+        std::function<void(const TxController::Input&)> txHandler;
     };
 
     explicit ShortcutManager(QObject* parent = nullptr);
