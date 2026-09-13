@@ -865,6 +865,18 @@ int main(int argc, char** argv)
             // construction push only; micLevelCommandIssued is operator intent
             // and stays wired, so the Phone MIC slider remains a live control on
             // an Icom rather than a readout that cannot write back.
+            // WHY THIS LANDS IN THE PHYSICAL-MIC BRANCH, since the answer is not
+            // local: IcomCivBackend's constructor seeds m_model to
+            // unknownModel(), whose civAddress matches no case in profileFor(),
+            // so modulationProfileFor() is nullopt and setMicGain() never takes
+            // its LAN-MOD early return. An unidentified Icom has no modulation
+            // profile, so this is the 14 0B path.
+            //
+            // It matters for the NEXT reader rather than for today: if
+            // unknownModel() ever gained a profile with
+            // phoneLevelFollowsNetworkInput, this would fail on the
+            // m_networkModLevelPercent < 0 refusal — a reason that has nothing
+            // to do with the gate this section pins (PR #5643 review).
             model.transmitModel().setMicLevel(70);
             check(icom::IcomCivBackendTestAccess::micGainReported(*rebuilt)
                       && icom::IcomCivBackendTestAccess::micGainPercent(*rebuilt)
