@@ -29,10 +29,32 @@
 namespace AetherSDR::icom {
 namespace {
 
-constexpr std::pair<const char*, const char*> kTrackedStateFields[] = {
-    {"frequency", "frequencyHz"}, {"mode", "modeDataFilter"},
-    {"civ.20.3", "squelchPercent"}, {"civ.22.18", "agcCode"},
-    {"civ.20.10", "rfPowerPercent"}, {"ptt", "ptt"}};
+struct TrackedStateField {
+    const char* key;
+    const char* label;
+    // Whether a stale value here should drop trackedStateReady.
+    //
+    // SQUELCH DOES NOT, and the reason is a polling asymmetry rather than a
+    // judgement about importance: level::kSquelch is re-read periodically only
+    // when the model profile sets pollCwSquelchAndTxBandwidth, which today is
+    // the IC-7300MK2 alone. Every other Icom reads squelch once at connect and
+    // never again, so an aggregate that required it went false about five
+    // seconds into every IC-705 and IC-9700 session and stayed there — a false
+    // negative on a perfectly healthy radio, which is the same misreading this
+    // diagnostic exists to prevent (#5516 review).
+    //
+    // The FIELD is still reported, and its `stale` is accurate: nothing does
+    // reconcile squelch on those models. Only the roll-up is narrowed, to mean
+    // "the state this app actually keeps current is current". Adding squelch to
+    // the unconditional poll would justify gating on it again, but that is a
+    // change to the shared CI-V stream and belongs in its own issue.
+    bool gatesReadiness;
+};
+
+constexpr TrackedStateField kTrackedStateFields[] = {
+    {"frequency", "frequencyHz", true}, {"mode", "modeDataFilter", true},
+    {"civ.20.3", "squelchPercent", false}, {"civ.22.18", "agcCode", true},
+    {"civ.20.10", "rfPowerPercent", true}, {"ptt", "ptt", true}};
 
 // The pan intents are the two that most need to say what they DECIDED rather
 // than what they were asked, because both of them deliberately do something
@@ -517,6 +539,9 @@ RadioCapabilities IcomCivBackend::capabilities() const
     c.agcModes = {QStringLiteral("slow"), QStringLiteral("med"), QStringLiteral("fast")};
     c.hasModeIndependentSquelch = profile.hasModeIndependentSquelch;
     c.hasCwTune = profile.hasCwTune;
+    // setTune() drives the ordinary TUNE producer: one sine wave. There is no
+    // CI-V route for a two-tone selection on any profiled model.
+    c.twoToneGenerator = std::nullopt;
     c.hasAmCarrierLevel = false; // RF power is separate; no AM carrier setter.
     c.hasVoxDelay = false; // setVox implements enable/gain only.
 
@@ -2047,6 +2072,15 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // This model has no verified DATA readback. An ordinary mode frame
             // can only justify an ordinary mode claim.
             m_dataMode = false;
+            // ...and that claim is still a confirmation. Without this, the only
+            // confirmState("mode") call sat in the 0x26 decode, so a model
+            // without IcomFeature::VfoMode could never reach `confirmed` on the
+            // mode field and trackedStateReady was unreachable for its whole
+            // session. 04 is what this model is polled with (onLinkTick's
+            // phase % 2 group picks it), so it is the right publication to
+            // record — with dataMode false, exactly as published above.
+            confirmState(QStringLiteral("mode"), QStringLiteral("%1/%2/%3")
+                .arg(static_cast<int>(m_mode)).arg(0).arg(m_filter));
             publishModeState();
         }
         return;
@@ -3009,9 +3043,26 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
     }
 
     case cmd::kControl: {
-        if (frame.hasSub && frame.sub == control::kPtt && frame.data.size() == 1
-            && frame.data[0] <= 1) {
+        if (frame.hasSub && frame.sub == control::kPtt && !frame.data.empty()) {
             const bool keyed = frame.data[0] != 0;
+            // THE SHAPE GATES EVIDENCE, NOT PUBLICATION (#5516 review).
+            //
+            // A 1C 00 answer is one byte, 00 or 01. Anything else is a frame we
+            // do not understand — but "do not understand" and "not keyed" are
+            // not the same answer, and this block is the fail-closed path for a
+            // radio that reports KEYED after an unkey request. Dropping an
+            // unrecognised payload here would make that report silent, which is
+            // the one direction Constitution VI will not accept. So publish on
+            // the broad guard as before, and refuse only to let an off-shape
+            // frame become a *confirmation* that something else can cite.
+            const bool wellFormed = frame.data.size() == 1 && frame.data[0] <= 1;
+            if (!wellFormed) {
+                qCWarning(lcIcomScheduler)
+                    << "PTT readback has an unexpected payload; publishing it as"
+                    << (keyed ? "KEYED" : "unkeyed")
+                    << "but refusing to record it as a confirmation. bytes ="
+                    << frame.data.size() << "first =" << int(frame.data[0]);
+            }
             // A read can already be on the wire when the operator keys.  Its
             // pre-write OFF answer then arrives after the newer ON request.
             // During the bounded confirmation window only the requested value
@@ -3087,7 +3138,9 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // Republishing unchanged state is never merely wasteful on a path
             // this hot: it is indistinguishable, to every consumer, from the
             // state having just changed.
-            confirmState(QStringLiteral("ptt"), keyed);
+            if (wellFormed) {
+                confirmState(QStringLiteral("ptt"), keyed);
+            }
             if (keyed == m_keyed && !republishContradiction) {
                 if (acceptedReadback) {
                     emit keyingStateConfirmed(keyed);
@@ -3627,9 +3680,8 @@ void IcomCivBackend::queueWrite(const std::vector<std::uint8_t>& frame,
         || (parsed && parsed->cmd == 0x07)) { // Official CI-V: VFO select/exchange.
         ++m_stateContext;
     }
-    for (const auto& [trackedKey, label] : kTrackedStateFields) {
-        Q_UNUSED(label);
-        if (stateKey == QLatin1String(trackedKey)) {
+    for (const auto& tracked : kTrackedStateFields) {
+        if (stateKey == QLatin1String(tracked.key)) {
             m_confirmedState[stateKey].pending = true;
             break;
         }
@@ -3692,8 +3744,19 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
 
 void IcomCivBackend::confirmState(const QString& key, const QVariant& value)
 {
-    // Called only after decode and stale-generation/PTT-intent rejection.
-    // ACKs, setters and control-map "seen" counters cannot confirm a value.
+    // Called after decode, and after the stale-generation and PTT-intent
+    // rejections in onCivFrame — with one structural exception: a stale frame
+    // that ARRIVES WHILE A PTT INTENT IS PENDING and agrees with that intent
+    // reaches here, because the Stale check is an `else if` on the intent
+    // branch. ACKs, setters and control-map "seen" counters never confirm.
+    //
+    // `pending` has no timer, and does not need one only because every tracked
+    // key is reconciled by something: sendUserCommand() queues confirmationFor()
+    // behind each write, and onLinkTick() re-polls frequency/mode (phase % 2),
+    // AGC and RF power (phase % 3) and PTT at 4 Hz. Squelch is the exception —
+    // see kTrackedStateFields, which is why it no longer gates readiness. If a
+    // future change removes one of those polls, the matching field can stick in
+    // `pending` for the rest of the session; add an expiry then.
     const auto previous = m_confirmedState.constFind(key);
     if ((key == QLatin1String("frequency") || key == QLatin1String("mode"))
         && previous != m_confirmedState.cend() && previous->value != value) {
@@ -3708,8 +3771,8 @@ QVariantMap IcomCivBackend::stateFreshness() const
     constexpr qint64 kFreshMs = 5000;
     QVariantMap fields;
     bool ready = m_connected && m_civReported != 0 && !m_civAmbiguous;
-    for (const auto& [key, label] : kTrackedStateFields) {
-        const auto it = m_confirmedState.constFind(QString::fromLatin1(key));
+    for (const auto& tracked : kTrackedStateFields) {
+        const auto it = m_confirmedState.constFind(QString::fromLatin1(tracked.key));
         const bool known = it != m_confirmedState.cend() && it->value.isValid();
         const qint64 age = known ? std::max<qint64>(0, nowMs() - it->atMs) : -1;
         const bool current = known && m_connected && it->session == m_sessionGeneration
@@ -3718,11 +3781,16 @@ QVariantMap IcomCivBackend::stateFreshness() const
             : !known ? QStringLiteral("never-confirmed")
             : !current ? QStringLiteral("previous-context")
             : age > kFreshMs ? QStringLiteral("stale") : QStringLiteral("confirmed");
-        ready = ready && status == QLatin1String("confirmed");
-        fields.insert(QString::fromLatin1(label), QVariantMap{
+        if (tracked.gatesReadiness) {
+            ready = ready && status == QLatin1String("confirmed");
+        }
+        fields.insert(QString::fromLatin1(tracked.label), QVariantMap{
             {QStringLiteral("status"), status}, {QStringLiteral("ageMs"), age},
             {QStringLiteral("value"), known ? it->value : QVariant()},
-            {QStringLiteral("semanticKey"), QString::fromLatin1(key)}});
+            // Say which fields the roll-up actually depends on, so a reader
+            // never has to infer it from a table that may change.
+            {QStringLiteral("gatesReadiness"), tracked.gatesReadiness},
+            {QStringLiteral("semanticKey"), QString::fromLatin1(tracked.key)}});
     }
     return {{QStringLiteral("backendInstanceId"), m_diagnosticInstanceId},
         {QStringLiteral("transportConnected"), m_connected},
@@ -3738,14 +3806,17 @@ QVariantMap IcomCivBackend::stateFreshness() const
             "Readiness is diagnostic, not TX authorization.")}};
 }
 
-QVariantMap IcomCivBackend::schedulerDiagnostics() const
+QVariantMap IcomCivBackend::schedulerDiagnostics(std::size_t traceLimit) const
 {
     const IcomCivScheduler::Stats stats = m_civScheduler.stats();
     QVariantMap out;
     out.insert(QStringLiteral("backendInstanceId"), m_diagnosticInstanceId);
     out.insert(QStringLiteral("stateFreshness"), stateFreshness());
     const auto& history = m_civScheduler.recentTransactions();
-    out.insert(QStringLiteral("transactions"), schedulerTransactionTrace(128));
+    // Callers that already publish their own trace (incidentSnapshot) or that
+    // only need the freshness block pass a shallow limit. Only the explicit
+    // `civ scheduler` verb asks for the full ring.
+    out.insert(QStringLiteral("transactions"), schedulerTransactionTrace(traceLimit));
     out.insert(QStringLiteral("firstRetainedEventId"),
         QVariant::fromValue<qulonglong>(history.empty() ? 0 : history.front().eventId));
     out.insert(QStringLiteral("lastRetainedEventId"),
@@ -3855,7 +3926,11 @@ QVariantMap IcomCivBackend::incidentSnapshot(const QString& kind,
                         m_lastOutboundCivAtMs > 0
                             ? std::max<qint64>(0, now - m_lastOutboundCivAtMs) : -1);
     commandPlane.insert(QStringLiteral("lastOutboundKey"), m_lastOutboundCivKey);
-    commandPlane.insert(QStringLiteral("scheduler"), schedulerDiagnostics());
+    // `commandPlane.transactions` below is this snapshot's trace. Asking
+    // schedulerDiagnostics() for a deep one too would ship the same events
+    // twice, at two different truncations, with nothing saying which is
+    // authoritative (#5516 review).
+    commandPlane.insert(QStringLiteral("scheduler"), schedulerDiagnostics(0));
     commandPlane.insert(QStringLiteral("transactions"), schedulerTransactionTrace());
     out.insert(QStringLiteral("commandPlane"), commandPlane);
 
@@ -3906,7 +3981,11 @@ void IcomCivBackend::serviceSchedulerWaiters(
     }
     if (ready.empty())
         return;
-    QVariantMap result = diagnosticSnapshot.value_or(schedulerDiagnostics());
+    // NOT value_or: it evaluates its argument even when the optional is
+    // engaged, so every terminateScheduler() call built a full diagnostics map
+    // — freshness block and transaction trace — only to discard it.
+    QVariantMap result = diagnosticSnapshot ? *diagnosticSnapshot
+                                            : schedulerDiagnostics();
     SchedulerWaiterOutcome outcome = SchedulerWaiterOutcome::Completed;
     if (terminal) {
         outcome = *terminal;
@@ -6420,7 +6499,14 @@ void IcomCivBackend::invokeExtension(const QString& ns, const QString& verb, qui
         return;
     }
     if (verb == QLatin1String("civ.scheduler.status")) {
-        emit extensionResult(requestId, schedulerDiagnostics());
+        // `civ scheduler freshness` asks for the confirmation block WITHOUT the
+        // transaction ring. The TX harness polls this on its unkey path purely
+        // to read stateFreshness.fields.ptt, and shipping 128 transaction rows
+        // per call to answer one boolean is waste on a loop that runs while the
+        // transmitter may still be keyed (#5516 review).
+        const bool freshnessOnly = arg.toString().trimmed()
+            .compare(QLatin1String("freshness"), Qt::CaseInsensitive) == 0;
+        emit extensionResult(requestId, schedulerDiagnostics(freshnessOnly ? 0 : 128));
         return;
     }
     if (verb == QLatin1String("civ.incident")) {

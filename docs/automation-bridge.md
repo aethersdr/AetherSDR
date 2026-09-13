@@ -1047,13 +1047,26 @@ used by the stacked trace renderer.
   trace floor used by 3D placement from the waterfall color floor.
 
 `get meters` additionally reports `temperature` and `voltage` observations with
-`status`, `value`, `unit` (when declared), and `ageMs`. Unsupported, never-fed, and stale vitals
-have a null value; a fresh zero is still a real reading. The legacy `paTemp` and
-`supplyVolts` scalars use those same qualified values. `alc` retains the native
-unit and age; `swAlc` is a legacy conversion and must not be labeled physical
-Icom dBFS. `txtest twotone` refuses Icom: its current TUNE backend generates one
-sine wave and has no two-tone selection route. Ordinary TUNE remains available
-in supported modes.
+`status`, `value`, `unit` and `ageMs`. `status` is one of `unsupported`,
+`unreliable`, `never-fed`, `stale` or `fresh`; every status but `fresh` has a
+null value, and a fresh zero is still a real reading. `unreliable` is the same
+known-bad annotation `all[].reliable` carries, rejected here rather than
+reported as a qualified reading. The freshness budget is 1500 ms, matching
+`FRESH_MS` in `tools/tx_meter_test.py`. The legacy `paTemp` and `supplyVolts`
+scalars carry those same qualified values, **and so does `paTemp` in
+`get radio`, in the `connect wait` reply and in `radiocert persist`'s `radio`
+block** — one snapshot gives one answer about one sensor. `alc` retains the
+native unit and age; `swAlc` is a legacy conversion and must not be labeled
+physical Icom dBFS.
+
+`txtest twotone` is refused whenever the connected backend does not declare a
+`twoToneGenerator` record. That is a capability, not a family check: only Flex has a
+two-tone route (`transmit set tune_mode=two_tone`), while Icom's `setTune()` and
+the HL2's built-in test tone at zero offset both produce a single carrier, so
+accepting the verb there would certify two-tone RF that was never on the air.
+The refusal comes before the TX gate — it is about what the evidence would
+claim, so it applies even when `AETHER_AUTOMATION_ALLOW_TX=1`. Ordinary TUNE
+remains available in supported modes.
 
 ### `radiocert persist`
 
@@ -1080,7 +1093,18 @@ Only validated receive publications refresh these fields, including unchanged
 replies. A setter or generic ACK cannot confirm them. Frequency/mode/filter
 changes and outgoing VFO select/exchange invalidate the prior context; session
 changes invalidate old observations. The diagnostic age budget is 5000 ms and
-does not change polling or authorize TX. Fields outside this list, including
+does not change polling or authorize TX.
+
+`trackedStateReady` is the conjunction of the fields whose per-field
+`gatesReadiness` is true — frequency, mode/DATA/filter, AGC, RF power and PTT,
+each of which `onLinkTick` reconciles on its own cadence. **Squelch is reported
+but does not gate it.** `level::kSquelch` is re-polled only under the model
+profile's `pollCwSquelchAndTxBandwidth`, which today only the IC-7300MK2 sets;
+on every other Icom it is read once at connect, so requiring it made the
+aggregate go false about five seconds into an IC-705 or IC-9700 session and stay
+there. `squelchPercent` still ages to `stale`, and that is accurate — nothing
+reconciles it on those models. Read `gatesReadiness` rather than assuming the
+membership of this list. Fields outside this list, including
 filter width and AGC threshold/off level, carry no freshness claim. CI-V has no
 transaction identifiers, so delayed unsolicited data cannot prove physical
 intent correlation or an unobserved front-panel VFO change with identical mode
@@ -3728,7 +3752,10 @@ producer in isolation:
 ```
 
 The scheduler also returns up to 128 `transactions`, `firstRetainedEventId`,
-`lastRetainedEventId`, and `stateFreshness` (see Persist above). Deduplicate
+`lastRetainedEventId`, and `stateFreshness` (see Persist above). `civ scheduler
+freshness` returns the same reply with an empty `transactions` list, for callers
+that only need the confirmation block — the TX harness polls it that way on its
+unkey path rather than pulling the whole ring to read one field. Deduplicate
 completion events by `backendInstanceId` plus `eventId`, never by semantic
 `key`/`generation`/`completion`: periodic polls reuse those three fields.
 Event IDs increase across ring eviction, history clears and scheduler resets.

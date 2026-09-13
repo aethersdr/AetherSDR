@@ -285,6 +285,8 @@ RadioCapabilities SimBackend::capabilities() const
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = familyName();
+    // The demo cannot key at all (Principle VI), let alone synthesise tones.
+    caps.twoToneGenerator = std::nullopt;
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
     caps.fmTonePresentation = FmTonePresentation::Legacy;

@@ -170,6 +170,14 @@ The shared RX/VFO/Phone/CW surfaces consume these declarations through
   produce a carrier. RadioModel updates TransmitModel on TX-slice mode/selection
   changes; both Tune starts are refused before side effects, and the UI keeps
   Stop usable while already tuning. Other profiles retain their existing policy.
+- `twoToneGenerator` (record) gates the automation bridge's `txtest twotone`
+  (`AutomationServer::doTxTest`). True only for `FlexBackend`, which is the sole
+  consumer of `transmit set tune_mode=two_tone`; Icom's `setTune()` and the
+  HL2's built-in test tone at zero offset both produce one carrier, and the
+  remaining backends have no `setTune()` at all. Absent refuses the verb before
+  the TX gate, so a single carrier is never recorded as two-tone/IMD evidence.
+  A record rather than a bool per #5262 M2: `selectionCommand` carries the route
+  and an undeclared backend reads as "not declared" rather than a confident no.
 - `hasModeIndependentSquelch` keeps MK2 squelch usable in CW/data. Other
   profiles keep their existing mode rules.
 - `hasFmRepeaterOffset` dims offset magnitude and direction when absent.
