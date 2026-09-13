@@ -18,6 +18,7 @@
 #include <QApplication>
 #include <QDeadlineTimer>
 #include <QLabel>
+#include <QFontMetrics>
 #include <QPushButton>
 
 #include <cstdio>
@@ -95,6 +96,46 @@ int main(int argc, char** argv)
         settle();
     }
     CHECK(aVisibleKeyReads(&applet, QStringLiteral("TUNE")));
+
+    // ── Every caption fits the rail's button, in every state ─────────────
+    //
+    // The rail's button is narrow and its captions are the tuner's states, so
+    // spelled out they do not fit: "OPERATE" was drawn as "OPERATI". They use
+    // the same abbreviations as the expanded panel's keys — which the operator
+    // has already learned there — and the accessible name keeps the full word,
+    // because the abbreviation is a fit problem and a reader has no width to
+    // run out of.
+    {
+        struct State { bool operate; bool bypass; const char* caption; const char* spoken; };
+        const State states[] = {
+            {true,  false, "OPR",  "Operate"},
+            {true,  true,  "BYP",  "Bypass"},
+            {false, false, "STBY", "Standby"},
+        };
+        for (const State& st : states) {
+            TunerDelta d;
+            d.operate = st.operate;
+            d.bypass = st.bypass;
+            model.applyChanges(d);
+            settle();
+
+            bool found = false;
+            for (auto* btn : applet.findChildren<QPushButton*>()) {
+                if (!btn->isVisible() || btn->text() != QLatin1String(st.caption)) continue;
+                found = true;
+                const QFontMetrics fm(btn->font());
+                // A few pixels of frame each side; anything tighter is the
+                // clipping this replaced.
+                CHECK(fm.horizontalAdvance(btn->text()) <= btn->width() - 6);
+                CHECK(btn->accessibleName() == QLatin1String(st.spoken));
+            }
+            CHECK(found);
+        }
+        // And back to a known state for what follows.
+        TunerDelta d; d.operate = true; d.bypass = false;
+        model.applyChanges(d);
+        settle();
+    }
 
     // ── Tuner alerts reach the rail, full width ───────────────────────────
     QLabel* overlay = alertOverlay(&applet);

@@ -326,7 +326,10 @@ void TunerApplet::buildUI()
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, kTuneIdleStyle);
     btnCol->addWidget(m_tuneBtn);
 
-    m_operateBtn = new QPushButton("OPERATE");
+    // Abbreviated from the outset: the state that replaces this arrives from
+    // the tuner, and until it does the caption still has to fit the button.
+    m_operateBtn = new QPushButton(tr("OPR"));
+    m_operateBtn->setAccessibleName(tr("Operate"));
     m_operateBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
@@ -1029,26 +1032,36 @@ void TunerApplet::syncFromModel()
     m_lDial->setValue(m_relayL);
     m_c2Dial->setValue(m_relayC2);
 
-    // Operate/Bypass/Standby button — 3-state display
-    // operate=1, bypass=0 → OPERATE (green)
-    // operate=1, bypass=1 → BYPASS  (orange)
-    // operate=0            → STANDBY (default)
+    // Operate/Bypass/Standby button — 3-state display, captioned with the
+    // same abbreviations the expanded panel uses (OPR / BYP / STBY). Spelled
+    // out they do not fit the rail's button and were clipped mid-word
+    // ("OPERATI"), and a caption the operator has to guess at is worse than a
+    // short one they have already learned from the panel.
+    //
+    // The accessible name stays the full word: the abbreviation is a fit
+    // problem, and a screen reader has no width to run out of.
+    // operate=1, bypass=0 → OPR  (green)
+    // operate=1, bypass=1 → BYP  (orange)
+    // operate=0            → STBY (default)
     auto& theme = AetherSDR::ThemeManager::instance();
     const bool operate = m_model->isOperate();
     const bool bypass = m_model->isBypass();
 
     if (operate && !bypass) {
-        m_operateBtn->setText("OPERATE");
+        m_operateBtn->setText(tr("OPR"));
+        m_operateBtn->setAccessibleName(tr("Operate"));
         theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
             "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
             "QPushButton:hover { background: #007040; }");
     } else if (operate && bypass) {
-        m_operateBtn->setText("BYPASS");
+        m_operateBtn->setText(tr("BYP"));
+        m_operateBtn->setAccessibleName(tr("Bypass"));
         theme.applyStyleSheet(m_operateBtn, "QPushButton { background: #8a6000; border: 1px solid #a07000; "
             "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
             "QPushButton:hover { background: #9a7000; }");
     } else {
-        m_operateBtn->setText("STANDBY");
+        m_operateBtn->setText(tr("STBY"));
+        m_operateBtn->setAccessibleName(tr("Standby"));
         theme.applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
             "QPushButton:hover { background: {{color.background.1}}; }");
