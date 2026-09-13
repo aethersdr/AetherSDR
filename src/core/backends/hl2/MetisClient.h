@@ -121,10 +121,12 @@ public:
         // flushed or trailing, and none of that becomes a reading.
         quint64 bandscopeBlocks = 0;
         // Arming cycles abandoned because no complete block arrived inside
-        // bandscopeGuardMs(). Expected to read ZERO: the guard is sized from
-        // the measured arming delay in the gateware's own units, so a non-zero
-        // value means the radio stopped answering the run byte, not that the
-        // guard is tight. See bandscopeGuardMs() for the two cases it spans.
+        // bandscopeGuardMs(). Should read zero in steady state, but a non-zero
+        // value does NOT on its own mean the radio stopped answering the run
+        // byte: bandscopeGuardMs() names two unmeasured multi-receiver cases
+        // that can fire it benignly — the arming delay being clocked by EP6
+        // samples rather than packets, and the EP4 rate at two, and at four or
+        // more, receivers. Read its assumptions before suspecting hardware.
         quint64 bandscopeTimeouts = 0;
         // Over the publish window only, so a stall that has ended stops being
         // reported as if it were still happening. Negative = nothing measured.
@@ -292,7 +294,16 @@ public:
     // beside EP6, about as much again as the IQ stream itself at 1 RX / 48 kHz
     // (see the table at kEp6LinkBudgetFraction). The gate raises the run byte's
     // wide_spectrum bit once per kBandscopeSampleMs, keeps ONE block, and lowers
-    // it again: 16 datagrams a second, 0.14 Mbit/s.
+    // it again: TWELVE datagrams a second, 0.11 Mbit/s.
+    //
+    // Twelve, not sixteen, and the count is the gate's own arithmetic rather
+    // than a block's: a steady-state cycle resumes at phase 1 (capture ends on
+    // phase 3, the trailing packet is phase 0), so 3 are discarded in Arming
+    // waiting for the boundary, 4 are flushed, 4 are kept, and 1 trailing
+    // packet follows the disable — 3+4+4+1. hl2_ep4_gate_test section 6 walks
+    // exactly that cycle. 0.11 Mbit/s is on the same wire-byte basis as the 3.3
+    // above (payload + UDP/IP/Ethernet + IFG, as ep6BitsPerSecond counts it);
+    // payload alone it is 0.10. (PR #5650 review, K5PTB.)
     //
     // That the gate exists for BANDWIDTH and not for stream integrity is now a
     // measurement rather than a hope. Bench run d95 (Procedure B) found the
@@ -311,9 +322,12 @@ public:
     Q_INVOKABLE void setBandscopeEnabled(bool on);
     // Whether the GATE is running — the operator's standing intent, which is the
     // only bandscope state that is stable long enough to report. The run byte
-    // itself is up for ~11 ms in every kBandscopeSampleMs and nothing in
-    // Protocol 1 reads it back, so a readout of the instantaneous bit would be
-    // both unknowable and useless.
+    // itself is up for only ~29 ms in every kBandscopeSampleMs — the 11 packets
+    // a cycle consumes before the disarm, at the measured 2.625 ms apiece, plus
+    // the 2.4-2.6 ms mid-stream arming latency — and nothing in Protocol 1 reads
+    // it back, so a readout of the instantaneous bit would be both unknowable
+    // and useless. (~11 ms here was one block's worth, the same undercount as
+    // the "16 datagrams" above; found while deriving that one.)
     //
     // Survives setReceiverCount()'s stop/start (Params::bandscope); cleared by
     // start() and stop().
@@ -686,8 +700,8 @@ private:
     // asks for it: the release law the eventual consumer would run requires
     // 3000 ms of dwell before any step, so a sampler slower than ~1 Hz would
     // make that dwell a property of this timer rather than of the plant. The
-    // CHOICE is 1000 ms — one sample per dwell-third, 16 datagrams/s,
-    // 0.14 Mbit/s. Nothing measured supports a faster one.
+    // CHOICE is 1000 ms — one sample per dwell-third, 12 datagrams/s,
+    // 0.11 Mbit/s. Nothing measured supports a faster one.
     static constexpr int kBandscopeSampleMs = 1000;
     // How long after unkey a block is still refused. FIND-16 / d83's measured
     // post-unkey transient is 178-285 ms, median 229; 300 ms clears it. The HL2
@@ -716,6 +730,11 @@ private:
     // is instead LOST, the flag eats the first packet of the next cycle, which
     // costs one block interval out of a guard sized in hundreds.
     bool m_bsTrailingPending = false;
+    // The run byte sendBandscopeRunByte() last COMPOSED, recorded before its
+    // socket test so the gate's arguments are observable without a socket.
+    // Read only by tests, through MetisClientTestAccess. Diagnostic state, not
+    // a readback: nothing in Protocol 1 reports what the radio actually holds.
+    std::uint8_t m_lastBandscopeRunByte = 0;
     quint64 m_bsBlocks = 0;
     quint64 m_bsTimeouts = 0;
     // Since the MOX falling edge; invalid until the first unkey of the session.

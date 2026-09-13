@@ -299,7 +299,10 @@ int main(int argc, char** argv)
                    .value(QStringLiteral("bandscopeEnabled")).toBool(),
               "and the health row reports the refusal, not the request");
 
-        // requestId 0 is the fire-and-forget form the UI uses on release.
+        // requestId 0 is the fire-and-forget form a caller uses when it wants no
+        // reply. NOT "the UI uses": no UI reaches this verb at all — the
+        // capabilities map lists it as caller-less and the verb's own comment in
+        // Hl2Backend says so. (PR #5650 review, K5PTB.)
         backend.invokeExtension(QStringLiteral("hl2"),
                                 QStringLiteral("bandscope.enable"), 0, QVariant(false));
         check(results == 1, "requestId 0 asks for no reply and gets none");

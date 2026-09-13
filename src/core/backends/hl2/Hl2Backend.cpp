@@ -449,6 +449,14 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // The bandscope belongs to the SESSION: MetisClient::start() comes up
         // with wide_spectrum clear and ep4_seq_no restarted, so carrying the
         // previous link's state here would report a stream nothing enabled.
+        //
+        // That premise holds on EVERY linkUp edge, but only because the silence
+        // watchdog was made to end the gate's intent too. Not every linkUp has a
+        // start() behind it: onWatchdogTick() emits linkDown after 2 s of EP6
+        // silence WITHOUT calling stop(), and if EP6 resumes before RadioModel's
+        // reconnect timer fires, handleDatagram emits linkUp again on the same
+        // session. Before that fix this line reported OFF beside a gate that was
+        // still cycling. (PR #5650 review, K5PTB.)
         resetBandscopeMirrors();
         m_linkStatsTimer->start();
         emit connected();
@@ -4400,8 +4408,10 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         // exist (PR #5650 review, finding 2).
         //
         // What this starts is MetisClient's DUTY-CYCLE GATE, not the stream:
-        // one 2048-sample block per sampling period, 16 datagrams a second,
-        // 0.14 Mbit/s. Ungated the same stream is ~3.3 Mbit/s, about as much
+        // one 2048-sample block per sampling period, TWELVE datagrams a second,
+        // 0.11 Mbit/s — 3 discarded while arming, 4 flushed, 4 kept, 1 trailing
+        // (PR #5650 review; the derivation is at setBandscopeEnabled's header in
+        // MetisClient.h). Ungated the same stream is ~3.3 Mbit/s, about as much
         // again as the IQ at 1 RX / 48 kHz.
         //
         // Completes locally, like freqcal.set above and for the same reason:
