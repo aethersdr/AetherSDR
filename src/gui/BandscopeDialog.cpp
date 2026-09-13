@@ -15,6 +15,7 @@
 #include <QPen>
 #include <QPushButton>
 #include <QSizePolicy>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QVariantMap>
 
@@ -32,6 +33,16 @@ namespace {
 // reason rather than silently zero-padded or truncated, either of which would
 // put a frequency axis on the window that was wrong by a factor.
 constexpr int kRequiredSamples = ClientEqFftAnalyzer::kFftSize;
+
+// How long a frame request is allowed to go unanswered before this window
+// stops waiting for it. NOT A PROTOCOL TIMEOUT and deliberately not tuned to
+// one: the backend answers or fails a bandscope.frame on its own schedule and
+// has its own guard timer, so this is only the outer bound on an answer that is
+// never coming at all because the object that owed it was destroyed. Generous
+// on purpose — an answer arriving at 2.9 s is a slow radio, not a lost one, and
+// expiring early would show the operator a failure that did not happen. No
+// radio has ever answered this verb, so the real distribution is NOT KNOWN.
+constexpr int kRequestDeadlineMs = 3000;
 
 QString formatMhz(double hz)
 {
@@ -223,9 +234,60 @@ BandscopeDialog::BandscopeDialog(RadioModel* model, QWidget* parent)
     buttonRow->addWidget(closeBtn);
     root->addLayout(buttonRow);
 
-    // One frame on open. THIS IS THE WHOLE REFRESH POLICY, plus the button: no
-    // timer, so a window left open costs the radio and the I/O thread nothing
-    // at all after the first frame has been drawn.
+    // The deadline on an outstanding request. Single-shot, started next to the
+    // invoke and stopped by releaseRequest(), so it is running exactly when a
+    // request is outstanding and at no other time. This is NOT a refresh timer:
+    // a window that has drawn its frame has no timer running at all.
+    m_deadline = new QTimer(this);
+    m_deadline->setSingleShot(true);
+    m_deadline->setInterval(kRequestDeadlineMs);
+    connect(m_deadline, &QTimer::timeout, this, [this] {
+        releaseRequest();
+        if (m_refresh)
+            m_refresh->setEnabled(true);
+        // The trace is LEFT ALONE. An unanswered request says nothing about the
+        // frame already on screen, and blanking it would destroy a reading the
+        // operator may still be looking at. The status line carries the news.
+        //
+        // AN ANSWER ARRIVING AFTER THIS IS DROPPED, not drawn: releaseRequest()
+        // has already torn down the lambdas that would have matched its id.
+        // That is the safe direction — a frame the operator stopped waiting
+        // for must not appear as the answer to their next press — and the
+        // recovery is a press of Refresh, which either succeeds or is refused
+        // by the backend with "already pending", which is itself the truth.
+        showStatus(tr("The radio did not answer. Press Refresh to ask again."));
+    });
+
+    // THE LINK GOING AWAY. Without this the window is the one surface in this
+    // change that can keep showing a dead radio's picture, with a peak readout,
+    // for as long as it is left open — every other surface the bandscope work
+    // touches (the health rows, resetBandscopeMirrors()) was built so a stale
+    // value goes ABSENT rather than stale. capabilitiesChanged is the single
+    // connection RadioModel documents for "the capability picture is now
+    // different, re-read it", and it fires on every connect/disconnect edge.
+    //
+    // Only the ABSENT case acts. A republication that still carries the record
+    // is a live radio revising something else, and wiping a good frame for that
+    // would be its own bug.
+    if (m_model) {
+        connect(m_model, &RadioModel::capabilitiesChanged, this,
+                [this](bool connected, const RadioCapabilities& caps) {
+            if (connected && caps.widebandConverterView)
+                return;
+            releaseRequest();
+            if (m_refresh)
+                m_refresh->setEnabled(true);
+            m_trace->clearFrame();
+            showStatus(connected
+                ? tr("This radio does not provide a wideband converter view.")
+                : tr("The radio disconnected. The last frame is no longer "
+                     "current and has been cleared."));
+        });
+    }
+
+    // One frame on open. THIS IS THE WHOLE REFRESH POLICY, plus the button and
+    // the deadline above: no refresh timer, so a window left open costs the
+    // radio and the I/O thread nothing at all after the first frame is drawn.
     requestFrame();
 }
 
@@ -236,6 +298,8 @@ BandscopeDialog::~BandscopeDialog()
 
 void BandscopeDialog::releaseRequest()
 {
+    if (m_deadline)
+        m_deadline->stop();
     QObject::disconnect(m_okConn);
     QObject::disconnect(m_errConn);
     m_okConn = {};
@@ -309,6 +373,14 @@ void BandscopeDialog::requestFrame()
     if (m_refresh)
         m_refresh->setEnabled(false);
     showStatus(tr("Waiting for a frame…"));
+    // STARTED BEFORE THE INVOKE, for the same reason the two connections above
+    // are made before it: invokeBackendExtension can emit extensionError
+    // SYNCHRONOUSLY (not connected, already pending), and that handler calls
+    // releaseRequest(). Arming the deadline afterwards would start a timer for
+    // a request that had already been answered and released, and its timeout
+    // would then overwrite the error the operator needs to read.
+    if (m_deadline)
+        m_deadline->start();
     m_model->invokeBackendExtension(wide.frameNamespace, wide.frameVerb, id);
 }
 
