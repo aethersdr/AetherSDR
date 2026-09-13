@@ -99,8 +99,6 @@ cmake --build build --target AetherSDR
 
 | Package | Feature |
 |---------|---------|
-| Package | Feature |
-|---------|---------|
 | qt6-base, qt6-multimedia | Core application (required) |
 | qt6-base-private-dev | GPU-accelerated spectrum/waterfall (QRhi) |
 | qt6-shadertools-dev | GPU shader compilation |
@@ -143,8 +141,6 @@ LTS at 6.4.2), install a newer Qt manually:
    Make sure the `qtshadertools` and `qt5compat` (or equivalent) modules are selected in the Qt Online Installer along with `qtbase`.
 
 *Note: GPU rendering also needs the private QtGui headers (`qt6-base-private-dev` on Debian-family, included by default in the Qt Online Installer).*
-
----
 
 ---
 

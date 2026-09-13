@@ -186,7 +186,7 @@ Substantial features requested on the
 
 ### Recently shipped
 
-Highlights from the last 30 days — full list in
+Highlights from recent releases — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
 - **A Tools-first menu bar** — the top level becomes
