@@ -3927,6 +3927,22 @@ target_include_directories(icom_settings_test PRIVATE src tests)
 target_link_libraries(icom_settings_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME icom_settings_test COMMAND icom_settings_test)
 
+# One real IcomCredentials implementation with an injected, in-memory QtKeychain
+# job. Proves concurrent startup callers share one OS credential read without
+# touching a keychain, socket or radio.
+add_executable(icom_credentials_singleflight_test
+    tests/icom_credentials_singleflight_test.cpp
+    tests/fakes/qt6keychain/keychain.h
+    src/core/backends/icom/IcomCredentials.cpp
+)
+target_include_directories(icom_credentials_singleflight_test BEFORE PRIVATE
+    tests/fakes src)
+target_compile_definitions(icom_credentials_singleflight_test PRIVATE HAVE_KEYCHAIN)
+target_link_libraries(icom_credentials_singleflight_test PRIVATE Qt6::Core)
+set_target_properties(icom_credentials_singleflight_test PROPERTIES AUTOMOC ON)
+add_test(NAME icom_credentials_singleflight_test
+         COMMAND icom_credentials_singleflight_test)
+
 # ANAN-G2 settings ("Anan" root key, Principle V). Own process because
 # AppSettings is a process-wide singleton, same reasoning as icom_settings_test.
 add_executable(anan_settings_test tests/anan_settings_test.cpp)

@@ -33,9 +33,11 @@ namespace AetherSDR {
 // keychain prompt, and nothing on the connect path can block on the keyring.
 class IcomCredentials {
 public:
-    // Read the stored password. The callback runs on `context`'s thread once
-    // the keychain answers; it receives an empty string when nothing is stored
-    // or the keychain is unavailable. Also primes the session cache on success.
+    // Read the stored password. Concurrent callers share one keychain read so
+    // macOS never presents several authorization prompts for the same item.
+    // The callback runs on `context`'s thread once the keychain answers; it
+    // receives an empty string when nothing is stored or the keychain is
+    // unavailable. Also primes the session cache on success.
     static void load(QObject* context, std::function<void(const QString&)> callback);
 
     // Persist it, and prime the session cache immediately so a connect issued
