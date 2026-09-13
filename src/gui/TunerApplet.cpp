@@ -48,6 +48,12 @@ constexpr int kBottomGap = 8;
 // keys stretch to match and become columns.
 constexpr qreal kKeyAspect = 16.0 / 9.0;
 constexpr int kKeyFontDesignPx = 13;
+
+// Relay dial diameter in design pixels. The dials were the largest thing on
+// the panel by some way and dominated it; this is 60% of the size they were
+// drawn at, which puts them nearer the keys beside them. It scales with
+// everything else, so the reduction holds at every panel size.
+constexpr int kDialDesignDiameter = 46;
 // Breathing room around the widest caption, in design pixels.
 constexpr int kKeyPaddingDesignPx = 18;
 
@@ -568,7 +574,7 @@ void TunerApplet::applyDensity()
     m_portA->setScale(f ? s : 1.0);
     m_portB->setScale(f ? s : 1.0);
     for (auto* dial : {m_c1Dial, m_lDial, m_c2Dial}) {
-        dial->setPreferredDiameter(px(76));
+        dial->setPreferredDiameter(px(kDialDesignDiameter));
     }
 
     // The SWR bar carries its scale as a gradient across the empty track —
