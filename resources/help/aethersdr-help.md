@@ -216,6 +216,14 @@ The RX applet is the slice-centric receive control surface. It repeats the most 
 
 This applet appears when tuner hardware or tuner support is relevant. Use it to manage tuning state, watch SWR and power behavior, and confirm that the RF path is behaving as expected before staying on the air.
 
+While a tune is running, `TUNE` becomes `STOP`, and pressing it stops that tune. The tuner stays in operate — stopping a tune does not put it into bypass or standby, so you are left where you started.
+
+Messages from the tuner appear across the applet for as long as the tuner shows them: a successful tune reports the SWR it settled on, and a tune that could not run reports why — `LOW RF POWER` means there was too little drive for the tuner to measure against, so raise drive and tune again.
+
+Popped out into its own window, or placed on the workspace canvas, the applet lays itself out the way the tuner's own front panel does: the two meters, a status strip for each RF port showing what is feeding it and where it is tuned, the C1/L/C2 relay positions as dials, and separate `STBY`, `BYP` and `TUNE` keys. Docked in the rail it stays the compact tile — the same tuner, fewer things on screen.
+
+Port detail needs the direct connection to the tuner (Radio Setup, peripherals), which is also what makes the relay positions adjustable by scrolling over them. Without it the applet still works from what the radio relays.
+
 ### `AMP`
 
 This applet is for amplifier integration when available. It is part of the station-status side of the app rather than the slice side, so always confirm whether you are making a station-wide change or a single-slice change.
