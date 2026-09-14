@@ -132,6 +132,16 @@ accessor set, and one performance change:
    (`ensure_minphase()`) so `setMp_fircore()` can still turn minimum phase on at
    any time. `deplan_fircore()` tolerates the absent object.
 
+   ONE NEW PROPERTY THIS GIVES `setMp_fircore()`: it can now build FFTW plans,
+   which it never could before, because `ensure_minphase()` reaches
+   `create_minphase()`'s four `FFTW_PATIENT` plans. FFTW planning is not
+   thread-safe. Today that is harmless — the only caller of `RXASetMP()` is
+   `WdspChannel::open()`, which holds the setup mutex, and `setNc_fircore()`
+   already planned from that same place. **If anything ever starts toggling
+   minimum phase at runtime, outside that mutex, this is the line to revisit.**
+   Raised by the reviewer on #5697 and recorded here rather than left in a
+   review thread.
+
    Upstream ends `plan_fircore()` with an unconditional
    `a->pminphase = create_minphase (a->nc, a->pfactor)`, with no reference to
    `a->mp`. The only consumer is the `if (a->mp)` branch of `calc_fircore()`.
