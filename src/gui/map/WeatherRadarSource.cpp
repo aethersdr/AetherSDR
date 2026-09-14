@@ -539,6 +539,7 @@ QUrl WeatherRadarSource::imageUrl(
             .arg(bounds.left(), 0, 'f', 3).arg(bounds.top(), 0, 'f', 3)
             .arg(bounds.right(), 0, 'f', 3).arg(bounds.bottom(), 0, 'f', 3));
         query.addQueryItem(QStringLiteral("providers"), QString::number(m_enabledProviders));
+        query.addQueryItem(QStringLiteral("provenance"), QStringLiteral("1"));
         query.addQueryItem(QStringLiteral("refresh"), QString::number(m_frameTime.toSecsSinceEpoch()));
         query.addQueryItem(QStringLiteral("width"), QString::number(pixelSize.width()));
         query.addQueryItem(QStringLiteral("height"), QString::number(pixelSize.height()));
@@ -552,7 +553,7 @@ QUrl WeatherRadarSource::imageUrl(
         query.addQueryItem(QStringLiteral("VERSION"), QStringLiteral("1.3.0"));
         query.addQueryItem(QStringLiteral("REQUEST"), QStringLiteral("GetMap"));
         query.addQueryItem(QStringLiteral("LAYERS"), QStringLiteral("RADAR_1KM_RRAI"));
-        query.addQueryItem(QStringLiteral("STYLES"), QString{});
+        query.addQueryItem(QStringLiteral("STYLES"), QStringLiteral("Radar-Rain"));
         query.addQueryItem(QStringLiteral("CRS"), QStringLiteral("EPSG:3857"));
         query.addQueryItem(QStringLiteral("BBOX"), QStringLiteral("%1,%2,%3,%4")
             .arg(bounds.left(), 0, 'f', 3).arg(bounds.top(), 0, 'f', 3)

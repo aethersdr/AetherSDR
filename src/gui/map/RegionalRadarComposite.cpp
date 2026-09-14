@@ -1,4 +1,5 @@
 #include "RegionalRadarComposite.h"
+#include "WeatherRadarProvenance.h"
 #include "MapProviderNetworkAccessManager.h"
 #include "WeatherRadarViewGeometry.h"
 #include <QBuffer>
@@ -40,7 +41,11 @@ std::optional<WeatherRadarObservation> radarObservationAt(
 
 QImage composeRegionalRadar(const QVector<QImage>& images, const QSize& size)
 {
-    if (images.size() > 3 && !images[3].isNull()) { return images[3]; }
+    if (images.size() > 3 && !images[3].isNull()) {
+        QImage primary = images[3];
+        setRadarImageProviders(primary, 8);
+        return primary;
+    }
     QImage result(size, QImage::Format_ARGB32_Premultiplied);
     result.fill(Qt::transparent);
     QPainter painter(&result);
@@ -49,6 +54,12 @@ QImage composeRegionalRadar(const QVector<QImage>& images, const QSize& size)
     for (int index : {1, 0, 2}) {
         if (index < images.size() && !images[index].isNull()) { painter.drawImage(0, 0, images[index]); }
     }
+    painter.end();
+    int providers = 0;
+    for (int i = 0; i < std::min(3, int(images.size())); ++i) {
+        if (!images[i].isNull()) { providers |= 1 << i; }
+    }
+    setRadarImageProviders(result, providers);
     return result;
 }
 

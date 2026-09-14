@@ -1,4 +1,5 @@
 #include "GlobeMapView.h"
+#include "WeatherRadarProvenance.h"
 #include "BasemapStyle.h"
 #include "CityLightsShading.h"
 
@@ -1425,6 +1426,19 @@ void GlobeMapView::requestAtlasTiles()
     requestNextTiles();
 }
 
+void GlobeMapView::publishWeatherRadarProviders()
+{
+    if (m_weatherRadarPlaybackActive) { return; }
+    int providers = 0;
+    for (int mask : m_weatherRadarAtlasProviders) { providers |= mask; }
+    for (const auto& tile : m_detailTiles) {
+        if (tile->radarFrameId == m_weatherRadarSource.frameId() && !tile->radarImage.isNull()) {
+            providers |= radarImageProviders(tile->radarImage, m_weatherRadarSource);
+        }
+    }
+    emit weatherRadarProvidersChanged(providers);
+}
+
 void GlobeMapView::requestWeatherRadarAtlas()
 {
     const int radarAtlasSize=kTileCount*m_weatherRadarSource.tilePixelSize();
@@ -1442,7 +1456,9 @@ void GlobeMapView::requestWeatherRadarAtlas()
         && m_weatherRadarTextureBounds
             == QVector4D(0.0F, 0.0F, 1.0F, 1.0F)) {
         m_pendingWeatherRadarAtlas = m_weatherRadarAtlas;
+        m_pendingWeatherRadarAtlasProviders = m_weatherRadarAtlasProviders;
     } else {
+        m_pendingWeatherRadarAtlasProviders.clear();
         m_pendingWeatherRadarAtlas = QImage(
             radarAtlasSize, radarAtlasSize, WeatherRadarTexture::kImageFormat);
         m_pendingWeatherRadarAtlas.fill(Qt::transparent);
@@ -1534,6 +1550,8 @@ void GlobeMapView::requestNextTiles()
                             if (tile.weatherRadar) {
                                 if (tile.baseAtlas && tile.radarFrameId
                                     == m_pendingWeatherRadarFrameId) {
+                                    m_pendingWeatherRadarAtlasProviders.insert(tile.y * kTileCount + tile.x,
+                                        radarImageProviders(image, m_weatherRadarSource));
                                     QPainter radarPainter(
                                         &m_pendingWeatherRadarAtlas);
                                     radarPainter.setCompositionMode(
@@ -1548,6 +1566,8 @@ void GlobeMapView::requestNextTiles()
                                         // slowest of 16 atlas tiles. Later time
                                         // updates retain the prior full atlas.
                                         m_weatherRadarAtlas = m_pendingWeatherRadarAtlas;
+                                        m_weatherRadarAtlasProviders = m_pendingWeatherRadarAtlasProviders;
+                                        publishWeatherRadarProviders();
                                         m_weatherRadarAtlasDirty = true;
                                         m_replaceWeatherRadarTexture = true;
                                         update();
@@ -1565,6 +1585,7 @@ void GlobeMapView::requestNextTiles()
                                         (*found)->radarLoading = false;
                                         (*found)->radarFrameId =
                                             tile.radarFrameId;
+                                        publishWeatherRadarProviders();
                                         update();
                                     }
                                 }
@@ -1620,6 +1641,8 @@ void GlobeMapView::requestNextTiles()
                             // A valid transparent PNG still counts as loaded.
                             m_weatherRadarAtlas =
                                 m_pendingWeatherRadarAtlas;
+                            m_weatherRadarAtlasProviders = m_pendingWeatherRadarAtlasProviders;
+                            publishWeatherRadarProviders();
                             m_loadedWeatherRadarFrameId =
                                 m_pendingWeatherRadarFrameId;
                             m_weatherRadarAtlasDirty = true;
@@ -2106,6 +2129,9 @@ void GlobeMapView::setWeatherRadarSource(
     if (source.provider() != m_weatherRadarSource.provider()
         || source.enabledProviders() != m_weatherRadarSource.enabledProviders()) {
         cancelWeatherRadarRequests();
+        m_weatherRadarAtlasProviders.clear();
+        m_pendingWeatherRadarAtlasProviders.clear();
+        emit weatherRadarProvidersChanged(0);
         m_weatherRadarAtlas.fill(Qt::transparent);
         m_pendingWeatherRadarAtlas.fill(Qt::transparent);
         m_loadedWeatherRadarFrameId.clear();

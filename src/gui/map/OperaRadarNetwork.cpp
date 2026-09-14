@@ -1,5 +1,5 @@
 #include "OperaRadarNetwork.h"
-#include "OperaRadarImage.h"
+#include "core/weather/OperaRadarImage.h"
 #include "WeatherRadarSource.h"
 #include "MapProviderNetworkAccessManager.h"
 #include "RegionalRadarComposite.h"

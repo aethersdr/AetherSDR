@@ -195,7 +195,7 @@ its identity and nominal range.
 
 Site positions come from the [NOAA radar station API](https://api.weather.gov/radar/stations)
 and the [OPERA radar database](https://www.eumetnet.eu/wp-content/themes/aeron-child/observations-programme/current-activities/opera/database/OPERA_Database/).
-The current OPERA adapter uses its published June 17, 2026 JSON snapshot and only
+The bundled OPERA catalog uses its published September 10, 2026 JSON snapshot and only
 active (`status=1`) records. Published site ranges are used. NOAA WSR-88D sites
 use the [ROC maximum reflectivity range of 460 km](https://www.weather.gov/roc/WindFarms).
 Unknown ranges are never inferred and produce no shaded disc. The site count
@@ -204,9 +204,40 @@ includes valid catalog sites even when their range is unknown.
 This describes nominal instrument reach, not measured present-day coverage,
 terrain visibility, precipitation presence, or live operational status. The
 catalog currently contains US and European sites; Canadian site footprints are
-not yet supplied by this adapter. Catalog requests happen only when coverage is
-enabled, with bounded responses and cached results. The OPERA snapshot URL should
-be updated when the official database publishes a replacement.
+not yet supplied by this adapter. Both catalogs are bundled Qt resources: enabling
+coverage makes no catalog requests. Snapshot provenance and the update procedure
+are in [resources/radar/README.md](../resources/radar/README.md).
+
+## Source labels and intensity legends
+
+A compact in-map panel names the displayed providers and gives each its own
+palette and units, on both projections. NOAA uses dBZ, ECCC uses mm/h, and OPERA
+uses DBZH maximum reflectivity in dBZ (not the separate OPERA rain-rate product).
+LibreWXR uses a dBZ-equivalent scale and is explicitly labeled radar, satellite
+estimates and model data. No reflectivity/rain-rate conversion is applied.
+
+Composite images carry the identity of the providers that actually succeeded,
+including clear transparent images, in their PNG metadata. That identity survives
+cache storage and texture preparation. Live fallback imagery gets the regional
+legends; playback keeps its selected provider set. Legend data and catalog
+resources are local, with no additional runtime provider traffic.
+
+`WeatherRadarController` owns network scheduling, caches, playback and coverage
+catalog state. Each `WeatherRadarFrame` keeps time, sample time, raster IDs,
+provider selection, URL, geometry, bytes, cache key and bounds together through
+compaction. `MapDisplayWidget` remains the projection facade.
+
+The OPERA decoder lives in aethercore and uses its existing zlib dependency.
+Only the fixed CIRRUS float32 DBZH profile is admitted; linked overviews are
+validated iteratively with a visited set and a maximum of eight directories.
+Input is capped at 16 MiB, the primary raster at 3800 × 4400, and decompression
+at 144 MiB of tile output. Dimensions and offset/count arithmetic are checked
+before allocation. `opera_radar_corpus_test` covers malformed directories,
+offsets, sample profiles and compressed payloads without network access.
+
+Release-note material: enabling weather now selects LibreWXR global precipitation
+by default, including for upgrading US users. NOAA remains independently selectable.
+The overlay and coverage shading remain opt-in; existing regional preferences stay.
 
 ## Verification
 

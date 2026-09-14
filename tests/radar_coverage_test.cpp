@@ -1,6 +1,7 @@
 #include "gui/map/RadarCoverage.h"
 #include <QCoreApplication>
 #include <iostream>
+#include <algorithm>
 using namespace AetherSDR;
 int main(int argc, char** argv)
 {
@@ -24,5 +25,9 @@ int main(int argc, char** argv)
     check(parseRadarSites(QByteArray(3*1024*1024, 'x'), true).isEmpty(), "allocation cap");
     const QByteArray unknown = R"({"features":[{"geometry":{"type":"Point","coordinates":[-79,35]},"properties":{"id":"KTEST","name":"Test","stationType":"other"}}]})";
     check(parseRadarSites(unknown, false).first().ring.isEmpty(), "unknown range not invented");
+    const QVector<RadarSite> bundled = bundledRadarSites();
+    check(bundled.size() == 389, "both bundled catalogs load without network");
+    check(std::any_of(bundled.begin(), bundled.end(), [](const RadarSite& s) { return s.id == QStringLiteral("KRAX"); }), "NOAA Raleigh present");
+    check(std::any_of(bundled.begin(), bundled.end(), [](const RadarSite& s) { return s.operatorName.startsWith(QStringLiteral("EUMETNET")); }), "OPERA sites present");
     return 0;
 }

@@ -91,6 +91,7 @@ signals:
     void imageOverlayViewChanged();
     void markerClicked(const GlobeMapView::Marker& marker);
     void rendererUnavailable(const QString& reason);
+    void weatherRadarProvidersChanged(int providers);
     void weatherRadarFrameLoaded(const QDateTime& frameTime);
     void weatherRadarPlaybackPresented(quint64 presentationSequence);
     void weatherRadarPlaybackFramePreloaded(const QDateTime& frameTime);
@@ -229,6 +230,9 @@ private:
     int m_indexCount{0};
 
     QImage m_atlas;
+    void publishWeatherRadarProviders();
+    QHash<int, int> m_weatherRadarAtlasProviders;
+    QHash<int, int> m_pendingWeatherRadarAtlasProviders;
     QImage m_weatherRadarAtlas;
     QImage m_pendingCurrentPlaybackRadarAtlas;
     QImage m_preloadedWeatherRadarAtlas;
