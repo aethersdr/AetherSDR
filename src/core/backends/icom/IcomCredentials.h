@@ -37,7 +37,10 @@ public:
     // macOS never presents several authorization prompts for the same item.
     // The callback runs on `context`'s thread once the keychain answers; it
     // receives an empty string when nothing is stored or the keychain is
-    // unavailable. Also primes the session cache on success.
+    // unavailable. Also primes the session cache on success. With QtKeychain,
+    // context must be non-null; destroyed contexts receive no callback. Without
+    // QtKeychain, context is unused and the session result is delivered
+    // synchronously on the calling thread.
     static void load(QObject* context, std::function<void(const QString&)> callback);
 
     // Persist it, and prime the session cache immediately so a connect issued

@@ -3942,6 +3942,7 @@ target_link_libraries(icom_credentials_singleflight_test PRIVATE Qt6::Core)
 set_target_properties(icom_credentials_singleflight_test PROPERTIES AUTOMOC ON)
 add_test(NAME icom_credentials_singleflight_test
          COMMAND icom_credentials_singleflight_test)
+set_tests_properties(icom_credentials_singleflight_test PROPERTIES TIMEOUT 10)
 
 # ANAN-G2 settings ("Anan" root key, Principle V). Own process because
 # AppSettings is a process-wide singleton, same reasoning as icom_settings_test.
