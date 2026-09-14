@@ -167,8 +167,27 @@ int main()
                "#5193 stale bind: an unclaimed slice is adopted again after the drop");
     }
 
-    // A TciCreated route is never dropped (split teardown must still be able
-    // to remove the slice TCI created) but is refused as a PTT target while
+    // An external bind outliving a GUI TX move: bound onto slice 2 while it
+    // held TX, TX moved to slice 0 by the operator, slice 0 then declared by
+    // another client. Neither slice is this client's PTT target (live TX
+    // beats the cache; the live TX slice is foreign) — PTT keys the
+    // requested slice and the stale bind is dropped.
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> txOnTwo {
+            { 0, false, false }, { 1, false, false }, { 2, true, false } };
+        QVector<TciSliceEndpoint> txMovedAndClaimed {
+            { 0, true, true }, { 1, false, false }, { 2, false, false } };
+        expect(routing.resolveVfoB(1, txOnTwo).action == Action::UseExisting
+                   && routing.txSliceId() == 2,
+               "#5193 moved TX: VFO B binds slice 2 while it holds TX");
+        expect(routing.resolvePttSlice(1, txMovedAndClaimed) == 1,
+               "#5193 moved TX: PTT keys the requested slice, not the slice TX left");
+        expect(routing.txSliceId() < 0 && routing.owner() == Owner::None,
+               "#5193 moved TX: the external bind onto the slice TX left is dropped");
+    }
+
+    // A TciCreated route is not dropped here but is refused as a PTT target while
     // another client operates it; PTT then keys the requested slice.
     {
         TciRoutingState routing;
@@ -178,7 +197,7 @@ int main()
         expect(routing.resolvePttSlice(1, createdClaimed) == 1,
                "#5193: a TciCreated slice another client operates is not keyed");
         expect(routing.ownsRoute() && routing.txSliceId() == 2,
-               "#5193: the TciCreated route is kept for teardown");
+               "#5193: the TciCreated route is left in place by the PTT resolver");
     }
 
     // Requested split with a negotiated (TciCreated) slice that is not the

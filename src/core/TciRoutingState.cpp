@@ -65,15 +65,18 @@ TciRoutingState::RouteDecision TciRoutingState::resolveVfoB(
         // route change, and writing m_rxSliceId here would make
         // resolvePttSlice()'s routeApplies true for a route never bound.
         //
-        // A route bound EARLIER onto this same slice is another matter. The
-        // UseExisting branch below adopted it while no client had declared
-        // it (the #1807 shape); now that a client has, that bind is stale,
-        // and left in place it would let resolvePttSlice() hand the other
-        // client's receiver to this one's next bare PTT. Drop it. Only an
-        // externally owned route is dropped: a TciCreated route is a slice
-        // TCI must still be able to `slice remove` on split teardown, and
-        // resolvePttSlice() refuses such a slice on its own.
-        if (m_txSliceId == currentTx && m_owner == TxRouteOwner::External) {
+        // An external bind recorded EARLIER (by any requester) is another
+        // matter. The UseExisting branch below adopted the live TX slice
+        // while no client had declared it (the #1807 shape); an external
+        // bind is only ever the live TX slice, so once that slice is another
+        // client's receiver there is no valid external bind at all, whether
+        // the cache names this slice or one TX has since moved away from.
+        // Left in place it would let resolvePttSlice() hand the other
+        // client's receiver, or a slice TX has left, to the next bare PTT.
+        // Drop it. A TciCreated route is not dropped here: resolvePttSlice()
+        // refuses such a slice on its own, and dropping it would not help
+        // teardown either way (see the Create branch below).
+        if (m_owner == TxRouteOwner::External) {
             m_rxSliceId = -1;
             m_txSliceId = -1;
             m_owner = TxRouteOwner::None;
@@ -102,6 +105,10 @@ TciRoutingState::RouteDecision TciRoutingState::resolveVfoB(
 
     // A non-TX slice may be an operator's independent receiver. Without an
     // explicit ownership signal, commandeering and retuning it is unsafe.
+    // Note this also overwrites a TciCreated route whose slice the promote
+    // above refused (another client now operates it): that slice becomes
+    // untracked and split teardown will not `slice remove` it. Pre-existing;
+    // the alternative, removing a slice another client operates, is worse.
     m_rxSliceId = rxSliceId;
     m_txSliceId = -1;
     m_owner = TxRouteOwner::None;
@@ -137,10 +144,10 @@ int TciRoutingState::resolvePttSlice(int rxSliceId, const QVector<TciSliceEndpoi
     // knowledge pass no flags and see the pre-#5193 behaviour unchanged.
     const bool liveTxIsAnotherReceiver = currentTx >= 0 && currentTx != rxSliceId
         && operatedByAnotherClient(endpoints, currentTx);
-    if (liveTxIsAnotherReceiver && m_txSliceId == currentTx
-        && m_owner == TxRouteOwner::External) {
-        // Same rule as resolveVfoB()'s EchoOnly branch: a stale external bind
-        // is dropped, a TciCreated one is kept for teardown and refused below.
+    if (liveTxIsAnotherReceiver && m_owner == TxRouteOwner::External) {
+        // Same rule as resolveVfoB()'s EchoOnly branch: an external bind is
+        // only ever the live TX slice, so with that slice foreign there is
+        // none to keep. A TciCreated one is left in place and refused below.
         m_rxSliceId = -1;
         m_txSliceId = -1;
         m_owner = TxRouteOwner::None;
