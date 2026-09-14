@@ -172,6 +172,26 @@ QString formatTemp(float degC, bool fahrenheit)
     return QStringLiteral("%1").arg(displayTemp(degC, fahrenheit), 0, 'f', 1);
 }
 
+// Every value in the bottom row is right-aligned in a field this wide and
+// drawn in a fixed-width face. The row is four readouts abreast, so any
+// reading that changes width shuffles everything to its right — and these
+// arrive five times a second, which makes the whole row twitch. The face
+// handles a 1 becoming an 8; the field handles 9.9 becoming 10.0.
+//
+// Five characters is what the widest of them needs: "100.4" for a PA
+// temperature in Fahrenheit.
+constexpr int kValueFieldChars = 5;
+
+QString pad(const QString& value)
+{
+    return value.rightJustified(kValueFieldChars);
+}
+
+QString voltsReadout(const QString& label, const QString& value)
+{
+    return QStringLiteral("%1 %2 V").arg(label).arg(pad(value));
+}
+
 // The state cell on a port strip. It speaks only when it has something to
 // say. Operating is the normal condition and needs no word for it — the
 // amplifier's own panel carries none — and keying is already on the PTT lamp
@@ -347,8 +367,8 @@ void AmpApplet::buildUI()
     });
     updateTempLabel();
 
-    m_vddLabel = new QLabel("Vdd  — V", this);
-    m_vacLabel = new QLabel("Vac  — V", this);
+    m_vddLabel = new QLabel(voltsReadout(QStringLiteral("Vdd"), QStringLiteral("—")), this);
+    m_vacLabel = new QLabel(voltsReadout(QStringLiteral("Vac"), QStringLiteral("—")), this);
     m_sourceLabel = new QLabel("● RADIO", this);
     for (QLabel* readout : {m_vddLabel, m_vacLabel, m_sourceLabel}) {
         readout->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
@@ -778,7 +798,8 @@ void AmpApplet::applyTelemetryStyles(qreal scale)
 
     theme.applyStyleSheet(m_tempBtn, QStringLiteral(
         "QPushButton { background: transparent; border: 1px solid transparent; "
-        "color: {{color.text.primary}}; font-size: %1px; text-align: left; padding: 0 2px; }"
+        "color: {{color.text.primary}}; font-family: monospace; font-size: %1px; "
+        "text-align: left; padding: 0 2px; }"
         "QPushButton:hover { border-color: {{color.background.2}}; color: {{color.text.primary}}; }"
         "QPushButton:focus { border-color: {{color.accent.bright}}; }").arg(bodyPx));
 
@@ -789,7 +810,8 @@ void AmpApplet::applyTelemetryStyles(qreal scale)
                                            : QStringLiteral("{{color.text.disabled}}");
     for (auto* lbl : {m_vddLabel, m_vacLabel}) {
         theme.applyStyleSheet(lbl, QStringLiteral(
-            "QLabel { color: %1; font-size: %2px; }").arg(tone).arg(bodyPx));
+            "QLabel { color: %1; font-family: monospace; font-size: %2px; }")
+            .arg(tone).arg(bodyPx));
     }
 
     theme.applyStyleSheet(m_sourceLabel, QStringLiteral(
@@ -1004,11 +1026,11 @@ void AmpApplet::updateTempLabel()
     if (m_hasTempB) {
         m_tempBtn->setText(
             QStringLiteral("PA %1 / HL %2 %3")
-                .arg(tempA)
-                .arg(formatTemp(m_tempB, m_tempFahrenheit))
+                .arg(pad(tempA))
+                .arg(pad(formatTemp(m_tempB, m_tempFahrenheit)))
                 .arg(unit));
     } else {
-        m_tempBtn->setText(QStringLiteral("PA %1 %2").arg(tempA).arg(unit));
+        m_tempBtn->setText(QStringLiteral("PA %1 %2").arg(pad(tempA)).arg(unit));
     }
 
     const QString nextUnit = m_tempFahrenheit
@@ -1058,16 +1080,17 @@ void AmpApplet::setDrainVoltage(float volts)
     // PGXL reports vdd=0.0 when the drain supply is off (standby). Show a dash
     // rather than "0.0 V" so it's clear the supply is off, not that we're reading zero.
     if (volts < 1.0f)
-        m_vddLabel->setText("Vdd  — V");
+        m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"), QStringLiteral("—")));
     else
-        m_vddLabel->setText(QStringLiteral("Vdd  %1 V").arg(volts, 0, 'f', 1));
+        m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"),
+                                         QString::number(volts, 'f', 1)));
 }
 
 void AmpApplet::setMainsVoltage(int volts)
 {
     if (!m_directConnected) return;
     m_mainsVolts = volts;
-    m_vacLabel->setText(QStringLiteral("Vac  %1 V").arg(volts));
+    m_vacLabel->setText(voltsReadout(QStringLiteral("Vac"), QString::number(volts)));
 }
 
 void AmpApplet::setFanMode(const QString& mode)
@@ -1169,8 +1192,8 @@ void AmpApplet::setDirectConnected(bool direct)
                                   : QStringLiteral("● RADIO"));
     if (!direct) {
         // Vdd and Vac are not proxied by the radio — clear the stale values.
-        m_vddLabel->setText("Vdd  — V");
-        m_vacLabel->setText("Vac  — V");
+        m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"), QStringLiteral("—")));
+        m_vacLabel->setText(voltsReadout(QStringLiteral("Vac"), QStringLiteral("—")));
         // Fan mode is only available via the direct PGXL protocol — drop it
         // until the amplifier is back rather than leaving a control up that
         // can no longer command anything.
