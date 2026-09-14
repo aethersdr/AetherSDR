@@ -530,6 +530,10 @@ void SpectralNR::reset()
 void SpectralNR::resetTransient()
 {
     ++m_transientResetCount;
+    // Upstream zeroes olddmag in its flush path (emnr.c). Without this a peak
+    // captured before a transmit pass keeps inflating the injected level for
+    // seconds after receive resumes, since the follower decays over 5 s.
+    m_post2PeakHold = 0.0;
     std::fill(m_inAccum.begin(), m_inAccum.end(), 0.0);
     std::fill(m_outAccum.begin(), m_outAccum.end(), 0.0);
     std::fill(m_stereoInAccumL.begin(), m_stereoInAccumL.end(), 0.0);
@@ -1147,11 +1151,25 @@ void SpectralNR::synthesizeCurrentFrameWithMask()
 // cosine taper, zeroing DC and everything above the band — is as upstream.
 
 namespace {
-// WDSP's own constants (emnr.c). The noise magnitude is the amplitude of the
-// unit phasor table; the factor of 4 scales the peak follower into it.
-constexpr int    kPost2TableSize = 1024;
-constexpr double kPost2NoiseMag  = 113.98;
-constexpr double kPost2PeakScale = 4.0;
+constexpr int kPost2TableSize = 1024;
+
+// How loud the synthetic white term is, as a fraction of the band peak the
+// residual term is measured against.
+//
+// This is WDSP's `dmult = dmag * 4.0 * a->gain` with `POST2_NOISE_MAG =
+// 113.98` folded in -- but it CANNOT be copied as those two constants, which
+// was the first version of this port and was 16384x too loud. `a->gain` is
+// `ogain / fsize / ovrlp` (emnr.c:310), so upstream's white-to-residual ratio
+// is `4 * gain * 113.98`, which at WDSP's own 4096/4 geometry is 0.0278 --
+// about 3% of the in-band peak, sitting sensibly beside a residual term that
+// is at most 1.0 of it. Our bins carry no such gain factor (the 1/fftSize
+// lands after the inverse transform), so `4 * 113.98` bare made the white
+// term 456x the residual rather than 0.028x.
+//
+// Expressed as the ratio rather than as WDSP's two constants, the stage
+// behaves the same at any FFT size -- the same reasoning as the taper being a
+// frequency rather than a bin fraction.
+constexpr double kPost2WhiteFraction = 4.0 * 113.98 / (4096.0 * 4.0);
 
 struct Post2PhasorTable {
     double cs[kPost2TableSize];
@@ -1159,9 +1177,9 @@ struct Post2PhasorTable {
     Post2PhasorTable()
     {
         for (int i = 0; i < kPost2TableSize; ++i) {
-            const double th = 2.0 * M_PI * static_cast<double>(i) / kPost2TableSize;
-            cs[i] = kPost2NoiseMag * std::cos(th);
-            sn[i] = kPost2NoiseMag * std::sin(th);
+            const double th = 2.0 * std::numbers::pi * static_cast<double>(i) / kPost2TableSize;
+            cs[i] = std::cos(th);
+            sn[i] = std::sin(th);
         }
     }
 };
@@ -1248,13 +1266,13 @@ void SpectralNR::applyPsychoacousticPostProcessing()
         m_post2PeakHold *= rateDecay;
     }
     peak = std::max(peak, m_post2PeakHold);
-    const double whiteScale = peak * kPost2PeakScale;
+    const double whiteScale = peak * kPost2WhiteFraction;
 
     // Raised-cosine taper over the band, as post2_calc_w() builds it.
     const auto& table = post2Table();
     for (int k = 1; k < ilim; ++k) {
         const double w = (ilim > 1)
-            ? 0.75 - 0.25 * std::cos(M_PI * (ilim - 1 - k) / (ilim - 1))
+            ? 0.75 - 0.25 * std::cos(std::numbers::pi * (ilim - 1 - k) / (ilim - 1))
             : 0.75;
 
         const unsigned int phase = post2NextRandom() & (kPost2TableSize - 1);

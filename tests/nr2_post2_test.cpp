@@ -132,25 +132,38 @@ int main()
         check(rms(out, kSampleRate / 2) > 0.0, "the taper silenced everything");
     }
 
-    // Injection puts energy back. The whole point of the stage is that the
-    // gaps stop being silent, so more nlevel means more residual energy.
+    // Injection puts energy back, and -- the part that matters -- a BOUNDED
+    // amount of it. The first version of this port scaled the synthetic white
+    // term by WDSP's bare constants, which made it 16384x too loud, and a
+    // directional "louder than nothing" assertion passed that happily. So the
+    // bound is the assertion: at the shipped defaults the stage adds fill, not
+    // a new signal.
     {
         SpectralNR quiet(kFftSize, kSampleRate, kOverlap);
         quiet.setPost2Run(true);
         quiet.setPost2Nlevel(0.0f);
         const double quietRms = rms(run(quiet, input), kSampleRate / 2);
 
-        SpectralNR loud(kFftSize, kSampleRate, kOverlap);
-        loud.setPost2Run(true);
-        loud.setPost2Nlevel(0.5f);
-        const std::vector<float> loudOut = run(loud, input);
+        SpectralNR def(kFftSize, kSampleRate, kOverlap);
+        def.setPost2Run(true);                 // defaults: nlevel 0.15, factor 0.15
+        const std::vector<float> defOut = run(def, input);
         bool finite = true;
-        for (float v : loudOut) {
+        for (float v : defOut) {
             finite = finite && std::isfinite(v);
         }
         check(finite, "injection produced non-finite output");
-        check(rms(loudOut, kSampleRate / 2) > quietRms,
-              "injection did not add energy");
+        const double defRms = rms(defOut, kSampleRate / 2);
+        check(defRms > quietRms, "injection did not add energy");
+        check(defRms < quietRms * 2.0,
+              "the default fill is more than doubling the output -- check the "
+              "white term's scale against WDSP's 4 * gain * POST2_NOISE_MAG");
+
+        // And the level control still moves it in the right direction.
+        SpectralNR loud(kFftSize, kSampleRate, kOverlap);
+        loud.setPost2Run(true);
+        loud.setPost2Nlevel(0.5f);
+        check(rms(run(loud, input), kSampleRate / 2) > defRms,
+              "raising the fill level did not add energy");
     }
 
     // Every control clamps to its documented range rather than trusting callers.
