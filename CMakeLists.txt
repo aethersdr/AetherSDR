@@ -919,6 +919,7 @@ set(CORE_SOURCES
     src/core/NvidiaAfxFilter.cpp
     src/core/NvidiaAfxPack.cpp
     src/core/DeepFilterFilter.cpp
+    src/core/NnrFilter.cpp
     src/core/RADEEngine.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
