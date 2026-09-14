@@ -4,7 +4,6 @@
 #include "models/RadioModel.h"
 
 #include <QAction>
-#include <QPalette>
 
 namespace AetherSDR {
 
@@ -14,17 +13,15 @@ namespace {
 // a user theme can restate them. Both tokens ship in default-dark and
 // default-light; see docs/style/theme-style-guide.md §"Three-state controls"
 // for the measured contrast and the honest note about the light theme.
-QColor treatmentColor(ControlAvailability state, const QWidget* context)
+QString treatmentToken(ControlAvailability state)
 {
     switch (state) {
         case ControlAvailability::Unavailable:
-            return ThemeManager::instance().color(context,
-                                                  QStringLiteral("color.control.unavailable"));
+            return QStringLiteral("color.control.unavailable");
         case ControlAvailability::Inactive:
-            return ThemeManager::instance().color(context,
-                                                  QStringLiteral("color.control.inactive"));
+            return QStringLiteral("color.control.inactive");
         case ControlAvailability::Active:
-            break;
+            return {};
     }
     return {};
 }
@@ -55,7 +52,9 @@ ControlAvailabilityRegistry::ControlAvailabilityRegistry(RadioModel& model, QObj
     // ONE subscription for every registered control, which is the point: the
     // per-site lambdas this replaces had undefined ordering between them.
     connect(&m_model, &RadioModel::capabilitiesChanged, this,
-            [this](bool, const RadioCapabilities&) { applyAll(); });
+            [this](bool connected, const RadioCapabilities& caps) {
+                applyAll(connected, caps);
+            });
 }
 
 void ControlAvailabilityRegistry::registerWidget(QWidget* widget,
@@ -63,8 +62,9 @@ void ControlAvailabilityRegistry::registerWidget(QWidget* widget,
                                                  AvailabilityPredicate available,
                                                  EngagedPredicate engaged)
 {
-    if (!widget || !available)
+    if (!widget || !available) {
         return;
+    }
     Entry entry;
     entry.widget = widget;
     entry.reason = std::move(reason);
@@ -82,8 +82,9 @@ void ControlAvailabilityRegistry::registerAction(QAction* action,
                                                  AvailabilityPredicate available,
                                                  EngagedPredicate engaged)
 {
-    if (!action || !available)
+    if (!action || !available) {
         return;
+    }
     Entry entry;
     entry.action = action;
     entry.reason = std::move(reason);
@@ -95,16 +96,15 @@ void ControlAvailabilityRegistry::registerAction(QAction* action,
 
 void ControlAvailabilityRegistry::refreshEngaged()
 {
-    applyAll();
+    applyAll(m_model.isConnected(), m_model.backendCapabilities());
 }
 
-void ControlAvailabilityRegistry::applyAll()
+void ControlAvailabilityRegistry::applyAll(bool connected, const RadioCapabilities& caps)
 {
     pruneDead();
-    const bool connected = m_model.isConnected();
-    const RadioCapabilities caps = m_model.backendCapabilities();
-    for (Entry& entry : m_entries)
+    for (Entry& entry : m_entries) {
         applyOne(entry, connected, caps);
+    }
 }
 
 void ControlAvailabilityRegistry::applyOne(Entry& entry,
@@ -116,15 +116,15 @@ void ControlAvailabilityRegistry::applyOne(Entry& entry,
     // control dimmed after unplugging reads as a fault rather than as an absent
     // capability.
     const bool available = !connected || entry.available(connected, caps);
-    const bool engaged = available && entry.engaged && entry.engaged();
+    const bool engaged = connected && available && entry.engaged && entry.engaged();
     entry.state = !available   ? ControlAvailability::Unavailable
                 : engaged      ? ControlAvailability::Active
                                : ControlAvailability::Inactive;
 
     const QString description = describe(entry.state, entry.reason);
     // The reason rides on BOTH the tooltip and the accessible description. A
-    // tooltip is a mouse affordance; a screen reader never sees it, which is
-    // exactly the gap #5266 shipped and #5299 then deleted.
+    // tooltip is exposed as help text, not the primary description; that was
+    // the gap #5266 shipped and #5299 then deleted.
     const QString tip = entry.state == ControlAvailability::Unavailable ? entry.reason
                                                                         : QString();
 
@@ -135,11 +135,7 @@ void ControlAvailabilityRegistry::applyOne(Entry& entry,
         w->setEnabled(entry.state != ControlAvailability::Unavailable);
         w->setToolTip(tip);
         w->setAccessibleDescription(description);
-        QPalette pal = w->palette();
-        const QColor colour = treatmentColor(entry.state, w);
-        if (colour.isValid())
-            pal.setColor(QPalette::Disabled, QPalette::WindowText, colour);
-        w->setPalette(pal);
+        ThemeManager::instance().setWidgetForegroundToken(w, treatmentToken(entry.state));
     }
     if (QAction* a = entry.action) {
         a->setEnabled(entry.state != ControlAvailability::Unavailable);
@@ -168,17 +164,21 @@ void ControlAvailabilityRegistry::pruneDead()
 
 ControlAvailability ControlAvailabilityRegistry::stateOf(const QWidget* widget) const
 {
-    for (const Entry& e : m_entries)
-        if (e.widget == widget)
+    for (const Entry& e : m_entries) {
+        if (e.widget == widget) {
             return e.state;
+        }
+    }
     return ControlAvailability::Unavailable;
 }
 
 ControlAvailability ControlAvailabilityRegistry::stateOf(const QAction* action) const
 {
-    for (const Entry& e : m_entries)
-        if (e.action == action)
+    for (const Entry& e : m_entries) {
+        if (e.action == action) {
             return e.state;
+        }
+    }
     return ControlAvailability::Unavailable;
 }
 

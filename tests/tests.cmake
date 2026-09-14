@@ -3934,6 +3934,13 @@ target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Cor
 add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_test)
 
 
+# Checker regression tests are socket-free and run when Python is available.
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME check_a11y_test
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_a11y_test.py)
+endif()
+
 # #5262 M3a: the three-state control doctrine as a mechanism. Pins the two
 # behaviours the per-site setVisible() plumbing got wrong — registration applies
 # immediately, and an unavailable control is dimmed with an announced reason.
@@ -3942,7 +3949,8 @@ add_test(NAME radiomodel_pan_range_null_test COMMAND radiomodel_pan_range_null_t
 # test, the way every other gui-widget test in this file does it.
 add_executable(control_availability_registry_test
     tests/control_availability_registry_test.cpp
-    src/gui/ControlAvailabilityRegistry.cpp)
+    src/gui/ControlAvailabilityRegistry.cpp
+    ${THEME_TEST_RESOURCES})
 target_include_directories(control_availability_registry_test PRIVATE src)
 target_link_libraries(control_availability_registry_test PRIVATE aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 set_target_properties(control_availability_registry_test PROPERTIES AUTOMOC ON)

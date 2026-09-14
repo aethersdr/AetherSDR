@@ -399,47 +399,66 @@ def check_custom_painted_widgets(lines: list, path: Path) -> list:
 # Both are fixed; this stops the third one.
 #
 # Deliberately narrow: it fires only when a tooltip is set on the SAME OBJECT in
-# the same function as a disabling setEnabled, which is the "dimmed with a
+# the same lexical block as a disabling setEnabled, which is the "dimmed with a
 # reason" pattern. A tooltip that merely describes a control is not a finding.
 
-DISABLE_RE = re.compile(r"(\w+)\s*->\s*setEnabled\s*\(\s*(?!true\s*\))")
-TOOLTIP_RE = re.compile(r"(\w+)\s*->\s*setToolTip\s*\(")
-ACCESSIBLE_RE = re.compile(r"(\w+)\s*->\s*(?:setAccessibleDescription|setStatusTip)\s*\(")
-MENU_ACTION_RE = re.compile(r"(\w+)\s*->\s*menuAction\s*\(\s*\)\s*->\s*set")
+# Keep the receiver, including the menuAction() indirection, as its identity.
+RECEIVER = r"(\w+(?:\s*->\s*menuAction\s*\(\s*\))?)"
+DISABLE_RE = re.compile(RECEIVER + r"\s*->\s*setEnabled\s*\(([^;]*)")
+TOOLTIP_RE = re.compile(RECEIVER + r"\s*->\s*setToolTip\s*\(")
+ACCESSIBLE_RE = re.compile(RECEIVER + r"\s*->\s*(?:setAccessibleDescription|setStatusTip)\s*\(")
+# Mask comments and literals before counting braces; QSS strings often contain
+# entire blocks. Preserve newlines so annotations still point at source lines.
+CPP_NON_CODE_RE = re.compile(
+    r'//[^\n]*|/\*.*?\*/|R"(?P<delimiter>[^ ()\\\t\r\n]{0,16})\(.*?\)(?P=delimiter)"'
+    r'|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.DOTALL)
 
 
 def check_disabled_reason_is_accessible(lines: list) -> list:
     findings = []
-    window = 12          # statements that plausibly belong to one gate
-    disabled: dict = {}  # receiver -> line index of the disabling setEnabled
-    tooltipped: dict = {}
-    accessible: set = set()
+    code = CPP_NON_CODE_RE.sub(
+        lambda m: "".join("\n" if c == "\n" else " " for c in m.group()),
+        "\n".join(lines)).splitlines()
+    # A lexical block is deliberately narrower than a function: a reason in
+    # another branch (or another function's local variable of the same name)
+    # must not suppress this gate. This is a heuristic, not a C++ dataflow pass.
+    blocks = [{}]
+    window = 12
 
-    for i, line in enumerate(lines):
-        if re.search(r"//\s*a11y-check\s*:\s*skip-line", line):
-            continue
-        for m in DISABLE_RE.finditer(line):
-            disabled[m.group(1)] = i
-        for m in TOOLTIP_RE.finditer(line):
-            tooltipped[m.group(1)] = i
-        for m in ACCESSIBLE_RE.finditer(line):
-            accessible.add(m.group(1))
+    def finish(block):
+        for name, calls in block.items():
+            for tip in calls["tip"]:
+                if any(abs(disabled - tip) <= window for disabled in calls["disabled"]) \
+                        and not any(abs(accessible - tip) <= window for accessible in calls["accessible"]):
+                    findings.append((tip + 1, "a11y-disabled-reason-not-announced",
+                        f"`{name}` is disabled and given a tooltip reason, but no "
+                        "accessibleDescription (widget) or statusTip (QAction) nearby "
+                        "in the same block. Put the reason on the accessible channel "
+                        "as well as the tooltip. (#5262 M3a doctrine, #4896)"))
 
-    for name, tip_line in tooltipped.items():
-        if name not in disabled or name in accessible:
-            continue
-        if abs(disabled[name] - tip_line) > window:
-            continue
-        findings.append((
-            tip_line + 1,
-            "a11y-disabled-reason-not-announced",
-            f"`{name}` is disabled and given a tooltip reason, but no "
-            f"accessibleDescription (widget) or statusTip (QAction). A tooltip "
-            f"is a mouse affordance — a screen reader never sees it, so a blind "
-            f"operator gets a dead control with no stated cause. Set the same "
-            f"reason on setAccessibleDescription() or setStatusTip(). "
-            f"(#5262 M3a doctrine, #4896)"))
-    return findings
+    for i, line in enumerate(code):
+        # Process braces in source order, including one-line inline functions.
+        for fragment in re.split(r"([{}])", line):
+            if fragment == "{":
+                blocks.append({})
+                continue
+            if fragment == "}":
+                if len(blocks) > 1:
+                    finish(blocks.pop())
+                continue
+            if re.search(r"//\s*a11y-check\s*:\s*skip-line", lines[i]):
+                continue
+            for pattern, kind in ((DISABLE_RE, "disabled"), (TOOLTIP_RE, "tip"),
+                                  (ACCESSIBLE_RE, "accessible")):
+                for match in pattern.finditer(fragment):
+                    if kind == "disabled" and re.match(r"\s*true\s*\)", match.group(2)):
+                        continue
+                    name = re.sub(r"\s+", "", match.group(1))
+                    calls = blocks[-1].setdefault(name, {"disabled": [], "tip": [], "accessible": []})
+                    calls[kind].append(i)
+    for block in blocks:
+        finish(block)
+    return sorted(findings)
 
 
 def main() -> None:

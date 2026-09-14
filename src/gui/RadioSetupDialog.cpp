@@ -1020,6 +1020,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
 {
     const bool connected = m_model->isConnected();
     const RadioCapabilities caps = m_model->backendCapabilities();
+    // M3b: these legacy info-field hides await their scoped migration.
     if (m_flexControlInfoField) {
         m_flexControlInfoField->setVisible(!connected || caps.hasFlexControlIntegration);
     }
@@ -1036,7 +1037,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
             tr("Not supported by this radio"));
     }
     if (m_licenseInfoGroup) {
-        m_licenseInfoGroup->setVisible(!connected || caps.hasLicenseInfo);
+        applyCapabilityClusterVisibility(m_licenseInfoGroup, connected, caps.hasLicenseInfo);
     }
     if (m_firmwareUpdateGroup) {
         applyCapabilityClusterVisibility(

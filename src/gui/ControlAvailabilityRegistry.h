@@ -36,7 +36,6 @@
 
 #include "core/backends/RadioCapabilities.h"
 
-#include <QHash>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -68,7 +67,7 @@ public:
     using AvailabilityPredicate =
         std::function<bool(bool connected, const RadioCapabilities& caps)>;
     // Optional: "is it engaged right now?". Absent means the control has no
-    // engaged state and renders Active whenever it is available.
+    // engaged state and renders Inactive whenever it is available.
     using EngagedPredicate = std::function<bool()>;
 
     explicit ControlAvailabilityRegistry(RadioModel& model, QObject* parent = nullptr);
@@ -110,7 +109,7 @@ private:
         ControlAvailability state{ControlAvailability::Unavailable};
     };
 
-    void applyAll();
+    void applyAll(bool connected, const RadioCapabilities& caps);
     void applyOne(Entry& entry, bool connected, const RadioCapabilities& caps);
     void pruneDead();
 

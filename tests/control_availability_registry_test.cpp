@@ -20,12 +20,18 @@
 //
 // Socket-free: a bare RadioModel and plain QWidgets; nothing binds or connects.
 
+#include "TestSettingsProfile.h"
 #include "gui/ControlAvailabilityRegistry.h"
+#include "core/ThemeManager.h"
+#include "core/AppSettings.h"
 #include "models/RadioModel.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QLabel>
+#include <QPushButton>
+#include <QLineEdit>
+#include <QImage>
 #include <QWidget>
 
 #include <cstdio>
@@ -36,12 +42,32 @@ static int g_failures = 0;
 static void check(bool ok, const char* what)
 {
     std::printf("%s %s\n", ok ? "[ OK ]" : "[FAIL]", what);
-    if (!ok) ++g_failures;
+    if (!ok) {
+        ++g_failures;
+    }
 }
+
+// An injected state source, not a peer: no transport, timers, or firmware model.
+class ConnectedBackend final : public IRadioBackend {
+public:
+    RadioCapabilities capabilities() const override { return {}; }
+    bool isConnected() const override { return true; }
+    void connectRadio(const RadioConnectRequest&) override {}
+    void disconnectRadio() override {}
+    void setSliceFrequency(int, double) override {}
+    void setSliceMode(int, const QString&) override {}
+    void setSliceFilter(int, int, int) override {}
+    void setSliceAgc(int, const QString&, int) override {}
+    void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    void setKeying(bool) override {}
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+};
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile profile(QStringLiteral("control-availability"));
     QApplication app(argc, argv);
+    AppSettings::instance().load();
     RadioModel model;                       // not connected
     ControlAvailabilityRegistry registry(model);
 
@@ -99,6 +125,16 @@ int main(int argc, char** argv)
               "and never changes whether the control is shown — dimmed, not hidden");
     }
 
+    // A retained engaged flag must not keep a disconnected control colored.
+    {
+        QLabel w;
+        registry.registerWidget(&w, reason,
+            [](bool, const RadioCapabilities&) { return true; }, [] { return true; });
+        check(registry.stateOf(&w) == ControlAvailability::Inactive,
+              "disconnect is inactive even when the owner retains an engaged flag");
+    }
+    model.setBackendForTest(std::make_unique<ConnectedBackend>(), QStringLiteral("test"));
+
     // ---- available + engaged ----
     {
         QLabel w;
@@ -142,7 +178,122 @@ int main(int argc, char** argv)
               "a destroyed widget is pruned rather than leaking a QPointer entry");
     }
 
-    if (g_failures == 0)
+    // Connected widgets exercise the path the old disconnected-only test missed.
+    ThemeManager& theme = ThemeManager::instance();
+    for (const QString& themeName : {QStringLiteral("Default Dark"),
+                                     QStringLiteral("Default Light")}) {
+        check(theme.setActiveTheme(themeName), "the shipped theme loads");
+        bool supported = false;
+        bool engaged = false;
+        QPushButton button(QStringLiteral("Capability"));
+        button.setObjectName(QStringLiteral("availabilityButton"));
+        button.setCheckable(true);
+        button.setChecked(true);
+        const QString baseStyle = QStringLiteral(
+            "QPushButton#availabilityButton:checked { color: {{color.text.primary}}; "
+            "padding: 7px; border: 2px solid {{color.border.strong}}; }");
+        theme.applyStyleSheet(&button, baseStyle);
+        button.show();
+        QApplication::processEvents();
+        const QColor baseForeground = button.palette().color(QPalette::ButtonText);
+        const QImage basePixels = button.grab().toImage();
+        registry.registerWidget(&button, reason,
+            [&supported](bool, const RadioCapabilities&) { return supported; },
+            [&engaged] { return engaged; });
+        QAction action(QStringLiteral("Capability action"));
+        registry.registerAction(&action, reason,
+            [&supported](bool, const RadioCapabilities&) { return supported; });
+        QApplication::processEvents();
+        check(registry.stateOf(&button) == ControlAvailability::Unavailable,
+              "late registration sees a connected unsupported capability immediately");
+        check(!button.isEnabled() && !button.isHidden(), "unavailable stays visible and disabled");
+        check(button.accessibleDescription() == reason && button.toolTip() == reason,
+              "unavailable widget carries both reason channels");
+        check(!action.isEnabled() && action.statusTip() == reason && action.toolTip() == reason,
+              "unavailable action carries its reason and cannot activate");
+        check(button.palette().color(QPalette::ButtonText) == theme.color("color.control.unavailable"),
+              "unavailable foreground overrides a styled checked button with an ID selector");
+
+        supported = true;
+        registry.refreshEngaged();
+        QApplication::processEvents();
+        check(button.isEnabled() && action.isEnabled() && action.statusTip().isEmpty(),
+              "supported recovery clears the action reason and enables both controls");
+        check(button.toolTip().isEmpty()
+                  && button.accessibleDescription() == QStringLiteral("Available, not currently active"),
+              "inactive clears stale reason and announces its own state");
+        check(button.palette().color(QPalette::ButtonText) == theme.color("color.control.inactive"),
+              "inactive text uses the enabled foreground role");
+        engaged = true;
+        registry.refreshEngaged();
+        QApplication::processEvents();
+        check(button.styleSheet() == theme.resolve(baseStyle)
+                  && button.accessibleDescription().isEmpty(),
+              "active restores the original complete stylesheet");
+        check(button.palette().color(QPalette::ButtonText) == baseForeground
+                  && button.grab().toImage() == basePixels,
+              "active restores the base foreground and rendered pixels");
+
+        // Both current theme changes and base-style replacements must compose.
+        supported = false;
+        registry.refreshEngaged();
+        const QColor edited(12, 123, 234);
+        theme.setColor(QStringLiteral("color.control.unavailable"), edited);
+        QApplication::processEvents();
+        check(button.palette().color(QPalette::ButtonText) == edited,
+              "token edits repaint unavailable controls without capability changes");
+        theme.applyStyleSheet(&button, QStringLiteral("QPushButton { color: {{color.accent}}; padding: 9px; }"));
+        QApplication::processEvents();
+        check(button.palette().color(QPalette::ButtonText) == edited,
+              "replacing the base style preserves the treatment");
+        supported = true;
+        engaged = true;
+        registry.refreshEngaged();
+        QApplication::processEvents();
+        check(button.palette().color(QPalette::ButtonText) == theme.color("color.accent"),
+              "active restores the latest base style, not a stale snapshot");
+
+        // The signal's disconnect snapshot wins over an independently polled backend.
+        supported = false;
+        registry.refreshEngaged();
+        emit model.capabilitiesChanged(false, {});
+        check(button.isEnabled() && action.isEnabled(), "disconnect payload is consumed directly");
+        check(button.toolTip().isEmpty() && action.statusTip().isEmpty(), "disconnect clears stale reasons");
+        check(registry.stateOf(&button) == ControlAvailability::Inactive,
+              "disconnect always returns to Inactive even with retained engagement");
+    }
+    {
+        bool engaged = false;
+        QLabel label(QStringLiteral("Availability text"));
+        label.resize(240, 40);
+        label.show();
+        registry.registerWidget(&label, reason,
+            [](bool, const RadioCapabilities&) { return true; }, [&engaged] { return engaged; });
+        QApplication::processEvents();
+        const QString otherTheme = theme.activeTheme() == QStringLiteral("Default Light")
+            ? QStringLiteral("Default Dark") : QStringLiteral("Default Light");
+        check(theme.setActiveTheme(otherTheme), "switch theme with a registered inactive label");
+        QApplication::processEvents();
+        check(label.palette().color(QPalette::WindowText) == theme.color("color.control.inactive"),
+              "theme switch refreshes an unstyled label treatment");
+        const QImage newInactive = label.grab().toImage();
+        engaged = true;
+        registry.refreshEngaged();
+        QApplication::processEvents();
+        check(newInactive != label.grab().toImage(), "inactive and active render different pixels");
+        check(label.styleSheet().isEmpty(), "active unstyled label resumes style inheritance");
+        QLineEdit edit;
+        theme.applyStyleSheet(&edit, QStringLiteral("color: {{color.accent}}; padding: 3px;"));
+        edit.show();
+        registry.registerWidget(&edit, reason,
+            [](bool, const RadioCapabilities&) { return false; });
+        QApplication::processEvents();
+        check(edit.palette().color(QPalette::Text) == theme.color("color.control.unavailable"),
+              "unavailable line edits use the Text role");
+    }
+
+    if (g_failures == 0) {
         std::printf("control_availability_registry_test: all checks passed\n");
+    }
     return g_failures == 0 ? 0 : 1;
 }
