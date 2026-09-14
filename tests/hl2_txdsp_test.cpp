@@ -203,6 +203,35 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- Opposite-sideband suppression at the DIGU/DIGL LOW EDGE ----
+    //
+    // DIAGNOSTIC ONLY, no assertion: this prints the phasing modulator's
+    // measured suppression on the {150, 3000} passband Hl2Backend pushes for
+    // DIGU and DIGL, at the frequencies where 255 taps run out of transition
+    // room. It exists so the number is MEASURED rather than derived from the
+    // filter design, and so it can be compared against the same measurement on
+    // a WDSP TXA channel -- wdsp_channel_test's "TX live geometry" case prints
+    // the identical quantity, from the identical binPower(), on the identical
+    // wire convention. No bench leg has ever been run in DIGU or DIGL, so this
+    // is the only figure either chain has at the low edge.
+    {
+        const double diguBand[2] = {150.0, 3000.0};
+        for (const double toneHz : {150.0, 200.0, 300.0, 1000.0}) {
+            const auto iq = modulate(WdspChannel::Mode::Digu, toneHz, 0.5, 1.0, 1.0,
+                                     nullptr, false, diguBand);
+            if (iq.empty()) {
+                continue;
+            }
+            const double wanted = binPower(iq, -toneHz, kFsOut);
+            const double image  = binPower(iq, +toneHz, kFsOut);
+            std::fprintf(stderr,
+                         "diag: Hl2TxDsp DIGU {150,3000} tone %.0f Hz: "
+                         "wanted %.6f  image %.6f  suppression %.1f dB\n",
+                         toneHz, wanted, image,
+                         20.0 * std::log10((image + 1e-12) / (wanted + 1e-12)));
+        }
+    }
+
     // ---- DIGU/DIGL transmit on the same sidebands as USB/LSB ----
     //
     // WSJT-X transmits in DIGU. These modes were never covered here, and the
