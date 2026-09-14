@@ -77,6 +77,7 @@ warren@wpratt.com
 #include "meter.h"
 #include "meterlog10.h"
 #include "nbp.h"
+#include "nnr.h"
 #include "nob.h"
 #include "nobII.h"
 #include "nurbs.h"

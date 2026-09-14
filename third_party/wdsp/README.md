@@ -1,4 +1,4 @@
-# WDSP 2.00 vendor snapshot
+# WDSP 2.10 vendor snapshot
 
 This directory contains the WDSP sources used by AetherSDR's engine-side radio
 DSP path. It is deliberately isolated behind `aether::wdsp`; no GUI target or
@@ -7,9 +7,9 @@ public AetherSDR header includes WDSP headers.
 ## Provenance
 
 - Upstream: <https://github.com/TAPR/OpenHPSDR-wdsp>
-- Upstream revision: `584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3`
-- Upstream commit subject: `Release Version 2.00`
-- Imported path: `wdsp 2.00/Source/*.[ch]`
+- Upstream revision: `b02d5bac675dd2f33ec2bab2b339f79a597c47dd`
+- Upstream commit subject: `Release Version 2.10`
+- Imported path: `wdsp 2.10/Source/*.[ch]`
 - License: GPL-2.0-or-later; see `LICENSE`
 
 The revision is also recorded in `COMMIT`. The upstream PDF guide and the
@@ -20,15 +20,29 @@ therefore retains its upstream fallback behavior.
 
 ## Local boundary
 
-`upstream/` matches that source snapshot except for three teardown fixes recorded
-in `AETHERSDR-PATCHES.md`. All portability changes live outside it:
+`upstream/` matches that source snapshot except for the three teardown fixes
+recorded in `AETHERSDR-PATCHES.md`. All portability changes live outside it:
 
 - `port/` implements the narrow Windows compatibility surface WDSP uses on
   Unix: threads, mutexes, semaphores/events, atomic operations, aligned
   allocation, exports, diagnostics, and flush-to-zero SIMD state.
 - `include/aether_wdsp.h` is the only C API AetherSDR code may include.
-- `CMakeLists.txt` builds a position-independent static archive and suppresses
-  warnings only for vendored code.
+- `CMakeLists.txt` builds a position-independent static archive, suppresses
+  warnings only for vendored code, and force-includes `port/include/wdsp_port.h`
+  on non-Windows targets. That last part is load-bearing: 2.10's
+  `extrapolate.c`, `nurbs_fit.c` and `nurbs_spline.c` call `_aligned_malloc()`
+  and `_aligned_free()` without including `comm.h`, which resolves to the CRT
+  on MSVC and to nothing at all anywhere else.
+
+## Neural Noise Reduction model data
+
+`upstream/nnr_model_0.c` and `upstream/nnr_model_1.c` are 34.7 MB of generated C
+holding the two trained NNR networks (2.10 MB and 4.68 MB of weights as
+`double`). They are vendored exactly as upstream ships them, which keeps the
+snapshot verifiable and means no model file has to be packaged or installed
+alongside the executable. WDSP will prefer `wdsp_nnr_0.bin` / `wdsp_nnr_1.bin`
+from the executable's directory if either is present, so an experimental model
+can still reach a tester without a rebuild.
 
 Do not patch `upstream/` casually. Every unavoidable source change must be
 recorded in `AETHERSDR-PATCHES.md` with the upstream revision, rationale, and

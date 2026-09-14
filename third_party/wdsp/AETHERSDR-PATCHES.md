@@ -1,18 +1,16 @@
-# AetherSDR patches to WDSP 2.00
+# AetherSDR patches to WDSP 2.10
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
-`584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3` (`Release Version 2.00`).
-AetherSDR carries four teardown fixes in the otherwise exact `Source/*.[ch]`
+`b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
+AetherSDR carries three teardown fixes in the otherwise exact `Source/*.[ch]`
 snapshot:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
 2. `upstream/nurbs.c`: `destroy_nurbs()` now frees the `nurbs` object after its
    member allocations.
-3. `upstream/cfir.c`: `cfir_impulse()` now frees its temporary transition table
-   before returning the generated impulse.
-4. `upstream/channel.h`, `upstream/main.c`, `upstream/channel.c`,
-   `upstream/iobuffs.c`: an exit handshake between the DSP worker and
+3. `upstream/channel.h`, `upstream/channel.c`, `upstream/main.c`,
+   `upstream/iobuffs.c`, `upstream/iobuffs.h`: an exit handshake between the DSP worker and
    `pre_main_destroy()`. Upstream's only barrier between the detached worker's
    exit and `destroy_main()` / `post_main_destroy()` freeing the semaphore,
    mutex and buffers it still touches was `Sleep(25)` — a scheduling bet, not
@@ -61,9 +59,8 @@ snapshot:
    surfaced, and gets the same treatment if it does.
 
 Without these lines, opening and closing one RX channel leaks one `notchdb`
-object and two NURBS objects, while one TX channel leaks one transition table.
-`wdsp_channel_test` detects both paths deterministically.
-Without the fourth, every channel close is a use-after-free race on the
+object and two NURBS objects. `wdsp_channel_test` detects that deterministically.
+Without the third, every channel close is a use-after-free race on the
 worker thread; `wdsp_channel_test` and the HL2 backend tests show it under
 ThreadSanitizer.
 
