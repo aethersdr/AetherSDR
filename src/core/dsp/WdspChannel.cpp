@@ -41,8 +41,11 @@ std::mutex g_channelMutex;
 std::mutex g_setupMutex;
 std::array<bool, kWdspChannelCount> g_channelsInUse {};
 
-// WDSP builds its FFTs with FFTW_PATIENT (35 plans per channel), which re-runs
-// exhaustive measurement on every OpenChannel — ~a minute per channel open.
+// WDSP builds its FFTs with FFTW_PATIENT — ~220 planner calls per RX channel
+// open, over 11 distinct (transform kind, size) pairs — which re-runs exhaustive
+// measurement on every OpenChannel: ~a minute per channel open. It is the
+// distinct set that wisdom covers, so the repeats are already free; WDSP 2.10
+// added 3 calls and 2 of those pairs (NNR's 512-point r2c/c2r).
 // FFTW wisdom is global: prime it once from a persisted cache so those plans are
 // imported instantly. First run still measures (and caches); later runs import.
 // Called under g_setupMutex, so this global FFTW-planner I/O never races a

@@ -38,12 +38,21 @@ therefore retains its upstream fallback behavior.
 ## Neural Noise Reduction model data
 
 `upstream/nnr_model_0.c` and `upstream/nnr_model_1.c` are 34.7 MB of generated C
-holding the two trained NNR networks (2.10 MB and 4.68 MB of weights as
-`double`). They are vendored exactly as upstream ships them, which keeps the
-snapshot verifiable and means no model file has to be packaged or installed
-alongside the executable. WDSP will prefer `wdsp_nnr_0.bin` / `wdsp_nnr_1.bin`
-from the executable's directory if either is present, so an experimental model
-can still reach a tester without a rebuild.
+holding the two trained NNR networks: `const unsigned char` blobs of 2,098,944
+and 4,682,240 bytes, which `nnio_parse()` expands into `double` tensors at load.
+They are vendored exactly as upstream ships them, which keeps the snapshot
+verifiable and means no model file has to be packaged alongside the executable.
+
+Every NNR construction looks for `wdsp_nnr_0.bin` and `wdsp_nnr_1.bin` **in the
+process's working directory** and prefers either over the built-in copy for that
+slot. The working directory, not the executable's: `nnet.c` holds those names as
+bare relative paths and `nnio_open()` hands them straight to `fopen()`, and
+upstream's own fallback message says "in the working directory" even though the
+Guide describes it as the directory containing the executable. That is how an
+experimental model reaches a tester without a rebuild. It also means a
+well-formed file of either name in the launch directory silently replaces a
+shipped DSP model with nothing in the UI to say so; `SetNNRModelPathSlot(slot,
+"")` skips the lookup for that slot and pins it to the built-in.
 
 Do not patch `upstream/` casually. Every unavoidable source change must be
 recorded in `AETHERSDR-PATCHES.md` with the upstream revision, rationale, and
