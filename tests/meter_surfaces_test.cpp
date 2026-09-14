@@ -65,8 +65,6 @@ bool certificationTableHasRow(const QString& table, const QString& source,
     return row.match(table).hasMatch();
 }
 
-// THE REGRESSION 1.38 LEFT BEHIND, in the general form. Every surface the UI
-// declares must have a certification row, because the unit verdict is computed
 // Drop // line comments before searching, so prose cannot satisfy a wiring
 // assertion. Without this, a Hl2Backend.cpp that merely MENTIONS ALCGAIN in a
 // comment -- which this file's own neighbours now do -- passes the checks below
@@ -84,7 +82,7 @@ QByteArray withoutLineComments(const QByteArray& src)
     return out;
 }
 
-// by joining the two on the key: a surface with no row is never checked at all,
+// Every UI surface needs a certification row. Join the two on the key: a surface with no row is never checked at all,
 // and a row with no surface "gets no unit verdict, which is the honest answer"
 // (RadioCertification.cpp). Only this direction is an error.
 void testEverySurfaceHasACertificationRow()
@@ -142,8 +140,8 @@ void testAlcGainSurfaceIsRegisteredInDb()
     check("TX:ALCGAIN's consumer does NOT accept dBFS",
           !meterUnitAccepted(QString::fromLatin1(s->acceptedUnits),
                              QStringLiteral("dBFS")));
-    check("TX:ALCGAIN remains producer-only until its GUI change lands",
-          !meterHasRenderedSurface(QStringLiteral("TX:ALCGAIN")));
+    check("TX:ALCGAIN is rendered by the Phone applet",
+          meterHasRenderedSurface(QStringLiteral("TX:ALCGAIN")));
 }
 
 

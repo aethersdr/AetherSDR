@@ -102,7 +102,7 @@ inline constexpr std::array<MeterSurface, 10> kMeterSurfaces{{
     // nothing — it reports the ALC's success, not their input level." This is
     // the number that answers "is the ALC holding, and by how much". This PR
     // publishes that value through MeterModel and the diagnostic surfaces;
-    // the operator-facing gauge is deliberately a separate change (#5636).
+    // the Phone panel renders it when the radio declares the meter (#5636).
     //
     // dB ONLY, deliberately, where TX:ALC accepts dBFS or Percent. That set has
     // two members because an Icom reports its ALC level as a percentage of its
@@ -112,7 +112,7 @@ inline constexpr std::array<MeterSurface, 10> kMeterSurfaces{{
     // same line — `TXA_ALC_PK` and `TXA_ALC_GAIN` are separate entries in
     // `txaMeterType` in `third_party/wdsp/upstream/TXA.h`.
     {"TX:ALCGAIN", "dB", "MeterModel::alcGainChanged / alcGainDb()",
-     "No GUI surface (producer-only; proposed Phone panel gauge is #5636)", false},
+     "Phone applet ALC Gain gauge (when the meter is defined)", true},
 
     {"TX:COMPPEAK", "dB", "MeterModel::compressionChanged",
      "Phone/CW applet Compression gauge", true},

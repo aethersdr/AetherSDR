@@ -106,6 +106,25 @@
             "dim":        "#3a553a",
             "bezel":      "#222822"
           },
+          "tgxl": {
+            "dial.face":   "{color.blue.500}",
+            "dial.needle": "{color.gray.950}",
+            "dial.rim":    "{color.gray.300}",
+            "key.standby.background": "#f7e3bb",
+            "key.standby.foreground": "#8a5a00",
+            "key.bypass.background":  "#f2cea0",
+            "key.bypass.foreground":  "#6a3f00",
+            "swrScale": {
+              "type": "linear-gradient",
+              "angle": 90,
+              "stops": [
+                { "at": 0.00, "color": "#bfe3cb" },
+                { "at": 0.35, "color": "#e4e3b6" },
+                { "at": 0.65, "color": "#f0d5ad" },
+                { "at": 1.00, "color": "#f0bcbc" }
+              ]
+            }
+          },
           "waterfall.colormap": {
             "default": {
               "type": "linear-gradient",

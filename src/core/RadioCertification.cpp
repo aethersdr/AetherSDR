@@ -524,10 +524,26 @@ void RadioCertification::stageControlEffect(const Options& o)
         target = qBound(low, target, high);
         const int stepDb = target - startGain;
 
+        // THE SAME DISCIPLINE, APPLIED TO THE THING THE OPERATOR HEARS.
+        // The AGC-T is a setpoint about the signal at the ANTENNA; the backend
+        // refers it to the LNA gain (Hl2DbReference::agcCeilingDb) so a gain
+        // change moves the derived WDSP ceiling and leaves the operator's own
+        // number alone. The tempting wrong fix — compensating by rewriting the
+        // operator's 0..100 — would make their AGC slider walk on every gain
+        // change, and item 14's regulator steps the gain several times a day.
+        //
+        // The derived ceiling is not on the seam, so this cannot measure it.
+        // What it CAN certify is that the operator's number did not move, which
+        // is the half that would be visible to them and the half a bad fix
+        // breaks. EXPECTED DELTA ZERO, same as the S-level above.
+        SliceModel* agcSlice = m_radio->slice(0);
+        const int agcTBefore = agcSlice ? agcSlice->agcThreshold() : -1;
+
         const double before = settledSLevel();
         m_radio->setPanRfGainFor(panId, target);
         const double after = settledSLevel();
         const int echoed = pan->rfGain();
+        const int agcTAfter = agcSlice ? agcSlice->agcThreshold() : -1;
         m_radio->setPanRfGainFor(panId, startGain);   // leave it where we found it
         spin(400);
 
@@ -556,6 +572,11 @@ void RadioCertification::stageControlEffect(const Options& o)
             "dominated by converter noise that does not rise with the gain. Only "
             "the raw pre-reference dBFS distinguishes them and the seam does not "
             "expose it").arg(-stepDb);
+        if (agcSlice) {
+            m[QStringLiteral("agcThresholdBefore")] = agcTBefore;
+            m[QStringLiteral("agcThresholdAfter")] = agcTAfter;
+            m[QStringLiteral("agcThresholdExpectedDelta")] = 0;
+        }
 
         if (stepDb == 0) {
             m[QStringLiteral("rfGainNotExercised")] = QStringLiteral(
@@ -575,6 +596,16 @@ void RadioCertification::stageControlEffect(const Options& o)
             problems << QStringLiteral(
                 "no S-meter reading either side of the RF gain step — the gain "
                 "reached the backend but its effect could not be measured");
+        }
+        // Reported whether or not the levels came back: this one does not
+        // depend on a meter, so a quiet band cannot excuse it.
+        if (agcSlice && stepDb != 0 && agcTAfter != agcTBefore) {
+            problems << QStringLiteral(
+                "an RF gain step of %1 dB moved the operator's AGC threshold "
+                "from %2 to %3. The gain is compensated below the slider, in "
+                "the derived WDSP ceiling — moving the operator's own setpoint "
+                "makes it walk every time the gain changes")
+                .arg(stepDb).arg(agcTBefore).arg(agcTAfter);
         }
     }
 

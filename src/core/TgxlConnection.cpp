@@ -119,6 +119,18 @@ void TgxlConnection::processLine(const QString& line)
         return;
     }
 
+    // Alert: M|<text>, or M| to clear. The tuner pushes these to every
+    // client when a tune cannot proceed — "LOW RF POWER" is the one the
+    // capture caught, raised ~40 ms after a tune starts with insufficient
+    // drive and cleared unprompted ~3 s later. Checked before the R and S
+    // branches: 'M' is its own frame type, not a response.
+    if (line.startsWith('M') && line.size() > 1 && line[1] == '|') {
+        const QString text = line.mid(2).trimmed();
+        qCDebug(lcTuner) << "TgxlConnection: alert" << (text.isEmpty() ? "(cleared)" : text);
+        emit alertChanged(text);
+        return;
+    }
+
     // Response: R<seq>|<code>|<body>
     // Status poll responses contain fwd/swr meter data as KV pairs.
     // Format: R<seq>|0|key=val key=val ...

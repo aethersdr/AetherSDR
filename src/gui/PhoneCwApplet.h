@@ -66,7 +66,7 @@ public:
     // only family in the tree that publishes the meter, and the shared Phone
     // panel is also Flex's, Icom's and the sim's. Pushed from
     // MainWindow::applyCapabilitiesToUi off MeterModel::hasAlcGainMeter(),
-    // and again when a sample arrives, because meters are DEFINED after
+    // and again on definition changes, because meters are DEFINED after
     // capabilities are published on the connect edge.
     //
     // NOT permissive while disconnected, unlike the APF row above: this gauge
@@ -99,9 +99,8 @@ public slots:
     // working to put it there — the half that answers "is the ALC holding, and
     // by how much" when a transmission goes out quiet.
     void updateAlcGain(float gainDb);
-    // Back to unity with no claim behind it, for unkey and disconnect. The
-    // caller decides WHEN, because "the ALC is applying no gain" and "nothing
-    // has told us what the ALC is doing" are the same number on this face.
+    // Clear immediately to the face floor on unkey, disconnect or invalidation.
+    // A missing reading must not animate through apparently measured gains.
     void resetAlcGain();
 
     // Notify the applet when RADE mode activates/deactivates so the mic level

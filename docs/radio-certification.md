@@ -395,6 +395,15 @@ this table, which is the same rule the report itself follows.
   `sLevelDeltaIsConclusive: false`, and raises its one concern on a missing
   echo. Closing the effect half needs the raw pre-reference dBFS, which the seam
   does not expose (CERTIFICATION.md 2.4).
+- **The same stage also checks the AGC threshold did not move** — and here the
+  expected delta of zero IS conclusive. The AGC-T is a setpoint about the signal
+  at the antenna, and the backend refers it to the LNA gain in the derived WDSP
+  ceiling (`Hl2DbReference::agcCeilingDb`), leaving the operator's own 0..100
+  alone. The tempting wrong fix is to compensate by rewriting that number, which
+  would make the operator's slider walk on every gain change. The derived
+  ceiling is not on the seam so the stage cannot read it; the operator's number
+  is, so `agcThresholdBefore`/`agcThresholdAfter` are published and a difference
+  is a concern. It needs no meter, so a quiet band cannot excuse it.
 - **`TX:FWDPWR` and `TX:REFPWR` are published and uncalibrated**, not absent.
   They read in dBm through a reference curve for a different board. The gap is
   a per-unit calibration, not a missing meter.

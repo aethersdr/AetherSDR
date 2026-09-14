@@ -1,9 +1,14 @@
 #include "core/backends/icom/IcomCredentials.h"
 
 #include <QLoggingCategory>
-#include <QtGlobal>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QPointer>
+#include <QTimer>
+#include <QtGlobal>
+
+#include <utility>
+#include <vector>
 
 #ifdef HAVE_KEYCHAIN
 #include <qt6keychain/keychain.h>
@@ -24,27 +29,83 @@ constexpr const char* kKeychainKey     = "icom_password";
 QMutex g_mutex;
 QString g_sessionPassword;
 
+#ifdef HAVE_KEYCHAIN
+struct PendingLoad {
+    QPointer<QObject> context;
+    std::function<void(const QString&)> callback;
+};
+
+bool g_loadInFlight{false};
+std::vector<PendingLoad> g_pendingLoads;
+#endif
+
 }  // namespace
 
 void IcomCredentials::load(QObject* context, std::function<void(const QString&)> callback)
 {
 #ifdef HAVE_KEYCHAIN
+    if (context == nullptr) {
+        qCWarning(lcIcomCred) << "cannot load a credential without a callback context";
+        return;
+    }
+
+    bool startRead = false;
+    {
+        QMutexLocker lock(&g_mutex);
+        g_pendingLoads.push_back({context, std::move(callback)});
+        if (!g_loadInFlight) {
+            g_loadInFlight = true;
+            startRead = true;
+        }
+    }
+
+    // Several startup paths can ask for the Icom password before the first
+    // asynchronous read completes. A new ad-hoc-signed macOS build may need
+    // operator approval for that item; issuing one job per caller turns the
+    // legitimate authorization challenge into several identical prompts.
+    if (!startRead) {
+        return;
+    }
+
     auto* job = new QKeychain::ReadPasswordJob(QLatin1String(kKeychainService));
     job->setAutoDelete(true);
     job->setKey(QLatin1String(kKeychainKey));
-    QObject::connect(job, &QKeychain::Job::finished, context,
-                     [callback = std::move(callback)](QKeychain::Job* j) {
+    QObject::connect(job, &QKeychain::Job::finished, job,
+                     [](QKeychain::Job* j) {
         QString value;
         if (j->error() == QKeychain::NoError) {
             value = static_cast<QKeychain::ReadPasswordJob*>(j)->textData();
-            setSessionPassword(value);
         } else if (j->error() != QKeychain::EntryNotFound) {
             // EntryNotFound is the ordinary first-run case and not worth a
             // warning; anything else means the keyring is there and refused us,
             // which the operator may need to act on.
             qCWarning(lcIcomCred) << "keychain read failed:" << j->errorString();
         }
-        callback(value);
+
+        std::vector<PendingLoad> pending;
+        {
+            QMutexLocker lock(&g_mutex);
+            if (j->error() == QKeychain::NoError) {
+                g_sessionPassword = value;
+            }
+            g_loadInFlight = false;
+            pending = std::move(g_pendingLoads);
+            g_pendingLoads.clear();
+        }
+
+        // A context object both selects the callback thread and makes delivery
+        // mortal: Qt drops the functor if its receiver was destroyed while the
+        // keychain dialog was open.
+        for (PendingLoad& request : pending) {
+            if (!request.context) {
+                continue;
+            }
+            QTimer::singleShot(
+                0, request.context,
+                [callback = std::move(request.callback), value] {
+                    callback(value);
+                });
+        }
     });
     job->start();
 #else

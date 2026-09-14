@@ -43,7 +43,7 @@ AetherSDR separates **operating shortcuts** from ordinary menu shortcuts.
 
 To turn on operating shortcuts, use:
 
-`View > Keyboard Shortcuts`
+`Settings > Keyboard Shortcuts`
 
 This setting is **off by default**. If the shortcuts below do nothing, this is the first place to check.
 
@@ -105,7 +105,7 @@ A few shortcut details are easy to miss:
 
 To customize shortcuts, open:
 
-`View > Configure Shortcuts...`
+`Settings > Configure Shortcuts...`
 
 The shortcut editor is designed to be beginner friendly:
 
@@ -238,14 +238,14 @@ AetherSDR treats FlexControl as a serial device and uses it for:
 
 Open:
 
-`Settings > FlexControl...`
+`Settings > FlexControl Knob & Buttons...`
 
 This jumps to the **Serial** tab of the Radio Setup dialog.
 
 ### How to set it up
 
 1. Plug in the FlexControl.
-2. Open `Settings > FlexControl...`.
+2. Open `Settings > FlexControl Knob & Buttons...`.
 3. In the **FlexControl Tuning Knob** section, click **Detect**.
 4. If the device is found, AetherSDR stores the port and marks it to open.
 5. Turn on **Auto-detect on startup** if you want AetherSDR to find it automatically next time.
@@ -607,7 +607,7 @@ Not every control device is a knob. AetherSDR also supports practical station-co
 
 Open:
 
-`Settings > FlexControl...`
+`Settings > FlexControl Knob & Buttons...`
 
 This opens the **Serial** tab, which includes the general serial-port controls in addition to FlexControl.
 
@@ -695,7 +695,7 @@ When a control does not behave the way you expect, use this order:
 
 ### Keyboard problem
 
-- Turn on `View > Keyboard Shortcuts`
+- Turn on `Settings > Keyboard Shortcuts`
 - Make sure you are not typing into a text field
 - Make sure the radio is connected
 

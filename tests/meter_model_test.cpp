@@ -624,9 +624,8 @@ void testAlcGainClearsOnEveryPathThatInvalidatesIt()
         // no fresh sample by then so it would return false anyway
         // (aethersdr-agent, #5636 review).
         //
-        // What exercises the contract is a call that DOES reach
-        // clearAlcGainState() with a live sample present and must still not
-        // emit: removing an ALCGAIN meter that is not the active one.
+        // Removing an inactive meter must bypass clearAlcGainState() even
+        // when the active meter has a live sample.
         model.setActiveTxSlice(0);
         model.updateValues({21}, {rawDb(12.0f)});
         const int before = emissions;
@@ -662,7 +661,15 @@ void testAlcGainClearsOnEveryPathThatInvalidatesIt()
         int emissions = 0;
         QObject::connect(&model, &MeterModel::alcGainChanged,
                          [&](float) { ++emissions; });
+        int removals = 0;
+        QObject::connect(&model, &MeterModel::meterRemoved, [&](int index) {
+            ++removals;
+            report("meterRemoved subscribers see the withdrawn definition and routing gone",
+                   index == 21 && model.meterDef(index) == nullptr
+                       && !model.hasAlcGainMeter() && !model.hasAlcGainValue());
+        });
         model.removeMeter(21);
+        report("meter withdrawal notifies subscribers exactly once", removals == 1);
         report("removing the active ALCGAIN meter clears the gain and says so",
                nearlyEqual(model.alcGainDb(), 0.0f) && !model.hasAlcGainValue()
                    && emissions == 1);

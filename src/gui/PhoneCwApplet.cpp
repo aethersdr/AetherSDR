@@ -1415,8 +1415,9 @@ void PhoneCwApplet::updateCompression(float compPeak)
 
 void PhoneCwApplet::updateAlcGain(float gainDb)
 {
-    if (!m_alcGainGauge)
+    if (!m_alcGainGauge) {
         return;
+    }
     // No clamp here: HGauge clamps to its own range, and clamping twice would
     // hide the case worth seeing — a gain pressed against the modulator's
     // ceiling, which reads as "the ALC has nothing left" rather than as a
@@ -1426,8 +1427,9 @@ void PhoneCwApplet::updateAlcGain(float gainDb)
 
 void PhoneCwApplet::resetAlcGain()
 {
-    if (!m_alcGainGauge)
+    if (!m_alcGainGauge) {
         return;
+    }
     // THE FACE FLOOR, NOT ZERO, and the distinction is the whole point of
     // hasAlcGainValue(). This face runs -20..+40, so HGauge renders 0 dB as a
     // bar one third full -- and 0 dB is also a real reading, "the ALC is
@@ -1436,23 +1438,26 @@ void PhoneCwApplet::resetAlcGain()
     // measurement in the one state where nothing has been measured. resetAlc()
     // beside it drives to its own floor for the same reason; an empty bar is
     // the only rendering of "no reading" this widget has.
-    m_alcGainGauge->setValue(kAlcGainGaugeMinDb);
+    m_alcGainGauge->setValueImmediate(kAlcGainGaugeMinDb);
     m_alcGainGauge->clearPeak();
 }
 
 void PhoneCwApplet::setHasAlcGainMeter(bool has)
 {
-    if (m_hasAlcGainMeter == has)
+    if (m_hasAlcGainMeter == has) {
         return;
+    }
     m_hasAlcGainMeter = has;
-    if (!m_alcGainGauge)
+    if (!m_alcGainGauge) {
         return;
+    }
     // Discard the departing radio's last gain before hiding, for the same
     // reason setMicLevelMeterState() resets the Level gauge at the lifecycle
     // boundary: a reading kept behind a hidden widget comes back as the next
     // radio's when the gauge is shown again.
-    if (!has)
+    if (!has) {
         resetAlcGain();
+    }
     m_alcGainGauge->setVisible(has);
 }
 

@@ -328,18 +328,8 @@ void MeterModel::removeMeter(int index)
         clearCompressionState();
         logCompressionSummary("meter-removed", true);
     }
-    // EMITTED LAST, not beside the m_defs erase.
-    //
-    // A slot on this signal reads the model, and until every index map above
-    // has been swept the model still answers questions about a meter that is
-    // gone: m_alcGainIdxByTxSource and its siblings still hold `index`, so a
-    // resolver called from the slot returns it and the caller reads a value
-    // whose definition was erased three lines earlier. MainWindow's ALCGAIN
-    // wiring is exactly such a slot (aethersdr-agent, #5636 review).
-    //
-    // Moving it here costs nothing a slot can observe except correctness: the
-    // erases and the map sweeps are one indivisible step from any consumer's
-    // point of view, because nothing between them yields.
+    // Presence subscribers query the routing maps synchronously. Notify only
+    // after the withdrawn meter has been removed from every index map.
     emit meterRemoved(index);
 }
 

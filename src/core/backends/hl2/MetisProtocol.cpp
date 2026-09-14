@@ -129,6 +129,21 @@ Cc ccAdcAssign() noexcept
     return {kC0AdcAssignOrTxGain, 0x00, 0x00, 0x00, 0x00};
 }
 
+Cc ccRegister(int addr, std::uint32_t data) noexcept
+{
+    // Masked, not clamped: an out-of-range address is a caller bug, and the
+    // callers that matter (Hl2ControlRequest::arm) refuse it outright before
+    // reaching here. Masking is the belt to that brace — what it must never do
+    // is let bit 6 of an address spill into the RQST flag at C0[7], or bit 0 of
+    // the shifted byte become MOX.
+    const auto c0 = static_cast<std::uint8_t>((addr & kMaxRegisterAddress) << 1);
+    return {c0,
+            static_cast<std::uint8_t>((data >> 24) & 0xFF),
+            static_cast<std::uint8_t>((data >> 16) & 0xFF),
+            static_cast<std::uint8_t>((data >> 8) & 0xFF),
+            static_cast<std::uint8_t>(data & 0xFF)};
+}
+
 Cc ccPipelineReset() noexcept
 {
     // DATA[7:4] = 0x8 -> C4 = 0x80. Everything else stays zero, which is "no
@@ -243,7 +258,22 @@ std::optional<Ep6Response> parseEp6Response(const std::uint8_t* frame) noexcept
 
 void Hl2Telemetry::apply(const Ep6Response& r) noexcept
 {
+    // PTT first: C0[0] is ptt_resp in BOTH branches of control.v's iresp
+    // composition, so it is the one field an ACK still carries honestly.
+    //
+    // NOT a belt-and-braces PTT path for MetisClient, and the comment used to
+    // imply it was: that client routes every ACK to ingestControlResponse and
+    // never here, so on that wiring this line only ever runs for free-running
+    // telemetry — where every one of control.v's four RADDR slots carries
+    // ptt_resp anyway, so nothing is lost. It is kept
+    // because apply() is a public decoder with other callers and tests, and
+    // because dropping a field an ACK genuinely carries would be the wrong
+    // default for them.
     ptt = r.ptt;
+    // Everything below reads `raddr` as a free-running telemetry slot. In an ACK
+    // it is a command address and `data` is our own echo — see the header.
+    if (r.ack)
+        return;
     switch (r.raddr) {
     case 0x00:
         firmwareVersion = static_cast<int>(r.data & 0xFF);

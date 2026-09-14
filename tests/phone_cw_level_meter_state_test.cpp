@@ -149,7 +149,16 @@ int main(int argc, char** argv)
         applet.updateAlcGain(12.0f);
         check(alcGainGauge->value() == 12.0f,
               "a gain sample reaches the revealed ALC Gain gauge");
+        // Seed a settled painted reading without waiting for animation timers.
+        alcGainGauge->setValueImmediate(12.0f);
+        check(alcGainGauge->filledFraction() > 0.5f, "the prior gain is painted");
+        applet.resetAlcGain();
+        check(alcGainGauge->filledFraction() == 0.0f,
+              "unkey or invalidation clears the painted bar immediately");
+        alcGainGauge->setValueImmediate(12.0f);
         applet.setHasAlcGainMeter(false);
+        check(alcGainGauge->filledFraction() == 0.0f,
+              "withdrawal discards the painted reading before hiding");
         check(alcGainGauge->isHidden(),
               "a radio without the meter takes the ALC Gain row back down");
         // THE FLOOR, NOT ZERO. This assertion said 0.0f and passed, which
@@ -161,6 +170,10 @@ int main(int argc, char** argv)
         check(alcGainGauge->value() == -20.0f,
               "hiding the ALC Gain row empties the bar rather than parking it "
               "at a readable 0 dB");
+        applet.setHasAlcGainMeter(true);
+        check(alcGainGauge->filledFraction() == 0.0f,
+              "immediate reappearance cannot resurrect a prior radio's bar");
+        applet.setHasAlcGainMeter(false);
     }
 
     // The same via the model accessor the GUI actually gates on.
