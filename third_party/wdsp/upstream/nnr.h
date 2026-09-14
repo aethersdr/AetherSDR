@@ -68,6 +68,29 @@ extern int getDelay_nnr (NNR a);
 
 extern int getRun_nnr(NNR a);
 
+// Standalone control surface -- the RXA properties below without the channel.
+// Locking is the caller's; see the note in nnr.c.
+
+extern void setRun_nnr (NNR a, int run);
+
+extern void setPosition_nnr (NNR a, int position);
+
+extern void setCmode_nnr (NNR a, int cmode);
+
+extern void setMaskFloor_nnr (NNR a, double floor_db);
+
+extern void setTestMode_nnr (NNR a, int mode);
+
+extern void setAlpha_nnr (NNR a, double alpha);
+
+extern void setAlphaKnee_nnr (NNR a, double knee_db);
+
+extern void setTau_nnr (NNR a, double tau);
+
+extern void setMaxGain_nnr (NNR a, double gmax_db);
+
+extern void setSmooth_nnr (NNR a, double att_ms, double rel_ms);
+
 
 // RXA Properties
 

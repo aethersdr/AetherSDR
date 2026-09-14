@@ -547,6 +547,72 @@ int getRun_nnr(NNR a)
 	return a->run;
 }
 
+/*  Standalone control surface.
+
+	Every control below has an RXA property wrapper further down this file that
+	does the same work under ch[channel].csDSP. These take an NNR directly, so a
+	host that runs the block outside a channel -- as the impulse noise blanker is
+	already run, via create_anbEXT()/xanbEXT() -- can reach the same settings.
+	Locking is the caller's, because a standalone block has no channel whose
+	critical section to take.  */
+
+void setRun_nnr (NNR a, int run)
+{
+	if (a->run != run)
+	{
+		a->run = run;
+		flush_nnr (a);
+	}
+}
+
+void setPosition_nnr (NNR a, int position)
+{
+	a->position = position;
+	flush_nnr (a);
+}
+
+void setCmode_nnr (NNR a, int cmode)
+{
+	a->cmode = cmode;
+}
+
+void setMaskFloor_nnr (NNR a, double floor_db)
+{
+	a->mask_floor = floor_db;
+	NNR_ALL_MODELS (a, setFloor_nnet (n, floor_db));
+}
+
+void setTestMode_nnr (NNR a, int mode)
+{
+	NNR_ALL_MODELS (a, setMode_nnet (n, mode));
+	flush_nnr (a);
+}
+
+void setAlpha_nnr (NNR a, double alpha)
+{
+	NNR_ALL_MODELS (a, setAlpha_nnet (n, alpha));
+}
+
+void setAlphaKnee_nnr (NNR a, double knee_db)
+{
+	NNR_ALL_MODELS (a, setKnee_nnet (n, knee_db));
+}
+
+void setTau_nnr (NNR a, double tau)
+{
+	NNR_ALL_MODELS (a, setTau_nnet (n, tau));
+}
+
+void setMaxGain_nnr (NNR a, double gmax_db)
+{
+	NNR_ALL_MODELS (a, setMaxGain_nnet (n, gmax_db));
+}
+
+void setSmooth_nnr (NNR a, double att_ms, double rel_ms)
+{
+	NNR_ALL_MODELS (a, setSmooth_nnet (n, att_ms, rel_ms));
+}
+
 
 /********************************************************************************************************
 *																										*

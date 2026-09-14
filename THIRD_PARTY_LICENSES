@@ -234,8 +234,8 @@ vendored, translated, or linked.
 ----------------------------------
 Bundled as an isolated static library at third_party/wdsp/ from the exact
 TAPR/OpenHPSDR-wdsp revision below. AetherSDR uses the complete WDSP channel
-API behind src/core/dsp/WdspChannel for raw-IQ radio backends. Four local
-fixes are documented in third_party/wdsp/AETHERSDR-PATCHES.md. The
+API behind src/core/dsp/WdspChannel for raw-IQ radio backends. Five local
+changes are documented in third_party/wdsp/AETHERSDR-PATCHES.md. The
 snapshot includes the two trained Neural Noise Reduction networks upstream
 compiles in (upstream/nnr_model_0.c, upstream/nnr_model_1.c).
 
