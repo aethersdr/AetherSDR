@@ -17,6 +17,7 @@
 #include "core/backends/AmpDelta.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDeadlineTimer>
 #include <QHostAddress>
 #include <QLabel>
@@ -149,6 +150,13 @@ int main(int argc, char** argv)
     CHECK(!portA->isVisible());
     CHECK(!portB->isVisible());
 
+    // Fan speed only exists on the direct connection. Until the amplifier has
+    // reported a mode, neither fan control is up: one that cannot say what it
+    // is set to is worse than none.
+    QComboBox* fanCombo = applet.findChild<QComboBox*>(QStringLiteral("ampFanModeCombo"));
+    CHECK(fanCombo != nullptr);
+    if (fanCombo) CHECK(!fanCombo->isVisible());
+
     // ── Expanded ──────────────────────────────────────────────────────
     applet.setFloating(true);
     QCoreApplication::processEvents();
@@ -179,6 +187,65 @@ int main(int argc, char** argv)
             if (operate.count() == 1) {
                 CHECK(operate.takeFirst().at(0).toBool() == false);
             }
+        }
+    }
+
+    // ── Fan speed ─────────────────────────────────────────────────────
+    //
+    // The rail keeps the pull-down (#3905 — three modes listed rather than
+    // clicked through blind); the panel gets a one-letter key, because the
+    // control row there is keys. Exactly one is up at a time.
+    {
+        PanelKey* fanKey = nullptr;
+        PanelKey* stbyKey = nullptr;
+        for (PanelKey* k : applet.findChildren<PanelKey*>()) {
+            if (k->accessibleName().contains(QStringLiteral("Fan"))) fanKey = k;
+            else stbyKey = k;
+        }
+        CHECK(fanKey != nullptr);
+        CHECK(stbyKey != nullptr);
+        if (fanKey && stbyKey && fanCombo) {
+            // No mode reported yet — still nothing up, in either presentation.
+            CHECK(!fanKey->isVisible());
+
+            applet.setFanMode(QStringLiteral("STANDARD"));
+            QCoreApplication::processEvents();
+            CHECK(fanKey->isVisible());
+            CHECK(!fanCombo->isVisible());   // the rail's control, not the panel's
+            CHECK(fanKey->text() == QStringLiteral("S"));
+            // The letter is the caption, not the whole story: the mode's name
+            // is on the tooltip and in the accessible name, so nothing is
+            // available only as an initial.
+            CHECK(fanKey->accessibleName().contains(QStringLiteral("STANDARD")));
+            CHECK(fanKey->toolTip().contains(QStringLiteral("STANDARD")));
+
+            // Square, and exactly as tall as the key beside it.
+            CHECK(fanKey->sizeHint().width() == fanKey->sizeHint().height());
+            CHECK(fanKey->sizeHint().height() == stbyKey->sizeHint().height());
+
+            // One press cycles to the next mode and commands it once.
+            QSignalSpy fan(&applet, &AmpApplet::fanModeChanged);
+            fanKey->click();
+            QCoreApplication::processEvents();
+            CHECK(fan.count() == 1);
+            if (fan.count() == 1) {
+                CHECK(fan.takeFirst().at(0).toString() == QStringLiteral("CONTEST"));
+            }
+            CHECK(fanKey->text() == QStringLiteral("C"));
+            fanKey->click();
+            CHECK(fanKey->text() == QStringLiteral("B"));
+            // And wraps, so every mode is reachable from every other.
+            fanKey->click();
+            CHECK(fanKey->text() == QStringLiteral("S"));
+
+            // The key and the pull-down are two faces of one mode, so a status
+            // from the amplifier moves both — and must not echo a command back.
+            QSignalSpy echo(&applet, &AmpApplet::fanModeChanged);
+            applet.setFanMode(QStringLiteral("BROADCAST"));
+            CHECK(echo.count() == 0);
+            CHECK(fanKey->text() == QStringLiteral("B"));
+            CHECK(fanCombo->currentData().toString() == QStringLiteral("BROADCAST"));
+            applet.setFanMode(QStringLiteral("STANDARD"));
         }
     }
 
@@ -257,7 +324,10 @@ int main(int argc, char** argv)
     {
         // In standby the key asks for operate — the opposite of what it asked
         // for a moment ago, from the same press.
-        PanelKey* key = applet.findChild<PanelKey*>();
+        PanelKey* key = nullptr;
+        for (PanelKey* k : applet.findChildren<PanelKey*>()) {
+            if (!k->accessibleName().contains(QStringLiteral("Fan"))) key = k;
+        }
         CHECK(key != nullptr);
         if (key) {
             QSignalSpy operate(&applet, &AmpApplet::operateToggled);
@@ -324,6 +394,16 @@ int main(int argc, char** argv)
     QCoreApplication::processEvents();
     CHECK(!rowShows(portA, QStringLiteral("40")));
     CHECK(!rowShows(portA, QStringLiteral("AAB")));
+
+    // Fan speed goes with it: it is commandable only over the direct
+    // connection, so the key comes down rather than standing there unable to
+    // do anything.
+    applet.setDirectConnected(false);
+    QCoreApplication::processEvents();
+    for (PanelKey* k : applet.findChildren<PanelKey*>()) {
+        if (k->accessibleName().contains(QStringLiteral("Fan")))
+            CHECK(!k->isVisible());
+    }
 
     conn.disconnect();
 

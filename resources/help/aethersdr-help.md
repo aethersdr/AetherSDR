@@ -234,6 +234,8 @@ Popped out into its own window, or placed on the workspace canvas, it lays itsel
 
 A port with no band reads `N/A`. That is the amplifier saying nothing is driving it, not a reading that failed to arrive — the radio name beside it describes how the port is wired, not that RF is flowing through it.
 
+Fan speed is a key on the panel and a pull-down on the rail — the same three modes either way. The key shows the mode's initial: `S` standard, `C` contest, `B` broadcast, cycling on each press; the full name is on its tooltip.
+
 Port detail needs the direct connection to the amplifier (Radio Setup, peripherals), which is also what supplies the fan-speed control and the drain and mains voltages. Without it the applet still works from what the radio relays, and the source indicator under the readouts says which path it is on.
 
 ### `TX`

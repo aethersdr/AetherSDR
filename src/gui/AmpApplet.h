@@ -109,6 +109,9 @@ private:
     // Both operate controls wear the amplifier's current state, so a single
     // place decides what each of them says and how it is lit.
     void applyStateToControls();
+    // Same for the two fan controls — the rail's pull-down and the panel's
+    // one-letter key are two faces of one mode.
+    void applyFanControls();
 
     void updatePortRows();
     void applyPortInfo(AccessoryPortRow* row, const AmpPortInfo& info);
@@ -141,6 +144,10 @@ private:
     QComboBox*   m_fanCombo{nullptr};
     QPushButton* m_operateBtn{nullptr};
     QString      m_fanMode{"STANDARD"};
+    // Neither fan control is shown before the amplifier has reported a mode:
+    // only the direct connection carries fanmode, and a control that cannot
+    // say what it is set to is worse than none.
+    bool         m_haveFanMode{false};
 
     // ── Expanded (floating / canvas) presentation ───────────────────────
     // Built up-front and hidden while docked, so switching presentation is a
@@ -180,6 +187,11 @@ private:
     // the plain button: its column has room for one control, not a key of
     // panel proportions.
     PanelKey*    m_stbyKey{nullptr};
+    // Fan speed on the panel: one letter — S, C, B — cycling the same three
+    // modes the rail's pull-down lists. Square rather than letterbox, because
+    // a single glyph has nothing for the extra width to hold, and exactly as
+    // tall as the key beside it.
+    PanelKey*    m_fanKey{nullptr};
     // The widest caption's natural width at scale 1.0, measured once before
     // the key has been given a fixed size — deriving it from the laid-out row
     // instead is a one-way ratchet.

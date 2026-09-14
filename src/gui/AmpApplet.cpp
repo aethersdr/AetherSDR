@@ -29,6 +29,16 @@ QString fanModeLabel(const QString& mode)
 
     return "Fan";
 }
+
+// The panel key's caption. One letter, because the key is one square: S, C
+// and B are the modes' own initials, and the full word is on the tooltip and
+// in the accessible name so nothing is only available as an initial.
+QString fanModeLetter(const QString& mode)
+{
+    if (mode == "CONTEST") return QStringLiteral("C");
+    if (mode == "BROADCAST") return QStringLiteral("B");
+    return QStringLiteral("S");
+}
 // Left-side label that shows the field name + live value ("PWR 1148").
 // Fixed width so all three gauge rows line up.
 QLabel* makeValueLabel(QWidget* parent)
@@ -69,6 +79,7 @@ constexpr int   kBottomGap = kPanelBottomGap;
 // applets on the canvas sees one control language rather than two.
 constexpr int kKeyDesignHeight = 44;
 constexpr int kKeyFontDesignPx = 13;
+constexpr int kFanKeyFontDesignPx = 17;
 // Breathing room around the widest caption, in design pixels.
 constexpr int kKeyPaddingDesignPx = 18;
 
@@ -343,7 +354,7 @@ void AmpApplet::buildUI()
     m_fanCombo->hide();
     connect(m_fanCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
         m_fanMode = m_fanCombo->itemData(index).toString();
-        m_fanCombo->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
+        applyFanControls();
         emit fanModeChanged(m_fanMode);
     });
     btnRow->addWidget(m_fanCombo);
@@ -355,8 +366,9 @@ void AmpApplet::buildUI()
     btnRow->addWidget(m_operateBtn);
 
     buildExpandedUI();
-    // Centred in both axes: the layout then takes the key's own size hint —
+    // Centred in both axes: the layout then takes each key's own size hint —
     // which the scale sets — instead of stretching it to fill the cell.
+    btnRow->addWidget(m_fanKey, 0, Qt::AlignCenter);
     btnRow->addWidget(m_stbyKey, 0, Qt::AlignCenter);
 
     vbox->addLayout(btnRow);
@@ -414,6 +426,20 @@ void AmpApplet::buildUI()
 
 void AmpApplet::buildExpandedUI()
 {
+    m_fanKey = new PanelKey(fanModeLetter(m_fanMode), this);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_fanKey, kPanelKeyIdleStyle);
+    m_fanKey->hide();
+    // Cycles through the pull-down's own items rather than keeping a second
+    // list: the combo's currentIndexChanged is the one place that publishes a
+    // mode change, so the key cannot command something the rail disagrees
+    // with. Wheel input is not accepted — this is a hardware control, and a
+    // scroll over a key the operator is only passing across must not change
+    // fan speed (the same reason the pull-down is a GuardedComboBox, #3905).
+    connect(m_fanKey, &QPushButton::clicked, this, [this]() {
+        if (m_fanCombo->count() <= 0) return;
+        m_fanCombo->setCurrentIndex((m_fanCombo->currentIndex() + 1) % m_fanCombo->count());
+    });
+
     m_stbyKey = new PanelKey(tr("STBY"), this);
     m_stbyKey->setToolTip(tr("Toggle standby — the amplifier drops out of circuit"));
     m_stbyKey->setAccessibleName(tr("STBY"));
@@ -564,12 +590,18 @@ void AmpApplet::applyDensityAtScale(qreal scale)
     QFont keyFont = m_stbyKey->font();
     keyFont.setPixelSize(px(kKeyFontDesignPx));
     m_stbyKey->setFont(keyFont);
+    // One glyph in a square box carries a larger face than a four-letter
+    // caption in a letterbox one, or it floats in the middle of the key.
+    QFont fanFont = m_fanKey->font();
+    fanFont.setPixelSize(px(kFanKeyFontDesignPx));
+    m_fanKey->setFont(fanFont);
     applyKeySize(f ? s : 1.0);
 
-    // Only one of the two operate controls is ever up, and neither is shown
-    // before the amplifier has reported a state — an unlit control that
-    // cannot say which way it would move is worse than none.
+    // Only one of each pair is ever up, and neither is shown before the
+    // amplifier has reported a state — a control that cannot say what it is
+    // set to is worse than none.
     applyStateToControls();
+    applyFanControls();
 
     m_vbox->invalidate();
 }
@@ -616,8 +648,11 @@ void AmpApplet::resizeEvent(QResizeEvent* event)
 void AmpApplet::applyKeySize(qreal scale)
 {
     if (!m_stbyKey || m_keySeedWidth <= 0) return;
-    m_stbyKey->setTargetSize(panelKeySize(qRound(kKeyDesignHeight * scale),
-                                          m_keySeedWidth, scale));
+    const int h = qMax(1, qRound(kKeyDesignHeight * scale));
+    m_stbyKey->setTargetSize(panelKeySize(h, m_keySeedWidth, scale));
+    // 1:1. The letterbox width exists to hold a word; this key holds a letter,
+    // and a square reads as the toggle it is rather than as a second STBY.
+    m_fanKey->setTargetSize(QSize(h, h));
 }
 
 void AmpApplet::applyTelemetryStyles(qreal scale)
@@ -930,8 +965,30 @@ void AmpApplet::setFanMode(const QString& mode)
         QSignalBlocker blocker(m_fanCombo);
         m_fanCombo->setCurrentIndex(idx);
     }
+    m_haveFanMode = true;
+    applyFanControls();
+}
+
+void AmpApplet::applyFanControls()
+{
     m_fanCombo->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
-    m_fanCombo->show();
+
+    m_fanKey->setText(fanModeLetter(m_fanMode));
+    m_fanKey->setToolTip(tr("Fan speed: %1\nClick to cycle standard, contest, broadcast")
+                             .arg(m_fanMode));
+    m_fanKey->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
+    m_fanKey->setAccessibleDescription(
+        tr("Cycles standard, contest and broadcast fan speed. Currently %1.")
+            .arg(m_fanMode));
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(m_fanKey, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
+
+    // Exactly one of the two is up, and it is the one that belongs to the
+    // presentation. Neither before the amplifier has reported a mode.
+    m_fanCombo->setVisible(m_haveFanMode && !m_floating);
+    m_fanKey->setVisible(m_haveFanMode && m_floating);
 }
 
 void AmpApplet::setState(const QString& state)
@@ -979,8 +1036,11 @@ void AmpApplet::setDirectConnected(bool direct)
         // Vdd and Vac are not proxied by the radio — clear the stale values.
         m_vddLabel->setText("Vdd  — V");
         m_vacLabel->setText("Vac  — V");
-        // Fan mode is only available via direct PGXL protocol — hide until reconnected.
-        m_fanCombo->hide();
+        // Fan mode is only available via the direct PGXL protocol — drop it
+        // until the amplifier is back rather than leaving a control up that
+        // can no longer command anything.
+        m_haveFanMode = false;
+        applyFanControls();
     }
     applyTelemetryStyles(m_floating ? m_appliedScale : 1.0);
     updatePortRows();
