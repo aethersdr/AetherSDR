@@ -19,7 +19,7 @@ public:
         setAttribute(Qt::WA_TransparentForMouseEvents);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     }
-    QSize sizeHint() const override { return {260, fontMetrics().height() + 15}; }
+    QSize sizeHint() const override { return {240, fontMetrics().height() + 8}; }
 protected:
     void paintEvent(QPaintEvent*) override
     {
@@ -35,12 +35,12 @@ protected:
             // These are measurement palette data, never theme UI colors.
             gradient.setColorAt(0, QColor(entry.value(QStringLiteral("start")).toString()));
             gradient.setColorAt(1, QColor(entry.value(QStringLiteral("end")).toString()));
-            painter.fillRect(QRectF(x, 0, step + 0.5, 9), gradient);
+            painter.fillRect(QRectF(x, 0, step + 0.5, 4), gradient);
             const QString label = entry.value(QStringLiteral("label")).toString();
             if (!label.isEmpty()) {
-                painter.setPen(palette().color(QPalette::WindowText));
+                painter.setPen(ThemeManager::instance().color(this, "color.text.secondary"));
                 painter.drawText(QPointF(x - fontMetrics().horizontalAdvance(label) / 2.0,
-                    12 + fontMetrics().ascent()), label);
+                    7 + fontMetrics().ascent()), label);
             }
         }
     }
@@ -55,9 +55,9 @@ WeatherRadarLegend::WeatherRadarLegend(QWidget* parent) : QFrame(parent)
     setAccessibleName(tr("Displayed weather sources and separate intensity scales"));
     setAttribute(Qt::WA_TransparentForMouseEvents);
     ThemeManager::instance().applyStyleSheet(this,
-        "QFrame#pskReporterRadarLegend { background: {{color.background.2}};"
-        " border: 1px solid {{color.border.subtle}}; }"
-        "QLabel { color: {{color.text.primary}}; background: transparent; border: none; }");
+        "QFrame#pskReporterRadarLegend { background: {{color.background.1}}; border: none; }"
+        "QWidget { font-size: 11px; background: transparent; border: none; }"
+        "QLabel { color: {{color.text.secondary}}; background: transparent; border: none; }");
     QFile file(QStringLiteral(":/radar/legends.json"));
     QJsonObject palettes;
     if (file.open(QIODevice::ReadOnly)) {
@@ -101,8 +101,17 @@ WeatherRadarLegend::WeatherRadarLegend(QWidget* parent) : QFrame(parent)
 
 void WeatherRadarLegend::setProviders(int providers)
 {
+    m_providers = providers;
     for (int i = 0; i < 4; ++i) { m_rows[i]->setVisible(providers & (1 << i)); }
-    setVisible(providers != 0);
+    setVisible(m_legendVisible && providers != 0);
+    adjustSize();
+    raise();
+}
+
+void WeatherRadarLegend::setLegendVisible(bool visible)
+{
+    m_legendVisible = visible;
+    setVisible(visible && m_providers != 0);
     adjustSize();
     raise();
 }

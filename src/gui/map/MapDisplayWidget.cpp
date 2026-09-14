@@ -7,6 +7,7 @@
 #include "core/ThemeManager.h"
 
 #include <QAccessible>
+#include <QEvent>
 #include <QLabel>
 #include <QStackedLayout>
 #include <QTimer>
@@ -53,7 +54,7 @@ MapDisplayWidget::MapDisplayWidget(QWidget* parent)
             this, &MapDisplayWidget::markerClicked);
     m_weatherRadar = new WeatherRadarController(m_flatView, this);
     m_radarLegend = new WeatherRadarLegend(this);
-    m_radarLegend->move(12, 12);
+    m_radarLegend->installEventFilter(this);
     connect(m_weatherRadar, &WeatherRadarController::displayedProvidersChanged,
         m_radarLegend, &WeatherRadarLegend::setProviders);
     connect(m_weatherRadar, &WeatherRadarController::radarCoverageStatusChanged, this, &MapDisplayWidget::radarCoverageStatusChanged);
@@ -316,7 +317,36 @@ void MapDisplayWidget::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     if (m_radarLegend) { m_radarLegend->setMaximumWidth(std::max(1, width() - 70)); }
+    positionRadarLegend();
     updateOverlayLoadingStatus();
+}
+
+bool MapDisplayWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_radarLegend && event->type() == QEvent::Resize) {
+        positionRadarLegend();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void MapDisplayWidget::positionRadarLegend()
+{
+    if (m_radarLegend) {
+        m_radarLegend->move(12, m_radarLegendAtTop ? 12
+            : std::max(12, height() - m_radarLegend->height() - 12));
+    }
+}
+
+void MapDisplayWidget::setRadarLegendVisible(bool visible)
+{
+    m_radarLegend->setLegendVisible(visible);
+    positionRadarLegend();
+}
+
+void MapDisplayWidget::setRadarLegendAtTop(bool atTop)
+{
+    m_radarLegendAtTop = atTop;
+    positionRadarLegend();
 }
 
 void MapDisplayWidget::updateOverlayLoadingStatus()

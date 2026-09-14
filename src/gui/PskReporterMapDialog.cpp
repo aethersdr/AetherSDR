@@ -432,6 +432,21 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_radarCoverageCheck->setToolTip(m_radarCoverageCheck->accessibleDescription());
     m_radarCoverageCheck->setChecked(pskSettings().value("showRadarCoverage").toBool(false));
 
+    m_radarLegendCheck = new QCheckBox(tr("Intensity legend"), reportsBox);
+    m_radarLegendCheck->setObjectName(QStringLiteral("pskReporterRadarLegendVisible"));
+    m_radarLegendCheck->setAccessibleName(tr("Show weather intensity legend"));
+    m_radarLegendCheck->setAccessibleDescription(tr(
+        "Show a separate intensity scale and units for each displayed weather source."));
+    m_radarLegendCheck->setToolTip(m_radarLegendCheck->accessibleDescription());
+    m_radarLegendCheck->setChecked(pskSettings().value("showRadarLegend").toBool(false));
+    m_radarLegendTopCheck = new QCheckBox(tr("Position at top"), reportsBox);
+    m_radarLegendTopCheck->setObjectName(QStringLiteral("pskReporterRadarLegendAtTop"));
+    m_radarLegendTopCheck->setAccessibleName(tr("Position weather legend at top"));
+    m_radarLegendTopCheck->setAccessibleDescription(tr(
+        "Checked: top left. Unchecked: bottom left. Applies when the intensity legend is shown."));
+    m_radarLegendTopCheck->setToolTip(m_radarLegendTopCheck->accessibleDescription());
+    m_radarLegendTopCheck->setChecked(pskSettings().value("radarLegendAtTop").toBool(false));
+
     m_weatherRadarPlayButton = new QToolButton(reportsBox);
     m_weatherRadarPlayButton->setObjectName(
         QStringLiteral("pskReporterWeatherRadarPlay"));
@@ -860,6 +875,11 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     coverageStatus->setAccessibleName(tr("Radar coverage status"));
     coverageStatus->setWordWrap(true);
     radarForm->addRow(coverageStatus);
+    auto* legendRow = new QHBoxLayout();
+    legendRow->setSpacing(8);
+    legendRow->addWidget(m_radarLegendCheck);
+    legendRow->addWidget(m_radarLegendTopCheck);
+    radarForm->addRow(legendRow);
     auto* playbackRow = new QHBoxLayout();
     playbackRow->setSpacing(4);
     playbackRow->addWidget(m_weatherRadarPlayButton);
@@ -891,7 +911,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         m_bandCombo, m_modeCombo, m_lookbackCombo, m_allCallsignsCheck,
         m_activeMonitorsCheck, m_globeCheck, m_pathsCheck, m_terminatorCheck, basemapDarkTint, basemapBrightness,
         m_cityLightsCheck, m_cityLightsBrightness, m_cityLightsFaintLights,
-        m_cityLightsWarmth, m_weatherRadarCheck, m_radarRegionChecks[3], m_radarRegionChecks[0], m_radarRegionChecks[1], m_radarRegionChecks[2], m_radarCoverageCheck, m_weatherRadarPlayButton,
+        m_cityLightsWarmth, m_weatherRadarCheck, m_radarRegionChecks[3], m_radarRegionChecks[0], m_radarRegionChecks[1], m_radarRegionChecks[2], m_radarCoverageCheck, m_radarLegendCheck, m_radarLegendTopCheck, m_weatherRadarPlayButton,
         m_weatherRadarHistoryCombo, m_weatherRadarSpeedSlider};
     for (int i = 1; i < tabOrder.size(); ++i) {
         QWidget::setTabOrder(tabOrder[i - 1], tabOrder[i]);
@@ -985,6 +1005,16 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     connect(m_mapView, &MapDisplayWidget::radarProviderStatusChanged, radarStatus, [radarStatus](const QString& status) {
         radarStatus->setText(status);
         radarStatus->setVisible(!status.isEmpty());
+    });
+    m_mapView->setRadarLegendVisible(m_radarLegendCheck->isChecked());
+    m_mapView->setRadarLegendAtTop(m_radarLegendTopCheck->isChecked());
+    connect(m_radarLegendCheck, &QCheckBox::toggled, this, [this](bool on) {
+        writePskSetting("showRadarLegend", on);
+        m_mapView->setRadarLegendVisible(on);
+    });
+    connect(m_radarLegendTopCheck, &QCheckBox::toggled, this, [this](bool atTop) {
+        writePskSetting("radarLegendAtTop", atTop);
+        m_mapView->setRadarLegendAtTop(atTop);
     });
     connect(m_radarCoverageCheck, &QCheckBox::toggled, this, [this](bool on) {
         writePskSetting("showRadarCoverage", on);

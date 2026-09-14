@@ -210,8 +210,14 @@ are in [resources/radar/README.md](../resources/radar/README.md).
 
 ## Source labels and intensity legends
 
-A compact in-map panel names the displayed providers and gives each its own
-palette and units, on both projections. NOAA uses dBZ, ECCC uses mm/h, and OPERA
+The optional **Intensity legend** names the displayed providers and gives each
+its own palette and units, on both projections. It is off by default. When
+shown, it uses thin color bars, subdued text and a borderless background at the
+bottom left. **Position at top** moves it to the top left when checked; leaving
+it unchecked selects the bottom left. Both preferences persist with the PSK
+Reporter settings. The panel follows map resizing and the displayed source set.
+
+NOAA uses dBZ, ECCC uses mm/h, and OPERA
 uses DBZH maximum reflectivity in dBZ (not the separate OPERA rain-rate product).
 LibreWXR uses a dBZ-equivalent scale and is explicitly labeled radar, satellite
 estimates and model data. No reflectivity/rain-rate conversion is applied.
