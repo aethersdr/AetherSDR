@@ -1650,7 +1650,12 @@ QVector<TciSliceEndpoint> TciServer::routingEndpoints(const QWebSocket* requeste
         if (!cs.socket || cs.socket == requester || cs.audioReceiver < 0) {
             continue;
         }
-        const SliceModel* operated = sliceForTrx(cs.audioReceiver);
+        // Strict resolver: a declared receiver that no longer maps to a live
+        // slice claims nothing. The loose resolver's first-slice fallback
+        // would flag slice 0 on a stale declaration and, if slice 0 holds TX,
+        // silence every other client's VFO B (#4547 rule: decisions that gate
+        // a write never use the read-path guess).
+        const SliceModel* operated = sliceForTrxStrict(cs.audioReceiver);
         if (!operated) {
             continue;
         }
