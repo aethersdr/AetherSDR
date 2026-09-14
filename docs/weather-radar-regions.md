@@ -26,6 +26,13 @@ panel identifies this mixture. The optional site shading continues to use our se
 NOAA/OPERA station catalogs; LibreWXR's coverage endpoint is not used because its
 inspected implementation masks nonzero precipitation rather than instrument range.
 
+LibreWXR's [source documentation](https://librewxr.net/) describes NOAA RRQPE
+satellite precipitation estimates across 60°S–70°N, with model data outside
+that coverage. A visible horizontal change in precipitation texture can occur
+at the boundary. This was reproduced in an original provider PNG, before
+AetherSDR compositing; it is not a 2D tile gap. The app preserves those source
+values rather than blurring across different measurements.
+
 Metadata comes from `https://api.librewxr.net/public/weather-maps.json`.
 Only `radar.past` is admitted: exact host/path validation, bounded JSON/frame
 counts, increasing integral UTC epochs, no future frames, and a latest frame
@@ -311,6 +318,9 @@ stopped afterward. These results describe the local implementation before public
 
 These native macOS captures show the RFC #5630 revisions, including bundled
 station catalogs and legends identifying the providers actually displayed.
+The muted legend captures below show the later optional-legend revision.
+The legend is off by default; enabling **Intensity legend** shows it at the
+bottom left, or at the top left with **Position at top** checked.
 The ARM64 build and eight focused CTest suites passed; a separate native Cocoa
 run passed all 49 loading, playback and rendering cases. The authenticated MCP
 walkthrough used isolated settings, DEMO-0001 and disabled TX automation.
@@ -343,6 +353,15 @@ Native flat-map capture showing precipitation across continents.
 
 With LibreWXR disabled, enabled regional providers appear together. NOAA and
 OPERA DBZH use dBZ; ECCC rain rate uses mm/h. Each source retains its own scale.
+
+![Muted legend and position controls](images/weather-radar/muted-legend-bottom.png)
+
+Optional muted legend at the bottom left, with its visibility and position
+controls in the sidebar. Each provider keeps its own units and palette.
+
+![Muted legend at top left](images/weather-radar/muted-legend-top.png)
+
+The same legend at the top left with **Position at top** checked.
 
 Screenshot weather imagery: LibreWXR and contributing agencies listed under
 Credits and licensing above, CC BY 4.0 with Radar-DPC imagery subject to
