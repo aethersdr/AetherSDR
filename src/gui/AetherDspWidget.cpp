@@ -615,10 +615,20 @@ QWidget* AetherDspWidget::buildNr2Page()
         "QLabel { color: #c8d8e8; font-size: 11px; min-width: 40px; }"
         "QLabel:disabled { color: #48515a; }");
 
+    // Every label on this page is styled through here rather than each one
+    // calling setStyleSheet itself. That is what the hardcoded-colour ratchet
+    // asks for -- it counts call sites, not colours, so fourteen scattered
+    // calls are fourteen places to migrate when these two strings become
+    // theme tokens, and this is one.
+    const auto styled = [](QLabel* label, const QString& style) {
+        label->setStyleSheet(style);
+        return label;
+    };
+
     // Gain Method — exclusive toggle row, styled like the slice DSP buttons.
     {
         auto* hdr = new QLabel("Gain Method:");
-        hdr->setStyleSheet(labelStyle);
+        styled(hdr, labelStyle);
         vbox->addWidget(hdr);
 
         auto* row = new QHBoxLayout;
@@ -662,7 +672,7 @@ QWidget* AetherDspWidget::buildNr2Page()
     // NPE Method — exclusive toggle row.
     {
         auto* hdr = new QLabel("NPE Method:");
-        hdr->setStyleSheet(labelStyle);
+        styled(hdr, labelStyle);
         vbox->addWidget(hdr);
 
         auto* row = new QHBoxLayout;
@@ -761,7 +771,7 @@ QWidget* AetherDspWidget::buildNr2Page()
     // Gain Max (reduction depth)
     {
         auto* lbl = new QLabel("Reduction:");
-        lbl->setStyleSheet(labelStyle);
+        styled(lbl, labelStyle);
         sliderGrid->addWidget(lbl, row, 0);
         m_nr2GainMaxSlider = new GuardedSlider(Qt::Horizontal);
         m_nr2GainMaxSlider->setObjectName(
@@ -780,7 +790,7 @@ QWidget* AetherDspWidget::buildNr2Page()
             "higher values retain more of the input level.");
         sliderGrid->addWidget(m_nr2GainMaxSlider, row, 1);
         m_nr2GainMaxLabel = new QLabel("1.00");
-        m_nr2GainMaxLabel->setStyleSheet(valStyle);
+        styled(m_nr2GainMaxLabel, valStyle);
         m_nr2GainMaxLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr2GainMaxLabel, row, 2);
         connect(m_nr2GainMaxSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -795,7 +805,7 @@ QWidget* AetherDspWidget::buildNr2Page()
     // Gain floor (naturalness / musical-noise tradeoff)
     {
         auto* lbl = new QLabel("Naturalness:");
-        lbl->setStyleSheet(labelStyle);
+        styled(lbl, labelStyle);
         sliderGrid->addWidget(lbl, row, 0);
         m_nr2GainFloorSlider = new GuardedSlider(Qt::Horizontal);
         m_nr2GainFloorSlider->setObjectName(
@@ -819,7 +829,7 @@ QWidget* AetherDspWidget::buildNr2Page()
             "metallic or musical artifacts.");
         sliderGrid->addWidget(m_nr2GainFloorSlider, row, 1);
         m_nr2GainFloorLabel = new QLabel("0.00");
-        m_nr2GainFloorLabel->setStyleSheet(valStyle);
+        styled(m_nr2GainFloorLabel, valStyle);
         m_nr2GainFloorLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr2GainFloorLabel, row, 2);
         connect(m_nr2GainFloorSlider, &QSlider::valueChanged,
@@ -836,7 +846,7 @@ QWidget* AetherDspWidget::buildNr2Page()
     // Gain Smooth
     {
         auto* lbl = new QLabel("Smoothing:");
-        lbl->setStyleSheet(labelStyle);
+        styled(lbl, labelStyle);
         sliderGrid->addWidget(lbl, row, 0);
         m_nr2SmoothSlider = new GuardedSlider(Qt::Horizontal);
         m_nr2SmoothSlider->setObjectName(
@@ -855,7 +865,7 @@ QWidget* AetherDspWidget::buildNr2Page()
             "change more slowly and can reduce musical artifacts.");
         sliderGrid->addWidget(m_nr2SmoothSlider, row, 1);
         m_nr2SmoothLabel = new QLabel("0.85");
-        m_nr2SmoothLabel->setStyleSheet(valStyle);
+        styled(m_nr2SmoothLabel, valStyle);
         m_nr2SmoothLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr2SmoothLabel, row, 2);
         connect(m_nr2SmoothSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -870,7 +880,7 @@ QWidget* AetherDspWidget::buildNr2Page()
     // Q_SPP (voice threshold)
     {
         m_nr2QsppTitleLabel = new QLabel("Threshold:");
-        m_nr2QsppTitleLabel->setStyleSheet(labelStyle);
+        styled(m_nr2QsppTitleLabel, labelStyle);
         sliderGrid->addWidget(m_nr2QsppTitleLabel, row, 0);
         m_nr2QsppSlider = new GuardedSlider(Qt::Horizontal);
         m_nr2QsppSlider->setObjectName(
@@ -890,7 +900,7 @@ QWidget* AetherDspWidget::buildNr2Page()
             "noise.");
         sliderGrid->addWidget(m_nr2QsppSlider, row, 1);
         m_nr2QsppLabel = new QLabel("0.20");
-        m_nr2QsppLabel->setStyleSheet(valStyle);
+        styled(m_nr2QsppLabel, valStyle);
         m_nr2QsppLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr2QsppLabel, row, 2);
         connect(m_nr2QsppSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -917,11 +927,11 @@ QWidget* AetherDspWidget::buildNr2Page()
         m_nr2Post2NlevelSlider->setToolTip("How much noise is mixed back in. 0 injects nothing.");
         applyPrimarySliderStyle(m_nr2Post2NlevelSlider);
         auto* nlevelTitle = new QLabel("Fill level:");
-        nlevelTitle->setStyleSheet(labelStyle);
+        styled(nlevelTitle, labelStyle);
         sliderGrid->addWidget(nlevelTitle, row, 0);
         sliderGrid->addWidget(m_nr2Post2NlevelSlider, row, 1);
         m_nr2Post2NlevelLabel = new QLabel(QString::number(cfg.post2Nlevel, 'f', 2));
-        m_nr2Post2NlevelLabel->setStyleSheet(valStyle);
+        styled(m_nr2Post2NlevelLabel, valStyle);
         m_nr2Post2NlevelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr2Post2NlevelLabel, row, 2);
         connect(m_nr2Post2NlevelSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -947,11 +957,11 @@ QWidget* AetherDspWidget::buildNr2Page()
             "1 = synthetic white noise");
         applyPrimarySliderStyle(m_nr2Post2FactorSlider);
         auto* factorTitle = new QLabel("Fill character:");
-        factorTitle->setStyleSheet(labelStyle);
+        styled(factorTitle, labelStyle);
         sliderGrid->addWidget(factorTitle, row, 0);
         sliderGrid->addWidget(m_nr2Post2FactorSlider, row, 1);
         m_nr2Post2FactorLabel = new QLabel(QString::number(cfg.post2Factor, 'f', 2));
-        m_nr2Post2FactorLabel->setStyleSheet(valStyle);
+        styled(m_nr2Post2FactorLabel, valStyle);
         m_nr2Post2FactorLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         sliderGrid->addWidget(m_nr2Post2FactorLabel, row, 2);
         connect(m_nr2Post2FactorSlider, &QSlider::valueChanged, this, [this](int v) {
