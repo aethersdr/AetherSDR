@@ -362,7 +362,7 @@ void SetRXAFMNCde (int channel, int nc)
 	{
 		a->nc_de = nc;
 		teardown_fcimp (a->pfcimp);
-		build_fcimp (a->nc_de, a->wintype_de);
+		a->pfcimp = build_fcimp (a->nc_de, a->wintype_de);
 		exec_fcimp (a->pfcimp, a->f_low, a->f_high, a->g0_de, a->g1_de, 1, a->rate, a->scale_de, 0);
 		setNc_fircore (a->pde, a->nc_de, get_pfcpulse(a->pfcimp));
 	}

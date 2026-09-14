@@ -159,7 +159,7 @@ void SetTXAFMEmphNC (int channel, int nc)
 	{
 		a->nc = nc;
 		teardown_fcimp(a->pfcimp);
-		build_fcimp(a->nc, a->wintype);
+		a->pfcimp = build_fcimp(a->nc, a->wintype);
 		exec_fcimp(a->pfcimp, a->f_low, a->f_high, a->g0, a->g1, a->ctype, a->rate, a->scale, 0);
 		setNc_fircore (a->p, a->nc, get_pfcpulse(a->pfcimp));
 	}
