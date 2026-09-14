@@ -1,22 +1,30 @@
 #pragma once
 
 #include <array>
+#include <type_traits>
 
 // Operator-facing ranges and default markers for WDSP Neural Noise Reduction.
 //
 // Three of NNR's controls are meant for operators and documented as such in the
 // WDSP Guide: on/off, mask floor and model. The rest are tuning parameters
 // Warren left out of the guide. Exposing them is this project's decision, so
-// picking their ranges -- and marking the value WDSP itself starts from, plainly
-// enough that an operator can see it without hunting -- is this project's job
-// too.
+// picking their ranges -- and marking the value WDSP itself starts from,
+// plainly enough that an operator can see it without hunting -- is this
+// project's job too.
 //
-// EVERY NUMBER BELOW IS READ OUT OF WDSP 2.10, not chosen. Defaults come from
-// create_dfhead()/create_nnet_slot() (nnet.c); the min and max of each range is
-// the clamp the corresponding setter already enforces, so a control cannot ask
-// for something WDSP will silently refuse. Re-check them on a WDSP refresh: a
-// marker in the wrong place is worse than no marker, because it tells the
-// operator a lie about where home is.
+// EVERY NUMBER BELOW IS READ OUT OF WDSP 2.10, not chosen. The tuning defaults
+// come from create_dfhead() and create_nnet_slot() (nnet.c), and the min and
+// max of each of their ranges is the clamp the corresponding setter already
+// enforces, so a control cannot ask for something WDSP will silently refuse.
+//
+// kMaskFloor is the one exception on both counts, and is annotated as such at
+// its definition: its default is set at the create_nnr() call site
+// (third_party/wdsp/upstream/RXA.c), not in nnet.c, and setFloor_nnet() clamps
+// nothing at all -- its range is the WDSP Guide's recommendation, which makes
+// it the only range here that is our policy rather than WDSP's arithmetic.
+//
+// Re-check all of it on a WDSP refresh: a marker in the wrong place is worse
+// than no marker, because it tells the operator a lie about where home is.
 //
 // This header deliberately has no WDSP dependency. The GUI may not include WDSP
 // headers (docs/architecture/wdsp-integration.md), and the NNR tab needs these
@@ -38,7 +46,12 @@ struct ControlSpec {
 // How far any one bin may be attenuated. NOT a strength knob: raising it lets
 // more of the genuine received noise through, which is the right answer on a
 // weak signal because it hands the speech/noise decision back to the listener.
-// The range is the Guide's recommendation; WDSP itself clamps nothing here.
+//
+// Unlike every other row here, BOTH ends of this range are policy rather than
+// enforcement -- setFloor_nnet() clamps nothing -- and the default is the
+// literal passed to create_nnr() in RXA.c rather than anything in nnet.c. The
+// range is the WDSP Guide's recommendation (-10 dB passes the most noise,
+// -50 dB is maximum suppression).
 inline constexpr ControlSpec kMaskFloor{-50.0, -10.0, -25.0, "dB"};
 
 // --- undocumented tuning controls -------------------------------------------
@@ -87,5 +100,42 @@ constexpr double markerPosition(const ControlSpec& spec)
 {
     return (spec.defaultValue - spec.minimum) / (spec.maximum - spec.minimum);
 }
+
+// A marker outside its own control's travel would place a tick off the end of
+// the slider, so the ranges check themselves at compile time in every
+// translation unit that includes this header. tests/nnr_controls_test.cpp is
+// the one that exists purely to compile them.
+constexpr bool markerIsInRange(const ControlSpec& spec)
+{
+    return spec.minimum <= spec.defaultValue
+        && spec.defaultValue <= spec.maximum
+        && spec.minimum < spec.maximum;
+}
+
+static_assert(markerIsInRange(kAlpha));
+static_assert(markerIsInRange(kAlphaKnee));
+static_assert(markerIsInRange(kTau));
+static_assert(markerIsInRange(kMaxGain));
+static_assert(markerIsInRange(kSmoothAttack));
+static_assert(markerIsInRange(kSmoothRelease));
+static_assert(markerIsInRange(kMaskFloor));
+
+// The knee's sign is the one value here that reads wrong in the WDSP source:
+// create_dfhead() writes it as the literal -10.0 with the comment "// -10 dB",
+// but setKnee_dfhead() computes pow(10, -knee_db/20) over a [0, 40] clamp, so
+// +10 is the value that reproduces the constructed default and -10 clamps to 0
+// -- a knee at unity gain, which widens the expansion to every bin. Pin it, so
+// that "correcting" the sign fails the build rather than the ear.
+static_assert(kAlphaKnee.defaultValue == 10.0,
+              "NNR alpha-knee default is +10 dB; -10 clamps to 0 and moves the "
+              "knee to unity gain (setKnee_dfhead, nnet.c)");
+
+// 0/0 is what bypasses the smoother (run_dfhead), so these two markers sit at
+// the bottom of their travel and mean "off" rather than "a little".
+static_assert(kSmoothAttack.defaultValue == 0.0
+              && kSmoothRelease.defaultValue == 0.0);
+
+// 1.0 disables the expansion branch outright (run_dfhead's `alpha != 1.0`).
+static_assert(kAlpha.defaultValue == 1.0);
 
 }  // namespace AetherSDR::Nnr

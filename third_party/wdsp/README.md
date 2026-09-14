@@ -20,10 +20,10 @@ therefore retains its upstream fallback behavior.
 
 ## Local boundary
 
-`upstream/` matches that source snapshot except for the five changes recorded in
-`AETHERSDR-PATCHES.md` — three teardown corrections, one use-after-free that
-2.10 introduced on the channel-open path, and one additive accessor set that
-lets Neural Noise Reduction be controlled outside an RXA channel. All portability changes live outside it:
+`upstream/` matches that source snapshot except for the six changes recorded in
+`AETHERSDR-PATCHES.md` — three teardown corrections, two null/lifetime fixes,
+and one additive accessor set that lets Neural Noise Reduction be controlled
+outside an RXA channel. All portability changes live outside it:
 
 - `port/` implements the narrow Windows compatibility surface WDSP uses on
   Unix: threads, mutexes, semaphores/events, atomic operations, aligned

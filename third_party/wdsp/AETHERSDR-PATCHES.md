@@ -2,8 +2,8 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries five local changes in the otherwise exact `Source/*.[ch]`
-snapshot — three teardown corrections, one use-after-free fix, and one added
+AetherSDR carries six local changes in the otherwise exact `Source/*.[ch]`
+snapshot — three teardown corrections, two null/lifetime fixes, and one added
 accessor set:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
@@ -106,15 +106,39 @@ accessor set:
    constructor argument, so the accessor is the setter that argument implies.
    Drop any function a future release provides itself.
 
+6. `upstream/nnet.c`: `setAlpha_nnet()` and `setKnee_nnet()` now check `n->df`
+   before writing through it.
+
+   They are the only two of the six NNET tuning setters without that guard —
+   `setSmooth_nnet()` checks `if (n->df)`, `setMaxGain_nnet()` and
+   `setFloor_nnet()` check `if (n->ready)`, `setTau_nnet()` checks `if (n->cnd)`.
+   A slot whose model fails to build never reaches `create_dfhead()`, so `df`
+   stays NULL from `malloc0`, and `calc_nnr()` stores slot 0 unconditionally
+   (unlike slots 1+, which it validates with `ok_nnet()`).
+
+   **Reachable in a shipping configuration, and reproduced:** a well-formed
+   model with different dimensions, named `wdsp_nnr_0.bin` in the process's
+   working directory, is loaded in preference to the built-in (RFC #5684 §8
+   keeps that lookup). WDSP's designed response is to pass audio through — and
+   then the first `setAlpha`/`setKnee` write dereferences NULL. Confirmed as
+   SIGSEGV against an unpatched build; exits cleanly with the guard.
+
+   Latent upstream too, via `SetRXANNRAlpha`/`SetRXANNRAlphaKnee`, for any
+   console that offers those controls. Report it and drop this when a release
+   carries the guard.
+
 Without the first two, opening and closing one RX channel leaks one `notchdb`
 object and two NURBS objects. `wdsp_channel_test` detects that deterministically.
 Without the third, every channel open reads and writes freed memory; ASan fails
 `wdsp_channel_test` immediately.
-Without the fifth, the only NNR setting a host outside an RXA channel can
-change is the model slot.
 Without the fourth, every channel close is a use-after-free race on the
 worker thread; `wdsp_channel_test` and the HL2 backend tests show it under
 ThreadSanitizer.
+Without the fifth, the only NNR setting a host outside an RXA channel can
+change is the model slot.
+Without the sixth, `nnr_controls_test`'s scenario segfaults: a model file with
+the wrong dimensions in the working directory leaves slot 0 not-ready, and the
+first alpha or knee write goes through a null `df`.
 
 When refreshing WDSP, first check whether upstream contains equivalent frees.
 If it does, drop the corresponding local patch. Otherwise reapply only these

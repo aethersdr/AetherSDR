@@ -611,6 +611,13 @@ target_link_libraries(wdsp_channel_reservation_test PRIVATE aethercore)
 add_test(NAME wdsp_channel_reservation_test COMMAND wdsp_channel_reservation_test)
 set_tests_properties(wdsp_channel_reservation_test PROPERTIES TIMEOUT 120)
 
+# Compiles src/core/NnrControls.h so its static_asserts are real, and pins the
+# default markers the NNR tab draws. Header-only: the WDSP cross-check needs the
+# facade that arrives with NnrFilter (RFC #5684 step 2).
+add_executable(nnr_controls_test tests/nnr_controls_test.cpp)
+target_link_libraries(nnr_controls_test PRIVATE aethercore)
+add_test(NAME nnr_controls_test COMMAND nnr_controls_test)
+
 add_executable(rtl_receiver_registry_test tests/rtl_receiver_registry_test.cpp)
 target_link_libraries(rtl_receiver_registry_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtl_receiver_registry_test COMMAND rtl_receiver_registry_test)

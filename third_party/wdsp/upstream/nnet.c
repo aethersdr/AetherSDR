@@ -1607,7 +1607,7 @@ double getTau_nnet (NNET n)
 
 void setAlpha_nnet (NNET n, double alpha)
 {
-	setAlpha_dfhead (n->df, alpha);
+	if (n->df) setAlpha_dfhead (n->df, alpha);
 }
 
 double getAlpha_nnet (NNET n)
@@ -1617,7 +1617,7 @@ double getAlpha_nnet (NNET n)
 
 void setKnee_nnet (NNET n, double knee_db)
 {
-	setKnee_dfhead (n->df, knee_db);
+	if (n->df) setKnee_dfhead (n->df, knee_db);
 }
 
 double getKnee_nnet (NNET n)
