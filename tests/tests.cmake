@@ -99,6 +99,14 @@ target_link_libraries(nnr_external_source_test PRIVATE aethercore Qt6::Core)
 add_test(NAME nnr_external_source_test COMMAND nnr_external_source_test)
 set_tests_properties(nnr_external_source_test PROPERTIES TIMEOUT 120)
 
+# #5687 follow-up: nnrModel() must converge on the slot WDSP actually applied.
+# Drives the real RX path against a QBuffer sink; no sockets/devices.
+add_executable(nnr_model_publication_test tests/nnr_model_publication_test.cpp)
+target_include_directories(nnr_model_publication_test PRIVATE src tests)
+target_link_libraries(nnr_model_publication_test PRIVATE aethercore Qt6::Core)
+add_test(NAME nnr_model_publication_test COMMAND nnr_model_publication_test)
+set_tests_properties(nnr_model_publication_test PROPERTIES TIMEOUT 120)
+
 add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
     src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
     src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
@@ -5435,6 +5443,8 @@ set(AETHER_SETTINGS_CONSUMERS
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
     nnr_external_source_test
+    nnr_model_publication_test
+    automation_nnr_probe_test
     pcm_compatibility_test
     firmware_close_dialog_test
     atu_seam_gate_test

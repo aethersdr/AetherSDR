@@ -1341,7 +1341,9 @@ bool AudioEngine::ensureLegacyKiwiDspState()
             m_kiwiSdrDfnr = std::move(dfnr);
         }
 #endif
-        // No settings copy: createNnrFilter() applies strength and model from
+        // No settings copy: createNnrFilter() applies strength from the
+        // engine's atomic and the model from NnrSettings (the persisted
+        // request), so a fresh instance is already in sync. Previously read as
         // the engine's own atomics, which are the source of truth for both.
         if (needNnr && m_nnrEnabled && m_nnr && !m_kiwiSdrNnr) {
             m_kiwiSdrNnr = std::move(nnr);
@@ -5675,6 +5677,11 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             // nnrModel() converges instead of reporting whatever was live when
             // setNnrModel() returned. Main RX only — the Kiwi and external
             // filters are separate instances that do not own this property.
+            // Convergence is therefore bounded by RX audio actually flowing:
+            // with the radio disconnected, or no block reaching this filter,
+            // the previously published slot persists exactly as it used to.
+            // Nothing is emitted here either — a UI that samples nnrModel()
+            // only on nnrEnabledChanged still has to re-read to see the move.
             if (!externalSource && source != RxDspSource::KiwiSdr) {
                 m_nnrModel.store(nnr->modelSlot(), std::memory_order_relaxed);
             }

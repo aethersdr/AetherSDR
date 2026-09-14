@@ -1981,7 +1981,7 @@ void VfoWidget::buildTabContent()
                 &VfoWidget::aetherVoiceRequested);
 
         // Radio-side DSP buttons only \u2014 client-side modules (NR2 / NR4 /
-        // MNR / BNR / DFNR / RN2) live in the spectrum overlay menu and
+        // MNR / BNR / DFNR / RN2 / NNR) live in the spectrum overlay menu and
         // the AetherDSP applet; users toggle them there to keep the VFO
         // grid focused on what the radio supplies.  4-column layout:
         m_dspGrid->addWidget(m_nrBtn,   0, 0);

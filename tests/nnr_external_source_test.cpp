@@ -57,13 +57,6 @@ public:
         return source ? source->nnr.get() : nullptr;
     }
 
-    static bool initializationPending(AudioEngine& engine, const QString& id)
-    {
-        std::lock_guard<std::recursive_mutex> lock(engine.m_dspMutex);
-        AudioEngine::ExternalRxAudioSourceState* source =
-            engine.externalKiwiSource(id, false);
-        return source && source->dspInitializationPending;
-    }
 };
 
 } // namespace AetherSDR
@@ -113,13 +106,20 @@ int main(int argc, char** argv)
     check(nnr != nullptr && nnr->isValid(),
           "and that filter is a live WDSP instance, not a failed construction");
 
-    // Having installed one, the initializer must settle rather than re-arm.
+    // Re-arming is gated on `!source->nnr` (AudioEngine.cpp, needNnr), so the
+    // non-null assertion above is what actually pins it -- there is no separate
+    // observable. Deliberately NOT asserting dspInitializationPending here: it
+    // is an in-flight flag cleared unconditionally at the end of the function,
+    // so it reads false against the unfixed code too and would pin nothing.
+    // What is checkable is that further passes are idempotent.
     check(Access::initializeSource(engine, id),
           "a second initialization pass still reports success");
-    check(!Access::initializationPending(engine, id),
-          "the source stops re-arming once its NNR filter is installed");
     check(Access::sourceNnr(engine, id) == nnr,
           "and the installed filter is not churned on the second pass");
+    check(Access::initializeSource(engine, id),
+          "a third pass still reports success");
+    check(Access::sourceNnr(engine, id) == nnr,
+          "and still does not churn the filter");
 
     // Disabling NNR must take the per-source filter with it.
     engine.setNnrEnabled(false);
