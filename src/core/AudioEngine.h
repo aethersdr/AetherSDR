@@ -380,6 +380,10 @@ public:
     int nnrStrength() const { return m_nnrStrength.load(); }
     // 0 = Standard, 1 = Premium. Reports the slot WDSP actually selected.
     void setNnrModel(int slot);
+    // Push the six undocumented tuning controls from NnrSettings to every live
+    // instance. One entry point rather than six setters: NnrSettings is the
+    // source of truth, so the UI writes there and calls this to make it live.
+    Q_INVOKABLE void applyNnrTuning();
     int nnrModel() const { return m_nnrModel.load(); }
 
     // Optional NVIDIA Maxine AFX GPU denoiser (runtime-loaded; NVIDIA RTX/GeForce).

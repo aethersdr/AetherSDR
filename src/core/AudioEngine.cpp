@@ -1129,6 +1129,11 @@ AudioEngine::createNnrFilter(const QString& label, int producerRate) const
     }
     filter->setStrength(m_nnrStrength.load());
     filter->setModel(m_nnrModel.load());
+    filter->setAlpha(NnrSettings::alpha());
+    filter->setAlphaKnee(NnrSettings::alphaKnee());
+    filter->setTau(NnrSettings::tau());
+    filter->setMaxGain(NnrSettings::maxGain());
+    filter->setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
     return filter;
 }
 
@@ -7869,6 +7874,28 @@ void AudioEngine::setNnrStrength(int strength)
     for (const auto& source : m_externalKiwiSources) {
         if (source && source->nnr) {
             source->nnr->setStrength(clamped);
+        }
+    }
+}
+
+void AudioEngine::applyNnrTuning()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    const auto push = [](NnrFilter* f) {
+        if (!f) {
+            return;
+        }
+        f->setAlpha(NnrSettings::alpha());
+        f->setAlphaKnee(NnrSettings::alphaKnee());
+        f->setTau(NnrSettings::tau());
+        f->setMaxGain(NnrSettings::maxGain());
+        f->setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
+    };
+    push(m_nnr.get());
+    push(m_kiwiSdrNnr.get());
+    for (const auto& source : m_externalKiwiSources) {
+        if (source) {
+            push(source->nnr.get());
         }
     }
 }

@@ -4,6 +4,10 @@
 #include <QStringList>
 #include <QList>
 #include <array>
+#include <functional>
+#include <vector>
+
+#include "core/NnrControls.h"
 
 class QSlider;
 class QLabel;
@@ -37,7 +41,10 @@ public:
     // activators for the six client-side noise-reduction modules.  The
     // button checked-state is the engine enable state; clicking the
     // active button toggles it off (no DSP active).
-    enum DspId { NR2 = 0, NR4, MNR, DFNR, RN2, BNR, NumDsps };
+    // NNR is appended rather than inserted: the ids are used as stack
+    // indices and in persisted state, so renumbering the existing six would
+    // silently repoint them.
+    enum DspId { NR2 = 0, NR4, MNR, DFNR, RN2, BNR, NNR, NumDsps };
 
     explicit AetherDspWidget(AudioEngine* audio, QWidget* parent = nullptr);
 
@@ -79,6 +86,9 @@ signals:
     void rn2DryMixChanged(float mix);
     void dfnrAttenLimitChanged(float dB);
     void dfnrPostFilterBetaChanged(float beta);
+    // NNR parameter changes
+    void nnrStrengthChanged(int value);
+    void nnrModelChanged(int slot);
     // NR4 parameter changes
     void nr4ReductionChanged(float dB);
     void nr4SmoothingChanged(float pct);
@@ -101,6 +111,7 @@ private:
     QWidget* buildRn2Page();
     QWidget* buildBnrPage();
     QWidget* buildDfnrPage();
+    QWidget* buildNnrPage();
 
     // Restore defaults for the currently-selected DSP page.  No-op for
     // RN2 / BNR which expose no adjustable parameters.
@@ -133,6 +144,23 @@ private:
     AudioEngine*    m_audio;
     QStackedWidget* m_dspStack{nullptr};
     std::array<QPushButton*, NumDsps> m_dspBtns{};
+
+    // NNR controls. The six advanced ones are uniform -- a slider, its value
+    // label and the spec that says where its default marker goes -- so they
+    // live in one table rather than eighteen members.
+    struct NnrAdvancedControl {
+        const Nnr::ControlSpec* spec;
+        const char* title;
+        int decimals;
+        double scale;                  // slider int <-> control double
+        QSlider* slider;
+        QLabel* value;
+        std::function<void(double)> apply;
+    };
+    std::vector<NnrAdvancedControl> m_nnrAdvanced;
+    QSlider*      m_nnrStrengthSlider{nullptr};
+    QLabel*       m_nnrStrengthLabel{nullptr};
+    QButtonGroup* m_nnrModelGroup{nullptr};
 
     // NR2 controls
     QButtonGroup* m_nr2GainGroup{nullptr};

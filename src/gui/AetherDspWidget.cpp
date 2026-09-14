@@ -1,6 +1,7 @@
 #include "AetherDspWidget.h"
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
+#include "core/NnrSettings.h"
 #include "core/NvidiaBnrSettings.h"
 #include "models/Nr2SettingsModel.h"
 #include "models/Rn2SettingsModel.h"
@@ -217,14 +218,16 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
     // activators.  Checked state == engine enable state; click again
     // to deactivate (chain bypass).  Each button is sized to span the
     // 250 px applet width with 4 px gaps:
-    //   6 × 38 px buttons + 5 × 4 px gaps = 248 px
+    //   7 × 32 px buttons + 6 × 4 px gaps = 248 px
+    // (6 × 38 + 5 × 4 before NNR joined the row: the width budget belongs to
+    // the applet, so the buttons narrowed rather than the row growing)
     auto* btnRow = new QHBoxLayout;
     btnRow->setContentsMargins(0, 0, 0, 0);
     btnRow->setSpacing(4);
-    static const char* kLabels[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR"};
+    static const char* kLabels[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR", "NNR"};
     for (int i = 0; i < NumDsps; ++i) {
         auto* b = makeToggle(kLabels[i]);
-        b->setFixedSize(38, 22);
+        b->setFixedSize(32, 22);
         b->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         // Name each selector for screen readers and the automation bridge.
         // Checkable buttons report value as "checked"/"unchecked", so without
@@ -310,6 +313,7 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
     m_dspStack->addWidget(buildDfnrPage());
     m_dspStack->addWidget(buildRn2Page());
     m_dspStack->addWidget(buildBnrPage());
+    m_dspStack->addWidget(buildNnrPage());
     root->addWidget(m_dspStack);
 
     // Engine → button sync: when DSP state changes externally (chain
@@ -353,7 +357,7 @@ void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
         return;
     }
 #endif
-    static const char* kNames[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR"};
+    static const char* kNames[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR", "NNR"};
     emit dspMethodUserToggled(QString::fromLatin1(kNames[index]), nowChecked);
 
     // Always bring this DSP's panel forward, regardless of new check
@@ -380,6 +384,7 @@ void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
                 case DFNR: audio->setDfnrEnabled(nowChecked); break;
                 case RN2:  audio->setRn2Enabled(nowChecked); break;
                 case BNR:  audio->setNvAfxEnabled(nowChecked); break;  // local AFX
+                case NNR:  audio->setNnrEnabled(nowChecked); break;
                 case NumDsps: break;
             }
             if (self) {
@@ -407,6 +412,7 @@ void AetherDspWidget::syncDspSelectorFromEngine()
         m_audio->dfnrEnabled(),
         m_audio->rn2Enabled(),
         m_audio->nvAfxEnabled(),   // BNR button = local AFX denoiser
+        m_audio->nnrEnabled(),
     };
     int active = -1;
     for (int i = 0; i < NumDsps; ++i) {
@@ -430,7 +436,7 @@ void AetherDspWidget::resetCurrentTab()
 {
     if (!m_dspStack) return;
     const int idx = m_dspStack->currentIndex();
-    static const char* kNames[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR"};
+    static const char* kNames[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR", "NNR"};
     const QString name = (idx >= 0 && idx < NumDsps) ? kNames[idx] : QString();
     if (name == "NR2") {
         // click() is intentional: setChecked() would update the UI without
@@ -443,6 +449,23 @@ void AetherDspWidget::resetCurrentTab()
         if (m_nr2GainFloorSlider)m_nr2GainFloorSlider->setValue(0);
         if (m_nr2SmoothSlider)   m_nr2SmoothSlider->setValue(85);
         if (m_nr2QsppSlider)     m_nr2QsppSlider->setValue(20);
+    } else if (name == "NNR") {
+        // Every NNR control resets to the value WDSP itself starts from, which
+        // is the value its marker is drawn at — NnrControls.h is the one place
+        // both come from, so "reset" and "the mark" cannot disagree.
+        if (m_nnrStrengthSlider) {
+            m_nnrStrengthSlider->setValue(
+                static_cast<int>(std::lround(Nnr::markerPosition(Nnr::kMaskFloor) * 100.0)));
+        }
+        if (m_nnrModelGroup) {
+            if (auto* b = m_nnrModelGroup->button(0)) b->click();
+        }
+        for (auto& c : m_nnrAdvanced) {
+            if (c.slider) {
+                c.slider->setValue(
+                    static_cast<int>(std::lround(c.spec->defaultValue * c.scale)));
+            }
+        }
     } else if (name == "NR4") {
         if (m_nr4MethodGroup)      m_nr4MethodGroup->button(0)->setChecked(true);
         if (m_nr4AdaptiveCheck)    m_nr4AdaptiveCheck->setChecked(true);
@@ -548,7 +571,7 @@ void AetherDspWidget::setNr2Available(bool available, const QString& tooltip)
 void AetherDspWidget::selectTab(const QString& name)
 {
     if (!m_dspStack) return;
-    static const char* kNames[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR"};
+    static const char* kNames[NumDsps] = {"NR2", "NR4", "MNR", "DFNR", "RN2", "BNR", "NNR"};
     for (int i = 0; i < NumDsps; ++i) {
         if (name == kNames[i]) {
             m_dspStack->setCurrentIndex(i);
@@ -1571,6 +1594,226 @@ void AetherDspWidget::clearBnrRows()
 }
 
 // ── DFNR Tab ────────────────────────────────────────────────────────────────
+
+namespace {
+
+// QSlider with one visible tick at a fixed position: where WDSP's own default
+// for that control sits. Stock QSlider ticks are drawn at a repeating
+// interval, which is the wrong shape for "home is here" — this is one mark,
+// at one place, in the accent colour.
+class MarkedSlider : public QSlider {
+public:
+    MarkedSlider(double markerFraction, QWidget* parent = nullptr)
+        : QSlider(Qt::Horizontal, parent)
+        , m_fraction(std::clamp(markerFraction, 0.0, 1.0))
+    {
+    }
+
+protected:
+    void paintEvent(QPaintEvent* e) override
+    {
+        QSlider::paintEvent(e);
+
+        QStyleOptionSlider opt;
+        initStyleOption(&opt);
+        const QRect groove =
+            style()->subControlRect(QStyle::CC_Slider, &opt, QStyle::SC_SliderGroove, this);
+        const QRect handle =
+            style()->subControlRect(QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
+
+        // Span the handle travels, so the mark lands under the handle when the
+        // control is at its default rather than a few pixels off at the ends.
+        const int span = groove.width() - handle.width();
+        if (span <= 0) {
+            return;
+        }
+        const int x = groove.left() + handle.width() / 2
+                    + static_cast<int>(std::lround(m_fraction * span));
+
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        QColor c = ThemeManager::instance().color("color.accent.dim");
+        c.setAlpha(200);
+        p.setPen(QPen(c, 2));
+        const int top = groove.bottom() + 1;
+        p.drawLine(x, top, x, top + 4);
+    }
+
+private:
+    double m_fraction;
+};
+
+}  // namespace
+
+QWidget* AetherDspWidget::buildNnrPage()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setContentsMargins(10, 20, 0, 0);
+
+    auto* info = new QLabel(
+        "Neural noise reduction trained on off-air HF: over a hundred noise "
+        "recordings from real receivers, with speech put through an SSB "
+        "transmit chain before mixing. Voice modes only — it treats a steady "
+        "carrier as noise and removes it.");
+    info->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        info, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    {
+        auto* infoRow = new QHBoxLayout;
+        infoRow->setContentsMargins(0, 0, 10, 0);
+        infoRow->addWidget(info);
+        vbox->addLayout(infoRow);
+    }
+
+    {
+        auto* resetRow = new QHBoxLayout;
+        resetRow->setContentsMargins(0, 10, 10, 0);
+        resetRow->addStretch(1);
+        auto* resetBtn = makeResetIconButton();
+        connect(resetBtn, &QPushButton::clicked, this, &AetherDspWidget::resetCurrentTab);
+        resetRow->addWidget(resetBtn);
+        vbox->addLayout(resetRow);
+    }
+
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+    int row = 0;
+
+    // Strength — the one control WDSP's own guide puts in front of operators.
+    // It sets how far any single bin may be attenuated, so raising it leaves
+    // MORE of the genuine received noise in place. That is the right answer on
+    // a weak signal, and the tooltip says so, because "more is better" is the
+    // wrong instinct here.
+    grid->addWidget(new QLabel("Strength:"), row, 0);
+    m_nnrStrengthSlider = new MarkedSlider(Nnr::markerPosition(Nnr::kMaskFloor));
+    m_nnrStrengthSlider->setObjectName(QStringLiteral("nnrStrengthSlider"));
+    m_nnrStrengthSlider->setAccessibleName(tr("NNR strength"));
+    m_nnrStrengthSlider->setAccessibleDescription(
+        tr("How far neural noise reduction may attenuate each frequency bin."));
+    m_nnrStrengthSlider->setRange(0, 100);
+    m_nnrStrengthSlider->setValue(NnrSettings::strength());
+    applyPrimarySliderStyle(m_nnrStrengthSlider);
+    m_nnrStrengthSlider->setToolTip(
+        "How much of the received noise NNR may remove.\n"
+        "Lower leaves more of the real band noise in place, which often makes\n"
+        "a weak signal easier to follow — the mark is WDSP's default.");
+    grid->addWidget(m_nnrStrengthSlider, row, 1);
+    m_nnrStrengthLabel = new QLabel(QString::number(m_nnrStrengthSlider->value()));
+    m_nnrStrengthLabel->setFixedWidth(40);
+    grid->addWidget(m_nnrStrengthLabel, row, 2);
+    connect(m_nnrStrengthSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_nnrStrengthLabel->setText(QString::number(v));
+        NnrSettings::setStrength(v);
+        if (m_audio) {
+            AudioEngine* audio = m_audio;
+            QMetaObject::invokeMethod(audio, [audio, v]() { audio->setNnrStrength(v); });
+        }
+        emit nnrStrengthChanged(v);
+    });
+    ++row;
+
+    // Model — both are compiled in, so this is a CPU budget choice rather than
+    // an availability one. Premium costs roughly twice the processor time for
+    // about half a dB; the engine reports back which slot actually took.
+    grid->addWidget(new QLabel("Model:"), row, 0);
+    {
+        auto* modelRow = new QHBoxLayout;
+        modelRow->setContentsMargins(0, 0, 0, 0);
+        modelRow->setSpacing(4);
+        m_nnrModelGroup = new QButtonGroup(this);
+        m_nnrModelGroup->setExclusive(true);
+        const char* kModelNames[2] = {"Standard", "Premium"};
+        for (int i = 0; i < 2; ++i) {
+            auto* b = makeToggle(kModelNames[i]);
+            b->setObjectName(QStringLiteral("nnrModelBtn") + QLatin1String(kModelNames[i]));
+            b->setAccessibleName(QString::fromLatin1(kModelNames[i])
+                                 + QStringLiteral(" neural noise reduction model"));
+            b->setToolTip(i == 0
+                ? QStringLiteral("Standard — the default. About 13% of one CPU core.")
+                : QStringLiteral("Premium — measurably better at poor signal-to-noise,\n"
+                                 "and about twice the CPU. Not suitable for a Pi."));
+            m_nnrModelGroup->addButton(b, i);
+            modelRow->addWidget(b);
+        }
+        modelRow->addStretch(1);
+        grid->addLayout(modelRow, row, 1, 1, 2);
+        if (auto* b = m_nnrModelGroup->button(NnrSettings::model())) {
+            QSignalBlocker block(b);
+            b->setChecked(true);
+        }
+        connect(m_nnrModelGroup, &QButtonGroup::idClicked, this, [this](int slot) {
+            NnrSettings::setModel(slot);
+            if (m_audio) {
+                AudioEngine* audio = m_audio;
+                QMetaObject::invokeMethod(audio, [audio, slot]() { audio->setNnrModel(slot); });
+            }
+            emit nnrModelChanged(slot);
+        });
+    }
+    ++row;
+
+    // The six WDSP leaves undocumented. Exposed by decision (RFC #5684 §8),
+    // each marked where WDSP itself starts it so an operator who has wandered
+    // can see where home is.
+    m_nnrAdvanced = {
+        {&Nnr::kAlpha,          "Alpha:",    2, 100.0, nullptr, nullptr,
+         [](double v) { NnrSettings::setAlpha(v); }},
+        {&Nnr::kAlphaKnee,      "Knee:",     1,  10.0, nullptr, nullptr,
+         [](double v) { NnrSettings::setAlphaKnee(v); }},
+        {&Nnr::kTau,            "Tau:",      2, 100.0, nullptr, nullptr,
+         [](double v) { NnrSettings::setTau(v); }},
+        {&Nnr::kMaxGain,        "Max gain:", 1,  10.0, nullptr, nullptr,
+         [](double v) { NnrSettings::setMaxGain(v); }},
+        {&Nnr::kSmoothAttack,   "Attack:",   0,   1.0, nullptr, nullptr,
+         [](double v) { NnrSettings::setSmoothAttackMs(v); }},
+        {&Nnr::kSmoothRelease,  "Release:",  0,   1.0, nullptr, nullptr,
+         [](double v) { NnrSettings::setSmoothReleaseMs(v); }},
+    };
+    const double stored[6] = {
+        NnrSettings::alpha(), NnrSettings::alphaKnee(), NnrSettings::tau(),
+        NnrSettings::maxGain(), NnrSettings::smoothAttackMs(),
+        NnrSettings::smoothReleaseMs(),
+    };
+    for (std::size_t i = 0; i < m_nnrAdvanced.size(); ++i) {
+        auto& c = m_nnrAdvanced[i];
+        grid->addWidget(new QLabel(QString::fromLatin1(c.title)), row, 0);
+        c.slider = new MarkedSlider(Nnr::markerPosition(*c.spec));
+        c.slider->setObjectName(QStringLiteral("nnrAdvSlider%1").arg(i));
+        c.slider->setAccessibleName(tr("NNR %1").arg(QString::fromLatin1(c.title)
+                                                     .remove(QLatin1Char(':'))));
+        c.slider->setRange(static_cast<int>(std::lround(c.spec->minimum * c.scale)),
+                           static_cast<int>(std::lround(c.spec->maximum * c.scale)));
+        c.slider->setValue(static_cast<int>(std::lround(stored[i] * c.scale)));
+        applyPrimarySliderStyle(c.slider);
+        c.slider->setToolTip(
+            QStringLiteral("%1 %2 — WDSP's default is %3%4. The mark is that value.")
+                .arg(QString::fromLatin1(c.title).remove(QLatin1Char(':')))
+                .arg(QString::fromLatin1(c.spec->unit).isEmpty()
+                         ? QString() : QStringLiteral("(%1)").arg(QString::fromLatin1(c.spec->unit)))
+                .arg(c.spec->defaultValue, 0, 'f', c.decimals)
+                .arg(QString::fromLatin1(c.spec->unit)));
+        grid->addWidget(c.slider, row, 1);
+        c.value = new QLabel(QString::number(stored[i], 'f', c.decimals));
+        c.value->setFixedWidth(40);
+        grid->addWidget(c.value, row, 2);
+        connect(c.slider, &QSlider::valueChanged, this, [this, i](int raw) {
+            auto& ctl = m_nnrAdvanced[i];
+            const double v = raw / ctl.scale;
+            ctl.value->setText(QString::number(v, 'f', ctl.decimals));
+            ctl.apply(v);
+            if (m_audio) {
+                AudioEngine* audio = m_audio;
+                QMetaObject::invokeMethod(audio, [audio]() { audio->applyNnrTuning(); });
+            }
+        });
+        ++row;
+    }
+
+    vbox->addLayout(grid);
+    vbox->addStretch(1);
+    return page;
+}
 
 QWidget* AetherDspWidget::buildDfnrPage()
 {

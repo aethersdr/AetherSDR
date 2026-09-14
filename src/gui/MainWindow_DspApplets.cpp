@@ -80,6 +80,9 @@ QString MainWindow::activeAetherDspMethod() const
     if (m_audio->nvAfxEnabled()) {
         return QStringLiteral("BNR");
     }
+    if (m_audio->nnrEnabled()) {
+        return QStringLiteral("NNR");
+    }
     return {};
 }
 
@@ -106,6 +109,8 @@ void MainWindow::setAetherDspMethodEnabled(const QString& method, bool enabled)
             audio->setRn2Enabled(enabled);
         } else if (method == QStringLiteral("BNR")) {
             audio->setNvAfxEnabled(enabled);
+        } else if (method == QStringLiteral("NNR")) {
+            audio->setNnrEnabled(enabled);
         }
     });
 }
@@ -170,7 +175,7 @@ void MainWindow::wirePooDooTiles()
         // connected slot.
         struct DspState {
             bool nr2{false}, rn2{false}, nr4{false},
-                 dfnr{false}, mnr{false}, bnr{false};
+                 dfnr{false}, mnr{false}, bnr{false}, nnr{false};
         };
         auto dspState = std::make_shared<DspState>();
         auto pushDsp = [this, chain, dspState]() {
@@ -179,7 +184,8 @@ void MainWindow::wirePooDooTiles()
             // order as the audio-thread dispatcher so the displayed
             // label matches what's actually processing.
             QString label;
-            if      (dspState->bnr)  label = "BNR";
+            if      (dspState->nnr)  label = "NNR";
+            else if (dspState->bnr)  label = "BNR";
             else if (dspState->mnr)  label = "MNR";
             else if (dspState->dfnr) label = "DFNR";
             else if (dspState->nr4)  label = "NR4";
@@ -202,6 +208,8 @@ void MainWindow::wirePooDooTiles()
                 [dspState, pushDsp](bool on) { dspState->mnr = on; pushDsp(); });
         connect(m_audio, &AudioEngine::nvAfxEnabledChanged, chain,
                 [dspState, pushDsp](bool on) { dspState->bnr = on; pushDsp(); });
+        connect(m_audio, &AudioEngine::nnrEnabledChanged, chain,
+                [dspState, pushDsp](bool on) { dspState->nnr = on; pushDsp(); });
 
         // SPEAK — AudioEngine emits mutedChanged on every setMuted() flip.
         connect(m_audio, &AudioEngine::mutedChanged, this,
@@ -224,6 +232,7 @@ void MainWindow::wirePooDooTiles()
         dspState->dfnr = m_audio->dfnrEnabled();
         dspState->mnr  = m_audio->mnrEnabled();
         dspState->bnr  = m_audio->nvAfxEnabled();   // BNR == local AFX denoiser
+        dspState->nnr  = m_audio->nnrEnabled();
         pushDsp();
         chain->setRxOutputUnmuted(!m_audio->isMuted());
         if (m_aetherialStrip)

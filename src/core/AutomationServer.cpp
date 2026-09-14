@@ -9,7 +9,8 @@
 #include "DigitalVoiceWaveformSettings.h"
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "AudioEngine.h"
-#include "NvidiaBnrSettings.h"   // BNR intensity (in-process AFX, #3902)
+#include "NvidiaBnrSettings.h"
+#include "NnrSettings.h"   // BNR intensity (in-process AFX, #3902)
 #include "ClientTxTestTone.h"     // testtone() verb — client-side TX test tone
 #include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
 #include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
@@ -2120,6 +2121,9 @@ QJsonObject dspEngineSnapshot(const AudioEngine* a)
 #else
                                    false},
 #endif
+        // Always available: both trained models are compiled into the
+        // vendored WDSP, so there is no library to find and no GPU to require.
+        {"NNR",  a->nnrEnabled(),  true},
     };
 
     QJsonObject methods;
@@ -2142,6 +2146,15 @@ QJsonObject dspEngineSnapshot(const AudioEngine* a)
     // the old address/connected fields are gone; report the persisted intensity.
     tuning[QStringLiteral("bnr")] =
         QJsonObject{{QStringLiteral("intensity"), NvidiaBnrSettings::intensity()}};
+    tuning[QStringLiteral("nnr")] =
+        QJsonObject{{QStringLiteral("strength"), a->nnrStrength()},
+                    {QStringLiteral("model"), a->nnrModel()},
+                    {QStringLiteral("alpha"), NnrSettings::alpha()},
+                    {QStringLiteral("alphaKneeDb"), NnrSettings::alphaKnee()},
+                    {QStringLiteral("tauSeconds"), NnrSettings::tau()},
+                    {QStringLiteral("maxGainDb"), NnrSettings::maxGain()},
+                    {QStringLiteral("smoothAttackMs"), NnrSettings::smoothAttackMs()},
+                    {QStringLiteral("smoothReleaseMs"), NnrSettings::smoothReleaseMs()}};
 
     return QJsonObject{{QStringLiteral("active"), active},
                        {QStringLiteral("methods"), methods},

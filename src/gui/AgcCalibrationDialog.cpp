@@ -307,7 +307,8 @@ bool AgcCalibrationDialog::nrSuppressesCalibration() const
 {
     if (m_audio && (m_audio->nr2Enabled() || m_audio->rn2Enabled()
                   || m_audio->nr4Enabled() || m_audio->dfnrEnabled()
-                  || m_audio->mnrEnabled() || m_audio->nvAfxEnabled())) {
+                  || m_audio->mnrEnabled() || m_audio->nvAfxEnabled()
+                  || m_audio->nnrEnabled())) {
         return true;
     }
     if (m_slice && m_slice->nrOn()) {
