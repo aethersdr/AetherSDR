@@ -40,9 +40,9 @@
 #include "RNNoiseFilter.h"
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
+#endif
 #include "NnrFilter.h"
 #include "NnrSettings.h"
-#endif
 #ifdef HAVE_NVIDIA_AFX
 #include "NvidiaAfxFilter.h"
 #include "NvidiaBnrSettings.h"
@@ -1189,8 +1189,8 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #endif
 #ifdef HAVE_DFNR
     bool needDfnr = false;
-    bool needNnr = false;
 #endif
+    bool needNnr = false;
 #ifdef HAVE_NVIDIA_AFX
     bool needNvAfx = false;
 #endif
@@ -1253,8 +1253,8 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #endif
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> dfnr;
-    std::unique_ptr<NnrFilter> nnr;
 #endif
+    std::unique_ptr<NnrFilter> nnr;
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> nvAfx;
 #endif
@@ -1388,8 +1388,8 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #endif
 #ifdef HAVE_DFNR
     bool needDfnr = false;
-    bool needNnr = false;
 #endif
+    bool needNnr = false;
 #ifdef HAVE_NVIDIA_AFX
     bool needNvAfx = false;
 #endif
@@ -1454,8 +1454,8 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #endif
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> dfnr;
-    std::unique_ptr<NnrFilter> nnr;
 #endif
+    std::unique_ptr<NnrFilter> nnr;
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> nvAfx;
 #endif
