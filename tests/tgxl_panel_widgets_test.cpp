@@ -3,7 +3,7 @@
 //
 // Two contracts are pinned here:
 //
-//  * TgxlPortRow renders a missing reading as "N/A" rather than as a stale or
+//  * AccessoryPortRow renders a missing reading as "N/A" rather than as a stale or
 //    invented one. Port B runs on RF sense and never reports a frequency, and
 //    port A has none before the client is connected, so "no reading" is the
 //    normal case rather than an error path. Bypass, being tuner-wide, empties
@@ -15,7 +15,7 @@
 //    still announced when focus returns. The dial is a second view of the same
 //    relay bank, so the guarantee has to hold in both.
 
-#include "gui/TgxlPanelWidgets.h"
+#include "gui/AccessoryPanelWidgets.h"
 
 #include <QAccessible>
 #include <QApplication>
@@ -57,7 +57,7 @@ void waitForEvents(int milliseconds)
 }
 
 // The row keeps its readings in child labels; find one by the text it shows.
-bool rowShowsText(const TgxlPortRow& row, const QString& text)
+bool rowShowsText(const AccessoryPortRow& row, const QString& text)
 {
     const QList<QLabel*> labels = row.findChildren<QLabel*>();
     for (const QLabel* label : labels) {
@@ -68,7 +68,7 @@ bool rowShowsText(const TgxlPortRow& row, const QString& text)
 
 void testPortRowReadings()
 {
-    TgxlPortRow row(QStringLiteral("A"));
+    AccessoryPortRow row(QStringLiteral("A"));
 
     // Nothing reported yet: both the band and the frequency read N/A.
     expect(rowShowsText(row, QStringLiteral("N/A")),
@@ -381,7 +381,7 @@ void testScaling()
 
     // The port strip scales its cells with its type, or the text outgrows the
     // box it sits in.
-    TgxlPortRow row(QStringLiteral("A"));
+    AccessoryPortRow row(QStringLiteral("A"));
     const int baseHint = row.sizeHint().height();
     row.setScale(2.0);
     expect(row.sizeHint().height() > baseHint,

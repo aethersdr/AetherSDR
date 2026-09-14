@@ -110,7 +110,7 @@
             "dim":        "#3a553a",
             "bezel":      "#222822"
           },
-          "tgxl": {
+          "accessory": {
             "dial.face":   "{color.blue.500}",
             "dial.needle": "{color.gray.950}",
             "dial.rim":    "{color.gray.300}",

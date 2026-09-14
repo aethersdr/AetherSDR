@@ -8,6 +8,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QFile>
+#include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -51,6 +52,11 @@ void resetSettings()
     settings.load();
 }
 
+// Values are right-aligned in a fixed field and drawn in a fixed-width face.
+// The bottom row is four readouts abreast and they arrive five times a second,
+// so a reading that changes width shuffles everything to its right and the
+// whole row twitches. The padding is part of the contract, not incidental
+// whitespace — these expectations hold it.
 void testDefaultPlaceholder()
 {
     resetSettings();
@@ -61,7 +67,7 @@ void testDefaultPlaceholder()
     if (!button) return;
 
     report("default placeholder uses Celsius",
-           button->text() == QStringLiteral("\u2014 C"),
+           button->text() == QStringLiteral("PA     \u2014 C"),
            button->text());
 }
 
@@ -76,17 +82,17 @@ void testSingleSensorToggle()
 
     applet.setTemp(34.7f);
     report("single sensor displays Celsius",
-           button->text() == QStringLiteral("34.7 C"),
+           button->text() == QStringLiteral("PA  34.7 C"),
            button->text());
 
     button->click();
     report("single sensor toggles to Fahrenheit",
-           button->text() == QStringLiteral("94.5 F"),
+           button->text() == QStringLiteral("PA  94.5 F"),
            button->text());
 
     button->click();
     report("single sensor toggles back to Celsius",
-           button->text() == QStringLiteral("34.7 C"),
+           button->text() == QStringLiteral("PA  34.7 C"),
            button->text());
 }
 
@@ -99,15 +105,18 @@ void testDualSensorToggle()
     report("dual sensor button exists", button != nullptr);
     if (!button) return;
 
+    // Both sensors are named. The amplifier's own panel runs them unlabelled
+    // ("24.4/24.2 C"); on hardware the operator knows which is which, and
+    // here two bare numbers say nothing about what either is measuring.
     applet.setTemp(34.7f);
     applet.setTempB(28.4f);
     report("dual sensor displays Celsius pair",
-           button->text() == QStringLiteral("34.7/28.4 C"),
+           button->text() == QStringLiteral("PA  34.7 / HL  28.4 C"),
            button->text());
 
     button->click();
     report("dual sensor toggles to Fahrenheit pair",
-           button->text() == QStringLiteral("94.5/83.1 F"),
+           button->text() == QStringLiteral("PA  94.5 / HL  83.1 F"),
            button->text());
 }
 
@@ -133,12 +142,12 @@ void testPreferenceReload()
     if (!button) return;
 
     report("reloaded placeholder uses Fahrenheit",
-           button->text() == QStringLiteral("\u2014 F"),
+           button->text() == QStringLiteral("PA     \u2014 F"),
            button->text());
 
     restored.setTemp(0.0f);
     report("reloaded value displays Fahrenheit",
-           button->text() == QStringLiteral("32.0 F"),
+           button->text() == QStringLiteral("PA  32.0 F"),
            button->text());
 }
 
@@ -185,6 +194,23 @@ void testFanModePulldown()
            combo->currentData().toString() == before,
            combo->currentData().toString());
 
+    // And an unrecognized mode must not be what reveals the control. A fan
+    // control that is up asserts the mode it is showing; if the only thing the
+    // amplifier ever sent was a word we could not parse, the control would be
+    // claiming a mode the amplifier never confirmed.
+    {
+        AmpApplet fresh;
+        QComboBox* freshCombo = fanCombo(fresh);
+        report("fresh fan combo starts hidden", freshCombo && freshCombo->isHidden());
+        if (freshCombo) {
+            fresh.setFanMode("bogus");
+            report("unknown fanmode does not reveal the control",
+                   freshCombo->isHidden());
+            fresh.setFanMode("CONTEST");
+            report("a recognized mode does reveal it", !freshCombo->isHidden());
+        }
+    }
+
     // #4731: on a large-enough default UI font, the popup's fixed pixel
     // width (sized off the combo's own hardcoded 10px stylesheet font)
     // couldn't fit "Fan: Contest" — the longest item — so Qt's default
@@ -201,6 +227,98 @@ void testFanModePulldown()
            QString::number(combo->minimumContentsLength()));
     report("fan combo popup does not silently mid-elide overflow",
            combo->view()->textElideMode() == Qt::ElideNone);
+}
+
+// The readouts must not change width as the values move. Both halves of that
+// are load-bearing: a fixed-width face so a 1 and an 8 cost the same, and a
+// fixed field so 9.9 and 100.4 do. Miss either and the bottom row twitches on
+// every poll, five times a second.
+void testReadoutWidthIsStable()
+{
+    resetSettings();
+
+    AmpApplet applet;
+    applet.setDirectConnected(true);
+    auto* button = tempButton(applet);
+    report("stable-width button exists", button != nullptr);
+    if (!button) return;
+
+    auto labelStarting = [&applet](const QString& prefix) -> QLabel* {
+        for (QLabel* l : applet.findChildren<QLabel*>()) {
+            if (l->text().startsWith(prefix)) return l;
+        }
+        return nullptr;
+    };
+    QLabel* vdd = labelStarting(QStringLiteral("Vdd"));
+    QLabel* vac = labelStarting(QStringLiteral("Vac"));
+    report("drain and mains readouts exist", vdd != nullptr && vac != nullptr);
+    if (!vdd || !vac) return;
+
+    // A digit either side of a width change, and the placeholder too: the
+    // dash is what stands there before the first reading arrives, and a row
+    // that settles into place on the first poll is the same jitter once.
+    const int tempWidth = button->text().length();
+    const int vddWidth = vdd->text().length();
+    const int vacWidth = vac->text().length();
+
+    applet.setTemp(9.9f);
+    applet.setTempB(9.9f);
+    const int pairWidth = button->text().length();
+
+    applet.setTemp(100.4f);
+    applet.setTempB(-5.0f);
+    report("temperature pair keeps its width across a digit change",
+           button->text().length() == pairWidth, button->text());
+
+    applet.setDrainVoltage(9.9f);
+    const int vddReading = vdd->text().length();
+    applet.setDrainVoltage(51.9f);
+    report("drain voltage keeps its width across a digit change",
+           vdd->text().length() == vddReading, vdd->text());
+    // Zero is a reading, not a gap. The amplifier keeps its drain rail down
+    // while idle, so this is what it reports for most of the time it is
+    // switched on; a dash there reads as "nothing arrived" and sends the
+    // operator looking for a fault in the client.
+    applet.setDrainVoltage(0.0f);
+    report("zero drain voltage is reported literally",
+           vdd->text().contains(QStringLiteral("0.0")), vdd->text());
+    report("zero drain voltage is not a placeholder",
+           !vdd->text().contains(QStringLiteral("\u2014")), vdd->text());
+    report("zero drain voltage keeps the row's width",
+           vdd->text().length() == vddReading, vdd->text());
+
+    // The dash is kept for the case where there is genuinely nothing: the
+    // readings only exist on the direct connection.
+    applet.setDirectConnected(false);
+    report("no direct connection falls back to the placeholder",
+           vdd->text().contains(QStringLiteral("\u2014")), vdd->text());
+    report("the placeholder is the same width as a reading",
+           vdd->text().length() == vddWidth, vdd->text());
+    applet.setDirectConnected(true);
+
+    applet.setMainsVoltage(98);
+    const int vacReading = vac->text().length();
+    applet.setMainsVoltage(247);
+    report("mains voltage keeps its width across a digit change",
+           vac->text().length() == vacReading, vac->text());
+    report("mains voltage placeholder is the same width as a reading",
+           vacWidth == vacReading, vac->text());
+
+    // A single sensor and the pre-reading dash are narrower than the pair —
+    // they are different rows, not different widths of the same row — but
+    // each has to be stable in itself.
+    report("single-sensor readout is stable", tempWidth > 0, QString::number(tempWidth));
+
+    // The face has to be fixed-width too, or the field alone does not save it.
+    // The size comes from a style sheet, so the widget's own font cannot be
+    // asked; the sheet is what decides it.
+    report("temperature readout is drawn in a fixed-width face",
+           button->styleSheet().contains(QStringLiteral("monospace")),
+           button->styleSheet());
+    report("voltage readouts are drawn in a fixed-width face",
+           vdd->styleSheet().contains(QStringLiteral("monospace"))
+               && vac->styleSheet().contains(QStringLiteral("monospace")),
+           vdd->styleSheet());
 }
 
 } // namespace
@@ -225,6 +343,7 @@ int main(int argc, char** argv)
     testDualSensorToggle();
     testPreferenceReload();
     testFanModePulldown();
+    testReadoutWidthIsStable();
 
     std::printf("\n%s\n",
                 g_failed == 0

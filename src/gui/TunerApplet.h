@@ -18,7 +18,7 @@ class MeterModel;
 struct TunerPortInfo;
 class PanelKey;
 class RelayDial;
-class TgxlPortRow;
+class AccessoryPortRow;
 
 // Tuner applet for the 4o3a Tuner Genius XL (TGXL).
 //
@@ -116,7 +116,7 @@ private:
     void applyTuneButtonText(const QString& text);
     void applyTuneButtonStyle(const char* styleTemplate);
     void updatePortRows();
-    void applyPortInfo(TgxlPortRow* row, const TunerPortInfo& info);
+    void applyPortInfo(AccessoryPortRow* row, const TunerPortInfo& info);
     // Outlines exactly the port carrying transmit, or neither when that is
     // not yet knowable. Never both: only one port can be transmitting.
     void updateActivePort();
@@ -185,8 +185,8 @@ private:
     QWidget*     m_panelControls{nullptr};   // dials + STBY/BYP/TUNE
     QWidget*     m_portRowsBox{nullptr};
     QWidget*     m_portLiveBox{nullptr};   // the two strips + the bypass overlay
-    TgxlPortRow* m_portA{nullptr};
-    TgxlPortRow* m_portB{nullptr};
+    AccessoryPortRow* m_portA{nullptr};
+    AccessoryPortRow* m_portB{nullptr};
     // Bypass is one device-wide field, so it is shown once across both strips
     // rather than repeated in each — repeating it reads as though a port could
     // be bypassed on its own.

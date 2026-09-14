@@ -2989,7 +2989,7 @@ set_tests_properties(relay_bar_a11y_test PROPERTIES
 # debounce (#4565). ThemeManager is linked for the dial's painted colours.
 add_executable(tgxl_panel_widgets_test
     tests/tgxl_panel_widgets_test.cpp
-    src/gui/TgxlPanelWidgets.cpp
+    src/gui/AccessoryPanelWidgets.cpp
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
     ${AETHER_SETTINGS_SOURCES}
@@ -3004,6 +3004,50 @@ set_target_properties(tgxl_panel_widgets_test PROPERTIES AUTOMOC ON)
 add_test(NAME tgxl_panel_widgets_test COMMAND tgxl_panel_widgets_test)
 # Exit 77 == no accessibility backend; see relay_bar_a11y_test above.
 set_tests_properties(tgxl_panel_widgets_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    SKIP_RETURN_CODE 77)
+
+# The PGXL's direct port-9008 protocol — the per-port block (band, bias
+# profile, source radio), the state word the keying lamps are derived from,
+# and the `M|<text>` alert frame — against a stub amplifier on loopback.
+add_executable(pgxl_direct_protocol_test
+    tests/pgxl_direct_protocol_test.cpp
+    src/core/PgxlConnection.cpp
+    src/models/AmpModel.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(pgxl_direct_protocol_test PRIVATE src)
+target_link_libraries(pgxl_direct_protocol_test PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+set_target_properties(pgxl_direct_protocol_test PROPERTIES AUTOMOC ON)
+add_test(NAME pgxl_direct_protocol_test COMMAND pgxl_direct_protocol_test)
+# Exit 77 == no loopback bind available in the sandbox.
+set_tests_properties(pgxl_direct_protocol_test PROPERTIES SKIP_RETURN_CODE 77)
+
+# The PGXL front-panel presentation: which controls each presentation shows,
+# what the port strips report, and that the panel's floor does not ratchet.
+add_executable(pgxl_panel_test
+    tests/pgxl_panel_test.cpp
+    src/gui/AmpApplet.cpp
+    src/gui/AccessoryPanelWidgets.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/AmpModel.cpp
+    src/core/PgxlConnection.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${AETHER_SETTINGS_SOURCES}
+)
+target_include_directories(pgxl_panel_test PRIVATE src tests)
+target_link_libraries(pgxl_panel_test PRIVATE
+    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test
+)
+set_target_properties(pgxl_panel_test PROPERTIES AUTOMOC ON)
+add_test(NAME pgxl_panel_test COMMAND pgxl_panel_test)
+# Exit 77 == no loopback bind available in the sandbox.
+set_tests_properties(pgxl_panel_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     SKIP_RETURN_CODE 77)
 
@@ -3031,7 +3075,7 @@ set_tests_properties(tgxl_direct_protocol_test PROPERTIES SKIP_RETURN_CODE 77)
 add_executable(tgxl_docked_parity_test
     tests/tgxl_docked_parity_test.cpp
     src/gui/TunerApplet.cpp
-    src/gui/TgxlPanelWidgets.cpp
+    src/gui/AccessoryPanelWidgets.cpp
     src/gui/DragValuePopup.cpp
     src/models/TunerModel.cpp
     src/models/MeterModel.cpp
@@ -5117,7 +5161,10 @@ set_tests_properties(filter_passband_widget_test PROPERTIES
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp
+    src/gui/AccessoryPanelWidgets.cpp
     src/gui/DragValuePopup.cpp
+    src/models/AmpModel.cpp
+    src/core/PgxlConnection.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/ThemeManager.cpp
     src/core/ThemeSeedGenerated.cpp
@@ -5126,7 +5173,7 @@ add_executable(amp_applet_test
 )
 target_include_directories(amp_applet_test PRIVATE src)
 target_link_libraries(amp_applet_test PRIVATE
-    Qt6::Core Qt6::Widgets Qt6::Test
+    Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test
 )
 set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
 add_test(NAME amp_applet_test COMMAND amp_applet_test)
@@ -5458,6 +5505,8 @@ set(AETHER_SETTINGS_CONSUMERS
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
     tgxl_docked_parity_test
+    pgxl_direct_protocol_test
+    pgxl_panel_test
 )
 foreach(_settings_consumer IN LISTS AETHER_SETTINGS_CONSUMERS)
     if(TARGET ${_settings_consumer})

@@ -1,4 +1,4 @@
-#include "TgxlPanelWidgets.h"
+#include "AccessoryPanelWidgets.h"
 
 #include "core/ThemeManager.h"
 
@@ -35,6 +35,31 @@ double needleAngleDeg(int value)
 }
 
 }  // namespace
+
+// ── Panel scaling ───────────────────────────────────────────────────────────
+
+qreal panelContentScale(const QSize& available, qreal designWidth, qreal naturalHeight)
+{
+    if (available.width() <= 0 || available.height() <= 0) return 1.0;
+    if (designWidth <= 1.0 || naturalHeight <= 1.0) return 1.0;
+    return qBound(kPanelMinScale,
+                  qMin(available.width() / designWidth,
+                       (available.height() - kPanelBottomGap) / naturalHeight),
+                  kPanelMaxScale);
+}
+
+QSize panelMinimumSize(qreal designWidth, qreal naturalHeight)
+{
+    return QSize(qRound(designWidth * kPanelMinScale),
+                 qRound(naturalHeight * kPanelMinScale) + kPanelBottomGap);
+}
+
+QSize panelKeySize(int heightPx, int seedWidthPx, qreal scale)
+{
+    const int h = qMax(1, heightPx);
+    const int w = qMax(qRound(h * kPanelKeyAspect), qRound(seedWidthPx * scale));
+    return QSize(w, h);
+}
 
 // ── RelayDial ───────────────────────────────────────────────────────────────
 
@@ -151,9 +176,9 @@ void RelayDial::wheelEvent(QWheelEvent* e)
 void RelayDial::paintEvent(QPaintEvent*)
 {
     auto& theme = AetherSDR::ThemeManager::instance();
-    const QColor face   = theme.color(this, QStringLiteral("color.tgxl.dial.face"));
-    const QColor needle = theme.color(this, QStringLiteral("color.tgxl.dial.needle"));
-    const QColor rim    = theme.color(this, QStringLiteral("color.tgxl.dial.rim"));
+    const QColor face   = theme.color(this, QStringLiteral("color.accessory.dial.face"));
+    const QColor needle = theme.color(this, QStringLiteral("color.accessory.dial.needle"));
+    const QColor rim    = theme.color(this, QStringLiteral("color.accessory.dial.rim"));
     const QColor text   = theme.color(this, QStringLiteral("color.text.primary"));
     const QColor label  = theme.color(this, QStringLiteral("color.text.secondary"));
 
@@ -231,9 +256,9 @@ QSize PanelKey::minimumSizeHint() const
     return QSize(24, 14);
 }
 
-// ── TgxlPortRow ─────────────────────────────────────────────────────────────
+// ── AccessoryPortRow ─────────────────────────────────────────────────────────────
 
-TgxlPortRow::TgxlPortRow(const QString& portLetter, QWidget* parent)
+AccessoryPortRow::AccessoryPortRow(const QString& portLetter, QWidget* parent)
     : QWidget(parent)
     , m_portLetter(portLetter)
 {
@@ -254,6 +279,11 @@ TgxlPortRow::TgxlPortRow(const QString& portLetter, QWidget* parent)
     m_bandLabel->setAlignment(Qt::AlignCenter);
     m_bandLabel->setMinimumWidth(34);
 
+    m_biasLabel = new QLabel(this);
+    m_biasLabel->setTextFormat(Qt::PlainText);
+    m_biasLabel->setAlignment(Qt::AlignCenter);
+    m_biasLabel->setVisible(false);      // amplifier-only; see setBiasText
+
     m_sourceLabel = new QLabel(QStringLiteral("—"), this);
     // flexA/flexB come off the wire verbatim — see the note on the alert
     // overlay. The rest of this strip is text we format ourselves, but it
@@ -272,6 +302,7 @@ TgxlPortRow::TgxlPortRow(const QString& portLetter, QWidget* parent)
     row->addWidget(m_portLabel);
     row->addWidget(m_pttLabel);
     row->addWidget(m_bandLabel);
+    row->addWidget(m_biasLabel);
     row->addWidget(m_sourceLabel);
     row->addStretch(1);
     row->addWidget(m_freqLabel);
@@ -281,7 +312,7 @@ TgxlPortRow::TgxlPortRow(const QString& portLetter, QWidget* parent)
     updateAccessibleText();
 }
 
-void TgxlPortRow::setPtt(bool keyed)
+void AccessoryPortRow::setPtt(bool keyed)
 {
     if (m_ptt == keyed) return;
     m_ptt = keyed;
@@ -289,7 +320,7 @@ void TgxlPortRow::setPtt(bool keyed)
     updateAccessibleText();
 }
 
-void TgxlPortRow::setBandText(const QString& band)
+void AccessoryPortRow::setBandText(const QString& band)
 {
     const QString shown = band.trimmed().isEmpty() ? tr("N/A") : band.trimmed();
     if (m_bandLabel->text() == shown) return;
@@ -298,7 +329,29 @@ void TgxlPortRow::setBandText(const QString& band)
     updateAccessibleText();
 }
 
-void TgxlPortRow::setSourceText(const QString& source)
+void AccessoryPortRow::setBiasText(const QString& bias)
+{
+    const QString shown = bias.trimmed();
+    if (m_biasLabel->text() == shown) return;
+    m_biasLabel->setText(shown);
+    m_biasLabel->setVisible(!shown.isEmpty());
+    applyTheme();
+    updateAccessibleText();
+}
+
+void AccessoryPortRow::setFrequencyVisible(bool visible)
+{
+    // isVisible() is false for every child of a widget that has not been shown
+    // yet, so gating on it silently drops a hide issued during construction —
+    // and the cell comes back the moment the panel is shown. isHidden() is the
+    // widget's own flag rather than its effective visibility, which is the
+    // question actually being asked here.
+    if (m_freqLabel->isHidden() == !visible) return;
+    m_freqLabel->setVisible(visible);
+    updateAccessibleText();
+}
+
+void AccessoryPortRow::setSourceText(const QString& source)
 {
     const QString shown = source.trimmed().isEmpty() ? QStringLiteral("—") : source.trimmed();
     if (m_sourceLabel->text() == shown) return;
@@ -306,7 +359,7 @@ void TgxlPortRow::setSourceText(const QString& source)
     updateAccessibleText();
 }
 
-void TgxlPortRow::setFrequencyMhz(double mhz)
+void AccessoryPortRow::setFrequencyMhz(double mhz)
 {
     QString shown = tr("N/A");
     if (mhz > 0.0) {
@@ -324,7 +377,7 @@ void TgxlPortRow::setFrequencyMhz(double mhz)
     updateAccessibleText();
 }
 
-void TgxlPortRow::setStateText(const QString& state)
+void AccessoryPortRow::setStateText(const QString& state)
 {
     if (m_stateLabel->text() == state) return;
     m_stateLabel->setText(state);
@@ -333,7 +386,7 @@ void TgxlPortRow::setStateText(const QString& state)
     updateAccessibleText();
 }
 
-void TgxlPortRow::setBypassed(bool bypassed)
+void AccessoryPortRow::setBypassed(bool bypassed)
 {
     if (m_bypassed == bypassed) return;
     m_bypassed = bypassed;
@@ -341,7 +394,7 @@ void TgxlPortRow::setBypassed(bool bypassed)
     updateAccessibleText();
 }
 
-void TgxlPortRow::setActive(bool active)
+void AccessoryPortRow::setActive(bool active)
 {
     if (m_active == active) return;
     m_active = active;
@@ -349,7 +402,7 @@ void TgxlPortRow::setActive(bool active)
     updateAccessibleText();
 }
 
-void TgxlPortRow::setScale(qreal scale)
+void AccessoryPortRow::setScale(qreal scale)
 {
     const qreal clamped = qBound(0.6, scale, 4.0);
     if (qFuzzyCompare(m_scale, clamped)) return;
@@ -359,6 +412,7 @@ void TgxlPortRow::setScale(qreal scale)
     m_portLabel->setFixedWidth(px(18));
     m_pttLabel->setFixedWidth(px(34));
     m_bandLabel->setMinimumWidth(px(34));
+    m_biasLabel->setMinimumWidth(px(34));
     m_stateLabel->setFixedWidth(px(38));
     if (auto* row = qobject_cast<QHBoxLayout*>(layout())) {
         row->setContentsMargins(px(6), px(3), px(6), px(3));
@@ -368,12 +422,12 @@ void TgxlPortRow::setScale(qreal scale)
     updateGeometry();
 }
 
-int TgxlPortRow::px(int base) const
+int AccessoryPortRow::px(int base) const
 {
     return qMax(1, qRound(base * m_scale));
 }
 
-void TgxlPortRow::applyTheme()
+void AccessoryPortRow::applyTheme()
 {
     auto& theme = AetherSDR::ThemeManager::instance();
 
@@ -408,6 +462,14 @@ void TgxlPortRow::applyTheme()
                       : QStringLiteral("{{color.text.label}}"))
         .arg(px(11)));
 
+    // The bias profile reads as a setting rather than a reading, so it takes
+    // the neutral chip treatment rather than the band's live-value green.
+    theme.applyStyleSheet(m_biasLabel, QStringLiteral(
+        "QLabel { border: none; border-radius: 2px; padding: %1px %2px; "
+        "background: {{color.background.2}}; color: {{color.text.primary}}; "
+        "font-size: %3px; font-weight: bold; }")
+        .arg(px(1)).arg(px(4)).arg(px(11)));
+
     theme.applyStyleSheet(m_sourceLabel, QStringLiteral(
         "QLabel { border: none; background: transparent; color: {{color.text.primary}}; "
         "font-size: %1px; }").arg(px(12)));
@@ -432,12 +494,12 @@ void TgxlPortRow::applyTheme()
         .arg(px(11)));
 }
 
-void TgxlPortRow::paintEvent(QPaintEvent*)
+void AccessoryPortRow::paintEvent(QPaintEvent*)
 {
     // Painted rather than style-sheeted. A style sheet on this widget can only
     // select it as "QWidget" — which also matches every QLabel inside it — or
     // by a class name that Qt spells with the namespace mangled in
-    // ("AetherSDR--TgxlPortRow"), a selector that silently matches nothing the
+    // ("AetherSDR--AccessoryPortRow"), a selector that silently matches nothing the
     // moment the class moves namespace. Painting the frame is neither
     // ambiguous nor fragile, and the transmit-port outline is the one thing on
     // this strip that has to be unmistakable.
@@ -456,20 +518,43 @@ void TgxlPortRow::paintEvent(QPaintEvent*)
     p.drawRoundedRect(box, 3.0, 3.0);
 }
 
-void TgxlPortRow::updateAccessibleText()
+void AccessoryPortRow::updateAccessibleText()
 {
     setAccessibleName(tr("Port %1").arg(m_portLetter));
     // One sentence covering the whole strip: a reader moving across six
     // separate labels loses which port they belong to.
     const QString state = m_bypassed ? tr("bypassed") : m_stateLabel->text();
+    const QString bias = m_biasLabel->isVisible() && !m_biasLabel->text().isEmpty()
+                             ? tr("bias %1, ").arg(m_biasLabel->text())
+                             : QString();
+    // A hidden frequency cell is one the device cannot report at all — the
+    // amplifier's strips leave it out — so it is dropped from the sentence
+    // rather than spoken as "N/A", which would claim a missing reading.
+    const QString freq = !m_freqLabel->isHidden()
+                             ? tr("%1, ").arg(m_freqLabel->text())
+                             : QString();
+    // One multi-argument arg(), not a chain of them. The source and band cells
+    // carry device text verbatim (flexA / bandA off the wire), and a chain
+    // substitutes left to right: a source name containing "%4" would land in
+    // the string and then be replaced by the next .arg() in the chain. The
+    // multi-argument form substitutes every placeholder in one pass, so text
+    // that arrives from the device cannot reach into the format string
+    // (Principle VII).
+    // The state carries its own separator, the way the bias and frequency
+    // pieces do. On the amplifier's strips the cell is deliberately empty
+    // whenever there is nothing to act on, which is most of the time — a
+    // separator left standing around it speaks as ", ,".
+    const QString statePart = state.isEmpty() ? QString()
+                                              : QStringLiteral("%1, ").arg(state);
     setAccessibleDescription(
-        tr("%1, band %2, %3, %4, %5%6")
-            .arg(m_sourceLabel->text())
-            .arg(m_bandLabel->text())
-            .arg(m_freqLabel->text())
-            .arg(state)
-            .arg(m_ptt ? tr("transmitting") : tr("not transmitting"))
-            .arg(m_active ? tr(", transmit port") : QString()));
+        tr("%1, band %2, %6%7%3%4%5").arg(
+            m_sourceLabel->text(),
+            m_bandLabel->text(),
+            statePart,
+            m_ptt ? tr("transmitting") : tr("not transmitting"),
+            m_active ? tr(", transmit port") : QString(),
+            bias,
+            freq));
 }
 
 }  // namespace AetherSDR

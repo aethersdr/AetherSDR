@@ -1,6 +1,6 @@
 #include "TunerApplet.h"
 #include "HGauge.h"
-#include "TgxlPanelWidgets.h"
+#include "AccessoryPanelWidgets.h"
 #include "models/TunerModel.h"
 #include "models/MeterModel.h"
 #include "models/BandSettings.h"
@@ -45,18 +45,11 @@ constexpr qreal kDesignWidth  = 420.0;
 // Only a first guess at the contents' height: applyDensity replaces it with
 // the measured value as soon as there is a laid-out column to measure.
 constexpr qreal kDesignHeight = 250.0;
-constexpr qreal kMinScale = 0.8;   // below this the type stops being legible
-constexpr qreal kMaxScale = 3.0;
 
-// The gap below the controls. Deliberately not scaled: it exists so they
-// clear the frame rather than sit against it, which is a constant few pixels
-// at any size.
-constexpr int kBottomGap = 8;
+// Scale bounds, the bottom gap and the key aspect are shared with the
+// amplifier's panel — see AccessoryPanelWidgets.h.
+constexpr int kBottomGap = kPanelBottomGap;
 
-// The discrete keys are letterbox-shaped rather than square. Their width is
-// set by the control row's split with the dials, so the aspect is applied as
-// a cap on their height: the row is as tall as the dials, and without it the
-// keys stretch to match and become columns.
 // The keys stand as tall as the dials beside them, just short of matching,
 // and keep their 16:9 shape — so the height is what is chosen and the width
 // follows from it. That makes a key considerably wider than its caption
@@ -64,7 +57,6 @@ constexpr int kBottomGap = 8;
 // kDesignWidth is measured from that rather than guessed, or the keys are
 // clipped on a narrow panel instead of merely cramped.
 constexpr qreal kKeyHeightOfDial = 0.95;
-constexpr qreal kKeyAspect = 16.0 / 9.0;
 constexpr int kKeyFontDesignPx = 13;
 
 // Relay dial diameter in design pixels. The dials were the largest thing on
@@ -104,13 +96,13 @@ constexpr const char* kPanelKeyIdleStyle =
     "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
     "QPushButton:hover { background: {{color.background.1}}; }";
 constexpr const char* kStandbyActiveStyle =
-    "QPushButton { background: {{color.tgxl.key.standby.background}}; "
-    "border: 1px solid {{color.tgxl.key.standby.foreground}}; border-radius: 3px; "
-    "color: {{color.tgxl.key.standby.foreground}}; font-weight: bold; }";
+    "QPushButton { background: {{color.accessory.key.standby.background}}; "
+    "border: 1px solid {{color.accessory.key.standby.foreground}}; border-radius: 3px; "
+    "color: {{color.accessory.key.standby.foreground}}; font-weight: bold; }";
 constexpr const char* kBypassActiveStyle =
-    "QPushButton { background: {{color.tgxl.key.bypass.background}}; "
-    "border: 1px solid {{color.tgxl.key.bypass.foreground}}; border-radius: 3px; "
-    "color: {{color.tgxl.key.bypass.foreground}}; font-weight: bold; }";
+    "QPushButton { background: {{color.accessory.key.bypass.background}}; "
+    "border: 1px solid {{color.accessory.key.bypass.foreground}}; border-radius: 3px; "
+    "color: {{color.accessory.key.bypass.foreground}}; font-weight: bold; }";
 
 }  // namespace
 
@@ -262,6 +254,7 @@ void TunerApplet::buildUI()
     static_cast<HGauge*>(m_fwdGauge)->setBallistics({0.030f, 0.800f});
     m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
+    pwrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
     pwrRow->setSpacing(4);
     pwrRow->addWidget(m_pwrLabel);
     pwrRow->addWidget(m_fwdGauge, 1);
@@ -278,6 +271,7 @@ void TunerApplet::buildUI()
         this, 2.0f);
     m_swrGauge->setAccessibleName(tr("SWR"));
     auto* swrRow = new QHBoxLayout;
+    swrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
     swrRow->setSpacing(4);
     swrRow->addWidget(m_swrLabel);
     swrRow->addWidget(m_swrGauge, 1);
@@ -301,8 +295,8 @@ void TunerApplet::buildUI()
         auto* rows = new QVBoxLayout;
         rows->setContentsMargins(0, 0, 0, 0);
         rows->setSpacing(2);
-        m_portA = new TgxlPortRow(QStringLiteral("A"), m_portLiveBox);
-        m_portB = new TgxlPortRow(QStringLiteral("B"), m_portLiveBox);
+        m_portA = new AccessoryPortRow(QStringLiteral("A"), m_portLiveBox);
+        m_portB = new AccessoryPortRow(QStringLiteral("B"), m_portLiveBox);
         rows->addWidget(m_portA);
         rows->addWidget(m_portB);
         live->addLayout(rows, 1);
@@ -602,27 +596,19 @@ qreal TunerApplet::contentScale() const
     // Docked, the rail gives every tile the same width and a fixed height;
     // scaling there would make one tile disagree with its neighbours.
     if (!m_floating) return 1.0;
-    if (width() <= 0 || height() <= 0) return 1.0;
-
-    // The height term budgets for the contents ONLY — the pad's minimum is
-    // taken off first, and the divisor is what the contents actually need at
-    // scale 1.0. Those two together are what make the pad drain before
-    // anything above it moves: while the width is the limiting term the
-    // contents hold their size and the surplus is all pad, and the moment
-    // height becomes limiting the arithmetic lands the contents at exactly
-    // height - kBottomGap, so the pad is at its minimum rather than still
-    // holding space that the contents just gave up.
     const qreal naturalH = m_naturalContentHeight > 1.0 ? m_naturalContentHeight
                                                         : kDesignHeight;
-    return qBound(kMinScale,
-                  qMin(width() / kDesignWidth,
-                       (height() - kBottomGap) / naturalH),
-                  kMaxScale);
+    return panelContentScale(size(), kDesignWidth, naturalH);
 }
 
 void TunerApplet::applyDensity()
 {
-    applyDensityAtScale(contentScale());
+    // The write lives here, not in resizeEvent. m_appliedScale answers "what
+    // scale are the children at", and resizeEvent is not the only caller that
+    // changes it — setFloating and setDirectConnected apply a density too. Set
+    // from the one place that does the applying, it cannot go stale.
+    m_appliedScale = contentScale();
+    applyDensityAtScale(m_appliedScale);
 }
 
 void TunerApplet::applyDensityAtScale(qreal scale)
@@ -668,7 +654,7 @@ void TunerApplet::applyDensityAtScale(qreal scale)
     QGradientStops swrStops;
     if (f) {
         const ThemeGradient scale =
-            theme.gradient(this, QStringLiteral("color.tgxl.swrScale"));
+            theme.gradient(this, QStringLiteral("color.accessory.swrScale"));
         for (const ThemeGradientStop& stop : scale.stops) {
             swrStops.append({stop.at, stop.color});
         }
@@ -682,9 +668,9 @@ void TunerApplet::applyDensityAtScale(qreal scale)
         "padding: 0 %1px; font-size: %2px; font-weight: bold; }")
         .arg(px(6)).arg(px(12)));
     theme.applyStyleSheet(m_standbyBanner, QStringLiteral(
-        "QLabel { border: 2px solid {{color.tgxl.key.standby.foreground}}; "
-        "border-radius: 3px; background: {{color.tgxl.key.standby.background}}; "
-        "color: {{color.tgxl.key.standby.foreground}}; "
+        "QLabel { border: 2px solid {{color.accessory.key.standby.foreground}}; "
+        "border-radius: 3px; background: {{color.accessory.key.standby.background}}; "
+        "color: {{color.accessory.key.standby.foreground}}; "
         "letter-spacing: 2px; font-size: %1px; font-weight: bold; }")
         .arg(px(20)));
     // The banner stands in for both strips, so it claims their combined height
@@ -829,13 +815,10 @@ void TunerApplet::applyKeySize(qreal scale)
     // The height is tied to the dials, so the two control groups read as one
     // row of peers at any panel size, and the width follows it at kKeyAspect.
     const int dial = qMax(1, qRound(kDialDesignDiameter * scale));
-    const int h = qMax(1, qRound(dial * kKeyHeightOfDial));
-    // Never narrower than the widest caption needs: 16:9 off this height is
-    // roomy enough that the floor should never bind, but a caption that
-    // outgrew it would be clipped rather than wrapped.
-    const int w = qMax(qRound(h * kKeyAspect), qRound(m_keySeedWidth * scale));
+    const QSize box = panelKeySize(qRound(dial * kKeyHeightOfDial),
+                                   m_keySeedWidth, scale);
     for (auto* btn : {m_stbyBtn, m_bypBtn, m_panelTuneBtn}) {
-        btn->setTargetSize(QSize(w, h));
+        btn->setTargetSize(box);
     }
 }
 
@@ -843,21 +826,15 @@ QSize TunerApplet::minimumSizeHint() const
 {
     if (!m_floating) return QWidget::minimumSizeHint();
 
-    // The floor is what the panel needs at kMinScale, not what its children
-    // happen to need right now. Letting the layout answer this instead makes
-    // the floor follow the current scale, and that ratchets: every metric
-    // sized by the scale raises the minimum as the panel grows, so a panel
-    // enlarged once can never be made small again. Measured before this
-    // existed — an 802px panel reported a 576px floor, and asking it for
-    // 392px got 576px back.
+    // See panelMinimumSize. Measured before it existed — an 802px panel
+    // reported a 576px floor, and asking it for 392px got 576px back.
     //
     // The layout's own minimum may briefly exceed this and the contents
     // overflow for that one pass; the resize that caused it then lowers the
     // scale and they fit again.
     const qreal natural = m_naturalContentHeight > 1.0 ? m_naturalContentHeight
                                                        : kDesignHeight;
-    return QSize(qRound(kDesignWidth * kMinScale),
-                 qRound(natural * kMinScale) + kBottomGap);
+    return panelMinimumSize(kDesignWidth, natural);
 }
 
 void TunerApplet::resizeEvent(QResizeEvent* event)
@@ -871,7 +848,6 @@ void TunerApplet::resizeEvent(QResizeEvent* event)
     // applyDensity re-applies a dozen style sheets.
     const qreal s = contentScale();
     if (!qFuzzyCompare(s, m_appliedScale)) {
-        m_appliedScale = s;
         applyDensity();
     }
 }
@@ -971,7 +947,7 @@ void TunerApplet::updatePortRows()
     updateActivePort();
 }
 
-void TunerApplet::applyPortInfo(TgxlPortRow* row, const TunerPortInfo& info)
+void TunerApplet::applyPortInfo(AccessoryPortRow* row, const TunerPortInfo& info)
 {
     // A port the tuner has no live reading on is one nothing is being heard
     // on. It is labelled RF SENSE rather than with the radio name the tuner

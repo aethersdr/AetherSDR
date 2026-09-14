@@ -28,6 +28,23 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accent.dim", QString("#0070c0"));
     m_tokens.insert("color.accent.success", QString("#4dd87a"));
     m_tokens.insert("color.accent.warning", QString("#ffb84d"));
+    m_tokens.insert("color.accessory.dial.face", QString("#0070c0"));
+    m_tokens.insert("color.accessory.dial.needle", QString("#e6f0fa"));
+    m_tokens.insert("color.accessory.dial.rim", QString("#3a4a5a"));
+    m_tokens.insert("color.accessory.key.bypass.background", QString("#8a6000"));
+    m_tokens.insert("color.accessory.key.bypass.foreground", QString("#ffd9a0"));
+    m_tokens.insert("color.accessory.key.standby.background", QString("#5a3a0a"));
+    m_tokens.insert("color.accessory.key.standby.foreground", QString("#ffb84d"));
+    {
+        ThemeGradient g;
+        g.type = ThemeGradient::Linear;
+        g.angle = 90.0;
+        g.stops.append({0.0, QColor("#1a5c30")});
+        g.stops.append({0.35, QColor("#4a5520")});
+        g.stops.append({0.65, QColor("#6a4520")});
+        g.stops.append({1.0, QColor("#6e1f1f")});
+        m_tokens.insert("color.accessory.swrScale", QVariant::fromValue(g));
+    }
     m_tokens.insert("color.background.0", QString("#0f0f1a"));
     m_tokens.insert("color.background.1", QString("#1a2a3a"));
     m_tokens.insert("color.background.2", QString("#304050"));
@@ -121,23 +138,6 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.text.label", QString("#506070"));
     m_tokens.insert("color.text.primary", QString("#c8d8e8"));
     m_tokens.insert("color.text.secondary", QString("#8ea8c0"));
-    m_tokens.insert("color.tgxl.dial.face", QString("#0070c0"));
-    m_tokens.insert("color.tgxl.dial.needle", QString("#e6f0fa"));
-    m_tokens.insert("color.tgxl.dial.rim", QString("#3a4a5a"));
-    m_tokens.insert("color.tgxl.key.bypass.background", QString("#8a6000"));
-    m_tokens.insert("color.tgxl.key.bypass.foreground", QString("#ffd9a0"));
-    m_tokens.insert("color.tgxl.key.standby.background", QString("#5a3a0a"));
-    m_tokens.insert("color.tgxl.key.standby.foreground", QString("#ffb84d"));
-    {
-        ThemeGradient g;
-        g.type = ThemeGradient::Linear;
-        g.angle = 90.0;
-        g.stops.append({0.0, QColor("#1a5c30")});
-        g.stops.append({0.35, QColor("#4a5520")});
-        g.stops.append({0.65, QColor("#6a4520")});
-        g.stops.append({1.0, QColor("#6e1f1f")});
-        m_tokens.insert("color.tgxl.swrScale", QVariant::fromValue(g));
-    }
     m_tokens.insert("color.toggle.accent.background.checked", QString("#0070c0"));
     m_tokens.insert("color.toggle.accent.border.checked", QString("#00b4d8"));
     m_tokens.insert("color.toggle.accent.foreground.checked", QString("#00b4d8"));
