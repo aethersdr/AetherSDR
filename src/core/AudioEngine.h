@@ -48,6 +48,7 @@ struct RadioCapabilities;
 class SpecbleachFilter;
 class RNNoiseFilter;
 class DeepFilterFilter;
+class NnrFilter;
 class NvidiaAfxFilter;
 class Resampler;
 class TxVoiceProcessor;
@@ -367,6 +368,19 @@ public:
     void setDfnrAttenLimit(float db);
     float dfnrAttenLimit() const;
     void setDfnrPostFilterBeta(float beta);
+
+    // Client-side NNR (WDSP 2.10 neural noise reduction, trained on HF).
+    // Unconditional, unlike DFNR/MNR/BNR: the models are compiled into the
+    // vendored WDSP, so there is no library to find and no GPU to require.
+    Q_INVOKABLE void setNnrEnabled(bool on);
+    bool nnrEnabled() const { return m_nnrEnabled.load(); }
+    // 0..100, mapped to WDSP's mask floor (-10..-50 dB). Higher is more
+    // suppression; see src/core/NnrControls.h.
+    void setNnrStrength(int strength);
+    int nnrStrength() const { return m_nnrStrength.load(); }
+    // 0 = Standard, 1 = Premium. Reports the slot WDSP actually selected.
+    void setNnrModel(int slot);
+    int nnrModel() const { return m_nnrModel.load(); }
 
     // Optional NVIDIA Maxine AFX GPU denoiser (runtime-loaded; NVIDIA RTX/GeForce).
     Q_INVOKABLE void setNvAfxEnabled(bool on);
@@ -715,6 +729,7 @@ signals:
     void rn2EnabledChanged(bool on);
     void rn2TxEnabledChanged(bool on);   // RN2 on the TX mic pre-amp (#2813)
     void dfnrEnabledChanged(bool on);
+    void nnrEnabledChanged(bool on);
     void nvAfxEnabledChanged(bool on);
     void txRawPcmReady(const QByteArray& pcm);  // raw 24kHz stereo int16 PCM for RADEEngine
     // Post-final-limiter TX monitor PCM (24 kHz stereo int16) — the exact stream
@@ -841,6 +856,7 @@ private:
 #ifdef HAVE_DFNR
         std::unique_ptr<DeepFilterFilter> dfnr;
 #endif
+        std::unique_ptr<NnrFilter> nnr;
 #ifdef HAVE_NVIDIA_AFX
         std::unique_ptr<NvidiaAfxFilter> nvAfx;
 #endif
@@ -953,6 +969,11 @@ private:
         RxDspSource source,
         ExternalRxAudioSourceState* externalSource) const;
 #endif
+    std::unique_ptr<NnrFilter> createNnrFilter(const QString& label,
+        int producerRate = DEFAULT_SAMPLE_RATE) const;
+    NnrFilter* nnrForSource(
+        RxDspSource source,
+        ExternalRxAudioSourceState* externalSource) const;
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> createNvAfxFilter(const QString& label,
         int producerRate = DEFAULT_SAMPLE_RATE) const;
@@ -1282,6 +1303,13 @@ private:
     std::unique_ptr<DeepFilterFilter> m_kiwiSdrDfnr;
 #endif
     std::atomic<bool> m_dfnrEnabled{false};
+
+    // Client-side NNR (WDSP 2.10). No build guard: the models ship in-tree.
+    std::unique_ptr<NnrFilter> m_nnr;
+    std::unique_ptr<NnrFilter> m_kiwiSdrNnr;
+    std::atomic<bool> m_nnrEnabled{false};
+    std::atomic<int>  m_nnrStrength{50};
+    std::atomic<int>  m_nnrModel{0};
 
     // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so
     // mutual-exclusion in the other NR setters compiles regardless of the build).

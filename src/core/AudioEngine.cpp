@@ -40,6 +40,7 @@
 #include "RNNoiseFilter.h"
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
+#include "NnrFilter.h"
 #endif
 #ifdef HAVE_NVIDIA_AFX
 #include "NvidiaAfxFilter.h"
@@ -1116,6 +1117,30 @@ AudioEngine::createMnrFilter(const QString& label, int producerRate) const
 }
 #endif
 
+std::unique_ptr<NnrFilter>
+AudioEngine::createNnrFilter(const QString& label, int producerRate) const
+{
+    auto filter = std::make_unique<NnrFilter>(producerRate);
+    if (!filter->isValid()) {
+        qCWarning(lcAudio).noquote()
+            << "AudioEngine: NNR create_nnr() failed for" << label;
+        return {};
+    }
+    filter->setStrength(m_nnrStrength.load());
+    filter->setModel(m_nnrModel.load());
+    return filter;
+}
+
+NnrFilter* AudioEngine::nnrForSource(
+    RxDspSource source,
+    ExternalRxAudioSourceState* externalSource) const
+{
+    if (externalSource) {
+        return externalSource->nnr.get();
+    }
+    return source == RxDspSource::KiwiSdr ? m_kiwiSdrNnr.get() : m_nnr.get();
+}
+
 #ifdef HAVE_DFNR
 std::unique_ptr<DeepFilterFilter>
 AudioEngine::createDfnrFilter(const QString& label, int producerRate) const
@@ -1158,6 +1183,7 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #endif
 #ifdef HAVE_DFNR
     bool needDfnr = false;
+    bool needNnr = false;
 #endif
 #ifdef HAVE_NVIDIA_AFX
     bool needNvAfx = false;
@@ -1183,6 +1209,8 @@ bool AudioEngine::ensureLegacyKiwiDspState()
         needDfnr = m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
             && !m_kiwiSdrDfnr;
 #endif
+        needNnr = m_nnrEnabled.load(std::memory_order_relaxed) && m_nnr
+            && !m_kiwiSdrNnr;
 #ifdef HAVE_NVIDIA_AFX
         needNvAfx = m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
             && !m_kiwiSdrNvAfx;
@@ -1197,6 +1225,7 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #ifdef HAVE_DFNR
             || needDfnr
 #endif
+            || needNnr
 #ifdef HAVE_NVIDIA_AFX
             || needNvAfx
 #endif
@@ -1218,6 +1247,7 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #endif
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> dfnr;
+    std::unique_ptr<NnrFilter> nnr;
 #endif
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> nvAfx;
@@ -1251,6 +1281,10 @@ bool AudioEngine::ensureLegacyKiwiDspState()
         ok = ok && static_cast<bool>(dfnr);
     }
 #endif
+    if (needNnr) {
+        nnr = createNnrFilter(QStringLiteral("legacy Kiwi"));
+        ok = ok && static_cast<bool>(nnr);
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (needNvAfx) {
         nvAfx = createNvAfxFilter(QStringLiteral("legacy Kiwi"));
@@ -1298,6 +1332,11 @@ bool AudioEngine::ensureLegacyKiwiDspState()
             m_kiwiSdrDfnr = std::move(dfnr);
         }
 #endif
+        // No settings copy: createNnrFilter() applies strength and model from
+        // the engine's own atomics, which are the source of truth for both.
+        if (needNnr && m_nnrEnabled && m_nnr && !m_kiwiSdrNnr) {
+            m_kiwiSdrNnr = std::move(nnr);
+        }
 #ifdef HAVE_NVIDIA_AFX
         if (needNvAfx && m_nvAfxEnabled && m_nvAfx && !m_kiwiSdrNvAfx) {
             if (nvAfx) {
@@ -1343,6 +1382,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #endif
 #ifdef HAVE_DFNR
     bool needDfnr = false;
+    bool needNnr = false;
 #endif
 #ifdef HAVE_NVIDIA_AFX
     bool needNvAfx = false;
@@ -1370,6 +1410,8 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
         needDfnr = m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
             && !source->dfnr;
 #endif
+        needNnr = m_nnrEnabled.load(std::memory_order_relaxed) && m_nnr
+            && !source->nnr;
 #ifdef HAVE_NVIDIA_AFX
         needNvAfx = m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
             && !source->nvAfx;
@@ -1384,6 +1426,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #ifdef HAVE_DFNR
             || needDfnr
 #endif
+            || needNnr
 #ifdef HAVE_NVIDIA_AFX
             || needNvAfx
 #endif
@@ -1405,6 +1448,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #endif
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> dfnr;
+    std::unique_ptr<NnrFilter> nnr;
 #endif
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> nvAfx;
@@ -1489,6 +1533,9 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
             source->dfnr = std::move(dfnr);
         }
 #endif
+        if (needNnr && m_nnrEnabled && m_nnr && !source->nnr) {
+            source->nnr = std::move(nnr);
+        }
 #ifdef HAVE_NVIDIA_AFX
         if (needNvAfx && m_nvAfxEnabled && m_nvAfx && !source->nvAfx) {
             if (nvAfx) {
@@ -1565,6 +1612,9 @@ void AudioEngine::resetLegacyKiwiDspState()
         m_kiwiSdrDfnr->reset();
     }
 #endif
+    if (m_nnrEnabled && m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->reset();
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (m_nvAfxEnabled && m_kiwiSdrNvAfx) {
         m_kiwiSdrNvAfx = createNvAfxFilter(QStringLiteral("Kiwi epoch"));
@@ -1594,6 +1644,7 @@ void AudioEngine::clearLegacyKiwiDspState()
 #ifdef HAVE_DFNR
     m_kiwiSdrDfnr.reset();
 #endif
+    m_kiwiSdrNnr.reset();
 #ifdef HAVE_NVIDIA_AFX
     m_kiwiSdrNvAfx.reset();
 #endif
@@ -1628,6 +1679,9 @@ void AudioEngine::resetExternalKiwiDspState(ExternalRxAudioSourceState& source)
         source.dfnr->reset();
     }
 #endif
+    if (m_nnrEnabled && source.nnr) {
+        source.nnr->reset();
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (m_nvAfxEnabled && source.nvAfx) {
         source.nvAfx = createNvAfxFilter(QStringLiteral("Kiwi epoch"));
@@ -4502,6 +4556,13 @@ bool AudioEngine::prepareMainPcmDsp()
         }
     }
 #endif
+    // NnrFilter is bound to its rate at construction (WDSP re-plans its FFTs
+    // and re-reads both models on a rate change), so rebuild rather than reset.
+    m_nnr.reset();
+    m_kiwiSdrNnr.reset();
+    if (m_nnrEnabled) {
+        m_nnr = createNnrFilter(QStringLiteral("main RX"), rate);
+    }
 #ifdef HAVE_DFNR
     m_dfnr.reset();
     if (m_dfnrEnabled) {
@@ -5210,6 +5271,14 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
         m_kiwiSdrDfnr->reset();
     }
 #endif
+    if (m_nnrEnabled && m_nnr) {
+        m_nnr->reset();
+    }
+    if (m_nnrEnabled && m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->reset();
+    }
+#ifdef HAVE_DFNR
+#endif
 #ifdef __APPLE__
     if (m_mnrEnabled && m_mnr) {
         m_mnr->reset();
@@ -5560,6 +5629,13 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             QByteArray processed = dfnr->process(pcm);
             writeAudioAndLevel(processed);
 #endif
+        } else if (m_nnrEnabled) {
+            NnrFilter* nnr = nnrForSource(source, externalSource);
+            if (!nnr || !nnr->isValid()) {
+                return; // enabled processor is still preparing or failed
+            }
+            QByteArray processed = nnr->process(pcm);
+            writeAudioAndLevel(processed);
 #ifdef HAVE_NVIDIA_AFX
         } else if (m_nvAfxEnabled) {
             NvidiaAfxFilter* nvAfx = nvAfxForSource(source, externalSource);
@@ -7264,6 +7340,7 @@ void AudioEngine::setNr2Enabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         // Wisdom should already be generated by MainWindow::enableNr2WithWisdom().
         // Import only here: full wisdom generation can take minutes and must
@@ -7476,6 +7553,7 @@ void AudioEngine::setNr4Enabled(bool on)
         if (m_rn2Enabled)  setRn2Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         m_nr4 = createNr4Filter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_nr4) {
@@ -7633,6 +7711,7 @@ void AudioEngine::setMnrEnabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         // Restore strength from settings (default 1.0 = full suppression)
         m_mnrStrength.store(std::clamp(
             AppSettings::instance().value("MnrStrength", "1.00").toFloat(), 0.0f, 1.0f));
@@ -7698,6 +7777,7 @@ void AudioEngine::setRn2Enabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         m_rn2 = createRn2Filter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_rn2) {
@@ -7722,6 +7802,101 @@ void AudioEngine::setRn2Enabled(bool on)
     }
     qCDebug(lcAudio) << "AudioEngine: RN2 (RNNoise)" << (on ? "enabled" : "disabled");
     emit rn2EnabledChanged(on);
+}
+
+// ─── NNR (WDSP 2.10 neural noise reduction) ──────────────────────────────────
+// Unconditional, unlike DFNR/MNR/BNR: both trained models are compiled into
+// the vendored WDSP, so there is no library to locate and no GPU to require.
+// It is a SPEECH model — a steady carrier is attenuated ~28 dB — so callers
+// must keep it away from CW, the digital modes and the data path.
+
+void AudioEngine::setNnrEnabled(bool on)
+{
+    if (m_nnrEnabled == on) return;
+    std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
+    ++m_dspConfigurationGeneration;
+    if (on) {
+        // Disable all other NR modes — they're mutually exclusive
+        if (m_nr2Enabled)  setNr2Enabled(false);
+        if (m_rn2Enabled)  setRn2Enabled(false);
+        if (m_nr4Enabled)  setNr4Enabled(false);
+        if (m_dfnrEnabled) setDfnrEnabled(false);
+        if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_mnrEnabled)  setMnrEnabled(false);
+        m_nnrStrength.store(std::clamp(
+            AppSettings::instance().value("NnrStrength", "50").toInt(), 0, 100));
+        m_nnrModel.store(std::clamp(
+            AppSettings::instance().value("NnrModel", "0").toInt(), 0, 1));
+        m_nnr = createNnrFilter(QStringLiteral("main RX"), m_rxProducerRate.load());
+        if (!m_nnr) {
+            m_nnr.reset();
+            emit nnrEnabledChanged(false);
+            return;
+        }
+        // WDSP reports the slot it actually selected, which differs from the
+        // request when a build has no model there.
+        m_nnrModel.store(m_nnr->modelSlot());
+        m_nnrEnabled = true;
+    } else {
+        m_nnrEnabled = false;
+        m_nnr.reset();
+        m_kiwiSdrNnr.reset();
+        for (const auto& source : m_externalKiwiSources) {
+            if (source) {
+                source->nnr.reset();
+            }
+        }
+    }
+    lock.unlock();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
+    qCDebug(lcAudio) << "AudioEngine: NNR" << (on ? "enabled" : "disabled");
+    emit nnrEnabledChanged(on);
+}
+
+void AudioEngine::setNnrStrength(int strength)
+{
+    const int clamped = std::clamp(strength, 0, 100);
+    m_nnrStrength.store(clamped);
+    AppSettings::instance().setValue("NnrStrength", QString::number(clamped));
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (m_nnr) {
+        m_nnr->setStrength(clamped);
+    }
+    if (m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->setStrength(clamped);
+    }
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nnr) {
+            source->nnr->setStrength(clamped);
+        }
+    }
+}
+
+void AudioEngine::setNnrModel(int slot)
+{
+    const int requested = std::clamp(slot, 0, 1);
+    AppSettings::instance().setValue("NnrModel", QString::number(requested));
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->setModel(requested);
+    }
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nnr) {
+            source->nnr->setModel(requested);
+        }
+    }
+    if (m_nnr) {
+        m_nnr->setModel(requested);
+        // Published after the filter has been asked, so nnrModel() reports the
+        // slot in use rather than the one wanted. The filter applies the switch
+        // on the audio thread, so this reflects the previous state until the
+        // next block; the UI re-reads on nnrEnabledChanged.
+        m_nnrModel.store(m_nnr->modelSlot());
+    } else {
+        m_nnrModel.store(requested);
+    }
 }
 
 // ─── RN2 — TX path (mic pre-amp) ──────────────────────────────────────────────
@@ -7803,6 +7978,7 @@ void AudioEngine::setDfnrEnabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         m_dfnr = createDfnrFilter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_dfnr) {
             m_dfnr.reset();
@@ -7890,6 +8066,7 @@ void AudioEngine::setNvAfxEnabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         m_nvAfx = createNvAfxFilter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_nvAfx) {
