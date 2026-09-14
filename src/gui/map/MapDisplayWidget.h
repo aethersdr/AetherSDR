@@ -74,6 +74,8 @@ public:
     void setCityLightsWarmth(int percent);
     int cityLightsBrightness() const { return m_cityLightsBrightness; }
     void setRadarCoverageVisible(bool visible);
+    void setRadarLegendVisible(bool visible);
+    void setRadarLegendAtTop(bool atTop);
     void setWeatherRadarVisible(bool visible);
     void setWeatherRadarProvider(WeatherRadarSource::Provider provider);
     void setWeatherRadarRegions(int enabledProviders);
@@ -111,6 +113,7 @@ protected:
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     friend class WeatherRadarLoadingTest;
@@ -121,6 +124,7 @@ private:
     void updateOverlayLoadingStatus();
     void refreshCityLightsView();
     void presentCityLights();
+    void positionRadarLegend();
 
     bool m_detailedAttributionVisible{true};
     CityLightsSource* m_cityLightsSource{nullptr};
@@ -152,6 +156,7 @@ private:
     QString m_weatherRadarLoadingAnnouncement;
     WeatherRadarController* m_weatherRadar{nullptr};
     WeatherRadarLegend* m_radarLegend{nullptr};
+    bool m_radarLegendAtTop{false};
     bool m_flatViewDirty{false};
     bool m_globeViewDirty{false};
     bool m_globeAvailable{true};

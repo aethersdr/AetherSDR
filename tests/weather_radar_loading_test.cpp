@@ -450,6 +450,9 @@ private slots:
     {
         WeatherRadarLegend legend;
         legend.setProviders(5);
+        QVERIFY(legend.isHidden()); // Provider arrivals cannot override the opt-in.
+        legend.setLegendVisible(true);
+        QVERIFY(!legend.isHidden());
         auto* noaa = legend.findChild<QLabel*>(QStringLiteral("pskReporterRadarSourceLabel0"));
         auto* canada = legend.findChild<QLabel*>(QStringLiteral("pskReporterRadarSourceLabel1"));
         auto* opera = legend.findChild<QLabel*>(QStringLiteral("pskReporterRadarSourceLabel2"));
@@ -464,6 +467,11 @@ private slots:
         legend.setProviders(8);
         QVERIFY(noaa->parentWidget()->isHidden());
         QVERIFY(!global->parentWidget()->isHidden());
+        legend.setLegendVisible(false);
+        legend.setProviders(7);
+        QVERIFY(legend.isHidden());
+        legend.setLegendVisible(true);
+        QVERIFY(!legend.isHidden());
         legend.setProviders(0);
         QVERIFY(legend.isHidden());
         MapDisplayWidget map;
@@ -482,6 +490,32 @@ private slots:
         map.m_weatherRadar->m_flatDisplayedProviders = 8;
         map.m_weatherRadar->publishDisplayedProviders();
         QCOMPARE(changes.size(), 2);
+    }
+
+    void legendPositionTracksMapAndSourceSize()
+    {
+        MapDisplayWidget map;
+        map.resize(800, 600);
+        map.show();
+        map.m_radarLegend->setProviders(7);
+        QVERIFY(map.m_radarLegend->isHidden());
+        map.setRadarLegendVisible(true);
+        QTRY_COMPARE(map.m_radarLegend->y(), map.height() - map.m_radarLegend->height() - 12);
+        QCOMPARE(map.m_radarLegend->x(), 12);
+        map.m_radarLegend->setProviders(8);
+        QTRY_COMPARE(map.m_radarLegend->y(), map.height() - map.m_radarLegend->height() - 12);
+        map.resize(900, 700);
+        QTRY_COMPARE(map.m_radarLegend->y(), map.height() - map.m_radarLegend->height() - 12);
+        map.setRadarLegendAtTop(true);
+        QCOMPARE(map.m_radarLegend->pos(), QPoint(12, 12));
+        map.m_radarLegend->setProviders(7);
+        QTRY_COMPARE(map.m_radarLegend->pos(), QPoint(12, 12));
+        map.setRadarLegendVisible(false);
+        map.setRadarLegendAtTop(false);
+        map.setRadarLegendVisible(true);
+        QTRY_COMPARE(map.m_radarLegend->y(), map.height() - map.m_radarLegend->height() - 12);
+        map.m_radarLegend->setProviders(0);
+        QVERIFY(map.m_radarLegend->isHidden());
     }
 
     void compositeObservationNeverUsesFutureOrStaleWeather()
