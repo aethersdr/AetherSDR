@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 216 touchpoint headers (184 core, 32 models) — 216/216 tagged, 0/216 converted.
+**Totals:** 218 touchpoint headers (186 core, 32 models) — 218/218 tagged, 0/218 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -97,6 +97,8 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/NetScheduler.h` | 1 | ui-support — Timer engine firing net-reminder alerts from NetEntry list; pure client calendar plumbing, no radio state. | unconverted |
 | `core/NetworkPathResolver.h` | 1 | ui-support — Local NIC/IPv4 enumeration + interface-pick helper for connection setup; host networking plumbing, not radio state | unconverted |
 | `core/NetworkSettings.h` | 1 | ui-support — AppSettings JSON wrapper persisting VITA-49 SO_RCVBUF tuning; settings storage, not radio state — engine config knob, no protocol msg | unconverted |
+| `core/NnrControls.h` | 1 | ui-support — Compile-time NNR control ranges and default-marker positions read out of WDSP 2.10; no state and no WDSP include, shared by the ADSP tab and the filter | unconverted |
+| `core/NnrSettings.h` | 3 | ui-support — AppSettings-backed JSON store for NNR strength, model and the six WDSP tuning controls; persistence, not radio state | unconverted |
 | `core/NvidiaAfxPack.h` | 1 | ui-support — Download/install manager for NVIDIA AFX BNR runtime pack (CUDA/TensorRT); deployment plumbing, no radio state | unconverted |
 | `core/NvidiaBnrSettings.h` | 1 | ui-support — AppSettings-backed JSON store for Maxine BNR intensity + licence acceptance; persistence, not radio state | unconverted |
 | `core/PanadapterStream.h` | 4 | vendor(flex) — SmartSDR VITA-49 UDP receiver (FlexLib PCCs, DAX/IQ routing, SmartLink WAN reg); emits core-profile data | unconverted |

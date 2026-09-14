@@ -431,6 +431,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/NnrSettings.h": {
+  "tag": "ui-support",
+  "note": "AppSettings-backed JSON store for NNR strength, model and the six WDSP tuning controls; persistence, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/NnrControls.h": {
+  "tag": "ui-support",
+  "note": "Compile-time NNR control ranges and default-marker positions read out of WDSP 2.10; no state and no WDSP include, shared by the ADSP tab and the filter",
+  "split": "",
+  "confidence": "high"
+ },
  "core/PanadapterStream.h": {
   "tag": "vendor(flex)",
   "note": "SmartSDR VITA-49 UDP receiver (FlexLib PCCs, DAX/IQ routing, SmartLink WAN reg); emits core-profile data",
