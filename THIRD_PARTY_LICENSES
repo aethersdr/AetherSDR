@@ -230,12 +230,14 @@ vendored, translated, or linked.
   SOFTWARE.
 
 
-1. WDSP 2.00 — engine-side SDR DSP
+1. WDSP 2.10 — engine-side SDR DSP
 ----------------------------------
 Bundled as an isolated static library at third_party/wdsp/ from the exact
 TAPR/OpenHPSDR-wdsp revision below. AetherSDR uses the complete WDSP channel
-API behind src/core/dsp/WdspChannel for raw-IQ radio backends. Three local
-teardown fixes are documented in third_party/wdsp/AETHERSDR-PATCHES.md.
+API behind src/core/dsp/WdspChannel for raw-IQ radio backends. Four local
+fixes are documented in third_party/wdsp/AETHERSDR-PATCHES.md. The
+snapshot includes the two trained Neural Noise Reduction networks upstream
+compiles in (upstream/nnr_model_0.c, upstream/nnr_model_1.c).
 
 The SpectralNR module (src/core/SpectralNR.h, SpectralNR.cpp) additionally
 derives its OSMS, MMSE, and NSTAT noise estimators and Gaussian/Gamma gain
@@ -246,9 +248,9 @@ Source/calculus binary.
   Copyright (C) 2011-2026 Warren Pratt, NR0V, and named contributors
   License: GPL-2.0-or-later
   Source:  https://github.com/TAPR/OpenHPSDR-wdsp
-  Pinned commit: 584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3
+  Pinned commit: b02d5bac675dd2f33ec2bab2b339f79a597c47dd
   Calculus source:
-    https://raw.githubusercontent.com/TAPR/OpenHPSDR-wdsp/584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3/Source/calculus
+    https://raw.githubusercontent.com/TAPR/OpenHPSDR-wdsp/b02d5bac675dd2f33ec2bab2b339f79a597c47dd/Source/calculus
   Calculus SHA-256:
     de43a4b9c7db4445997e6452852980d58d2558d635ab3c63e6423a347ba326c3
 

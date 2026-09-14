@@ -1,18 +1,37 @@
-# AetherSDR patches to WDSP 2.00
+# AetherSDR patches to WDSP 2.10
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
-`584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3` (`Release Version 2.00`).
-AetherSDR carries four teardown fixes in the otherwise exact `Source/*.[ch]`
-snapshot:
+`b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
+AetherSDR carries four fixes in the otherwise exact `Source/*.[ch]` snapshot:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
 2. `upstream/nurbs.c`: `destroy_nurbs()` now frees the `nurbs` object after its
    member allocations.
-3. `upstream/cfir.c`: `cfir_impulse()` now frees its temporary transition table
-   before returning the generated impulse.
-4. `upstream/channel.h`, `upstream/main.c`, `upstream/channel.c`,
-   `upstream/iobuffs.c`: an exit handshake between the DSP worker and
+3. `upstream/fmd.c` (`SetRXAFMNCde`) and `upstream/emph.c`
+   (`SetTXAFMEmphNC`): `a->pfcimp = build_fcimp (...)`. Both functions tear
+   down the filter-curve object and then rebuild it, but 2.10 discards the
+   pointer `build_fcimp()` returns, so `a->pfcimp` still holds the address of
+   the object `teardown_fcimp()` just freed. The two statements that follow —
+   `exec_fcimp()` and `get_pfcpulse()` — then read and write through it, and
+   the newly built object leaks.
+
+   This is a **use-after-free on a live path, not a teardown-only leak**:
+   `RXASetNC()` calls `SetRXAFMNCde()`, and `WdspChannel::open()` calls
+   `RXASetNC()`, so every channel this host opens hits it. ASan reports it as
+   a 4-byte read of freed memory in `exec_fcimp` (`fcurve.c:67`). It is new in
+   2.10 — 2.00's `SetRXAFMNCde()` used `fc_impulse()` and owned the impulse
+   buffer directly, so the object-lifetime mistake did not exist to make.
+
+   `SetTXAFMEmphNC()` is the same mistake in the TX chain. This host does not
+   currently call it, and it is fixed anyway: it is one line, it is the same
+   refactor, and a known use-after-free left in a vendored tree is a trap for
+   whoever calls it next.
+
+   Reported upstream as TAPR/OpenHPSDR-wdsp#2; drop both lines when a release
+   contains the assignment.
+4. `upstream/channel.h`, `upstream/channel.c`, `upstream/main.c`,
+   `upstream/iobuffs.c`, `upstream/iobuffs.h`: an exit handshake between the DSP worker and
    `pre_main_destroy()`. Upstream's only barrier between the detached worker's
    exit and `destroy_main()` / `post_main_destroy()` freeing the semaphore,
    mutex and buffers it still touches was `Sleep(25)` — a scheduling bet, not
@@ -60,9 +79,10 @@ snapshot:
    `flushChannel()` has the same detached shape and no handshake; it has not
    surfaced, and gets the same treatment if it does.
 
-Without these lines, opening and closing one RX channel leaks one `notchdb`
-object and two NURBS objects, while one TX channel leaks one transition table.
-`wdsp_channel_test` detects both paths deterministically.
+Without the first two, opening and closing one RX channel leaks one `notchdb`
+object and two NURBS objects. `wdsp_channel_test` detects that deterministically.
+Without the third, every channel open reads and writes freed memory; ASan fails
+`wdsp_channel_test` immediately.
 Without the fourth, every channel close is a use-after-free race on the
 worker thread; `wdsp_channel_test` and the HL2 backend tests show it under
 ThreadSanitizer.

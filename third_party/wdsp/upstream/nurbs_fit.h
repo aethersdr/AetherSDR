@@ -116,19 +116,24 @@ typedef struct {
     double x_weight_x0;
     double x_weight_min;
     int    fold_detect;
+    int    uniform_knots;
     int    irls_iters;
     double irls_epsilon;
 } NF_Config;
 
 void nf_default_config(NF_Config *cfg);
 
-// This function no longer called.
+typedef struct _nf_ws* NF_WS;
+
+NF_WS build_nf_ws(int n_pts_max, int n_ctrl_max);
+void  teardown_nf_ws(NF_WS ws);
+
 NF_Curve *nf_fit_direct(const NF_Point2 *pts,
                          int              n_pts,
                          const NF_Config *cfg,
                          NF_FitResult    *result_out);
 
-NF_Curve *nf_fit(const NF_Point2 *pts, int n_pts,
+NF_Curve *nf_fit(NF_WS ws, const NF_Point2 *pts, int n_pts,
                  const NF_Config *cfg,
                  NF_FitResult    *result);
 
@@ -136,20 +141,16 @@ NF_Point2 nf_eval(const NF_Curve *c, double t);
 
 void nf_curve_free(NF_Curve *c);
  
-double nf_spearman(const NF_Point2 *pts, int n);
+double nf_spearman(NF_WS ws, const NF_Point2 *pts, int n);
 
-// This function not called.
 double nf_compute_rms(const NF_Curve *c,
                       const NF_Point2 *pts, int n_pts,
                       const double *t_params);   
 
-// This function not called.
 NF_Point2 *nf_sample(const NF_Curve *c, int n_samples);
 
-// This function not called.
 int nf_curve_write(const NF_Curve *c, const char *path);
 
-// This function not called.
 NF_Curve *nf_curve_read(const char *path);
 
 #endif  

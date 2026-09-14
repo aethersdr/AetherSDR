@@ -170,7 +170,7 @@ SetRXAANFRun (int channel, int run)
 	if (a->run != run)
 	{
 		RXAbp1Check (channel, rxa[channel].amd.p->run, rxa[channel].snba.p->run, 
-			rxa[channel].emnr.p->run, run, rxa[channel].anr.p->run);
+			rxa[channel].emnr.p->run, getRun_nnr(rxa[channel].nnr.p), run, rxa[channel].anr.p->run);
 		EnterCriticalSection (&ch[channel].csDSP);
 		a->run = run;
 		RXAbp1Set (channel);

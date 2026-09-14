@@ -248,7 +248,6 @@ void MeterModel::removeMeter(int index)
     m_defs.remove(index);
     m_values.remove(index);
     m_valueUpdatedMs.remove(index);
-    emit meterRemoved(index);
 
     const auto matchesIndex = [index](QMap<int, int>::iterator entry) {
         return entry.value() == index;
@@ -329,6 +328,9 @@ void MeterModel::removeMeter(int index)
         clearCompressionState();
         logCompressionSummary("meter-removed", true);
     }
+    // Presence subscribers query the routing maps synchronously. Notify only
+    // after the withdrawn meter has been removed from every index map.
+    emit meterRemoved(index);
 }
 
 float MeterModel::convertRaw(const MeterDef& def, qint16 raw) const

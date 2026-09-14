@@ -65,14 +65,39 @@ bool certificationTableHasRow(const QString& table, const QString& source,
     return row.match(table).hasMatch();
 }
 
-// THE REGRESSION 1.38 LEFT BEHIND, in the general form. Every surface the UI
-// declares must have a certification row, because the unit verdict is computed
-// by joining the two on the key: a surface with no row is never checked at all,
+// Drop // line comments before searching, so prose cannot satisfy a wiring
+// assertion. Without this, a Hl2Backend.cpp that merely MENTIONS ALCGAIN in a
+// comment -- which this file's own neighbours now do -- passes the checks below
+// with the emit deleted. Crude by design: it also blanks a // inside a string
+// literal, which costs nothing here because neither needle contains one.
+QByteArray withoutLineComments(const QByteArray& src)
+{
+    QByteArray out;
+    out.reserve(src.size());
+    for (const QByteArray& line : src.split('\n')) {
+        const int c = line.indexOf("//");
+        out += (c < 0 ? line : line.left(c));
+        out += '\n';
+    }
+    return out;
+}
+
+// Every UI surface needs a certification row. Join the two on the key: a surface with no row is never checked at all,
 // and a row with no surface "gets no unit verdict, which is the honest answer"
 // (RadioCertification.cpp). Only this direction is an error.
 void testEverySurfaceHasACertificationRow()
 {
-    const QByteArray cert = readSource("/src/core/RadioCertification.cpp");
+    // Comments stripped on BOTH sides of this join, not only on the
+    // Hl2Backend.cpp side. The reason given at withoutLineComments() applies
+    // identically here: this read is raw, so a comment in
+    // RadioCertification.cpp containing `{"TX", "ALCGAIN",` would satisfy
+    // certificationTableHasRow() with the real row deleted. Nothing in the tree
+    // does that today and the row-shaped regex makes an accidental hit
+    // unlikely — but this is a test whose whole subject is two hand-maintained
+    // tables drifting apart, so the defence belongs on both halves
+    // (aethersdr-agent, #5636 review).
+    const QByteArray cert =
+        withoutLineComments(readSource("/src/core/RadioCertification.cpp"));
     check("the join test can read RadioCertification.cpp", !cert.isEmpty());
     const QString table = QString::fromUtf8(cert);
 
@@ -115,26 +140,10 @@ void testAlcGainSurfaceIsRegisteredInDb()
     check("TX:ALCGAIN's consumer does NOT accept dBFS",
           !meterUnitAccepted(QString::fromLatin1(s->acceptedUnits),
                              QStringLiteral("dBFS")));
-    check("TX:ALCGAIN remains producer-only until its GUI change lands",
-          !meterHasRenderedSurface(QStringLiteral("TX:ALCGAIN")));
+    check("TX:ALCGAIN is rendered by the Phone applet",
+          meterHasRenderedSurface(QStringLiteral("TX:ALCGAIN")));
 }
 
-// Drop // line comments before searching, so prose cannot satisfy a wiring
-// assertion. Without this, a Hl2Backend.cpp that merely MENTIONS ALCGAIN in a
-// comment -- which this file's own neighbours now do -- passes the checks below
-// with the emit deleted. Crude by design: it also blanks a // inside a string
-// literal, which costs nothing here because neither needle contains one.
-QByteArray withoutLineComments(const QByteArray& src)
-{
-    QByteArray out;
-    out.reserve(src.size());
-    for (const QByteArray& line : src.split('\n')) {
-        const int c = line.indexOf("//");
-        out += (c < 0 ? line : line.left(c));
-        out += '\n';
-    }
-    return out;
-}
 
 // The producer half of the same join. A surface row is a claim about wiring
 // that only the wiring can honour, and "defined but never fed" and "fed but
