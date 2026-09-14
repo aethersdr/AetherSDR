@@ -1077,13 +1077,19 @@ void AmpApplet::updateValueLabels()
 void AmpApplet::setDrainVoltage(float volts)
 {
     if (!m_directConnected) return;
-    // PGXL reports vdd=0.0 when the drain supply is off (standby). Show a dash
-    // rather than "0.0 V" so it's clear the supply is off, not that we're reading zero.
-    if (volts < 1.0f)
-        m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"), QStringLiteral("—")));
-    else
-        m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"),
-                                         QString::number(volts, 'f', 1)));
+    // Reported as it arrives, including zero.
+    //
+    // A PGXL keeps its drain rail down while it is idle and only brings it up
+    // on entering OPERATE, so vdd=0.0 is the normal reading for most of the
+    // time the amplifier is switched on — not a fault, and not a missing
+    // value. This used to print a dash below 1 V, which reads as "nothing
+    // arrived": the operator sees an empty field on connect, toggles standby
+    // to make the reading appear, and concludes the client dropped the first
+    // frames. Zero volts is a true reading and says the rail is down; the
+    // dash is kept for the one case where we genuinely have nothing, which is
+    // no direct connection at all (see setDirectConnected).
+    m_vddLabel->setText(voltsReadout(QStringLiteral("Vdd"),
+                                     QString::number(volts, 'f', 1)));
 }
 
 void AmpApplet::setMainsVoltage(int volts)

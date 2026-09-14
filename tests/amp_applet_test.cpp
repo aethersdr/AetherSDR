@@ -258,11 +258,26 @@ void testReadoutWidthIsStable()
     applet.setDrainVoltage(51.9f);
     report("drain voltage keeps its width across a digit change",
            vdd->text().length() == vddReading, vdd->text());
-    applet.setDrainVoltage(0.0f);          // supply off — back to the dash
-    report("drain voltage placeholder is the same width as a reading",
+    // Zero is a reading, not a gap. The amplifier keeps its drain rail down
+    // while idle, so this is what it reports for most of the time it is
+    // switched on; a dash there reads as "nothing arrived" and sends the
+    // operator looking for a fault in the client.
+    applet.setDrainVoltage(0.0f);
+    report("zero drain voltage is reported literally",
+           vdd->text().contains(QStringLiteral("0.0")), vdd->text());
+    report("zero drain voltage is not a placeholder",
+           !vdd->text().contains(QStringLiteral("\u2014")), vdd->text());
+    report("zero drain voltage keeps the row's width",
            vdd->text().length() == vddReading, vdd->text());
-    report("drain voltage placeholder matches the startup one",
+
+    // The dash is kept for the case where there is genuinely nothing: the
+    // readings only exist on the direct connection.
+    applet.setDirectConnected(false);
+    report("no direct connection falls back to the placeholder",
+           vdd->text().contains(QStringLiteral("\u2014")), vdd->text());
+    report("the placeholder is the same width as a reading",
            vdd->text().length() == vddWidth, vdd->text());
+    applet.setDirectConnected(true);
 
     applet.setMainsVoltage(98);
     const int vacReading = vac->text().length();

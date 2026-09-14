@@ -232,6 +232,8 @@ Docked in the rail it is the compact tile: forward power, SWR and drain current 
 
 Popped out into its own window, or placed on the workspace canvas, it lays itself out the way the amplifier's own front panel does: the same three meters, larger, and a status strip for each RF port showing the band it is on, the bias profile it is set to, and the radio feeding it, with the fan and standby keys beside them and the temperatures, drain and mains voltages along the bottom. The port carrying transmit is outlined. In standby a single banner replaces both strips — with the amplifier out of circuit there is no per-port reading left to show — and the `STBY` key lights to say so; pressing it there puts the amplifier back into operate.
 
+`Vdd` reads `0.0 V` most of the time the amplifier is switched on. That is the amplifier, not a missing reading — it keeps its drain rail down while idle and brings it up when it enters operate. A dash there means there is no direct connection at all.
+
 A port strip names a state only when there is one to act on. Operating is the normal condition and keying is already on the `PTT` lamp, so neither puts a word on the strip; `FAULT` does.
 
 A port with no band reads `N/A`. That is the amplifier saying nothing is driving it, not a reading that failed to arrive — the radio name beside it describes how the port is wired, not that RF is flowing through it.
