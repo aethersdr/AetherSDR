@@ -28,7 +28,8 @@ AetherSDR carries four fixes in the otherwise exact `Source/*.[ch]` snapshot:
    refactor, and a known use-after-free left in a vendored tree is a trap for
    whoever calls it next.
 
-   Report upstream; drop both lines when a release contains the assignment.
+   Reported upstream as TAPR/OpenHPSDR-wdsp#2; drop both lines when a release
+   contains the assignment.
 4. `upstream/channel.h`, `upstream/channel.c`, `upstream/main.c`,
    `upstream/iobuffs.c`, `upstream/iobuffs.h`: an exit handshake between the DSP worker and
    `pre_main_destroy()`. Upstream's only barrier between the detached worker's
