@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -1216,6 +1217,432 @@ bool runLifecycleTest()
 // measured and then thrown away, so the next launch paid full first-run cost
 // again — for anyone who had ever force-quit, on every run.
 //
+// ── TXA driven the way the HL2 backend drives a transmit chain ────────────
+//
+// runVector(Direction::Transmit) above proves a TXA channel produces IQ, but it
+// proves it in a configuration the live path cannot use: equal rates, equal
+// block sizes, and blockForOutput = true. With bfo set, fexchange2()'s
+// `*error += -2` branch is unreachable (iobuffs.c: `if (a->bfo)
+// WaitForSingleObject(...INFINITE); if (a->bfo || doit)`), so that vector is
+// structurally incapable of reporting an underrun, and every buffer
+// relationship pre_main_build() computes differs from the live one.
+//
+// This case runs a transmit channel at the rates and block sizes
+// Hl2TxDsp::Config and MetisClient actually use -- 24 kHz audio in, 48 kHz DSP,
+// 48 kHz EP2 out -- with blockForOutput = false, and measures what comes out.
+//
+// Three things it pins that nothing else in the tree does:
+//
+//  * THE CALLER MUST BE PACED. A non-blocking channel has exactly one DSP
+//    buffer of slack (create_iobuffs: r2_havesamps = (DSP_MULT - 1) * r2_size,
+//    DSP_MULT = 2) and fexchange2 CLAMPS r2_havesamps at zero on a miss while
+//    still advancing r2_outidx, so credit is destroyed rather than banked and a
+//    caller that outruns the worker never recovers. A tight loop underruns
+//    almost every block; at the live block period it underruns none after the
+//    first.
+//
+//  * THE AUDIO MUST BE IN I. xpanel runs with inselect = 2, which evaluates
+//    I = in[2i] * (inselect >> 1) and Q = in[2i+1] * (inselect & 1), so Q is
+//    multiplied by zero. A caller that fills inputQ and leaves inputI empty
+//    gets exact zeros out forever, with no error. fillAudioTone() writes the
+//    same value into both planes, so runVector cannot distinguish the two.
+//
+//  * POSITIVE PASSBAND EDGES ALREADY GIVE THE HPSDR WIRE'S HANDEDNESS.
+//    fir_bandpass builds the complex impulse as coef * (cos, -sin), i.e.
+//    exp(-j*w_osc*pos), so a positive signed band selects the NEGATIVE
+//    baseband half. TXA therefore emits, with no conjugation, the same
+//    handedness Hl2TxDsp reaches by conjugating -- which is what
+//    hl2_txdsp_test's "USB puts energy on the LOWER wire bin" asserts.
+
+struct TransmitRun
+{
+    bool created = false;
+    int okBlocks = 0;
+    int underrunBlocks = 0;
+    int otherBlocks = 0;
+    int firstOkBlock = -1;
+    int lastUnderrunBlock = -1;
+    int firstNonZeroBlock = -1;
+    double peakMagnitude = 0.0;
+    // Wire-facing IQ from Ok blocks at or after `discardBlocks`, with each
+    // sample's ABSOLUTE index in the output stream. The index matters: a
+    // dropped block is a phase discontinuity, and correlating a concatenation
+    // of non-adjacent blocks against a fixed tone measures nothing.
+    std::vector<std::complex<float>> iq;
+    std::vector<std::size_t> index;
+    // Per-Ok-block correlation phase at the tone frequency, in degrees, taken
+    // against each block's ABSOLUTE position in the output stream. A channel
+    // whose r2 read pointer is aligned with its write pointer returns the same
+    // phase for every block (the chain's fixed group delay). fexchange2
+    // advances r2_outidx on a MISS as well as on a hit, so a run of underruns
+    // de-phases the two pointers and a later successful read can return a
+    // buffer the worker has not refreshed -- which shows up here, and only
+    // here, as a block whose phase differs from its neighbours'.
+    std::vector<double> blockPhaseDeg;
+    std::vector<double> blockPhasePeak;   // that block's peak |sample|, for gating
+};
+
+// Live geometry. Hl2TxDsp::Config's 24 kHz audio in and 48 kHz EP2 out, with
+// dspBlockSize in DSP-rate samples -- twice the input block, so the channel
+// consumes exactly one input block per DSP pass. That is the mirror of the
+// arithmetic Hl2RxDsp::configure already does for receive, and nothing in the
+// tree does it for transmit today.
+WdspChannel::Config liveTransmitConfig(WdspChannel::Mode mode,
+                                       double lowHz, double highHz)
+{
+    WdspChannel::Config config;
+    config.direction = WdspChannel::Direction::Transmit;
+    config.inputSampleRate = 24000;
+    config.dspSampleRate = 48000;
+    config.outputSampleRate = 48000;
+    config.inputBlockSize = 512;
+    config.dspBlockSize = 1024;
+    config.mode = mode;
+    config.filterLowHz = lowHz;
+    config.filterHighHz = highHz;
+    config.blockForOutput = false;   // the LIVE setting, deliberately
+    return config;
+}
+
+// `plane`: 0 = tone in I only (what a backend feeding mono audio would do),
+// 1 = tone in Q only, 2 = both (what fillAudioTone does).
+// `paceUs`: wall-clock delay between calls. 0 is a tight loop; the live value
+// is inputBlockSize / inputSampleRate = 21333 us.
+TransmitRun runTransmitChannel(int plane, double toneHz, WdspChannel::Mode mode,
+                               double lowHz, double highHz,
+                               std::size_t blocks, std::size_t discardBlocks,
+                               int paceUs)
+{
+    TransmitRun run;
+    const WdspChannel::Config config = liveTransmitConfig(mode, lowHz, highHz);
+
+    std::string error;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, error.c_str())) {
+        return run;
+    }
+    run.created = true;
+
+    std::vector<float> inputI(config.inputBlockSize, 0.0f);
+    std::vector<float> inputQ(config.inputBlockSize, 0.0f);
+    std::vector<float> outputLeft(channel->outputBlockSize());
+    std::vector<float> outputRight(channel->outputBlockSize());
+    const std::size_t outBlock = channel->outputBlockSize();
+
+    for (std::size_t block = 0; block < blocks; ++block) {
+        for (std::size_t sample = 0; sample < inputI.size(); ++sample) {
+            const double phase = 2.0 * std::numbers::pi * toneHz *
+                                 static_cast<double>(block * inputI.size() + sample) /
+                                 static_cast<double>(config.inputSampleRate);
+            const float value = static_cast<float>(0.1 * std::cos(phase));
+            inputI[sample] = (plane == 1) ? 0.0f : value;
+            inputQ[sample] = (plane == 0) ? 0.0f : value;
+        }
+        const WdspChannel::ProcessResult result =
+            channel->processIq(inputI, inputQ, outputLeft, outputRight);
+        switch (result) {
+        case WdspChannel::ProcessResult::Ok:
+            ++run.okBlocks;
+            if (run.firstOkBlock < 0) {
+                run.firstOkBlock = static_cast<int>(block);
+            }
+            break;
+        case WdspChannel::ProcessResult::Underrun:
+            ++run.underrunBlocks;
+            run.lastUnderrunBlock = static_cast<int>(block);
+            break;
+        default:
+            ++run.otherBlocks;
+            break;
+        }
+        double blockPeak = 0.0;
+        for (std::size_t k = 0; k < outBlock; ++k) {
+            blockPeak = std::max(blockPeak,
+                                 std::abs(static_cast<double>(outputLeft[k])));
+            blockPeak = std::max(blockPeak,
+                                 std::abs(static_cast<double>(outputRight[k])));
+        }
+        if (blockPeak > 0.0 && run.firstNonZeroBlock < 0) {
+            run.firstNonZeroBlock = static_cast<int>(block);
+        }
+        run.peakMagnitude = std::max(run.peakMagnitude, blockPeak);
+        if (result == WdspChannel::ProcessResult::Ok && blockPeak > 0.0) {
+            std::complex<double> acc {0.0, 0.0};
+            const double w = 2.0 * std::numbers::pi * toneHz / 48000.0;
+            for (std::size_t k = 0; k < outBlock; ++k) {
+                const double ph = w * static_cast<double>(block * outBlock + k);
+                acc += std::complex<double>(outputLeft[k], outputRight[k]) *
+                       std::complex<double>(std::cos(ph), std::sin(ph));
+            }
+            run.blockPhaseDeg.push_back(std::arg(acc) * 180.0 /
+                                        std::numbers::pi);
+            run.blockPhasePeak.push_back(blockPeak);
+        }
+        if (result != WdspChannel::ProcessResult::Ok) {
+            // An underrun slips the output stream by one whole DSP buffer for
+            // good (see the census in runTransmitLiveGeometryTest), so anything
+            // collected before it is in a different phase frame from anything
+            // collected after. Start again rather than correlate across the
+            // seam: the alternative is a suppression figure that silently
+            // averages two time origins.
+            run.iq.clear();
+            run.index.clear();
+        } else if (block >= discardBlocks) {
+            for (std::size_t k = 0; k < outBlock; ++k) {
+                run.iq.emplace_back(outputLeft[k], outputRight[k]);
+                run.index.push_back(block * outBlock + k);
+            }
+        }
+        if (paceUs > 0) {
+            std::this_thread::sleep_for(std::chrono::microseconds(paceUs));
+        }
+    }
+    return run;
+}
+
+// Goertzel-style complex-bin correlation. The same instrument hl2_txdsp_test
+// runs on the phasing modulator, extended only to take each sample's absolute
+// index so a dropped block does not silently become a phase step.
+double binPower(const std::vector<std::complex<float>>& iq,
+                const std::vector<std::size_t>& index, double hz, double fs)
+{
+    if (iq.empty()) {
+        return 0.0;
+    }
+    std::complex<double> acc {0.0, 0.0};
+    const double w = -2.0 * std::numbers::pi * hz / fs;
+    for (std::size_t n = 0; n < iq.size(); ++n) {
+        const double ph = w * static_cast<double>(index[n]);
+        acc += std::complex<double>(iq[n].real(), iq[n].imag()) *
+               std::complex<double>(std::cos(ph), std::sin(ph));
+    }
+    return std::abs(acc) / static_cast<double>(iq.size());
+}
+
+double suppressionDb(double wanted, double unwanted)
+{
+    // Floor well below float32 quantization so a bin that measures at the
+    // arithmetic floor prints its real value rather than a clamp artefact.
+    return 20.0 * std::log10(std::max(1.0e-20, unwanted) /
+                             std::max(1.0e-20, wanted));
+}
+
+// Input block period at the live rates, in microseconds: what
+// Hl2TxDsp::processAudioBlock's accumulator hands the channel, paced by
+// AudioEngine's 5 ms TX poll timer.
+constexpr int kLivePaceUs = 512 * 1000000 / 24000;   // 21333
+// Pace for the spectral runs. Four times FASTER than the live cadence, and
+// still five times slower than the point the census below shows the worker
+// keeping up, so these runs are not measuring a race. Keeping them off the live
+// cadence keeps the case's wall-clock cost to a few seconds.
+constexpr int kSpectralPaceUs = 5000;
+
+bool runTransmitLiveGeometryTest()
+{
+    // 1. Underrun census against caller pacing. This is the measurement the
+    //    original TXA attempt needed and the one runVector cannot make.
+    std::cout << "  TX underrun census at the live geometry"
+                 " (512 in / 1024 dsp, 24k->48k, bfo=0):\n";
+    bool pacedClean = false;
+    for (const int paceUs : {0, 1000, 5000, kLivePaceUs}) {
+        // The unpaced leg costs no wall clock, so run it long enough to show
+        // that the state does not clear itself.
+        const std::size_t censusBlocks = (paceUs == 0) ? 256 : 64;
+        const TransmitRun census =
+            runTransmitChannel(0, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+                               censusBlocks, censusBlocks, paceUs);
+        if (!require(census.created, "live-geometry transmit channel was refused")) {
+            return false;
+        }
+        // Only blocks at full amplitude: a block still inside the mute ramp or
+        // bp0's fill has a meaningless phase, and including it would report a
+        // priming transient as a pointer fault.
+        double phaseSpread = 0.0;
+        std::size_t settledBlocks = 0;
+        {
+            double reference = 0.0;
+            bool haveReference = false;
+            for (std::size_t n = 0; n < census.blockPhaseDeg.size(); ++n) {
+                if (census.blockPhasePeak[n] < 0.5 * census.peakMagnitude) {
+                    continue;
+                }
+                ++settledBlocks;
+                if (!haveReference) {
+                    reference = census.blockPhaseDeg[n];
+                    haveReference = true;
+                    continue;
+                }
+                double delta = census.blockPhaseDeg[n] - reference;
+                while (delta > 180.0) { delta -= 360.0; }
+                while (delta < -180.0) { delta += 360.0; }
+                phaseSpread = std::max(phaseSpread, std::abs(delta));
+            }
+        }
+        std::cout << "    pace " << paceUs << " us over " << censusBlocks
+                  << " blocks: ok=" << census.okBlocks
+                  << " underrun=" << census.underrunBlocks
+                  << " other=" << census.otherBlocks
+                  << " lastUnderrun=" << census.lastUnderrunBlock
+                  << " signalBlocks=" << census.blockPhaseDeg.size()
+                  << " settledBlocks=" << settledBlocks
+                  << " maxPhaseSpread=" << phaseSpread << " deg\n";
+        if (!require(census.otherBlocks == 0,
+                     "a live-geometry transmit channel reported a hard error")) {
+            return false;
+        }
+        if (paceUs == kLivePaceUs) {
+            // At the live cadence the pipeline primes and stays primed. The
+            // margin is deliberately loose -- what this falsifies is the
+            // existing note's "Underrun on most blocks", not a tight bound.
+            pacedClean = census.underrunBlocks * 20 <=
+                         static_cast<int>(censusBlocks);
+            // AND the output must not have SLIPPED. An underrun does not merely
+            // drop a block: fexchange2 advances r2_outidx on the miss without
+            // consuming, so the read pointer catches the write pointer up and
+            // the stream thereafter runs one whole DSP buffer ahead -- measured
+            // here as a 120 degree step at 1 kHz, which is exactly 1024 samples
+            // at 48 kHz. A block of audio is discarded on top of the block of
+            // silence, permanently, with nothing reported. Only asserted on a
+            // leg that underran nothing, so a loaded machine reports the slip
+            // rather than failing twice for one cause.
+            if (census.underrunBlocks == 0 &&
+                !require(phaseSpread < 1.0,
+                         "a clean transmit channel's output slipped against "
+                         "its input")) {
+                return false;
+            }
+        }
+    }
+    if (!require(pacedClean,
+                 "a transmit channel paced at the live block period underran "
+                 "more than 5% of blocks")) {
+        return false;
+    }
+
+    constexpr std::size_t kBlocks = 96;
+    constexpr std::size_t kDiscard = 24;   // past the mute ramp and bp0's fill
+
+    // 2. The backend's arrangement: mono audio in I, Q empty.
+    const TransmitRun iOnly =
+        runTransmitChannel(0, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+                           kBlocks, kDiscard, kSpectralPaceUs);
+    if (!require(iOnly.created, "live-geometry transmit channel was refused")) {
+        return false;
+    }
+    std::cout << "  TX live geometry (I only): ok=" << iOnly.okBlocks
+              << " underrun=" << iOnly.underrunBlocks
+              << " firstNonZero=" << iOnly.firstNonZeroBlock
+              << " peak=" << iOnly.peakMagnitude << '\n';
+
+    // 3. The same feed in the other plane. xpanel's inselect = 2 discards Q.
+    const TransmitRun qOnly =
+        runTransmitChannel(1, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+                           24, 24, kSpectralPaceUs);
+    if (!require(qOnly.created, "live-geometry transmit channel was refused")) {
+        return false;
+    }
+    std::cout << "  TX live geometry (Q only): ok=" << qOnly.okBlocks
+              << " peak=" << qOnly.peakMagnitude << '\n';
+
+    if (!require(iOnly.iq.size() >= 4096,
+                 "live-geometry transmit channel produced too few contiguous "
+                 "Ok blocks to correlate") ||
+        !require(iOnly.peakMagnitude > 0.0,
+                 "audio in I produced no transmit IQ at the live geometry") ||
+        !require(qOnly.peakMagnitude == 0.0,
+                 "audio in Q produced transmit IQ; xpanel's inselect changed")) {
+        return false;
+    }
+
+    // 4. Sideband and opposite-sideband suppression, measured with the same
+    //    instrument and on the same convention hl2_txdsp_test uses: the
+    //    wire-facing plane pair, against an audio tone, with nothing
+    //    downstream. Two conjugations cannot cancel here.
+    const double upper = binPower(iOnly.iq, iOnly.index, 1000.0, 48000.0);
+    const double lower = binPower(iOnly.iq, iOnly.index, -1000.0, 48000.0);
+    std::cout << "  TX USB {300,2700} 1 kHz: +1 kHz " << upper
+              << "  -1 kHz " << lower << "  suppression "
+              << suppressionDb(std::max(upper, lower), std::min(upper, lower))
+              << " dB over " << iOnly.iq.size() << " samples\n";
+
+    // hl2_txdsp_test asserts exactly this of Hl2TxDsp's CONJUGATED output. TXA
+    // reaches it with no conjugation, because fir_bandpass's exp(-j*w_osc*pos)
+    // impulse makes a positive signed band select the negative baseband half.
+    // So Hl2Backend::defaultTxPassbandForMode's positive-for-every-mode table
+    // is already right for a TXA channel, and ADDING the conjugation would
+    // transmit on the wrong sideband.
+    if (!require(lower > upper,
+                 "TXA with positive passband edges did not put the tone on the "
+                 "LOWER wire bin")) {
+        return false;
+    }
+    if (!require(suppressionDb(lower, upper) < -40.0,
+                 "TXA opposite-sideband suppression below 40 dB")) {
+        return false;
+    }
+
+    // 5. Negative passband edges mirror it. TXASetupBPFilters handles TXA_LSB
+    //    and TXA_USB with the identical CalcBandpassFilter call, so the MODE
+    //    does not select the sideband in TXA -- the passband sign does, exactly
+    //    as it does in RXA.
+    const TransmitRun mirrored =
+        runTransmitChannel(0, 1000.0, WdspChannel::Mode::Usb, -2700.0, -300.0,
+                           kBlocks, kDiscard, kSpectralPaceUs);
+    if (!require(mirrored.created && !mirrored.iq.empty(),
+                 "mirrored-passband transmit channel produced nothing")) {
+        return false;
+    }
+    const double mirroredUpper = binPower(mirrored.iq, mirrored.index, 1000.0, 48000.0);
+    const double mirroredLower = binPower(mirrored.iq, mirrored.index, -1000.0, 48000.0);
+    std::cout << "  TX USB {-2700,-300} 1 kHz: +1 kHz " << mirroredUpper
+              << "  -1 kHz " << mirroredLower << "  suppression "
+              << suppressionDb(std::max(mirroredUpper, mirroredLower),
+                               std::min(mirroredUpper, mirroredLower)) << " dB\n";
+    if (!require(mirroredUpper > mirroredLower,
+                 "negative passband edges did not mirror the sideband")) {
+        return false;
+    }
+
+    // 6. The DIGU/DIGL passband at its low edge. Hl2TxDsp's 255 Blackman taps
+    //    at 48 kHz give a derived 22 dB at 150 Hz and 30.6 dB at 200 Hz on this
+    //    passband; TXA's bp0 is max(2048, dsp_size) taps at the same rate.
+    for (const double toneHz : {150.0, 200.0, 300.0, 1000.0}) {
+        const TransmitRun dig =
+            runTransmitChannel(0, toneHz, WdspChannel::Mode::Digu, 150.0, 3000.0,
+                               kBlocks, kDiscard, kSpectralPaceUs);
+        if (!require(dig.created && !dig.iq.empty(),
+                     "DIGU transmit channel produced nothing")) {
+            return false;
+        }
+        const double wanted = binPower(dig.iq, dig.index, -toneHz, 48000.0);
+        const double image = binPower(dig.iq, dig.index, toneHz, 48000.0);
+        std::cout << "  TX DIGU {150,3000} tone " << toneHz
+                  << " Hz: wanted " << wanted << "  image " << image
+                  << "  suppression " << suppressionDb(wanted, image) << " dB\n";
+    }
+
+    // 7. Out-of-passband rejection -- the assertion that caught the wideband
+    //    Hilbert bug on the phasing modulator.
+    const TransmitRun outOfBand =
+        runTransmitChannel(0, 5000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+                           kBlocks, kDiscard, kSpectralPaceUs);
+    if (!require(outOfBand.created && !outOfBand.iq.empty(),
+                 "out-of-band transmit channel produced nothing")) {
+        return false;
+    }
+    const double leak =
+        std::max(binPower(outOfBand.iq, outOfBand.index, 5000.0, 48000.0),
+                 binPower(outOfBand.iq, outOfBand.index, -5000.0, 48000.0));
+    std::cout << "  TX out-of-band 5 kHz against a 2700 Hz edge: "
+              << suppressionDb(lower, leak) << " dB below an in-band tone\n";
+    if (!require(suppressionDb(lower, leak) < -60.0,
+                 "a 5 kHz tone leaked through a 2700 Hz transmit filter")) {
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -1255,6 +1682,7 @@ int main()
     check(runLeakChecked("TX vector", [] {
         return runVector(WdspChannel::Direction::Transmit);
     }));
+    check(runLeakChecked("TX live geometry", runTransmitLiveGeometryTest));
     check(runLeakChecked("underrun test", runUnderrunTest));
     check(runLeakChecked("reconfiguration test", runReconfigurationTest));
     check(runLeakChecked("start/stop test", runStartStopTest));
