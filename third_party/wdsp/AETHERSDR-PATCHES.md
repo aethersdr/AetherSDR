@@ -559,9 +559,38 @@ at every edited site, so `grep -rn "AetherSDR patch" third_party/wdsp/` finds
 them all. Patches 1-3 carry no marker — 1 and 2 are single added `_aligned_free`
 lines and 3 is a single added assignment — and are findable only from this file.
 New patches use the marker.
+ Patch 10 is the exception: its sites are marked `// AetherSDR:` with no
+number, so the grep above does not find them; it is findable from this file
+and from `ensure_minphase` in `upstream/firmin.c`.
 
-When refreshing WDSP, first check whether upstream has made each change itself --
-the equivalent frees for patches 1-3, the exit handshake for patch 4, the `a->mp`
-guard for patch 10. Drop any local patch upstream now carries. Otherwise reapply
-only these minimal changes and run the lifecycle test under AddressSanitizer on
-every supported platform.
+When refreshing WDSP, first check whether upstream has made each change
+itself. The ten are different shapes, so grep for the shape, not for a free:
+
+- **patches 1-2** -- a trailing `_aligned_free()` of the object itself at the
+  end of `destroy_notchdb()` / `destroy_nurbs()`.
+- **patch 3** -- the `a->pfcimp = build_fcimp (...)` **assignment** in
+  `SetRXAFMNCde()` and `SetTXAFMEmphNC()` (TAPR/OpenHPSDR-wdsp#2). This one is
+  a use-after-free fixed by capturing a return value, **not a free**: looking
+  for an added free will report the fix absent when it has landed, or have you
+  reapply a patch upstream already carries.
+- **patch 4** -- the `mainGen` / `mainRunGen` / `mainExited` exit handshake
+  between the DSP worker and `pre_main_destroy()`.
+- **patch 5** -- standalone `set*_nnr()` accessors alongside the `SetRXANNR*`
+  properties.
+- **patch 6** -- an `n->df` guard in `setAlpha_nnet()` and `setKnee_nnet()`
+  (TAPR/OpenHPSDR-wdsp#4, fix in TAPR/OpenHPSDR-wdsp#5).
+- **patch 7** -- `SetChannelState()` case 1 clearing a still-pending
+  `slew.downflag` / `iob.ch_upslew` down-ramp before it arms the up-ramp
+  (TAPR/OpenHPSDR-wdsp#6).
+- **patch 8** -- `SetChannelState()` case 1 waiting, outside `csEXCH` and under
+  case 0's existing bound, for `exchange` clear **and** `flushflag` set
+  (TAPR/OpenHPSDR-wdsp#7).
+- **patch 9** -- a `quiesce_flush()` holding the `flush_bypass` / `Sem_Flush`
+  handshake, called from `pre_main_destroy()` rather than only from
+  `destroy_iobuffs()` (TAPR/OpenHPSDR-wdsp#8).
+- **patch 10** -- an `a->mp` guard on the `create_minphase()` call at the end of
+  `plan_fircore()`, and a build-on-first-use in `calc_fircore()`.
+
+Drop any local patch upstream now carries. Otherwise reapply only these minimal
+changes and run the lifecycle test under AddressSanitizer on every supported
+platform.
