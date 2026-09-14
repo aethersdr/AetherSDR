@@ -2,8 +2,8 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries eight local changes in the otherwise exact `Source/*.[ch]`
-snapshot — three teardown corrections, two null/lifetime fixes, one added
+AetherSDR carries nine local changes in the otherwise exact `Source/*.[ch]`
+snapshot — four teardown corrections, two null/lifetime fixes, one added
 accessor set, and two channel-state fixes:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
@@ -265,6 +265,115 @@ accessor set, and two channel-state fixes:
    NOT MEASURED ON HARDWARE. The probe is synthetic; no radio has run any of
    this.
 
+9. `upstream/channel.c`, `upstream/iobuffs.c`, `upstream/iobuffs.h`: the
+   `flushChannel` exit handshake now runs in `pre_main_destroy()`, before
+   `destroy_main()`, instead of in `destroy_iobuffs()` after it.
+
+   **This is a move, not a new mechanism.** Upstream already had the handshake:
+   `destroy_iobuffs()` sets `flush_bypass`, releases `Sem_Flush` so a parked
+   thread wakes and sees it, and waits for the thread's own reset of
+   `flush_bypass` at the tail of `flushChannel()`. What was wrong was where it
+   ran. `CloseChannel()` is `pre_main_destroy(); destroy_main();
+   post_main_destroy()`, and `destroy_iobuffs()` is reached only from the third
+   — so the flush thread was still live across `destroy_main()`, which is
+   `destroy_rxa()`/`destroy_txa()`, exactly the chain `flush_main()` ->
+   `flush_rxa()` walks. The patch adds a `quiesce_flush()` function holding that
+   code and calls it from both ends of the pair; `destroy_iobuffs()` keeps its
+   call and normally finds the work already done.
+
+   Patch 4 gave the `wdspmain` worker an exit handshake and said of this thread:
+   *"`flushChannel()` has the same detached shape and no handshake; it has not
+   surfaced, and gets the same treatment if it does."* It has surfaced.
+
+   **What makes it reachable is a completed down-ramp.** At the completion of
+   the ramp, `fexchange0`/`fexchange2` clear `exchange` and release `Sem_Flush`
+   (`iobuffs.c`), leaving `flushChannel` runnable. Before
+   `WdspChannel::setRunning()` there was no way to reach that state and then
+   close: the only stop was `close()`'s own, taken behind the host's control
+   fence with nothing left to call `fexchange*`, so the ramp never completed and
+   the thread stayed parked through the whole of teardown. A host that stops a
+   channel, keeps clocking it — which is what `WdspChannel.h` now documents as
+   correct usage, and what the T/R mute of `docs/HERMES.md` §13 row 9a will do —
+   and then destroys it, hands `destroy_rxa()` a chain another thread is inside.
+
+   **MEASURED, before it was fixed.** macOS arm64, AppleClang, RelWithDebInfo,
+   one trial per process. TWO BUILDS OF THE SAME SOURCE are reported separately
+   and deliberately: the rate is a property of the schedule and the heap, not of
+   the defect, and quoting one figure would misrepresent it.
+
+   Build A, DFNR not linked:
+
+   | shape | non-blocking | blocking |
+   |---|---|---|
+   | create -> clock 32 -> destroy (never stopped) | clean 10/10 | clean 10/10 |
+   | create -> clock 32 -> `setRunning(false)` -> destroy | clean 10/10 | clean 10/10 |
+   | create -> clock 32 -> `setRunning(false)` -> **clock 32** -> destroy | **crashed 30/30** | clean 30/30 |
+   | the same, with a 50 ms sleep before the destroy | clean 30/30 | — |
+
+   Build B, DFNR linked (which moves the heap), same source:
+
+   | shape | non-blocking | blocking |
+   |---|---|---|
+   | never stopped; and stopped with nothing clocked | clean 15/15 each | — |
+   | stopped **and clocked** | **crashed 8/30** | **crashed 1/30** |
+
+   The single distinguishing variable is the clocking after the stop, and the
+   sleep control is what identifies the flush thread rather than the stop itself.
+   Within build A the crashing shape measured 3 of 10, then 16 of 30, then 30 of
+   30 across relinks of identical source, so no one figure should be read as
+   "the" rate; what is stable is that the shape faults and its two neighbours do
+   not. Build B is the one that matters for the blocking mode: 1 of 30 is small
+   but not zero, so this is not a mode-specific defect — the suite's own cases,
+   which are all `blockForOutput = true`, are exposed, just far less often here
+   than the non-blocking form production uses.
+
+   `lldb` on a faulting run shows both halves at once — thread 1 in
+   `destroy_fmd` <- `destroy_rxa` <- `destroy_main` <- `CloseChannel` <-
+   `WdspChannel::close`, thread 4 in `flush_emnr` <- `flush_rxa` <-
+   `flush_main` <- `flushChannel`. With patch 9 the crashing shape is clean
+   80/80 in build B, 40 in each output mode.
+
+   @ten9876 reported it against Arch/gcc, where he measured 10 of 10 and a
+   `pthread_cond_destroy` hang variant in `wdsp_channel_test` itself, 2 runs in
+   3. The crash reproduces here; the hang does not — 35 runs of the unfixed
+   suite, 0 hangs. See patch 4's note on `_beginthread` failure and on the
+   worker's exit handshake for the part of that difference worth keeping in
+   view.
+
+   **BOUNDED, where upstream's spin was not**, at 1000 x `Sleep(1)` to match
+   patch 4's handshake and for the reason patch 4 gives: upstream ignores
+   `_beginthread()` failure, and an unbounded wait on a thread that was never
+   created would hang `CloseChannel()` forever. Falling through after the cap
+   leaves exactly the pre-patch behaviour, which is the bug — no worse than
+   today, and a hang would be worse than both. This is the one respect in which
+   the moved code is not verbatim, and it is a deliberate trade rather than an
+   oversight.
+
+   **IDEMPOTENT**, via a new `flush_quiesced` bit in `struct _iobuffs`, because
+   both ends of the `pre_main_destroy()`/`post_main_destroy()` pair call it and
+   a second pass must not re-arm a `flush_bypass` that no thread is left to
+   acknowledge — that would burn the whole cap on every close. Per-`iob`, not
+   per-channel-slot, so patch 4's generation hazard does not arise: the `iob` is
+   freed and reallocated on every build.
+
+   **AFTER patch 4's worker wait, not before.** `flushChannel()` takes `csDSP`,
+   which the worker holds across `dexchange()`, so quiescing the flush thread
+   first could make `pre_main_destroy()` wait out the worker's block through a
+   second thread. With the worker already gone both channel sections are free.
+
+   **Unchanged by the 2.10 refresh**, for the same reason patches 7 and 8 are:
+   `channel.c`, `iobuffs.c`, `iobuffs.h` and `main.c` are byte-identical
+   upstream between `Release Version 2.00` and `Release Version 2.10`.
+
+   Found by @ten9876 in review of #5628. Pinned by `wdsp_channel_test`'s
+   `runCloseAfterStoppedClockingTest`, which drives the crashing shape 24 times
+   in one process and goes red — as a signal, not a message, because there is no
+   assertion that catches a use-after-free from inside the process committing it
+   — in 5 of 5 runs with this patch reverted.
+
+   NOT MEASURED ON HARDWARE. The probe is synthetic; no radio has run any of
+   this.
+
 Without the first two, opening and closing one RX channel leaks one `notchdb`
 object and two NURBS objects. `wdsp_channel_test` detects that deterministically.
 Without the third, every channel open reads and writes freed memory; ASan fails
@@ -283,8 +392,10 @@ clocked the down-ramp out — silently and permanently disables the channel;
 Without the eighth, a start taken just *after* that ramp completes does the same
 thing by a different route, and in the blocking form hangs the host outright;
 `wdsp_channel_test` shows it, and the probe behind the patch measures it.
+Without the ninth, closing a channel that was stopped and then clocked frees the
+RXA chain under a live `flushChannel` thread; `wdsp_channel_test` crashes.
 
-**Marking convention.** Patches 4, 7 and 8 carry `// AetherSDR patch N:` comments
+**Marking convention.** Patches 4, 7, 8 and 9 carry `// AetherSDR patch N:` comments
 at every edited site, so `grep -rn "AetherSDR patch" third_party/wdsp/` finds
 them all. Patches 1-3 carry no marker — 1 and 2 are single added `_aligned_free`
 lines and 3 is a single added assignment — and are findable only from this file.

@@ -144,6 +144,30 @@ void pre_main_destroy (int channel)
 			++waited;
 		}
 	}
+	// AetherSDR patch 9: AND NOW THE OTHER DETACHED THREAD. Patch 4 waited for
+	// the wdspmain worker and said of this one: "flushChannel() has the same
+	// detached shape and no handshake; it has not surfaced, and gets the same
+	// treatment if it does." It has surfaced.
+	//
+	// flushChannel() DOES have a handshake — upstream's, in destroy_iobuffs().
+	// It is simply on the wrong side of destroy_main(). CloseChannel() is
+	// pre_main_destroy(); destroy_main(); post_main_destroy(), and
+	// destroy_iobuffs() is reached only from the third, so a flush thread that a
+	// COMPLETED down-ramp made runnable was still inside flush_main() ->
+	// flush_rxa() while destroy_main() -> destroy_rxa() freed that same chain
+	// underneath it. Running the handshake here, before destroy_main(), is the
+	// whole fix; quiesce_flush() is idempotent so destroy_iobuffs() keeps its
+	// call and simply finds the work already done.
+	//
+	// AFTER the worker wait above, not before, and the order is deliberate:
+	// flushChannel() takes csDSP, which the worker holds across dexchange(), so
+	// quiescing the flush thread first could make this function wait out the
+	// worker's block through a second thread. With the worker already gone, both
+	// channel sections are free and nothing can be holding them — the host is
+	// fenced out of fexchange* by the caller.
+	//
+	// REPRODUCED BEFORE FIXING. See AETHERSDR-PATCHES.md patch 9.
+	quiesce_flush (channel);
 }
 
 void post_main_destroy (int channel)
