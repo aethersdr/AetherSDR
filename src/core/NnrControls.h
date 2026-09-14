@@ -96,10 +96,49 @@ inline constexpr std::array<const ControlSpec*, 6> kAdvancedControls{
 // Where the default sits along the control's travel, 0.0 at the minimum and 1.0
 // at the maximum -- what a tick-drawing widget needs to place the marker. Both
 // smoothing controls default to their minimum and so mark at 0.0.
+//
+// Correct only for a control whose slider ASCENDS with its value, which is
+// every one of the advanced controls. kMaskFloor is the exception and must use
+// maskFloorMarkerPosition() below: its slider is a 0..100 STRENGTH that runs
+// the opposite way to the dB value, so this formula mirrors the mark about the
+// centre -- it put it at 62.5% when the default sits at 37.5%.
 constexpr double markerPosition(const ControlSpec& spec)
 {
     return (spec.defaultValue - spec.minimum) / (spec.maximum - spec.minimum);
 }
+
+// ── The mask floor's strength mapping ────────────────────────────────────────
+//
+// The operator control is a 0..100 strength where MORE means MORE suppression,
+// so it runs from kMaskFloor.maximum (-10 dB, the least) down to .minimum
+// (-50 dB, the most). Both directions live here because they have to agree:
+// the default strength, the marker the tab draws, and the dB the filter asks
+// WDSP for are three views of one mapping, and deriving them separately is
+// exactly how the shipped default ended up 5 dB away from WDSP's.
+
+constexpr double maskFloorForStrength(double strength)
+{
+    const double t = (strength < 0.0 ? 0.0 : (strength > 100.0 ? 100.0 : strength)) / 100.0;
+    return kMaskFloor.maximum + (kMaskFloor.minimum - kMaskFloor.maximum) * t;
+}
+
+constexpr double strengthForMaskFloor(double floorDb)
+{
+    return 100.0 * (kMaskFloor.maximum - floorDb)
+                 / (kMaskFloor.maximum - kMaskFloor.minimum);
+}
+
+// Where the tab draws the mask floor's marker: the strength that reproduces
+// WDSP's own default, as a fraction of the slider's travel.
+constexpr double maskFloorMarkerPosition()
+{
+    return strengthForMaskFloor(kMaskFloor.defaultValue) / 100.0;
+}
+
+// The strength a fresh install starts at -- WDSP's -25 dB, not the middle of
+// the slider. 37.5 is not an integer, and the slider is, so 38 is the nearest
+// position: -25.2 dB rather than -25.0.
+inline constexpr int kMaskFloorDefaultStrength = 38;
 
 // A marker outside its own control's travel would place a tick off the end of
 // the slider, so the ranges check themselves at compile time in every
@@ -119,6 +158,17 @@ static_assert(markerIsInRange(kMaxGain));
 static_assert(markerIsInRange(kSmoothAttack));
 static_assert(markerIsInRange(kSmoothRelease));
 static_assert(markerIsInRange(kMaskFloor));
+
+// The three views of the mask-floor mapping have to agree. If any of these
+// fails, the tab is marking one value, the filter is asking WDSP for another,
+// and a fresh install is running at a third.
+static_assert(maskFloorForStrength(kMaskFloorDefaultStrength) < -24.0
+              && maskFloorForStrength(kMaskFloorDefaultStrength) > -26.0,
+              "the default strength no longer lands on WDSP's -25 dB floor");
+static_assert(maskFloorForStrength(0.0) == kMaskFloor.maximum);
+static_assert(maskFloorForStrength(100.0) == kMaskFloor.minimum);
+static_assert(maskFloorMarkerPosition() > 0.37 && maskFloorMarkerPosition() < 0.38,
+              "the mask-floor marker no longer sits where the default does");
 
 // The knee's sign is the one value here that reads wrong in the WDSP source:
 // create_dfhead() writes it as the literal -10.0 with the comment "// -10 dB",

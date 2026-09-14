@@ -468,8 +468,7 @@ void AetherDspWidget::resetCurrentTab()
         // is the value its marker is drawn at — NnrControls.h is the one place
         // both come from, so "reset" and "the mark" cannot disagree.
         if (m_nnrStrengthSlider) {
-            m_nnrStrengthSlider->setValue(
-                static_cast<int>(std::lround(Nnr::markerPosition(Nnr::kMaskFloor) * 100.0)));
+            m_nnrStrengthSlider->setValue(Nnr::kMaskFloorDefaultStrength);
         }
         if (m_nnrModelGroup) {
             if (auto* b = m_nnrModelGroup->button(0)) b->click();
@@ -1710,7 +1709,7 @@ QWidget* AetherDspWidget::buildNnrPage()
     // a weak signal, and the tooltip says so, because "more is better" is the
     // wrong instinct here.
     grid->addWidget(new QLabel("Strength:"), row, 0);
-    m_nnrStrengthSlider = new MarkedSlider(Nnr::markerPosition(Nnr::kMaskFloor));
+    m_nnrStrengthSlider = new MarkedSlider(Nnr::maskFloorMarkerPosition());
     m_nnrStrengthSlider->setObjectName(QStringLiteral("nnrStrengthSlider"));
     m_nnrStrengthSlider->setAccessibleName(tr("NNR strength"));
     m_nnrStrengthSlider->setAccessibleDescription(

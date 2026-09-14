@@ -13,6 +13,8 @@
 #include <QUdpSocket>
 #include <QTimer>
 #include <QVector>
+#include "NnrControls.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -1312,7 +1314,7 @@ private:
     std::unique_ptr<NnrFilter> m_nnr;
     std::unique_ptr<NnrFilter> m_kiwiSdrNnr;
     std::atomic<bool> m_nnrEnabled{false};
-    std::atomic<int>  m_nnrStrength{50};
+    std::atomic<int>  m_nnrStrength{Nnr::kMaskFloorDefaultStrength};
     std::atomic<int>  m_nnrModel{0};
 
     // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so
