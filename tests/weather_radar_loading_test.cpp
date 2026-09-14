@@ -265,6 +265,9 @@ private slots:
                 QVERIFY(pending > 0);
             };
             checkRequests();
+            for (const WeatherRadarFrame& frame : map.m_weatherRadar->m_frames) {
+                QCOMPARE(frame.providers, providers);
+            }
             map.m_weatherRadar->cancelWeatherRadarFrameRequests();
             map.m_weatherRadar->bufferWeatherRadarFrames(); // Same path used by a zoom refresh.
             checkRequests();
@@ -470,6 +473,15 @@ private slots:
         map.setRadarCoverageVisible(false);
         map.setRadarCoverageVisible(true);
         QCOMPARE(map.m_weatherRadar->m_radarSites.size(), count);
+        QSignalSpy changes(map.m_weatherRadar, &WeatherRadarController::displayedProvidersChanged);
+        map.m_weatherRadar->m_weatherRadarVisible = true;
+        map.m_weatherRadar->m_flatDisplayedProviders = 5;
+        map.m_weatherRadar->publishDisplayedProviders();
+        map.m_weatherRadar->publishDisplayedProviders();
+        QCOMPARE(changes.size(), 1); // Repeated frames do not relayout the legend.
+        map.m_weatherRadar->m_flatDisplayedProviders = 8;
+        map.m_weatherRadar->publishDisplayedProviders();
+        QCOMPARE(changes.size(), 2);
     }
 
     void compositeObservationNeverUsesFutureOrStaleWeather()

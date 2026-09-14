@@ -223,9 +223,13 @@ void WeatherRadarController::setGlobeActive(bool active)
 }
 void WeatherRadarController::publishDisplayedProviders()
 {
-    emit displayedProvidersChanged(!m_weatherRadarVisible ? 0 :
+    const int providers = !m_weatherRadarVisible ? 0 :
         m_presentingPlayback ? m_playbackDisplayedProviders :
-        m_globeActive ? m_globeDisplayedProviders : m_flatDisplayedProviders);
+        m_globeActive ? m_globeDisplayedProviders : m_flatDisplayedProviders;
+    if (providers != m_lastDisplayedProviders) {
+        m_lastDisplayedProviders = providers;
+        emit displayedProvidersChanged(providers);
+    }
 }
 
 void WeatherRadarController::presentRadarSites()

@@ -47,6 +47,7 @@ signals:
 private:
     friend class WeatherRadarLoadingTest;
     void publishDisplayedProviders();
+    int m_lastDisplayedProviders{-1};
     int m_flatDisplayedProviders{0};
     int m_globeDisplayedProviders{0};
     int m_playbackDisplayedProviders{0};

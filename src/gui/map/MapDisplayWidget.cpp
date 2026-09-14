@@ -464,6 +464,7 @@ void MapDisplayWidget::setProjectionMode(ProjectionMode mode)
                                   ? static_cast<QWidget*>(m_globeView)
                                   : static_cast<QWidget*>(m_flatView));
     m_weatherRadar->setGlobeActive(mode == ProjectionMode::Globe);
+    m_radarLegend->raise();
     // Flat view uses CPU processing; the globe shades the original on the GPU.
     m_cityLightsSource->setNightOnly(m_terminatorVisible && mode == ProjectionMode::Flat);
     m_cityLightsSource->setFaintLights(mode == ProjectionMode::Flat ? m_cityLightsFaintLights : 0);
