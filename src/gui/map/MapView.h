@@ -133,6 +133,7 @@ public:
 signals:
     void imageOverlayViewChanged();
     void markerClicked(const MapView::Marker& marker);
+    void weatherRadarProvidersChanged(int providers);
     void weatherRadarFrameLoaded(const QDateTime& frameTime);
     void weatherRadarPlaybackPresented(quint64 presentationSequence);
     void weatherRadarPlaybackFramePreloaded(const QDateTime& frameTime);

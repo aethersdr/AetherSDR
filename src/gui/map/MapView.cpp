@@ -236,6 +236,12 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
     m_map->addItem(m_weatherRadarNextLayer);
     for (WeatherRadarTileLayer* layer : { m_weatherRadarLayer,
                                           m_weatherRadarNextLayer }) {
+        connect(layer, &WeatherRadarTileLayer::providersChanged, this,
+            [this, layer](int providers) {
+                if (layer == m_weatherRadarLayer && !m_weatherRadarPlaybackActive) {
+                    emit weatherRadarProvidersChanged(providers);
+                }
+            });
         connect(layer, &WeatherRadarTileLayer::frameReady, this,
                 [this, layer](const QDateTime& frameTime) {
                     handleWeatherRadarFrameReady(layer, frameTime);
@@ -275,6 +281,7 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
                 m_weatherRadarNextLayer->setOpacity(0.0);
                 m_weatherRadarNextLayer->setZValue(-31999);
                 m_pendingWeatherRadarFrameId.clear();
+                emit weatherRadarProvidersChanged(m_weatherRadarLayer->displayedProviders());
                 emit weatherRadarFrameLoaded(
                     m_weatherRadarLayer->source().frameTime());
             });

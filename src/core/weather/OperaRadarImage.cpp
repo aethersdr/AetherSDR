@@ -1,5 +1,6 @@
 #include "OperaRadarImage.h"
 #include <QHash>
+#include <QSet>
 #include <zlib.h>
 #include <QVector>
 #include <QtEndian>
@@ -53,20 +54,55 @@ struct Tiff {
         little = b.startsWith("II");
         if (!little && !b.startsWith("MM")) { return false; }
         if (integer(2, 2) != 42) { return false; }
-        const quint32 ifd = integer(4, 4);
-        const quint32 count = integer(ifd, 2);
-        if (!ok || count > 128 || quint64(ifd) + 2 + quint64(count) * 12 > quint64(b.size())) { return false; }
-        for (quint32 i = 0; i < count; ++i) {
-            const quint64 at = quint64(ifd) + 2 + i * 12;
-            const int tag = integer(at, 2);
-            const quint16 type = integer(at + 2, 2);
-            const quint32 n = integer(at + 4, 4);
-            const int size = type == 3 ? 2 : type == 4 ? 4 : type == 12 ? 8 : 1;
-            const quint32 off = quint64(n) * size <= 4 ? quint32(at + 8) : integer(at + 8, 4);
-            if (fields.contains(tag) || quint64(off) + quint64(n) * size > quint64(b.size())) { return false; }
-            fields.insert(tag, {type, n, off});
+        quint32 ifd = integer(4, 4);
+        QSet<quint32> visited;
+        QHash<int, Field> primary;
+        quint32 expectedWidth = 3800, expectedHeight = 4400;
+        while (ifd != 0) {
+            // CIRRUS COGs carry a primary IFD followed by reduced overviews.
+            // Walk iteratively and validate every directory, even though only
+            // the primary raster is decoded. Cycles never consume CPU forever.
+            if (ifd < 8 || visited.contains(ifd) || visited.size() >= 8) { return false; }
+            visited.insert(ifd);
+            const quint32 count = integer(ifd, 2);
+            const quint64 end = quint64(ifd) + 2 + quint64(count) * 12;
+            if (!ok || count > 128 || end + 4 > quint64(b.size())) { return false; }
+            fields.clear();
+            for (quint32 i = 0; i < count; ++i) {
+                const quint64 at = quint64(ifd) + 2 + quint64(i) * 12;
+                const int tag = integer(at, 2);
+                const quint16 type = integer(at + 2, 2);
+                const quint32 n = integer(at + 4, 4);
+                constexpr int sizes[] = {0,1,1,2,4,8,1,1,2,4,8,4,8};
+                if (type == 0 || type >= std::size(sizes) || n == 0) { return false; }
+                const quint64 bytes = quint64(n) * sizes[type];
+                const quint32 off = bytes <= 4 ? quint32(at + 8) : integer(at + 8, 4);
+                if (fields.contains(tag) || quint64(off) + bytes > quint64(b.size())
+                    || tag == 330) { return false; } // SubIFDs are outside this profile.
+                fields.insert(tag, {type, n, off});
+            }
+            if (unsignedValue(256) != expectedWidth || unsignedValue(257) != expectedHeight
+                || value(322) != 512 || value(323) != 512 || value(277) != 2
+                || fields.value(258).count != 2 || value(258, 0) != 32 || value(258, 1) != 32
+                || fields.value(339).count != 2 || value(339, 0) != 3 || value(339, 1) != 3
+                || value(259) != 8 || value(284) != 1 || value(317) != 1) { return false; }
+            const quint64 tiles = ((quint64(expectedWidth) + 511) / 512)
+                * ((quint64(expectedHeight) + 511) / 512);
+            if (fields.value(324).count != tiles || fields.value(325).count != tiles) { return false; }
+            for (quint64 tile = 0; tile < tiles; ++tile) {
+                const quint64 offset = unsignedValue(324, int(tile));
+                const quint64 length = unsignedValue(325, int(tile));
+                if (!ok || length == 0 || length > 3 * 1024 * 1024
+                    || offset + length > quint64(b.size())) { return false; }
+            }
+            if (!ok) { return false; }
+            if (primary.isEmpty()) { primary = fields; }
+            ifd = integer(end, 4);
+            expectedWidth /= 2;
+            expectedHeight /= 2;
         }
-        return ok;
+        fields = primary;
+        return ok && !fields.isEmpty();
     }
 };
 double authalicQ(double phi)
@@ -149,13 +185,21 @@ OperaRadarImage OperaRadarImage::decode(const QByteArray& bytes)
     if (t.fields.value(324).count != quint32(nx * ny) || t.fields.value(325).count != quint32(nx * ny)) {
         return failure("Invalid OPERA tile table");
     }
-    QVector<float> reflectivity(width * height, std::numeric_limits<float>::quiet_NaN());
+    constexpr quint64 pixelCount = quint64(width) * quint64(height);
+    constexpr quint64 tileBytes = quint64(tw) * quint64(th) * 2 * sizeof(float);
+    constexpr quint64 maximumDecodedBytes = 72 * tileBytes;
+    static_assert(pixelCount * sizeof(float) <= 64 * 1024 * 1024);
+    static_assert(maximumDecodedBytes <= 144 * 1024 * 1024);
+    quint64 decodedBytes = 0;
+    QVector<float> reflectivity(qsizetype(pixelCount), std::numeric_limits<float>::quiet_NaN());
     for (int tile = 0; tile < nx * ny; ++tile) {
         const quint32 offset = t.unsignedValue(324, tile), length = t.unsignedValue(325, tile);
         if (!t.ok || length > 3 * 1024 * 1024 || quint64(offset) + length > quint64(bytes.size())) {
             return failure("Invalid OPERA tile bounds");
         }
-        QByteArray raw(tw * th * 8, char(0));
+        if (decodedBytes + tileBytes > maximumDecodedBytes) { return failure("OPERA decompression budget exceeded"); }
+        QByteArray raw(qsizetype(tileBytes), char(0));
+        decodedBytes += tileBytes;
         uLongf decodedSize = raw.size();
         if (uncompress(reinterpret_cast<Bytef*>(raw.data()), &decodedSize,
                 reinterpret_cast<const Bytef*>(bytes.constData() + offset), length) != Z_OK

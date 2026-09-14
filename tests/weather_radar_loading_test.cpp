@@ -1,4 +1,7 @@
 #include "gui/map/MapDisplayWidget.h"
+#include "gui/map/WeatherRadarController.h"
+#include "gui/map/WeatherRadarProvenance.h"
+#include "gui/map/WeatherRadarLegend.h"
 #include "gui/map/MapProviderNetworkAccessManager.h"
 #include "gui/map/CityLightsItem.h"
 #include "gui/map/GlobeMapView.h"
@@ -169,7 +172,7 @@ private:
     static void prepare(MapDisplayWidget& map, ControlledRadarNetwork& network,
                         int count = 6, bool nativeFlat = false)
     {
-        map.m_weatherRadarNetwork = &network;
+        map.m_weatherRadar->m_weatherRadarNetwork = &network;
         QGVMap* flat = map.m_flatView->findChild<QGVMap*>();
         if (!nativeFlat) {
             flat->geoView()->setViewport(new QWidget()); // Production raster fallback.
@@ -180,21 +183,21 @@ private:
         flat->cameraTo(QGVCameraActions(flat).scaleTo(.0001)
             .moveTo(QPointF(-1.05e7, -4.0e6)), false);
         QCoreApplication::processEvents();
-        map.m_weatherRadarVisible = true;
-        map.m_weatherRadarPlaybackRequested = true;
+        map.m_weatherRadar->m_weatherRadarVisible = true;
+        map.m_weatherRadar->m_weatherRadarPlaybackRequested = true;
         const QDateTime start = QDateTime::currentDateTimeUtc().addSecs(-count * 300);
         for (int i = 0; i < count; ++i) {
-            map.m_weatherRadarFrames.append(start.addSecs(i * 300));
-            map.m_weatherRadarFrameSampleTimes.append(start.addSecs(i * 300 + 150));
-            map.m_weatherRadarFrameRasterIds.append(QVector<qint64>{100 + i});
+            map.m_weatherRadar->m_frames.append(WeatherRadarFrame{start.addSecs(i * 300)});
+            map.m_weatherRadar->m_frames.last().sampleTime = start.addSecs(i * 300 + 150);
+            map.m_weatherRadar->m_frames.last().rasterIds = QVector<qint64>{100 + i};
         }
-        map.bufferWeatherRadarFrames();
+        map.m_weatherRadar->bufferWeatherRadarFrames();
     }
     static void finishAll(MapDisplayWidget& map, ControlledRadarNetwork& network)
     {
         QElapsedTimer deadline;
         deadline.start();
-        while (!map.m_weatherRadarNetworkRequestsComplete && deadline.elapsed() < 5000) {
+        while (!map.m_weatherRadar->m_weatherRadarNetworkRequestsComplete && deadline.elapsed() < 5000) {
             if (auto* reply = network.pending()) {
                 reply->complete();
             }
@@ -234,22 +237,22 @@ private slots:
         ControlledRadarNetwork network;
         QGV::setNetworkManager(&network);
         MapDisplayWidget map;
-        map.m_weatherRadarNetwork = &network;
-        map.m_weatherRadarSource = WeatherRadarSource::composite(15);
+        map.m_weatherRadar->m_weatherRadarNetwork = &network;
+        map.m_weatherRadar->m_weatherRadarSource = WeatherRadarSource::composite(15);
         QGVMap* flat = map.m_flatView->findChild<QGVMap*>();
         flat->geoView()->setViewport(new QWidget());
         map.resize(600, 400);
         map.show();
         QCoreApplication::processEvents();
-        map.m_weatherRadarVisible = true;
-        map.m_weatherRadarPlaybackRequested = true;
+        map.m_weatherRadar->m_weatherRadarVisible = true;
+        map.m_weatherRadar->m_weatherRadarPlaybackRequested = true;
         const qint64 stamp = QDateTime::currentSecsSinceEpoch() / 600 * 600 - 600;
         for (int providers : {8, 7}) {
-            map.cancelWeatherRadarFrameRequests();
+            map.m_weatherRadar->cancelWeatherRadarFrameRequests();
             const QByteArray catalog = QJsonDocument(QJsonObject{
                 {QStringLiteral("times"), QJsonArray{stamp - 600, stamp}},
                 {QStringLiteral("providers"), providers}}).toJson();
-            QVERIFY(map.useWeatherRadarTimeline(catalog, 2));
+            QVERIFY(map.m_weatherRadar->useWeatherRadarTimeline(catalog, 2));
             const auto checkRequests = [&] {
                 int pending = 0;
                 for (const auto& reply : network.allReplies) {
@@ -262,25 +265,25 @@ private slots:
                 QVERIFY(pending > 0);
             };
             checkRequests();
-            map.cancelWeatherRadarFrameRequests();
-            map.bufferWeatherRadarFrames(); // Same path used by a zoom refresh.
+            map.m_weatherRadar->cancelWeatherRadarFrameRequests();
+            map.m_weatherRadar->bufferWeatherRadarFrames(); // Same path used by a zoom refresh.
             checkRequests();
-            QCOMPARE(map.m_weatherRadarSource.enabledProviders(), 15); // Preserve user settings.
+            QCOMPARE(map.m_weatherRadar->m_weatherRadarSource.enabledProviders(), 15); // Preserve user settings.
         }
         const QByteArray primaryCatalog = QJsonDocument(QJsonObject{
             {QStringLiteral("times"), QJsonArray{stamp - 600, stamp}},
             {QStringLiteral("providers"), 8}}).toJson();
-        map.cancelWeatherRadarFrameRequests();
-        QVERIFY(map.useWeatherRadarTimeline(primaryCatalog, 2));
+        map.m_weatherRadar->cancelWeatherRadarFrameRequests();
+        QVERIFY(map.m_weatherRadar->useWeatherRadarTimeline(primaryCatalog, 2));
         const auto failedReplies = network.allReplies;
         for (const auto& reply : failedReplies) {
             if (reply && !reply->isFinished() && reply->url().scheme() == "radar-composite") {
                 reply->complete(true);
             }
         }
-        QCOMPARE(map.m_weatherRadarPlaybackProviders, 7);
-        QVERIFY(map.m_weatherRadarTimelineReply != nullptr);
-        QCOMPARE(QUrlQuery(map.m_weatherRadarTimelineReply->url())
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarPlaybackProviders, 7);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarTimelineReply != nullptr);
+        QCOMPARE(QUrlQuery(map.m_weatherRadar->m_weatherRadarTimelineReply->url())
             .queryItemValue("providers").toInt(), 7); // Entire fallback movie, not mixed frames.
         GlobeMapView globe;
         globe.resize(2000, 2000);
@@ -418,6 +421,57 @@ private slots:
         QCOMPARE(partial.pixelColor(2,0),QColor(Qt::blue));
     }
 
+    void providerIdentitySurvivesPngCacheAndTexturePreparation()
+    {
+        QVector<QImage> images(4);
+        images[0] = QImage(2, 2, QImage::Format_ARGB32);
+        images[0].fill(Qt::transparent);
+        images[2] = images[0];
+        const WeatherRadarSource source = WeatherRadarSource::composite(15);
+        QImage result = composeRegionalRadar(images, QSize(2, 2));
+        QCOMPARE(radarImageProviders(result, source), 5);
+        QByteArray bytes;
+        QBuffer buffer(&bytes);
+        QVERIFY(buffer.open(QIODevice::WriteOnly));
+        QVERIFY(result.save(&buffer, "PNG"));
+        QImage decoded;
+        QVERIFY(decoded.loadFromData(bytes, "PNG"));
+        QCOMPARE(radarImageProviders(WeatherRadarTexture::prepareImage(decoded), source), 5);
+        images[3] = images[0]; // A clear global image still wins over backups.
+        QCOMPARE(radarImageProviders(composeRegionalRadar(images, QSize(2, 2)), source), 8);
+        QCOMPARE(radarImageProviders(images[0], source), 0); // No invented legacy provenance.
+        QCOMPARE(requestedRadarProviders(WeatherRadarSource()), 1);
+    }
+
+    void legendsFollowDisplayedSourcesAndCoverageNeedsNoNetwork()
+    {
+        WeatherRadarLegend legend;
+        legend.setProviders(5);
+        auto* noaa = legend.findChild<QLabel*>(QStringLiteral("pskReporterRadarSourceLabel0"));
+        auto* canada = legend.findChild<QLabel*>(QStringLiteral("pskReporterRadarSourceLabel1"));
+        auto* opera = legend.findChild<QLabel*>(QStringLiteral("pskReporterRadarSourceLabel2"));
+        auto* global = legend.findChild<QLabel*>(QStringLiteral("pskReporterRadarSourceLabel3"));
+        QVERIFY(noaa && canada && opera && global);
+        QVERIFY(!noaa->parentWidget()->isHidden());
+        QVERIFY(canada->parentWidget()->isHidden());
+        QVERIFY(!opera->parentWidget()->isHidden());
+        QVERIFY(global->parentWidget()->isHidden());
+        QVERIFY(noaa->text().contains(QStringLiteral("dBZ")));
+        QVERIFY(canada->text().contains(QStringLiteral("mm/h")));
+        legend.setProviders(8);
+        QVERIFY(noaa->parentWidget()->isHidden());
+        QVERIFY(!global->parentWidget()->isHidden());
+        legend.setProviders(0);
+        QVERIFY(legend.isHidden());
+        MapDisplayWidget map;
+        map.setRadarCoverageVisible(true);
+        QVERIFY(map.m_weatherRadar->m_radarSites.size() == 389);
+        const int count = map.m_weatherRadar->m_radarSites.size();
+        map.setRadarCoverageVisible(false);
+        map.setRadarCoverageVisible(true);
+        QCOMPARE(map.m_weatherRadar->m_radarSites.size(), count);
+    }
+
     void compositeObservationNeverUsesFutureOrStaleWeather()
     {
         const QDateTime now = QDateTime::currentDateTimeUtc();
@@ -434,15 +488,15 @@ private slots:
     {
         MapDisplayWidget map;
         map.setWeatherRadarRegions(7);
-        map.m_weatherRadarTimelineCache = QByteArrayLiteral("old catalog");
-        map.m_weatherRadarFrames.append(QDateTime::currentDateTimeUtc());
+        map.m_weatherRadar->m_weatherRadarTimelineCache = QByteArrayLiteral("old catalog");
+        map.m_weatherRadar->m_frames.append(WeatherRadarFrame{QDateTime::currentDateTimeUtc()});
         map.setWeatherRadarRegions(4);
-        QCOMPARE(map.m_weatherRadarSource.enabledProviders(),4);
-        QVERIFY(map.m_weatherRadarFrames.isEmpty());
-        QVERIFY(map.m_weatherRadarTimelineCache.isEmpty());
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarSource.enabledProviders(),4);
+        QVERIFY(map.m_weatherRadar->m_frames.isEmpty());
+        QVERIFY(map.m_weatherRadar->m_weatherRadarTimelineCache.isEmpty());
         QVERIFY(WeatherRadarSource::composite(7).frameId() != WeatherRadarSource::composite(4).frameId());
-        QCOMPARE(map.m_weatherRadarSource.latestFrame().enabledProviders(),4);
-        QCOMPARE(map.m_weatherRadarSource.historicalFrame(QDateTime::currentDateTimeUtc()).enabledProviders(),4);
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarSource.latestFrame().enabledProviders(),4);
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarSource.historicalFrame(QDateTime::currentDateTimeUtc()).enabledProviders(),4);
     }
 
     void noRegionsReturnsTransparentPixelsWithoutNetwork()
@@ -605,43 +659,43 @@ private slots:
         QGV::setNetworkManager(&network);
         MapDisplayWidget map;
         prepare(map, network);
-        const QVector<QDateTime> originalFrames = map.m_weatherRadarFrames;
+        const QVector<QDateTime> originalFrames = map.m_weatherRadar->frameValues(&WeatherRadarFrame::time);
         QVector<WeatherRadarObservation> catalog;
         for (int i = 0; i < originalFrames.size(); ++i) {
-            catalog.append({originalFrames.at(i), map.m_weatherRadarFrameSampleTimes.at(i),
-                            map.m_weatherRadarFrameRasterIds.at(i)});
+            catalog.append({originalFrames.at(i), map.m_weatherRadar->m_frames.at(i).sampleTime,
+                            map.m_weatherRadar->m_frames.at(i).rasterIds});
         }
-        network.pending(map.m_weatherRadarFrameUrls.at(failedIndex))->complete(true);
+        network.pending(map.m_weatherRadar->m_frames.at(failedIndex).url)->complete(true);
         finishAll(map, network);
-        map.m_weatherRadarPlaybackTimer->stop();
-        map.applyFinalizedWeatherRadarBuffering();
-        QCOMPARE(map.m_weatherRadarFrames.size(), 5);
-        QVERIFY(map.m_weatherRadarRebufferTimer->isActive());
-        const QVector<QDateTime> activeFrames = map.m_weatherRadarFrames;
-        const QVector<int> activeDurations = map.m_weatherRadarActiveSegmentDurationsMs;
+        map.m_weatherRadar->m_weatherRadarPlaybackTimer->stop();
+        map.m_weatherRadar->applyFinalizedWeatherRadarBuffering();
+        QCOMPARE(map.m_weatherRadar->m_frames.size(), 5);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarRebufferTimer->isActive());
+        const QVector<QDateTime> activeFrames = map.m_weatherRadar->frameValues(&WeatherRadarFrame::time);
+        const QVector<int> activeDurations = map.m_weatherRadar->m_weatherRadarActiveSegmentDurationsMs;
         const int requests = network.requests.size();
-        map.rebufferWeatherRadarPlayback();
-        QVERIFY(map.m_weatherRadarTimelineReply);
-        map.cancelWeatherRadarTimelineRequest();
-        map.appendWeatherRadarObservations(catalog);
+        map.m_weatherRadar->rebufferWeatherRadarPlayback();
+        QVERIFY(map.m_weatherRadar->m_weatherRadarTimelineReply);
+        map.m_weatherRadar->cancelWeatherRadarTimelineRequest();
+        map.m_weatherRadar->appendWeatherRadarObservations(catalog);
         QCOMPARE(network.requests.size(), requests + 1); // Only the missing image.
-        QCOMPARE(map.m_weatherRadarFrames.mid(0, 5), activeFrames);
-        QCOMPARE(map.m_weatherRadarActiveSegmentDurationsMs, activeDurations);
-        QCOMPARE(map.weatherRadarPlaybackFrameCount(), 5);
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::time).mid(0, 5), activeFrames);
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarActiveSegmentDurationsMs, activeDurations);
+        QCOMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 5);
         // A view refresh while the older retry is staged must not reject its
         // temporarily unsorted tail or change the active movie's cadence.
-        map.cancelWeatherRadarFrameRequests();
-        map.bufferWeatherRadarFrames(true);
-        QVERIFY(map.m_weatherRadarAnimating);
-        QCOMPARE(map.m_weatherRadarActiveSegmentDurationsMs, activeDurations);
+        map.m_weatherRadar->cancelWeatherRadarFrameRequests();
+        map.m_weatherRadar->bufferWeatherRadarFrames(true);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarAnimating);
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarActiveSegmentDurationsMs, activeDurations);
         finishAll(map, network);
-        QVERIFY(map.m_weatherRadarBufferFinalizationPending);
-        QCOMPARE(map.weatherRadarPlaybackFrameCount(), 5);
-        map.applyFinalizedWeatherRadarBuffering(); // The loop-restart operation.
-        QCOMPARE(map.m_weatherRadarFrames, originalFrames);
-        QCOMPARE(map.weatherRadarPlaybackFrameCount(), 6);
-        QVERIFY(map.m_weatherRadarRetryFrames.isEmpty());
-        QVERIFY(map.m_weatherRadarDownloadFailed.isEmpty());
+        QVERIFY(map.m_weatherRadar->m_weatherRadarBufferFinalizationPending);
+        QCOMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 5);
+        map.m_weatherRadar->applyFinalizedWeatherRadarBuffering(); // The loop-restart operation.
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::time), originalFrames);
+        QCOMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 6);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarRetryFrames.isEmpty());
+        QVERIFY(map.m_weatherRadar->m_weatherRadarDownloadFailed.isEmpty());
         map.stopWeatherRadarAnimation();
         QGV::setNetworkManager(nullptr);
     }
@@ -885,23 +939,23 @@ private slots:
         MapDisplayWidget map;
         prepare(map, network);
         finishAll(map, network);
-        map.applyFinalizedWeatherRadarBuffering();
-        QCOMPARE(map.weatherRadarPlaybackFrameCount(), 6);
-        map.m_weatherRadarPlaybackTimer->stop();
-        const auto frames = map.m_weatherRadarFrames;
-        const auto bytes = map.m_weatherRadarBufferedBytes;
+        map.m_weatherRadar->applyFinalizedWeatherRadarBuffering();
+        QCOMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 6);
+        map.m_weatherRadar->m_weatherRadarPlaybackTimer->stop();
+        const auto frames = map.m_weatherRadar->frameValues(&WeatherRadarFrame::time);
+        const auto bytes = map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes);
         const int downloads = network.requests.size();
         QVector<WeatherRadarObservation> catalog;
         for (int i = 1; i < frames.size(); ++i) {
-            catalog.append({frames.at(i), map.m_weatherRadarFrameSampleTimes.at(i),
-                            map.m_weatherRadarFrameRasterIds.at(i)});
+            catalog.append({frames.at(i), map.m_weatherRadar->m_frames.at(i).sampleTime,
+                            map.m_weatherRadar->m_frames.at(i).rasterIds});
         }
-        map.appendWeatherRadarObservations(catalog);
-        QCOMPARE(map.m_weatherRadarFrames, frames); // Do not renumber mid-loop.
-        QVERIFY(map.m_weatherRadarBufferFinalizationPending);
-        map.applyFinalizedWeatherRadarBuffering();
-        QCOMPARE(map.m_weatherRadarFrames, frames.mid(1));
-        QCOMPARE(map.m_weatherRadarBufferedBytes, bytes.mid(1));
+        map.m_weatherRadar->appendWeatherRadarObservations(catalog);
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::time), frames); // Do not renumber mid-loop.
+        QVERIFY(map.m_weatherRadar->m_weatherRadarBufferFinalizationPending);
+        map.m_weatherRadar->applyFinalizedWeatherRadarBuffering();
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::time), frames.mid(1));
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes), bytes.mid(1));
         QCOMPARE(network.requests.size(), downloads);
         map.stopWeatherRadarAnimation();
         QGV::setNetworkManager(nullptr);
@@ -928,38 +982,38 @@ private slots:
         MapDisplayWidget map;
         prepare(map, network);
         finishAll(map, network);
-        map.applyFinalizedWeatherRadarBuffering();
-        QCOMPARE(map.weatherRadarPlaybackFrameCount(), 6);
-        map.m_weatherRadarPlaybackTimer->stop();
+        map.m_weatherRadar->applyFinalizedWeatherRadarBuffering();
+        QCOMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 6);
+        map.m_weatherRadar->m_weatherRadarPlaybackTimer->stop();
         if (globe) {
             map.hide();
             map.setProjectionMode(MapDisplayWidget::ProjectionMode::Globe);
         }
-        map.m_weatherRadarRebufferTimer->stop();
-        const auto frames = map.m_weatherRadarFrames;
-        const auto bytes = map.m_weatherRadarBufferedBytes;
+        map.m_weatherRadar->m_weatherRadarRebufferTimer->stop();
+        const auto frames = map.m_weatherRadar->frameValues(&WeatherRadarFrame::time);
+        const auto bytes = map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes);
         // Reproduce NOAA expiring an immutable raster BETWEEN catalog fetch
         // and a zoom export: HTTP 200, correctly sized PNG, every alpha zero.
-        map.m_weatherRadarFrameCache.clear();
-        map.cancelWeatherRadarFrameRequests();
-        map.m_weatherRadarDetailRefresh = true;
-        map.m_weatherRadarRequestedView = {map.weatherRadarCurrentView().bounds, QSize(256, 256)};
-        map.m_weatherRadarFrameCacheKeys[0].clear();
-        map.m_weatherRadarFrameUrls[0] = WeatherRadarSource::historicalNoaaFrame(
-            frames.first(), map.m_weatherRadarFrameSampleTimes.first(), {100}).imageUrl(
-                map.m_weatherRadarRequestedView.bounds, map.m_weatherRadarRequestedView.size);
+        map.m_weatherRadar->m_weatherRadarFrameCache.clear();
+        map.m_weatherRadar->cancelWeatherRadarFrameRequests();
+        map.m_weatherRadar->m_weatherRadarDetailRefresh = true;
+        map.m_weatherRadar->m_weatherRadarRequestedView = {map.m_weatherRadar->weatherRadarCurrentView().bounds, QSize(256, 256)};
+        map.m_weatherRadar->m_frames[0].cacheKey.clear();
+        map.m_weatherRadar->m_frames[0].url = WeatherRadarSource::historicalNoaaFrame(
+            frames.first(), map.m_weatherRadar->m_frames.first().sampleTime, {100}).imageUrl(
+                map.m_weatherRadar->m_weatherRadarRequestedView.bounds, map.m_weatherRadar->m_weatherRadarRequestedView.size);
         // Feed the same production decode path as the network reply.
-        QImage clear(map.m_weatherRadarRequestedView.size, WeatherRadarTexture::kImageFormat);
+        QImage clear(map.m_weatherRadar->m_weatherRadarRequestedView.size, WeatherRadarTexture::kImageFormat);
         clear.fill(Qt::transparent);
         QByteArray png;
         QBuffer buffer(&png);
         buffer.open(QIODevice::WriteOnly);
         clear.save(&buffer, "PNG");
-        const QString key = map.m_weatherRadarFrameUrls.first().toString(QUrl::FullyEncoded);
-        map.m_weatherRadarNetworkRequestsComplete = false;
-        map.decodeWeatherRadarDownload(0, png, key, map.m_weatherRadarRequestedView);
+        const QString key = map.m_weatherRadar->m_frames.first().url.toString(QUrl::FullyEncoded);
+        map.m_weatherRadar->m_weatherRadarNetworkRequestsComplete = false;
+        map.m_weatherRadar->decodeWeatherRadarDownload(0, png, key, map.m_weatherRadar->m_weatherRadarRequestedView);
         QTRY_VERIFY(network.pendingValidation() != nullptr);
-        QCOMPARE(map.m_weatherRadarBufferedBytes.first(), bytes.first());
+        QCOMPARE(map.m_weatherRadar->m_frames.first().bytes, bytes.first());
         if (result == 3) {
             const QPointer<ControlledRadarReply> verification = network.pendingValidation();
             map.stopWeatherRadarAnimation();
@@ -969,9 +1023,9 @@ private slots:
                 verification->completeJson(R"({"objectIds":[100]})");
             }
             QCoreApplication::processEvents();
-            QVERIFY(!map.m_weatherRadarPlaybackRequested);
-            QVERIFY(map.m_weatherRadarBufferedBytes.isEmpty());
-            QVERIFY(!map.m_weatherRadarFrameCache.contains(key));
+            QVERIFY(!map.m_weatherRadar->m_weatherRadarPlaybackRequested);
+            QVERIFY(map.m_weatherRadar->m_frames.isEmpty());
+            QVERIFY(!map.m_weatherRadar->m_weatherRadarFrameCache.contains(key));
             QGV::setNetworkManager(nullptr);
             return;
         }
@@ -981,40 +1035,40 @@ private slots:
             network.pendingValidation()->completeJson(result == 1
                 ? R"({"objectIds":[100]})" : R"({"objectIds":[]})");
         }
-        QTRY_VERIFY(!map.m_weatherRadarDownloadDecodePending.contains(0));
-        map.updateWeatherRadarLoadingStatus();
+        QTRY_VERIFY(!map.m_weatherRadar->m_weatherRadarDownloadDecodePending.contains(0));
+        map.m_weatherRadar->updateWeatherRadarLoadingStatus();
         if (result == 0) {
             // Confirmed source expiration is normal rolling-history upkeep,
             // not a download failure and not a reason to retry that export.
-            QVERIFY(!map.m_weatherRadarDownloadFailed.contains(0));
-            QVERIFY(!map.m_weatherRadarRebufferTimer->isActive());
+            QVERIFY(!map.m_weatherRadar->m_weatherRadarDownloadFailed.contains(0));
+            QVERIFY(!map.m_weatherRadar->m_weatherRadarRebufferTimer->isActive());
             QVERIFY(map.m_weatherRadarLoadingLabel->text() != QStringLiteral("Loading radar data failed"));
         } else if (result == 2) {
             QCOMPARE(map.m_weatherRadarLoadingLabel->text(), QStringLiteral("Loading radar data failed"));
-            QVERIFY(map.m_weatherRadarRebufferTimer->isActive());
+            QVERIFY(map.m_weatherRadar->m_weatherRadarRebufferTimer->isActive());
         }
         if (result == 1) {
-            QCOMPARE(map.m_weatherRadarBufferedBytes.first(), png);
-            QVERIFY(map.m_weatherRadarFrameCache.contains(key));
+            QCOMPARE(map.m_weatherRadar->m_frames.first().bytes, png);
+            QVERIFY(map.m_weatherRadar->m_weatherRadarFrameCache.contains(key));
             // Trusted clear originals may be replayed from compressed cache
             // without another network verification on every loop.
-            map.m_weatherRadarFrameCache[key].decodedImage = {};
-            map.m_weatherRadarBufferQueue = {0};
-            map.requestNextWeatherRadarBufferedFrames();
-            QTRY_VERIFY(!map.m_weatherRadarDownloadDecodePending.contains(0));
+            map.m_weatherRadar->m_weatherRadarFrameCache[key].decodedImage = {};
+            map.m_weatherRadar->m_weatherRadarBufferQueue = {0};
+            map.m_weatherRadar->requestNextWeatherRadarBufferedFrames();
+            QTRY_VERIFY(!map.m_weatherRadar->m_weatherRadarDownloadDecodePending.contains(0));
             QVERIFY(network.pendingValidation() == nullptr);
         } else {
-            QCOMPARE(map.m_weatherRadarBufferedBytes.first(), bytes.first());
-            QVERIFY(!map.m_weatherRadarFrameCache.contains(key));
-            map.m_weatherRadarRebufferTimer->stop();
+            QCOMPARE(map.m_weatherRadar->m_frames.first().bytes, bytes.first());
+            QVERIFY(!map.m_weatherRadar->m_weatherRadarFrameCache.contains(key));
+            map.m_weatherRadar->m_weatherRadarRebufferTimer->stop();
             if (result == 0) {
-                QVERIFY(map.m_weatherRadarBufferFinalizationPending);
-                map.applyFinalizedWeatherRadarBuffering();
-                QCOMPARE(map.m_weatherRadarFrames, frames.mid(1));
-                QCOMPARE(map.m_weatherRadarBufferedBytes, bytes.mid(1));
+                QVERIFY(map.m_weatherRadar->m_weatherRadarBufferFinalizationPending);
+                map.m_weatherRadar->applyFinalizedWeatherRadarBuffering();
+                QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::time), frames.mid(1));
+                QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes), bytes.mid(1));
             } else {
-                QCOMPARE(map.m_weatherRadarFrames, frames);
-                QVERIFY(map.m_weatherRadarDownloadFailed.contains(0));
+                QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::time), frames);
+                QVERIFY(map.m_weatherRadar->m_weatherRadarDownloadFailed.contains(0));
             }
         }
         map.stopWeatherRadarAnimation();
@@ -1040,7 +1094,7 @@ private slots:
         ControlledRadarNetwork network;
         QGV::setNetworkManager(&network);
         MapDisplayWidget map;
-        map.m_weatherRadarHistoryHours = 4;
+        map.m_weatherRadar->m_weatherRadarHistoryHours = 4;
         prepare(map, network, 18, true);
         QOpenGLWidget* viewport = map.m_flatView->findChild<QOpenGLWidget*>();
         QVERIFY(viewport != nullptr);
@@ -1048,15 +1102,15 @@ private slots:
         map.setWeatherRadarPlaybackSpeed(500);
         QElapsedTimer deadline;
         deadline.start();
-        while (!map.m_weatherRadarNetworkRequestsComplete && deadline.elapsed() < 5000) {
+        while (!map.m_weatherRadar->m_weatherRadarNetworkRequestsComplete && deadline.elapsed() < 5000) {
             if (ControlledRadarReply* reply = network.pending()) {
                 reply->complete(false, Qt::green);
             }
             QTest::qWait(10);
         }
-        QTRY_COMPARE(map.weatherRadarPlaybackFrameCount(), 18);
-        QTRY_VERIFY(map.m_weatherRadarPresentedImageKey != 0);
-        map.m_weatherRadarFrameCache.clear();
+        QTRY_COMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 18);
+        QTRY_VERIFY(map.m_weatherRadar->m_weatherRadarPresentedImageKey != 0);
+        map.m_weatherRadar->m_weatherRadarFrameCache.clear();
         int paints = 0;
         int blanks = 0;
         int restarts = 0;
@@ -1074,10 +1128,10 @@ private slots:
                 if (rgba[1] < 150) {
                     ++blanks;
                 }
-                if (map.m_weatherRadarFrameIndex == 0 && previousIndex > 0) {
+                if (map.m_weatherRadar->m_weatherRadarFrameIndex == 0 && previousIndex > 0) {
                     ++restarts;
                 }
-                previousIndex = map.m_weatherRadarFrameIndex;
+                previousIndex = map.m_weatherRadar->m_weatherRadarFrameIndex;
             });
         QTRY_VERIFY_WITH_TIMEOUT(restarts >= 4, 20000);
         disconnect(capture);
@@ -1096,7 +1150,7 @@ private slots:
         QGV::setNetworkManager(&network);
         MapDisplayWidget map;
         map.setProjectionMode(MapDisplayWidget::ProjectionMode::Globe);
-        map.m_weatherRadarHistoryHours = 4;
+        map.m_weatherRadar->m_weatherRadarHistoryHours = 4;
         prepare(map, network, 18);
         GlobeMapView& globe = *map.m_globeView;
         globe.m_navigation.reset(35, -80);
@@ -1108,17 +1162,17 @@ private slots:
         QTRY_VERIFY(globe.isValid());
         QElapsedTimer deadline;
         deadline.start();
-        while (!map.m_weatherRadarNetworkRequestsComplete && deadline.elapsed() < 5000) {
+        while (!map.m_weatherRadar->m_weatherRadarNetworkRequestsComplete && deadline.elapsed() < 5000) {
             if (auto* reply = network.pending()) {
                 reply->complete(false, Qt::green);
             }
             QTest::qWait(10);
         }
-        QTRY_COMPARE(map.weatherRadarPlaybackFrameCount(), 18);
-        QTRY_VERIFY(map.m_weatherRadarPresentedImageKey != 0);
+        QTRY_COMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 18);
+        QTRY_VERIFY(map.m_weatherRadar->m_weatherRadarPresentedImageKey != 0);
         // Exercise real PNG re-decodes/new QImage identities on every wrap,
         // not only six images held forever by the cache or the test itself.
-        map.m_weatherRadarFrameCache.clear();
+        map.m_weatherRadar->m_weatherRadarFrameCache.clear();
         int paints = 0;
         int blanks = 0;
         int restarts = 0;
@@ -1134,13 +1188,13 @@ private slots:
             ++paints;
             if (rgba[1] < 150) {
                 ++blanks;
-                qWarning() << "Blank controller paint" << map.m_weatherRadarFrameIndex
+                qWarning() << "Blank controller paint" << map.m_weatherRadar->m_weatherRadarFrameIndex
                     << globe.m_radarTextureFrameTime << int(rgba[0]) << int(rgba[1]) << int(rgba[2]);
             }
-            if (map.m_weatherRadarFrameIndex == 0 && previousIndex > 0) {
+            if (map.m_weatherRadar->m_weatherRadarFrameIndex == 0 && previousIndex > 0) {
                 ++restarts;
             }
-            previousIndex = map.m_weatherRadarFrameIndex;
+            previousIndex = map.m_weatherRadar->m_weatherRadarFrameIndex;
         });
         QTRY_VERIFY_WITH_TIMEOUT(restarts >= 4, 20000);
         disconnect(capture);
@@ -1179,25 +1233,25 @@ private slots:
         ControlledRadarNetwork network;
         QGV::setNetworkManager(&network);
         MapDisplayWidget map;
-        map.m_weatherRadarNetwork = &network;
-        map.m_weatherRadarVisible = true;
+        map.m_weatherRadar->m_weatherRadarNetwork = &network;
+        map.m_weatherRadar->m_weatherRadarVisible = true;
         QSignalSpy errors(&map, &MapDisplayWidget::weatherRadarAnimationError);
         map.startWeatherRadarAnimation(1);
-        QVERIFY(map.m_weatherRadarTimelineReply);
-        static_cast<ControlledRadarReply*>(map.m_weatherRadarTimelineReply)->complete(true);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarTimelineReply);
+        static_cast<ControlledRadarReply*>(map.m_weatherRadar->m_weatherRadarTimelineReply)->complete(true);
         QVERIFY(map.weatherRadarAnimating()); // Includes requested/retrying playback.
-        QVERIFY(map.m_weatherRadarTimelineFailed);
-        QVERIFY(map.m_weatherRadarRebufferTimer->isActive());
+        QVERIFY(map.m_weatherRadar->m_weatherRadarTimelineFailed);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarRebufferTimer->isActive());
         QVERIFY(errors.isEmpty());
-        QCOMPARE(map.m_weatherRadarRebufferTimer->interval(), MapProviderRetryPolicy::kConsumerRetryMs);
-        QCOMPARE(map.m_weatherRadarRebufferTimer->timerType(), Qt::PreciseTimer);
-        map.m_weatherRadarRebufferTimer->stop();
-        map.rebufferWeatherRadarPlayback(); // Same callback as the jitter-aware retry.
-        QVERIFY(map.m_weatherRadarTimelineReply);
-        QCOMPARE(map.m_weatherRadarTimelineReply->url(), WeatherRadarSource::noaaTimelineUrl());
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarRebufferTimer->interval(), MapProviderRetryPolicy::kConsumerRetryMs);
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarRebufferTimer->timerType(), Qt::PreciseTimer);
+        map.m_weatherRadar->m_weatherRadarRebufferTimer->stop();
+        map.m_weatherRadar->rebufferWeatherRadarPlayback(); // Same callback as the jitter-aware retry.
+        QVERIFY(map.m_weatherRadar->m_weatherRadarTimelineReply);
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarTimelineReply->url(), WeatherRadarSource::noaaTimelineUrl());
         map.stopWeatherRadarAnimation();
-        QVERIFY(!map.m_weatherRadarRebufferTimer->isActive());
-        QVERIFY(!map.m_weatherRadarTimelineReply);
+        QVERIFY(!map.m_weatherRadar->m_weatherRadarRebufferTimer->isActive());
+        QVERIFY(!map.m_weatherRadar->m_weatherRadarTimelineReply);
         QVERIFY(!map.weatherRadarAnimating());
         QGV::setNetworkManager(nullptr);
     }
@@ -1210,47 +1264,47 @@ private slots:
         prepare(map, network);
         map.m_flatView->setWeatherRadarVisible(true);
         finishAll(map, network);
-        QTRY_COMPARE(map.weatherRadarPlaybackFrameCount(), 6);
-        map.m_weatherRadarPlaybackTimer->stop();
-        map.m_weatherRadarTimer->stop();
-        const auto bytes = map.m_weatherRadarBufferedBytes;
-        const auto keys = map.m_weatherRadarFrameCacheKeys;
-        const auto bounds = map.m_weatherRadarFrameBounds;
-        const int generation = map.m_weatherRadarBufferGeneration;
+        QTRY_COMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 6);
+        map.m_weatherRadar->m_weatherRadarPlaybackTimer->stop();
+        map.m_weatherRadar->m_weatherRadarTimer->stop();
+        const auto bytes = map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes);
+        const auto keys = map.m_weatherRadar->frameValues(&WeatherRadarFrame::cacheKey);
+        const auto bounds = map.m_weatherRadar->frameValues(&WeatherRadarFrame::bounds);
+        const int generation = map.m_weatherRadar->m_weatherRadarBufferGeneration;
         const int requests = network.requests.size();
         for (const int speed : {25, 73, 400, 500, 100}) {
             map.setWeatherRadarPlaybackSpeed(speed);
-            map.rebufferWeatherRadarPlayback(); // Even a queued view callback is a no-op.
-            QCOMPARE(map.m_weatherRadarPlaybackSpeedPercent, speed);
-            QCOMPARE(map.m_weatherRadarBufferGeneration, generation);
-            QCOMPARE(map.m_weatherRadarBufferedBytes, bytes);
-            QCOMPARE(map.m_weatherRadarFrameCacheKeys, keys);
-            QCOMPARE(map.m_weatherRadarFrameBounds, bounds);
+            map.m_weatherRadar->rebufferWeatherRadarPlayback(); // Even a queued view callback is a no-op.
+            QCOMPARE(map.m_weatherRadar->m_weatherRadarPlaybackSpeedPercent, speed);
+            QCOMPARE(map.m_weatherRadar->m_weatherRadarBufferGeneration, generation);
+            QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes), bytes);
+            QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::cacheKey), keys);
+            QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bounds), bounds);
             QCOMPARE(network.requests.size(), requests);
 
             qint64 lastStart = 0;
-            for (const int duration : map.m_weatherRadarActiveSegmentDurationsMs) {
+            for (const int duration : map.m_weatherRadar->m_weatherRadarActiveSegmentDurationsMs) {
                 lastStart += duration;
             }
             // Enter the actual final original, then hold it through many
             // ticks and a speed change. Neither preloading frame zero nor a
             // changed clock is permission to clear the displayed image.
-            map.ensureWeatherRadarDecodeAhead(5);
-            QTRY_VERIFY(map.m_weatherRadarDecodedImages.contains(5));
-            map.m_weatherRadarPlaybackCadence.reset(lastStart,
-                map.m_weatherRadarPlaybackClock.elapsed());
-            QVERIFY(map.tryPresentWeatherRadarElapsed(lastStart));
+            map.m_weatherRadar->ensureWeatherRadarDecodeAhead(5);
+            QTRY_VERIFY(map.m_weatherRadar->m_weatherRadarDecodedImages.contains(5));
+            map.m_weatherRadar->m_weatherRadarPlaybackCadence.reset(lastStart,
+                map.m_weatherRadar->m_weatherRadarPlaybackClock.elapsed());
+            QVERIFY(map.m_weatherRadar->tryPresentWeatherRadarElapsed(lastStart));
             // Seed an acknowledged final frame for the clock-only test. The
             // native framebuffer test separately checks actual retained pixels.
-            map.m_weatherRadarPlaybackCadence.rebaseElapsed(lastStart);
-            const qint64 imageKey = map.m_weatherRadarPresentedImageKey;
+            map.m_weatherRadar->m_weatherRadarPlaybackCadence.rebaseElapsed(lastStart);
+            const qint64 imageKey = map.m_weatherRadar->m_weatherRadarPresentedImageKey;
             for (int hold = 16; hold < 1000; hold += 16) {
-                QVERIFY(map.tryPresentWeatherRadarElapsed(lastStart + hold));
-                QCOMPARE(map.m_weatherRadarFrameIndex, 5);
-                QCOMPARE(map.m_weatherRadarPresentedImageKey, imageKey);
+                QVERIFY(map.m_weatherRadar->tryPresentWeatherRadarElapsed(lastStart + hold));
+                QCOMPARE(map.m_weatherRadar->m_weatherRadarFrameIndex, 5);
+                QCOMPARE(map.m_weatherRadar->m_weatherRadarPresentedImageKey, imageKey);
             }
-            QVERIFY(map.tryPresentWeatherRadarElapsed(lastStart + 1000));
-            QCOMPARE(map.m_weatherRadarFrameIndex, 0);
+            QVERIFY(map.m_weatherRadar->tryPresentWeatherRadarElapsed(lastStart + 1000));
+            QCOMPARE(map.m_weatherRadar->m_weatherRadarFrameIndex, 0);
         }
         map.stopWeatherRadarAnimation();
         QGV::setNetworkManager(nullptr);
@@ -1434,58 +1488,58 @@ private slots:
         MapDisplayWidget map;
         prepare(map, network);
         finishAll(map, network);
-        QTRY_COMPARE(map.weatherRadarPlaybackFrameCount(), 6);
-        map.m_weatherRadarPlaybackTimer->stop();
-        map.m_weatherRadarTimer->stop();
+        QTRY_COMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 6);
+        map.m_weatherRadar->m_weatherRadarPlaybackTimer->stop();
+        map.m_weatherRadar->m_weatherRadarTimer->stop();
         map.setWeatherRadarPlaybackSpeed(137);
-        const auto frames = map.m_weatherRadarFrames;
-        const auto bytes = map.m_weatherRadarBufferedBytes;
-        const auto bounds = map.m_weatherRadarFrameBounds;
-        const auto elapsed = map.m_weatherRadarPlaybackCadence.requestedElapsedMs();
+        const auto frames = map.m_weatherRadar->frameValues(&WeatherRadarFrame::time);
+        const auto bytes = map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes);
+        const auto bounds = map.m_weatherRadar->frameValues(&WeatherRadarFrame::bounds);
+        const auto elapsed = map.m_weatherRadar->m_weatherRadarPlaybackCadence.requestedElapsedMs();
         QSignalSpy state(&map, &MapDisplayWidget::weatherRadarAnimationStateChanged);
         // Hidden widget: this state-machine test never requires a GL context.
         map.hide();
         map.setProjectionMode(MapDisplayWidget::ProjectionMode::Globe);
         QCOMPARE(map.projectionMode(), MapDisplayWidget::ProjectionMode::Globe);
-        QVERIFY(map.m_weatherRadarPlaybackRequested && map.m_weatherRadarAnimating);
-        QCOMPARE(map.m_weatherRadarFrames, frames);
-        QCOMPARE(map.m_weatherRadarBufferedBytes, bytes);
-        QCOMPARE(map.m_weatherRadarFrameBounds, bounds);
-        QCOMPARE(map.m_weatherRadarPlaybackCadence.requestedElapsedMs(), elapsed);
-        QCOMPARE(map.weatherRadarRendererBounds(bounds.first()), bounds.first());
+        QVERIFY(map.m_weatherRadar->m_weatherRadarPlaybackRequested && map.m_weatherRadar->m_weatherRadarAnimating);
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::time), frames);
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes), bytes);
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bounds), bounds);
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarPlaybackCadence.requestedElapsedMs(), elapsed);
+        QCOMPARE(map.m_weatherRadar->weatherRadarRendererBounds(bounds.first()), bounds.first());
         map.setProjectionMode(MapDisplayWidget::ProjectionMode::Flat);
         QVERIFY(state.isEmpty());
-        QCOMPARE(map.m_weatherRadarPlaybackSpeedPercent, 137);
-        QCOMPARE(map.m_weatherRadarFrameBounds, bounds);
-        QCOMPARE(map.weatherRadarRendererBounds(bounds.first()),
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarPlaybackSpeedPercent, 137);
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bounds), bounds);
+        QCOMPARE(map.m_weatherRadar->weatherRadarRendererBounds(bounds.first()),
             WeatherRadarSource::conventionalBoundsFromQgv(bounds.first()));
-        map.m_weatherRadarRebufferTimer->stop();
+        map.m_weatherRadar->m_weatherRadarRebufferTimer->stop();
 
-        map.m_weatherRadarHistoryHours = 1;
+        map.m_weatherRadar->m_weatherRadarHistoryHours = 1;
         const QDateTime newest = frames.last().addSecs(3600);
-        map.appendWeatherRadarObservations({
-            {frames.last(), map.m_weatherRadarFrameSampleTimes.last(),
-                map.m_weatherRadarFrameRasterIds.last()},
+        map.m_weatherRadar->appendWeatherRadarObservations({
+            {frames.last(), map.m_weatherRadar->m_frames.last().sampleTime,
+                map.m_weatherRadar->m_frames.last().rasterIds},
             {newest, newest.addSecs(150), {1000}}});
-        QCOMPARE(map.weatherRadarPlaybackFrameCount(), 6);
-        QCOMPARE(map.m_weatherRadarBufferedBytes.mid(0, 6), bytes);
+        QCOMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 6);
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes).mid(0, 6), bytes);
         finishAll(map, network);
-        QVERIFY(map.m_weatherRadarBufferFinalizationPending);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarBufferFinalizationPending);
         // Pruning the reusable cache must not destroy the active frame bytes.
-        map.m_weatherRadarFrameCache.clear();
-        map.applyFinalizedWeatherRadarBuffering();
-        QCOMPARE(map.m_weatherRadarFrames.size(), 2);
-        QCOMPARE(map.m_weatherRadarFrames.first(), frames.last());
-        QCOMPARE(map.m_weatherRadarFrameBounds.first(), bounds.last());
-        QCOMPARE(map.m_weatherRadarBufferedBytes.first(), bytes.last());
-        QVERIFY(!map.m_weatherRadarBufferedBytes.last().isEmpty());
-        QCOMPARE(map.weatherRadarPlaybackFrameCount(), 2);
-        QVERIFY(map.m_weatherRadarAnimating);
+        map.m_weatherRadar->m_weatherRadarFrameCache.clear();
+        map.m_weatherRadar->applyFinalizedWeatherRadarBuffering();
+        QCOMPARE(map.m_weatherRadar->m_frames.size(), 2);
+        QCOMPARE(map.m_weatherRadar->m_frames.first().time, frames.last());
+        QCOMPARE(map.m_weatherRadar->m_frames.first().bounds, bounds.last());
+        QCOMPARE(map.m_weatherRadar->m_frames.first().bytes, bytes.last());
+        QVERIFY(!map.m_weatherRadar->m_frames.last().bytes.isEmpty());
+        QCOMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 2);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarAnimating);
         map.stopWeatherRadarAnimation();
         map.setProjectionMode(MapDisplayWidget::ProjectionMode::Globe);
-        QVERIFY(!map.m_weatherRadarPlaybackRequested);
+        QVERIFY(!map.m_weatherRadar->m_weatherRadarPlaybackRequested);
         map.setProjectionMode(MapDisplayWidget::ProjectionMode::Flat);
-        QVERIFY(!map.m_weatherRadarPlaybackRequested);
+        QVERIFY(!map.m_weatherRadar->m_weatherRadarPlaybackRequested);
         QGV::setNetworkManager(nullptr);
     }
 
@@ -1522,17 +1576,17 @@ private slots:
         const WeatherRadarViewGeometry selected{QRectF(-11e6, 4e6, 3e6, 2e6), QSize(128, 96)};
         const int index = 4;
         const auto source = WeatherRadarSource::historicalNoaaFrame(
-            map.m_weatherRadarFrames.at(index), map.m_weatherRadarFrameSampleTimes.at(index),
-            map.m_weatherRadarFrameRasterIds.at(index));
+            map.m_weatherRadar->m_frames.at(index).time, map.m_weatherRadar->m_frames.at(index).sampleTime,
+            map.m_weatherRadar->m_frames.at(index).rasterIds);
         const QUrl selectedUrl = source.imageUrl(selected.bounds, selected.size);
-        map.m_weatherRadarFrameUrls[index] = selectedUrl;
-        map.m_weatherRadarFrameRequestGeometry[index] = selected;
+        map.m_weatherRadar->m_frames[index].url = selectedUrl;
+        map.m_weatherRadar->m_frames[index].requestGeometry = selected;
         network.pending()->complete();
         QTRY_VERIFY(network.pending(selectedUrl));
         network.pending(selectedUrl)->complete();
-        QTRY_VERIFY(!map.m_weatherRadarBufferedBytes.at(index).isEmpty());
-        QCOMPARE(map.m_weatherRadarDecodedImages.value(index).size(), selected.size);
-        QCOMPARE(map.m_weatherRadarFrameBounds.at(index), selected.bounds);
+        QTRY_VERIFY(!map.m_weatherRadar->m_frames.at(index).bytes.isEmpty());
+        QCOMPARE(map.m_weatherRadar->m_weatherRadarDecodedImages.value(index).size(), selected.size);
+        QCOMPARE(map.m_weatherRadar->m_frames.at(index).bounds, selected.bounds);
         QGV::setNetworkManager(nullptr);
     }
 
@@ -1590,7 +1644,7 @@ private slots:
         QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
         QTRY_VERIFY(map.m_weatherRadarLoadingLabel->isVisible());
         QCOMPARE(map.m_weatherRadarLoadingLabel->text(), QStringLiteral("Loading city lights…"));
-        map.m_weatherRadarVisible = true;
+        map.m_weatherRadar->m_weatherRadarVisible = true;
         map.m_weatherRadarLoadingText = QStringLiteral("Loading radar… 2/6");
         map.m_weatherRadarLoadingAnnouncement = QStringLiteral("Loading radar…");
         map.updateOverlayLoadingStatus();
@@ -1600,8 +1654,8 @@ private slots:
         QCOMPARE(map.m_weatherRadarLoadingLabel->accessibleDescription(),
                  QStringLiteral("Loading radar…\nLoading city lights…"));
         QVERIFY(map.m_weatherRadarLoadingLabel->testAttribute(Qt::WA_TransparentForMouseEvents));
-        map.m_weatherRadarVisible = false;
-        map.updateWeatherRadarLoadingStatus();
+        map.m_weatherRadar->m_weatherRadarVisible = false;
+        map.m_weatherRadar->updateWeatherRadarLoadingStatus();
         QCOMPARE(map.m_weatherRadarLoadingLabel->text(), QStringLiteral("Loading city lights…"));
         emit map.cityLightsStatusChanged(QString());
         QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
@@ -1622,100 +1676,100 @@ private slots:
         prepare(map, network);
         QSignalSpy frames(&map, &MapDisplayWidget::weatherRadarFrameChanged);
         QCOMPARE(network.requests.size(), 4); // Bounded even on a stalled link.
-        map.updateWeatherRadarLoadingStatus();
+        map.m_weatherRadar->updateWeatherRadarLoadingStatus();
         QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
         QTest::qWait(340);
-        map.updateWeatherRadarLoadingStatus();
+        map.m_weatherRadar->updateWeatherRadarLoadingStatus();
         QVERIFY(map.m_weatherRadarLoadingLabel->isVisible());
         QCOMPARE(map.m_weatherRadarLoadingLabel->text(), QStringLiteral("Loading radar… 0/6"));
         QVERIFY(map.m_weatherRadarLoadingLabel->testAttribute(Qt::WA_TransparentForMouseEvents));
         QCOMPARE(map.m_weatherRadarLoadingLabel->focusPolicy(), Qt::NoFocus);
         QVERIFY(std::abs(map.m_weatherRadarLoadingLabel->geometry().center().x() - map.width()/2) < 2);
 
-        QVERIFY(network.pending(map.m_weatherRadarFrameUrls.at(0)));
-        network.pending(map.m_weatherRadarFrameUrls.at(0))->complete();
-        QTRY_VERIFY(map.m_weatherRadarDecodedImages.contains(0));
+        QVERIFY(network.pending(map.m_weatherRadar->m_frames.at(0).url));
+        network.pending(map.m_weatherRadar->m_frames.at(0).url)->complete();
+        QTRY_VERIFY(map.m_weatherRadar->m_weatherRadarDecodedImages.contains(0));
         QVERIFY(!frames.isEmpty()); // A single complete image is displayed now.
-        QVERIFY(!map.m_weatherRadarAnimating);
-        network.pending(map.m_weatherRadarFrameUrls.at(1))->complete();
-        QTRY_VERIFY(map.m_weatherRadarAnimating); // No five-frame barrier.
-        QVERIFY(map.m_weatherRadarPlaybackTimer->isActive());
-        QTRY_VERIFY(map.m_weatherRadarFrameIndex == 1);
+        QVERIFY(!map.m_weatherRadar->m_weatherRadarAnimating);
+        network.pending(map.m_weatherRadar->m_frames.at(1).url)->complete();
+        QTRY_VERIFY(map.m_weatherRadar->m_weatherRadarAnimating); // No five-frame barrier.
+        QVERIFY(map.m_weatherRadar->m_weatherRadarPlaybackTimer->isActive());
+        QTRY_VERIFY(map.m_weatherRadar->m_weatherRadarFrameIndex == 1);
         finishAll(map, network);
-        QVERIFY(map.m_weatherRadarNetworkRequestsComplete);
-        QTRY_COMPARE(map.weatherRadarPlaybackFrameCount(), 6);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarNetworkRequestsComplete);
+        QTRY_COMPARE(map.m_weatherRadar->weatherRadarPlaybackFrameCount(), 6);
 
         QGVMap* flat = map.m_flatView->findChild<QGVMap*>();
         const double originalScale = flat->getCamera().scale();
         const QPointF originalCenter = flat->getCamera().projRect().center();
-        const QVector<QRectF> oldBounds = map.m_weatherRadarFrameBounds;
-        const QVector<QString> oldKeys = map.m_weatherRadarFrameCacheKeys;
-        const qint64 oldClock = map.m_weatherRadarPlaybackClock.elapsed();
+        const QVector<QRectF> oldBounds = map.m_weatherRadar->frameValues(&WeatherRadarFrame::bounds);
+        const QVector<QString> oldKeys = map.m_weatherRadar->frameValues(&WeatherRadarFrame::cacheKey);
+        const qint64 oldClock = map.m_weatherRadar->m_weatherRadarPlaybackClock.elapsed();
         flat->cameraTo(QGVCameraActions(flat).scaleTo(originalScale * 2), false);
         QCoreApplication::processEvents();
         const int beforeRequests = network.requests.size();
-        const int displayed = map.m_weatherRadarFrameIndex;
-        map.rebufferWeatherRadarPlayback();
-        map.m_weatherRadarRebufferTimer->stop();
-        QVERIFY(map.m_weatherRadarAnimating);
-        QVERIFY(map.m_weatherRadarPlaybackRequested);
-        QVERIFY(map.m_weatherRadarPlaybackTimer->isActive());
-        QVERIFY(map.m_weatherRadarPlaybackClock.elapsed() >= oldClock);
-        QCOMPARE(map.m_weatherRadarFrameBounds, oldBounds);
-        QCOMPARE(map.m_weatherRadarFrameCacheKeys, oldKeys);
+        const int displayed = map.m_weatherRadar->m_weatherRadarFrameIndex;
+        map.m_weatherRadar->rebufferWeatherRadarPlayback();
+        map.m_weatherRadar->m_weatherRadarRebufferTimer->stop();
+        QVERIFY(map.m_weatherRadar->m_weatherRadarAnimating);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarPlaybackRequested);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarPlaybackTimer->isActive());
+        QVERIFY(map.m_weatherRadar->m_weatherRadarPlaybackClock.elapsed() >= oldClock);
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::bounds), oldBounds);
+        QCOMPARE(map.m_weatherRadar->frameValues(&WeatherRadarFrame::cacheKey), oldKeys);
         QCOMPARE(network.requests.size(), beforeRequests + 4);
-        QCOMPARE(network.requests.at(beforeRequests), map.m_weatherRadarFrameUrls.at(displayed));
+        QCOMPARE(network.requests.at(beforeRequests), map.m_weatherRadar->m_frames.at(displayed).url);
         QSignalSpy playing(&map, &MapDisplayWidget::weatherRadarAnimationStateChanged);
         QSignalSpy loading(&map, &MapDisplayWidget::weatherRadarTimelineLoadingChanged);
-        network.pending(map.m_weatherRadarFrameUrls.at(displayed))->complete();
-        QTRY_VERIFY(map.m_weatherRadarFrameCacheKeys.at(displayed) != oldKeys.at(displayed));
+        network.pending(map.m_weatherRadar->m_frames.at(displayed).url)->complete();
+        QTRY_VERIFY(map.m_weatherRadar->m_frames.at(displayed).cacheKey != oldKeys.at(displayed));
         const int neighbor = (displayed + 1) % 6;
-        QVERIFY(map.m_weatherRadarFrameBounds.at(displayed) != oldBounds.at(displayed));
-        QCOMPARE(map.m_weatherRadarFrameBounds.at(neighbor), oldBounds.at(neighbor));
-        QVERIFY(!map.m_weatherRadarDecodedImages.value(displayed).isNull());
-        QVERIFY(!map.m_weatherRadarBufferedBytes.at(neighbor).isEmpty());
+        QVERIFY(map.m_weatherRadar->m_frames.at(displayed).bounds != oldBounds.at(displayed));
+        QCOMPARE(map.m_weatherRadar->m_frames.at(neighbor).bounds, oldBounds.at(neighbor));
+        QVERIFY(!map.m_weatherRadar->m_weatherRadarDecodedImages.value(displayed).isNull());
+        QVERIFY(!map.m_weatherRadar->m_frames.at(neighbor).bytes.isEmpty());
         QVERIFY(playing.isEmpty() && loading.isEmpty()); // Zoom cannot change Play/Pause.
-        const qint64 elapsed = map.m_weatherRadarPlaybackCadence.presentedElapsedMs();
+        const qint64 elapsed = map.m_weatherRadar->m_weatherRadarPlaybackCadence.presentedElapsedMs();
         QTest::qWait(200);
-        QVERIFY(map.m_weatherRadarPlaybackCadence.presentedElapsedMs() > elapsed);
+        QVERIFY(map.m_weatherRadar->m_weatherRadarPlaybackCadence.presentedElapsedMs() > elapsed);
 
         QVERIFY(network.pending());
         network.pending()->complete(true);
         finishAll(map, network);
-        QVERIFY(!map.m_weatherRadarDownloadFailed.isEmpty());
-        for (const QByteArray& bytes : map.m_weatherRadarBufferedBytes) {
+        QVERIFY(!map.m_weatherRadar->m_weatherRadarDownloadFailed.isEmpty());
+        for (const QByteArray& bytes : map.m_weatherRadar->frameValues(&WeatherRadarFrame::bytes)) {
             QVERIFY(!bytes.isEmpty()); // Failure is not "no rain" and not a blank.
         }
-        map.updateWeatherRadarLoadingStatus();
+        map.m_weatherRadar->updateWeatherRadarLoadingStatus();
         QTest::qWait(340);
-        map.updateWeatherRadarLoadingStatus();
+        map.m_weatherRadar->updateWeatherRadarLoadingStatus();
         QCOMPARE(map.m_weatherRadarLoadingLabel->text(), QStringLiteral("Loading radar data failed"));
-        map.m_weatherRadarRebufferTimer->stop();
+        map.m_weatherRadar->m_weatherRadarRebufferTimer->stop();
 
         // A late old-generation result must not re-georeference current data.
-        const int generation = map.m_weatherRadarBufferGeneration;
-        const auto frame = map.m_weatherRadarFrameCache.value(map.m_weatherRadarFrameCacheKeys.at(0));
-        const QRectF retained = map.m_weatherRadarFrameBounds.at(0);
-        ++map.m_weatherRadarBufferGeneration;
-        map.acceptWeatherRadarDownload(generation, 0, oldKeys.at(0), frame);
-        QCOMPARE(map.m_weatherRadarFrameBounds.at(0), retained);
+        const int generation = map.m_weatherRadar->m_weatherRadarBufferGeneration;
+        const auto frame = map.m_weatherRadar->m_weatherRadarFrameCache.value(map.m_weatherRadar->m_frames.at(0).cacheKey);
+        const QRectF retained = map.m_weatherRadar->m_frames.at(0).bounds;
+        ++map.m_weatherRadar->m_weatherRadarBufferGeneration;
+        map.m_weatherRadar->acceptWeatherRadarDownload(generation, 0, oldKeys.at(0), frame);
+        QCOMPARE(map.m_weatherRadar->m_frames.at(0).bounds, retained);
 
         // Returning to the previous view reuses all six original exports.
         flat->cameraTo(QGVCameraActions(flat).scaleTo(originalScale).moveTo(originalCenter), false);
         QCoreApplication::processEvents();
         const int beforeReturn = network.requests.size();
-        map.rebufferWeatherRadarPlayback();
-        QTRY_VERIFY(map.m_weatherRadarNetworkRequestsComplete);
+        map.m_weatherRadar->rebufferWeatherRadarPlayback();
+        QTRY_VERIFY(map.m_weatherRadar->m_weatherRadarNetworkRequestsComplete);
         QCOMPARE(network.requests.size(), beforeReturn);
-        QVERIFY(map.m_weatherRadarDownloadFailed.isEmpty());
-        map.m_weatherRadarRebufferTimer->stop();
+        QVERIFY(map.m_weatherRadar->m_weatherRadarDownloadFailed.isEmpty());
+        map.m_weatherRadar->m_weatherRadarRebufferTimer->stop();
         flat->cameraTo(QGVCameraActions(flat).moveTo(originalCenter + QPointF(1000, 1000)), false);
         QCoreApplication::processEvents();
-        map.rebufferWeatherRadarPlayback();
+        map.m_weatherRadar->rebufferWeatherRadarPlayback();
         QCOMPARE(network.requests.size(), beforeReturn);
         map.stopWeatherRadarAnimation();
-        map.m_weatherRadarVisible = false;
-        map.updateWeatherRadarLoadingStatus();
+        map.m_weatherRadar->m_weatherRadarVisible = false;
+        map.m_weatherRadar->updateWeatherRadarLoadingStatus();
         QVERIFY(!map.m_weatherRadarLoadingLabel->isVisible());
         QGV::setNetworkManager(nullptr);
     }

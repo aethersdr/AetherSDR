@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -109,5 +110,15 @@ inline QVector<RadarSite> parseRadarSites(const QByteArray& bytes, bool opera)
         result.append(site);
     }
     return result;
+}
+inline QVector<RadarSite> bundledRadarSites()
+{
+    QVector<RadarSite> sites;
+    for (bool opera : {false, true}) {
+        QFile file(opera ? QStringLiteral(":/radar/opera-stations.json")
+                         : QStringLiteral(":/radar/noaa-stations.json"));
+        if (file.open(QIODevice::ReadOnly)) { sites += parseRadarSites(file.readAll(), opera); }
+    }
+    return sites;
 }
 } // namespace AetherSDR
