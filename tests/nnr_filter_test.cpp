@@ -16,6 +16,7 @@
 #include <QByteArray>
 
 #include <cmath>
+#include <numbers>
 #include <cstdio>
 #include <vector>
 
@@ -48,13 +49,13 @@ float noise()
 float voice(long n)
 {
     const double t = static_cast<double>(n) / kRate;
-    const double env = 0.5 * (1.0 + std::sin(2.0 * M_PI * 3.0 * t));
+    const double env = 0.5 * (1.0 + std::sin(2.0 * std::numbers::pi * 3.0 * t));
     double v = 0.0;
     for (int h = 1; h <= 12; ++h) {
         const double f = 120.0 * h;
         const double a = std::exp(-std::fabs(f - 500.0) / 600.0)
                        + 0.7 * std::exp(-std::fabs(f - 1500.0) / 500.0);
-        v += a * std::sin(2.0 * M_PI * f * t + 0.7 * h);
+        v += a * std::sin(2.0 * std::numbers::pi * f * t + 0.7 * h);
     }
     return static_cast<float>(0.05 * env * v);
 }

@@ -91,6 +91,14 @@ target_link_libraries(audio_engine_pcm_lifetime_test PRIVATE aethercore Qt6::Cor
 add_test(NAME audio_engine_pcm_lifetime_test COMMAND audio_engine_pcm_lifetime_test)
 set_tests_properties(audio_engine_pcm_lifetime_test PROPERTIES TIMEOUT 120)
 
+# #5687 follow-up: managed Kiwi sources must actually be given an NNR filter.
+# Drives the real DSP initializer through the friend seam; no sockets/devices.
+add_executable(nnr_external_source_test tests/nnr_external_source_test.cpp)
+target_include_directories(nnr_external_source_test PRIVATE src tests)
+target_link_libraries(nnr_external_source_test PRIVATE aethercore Qt6::Core)
+add_test(NAME nnr_external_source_test COMMAND nnr_external_source_test)
+set_tests_properties(nnr_external_source_test PROPERTIES TIMEOUT 120)
+
 add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
     src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
     src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
@@ -4287,6 +4295,16 @@ target_link_libraries(automation_rn2_probe_test PRIVATE
 )
 add_test(NAME automation_rn2_probe_test COMMAND automation_rn2_probe_test)
 
+# #5687 follow-up: the probe's mode table and its `all` sweep must include NNR.
+add_executable(automation_nnr_probe_test
+    tests/automation_nnr_probe_test.cpp
+)
+target_include_directories(automation_nnr_probe_test PRIVATE src)
+target_link_libraries(automation_nnr_probe_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_nnr_probe_test COMMAND automation_nnr_probe_test)
+
 add_executable(aetherclock_model_test tests/aetherclock_model_test.cpp)
 target_include_directories(aetherclock_model_test PRIVATE src)
 target_link_libraries(aetherclock_model_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -5416,6 +5434,7 @@ set(AETHER_SETTINGS_CONSUMERS
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
+    nnr_external_source_test
     pcm_compatibility_test
     firmware_close_dialog_test
     atu_seam_gate_test
@@ -5529,6 +5548,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_drag_at_test
     automation_tx_watchdog_test
     automation_rn2_probe_test
+    automation_nnr_probe_test
     connect_state_model_test
     automation_dsp_backend_readback_test
     backend_slice_lifecycle_test

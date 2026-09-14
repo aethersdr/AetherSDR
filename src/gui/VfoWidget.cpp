@@ -1965,7 +1965,7 @@ void VfoWidget::buildTabContent()
         m_aetherDspBtn->setFixedHeight(26);
         m_aetherDspBtn->setStyleSheet(kDspToggle);
         m_aetherDspBtn->setAccessibleName("AetherDSP Settings");
-        m_aetherDspBtn->setToolTip("Open AetherDSP Settings (client-side NR2 / NR4 / DFNR / RN2 / BNR / MNR)");
+        m_aetherDspBtn->setToolTip("Open AetherDSP Settings (client-side NR2 / NR4 / DFNR / RN2 / BNR / MNR / NNR)");
         connect(m_aetherDspBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherDspRequested);
 

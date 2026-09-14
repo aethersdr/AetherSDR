@@ -50,6 +50,7 @@ const char* dspNameForIndex(int index)
     case AetherDspWidget::DFNR: return "DFNR";
     case AetherDspWidget::RN2:  return "RN2";
     case AetherDspWidget::BNR:  return "BNR";
+    case AetherDspWidget::NNR:  return "NNR";
     case AetherDspWidget::NumDsps:
         break;
     }

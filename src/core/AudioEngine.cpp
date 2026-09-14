@@ -1128,7 +1128,10 @@ AudioEngine::createNnrFilter(const QString& label, int producerRate) const
         return {};
     }
     filter->setStrength(m_nnrStrength.load());
-    filter->setModel(m_nnrModel.load());
+    // The persisted request, not m_nnrModel: that publishes the slot WDSP has
+    // live, which lags a pending switch by one audio block. Seeding from it
+    // made a sample-rate change rebuild on the superseded model (#5687).
+    filter->setModel(NnrSettings::model());
     filter->setAlpha(NnrSettings::alpha());
     filter->setAlphaKnee(NnrSettings::alphaKnee());
     filter->setTau(NnrSettings::tau());
@@ -1488,6 +1491,10 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
         ok = ok && static_cast<bool>(dfnr);
     }
 #endif
+    if (needNnr) {
+        nnr = createNnrFilter(QStringLiteral("external Kiwi %1").arg(id));
+        ok = ok && static_cast<bool>(nnr);
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (needNvAfx) {
         nvAfx = createNvAfxFilter(QStringLiteral("external Kiwi %1").arg(id));
@@ -3764,11 +3771,32 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
 #endif
         }
 
+        if (requestedMode == QLatin1String("NNR")) {
+            // No build guard, unlike its siblings: WDSP ships both trained
+            // models in-tree, so NNR is always compiled (CMakeLists CORE_SOURCES).
+            NnrFilter nnr;
+            if (!nnr.isValid()) {
+                return unavailableAutomationDspProbe(
+                    requestedMode, QStringLiteral("NNR/WDSP create_nnr() failed"));
+            }
+            nnr.setStrength(NnrSettings::strength());
+            nnr.setModel(NnrSettings::model());
+            nnr.setAlpha(NnrSettings::alpha());
+            nnr.setAlphaKnee(NnrSettings::alphaKnee());
+            nnr.setTau(NnrSettings::tau());
+            nnr.setMaxGain(NnrSettings::maxGain());
+            nnr.setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
+            const QByteArray output = processAutomationDspProbeBlocks(
+                input, [&nnr](const QByteArray& block) { return nnr.process(block); });
+            return completedAutomationDspProbe(requestedMode, input, output);
+        }
+
         return QJsonObject{
             {QStringLiteral("ok"), false},
             {QStringLiteral("mode"), requestedMode},
             {QStringLiteral("error"),
-             QStringLiteral("unknown DSP mode; use NR2, RN2, NR4, MNR, DFNR, BNR, or all")},
+             QStringLiteral(
+                 "unknown DSP mode; use NR2, RN2, NR4, MNR, DFNR, BNR, NNR, or all")},
         };
     };
 
@@ -3795,6 +3823,7 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
         QStringLiteral("MNR"),
         QStringLiteral("DFNR"),
         QStringLiteral("BNR"),
+        QStringLiteral("NNR"),
     };
     QJsonArray results;
     bool testedOk = true;
@@ -5641,6 +5670,14 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = nnr->process(pcm);
+            // process() applies a pending model switch on this thread, so this
+            // is the first point the selected slot is knowable. Republish it so
+            // nnrModel() converges instead of reporting whatever was live when
+            // setNnrModel() returned. Main RX only — the Kiwi and external
+            // filters are separate instances that do not own this property.
+            if (!externalSource && source != RxDspSource::KiwiSdr) {
+                m_nnrModel.store(nnr->modelSlot(), std::memory_order_relaxed);
+            }
             writeAudioAndLevel(processed);
 #ifdef HAVE_NVIDIA_AFX
         } else if (m_nvAfxEnabled) {
@@ -7915,10 +7952,11 @@ void AudioEngine::setNnrModel(int slot)
     }
     if (m_nnr) {
         m_nnr->setModel(requested);
-        // Published after the filter has been asked, so nnrModel() reports the
-        // slot in use rather than the one wanted. The filter applies the switch
-        // on the audio thread, so this reflects the previous state until the
-        // next block; the UI re-reads on nnrEnabledChanged.
+        // nnrModel() reports the slot in use, not the one wanted: WDSP can
+        // refuse a slot this build has no model for. The switch lands on the
+        // audio thread, so this still reads the previous slot here — the RX
+        // path republishes it after the next processed block, which is what
+        // makes the value converge rather than stay stale.
         m_nnrModel.store(m_nnr->modelSlot());
     } else {
         m_nnrModel.store(requested);
