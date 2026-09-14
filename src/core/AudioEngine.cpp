@@ -41,6 +41,7 @@
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
 #include "NnrFilter.h"
+#include "NnrSettings.h"
 #endif
 #ifdef HAVE_NVIDIA_AFX
 #include "NvidiaAfxFilter.h"
@@ -7823,10 +7824,8 @@ void AudioEngine::setNnrEnabled(bool on)
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
-        m_nnrStrength.store(std::clamp(
-            AppSettings::instance().value("NnrStrength", "50").toInt(), 0, 100));
-        m_nnrModel.store(std::clamp(
-            AppSettings::instance().value("NnrModel", "0").toInt(), 0, 1));
+        m_nnrStrength.store(NnrSettings::strength());
+        m_nnrModel.store(NnrSettings::model());
         m_nnr = createNnrFilter(QStringLiteral("main RX"), m_rxProducerRate.load());
         if (!m_nnr) {
             m_nnr.reset();
@@ -7859,7 +7858,7 @@ void AudioEngine::setNnrStrength(int strength)
 {
     const int clamped = std::clamp(strength, 0, 100);
     m_nnrStrength.store(clamped);
-    AppSettings::instance().setValue("NnrStrength", QString::number(clamped));
+    NnrSettings::setStrength(clamped);
     std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_nnr) {
         m_nnr->setStrength(clamped);
@@ -7877,7 +7876,7 @@ void AudioEngine::setNnrStrength(int strength)
 void AudioEngine::setNnrModel(int slot)
 {
     const int requested = std::clamp(slot, 0, 1);
-    AppSettings::instance().setValue("NnrModel", QString::number(requested));
+    NnrSettings::setModel(requested);
     std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_kiwiSdrNnr) {
         m_kiwiSdrNnr->setModel(requested);
