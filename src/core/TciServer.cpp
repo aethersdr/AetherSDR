@@ -4231,11 +4231,13 @@ void TciServer::ensureDaxForTci()
     if (!m_model || !m_model->isConnected()) return;
 
     // In-process backend (HL2): there is no DAX plane to arrange. RX audio
-    // reaches onDaxAudioReady() on channel 1 straight from the backend's
-    // demodulator (MainWindow wires backendAudioFrameReady), and the
-    // channel→TRX fallback there maps channel 1 to trx 0 — which is the whole
-    // mapping on a single-slice radio. Assigning slice DAX channels here would
-    // emit Flex `slice set … dax=` commands into a socket that ignores them.
+    // reaches onDaxAudioReady() straight from the backend's demodulator —
+    // MainWindow wires backendSliceAudioFrameReady per slice, as channel
+    // sliceId + 1 (#4545) — and the channel→TRX fallback there maps channel N
+    // to trx N-1. backendAudioFrameReady is the MIXED speaker feed and does not
+    // reach TCI; routing TCI from it was the single-receiver bug #4545 fixed.
+    // Assigning slice DAX channels here would emit Flex `slice set … dax=`
+    // commands into a socket that ignores them.
     if (!m_model->panStream()) return;
 
     QSet<int> channelsNeeded;

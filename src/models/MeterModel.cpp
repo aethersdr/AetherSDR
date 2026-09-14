@@ -168,6 +168,14 @@ void MeterModel::defineMeter(const MeterDef& def)
         qCWarning(lcMeters) << "MeterModel: ALC definition has no TX waveform route"
                             << def.index << def.source << def.sourceIndex;
     }
+    else if (isTxWaveformMeter(def) && def.name == "ALCGAIN") {
+        registerTxWaveformMeter(def, redefinition,
+                                m_alcGainIdxByTxSource, m_alcGainIdxBySlice);
+    }
+    else if (def.name == "ALCGAIN") {
+        qCWarning(lcMeters) << "MeterModel: ALCGAIN definition has no TX waveform route"
+                            << def.index << def.source << def.sourceIndex;
+    }
     else if (isTxWaveformMeter(def)
              && (def.name == "SC_MIC" || def.name == "SC_FILT_1"
                  || def.name == "SC_FILT_2")) {
@@ -230,6 +238,10 @@ QList<int> MeterModel::firstDefinedIndices(int limit, std::optional<int> after) 
 void MeterModel::removeMeter(int index)
 {
     const int activeSwAlcIdx = swAlcIndexForActiveTxSlice();
+    // Resolved BEFORE the maps are erased, exactly like the filter taps below:
+    // once the entry is gone the resolver returns -1 and the reading would
+    // outlive the meter it describes.
+    const int activeAlcGainIdx = alcGainIndexForActiveTxSlice();
     // Removal starts a new manifest lifecycle. Existing ownership survives,
     // but newly declared meters need fresh SLC context or the source fallback.
     m_manifestSliceContext = -1;
@@ -265,6 +277,11 @@ void MeterModel::removeMeter(int index)
         m_nativeAlcIndex = -1;
         emit swAlcChanged(m_swAlc);
         emit alcValueChanged(alcValue(), alcUnit());
+    }
+    m_alcGainIdxByTxSource.removeIf(matchesIndex);
+    m_alcGainIdxBySlice.removeIf(matchesIndex);
+    if (index == activeAlcGainIdx && clearAlcGainState()) {
+        emit alcGainChanged(m_alcGainDb);
     }
     // A level must never outlive the meter it describes.
     // Resolve the ACTIVE indices BEFORE erasing: once the entry is gone the
@@ -380,6 +397,8 @@ void MeterModel::clear()
     m_hwAlcIdx = -1;
     m_swAlcIdxByTxSource.clear();
     m_swAlcIdxBySlice.clear();
+    m_alcGainIdxByTxSource.clear();
+    m_alcGainIdxBySlice.clear();
     m_paTempIdx = -1;
     m_paCurrentIdx = -1;
     m_hasPaTempValue = false;
@@ -421,6 +440,9 @@ void MeterModel::clear()
     m_hwAlc = 0.0f;
     m_swAlc = kAlcGaugeFloorDbfs;
     m_nativeAlcIndex = -1;
+    // No signal here: clear() is the disconnect path and every consumer is
+    // rebuilt or reset behind it, which is why none of its neighbours emit.
+    clearAlcGainState();
     m_paTemp = 0.0f;
     m_paCurrent = 0.0f;
     m_supplyVolts = 0.0f;
@@ -454,10 +476,26 @@ void MeterModel::setActiveTxSlice(int sliceIndex)
     clearCompressionState();
     m_swAlc = kAlcGaugeFloorDbfs;
     m_nativeAlcIndex = -1;
+    // The gain describes the transmitter that was active, so it does not
+    // survive the change any more than the ALC level or the compression does.
+    const bool alcGainCleared = clearAlcGainState();
     logCompressionSummary("active-slice-change", true);
     emit micMetersChanged(m_micLevel, m_compLevel, m_micPeak, m_compPeak);
     emit swAlcChanged(m_swAlc);
+    if (alcGainCleared) {
+        emit alcGainChanged(m_alcGainDb);
+    }
     emit alcValueChanged(alcValue(), alcUnit());
+}
+
+bool MeterModel::clearAlcGainState()
+{
+    if (m_alcGainDb == 0.0f && !m_hasAlcGainValue) {
+        return false;
+    }
+    m_alcGainDb = 0.0f;
+    m_hasAlcGainValue = false;
+    return true;
 }
 
 float MeterModel::alcValue() const
@@ -606,6 +644,16 @@ int MeterModel::swAlcIndexForActiveTxSlice() const
     return resolveTxWaveformIndex(m_swAlcIdxByTxSource, m_swAlcIdxBySlice, true);
 }
 
+int MeterModel::alcGainIndexForActiveTxSlice() const
+{
+    // allowSingleImplicit, matching ALC and COMPPEAK rather than the filter
+    // taps: a one-modulator backend (the HL2 is one) declares this meter
+    // without an explicit TX-waveform source index, and it follows TX between
+    // receivers (#4609). The taps decline the fallback because THEY are only
+    // meaningful as a matched pair; a gain is a single reading.
+    return resolveTxWaveformIndex(m_alcGainIdxByTxSource, m_alcGainIdxBySlice, true);
+}
+
 void MeterModel::logCompressionMeterMap(const MeterDef& def) const
 {
     if (!lcMeters().isDebugEnabled())
@@ -710,6 +758,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
     const qint64 packetUpdatedMs = QDateTime::currentMSecsSinceEpoch();
     const int activeCompPeakIdx = compPeakIndexForActiveTxSlice();
     const int activeSwAlcIdx = swAlcIndexForActiveTxSlice();
+    const int activeAlcGainIdx = alcGainIndexForActiveTxSlice();
     // Resolved once per packet, same shape as activeCompPeakIdx: these must
     // track the ACTIVE TX slice, not whichever block was defined last.
     const int activeScMicIdx   = scMicIndexForActiveTxSlice();
@@ -722,6 +771,7 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
     bool micChanged = false;
     bool hwAlcChangedFlag = false;
     bool swAlcChangedFlag = false;
+    bool alcGainChangedFlag = false;
     bool txFilterLevelsChangedFlag = false;
     bool hwChanged = false;
     bool ampChanged = false;
@@ -856,6 +906,12 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             m_nativeAlcIndex = idx;
             m_swAlc = convertAlcToGaugeDbfs(v, it->unit);
             swAlcChangedFlag = true;
+        } else if (activeAlcGainIdx >= 0 && idx == activeAlcGainIdx) {
+            // Straight through. The unit is dB by declaration and there is no
+            // second unit to reconcile it with — see alcGainDb().
+            m_alcGainDb = v;
+            m_hasAlcGainValue = true;
+            alcGainChangedFlag = true;
         } else if (activeScMicIdx >= 0 && idx == activeScMicIdx) {
             m_scMic = v;
             m_hasScMicValue = true;
@@ -969,6 +1025,9 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
     if (swAlcChangedFlag) {
         emit this->swAlcChanged(m_swAlc);
         emit alcValueChanged(alcValue(), alcUnit());
+    }
+    if (alcGainChangedFlag) {
+        emit this->alcGainChanged(m_alcGainDb);
     }
     if (txFilterLevelsChangedFlag)
         emit txFilterLevelsChanged(m_scFilt1, m_scFilt2);

@@ -117,6 +117,11 @@ void MainWindow::wireStatusBarMessages()
             updateStatusBarMinimumWidth();
         }
     });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::atuTuneFailed,
+            this, [this](ATUStatus, const QString& detail) {
+                statusBar()->showMessage(
+                    tr("ATU Tune Failed - %1").arg(detail), 5000);
+            });
 }
 
 
@@ -1673,6 +1678,19 @@ bool MainWindow::reattachSliceVisualsToPanadapter(SliceModel* s)
 }
 
 
+void MainWindow::refreshTunerPortFrequency()
+{
+    if (!m_appletPanel || !m_appletPanel->tunerApplet()) return;
+    // No radio, or no slice keyed for transmit, means there is no frequency
+    // on the port — which the strip renders as N/A. Reporting the last one
+    // seen would be worse than reporting nothing.
+    SliceModel* tx = m_radioModel.isConnected() ? m_radioModel.txSlice() : nullptr;
+    m_appletPanel->tunerApplet()->setPortAFrequencyMhz(tx ? tx->frequency() : 0.0);
+    // The same slice's antenna decides which port the applet outlines, so it
+    // is refreshed on every path that can change the transmit slice.
+    m_appletPanel->tunerApplet()->setTxAntenna(tx ? tx->txAntenna() : QString());
+}
+
 void MainWindow::onSliceAdded(SliceModel* s)
 {
     // During layout transition, spectrums are being destroyed/recreated — skip
@@ -2243,6 +2261,20 @@ void MainWindow::onSliceAdded(SliceModel* s)
     connect(s, &SliceModel::letterChanged, this,
             [this](const QString&) { refreshSliceLinkUi(); });
 
+    // Port A's readout follows the transmit slice, whichever slice that is
+    // and wherever it is tuned. Both edges matter: a retune moves the
+    // frequency, and the TX flag moving between slices changes which one to
+    // read. Bound here so a slice that band recall re-created is re-bound too.
+    connect(s, &SliceModel::frequencyChanged, this,
+            [this](double) { refreshTunerPortFrequency(); });
+    connect(s, &SliceModel::txSliceChanged, this,
+            [this](bool) { refreshTunerPortFrequency(); });
+    // Switching the transmit antenna moves which tuner port carries RF, with
+    // no change of slice or frequency to notice it by.
+    connect(s, &SliceModel::txAntennaChanged, this,
+            [this](const QString&) { refreshTunerPortFrequency(); });
+    refreshTunerPortFrequency();
+
     // Reset band-stack auto-save dwell timer on every active-slice tune
     connect(s, &SliceModel::frequencyChanged, this, [this, s]() {
         if (s->sliceId() != m_activeSliceId) return;
@@ -2320,6 +2352,10 @@ void MainWindow::onSliceRemoved(int id)
     if (m_applyingLayout) return;
 
     qDebug() << "MainWindow: slice removed" << id;
+
+    // The removed slice may have been the transmit one, leaving port A with
+    // no frequency to show.
+    refreshTunerPortFrequency();
 
     // #4558: any LIVE removal ends the last-session DAX restore window — from
     // here on, slice adds are mid-session (band-stack recreates included) and
@@ -5402,7 +5438,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             QString("display pan set %1 loopb=%2").arg(applet->panId()).arg(on ? 1 : 0));
     });
     connect(menu, &SpectrumOverlayMenu::swrSweepStartRequested,
-            this, &MainWindow::startSwrSweep);
+            this, [this](int sliceId, int powerWatts,
+                         double lowMhz, double highMhz) {
+        startSwrSweep(sliceId, powerWatts, lowMhz, highMhz);
+    });
     connect(menu, &SpectrumOverlayMenu::swrSweepClearRequested,
             this, &MainWindow::clearSwrSweepPlot);
     connect(menu, &SpectrumOverlayMenu::swrSweepSaveCsvRequested,
@@ -5863,6 +5902,66 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     // Split toggle — per-widget, slice-aware (#328)
     connect(w, &VfoWidget::splitToggled, this, [this, sliceId]() {
         if (!m_splitActive) {
+            // Split creates its TX slice with Flex wire text, which a backend
+            // with no command plane drops before any wire write. Same gate
+            // #5266 put on the FlexControl and RC-28/HID Split actions; this
+            // on-screen badge and the split_toggle shortcut are the two
+            // primary operator paths and were not in #5263's item-3
+            // enumeration (issue 5277).
+            //
+            // It returns BEFORE the three writes below rather than merely
+            // skipping the send, because the writes are the worse half of the
+            // defect: m_splitActive is latched AHEAD of the command, so an HL2
+            // that never created the slice left the application believing
+            // split was on while the SPLIT badge — derived from model truth in
+            // updateSplitState() — correctly showed it off. From there
+            // startSwrSweep() refuses with "Disable split before running an
+            // SWR sweep" for a split the operator does not have,
+            // TxFollowsActiveSlice silently stops following, and the next
+            // slice to arrive from ANY source is adopted as the split TX
+            // slice, muted and made TX, by MainWindow::onSliceAdded.
+            //
+            // qCWarning, not the qCDebug the #5266 sites use: since #5265 an
+            // UNGATED dead control warns and shows the operator a status-bar
+            // notice, so a gate that logged at debug and said nothing would
+            // make the CONVERTED control the quieter of the two. The refusal
+            // is the drop, one layer up, and it reports the same way.
+            //
+            // This is the M0 gate, not the end state. TciServer::
+            // createTxSliceForVfoB already carries a family-blind split for
+            // exactly this radio — createPanadapter() brings up another DDC
+            // with its slice synchronously — so #5263's own "conversion beats
+            // gating where the seam verb exists" applies to these two GUI
+            // sites as an M4 item.
+            //
+            // Deliberately NOT permissive on disconnect, unlike every gate in
+            // applyCapabilitiesToUi() (which spells that rule out at the
+            // cmdPlane/`!connected ||` gate in MainWindow.cpp). Those gate
+            // ENABLEMENT of a visible control, where staying permissive with no
+            // radio attached is right. This gates an ACTION that writes
+            // m_splitActive ahead of its send, so admitting the press while
+            // disconnected would reinstate exactly the latch this guard exists
+            // to remove. The cost is that an offline press reports "this radio
+            // doesn't support that control" when there is no radio; the wording
+            // is the price of sharing one notice with the drop path.
+            //
+            // Which families this refuses is a property of the predicate, not a
+            // list kept here: hasCommandPlane() is m_wanConn || m_connection,
+            // and RadioModel::buildBackend() harvests m_connection in exactly
+            // two branches — dynamic_cast<FlexBackend*>, and the else-if
+            // dynamic_cast<SimBackend*> that vends the synthetic connection per
+            // RFC #4288 Route A. So Flex (LAN, and WAN via m_wanConn) and Sim
+            // pass unchanged, and every family that vends no RadioConnection
+            // refuses: hl2, icom, anan and rtl alike. Nothing here enumerates
+            // them, and a future backend that vends one passes with no edit to
+            // this site.
+            if (!m_radioModel.hasCommandPlane()) {
+                qCWarning(lcDevices)
+                    << "VFO split toggle ignored: this backend takes no Flex"
+                    << "slice-create command";
+                showUnsupportedControlNotice();
+                return;
+            }
             // Entering split: this slice becomes RX, create a new TX slice
             if (m_radioModel.slices().size() >= m_radioModel.maxSlices())
                 return;
@@ -6108,6 +6207,28 @@ void MainWindow::wireMeters()
     // via the direct TCP connection (port 9010). (#625)
     m_appletPanel->tunerApplet()->setTunerModel(&m_radioModel.tunerModel());
     m_appletPanel->tunerApplet()->setMeterModel(&m_radioModel.meterModel());
+
+    // ── Tuner: what is feeding port A ───────────────────────────────────
+    // The TGXL's status says nothing about each port's source, so the
+    // expanded front-panel presentation gets it from the radio this client
+    // is connected to. The model names the port; the frequency follows the
+    // TX slice via refreshTunerPortFrequency() (see onSliceAdded).
+    {
+        auto* tuner = m_appletPanel->tunerApplet();
+        auto pushModelName = [this, tuner]() {
+            tuner->setRadioModelName(m_radioModel.model());
+        };
+        connect(&m_radioModel, &RadioModel::infoChanged, this, pushModelName);
+        connect(&m_radioModel, &RadioModel::connectionStateChanged, this,
+                [this, tuner, pushModelName](bool connected) {
+                    tuner->setRadioConnected(connected);
+                    pushModelName();
+                    refreshTunerPortFrequency();
+                });
+        pushModelName();
+        tuner->setRadioConnected(m_radioModel.isConnected());
+        refreshTunerPortFrequency();
+    }
 
     // Show/hide TUNE button + applet based on TGXL presence
     connect(&m_radioModel.tunerModel(), &TunerModel::presenceChanged,

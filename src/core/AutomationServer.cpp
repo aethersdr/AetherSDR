@@ -8159,6 +8159,9 @@ QJsonObject AutomationServer::doLiveness()
     QJsonArray join;
     QStringList publishedNowhere, surfaceStarved, unitDisagreements;
     for (const auto& surf : kMeterSurfaces) {
+        if (!surf.rendered) {
+            continue;
+        }
         const QString key = QString::fromLatin1(surf.key);
         const int colon = key.indexOf(QLatin1Char(':'));
         const int idx = meters.findMeter(key.left(colon), key.mid(colon + 1));
@@ -8199,8 +8202,9 @@ QJsonObject AutomationServer::doLiveness()
         if (!def)
             continue;
         const QString key = def->source + QLatin1Char(':') + def->name;
-        if (meterSurfaceFor(key))
+        if (meterHasRenderedSurface(key)) {
             continue;
+        }
         publishedNowhere << key;
     }
 

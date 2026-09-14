@@ -763,6 +763,24 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                                m_drawer, m_drawerLayout);
         m_tuneBtn = entry.btn;
         markHardwareConditional("TUN");
+        // Popped out or on the canvas, the applet switches to the tuner's
+        // own front-panel layout — port strips, relay dials and discrete
+        // keys — same pattern as PWR and SPE above.
+        if (ContainerWidget* container =
+                qobject_cast<ContainerWidget*>(entry.widget)) {
+            // The expanded layout asks for 361x242; this rounds that up to a
+            // comfortable strip — wide enough that the source and frequency
+            // on a port row are never the thing that gets elided. Saved user
+            // geometry takes over after the first resize.
+            container->setDefaultFloatingSize(QSize(520, 275));
+            connect(container, &ContainerWidget::dockModeChanged,
+                    m_tunerApplet,
+                    [this](ContainerWidget::DockMode mode) {
+                        // Canvas is a floating presentation too (see PWR).
+                        m_tunerApplet->setFloating(
+                            mode != ContainerWidget::DockMode::PanelDocked);
+                    });
+        }
         m_appletOrder.append(entry);
     }
 

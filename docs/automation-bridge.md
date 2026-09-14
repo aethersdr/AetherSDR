@@ -3536,7 +3536,7 @@ is applied automatically on connect and the user's real name is restored when th
 bridge stops.
 
 ### `qrz`
-QRZ.com callsign-lookup subsystem (CW decoder contact card + View → Callsign
+QRZ.com callsign-lookup subsystem (CW decoder contact card + Tools → Callsign
 Lookup). Four actions; none touch the radio and none key TX.
 
 ```json

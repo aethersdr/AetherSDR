@@ -58,8 +58,7 @@ Refresh notes:
 
 Manual RX/TX test notes:
 
-- Open **View > AetherModem...**. The action is listed immediately under
-  **Propagation Conditions**.
+- Open **Tools > AetherModem...**.
 - For HF packet/APRS, choose **300 baud HF**, tune an appropriate frequency,
   and use SSB/DIG receive mode with the audio passband covering 1600/1800 Hz.
 - For VHF packet/APRS, choose **1200 baud VHF** and use the normal FM packet

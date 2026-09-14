@@ -230,10 +230,11 @@ int main(int argc, char** argv)
     // fresh one, so the new Hl2TxDsp starts at its own 1.0 default. But the
     // seam carrying mic gain to a host-modulating backend fires on operator
     // INTENT — the slider moving — and a rebuild is not the slider moving.
-    // TransmitModel is never reset and micLevel is not persisted, so without an
-    // explicit re-assert the slider goes on reading the operator's value while
-    // the modulator sits at unity, and the radio transmits several dB below
-    // what every readout claims.
+    // TransmitModel is never reset — resetState() leaves micLevel alone — and
+    // the level's persistence restores it at CONNECT, which a mid-session
+    // backend rebuild is not. So without an explicit re-assert the slider goes
+    // on reading the operator's value while the modulator sits at unity, and
+    // the radio transmits several dB below what every readout claims.
     //
     // That is exactly the readback-agrees-with-the-failure shape the mic-gain
     // fix exists to eliminate, displaced one seam over, so it gets its own pin.

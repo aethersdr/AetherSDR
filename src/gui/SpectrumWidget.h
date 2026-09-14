@@ -525,6 +525,16 @@ public:
     bool extendedFrequencyLine() const { return m_extendedFrequencyLine; }
     void setExtendedPassband(bool on);
     bool extendedPassband() const { return m_extendedPassband; }
+    void setExtendedTnf(bool on);
+    bool extendedTnf() const { return m_extendedTnf; }
+    // Push a global pan-display flag onto every other open panadapter,
+    // floating ones included. See the definition for why the walk is over
+    // topLevelWidgets() rather than window()'s children.
+    // `onApplied` runs on each sibling that actually changed, for toggles that
+    // own more than a flag (e.g. stopping that pan's tune-guide timer).
+    void propagateGlobalDisplayToggle(
+        bool SpectrumWidget::*flag, bool on, const char* cause,
+        const std::function<void(SpectrumWidget*)>& onApplied = {});
     void setThreeDSliceDepth(bool on);
     bool threeDSliceDepth() const { return m_threeDSliceDepth; }
     void setFloating(bool on) { m_isFloating = on; }
@@ -979,7 +989,11 @@ private:
     void drawSmartMtrValueLabels(QPainter& p);
     void drawOffScreenSlices(QPainter& p, const QRect& specRect);
     void drawBandPlan(QPainter& p, const QRect& specRect);
-    void drawTnfMarkers(QPainter& p, const QRect& specRect);
+    // wfRect is the waterfall band the notch is optionally extended into; pass
+    // an empty rect (or leave it defaulted) where there is no waterfall to
+    // paint, e.g. a pan rendered without one.
+    void drawTnfMarkers(QPainter& p, const QRect& specRect,
+                        const QRect& wfRect = QRect());
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
@@ -1876,6 +1890,7 @@ private:
     bool    m_showTuneGuides{false};
     bool    m_extendedFrequencyLine{false};
     bool    m_extendedPassband{false};
+    bool    m_extendedTnf{false};
     bool    m_threeDSliceDepth{false};
     bool    m_isFloating{false};
     bool    m_tuneGuideVisible{false};

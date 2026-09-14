@@ -160,6 +160,17 @@ inline constexpr std::size_t kTxSampleBytes = 8;
 // C0 register-address bytes (address << 1). Bit 0 is MOX, not part of the
 // address, so every constant here is even and keying is applied separately with
 // withMox() — see kC0MoxBit.
+//
+// The host->radio C0 byte splits THREE ways, not two. dsopenhpsdr1.v decodes it
+// in one state (CMDCTRL):
+//
+//     resprqst <= eth_data[7];      // ask the radio to answer this command
+//     addr     <= eth_data[6:1];    // SIX bits of register address, not seven
+//     ptt      <= eth_data[0];      // MOX
+//
+// so the address space is 0x00..0x3F and bit 7 is a flag, not address bit 6.
+// Nothing below 0x40 collides with it, which is why every constant here has
+// been safe while nothing set it. See kC0RespRqstBit and Hl2ControlRequest.
 inline constexpr std::uint8_t kC0Config = 0x00;   // addr 0x00: sample rate + #RX + ADC select
 inline constexpr std::uint8_t kC0Rx1Freq = 0x04;  // addr 0x02: RX1 NCO frequency (Hz, 32-bit BE)
 inline constexpr std::uint8_t kC0TxFreq  = 0x02;  // addr 0x01: TX1 NCO frequency (Hz, 32-bit BE)
@@ -169,6 +180,30 @@ inline constexpr std::uint8_t kC0TxDrive = 0x12;  // addr 0x09: TX drive level +
 // radio reads it from whatever bank happens to be in flight. So keying is a
 // property of the frame, and every bank has to carry it while transmitting.
 inline constexpr std::uint8_t kC0MoxBit = 0x01;
+
+// C0 bit 7, host->radio: RESPONSE REQUEST. Set it on a C&C bank and the radio
+// answers that one command with an ACK frame on EP6 (C0[7] set there too).
+// Clear on every bank this client has ever sent until Hl2ControlRequest, which
+// is why no ACK has ever arrived and why nothing downstream has had to cope
+// with one.
+//
+// It is NOT a read bit. There is no read-only command in this direction: the
+// gateware latches cmd_data and applies the write whatever bit 7 says, and the
+// response is an ECHO of what was written (control.v, RESP_START:
+// resp_cmd_data_next = cmd_data). The only genuine reads are the AD9866 SPI and
+// I2C subsystem commands, which encode a read opcode inside the data and whose
+// reply carries the read value in place of the echo (RESP_READ).
+inline constexpr std::uint8_t kC0RespRqstBit = 0x80;
+
+// Highest register address the six-bit C0 field can carry.
+inline constexpr int kMaxRegisterAddress = 0x3F;
+
+// Radio->host ACK address meaning "I could not do that". The response FSM
+// substitutes 6'h3f for the command address when a subsystem was not ready
+// (control.v, RESP_ACK), so this is a refusal and not a register. We never
+// REQUEST 0x3F — it is the extended-address escape (see ep2WriteTxIq) — so the
+// two readings never collide on our wire.
+inline constexpr int kRespAddrError = 0x3F;
 
 // TX drive level occupies DATA[31:24] (C1). The Hermes-Lite 2 gateware decodes
 // only the top nibble [31:28], but the byte-wide field is what the reference
@@ -355,12 +390,42 @@ Cc ccTxDrive(int level, bool paEnable = false) noexcept;
 // ordinary register-then-value slave expects. ONE-BYTE WRITES ONLY — there is
 // no burst mode, so an N-byte value costs N C&C banks.
 //
-// RQST (C0[7]) IS DELIBERATELY LEFT CLEAR. The wiki calls it optional for a
-// write, and setting it makes the radio answer with an ACK response — which
-// Hl2Telemetry::apply() dispatches on RADDR *without* consulting the ACK flag.
-// Today an I2C reply (RADDR 0x3c/0x3d) lands harmlessly in its `default:`, but
-// a write that provokes no reply at all cannot perturb the telemetry decoder
-// under any future edit to that switch. This path stays write-only.
+// RQST (C0[7]) IS LEFT CLEAR ON THESE BANKS, AND THE REASON HAS CHANGED.
+//
+// It used to be a decoder hazard: `Hl2Telemetry::apply()` dispatched on RADDR
+// *without* consulting the ACK flag, so an I2C reply (RADDR 0x3c/0x3d) landed
+// harmlessly in its `default:` only by accident of that switch's shape, and any
+// future edit to it could have made an echo of our own outgoing bytes read as
+// telemetry. THAT BUG IS FIXED — `apply()` now returns early on `r.ack`
+// (MetisProtocol.cpp) — so the hazard is closed and is no longer the reason.
+//
+// What decides whether an address may carry RQST now is the ALLOW-LIST in
+// `MetisClient::requestRegister`, and NEITHER 0x3c NOR 0x3d IS ON IT. That is a
+// deliberate omission, not an oversight: an arbitrary-data RQST at 0x3d is a
+// direct I2C write to the companion board described immediately below — the one
+// that switches amplifiers, antenna relays and transverters — and 0x3c reaches
+// the Versa clock that the board's own clocking depends on. Neither is
+// re-asserted by anything, so a wrong value there persists.
+//
+// The encoders in this section therefore stay write-only because nothing needs
+// an acknowledgement for them, and because nothing may ask for one. If a future
+// item does need one, the change is to that allow-list, with a note there
+// saying what the acknowledgement is worth — not a flag added here.
+// addr 0x3b: a raw SPI transaction against the AD9866 itself (gateware
+// `ad9866ctrl.v`, which decodes `6'h3b`). A WRITE, and only a write — an
+// earlier note here called it the read path, which the RTL contradicts:
+// `ad9866ctrl` has no data output, `assign sdo = 1'b0;`, and control.v's
+// RESP_READ carries `cmd_resp_data_i2c` for the AD9866 branch behind the
+// gateware's own `// FIXME: suppor read cmd_resp_data_ad9866`. The reply is our
+// echo or the 0x3F refusal.
+//
+// What it writes: gated on `cmd_data[31:24] == 8'h06`, it puts
+// `{3'b000, cmd_data[20:16], cmd_data[7:0]}` on the converter's SPI bus — any
+// AD9866 register, any byte, INCLUDING the TX-gain register 0x0a that the
+// gateware's own 0x09 handler drives. It is therefore a transmit-path write
+// that nothing re-asserts, and MetisClient::requestRegister does NOT allow-list
+// it. No encoder here either: nothing writes it.
+inline constexpr std::uint8_t kC0Ad9866Spi = 0x76;  // addr 0x3b << 1
 inline constexpr std::uint8_t kC0I2c1 = 0x78;          // addr 0x3c << 1
 inline constexpr std::uint8_t kC0I2c2 = 0x7A;          // addr 0x3d << 1
 inline constexpr std::uint8_t kI2cCookieWrite = 0x06;  // C1
@@ -417,6 +482,26 @@ static_assert(kIoBoardTxFreqBanks
                                               - kIoBoardRegTxFreqMsb + 1),
               "IO board frequency bank count must span Msb..Lsb exactly");
 std::array<Cc, kIoBoardTxFreqBanks> ccIoBoardTxFrequency(std::uint64_t hz) noexcept;
+// A C&C bank addressing an arbitrary six-bit register with arbitrary data.
+//
+// Deliberately the last resort, not the first: every register with a known
+// meaning has a named encoder above, and one of those says what it is doing in
+// the call. This exists because Hl2ControlRequest has to be able to address a
+// register the caller names at runtime, and refuses an address outside
+// 0x00..0x3F rather than letting it alias into the RQST bit.
+Cc ccRegister(int addr, std::uint32_t data) noexcept;
+
+// Set or clear the response-request bit (C0 bit 7) on a C&C bank.
+//
+// Orthogonal to withMox(), which touches bit 0 only, so the two compose in
+// either order and neither can set the other's bit.
+inline Cc withRespRqst(Cc cc, bool request) noexcept
+{
+    cc[0] = static_cast<std::uint8_t>(request ? (cc[0] | kC0RespRqstBit)
+                                              : (cc[0] & ~kC0RespRqstBit));
+    return cc;
+}
+
 // Set MOX (C0 bit 0) on a C&C bank. Keying is per-FRAME, so this is applied to
 // whichever bank is being sent rather than to one dedicated register.
 inline Cc withMox(Cc cc, bool keyed) noexcept
@@ -456,6 +541,17 @@ inline constexpr int kTxSamplesPerPacket = 126;
 // The radio free-runs through the classic addresses, so telemetry arrives
 // without asking. Verified against hpsdrsim's responder, whose C0 sequence is
 // 0, 8, 16, 24, 32 — i.e. RADDR 0..4 at C0[6:3].
+//
+// On a real HL2 the free-running address is only TWO bits wide: control.v
+// declares `logic [1:0] resp_addr` and composes C0 as
+// {3'b000, resp_addr, ext_cwkey, 1'b0, ptt_resp}, so C0[6:5] are hardwired zero
+// and the cycle is 0,1,2,3. Reading four bits at C0[6:3] therefore gives the
+// same number on this hardware and stays right on a generic Hermes — but do not
+// expect RADDR 4 from an HL2. Slot 3 is `debug` and carries nothing we consume.
+//
+// ONE RESPONSE SLOT PER EP6 FRAME, not per packet: usopenhpsdr1.v toggles
+// resp_rqst once in SYNC_RESP, which runs once per 512-byte frame. That is the
+// only clock a reply can arrive on, and it stops dead when the stream stops.
 struct Ep6Response {
     bool ack = false;
     int raddr = 0;
@@ -501,6 +597,14 @@ struct Hl2Telemetry {
     bool ptt = false;
 
     // Merge a decoded response in, leaving untouched fields alone.
+    //
+    // IGNORES ACK responses apart from their PTT bit, and that is load-bearing
+    // rather than tidiness. In an ACK, `raddr` is the six-bit address of the
+    // command being answered and `data` is the echo of what we wrote — so an
+    // ACK for register 0x00 would otherwise be decoded here as a firmware
+    // version, an ADC-overload flag and a TX FIFO depth, all invented from our
+    // own outgoing bytes. Harmless until something set the RQST bit; this
+    // guard is what makes it stay harmless now that Hl2ControlRequest does.
     void apply(const Ep6Response& r) noexcept;
 };
 
@@ -715,6 +819,44 @@ struct DiscoveryReply {
     // 19 and not 20, and what the byte at 20 actually is.
     std::uint8_t numRx = 0;
     [[nodiscard]] bool isHermesLite2() const noexcept { return boardId == 0x06; }
+
+    // ---- Telemetry, discovery-reply offsets 0x17-0x29 ----
+    //
+    // The SAME quantities the EP6 response cycle carries, in the SAME raw
+    // units, but all at once and WITHOUT a stream — which is the whole point:
+    // this is the only route that answers while another client holds the radio,
+    // and the only one that answers at all when the stream is broken.
+    //
+    // Every field is optional because a reply may be short, or may come from a
+    // gateware built without EXTENDED_RESP (control.v:826), where these bytes
+    // are hard zeros rather than readings. nullopt is "this reply did not carry
+    // it"; 0 is a measurement. A forward-power reading of zero is real.
+    //
+    // Offsets are the gateware's, derived from usopenhpsdr1.v's DOWN-counting
+    // emitter (offset = 0x3B - dbyte_no) at 883a338 and cross-checked against
+    // hermeslite.py's independent decoder. See the test for the full map.
+    std::optional<std::uint32_t> responseData;   // 0x17-0x1a, `resp_data`
+    std::optional<bool> extCwKey;                // 0x1b[7]
+    std::optional<bool> ptt;                     // 0x1b[6]  `ptt_resp` = cw_on|ext_ptt
+    std::optional<bool> paExtTr;                 // 0x1b[5]
+    std::optional<bool> paIntTr;                 // 0x1b[4]
+    std::optional<bool> txOn;                    // 0x1b[3]
+    std::optional<bool> cwOn;                    // 0x1b[2]
+    // 0x1b[1:0]. NOT a count of clips — see the two-state warning in the .cpp.
+    std::optional<int>  adcClipCount;
+    std::optional<int>  temperatureRaw;          // 0x1c-0x1d, 12 bits
+    std::optional<int>  forwardPowerRaw;         // 0x1e-0x1f, 12 bits
+    std::optional<int>  reversePowerRaw;         // 0x20-0x21, 12 bits
+    std::optional<int>  biasCurrentRaw;          // 0x22-0x23, 12 bits
+    std::optional<int>  txFifoFillMsbs;          // 0x24[6:0], as in Hl2Telemetry
+    std::optional<bool> txFifoRecovery;          // 0x24[7],   as in Hl2Telemetry
+    std::optional<int>  txBufferLatencyMs;       // 0x26[6:0]
+    // 0x28[4:0]. SAFETY-RELEVANT: 31 does not mean "the longest hang"; it
+    // disables the gateware's PTT auto-unkey entirely (softerhardware/
+    // Hermes-Lite2 issue #178). Reading it without a stream is how an
+    // application can tell the operator their radio's own dead-man's switch is
+    // off — which is a thing worth knowing before keying, not after.
+    std::optional<int>  pttHangTimeMs;
 };
 // Parse a >=60-byte Metis discovery reply (EF FE <st> MAC[6] gwver board ...).
 std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> pkt) noexcept;

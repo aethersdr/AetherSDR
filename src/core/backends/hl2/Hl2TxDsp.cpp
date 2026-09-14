@@ -278,9 +278,14 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono, bool clientLeve
         m_alcGain = 1.0;
     }
     // Published unconditionally, including when the ALC is off and the answer
-    // is a flat 0 dB. The TX:ALC meter is fed from this, and a meter that stops
-    // updating reads as a stuck needle rather than as "no gain is being
+    // is a flat 0 dB. The TX:ALCGAIN meter is fed from this, and a meter that
+    // stops updating reads as a stuck needle rather than as "no gain is being
     // applied" — the same reason the mic peak below is not gated either.
+    //
+    // TX:ALC is NOT fed from here: it is the post-ALC level, published from
+    // alcPeak below. The two meters are the two halves of this stage and they
+    // move in opposite directions, which is why they are separate keys rather
+    // than one gauge that changes meaning.
     emit alcGain(static_cast<float>(alcGainDb()));
 
     for (std::size_t s = 0; s < consumed; ++s) {
@@ -289,7 +294,8 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono, bool clientLeve
         // A post-ALC meter sits pinned near the target by definition and tells
         // the operator nothing — it reports the ALC's success, not their input
         // level. What a mic-gain control acts on is this, and how hard the ALC
-        // is working is reported separately as alcGain().
+        // is working is reported separately as alcGain(), which is published
+        // to the model and diagnostic surfaces as TX:ALCGAIN.
         const float preAlc = static_cast<float>(m_inBuffer[s] * m_micGain);
         peak = std::max(peak, std::fabs(preAlc));
 

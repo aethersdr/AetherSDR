@@ -974,7 +974,7 @@ need:
 |---|---|
 | `TX:FWDPWR` / `TX:REFPWR` defined but never fed | two power meters that can never move; publish with a documented scale or stop defining them |
 | `SliceModel::setRfGain` has no runtime path | LNA gain is connect-parameters only; the preamp control does nothing after connect |
-| `TX:ALC` computed and discarded | `Hl2TxDsp` emits `alcGain`; nothing consumes it |
+| ~~`TX:ALC` computed and discarded~~ | **Producer fixed; operator-visible half remains #5636** (not yet verified on a real radio) — `Hl2TxDsp::alcGain` now feeds a meter of its own, `TX:ALCGAIN` (dB), through `MeterModel`, radiocert and the automation bridge; no GUI surface renders it yet. It was NOT a repoint of `TX:ALC`: that key is a post-ALC LEVEL consumed by `MeterModel::swAlc()`, both ALC gauges, the certification table and the bridge, and changing what a published key means breaks all of them silently. The two are now separate quantities, as they are in WDSP (`TXA_ALC_PK` and `TXA_ALC_GAIN`) |
 | Tune power not separable from RF power | TUNE keys at full drive on a fresh connect |
 | `RTTY` unmapped | silently demodulated as USB; conventionally lower-sideband on HF, so it wants a decision rather than a default |
 | Sideband stage saturates | even at 5 % drive into a dummy load a few inches away; needs inline attenuation or a second receiver |

@@ -23,7 +23,7 @@ class PskReporterClient;
 class RadioModel;
 class TransmitModel;
 
-// PSK Reporter reception map (View menu). Shows who is hearing our
+// PSK Reporter reception map (Tools menu). Shows who is hearing our
 // callsign, centered on the radio's GPS fix (falling back to the reported
 // grid locator). Update cadence is fixed-interval only — PSK Reporter asks
 // clients not to poll more than once per five minutes, so there is no

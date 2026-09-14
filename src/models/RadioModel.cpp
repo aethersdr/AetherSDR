@@ -1480,10 +1480,38 @@ void RadioModel::setupBackend(const QString& family)
     // healthSnapshot() honestly.
     //
     // Free on the constructor's own call, where TransmitModel is at its 50 and
-    // 50 maps to the 1.0 the modulator already holds. Same Flex gate as the
-    // seam: on a Flex the slider's `transmit set miclevel=` reaches the radio's
-    // own preamp and this must not double it.
-    if (m_backend && !usesFlexCommandPlane())
+    // 50 maps to the 1.0 the modulator already holds.
+    //
+    // GATED ON hostModulates, NOT on the family predicate the operator-intent
+    // seam uses — the two sites ask different questions and the gate was copied
+    // between them.
+    //
+    // The seam's gate is DE-DUPLICATION: setMicLevel() emits
+    // `transmit set miclevel=` beside micLevelCommandIssued, so on a Flex the
+    // seam would issue a second copy of a command the wire text already carried.
+    // Nothing is in flight here. setupBackend() emits no wire text, so "did the
+    // Flex text path already carry this" is not a question this site has.
+    //
+    // The question this site has is whether the fresh backend HAS a host
+    // modulator standing at its own default, waiting to be told where the
+    // operator left the slider. That is precisely what hostModulates answers.
+    // A backend that does not host-modulate has no such object: it either has
+    // nothing to seed (Flex, RTL, the sim) or it owns the value INSIDE the radio
+    // and will report it on connect — Icom, where IRadioBackend::setMicGain is
+    // implemented as a live CI-V 14 0B write (or, on an IC-9700 with LAN as the
+    // modulation input, a SET 0114 LAN MOD write). Handing either one a
+    // client-held number at construction is a silent write of state the radio
+    // never asked for, and it marks the backend's own mirror as reported —
+    // healthSnapshot() then prints our number where the radio's belongs, before
+    // a single 14 0B reply has arrived. The operator's own slider move still
+    // reaches an Icom through micLevelCommandIssued; only this construction-time
+    // push stops.
+    //
+    // See the hostModulates declaration in RadioCapabilities.h, which carries
+    // the warning that conflating it with takesTxAudioOverSeam cost a working
+    // transmitter. This is that same flag, read for the question it was written
+    // to answer: does the HOST run the modulator.
+    if (m_backend && backendCapabilities().hostModulates)
         m_backend->setMicGain(m_transmitModel.micLevel());
 }
 
