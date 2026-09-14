@@ -50,10 +50,23 @@ slot. The working directory, not the executable's: `nnet.c` holds those names as
 bare relative paths and `nnio_open()` hands them straight to `fopen()`, and
 upstream's own fallback message says "in the working directory" even though the
 Guide describes it as the directory containing the executable. That is how an
-experimental model reaches a tester without a rebuild. It also means a
-well-formed file of either name in the launch directory silently replaces a
-shipped DSP model with nothing in the UI to say so; `SetNNRModelPathSlot(slot,
-"")` skips the lookup for that slot and pins it to the built-in.
+experimental model reaches a tester without a rebuild, and AetherSDR keeps that
+behaviour deliberately (RFC #5684 §8). Know what it costs, measured against a
+standalone NNR:
+
+| File present as `wdsp_nnr_0.bin` | Result |
+|---|---|
+| none | built-in loads; noise attenuation −28.15 dB |
+| malformed | rejected, falls back to the built-in; −28.15 dB |
+| another valid model | **loads it** — slot 0 ran the Premium network while the selector still read "Standard" |
+| valid, different dimensions | **"passing audio through"** — NNR silently does nothing; −5.46 dB, which is only the resampling band limit |
+
+The last row is the one that will be mistaken for a bug: a well-formed model from
+a different WDSP release, left in a launch directory, disables NNR entirely. The
+only trace is WDSP's own `dprintf`, which reaches `stderr` here — so a terminal
+launch shows it and a desktop launch discards it. `SetNNRModelPathSlot(slot, "")`
+skips the lookup for that slot and pins it to the built-in, if a host ever wants
+to close it off.
 
 Do not patch `upstream/` casually. Every unavoidable source change must be
 recorded in `AETHERSDR-PATCHES.md` with the upstream revision, rationale, and
