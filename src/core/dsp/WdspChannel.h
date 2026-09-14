@@ -189,7 +189,7 @@ public:
     // blocks finished it, and downslew2's completion arm clears
     // ch[].exchange, after which fexchange2 returns having touched nothing at
     // all. The channel was silently dead, isRunning() said true, and only a
-    // reconfigure() recovered it. AetherSDR patch 5 (see
+    // reconfigure() recovered it. AetherSDR patch 7 (see
     // third_party/wdsp/AETHERSDR-PATCHES.md) makes case 1 cancel a pending
     // down-ramp first.
     //
@@ -204,16 +204,33 @@ public:
     // fexchange2 forever on a semaphore the bypassed worker will never
     // release. Measured on this tree, restarting with no gap at the spacing
     // where the ramp completes: 42 of 440 non-blocking trials dead, and 20 of
-    // 20 blocking trials hung. Patch 6 waits that flush out before arming, and
+    // 20 blocking trials hung. Patch 8 waits that flush out before arming, and
     // both are 0.
     //
-    // SO, PLAINLY, WHAT IS SAFE. With patches 5 and 6 together, a stop/start
+    // AND A STOP FOLLOWED BY CLOCKING USED TO MAKE THE NEXT CLOSE A
+    // USE-AFTER-FREE, which is the other half of the same thread's story and
+    // took a third vendored patch (ten9876, review of #5628). A completed ramp
+    // makes flushChannel runnable; CloseChannel waited for the wdspmain worker
+    // and for nothing else, so destroy_main() freed the RXA chain while
+    // flushChannel was inside flush_rxa() on it. MEASURED: the shape stop ->
+    // clock -> destroy crashed 30 of 30 trials, against clean 15 of 15 for both
+    // stop -> destroy and never-stopped -> destroy; a 50 ms gap before the
+    // destroy was clean 30 of 30, which is what identifies the flush thread.
+    // AetherSDR patch 9 moves upstream's own flushChannel handshake out of
+    // destroy_iobuffs() and into pre_main_destroy(), so it runs BEFORE
+    // destroy_main() instead of after it. Pinned by
+    // runCloseAfterStoppedClockingTest.
+    //
+    // SO, PLAINLY, WHAT IS SAFE. With patches 7, 8 and 9 together: a stop/start
     // pair is safe at any spacing including none, EXCEPT that the start may
     // block up to WDSP's 100 ms timeout waiting for the flush thread — in
     // practice under 3 ms, and 0 unless the previous stop's ramp was clocked
-    // out. What is NOT claimed: none of this has run on hardware, and the
-    // measurement behind it is a synthetic probe, not a T/R edge. Pinned by
-    // runRestartDuringRampTest, whose scenarios now straddle the ramp.
+    // out; and a stopped channel may be clocked for as long as the caller likes
+    // and then destroyed, with no ordering obligation on the caller. What is NOT
+    // claimed: none of this has run on hardware, and the measurements behind it
+    // are synthetic probes, not a T/R edge. Pinned by
+    // runRestartDuringRampTest, whose scenarios straddle the ramp, and by
+    // runCloseAfterStoppedClockingTest.
     //
     // Control-path work, guarded exactly like setMode(): returns false if a
     // control operation is already in flight, and must not be called from

@@ -517,7 +517,22 @@ bool WdspChannel::setRunning(bool running) noexcept
     //
     // OUTSIDE g_setupMutex, like close()'s stop and for the reason spelled out
     // there: that lock serialises the FFTW planner and SetChannelState enters
-    // none of it. Three SetChannelState sites in this file, one convention.
+    // none of it.
+    //
+    // FOUR SetChannelState SITES IN THIS FILE, and the convention holds at three
+    // of them: this one, reconfigure()'s restore, and close()'s stop. The fourth
+    // is open()'s start, which runs INSIDE open()'s g_setupMutex scope because
+    // it is one statement in a build sequence that is genuinely planner-bound
+    // from end to end; hoisting it alone would buy nothing and split the build.
+    //
+    // That exception is worth naming now rather than leaving implicit, because
+    // AetherSDR patch 8 gave case 1 a bounded Sleep(1) loop, and at open()'s
+    // site that loop would run while holding the process-global planner lock.
+    // It cannot fire there: the wait's predicate needs flushflag SET, and
+    // pre_main_build clears flushflag before OpenChannel ever reaches its start
+    // (channel.c). That is an invariant of vendored code rather than a guard in
+    // this file, so it is stated here, where the next reader will look. Raised
+    // in review of #5628.
     SetChannelState(m_channelId, running ? 1 : 0, 0);
     m_running.store(running, std::memory_order_relaxed);
     endControlOperation();
@@ -547,10 +562,10 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
         //
         // Safe to leave a ramp pending here, which it did not used to be: this
         // arms a down-slew that nothing is obliged to clock, and before
-        // AetherSDR patch 5 a later setRunning(true) would then have finished
+        // AetherSDR patch 7 a later setRunning(true) would then have finished
         // that stale ramp and killed the channel. Case 1 now cancels it.
         //
-        // Outside g_setupMutex, like the other two SetChannelState sites.
+        // Outside g_setupMutex, like setRunning()'s and close()'s stops.
         SetChannelState(m_channelId, 0, 0);
         m_running.store(false, std::memory_order_relaxed);
     }
@@ -1027,15 +1042,38 @@ void WdspChannel::close() noexcept
     // set is benign, checked rather than assumed: pre_main_destroy clears
     // exchange, pre_main_build clears flushflag, and post_main_destroy ->
     // destroy_iobuffs frees the whole iob so create_iobuffs hands back a fresh
-    // slew with downflag zeroed. Nothing can release Sem_Flush in between,
-    // because nothing calls fexchange*. A future reader following the
-    // paragraph above should not re-add the wait. (Raised in review of #5628.)
+    // slew with downflag zeroed. A future reader following the paragraph above
+    // should not re-add the wait. (Raised in review of #5628.)
     //
-    // The real fix is at the OWNER, not here: a channel already stopped through
-    // setRunning() takes none of this, because SetChannelState no-ops when the
-    // state already matches. Both RX owners in this tree (Hl2RxDsp, AnanRxDsp)
-    // now stop before they let a channel go, so in production this line is
-    // normally a no-op and the 100 ms is not paid at all.
+    // THE ONE THING THE 100 ms WAS ALSO DOING, and the reason this is safe to
+    // skip only since AetherSDR patch 9. The wait was never only a wait: while
+    // it ran, an in-flight flushChannel thread had time to leave flush_rxa()
+    // before destroy_main() freed the RXA chain underneath it. Nothing in
+    // CloseChannel waited for that thread — patch 4's handshake waits for the
+    // wdspmain worker, and upstream's flushChannel handshake sat in
+    // destroy_iobuffs(), i.e. AFTER destroy_main(). So a channel stopped through
+    // setRunning() and then CLOCKED — which is what the header documents as
+    // correct usage, and what the T/R mute of docs/HERMES.md §13 row 9a will do
+    // — reached this line with the flush thread runnable and no barrier left.
+    // MEASURED as a use-after-free, reproduced before it was fixed; ten9876
+    // found it in review of #5628. Patch 9 moves that handshake into
+    // pre_main_destroy, so the barrier is explicit and covers every caller of
+    // CloseChannel rather than only the ones that happen to pay a timeout.
+    // runCloseAfterStoppedClockingTest is what holds it.
+    //
+    // The rest of the fix is at the OWNER, not here: a channel already stopped
+    // through setRunning() takes none of this, because SetChannelState no-ops
+    // when the state already matches. Two of the three WdspChannel owners in
+    // this tree — Hl2RxDsp and AnanRxDsp — now stop before they let a channel
+    // go, so on those paths this line is normally a no-op and the 100 ms is not
+    // paid at all. The third, WdspReceiver in
+    // src/core/backends/rtl/RtlReceiverRegistry.cpp, deliberately does not:
+    // it retires a bank on the registry's executor thread rather than on the
+    // thread that drives processIq(), so the "a callback cannot be in flight"
+    // argument the other two rest on does not carry across without work this PR
+    // has not done. Since patch 9 that is a latency question and not a safety
+    // one, and the RTL path still pays the 100 ms per channel. (Raised in
+    // review of #5628.)
     //
     // OUTSIDE g_setupMutex, and it is the only WDSP call in this class that is.
     // That lock exists to serialise the FFTW PLANNER (see the comments at the

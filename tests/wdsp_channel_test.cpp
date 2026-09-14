@@ -470,21 +470,36 @@ bool runStartStopTest()
     std::vector<float> outputLeft(channel->outputBlockSize());
     std::vector<float> outputRight(channel->outputBlockSize());
 
-    const auto clock = [&](std::size_t blocks, std::size_t offset) {
+    // ENERGY AND THE Ok COUNT TOGETHER, never energy alone. clock() accumulates
+    // only on Ok, so a block that returns Busy, Underrun or InvalidBuffer
+    // contributes exactly 0 and is otherwise invisible. Every silence assertion
+    // below would then pass vacuously against a regression that made processIq()
+    // fail for all 32 blocks: "correctly produced silence" and "produced nothing
+    // at all" are the same number. Counting Ok separates them, which is the only
+    // way the zero-fill contract these assertions exist for is actually pinned.
+    // Raised in review of #5628.
+    struct Clocked
+    {
         double energy = 0.0;
+        int okBlocks = 0;
+    };
+    const auto clock = [&](std::size_t blocks, std::size_t offset) {
+        Clocked clocked;
         for (std::size_t block = 0; block < blocks; ++block) {
             fillComplexTone(inputI, inputQ, config.inputSampleRate, 1000.0,
                             (offset + block) * config.inputBlockSize);
             const WdspChannel::ProcessResult result =
                 channel->processIq(inputI, inputQ, outputLeft, outputRight);
             if (result == WdspChannel::ProcessResult::Ok) {
-                energy += rms(outputLeft) + rms(outputRight);
+                clocked.energy += rms(outputLeft) + rms(outputRight);
+                ++clocked.okBlocks;
             }
         }
-        return energy;
+        return clocked;
     };
 
-    if (!require(clock(64, 0) > 0.01, "the running channel produced no audio")) {
+    if (!require(clock(64, 0).energy > 0.01,
+                 "the running channel produced no audio")) {
         return false;
     }
 
@@ -500,8 +515,14 @@ bool runStartStopTest()
     // be SILENCE and not the last block before the stop held forever, which is
     // what fexchange2 leaves behind when it stops writing the buffer at all.
     clock(64, 64);
-    const double tailEnergy = clock(32, 128);
-    if (!require(tailEnergy == 0.0,
+    const Clocked tail = clock(32, 128);
+    if (!require(tail.okBlocks == 32,
+                 "a stopped channel stopped accepting blocks — the silence "
+                 "assertion below would have passed against nothing at all")) {
+        std::cerr << "       " << tail.okBlocks << " of 32 blocks returned Ok\n";
+        return false;
+    }
+    if (!require(tail.energy == 0.0,
                  "a stopped channel kept producing output — the buffer is stale, "
                  "not silent")) {
         return false;
@@ -529,7 +550,7 @@ bool runStartStopTest()
                  "changing its state")) {
         return false;
     }
-    if (!require(clock(128, 160) > 0.01,
+    if (!require(clock(128, 160).energy > 0.01,
                  "the restarted channel produced no audio") ||
         !require(channel->notchCount() == 3,
                  "restarting the channel destroyed the notch database")) {
@@ -567,7 +588,15 @@ bool runStartStopTest()
     // silence, so a reconfigure() that quietly restarted WDSP while isRunning()
     // still said "stopped" fails here rather than on the air.
     clock(32, 320);
-    if (!require(clock(32, 352) == 0.0,
+    const Clocked afterReconfigure = clock(32, 352);
+    if (!require(afterReconfigure.okBlocks == 32,
+                 "a channel stopped across reconfigure() stopped accepting "
+                 "blocks — the silence assertion below would be vacuous")) {
+        std::cerr << "       " << afterReconfigure.okBlocks
+                  << " of 32 blocks returned Ok\n";
+        return false;
+    }
+    if (!require(afterReconfigure.energy == 0.0,
                  "a channel stopped across reconfigure() still produced audio")) {
         return false;
     }
@@ -591,13 +620,13 @@ bool runStartStopTest()
 // so finishing that ramp CLEARED EXCHANGE. Every later fexchange2 then failed
 // its opening `if (exchange)` test and returned having written nothing and
 // reported no error: the channel was permanently silent, isRunning() said true,
-// and only a reconfigure() recovered it. AetherSDR patch 5 makes case 1 cancel
+// and only a reconfigure() recovered it. AetherSDR patch 7 makes case 1 cancel
 // the pending ramp (third_party/wdsp/AETHERSDR-PATCHES.md).
 //
 // HOW THIS GOES RED. Not on the mirror — isRunning() reports true either way,
 // which is the whole complaint. It clocks the channel after the restart and
 // requires real energy out of it, which is the only observable that separates
-// "running" from "believes it is running". With patch 5 reverted every one of
+// "running" from "believes it is running". With patch 7 reverted every one of
 // the three scenarios below fails on that assertion with energy exactly 0.
 //
 // All three ways in are covered, because they differ in WHERE the ramp is when
@@ -632,12 +661,12 @@ bool runRestartDuringRampTest()
     // skip one.
     //
     // Spacings 0 and 1 are INSIDE the ramp: it is still pending at the start,
-    // and AetherSDR patch 5's flush_slews() cancel is what makes them safe.
+    // and AetherSDR patch 7's flush_slews() cancel is what makes them safe.
     // Spacings 3, 4 and 5 are AT and PAST its completion, which is a different
     // defect with a different fix: by then fexchange2 has already released
     // Sem_Flush, and the flushChannel thread — runnable, not necessarily
     // scheduled — will set exec_bypass whenever it gets a slot, possibly after
-    // case 1 has cleared it. That is patch 6's window, and 3 is where it bites:
+    // case 1 has cleared it. That is patch 8's window, and 3 is where it bites:
     // the probe behind that patch measured 20 of 20 blocking trials hung at
     // spacing 3 and none at 4 or 5, so 3 is the row with the mutation
     // sensitivity and 4 and 5 are the shoulders that say where it stops.
@@ -727,10 +756,10 @@ bool runRestartDuringRampTest()
         //
         // ON ITS OWN THREAD, UNDER A DEADLINE, and that is not defensive
         // dressing. The past-the-ramp scenarios have two distinct failure
-        // modes and only one of them is an assertion. Without patch 5 the
+        // modes and only one of them is an assertion. Without patch 7 the
         // channel goes SILENT: exchange is clear, fexchange2 returns having
         // touched nothing, and the energy assertion below catches it. Without
-        // patch 6 in blocking mode the channel HANGS: exec_bypass is set, so
+        // patch 8 in blocking mode the channel HANGS: exec_bypass is set, so
         // wdspmain never reaches dexchange, Sem_OutReady is never released,
         // and fexchange2's `if (a->bfo) WaitForSingleObject (..., INFINITE)`
         // never returns. Clocked inline that is a ctest TIMEOUT — a red with
@@ -900,22 +929,143 @@ bool runStoppedCloseTest()
         std::cerr << "       running close took " << runningMs << " ms\n";
         return false;
     }
-    // 30 ms, not 50. The two assertions are not equally robust and the
-    // difference is the soft one: runningMs is a floor under a fixed 100 ms
-    // constant, so noise can only push it toward passing, but this one needs
-    // the STOPPED close — which still runs CloseChannel, i.e. worker-thread
-    // joins and FFTW plan destruction under g_setupMutex — to land inside
-    // runningMs - 30, and noise on stoppedMs pushes toward failure. Native
-    // runs have ~95 ms of margin here; the sanitizer lane and a loaded runner
-    // are where a 50 ms threshold would have gone soft. 30 ms still cannot pass
-    // unless a 100 ms wait was actually skipped: with the wait still paid the
-    // difference is ~0. Raised in review of #5628.
-    if (!require(runningMs - stoppedMs >= 30.0,
-                 "stopping a channel before teardown did not remove WDSP's "
-                 "stop-and-flush wait")) {
+    // ONE MEASUREMENT, NOT A DIFFERENCE OF TWO. This assertion used to be
+    // `runningMs - stoppedMs >= 30`, and that shape compounds the noise of two
+    // independent sets of runs: BOTH timings include CloseChannel — a
+    // worker-thread join plus FFTW plan destruction under the process-global
+    // g_setupMutex — which is large and variable, and the minimum is taken over
+    // separate sets, so a stopped close that lands on an expensive plan teardown
+    // while the running closes landed on cheap ones fails a test with nothing
+    // wrong. Under the sanitizer lane, or on a box carrying concurrent builds
+    // (this one routinely does), that is a flake for a quantity a stopwatch
+    // cannot measure robustly. Raised in review of #5628 by ten9876.
+    //
+    // The absolute ceiling says the same thing with one sample instead of two:
+    // it is the SAME 80 ms constant as the floor above, so the pair still proves
+    // a 100 ms wait was skipped — runningMs is at least 80, stoppedMs is under
+    // it — while noise on the stopped close now has ~80 ms of one-sided headroom
+    // over a native close rather than having to stay inside another run's
+    // budget. It still cannot pass if the wait is paid: paying it puts stoppedMs
+    // at 100 or more.
+    //
+    // runCloseSetupLockTest pins the LOCK half of the same change stopwatch-free
+    // and remains the stronger test; this one is what says the 100 ms is gone.
+    if (!require(stoppedMs < 80.0,
+                 "closing a STOPPED channel still paid WDSP's stop-and-flush "
+                 "wait")) {
         std::cerr << "       running close " << runningMs << " ms, stopped close "
                   << stoppedMs << " ms\n";
         return false;
+    }
+    return true;
+}
+
+// CLOSING A CHANNEL THAT WAS STOPPED AND THEN CLOCKED MUST NOT RACE WDSP'S
+// FLUSH THREAD.
+//
+// THE MECHANISM. A stop that is clocked to completion does three things at the
+// completion of the down-ramp, inside fexchange0/fexchange2: it clears
+// ch[].exchange, it releases the channel's Sem_Flush, and it thereby makes
+// WDSP's per-channel flushChannel thread RUNNABLE. That thread takes csDSP and
+// csEXCH and runs flush_iobuffs/flush_main, and flush_main walks the same
+// rxa[channel] chain destroy_rxa frees.
+//
+// Nothing in CloseChannel waited for it. CloseChannel is exactly
+// pre_main_destroy; destroy_main; post_main_destroy. AetherSDR patch 4's exit
+// handshake in pre_main_destroy waits for the wdspmain WORKER. Upstream's
+// flushChannel handshake existed too — but inside destroy_iobuffs, which
+// post_main_destroy calls AFTER destroy_main. So destroy_main -> destroy_rxa
+// freed the chain while flushChannel was inside flush_rxa on it.
+//
+// WHY THIS WAS NOT REACHABLE BEFORE THIS PR. Without setRunning() there was no
+// way to stop a channel and then keep clocking it: the only stop was close()'s
+// own, behind the control fence, with nothing left to call fexchange*. The ramp
+// therefore never completed, Sem_Flush was never released, and flushChannel
+// stayed parked for the whole of teardown. This PR's contract — "while stopped,
+// processIq() still runs and returns silence" — is what makes the crashing
+// shape a documented one, and docs/HERMES.md §13 row 9a (the T/R mute) is
+// exactly it. Found by ten9876 in review of #5628; fixed as AetherSDR patch 9,
+// which moves the handshake into pre_main_destroy.
+//
+// HOW THIS GOES RED: IT CRASHES OR IT HANGS. There is no assertion that can
+// catch a use-after-free from inside the process that is committing it, so this
+// case does not try to invent one — it drives the shape that was measured to
+// fault and lets the fault be the signal. ctest reports the target's signal or
+// its timeout; a reader who sees either should start here. That is why this
+// case runs LAST of the WDSP lifecycle group in main(): everything before it
+// has already reported.
+//
+// THE THREE VARIABLES THAT MATTER, all measured on this tree (macOS arm64,
+// AppleClang, RelWithDebInfo, one trial per process, patch 9 reverted):
+//
+//   create -> clock -> destroy, never stopped          clean 15/15
+//   create -> clock -> setRunning(false) -> destroy    clean 15/15
+//   create -> clock -> setRunning(false) -> clock 32
+//                                        -> destroy    CRASHED
+//
+// so the single distinguishing variable is CLOCKING AFTER THE STOP, which is
+// what identifies the flush thread rather than the stop itself. A control that
+// sleeps 50 ms before the destroy — giving that thread its slot — was clean
+// 30/30 on the same binary. With patch 9 the crashing shape is clean 80/80
+// across both output modes.
+//
+// NON-BLOCKING, unlike every other case in this file, and that is deliberate.
+// The crash rate is scheduling-dependent and the non-blocking form is both the
+// faster reproducer here and what production actually uses: Hl2RxDsp and
+// AnanRxDsp leave Config::blockForOutput false. Measured per-cycle on this box
+// with patch 9 reverted, 8 of 30 non-blocking against 1 of 30 blocking — both
+// non-zero, so this is not a mode-specific defect, but the cheaper one is the
+// right one to run every build. CYCLES is sized against that 8-in-30: at 24
+// independent cycles an unfixed tree escapes with probability 0.73^24, under
+// 0.1%. On a machine whose scheduling hides it more thoroughly this case can
+// still pass against a broken tree, which is the honest limit of any test for a
+// race — the probe behind the patch, not this, is the measurement.
+bool runCloseAfterStoppedClockingTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.mode = WdspChannel::Mode::Usb;
+    config.blockForOutput = false;
+
+    constexpr int kCycles = 24;
+    constexpr std::size_t kBlocks = 32;
+
+    std::vector<float> inputI(config.inputBlockSize);
+    std::vector<float> inputQ(config.inputBlockSize);
+
+    for (int cycle = 0; cycle < kCycles; ++cycle) {
+        std::string error;
+        std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+        if (!require(channel != nullptr, error.c_str())) {
+            return false;
+        }
+        std::vector<float> outputLeft(channel->outputBlockSize());
+        std::vector<float> outputRight(channel->outputBlockSize());
+
+        const auto clock = [&](std::size_t blocks, std::size_t offset) {
+            for (std::size_t block = 0; block < blocks; ++block) {
+                fillComplexTone(inputI, inputQ, config.inputSampleRate, 1000.0,
+                                (offset + block) * config.inputBlockSize);
+                (void)channel->processIq(inputI, inputQ, outputLeft, outputRight);
+            }
+        };
+
+        // Prime the channel, so the stop below has a real ramp to run.
+        clock(kBlocks, 0);
+        if (!require(channel->setRunning(false),
+                     "the channel refused to stop")) {
+            return false;
+        }
+        // THE LINE THAT ARMS IT. The ramp is three blocks at this block size, so
+        // 32 clocks it well past completion — which is what releases Sem_Flush
+        // and wakes flushChannel. Anything at or past completion will do; more
+        // blocks only widen the window in which the destroy below can land.
+        clock(kBlocks, kBlocks);
+
+        // AND THE LINE THAT USED TO CRASH. No gap, deliberately: a sleep here is
+        // the control that passes, not the case under test.
+        channel.reset();
     }
     return true;
 }
@@ -979,6 +1129,10 @@ int main()
         !runLeakChecked("stopped-close test", runStoppedCloseTest) ||
         !runLeakChecked("notch index test", runNotchIndexTest) ||
         !runLeakChecked("notch attenuation test", runNotchAttenuationTest) ||
+        // LAST, deliberately: its failure mode is a signal or a timeout, not a
+        // message, so everything that can still report has already reported.
+        !runLeakChecked("close-after-stopped-clocking test",
+                        runCloseAfterStoppedClockingTest) ||
         !require(WdspChannel::outstandingAllocationsForTest() == allocationBaseline,
                  "WDSP test suite left allocations outstanding")) {
         return 1;

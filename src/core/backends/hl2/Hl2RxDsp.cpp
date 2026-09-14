@@ -40,6 +40,21 @@ Hl2RxDsp::~Hl2RxDsp()
     // a smoother exit. The one place a stop CAN be taken with samples still
     // flowing is the T/R mute, which is item 9a and is a bench decision.
     //
+    // "NO BLOCK REACHES processIq() AFTER THIS LINE" IS A CORRECTNESS
+    // PRECONDITION, NOT A PERFORMANCE DETAIL, and it is stated here rather than
+    // enforced. A stop followed by clocking leaves WDSP's flushChannel thread
+    // runnable, and before AetherSDR patch 9 nothing in CloseChannel waited for
+    // it: destroy_main() freed the RXA chain while that thread was inside
+    // flush_rxa() on it. MEASURED as a use-after-free, 30 of 30 trials, on the
+    // exact shape stop-then-clock-then-destroy; stop-then-destroy with nothing
+    // clocked between was clean. Found by ten9876 in review of #5628.
+    //
+    // Patch 9 makes that barrier explicit in the vendored tree, so this
+    // destructor is no longer the only thing standing between the two. The
+    // precondition is still worth stating: it is what makes the ramp's absence
+    // here intentional rather than a silent loss, and item 9a is the change that
+    // will make a clocked stop routine.
+    //
     // CHECKED, not discarded. setRunning() goes through beginControlOperation(),
     // which REFUSES rather than waits when a processIq() callback is in flight.
     // That cannot happen here today — Hl2Backend destroys these through
