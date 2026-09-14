@@ -3025,7 +3025,7 @@ add_executable(pgxl_panel_test
     src/core/AsyncLogWriter.cpp
     ${AETHER_SETTINGS_SOURCES}
 )
-target_include_directories(pgxl_panel_test PRIVATE src)
+target_include_directories(pgxl_panel_test PRIVATE src tests)
 target_link_libraries(pgxl_panel_test PRIVATE
     Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::Test
 )

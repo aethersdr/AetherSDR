@@ -623,7 +623,12 @@ qreal AmpApplet::contentScale() const
 
 void AmpApplet::applyDensity()
 {
-    applyDensityAtScale(contentScale());
+    // The write lives here, not in resizeEvent. m_appliedScale answers "what
+    // scale are the children at", and resizeEvent is not the only caller that
+    // changes it — setFloating and setDirectConnected apply a density too. Set
+    // from the one place that does the applying, it cannot go stale.
+    m_appliedScale = contentScale();
+    applyDensityAtScale(m_appliedScale);
 }
 
 void AmpApplet::applyDensityAtScale(qreal scale)
@@ -774,7 +779,6 @@ void AmpApplet::resizeEvent(QResizeEvent* event)
     // applyDensity re-applies a dozen style sheets.
     const qreal s = contentScale();
     if (!qFuzzyCompare(s, m_appliedScale)) {
-        m_appliedScale = s;
         applyDensity();
     }
 }

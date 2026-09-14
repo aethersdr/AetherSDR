@@ -540,11 +540,17 @@ void AccessoryPortRow::updateAccessibleText()
     // multi-argument form substitutes every placeholder in one pass, so text
     // that arrives from the device cannot reach into the format string
     // (Principle VII).
+    // The state carries its own separator, the way the bias and frequency
+    // pieces do. On the amplifier's strips the cell is deliberately empty
+    // whenever there is nothing to act on, which is most of the time — a
+    // separator left standing around it speaks as ", ,".
+    const QString statePart = state.isEmpty() ? QString()
+                                              : QStringLiteral("%1, ").arg(state);
     setAccessibleDescription(
-        tr("%1, band %2, %6%7%3, %4%5").arg(
+        tr("%1, band %2, %6%7%3%4%5").arg(
             m_sourceLabel->text(),
             m_bandLabel->text(),
-            state,
+            statePart,
             m_ptt ? tr("transmitting") : tr("not transmitting"),
             m_active ? tr(", transmit port") : QString(),
             bias,

@@ -179,6 +179,35 @@ int main(int argc, char** argv)
         CHECK(!amp.present() && amp.handle().isEmpty() && !amp.operate());
     }
 
+    // ---- and everything else the radio told us about it ----
+    //
+    // reset() is the bulk clear on radio disconnect. A state word or an
+    // antenna map left standing outlives the radio that relayed it — the same
+    // reason the direct connection's own disconnect handler clears them.
+    {
+        AmpModel amp;
+        QSignalSpy words(&amp, &AmpModel::ampStateChanged);
+        QSignalSpy antennas(&amp, &AmpModel::antennaMapChanged);
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "10.0.0.5", true,
+                                  {{"state", "TRANSMIT_A"},
+                                   {"ant", "ANT1:PORTA,ANT2:PORTB"}}));
+        CHECK(amp.stateText() == QStringLiteral("TRANSMIT_A"));
+        CHECK(amp.outputForAntenna("ANT1") == QStringLiteral("PORTA"));
+
+        amp.reset();
+        CHECK(amp.stateText().isEmpty());
+        CHECK(amp.outputForAntenna("ANT1").isEmpty());
+        // And it says so, rather than clearing quietly and leaving the panel
+        // drawing what it last heard.
+        CHECK(words.count() == 2);
+        CHECK(antennas.count() == 2);
+
+        // Idempotent: a second reset has nothing to announce.
+        amp.reset();
+        CHECK(words.count() == 2);
+        CHECK(antennas.count() == 2);
+    }
+
     // ---- the antenna → output map, off the radio-relayed status ----
     //
     // "ANT1:PORTA,ANT2:PORTB" — verbatim from the radio's amplifier object.

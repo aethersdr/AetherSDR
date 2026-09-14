@@ -10,6 +10,8 @@
 // exists on the direct port-9008 status — the radio-relayed object carries
 // none of it.
 
+#include "TestSettingsProfile.h"
+
 #include "gui/AmpApplet.h"
 #include "gui/AccessoryPanelWidgets.h"
 #include "models/AmpModel.h"
@@ -91,6 +93,14 @@ QLabel* standbyBanner(AmpApplet& applet)
 
 int main(int argc, char** argv)
 {
+    // A scratch settings store, not the operator's own. AmpApplet reads and
+    // writes the C/F preference through AppSettings on construction, and a
+    // test has no business touching the store the running app uses.
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-pgxl-panel-test"));
+    if (!settingsProfile.isValid()) {
+        std::fprintf(stderr, "could not create a temporary home — skipping\n");
+        return 77;
+    }
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
@@ -300,6 +310,13 @@ int main(int argc, char** argv)
         CHECK(visibleNa <= 1);
     }
     CHECK(!rowShowsVisible(portA, QStringLiteral("N/A")));
+
+    // The spoken description reads as a sentence in the amplifier's normal
+    // case too, where the state cell is deliberately empty — a separator left
+    // standing around an empty piece speaks as ", ,".
+    CHECK(!portA->accessibleDescription().contains(QStringLiteral(", ,")));
+    CHECK(!portB->accessibleDescription().contains(QStringLiteral(", ,")));
+    CHECK(portA->accessibleDescription().contains(QStringLiteral("band 40")));
 
     // ── Which port transmits ──────────────────────────────────────────
     //

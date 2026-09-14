@@ -200,6 +200,29 @@ void AmpModel::reset()
     m_present = false;
     m_handle.clear();
     m_operate = false;
+
+    // Everything below describes an amplifier reached through a radio this
+    // model is being torn down from. A state word, an antenna map or a port
+    // block left standing outlives the thing that reported it — the same
+    // reason the direct connection's `disconnected` handler clears them.
+    if (!m_state.isEmpty()) {
+        m_state.clear();
+        emit ampStateChanged(m_state);
+    }
+    if (!m_alert.isEmpty()) {
+        m_alert.clear();
+        emit alertChanged(m_alert);
+    }
+    if (!m_antennaOutputs.isEmpty()) {
+        m_antennaOutputs.clear();
+        emit antennaMapChanged();
+    }
+    if (m_havePortInfo) {
+        m_havePortInfo = false;
+        m_portA = {};
+        m_portB = {};
+        emit portsChanged();
+    }
 }
 
 void AmpModel::setOperate(bool on)
