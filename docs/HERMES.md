@@ -478,11 +478,15 @@ plausible. A table written for one and reused for the other is silently wrong on
 exactly half the modes. The second trap is assuming the first one describes
 WDSP's transmit path: it does not.
 
-> **Forward note — not an instruction, and nothing here changes behaviour.** A
-> sibling study argues that migrating TX from `Hl2TxDsp` onto a real TXA channel
-> should drop `Hl2TxDsp`'s wire conjugation and feed TXA *signed* RX-style edges
-> rather than `defaultTxPassbandForMode`. That is a code change for the migration
-> PR to establish and measure, not a claim this section makes.
+> **Forward note — not an instruction, and nothing here changes behaviour.**
+> Whether transmit should move from `Hl2TxDsp` onto a real TXA channel is the
+> open question in **#5678**; nothing has been decided. An **unfiled** analysis
+> behind that issue argues such a migration should drop `Hl2TxDsp`'s wire
+> conjugation and feed TXA *signed* RX-style edges rather than
+> `defaultTxPassbandForMode`. It is unfiled deliberately — there is no artifact
+> to cite and no number to follow, so treat the arrangement as unestablished. It
+> is a code change for a migration PR to settle and measure, not a claim this
+> section makes.
 
 ### CW has no BFO unless you build one
 
