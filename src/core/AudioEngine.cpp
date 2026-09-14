@@ -7216,6 +7216,11 @@ static void applyNr2Settings(SpectralNR& nr2)
     nr2.setGainMethod(config.gainMethod);
     nr2.setNpeMethod(config.npeMethod);
     nr2.setAeFilter(config.aeFilter);
+    nr2.setPost2Run(config.post2Run);
+    nr2.setPost2Factor(config.post2Factor);
+    nr2.setPost2Nlevel(config.post2Nlevel);
+    nr2.setPost2TaperHz(config.post2TaperHz);
+    nr2.setPost2DecaySeconds(config.post2DecaySeconds);
 }
 
 // RN2's only user-adjustable parameter. The TX (ProcessedMono) instance is
@@ -7235,6 +7240,11 @@ static void copyNr2Settings(const SpectralNR& source, SpectralNR& target)
     target.setGainMethod(source.gainMethod());
     target.setNpeMethod(source.npeMethod());
     target.setAeFilter(source.aeFilter());
+    target.setPost2Run(source.post2Run());
+    target.setPost2Factor(source.post2Factor());
+    target.setPost2Nlevel(source.post2Nlevel());
+    target.setPost2TaperHz(source.post2TaperHz());
+    target.setPost2DecaySeconds(source.post2DecaySeconds());
 }
 
 #ifdef HAVE_SPECBLEACH

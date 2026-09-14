@@ -1126,6 +1126,162 @@ void SpectralNR::synthesizeCurrentFrameWithMask()
     synthesizeCurrentFrequencyBinsWithMask();
 }
 
+// ─── Psychoacoustic post-processing — WDSP emnr.c's post2 stage ──────────────
+//
+// Ported from third_party/wdsp/upstream/emnr.c (post2(), post2_calc_w(),
+// post2_init_table()). The arithmetic is WDSP's; two things are deliberately
+// not copied verbatim:
+//
+//  * `taper` is a FREQUENCY here, not WDSP's fraction of the bin count. 0.12
+//    of WDSP's 2048 bins over 24 kHz is 2871 Hz; 0.12 of our 513 bins over
+//    12 kHz would be 1435 Hz, which lowpasses voice to telephone quality. The
+//    default below is WDSP's value expressed in Hz, so the two implementations
+//    cover the same band and the control stays correct if the FFT geometry is
+//    retuned again (it has been once already: 256/2 -> 1024/4).
+//
+//  * the decay is a time constant in seconds rather than a precomputed
+//    per-frame coefficient, derived here from the live hop size, which is the
+//    same quantity WDSP computes as exp(-fsize / (tc * rate * ovrlp)).
+//
+// Everything else — the peak follower, the residual/white blend, the raised
+// cosine taper, zeroing DC and everything above the band — is as upstream.
+
+namespace {
+// WDSP's own constants (emnr.c). The noise magnitude is the amplitude of the
+// unit phasor table; the factor of 4 scales the peak follower into it.
+constexpr int    kPost2TableSize = 1024;
+constexpr double kPost2NoiseMag  = 113.98;
+constexpr double kPost2PeakScale = 4.0;
+
+struct Post2PhasorTable {
+    double cs[kPost2TableSize];
+    double sn[kPost2TableSize];
+    Post2PhasorTable()
+    {
+        for (int i = 0; i < kPost2TableSize; ++i) {
+            const double th = 2.0 * M_PI * static_cast<double>(i) / kPost2TableSize;
+            cs[i] = kPost2NoiseMag * std::cos(th);
+            sn[i] = kPost2NoiseMag * std::sin(th);
+        }
+    }
+};
+const Post2PhasorTable& post2Table()
+{
+    static const Post2PhasorTable table;
+    return table;
+}
+}  // namespace
+
+void SpectralNR::setPost2Factor(float v)
+{
+    m_post2Factor.store(std::clamp(v, 0.0f, 1.0f));
+}
+
+void SpectralNR::setPost2Nlevel(float v)
+{
+    m_post2Nlevel.store(std::clamp(v, 0.0f, 1.0f));
+}
+
+void SpectralNR::setPost2TaperHz(float hz)
+{
+    m_post2TaperHz.store(std::clamp(hz, 300.0f, 6000.0f));
+}
+
+void SpectralNR::setPost2DecaySeconds(float seconds)
+{
+    m_post2Decay.store(std::clamp(seconds, 0.1f, 30.0f));
+}
+
+int SpectralNR::post2BinLimit() const
+{
+    if (m_fftSize <= 0 || m_sampleRate <= 0) {
+        return 0;
+    }
+    const double binHz = static_cast<double>(m_sampleRate) / m_fftSize;
+    const int bins = static_cast<int>(m_post2TaperHz.load() / binHz);
+    return std::clamp(bins, 1, m_msize);
+}
+
+// xorshift32, as upstream: cheap, and the sequence only has to be white.
+unsigned int SpectralNR::post2NextRandom()
+{
+    unsigned int x = m_post2RngState;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    m_post2RngState = x;
+    return x;
+}
+
+void SpectralNR::applyPsychoacousticPostProcessing()
+{
+    if (!m_post2Run.load()) {
+        return;
+    }
+
+    const int ilim = post2BinLimit();
+    if (ilim <= 1) {
+        return;
+    }
+
+    const double factor = m_post2Factor.load();
+    const double nlevel = m_post2Nlevel.load();
+
+    // Per-frame decay of the peak follower, from the hop this instance runs at.
+    const double secondsPerFrame =
+        static_cast<double>(m_hopSize) / static_cast<double>(m_sampleRate);
+    const double rateDecay = std::exp(-secondsPerFrame / m_post2Decay.load());
+
+    // Peak magnitude in the band, held and decayed so the injected level
+    // follows the signal rather than jumping frame to frame.
+    double peak = 0.0;
+    for (int k = 1; k < ilim; ++k) {
+        const double mag = std::sqrt(m_freqRe[k] * m_freqRe[k]
+                                   + m_freqIm[k] * m_freqIm[k]);
+        if (mag > peak) {
+            peak = mag;
+        }
+    }
+    if (peak > m_post2PeakHold) {
+        m_post2PeakHold = peak;
+    } else {
+        m_post2PeakHold *= rateDecay;
+    }
+    peak = std::max(peak, m_post2PeakHold);
+    const double whiteScale = peak * kPost2PeakScale;
+
+    // Raised-cosine taper over the band, as post2_calc_w() builds it.
+    const auto& table = post2Table();
+    for (int k = 1; k < ilim; ++k) {
+        const double w = (ilim > 1)
+            ? 0.75 - 0.25 * std::cos(M_PI * (ilim - 1 - k) / (ilim - 1))
+            : 0.75;
+
+        const unsigned int phase = post2NextRandom() & (kPost2TableSize - 1);
+
+        // What this reduction just removed, per bin.
+        const double residualRe = m_freqRe[k] - m_gainRe[k];
+        const double residualIm = m_freqIm[k] - m_gainIm[k];
+
+        const double whiteRe = whiteScale * table.cs[phase];
+        const double whiteIm = whiteScale * table.sn[phase];
+
+        const double noiseRe = (1.0 - factor) * residualRe + factor * whiteRe;
+        const double noiseIm = (1.0 - factor) * residualIm + factor * whiteIm;
+
+        m_gainRe[k] = w * (m_gainRe[k] + nlevel * noiseRe);
+        m_gainIm[k] = w * (m_gainIm[k] + nlevel * noiseIm);
+    }
+
+    // DC and everything above the band, as upstream.
+    m_gainRe[0] = 0.0;
+    m_gainIm[0] = 0.0;
+    for (int k = ilim; k < m_msize; ++k) {
+        m_gainRe[k] = 0.0;
+        m_gainIm[k] = 0.0;
+    }
+}
+
 void SpectralNR::synthesizeCurrentFrequencyBinsWithMask()
 {
     // Apply smoothed gain to frequency bins (with dry/wet blend during startup)
@@ -1134,6 +1290,8 @@ void SpectralNR::synthesizeCurrentFrequencyBinsWithMask()
         m_gainRe[k] = g * m_freqRe[k];
         m_gainIm[k] = g * m_freqIm[k];
     }
+
+    applyPsychoacousticPostProcessing();
 
 #ifdef HAVE_FFTW3
     // Pack into FFTW complex input for inverse FFT

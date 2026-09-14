@@ -27,6 +27,18 @@ public:
         float gainSmooth{0.85f};
         float qspp{0.20f};
 
+        // WDSP's psychoacoustic post-processing (emnr.c post2), off by
+        // default exactly as upstream ships it — the Guide notes the default
+        // is zero so the stage does nothing where a console has not
+        // implemented its controls, which was AetherSDR until now (#5702).
+        bool post2Run{false};
+        float post2Factor{0.15f};
+        float post2Nlevel{0.15f};
+        // A FREQUENCY, not WDSP's bin fraction: 0.12 means 2871 Hz at WDSP's
+        // geometry and 1435 Hz at this one. See SpectralNR.
+        float post2TaperHz{2871.0f};
+        float post2DecaySeconds{5.0f};
+
         bool operator==(const Config&) const = default;
     };
 
@@ -43,6 +55,12 @@ public:
     void setGainFloor(float value);
     void setGainSmooth(float value);
     void setQspp(float value);
+    // WDSP's post2 psychoacoustic stage (#5702).
+    void setPost2Run(bool enabled);
+    void setPost2Factor(float value);
+    void setPost2Nlevel(float value);
+    void setPost2TaperHz(float hz);
+    void setPost2DecaySeconds(float seconds);
 
 signals:
     void configChanged();
