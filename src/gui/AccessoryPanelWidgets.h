@@ -11,6 +11,72 @@ class QLabel;
 
 namespace AetherSDR {
 
+// ── Panel scaling ───────────────────────────────────────────────────────────
+//
+// Both front-panel presentations — the tuner's and the amplifier's — size
+// every metric from one scale derived from the room the panel actually has,
+// so growing the window grows the contents rather than the padding around
+// them. Same idea as CrossNeedleMeterWidget, which fits a fixed design canvas
+// into its widget and scales the painter onto it; a panel is a widget tree
+// rather than one painted face, so the scale is applied to each metric
+// instead. The parts that are not device-specific live here, so the two
+// panels cannot drift apart on them.
+
+// Below this the type stops being legible; above it the panel is being
+// stretched rather than filled.
+constexpr qreal kPanelMinScale = 0.8;
+constexpr qreal kPanelMaxScale = 3.0;
+
+// The gap below the controls. Deliberately not scaled: it exists so they
+// clear the frame rather than sit against it, which is a constant few pixels
+// at any size. It is also the floor of the pad that absorbs whatever the
+// scaling did not use.
+constexpr int kPanelBottomGap = 8;
+
+// Panel keys are letterbox-shaped rather than square. Their height is tied to
+// the instruments beside them so the two groups read as one row of peers, and
+// the width follows from it at this aspect.
+constexpr qreal kPanelKeyAspect = 16.0 / 9.0;
+
+// The scale for a panel `available` pixels across, whose contents cost
+// `naturalHeight` at scale 1.0 and whose widest row costs `designWidth`.
+//
+// The height term budgets for the contents ONLY — the pad's minimum is taken
+// off first. Those two together are what make the pad drain before anything
+// above it moves: while the width is the limiting term the contents hold
+// their size and the surplus is all pad, and the moment height becomes
+// limiting the arithmetic lands the contents at exactly height - the gap, so
+// the pad is at its minimum rather than still holding space the contents just
+// gave up.
+//
+// `naturalHeight` must be measured ONCE, at scale 1.0, and never revised.
+// Re-deriving it from a scaled layout feeds the scale back into its own
+// input: rounding and the widgets' own minimums stop the contents being
+// exactly proportional to the scale, the leftover lands in the divisor, and
+// the next scale reads larger. It does not settle.
+//
+// `designWidth`, by contrast, is a constant rather than a measurement, for
+// the same reason: dividing a measured width by the scale leaves a constant
+// term behind that grows as the scale falls, and it runs away. Observed on
+// the tuner panel before this was fixed — a 686px panel drew its contents
+// half again larger than an 802px one.
+qreal panelContentScale(const QSize& available, qreal designWidth, qreal naturalHeight);
+
+// The floor a panel may be shrunk to: what it needs at kPanelMinScale, not
+// what its children happen to need right now. Letting the layout answer that
+// instead makes the floor follow the current scale, and it ratchets — every
+// metric the scale sizes raises the minimum as the panel grows, so a panel
+// enlarged once can never be made small again.
+QSize panelMinimumSize(qreal designWidth, qreal naturalHeight);
+
+// One key box. `heightPx` is already scaled (it is tied to whatever sits
+// beside the keys); `seedWidthPx` is the widest caption's natural width at
+// scale 1.0, so the narrowest caption gets the same box as the widest rather
+// than the box its own text happened to need. 16:9 off the height is roomy
+// enough that the caption floor should never bind, but a caption that
+// outgrew it would be clipped rather than wrapped.
+QSize panelKeySize(int heightPx, int seedWidthPx, qreal scale);
+
 // Widgets used only by TunerApplet's expanded (popped-out / on-canvas)
 // presentation, which lays the TGXL out the way the tuner's own front panel
 // does. They live here rather than in HGauge.h beside RelayBar so the ~20
@@ -103,7 +169,7 @@ private:
     QSize m_target{0, 0};
 };
 
-// ── TgxlPortRow ─────────────────────────────────────────────────────────────
+// ── AccessoryPortRow ────────────────────────────────────────────────────────
 //
 // One RF port's status strip: port letter, PTT lamp, band chip, signal source,
 // frequency, and the tuner's operate state — the two-row block the front panel
@@ -113,11 +179,11 @@ private:
 // band and frequency describe what is feeding the port, which the Flex-relayed
 // ATU status does not carry; TunerApplet fills them from the radio it is
 // connected to (see TunerApplet::setPortASource / setPortAFrequency).
-class TgxlPortRow : public QWidget {
+class AccessoryPortRow : public QWidget {
     Q_OBJECT
 
 public:
-    explicit TgxlPortRow(const QString& portLetter, QWidget* parent = nullptr);
+    explicit AccessoryPortRow(const QString& portLetter, QWidget* parent = nullptr);
 
     void setPtt(bool keyed);
     // Empty band or a non-positive frequency renders as "N/A" — the honest
@@ -133,6 +199,13 @@ public:
     // being matched, so it reads in the bypass colour rather than as a good
     // reading.
     void setBypassed(bool bypassed);
+    // The amplifier's bias profile for this port (the tuner has none, and
+    // hides the cell by never setting it). Empty hides it.
+    void setBiasText(const QString& bias);
+    // The tuner knows the frequency it is matching; the amplifier does not
+    // report one per port, so its strips leave the cell out rather than
+    // standing an N/A in it forever.
+    void setFrequencyVisible(bool visible);
     // The port carrying the radio's transmit path, outlined to match the
     // panel's highlight of the port in use.
     void setActive(bool active);
@@ -156,6 +229,7 @@ private:
     QLabel* m_portLabel{nullptr};
     QLabel* m_pttLabel{nullptr};
     QLabel* m_bandLabel{nullptr};
+    QLabel* m_biasLabel{nullptr};
     QLabel* m_sourceLabel{nullptr};
     QLabel* m_freqLabel{nullptr};
     QLabel* m_stateLabel{nullptr};

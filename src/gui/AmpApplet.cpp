@@ -1,16 +1,20 @@
 #include "AmpApplet.h"
 #include "HGauge.h"
+#include "AccessoryPanelWidgets.h"
 #include "GuardedSlider.h"
 #include "core/AppSettings.h"
+#include "models/AmpModel.h"
 
 #include <QAbstractItemView>
 #include <QAccessible>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSignalBlocker>
+#include <QSpacerItem>
 #include "core/ThemeManager.h"
 #include "MeterSmoother.h"
 
@@ -35,6 +39,58 @@ QLabel* makeValueLabel(QWidget* parent)
     lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
     return lbl;
 }
+
+// ── Expanded panel design metrics ───────────────────────────────────────────
+//
+// The size at which every metric below is its literal value; the actual
+// metrics are that value times one scale derived from the room the panel has.
+// See AccessoryPanelWidgets.h for why the width is a constant and the height
+// is measured exactly once.
+//
+// What the widest row costs at scale 1.0: a port strip — letter, PTT lamp,
+// band and bias chips, the source radio's name and the state cell — plus the
+// readouts, the fan pull-down and the key below them, and the column's side
+// margins.
+//
+// Deliberately generous. The column's width is not exactly proportional to
+// the scale — a button's frame and the readout's minimum width are constants
+// inside it — so the contents cost roughly 265 * scale + 63 rather than a
+// clean multiple. Solving that against this divisor is what decides whether a
+// narrow panel merely cramps or actually clips: at 420 every panel from the
+// minimum scale upward has room to spare, while a divisor tight enough to hit
+// scale 1.0 at the contents' own 300px would clip anything under 540px wide.
+constexpr qreal kDesignWidth  = 420.0;
+// Only a first guess: applyDensity replaces it with the measured value as
+// soon as there is a laid-out column to measure.
+constexpr qreal kDesignHeight = 250.0;
+constexpr int   kBottomGap = kPanelBottomGap;
+
+// The panel key stands as tall as the tuner's do, so an operator with both
+// applets on the canvas sees one control language rather than two.
+constexpr int kKeyDesignHeight = 44;
+constexpr int kKeyFontDesignPx = 13;
+// Breathing room around the widest caption, in design pixels.
+constexpr int kKeyPaddingDesignPx = 18;
+
+constexpr const char* kBtnStyle =
+    "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+    "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
+    "QPushButton:hover { background: {{color.background.1}}; }";
+constexpr const char* kOperateStyle =
+    "QPushButton { background: #006030; border: 1px solid #008040; "
+    "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
+    "QPushButton:hover { background: #007040; }";
+
+// The panel key: resting, and lit while the amplifier is in the state it
+// selects. Shared tokens with the tuner's keys — one accessory palette.
+constexpr const char* kPanelKeyIdleStyle =
+    "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+    "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
+    "QPushButton:hover { background: {{color.background.1}}; }";
+constexpr const char* kPanelKeyStandbyStyle =
+    "QPushButton { background: {{color.accessory.key.standby.background}}; "
+    "border: 1px solid {{color.accessory.key.standby.foreground}}; border-radius: 3px; "
+    "color: {{color.accessory.key.standby.foreground}}; font-weight: bold; }";
 
 constexpr const char* kAmpAppletSettingsKey = "AmpApplet";
 constexpr const char* kTempFahrenheitField = "tempFahrenheit";
@@ -87,13 +143,54 @@ QString formatTemp(float degC, bool fahrenheit)
     return QStringLiteral("%1").arg(displayTemp(degC, fahrenheit), 0, 'f', 1);
 }
 
+// The state cell on a port strip. The amplifier's state is one device-wide
+// word, so both strips carry the same one — the tuner's strips do the same
+// with OPR — except while it is transmitting, which is true of exactly one
+// port. Putting TX on both would say RF is leaving a port that is idle.
+// STANDBY never reaches here: the banner has replaced the strips by then.
+QString stateCell(const QString& state, bool keyed)
+{
+    if (keyed) return QStringLiteral("TX");
+    if (state == QLatin1String("IDLE") || state == QLatin1String("OPERATE")
+            || state.startsWith(QLatin1String("TRANSMIT")))
+        return QStringLiteral("OPR");
+    if (state == QLatin1String("FAULT"))
+        return QStringLiteral("FAULT");
+    if (state == QLatin1String("POWERUP"))
+        return QStringLiteral("PWRUP");
+    if (state == QLatin1String("SELFCHECK"))
+        return QStringLiteral("CHECK");
+    // An unknown or not-yet-reported state. Blank rather than guessed — the
+    // cell going empty says "not known", which is the truth.
+    return QString();
+}
+
 } // namespace
 
 AmpApplet::AmpApplet(QWidget* parent)
     : QWidget(parent)
 {
     theme::setContainer(this, QStringLiteral("applet/amp"));
-    auto* vbox = new QVBoxLayout(this);
+    buildUI();
+}
+
+void AmpApplet::buildUI()
+{
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+    // Same reason as the column inside it — see m_vbox below. Both have to
+    // stand down, or the body's own minimum reaches the applet through this
+    // one and the floor ratchets anyway.
+    outer->setSizeConstraint(QLayout::SetNoConstraint);
+
+    auto* body = new QWidget;
+    m_vbox = new QVBoxLayout(body);
+    // The column must not dictate how small the panel can be — its minimum is
+    // the sum of children the scale has just sized. minimumSizeHint() answers
+    // that from the minimum scale instead.
+    m_vbox->setSizeConstraint(QLayout::SetNoConstraint);
+    auto* vbox = m_vbox;
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
 
@@ -139,13 +236,48 @@ AmpApplet::AmpApplet(QWidget* parent)
     idRow->addWidget(m_idGauge, 1);
     vbox->addLayout(idRow);
 
+    // ── Port status strips ───────────────────────────────────────────────────
+    // Between the meters and the controls, where the amplifier's own panel
+    // puts them. Expanded presentation only.
+    {
+        m_portRowsBox = new QWidget;
+        auto* area = new QVBoxLayout(m_portRowsBox);
+        area->setContentsMargins(0, 0, 0, 0);
+        area->setSpacing(0);
+
+        m_portLiveBox = new QWidget(m_portRowsBox);
+        auto* rows = new QVBoxLayout(m_portLiveBox);
+        rows->setContentsMargins(0, 0, 0, 0);
+        rows->setSpacing(2);
+        m_portA = new AccessoryPortRow(QStringLiteral("A"), m_portLiveBox);
+        m_portB = new AccessoryPortRow(QStringLiteral("B"), m_portLiveBox);
+        for (auto* row : {m_portA, m_portB}) {
+            // The amplifier reports no frequency per port. The tuner's strips
+            // carry one; leaving an N/A standing here forever would claim a
+            // reading is missing rather than that there is none to take.
+            row->setFrequencyVisible(false);
+            rows->addWidget(row);
+        }
+        area->addWidget(m_portLiveBox);
+
+        m_standbyBanner = new QLabel(tr("STANDBY"), m_portRowsBox);
+        m_standbyBanner->setAlignment(Qt::AlignCenter);
+        m_standbyBanner->setVisible(false);
+        m_standbyBanner->setAccessibleName(tr("Amplifier in standby"));
+        area->addWidget(m_standbyBanner);
+
+        // Fixed, not Maximum: Maximum still lets the layout shrink it, and
+        // then a panel being dragged shorter squeezes the strips while the pad
+        // below them is still metres deep. See applyDensityAtScale.
+        m_portRowsBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        vbox->addWidget(m_portRowsBox);
+    }
+
     vbox->addSpacing(4);
 
-    // ── Bottom row: [temp / Vdd / Vac stacked] [OPERATE button] ─────────────
-    //   Temp, drain voltage, and mains voltage sit in the empty space to the
-    //   left of the OPERATE/STANDBY button.
-    static const char* kTelStyle = "QLabel { color: #c8d8e8; font-size: 10px; }";
-
+    // ── Control row: [temp / Vdd / Vac stacked] [fan] [operate] ─────────────
+    //   Temp, drain voltage and mains voltage sit in the space to the left of
+    //   the operate control, in both presentations.
     m_tempFahrenheit = readTempFahrenheit();
 
     m_tempBtn = new QPushButton(this);
@@ -156,11 +288,6 @@ AmpApplet::AmpApplet(QWidget* parent)
     m_tempBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_tempBtn->setMinimumWidth(76);
     m_tempBtn->setAccessibleDescription("Toggles amplifier temperature between Celsius and Fahrenheit");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tempBtn,
-        "QPushButton { background: transparent; border: 1px solid transparent; "
-        "color: #c8d8e8; font-size: 10px; text-align: left; padding: 0 2px; }"
-        "QPushButton:hover { border-color: #203040; color: #ffffff; }"
-        "QPushButton:focus { border-color: #00b4d8; }");
     connect(m_tempBtn, &QPushButton::clicked, this, [this]() {
         m_tempFahrenheit = !m_tempFahrenheit;
         writeTempFahrenheit(m_tempFahrenheit);
@@ -169,13 +296,8 @@ AmpApplet::AmpApplet(QWidget* parent)
     updateTempLabel();
 
     m_vddLabel = new QLabel("Vdd  — V", this);
-    m_vddLabel->setStyleSheet(kTelStyle);
-
     m_vacLabel = new QLabel("Vac  — V", this);
-    m_vacLabel->setStyleSheet(kTelStyle);
-
     m_sourceLabel = new QLabel("● RADIO", this);
-    m_sourceLabel->setStyleSheet("QLabel { color: #888888; font-size: 9px; }");
 
     auto* infoStack = new QVBoxLayout;
     infoStack->setSpacing(0);
@@ -190,30 +312,12 @@ AmpApplet::AmpApplet(QWidget* parent)
     btnRow->addLayout(infoStack);
     btnRow->addStretch();
 
-    static const char* kBtnStyle =
-        "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }";
-
     // Fan speed pull-down — surfaces all three modes instead of making the
     // operator click through them blind (#3905). Item text via
     // fanModeLabel(); uppercase mode stored as itemData so the
     // fanModeChanged contract ("uppercase, ready for sendCommand") is
     // unchanged. Hidden until a direct PGXL connection delivers the first
     // fanmode status.
-    // The popup view is a separate top-level (Qt::Popup) window, so it
-    // doesn't inherit the combo's font — it must be set explicitly here or
-    // the popup paints at the app's default UI font while the combo's own
-    // width (and elision) is computed from the 10px rule below. On a
-    // larger-than-default UI font that mismatch elides "Fan: Contest", the
-    // longest item, into a garbled label (#4731).
-    static const char* kComboStyle =
-        "QComboBox { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 3px; padding: 1px 4px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QComboBox:hover { background: {{color.background.1}}; }"
-        "QComboBox::drop-down { border: none; width: 14px; }"
-        "QComboBox QAbstractItemView { background: {{color.background.2}}; color: {{color.text.primary}}; "
-        "selection-background-color: {{color.background.1}}; font-size: 10px; font-weight: bold; }";
     // GuardedComboBox (not plain QComboBox): this is a hardware control, so
     // an accidental mouse-wheel scroll while just hovering over it must not
     // silently change fan mode and send a command to the amp — it only
@@ -233,7 +337,6 @@ AmpApplet::AmpApplet(QWidget* parent)
     m_fanCombo->view()->setTextElideMode(Qt::ElideNone);
     m_fanCombo->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_fanCombo->setFocusPolicy(Qt::TabFocus);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_fanCombo, kComboStyle);
     m_fanCombo->setToolTip("Fan Speed\nSelect STANDARD / CONTEST / BROADCAST");
     m_fanCombo->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
     m_fanCombo->setAccessibleDescription("Selects STANDARD, CONTEST, or BROADCAST fan mode");
@@ -249,11 +352,45 @@ AmpApplet::AmpApplet(QWidget* parent)
     m_operateBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, kBtnStyle);
     m_operateBtn->hide();
-    connect(m_operateBtn, &QPushButton::clicked, this, [this]() {
-        emit operateToggled(m_operateBtn->text() != "OPERATE");
-    });
     btnRow->addWidget(m_operateBtn);
+
+    buildExpandedUI();
+    // Centred in both axes: the layout then takes the key's own size hint —
+    // which the scale sets — instead of stretching it to fill the cell.
+    btnRow->addWidget(m_stbyKey, 0, Qt::AlignCenter);
+
     vbox->addLayout(btnRow);
+
+    // One pad under the controls, absorbing whatever the scaling did not use.
+    // kBottomGap is its floor rather than a margin on the layout so there is a
+    // single thing deciding the space below the controls.
+    m_bottomStretch = new QSpacerItem(0, kBottomGap,
+                                      QSizePolicy::Minimum, QSizePolicy::Fixed);
+    vbox->addSpacerItem(m_bottomStretch);
+
+    outer->addWidget(body);
+
+    // The alert overlay is a child of the applet rather than a row in its
+    // layout, so it can cover the whole thing. Created last so it sits on top
+    // of everything already added.
+    m_alertOverlay = new QLabel(this);
+    // The body of an M| frame, verbatim from the amplifier. QLabel's AutoText
+    // would render anything markup-shaped as rich text — including a remote
+    // <img>, which it would then fetch. Device input is not ours to trust
+    // (Principle VII), and PlainText is the house answer.
+    m_alertOverlay->setTextFormat(Qt::PlainText);
+    m_alertOverlay->setAlignment(Qt::AlignCenter);
+    m_alertOverlay->setWordWrap(true);
+    m_alertOverlay->setVisible(false);
+    m_alertOverlay->setAccessibleName(tr("Amplifier alert"));
+
+    // Both operate controls do the same thing: command the state the
+    // amplifier is not in. Routed through one lambda so the rail button and
+    // the panel key can never disagree about which way the toggle goes.
+    for (QPushButton* btn : {m_operateBtn, static_cast<QPushButton*>(m_stbyKey)}) {
+        connect(btn, &QPushButton::clicked, this,
+                [this]() { emit operateToggled(m_standby); });
+    }
 
     // Label text throttle — update PWR/SWR/Id text at 10 Hz so the digits
     // don't flicker on every incoming meter packet.  Gauge fill still
@@ -270,7 +407,387 @@ AmpApplet::AmpApplet(QWidget* parent)
         m_peakFwd = 0.0f;
         m_fwdGauge->clearPeak();
     });
+
+    applyDensityAtScale(1.0);
+    updatePortRows();
 }
+
+void AmpApplet::buildExpandedUI()
+{
+    m_stbyKey = new PanelKey(tr("STBY"), this);
+    m_stbyKey->setToolTip(tr("Toggle standby — the amplifier drops out of circuit"));
+    m_stbyKey->setAccessibleName(tr("STBY"));
+    m_stbyKey->setAccessibleDescription(m_stbyKey->toolTip());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_stbyKey, kPanelKeyIdleStyle);
+    m_stbyKey->hide();
+
+    // Seed size: the widest caption at the design font, measured now, while
+    // the key still has its natural size hint.
+    QFont seedFont = m_stbyKey->font();
+    seedFont.setPixelSize(kKeyFontDesignPx);
+    m_keySeedWidth = QFontMetrics(seedFont).horizontalAdvance(m_stbyKey->text())
+                     + kKeyPaddingDesignPx;
+}
+
+// ── Model ───────────────────────────────────────────────────────────────────
+
+void AmpApplet::setAmpModel(AmpModel* model)
+{
+    if (m_model == model) return;
+    if (m_model) {
+        disconnect(m_model, nullptr, this, nullptr);
+    }
+    m_model = model;
+    if (!m_model) return;
+
+    connect(m_model, &AmpModel::portsChanged, this, &AmpApplet::updatePortRows);
+    connect(m_model, &AmpModel::antennaMapChanged, this, &AmpApplet::updateActivePort);
+    connect(m_model, &AmpModel::ampStateChanged, this, &AmpApplet::setState);
+    connect(m_model, &AmpModel::alertChanged, this, &AmpApplet::setAlertText);
+    // Seed from what the model already holds. The applet is attached after
+    // the connection is wired, so anything that arrived in between — an
+    // alert standing when the applet was built, the first state word — would
+    // otherwise be missed until the device happened to send it again.
+    if (!m_model->stateText().isEmpty()) setState(m_model->stateText());
+    setAlertText(m_model->alert());
+    updatePortRows();
+}
+
+void AmpApplet::setTxAntenna(const QString& antenna)
+{
+    if (m_txAntenna == antenna) return;
+    m_txAntenna = antenna;
+    updateActivePort();
+}
+
+// ── Presentation ────────────────────────────────────────────────────────────
+
+void AmpApplet::setFloating(bool floating)
+{
+    if (floating == m_floating) return;
+    m_floating = floating;
+    // Calibrate before the first scaled layout, so the divisor comes from a
+    // panel at scale 1.0 rather than from one the scale has already sized.
+    if (m_floating) {
+        calibrateNaturalHeight();
+    }
+    applyDensity();
+}
+
+qreal AmpApplet::contentScale() const
+{
+    // Docked, the rail gives every tile the same width and a fixed height;
+    // scaling there would make one tile disagree with its neighbours.
+    if (!m_floating) return 1.0;
+    const qreal naturalH = m_naturalContentHeight > 1.0 ? m_naturalContentHeight
+                                                        : kDesignHeight;
+    return panelContentScale(size(), kDesignWidth, naturalH);
+}
+
+void AmpApplet::applyDensity()
+{
+    applyDensityAtScale(contentScale());
+}
+
+void AmpApplet::applyDensityAtScale(qreal scale)
+{
+    auto& theme = AetherSDR::ThemeManager::instance();
+    const bool f = m_floating;
+    const qreal s = scale;
+    auto px = [s](int base) { return qMax(1, qRound(base * s)); };
+
+    // No bottom margin: m_bottomStretch owns the space under the controls.
+    m_vbox->setContentsMargins(f ? px(12) : 4, f ? px(10) : 2,
+                               f ? px(12) : 4, f ? 0 : 2);
+    m_vbox->setSpacing(f ? px(8) : 2);
+
+    // Expanded fills the window it was given; docked stays the fixed-height
+    // tile the rail stacks.
+    setSizePolicy(QSizePolicy::Preferred,
+                  f ? QSizePolicy::Preferred : QSizePolicy::Fixed);
+
+    for (auto* lbl : {m_pwrLabel, m_swrLabel, m_idLabel}) {
+        lbl->setFixedWidth(f ? px(96) : 72);
+        theme.applyStyleSheet(lbl, QStringLiteral(
+            "QLabel { color: {{color.text.primary}}; font-size: %1px; font-weight: bold; }")
+            .arg(f ? px(14) : 11));
+    }
+    for (auto* gauge : {m_fwdGauge, m_swrGauge, m_idGauge}) {
+        gauge->setFixedHeight(f ? px(34) : 24);
+        // The bar grows with the panel; without this its tick lettering would
+        // not, which is most of what "it just stretches" looks like.
+        gauge->setMetricScale(f ? s : 1.0);
+    }
+
+    m_portA->setScale(f ? s : 1.0);
+    m_portB->setScale(f ? s : 1.0);
+
+    // The SWR bar carries its scale as a gradient across the empty track —
+    // the one piece of the panel that is a colour, not a layout, so it is
+    // resolved from the theme rather than copied off the hardware.
+    QGradientStops swrStops;
+    if (f) {
+        const ThemeGradient swrScale =
+            theme.gradient(this, QStringLiteral("color.accessory.swrScale"));
+        for (const ThemeGradientStop& stop : swrScale.stops) {
+            swrStops.append({stop.at, stop.color});
+        }
+    }
+    m_swrGauge->setTrackGradient(swrStops);
+
+    applyTelemetryStyles(s);
+    applyAlertStyle();
+
+    theme.applyStyleSheet(m_standbyBanner, QStringLiteral(
+        "QLabel { border: 2px solid {{color.accessory.key.standby.foreground}}; "
+        "border-radius: 3px; background: {{color.accessory.key.standby.background}}; "
+        "color: {{color.accessory.key.standby.foreground}}; "
+        "letter-spacing: 2px; font-size: %1px; font-weight: bold; }")
+        .arg(px(20)));
+    // The banner stands in for both strips, so it claims their combined height
+    // — otherwise the panel jumps every time the amplifier enters standby.
+    m_standbyBanner->setMinimumHeight(m_portA->sizeHint().height() * 2 + 2);
+
+    // Expanding only when popped out: docked, the rail already fixes the
+    // tile's height and there is no slack for a pad to take.
+    //
+    // This is the ONLY item in the column that may change height. Everything
+    // above it is vertically Fixed, so the layout has exactly one place to put
+    // spare height and one place to take it from: dragging the panel shorter
+    // drains the pad to kBottomGap before anything else moves. Sizing the
+    // contents is the scale's job, not the layout's.
+    m_bottomStretch->changeSize(0, kBottomGap, QSizePolicy::Minimum,
+                                f ? QSizePolicy::Expanding : QSizePolicy::Fixed);
+
+    m_portRowsBox->setVisible(f);
+
+    QFont keyFont = m_stbyKey->font();
+    keyFont.setPixelSize(px(kKeyFontDesignPx));
+    m_stbyKey->setFont(keyFont);
+    applyKeySize(f ? s : 1.0);
+
+    // Only one of the two operate controls is ever up, and neither is shown
+    // before the amplifier has reported a state — an unlit control that
+    // cannot say which way it would move is worse than none.
+    applyStateToControls();
+
+    m_vbox->invalidate();
+}
+
+void AmpApplet::calibrateNaturalHeight()
+{
+    // What the column costs at scale 1.0 — the figure every later scale is a
+    // multiple of. Measured ONCE, and never revised; see panelContentScale.
+    if (m_naturalContentHeight > 1.0 || !m_vbox) return;
+    applyDensityAtScale(1.0);
+    m_vbox->activate();
+    const qreal content = m_vbox->sizeHint().height() - kBottomGap;
+    if (content > 1.0) {
+        m_naturalContentHeight = content;
+    }
+}
+
+QSize AmpApplet::minimumSizeHint() const
+{
+    if (!m_floating) return QWidget::minimumSizeHint();
+    // The layout's own minimum may briefly exceed this and the contents
+    // overflow for that one pass; the resize that caused it then lowers the
+    // scale and they fit again.
+    const qreal natural = m_naturalContentHeight > 1.0 ? m_naturalContentHeight
+                                                       : kDesignHeight;
+    return panelMinimumSize(kDesignWidth, natural);
+}
+
+void AmpApplet::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    layOutAlertOverlay();
+
+    // Re-derive the metrics for the new size, but only when the scale has
+    // actually moved: a resize arrives for every pixel of a window drag and
+    // applyDensity re-applies a dozen style sheets.
+    const qreal s = contentScale();
+    if (!qFuzzyCompare(s, m_appliedScale)) {
+        m_appliedScale = s;
+        applyDensity();
+    }
+}
+
+void AmpApplet::applyKeySize(qreal scale)
+{
+    if (!m_stbyKey || m_keySeedWidth <= 0) return;
+    m_stbyKey->setTargetSize(panelKeySize(qRound(kKeyDesignHeight * scale),
+                                          m_keySeedWidth, scale));
+}
+
+void AmpApplet::applyTelemetryStyles(qreal scale)
+{
+    auto& theme = AetherSDR::ThemeManager::instance();
+    const bool f = m_floating;
+    auto px = [scale](int base) { return qMax(1, qRound(base * scale)); };
+    const int bodyPx = f ? px(13) : 10;
+
+    theme.applyStyleSheet(m_tempBtn, QStringLiteral(
+        "QPushButton { background: transparent; border: 1px solid transparent; "
+        "color: {{color.text.primary}}; font-size: %1px; text-align: left; padding: 0 2px; }"
+        "QPushButton:hover { border-color: {{color.background.2}}; color: {{color.text.primary}}; }"
+        "QPushButton:focus { border-color: {{color.accent.bright}}; }").arg(bodyPx));
+
+    // Vdd and Vac are not proxied by the radio. Without the direct connection
+    // they have no value to show, so they read as unavailable rather than as
+    // a reading that happens to be dashes.
+    const QString tone = m_directConnected ? QStringLiteral("{{color.text.primary}}")
+                                           : QStringLiteral("{{color.text.disabled}}");
+    for (auto* lbl : {m_vddLabel, m_vacLabel}) {
+        theme.applyStyleSheet(lbl, QStringLiteral(
+            "QLabel { color: %1; font-size: %2px; }").arg(tone).arg(bodyPx));
+    }
+
+    theme.applyStyleSheet(m_sourceLabel, QStringLiteral(
+        "QLabel { color: %1; font-size: %2px; }")
+        .arg(m_directConnected ? QStringLiteral("{{color.accent.bright}}")
+                               : QStringLiteral("{{color.text.label}}"))
+        .arg(f ? px(11) : 9));
+
+    theme.applyStyleSheet(m_fanCombo, QStringLiteral(
+        "QComboBox { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 3px; padding: 1px 4px; color: {{color.text.primary}}; "
+        "font-size: %1px; font-weight: bold; }"
+        "QComboBox:hover { background: {{color.background.1}}; }"
+        "QComboBox::drop-down { border: none; width: %2px; }"
+        // The popup view is a separate top-level (Qt::Popup) window, so it
+        // doesn't inherit the combo's font — it must be set explicitly here or
+        // the popup paints at the app's default UI font while the combo's own
+        // width (and elision) is computed from the rule above. On a
+        // larger-than-default UI font that mismatch elides "Fan: Contest", the
+        // longest item, into a garbled label (#4731).
+        "QComboBox QAbstractItemView { background: {{color.background.2}}; color: {{color.text.primary}}; "
+        "selection-background-color: {{color.background.1}}; font-size: %1px; font-weight: bold; }")
+        .arg(f ? px(11) : 10).arg(f ? px(14) : 14));
+}
+
+// ── Alerts ──────────────────────────────────────────────────────────────────
+
+void AmpApplet::layOutAlertOverlay()
+{
+    if (!m_alertOverlay) return;
+    m_alertOverlay->setGeometry(rect());
+}
+
+void AmpApplet::applyAlertStyle()
+{
+    if (!m_alertOverlay) return;
+    // Unlike the tuner, which announces a successful tune on the same
+    // channel, every amplifier message seen so far is something to act on —
+    // and the protocol carries no severity field to tell them apart. So they
+    // all land on the attention colour, which is the safe way round: a
+    // warning shown as good news is worse than the reverse.
+    //
+    // Opaque ground: the overlay has to obscure the readings under it, not
+    // tint them. The applet's own darkest ground rather than a literal black,
+    // so it still reads correctly under a light theme.
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_alertOverlay, QStringLiteral(
+        "QLabel { background: {{color.background.0}}; color: {{color.accent.danger}}; "
+        "border: none; padding: 8px; font-size: %1px; font-weight: bold; }")
+        .arg(m_floating ? 26 : 15));
+}
+
+void AmpApplet::setAlertText(const QString& text)
+{
+    const QString shown = text.trimmed();
+    if (m_alertOverlay->text() == shown) return;
+    m_alertOverlay->setText(shown);
+    applyAlertStyle();
+
+    // The amplifier raises the alert and later clears it with an empty frame;
+    // the overlay simply follows those two, so its dwell time is whatever the
+    // device chose.
+    if (shown.isEmpty()) {
+        m_alertOverlay->hide();
+        return;
+    }
+    layOutAlertOverlay();
+    m_alertOverlay->raise();
+    m_alertOverlay->show();
+
+    // Announce it: the banner appears and disappears on the amplifier's
+    // schedule, and a reader that is not looking at it would otherwise never
+    // learn the amplifier had faulted.
+    m_alertOverlay->setAccessibleDescription(shown);
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(m_alertOverlay, QAccessible::Alert);
+        QAccessible::updateAccessibility(&event);
+    }
+}
+
+// ── Port strips ─────────────────────────────────────────────────────────────
+
+void AmpApplet::updatePortRows()
+{
+    if (!m_portA || !m_portB) return;
+
+    // Standby takes the whole area: out of circuit, there is no per-port
+    // reading left to show.
+    m_portLiveBox->setVisible(!m_standby);
+    m_standbyBanner->setVisible(m_standby);
+
+    if (m_model && m_model->hasPortInfo()) {
+        applyPortInfo(m_portA, m_model->portA());
+        applyPortInfo(m_portB, m_model->portB());
+    } else {
+        // The radio-relayed "amplifier" object carries no per-port block at
+        // all, so without the direct connection there is nothing to put in
+        // these cells. They stay empty rather than repeating the one radio
+        // this client happens to be connected to onto both ports. Which port
+        // is keyed is still knowable — it is in the state word.
+        for (auto* row : {m_portA, m_portB}) {
+            row->setBandText(QString());
+            row->setBiasText(QString());
+            row->setSourceText(QString());
+        }
+        m_portA->setPtt(m_stateWord == QLatin1String("TRANSMIT_A"));
+        m_portB->setPtt(m_stateWord == QLatin1String("TRANSMIT_B"));
+    }
+
+    m_portA->setStateText(stateCell(m_stateWord,
+                                    m_stateWord == QLatin1String("TRANSMIT_A")));
+    m_portB->setStateText(stateCell(m_stateWord,
+                                    m_stateWord == QLatin1String("TRANSMIT_B")));
+    updateActivePort();
+}
+
+void AmpApplet::applyPortInfo(AccessoryPortRow* row, const AmpPortInfo& info)
+{
+    // The band is the live reading — the amplifier reports bandX=0 for a port
+    // nothing is driving, which the strip shows as N/A. The source radio and
+    // the bias profile are configuration: they describe how the port is set
+    // up whether or not RF is going through it, so they are shown either way
+    // rather than blanked to imply the port does not exist.
+    row->setBandText(info.band);
+    row->setBiasText(info.bias);
+    row->setSourceText(info.source);
+    row->setPtt(info.ptt);
+}
+
+void AmpApplet::updateActivePort()
+{
+    if (!m_portA || !m_portB) return;
+
+    // Which port carries transmit comes from the amplifier's own antenna →
+    // output map read with the transmit slice's antenna — exactly FlexLib's
+    // Amplifier.OutputConfiguredForAntenna. The state word answers it only
+    // once RF is already flowing (TRANSMIT_A / TRANSMIT_B), which is too late
+    // to be what tells the operator where it is about to go.
+    //
+    // No match means the radio is transmitting on an antenna that does not
+    // run through the amplifier at all. Outlining nothing is the honest
+    // answer; outlining a port would claim RF is passing through it.
+    const QString out = m_model ? m_model->outputForAntenna(m_txAntenna) : QString();
+    m_portA->setActive(out.compare(QLatin1String("PORTA"), Qt::CaseInsensitive) == 0);
+    m_portB->setActive(out.compare(QLatin1String("PORTB"), Qt::CaseInsensitive) == 0);
+}
+
+// ── Telemetry ───────────────────────────────────────────────────────────────
 
 void AmpApplet::setFwdPower(float watts)
 {
@@ -322,7 +839,7 @@ void AmpApplet::updateTempLabel()
 
     const QString tempA = m_hasTempA
         ? formatTemp(m_tempA, m_tempFahrenheit)
-        : QStringLiteral("\u2014");
+        : QStringLiteral("—");
     const QString unit = m_tempFahrenheit
         ? QStringLiteral("F")
         : QStringLiteral("C");
@@ -419,49 +936,63 @@ void AmpApplet::setFanMode(const QString& mode)
 
 void AmpApplet::setState(const QString& state)
 {
-    // PGXL states: IDLE/OPERATE/TRANSMIT_* = operating (green), else standby (grey)
-    bool operating = (state == "IDLE" || state == "OPERATE"
-                      || state.startsWith("TRANSMIT"));
-    if (operating) {
-        m_operateBtn->setText("OPERATE");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn,
-            "QPushButton { background: #006030; border: 1px solid #008040; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background: #007040; }");
-    } else {
-        m_operateBtn->setText("STANDBY");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn,
-            "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background: {{color.background.1}}; }");
-    }
-    m_operateBtn->show();
+    // PGXL states: IDLE/OPERATE/TRANSMIT_* = operating, else standby.
+    // Same mapping FlexLib makes (Amplifier.Operate is State != Standby).
+    const QString word = state.trimmed().toUpper();
+    if (word == m_stateWord) return;
+    m_stateWord = word;
+    m_standby = !(m_stateWord == QLatin1String("IDLE")
+                  || m_stateWord == QLatin1String("OPERATE")
+                  || m_stateWord.startsWith(QLatin1String("TRANSMIT")));
+    applyStateToControls();
+    updatePortRows();
+}
+
+void AmpApplet::applyStateToControls()
+{
+    auto& theme = AetherSDR::ThemeManager::instance();
+    const bool known = !m_stateWord.isEmpty();
+
+    // The rail button names the state the amplifier is IN, the way it always
+    // has. The panel key names the state it SELECTS and lights when the
+    // amplifier is in it — a key that renamed itself would leave the operator
+    // reading the label to work out which way it moves.
+    m_operateBtn->setText(m_standby ? QStringLiteral("STANDBY")
+                                    : QStringLiteral("OPERATE"));
+    theme.applyStyleSheet(m_operateBtn, m_standby ? kBtnStyle : kOperateStyle);
+    theme.applyStyleSheet(m_stbyKey, m_standby ? kPanelKeyStandbyStyle
+                                               : kPanelKeyIdleStyle);
+    m_stbyKey->setAccessibleDescription(
+        m_standby ? tr("Amplifier is in standby. Activates operate.")
+                  : tr("Amplifier is operating. Activates standby."));
+
+    m_operateBtn->setVisible(known && !m_floating);
+    m_stbyKey->setVisible(known && m_floating);
 }
 
 void AmpApplet::setDirectConnected(bool direct)
 {
     m_directConnected = direct;
-    if (direct) {
-        m_sourceLabel->setText("● DIRECT");
-        m_sourceLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 9px; }");
-        m_vddLabel->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; }");
-        m_vacLabel->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; }");
-    } else {
-        m_sourceLabel->setText("● RADIO");
-        m_sourceLabel->setStyleSheet("QLabel { color: #888888; font-size: 9px; }");
-        // Vdd and Vac are not proxied by the radio — gray out and clear stale values.
+    m_sourceLabel->setText(direct ? QStringLiteral("● DIRECT")
+                                  : QStringLiteral("● RADIO"));
+    if (!direct) {
+        // Vdd and Vac are not proxied by the radio — clear the stale values.
         m_vddLabel->setText("Vdd  — V");
-        m_vddLabel->setStyleSheet("QLabel { color: #505050; font-size: 10px; }");
         m_vacLabel->setText("Vac  — V");
-        m_vacLabel->setStyleSheet("QLabel { color: #505050; font-size: 10px; }");
         // Fan mode is only available via direct PGXL protocol — hide until reconnected.
         m_fanCombo->hide();
     }
+    applyTelemetryStyles(m_floating ? m_appliedScale : 1.0);
+    updatePortRows();
 }
 
 void AmpApplet::setMeff(const QString& /*meff*/)
 {
-    // MEffA not displayed in the main applet view (matches SSDR layout).
+    // MEffA is deliberately not displayed. One capture is all there is of it,
+    // it has no FlexLib analogue to read a meaning off, and the single value
+    // seen ("STANDBY") contradicts the amplifier's own state word in the same
+    // frame (state=IDLE). Two different answers to "is the amplifier in
+    // standby?" on one panel is worse than one.
 }
 
 } // namespace AetherSDR

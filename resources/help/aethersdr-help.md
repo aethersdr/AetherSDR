@@ -228,6 +228,14 @@ Port detail needs the direct connection to the tuner (Radio Setup, peripherals),
 
 This applet is for amplifier integration when available. It is part of the station-status side of the app rather than the slice side, so always confirm whether you are making a station-wide change or a single-slice change.
 
+Docked in the rail it is the compact tile: forward power, SWR and drain current as bargraphs, with the PA temperatures, drain voltage and mains voltage beside the fan-speed pull-down and the operate/standby button.
+
+Popped out into its own window, or placed on the workspace canvas, it lays itself out the way the amplifier's own front panel does: the same three meters, larger, and a status strip for each RF port showing the band it is on, the bias profile it is set to, and the radio feeding it. The port carrying transmit is outlined. In standby a single banner replaces both strips — with the amplifier out of circuit there is no per-port reading left to show — and the `STBY` key lights to say so; pressing it there puts the amplifier back into operate.
+
+A port with no band reads `N/A`. That is the amplifier saying nothing is driving it, not a reading that failed to arrive — the radio name beside it describes how the port is wired, not that RF is flowing through it.
+
+Port detail needs the direct connection to the amplifier (Radio Setup, peripherals), which is also what supplies the fan-speed control and the drain and mains voltages. Without it the applet still works from what the radio relays, and the source indicator under the readouts says which path it is on.
+
 ### `TX`
 
 The TX applet is the main transmit command surface. It includes:

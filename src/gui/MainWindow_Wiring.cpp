@@ -1686,9 +1686,13 @@ void MainWindow::refreshTunerPortFrequency()
     // seen would be worse than reporting nothing.
     SliceModel* tx = m_radioModel.isConnected() ? m_radioModel.txSlice() : nullptr;
     m_appletPanel->tunerApplet()->setPortAFrequencyMhz(tx ? tx->frequency() : 0.0);
-    // The same slice's antenna decides which port the applet outlines, so it
-    // is refreshed on every path that can change the transmit slice.
-    m_appletPanel->tunerApplet()->setTxAntenna(tx ? tx->txAntenna() : QString());
+    // The same slice's antenna decides which port each applet outlines, so it
+    // is refreshed on every path that can change the transmit slice. The
+    // amplifier resolves it through its own antenna → output map rather than
+    // by a direct name comparison; both start from this one antenna.
+    const QString txAnt = tx ? tx->txAntenna() : QString();
+    m_appletPanel->tunerApplet()->setTxAntenna(txAnt);
+    if (m_appletPanel->ampApplet()) m_appletPanel->ampApplet()->setTxAntenna(txAnt);
 }
 
 void MainWindow::onSliceAdded(SliceModel* s)
@@ -6262,6 +6266,12 @@ void MainWindow::wireMeters()
 
     // Wire TgxlConnection to TunerModel
     m_radioModel.tunerModel().setDirectConnection(&m_tgxlConn);
+    // Same for the PGXL: the per-port block, the state word and the alert
+    // channel live in the model rather than being decoded into the applet
+    // here, so the applet has one source for them whichever path they arrive
+    // on.
+    m_radioModel.amplifier().setDirectConnection(&m_pgxlConn);
+    m_appletPanel->ampApplet()->setAmpModel(&m_radioModel.amplifier());
     // ACOM deliberately does NOT route through AmpModel — it has its own
     // dedicated AcomApplet talking straight to AcomConnection (commands and
     // telemetry alike), so AmpModel stays 100% PGXL/Flex-relay-only. Wiring
@@ -6310,8 +6320,9 @@ void MainWindow::wireMeters()
             amp->setDrainVoltage(kvs["vdd"].toFloat());
         if (kvs.contains("vac"))
             amp->setMainsVoltage(kvs["vac"].toInt());
-        if (kvs.contains("state"))
-            amp->setState(kvs["state"]);
+        // The state word is NOT applied here: AmpModel owns it (it also has to
+        // derive the per-port keying from it) and the applet follows
+        // AmpModel::ampStateChanged on both paths.
         if (kvs.contains("fanmode"))
             amp->setFanMode(kvs["fanmode"]);
         if (kvs.contains("meffa"))
@@ -6382,8 +6393,6 @@ void MainWindow::wireMeters()
             amp->setDrainVoltage(kvs["vdd"].toFloat());
         if (kvs.contains("vac"))
             amp->setMainsVoltage(kvs["vac"].toInt());
-        if (kvs.contains("state"))
-            amp->setState(kvs["state"]);
         if (kvs.contains("meffa"))
             amp->setMeff(kvs["meffa"]);
     });
@@ -6934,25 +6943,20 @@ void MainWindow::wireMeters()
         else
             setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "STANDBY", "#404858");
     };
-    connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this, [this, updatePgxlStyle]() {
-        updatePgxlStyle();
-        // Sync the AmpApplet button — the direct PGXL TCP path may not deliver
-        // a state update fast enough, leaving the button stuck on the old state.
-        // RadioModel is authoritative; use it to keep the button consistent.
-        m_appletPanel->ampApplet()->setState(
-            m_radioModel.amplifier().operate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
-    });
+    // The applet is NOT seeded from operate() here. That flag is derived from
+    // the state word and cannot say TRANSMIT_A or FAULT, so writing it back
+    // would overwrite the real word — and with it the port keying lamps the
+    // panel derives from it. AmpModel::ampStateChanged carries the word itself
+    // on both paths, which is what the applet follows.
+    connect(&m_radioModel.amplifier(), &AmpModel::stateChanged, this,
+            [updatePgxlStyle]() { updatePgxlStyle(); });
 
     connect(&m_radioModel.amplifier(), &AmpModel::presenceChanged, this, [this, updatePgxlStyle](bool present) {
         m_pgxlContainer->setVisible(present);
         m_pgxlSeparator->setVisible(present);
         m_appletPanel->setAmpVisible(present);
         updateStatusBarMinimumWidth();
-        if (present) {
-            updatePgxlStyle();
-            m_appletPanel->ampApplet()->setState(
-                m_radioModel.amplifier().operate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
-        }
+        if (present) updatePgxlStyle();
     });
     connect(&m_radioModel.meterModel(), &MeterModel::ampMetersChanged,
             this, [this](float fwdPwr, float swr, float temp) {
