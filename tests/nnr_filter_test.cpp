@@ -147,6 +147,25 @@ int main()
     check(Nnr::kMaskFloor.defaultValue == -25.0, "the mask-floor default moved");
     check(Nnr::kAlphaKnee.defaultValue == 10.0, "the alpha-knee default moved");
 
+    // The 24 kHz path is the one the latency fix is about: at 48 kHz there are
+    // no resamplers and totalLatencyFrames() equals NNR's own delay, so a test
+    // at 48 kHz alone cannot see the defect this fixes.
+    {
+        NnrFilter narrow(24000);
+        check(narrow.isValid(), "the filter did not construct at 24 kHz");
+        if (narrow.isValid()) {
+            const double declaredMs = 1000.0 * narrow.delaySamples() / 24000.0;
+            // NNR's own 51.17 ms plus two resamplers' group delay. Well over
+            // NNR's alone, which is exactly what was being declared before.
+            check(declaredMs > 100.0,
+                  "the 24 kHz path is declaring NNR's delay without the "
+                  "resamplers' group delay");
+            check(declaredMs < 400.0, "the declared 24 kHz latency is implausible");
+            check(narrow.delaySamples() > filter.delaySamples() / 2,
+                  "the 24 kHz delay should exceed half the 48 kHz figure");
+        }
+    }
+
     if (failures == 0) {
         std::printf("nnr_filter_test: all checks passed (delay %.2f ms, "
                     "noise %.1f dB, voice %.1f dB)\n", delayMs, noiseOnly, withVoice);
