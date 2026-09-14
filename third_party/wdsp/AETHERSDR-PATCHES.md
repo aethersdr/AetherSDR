@@ -124,8 +124,8 @@ accessor set:
    SIGSEGV against an unpatched build; exits cleanly with the guard.
 
    Latent upstream too, via `SetRXANNRAlpha`/`SetRXANNRAlphaKnee`, for any
-   console that offers those controls. Report it and drop this when a release
-   carries the guard.
+   console that offers those controls. Reported as TAPR/OpenHPSDR-wdsp#4 with
+   a fix in TAPR/OpenHPSDR-wdsp#5; drop this when a release carries the guard.
 
 Without the first two, opening and closing one RX channel leaks one `notchdb`
 object and two NURBS objects. `wdsp_channel_test` detects that deterministically.
