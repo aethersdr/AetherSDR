@@ -8,6 +8,7 @@
 #include <QAbstractItemView>
 #include <QAccessible>
 #include <QVBoxLayout>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLayout>
@@ -87,6 +88,9 @@ constexpr const char* kBtnStyle =
     "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
     "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
     "QPushButton:hover { background: {{color.background.1}}; }";
+constexpr const char* kFaultStyle =
+    "QPushButton { background: {{color.accent.danger}}; border: 1px solid {{color.accent.danger}}; "
+    "border-radius: 3px; color: {{color.background.0}}; font-size: 10px; font-weight: bold; }";
 constexpr const char* kOperateStyle =
     "QPushButton { background: #006030; border: 1px solid #008040; "
     "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
@@ -154,25 +158,21 @@ QString formatTemp(float degC, bool fahrenheit)
     return QStringLiteral("%1").arg(displayTemp(degC, fahrenheit), 0, 'f', 1);
 }
 
-// The state cell on a port strip. The amplifier's state is one device-wide
-// word, so both strips carry the same one — the tuner's strips do the same
-// with OPR — except while it is transmitting, which is true of exactly one
-// port. Putting TX on both would say RF is leaving a port that is idle.
+// The state cell on a port strip. It speaks only when it has something to
+// say. Operating is the normal condition and needs no word for it — the
+// amplifier's own panel carries none — and keying is already on the PTT lamp
+// beside it, so both leave the cell empty. What is left is the states an
+// operator has to do something about, and those get their name.
+//
 // STANDBY never reaches here: the banner has replaced the strips by then.
-QString stateCell(const QString& state, bool keyed)
+QString stateCell(const QString& state)
 {
-    if (keyed) return QStringLiteral("TX");
-    if (state == QLatin1String("IDLE") || state == QLatin1String("OPERATE")
-            || state.startsWith(QLatin1String("TRANSMIT")))
-        return QStringLiteral("OPR");
     if (state == QLatin1String("FAULT"))
         return QStringLiteral("FAULT");
     if (state == QLatin1String("POWERUP"))
         return QStringLiteral("PWRUP");
     if (state == QLatin1String("SELFCHECK"))
         return QStringLiteral("CHECK");
-    // An unknown or not-yet-reported state. Blank rather than guessed — the
-    // cell going empty says "not known", which is the truth.
     return QString();
 }
 
@@ -204,6 +204,10 @@ void AmpApplet::buildUI()
     auto* vbox = m_vbox;
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
+
+    // Built first: the panel's keys sit beside the port strips, so they have
+    // to exist before that row is assembled.
+    buildExpandedUI();
 
     // ── PWR row ──────────────────────────────────────────────────────────────
     m_pwrLabel = makeValueLabel(this);
@@ -252,7 +256,14 @@ void AmpApplet::buildUI()
     // puts them. Expanded presentation only.
     {
         m_portRowsBox = new QWidget;
-        auto* area = new QVBoxLayout(m_portRowsBox);
+        // Strips on the left, keys on the right — the keys span both strips
+        // rather than sitting under them, which is what makes this one block
+        // of the panel rather than two stacked rows of unequal weight.
+        auto* portRow = new QHBoxLayout(m_portRowsBox);
+        portRow->setContentsMargins(0, 0, 0, 0);
+        portRow->setSpacing(4);
+
+        auto* area = new QVBoxLayout;
         area->setContentsMargins(0, 0, 0, 0);
         area->setSpacing(0);
 
@@ -276,6 +287,14 @@ void AmpApplet::buildUI()
         m_standbyBanner->setVisible(false);
         m_standbyBanner->setAccessibleName(tr("Amplifier in standby"));
         area->addWidget(m_standbyBanner);
+
+        portRow->addLayout(area, 1);
+        // Centred in both axes: the layout then takes each key's own size hint
+        // — which the scale sets — instead of stretching it to fill the cell.
+        // The standby banner replaces the strips beside them, never the keys:
+        // pressing STBY is how the amplifier comes back out of standby.
+        portRow->addWidget(m_fanKey, 0, Qt::AlignCenter);
+        portRow->addWidget(m_stbyKey, 0, Qt::AlignCenter);
 
         // Fixed, not Maximum: Maximum still lets the layout shrink it, and
         // then a panel being dragged shorter squeezes the strips while the pad
@@ -310,17 +329,18 @@ void AmpApplet::buildUI()
     m_vacLabel = new QLabel("Vac  — V", this);
     m_sourceLabel = new QLabel("● RADIO", this);
 
-    auto* infoStack = new QVBoxLayout;
-    infoStack->setSpacing(0);
-    infoStack->setContentsMargins(0, 0, 0, 0);
-    infoStack->addWidget(m_tempBtn);
-    infoStack->addWidget(m_vddLabel);
-    infoStack->addWidget(m_vacLabel);
-    infoStack->addWidget(m_sourceLabel);
+    // One row along the bottom when the panel has the width for it, stacked
+    // when it does not. A grid rather than two layouts, so neither reading is
+    // ever reparented between presentations — see applyTelemetryLayout.
+    m_telemetryBox = new QWidget;
+    m_telemetryGrid = new QGridLayout(m_telemetryBox);
+    m_telemetryGrid->setContentsMargins(0, 0, 0, 0);
+    m_telemetryGrid->setVerticalSpacing(0);
+    applyTelemetryLayout();
 
     auto* btnRow = new QHBoxLayout;
     btnRow->setSpacing(6);
-    btnRow->addLayout(infoStack);
+    btnRow->addWidget(m_telemetryBox);
     btnRow->addStretch();
 
     // Fan speed pull-down — surfaces all three modes instead of making the
@@ -364,12 +384,6 @@ void AmpApplet::buildUI()
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, kBtnStyle);
     m_operateBtn->hide();
     btnRow->addWidget(m_operateBtn);
-
-    buildExpandedUI();
-    // Centred in both axes: the layout then takes each key's own size hint —
-    // which the scale sets — instead of stretching it to fill the cell.
-    btnRow->addWidget(m_fanKey, 0, Qt::AlignCenter);
-    btnRow->addWidget(m_stbyKey, 0, Qt::AlignCenter);
 
     vbox->addLayout(btnRow);
 
@@ -422,6 +436,29 @@ void AmpApplet::buildUI()
 
     applyDensityAtScale(1.0);
     updatePortRows();
+}
+
+void AmpApplet::applyTelemetryLayout()
+{
+    if (!m_telemetryGrid) return;
+    const bool inRow = m_floating;
+    if (m_telemetryBox->layout() && m_telemetryInRow == inRow
+            && m_telemetryGrid->count() > 0) {
+        return;
+    }
+    m_telemetryInRow = inRow;
+
+    QWidget* const cells[] = {m_tempBtn, m_vddLabel, m_vacLabel, m_sourceLabel};
+    for (QWidget* cell : cells) {
+        m_telemetryGrid->removeWidget(cell);
+    }
+    for (int i = 0; i < 4; ++i) {
+        // Along the bottom on the panel, the way the amplifier's own front
+        // panel runs them; down the side in the rail, which is one tile wide
+        // and has nowhere to put four readings abreast.
+        if (inRow) m_telemetryGrid->addWidget(cells[i], 0, i);
+        else       m_telemetryGrid->addWidget(cells[i], i, 0);
+    }
 }
 
 void AmpApplet::buildExpandedUI()
@@ -561,6 +598,8 @@ void AmpApplet::applyDensityAtScale(qreal scale)
     }
     m_swrGauge->setTrackGradient(swrStops);
 
+    applyTelemetryLayout();
+    m_telemetryGrid->setHorizontalSpacing(f ? px(14) : 0);
     applyTelemetryStyles(s);
     applyAlertStyle();
 
@@ -784,10 +823,9 @@ void AmpApplet::updatePortRows()
         m_portB->setPtt(m_stateWord == QLatin1String("TRANSMIT_B"));
     }
 
-    m_portA->setStateText(stateCell(m_stateWord,
-                                    m_stateWord == QLatin1String("TRANSMIT_A")));
-    m_portB->setStateText(stateCell(m_stateWord,
-                                    m_stateWord == QLatin1String("TRANSMIT_B")));
+    const QString cell = stateCell(m_stateWord);
+    m_portA->setStateText(cell);
+    m_portB->setStateText(cell);
     updateActivePort();
 }
 
@@ -993,14 +1031,18 @@ void AmpApplet::applyFanControls()
 
 void AmpApplet::setState(const QString& state)
 {
-    // PGXL states: IDLE/OPERATE/TRANSMIT_* = operating, else standby.
-    // Same mapping FlexLib makes (Amplifier.Operate is State != Standby).
+    // Standby is the state STANDBY, and nothing else — the mapping FlexLib
+    // makes (Amplifier.Operate is State != Standby).
+    //
+    // Deliberately NOT "anything that is not IDLE/OPERATE/TRANSMIT". Read
+    // that way a FAULT is standby, and the panel puts up a STANDBY banner
+    // over the port strips — telling the operator the amplifier is out of
+    // circuit because someone chose that, at the moment it has tripped, and
+    // hiding the cell that would have said FAULT behind the banner.
     const QString word = state.trimmed().toUpper();
     if (word == m_stateWord) return;
     m_stateWord = word;
-    m_standby = !(m_stateWord == QLatin1String("IDLE")
-                  || m_stateWord == QLatin1String("OPERATE")
-                  || m_stateWord.startsWith(QLatin1String("TRANSMIT")));
+    m_standby = (m_stateWord == QLatin1String("STANDBY"));
     applyStateToControls();
     updatePortRows();
 }
@@ -1014,9 +1056,18 @@ void AmpApplet::applyStateToControls()
     // has. The panel key names the state it SELECTS and lights when the
     // amplifier is in it — a key that renamed itself would leave the operator
     // reading the label to work out which way it moves.
-    m_operateBtn->setText(m_standby ? QStringLiteral("STANDBY")
-                                    : QStringLiteral("OPERATE"));
-    theme.applyStyleSheet(m_operateBtn, m_standby ? kBtnStyle : kOperateStyle);
+    //
+    // A fault is neither of the two the button toggles between, and calling it
+    // OPERATE in the operating colour is the one reading that must not happen.
+    // The button still commands standby when pressed; it just stops claiming
+    // the amplifier is fine.
+    const bool faulted = (m_stateWord == QLatin1String("FAULT"));
+    m_operateBtn->setText(faulted   ? tr("FAULT")
+                          : m_standby ? QStringLiteral("STANDBY")
+                                      : QStringLiteral("OPERATE"));
+    theme.applyStyleSheet(m_operateBtn, faulted   ? kFaultStyle
+                                        : m_standby ? kBtnStyle
+                                                    : kOperateStyle);
     theme.applyStyleSheet(m_stbyKey, m_standby ? kPanelKeyStandbyStyle
                                                : kPanelKeyIdleStyle);
     m_stbyKey->setAccessibleDescription(

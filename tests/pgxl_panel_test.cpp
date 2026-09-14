@@ -298,17 +298,34 @@ int main(int argc, char** argv)
     CHECK(!portA->accessibleDescription().contains(QStringLiteral("transmit port")));
     CHECK(!portB->accessibleDescription().contains(QStringLiteral("transmit port")));
 
-    // ── Transmitting ──────────────────────────────────────────────────
+    // ── The state cell speaks only when it has something to say ───────
     //
-    // TRANSMIT_A is one port's condition, not the amplifier's. Putting TX on
-    // both strips would say RF is leaving a port that is idle.
+    // Operating is the normal condition and carries no word for it — the
+    // amplifier's own panel has none — and keying is already on the PTT lamp,
+    // so neither puts anything in the cell.
+    CHECK(!rowShowsVisible(portA, QStringLiteral("OPR")));
     peer->write(statusReply("TRANSMIT_A"));
     peer->flush();
     CHECK(spin([&] { return model.portA().ptt; }));
     QCoreApplication::processEvents();
-    CHECK(rowShows(portA, QStringLiteral("TX")));
-    CHECK(rowShows(portB, QStringLiteral("OPR")));
-    CHECK(!rowShows(portB, QStringLiteral("TX")));
+    CHECK(!rowShowsVisible(portA, QStringLiteral("TX")));
+    CHECK(!rowShowsVisible(portB, QStringLiteral("OPR")));
+
+    // A fault does: it is the one thing on this strip an operator has to act
+    // on, and it is named rather than left to the absence of a word.
+    peer->write(statusReply("FAULT"));
+    peer->flush();
+    CHECK(spin([&] { return model.stateText() == QLatin1String("FAULT"); }));
+    QCoreApplication::processEvents();
+    CHECK(rowShowsVisible(portA, QStringLiteral("FAULT")));
+    // And a fault is NOT standby. Read as one, the banner covers the strips
+    // and tells the operator the amplifier is out of circuit by choice at the
+    // moment it has tripped — hiding the cell that just said FAULT.
+    CHECK(portA->isVisible());
+    {
+        QLabel* banner = standbyBanner(applet);
+        if (banner) CHECK(!banner->isVisible());
+    }
 
     // ── Standby ───────────────────────────────────────────────────────
     //
@@ -320,6 +337,13 @@ int main(int argc, char** argv)
     QLabel* banner = standbyBanner(applet);
     CHECK(banner != nullptr);
     if (banner) CHECK(banner->isVisible());
+
+    // The banner replaces the strips beside the keys, never the keys: pressing
+    // STBY is how the amplifier comes back out of standby, so it has to
+    // survive the state it is the exit from.
+    for (PanelKey* k : applet.findChildren<PanelKey*>()) {
+        CHECK(k->isVisible());
+    }
 
     {
         // In standby the key asks for operate — the opposite of what it asked
@@ -336,6 +360,37 @@ int main(int argc, char** argv)
             if (operate.count() == 1) {
                 CHECK(operate.takeFirst().at(0).toBool() == true);
             }
+        }
+    }
+
+    // ── The readouts reflow with the presentation ─────────────────────
+    //
+    // One row along the bottom on the panel, stacked in the rail — which is
+    // one tile wide and has nowhere to put four readings abreast. Same
+    // widgets either way; nothing is reparented between presentations.
+    {
+        QPushButton* temp = applet.findChild<QPushButton*>(QStringLiteral("ampTempUnitButton"));
+        QLabel* vdd = nullptr;
+        for (QLabel* l : applet.findChildren<QLabel*>()) {
+            if (l->text().startsWith(QStringLiteral("Vdd"))) vdd = l;
+        }
+        CHECK(temp != nullptr);
+        CHECK(vdd != nullptr);
+        if (temp && vdd) {
+            CHECK(applet.isFloating());
+            CHECK(temp->y() == vdd->y());        // abreast
+            CHECK(temp->x() < vdd->x());
+
+            applet.setFloating(false);
+            QCoreApplication::processEvents();
+            CHECK(temp->y() < vdd->y());         // stacked
+            CHECK(temp->x() == vdd->x());
+            // Still the same widgets, still inside the applet.
+            CHECK(temp->parentWidget() == vdd->parentWidget());
+
+            applet.setFloating(true);
+            QCoreApplication::processEvents();
+            CHECK(temp->y() == vdd->y());
         }
     }
 

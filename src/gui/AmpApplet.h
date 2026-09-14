@@ -7,6 +7,7 @@
 
 class QLabel;
 class QVBoxLayout;
+class QGridLayout;
 class QSpacerItem;
 
 namespace AetherSDR {
@@ -34,7 +35,8 @@ struct AmpPortInfo;
 //  - a status strip per RF port: PTT lamp, band, bias profile, source radio
 //    — collapsed to a single STANDBY banner while the amplifier is in
 //    standby, since nothing on those strips is live then
-//  - the readouts and a discrete STBY key, sized like the tuner's keys
+//  - the fan-speed and standby keys beside those strips, spanning both
+//  - the temperatures, drain and mains voltages as one row along the bottom
 //
 // The per-port block is only on the amplifier's own port-9008 status; the
 // radio-relayed "amplifier" object carries model, serial, ip, state and the
@@ -90,6 +92,10 @@ protected:
 private:
     void buildUI();
     void buildExpandedUI();
+    // The four readouts run as a row along the bottom of the panel and stack
+    // in the rail's single-tile width. Same widgets either way — the grid is
+    // re-flowed rather than the controls rebuilt.
+    void applyTelemetryLayout();
     void updateTempLabel();
     void updateValueLabels();
 
@@ -140,6 +146,12 @@ private:
     QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
     QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
     bool     m_directConnected{false};
+
+    QWidget*     m_telemetryBox{nullptr};
+    QGridLayout* m_telemetryGrid{nullptr};
+    // Which way the grid is currently flowed, so a density pass that changes
+    // nothing does not re-add four widgets to it.
+    bool         m_telemetryInRow{false};
 
     QComboBox*   m_fanCombo{nullptr};
     QPushButton* m_operateBtn{nullptr};
