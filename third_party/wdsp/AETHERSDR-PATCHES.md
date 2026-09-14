@@ -440,9 +440,20 @@ accessor set, two channel-state fixes, and one performance change:
 
     `create_minphase()` (`fir.c`) allocates six `complex` buffers and one
     `double` buffer at `N * pfactor` elements -- 104 bytes per element in total --
-    and creates **four `FFTW_PATIENT` plans** of that length. `FFTW_PATIENT`
-    measures many transform strategies at plan time, so the cost is
-    plan-construction time first and bytes second.
+    and creates **four `FFTW_PATIENT` plans** of that length.
+
+    **The standing cost is the resident workspace, not the planning.** An earlier
+    draft of this note led with plan-construction time; that overstated it.
+    `WdspChannel::open()` calls `loadWisdomOnce()` before the first plan and
+    exports afterwards, and FFTW wisdom is keyed on the (transform kind, size)
+    pair, so on a warm cache `FFTW_PATIENT` imports instead of re-measuring and
+    the planner cost is already largely amortised. What is NOT amortised is the
+    memory: the buffers are allocated on every open, held for the life of the
+    channel, and never read. Plan time is the **cold-cache** case -- a first run,
+    a cleared cache, a CI container, a session whose export never ran -- and
+    there it does bite, because these are among the largest geometries the
+    channel plans. Treat it as the cold-start half of the argument, not the
+    headline.
 
     Counted, not assumed, by instrumenting `create_fircore()` and
     `create_minphase()` and opening one channel: **an RX channel builds 13
@@ -464,11 +475,41 @@ accessor set, two channel-state fixes, and one performance change:
     and `mp == 0` hold the identical 1300; after it, `mp == 1` holds 1252, the
     48 allocations of the six cores `RXASetMP()` reaches.
 
-    The BYTE figure is arithmetic on those counts, not a measurement:
-    **~66.9 MB of never-executed workspace per RX channel at 8192 taps**
-    (~28.5 MB at WDSP's own `max(2048, dsp_size)` default), plus ~16.2 MB per TX
-    channel. This is shared DSP -- **every backend that opens a `WdspChannel`
-    pays it**, not only the HL2, and the HL2's tap count only sets how much.
+    **Two different totals come out of those counts, and they must not be
+    confused.** `RXASetNC()` reaches its six cores through `setNc_fircore()`,
+    which calls `deplan_fircore()` BEFORE `plan_fircore()` -- so those six
+    workspaces are built at `nc = 2048`, freed, and built again at 8192. They
+    appear twice in the built list and once in the resident one. Showing the
+    working, in `N * pfactor` elements at 104 bytes each:
+
+    | quantity | elements | bytes |
+    |---|---|---|
+    | Built, dead, across one RX open (18 calls: 131072 x3, 65536, 32768 x8, 8192 x5, 4096) | 765,952 | **~79.7 MB** |
+    | less the six pre-`RXASetNC` workspaces `setNc_fircore()` frees (32768 x3 + 8192 x3) | -122,880 | -~12.8 MB |
+    | **Resident, dead, once the channel is open** (12 cores: 131072 x3, 65536, 32768 x5, 8192 x2, 4096) | **643,072** | **~66.9 MB** |
+
+    The figure this note quotes is the **resident** one. Because the frees
+    precede the allocations and every core only grows, resident is also the peak
+    concurrent figure: **~66.9 MB of never-executed workspace per RX channel at
+    8192 taps**. The ~79.7 MB is allocation churn across the open, not memory
+    ever held at once. At WDSP's own `max(2048, dsp_size)` default the two
+    coincide at ~28.5 MB, because `RXASetNC(2048)` changes no `nc` and re-plans
+    nothing; likewise ~16.2 MB per TX channel.
+
+    Every byte figure above is arithmetic on the counted inventory and
+    `create_minphase()`'s own allocation sizes. **No memory was measured**, here
+    or on hardware, and nothing in this work ran a radio.
+
+    This is shared DSP -- **every backend that opens a `WdspChannel` pays it**,
+    not only the HL2, and the HL2's tap count only sets how much.
+
+    **Drop condition.** This is the one entry here that is a performance change
+    rather than a correctness fix, so it is also the one a maintainer may simply
+    decline to carry. Drop it if upstream makes the construction conditional
+    itself; drop it if this tree ever sets `Config::minimumPhase` true on every
+    path, since the workspace would then be wanted everywhere and the laziness
+    would buy nothing. **Not reported upstream yet** -- unlike patch 3, which is
+    TAPR/OpenHPSDR-wdsp#2, this one has no upstream issue behind it.
 
 Without the first two, opening and closing one RX channel leaks one `notchdb`
 object and two NURBS objects. `wdsp_channel_test` detects that deterministically.
@@ -509,7 +550,8 @@ them all. Patches 1-3 carry no marker — 1 and 2 are single added `_aligned_fre
 lines and 3 is a single added assignment — and are findable only from this file.
 New patches use the marker.
 
-When refreshing WDSP, first check whether upstream contains equivalent frees.
-If it does, drop the corresponding local patch. Otherwise reapply only these
-minimal fixes and run the lifecycle test under AddressSanitizer on every supported
-platform.
+When refreshing WDSP, first check whether upstream has made each change itself --
+the equivalent frees for patches 1-3, the exit handshake for patch 4, the `a->mp`
+guard for patch 10. Drop any local patch upstream now carries. Otherwise reapply
+only these minimal changes and run the lifecycle test under AddressSanitizer on
+every supported platform.
