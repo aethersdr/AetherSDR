@@ -6295,7 +6295,7 @@ void MainWindow::wireMeters()
             m_pgxlConn.disconnect();
         }
     });
-    // PGXL status → AmpApplet (direct telemetry: vac, vdd, id, temp, tempb, state, etc.)
+    // PGXL status → AmpApplet (direct telemetry: vac, vdd, id, temp, hltemp, state, etc.)
     connect(&m_pgxlConn, &PgxlConnection::statusUpdated, this, [this](const QMap<QString, QString>& kvs) {
         qCDebug(lcTuner) << "PGXL status:" << kvs;
         auto* amp = m_appletPanel->ampApplet();
@@ -6311,8 +6311,12 @@ void MainWindow::wireMeters()
                 amp->setTemp(tv.toFloat());
             }
         }
-        // Separate tempb field (firmware variant)
-        if (kvs.contains("tempb"))
+        // The second sensor. Firmware 3.8.9 sends it as `hltemp`; other builds
+        // use `tempb`, and some pack both into `temp` as "A/B" above. All
+        // three are the same reading, so whichever arrives wins.
+        if (kvs.contains("hltemp"))
+            amp->setTempB(kvs["hltemp"].toFloat());
+        else if (kvs.contains("tempb"))
             amp->setTempB(kvs["tempb"].toFloat());
         if (kvs.contains("id"))
             amp->setDrainCurrent(kvs["id"].toFloat());
@@ -6365,7 +6369,7 @@ void MainWindow::wireMeters()
         m_appletPanel->ampApplet()->setDirectConnected(false);
     });
     // Radio amplifier status → AmpApplet telemetry (fallback path).
-    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, temp, tempb, state) in its
+    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, temp, hltemp, state) in its
     // amplifier status messages, so the applet keeps updating even when the direct
     // PGXL TCP connection isn't established.  When direct TCP IS connected, that
     // path is faster and higher-precision (the radio rebroadcast may round/lag),
@@ -6385,7 +6389,9 @@ void MainWindow::wireMeters()
                 amp->setTemp(tv.toFloat());
             }
         }
-        if (kvs.contains("tempb"))
+        if (kvs.contains("hltemp"))
+            amp->setTempB(kvs["hltemp"].toFloat());
+        else if (kvs.contains("tempb"))
             amp->setTempB(kvs["tempb"].toFloat());
         if (kvs.contains("id"))
             amp->setDrainCurrent(kvs["id"].toFloat());

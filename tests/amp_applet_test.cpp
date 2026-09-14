@@ -61,7 +61,7 @@ void testDefaultPlaceholder()
     if (!button) return;
 
     report("default placeholder uses Celsius",
-           button->text() == QStringLiteral("\u2014 C"),
+           button->text() == QStringLiteral("PA \u2014 C"),
            button->text());
 }
 
@@ -76,17 +76,17 @@ void testSingleSensorToggle()
 
     applet.setTemp(34.7f);
     report("single sensor displays Celsius",
-           button->text() == QStringLiteral("34.7 C"),
+           button->text() == QStringLiteral("PA 34.7 C"),
            button->text());
 
     button->click();
     report("single sensor toggles to Fahrenheit",
-           button->text() == QStringLiteral("94.5 F"),
+           button->text() == QStringLiteral("PA 94.5 F"),
            button->text());
 
     button->click();
     report("single sensor toggles back to Celsius",
-           button->text() == QStringLiteral("34.7 C"),
+           button->text() == QStringLiteral("PA 34.7 C"),
            button->text());
 }
 
@@ -99,15 +99,18 @@ void testDualSensorToggle()
     report("dual sensor button exists", button != nullptr);
     if (!button) return;
 
+    // Both sensors are named. The amplifier's own panel runs them unlabelled
+    // ("24.4/24.2 C"); on hardware the operator knows which is which, and
+    // here two bare numbers say nothing about what either is measuring.
     applet.setTemp(34.7f);
     applet.setTempB(28.4f);
     report("dual sensor displays Celsius pair",
-           button->text() == QStringLiteral("34.7/28.4 C"),
+           button->text() == QStringLiteral("PA 34.7 / HL 28.4 C"),
            button->text());
 
     button->click();
     report("dual sensor toggles to Fahrenheit pair",
-           button->text() == QStringLiteral("94.5/83.1 F"),
+           button->text() == QStringLiteral("PA 94.5 / HL 83.1 F"),
            button->text());
 }
 
@@ -133,12 +136,12 @@ void testPreferenceReload()
     if (!button) return;
 
     report("reloaded placeholder uses Fahrenheit",
-           button->text() == QStringLiteral("\u2014 F"),
+           button->text() == QStringLiteral("PA \u2014 F"),
            button->text());
 
     restored.setTemp(0.0f);
     report("reloaded value displays Fahrenheit",
-           button->text() == QStringLiteral("32.0 F"),
+           button->text() == QStringLiteral("PA 32.0 F"),
            button->text());
 }
 

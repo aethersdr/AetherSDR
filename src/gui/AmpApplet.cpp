@@ -992,14 +992,23 @@ void AmpApplet::updateTempLabel()
         ? QStringLiteral("F")
         : QStringLiteral("C");
 
+    // Both sensors are named. The amplifier's own panel runs them unlabelled
+    // as "24.4/24.2 C", which is fine on hardware where the operator knows
+    // which is which and nothing else on screen is a temperature; here two
+    // bare numbers say nothing about what either one is measuring.
+    //
+    // HL is the wire's own name for the second (`hltemp`). PA is not — the
+    // first arrives as a bare `temp`, and PA is what an unqualified
+    // temperature on a power amplifier is. A one-line change if 4O3A ever
+    // says otherwise.
     if (m_hasTempB) {
         m_tempBtn->setText(
-            QStringLiteral("%1/%2 %3")
+            QStringLiteral("PA %1 / HL %2 %3")
                 .arg(tempA)
                 .arg(formatTemp(m_tempB, m_tempFahrenheit))
                 .arg(unit));
     } else {
-        m_tempBtn->setText(QStringLiteral("%1 %2").arg(tempA).arg(unit));
+        m_tempBtn->setText(QStringLiteral("PA %1 %2").arg(tempA).arg(unit));
     }
 
     const QString nextUnit = m_tempFahrenheit
