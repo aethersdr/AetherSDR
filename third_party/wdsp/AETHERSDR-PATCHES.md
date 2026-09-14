@@ -246,8 +246,25 @@ ASan build of the vendored library alone, cycling `open` / `RXASetNC` /
 `RXASetMP(1)` / `RXASetNC` / `RXASetMP(0)` / `close` twice plus a TX open,
 reported nothing on macOS arm64.
 
-When refreshing WDSP, first check whether upstream has made each change itself --
-the equivalent frees for patches 1-3, the exit handshake for patch 4, the `a->mp`
-guard for patch 5. Drop any local patch upstream now carries. Otherwise reapply
-only these minimal changes and run the lifecycle test under AddressSanitizer on
-every supported platform.
+When refreshing WDSP, first check whether upstream has made each change
+itself. The seven are different shapes, so grep for the shape, not for a free:
+
+- **patches 1-2** -- a trailing `_aligned_free()` of the object itself at the
+  end of `destroy_notchdb()` / `destroy_nurbs()`.
+- **patch 3** -- the `a->pfcimp = build_fcimp (...)` **assignment** in
+  `SetRXAFMNCde()` and `SetTXAFMEmphNC()` (TAPR/OpenHPSDR-wdsp#2). This one is
+  a use-after-free fixed by capturing a return value, **not a free**: looking
+  for an added free will report the fix absent when it has landed, or have you
+  reapply a patch upstream already carries.
+- **patch 4** -- the `mainGen` / `mainRunGen` / `mainExited` exit handshake
+  between the DSP worker and `pre_main_destroy()`.
+- **patch 5** -- standalone `set*_nnr()` accessors alongside the `SetRXANNR*`
+  properties.
+- **patch 6** -- an `n->df` guard in `setAlpha_nnet()` and `setKnee_nnet()`
+  (TAPR/OpenHPSDR-wdsp#4, fix in TAPR/OpenHPSDR-wdsp#5).
+- **patch 7** -- an `a->mp` guard on the `create_minphase()` call at the end of
+  `plan_fircore()`, and a build-on-first-use in `calc_fircore()`.
+
+Drop any local patch upstream now carries. Otherwise reapply only these minimal
+changes and run the lifecycle test under AddressSanitizer on every supported
+platform.
