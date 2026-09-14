@@ -47,6 +47,13 @@ QLabel* makeValueLabel(QWidget* parent)
     auto* lbl = new QLabel(parent);
     lbl->setFixedWidth(72);
     lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    // Fixed vertically, not just horizontally. The bottom pad is meant to be
+    // the only item in the column that can change height — that is what makes
+    // dragging the panel shorter drain the pad before anything above it moves.
+    // The pad's Expanding policy outranks a label's Preferred one today, so
+    // leaving this off happens to work; it works by priority rather than by
+    // construction, and the tuner's row labels state it outright.
+    lbl->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
     return lbl;
 }
@@ -81,6 +88,13 @@ constexpr int   kBottomGap = kPanelBottomGap;
 constexpr int kKeyDesignHeight = 44;
 constexpr int kKeyFontDesignPx = 13;
 constexpr int kFanKeyFontDesignPx = 17;
+
+// Style sheets reach the widgets over the next few turns of the event loop, and
+// each turn brings the measurement closer: 285px on the first, 243 on the
+// second, 234 by the sixth, against the 218 the column actually settles at.
+// Bounded, because the tail is asymptotic and the panel cannot spend the
+// session re-measuring itself.
+constexpr int kMaxCalibrationPasses = 6;
 // Breathing room around the widest caption, in design pixels.
 constexpr int kKeyPaddingDesignPx = 18;
 
@@ -220,6 +234,14 @@ void AmpApplet::buildUI()
     m_fwdGauge->setBallistics({0.030f, 0.800f});
     m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
+    // Zero margins, like every other nested layout here. A QLayout that is
+    // never given contents margins takes the style's, and those are a constant
+    // number of pixels that does NOT follow the panel's scale. Left in, three
+    // gauge rows contribute ~33px that the height budget counts at scale 1.0
+    // and then keeps charging for at every smaller scale — so the contents
+    // never cost what the budget says they do, and the pad stops landing at
+    // its minimum when height becomes the limiting term.
+    pwrRow->setContentsMargins(0, 0, 0, 0);
     pwrRow->setSpacing(4);
     pwrRow->addWidget(m_pwrLabel);
     pwrRow->addWidget(m_fwdGauge, 1);
@@ -233,6 +255,7 @@ void AmpApplet::buildUI()
         this, 2.0f);
     m_swrGauge->setAccessibleName(tr("SWR"));
     auto* swrRow = new QHBoxLayout;
+    swrRow->setContentsMargins(0, 0, 0, 0);
     swrRow->setSpacing(4);
     swrRow->addWidget(m_swrLabel);
     swrRow->addWidget(m_swrGauge, 1);
@@ -246,6 +269,7 @@ void AmpApplet::buildUI()
         this, 50.0f);
     m_idGauge->setAccessibleName(tr("Drain current"));
     auto* idRow = new QHBoxLayout;
+    idRow->setContentsMargins(0, 0, 0, 0);
     idRow->setSpacing(4);
     idRow->addWidget(m_idLabel);
     idRow->addWidget(m_idGauge, 1);
@@ -303,8 +327,6 @@ void AmpApplet::buildUI()
         vbox->addWidget(m_portRowsBox);
     }
 
-    vbox->addSpacing(4);
-
     // ── Control row: [temp / Vdd / Vac stacked] [fan] [operate] ─────────────
     //   Temp, drain voltage and mains voltage sit in the space to the left of
     //   the operate control, in both presentations.
@@ -328,6 +350,9 @@ void AmpApplet::buildUI()
     m_vddLabel = new QLabel("Vdd  — V", this);
     m_vacLabel = new QLabel("Vac  — V", this);
     m_sourceLabel = new QLabel("● RADIO", this);
+    for (QLabel* readout : {m_vddLabel, m_vacLabel, m_sourceLabel}) {
+        readout->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    }
 
     // One row along the bottom when the panel has the width for it, stacked
     // when it does not. A grid rather than two layouts, so neither reading is
@@ -336,12 +361,17 @@ void AmpApplet::buildUI()
     m_telemetryGrid = new QGridLayout(m_telemetryBox);
     m_telemetryGrid->setContentsMargins(0, 0, 0, 0);
     m_telemetryGrid->setVerticalSpacing(0);
+    m_telemetryBox->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     applyTelemetryLayout();
 
     auto* btnRow = new QHBoxLayout;
+    btnRow->setContentsMargins(0, 0, 0, 0);
     btnRow->setSpacing(6);
-    btnRow->addWidget(m_telemetryBox);
-    btnRow->addStretch();
+    // The readouts take the row's width rather than a stretch beside them,
+    // so the grid has slack of its own to put between the last reading and
+    // the source indicator at the far end. A stretch here instead would take
+    // it all first and leave the grid at its contents' width.
+    btnRow->addWidget(m_telemetryBox, 1);
 
     // Fan speed pull-down — surfaces all three modes instead of making the
     // operator click through them blind (#3905). Item text via
@@ -452,12 +482,22 @@ void AmpApplet::applyTelemetryLayout()
     for (QWidget* cell : cells) {
         m_telemetryGrid->removeWidget(cell);
     }
-    for (int i = 0; i < 4; ++i) {
-        // Along the bottom on the panel, the way the amplifier's own front
-        // panel runs them; down the side in the rail, which is one tile wide
-        // and has nowhere to put four readings abreast.
+    // Along the bottom on the panel, the way the amplifier's own front panel
+    // runs them; down the side in the rail, which is one tile wide and has
+    // nowhere to put four readings abreast.
+    for (int i = 0; i < 3; ++i) {
         if (inRow) m_telemetryGrid->addWidget(cells[i], 0, i);
         else       m_telemetryGrid->addWidget(cells[i], i, 0);
+    }
+    // The source indicator is not a reading — it says which path the readings
+    // came down. It goes to the far end of the row rather than trailing the
+    // measurements, with the slack between, so it reads as a separate thing.
+    if (inRow) {
+        m_telemetryGrid->addWidget(cells[3], 0, 4, Qt::AlignRight | Qt::AlignVCenter);
+        m_telemetryGrid->setColumnStretch(3, 1);
+    } else {
+        m_telemetryGrid->addWidget(cells[3], 3, 0);
+        m_telemetryGrid->setColumnStretch(3, 0);
     }
 }
 
@@ -529,12 +569,26 @@ void AmpApplet::setFloating(bool floating)
 {
     if (floating == m_floating) return;
     m_floating = floating;
-    // Calibrate before the first scaled layout, so the divisor comes from a
-    // panel at scale 1.0 rather than from one the scale has already sized.
-    if (m_floating) {
-        calibrateNaturalHeight();
-    }
     applyDensity();
+    if (!m_floating || m_calibrationPasses > 0) return;
+
+    // Calibrate on the next turn of the event loop, not here.
+    //
+    // Almost all of this column's height is text, and the text's size comes
+    // from the style sheets applyDensity has just set — which Qt applies when
+    // it next delivers events, not on the call. Measured now, every label still
+    // carries the application's default font and the column reads far taller
+    // than it will ever be: 285px against the 221 it settles at, a third too
+    // much. That figure divides every later scale, so the panel starts
+    // shrinking its contents while there is still an inch of empty space under
+    // them — which is the opposite of the rule the bottom pad exists to keep.
+    //
+    // The measurement takes a few turns to settle; calibrateNaturalHeight
+    // re-schedules itself until it does.
+    QTimer::singleShot(0, this, [this]() {
+        calibrateNaturalHeight();
+        applyDensity();
+    });
 }
 
 qreal AmpApplet::contentScale() const
@@ -648,14 +702,35 @@ void AmpApplet::applyDensityAtScale(qreal scale)
 void AmpApplet::calibrateNaturalHeight()
 {
     // What the column costs at scale 1.0 — the figure every later scale is a
-    // multiple of. Measured ONCE, and never revised; see panelContentScale.
-    if (m_naturalContentHeight > 1.0 || !m_vbox) return;
+    // multiple of.
+    //
+    // Always measured with the scale forced to 1.0 first. That is the rule
+    // that matters: re-deriving it from a SCALED layout feeds the scale back
+    // into its own input, and it does not settle — rounding and the widgets'
+    // own minimums stop the contents being exactly proportional, the leftover
+    // lands in the divisor, and the next scale reads larger every time.
+    //
+    // Re-running it at scale 1.0, by contrast, is just a better measurement of
+    // the same thing, and it takes more than one turn to get: almost all of
+    // this column is text, and the text's size arrives from style sheets Qt
+    // applies over the following turns of the event loop. Measured on the
+    // first turn the column reads 285px, on the second 243, and it settles at
+    // 221 — a third too much at the start, and that figure divides every later
+    // scale, so the panel shrinks its contents while there is still an inch of
+    // empty space under them. So it re-measures until the figure stops moving,
+    // and then stops for good.
+    if (!m_vbox || m_calibrationPasses >= kMaxCalibrationPasses) return;
     applyDensityAtScale(1.0);
     m_vbox->activate();
     const qreal content = m_vbox->sizeHint().height() - kBottomGap;
-    if (content > 1.0) {
-        m_naturalContentHeight = content;
-    }
+    if (content <= 1.0) return;
+    ++m_calibrationPasses;
+    m_naturalContentHeight = content;
+    if (m_calibrationPasses >= kMaxCalibrationPasses) return;
+    QTimer::singleShot(0, this, [this]() {
+        calibrateNaturalHeight();
+        applyDensity();
+    });
 }
 
 QSize AmpApplet::minimumSizeHint() const

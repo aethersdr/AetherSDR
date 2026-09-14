@@ -105,7 +105,8 @@ private:
     void applyDensityAtScale(qreal scale);
     // One uniform scale for every metric, from how much room the panel has.
     qreal contentScale() const;
-    // Measures what the column costs at scale 1.0. Runs once.
+    // Measures what the column costs at scale 1.0. Re-runs until the figure
+    // stops moving, then never again — see the note on the implementation.
     void calibrateNaturalHeight();
     // Sizes the panel key: one seed size, scaled like every other metric.
     void applyKeySize(qreal scale);
@@ -171,6 +172,8 @@ private:
     // What the contents need at scale 1.0, measured from the laid-out column
     // rather than assumed. Measured once — see panelContentScale.
     qreal        m_naturalContentHeight{0.0};
+    // Bounded so a column that never settles cannot re-measure forever.
+    int          m_calibrationPasses{0};
 
     QWidget*     m_portRowsBox{nullptr};
     QWidget*     m_portLiveBox{nullptr};

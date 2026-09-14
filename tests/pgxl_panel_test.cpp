@@ -18,6 +18,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QLayout>
 #include <QDeadlineTimer>
 #include <QHostAddress>
 #include <QLabel>
@@ -126,12 +127,35 @@ int main(int argc, char** argv)
     peer->flush();
     CHECK(spin([&] { return model.hasPortInfo(); }));
 
+    // In a host with a zero-margin layout rather than as a top-level window:
+    // an offscreen top-level does not reliably take a resize(), and a panel
+    // whose whole behaviour is "what does it do at this size" cannot be
+    // measured through a size it may not have been given.
+    QWidget host;
+    auto* hostLayout = new QVBoxLayout(&host);
+    hostLayout->setContentsMargins(0, 0, 0, 0);
     AmpApplet applet;
+    hostLayout->addWidget(&applet);
+
     applet.setAmpModel(&model);
     applet.setDirectConnected(true);
-    applet.resize(560, 380);
-    applet.show();
+    host.resize(560, 380);
+    host.show();
     QCoreApplication::processEvents();
+
+    auto settle = [&](QSize box) {
+        // setFixedSize, not resize: an offscreen top-level does not reliably
+        // take a plain resize, and a panel whose whole behaviour is "what does
+        // it do at this size" cannot be measured through a size it may not
+        // have been given.
+        host.setFixedSize(box);
+        for (int i = 0; i < 6; ++i) {
+            QCoreApplication::processEvents();
+            host.layout()->activate();
+            applet.layout()->activate();
+        }
+    };
+    settle(QSize(560, 380));
 
     const auto rows = applet.findChildren<AccessoryPortRow*>();
     CHECK(rows.size() == 2);
@@ -377,20 +401,109 @@ int main(int argc, char** argv)
         CHECK(temp != nullptr);
         CHECK(vdd != nullptr);
         if (temp && vdd) {
+            settle(QSize(560, 380));
+            // Abreast is an overlap rather than an identical y: the cells are
+            // vertically Fixed, so a shorter one is centred in the row rather
+            // than stretched to it.
+            auto abreast = [](QWidget* a, QWidget* b) {
+                return a->y() < b->y() + b->height() && b->y() < a->y() + a->height();
+            };
             CHECK(applet.isFloating());
-            CHECK(temp->y() == vdd->y());        // abreast
+            CHECK(abreast(temp, vdd));
             CHECK(temp->x() < vdd->x());
 
+            // The source indicator is not a reading — it says which path the
+            // readings came down — so it sits at the far end of the row with
+            // the slack between, rather than trailing the measurements.
+            QLabel* source = nullptr;
+            for (QLabel* l : applet.findChildren<QLabel*>()) {
+                if (l->text().contains(QStringLiteral("DIRECT"))
+                        || l->text().contains(QStringLiteral("RADIO"))) source = l;
+            }
+            QLabel* vac = nullptr;
+            for (QLabel* l : applet.findChildren<QLabel*>()) {
+                if (l->text().startsWith(QStringLiteral("Vac"))) vac = l;
+            }
+            CHECK(source != nullptr);
+            CHECK(vac != nullptr);
+            if (source && vac) {
+                CHECK(abreast(source, vdd));
+                // The slack is BETWEEN the last reading and the indicator, not
+                // after it: a gap the width of the column's spacing would mean
+                // it is just the fourth item in the row.
+                CHECK(source->x() - (vac->x() + vac->width()) > 40);
+            }
+
             applet.setFloating(false);
-            QCoreApplication::processEvents();
-            CHECK(temp->y() < vdd->y());         // stacked
+            settle(QSize(560, 380));
+            CHECK(!abreast(temp, vdd));          // stacked
             CHECK(temp->x() == vdd->x());
             // Still the same widgets, still inside the applet.
             CHECK(temp->parentWidget() == vdd->parentWidget());
 
             applet.setFloating(true);
-            QCoreApplication::processEvents();
-            CHECK(temp->y() == vdd->y());
+            settle(QSize(560, 380));
+            CHECK(abreast(temp, vdd));
+        }
+    }
+
+    // ── The pad gives up everything before anything else resizes ──────
+    //
+    // The bottom pad is the only item in the column that may change height.
+    // Dragging the panel shorter drains it to its minimum first; only then
+    // does the scale start shrinking the contents. Without that, the readings
+    // and the keys begin moving while there is still an inch of empty space
+    // under them.
+    peer->write(statusReply("IDLE"));
+    peer->flush();
+    CHECK(spin([&] { return model.stateText() == QLatin1String("IDLE"); }));
+    {
+        PanelKey* key = nullptr;
+        for (PanelKey* k : applet.findChildren<PanelKey*>()) {
+            if (!k->accessibleName().contains(QStringLiteral("Fan"))) key = k;
+        }
+        CHECK(key != nullptr);
+        if (key) {
+            // Both of these are width-limited: the contents are at the same
+            // scale and the extra height is all pad.
+            settle(QSize(420, 400));
+            const QSize tall = key->size();
+
+            // The floor has to reflect what the column actually costs. It is
+            // derived from a measurement of the laid-out panel, and that
+            // measurement is only right once Qt has applied the style sheets
+            // that decide the type's size — which it does over the turns
+            // AFTER they are set, not on the call. Taken too early the column
+            // reads a third taller than it ever is, the floor rises with it,
+            // and the panel starts shrinking its contents while there is still
+            // an inch of empty space under them.
+            //
+            // 420x400 is width-limited, so the panel is at scale 1.0 here and
+            // its size hint IS what the column costs.
+            const int settledCost = applet.sizeHint().height();
+            const int honestFloor = qRound(settledCost * kPanelMinScale) + kPanelBottomGap;
+            CHECK(applet.minimumSizeHint().height() <= honestFloor + 12);
+            settle(QSize(420, 300));
+            CHECK(key->size() == tall);
+            settle(QSize(420, 260));
+            CHECK(key->size() == tall);
+
+            // Past the point where the pad has drained, height becomes the
+            // limit and the contents finally give way — and only then.
+            settle(QSize(420, 195));
+            CHECK(key->height() < tall.height());
+
+            // And the slack goes UNDER the contents, not around them. With
+            // nothing in the column able to expand, a box layout spreads the
+            // leftover between the rows instead, and the readings drift apart
+            // down a tall panel.
+            settle(QSize(420, 400));
+            QLabel* pwr = nullptr;
+            for (QLabel* l : applet.findChildren<QLabel*>()) {
+                if (l->text().startsWith(QStringLiteral("PWR"))) pwr = l;
+            }
+            CHECK(pwr != nullptr);
+            if (pwr) CHECK(pwr->mapTo(&applet, QPoint(0, 0)).y() < 24);
         }
     }
 
@@ -400,11 +513,9 @@ int main(int argc, char** argv)
     // current scale has just sized. Derived from the layout instead, a panel
     // enlarged once could never be made small again.
     const QSize floorBefore = applet.minimumSizeHint();
-    applet.resize(900, 700);
-    QCoreApplication::processEvents();
+    settle(QSize(900, 700));
     CHECK(applet.minimumSizeHint() == floorBefore);
-    applet.resize(360, 260);
-    QCoreApplication::processEvents();
+    settle(QSize(360, 260));
     CHECK(applet.minimumSizeHint() == floorBefore);
     CHECK(applet.size().width() == 360 && applet.size().height() == 260);
 

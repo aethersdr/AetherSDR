@@ -254,6 +254,7 @@ void TunerApplet::buildUI()
     static_cast<HGauge*>(m_fwdGauge)->setBallistics({0.030f, 0.800f});
     m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
+    pwrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
     pwrRow->setSpacing(4);
     pwrRow->addWidget(m_pwrLabel);
     pwrRow->addWidget(m_fwdGauge, 1);
@@ -270,6 +271,7 @@ void TunerApplet::buildUI()
         this, 2.0f);
     m_swrGauge->setAccessibleName(tr("SWR"));
     auto* swrRow = new QHBoxLayout;
+    swrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
     swrRow->setSpacing(4);
     swrRow->addWidget(m_swrLabel);
     swrRow->addWidget(m_swrGauge, 1);
