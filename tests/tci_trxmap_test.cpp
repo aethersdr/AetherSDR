@@ -123,6 +123,77 @@ int main()
                "#5193: bare PTT after an echo still keys the requested slice");
     }
 
+    // Stale bind (#5681 review round 2): a route legitimately bound while the
+    // TX slice was unclaimed must not survive that slice becoming another
+    // client's receiver. CONSTRUCTED from the measured topology above, with
+    // the RX1 instance's audio_start arriving AFTER the RX2 instance's first
+    // band change (client start order is not fixed).
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> unclaimed { { 0, true, false }, { 1, false, false } };
+        QVector<TciSliceEndpoint> claimed { { 0, true, true }, { 1, false, false } };
+        // Step 1: RX2's channel-1 frame adopts slice 0 (the #1807 branch).
+        expect(routing.resolveVfoB(1, unclaimed).action == Action::UseExisting
+                   && routing.txSliceId() == 0 && routing.owner() == Owner::External,
+               "#5193 stale bind: VFO B binds the unclaimed TX slice first");
+        // Step 2: RX1 declares slice 0. Step 3: RX2's next band change echoes
+        // AND drops the now-stale bind.
+        expect(routing.resolveVfoB(1, claimed).action == Action::EchoOnly,
+               "#5193 stale bind: the next VFO B frame echoes once the slice is claimed");
+        expect(routing.rxSliceId() < 0 && routing.txSliceId() < 0
+                   && routing.owner() == Owner::None,
+               "#5193 stale bind: EchoOnly drops the stale external bind");
+        // Step 4: RX2's bare PTT keys its own slice, not RX1's.
+        expect(routing.resolvePttSlice(1, claimed) == 1,
+               "#5193 stale bind: bare PTT after the echo keys the requested slice");
+    }
+
+    // Same stale bind, no band change in between: the declaration lands and
+    // the client keys straight away. The PTT resolver itself must refuse the
+    // cached slice (the EchoOnly drop above never ran).
+    {
+        TciRoutingState routing;
+        QVector<TciSliceEndpoint> unclaimed { { 0, true, false }, { 1, false, false } };
+        QVector<TciSliceEndpoint> claimed { { 0, true, true }, { 1, false, false } };
+        routing.resolveVfoB(1, unclaimed);
+        expect(routing.txSliceId() == 0, "#5193 stale bind (PTT first): route bound");
+        expect(routing.resolvePttSlice(1, claimed) == 1,
+               "#5193 stale bind (PTT first): PTT refuses the cached slice once another client operates it");
+        expect(routing.txSliceId() < 0 && routing.owner() == Owner::None,
+               "#5193 stale bind (PTT first): the stale external bind is dropped");
+        // Unclaimed again (that client sent audio_stop): the #1807 adoption
+        // returns on the next frame, nothing is permanently poisoned.
+        expect(routing.resolveVfoB(1, unclaimed).action == Action::UseExisting,
+               "#5193 stale bind: an unclaimed slice is adopted again after the drop");
+    }
+
+    // A TciCreated route is never dropped (split teardown must still be able
+    // to remove the slice TCI created) but is refused as a PTT target while
+    // another client operates it; PTT then keys the requested slice.
+    {
+        TciRoutingState routing;
+        routing.bindCreatedRoute(1, 2);
+        QVector<TciSliceEndpoint> createdClaimed {
+            { 0, false, false }, { 1, false, false }, { 2, true, true } };
+        expect(routing.resolvePttSlice(1, createdClaimed) == 1,
+               "#5193: a TciCreated slice another client operates is not keyed");
+        expect(routing.ownsRoute() && routing.txSliceId() == 2,
+               "#5193: the TciCreated route is kept for teardown");
+    }
+
+    // Requested split with a negotiated (TciCreated) slice that is not the
+    // live TX slice because another client's receiver holds TX: the
+    // negotiated slice is promoted, the other client's is never keyed.
+    {
+        TciRoutingState routing;
+        routing.setSplitRequested(true);
+        routing.bindCreatedRoute(1, 2);
+        QVector<TciSliceEndpoint> foreignTx {
+            { 0, true, true }, { 1, false, false }, { 2, false, false } };
+        expect(routing.resolvePttSlice(1, foreignTx) == 2,
+               "#5193: split PTT promotes the negotiated slice, never the other client's TX slice");
+    }
+
     // Direction follows the TX flag, not the slice number (measured: TX moved
     // to slice 1, the RX1 instance's channel-1 frame retuned slice 1).
     {

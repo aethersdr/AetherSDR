@@ -2435,7 +2435,10 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
         return;
     }
-    const QVector<TciSliceEndpoint> endpoints = routingEndpoints();
+    // With the requester: a TX slice another client operates as its receiver
+    // is never this client's PTT target, even through a route cached before
+    // that client declared it (#5193, the PTT twin of the VFO-B rule above).
+    const QVector<TciSliceEndpoint> endpoints = routingEndpoints(client);
     const int liveTx = TciRoutingState::currentTxSlice(endpoints);
     // Sample the cached route BEFORE resolving. resolvePttSlice() writes the
     // live TX assignment through to the cache on the external-TX branch, so

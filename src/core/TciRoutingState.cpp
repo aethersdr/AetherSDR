@@ -61,9 +61,23 @@ TciRoutingState::RouteDecision TciRoutingState::resolveVfoB(
     const bool currentTxIsAnotherReceiver = currentTx >= 0 && currentTx != rxSliceId
         && operatedByAnotherClient(endpoints, currentTx);
     if (currentTxIsAnotherReceiver && !m_splitRequested) {
-        // Deliberately records nothing: this is a decision about one frame,
-        // not a route change, and writing m_rxSliceId here would make
+        // Records no NEW route: this is a decision about one frame, not a
+        // route change, and writing m_rxSliceId here would make
         // resolvePttSlice()'s routeApplies true for a route never bound.
+        //
+        // A route bound EARLIER onto this same slice is another matter. The
+        // UseExisting branch below adopted it while no client had declared
+        // it (the #1807 shape); now that a client has, that bind is stale,
+        // and left in place it would let resolvePttSlice() hand the other
+        // client's receiver to this one's next bare PTT. Drop it. Only an
+        // externally owned route is dropped: a TciCreated route is a slice
+        // TCI must still be able to `slice remove` on split teardown, and
+        // resolvePttSlice() refuses such a slice on its own.
+        if (m_txSliceId == currentTx && m_owner == TxRouteOwner::External) {
+            m_rxSliceId = -1;
+            m_txSliceId = -1;
+            m_owner = TxRouteOwner::None;
+        }
         return { RouteAction::EchoOnly, -1, TxRouteOwner::None };
     }
 
@@ -114,8 +128,26 @@ int TciRoutingState::resolvePttSlice(int rxSliceId, const QVector<TciSliceEndpoi
     const bool routeApplies
         = m_splitRequested || (m_rxSliceId == rxSliceId && m_txSliceId >= 0);
 
+    // A TX slice another client operates as its receiver is never this
+    // client's PTT target, whatever the cache says (#5193). The cache can be
+    // stale in exactly this way: the route was bound while the slice was
+    // unclaimed, and a client has declared it since. Nothing in the
+    // audio_start / audio_stop handlers touches routing state, so the check
+    // has to live here, at the point of trust. Callers without requester
+    // knowledge pass no flags and see the pre-#5193 behaviour unchanged.
+    const bool liveTxIsAnotherReceiver = currentTx >= 0 && currentTx != rxSliceId
+        && operatedByAnotherClient(endpoints, currentTx);
+    if (liveTxIsAnotherReceiver && m_txSliceId == currentTx
+        && m_owner == TxRouteOwner::External) {
+        // Same rule as resolveVfoB()'s EchoOnly branch: a stale external bind
+        // is dropped, a TciCreated one is kept for teardown and refused below.
+        m_rxSliceId = -1;
+        m_txSliceId = -1;
+        m_owner = TxRouteOwner::None;
+    }
+
     if (routeApplies) {
-        if (currentTx >= 0) {
+        if (currentTx >= 0 && !liveTxIsAnotherReceiver) {
             // The live TX slice always outranks the cache. m_txSliceId is
             // refreshed only here, in resolveVfoB and in bindCreatedRoute, and
             // clearTciRoute() no-ops for a route TCI does not own — so a route
@@ -136,13 +168,17 @@ int TciRoutingState::resolvePttSlice(int rxSliceId, const QVector<TciSliceEndpoi
         }
         // Backends that mark no TX slice at all (the seam backends; the Flex
         // always-one-TX-slice invariant does not hold there) still answer from
-        // the tracked route.
-        if (m_txSliceId >= 0 && contains(endpoints, m_txSliceId)) {
+        // the tracked route. So does a negotiated route whose slice is not the
+        // live TX slice because another client's receiver holds TX: the
+        // tracked slice is promoted, the other client's is never keyed.
+        if (m_txSliceId >= 0 && contains(endpoints, m_txSliceId)
+            && !operatedByAnotherClient(endpoints, m_txSliceId)) {
             return m_txSliceId;
         }
     }
 
-    // No route applies: key the slice the client named. The caller promotes it.
+    // No route applies (or the live TX slice is another client's receiver):
+    // key the slice the client named. The caller promotes it.
     //
     // Deliberately does NOT record rxSliceId. Writing it while m_txSliceId
     // still held a route bound for a *different* RX slice would make
