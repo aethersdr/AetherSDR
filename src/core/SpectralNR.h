@@ -380,8 +380,18 @@ private:
     std::atomic<float> m_post2Nlevel{0.15f};
     std::atomic<float> m_post2TaperHz{2871.0f};
     std::atomic<float> m_post2Decay{5.0f};
-    unsigned int m_post2RngState{2463534242u};
+    // Seeded per instance, as upstream does from its own pointer: every
+    // receiver seeded identically would inject correlated noise across them.
+    unsigned int m_post2RngState{0};
     double m_post2PeakHold{0.0};
+    // The peak follower must advance ONCE per hop. The stereo shared-mask path
+    // calls synthesizeCurrentFrameWithMask() twice per hop, once per channel,
+    // which decayed it twice and halved the effective time constant.
+    bool m_post2FollowerAdvanced{false};
+    // Raised-cosine taper, rebuilt only when the band limit moves, rather than
+    // a std::cos per bin per hop on the audio thread (upstream: post2_calc_w).
+    std::vector<double> m_post2Window;
+    int m_post2WindowBins{-1};
     void applyCommonModeNoiseEstimate();
     void scalePowerHistory(double ratio,
                            const std::vector<std::uint8_t>* binMask = nullptr);

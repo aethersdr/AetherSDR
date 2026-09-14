@@ -36,6 +36,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <numbers>
 #include <numeric>
 
@@ -534,6 +535,16 @@ void SpectralNR::resetTransient()
     // captured before a transmit pass keeps inflating the injected level for
     // seconds after receive resumes, since the follower decays over 5 s.
     m_post2PeakHold = 0.0;
+    m_post2FollowerAdvanced = false;
+    if (m_post2RngState == 0) {
+        // Upstream seeds from the instance pointer for the same reason.
+        m_post2RngState = 2463534242u
+            + 2654435761u * static_cast<unsigned int>(
+                  reinterpret_cast<std::uintptr_t>(this));
+        if (m_post2RngState == 0) {
+            m_post2RngState = 2463534242u;
+        }
+    }
     std::fill(m_inAccum.begin(), m_inAccum.end(), 0.0);
     std::fill(m_outAccum.begin(), m_outAccum.end(), 0.0);
     std::fill(m_stereoInAccumL.begin(), m_stereoInAccumL.end(), 0.0);
@@ -992,6 +1003,11 @@ void SpectralNR::processStereoSharedMask(const float* input, float* output, int 
 
 bool SpectralNR::updateMaskFromCurrentFrame()
 {
+    // One hop begins here, whichever path called us. The post-processing peak
+    // follower advances on the first channel of this hop and is only read by
+    // the second, which is what keeps its time constant right in stereo.
+    m_post2FollowerAdvanced = false;
+
     // This is per-frame estimator state, not FFTW state. Clear it for both the
     // FFTW and built-in FFT paths so the fallback cannot reuse stale minima.
     std::fill(m_kMod.begin(), m_kMod.end(), 0);
@@ -1252,6 +1268,10 @@ void SpectralNR::applyPsychoacousticPostProcessing()
 
     // Peak magnitude in the band, held and decayed so the injected level
     // follows the signal rather than jumping frame to frame.
+    //
+    // Advanced ONCE per hop. processStereoSharedMask() calls into here twice,
+    // once per channel against a shared mask, and decaying on both halved the
+    // 5 s time constant to 2.5 s in stereo.
     double peak = 0.0;
     for (int k = 1; k < ilim; ++k) {
         const double mag = std::sqrt(m_freqRe[k] * m_freqRe[k]
@@ -1260,20 +1280,42 @@ void SpectralNR::applyPsychoacousticPostProcessing()
             peak = mag;
         }
     }
-    if (peak > m_post2PeakHold) {
-        m_post2PeakHold = peak;
-    } else {
-        m_post2PeakHold *= rateDecay;
+    if (!m_post2FollowerAdvanced) {
+        if (peak > m_post2PeakHold) {
+            m_post2PeakHold = peak;
+        } else {
+            m_post2PeakHold *= rateDecay;
+        }
+        m_post2FollowerAdvanced = true;
     }
     peak = std::max(peak, m_post2PeakHold);
     const double whiteScale = peak * kPost2WhiteFraction;
 
-    // Raised-cosine taper over the band, as post2_calc_w() builds it.
+    // Raised-cosine taper over the band, rebuilt only when the band moves --
+    // upstream builds it in post2_calc_w() for the same reason, and a
+    // std::cos per bin per hop is up to 40k calls a second in stereo.
+    if (m_post2WindowBins != ilim) {
+        m_post2Window.assign(static_cast<std::size_t>(ilim), 0.75);
+        for (int k = 1; k < ilim; ++k) {
+            m_post2Window[k] = (ilim > 1)
+                ? 0.75 - 0.25 * std::cos(std::numbers::pi * (ilim - 1 - k) / (ilim - 1))
+                : 0.75;
+        }
+        m_post2WindowBins = ilim;
+    }
+
+    // The startup dry/wet ramp applies here too. Without this the stage would
+    // zero the band above ilim and inject noise while the rest of the filter
+    // is still 100% dry, which is audible as a lowpass snapping in ahead of
+    // the noise reduction it belongs to.
+    const double wet = m_currentWet;
+    if (wet <= 0.0) {
+        return;
+    }
+
     const auto& table = post2Table();
     for (int k = 1; k < ilim; ++k) {
-        const double w = (ilim > 1)
-            ? 0.75 - 0.25 * std::cos(std::numbers::pi * (ilim - 1 - k) / (ilim - 1))
-            : 0.75;
+        const double w = m_post2Window[k];
 
         const unsigned int phase = post2NextRandom() & (kPost2TableSize - 1);
 
@@ -1287,16 +1329,19 @@ void SpectralNR::applyPsychoacousticPostProcessing()
         const double noiseRe = (1.0 - factor) * residualRe + factor * whiteRe;
         const double noiseIm = (1.0 - factor) * residualIm + factor * whiteIm;
 
-        m_gainRe[k] = w * (m_gainRe[k] + nlevel * noiseRe);
-        m_gainIm[k] = w * (m_gainIm[k] + nlevel * noiseIm);
+        const double filledRe = w * (m_gainRe[k] + nlevel * noiseRe);
+        const double filledIm = w * (m_gainIm[k] + nlevel * noiseIm);
+        m_gainRe[k] = wet * filledRe + (1.0 - wet) * m_gainRe[k];
+        m_gainIm[k] = wet * filledIm + (1.0 - wet) * m_gainIm[k];
     }
 
-    // DC and everything above the band, as upstream.
-    m_gainRe[0] = 0.0;
-    m_gainIm[0] = 0.0;
+    // DC and everything above the band, as upstream -- crossfaded by the same
+    // ramp so the band limit arrives with the rest of the effect.
+    m_gainRe[0] *= (1.0 - wet);
+    m_gainIm[0] *= (1.0 - wet);
     for (int k = ilim; k < m_msize; ++k) {
-        m_gainRe[k] = 0.0;
-        m_gainIm[k] = 0.0;
+        m_gainRe[k] *= (1.0 - wet);
+        m_gainIm[k] *= (1.0 - wet);
     }
 }
 

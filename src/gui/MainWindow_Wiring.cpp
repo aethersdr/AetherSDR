@@ -1454,6 +1454,11 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     connect(w, &AetherDspWidget::nr2NpeMethodChanged, this, [this](int m) {
         QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2NpeMethod(m); });
     });
+    connect(w, &AetherDspWidget::nr2Post2SettingsChanged, this, [this]() {
+        // Every post-processing control writes to Nr2SettingsModel first, so
+        // the engine re-reads the group rather than being handed one value.
+        QMetaObject::invokeMethod(m_audio, [this]() { m_audio->applyNr2Post2Settings(); });
+    });
     connect(w, &AetherDspWidget::nr2AeFilterChanged, this, [this](bool on) {
         QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
     });

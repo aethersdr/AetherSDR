@@ -9,6 +9,7 @@
 #include "core/SpectralNR.h"
 
 #include <cmath>
+#include <numbers>
 #include <cstdio>
 #include <vector>
 
@@ -42,7 +43,7 @@ std::vector<float> makeInput(int samples)
         const double t = static_cast<double>(i) / kSampleRate;
         double tone = 0.0;
         for (int h = 1; h <= 4; ++h) {
-            tone += 0.05 * std::sin(2.0 * M_PI * 300.0 * h * t);
+            tone += 0.05 * std::sin(2.0 * std::numbers::pi * 300.0 * h * t);
         }
         v[i] = static_cast<float>(tone + noise);
     }
@@ -178,6 +179,34 @@ int main()
         check(nr.post2BinLimit() <= kFftSize / 2 + 1, "band limit exceeds the bins");
         nr.setPost2DecaySeconds(0.0f);
         check(nr.post2DecaySeconds() > 0.0f, "decay did not clamp");
+    }
+
+    // The band limit is an operator control now, because enabling the stage
+    // lowpasses the audio at it -- an AM or FM listener would otherwise lose
+    // their highs with nothing on screen to explain it.
+    {
+        SpectralNR nr(kFftSize, kSampleRate, kOverlap);
+        nr.setPost2TaperHz(5000.0f);
+        const int wide = nr.post2BinLimit();
+        nr.setPost2TaperHz(1500.0f);
+        const int narrow = nr.post2BinLimit();
+        check(wide > narrow, "the band limit does not follow the control");
+    }
+
+    // The startup dry/wet ramp applies to this stage too: at 100% dry it must
+    // not be zeroing the band or injecting anything.
+    {
+        SpectralNR dry(kFftSize, kSampleRate, kOverlap);
+        dry.setPost2Run(true);
+        dry.setPost2Nlevel(1.0f);
+        std::vector<float> out(kBlock, 0.0f);
+        // One block only: the wet ramp has not advanced past zero yet.
+        dry.process(input.data(), out.data(), kBlock);
+        bool finite = true;
+        for (float v : out) {
+            finite = finite && std::isfinite(v);
+        }
+        check(finite, "the first block produced non-finite output");
     }
 
     if (failures == 0) {

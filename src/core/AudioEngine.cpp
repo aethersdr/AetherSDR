@@ -7539,6 +7539,29 @@ void AudioEngine::setNr2AeFilter(bool on)
     }
 }
 
+void AudioEngine::applyNr2Post2Settings()
+{
+    const Nr2SettingsModel::Config config = Nr2SettingsModel::instance().config();
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    const auto push = [&config](SpectralNR* nr2) {
+        if (!nr2) {
+            return;
+        }
+        nr2->setPost2Run(config.post2Run);
+        nr2->setPost2Factor(config.post2Factor);
+        nr2->setPost2Nlevel(config.post2Nlevel);
+        nr2->setPost2TaperHz(config.post2TaperHz);
+        nr2->setPost2DecaySeconds(config.post2DecaySeconds);
+    };
+    push(m_nr2.get());
+    push(m_kiwiSdrNr2.get());
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nr2) {
+            push(source->nr2.get());
+        }
+    }
+}
+
 void AudioEngine::setMainSourceLegacyNr2(bool legacy)
 {
     const bool previous =
