@@ -140,6 +140,16 @@ Each panadapter contains:
 - Tracking notch filters
 - Optional CW decode panel when CW decoding is in use
 
+### Waterfall scrollback
+
+The waterfall retains recent rows so you can pause it and scroll back through what was received. Right-click the panadapter background and use `Waterfall Scrollback` to choose how far back that reaches: `Off`, 5, 10, or 20 minutes.
+
+This is a memory decision as much as a time one. Each panadapter holds its scrollback in a buffer sized by the retention length times the panadapter's width, so the menu shows the cost beside each length for the panadapter you opened it on. A wide panadapter at 20 minutes can hold tens of megabytes, and each step down halves that exactly.
+
+`Off` releases the buffer straight away and stops retaining rows. The waterfall itself keeps running — only the ability to pause and scroll back through history is lost.
+
+The setting applies to every panadapter, including ones popped out into their own window. Changing it discards whatever scrollback is currently held, so the new window starts filling from the moment you pick it.
+
 ### Spectrum overlay menu
 
 The floating left-side overlay is a fast operator menu for the currently focused panadapter. Its buttons are:

@@ -4,7 +4,39 @@
 #include <QSize>
 #include <QVector>
 
+#include <array>
+
 namespace AetherSDR {
+
+// How long a panadapter retains waterfall scrollback, in minutes, and the
+// lengths the UI offers. 0 is "Off": no ring at all.
+//
+// This lives beside the buffer rather than with the other display settings
+// because it is a statement about THIS storage. Capacity is
+// (minutes x 60000 / kWaterfallHistoryCapacityMsPerRow) rows, and a pan
+// allocates up to two rings of (capacity x pan width) bytes, so the number is
+// a memory budget as much as a time window: on a 1564 px pan, 20 minutes is
+// 75.1 MB and each step down halves it.
+//
+// 20 is the upper bound because it is what shipped. Longer windows were
+// considered and rejected: a screenful of waterfall is ~11-19 s at typical
+// rates, so the far end of a 20-minute ring is already ~60 screenfuls back.
+inline constexpr std::array<int, 4> kWaterfallHistoryMinutes{0, 5, 10, 20};
+
+inline constexpr int kDefaultWaterfallHistoryMinutes = 20;
+
+// Unknown values resolve to the DEFAULT, never to 0. A corrupt or hand-edited
+// setting silently disabling scrollback would read as data loss; falling back
+// to the shipped length reads as the setting being ignored, which it is.
+inline int validWaterfallHistoryMinutes(int minutes)
+{
+    for (const int value : kWaterfallHistoryMinutes) {
+        if (value == minutes) {
+            return minutes;
+        }
+    }
+    return kDefaultWaterfallHistoryMinutes;
+}
 
 // Lazily allocated ring-row backing for retained waterfall intensity. The
 // logical slot count is fixed, but storage appears in small row chunks only as

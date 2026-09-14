@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/AppSettings.h"
+#include "WaterfallHistoryBuffer.h"
 #include "WaterfallTimeMarkers.h"
 
 #include <QJsonDocument>
@@ -78,6 +79,31 @@ public:
     {
         QJsonObject o = readObj();
         o["extendedTnf"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
+    // Retained waterfall scrollback, in minutes, global across panadapters.
+    // The offered lengths and why this is a length rather than a bool are in
+    // WaterfallHistoryBuffer.h, beside the storage it sizes.
+    //
+    // OFF DOES NOT STOP THE WATERFALL. The visible viewport is a separate
+    // image fed by appendVisibleRow(); the ring backs scrollback and nothing
+    // else, so Off costs the ability to scroll back and nothing on screen.
+    //
+    // Defaults to 20 rather than off, unlike the opt-in overlay toggles above:
+    // this one has shipped behaviour behind it, and an upgrade must not
+    // silently take an operator's scrollback away.
+    static int waterfallHistoryMinutes()
+    {
+        return validWaterfallHistoryMinutes(
+            readObj().value("waterfallHistoryMinutes")
+                .toInt(kDefaultWaterfallHistoryMinutes));
+    }
+
+    static void setWaterfallHistoryMinutes(int minutes)
+    {
+        QJsonObject o = readObj();
+        o["waterfallHistoryMinutes"] = validWaterfallHistoryMinutes(minutes);
         write(o);
     }
 

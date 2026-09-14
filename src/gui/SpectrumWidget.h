@@ -527,13 +527,27 @@ public:
     bool extendedPassband() const { return m_extendedPassband; }
     void setExtendedTnf(bool on);
     bool extendedTnf() const { return m_extendedTnf; }
-    // Push a global pan-display flag onto every other open panadapter,
-    // floating ones included. See the definition for why the walk is over
-    // topLevelWidgets() rather than window()'s children.
+    // Retained scrollback length in minutes; 0 releases the ring entirely.
+    // Global, like the overlay toggles above. Changing it DISCARDS existing
+    // scrollback: capacity is the ring's chunk count, so a new length is a new
+    // ring, not a resized one.
+    void setWaterfallHistoryMinutes(int minutes);
+    int waterfallHistoryMinutes() const { return m_waterfallHistoryMinutes; }
+    // One walk over every OTHER open panadapter, floating ones included. See
+    // the definition for why it is over topLevelWidgets() rather than
+    // window()'s children. Both propagate helpers below share it: four
+    // hand-rolled copies of this loop are what let the display toggles drift
+    // apart before #5679, and a fifth and sixth would do it again.
+    void forEachOtherPan(const std::function<void(SpectrumWidget*)>& fn);
+    // Push a global pan-display flag onto every other open panadapter.
     // `onApplied` runs on each sibling that actually changed, for toggles that
     // own more than a flag (e.g. stopping that pan's tune-guide timer).
     void propagateGlobalDisplayToggle(
         bool SpectrumWidget::*flag, bool on, const char* cause,
+        const std::function<void(SpectrumWidget*)>& onApplied = {});
+    // Same contract for a global setting that is a value rather than a flag.
+    void propagateGlobalDisplayValue(
+        int SpectrumWidget::*field, int value, const char* cause,
         const std::function<void(SpectrumWidget*)>& onApplied = {});
     void setThreeDSliceDepth(bool on);
     bool threeDSliceDepth() const { return m_threeDSliceDepth; }
@@ -1046,6 +1060,13 @@ private:
     QRect waterfallLiveButtonRect(const QRect& wfRect) const;
     QRect waterfallTimeScaleRect(const QRect& wfRect) const;
     void ensureWaterfallHistory();
+    // Drop both rings and every parallel per-row vector, and return the
+    // viewport to live. Used when retention is Off — releasing is the point,
+    // so this is NOT the same as ensureWaterfallHistory() declining to build.
+    void releaseWaterfallHistory();
+    // Re-apply the current retention length to this pan: release, resize or
+    // build as needed, then repaint. Safe to call when nothing changed.
+    void applyWaterfallHistoryCapacity();
     quint64 waterfallPaletteToken() const;
     void paintWaterfallRowsFromHistory(double centerMhz, double bandwidthMhz,
                                        int writeRowOrigin,
@@ -1121,6 +1142,11 @@ private:
         QVector<double> visibleSupplementalBwMhz;
         WaterfallHistoryBuffer waterfallHistory;
         WaterfallHistoryBuffer waterfallSupplementalHistory;
+        // Travels with the ring it describes: whether this source ever
+        // delivered a supplemental row decides whether its ring exists at all,
+        // so restoring one without the other would rebuild an empty ring or
+        // drop a populated one.
+        bool supplementalActive{false};
         QVector<qint64> historyTimestamps;
         int historyWriteRow{0};
         int historyRowCount{0};
@@ -1669,6 +1695,13 @@ private:
     QVector<double> m_wfVisibleSupplementalBwMhz;
     WaterfallHistoryBuffer m_waterfallHistory;
     WaterfallHistoryBuffer m_waterfallSupplementalHistory;
+    // Whether THIS source has ever delivered a supplemental row. Only the
+    // native tile path does; the Kiwi, simulator and fallback row writers all
+    // pass nullptr. The supplemental ring is built on the first real row
+    // rather than up front, because it is the same size as the main one and
+    // was previously allocated — and zero-filled every row — for every source
+    // whether or not the data existed.
+    bool   m_waterfallSupplementalActive{false};
     QTimer* m_resizeBufferSettleTimer{nullptr};
     quint64 m_resizeEventCount{0};
     quint64 m_resizeBufferCommitCount{0};
@@ -1697,7 +1730,10 @@ private:
     int    m_timeScaleDragStartY{0};
     int    m_timeScaleDragStartOffsetRows{0};
     int    m_timeScaleDragStartRatePercent{1};
-    static constexpr qint64 kWaterfallHistoryMs = 20LL * 60LL * 1000LL;
+    // Mirrors DisplaySettings::waterfallHistoryMinutes(), read once in
+    // loadSettings() and pushed to siblings on change, exactly like the
+    // overlay flags. 0 means the ring is released and scrollback is off.
+    int    m_waterfallHistoryMinutes{kDefaultWaterfallHistoryMinutes};
 
     // True while native waterfall tile data (PCC 0x8004) is arriving on the
     // expected cadence.  RX uses paced FFT-derived rows only as a stale-native

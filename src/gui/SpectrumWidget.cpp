@@ -1144,6 +1144,18 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
             + currentWaterfallSupplementalVisibleBytes);
     m[QStringLiteral("currentWaterfallHistoryBytes")] =
         static_cast<qulonglong>(currentWaterfallHistoryBytes);
+    // The requested retention beside the bytes it produced. Zero bytes alone
+    // is ambiguous — it is equally "the operator chose Off" and "the ring has
+    // not been reached yet" — and these two fields separate them. Reported
+    // here rather than only on the DSS snapshot because this is the map the
+    // memory profiler reads per pan.
+    m[QStringLiteral("waterfallHistoryMinutes")] = m_waterfallHistoryMinutes;
+    m[QStringLiteral("waterfallHistoryMainBytes")] =
+        static_cast<qulonglong>(m_waterfallHistory.allocatedBytes());
+    m[QStringLiteral("waterfallHistorySupplementalBytes")] =
+        static_cast<qulonglong>(m_waterfallSupplementalHistory.allocatedBytes());
+    m[QStringLiteral("waterfallSupplementalHistoryActive")] =
+        m_waterfallSupplementalActive;
     m[QStringLiteral("cachedWaterfallVisibleBytes")] =
         static_cast<qulonglong>(cachedWaterfallVisibleBytes);
     m[QStringLiteral("cachedWaterfallHistoryBytes")] =
@@ -1329,6 +1341,9 @@ QVariantMap SpectrumWidget::automationDssSnapshot() const
         m_waterfallHistory.allocatedChunkCount();
     m[QStringLiteral("waterfallSupplementalHistoryAllocatedChunks")] =
         m_waterfallSupplementalHistory.allocatedChunkCount();
+    m[QStringLiteral("waterfallHistoryMinutes")] = m_waterfallHistoryMinutes;
+    m[QStringLiteral("waterfallSupplementalHistoryActive")] =
+        m_waterfallSupplementalActive;
     m[QStringLiteral("resizeEventCount")] =
         static_cast<qulonglong>(m_resizeEventCount);
     m[QStringLiteral("resizeBufferCommitCount")] =
@@ -2610,6 +2625,7 @@ void SpectrumWidget::loadSettings()
     m_extendedFrequencyLine = s.value("ExtendedFrequencyLine", "False").toString() == "True";
     m_extendedPassband = DisplaySettings::extendedPassband();
     m_extendedTnf = DisplaySettings::extendedTnf();
+    m_waterfallHistoryMinutes = DisplaySettings::waterfallHistoryMinutes();
     m_threeDSliceDepth = DisplaySettings::threeDSliceDepth();
 
     // Background image — default to bundled logo, "none" = explicitly cleared
@@ -4233,14 +4249,30 @@ void SpectrumWidget::setShowTuneGuides(bool on) {
 // `onApplied` runs on each sibling that actually changed, between the flag
 // write and the repaint, for toggles that own more than a flag (Show Tune
 // Guides also has to stop the sibling's timeout timer).
+void SpectrumWidget::forEachOtherPan(
+    const std::function<void(SpectrumWidget*)>& fn)
+{
+    for (QWidget* top : QApplication::topLevelWidgets()) {
+        if (auto* sw = qobject_cast<SpectrumWidget*>(top); sw && sw != this) {
+            fn(sw);
+        }
+        const auto pans = top->findChildren<SpectrumWidget*>();
+        for (SpectrumWidget* sw : pans) {
+            if (sw != this) {
+                fn(sw);
+            }
+        }
+    }
+}
+
 void SpectrumWidget::propagateGlobalDisplayToggle(
     bool SpectrumWidget::*flag,
     bool on,
     const char* cause,
     const std::function<void(SpectrumWidget*)>& onApplied)
 {
-    const auto applyToSibling = [&](SpectrumWidget* sw) {
-        if (!sw || sw == this || sw->*flag == on) {
+    forEachOtherPan([&](SpectrumWidget* sw) {
+        if (sw->*flag == on) {
             return;
         }
         sw->*flag = on;
@@ -4248,14 +4280,25 @@ void SpectrumWidget::propagateGlobalDisplayToggle(
             onApplied(sw);
         }
         sw->markOverlayDirty(cause);
-    };
-    for (QWidget* top : QApplication::topLevelWidgets()) {
-        applyToSibling(qobject_cast<SpectrumWidget*>(top));
-        const auto pans = top->findChildren<SpectrumWidget*>();
-        for (SpectrumWidget* sw : pans) {
-            applyToSibling(sw);
+    });
+}
+
+void SpectrumWidget::propagateGlobalDisplayValue(
+    int SpectrumWidget::*field,
+    int value,
+    const char* cause,
+    const std::function<void(SpectrumWidget*)>& onApplied)
+{
+    forEachOtherPan([&](SpectrumWidget* sw) {
+        if (sw->*field == value) {
+            return;
         }
-    }
+        sw->*field = value;
+        if (onApplied) {
+            onApplied(sw);
+        }
+        sw->markOverlayDirty(cause);
+    });
 }
 
 void SpectrumWidget::setExtendedFrequencyLine(bool on) {
@@ -4274,6 +4317,29 @@ void SpectrumWidget::setExtendedPassband(bool on) {
     markOverlayDirty();
     propagateGlobalDisplayToggle(&SpectrumWidget::m_extendedPassband, on,
                                  "extendedPassbandSibling");
+}
+
+// Retention is a memory budget, not an overlay: applying it allocates or frees
+// the largest buffer a panadapter owns, so each sibling re-applies its own
+// capacity rather than just taking the number and repainting.
+//
+// CHANGING THE LENGTH DISCARDS EXISTING SCROLLBACK. Capacity is the ring's
+// chunk count, so a new length is a new ring; WaterfallHistoryBuffer has no
+// way to re-home rows into a different geometry, and inventing one to preserve
+// history across a deliberate resize would be a lot of machinery for a
+// setting an operator changes once.
+void SpectrumWidget::setWaterfallHistoryMinutes(int minutes) {
+    const int validated = validWaterfallHistoryMinutes(minutes);
+    if (m_waterfallHistoryMinutes == validated) {
+        return;
+    }
+    m_waterfallHistoryMinutes = validated;
+    DisplaySettings::setWaterfallHistoryMinutes(validated);
+    applyWaterfallHistoryCapacity();
+    propagateGlobalDisplayValue(
+        &SpectrumWidget::m_waterfallHistoryMinutes, validated,
+        "waterfallHistoryMinutesSibling",
+        [](SpectrumWidget* sw) { sw->applyWaterfallHistoryCapacity(); });
 }
 
 void SpectrumWidget::setExtendedTnf(bool on) {
@@ -4960,10 +5026,19 @@ void SpectrumWidget::resetWfTimeScale() {
 
 int SpectrumWidget::waterfallHistoryCapacityRows() const
 {
+    // Off. Zero rows is the buffer's own "no storage" contract: configure()
+    // routes a non-positive capacity to reset(), so every caller that sizes a
+    // ring from this function releases it rather than needing its own branch.
+    if (m_waterfallHistoryMinutes <= 0) {
+        return 0;
+    }
     // Keep history capacity bounded; radio line_duration accepts 1 ms, but
-    // allocating 20 minutes at that cadence would be disproportionate.
+    // allocating the retained window at that cadence would be
+    // disproportionate.
     const int msPerRow = kWaterfallHistoryCapacityMsPerRow;
-    return static_cast<int>((kWaterfallHistoryMs + msPerRow - 1) / msPerRow);
+    const qint64 retainMs =
+        static_cast<qint64>(m_waterfallHistoryMinutes) * 60LL * 1000LL;
+    return static_cast<int>((retainMs + msPerRow - 1) / msPerRow);
 }
 
 int SpectrumWidget::maxWaterfallHistoryOffsetRows() const
@@ -5163,15 +5238,29 @@ void SpectrumWidget::ensureWaterfallHistory()
     }
 
     const QSize desiredSize(m_waterfall.width(), waterfallHistoryCapacityRows());
-    if (desiredSize.width() <= 0 || desiredSize.height() <= 0) {
+    if (desiredSize.height() <= 0) {
+        // Retention is Off. RELEASE rather than return: this is the path a
+        // live "Off" selection takes, and simply declining to build would
+        // leave the previous ring allocated — exactly the memory the operator
+        // just asked to have back.
+        releaseWaterfallHistory();
+        return;
+    }
+    if (desiredSize.width() <= 0) {
         return;
     }
 
     const bool retainDssHistory =
         m_waterfallWriteVisible
         && m_spectrumRenderMode == SpectrumRenderMode::Mode3D;
+    // The supplemental ring is sized only for a source that actually delivers
+    // supplemental rows; for every other source its "desired" size is nothing.
+    // Comparing against that, rather than against desiredSize, is what lets
+    // the early-out below still fire when the ring is deliberately absent.
+    const QSize desiredSupplementalSize =
+        m_waterfallSupplementalActive ? desiredSize : QSize(0, 0);
     if (m_waterfallHistory.size() == desiredSize
-        && m_waterfallSupplementalHistory.size() == desiredSize) {
+        && m_waterfallSupplementalHistory.size() == desiredSupplementalSize) {
         m_dss.setHistoryCapacityRows(retainDssHistory ? desiredSize.height() : 0);
         return;
     }
@@ -5202,7 +5291,22 @@ void SpectrumWidget::ensureWaterfallHistory()
         m_wfHistoryOffsetRows = 0;
         m_wfLive = true;
     }
-    if (!resizedSupplemental) {
+    if (!m_waterfallSupplementalActive) {
+        // No supplemental source, no ring. It is the same size as the main
+        // one, so building it up front doubled retained-waterfall memory for
+        // every source that passes nullptr — the Kiwi and simulator paths and
+        // the fallback row writer — to hold rows of zeros. appendHistoryRow()
+        // builds it on the first row that actually carries data.
+        //
+        // The per-row frame vectors are still sized: paintWaterfallRowsFromHistory()
+        // indexes them for every row it draws, and a short vector there is an
+        // out-of-range read rather than an absent overlay.
+        m_waterfallSupplementalHistory.reset();
+        m_wfHistorySupplementalCenterMhz =
+            QVector<double>(desiredSize.height(), 0.0);
+        m_wfHistorySupplementalBwMhz =
+            QVector<double>(desiredSize.height(), 0.0);
+    } else if (!resizedSupplemental) {
         m_waterfallSupplementalHistory.configure(
             desiredSize.width(), desiredSize.height());
         if (resizedExisting) {
@@ -5213,6 +5317,41 @@ void SpectrumWidget::ensureWaterfallHistory()
         }
     }
     m_dss.setHistoryCapacityRows(retainDssHistory ? desiredSize.height() : 0);
+}
+
+void SpectrumWidget::releaseWaterfallHistory()
+{
+    // Return to live unconditionally, even when there was nothing to free:
+    // retention can be Off from the first frame, and a viewport parked at a
+    // scrollback offset with no ring behind it can never be repainted.
+    m_wfLive = true;
+    m_wfHistoryOffsetRows = 0;
+    m_wfHistoryWriteRow = 0;
+    m_wfHistoryRowCount = 0;
+    m_waterfallSupplementalActive = false;
+
+    m_waterfallHistory.reset();
+    m_waterfallSupplementalHistory.reset();
+    m_wfHistoryTimestamps.clear();
+    m_wfHistoryRowCenterMhz.clear();
+    m_wfHistoryRowBwMhz.clear();
+    m_wfHistorySupplementalCenterMhz.clear();
+    m_wfHistorySupplementalBwMhz.clear();
+    m_waterfallHistoryStreamSizeHint = QSize();
+    // The 3D surface is retained history by another name and is sized from the
+    // same capacity, so it goes with it rather than outliving it.
+    m_dss.setHistoryCapacityRows(0);
+}
+
+void SpectrumWidget::applyWaterfallHistoryCapacity()
+{
+    ensureWaterfallHistory();
+    // The viewport is rebuilt from the ring whenever one exists. With
+    // retention Off the rebuild early-outs and the live rows already on screen
+    // simply keep scrolling, which is the intended degradation.
+    rebuildWaterfallViewport();
+    markOverlayDirty("waterfallHistoryMinutes");
+    update();
 }
 
 float SpectrumWidget::dssHistoryFallbackDbm() const
@@ -5518,6 +5657,17 @@ void SpectrumWidget::appendHistoryRow(const quint8* intensityData,
         return;
     }
     std::memcpy(row, intensityData, m_waterfallHistory.width());
+    if (supplementalIntensityData != nullptr && !m_waterfallSupplementalActive) {
+        // First supplemental row from this source. Build the ring now, at the
+        // main ring's current geometry, rather than having carried an
+        // identically-sized ring of zeros since the stream opened on the
+        // chance that one would arrive.
+        m_waterfallSupplementalActive = true;
+        m_waterfallSupplementalHistory.configure(
+            m_waterfallHistory.width(), m_waterfallHistory.capacityRows());
+    }
+    // Still nullptr when this source has never sent supplemental data, which
+    // is the ordinary case; writableRow() on a reset buffer returns nothing.
     quint8* supplementalRow =
         m_waterfallSupplementalHistory.writableRow(m_wfHistoryWriteRow);
     if (supplementalRow != nullptr) {
@@ -5525,6 +5675,9 @@ void SpectrumWidget::appendHistoryRow(const quint8* intensityData,
             std::memcpy(supplementalRow, supplementalIntensityData,
                         m_waterfallHistory.width());
         } else {
+            // The ring exists because supplemental data arrived earlier, and
+            // this row has none — zero it so the gap renders as absent rather
+            // than as whatever this slot held a full ring ago.
             std::fill_n(supplementalRow, m_waterfallHistory.width(),
                         quint8(0));
         }
@@ -6628,8 +6781,14 @@ void SpectrumWidget::resetCurrentWaterfallRowsForSize(
     if (!desiredHistorySize.isEmpty()) {
         m_waterfallHistory.configure(desiredHistorySize.width(),
                                      desiredHistorySize.height());
-        m_waterfallSupplementalHistory.configure(
-            desiredHistorySize.width(), desiredHistorySize.height());
+        // Only for a source already known to deliver supplemental rows;
+        // otherwise appendHistoryRow() builds it when the first one lands.
+        if (m_waterfallSupplementalActive) {
+            m_waterfallSupplementalHistory.configure(
+                desiredHistorySize.width(), desiredHistorySize.height());
+        } else {
+            m_waterfallSupplementalHistory.reset();
+        }
         m_waterfallHistoryStreamSizeHint = desiredHistorySize;
         m_wfHistoryTimestamps = QVector<qint64>(desiredHistorySize.height(), 0);
         m_wfHistoryRowCenterMhz = QVector<double>(desiredHistorySize.height(), 0.0);
@@ -6651,6 +6810,11 @@ void SpectrumWidget::resetCurrentWaterfallRowsForSize(
         m_wfHistoryRowBwMhz.clear();
         m_wfHistorySupplementalCenterMhz.clear();
         m_wfHistorySupplementalBwMhz.clear();
+        // Both rings are gone, so the next supplemental row rebuilds from
+        // scratch. Self-healing within one row, and it keeps the flag's
+        // meaning exact: it says a ring exists for supplemental data, never
+        // merely that the source is capable of sending it.
+        m_waterfallSupplementalActive = false;
         m_dss.setHistoryCapacityRows(0);
     }
 
@@ -6719,6 +6883,7 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.waterfallHistory = std::move(m_waterfallHistory);
     updated.waterfallSupplementalHistory =
         std::move(m_waterfallSupplementalHistory);
+    updated.supplementalActive = m_waterfallSupplementalActive;
     updated.historyTimestamps = std::move(m_wfHistoryTimestamps);
     updated.historyWriteRow = m_wfHistoryWriteRow;
     updated.historyRowCount = m_wfHistoryRowCount;
@@ -6853,6 +7018,7 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     m_waterfallHistory = std::move(restored.waterfallHistory);
     m_waterfallSupplementalHistory =
         std::move(restored.waterfallSupplementalHistory);
+    m_waterfallSupplementalActive = restored.supplementalActive;
     if (m_waterfallHistory.isConfigured()) {
         m_waterfallHistoryStreamSizeHint = m_waterfallHistory.size();
     }
@@ -10198,6 +10364,47 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     setWaterfallTimeMarkerSeconds(seconds);
                 });
             }
+
+            // Beside the time markers because both describe the waterfall's
+            // time axis: one labels it, the other decides how far back it
+            // goes. The memory cost is in the label rather than a tooltip —
+            // it is the reason to touch this menu at all, and a submenu entry
+            // that has to be hovered to explain itself is not offering the
+            // choice, it is hiding it.
+            QMenu* retentionMenu = menu.addMenu(tr("Waterfall Scrollback"));
+            retentionMenu->setObjectName(
+                QStringLiteral("waterfallScrollbackMenu"));
+            QActionGroup* retentionGroup = new QActionGroup(retentionMenu);
+            retentionGroup->setExclusive(true);
+            for (const int minutes : kWaterfallHistoryMinutes) {
+                // Two rings of capacityRows x width bytes, which is what the
+                // operator is actually choosing between. Reported for THIS
+                // pan: the setting is global, but the cost is per pan and
+                // scales with its width, so a number from another pan would
+                // be wrong for this one.
+                const int rows = minutes <= 0 ? 0
+                    : static_cast<int>(
+                          (static_cast<qint64>(minutes) * 60LL * 1000LL
+                           + kWaterfallHistoryCapacityMsPerRow - 1)
+                          / kWaterfallHistoryCapacityMsPerRow);
+                const qint64 bytes = static_cast<qint64>(rows) * 2LL
+                    * std::max(1, m_waterfall.width());
+                const QString label = minutes <= 0
+                    ? tr("Off")
+                    : tr("%1 minutes  (~%2 MB)")
+                          .arg(minutes)
+                          .arg(QString::number(bytes / (1024.0 * 1024.0), 'f', 1));
+                QAction* action = retentionMenu->addAction(label);
+                action->setObjectName(
+                    QStringLiteral("waterfallScrollback%1").arg(minutes));
+                action->setCheckable(true);
+                action->setChecked(minutes == m_waterfallHistoryMinutes);
+                retentionGroup->addAction(action);
+                connect(action, &QAction::triggered, this, [this, minutes]() {
+                    setWaterfallHistoryMinutes(minutes);
+                });
+            }
+
             QAction* tuneGuideAction = menu.addAction("Show Tune Guides");
             tuneGuideAction->setCheckable(true);
             tuneGuideAction->setChecked(m_showTuneGuides);
