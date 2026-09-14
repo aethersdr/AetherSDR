@@ -240,7 +240,7 @@ A port with no band reads `N/A`. That is the amplifier saying nothing is driving
 
 Fan speed is a key on the panel and a pull-down on the rail — the same three modes either way. The key shows the mode's initial: `S` standard, `C` contest, `B` broadcast, cycling on each press; the full name is on its tooltip.
 
-Port detail needs the direct connection to the amplifier (Radio Setup, peripherals), which is also what supplies the fan-speed control and the drain and mains voltages. Without it the applet still works from what the radio relays, and the source indicator under the readouts says which path it is on.
+Port detail needs the direct connection to the amplifier (Radio Setup, peripherals), which is also what supplies the fan-speed control and the drain and mains voltages. Without it the applet still works from what the radio relays, and the source indicator at the end of the readout row says which path it is on.
 
 ### `TX`
 

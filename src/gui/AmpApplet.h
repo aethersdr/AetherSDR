@@ -116,6 +116,9 @@ private:
     // Both operate controls wear the amplifier's current state, so a single
     // place decides what each of them says and how it is lit.
     void applyStateToControls();
+    // Which way a press goes. One place, so the rail button and the panel key
+    // can never ask the amplifier for opposite things.
+    bool wantsOperate() const;
     // Same for the two fan controls — the rail's pull-down and the panel's
     // one-letter key are two faces of one mode.
     void applyFanControls();
@@ -212,10 +215,17 @@ private:
     // instead is a one-way ratchet.
     int          m_keySeedWidth{0};
 
-    // The amplifier's own state word, upper-cased. STANDBY is the only state
-    // that is not operating, so it is what the key lights on.
+    // The amplifier's own state word, upper-cased.
+    //
+    // Three questions get asked of it and they are NOT the same question.
+    // `m_standby` is "is it in STANDBY" — that is what the banner and the
+    // key's lit state follow, and it is FlexLib's Operate (State != Standby).
+    // `m_operating` is "can it amplify right now" — IDLE, OPERATE and the two
+    // TRANSMIT states, which is what the rail button's colour follows.
+    // POWERUP, SELFCHECK and FAULT are neither: not standby, not operating.
     QString  m_stateWord;
     bool     m_standby{false};
+    bool     m_operating{false};
     QString  m_txAntenna;
 
     // 100 ms timer — updates label text independently of gauge fill rate

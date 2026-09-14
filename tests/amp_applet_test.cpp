@@ -194,6 +194,23 @@ void testFanModePulldown()
            combo->currentData().toString() == before,
            combo->currentData().toString());
 
+    // And an unrecognized mode must not be what reveals the control. A fan
+    // control that is up asserts the mode it is showing; if the only thing the
+    // amplifier ever sent was a word we could not parse, the control would be
+    // claiming a mode the amplifier never confirmed.
+    {
+        AmpApplet fresh;
+        QComboBox* freshCombo = fanCombo(fresh);
+        report("fresh fan combo starts hidden", freshCombo && freshCombo->isHidden());
+        if (freshCombo) {
+            fresh.setFanMode("bogus");
+            report("unknown fanmode does not reveal the control",
+                   freshCombo->isHidden());
+            fresh.setFanMode("CONTEST");
+            report("a recognized mode does reveal it", !freshCombo->isHidden());
+        }
+    }
+
     // #4731: on a large-enough default UI font, the popup's fixed pixel
     // width (sized off the combo's own hardcoded 10px stylesheet font)
     // couldn't fit "Fan: Contest" — the longest item — so Qt's default

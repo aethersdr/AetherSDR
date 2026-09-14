@@ -533,15 +533,22 @@ void AccessoryPortRow::updateAccessibleText()
     const QString freq = !m_freqLabel->isHidden()
                              ? tr("%1, ").arg(m_freqLabel->text())
                              : QString();
+    // One multi-argument arg(), not a chain of them. The source and band cells
+    // carry device text verbatim (flexA / bandA off the wire), and a chain
+    // substitutes left to right: a source name containing "%4" would land in
+    // the string and then be replaced by the next .arg() in the chain. The
+    // multi-argument form substitutes every placeholder in one pass, so text
+    // that arrives from the device cannot reach into the format string
+    // (Principle VII).
     setAccessibleDescription(
-        tr("%1, band %2, %6%7%3, %4%5")
-            .arg(m_sourceLabel->text())
-            .arg(m_bandLabel->text())
-            .arg(state)
-            .arg(m_ptt ? tr("transmitting") : tr("not transmitting"))
-            .arg(m_active ? tr(", transmit port") : QString())
-            .arg(bias)
-            .arg(freq));
+        tr("%1, band %2, %6%7%3, %4%5").arg(
+            m_sourceLabel->text(),
+            m_bandLabel->text(),
+            state,
+            m_ptt ? tr("transmitting") : tr("not transmitting"),
+            m_active ? tr(", transmit port") : QString(),
+            bias,
+            freq));
 }
 
 }  // namespace AetherSDR

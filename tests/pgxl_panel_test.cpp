@@ -351,6 +351,66 @@ int main(int argc, char** argv)
         if (banner) CHECK(!banner->isVisible());
     }
 
+    // ── Coming up, and tripped ────────────────────────────────────────
+    //
+    // POWERUP, SELFCHECK and FAULT are none of standby, operating, or each
+    // other. The one reading that must not happen is any of them shown as
+    // OPERATE in the operating colour — and the press must not be inverted
+    // by the same mistake. Before the panel existed the rail button was fed a
+    // derived operate() flag, which is false for all three; POWERUP and
+    // SELFCHECK have to keep asking for operate, and only FAULT changes, to
+    // ask for standby instead of insisting a tripped amplifier operate.
+    {
+        PanelKey* key = nullptr;
+        for (PanelKey* k : applet.findChildren<PanelKey*>()) {
+            if (!k->accessibleName().contains(QStringLiteral("Fan"))) key = k;
+        }
+        QPushButton* rail = nullptr;
+        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+            if (!qobject_cast<PanelKey*>(b)
+                    && b->objectName() != QStringLiteral("ampTempUnitButton")) rail = b;
+        }
+        CHECK(key != nullptr);
+        CHECK(rail != nullptr);
+
+        struct Case { const char* word; const char* caption; bool wantsOperate; };
+        const Case cases[] = {
+            {"POWERUP",   "PWRUP",   true},
+            {"SELFCHECK", "CHECK",   true},
+            {"FAULT",     "FAULT",   false},
+            {"STANDBY",   "STANDBY", true},
+            {"IDLE",      "OPERATE", false},
+        };
+        for (const Case& c : cases) {
+            peer->write(statusReply(c.word));
+            peer->flush();
+            CHECK(spin([&] { return model.stateText() == QLatin1String(c.word); }));
+            QCoreApplication::processEvents();
+            if (rail) {
+                CHECK(rail->text() == QLatin1String(c.caption));
+            }
+            if (key) {
+                QSignalSpy operate(&applet, &AmpApplet::operateToggled);
+                key->click();
+                CHECK(operate.count() == 1);
+                if (operate.count() == 1) {
+                    CHECK(operate.takeFirst().at(0).toBool() == c.wantsOperate);
+                }
+            }
+        }
+        // And the rail button and the panel key can never disagree — they run
+        // through the same decision.
+        peer->write(statusReply("POWERUP"));
+        peer->flush();
+        CHECK(spin([&] { return model.stateText() == QLatin1String("POWERUP"); }));
+        if (rail) {
+            QSignalSpy operate(&applet, &AmpApplet::operateToggled);
+            rail->click();
+            CHECK(operate.count() == 1);
+            if (operate.count() == 1) CHECK(operate.takeFirst().at(0).toBool());
+        }
+    }
+
     // ── Standby ───────────────────────────────────────────────────────
     //
     // Out of circuit there is no per-port reading left, so the banner takes

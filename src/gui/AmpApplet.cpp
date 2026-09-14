@@ -465,7 +465,7 @@ void AmpApplet::buildUI()
     // the panel key can never disagree about which way the toggle goes.
     for (QPushButton* btn : {m_operateBtn, static_cast<QPushButton*>(m_stbyKey)}) {
         connect(btn, &QPushButton::clicked, this,
-                [this]() { emit operateToggled(m_standby); });
+                [this]() { emit operateToggled(wantsOperate()); });
     }
 
     // Label text throttle — update PWR/SWR/Id text at 10 Hz so the digits
@@ -1107,6 +1107,9 @@ void AmpApplet::setFanMode(const QString& mode)
         // Leave m_fanMode and the combo's selection as they were — updating
         // one but not the other would desync what's displayed from what
         // AmpApplet thinks the mode is.
+        // And do NOT reveal the control: it would then assert a mode the
+        // amplifier never confirmed, which is the one thing m_haveFanMode
+        // exists to prevent.
         qWarning() << "AmpApplet: unknown fanmode" << upper;
     } else {
         m_fanMode = upper;
@@ -1115,8 +1118,8 @@ void AmpApplet::setFanMode(const QString& mode)
         // "setup fanmode=" command back to the amp (#3905).
         QSignalBlocker blocker(m_fanCombo);
         m_fanCombo->setCurrentIndex(idx);
+        m_haveFanMode = true;
     }
-    m_haveFanMode = true;
     applyFanControls();
 }
 
@@ -1156,8 +1159,21 @@ void AmpApplet::setState(const QString& state)
     if (word == m_stateWord) return;
     m_stateWord = word;
     m_standby = (m_stateWord == QLatin1String("STANDBY"));
+    m_operating = (m_stateWord == QLatin1String("IDLE")
+                   || m_stateWord == QLatin1String("OPERATE")
+                   || m_stateWord.startsWith(QLatin1String("TRANSMIT")));
     applyStateToControls();
     updatePortRows();
+}
+
+bool AmpApplet::wantsOperate() const
+{
+    // What a press asks for. Not simply "not standby": POWERUP and SELFCHECK
+    // are the amplifier coming up toward operate, so a press there asks for
+    // operate, which is what it did before the panel existed. A fault is the
+    // exception — the amplifier has tripped, and the useful thing to command
+    // is standby, not to insist it operate.
+    return !m_operating && m_stateWord != QLatin1String("FAULT");
 }
 
 void AmpApplet::applyStateToControls()
@@ -1170,22 +1186,24 @@ void AmpApplet::applyStateToControls()
     // amplifier is in it — a key that renamed itself would leave the operator
     // reading the label to work out which way it moves.
     //
-    // A fault is neither of the two the button toggles between, and calling it
-    // OPERATE in the operating colour is the one reading that must not happen.
-    // The button still commands standby when pressed; it just stops claiming
-    // the amplifier is fine.
+    // Three states are neither of the two the button toggles between, and the
+    // one reading that must not happen is any of them shown as OPERATE in the
+    // operating colour. POWERUP and SELFCHECK are the amplifier on its way up;
+    // FAULT is it having tripped. Each says so.
     const bool faulted = (m_stateWord == QLatin1String("FAULT"));
-    m_operateBtn->setText(faulted   ? tr("FAULT")
-                          : m_standby ? QStringLiteral("STANDBY")
-                                      : QStringLiteral("OPERATE"));
-    theme.applyStyleSheet(m_operateBtn, faulted   ? kFaultStyle
-                                        : m_standby ? kBtnStyle
-                                                    : kOperateStyle);
+    m_operateBtn->setText(faulted ? tr("FAULT")
+                          : m_stateWord == QLatin1String("POWERUP") ? tr("PWRUP")
+                          : m_stateWord == QLatin1String("SELFCHECK") ? tr("CHECK")
+                          : m_operating ? tr("OPERATE")
+                                        : tr("STANDBY"));
+    theme.applyStyleSheet(m_operateBtn, faulted     ? kFaultStyle
+                                        : m_operating ? kOperateStyle
+                                                      : kBtnStyle);
     theme.applyStyleSheet(m_stbyKey, m_standby ? kPanelKeyStandbyStyle
                                                : kPanelKeyIdleStyle);
     m_stbyKey->setAccessibleDescription(
-        m_standby ? tr("Amplifier is in standby. Activates operate.")
-                  : tr("Amplifier is operating. Activates standby."));
+        wantsOperate() ? tr("Amplifier is not operating. Activates operate.")
+                       : tr("Amplifier is operating. Activates standby."));
 
     m_operateBtn->setVisible(known && !m_floating);
     m_stbyKey->setVisible(known && m_floating);
@@ -1206,7 +1224,12 @@ void AmpApplet::setDirectConnected(bool direct)
         m_haveFanMode = false;
         applyFanControls();
     }
-    applyTelemetryStyles(m_floating ? m_appliedScale : 1.0);
+    // contentScale(), not m_appliedScale: that member is only resizeEvent's
+    // cache key for "has the scale moved", and nothing else writes it — so
+    // between popping the applet out and the first resize that actually moves
+    // the scale it still reads 1.0, and a connect or disconnect in that window
+    // would style the readouts at a size nothing else on the panel is at.
+    applyTelemetryStyles(contentScale());
     updatePortRows();
 }
 
