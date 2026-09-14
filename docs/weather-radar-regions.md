@@ -301,19 +301,18 @@ remained disconnected from radio hardware with TX automation disabled and were
 stopped afterward. These results describe the local implementation before publication.
 
 
-### RFC implementation captures (September 12, 2026)
+### RFC implementation captures (September 14, 2026)
 
-The images below show the proposed implementation at source commit
-`94fc042a18c62c2b82e13ae91ac191a4ad11ca77`, rebased onto upstream
-`3b3312eb8a5af12e485c4284d64fca59ee72fcf7`. This is a proposal awaiting
-maintainer design approval, not a released feature. The ARM64 build and all six
-focused CTest suites passed; a separate native Cocoa run passed all 47 loading,
-playback and rendering cases. The authenticated MCP walkthrough used isolated
-settings, DEMO-0001 and disabled TX automation. Windows/Linux remain unverified.
+These native macOS captures show the RFC #5630 revisions, including bundled
+station catalogs and legends identifying the providers actually displayed.
+The ARM64 build and eight focused CTest suites passed; a separate native Cocoa
+run passed all 49 loading, playback and rendering cases. The authenticated MCP
+walkthrough used isolated settings, DEMO-0001 and disabled TX automation.
+Windows and Linux validation is recorded separately in the pull request.
 
-An initial live loading failure recovered after restarting the overlay. One
-station catalog remained unavailable, so the visible 208-site status is partial;
-the screenshots do not claim complete station coverage.
+Both bundled catalogs load without station-metadata network requests: 208 NOAA
+sites and 181 active OPERA sites. Their 389 nominal footprints do not describe
+live operational coverage.
 
 ![Global precipitation playback](images/weather-radar/global-playback.png)
 
@@ -333,6 +332,11 @@ visible on the map when the panel is collapsed.
 ![Flat-map precipitation playback](images/weather-radar/flat-map.png)
 
 Native flat-map capture showing precipitation across continents.
+
+![Regional sources and separate scales](images/weather-radar/regional-legends.png)
+
+With LibreWXR disabled, enabled regional providers appear together. NOAA and
+OPERA DBZH use dBZ; ECCC rain rate uses mm/h. Each source retains its own scale.
 
 Screenshot weather imagery: LibreWXR and contributing agencies listed under
 Credits and licensing above, CC BY 4.0 with Radar-DPC imagery subject to
