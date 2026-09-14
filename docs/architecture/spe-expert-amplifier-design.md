@@ -316,21 +316,29 @@ control application and re-validated against the real 1.5K-FA (see
 MIT-licensed expert-amp-server project) — is:
 
 - **Request**: the standard keystroke-style packet with code `0x80`.
-  Polling is reply-paced on a single-shot timer: a request arms only a
-  1 s lost-reply fallback, and each decoded display re-arms the short
-  250 ms gap — so the effective cadence is gap plus round trip plus the
-  link's own serialization time for the 371-byte frame (~285 ms total at
-  115200; a 19200 proxy serial side stretches it to ~450 ms on its own).
-  As long as the round trip stays under the 1 s fallback — which covers
-  the slowest plausible link, a 9600 baud serial side spending ~390 ms on
-  the frame alone — a second request is never issued while the previous
-  reply is still arriving: the amplifier is never asked to interleave
+  All request pacing is decided by `Spe::LcdScheduler` — a deterministic,
+  I/O-free state machine (`SpeLcdScheduler.h`) that keeps requests
+  **single-file**: at most one in flight and at most one timer armed,
+  with every trigger path — the idle cadence, a keystroke ACK, the
+  corrupted-frame retry, the lost-reply fallback — flowing through the
+  same gate. Its invariant is unit-tested in `spe_protocol_test`,
+  including an exhaustive event-sequence sweep, rather than asserted in
+  prose. Concretely: a request arms a 1 s lost-reply fallback; a decoded
+  reply arms the 250 ms idle gap (or immediately services a refresh an
+  ACK asked for while the request was in flight — pending work, never a
+  second in-flight request); a rejected frame supersedes the fallback
+  with the 80 ms retry pause. The effective cadence is therefore gap plus
+  round trip plus the link's own serialization time for the 371-byte
+  frame (~285 ms total at 115200; a 19200 proxy serial side stretches it
+  to ~450 ms on its own): the amplifier is never asked to interleave
   display blocks, and a slow link stretches the cadence instead of
-  accumulating a request backlog. A round trip beyond the fallback is
-  treated as a lost reply and retried, accepting the overlap risk on a
-  link that degenerate. At a 9600 baud proxy serial side the 100 ms
-  Status poll alone consumes ~80% of the wire, so ser2net serial sides
-  should be configured at 57600 or above.
+  accumulating a request backlog. Only a round trip beyond the 1 s
+  fallback — which covers the slowest plausible link, a 9600 baud serial
+  side spending ~390 ms on the frame alone — is misclassified as a lost
+  reply and retried, accepting the overlap risk on a link that
+  degenerate. At a 9600 baud proxy serial side the 100 ms Status poll
+  alone consumes ~80% of the wire, so ser2net serial sides should be
+  configured at 57600 or above.
 - **Reply**: `AA AA AA | 6A 01` (16-bit payload length, 362) `| 95 FE |
   ` 2-byte inverted flag word |` 320 character bytes (8 rows x 40
   columns, row-major) + 40 attribute bytes (one per column, bit N =
@@ -378,12 +386,14 @@ staleness treatment fires constantly and punishes the operator without
 adding safety the key gate doesn't already provide.) The mirror only
 returns to the idle glass when the image is truly obsolete (disconnect,
 or a docked⇄floating switch). Every
-acknowledged keystroke requests an immediate display refresh, and the
-cadence re-arms from each display *reply* rather than free-running: the
-original free-running 600 ms period was an exact multiple of the 100 ms
-Status poll, and two such timers phase-lock with every display reply
-straddling a status poll on the wire, dropping display frames in bursts
-until clock drift walks the alignment out. Pacing from the reply folds the
-amplifier's variable response latency into the period, so no stable phase
-relationship can form — and it is also what makes the small 250 ms gap
-safe on slow links (see the request bullet above).
+acknowledged keystroke requests a display refresh — immediately when the
+line is free, otherwise as pending work the scheduler services the moment
+the in-flight request resolves — and the cadence re-arms from each
+display *reply* rather than free-running: the original free-running
+600 ms period was an exact multiple of the 100 ms Status poll, and two
+such timers phase-lock with every display reply straddling a status poll
+on the wire, dropping display frames in bursts until clock drift walks
+the alignment out. Pacing from the reply folds the amplifier's variable
+response latency into the period, so no stable phase relationship can
+form — and it is also what makes the small 250 ms gap safe on slow links
+(see the request bullet above).

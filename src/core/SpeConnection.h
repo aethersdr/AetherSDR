@@ -10,6 +10,7 @@
 #include <QSerialPort>
 #endif
 
+#include "SpeLcdScheduler.h"
 #include "SpeProtocol.h"
 
 namespace AetherSDR {
@@ -140,7 +141,9 @@ private:
     void pollTick();
     void powerOnStep();
     void setControlLines(bool dtr, bool rts);  // transport-appropriate DTR/RTS
-    void requestLcdFrame();
+    // Executes a scheduler decision: send the 0x80 request and/or re-arm
+    // m_lcdTimer with the interval for the role the scheduler assigned it.
+    void applyLcdEffect(const Spe::LcdScheduler::Effect& effect);
     void setLcdFresh(bool fresh);
 
     QIODevice*    m_device{nullptr};
@@ -170,39 +173,39 @@ private:
     QTimer m_pollTimer;
     static constexpr int kPollIntervalMs = 100;
 
-    // LCD refresh poll — the field-proven application's cadence. Slower
-    // than the status poll on purpose: a display frame is 371 bytes
-    // against Status's ~76, and the panel is for eyes, not telemetry.
+    // Display-request pacing is decided entirely by the I/O-free
+    // Spe::LcdScheduler (see SpeLcdScheduler.h): requests are single-file
+    // — at most one in flight, at most one timer armed — with every
+    // trigger path (idle cadence, keystroke ACK, corrupted-frame retry,
+    // lost-reply fallback) flowing through the same gate. m_lcdTimer is
+    // that ONE timer; applyLcdEffect() arms it with the interval for
+    // whichever role the scheduler assigned. The no-overlap property is
+    // unit-tested in spe_protocol_test.
+    Spe::LcdScheduler m_lcdScheduler;
     QTimer m_lcdTimer;
     QTimer m_lcdStaleTimer;
-    QTimer m_lcdRetryTimer;  // single-shot reject->re-request pause
     bool   m_lcdWanted{false};
     bool   m_lcdFresh{false};
     // The IDLE GAP between a display reply and the next request, not a
-    // free-running period: m_lcdTimer is single-shot, a REQUEST arms only
-    // the kLcdLostReplyMs fallback, and only a decoded REPLY re-arms this
-    // short gap — so the effective cadence is gap + round trip + the
-    // link's serialization time for the 371-byte frame (~32 ms at 115200,
-    // ~193 ms at 19200), and a second request cannot be issued while the
-    // previous reply is still arriving unless the round trip exceeds
-    // kLcdLostReplyMs. That self-clocking is what makes a small gap safe
-    // on slow links: the amp is never asked to interleave display blocks
-    // and the cadence stretches instead of piling up. (At ≤9600 the
-    // 100 ms Status poll alone nearly saturates the wire — see the design
-    // note §11's proxy baud recommendation.)
+    // free-running period — the effective cadence is gap + round trip +
+    // the link's serialization time for the 371-byte frame (~32 ms at
+    // 115200, ~193 ms at 19200), so a slow link stretches the cadence
+    // instead of piling requests up, and the amp is never asked to
+    // interleave display blocks. (At ≤9600 the 100 ms Status poll alone
+    // nearly saturates the wire — see the design note §11's proxy baud
+    // recommendation.)
     static constexpr int kLcdPollIntervalMs = 250;
-    // Lost-reply fallback: armed at request time, superseded by the reply
-    // re-arm above. Sized above the worst plausible round trip (a 9600
-    // baud proxy serial side spends ~390 ms serializing the frame alone),
-    // so within it a request is either answered or genuinely lost — never
-    // merely still in flight.
+    // Lost-reply fallback, armed while a request is in flight. Sized
+    // above the worst plausible round trip (a 9600 baud proxy serial side
+    // spends ~390 ms serializing the frame alone), so when it fires the
+    // request is genuinely lost — never merely still arriving.
     static constexpr int kLcdLostReplyMs = 1000;
-    // Prompt-retry pause after a display frame fails validation (see the
-    // parser's reject callback). Short enough that a mostly-corrupted
-    // mid-transmit stream still lands a clean frame within the staleness
-    // window whenever one gets through at all; long enough that the retry
-    // stream (each retry also provoked by a full received frame) stays
-    // well under the wire's capacity even at 115200 with Status polling.
+    // Retry pause after a display frame arrives complete but fails
+    // validation. Short enough that a mostly-corrupted mid-transmit
+    // stream still lands a clean frame within the staleness window
+    // whenever one gets through at all; long enough that the retry stream
+    // (each retry provoked by a full received frame) stays well under the
+    // wire's capacity even at 115200 with Status polling.
     static constexpr int kLcdRetryGapMs = 80;
     // Absolute, deliberately decoupled from the poll gap: it must cover a
     // full lost frame plus a retry on the slowest plausible link (a 9600

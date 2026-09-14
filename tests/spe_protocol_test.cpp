@@ -1,3 +1,4 @@
+#include "core/SpeLcdScheduler.h"
 #include "core/SpeProtocol.h"
 
 #include <QByteArray>
@@ -454,6 +455,93 @@ int main()
         telnetParser.feed(telnet.mid(escapedPair + 1));
         report("telnet-escaped display decodes to the byte-exact logical frame",
                telnetDisplays.size() == 1 && telnetDisplays.at(0) == raw);
+
+        // ── LCD request scheduler ────────────────────────────────────
+        // The no-overlap invariant both PR #5542 review rounds demanded:
+        // requests are single-file, every trigger path flows through the
+        // same gate, and the exact interleavings the reviews described are
+        // pinned here as sequences.
+        using SchedTimer = LcdScheduler::Timer;
+        LcdScheduler sched;
+        auto fx = sched.enable();
+        report("scheduler: enable sends at once and arms the lost-reply fallback",
+               fx.sendRequest && fx.arm == SchedTimer::LostReply);
+
+        // Review path A: a keystroke ACK while a request is in flight must
+        // not become a second in-flight request — it becomes pending work.
+        fx = sched.ackSeen();
+        report("scheduler: an ACK during an in-flight request sends nothing",
+               !fx.sendRequest && fx.arm == SchedTimer::None
+                   && sched.requestOutstanding());
+        fx = sched.replyValid();
+        report("scheduler: the reply services the pending ACK refresh as ONE send",
+               fx.sendRequest && fx.arm == SchedTimer::LostReply);
+
+        // Ordinary idle pacing: reply -> gap -> fire -> next request.
+        fx = sched.replyValid();
+        report("scheduler: a reply with nothing pending arms only the idle gap",
+               !fx.sendRequest && fx.arm == SchedTimer::IdleGap);
+        fx = sched.timerFired();
+        report("scheduler: the idle gap firing sends the next request",
+               fx.sendRequest && fx.arm == SchedTimer::LostReply);
+
+        // Review path B: a corrupted reply landing late in the fallback
+        // window. Classifying it supersedes the fallback with the retry
+        // pause, so exactly one send follows — not a fallback send AND a
+        // retry send racing each other.
+        fx = sched.replyRejected();
+        report("scheduler: a rejected reply arms only the retry pause",
+               !fx.sendRequest && fx.arm == SchedTimer::RejectRetry
+                   && !sched.requestOutstanding());
+        fx = sched.timerFired();
+        report("scheduler: the retry pause firing sends exactly one request",
+               fx.sendRequest && fx.arm == SchedTimer::LostReply);
+
+        // A genuinely lost reply: the fallback fires, classifies it lost,
+        // and retries — still single-file.
+        fx = sched.timerFired();
+        report("scheduler: a lost reply retries from the fallback",
+               fx.sendRequest && fx.arm == SchedTimer::LostReply);
+
+        sched.reset();
+        report("scheduler: after reset no event produces traffic",
+               !sched.ackSeen().sendRequest && !sched.timerFired().sendRequest
+                   && !sched.replyValid().sendRequest
+                   && !sched.replyRejected().sendRequest);
+
+        // Exhaustive sweep — every 6-event sequence over {ACK, valid,
+        // rejected, timer}: an ACK never sends into an outstanding
+        // request, and every send re-arms the lost-reply fallback (the
+        // only timer that may run while a request is in flight).
+        bool sweepHolds = true;
+        for (int seq = 0; seq < 4 * 4 * 4 * 4 * 4 * 4; ++seq) {
+            LcdScheduler s2;
+            s2.enable();
+            int code = seq;
+            for (int step = 0; step < 6; ++step) {
+                const int ev = code % 4;
+                code /= 4;
+                const bool wasOutstanding = s2.requestOutstanding();
+                LcdScheduler::Effect e;
+                switch (ev) {
+                    case 0:  e = s2.ackSeen();       break;
+                    case 1:  e = s2.replyValid();    break;
+                    case 2:  e = s2.replyRejected(); break;
+                    default: e = s2.timerFired();    break;
+                }
+                if (e.sendRequest && ev == 0 && wasOutstanding) {
+                    sweepHolds = false;
+                }
+                if (e.sendRequest && e.arm != SchedTimer::LostReply) {
+                    sweepHolds = false;
+                }
+                if (e.sendRequest && !s2.requestOutstanding()) {
+                    sweepHolds = false;
+                }
+            }
+        }
+        report("scheduler: 4^6-sequence sweep holds the single-file invariant",
+               sweepHolds);
 
         // A 0x6A length byte WITHOUT the 95 FE display marker must fall
         // through to the CNT check and resync, not stall the parser.
