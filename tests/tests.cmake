@@ -2052,6 +2052,44 @@ target_include_directories(qso_recorder_slice_lifetime_test PRIVATE
 target_link_libraries(qso_recorder_slice_lifetime_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME qso_recorder_slice_lifetime_test COMMAND qso_recorder_slice_lifetime_test)
 
+# RFC #5468 A3 format/parser/converter helpers: no sockets or audio devices.
+add_executable(qso_recording_format_test
+    tests/qso_recording_format_test.cpp
+)
+target_include_directories(qso_recording_format_test PRIVATE src)
+target_link_libraries(qso_recording_format_test PRIVATE Qt6::Core)
+add_test(NAME qso_recording_format_test COMMAND qso_recording_format_test)
+
+add_executable(qso_recorder_wav_format_test
+    tests/qso_recorder_wav_format_test.cpp
+    src/core/QsoWavFormat.cpp
+)
+target_include_directories(qso_recorder_wav_format_test PRIVATE src)
+target_link_libraries(qso_recorder_wav_format_test PRIVATE Qt6::Core)
+add_test(NAME qso_recorder_wav_format_test COMMAND qso_recorder_wav_format_test)
+
+add_executable(qso_recorder_conversion_test
+    tests/qso_recorder_conversion_test.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/Resampler.cpp
+)
+target_include_directories(qso_recorder_conversion_test PRIVATE
+    src ${CMAKE_SOURCE_DIR}/third_party/r8brain)
+target_link_libraries(qso_recorder_conversion_test PRIVATE Qt6::Core)
+add_test(NAME qso_recorder_conversion_test COMMAND qso_recorder_conversion_test)
+
+add_executable(qso_recorder_playback_format_test
+    tests/qso_recorder_playback_format_test.cpp
+    src/core/QsoWavPlayback.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/Resampler.cpp
+)
+target_include_directories(qso_recorder_playback_format_test PRIVATE
+    src ${CMAKE_SOURCE_DIR}/third_party/r8brain)
+target_link_libraries(qso_recorder_playback_format_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_playback_format_test COMMAND qso_recorder_playback_format_test)
+
 # #4629 — the start policy alone. Pure/constexpr, no Qt at all: the radio-side
 # case (which must NEVER be blocked) is also asserted at compile time.
 add_executable(qso_record_start_policy_test
