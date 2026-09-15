@@ -6,9 +6,12 @@
 #include <QFile>
 #include <QTimer>
 
+class QSaveFile;
+
 namespace AetherSDR {
 
 class RadioModel;
+class DvkWavTransferTestAccess;
 
 // Transfers DVK recordings between the radio and local WAV files.
 //
@@ -26,6 +29,7 @@ class RadioModel;
 
 class DvkWavTransfer : public QObject {
     Q_OBJECT
+    friend class DvkWavTransferTestAccess;
 public:
     explicit DvkWavTransfer(RadioModel* model, QObject* parent = nullptr);
     ~DvkWavTransfer() override;
@@ -46,10 +50,12 @@ signals:
 private:
     // Download (radio → client)
     void onDownloadPortReceived(int code, const QString& body);
+    bool openDownloadFile();
     void onNewConnection();
     void onReadyRead();
     void onDownloadFinished();
     void onDownloadError();
+    void receiveDownloadBytes(const QByteArray& data);
 
     // Upload (client → radio)
     void onUploadPortReceived(int code, const QString& body);
@@ -58,18 +64,18 @@ private:
     void onUploadError();
     void sendNextChunk();
 
-    void cleanup(bool removeFile);
+    void cleanup(bool discardDownload);
 
-    // Single idempotent funnel: emits finished() once and tears down.
+    // Single idempotent funnel: tears down, then emits finished() once.
     // Re-entrant calls (e.g. a second socket signal during teardown) are no-ops.
-    void finish(bool success, const QString& message, bool removeFile);
+    void finish(bool success, const QString& message, bool discardDownload);
 
     enum Direction { None, Download, Upload };
 
     RadioModel*  m_model{nullptr};
     QTcpServer*  m_server{nullptr};    // download: we listen
     QTcpSocket*  m_client{nullptr};    // download: accepted socket / upload: our socket
-    QFile*       m_file{nullptr};      // download: output file
+    QSaveFile*   m_file{nullptr};      // download: staged output file
     QTimer*      m_timeout{nullptr};
     int          m_slotId{-1};
     QString      m_filePath;           // download: save path / upload: source path

@@ -2051,6 +2051,15 @@ target_include_directories(profile_transfer_cleanup_test PRIVATE src)
 target_link_libraries(profile_transfer_cleanup_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME profile_transfer_cleanup_test COMMAND profile_transfer_cleanup_test)
 
+# #5662 — DVK exports stage into QSaveFile and atomically replace an existing
+# WAV only after the radio stream is complete. Socket-free injected coverage.
+add_executable(dvk_wav_transfer_test
+    tests/dvk_wav_transfer_test.cpp
+)
+target_include_directories(dvk_wav_transfer_test PRIVATE src)
+target_link_libraries(dvk_wav_transfer_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME dvk_wav_transfer_test COMMAND dvk_wav_transfer_test)
+
 add_executable(waveform_upload_state_test
     tests/waveform_upload_state_test.cpp
     src/core/WaveformUploadState.cpp

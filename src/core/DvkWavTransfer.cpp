@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QHostAddress>
+#include <QSaveFile>
 #include <QtEndian>
 
 namespace AetherSDR {
@@ -67,22 +68,18 @@ void DvkWavTransfer::onDownloadPortReceived(int code, const QString& body)
     if (code != 0) {
         finish(false, QString("Radio rejected download — %1")
                    .arg(DvkModel::dvkErrorString(static_cast<uint>(code))),
-               false);
+               true);
         return;
     }
 
     bool ok = false;
     int port = body.trimmed().toInt(&ok);
     if (!ok || port <= 0 || port > 65535) {
-        finish(false, QString("Invalid port in response: %1").arg(body.trimmed()), false);
+        finish(false, QString("Invalid port in response: %1").arg(body.trimmed()), true);
         return;
     }
 
-    QDir().mkpath(QFileInfo(m_filePath).absolutePath());
-
-    m_file = new QFile(m_filePath, this);
-    if (!m_file->open(QIODevice::WriteOnly)) {
-        finish(false, "Cannot create file: " + m_file->errorString(), false);
+    if (!openDownloadFile()) {
         return;
     }
 
@@ -98,6 +95,23 @@ void DvkWavTransfer::onDownloadPortReceived(int code, const QString& body)
     qDebug() << "DvkWavTransfer: listening on port" << port << "for slot" << m_slotId;
     emit statusChanged(QString("Waiting for radio on port %1…").arg(port));
     m_timeout->start(CONNECT_TIMEOUT_MS);
+}
+
+bool DvkWavTransfer::openDownloadFile()
+{
+    QDir().mkpath(QFileInfo(m_filePath).absolutePath());
+
+    // Keep the previous export visible until the radio stream is complete.
+    // Direct-write fallback would truncate the destination if its directory
+    // cannot host a temporary file, defeating that guarantee.
+    m_file = new QSaveFile(m_filePath, this);
+    m_file->setDirectWriteFallback(false);
+    if (!m_file->open(QIODevice::WriteOnly)) {
+        finish(false, "Cannot create file: " + m_file->errorString(), true);
+        return false;
+    }
+
+    return true;
 }
 
 void DvkWavTransfer::onNewConnection()
@@ -122,18 +136,29 @@ void DvkWavTransfer::onReadyRead()
 {
     if (m_cancelled || m_finished || !m_file || !m_client) return;
 
-    const QByteArray data = m_client->readAll();
-    m_bytesReceived += data.size();
+    receiveDownloadBytes(m_client->readAll());
+}
 
-    if (m_bytesReceived > MAX_FILE_SIZE) {
-        qWarning() << "DvkWavTransfer: file exceeds" << MAX_FILE_SIZE << "bytes, truncating";
-        m_file->write(data.constData(), data.size() - (m_bytesReceived - MAX_FILE_SIZE));
-        finish(true, QString("Export complete (truncated at %1 KB)")
-                   .arg(MAX_FILE_SIZE / 1024), false);
+void DvkWavTransfer::receiveDownloadBytes(const QByteArray& data)
+{
+    if (m_cancelled || m_finished || !m_file || data.isEmpty()) {
         return;
     }
 
-    m_file->write(data);
+    if (data.size() > MAX_FILE_SIZE - m_bytesReceived) {
+        qWarning() << "DvkWavTransfer: file exceeds" << MAX_FILE_SIZE << "bytes";
+        finish(false, QString("Export exceeds the %1 KB limit")
+                   .arg(MAX_FILE_SIZE / 1024), true);
+        return;
+    }
+
+    const qint64 written = m_file->write(data);
+    if (written != data.size()) {
+        finish(false, "Cannot write export file: " + m_file->errorString(), true);
+        return;
+    }
+
+    m_bytesReceived += written;
 }
 
 void DvkWavTransfer::onDownloadFinished()
@@ -144,6 +169,14 @@ void DvkWavTransfer::onDownloadFinished()
         finish(false, "Radio sent no data", true);
         return;
     }
+
+    if (!m_file || !m_file->commit()) {
+        const QString error = m_file ? m_file->errorString() : QString("Output file is unavailable");
+        finish(false, "Cannot finalize export file: " + error, true);
+        return;
+    }
+    m_file->deleteLater();
+    m_file = nullptr;
 
     qDebug() << "DvkWavTransfer: export complete," << m_bytesReceived << "bytes";
     finish(true, QString("Exported slot %1 (%2 KB)")
@@ -368,7 +401,7 @@ void DvkWavTransfer::cancel()
     finish(false, "Transfer cancelled", m_direction == Download);
 }
 
-void DvkWavTransfer::finish(bool success, const QString& message, bool removeFile)
+void DvkWavTransfer::finish(bool success, const QString& message, bool discardDownload)
 {
     // Idempotent: the radio fires both errorOccurred() and disconnected() on a
     // clean close, and abort()/disconnectFromHost() during teardown can emit
@@ -378,11 +411,11 @@ void DvkWavTransfer::finish(bool success, const QString& message, bool removeFil
     }
     m_finished = true;
 
+    cleanup(discardDownload);
     emit finished(success, message);
-    cleanup(removeFile);
 }
 
-void DvkWavTransfer::cleanup(bool removeFile)
+void DvkWavTransfer::cleanup(bool discardDownload)
 {
     // Re-entrancy guard: abort()/deleteLater() below can synchronously deliver
     // queued socket signals (disconnected/errorOccurred) that route back here.
@@ -414,9 +447,8 @@ void DvkWavTransfer::cleanup(bool removeFile)
     }
 
     if (m_file) {
-        m_file->close();
-        if (removeFile) {
-            m_file->remove();
+        if (discardDownload) {
+            m_file->cancelWriting();
         }
         m_file->deleteLater();
         m_file = nullptr;
