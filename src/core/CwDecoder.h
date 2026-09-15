@@ -7,13 +7,12 @@
 
 #include <atomic>
 #include <memory>
-
-class GGMorse;
+#include <mutex>
 
 namespace AetherSDR {
 
 // Client-side CW (Morse code) decoder using ggmorse.
-// Runs decoding on a worker thread. Feed it 24kHz stereo int16 PCM
+// Runs decoding on a worker thread. Feed it 24kHz stereo float32 PCM
 // and it emits decoded text character by character.
 //
 // Usage:
@@ -28,6 +27,8 @@ public:
     explicit CwDecoder(QObject* parent = nullptr);
     ~CwDecoder() override;
 
+    // Lifecycle and parameter setters run on this QObject's owning thread.
+    // feedAudio() may run on the audio producer thread.
     void start();
     void stop();
     bool isRunning() const { return m_running; }
@@ -44,14 +45,14 @@ public:
     // Force pitch + speed to specific values and lock both — used by the
     // TX-side decoder (#2417) where the operator's keying parameters are
     // known from PhoneCwApplet rather than detected from the audio.
-    // Calling this while a decode is in progress reconfigures ggmorse
-    // immediately; subsequent calls are no-ops if the values are unchanged.
+    // Changes are applied by the worker before the next frame; subsequent
+    // calls are no-ops if the requested values are unchanged.
     void setKnownParameters(float pitchHz, float speedWpm);
     bool isPitchLocked() const { return m_pitchLocked; }
     bool isSpeedLocked() const { return m_speedLocked; }
 
 public slots:
-    // Feed 24kHz stereo int16 PCM (same format as AudioEngine receives).
+    // Feed 24kHz stereo float32 PCM (same format as AudioEngine receives).
     void feedAudio(const QByteArray& pcm24kStereo);
 
 signals:
@@ -60,10 +61,21 @@ signals:
 
 private:
     void decodeLoop();
-    void applyDecodeParameters();
+    std::unique_ptr<QThread> m_workerThread;
 
-    QThread*      m_workerThread{nullptr};
-    std::unique_ptr<GGMorse> m_ggmorse;
+    // One coherent pending configuration. Only setters and the decoder worker
+    // take this mutex; feedAudio() never does. GGMorse itself is worker-local.
+    struct DecodeParameters {
+        float pitchHz{-1.0f};
+        float speedWpm{-1.0f};
+        float pitchRangeMin{500.0f};
+        float pitchRangeMax{700.0f};
+        float speedRangeMin{-1.0f};
+        float speedRangeMax{-1.0f};
+    };
+    std::mutex m_parametersMutex;
+    DecodeParameters m_pendingParameters;
+    bool m_parametersDirty{true};
 
     // Ring buffer for audio samples (mono int16 at 24kHz)
     QMutex        m_bufMutex;
@@ -75,10 +87,6 @@ private:
     std::atomic<float> m_speed{0};
     std::atomic<bool> m_pitchLocked{false};
     std::atomic<bool> m_speedLocked{false};
-    std::atomic<float> m_pitchRangeMin{500.0f};
-    std::atomic<float> m_pitchRangeMax{700.0f};
-    std::atomic<float> m_speedRangeMin{-1.0f};   // -1 = full range
-    std::atomic<float> m_speedRangeMax{-1.0f};
 };
 
 } // namespace AetherSDR

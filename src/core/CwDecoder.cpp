@@ -18,21 +18,10 @@ void CwDecoder::start()
 {
     if (m_running) return;
 
-    // Create ggmorse instance for 24kHz mono int16 input
-    GGMorse::Parameters params;
-    params.sampleRateInp = 24000.0f;
-    params.sampleRateOut = 24000.0f;
-    params.samplesPerFrame = GGMorse::kDefaultSamplesPerFrame;
-    params.sampleFormatInp = GGMORSE_SAMPLE_FORMAT_I16;
-    params.sampleFormatOut = GGMORSE_SAMPLE_FORMAT_I16;
-
-    m_ggmorse = std::make_unique<GGMorse>(params);
-
-    // Auto-detect pitch and speed
-    GGMorse::ParametersDecode dp = GGMorse::getDefaultParametersDecode();
-    dp.frequency_hz = -1;  // auto
-    dp.speed_wpm = -1;     // auto
-    m_ggmorse->setParametersDecode(dp);
+    {
+        std::lock_guard lock(m_parametersMutex);
+        m_parametersDirty = true;
+    }
 
     m_running = true;
 
@@ -44,8 +33,7 @@ void CwDecoder::start()
     // Run decode loop on worker thread (CwDecoder stays on main thread)
     auto* worker = QThread::create([this]() { decodeLoop(); });
     worker->setObjectName("CwDecoder");
-    connect(worker, &QThread::finished, worker, &QThread::deleteLater);
-    m_workerThread = worker;
+    m_workerThread.reset(worker);
     worker->start();
 
     qCDebug(lcDsp) << "CwDecoder: started";
@@ -57,16 +45,16 @@ void CwDecoder::stop()
     m_running = false;
 
     if (m_workerThread) {
-        m_workerThread->wait(2000);
-        m_workerThread = nullptr;
+        // The callback checks m_running and each decode call is frame-bounded.
+        // Never destroy the buffer/owner while a slow frame is still running.
+        m_workerThread->wait();
+        m_workerThread.reset();
     }
-
-    m_ggmorse.reset();
 
     // The estimates died with the ggmorse instance — clear them so a later
     // Zero Beat can't retune the slice on a pitch from a previous run
     // (#5213).  Locked values are operator-set state, not estimates: keep
-    // them, or applyDecodeParameters() would feed 0 into a still-pressed
+    // them, or a restart would feed 0 into a still-pressed
     // lock button on the next start.
     if (!m_pitchLocked) m_pitch = 0;
     if (!m_speedLocked) m_speed = 0;
@@ -84,32 +72,26 @@ void CwDecoder::stop()
     qCDebug(lcDsp) << "CwDecoder: stopped";
 }
 
-// Build and apply current ggmorse decode parameters from all stored state.
-void CwDecoder::applyDecodeParameters()
-{
-    if (!m_ggmorse) return;
-    GGMorse::ParametersDecode dp = GGMorse::getDefaultParametersDecode();
-    dp.frequency_hz          = m_pitchLocked ? m_pitch.load() : -1.0f;
-    dp.speed_wpm             = m_speedLocked ? m_speed.load() : -1.0f;
-    dp.frequencyRangeMin_hz  = m_pitchRangeMin;
-    dp.frequencyRangeMax_hz  = m_pitchRangeMax;
-    dp.speedRangeMin_wpm     = m_speedRangeMin;
-    dp.speedRangeMax_wpm     = m_speedRangeMax;
-    m_ggmorse->setParametersDecode(dp);
-}
-
 void CwDecoder::lockPitch(bool lock)
 {
-    m_pitchLocked = lock;
-    applyDecodeParameters();
+    {
+        std::lock_guard guard(m_parametersMutex);
+        m_pitchLocked = lock;
+        m_pendingParameters.pitchHz = lock ? m_pitch.load() : -1.0f;
+        m_parametersDirty = true;
+    }
     qCDebug(lcDsp) << "CwDecoder: pitch" << (lock ? "locked at" : "unlocked from")
                    << m_pitch.load() << "Hz";
 }
 
 void CwDecoder::lockSpeed(bool lock)
 {
-    m_speedLocked = lock;
-    applyDecodeParameters();
+    {
+        std::lock_guard guard(m_parametersMutex);
+        m_speedLocked = lock;
+        m_pendingParameters.speedWpm = lock ? m_speed.load() : -1.0f;
+        m_parametersDirty = true;
+    }
     qCDebug(lcDsp) << "CwDecoder: speed" << (lock ? "locked at" : "unlocked from")
                    << m_speed.load() << "WPM";
 }
@@ -118,8 +100,9 @@ void CwDecoder::setKnownParameters(float pitchHz, float speedWpm)
 {
     if (pitchHz <= 0.0f || speedWpm <= 0.0f) return;
 
-    const bool unchanged = qFuzzyCompare(m_pitch.load(), pitchHz)
-        && qFuzzyCompare(m_speed.load(), speedWpm)
+    std::lock_guard lock(m_parametersMutex);
+    const bool unchanged = qFuzzyCompare(m_pendingParameters.pitchHz, pitchHz)
+        && qFuzzyCompare(m_pendingParameters.speedWpm, speedWpm)
         && m_pitchLocked && m_speedLocked;
     if (unchanged) return;
 
@@ -128,6 +111,8 @@ void CwDecoder::setKnownParameters(float pitchHz, float speedWpm)
     // sidetone is generated at exactly that rate — ggmorse with both
     // values locked gets a reliable unit length and correctly classifies
     // 1u / 3u / 7u gaps so inter-word boundaries become " " separators.
+    m_pendingParameters.pitchHz = pitchHz;
+    m_pendingParameters.speedWpm = speedWpm;
     m_pitch = pitchHz;
     m_speed = speedWpm;
     m_pitchLocked = true;
@@ -137,27 +122,29 @@ void CwDecoder::setKnownParameters(float pitchHz, float speedWpm)
     // is 500–700 Hz but operators commonly use 700 / 750 / 800).  Also
     // drives ggmorse's internal HPF cutoff.
     constexpr float kPitchRangePad = 150.0f;
-    m_pitchRangeMin = std::max(100.0f, pitchHz - kPitchRangePad);
-    m_pitchRangeMax = pitchHz + kPitchRangePad;
+    m_pendingParameters.pitchRangeMin = std::max(100.0f, pitchHz - kPitchRangePad);
+    m_pendingParameters.pitchRangeMax = pitchHz + kPitchRangePad;
 
-    applyDecodeParameters();
+    m_parametersDirty = true;
     qCDebug(lcDsp) << "CwDecoder: known params pitch=" << pitchHz
                    << "Hz speed=" << speedWpm << "WPM";
 }
 
 void CwDecoder::setPitchRange(int minHz, int maxHz)
 {
-    m_pitchRangeMin = static_cast<float>(minHz);
-    m_pitchRangeMax = static_cast<float>(maxHz);
-    applyDecodeParameters();
+    std::lock_guard lock(m_parametersMutex);
+    m_pendingParameters.pitchRangeMin = static_cast<float>(minHz);
+    m_pendingParameters.pitchRangeMax = static_cast<float>(maxHz);
+    m_parametersDirty = true;
     qCDebug(lcDsp) << "CwDecoder: pitch range" << minHz << "-" << maxHz << "Hz";
 }
 
 void CwDecoder::setSpeedRange(int minWpm, int maxWpm)
 {
-    m_speedRangeMin = static_cast<float>(minWpm);
-    m_speedRangeMax = static_cast<float>(maxWpm);
-    applyDecodeParameters();
+    std::lock_guard lock(m_parametersMutex);
+    m_pendingParameters.speedRangeMin = static_cast<float>(minWpm);
+    m_pendingParameters.speedRangeMax = static_cast<float>(maxWpm);
+    m_parametersDirty = true;
     qCDebug(lcDsp) << "CwDecoder: speed range" << minWpm << "-" << maxWpm << "WPM";
 }
 
@@ -186,10 +173,20 @@ void CwDecoder::feedAudio(const QByteArray& pcm24kStereo)
 
 void CwDecoder::decodeLoop()
 {
+    // Create ggmorse instance for 24kHz mono int16 input
+    GGMorse::Parameters params;
+    params.sampleRateInp = 24000.0f;
+    params.sampleRateOut = 24000.0f;
+    params.samplesPerFrame = GGMorse::kDefaultSamplesPerFrame;
+    params.sampleFormatInp = GGMORSE_SAMPLE_FORMAT_I16;
+    params.sampleFormatOut = GGMORSE_SAMPLE_FORMAT_I16;
+
+    GGMorse ggmorse(params);
+
     // ggmorse requests samplesPerFrame * resampleFactor * sampleSize bytes per callback.
     // At 24kHz int16, factor=6 (24000/4000), frame=128: 128*6*2 = 1536 bytes.
-    const int resampleFactor = static_cast<int>(m_ggmorse->getSampleRateInp() / GGMorse::kBaseSampleRate);
-    const int bytesPerFrame = m_ggmorse->getSamplesPerFrame() * resampleFactor * m_ggmorse->getSampleSizeBytesInp();
+    const int resampleFactor = static_cast<int>(ggmorse.getSampleRateInp() / GGMorse::kBaseSampleRate);
+    const int bytesPerFrame = ggmorse.getSamplesPerFrame() * resampleFactor * ggmorse.getSampleSizeBytesInp();
     int feedCount = 0;
 
     qCDebug(lcDsp) << "CwDecoder: decode loop running, bytesPerFrame:" << bytesPerFrame;
@@ -205,10 +202,35 @@ void CwDecoder::decodeLoop()
             }
         }
 
+        DecodeParameters pending;
+        bool applyParameters = false;
+        {
+            std::lock_guard lock(m_parametersMutex);
+            if (m_parametersDirty) {
+                pending = m_pendingParameters;
+                m_parametersDirty = false;
+                applyParameters = true;
+            }
+        }
+        if (applyParameters) {
+            GGMorse::ParametersDecode dp = GGMorse::getDefaultParametersDecode();
+            dp.frequency_hz = pending.pitchHz;
+            dp.speed_wpm = pending.speedWpm;
+            dp.frequencyRangeMin_hz = pending.pitchRangeMin;
+            dp.frequencyRangeMax_hz = pending.pitchRangeMax;
+            dp.speedRangeMin_wpm = pending.speedRangeMin;
+            dp.speedRangeMax_wpm = pending.speedRangeMax;
+            ggmorse.setParametersDecode(dp);
+        }
+
         int framesThisCall = 0;
 
-        bool gotData = m_ggmorse->decode([this, &framesThisCall](void* data, uint32_t nMaxBytes) -> uint32_t {
-            if (!m_running) return 0;
+        bool gotData = ggmorse.decode([this, &framesThisCall](void* data, uint32_t nMaxBytes) -> uint32_t {
+            // Return after one frame so continuously arriving audio cannot
+            // postpone pending parameter changes or stop indefinitely.
+            if (!m_running || framesThisCall > 0) {
+                return 0;
+            }
 
             QMutexLocker lock(&m_bufMutex);
             // ggmorse requires exactly nMaxBytes — partial returns cause it to abort
@@ -224,20 +246,20 @@ void CwDecoder::decodeLoop()
 
         // Log periodically
         if (feedCount % 200 == 0 && feedCount > 0) {
-            const auto& stats = m_ggmorse->getStatistics();
-            const auto& rxData = m_ggmorse->getRxData();
+            const auto& stats = ggmorse.getStatistics();
+            const auto& rxData = ggmorse.getRxData();
             qCDebug(lcDsp) << "CwDecoder:" << feedCount << "frames fed, pitch:"
                      << stats.estimatedPitch_Hz << "Hz, speed:"
                      << stats.estimatedSpeed_wpm << "WPM, decode:" << gotData
                      << "rxLen:" << rxData.size()
-                     << "lastResult:" << m_ggmorse->lastDecodeResult();
+                     << "lastResult:" << ggmorse.lastDecodeResult();
         }
 
-        const auto& stats = m_ggmorse->getStatistics();
+        const auto& stats = ggmorse.getStatistics();
 
         // Accept all decodes — color-coded by confidence in the UI
         GGMorse::TxRx rxData;
-        if (m_ggmorse->takeRxData(rxData) > 0 && stats.costFunction < 1.0f) {
+        if (ggmorse.takeRxData(rxData) > 0 && stats.costFunction < 1.0f) {
             QString text = QString::fromLatin1(
                 reinterpret_cast<const char*>(rxData.data()),
                 static_cast<int>(rxData.size()));
@@ -245,9 +267,23 @@ void CwDecoder::decodeLoop()
         }
 
         if (stats.estimatedPitch_Hz > 0) {
-            m_pitch = stats.estimatedPitch_Hz;
-            m_speed = stats.estimatedSpeed_wpm;
-            emit statsUpdated(m_pitch, m_speed);
+            float pitch;
+            float speed;
+            {
+                std::lock_guard lock(m_parametersMutex);
+                // A just-completed old frame must not overwrite a newer lock
+                // request. Locked setpoints live in the pending snapshot.
+                // Nonpositive locks still mean automatic detection to GGMorse.
+                if (!m_pitchLocked || m_pendingParameters.pitchHz <= 0.0f) {
+                    m_pitch = stats.estimatedPitch_Hz;
+                }
+                if (!m_speedLocked || m_pendingParameters.speedWpm <= 0.0f) {
+                    m_speed = stats.estimatedSpeed_wpm;
+                }
+                pitch = m_pitch;
+                speed = m_speed;
+            }
+            emit statsUpdated(pitch, speed);
         }
     }
 
