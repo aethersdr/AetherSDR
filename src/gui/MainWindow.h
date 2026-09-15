@@ -38,6 +38,7 @@
 #include "core/CwDecoder.h"
 #include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
+#include "models/DecoderAudioModel.h"
 #include "core/QsoRecorder.h"
 #include "core/ClientPuduMonitor.h"
 #include "core/AudioOutputRouter.h"
@@ -1147,6 +1148,7 @@ private:
     CwDecoder         m_cwDecoderTx;
     CwCallsignSpotter m_cwCallsignSpotter;
     RttyDecoder       m_rttyDecoder;
+    std::unique_ptr<DecoderAudioModel> m_rttyAudio;
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
 #ifdef HAVE_MQTT

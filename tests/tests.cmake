@@ -73,6 +73,22 @@ target_link_libraries(pcm_frame_test PRIVATE Qt6::Core)
 add_test(NAME pcm_frame_test COMMAND pcm_frame_test)
 set_tests_properties(pcm_frame_test PROPERTIES TIMEOUT 30)
 
+# Fixed decoder domains and selected receiver routes; no transport peer/device.
+add_executable(decoder_pcm_adapter_test tests/decoder_pcm_adapter_test.cpp)
+target_link_libraries(decoder_pcm_adapter_test PRIVATE aethercore Qt6::Core)
+add_test(NAME decoder_pcm_adapter_test COMMAND decoder_pcm_adapter_test)
+set_tests_properties(decoder_pcm_adapter_test PROPERTIES TIMEOUT 30)
+
+add_executable(decoder_audio_routing_test tests/decoder_audio_routing_test.cpp)
+target_link_libraries(decoder_audio_routing_test PRIVATE aethercore Qt6::Core)
+add_test(NAME decoder_audio_routing_test COMMAND decoder_audio_routing_test)
+set_tests_properties(decoder_audio_routing_test PROPERTIES TIMEOUT 30)
+
+add_executable(rtty_decoder_pcm_test tests/rtty_decoder_pcm_test.cpp)
+target_link_libraries(rtty_decoder_pcm_test PRIVATE aethercore Qt6::Core)
+add_test(NAME rtty_decoder_pcm_test COMMAND rtty_decoder_pcm_test)
+set_tests_properties(rtty_decoder_pcm_test PROPERTIES TIMEOUT 30)
+
 # Actual backend/model/audio/parser wiring with injected PCM; binds no sockets.
 add_executable(pcm_compatibility_test tests/pcm_compatibility_test.cpp)
 target_link_libraries(pcm_compatibility_test PRIVATE aethercore Qt6::Core)
@@ -5491,6 +5507,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    decoder_audio_routing_test
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test

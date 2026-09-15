@@ -2386,13 +2386,13 @@ void MainWindow::wireRxDemodAudioSinks()
                     m_cwDecoder.feedAudio(pcm);
             });
 
-    // RTTY decoder RX feed — gated on the decoder being running.
-    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_rttyDecoder, [this](const PcmFrame& frame) {
-                const QByteArray pcm = frame.legacyStereo24();
-                if (!pcm.isEmpty() && m_rttyDecoder.isRunning())
-                    m_rttyDecoder.feedAudio(pcm);
-            });
+    // RFC #5468 A5: selected receiver/DAX tap, before speaker gain/mute/mix.
+    m_rttyAudio = std::make_unique<DecoderAudioModel>(
+        m_radioModel, DecoderAudioModel::Consumer::Rtty);
+    connect(m_rttyAudio.get(), &DecoderAudioModel::pcmReady,
+            &m_rttyDecoder, &RttyDecoder::feedPcmBlock);
+    connect(m_rttyAudio.get(), &DecoderAudioModel::sourceReset,
+            &m_rttyDecoder, &RttyDecoder::resetInput);
 }
 
 // TX VITA-49 packets → the registered PanadapterStream socket. Flex-only (the
