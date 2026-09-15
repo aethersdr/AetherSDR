@@ -462,7 +462,7 @@ and conflating them would hide one of them.
 | Field | Flex | HL2 | Icom | ANAN | Question it answers |
 |---|:--:|:--:|:--:|:--:|---|
 | `radioOwnsDbmScale` | ✅ (default) | ❌ | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
-| `reportsCalibratedDbm` | ✅ (default) | ❌ | ✅ (default) | ✅ (default) | Do the numbers on that axis mean absolute dBm at the antenna? |
+| `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
 
 **`radioOwnsDbmScale` is consumed**, and a backend declaring `false` changes
 behaviour at four gates plus two fan-out sites:
@@ -504,7 +504,7 @@ auto-floor is the only one available. The two questions coincide on a Flex and a
 Icom and come apart here; the gate should eventually ask whether the floor
 MEASUREMENT depends on a commanded range.
 
-**`reportsCalibratedDbm` is declared and nothing reads it yet.** It is the
+**The calibration claim is declared and nothing reads it yet.** It is the
 second question: an HL2's axis is dBFS wearing a dBm label, because nothing on
 the board reports what 0 dBFS is worth at the antenna and no HL2 oracle states a
 figure for it. `Hl2Backend` reads the declaration off
@@ -514,20 +514,37 @@ internally consistent — a 3 dB stronger signal reads 3 dB higher — so what t
 `false` denies is comparison: no spot level, no cross-station claim, no absolute
 threshold.
 
-Both default to the **legacy** shape (`true`) rather than the conservative one,
-which is the second half of the "ADDING A FIELD" rule in the struct header: every
-backend predating these fields labelled its axis dBm and was consumed as though
-it meant it. That also means ANAN and RTL-SDR currently inherit
-`reportsCalibratedDbm = true` — both are raw-IQ paths and neither has been read
-for this question, so the `✅` in their column above is an unexamined default,
-not a finding. It is exactly the trap rule 1 names, sitting in the tree.
+It is **not a bool**. It is a field of `PanAmplitudeModel`, held as
+`std::optional<PanAmplitudeModel> panAmplitude`, and read through
+`RadioCapabilities::dbmAxisIsCalibrated()`. Absent means *no backend has been
+read on the question*, which is not the same as "no" — the distinction a bool
+cannot carry, and the reason #5262 M2 asks for a record. The accessor exists
+because absence has to fall to the **legacy** answer (`true`): every backend
+predating the field labelled its axis dBm and was consumed as though it meant
+it, so answering `false` for an unread backend would silently restate a claim
+about radios nobody has looked at.
+
+`panBinsAbsolute()` reads the *other* field of the same record and falls the
+**opposite** way on the same absent value — undeclared is not "absolute". Two
+opposite defaults on one record is precisely why neither is unwrapped at a call
+site.
+
+Flex and Icom leave the record absent and keep the legacy `✅` above; that is an
+unexamined default, not a finding, and it is exactly the trap rule 1 names,
+sitting in the tree. ANAN and RTL-SDR no longer inherit it: both are raw-IQ
+paths, both have now been read, and both declare `calibratedDbm = false` with
+the bin expression quoted in their own `capabilities()`.
 
 ### The panadapter span is a hardware property on a raw-IQ radio
 
 | Field | Flex | HL2 | RTL | Question it answers |
 |---|:--:|:--:|:--:|---|
-| `panSpanFollowsSampleRate` | — (❌) | ✅ | — (❌) | Is `sampleRatesHz` the complete set of spans, floor included? |
-| `panSpanIsRadioWide` | — (❌) | ✅ | — (❌) | Does changing one pan's span change every receiver's? |
+| `panSpanModel->followsSampleRate` | — (absent) | ✅ | — (absent) | Is `sampleRatesHz` the complete set of spans, floor included? |
+| `panSpanModel->radioWide` | — (absent) | ✅ | — (absent) | Does changing one pan's span change every receiver's? |
+
+Both live in one `std::optional<PanSpanModel> panSpanModel`. Absent is *not* a
+pair of `false`s: it means no backend has been read, and a client that needs the
+distinction checks `has_value()` before the fields.
 
 Both are declared and nothing reads them yet — the behaviour they describe is
 already implemented, by `Hl2Backend::applyPanBandwidth` snapping through
@@ -542,7 +559,7 @@ default. A narrower window would need samples the DDC never sent. One array in
 clamp and the snap target, and `tests/hl2_pan_limits_declaration_test.cpp`
 asserts the capability against that array rather than a copy of its values.
 
-`panSpanIsRadioWide` is why `receivePanBandwidthControl` is `nullopt` on a radio
+`panSpanModel->radioWide` is why `receivePanBandwidthControl` is `nullopt` on a radio
 that plainly does change its span: `MetisProtocol::ccConfig` packs one
 `SampleRate` into C1[1:0] for the whole board, so the control is real but
 radio-wide. Publishing it as a per-pan authority would let an operator narrow one
@@ -577,10 +594,10 @@ backend side the whole time.
 
 | Field | Flex | HL2 | Sim | Note |
 |---|:--:|:--:|:--:|---|
-| `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists. On the HL2 it is also the complete span set — see `panSpanFollowsSampleRate` below |
-| `panSpanFollowsSampleRate` | — (❌) | ✅ | — (❌) | The span IS the rate, so `sampleRatesHz` is every deliverable span and its first entry is a floor |
-| `panSpanIsRadioWide` | — (❌) | ✅ | — (❌) | One DDC rate for the board; a span change moves every receiver |
-| `reportsCalibratedDbm` | — (✅) | ❌ | — (✅) | Whether the dBm axis is absolute. HL2 reads it off `Hl2DbReference::isCalibrated()` |
+| `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists. On the HL2 it is also the complete span set — see `panSpanModel` below |
+| `panSpanModel->followsSampleRate` | — (absent) | ✅ | — (absent) | The span IS the rate, so `sampleRatesHz` is every deliverable span and its first entry is a floor |
+| `panSpanModel->radioWide` | — (absent) | ✅ | — (absent) | One DDC rate for the board; a span change moves every receiver |
+| `dbmAxisIsCalibrated()` | — (absent ⇒ ✅) | ❌ | — (absent ⇒ ✅) | Whether the dBm axis is absolute. HL2 reads it off `Hl2DbReference::isCalibrated()` |
 | `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Global fallback ceiling; Flex still omits it despite transmitting, which remains wrong but inert while `txPowerBands` is empty |
 | `hasAmplifier` | — (❌) | ❌ | ❌ | The AMP applet is driven by `TunerModel::presenceChanged`, not by this |
 | `extensions` | — | — | — | The namespaced vendor bag; never populated |
@@ -658,8 +675,8 @@ other backends keep the controls those refusals take away.
 covers the keying-authority side.
 [`tests/hl2_pan_limits_declaration_test.cpp`](../../tests/hl2_pan_limits_declaration_test.cpp)
 pins the HL2's panadapter-limit declarations — `radioOwnsDbmScale`,
-`panSpanFollowsSampleRate`, `panSpanIsRadioWide`, `reportsCalibratedDbm` — and
-asserts the rate list against `hl2::kIqSampleRatesHz` and the axis against
+`panSpanModel` and `panAmplitude` — and asserts the rate list against
+`hl2::kIqSampleRatesHz` and the axis against
 `Hl2DbReference::isCalibrated()` rather than against re-typed values, so the
 declaration cannot drift away from the code it describes without a failure. It is
 its own socket-free target on purpose: the fake-EP6 fixture that once carried the

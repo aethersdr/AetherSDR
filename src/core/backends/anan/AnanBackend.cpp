@@ -346,7 +346,9 @@ RadioCapabilities AnanBackend::capabilities() const
     // The numbers stay internally consistent; what is denied is COMPARISON. A
     // level from this radio may not be published as a spot, held against another
     // station's report, or used as an absolute threshold.
-    c.reportsCalibratedDbm = false;
+    PanAmplitudeModel amplitude;
+    amplitude.calibratedDbm = false;
+    c.panAmplitude = amplitude;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");

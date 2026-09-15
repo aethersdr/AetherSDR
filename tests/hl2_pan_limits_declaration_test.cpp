@@ -116,7 +116,14 @@ int main(int argc, char** argv)
     // so a narrower window would need samples the DDC never delivered. Revert
     // this and a client is entitled to take a 5 kHz zoom request literally
     // instead of snapping it to a rate.
-    check(caps.panSpanFollowsSampleRate,
+    //
+    // The record is PRESENT, which is a claim in its own right: absent means
+    // "no backend has been read on the question", and an assertion that only
+    // read the fields would pass on a default-constructed nullopt turning into
+    // a silent false. Check presence first, then each field.
+    check(caps.panSpanModel.has_value(),
+          "the HL2 DECLARES a span model — absence would mean nobody had read it");
+    check(caps.panSpanModel && caps.panSpanModel->followsSampleRate,
           "the pan span IS the sample rate, so the rate list is the complete span set");
 
     // One rate field for the whole board — MetisProtocol::ccConfig packs
@@ -124,7 +131,7 @@ int main(int argc, char** argv)
     // so a span change is radio-wide. Revert this and a per-pan span control
     // looks legitimate on a radio where narrowing one window silently retunes
     // the other three.
-    check(caps.panSpanIsRadioWide,
+    check(caps.panSpanModel && caps.panSpanModel->radioWide,
           "one DDC rate for the whole radio — span is shared, not per-panadapter");
 
     // ---- the Y axis is dBFS wearing a dBm label ----
@@ -133,22 +140,41 @@ int main(int argc, char** argv)
     // false, so the day a per-unit fullScaleDbm is measured and populated the
     // declaration follows it and this assertion keeps holding instead of having
     // to be remembered. The second check is what today's answer is.
-    check(caps.reportsCalibratedDbm == hl2::Hl2DbReference{}.isCalibrated(),
+    check(caps.panAmplitude.has_value(),
+          "the HL2 DECLARES an amplitude model — this is a read backend, not a "
+          "silent one, and dbmAxisIsCalibrated() must not be answering from the "
+          "absent-means-legacy branch");
+    check(caps.panAmplitude
+              && caps.panAmplitude->calibratedDbm == hl2::Hl2DbReference{}.isCalibrated(),
           "the dBm axis declaration tracks Hl2DbReference::isCalibrated()");
-    check(!caps.reportsCalibratedDbm,
+    check(caps.dbmAxisIsCalibrated() == hl2::Hl2DbReference{}.isCalibrated(),
+          "and the accessor reports the declared field, not its absent default");
+    check(!caps.dbmAxisIsCalibrated(),
           "and today that means UNCALIBRATED — no per-unit fullScaleDbm exists");
 
-    // The permissive defaults these two fields carry are load-bearing, and a
-    // regression that flipped either default would make every silent backend
-    // change its claim at once. Pin them from a default-constructed descriptor,
-    // beside the HL2's overrides, so the two facts fail separately.
+    // The permissive defaults these fields carry are load-bearing, and a
+    // regression that flipped either would make every silent backend change its
+    // claim at once. Pin them from a default-constructed descriptor, beside the
+    // HL2's overrides, so the facts fail separately.
+    //
+    // THE TWO ACCESSORS FALL OPPOSITE WAYS ON THE SAME ABSENT RECORD. That is
+    // the point of the record and the single thing a conversion could silently
+    // regress, so both directions are asserted here rather than inferred.
     check(RadioCapabilities{}.radioOwnsDbmScale,
           "radioOwnsDbmScale still defaults TRUE (the legacy shape)");
-    check(RadioCapabilities{}.reportsCalibratedDbm,
-          "reportsCalibratedDbm also defaults TRUE — see its comment for why");
-    check(!RadioCapabilities{}.panSpanFollowsSampleRate
-              && !RadioCapabilities{}.panSpanIsRadioWide,
-          "both span-shape fields default FALSE — a radio without the constraint");
+    check(!RadioCapabilities{}.panAmplitude.has_value(),
+          "a descriptor nobody has written declares NO amplitude model");
+    check(RadioCapabilities{}.dbmAxisIsCalibrated(),
+          "absent -> CALIBRATED: the legacy claim is kept, matching the bool "
+          "default this replaced");
+    check(!RadioCapabilities{}.panBinsAbsolute(),
+          "absent -> NOT absolute: the opposite fall, matching the bool default "
+          "this replaced. The auto-floor gate's OR stays permissive through "
+          "radioOwnsDbmScale instead");
+    check(!RadioCapabilities{}.panSpanModel.has_value(),
+          "and no span model either — a radio without the constraint, and one "
+          "nobody has read, are the same descriptor only because neither is "
+          "allowed to claim anything");
 
     std::printf("%s: %d failure(s)\n", argv[0], failures);
     return failures == 0 ? 0 : 1;
