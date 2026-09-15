@@ -294,6 +294,14 @@ void QsoRecorder::setCwOverActive(bool active)
 
 void QsoRecorder::startFile()
 {
+    Q_ASSERT(!m_file);
+    // QDir("") resolves to the working directory. A missing configured path
+    // must fail visibly rather than silently putting recordings there.
+    if (m_recordingDir.isEmpty()) {
+        emit recordingError(QStringLiteral("Cannot create recording directory: path is empty"));
+        return;
+    }
+
     // Capture metadata from active slice at recording start
     if (m_slice) {
         m_freqMhz = m_slice->frequency();
@@ -339,10 +347,6 @@ void QsoRecorder::startFile()
         }
 
         openError = file->errorString();
-        if (file->error() == QFileDevice::PermissionsError) {
-            break;
-        }
-
         // NewOnly makes this check a classification after the atomic create
         // attempt, never an exists-before-open TOCTOU window. QFileInfo::exists
         // is false for a dangling link, so preserve it as an occupied name too.

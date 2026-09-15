@@ -7,10 +7,12 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QtEndian>
 
@@ -250,27 +252,26 @@ int main(int argc, char** argv)
     }
 #endif
 
-    // Exercise the default date/time form. Each retry uses an empty temporary
-    // directory, avoiding a second attempt inheriting an earlier suffix after a
-    // wall-clock boundary.
+    // Default names retain their UTC date/time shape and preserve prior audio,
+    // whether these starts happen within one second or straddle a clock tick.
+    // Repeated-name suffix allocation is deterministic in the cases above.
     {
-        bool observedSameSecondCollision = false;
-        constexpr int kAttempts = 3;
-        for (int attempt = 0; attempt < kAttempts && !observedSameSecondCollision; ++attempt) {
-            QTemporaryDir directory;
-            EXPECT_TRUE(directory.isValid());
-            QsoRecorder first;
-            first.setRecordingDir(directory.path());
-            const QString firstPath = startAndCapture(first, 0.25f);
-            QsoRecorder second;
-            second.setRecordingDir(directory.path());
-            const QString secondPath = startAndCapture(second, 0.50f);
-            const QFileInfo firstInfo(firstPath);
-            const QFileInfo secondInfo(secondPath);
-            observedSameSecondCollision = secondInfo.fileName()
-                == firstInfo.completeBaseName() + QStringLiteral("_1.wav");
-        }
-        EXPECT_TRUE(observedSameSecondCollision);
+        QTemporaryDir directory;
+        EXPECT_TRUE(directory.isValid());
+        QsoRecorder first;
+        first.setRecordingDir(directory.path());
+        const QString firstPath = startAndCapture(first, 0.25f);
+        const QByteArray firstBytes = readFile(firstPath);
+        QsoRecorder second;
+        second.setRecordingDir(directory.path());
+        const QString secondPath = startAndCapture(second, 0.50f);
+        const QRegularExpression defaultName(
+            QStringLiteral("^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}Z(?:_[0-9]+)?\\.wav$"));
+        EXPECT_TRUE(defaultName.match(QFileInfo(firstPath).fileName()).hasMatch());
+        EXPECT_TRUE(defaultName.match(QFileInfo(secondPath).fileName()).hasMatch());
+        EXPECT_TRUE(firstPath != secondPath);
+        EXPECT_TRUE(readFile(firstPath) == firstBytes);
+        EXPECT_TRUE(readFile(secondPath).mid(44) == expectedRecordedPcm(0.50f));
     }
 
     // The workers wait on a stdin barrier, then race for the same local-file
@@ -356,6 +357,74 @@ int main(int argc, char** argv)
         EXPECT_TRUE(recorder.recordingFilePath().isEmpty());
         EXPECT_TRUE(errors == 1);
         EXPECT_TRUE(started == 0);
+    }
+
+    // A blank configured directory must not resolve to the process working
+    // directory. Isolate that directory too so the guard's mutation is safe.
+    {
+        QTemporaryDir directory;
+        EXPECT_TRUE(directory.isValid());
+        const QString previousDirectory = QDir::currentPath();
+        if (!directory.isValid() || !QDir::setCurrent(directory.path())) {
+            return 1;
+        }
+        QsoRecorder recorder;
+        recorder.setRecordingDir(QString());
+        disableFilenameFields(recorder);
+        QStringList errors;
+        int started = 0;
+        QObject::connect(&recorder, &QsoRecorder::recordingError,
+                         &recorder, [&](const QString& message) { errors << message; });
+        QObject::connect(&recorder, &QsoRecorder::recordingStarted,
+                         &recorder, [&](const QString&) { ++started; });
+        recorder.startRecording();
+        EXPECT_TRUE(!recorder.isRecording());
+        EXPECT_TRUE(recorder.recordingFilePath().isEmpty());
+        EXPECT_TRUE(started == 0);
+        EXPECT_TRUE(errors.size() == 1);
+        EXPECT_TRUE(errors.value(0).contains(QStringLiteral("path is empty")));
+        EXPECT_TRUE(!QFileInfo::exists(directory.filePath(QStringLiteral("QSO.wav"))));
+        recorder.stopRecording();
+        EXPECT_TRUE(QDir::setCurrent(previousDirectory));
+    }
+
+    // Occupy every allowed candidate: fail once at the bound and preserve all
+    // existing bytes. Freeing the final candidate permits a later retry.
+    {
+        QTemporaryDir directory;
+        EXPECT_TRUE(directory.isValid());
+        for (int suffix = 0; suffix < 1000; ++suffix) {
+            const QString name = suffix == 0 ? QStringLiteral("QSO.wav")
+                : QStringLiteral("QSO_%1.wav").arg(suffix);
+            EXPECT_TRUE(writeFile(directory.filePath(name), QByteArrayLiteral("occupied")));
+        }
+        QsoRecorder recorder;
+        recorder.setRecordingDir(directory.path());
+        disableFilenameFields(recorder);
+        QStringList errors;
+        int started = 0;
+        QObject::connect(&recorder, &QsoRecorder::recordingError,
+                         &recorder, [&](const QString& message) { errors << message; });
+        QObject::connect(&recorder, &QsoRecorder::recordingStarted,
+                         &recorder, [&](const QString&) { ++started; });
+        recorder.startRecording();
+        EXPECT_TRUE(!recorder.isRecording());
+        EXPECT_TRUE(recorder.recordingFilePath().isEmpty());
+        EXPECT_TRUE(started == 0);
+        EXPECT_TRUE(errors.size() == 1);
+        EXPECT_TRUE(errors.value(0).endsWith(
+            QStringLiteral("all 1000 filename candidates are occupied")));
+        EXPECT_TRUE(!QFileInfo::exists(directory.filePath(QStringLiteral("QSO_1000.wav"))));
+        for (int suffix = 0; suffix < 1000; ++suffix) {
+            const QString name = suffix == 0 ? QStringLiteral("QSO.wav")
+                : QStringLiteral("QSO_%1.wav").arg(suffix);
+            EXPECT_TRUE(readFile(directory.filePath(name)) == QByteArrayLiteral("occupied"));
+        }
+        EXPECT_TRUE(QFile::remove(directory.filePath(QStringLiteral("QSO_999.wav"))));
+        EXPECT_EQ(QFileInfo(startAndCapture(recorder, 0.25f)).fileName(),
+                  QStringLiteral("QSO_999.wav"));
+        EXPECT_TRUE(started == 1);
+        EXPECT_TRUE(errors.size() == 1);
     }
 
     if (g_failures == 0) {
