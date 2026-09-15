@@ -1643,6 +1643,448 @@ bool runTransmitLiveGeometryTest()
     return true;
 }
 
+// ── "Underrun on most blocks and zeros on the rest" ───────────────────────
+//
+// Hl2TxDsp.cpp's note records a TXA attempt that "returned Underrun on most
+// blocks and zeros on the rest". S6 §3.6 ranks four candidates for the ZEROS
+// half and says none of them is established. This case is the experiment §3.6
+// names: a transmit channel at the live rates and block sizes, fed with the
+// tone in ONE plane only, printing per-block RMS and ProcessResult for the
+// first 200 blocks.
+//
+// It is deliberately a SIBLING of runTransmitLiveGeometryTest, not a
+// replacement. That case establishes the Underrun half (caller cadence) and
+// measures the channel's spectra; this one is about the zeros, and about which
+// of §3.6's four candidates can and cannot produce them.
+//
+// The four candidates, and what each leg below does to it:
+//
+//  1. WRONG PLANE. xpanel runs with inselect = 2 -- create_panel's ninth
+//     argument in txa.c's create_txa, commented "1 to use Q, 2 to use I for
+//     input" -- and evaluates I = in[2i] * (inselect >> 1),
+//     Q = in[2i+1] * (inselect & 1). Q is multiplied by zero. Leg Q feeds the
+//     tone into inputQ and nothing into inputI.
+//
+//  2. PRIMING: the iobuffs mute ramp plus bp0's fill. create_slews sizes
+//     ndelup = tdelayup * in_rate and ntup = tslewup * in_rate, and upslew2
+//     sits in BEGIN emitting zeros until a non-zero sample arrives. Leg I
+//     measures how long the priming actually lasts, in blocks and in samples,
+//     against that arithmetic.
+//
+//  3. A REFUSED CONTROL CALL. WdspChannel::setFilter returns false on
+//     lowHz >= highHz and on a control operation already in flight. Leg 3
+//     refuses a call on a RUNNING channel and keeps feeding it.
+//
+//  4. xuslew. Not reachable for SSB: TXAuSlewCheck leaves runmode 0 and the
+//     stage is a pass-through. Leg AM drives the same geometry in AM, where
+//     ammod.run is 1, and reports what that does to the priming stretch.
+//
+// Note what upslew2 tests: `(I != 0.0) || (Q != 0.0)`, on the RAW input pair,
+// BEFORE xpanel. So candidates 1 and 2 are separable rather than confounded --
+// a Q-only feed opens the mute ramp exactly as an I-only feed does, and is
+// then zeroed one stage later.
+
+struct BlockRecord
+{
+    WdspChannel::ProcessResult result = WdspChannel::ProcessResult::Ok;
+    double rms = 0.0;
+    bool exactlyZero = true;
+};
+
+const char* resultName(WdspChannel::ProcessResult result)
+{
+    switch (result) {
+    case WdspChannel::ProcessResult::Ok:                  return "Ok";
+    case WdspChannel::ProcessResult::Underrun:            return "Underrun";
+    case WdspChannel::ProcessResult::Busy:                return "Busy";
+    case WdspChannel::ProcessResult::InvalidBuffer:       return "InvalidBuffer";
+    case WdspChannel::ProcessResult::AllocationViolation: return "AllocationViolation";
+    case WdspChannel::ProcessResult::EngineError:         return "EngineError";
+    }
+    return "?";
+}
+
+struct ZerosCensus
+{
+    bool created = false;
+    std::vector<BlockRecord> blocks;
+    int okBlocks = 0;
+    int underrunBlocks = 0;
+    int otherBlocks = 0;
+    int firstNonZeroBlock = -1;
+    // Index of the first non-zero sample in the OUTPUT stream, at the output
+    // rate. Converted to input samples this is the quantity §3.6's mute-ramp
+    // arithmetic predicts.
+    long long firstNonZeroOutputSample = -1;
+    int okBlocksThatWereZero = 0;
+    int okBlocksAfterFirstNonZeroThatWereZero = 0;
+    double peakRms = 0.0;
+    // RMS of the Ok blocks only, in the order they were returned. On a starved
+    // caller this is the OUTPUT STREAM's own opening sequence sampled one block
+    // at a time, which is the whole point: it is what the caller sees, and it
+    // is not the same thing as the first N calls.
+    std::vector<double> okRms;
+};
+
+// plane: 0 = tone in I only, 1 = tone in Q only.
+ZerosCensus runZerosCensus(int plane, double toneHz, WdspChannel::Mode mode,
+                           double lowHz, double highHz, std::size_t blocks,
+                           int paceUs)
+{
+    ZerosCensus census;
+    const WdspChannel::Config config = liveTransmitConfig(mode, lowHz, highHz);
+    std::string error;
+    std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, error.c_str())) {
+        return census;
+    }
+    census.created = true;
+
+    std::vector<float> inputI(config.inputBlockSize, 0.0f);
+    std::vector<float> inputQ(config.inputBlockSize, 0.0f);
+    const std::size_t outBlock = channel->outputBlockSize();
+    std::vector<float> outputLeft(outBlock);
+    std::vector<float> outputRight(outBlock);
+
+    for (std::size_t block = 0; block < blocks; ++block) {
+        for (std::size_t sample = 0; sample < inputI.size(); ++sample) {
+            const double phase = 2.0 * std::numbers::pi * toneHz *
+                                 static_cast<double>(block * inputI.size() + sample) /
+                                 static_cast<double>(config.inputSampleRate);
+            const float value = static_cast<float>(0.1 * std::cos(phase));
+            inputI[sample] = (plane == 1) ? 0.0f : value;
+            inputQ[sample] = (plane == 0) ? 0.0f : value;
+        }
+        const WdspChannel::ProcessResult result =
+            channel->processIq(inputI, inputQ, outputLeft, outputRight);
+
+        BlockRecord record;
+        record.result = result;
+        double sum = 0.0;
+        for (std::size_t k = 0; k < outBlock; ++k) {
+            const double l = outputLeft[k];
+            const double r = outputRight[k];
+            sum += l * l + r * r;
+            if (l != 0.0 || r != 0.0) {
+                if (record.exactlyZero) {
+                    record.exactlyZero = false;
+                    if (census.firstNonZeroOutputSample < 0) {
+                        census.firstNonZeroOutputSample =
+                            static_cast<long long>(block * outBlock + k);
+                    }
+                }
+            }
+        }
+        record.rms = std::sqrt(sum / static_cast<double>(2 * outBlock));
+        census.peakRms = std::max(census.peakRms, record.rms);
+        if (!record.exactlyZero && census.firstNonZeroBlock < 0) {
+            census.firstNonZeroBlock = static_cast<int>(block);
+        }
+        switch (result) {
+        case WdspChannel::ProcessResult::Ok:
+            ++census.okBlocks;
+            census.okRms.push_back(record.rms);
+            if (record.exactlyZero) {
+                ++census.okBlocksThatWereZero;
+                if (census.firstNonZeroBlock >= 0) {
+                    ++census.okBlocksAfterFirstNonZeroThatWereZero;
+                }
+            }
+            break;
+        case WdspChannel::ProcessResult::Underrun:
+            ++census.underrunBlocks;
+            break;
+        default:
+            ++census.otherBlocks;
+            break;
+        }
+        census.blocks.push_back(record);
+        if (paceUs > 0) {
+            std::this_thread::sleep_for(std::chrono::microseconds(paceUs));
+        }
+    }
+    return census;
+}
+
+// Per-block print. Every block of the first `verbatim`, then only blocks that
+// are not Ok or that change the zero/non-zero state, then a run-length line for
+// each collapsed stretch -- so a 200-block leg that says the same thing 190
+// times says it once, and nothing that CHANGES is ever hidden.
+void printCensus(const char* label, const ZerosCensus& census,
+                 std::size_t verbatim)
+{
+    std::cout << "    " << label << ":\n";
+    std::size_t runStart = 0;
+    for (std::size_t n = 0; n < census.blocks.size(); ++n) {
+        const BlockRecord& record = census.blocks[n];
+        const bool changed =
+            n == 0 ||
+            record.result != census.blocks[n - 1].result ||
+            record.exactlyZero != census.blocks[n - 1].exactlyZero;
+        if (changed && n > 0 && n > verbatim && n - runStart > 1) {
+            std::cout << "      b" << runStart << "..b" << (n - 1) << ": "
+                      << resultName(census.blocks[runStart].result)
+                      << (census.blocks[runStart].exactlyZero
+                              ? "  rms=0 (exactly)" : "  rms>0")
+                      << "  (" << (n - runStart) << " blocks, same)\n";
+        }
+        if (changed) {
+            runStart = n;
+        }
+        if (n < verbatim || changed) {
+            std::cout << "      b" << n << ": " << resultName(record.result)
+                      << "  rms=" << record.rms
+                      << (record.exactlyZero ? "  (exactly zero)" : "") << '\n';
+        }
+    }
+    const std::size_t last = census.blocks.size();
+    if (last > verbatim && last - runStart > 1) {
+        std::cout << "      b" << runStart << "..b" << (last - 1) << ": "
+                  << resultName(census.blocks[runStart].result)
+                  << (census.blocks[runStart].exactlyZero
+                          ? "  rms=0 (exactly)" : "  rms>0")
+                  << "  (" << (last - runStart) << " blocks, same)\n";
+    }
+    std::cout << "      totals: ok=" << census.okBlocks
+              << " underrun=" << census.underrunBlocks
+              << " other=" << census.otherBlocks
+              << " firstNonZeroBlock=" << census.firstNonZeroBlock
+              << " firstNonZeroOutputSample=" << census.firstNonZeroOutputSample
+              << " okButZero=" << census.okBlocksThatWereZero
+              << " okButZeroAfterSignalStarted="
+              << census.okBlocksAfterFirstNonZeroThatWereZero
+              << " peakRms=" << census.peakRms << '\n';
+}
+
+bool runTransmitZerosCensusTest()
+{
+    constexpr std::size_t kBlocks = 200;     // §3.6's own number
+    constexpr std::size_t kVerbatim = 12;
+
+    // The mute-ramp arithmetic §3.6 predicts, printed so the measurement below
+    // can be read against it rather than against a remembered number.
+    const WdspChannel::Config probe =
+        liveTransmitConfig(WdspChannel::Mode::Usb, 300.0, 2700.0);
+    const int ndelup = static_cast<int>(probe.muteDelayUpSec *
+                                        probe.inputSampleRate);
+    const int ntup = static_cast<int>(probe.muteSlewUpSec *
+                                      probe.inputSampleRate);
+    std::cout << "  TX zeros census at the live geometry (512 in / 1024 dsp, "
+                 "24k->48k, bfo=0)\n";
+    std::cout << "    create_slews arithmetic: ndelup=" << ndelup
+              << " + ntup=" << ntup << " = " << (ndelup + ntup)
+              << " input samples = "
+              << static_cast<double>(ndelup + ntup) /
+                     static_cast<double>(probe.inputBlockSize)
+              << " input blocks; bp0 = " << probe.filterTaps << " taps over "
+              << probe.dspBlockSize << "-sample DSP passes\n";
+
+    // ── Leg I: the tone in inputI, paced at the live block period. ────────
+    const ZerosCensus legI =
+        runZerosCensus(0, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+                       kBlocks, kLivePaceUs);
+    if (!require(legI.created, "live-geometry transmit channel was refused")) {
+        return false;
+    }
+    printCensus("leg I  (tone in inputI, inputQ zero, live pace)", legI,
+                kVerbatim);
+
+    // ── Leg Q: the same tone in inputQ. ───────────────────────────────────
+    const ZerosCensus legQ =
+        runZerosCensus(1, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+                       kBlocks, kLivePaceUs);
+    if (!require(legQ.created, "live-geometry transmit channel was refused")) {
+        return false;
+    }
+    printCensus("leg Q  (tone in inputQ, inputI zero, live pace)", legQ,
+                kVerbatim);
+
+    // ── Leg U: I-only, unpaced. The historical caller's cadence. ──────────
+    const ZerosCensus legU =
+        runZerosCensus(0, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+                       kBlocks, 0);
+    if (!require(legU.created, "live-geometry transmit channel was refused")) {
+        return false;
+    }
+    printCensus("leg U  (tone in inputI, unpaced tight loop)", legU, kVerbatim);
+
+    // ── Leg AM: candidate 4's stage, reachable. ───────────────────────────
+    const ZerosCensus legAm =
+        runZerosCensus(0, 1000.0, WdspChannel::Mode::Am, -3000.0, 3000.0,
+                       kBlocks, kLivePaceUs);
+    if (!require(legAm.created, "AM live-geometry transmit channel was refused")) {
+        return false;
+    }
+    printCensus("leg AM (tone in inputI, AM, live pace -- xuslew reachable)",
+                legAm, kVerbatim);
+
+    // ── What the four legs settle ─────────────────────────────────────────
+
+    // CANDIDATE 1 is a real, silent, permanent zeros mechanism. Not "zeros for
+    // a while": zeros for every block of the run, with every ProcessResult Ok,
+    // so a caller watching the return value sees a healthy channel.
+    if (!require(legQ.peakRms == 0.0,
+                 "audio in Q produced transmit output; xpanel's inselect "
+                 "changed")) {
+        return false;
+    }
+    if (!require(legQ.otherBlocks == 0 && legQ.underrunBlocks == 0,
+                 "the Q-only leg reported an error, so the wrong-plane fault "
+                 "is not silent after all")) {
+        return false;
+    }
+    if (!require(static_cast<std::size_t>(legQ.okBlocksThatWereZero) == kBlocks,
+                 "the Q-only leg did not report Ok-and-zero on every block")) {
+        return false;
+    }
+
+    // CANDIDATE 2 is real but BOUNDED, and the bound is what excludes it as an
+    // explanation for zeros that persist. Output starts, and once started it
+    // never returns to exact zero on an Ok block.
+    if (!require(legI.firstNonZeroBlock >= 0,
+                 "audio in I produced no transmit output at all")) {
+        return false;
+    }
+    if (!require(legI.firstNonZeroBlock < 8,
+                 "the priming stretch on an I-only feed ran past 8 blocks")) {
+        return false;
+    }
+    if (!require(legI.okBlocksAfterFirstNonZeroThatWereZero == 0,
+                 "an Ok block returned exact zeros AFTER the channel had "
+                 "started producing output")) {
+        return false;
+    }
+
+    // THE RECORDED SYMPTOM IS LEG U, AND ITS ZEROS ARE CANDIDATE 2's.
+    // Hl2TxDsp.cpp's note says "Underrun on most blocks AND ZEROS ON THE REST"
+    // -- the rest of the BLOCKS, not the rest of the run. Leg U reproduces both
+    // halves at once with the audio in the RIGHT plane. The caller outruns the
+    // worker, fexchange2 misses on nearly every call, and the few reads that do
+    // land walk the OUTPUT STREAM's opening blocks one at a time -- so what the
+    // caller gets back is leg I's priming stretch, spread over hundreds of
+    // calls instead of five. The okRms sequence printed below is that walk.
+    //
+    // How far it walks is load-dependent, and deliberately not asserted: on a
+    // busier machine fewer reads land and every one of them is zero (which is
+    // the record verbatim); on a quieter one a late read reaches full
+    // amplitude. What is asserted is the part that does not move -- most calls
+    // underrun, and the first read a starved caller gets is exact zeros.
+    //
+    // So candidate 1 is NOT what the note describes. It cannot be: leg Q shows
+    // a wrong-plane channel returns Ok on every block and underruns NOTHING,
+    // which contradicts the "Underrun on most blocks" half of the record. It
+    // remains a real, silent, permanent zeros mechanism -- just not this one.
+    if (!require(legU.underrunBlocks * 2 >= static_cast<int>(kBlocks),
+                 "an unpaced caller at the live geometry did not underrun; the "
+                 "recorded symptom was not reproduced")) {
+        return false;
+    }
+    if (!require(!legU.okRms.empty() && legU.okRms.front() == 0.0,
+                 "the first block a starved transmit caller got back was not "
+                 "exact zeros")) {
+        return false;
+    }
+    std::cout << "    leg U Ok-block rms in order:";
+    for (const double value : legU.okRms) {
+        std::cout << ' ' << value;
+    }
+    std::cout << "\n    leg I block rms in order (first 8):";
+    for (std::size_t n = 0; n < 8 && n < legI.blocks.size(); ++n) {
+        std::cout << ' ' << legI.blocks[n].rms;
+    }
+    std::cout << '\n';
+    std::cout << "    verdict:\n"
+                 "      candidate 1 (leg Q): " << legQ.okBlocksThatWereZero
+              << "/" << kBlocks << " Ok-and-exactly-zero, "
+              << legQ.underrunBlocks << " underruns. A real, silent, permanent"
+                 " zeros mechanism -- but it underruns NOTHING, so it does not"
+                 " fit the recorded \"Underrun on most blocks\".\n"
+                 "      candidate 2 (leg I): priming ends at output sample "
+              << legI.firstNonZeroOutputSample << " ("
+              << 1000.0 * static_cast<double>(legI.firstNonZeroOutputSample) /
+                     static_cast<double>(probe.outputSampleRate)
+              << " ms), of which create_slews accounts for "
+              << 1000.0 * static_cast<double>(ndelup + ntup) /
+                     static_cast<double>(probe.inputSampleRate)
+              << " ms. Bounded: output never returns to exact zero after it"
+                 " starts.\n"
+                 "      leg U = the record: underrun=" << legU.underrunBlocks
+              << "/" << kBlocks << ", ok=" << legU.okBlocks
+              << ". The output stream advanced " << legU.okBlocks
+              << " blocks in " << kBlocks << " calls, so candidate 2's bounded"
+                 " priming is what a starved caller sees for the whole run.\n";
+
+    // CANDIDATE 3 cannot be the mechanism either, and this is the leg that
+    // shows why: a refused setFilter leaves a RUNNING channel running. The
+    // channel is fed across the refusal, so "the caller stopped feeding" --
+    // §3.6's own caveat -- is the only way a false becomes zeros, and that is a
+    // property of the caller, not of the channel.
+    {
+        const WdspChannel::Config config =
+            liveTransmitConfig(WdspChannel::Mode::Usb, 300.0, 2700.0);
+        std::string error;
+        std::unique_ptr<WdspChannel> channel = WdspChannel::create(config, &error);
+        if (!require(channel != nullptr, error.c_str())) {
+            return false;
+        }
+        std::vector<float> inputI(config.inputBlockSize, 0.0f);
+        std::vector<float> inputQ(config.inputBlockSize, 0.0f);
+        const std::size_t outBlock = channel->outputBlockSize();
+        std::vector<float> outputLeft(outBlock);
+        std::vector<float> outputRight(outBlock);
+        double rmsBefore = 0.0;
+        double rmsAfter = 0.0;
+        bool refused = false;
+        bool accepted = true;
+        for (std::size_t block = 0; block < 32; ++block) {
+            for (std::size_t sample = 0; sample < inputI.size(); ++sample) {
+                const double phase = 2.0 * std::numbers::pi * 1000.0 *
+                    static_cast<double>(block * inputI.size() + sample) /
+                    static_cast<double>(config.inputSampleRate);
+                inputI[sample] = static_cast<float>(0.1 * std::cos(phase));
+            }
+            if (block == 16) {
+                rmsBefore = rms(outputLeft);
+                // Inverted edges: setFilter's own guard, on a live channel.
+                refused = !channel->setFilter(2700.0, 300.0);
+                accepted = channel->setFilter(400.0, 2600.0);
+            }
+            channel->processIq(inputI, inputQ, outputLeft, outputRight);
+            if (block == 31) {
+                rmsAfter = rms(outputLeft);
+            }
+            std::this_thread::sleep_for(
+                std::chrono::microseconds(kLivePaceUs));
+        }
+        std::cout << "    leg 3  (setFilter refused mid-run): "
+                     "setFilter(2700,300) refused=" << (refused ? "yes" : "no")
+                  << "  setFilter(400,2600) accepted=" << (accepted ? "yes" : "no")
+                  << "  rms before=" << rmsBefore << " after=" << rmsAfter << '\n';
+        if (!require(refused, "setFilter accepted inverted passband edges") ||
+            !require(accepted, "setFilter refused a valid passband on a "
+                               "running channel") ||
+            !require(rmsBefore > 0.0 && rmsAfter > 0.0,
+                     "a channel that refused a setFilter stopped producing "
+                     "output")) {
+            return false;
+        }
+    }
+
+    // CANDIDATE 4 -- the AM leg -- is reported, not asserted into a bound. The
+    // point is only that the stage being reachable does not turn the priming
+    // stretch into a permanent one.
+    if (!require(legAm.firstNonZeroBlock >= 0,
+                 "an AM transmit channel produced no output at all")) {
+        return false;
+    }
+    if (!require(legAm.okBlocksAfterFirstNonZeroThatWereZero == 0,
+                 "an AM Ok block returned exact zeros after output started")) {
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -1683,6 +2125,7 @@ int main()
         return runVector(WdspChannel::Direction::Transmit);
     }));
     check(runLeakChecked("TX live geometry", runTransmitLiveGeometryTest));
+    check(runLeakChecked("TX zeros census", runTransmitZerosCensusTest));
     check(runLeakChecked("underrun test", runUnderrunTest));
     check(runLeakChecked("reconfiguration test", runReconfigurationTest));
     check(runLeakChecked("start/stop test", runStartStopTest));
