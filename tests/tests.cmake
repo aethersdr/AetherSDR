@@ -664,6 +664,16 @@ add_executable(hl2_metis_protocol_test
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
 
+# HL2 wideband bandscope (EP4) parser — the 12-bit ADC codes, the 20-bit
+# sequence counter and its forward-gap guard. Same shape as the target above:
+# compiles MetisProtocol.cpp directly, no Qt, no aethercore, no socket. Its
+# sequence expectations replay tests/Hl2Ep4ArrivalsD94.h, a recorded bench leg.
+add_executable(hl2_ep4_bandscope_test
+    tests/hl2_ep4_bandscope_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_ep4_bandscope_test PRIVATE src tests)
+add_test(NAME hl2_ep4_bandscope_test COMMAND hl2_ep4_bandscope_test)
+
 # HL2 IO-board push scheduling — pure policy, standalone (no Qt, no radio).
 add_executable(hl2_io_board_policy_test
     tests/hl2_io_board_policy_test.cpp
@@ -4040,6 +4050,71 @@ add_executable(hl2_band_filter_frame_test tests/hl2_band_filter_frame_test.cpp)
 target_include_directories(hl2_band_filter_frame_test PRIVATE src)
 target_link_libraries(hl2_band_filter_frame_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_band_filter_frame_test COMMAND hl2_band_filter_frame_test)
+
+# HL2 wideband bandscope ingest — EP4 and EP6 accounted separately on one
+# socket. Binds nothing: recorded datagrams go straight into MetisClient's
+# drain path through the MetisClientTestAccess friend seam.
+# Its section 8 carries the same claim up to the IRadioBackend seam — the
+# health rows and the bandscope.enable verb on a default-constructed
+# Hl2Backend, which needs no socket because m_connected is the only thing a
+# peer buys. The positive path is certified against hardware, not faked here.
+# That section lives in this target and not in tests/hl2_backend_test.cpp,
+# which the retired-fixtures block below leaves with no target at all.
+add_executable(hl2_ep4_ingest_test tests/hl2_ep4_ingest_test.cpp)
+target_include_directories(hl2_ep4_ingest_test PRIVATE src tests)
+target_link_libraries(hl2_ep4_ingest_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_ep4_ingest_test COMMAND hl2_ep4_ingest_test)
+
+# HL2 wideband bandscope duty-cycle gate — the four-state machine, its guard
+# timer and the transmit interlocks. Socket-free and event-loop-free: recorded
+# enable/disable cycles go in through the same MetisClientTestAccess seam and
+# both timers are fired by hand. Qt6::Test is for QSignalSpy, which is how
+# "one block per arming cycle, never one per packet" is asserted.
+add_executable(hl2_ep4_gate_test tests/hl2_ep4_gate_test.cpp)
+target_include_directories(hl2_ep4_gate_test PRIVATE src tests)
+target_link_libraries(hl2_ep4_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_ep4_gate_test COMMAND hl2_ep4_gate_test)
+
+# The two contracts BandscopeDialog borrows from ClientEqFftAnalyzer: reset()
+# followed by update() reports the transform unsmoothed, and the absolute dB
+# scale is what the window thinks it is (the analyzer's own bins are 6.02 dB
+# low; coherentGainCorrectionDb() is the inverse the window applies). Same
+# shape as the parser targets above — compiles the analyzer directly, no Qt,
+# no aethercore, no widget, no radio.
+add_executable(bandscope_analyzer_test
+    tests/bandscope_analyzer_test.cpp
+    src/gui/ClientEqFftAnalyzer.cpp)
+target_include_directories(bandscope_analyzer_test PRIVATE src)
+add_test(NAME bandscope_analyzer_test COMMAND bandscope_analyzer_test)
+
+# BandscopeTrace's paint path, executed offscreen. Nothing else in the
+# bandscope work runs a line of paintEvent, and a widget whose drawing has never
+# been executed is the weakest part of it. Links the dialog's TU (which holds
+# both classes) plus PersistentDialog and the analyzer; no radio, no sockets.
+add_executable(bandscope_trace_render_test
+    tests/bandscope_trace_render_test.cpp
+    src/gui/BandscopeDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/ClientEqFftAnalyzer.cpp
+)
+target_include_directories(bandscope_trace_render_test PRIVATE src)
+target_link_libraries(bandscope_trace_render_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test)
+set_target_properties(bandscope_trace_render_test PROPERTIES AUTOMOC ON)
+add_test(NAME bandscope_trace_render_test COMMAND bandscope_trace_render_test)
+set_tests_properties(bandscope_trace_render_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The wideband converter view capability, and the verb its record names.
+# Socket-free: constructs an Hl2Backend, never connects it, and asserts that
+# the advertised verb reaches the branch that implements it rather than the
+# unknown-verb fallthrough. Needs aethercore and Qt because Hl2Backend does.
+add_executable(wideband_converter_view_test tests/wideband_converter_view_test.cpp)
+target_include_directories(wideband_converter_view_test PRIVATE src)
+target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
 
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)

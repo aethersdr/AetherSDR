@@ -1116,6 +1116,7 @@ set(GUI_SOURCES
     src/gui/CallsignLookupDialog.cpp
     src/gui/CwxPanel.cpp
     src/gui/BandStackPanel.cpp
+    src/gui/BandscopeDialog.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/FramelessResizer.cpp
     src/gui/PanFloatingWindow.cpp
