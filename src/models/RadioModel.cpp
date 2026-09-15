@@ -4684,6 +4684,29 @@ bool RadioModel::setOfflineHealthTarget(const QHostAddress& addr)
     if (!OfflineHealthRegistry::declaredFor(m_family))
         return false;
 
+    // AND IT IS REFUSED WHILE A SESSION HOLDS THE INSTRUMENT.
+    //
+    // There is ONE source, and setupBackend() lends the same pointer to the
+    // live backend. So aiming it while connected does not open a second probe:
+    // it REPOINTS the one the connected session is reading, and that session's
+    // health then merges another radio's temperature, forward power, PTT and
+    // in-use rows as its own. `setOfflineTarget()`'s own comment calls that the
+    // "frozen reading wearing a different address" the design exists to stop --
+    // and repointing produces the same defect live rather than stale.
+    //
+    // `off` is refused for the same reason from the other side: it would disarm
+    // the connected session's stall diagnostic, which is the one thing this
+    // feature exists to keep running when the stream stops.
+    //
+    // Nothing is lost for the headline case. A connected session is ALREADY
+    // aimed -- connectRadio() sets the poll target at connect -- so an operator
+    // who is connected and stalled has the readings without asking. The verb is
+    // for the radio you are NOT talking to, and refusing it here is the same
+    // separation the function's tail comment makes between aiming and
+    // connecting. Reported by ten9876 on #5642.
+    if (m_backend && isConnected())
+        return false;
+
     if (addr.isNull()) {
         if (!m_offlineHealth) {
             // "Stop" on a session that never started is a no-op, not a reason

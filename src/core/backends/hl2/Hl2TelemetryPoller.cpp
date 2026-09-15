@@ -1,5 +1,7 @@
 #include "core/backends/hl2/Hl2TelemetryPoller.h"
 
+#include "core/backends/hl2/Hl2TelemetryCadence.h"
+
 #include <QDebug>
 #include <QNetworkDatagram>
 #include <QTimer>
@@ -69,6 +71,9 @@ void Hl2TelemetryPoller::setTarget(const QHostAddress& addr)
         return;
     m_target = addr;
     m_lastResponder = QHostAddress();
+    // A different radio is allowed a different MAC. See the latch in
+    // onReadyRead().
+    m_latchedMac.reset();
     // A new radio's counters are not the old radio's. Anything a consumer is
     // showing belongs to the previous target until the next reply arrives.
     m_unanswered = 0;
@@ -232,13 +237,23 @@ void Hl2TelemetryPoller::onReadyRead()
         const auto reply = parseDiscoveryReply(
             {reinterpret_cast<const std::uint8_t*>(data.constData()),
              static_cast<std::size_t>(data.size())});
-        if (!reply || !reply->isHermesLite2())
+        if (!reply)
             continue;
-        // With no target set, a broadcast can be answered by more than one
-        // radio. Accepting the first is right for a single-radio bench and
-        // wrong the moment there are two, so a caller that knows which radio it
-        // means sets the serial and this drops the rest.
-        if (m_expectedMac && reply->mac != *m_expectedMac)
+        // THE RULE IS IN Hl2TelemetryCadence.h, acceptReply(), so it can be
+        // tested without a socket. What stays here is the transport.
+        //
+        // setExpectedMac() has no production caller -- an aim names an IP and
+        // the MAC is not knowable until something replies -- so m_expectedMac
+        // was always nullopt and the MAC filter was dead on every live path
+        // (ten9876, #5642). The latch is what can actually be armed, and it is
+        // narrower than the old comment claimed: the first HL2-speaking answer
+        // from the named address is still believed, whoever it is. What it
+        // stops is the responder CHANGING underneath a live aim.
+        const auto verdict = acceptReply(reply->isHermesLite2(), reply->mac,
+                                         m_expectedMac, m_latchedMac);
+        if (verdict.latch)
+            m_latchedMac = verdict.latch;
+        if (!verdict.accept)
             continue;
         m_lastResponder = dg.senderAddress();
 

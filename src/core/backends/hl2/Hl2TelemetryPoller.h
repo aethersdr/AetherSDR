@@ -147,6 +147,10 @@ private:
     QHostAddress m_target;          // null = broadcast and take what answers
     QHostAddress m_lastResponder;
     std::optional<std::array<std::uint8_t, 6>> m_expectedMac;
+    // Set from the FIRST accepted reply when no caller supplied a MAC, and
+    // cleared by setTarget(). It does not stop a stranger being believed once;
+    // it stops the responder changing underneath a live aim. See onReadyRead().
+    std::optional<std::array<std::uint8_t, 6>> m_latchedMac;
     bool m_allowBroadcast = false;   // see setTarget for why this is the default
     LinkState m_state = LinkState::NotConnected;
     bool m_surfaceVisible = false;

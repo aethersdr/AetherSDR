@@ -6851,9 +6851,18 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
 //
 // Read-only and TX-safe: it keys nothing and changes nothing.
 namespace {
-// One wording for the refusal, so the "off" and "aim" paths cannot drift.
-QString offlineHealthRefusal(const QString& family)
+// One wording per reason, so the "off" and "aim" paths cannot drift -- and TWO
+// reasons, because the model now refuses for two different things and a caller
+// that cannot tell them apart will retry the one it cannot fix.
+QString offlineHealthRefusal(const QString& family, bool connected)
 {
+    if (connected)
+        return QStringLiteral(
+            "telemetry: this session is connected, and there is ONE poller — "
+            "aiming it would repoint the instrument the live session is "
+            "reading, so its health would merge another radio's rows as its "
+            "own. A connected session is already aimed at its own radio; "
+            "disconnect first, or just read `health`");
     return QStringLiteral("telemetry: this session's family ('%1') declares no "
                           "offline health source, so there is nothing to aim")
         .arg(family.isEmpty() ? QStringLiteral("none") : family);
@@ -6897,7 +6906,8 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
     // attribution rows on that session's `health` that nothing could remove.
     if (value.compare(QStringLiteral("off"), Qt::CaseInsensitive) == 0) {
         if (!m_radioModel->setOfflineHealthTarget(QHostAddress()))
-            return err(offlineHealthRefusal(m_radioModel->family()));
+            return err(offlineHealthRefusal(m_radioModel->family(),
+                                            m_radioModel->isConnected()));
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("telemetry"), QStringLiteral("target")},
                            {QStringLiteral("target"), QJsonValue::Null}};
@@ -6919,13 +6929,37 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
     // A UNICAST ADDRESS OFF THIS SUBNET IS STILL ALLOWED, deliberately: this
     // lab's own radio sits at 192.168.8.2 behind a gateway while the host is on
     // 192.168.36.0/24, so a same-subnet rule would refuse the one radio the
-    // feature exists for. What protects the wrong-unicast case is the reply
-    // side, not the send side — Hl2TelemetryPoller checks the MAC in the
-    // answer, so a stranger who replies is discarded rather than believed.
-    // A stranger still receives an unsolicited probe; that is the residual
-    // cost, and it is stated rather than hidden.
+    // feature exists for.
+    //
+    // WHAT PROTECTS THE WRONG-UNICAST CASE, stated accurately. An earlier
+    // version of this comment said the poller checks the MAC in the answer so
+    // "a stranger who replies is discarded rather than believed". That was
+    // false: setExpectedMac() had no production caller, so the MAC filter was
+    // never armed on this path (ten9876, #5642). The filters actually applied
+    // to a reply are sender-address equality, isHermesLite2(), and -- added
+    // with that report -- a latch on the first answering MAC.
+    //
+    // So the honest statement is narrower. A mistyped address that happens to
+    // host an HPSDR-speaking device gets its FIRST reading believed and
+    // rendered as this radio's health; what the latch prevents is the responder
+    // changing afterwards. A stranger also receives an unsolicited probe. Both
+    // are residual costs and both are stated rather than hidden.
+    //
+    // IPv6 is refused outright rather than half-supported. AnyIPv6 slipped the
+    // gate below because it equals neither AnyIPv4 nor Any, and an IPv6 unicast
+    // was accepted but unpollable: applyCadence() binds AnyIPv4, writeDatagram
+    // fails, and m_unanswered climbs at send time -- so `health` reported a
+    // radio not answering for datagrams that structurally could not leave.
+    if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
+        return err(QStringLiteral(
+                       "telemetry target: '%1' is IPv6, and this poller binds "
+                       "an IPv4 socket — it would report unanswered polls for "
+                       "datagrams that never left")
+                       .arg(value));
+    }
     if (addr == QHostAddress::Broadcast || addr.isMulticast()
-        || addr == QHostAddress::AnyIPv4 || addr == QHostAddress::Any) {
+        || addr == QHostAddress::AnyIPv4 || addr == QHostAddress::Any
+        || addr == QHostAddress::AnyIPv6) {
         return err(QStringLiteral(
                        "telemetry target: '%1' is a broadcast, multicast or "
                        "unspecified address — this sends one datagram a second "
@@ -6934,7 +6968,8 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
     }
 
     if (!m_radioModel->setOfflineHealthTarget(addr))
-        return err(offlineHealthRefusal(m_radioModel->family()));
+        return err(offlineHealthRefusal(m_radioModel->family(),
+                                            m_radioModel->isConnected()));
     return QJsonObject{{QStringLiteral("ok"), true},
                        {QStringLiteral("telemetry"), QStringLiteral("target")},
                        {QStringLiteral("target"), addr.toString()},
