@@ -7414,17 +7414,25 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             m_radioModel.meterModel().hasMicPeakMeter());
     }
 
-    // ── Display dBm scale: who owns it ─────────────────────────────────────
-    // A backend that decodes its scope at a fixed calibration (Icom CI-V) has
-    // no range command and never echoes one back, so the noise-floor auto-
-    // adjust must not try to move a reference level the radio will not confirm.
-    // `!connected ||` restores the permissive default on disconnect so the
+    // ── Display dBm scale: who owns it, and whether the bins hold still ────
+    // Two INDEPENDENT properties, pushed together because the auto-floor gate
+    // is the OR of them (noiseFloorAutoAdjustAllowed). A backend that decodes
+    // its scope at a fixed calibration (Icom CI-V) has no range command and
+    // never echoes one back; a backend whose bins are computed on this host
+    // (HL2, ANAN, RTL-SDR) gives the loop a fixed target instead, which
+    // terminates it just as well.
+    //
+    // `!connected ||` restores the permissive default for the echo so the
     // setting cannot leak from an Icom into the next radio connected.
+    // panBinsAbsolute() uses `connected &&` instead — its permissive default
+    // is FALSE, and disconnected the first term of the OR is already true.
     {
         const bool radioOwnsScale = !connected || caps.radioOwnsDbmScale;
+        const bool binsAbsolute = connected && caps.panBinsAbsolute();
         const QList<SpectrumWidget*> spectra = findChildren<SpectrumWidget*>();
         for (SpectrumWidget* spectrum : spectra) {
             spectrum->setRadioOwnsDbmScale(radioOwnsScale);
+            spectrum->setPanBinsAbsolute(binsAbsolute);
         }
     }
 

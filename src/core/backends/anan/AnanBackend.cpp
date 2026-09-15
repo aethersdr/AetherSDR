@@ -348,6 +348,18 @@ RadioCapabilities AnanBackend::capabilities() const
     // station's report, or used as an absolute threshold.
     PanAmplitudeModel amplitude;
     amplitude.calibratedDbm = false;
+    // ...and BECAUSE those bins are the raw dBFS, they are also ABSOLUTE:
+    // AnanRxDsp::spectrumReady hands over WDSP's dBFS bins and this backend
+    // emits `binsDbfs[i] + kUncalibratedDbfsToDbmOffset`, where that constant
+    // is 0.0f -- the bins ARE the dBFS, relabelled. Nothing in that expression
+    // is the display reference level, so the auto-floor's measurement holds
+    // still under its own correction and the loop converges.
+    //
+    // This is the behaviour change in the flag split: c.radioOwnsDbmScale =
+    // false, declared further down this function, used to switch the auto-floor
+    // off here, and that was the conflation rather than a decision about this
+    // radio.
+    amplitude.binsAbsolute = true;
     c.panAmplitude = amplitude;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");

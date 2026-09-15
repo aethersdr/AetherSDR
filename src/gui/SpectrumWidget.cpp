@@ -22,6 +22,7 @@
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
 #include "core/EibiClient.h"
+#include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include <QVariant>
 #include <QVariantAnimation>
 
@@ -4070,13 +4071,22 @@ bool SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
 
 void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
 {
-    // A FIXED-scale backend has no reference level to move: the floor is where
-    // its calibration puts it. Moving m_refLevel here would ratchet forever,
-    // because the loop only stops when the radio echoes the requested range
-    // back and there is nothing on the other end to echo. This is the gate that
-    // actually stops the runaway — the ones on the outbound command paths stop
-    // the traffic, but m_refLevel is local and would keep marching without this.
-    if (!m_radioOwnsDbmScale) {
+    // THE GATE. The loop needs something that makes it terminate, and there are
+    // two such things — a real echo from the radio, or bins that stay put while
+    // m_refLevel moves. Either alone is enough, so this is an OR and the early
+    // return fires only when NEITHER holds.
+    //
+    // With neither, m_refLevel ratchets forever: it is local, so the outbound
+    // command guards stop the traffic but not the march. That is the 24 dB/s
+    // runaway measured on an IC-9700.
+    //
+    // It is NOT enough to ask "does the radio own the scale". A Hermes-Lite 2
+    // owns nothing of the kind and its auto-floor still settles, because its
+    // bins are computed on this host: bench run d101 measured 0.307 dB of drift
+    // over 74 s quiescent and 0.0000 dB/s over the second half, and a re-settle
+    // within ~30 s after a 12 dB LNA step. Gating on the echo alone switched
+    // that working loop off.
+    if (!noiseFloorAutoAdjustAllowed(m_radioOwnsDbmScale, m_panBinsAbsolute)) {
         return;
     }
     if (noiseFloorAutoAdjustHeld(nowMs)) {

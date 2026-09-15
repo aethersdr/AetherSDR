@@ -463,6 +463,19 @@ and conflating them would hide one of them.
 |---|:--:|:--:|:--:|:--:|---|
 | `radioOwnsDbmScale` | ✅ (default) | ❌ | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
+| `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
+
+**`panBinsAbsolute()` is consumed too, and it is the second term of ONE gate.**
+`noiseFloorAutoAdjustAllowed(radioOwnsDbmScale, panBinsAbsolute)` in
+`core/backends/NoiseFloorAutoAdjustGate.h` is an OR: a real echo from the radio
+ends the auto-floor loop by confirmation, absolute bins end it by giving it a
+fixed target, and either alone is enough. `SpectrumWidget::applyNoiseFloorAutoAdjust`
+and the auto-floor branch of `dbmRangeChangeRequested` both call it, so the
+widget and its backstop cannot drift apart. The other three
+`radioOwnsDbmScale` gates below are about whether a range can be **sent** and
+stay on the echo alone. HL2, ANAN and RTL-SDR declare `binsAbsolute = true`,
+each quoting the expression that produces its bins; ANAN is the one whose loop
+this turned back on.
 
 **`radioOwnsDbmScale` is consumed**, and a backend declaring `false` changes
 behaviour at four gates plus two fan-out sites:
