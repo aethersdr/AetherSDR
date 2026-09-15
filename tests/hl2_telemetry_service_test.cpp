@@ -120,6 +120,59 @@ int main(int argc, char** argv)
     check(!rowValue(snap, "telemetryUnanswered").isValid(),
           "not polling -> unanswered is ABSENT, not 0 — 0 would read as 'asking, all fine'");
 
+    // ---- 5. A section is a GROUP HEADING, not a tag on every row ----
+    //
+    // docs/automation-bridge.md: "section appears on the first row of each
+    // group and is absent on the rest". RadioHealthDialog draws a bold header
+    // for every key that carries one, so stamping them all drew eleven repeated
+    // headers interleaved with the rows. ten9876, #5642.
+    {
+        int withSection = 0;
+        for (const QString& k : snap.order)
+            if (snap.sections.contains(k))
+                ++withSection;
+        std::fprintf(stderr, "  sections: %d of %lld rows carry one\n",
+                     withSection, static_cast<long long>(snap.order.size()));
+        check(snap.order.size() > 1, "there is more than one row to group");
+        check(withSection == 1,
+              "exactly one row carries the section — the group's first");
+        check(!snap.order.isEmpty() && snap.sections.contains(snap.order.first()),
+              "and it is the FIRST row, not an arbitrary one");
+    }
+
+    // ---- 6. radioInUse may not report OUR OWN stream as another client ----
+    //
+    // The `run` bit in a discovery reply says somebody is streaming; it does
+    // not say who. While connected and stalled the poller still runs and that
+    // somebody is us, so publishing the bit told the operator another client
+    // held the radio during their own stalled session — in exactly the state
+    // this feature exists to diagnose. Hl2Backend::healthSnapshot() publishes
+    // no radioInUse key, so nothing corrected it at the merge. ten9876, #5642.
+    {
+        DiscoveryReply r;
+        r.streaming = true;
+
+        Hl2TelemetryService owned;
+        Hl2TelemetryServiceTestAccess::placeReply(owned, r);
+
+        owned.setLinkState(Hl2LinkState::HeldByOther);
+        auto held = owned.healthRows();
+        check(rowValue(held, "radioInUse").isValid()
+                  && rowValue(held, "radioInUse").toBool(),
+              "held by another client -> the bit is published, and it is true");
+
+        // setLinkState(Streaming) does not clear the cache: leftOurOwnSession
+        // fires on LEAVING a streaming state, not on entering one.
+        owned.setLinkState(Hl2LinkState::StreamStalled);
+        auto stalled = owned.healthRows();
+        check(!owned.lastReply().has_value()
+                  || !rowValue(stalled, "radioInUse").isValid(),
+              "our own stalled session -> radioInUse is ABSENT, because the bit "
+              "cannot tell another client from us");
+        check(rowValue(stalled, "radioInUse").toBool() == false,
+              "and it is certainly never TRUE about our own stream");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_service_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

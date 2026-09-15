@@ -114,11 +114,26 @@ public:
     }
 
 private:
+    // Test access to the cached reply, which otherwise only the poller's signal
+    // can set. Two of this class's rows are conditional on a reply having
+    // arrived -- radioInUse among them, and it is the one whose correctness
+    // depends on WHICH session the reply describes -- so a test that cannot
+    // place one cannot reach them at all. The friend struct is the idiom
+    // Hl2Backend already uses (Hl2DspReadbackTestAccess), and it adds no public
+    // surface: a caller outside the test cannot name it.
+    friend struct Hl2TelemetryServiceTestAccess;
+
     // Pimpl by unique_ptr, not a raw owning pointer: the destructor is the only
     // thing that has to see the complete type, and it is out of line below for
     // exactly that reason.
     struct Impl;
     std::unique_ptr<Impl> d;
+};
+
+// See the friend declaration above. Declared here and defined in the .cpp,
+// where Impl is complete; nothing in production names it.
+struct Hl2TelemetryServiceTestAccess {
+    static void placeReply(Hl2TelemetryService& svc, const DiscoveryReply& r);
 };
 
 }  // namespace AetherSDR::hl2

@@ -49,6 +49,15 @@ struct Hl2TelemetryService::Impl {
     int linkStateUpdates = 0;  // proof that something drives this
 };
 
+// Declared in the header; defined here because Impl is only complete in this
+// translation unit.
+void Hl2TelemetryServiceTestAccess::placeReply(Hl2TelemetryService& svc,
+                                               const DiscoveryReply& r)
+{
+    svc.d->reply = r;
+    svc.d->at.start();
+}
+
 Hl2TelemetryService::Hl2TelemetryService(QObject* parent)
     : QObject(parent)
     , d(std::make_unique<Impl>())
@@ -174,11 +183,28 @@ bool Hl2TelemetryService::hasOfflineTarget() const
 IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
 {
     IRadioBackend::HealthSnapshot h;
-    auto put = [&h](const char* key, const QString& label, const QVariant& v) {
+    // A SECTION IS A GROUP HEADING, NOT A TAG ON EVERY ROW.
+    // docs/automation-bridge.md states the contract for `health`: "section
+    // appears on the first row of each group and is absent on the rest", and
+    // RadioHealthDialog::refresh() draws a bold header row for any key that
+    // carries one. Stamping every key drew eleven repeated headers interleaved
+    // with nearly every row -- latent until this PR, because nothing
+    // constructed the service. Reported by ten9876 on #5642.
+    //
+    // `pendingSection` is emptied by the put() that consumes it, so a group
+    // leader is whichever row happens to come first. That matters: the readings
+    // below are conditional on a reply having arrived, so the row that leads
+    // them is not a fixed key.
+    QString pendingSection = QStringLiteral("Telemetry source");
+    auto put = [&h, &pendingSection](const char* key, const QString& label,
+                                     const QVariant& v) {
         const QString k = QString::fromLatin1(key);
         h.order.push_back(k);
         h.labels.insert(k, label);
-        h.sections.insert(k, QStringLiteral("Telemetry source"));
+        if (!pendingSection.isEmpty()) {
+            h.sections.insert(k, pendingSection);
+            pendingSection.clear();
+        }
         // An INVALID variant is left out of `values` entirely, which is how the
         // snapshot spells "never reported" — the bridge renders that as JSON
         // null. Inserting a default-constructed value instead would turn "we
@@ -236,6 +262,8 @@ IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
         put(key, label, opt ? QVariant(*opt) : QVariant());
     };
     if (d->reply) {
+        // Second group: the numbers, as opposed to the attribution rows above.
+        pendingSection = QStringLiteral("Stream-free readings");
         const DiscoveryReply& r = *d->reply;
         reading("temperatureRaw",  QStringLiteral("Temperature (raw counts)"), r.temperatureRaw);
         reading("forwardPowerRaw", QStringLiteral("Forward (raw counts)"),     r.forwardPowerRaw);
@@ -246,10 +274,29 @@ IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
         reading("txFifoRecovery",  QStringLiteral("TX pacing fault (under OR overrun)"),
                 r.txFifoRecovery);
         reading("ptt",             QStringLiteral("PTT (radio)"),              r.ptt);
-        // The radio's own view of whether somebody is streaming from it. On this
-        // path that somebody is not us, which is the case A-telemetry is about.
+        // The radio's own view of whether somebody is streaming from it — and
+        // WHO that somebody is, is a question this bit cannot answer.
+        //
+        // The original comment here said "on this path that somebody is not
+        // us". That is true in NotConnected and HeldByOther, and false in
+        // exactly the state this feature exists to diagnose: while connected
+        // and stalled, the poller still runs and the `run` bit in the reply it
+        // caches was set BY US. Publishing it then told the operator another
+        // client held the radio during their own stalled session, and nothing
+        // corrected it — Hl2Backend::healthSnapshot() publishes no radioInUse
+        // key at all, so this value always survived the merge. Reported by
+        // ten9876 on #5642.
+        //
+        // The honest answer while our own session owns the stream is to say
+        // NOTHING. An absent key is "we were never told"; a false would be a
+        // claim we cannot support, since another client could also be
+        // streaming and this bit would look identical. leftOurOwnSession()
+        // above drops the cache when the session ENDS, which is the same
+        // reasoning one transition later — it just never fired mid-stall.
+        const bool streamIsOurs = d->state == Hl2LinkState::Streaming
+                               || d->state == Hl2LinkState::StreamStalled;
         put("radioInUse", QStringLiteral("In use by another client"),
-            QVariant(r.streaming));
+            streamIsOurs ? QVariant() : QVariant(r.streaming));
         // ptt_hang_time, because 31 does not mean "the longest hang" -- it
         // disables the gateware's PTT auto-unkey entirely (softerhardware/
         // Hermes-Lite2 #178). Being able to read that WITHOUT a stream is how an
