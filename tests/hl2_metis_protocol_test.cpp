@@ -192,6 +192,35 @@ int main()
         check(start[0] == 0xEF && start[1] == 0xFE && start[2] == 0x04 && start[3] == 0x01,
               "metis start = EF FE 04 01");
         check(metisStop()[3] == 0x00, "metis stop cmd = 0x00");
+
+        // ---- the mid-stream run byte (PR #5650 review, blocker 1) ----
+        //
+        // THE MOST DANGEROUS BYTE IN THE BANDSCOPE WORK. It leaves the host
+        // twice a second for the whole session while the operator is
+        // listening, and bit 0 is `run`: clear it by accident and the HL2's IQ
+        // stream stops mid-QSO, silently, twice a second. Asserted here on the
+        // pure function rather than re-derived from the same constants in a
+        // test body, which is an assertion about two constexprs and would agree
+        // with a wrong implementation.
+        check(metisRunCommand(true)[3] == 0x03,
+              "bandscope ON: run high AND wide_spectrum high");
+        check(metisRunCommand(false)[3] == 0x01,
+              "bandscope OFF: wide_spectrum clear, run STILL HIGH");
+        check((metisRunCommand(true)[3] & 0x01) != 0 && (metisRunCommand(false)[3] & 0x01) != 0,
+              "run is never cleared to move the bandscope bit");
+        // The watchdog-disable leg, untested in any form before this.
+        check(metisRunCommand(true, false)[3] == 0x83,
+              "bandscope ON with the watchdog disabled = 0x83");
+        check(metisRunCommand(false, false)[3] == 0x81,
+              "bandscope OFF with the watchdog disabled = 0x81");
+        // And connect is NOT widened: metisStart stays the byte three
+        // fake-radio fixtures sniff, which is why this is a separate function.
+        check(metisStart()[3] == 0x01 && metisStart(false)[3] == 0x81,
+              "metisStart() is not widened by the bandscope");
+        check(metisRunCommand(true)[0] == 0xEF && metisRunCommand(true)[1] == 0xFE
+                  && metisRunCommand(true)[2] == 0x04 && metisRunCommand(true).size() == 64,
+              "the run byte is framed and padded like every other metis command");
+
         const auto disc = discoveryRequest();
         check(disc.size() == 63 && disc[0] == 0xEF && disc[1] == 0xFE && disc[2] == 0x02,
               "discovery request = EF FE 02 + pad");
@@ -1031,6 +1060,53 @@ int main()
         const auto high = ccIoBoardTxFrequency(0x11'22'33'44'55ull);
         check(high[0][4] == 0x11 && high[4][4] == 0x55,
               "all 40 bits reach the wire");
+    }
+
+    // ---- adcClipRatePercent: NULL AND ZERO ARE DIFFERENT FACTS ------------
+    //
+    // The clip evidence is one bit sampled ~190 times a second and coalesced to
+    // ~10 Hz, so what a consumer gets is a numerator over a denominator that
+    // varies with the sample rate, the receiver count and whether the
+    // application happens to be issuing commands. The denominator is therefore
+    // not something a reader may assume, and a window that did not carry enough
+    // of it has NO RATE -- not a rate of zero, and not a rate of one hundred.
+    //
+    // Getting that wrong in either direction is the worst thing this row can
+    // do: "three of three railed" rendered as 100 % is the most alarming
+    // reading available, produced by three observations; "none of two" rendered
+    // as 0 % is a clean converter reported from nothing at all.
+    {
+        check(!adcClipRatePercent(0, 0).has_value(),
+              "an empty window has no clip rate");
+        check(!adcClipRatePercent(3, 3).has_value(),
+              "three of three is NOT 100 % -- it is three observations");
+        check(!adcClipRatePercent(2, 0).has_value(),
+              "none of two is NOT 0 % -- it is two observations");
+        check(adcClipRatePercent(4, 0).value_or(-1) == 0,
+              "at the minimum denominator a clean window really is 0 %");
+        check(adcClipRatePercent(4, 4).value_or(-1) == 100,
+              "and a fully railed one really is 100 %");
+        check(adcClipRatePercent(19, 0).value_or(-1) == 0,
+              "0 of 19 is 0 %");
+        check(adcClipRatePercent(19, 19).value_or(-1) == 100,
+              "19 of 19 is 100 %");
+        // Rounded to nearest whole percent: this observation does not have two
+        // significant figures in it, and a nearest-integer rule is one a reader
+        // can reproduce in their head.
+        check(adcClipRatePercent(19, 9).value_or(-1) == 47, "9 of 19 rounds to 47 %");
+        check(adcClipRatePercent(19, 10).value_or(-1) == 53, "10 of 19 rounds to 53 %");
+        check(adcClipRatePercent(7, 6).value_or(-1) == 86,
+              "6 of 7 is 86 % -- the figure ON8ST's own sweep reports at 0 dB LNA");
+        // Nonsense in, bounded out: a numerator above its own denominator is a
+        // decode fault, and 100 % is the honest reading of it rather than a
+        // number above full scale.
+        check(adcClipRatePercent(10, 50).value_or(-1) == 100,
+              "a numerator above its denominator clamps at 100 rather than exceeding it");
+        check(adcClipRatePercent(10, -3).value_or(-1) == 0,
+              "and a negative one clamps at 0");
+        // The gate is settable, because the denominator is not a constant.
+        check(!adcClipRatePercent(19, 19, 20).has_value(),
+              "a caller with a stricter minimum gets nothing rather than a rate");
     }
 
     if (g_failures == 0)
