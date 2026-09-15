@@ -170,7 +170,7 @@ independent interoperability and both radio paths are proven.
 
 The acting maintainer explicitly approved implementation without an RFC in the
 2026-09-15 task continuation. This is task-specific authorization; repository
-policy files are unchanged. No GitHub issue or PR has been published.
+policy files are unchanged.
 
 ## Current implementation choices
 
