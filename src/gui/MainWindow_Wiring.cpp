@@ -19,6 +19,7 @@
 
 #include "MainWindow.h"
 #include "core/ClientDisplaySettings.h"
+#include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QStatusBar>
@@ -4008,6 +4009,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // echo a range — one runaway pane is enough to churn the session.
         sw->setRadioOwnsDbmScale(!m_radioModel.isConnected()
                                  || m_radioModel.backendCapabilities().radioOwnsDbmScale);
+        // The other half of the auto-floor gate, for the same reason: a pane
+        // added after connect must learn that this radio's bins are absolute,
+        // or it arms nothing on an HL2/ANAN/RTL-SDR that the pane created
+        // before connect is happily running.
+        sw->setPanBinsAbsolute(m_radioModel.isConnected()
+                               && m_radioModel.backendCapabilities().panBinsAbsolute());
 
         wirePanDisplayStatus(applet, pan);
     }
@@ -4137,21 +4144,38 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         const bool profileLoadHeld = profileLoadRadioStateWritesHeld();
         const bool autoFloorChange = sw->pendingAutoNoiseFloorDbmRange();
 
-        // A backend whose dBm scale is FIXED never echoes a range back, and the
-        // auto-floor loop is built on that echo: it moves the reference level,
-        // requests the range, and waits for confirmation before moving again.
-        // With nothing to confirm it reads the unchanged floor as "not there
-        // yet" and steps again — a measured 24 dB/s ratchet that walks off the
-        // bottom of the scale (-202 … -1882 dBm) and only becomes visible when
-        // dbmRangeLooksPlausible() starts rejecting it at -180. Re-seed the
-        // widget from the pan's real range instead, which is the same recovery
-        // the profile-load path above uses, and drop the request.
+        // A backend whose auto-floor CANNOT CONVERGE never gets to finish this
+        // handshake: the loop moves the reference level, requests the range,
+        // and waits. With nothing to confirm it reads the unchanged floor as
+        // "not there yet" and steps again — a measured 24 dB/s ratchet that
+        // walks off the bottom of the scale (-202 … -1882 dBm) and only becomes
+        // visible when dbmRangeLooksPlausible() starts rejecting it at -180.
+        // Re-seed the widget from the pan's real range instead, which is the
+        // same recovery the profile-load path above uses, and drop the request.
+        //
+        // THIS IS THE SAME QUESTION SpectrumWidget::applyNoiseFloorAutoAdjust
+        // asks, so it must ask it the same way — noiseFloorAutoAdjustAllowed,
+        // the OR of the echo and absolute bins. The three other capability
+        // gates in this file are about whether a range can be SENT, and stay on
+        // radioOwnsDbmScale alone. This one is not: it is about whether the
+        // loop terminates. Gating it on the echo alone re-seeds the widget out
+        // from under a loop that converges perfectly well without one (ANAN,
+        // whose bins are absolute), which leaves the echo pending, stalls the
+        // loop, and hands the operator a reference level that snaps back to the
+        // pan's saved range every iteration.
+        //
+        // It stays as a backstop rather than becoming dead code: a pane created
+        // before connect has not been pushed either value yet, and one pane
+        // ratcheting is enough to churn the session.
         //
         // Deliberately NOT setNoiseFloorEnable(false): that is the operator's
         // own toggle, and forcing it would both fight the overlay menu and lose
         // the setting for the next radio. The auto-floor stays enabled and
         // simply has nothing to chase on a fixed scale.
-        if (autoFloorChange && !m_radioModel.backendCapabilities().radioOwnsDbmScale) {
+        const RadioCapabilities& dbmCaps = m_radioModel.backendCapabilities();
+        if (autoFloorChange
+            && !noiseFloorAutoAdjustAllowed(dbmCaps.radioOwnsDbmScale,
+                                            dbmCaps.panBinsAbsolute())) {
             if (auto* pan = m_radioModel.panadapter(applet->panId())) {
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());
             }

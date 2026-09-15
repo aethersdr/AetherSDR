@@ -136,22 +136,47 @@ struct PanAmplitudeModel {
     // HL2's Hl2DbReference::isCalibrated() is exactly that predicate.
     bool calibratedDbm = false;
 
-    // The spectrum bins carry ABSOLUTE levels: a bin's value does not move when
-    // the display reference level moves, because the bins are computed
-    // host-side from the samples. This describes the data path, not a feature
-    // the operator can reach.
+    // The spectrum bins carry ABSOLUTE levels — they are computed HOST-side from
+    // the samples, so a bin's value does not move when the display reference
+    // level moves. This describes the RADIO's data path, not a feature the
+    // operator can reach, and it is deliberately NOT the same question as
+    // RadioCapabilities::radioOwnsDbmScale. That flag was being asked two: "can
+    // the radio be commanded a display range and echo it back" (Flex yes; HL2,
+    // ANAN, RTL-SDR, Icom no) and "can the noise-floor auto-adjust converge".
+    // On a raw-IQ radio the answers differ, so declaring the truth about the
+    // first switched off a loop that demonstrably works.
     //
     // It is what lets the noise-floor auto-adjust converge on a radio that
-    // echoes no range command back. The gate that reads it is
-    // noiseFloorAutoAdjustAllowed(), which DOES NOT EXIST YET — it arrives with
-    // #5726, as does any backend that sets this field true. Forward-looking, in
-    // the same way the population note below is, and said so rather than
-    // reading as a pointer to shipped code (aethersdr-agent, #5725). Declared here rather than beside
-    // radioOwnsDbmScale because it is a property of THIS axis, and because the
-    // single flag that used to answer both questions is the bug being split.
+    // echoes no range command back.
     //
-    // Nothing populates this field yet; the backends that can quote their bin
-    // path declare it in #5726.
+    // Why absolute bins let the loop converge: the auto-floor measures its own
+    // input. SpectrumWidget::estimateNoiseFloorDbm reads the bins, and
+    // applyNoiseFloorAutoAdjust aims at desiredRef = baseline + frac *
+    // dynamicRange. If the bins are absolute that target is FIXED under the
+    // loop's own correction — moveRefLevelToward reaches it and stops on the
+    // 0.45 dB deadband. If the bins instead move with the reference level, the
+    // target retreats every step and only a real echo from the radio can end
+    // the loop; with no echo that is the 24 dB/s ratchet documented on
+    // radioOwnsDbmScale.
+    //
+    // Declared here rather than beside radioOwnsDbmScale because it is a
+    // property of THIS axis, and because the single flag that used to answer
+    // both questions is the bug being split. The field arrived one PR ahead of
+    // its gate: #5725 added it with nothing reading it, and this PR supplies
+    // noiseFloorAutoAdjustAllowed() and the first backend that sets it true.
+    // That ordering was flagged as needing to be said out loud rather than
+    // read as a pointer to shipped code (aethersdr-agent, #5725).
+    //
+    // So the auto-floor gate is an OR — a real echo OR absolute bins. It lives
+    // in one place, noiseFloorAutoAdjustAllowed() in NoiseFloorAutoAdjustGate.h,
+    // so the widget and its test read the same predicate.
+    //
+    // FALSE WHEN THE RECORD IS ABSENT, via
+    // RadioCapabilities::panBinsAbsolute(), and that costs nothing rather than
+    // being merely cautious: radioOwnsDbmScale still defaults TRUE, so for any
+    // backend nobody has read the first term of the OR is already open and this
+    // field changes that backend's behaviour not at all. A backend declares it
+    // true only when someone has READ its bin path and can quote it.
     bool binsAbsolute = false;
 };
 

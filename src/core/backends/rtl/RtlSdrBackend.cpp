@@ -118,6 +118,17 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // another station's report, or used as an absolute threshold.
     PanAmplitudeModel amplitude;
     amplitude.calibratedDbm = false;
+    // The spectrum bins are computed on THIS host from raw ADC magnitudes and
+    // carry no reference level: RtlSdrDdc::processSpectrum takes the FFT output,
+    // forms `mag = sqrt(re*re + im*im) / kFftSize` and emits
+    // `20 * log10(max(mag, 1e-6))` straight into the frame. Nothing in that
+    // expression can move when the display reference level moves, so the
+    // noise-floor auto-adjust has a fixed target and terminates — see
+    // PanAmplitudeModel::binsAbsolute. radioOwnsDbmScale is deliberately
+    // left at its permissive default here and NOT flipped in the same change:
+    // this radio has no range command, but correcting that declaration is a
+    // separate question from this one and belongs with its own reasoning.
+    amplitude.binsAbsolute = true;
     c.panAmplitude = amplitude;
     c.family = QStringLiteral("rtl");
     c.model  = m_modelName;

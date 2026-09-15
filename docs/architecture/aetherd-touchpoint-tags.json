@@ -1354,5 +1354,11 @@
   "note": "Session-local APRS fill-in policy and bounded modem queue; no backend-specific commands or transport ownership.",
   "split": "",
   "confidence": "high"
+ },
+ "core/backends/NoiseFloorAutoAdjustGate.h": {
+  "tag": "universal",
+  "note": "The ONE predicate deciding whether the noise-floor auto-adjust may move the display reference level, as an OR over two backend-neutral properties (a real dBm-range echo, or absolute spectrum bins). Deliberately free of Qt and of RadioCapabilities so the widget and its test read the same function rather than two copies; the UI reaching it is the seam working, not coupling. Family backends populate the capability it is called with.",
+  "split": "",
+  "confidence": "high"
  }
 }

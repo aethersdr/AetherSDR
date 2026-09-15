@@ -1677,6 +1677,23 @@ RadioCapabilities Hl2Backend::capabilities() const
     // COMPARISON: a level from this radio must not be published as a spot, held
     // against another station's report, or used as an absolute threshold.
     amplitude.calibratedDbm = m_dbRef.isCalibrated();
+    // The bins this backend emits are ABSOLUTE dBFS computed on THIS host, so
+    // they do not move when the display reference level does — which is what
+    // lets the noise-floor auto-adjust converge even though this radio owns no
+    // dBm scale and echoes no range command back.
+    //
+    // Quoting the path rather than asserting it. Hl2RxDsp::spectrumReady hands
+    // over dBFS bins; the lambda wiring it shifts them by m_dbRef.offsetDb()
+    // and publishes a raw float32 array (floatBytes). That shift is the shared
+    // LNA reference (Hl2DbReference), NOT the display reference level — it
+    // moves when the operator changes RF gain and never when m_refLevel moves,
+    // which is exactly the property this field claims. From there
+    // RadioModel::onBackendSpectrumFrame memcpy's the array into the QVector it
+    // emits on panFeedSpectrumReady — "a straight pass-through", its own
+    // comment — touching no value, and SpectrumWidget::estimateNoiseFloorDbm
+    // reads those bins directly (a trimmed mean over the array; m_refLevel
+    // appears nowhere in it). See PanAmplitudeModel::binsAbsolute.
+    amplitude.binsAbsolute = true;
     c.panAmplitude = amplitude;
 
     // radioOwnsDbmScale IS DELIBERATELY NOT DECLARED HERE, and the reason is a
@@ -1700,10 +1717,13 @@ RadioCapabilities Hl2Backend::capabilities() const
     // level sat pinned at -40.000 dBm for 222 s while the measured floor moved
     // 2 dB. So the declaration would remove a loop that demonstrably works.
     //
-    // Splitting the flag is the fix and it is above this seam, so it is its own
-    // change. Until then the honest position is to leave the claim undeclared
-    // rather than trade a true statement about the command plane for a false
-    // one about the floor.
+    // Splitting the flag is the fix, and this change is that split: question 2
+    // now has its own field, PanAmplitudeModel::binsAbsolute, declared true
+    // above. Answering question 1 correctly is therefore SAFE from here on --
+    // noiseFloorAutoAdjustAllowed() is an OR and the second term holds the gate
+    // open -- but it is a claim about the command plane, not about the floor,
+    // so it gets its own change with its own reasoning rather than riding in on
+    // this one.
     // The AD9866 samples at 76.8 MHz, so the first Nyquist zone — everything
     // this receiver can hear without relying on an alias — is DC to 38.4 MHz
     // (oracle §7, which is also why the wideband bandscope spans exactly that).
