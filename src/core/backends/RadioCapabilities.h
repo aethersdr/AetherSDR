@@ -69,6 +69,79 @@ struct ReceivePanRangeControl {
     // bandwidth support promises no slice creation/removal or retune.
 };
 
+// What the panadapter's SPAN is made of. Absent means NO BACKEND HAS BEEN READ
+// on the question — not "no". That distinction is the whole reason this is a
+// record and not two bools (#5262 M2): a bool that nobody set reports a
+// definite answer indistinguishable from a considered one.
+struct PanSpanModel {
+    // `sampleRatesHz` IS the complete span set, floor included — the panadapter
+    // span is the receiver sample rate.
+    //
+    // True for a direct-sampling backend that ships raw IQ and computes the
+    // spectrum from it: there is no display-side decimation stage between the
+    // DDC and the FFT, so asking for a narrower window than the narrowest rate
+    // asks for samples that were never sent. False for a radio that computes
+    // its own spectrum and treats span as a display parameter (a Flex, whose
+    // span is continuous and independent of any stream rate).
+    //
+    // The consequence a client has to respect: a span request must SNAP to one
+    // of `sampleRatesHz` rather than being taken literally, and the zoom
+    // control must stop at the narrowest one instead of offering a span the
+    // backend will silently refuse.
+    bool followsSampleRate = false;
+
+    // One span register for the whole radio: changing any panadapter's span
+    // changes every receiver's, because they share one DDC rate.
+    //
+    // True for the HL2, whose sample rate is a single two-bit field in the
+    // HPSDR config command, in front of every DDC. False for a radio with
+    // per-pan span (a Flex), and false for a single-receiver backend where the
+    // question does not arise.
+    //
+    // This is why `receivePanBandwidthControl` can be absent on a radio that
+    // plainly does change its span: the control exists, but it is not a
+    // per-panadapter one, and offering it as per-pan would let an operator
+    // narrow one window and silently retune the other three.
+    bool radioWide = false;
+};
+
+// What the numbers on the panadapter's VERTICAL axis mean. Absent means NO
+// BACKEND HAS BEEN READ, and the two fields then fall to OPPOSITE legacy
+// answers — which is exactly why consumers must go through
+// RadioCapabilities::dbmAxisIsCalibrated() and ::panBinsAbsolute() rather than
+// reach in here and pick a default for themselves.
+struct PanAmplitudeModel {
+    // The numbers on the axis are ABSOLUTE dBm at the antenna. True for a radio
+    // that carries a per-unit factory calibration (a Flex reports true dBm; an
+    // Icom decodes its scope against ScopeCalibration), so an S-meter reading,
+    // a noise-floor readout and a recorded spot level all mean something off
+    // this radio.
+    //
+    // FALSE means the axis is dBFS wearing a dBm label: the numbers are
+    // self-consistent — a 3 dB stronger signal still reads 3 dB higher — but
+    // the zero point is arbitrary, so no value may be compared against another
+    // station's, published as a spot level, or used as an absolute threshold.
+    //
+    // A backend sets this from its own reference object where it has one — the
+    // HL2's Hl2DbReference::isCalibrated() is exactly that predicate.
+    bool calibratedDbm = false;
+
+    // The spectrum bins carry ABSOLUTE levels: a bin's value does not move when
+    // the display reference level moves, because the bins are computed
+    // host-side from the samples. This describes the data path, not a feature
+    // the operator can reach.
+    //
+    // It is what lets the noise-floor auto-adjust converge on a radio that
+    // echoes no range command back — see noiseFloorAutoAdjustAllowed() and
+    // RadioCapabilities::panBinsAbsolute(). Declared here rather than beside
+    // radioOwnsDbmScale because it is a property of THIS axis, and because the
+    // single flag that used to answer both questions is the bug being split.
+    //
+    // Nothing populates this field yet; the backends that can quote their bin
+    // path declare it in #5726.
+    bool binsAbsolute = false;
+};
+
 // A stable, radio-owned receive-filter preset. `id` is the identity used on
 // the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
 // that preset and must never be used as its identity.
@@ -170,6 +243,33 @@ struct RadioCapabilities {
     int maxSlices = 1;             // independent demod slices the radio supports
     int maxPanadapters = 1;        // simultaneous panadapters
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
+
+    // What this radio's panadapter span and vertical axis are made of, as two
+    // per-feature records (#5262 M2). ABSENT MEANS "no backend has been read",
+    // never "no" — and for panAmplitude the two fields fall to opposite legacy
+    // answers when it is absent, so read it through the accessors below rather
+    // than unwrapping it at the call site.
+    std::optional<PanSpanModel> panSpanModel;
+    std::optional<PanAmplitudeModel> panAmplitude;
+
+    // A backend nobody has read labelled its axis dBm and was consumed as
+    // though it meant it. ABSENT KEEPS THAT CLAIM, so this is the legacy shape
+    // rather than the conservative one: defaulting to "uncalibrated" would
+    // silently restate a claim about backends nobody has read.
+    [[nodiscard]] bool dbmAxisIsCalibrated() const
+    {
+        return !panAmplitude || panAmplitude->calibratedDbm;
+    }
+
+    // Absent means UNDECLARED, and an undeclared backend must not be assumed to
+    // have absolute bins. The opposite default to the accessor above, and it
+    // costs nothing: the auto-floor gate is an OR whose other term,
+    // radioOwnsDbmScale, still defaults permissive.
+    [[nodiscard]] bool panBinsAbsolute() const
+    {
+        return panAmplitude && panAmplitude->binsAbsolute;
+    }
+
 
     // The frequency range the receiver can actually be tuned to, in Hz.
     //
@@ -313,6 +413,11 @@ struct RadioCapabilities {
     // A backend with a fixed scale needs no auto-adjust: its floor is already
     // where the calibration puts it.
     bool radioOwnsDbmScale = true;
+
+    // WHETHER THOSE NUMBERS MEAN ANYTHING is a SEPARATE question from who owns
+    // the scale, and it lives in PanAmplitudeModel::calibratedDbm above, read
+    // through dbmAxisIsCalibrated(). A radio can own its scale and still label
+    // dBFS as dBm; a radio that owns nothing can still be calibrated.
 
     // The RADIO stores memory channels and re-dumps them on connect. True for a
     // Flex, whose memory slots live in the radio and are shared by every client
