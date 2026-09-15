@@ -2051,6 +2051,15 @@ target_include_directories(profile_transfer_cleanup_test PRIVATE src)
 target_link_libraries(profile_transfer_cleanup_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME profile_transfer_cleanup_test COMMAND profile_transfer_cleanup_test)
 
+# #5663 — socket-free DVK upload queue accounting. An injected QTcpSocket
+# writer accepts and drains partial spans without binding a radio-peer socket.
+add_executable(dvk_wav_upload_test
+    tests/dvk_wav_upload_test.cpp
+)
+target_include_directories(dvk_wav_upload_test PRIVATE src)
+target_link_libraries(dvk_wav_upload_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME dvk_wav_upload_test COMMAND dvk_wav_upload_test)
+
 add_executable(waveform_upload_state_test
     tests/waveform_upload_state_test.cpp
     src/core/WaveformUploadState.cpp

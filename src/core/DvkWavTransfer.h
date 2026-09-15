@@ -26,6 +26,7 @@ class RadioModel;
 
 class DvkWavTransfer : public QObject {
     Q_OBJECT
+    friend class DvkWavTransferTestAccess;
 public:
     explicit DvkWavTransfer(RadioModel* model, QObject* parent = nullptr);
     ~DvkWavTransfer() override;
@@ -75,7 +76,8 @@ private:
     QString      m_filePath;           // download: save path / upload: source path
     qint64       m_bytesReceived{0};
     QByteArray   m_uploadData;
-    qint64       m_bytesSent{0};
+    qint64       m_bytesSent{0};      // bytes confirmed drained by QTcpSocket
+    qint64       m_bytesAccepted{0};  // bytes accepted by QTcpSocket::write()
     Direction    m_direction{None};
     bool         m_transferring{false};
     bool         m_cancelled{false};

@@ -199,6 +199,7 @@ void DvkWavTransfer::upload(int slotId, const QString& filePath)
     m_slotId = slotId;
     m_filePath = filePath;
     m_bytesSent = 0;
+    m_bytesAccepted = 0;
     m_direction = Upload;
     m_transferring = true;
     m_cancelled = false;
@@ -261,18 +262,50 @@ void DvkWavTransfer::onUploadConnected()
 
 void DvkWavTransfer::sendNextChunk()
 {
-    if (m_cancelled || !m_client) return;
+    if (m_cancelled || m_finished || !m_client) {
+        return;
+    }
 
-    const qint64 remaining = m_uploadData.size() - m_bytesSent;
-    if (remaining <= 0) return;
+    // Keep one accepted span in flight. bytesWritten() reports drained bytes,
+    // while write() can have already accepted more data into QTcpSocket's
+    // buffer. Advancing from m_bytesSent here would requeue that accepted tail
+    // after a partial bytesWritten() notification.
+    if (m_bytesSent != m_bytesAccepted) {
+        return;
+    }
+
+    const qint64 remaining = m_uploadData.size() - m_bytesAccepted;
+    if (remaining <= 0) {
+        return;
+    }
 
     const qint64 toSend = qMin(static_cast<qint64>(UPLOAD_CHUNK_SIZE), remaining);
-    m_client->write(m_uploadData.constData() + m_bytesSent, toSend);
+    const qint64 accepted = m_client->write(m_uploadData.constData() + m_bytesAccepted, toSend);
+    // A synchronous socket error can finish the transfer inside write().
+    if (m_cancelled || m_finished || !m_client) {
+        return;
+    }
+    if (accepted < 0) {
+        finish(false, "Upload write error: " + m_client->errorString(), false);
+        return;
+    }
+    if (accepted == 0) {
+        finish(false, "Upload write made no progress", false);
+        return;
+    }
+
+    m_bytesAccepted += accepted;
 }
 
 void DvkWavTransfer::onUploadBytesWritten(qint64 bytes)
 {
     if (m_cancelled || m_finished) return;
+
+    const qint64 pending = m_bytesAccepted - m_bytesSent;
+    if (bytes <= 0 || bytes > pending) {
+        finish(false, "Upload write acknowledgement invalid", false);
+        return;
+    }
 
     m_bytesSent += bytes;
     const int percent = static_cast<int>(m_bytesSent * 100 / m_uploadData.size());
@@ -425,6 +458,7 @@ void DvkWavTransfer::cleanup(bool removeFile)
     m_uploadData.clear();
     m_bytesReceived = 0;
     m_bytesSent = 0;
+    m_bytesAccepted = 0;
 
     m_cleaningUp = false;
 }
