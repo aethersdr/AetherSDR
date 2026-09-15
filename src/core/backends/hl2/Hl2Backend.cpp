@@ -34,13 +34,19 @@
 #include <tuple>
 #include <utility>
 
-// Hl2Backend.h seeds m_alcHoldBelowDbfs with a literal because it can only
+// Hl2Backend.h seeds m_alcTargetPeak with a literal because it can only
 // forward-declare Hl2TxDsp. This is what stops the two drifting: the seed has
 // to keep meaning "the modulator's own default" for a pre-connect snapshot to
 // be honest, and a silent divergence is exactly the class of readout error this
 // backend's health section exists to eliminate.
-static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcHoldBelowDbfs == -45.0,
-              "Hl2Backend.h seeds m_alcHoldBelowDbfs with this value — keep them equal");
+//
+// This pinned alcHoldBelowDbfs == -45.0 until the ALC's makeup half was removed
+// and the hold with it. Re-pointing it rather than deleting it is deliberate:
+// the compile-time link is the only thing that made the deletion of the Config
+// field surface here as a build failure instead of a stale readout, and the
+// target is what a mic peak is now measured against.
+static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
+              "Hl2Backend.h seeds m_alcTargetPeak with this value — keep them equal");
 
 Q_LOGGING_CATEGORY(lcHl2Tx, "aether.hl2.tx")
 
@@ -533,9 +539,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             [this](float dbfs) {
         emit meterUpdate(QStringLiteral("TX:MICPEAK"), dbfs);
         // Loudest thing the operator said this transmission. Evaluated at unkey
-        // (setKeying) against the ALC's hold threshold — a PER-BLOCK test would
+        // (setKeying) against the ALC's target peak — a PER-BLOCK test would
         // fire on every normal transmission, because the pauses between words
-        // are exactly what the hold exists to sit through.
+        // sit far below the target by definition. The MAXIMUM across the over
+        // is the only reading that answers "did any of this modulate".
         if (m_keyed)
             m_txMicPeakMaxDbfs = std::max(m_txMicPeakMaxDbfs, dbfs);
     });
@@ -2092,12 +2099,11 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
         tc.filterLowHz  = txLo;
         tc.filterHighHz = txHi;
     }
-    // Remember the threshold the modulator is being handed, so the health
-    // snapshot and the unkey diagnostic both report what it is RUNNING rather
-    // than what a default-constructed Config would have said. Assigned from
-    // `tc` and not from the default so it stays correct the day this Config
-    // sets the field.
-    m_alcHoldBelowDbfs = tc.alcHoldBelowDbfs;
+    // Remember the target the modulator is being handed, so the health snapshot
+    // and the unkey diagnostic both report what it is RUNNING rather than what
+    // a default-constructed Config would have said. Assigned from `tc` and not
+    // from the default so it stays correct the day this Config sets the field.
+    m_alcTargetPeak = tc.alcTargetPeak;
 
     // Announce the passband the modulator is being configured with. The Config
     // is how the modulator learns it, so this is the echo half only — but it is
@@ -3450,35 +3456,36 @@ void Hl2Backend::setKeying(bool key)
         }
         m_cwAutoKeyed = false;
     }
-    // THE ALC'S HOLD THRESHOLD IS A SILENT CLIFF, so say when an operator has
-    // fallen off it.
+    // THE QUIET-MICROPHONE ADVICE IS NOT IN THIS CHANGE, AND THAT IS DELIBERATE.
     //
-    // Below alcHoldBelowDbfs the ALC deliberately stops raising gain — that is
-    // what keeps it from winding up 40 dB on room noise between words and
-    // fighting the speech processor. But a microphone whose PEAKS never reach
-    // the threshold now gets no makeup gain at all where it previously got up to
-    // 40 dB, and "I was quiet on the air" points at nothing. The answer is mic
-    // gain, and the meter that shows it is the one this very peak feeds.
+    // Making the ALC reduction-only means the pre-ALC mic peak IS the on-air
+    // level, so an operator whose gain nobody set now goes out quiet with
+    // nothing to say so. An unkey-time "raise mic gain" line is the right
+    // instrument for that, and an earlier revision of this PR carried one.
     //
-    // At unkey, once per transmission, on the main thread: the DSP worker must
-    // not log per block, and a per-block test would fire on every normal
-    // transmission because the pauses between words are what the hold is for.
-    if (m_keyed && !key) {
-        const double kHoldDbfs = m_alcHoldBelowDbfs;
-        // Not for client-leveled transmissions: the ALC is bypassed there
-        // (#4796), so a below-threshold peak is the client's own attenuation
-        // doing exactly what it asked for, and "raise mic gain" would send an
-        // operator chasing a control that was never in the path.
-        if (!m_txAudioClientLeveled
-            && m_txMicPeakMaxDbfs > -139.0f
-            && m_txMicPeakMaxDbfs < static_cast<float>(kHoldDbfs)) {
-            qCInfo(lcHl2) << "HL2 TX: microphone peaked at" << m_txMicPeakMaxDbfs
-                          << "dBFS for the whole transmission, below the ALC hold"
-                             " threshold of" << kHoldDbfs
-                          << "dBFS — the ALC held rather than lifting it, so that"
-                             " audio went out quiet. Raise mic gain.";
-        }
-    }
+    // IT CANNOT BE AIMED FROM THIS BRANCH. The advice must not fire for audio
+    // the operator's microphone did not produce: WSPR, AX.25 and RADE reach
+    // submitTxAudio() with `clientLeveled` false, exactly like the microphone,
+    // and a beacon at its -20 dBFS default sits about 18.6 dB under the target
+    // — well past any sensible margin. Every beacon unkey would advise raising
+    // a mic gain that has nothing to do with the level (K5PTB, #5646 review).
+    //
+    // The information needed to aim it does not exist here. This branch's seam
+    // is `submitTxAudio(..., bool clientLeveled)` — two states, and engine
+    // audio is not one of them. Distinguishing it means the three-state
+    // TxAudioSource, which is #5647's substance and reaches four files above
+    // the HL2 backend. Importing that here would move #5647 into #5646 rather
+    // than fix #5646, and would take this change's localization from one hit
+    // to four.
+    //
+    // So: no advice rather than misaimed advice, and #5647 reintroduces it
+    // gated on `!m_txAudioEngineGenerated`. The measurement it needs is kept —
+    // `m_txMicPeakMaxDbfs` still tracks and still reaches the health snapshot,
+    // so an operator can see the number even while nothing volunteers it.
+    //
+    // MERGE ORDER MATTERS ONE WAY ONLY. #5647 carries the advice with its
+    // gate; this removal must not be applied over it. If #5647 lands first,
+    // this hunk is the one to drop.
     if (key) {
         m_txMicPeakMaxDbfs = -140.0f;
         // A new transmission decides afresh whether it is client-leveled; the
@@ -4073,35 +4080,34 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
 // the first time this code shipped and the first launch after the level began
 // persisting.
 //
-// Above and below that, +/-20 dB linear in dB — 0.4 dB per slider step, which is
-// fine enough to set by ear and wide enough to cover the range between a headset
-// boom mic and a built-in laptop microphone.
+// The travel around that point is ASYMMETRIC: -20 dB below 50 at 0.4 dB per
+// step, +40 dB above it at 0.8 dB per step. The upward half was widened when the
+// ALC's 40 dB of makeup was removed — speech near -32 dBFS against an ALC target
+// near -1.4 dBFS is a ~30 dB shortfall, and the old +20 dB left the chain 10.6 dB
+// short at maximum slider. Widening it symmetrically would have moved unity off
+// 50 and changed the transmit level of every existing install, which is the one
+// thing the paragraph above forbids. So the two legs meet at 50 with different
+// slopes, and hl2_tx_level_policy_test pins the join.
 //
-// WHAT THIS DOES AND DOES NOT BUY depends on which path the audio took, because
-// the ALC sits right behind this and is one-sided for client-leveled audio
-// (#4796).
+// WHAT THIS BUYS is now the same on every path, and that is the change. The ALC
+// behind this only reduces — it has no makeup half left to give the gain back
+// with — so this slider is a straight proportional control on the air all the
+// way up to alcTargetPeak, for the microphone and for a TCI/DAX client alike.
+// TX gain 5 is a real -18 dB. Past the target the ALC limits rather than letting
+// the modulator's hard clamp flat-top the signal, so the last stretch of travel
+// buys reduced headroom rather than more power.
 //
-// MIC PATH: the ALC normalizes each block's peak to alcTargetPeak, so raising
-// mic gain on already-loud speech is largely given back and PEP barely moves.
-// Where it MATTERS is the ALC's hold threshold (alcHoldBelowDbfs, -45 dBFS):
-// below that the ALC deliberately stops lifting, so a microphone quiet enough to
-// sit under it gets no makeup at all and goes out weak. This slider is what
-// carries such a mic over the threshold — which is exactly what setKeying()'s
-// "raise mic gain" diagnostic tells the operator to do, and until that
-// diagnostic existed the advice pointed at a control that did nothing here.
-//
-// CLIENT-LEVELED PATH (TCI/DAX): nothing is given back. The ALC may only reduce,
-// never lift, so this is a straight proportional attenuator all the way up to
-// alcTargetPeak — TX gain 5 is a real -18 dB on the air. The hold threshold does
-// not apply, and neither does the "raise mic gain" diagnostic, which setKeying()
-// gates off for such transmissions. Past the target the ALC limits rather than
-// letting the modulator's clamp flat-top the signal, so the last stretch of
-// travel buys reduced headroom rather than more power.
+// The one path-dependent thing left is setKeying()'s "raise mic gain"
+// diagnostic, which is gated off for client-leveled transmissions — not because
+// the DSP treats them differently any more, but because the remedy for a quiet
+// TCI/DAX client is that client's own level control.
 //
 // Level 0 mutes outright rather than resolving to -20 dB. A slider at the bottom
-// of its travel means off, and a mic that is merely 20 dB down would still be
-// hauled back up by the ALC's 40 dB of makeup — so without the special case,
-// "0" would sound barely different from "50".
+// of its travel means off. That used to need arguing — a mic merely 20 dB down
+// would have been hauled back up by the ALC's makeup, so "0" would have sounded
+// much like "50" — and now it needs none: -20 dB is simply -20 dB on the air,
+// and the special case is there because the bottom of a travel should mean off
+// rather than very quiet.
 void Hl2Backend::setMicGain(int level)
 {
     level = std::clamp(level, 0, 100);
@@ -4183,6 +4189,42 @@ void Hl2Backend::setTxDriveLevel(int level)
 }
 
 namespace {
+
+// A restored mic level, read against the curve the document that carries it was
+// written on.
+//
+// The document says which curve with `micLevelCurve`. ABSENT MEANS CURVE 1 —
+// the key did not exist while curve 1 was the only curve, so its absence is a
+// positive statement about the writer rather than a gap, and that is the whole
+// reason the migration can be one-shot: writing the level back stamps the curve
+// beside it, so the next read takes the identity branch and the level stops
+// moving.
+//
+// Anything else present and readable is taken at face value, including a curve
+// number from the future. This function's job is to not misread a document, and
+// a level written by a build that knows a curve this one does not is a level
+// this build cannot re-derive; re-mapping it on the guess that a higher number
+// means a wider leg would be inventing a setpoint, which is what the DROPPED
+// rule above the caller exists to refuse. A future curve therefore restores
+// as-written, and the operator's own next slider move re-stamps it.
+[[nodiscard]] int migrateRestoredMicLevel(int level, const QJsonObject& txSetpoints)
+{
+    const QJsonValue curve = txSetpoints.value(QStringLiteral("micLevelCurve"));
+    if (curve.isDouble() && curve.toInt() != 1)
+        return level;
+    if (!curve.isUndefined() && !curve.isDouble()) {
+        qCInfo(lcHl2) << "HL2: restored mic level carries a malformed curve"
+                      << curve.toVariant() << "- reading it as written";
+        return level;
+    }
+    const int migrated = AetherSDR::hl2::micLevelFromCurve1(level);
+    if (migrated != level)
+        qCInfo(lcHl2) << "HL2: restored mic level" << level
+                      << "was stored against mic curve 1; it is"
+                      << migrated << "on curve" << AetherSDR::hl2::kMicLevelCurve
+                      << "- the same gain, a different position";
+    return migrated;
+}
 
 // WDSP's AGC mode integer as the string the bridge and the operator use, so a
 // read-back can be compared against what was asked for without the reader
@@ -4283,10 +4325,8 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
         e[QStringLiteral("filterHighHz")] = t.filterHighHz;
         e[QStringLiteral("alcEnabled")] = t.alcEnabled;
         e[QStringLiteral("alcTargetPeak")] = t.alcTargetPeak;
-        e[QStringLiteral("alcMaxGainDb")] = t.alcMaxGainDb;
         e[QStringLiteral("alcAttackSec")] = t.alcAttackSec;
         e[QStringLiteral("alcReleaseSec")] = t.alcReleaseSec;
-        e[QStringLiteral("alcHoldBelowDbfs")] = t.alcHoldBelowDbfs;
         e[QStringLiteral("micGainLinear")] = txDsp->micGain();
         chains.append(e);
     }
@@ -4729,26 +4769,26 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         std::isnan(m_appliedMicGainLinear) ? QVariant()
                                            : QVariant(m_appliedMicGainLinear));
     // Peak mic level for the CURRENT transmission, reset at each key. Compared
-    // against the hold threshold below, these two rows are the whole "why did I
-    // go out quiet" diagnosis: a peak under the threshold means the ALC declined
-    // to lift it and the answer is mic gain.
+    // against the ALC target below, these two rows are the whole "why did I go
+    // out quiet" diagnosis: the ALC only reduces, so this peak IS the on-air
+    // level up to the target, and a peak well under it means nothing lifted it
+    // and the answer is mic gain.
     put("txMicPeakDbfs", QStringLiteral("Mic peak this over (dBFS)"),
         m_txMicPeakMaxDbfs > -139.0f ? QVariant(m_txMicPeakMaxDbfs) : QVariant());
-    // The threshold the modulator was actually CONFIGURED with, not the one a
+    // The target the modulator was actually CONFIGURED with, not the one a
     // default-constructed Config would have. The two agree today because the
     // Config built in connectRadio() never touches this field — but this row sits
     // in a section whose thesis is "report what the modulator is running",
     // and a constant that silently stops matching the modulator is the row
     // nobody would think to suspect.
     //
-    // Labelled as mic-path-only since #4796: the hold governs the ALC's MAKEUP
-    // half, and client-leveled (TCI/DAX) audio has no makeup half to hold — its
-    // gain is ceilinged at unity and released freely. A reader debugging a
-    // WSJT-X level problem against this row would otherwise chase a threshold
-    // that was never in their path.
-    put("alcHoldBelowDbfs",
-        QStringLiteral("ALC hold threshold (dBFS, mic path only)"),
-        m_alcHoldBelowDbfs);
+    // This row reported alcHoldBelowDbfs until the ALC's makeup half was
+    // removed. It is the target now, and it applies to EVERY path rather than
+    // to the mic path only: with the ceiling at unity there is no longer a
+    // mic/client asymmetry for a reader to be misled by.
+    put("alcTargetPeak",
+        QStringLiteral("ALC target peak (linear, all paths)"),
+        m_alcTargetPeak);
     put("alcGainDb", QStringLiteral("ALC gain applied (dB)"),
         std::isnan(m_alcGainDb) ? QVariant() : QVariant(m_alcGainDb));
     put("alcPeakDbfs", QStringLiteral("Post-ALC peak (dBFS)"),
@@ -5073,7 +5113,7 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         const QJsonValue raw = txSetpoints.value(QStringLiteral("micLevel"));
         const int level = raw.toInt(-1);
         if (raw.isDouble() && level >= 0 && level <= 100) {
-            m_restoredMicLevel = level;
+            m_restoredMicLevel = migrateRestoredMicLevel(level, txSetpoints);
         } else {
             qCInfo(lcHl2) << "HL2: dropping invalid restored mic level"
                           << raw.toVariant();
@@ -5303,6 +5343,14 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     // it cannot be filtered out as "absent" — see the -1 sentinel on
     // m_restoredMicLevel.
     txSetpoints.insert(QStringLiteral("micLevel"), m_micLevel);
+    // The curve that level is a position ON, so a document written by one build
+    // is not silently re-interpreted by another. Absent means curve 1, the
+    // +20 dB upper leg this radio shipped with before the ALC's makeup gain was
+    // removed; see migrateRestoredMicLevel(). Written unconditionally beside the
+    // level, because a level without its curve is the ambiguity this key exists
+    // to end — and written as a NUMBER rather than a build string, so the next
+    // change to the mapping is a comparison rather than a table of versions.
+    txSetpoints.insert(QStringLiteral("micLevelCurve"), kMicLevelCurve);
     state.extension = QJsonObject{{QStringLiteral("rfGain"), rfGain},
                                   {QStringLiteral("txSetpoints"), txSetpoints}};
     state.extensionSchemaVersion = 1;

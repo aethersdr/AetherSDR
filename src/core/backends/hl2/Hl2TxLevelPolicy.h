@@ -29,48 +29,123 @@ namespace AetherSDR::hl2 {
 // that session must leave the modulator exactly at its own 1.0 default. The
 // persistence changed which sessions arrive here at 50; it did not retire the
 // pin, and moving unity would still re-level every install that never asked for
-// it. +/-20 dB across the travel, linear in dB.
+// it.
+//
+// THE TWO LEGS HAVE DIFFERENT SLOPES, and that asymmetry is the whole reason
+// this is not a single multiply. Below 50: -20 dB at 0.4 dB per step, exactly
+// as it always was. Above 50: +40 dB at 0.8 dB per step. The upward half was
+// widened when Hl2TxDsp's ALC lost its 40 dB of makeup gain — speech sits near
+// -32 dBFS and the ALC targets 0.85 (-1.41 dBFS), a ~30 dB shortfall that the
+// operator's slider is now the only thing closing, and the old +20 dB left the
+// chain 10.6 dB short at maximum travel.
+//
+// Widening it SYMMETRICALLY would have been tidier and is wrong: it moves unity
+// off 50, and the paragraph above is exactly the reason it may not move. So the
+// legs meet at 50 with no discontinuity in value (49 = -0.4 dB, 51 = +0.8 dB)
+// and a deliberate one in slope. hl2_tx_level_policy_test pins the join, so
+// tidying this back to a symmetric mapping fails there rather than on the air.
 //
 // Level 0 is NOT -20 dB — see micSliderToLinear, which handles it as a mute.
 // This function is the continuous part of the mapping only.
 [[nodiscard]] constexpr double micSliderToGainDb(int level) noexcept
 {
     const int clamped = level < 0 ? 0 : (level > 100 ? 100 : level);
-    return (static_cast<double>(clamped) - 50.0) * 0.4;
+    const double fromUnity = static_cast<double>(clamped) - 50.0;
+    return fromUnity <= 0.0 ? fromUnity * 0.4 : fromUnity * 0.8;
 }
 
 // The same slider as the linear multiplier the modulator takes.
 //
 // Level 0 mutes outright rather than resolving to the -20 dB the line above
-// would give it. A slider at the bottom of its travel means off — and a mic
-// merely 20 dB down would be hauled back up by the ALC's 40 dB of makeup
-// anyway, so without the special case "0" would sound barely different from
-// "50", which is the sort of control that teaches an operator to distrust every
-// other one on the panel.
+// would give it. A slider at the bottom of its travel means off, and 0.0x is
+// the only reading of that which is not "very quiet".
+//
+// THE ARGUMENT FOR THE SPECIAL CASE HAS CHANGED, though the behaviour has not.
+// It used to be that -20 dB would be hauled straight back up by the ALC's 40 dB
+// of makeup, so "0" would have sounded barely different from "50" — a control
+// that teaches an operator to distrust every other one on the panel. That
+// makeup gain is gone: -20 dB is now a real -20 dB on the air, and "0" would be
+// audibly quieter than "50" without the mute. The case survives on the plainer
+// ground that the bottom of a travel labelled as a level means off.
 //
 // SCOPE, because "mic" undersells it: this multiplier is applied to everything
 // entering Hl2TxDsp::processAudioBlock, and on a host-modulating backend that
 // includes digital-mode and WSPR-beacon audio arriving through submitTxAudio,
-// not only voice. For MIC-path audio, above the ALC's hold threshold it is
-// very nearly a no-op — the ALC normalizes each block's peak to alcTargetPeak
-// and hands the gain straight back. For CLIENT-LEVELED audio (TCI/DAX) the ALC
-// may only reduce, never lift (#4796), so below its target there is no handing
-// back: this slider is a straight proportional attenuator on that path, and
-// TX gain 5 (-18 dB) is a real -18 dB on the air. It stops being straight only
-// where it has to — drive a full-scale client through the top of this slider's
-// +20 dB and the ALC limits, rather than letting the modulator's hard clamp
-// flat-top it, so the last stretch of travel buys reduced headroom rather than
-// more power. At 0 neither path transmits: the mic path because silence
-// sits below the hold threshold so the ALC declines to lift it, the
-// client-leveled path as a plain 0.0x multiply. That is the honest reading of
-// a slider at the bottom of its travel on a host modulator — there is one
-// modulator and it is off — but it is worth knowing before parking the control
-// at 0 between voice sessions.
+// not only voice. It is a straight proportional control on the air, the same on
+// every path, all the way up to the ALC's target — the ALC behind it only
+// reduces and has no makeup half left to hand the gain back with, so TX gain 5
+// (-18 dB) is a real -18 dB. It stops being straight only where it has to:
+// drive a full-scale source through the top of this slider's +40 dB and the ALC
+// limits, rather than letting the modulator's hard clamp flat-top it, so the
+// last stretch of travel buys reduced headroom rather than more power.
+//
+// THAT LAST SENTENCE IS TRUE ONLY BECAUSE OF THE KEY-ON SEED, and it is worth
+// saying which mechanism holds it up. The ALC reduces on a 5 ms attack from
+// wherever it starts, and reset() starts it at unity on every unkey. A loop
+// ramping down from unity does not reach 0.01 within a block, so at 100x the
+// clamp WOULD be reached first and would flat-top the first ~17 ms of every
+// over — measured at |IQ| 1.5391 with 800 clipped samples, on the mic path and
+// the TCI/DAX one alike. Hl2TxDsp seeds the gain at its target on the first
+// block carrying signal instead of ramping to it, which is what keeps the
+// widening inside the modulator's headroom. hl2_txdsp_test's slider-top case
+// asserts it over the WHOLE run rather than the settled tail, because the
+// settled tail is precisely the half that cannot see this.
+//
+// At 0 nothing transmits, as a plain 0.0x multiply on every path. That is the honest
+// reading of a slider at the bottom of its travel on a host modulator — there
+// is one modulator and it is off — but it is worth knowing before parking the
+// control at 0 between voice sessions.
 [[nodiscard]] inline double micSliderToLinear(int level) noexcept
 {
     if (level <= 0)
         return 0.0;
     return std::pow(10.0, micSliderToGainDb(level) / 20.0);
+}
+
+// ---- Persisted level migration ---------------------------------------------
+
+// The curve micSliderToGainDb implements, as a number a stored document can
+// carry.
+//
+// Curve 1 was the mapping this radio shipped with while Hl2TxDsp's ALC still
+// had 40 dB of makeup gain: -20 dB below unity, +20 dB above, both legs at
+// 0.4 dB per step. Curve 2 is what is above — the lower leg unchanged, the
+// upper leg widened to +40 dB at 0.8 dB per step, because the makeup gain that
+// used to close the ~30 dB speech-to-target shortfall is gone and the slider is
+// now the only thing that closes it.
+//
+// It is a curve number rather than a schema version because it describes what a
+// stored NUMBER means, not what keys a document has. A document can gain and
+// lose keys without any level in it changing meaning; this changes when the
+// meaning of one key does, and only then.
+inline constexpr int kMicLevelCurve = 2;
+
+// A slider position stored against curve 1, re-expressed against curve 2 so it
+// puts the same gain on the air.
+//
+// THIS IS NOT A CLAMP AND NOT A PREFERENCE. An operator who parked the slider
+// at 80 under curve 1 asked for +12 dB. Under curve 2, 80 means +24 dB — so
+// restoring the raw number would hand them 15.849x where they chose 3.981x, on
+// the first over after an upgrade, with nothing on the panel to say why. The
+// position moves precisely so that the level does not.
+//
+// Only the upper leg needs it: below 50 both curves are 0.4 dB per step and the
+// number already means what it meant. At and below 50 this is the identity,
+// including the mute at 0.
+//
+// The halving is exact in dB and inexact in slider steps — curve 2 has half the
+// resolution above unity, so an odd position lands between two steps and rounds
+// up, at most 0.4 dB above where it sat. Rounding the other way was the
+// alternative and is worse: it rounds toward the unity the operator moved away
+// from, and 0.4 dB of extra level is a far smaller surprise on a control whose
+// whole upper half is now +40 dB.
+[[nodiscard]] constexpr int micLevelFromCurve1(int level) noexcept
+{
+    if (level <= 50)
+        return level;
+    const int clamped = level > 100 ? 100 : level;
+    // +1 before the integer divide is round-half-up on a non-negative value.
+    return 50 + (clamped - 50 + 1) / 2;
 }
 
 // ---- Forward-power peak hold -----------------------------------------------

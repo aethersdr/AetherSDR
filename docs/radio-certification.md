@@ -39,7 +39,8 @@ Hermes-Lite 2 can physically produce it.
 | `TX:SWR` idle | SWR | yes | **absent** | key with no audio | present-while-idle means the ratio saturated |
 | `TX:FWDPWR` | dBm | yes | rises with drive | raise the drive **one nibble** → rises | see the note below on halving |
 | `TX:REFPWR` | dBm | yes | ≪ forward into a load | key into a dummy load | ≥15 dB below forward |
-| `TX:ALC` | dBFS | **host-side** | post-ALC transmit peak | sweep the input 20 dB → reading does **not** move | **±1 dB across the sweep** |
+| `TX:ALC` | dBFS | **host-side** | post-ALC transmit peak | sweep the input 20 dB **below** the ALC target → reading **tracks the input 1:1** | **within ±0.25 dB of `TX:MICPEAK` at every level** |
+| `TX:ALC` at the limit | dBFS | **host-side** | the ALC's target | raise the input **above** the target → reading stops at `20·log10(alcTargetPeak)` | **−1.41 dBFS ±0.25 dB** |
 | `TX:ALCGAIN` | dB | **host-side** | gain the ALC is applying | sweep the MIC input 20 dB, between `alcHoldBelowDbfs` and the makeup ceiling → reading moves 20 dB the other way | **±1 dB inside that window only** — the gain is frozen below the hold threshold (`Hl2TxDsp.cpp`, `processAudioBlock`) and capped at unity for `clientLeveled` audio, so a TCI/DAX sweep moves it 0 dB by construction and a whole-range criterion would report a healthy meter as out of tolerance |
 | `TX:COMPPEAK` | dB | host-side | compression applied | PROC on → rises above 0 | reads 0 with PROC off |
 | `TX:MIC` | dBFS | host-side | pre-gain mic level | — | not yet wired |
@@ -63,9 +64,13 @@ would notice the meter regressing (CERTIFICATION.md 1.37).
 
 Both of the changed stimulus cells above are measurements, not preferences —
 `TX:FWDPWR`'s nibble step replaces a halving the hardware refutes, and
-`TX:ALC`'s no-movement sweep replaces envelope tracking that would fail a
-correct meter by ~17 dB. The numbers are under *Certified by effect,
-2026-08-10* below.
+`TX:ALC`'s tracking sweep replaces a no-movement expectation that was the
+observable signature of the ALC's 40 dB of upward makeup — a stage since made
+reduction-only, so the old expectation would fail a correct meter by 28.6 dB.
+The numbers are under *Certified by effect, 2026-08-10* and *2026-09-09* below;
+both are kept, because the 2026-08-10 figures are still correct for the build
+they were taken on and reproducing them there is what makes the newer block
+trustworthy.
 
 ### Radio / hardware
 
@@ -88,7 +93,7 @@ a readback.
 | `TX:SWR` idle | unkeyed | **absent** (null, age −1) | **CERTIFIED** — the `kMinForwardCountsForSwr` gate does its job; no 255.99:1 |
 | `TX:REFPWR` | 5.57 W forward into a dummy load | **0.001 W**, ≈37 dB below forward | **CERTIFIED** — requirement is ≥15 dB |
 | `RAD:PATEMP` | 10 s key | 32.70 → **43.06 °C** (+10.36) | **CERTIFIED** — requirement is a ≥0.5 °C rise |
-| `TX:ALC` | tone swept −10 → −30 dBFS | **−1.41 dBFS at every level** | **CERTIFIED** — see the normalisation check below |
+| `TX:ALC` | tone swept −10 → −30 dBFS | **−1.41 dBFS at every level** | **CERTIFIED FOR THE BUILD IT WAS RUN ON**, which had the makeup ALC — see the normalisation check below, and the 2026-09-09 block after it |
 | `TX:COMPPEAK` | PROC off | **0 dB**, age 0–28 ms | **LIVE** — reads zero with the compressor off, which is correct |
 | `SLC:LEVEL` | receiving | −105.7 dBm, age 15–78 ms | **LIVE** |
 | `RAD:+13.8A` | — | not defined | **correct** — the HL2 reports no supply voltage |
@@ -118,6 +123,19 @@ This is the HL2 analogue of the IC-705's live-voice run below, with a synthetic
 stimulus instead of speech — weaker as an audio-quality check and stronger as a
 level check, since the tone's amplitude is exactly known.
 
+**What that check was actually measuring, established 2026-09-09.** The
+constancy above is not a property of a post-ALC peak meter in general. It is the
+observable signature of `Hl2TxDsp::Config::alcMaxGainDb`, 40 dB of upward makeup
+that drags any input from about −41 dBFS upward onto `alcTargetPeak` — and
+−1.41 dBFS is exactly `20·log10(0.85)`. Two consequences, both measured rather
+than reasoned. It does **not** hold over the whole input range even here: below
+about −42 dBFS the makeup's ceiling binds, the reading starts tracking again at a
+fixed +40 dB offset, and below the −45 dBFS `alcHoldBelowDbfs` threshold it
+becomes **path-dependent** — the same stage at comparable inputs was measured at
++33.17 dB and +39.996 dB of applied gain depending only on how the level was
+approached. And once the stage is made reduction-only the signature disappears
+entirely, which is the 2026-09-09 block below.
+
 `TX:FWDPWR` is **live and uncertified**, and the distinction is the point.
 It reads 5.57 W at full drive and 1.17 W at 25 %, so it plainly tracks drive.
 But the certification stimulus in the table above — halve the control, expect
@@ -142,6 +160,62 @@ curve, and **`radiocert` must not report one as a control defect.** Certifying
 drive by effect on this radio needs either a per-unit power calibration or an
 external power meter; until then the honest claim is "monotonic in drive",
 which is what the nibble sweep in `HERMES.md` 17.7 shows.
+
+### Certified by effect, 2026-09-09 (Hermes-Lite 2, gateware 74, 7.100 MHz USB, dummy load)
+
+The ALC became reduction-only in this series, so the 2026-08-10 normalisation
+check above no longer describes a correct radio. **Both builds were measured**,
+and the older figures reproduce on the older build — which is what makes this
+block trustworthy rather than merely newer.
+
+Stimulus: the host-side 1 kHz test tone, mic slider at 50 (unity, and the one
+slider position where the old and new `micSliderToGainDb` mappings agree by
+construction), speech processor off (`TX:COMPPEAK` 0.00 dB at every level),
+drive register 0 so the transmit DSP runs while the PA emits nothing.
+`TX:MICPEAK` is the control: it is measured inside `Hl2TxDsp` **after** the mic
+gain and **before** the ALC, so it sits downstream of the whole client TX chain
+and upstream of the stage under test, and it is what proves the stimulus varied
+rather than being flattened by the channel strip or the final limiter.
+
+| build | input span (`TX:MICPEAK`) | `TX:ALC` | verdict |
+|---|---|---|---|
+| the makeup ALC (pre-series) | −40.97 … −0.97 dBFS | **−1.435 … −1.412 dBFS**, span **0.023 dB** | the 2026-08-10 row, reproduced to 0.023 dB |
+| reduction-only (this series) | −54.89 … −1.41 dBFS | **tracks `TX:MICPEAK`**: max deviation **0.0065 dB**, sd 0.0015, fitted slope **0.99997** | **CERTIFIED** |
+| reduction-only, above the target | −1.11 … −0.97 dBFS | **−1.4136 … −1.4125 dBFS**, span **0.0011 dB** | **CERTIFIED** — the target is `20·log10(0.85)` = −1.4116 |
+
+The knee was **located, not assumed**: the reading still tracks at an input of
+−1.406 dBFS and is already at the target at −1.112 dBFS, bracketing the target
+itself. Approaching a level from above rather than from below changes the
+reading by **0.0 dB**.
+
+**The ±0.25 dB in the table above is margin, not measurement, and the two are
+worth keeping apart.** The worst deviation measured anywhere in the tracking
+region is 0.0065 dB, its standard deviation 0.0015 dB, the worst within-level
+scatter 0.0047 dB and the path dependence 0.0 dB; ±0.05 dB would be supported by
+every one of those. The tolerance is set two orders of magnitude looser so the
+row survives a different host, audio device and block alignment, none of which
+were varied — one radio, one host, one night.
+
+**Two things about running this row that the old one did not say.**
+
+- **It cannot be certified without transmitting.** `Hl2Backend::submitTxAudio`
+  returns early unless `m_keyed`, so the transmit DSP — and with it both
+  meters — is dead in a receive-only session. A load and a keyed window are
+  required. The drive may be zero, and was: the quantity is host-side, and on
+  this gateware the bottom nibble of the drive register is silence.
+- **Let the reading settle.** On the reduction-only build it is settled within
+  one meter update. On the makeup build it is not: after a step down in level
+  the gain climbs on the 0.5 s release constant, and a reading averaged across
+  the first half of a 3 s dwell sits up to **0.78 dB** from the settled one —
+  most of the old row's own ±1 dB budget spent on the instrument rather than on
+  the radio.
+
+**Where this expectation stops holding, measured rather than assumed:** it holds
+for inputs from −54.9 dBFS up to the ALC target. Below −54.9 dBFS is untested —
+the host test tone clamps at −60 dBFS (`ClientTxTestTone::setLevelDb`). Above
+roughly −1 dBFS the test tone itself saturates, so the limiting clause rests on
+three points between −1.11 and −0.97 dBFS. Nothing was radiated at any point, so
+no RF figure is claimed here.
 
 ### Icom (IC-705) — measured with `controls meters`, radio idle on 20 m
 
