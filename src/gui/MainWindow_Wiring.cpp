@@ -18,6 +18,7 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include "models/CwDecodeSettings.h"
 #include "core/ClientDisplaySettings.h"
 #include <QHBoxLayout>
 #include <QLabel>
@@ -5861,6 +5862,9 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
             m_radioModel.cwAutoTuneOnce(sliceId);
     });
     connect(w, &VfoWidget::zeroBeatRequested, this, [this, sliceId]() {
+#ifdef HAVE_DEEPFIST
+        if (CwDecodeSettings::deepFistSelected()) { return; }
+#endif
         // #2516: act on the slice that owns the clicked VfoWidget, NOT the
         // active slice — otherwise pressing Zero Beat on slice A while slice
         // B is active would tune B.

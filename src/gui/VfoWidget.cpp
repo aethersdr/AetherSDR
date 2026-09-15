@@ -1,5 +1,8 @@
 #include "VfoWidget.h"
 #include "VfoDisplayDefaults.h"
+#ifdef HAVE_DEEPFIST
+#include "models/CwDecodeSettings.h"
+#endif
 #include "ScopedChildWidget.h"
 #include "AgcModeAvailability.h"
 #include "FmTonePresentation.h"
@@ -5870,6 +5873,9 @@ void VfoWidget::rebuildFilterButtons()
         } else {
             m_zeroBeatBtn = new QPushButton("Zero Beat");
             m_zeroBeatBtn->setFixedHeight(26);
+#ifdef HAVE_DEEPFIST
+            refreshCwDecoderControls();
+#endif
             m_zeroBeatBtn->setStyleSheet(btnStyle);
             connect(m_zeroBeatBtn, &QPushButton::clicked, this, [this]() {
                 emit zeroBeatRequested();
@@ -5886,6 +5892,17 @@ void VfoWidget::rebuildFilterButtons()
 
     updateFilterHighlight();
 }
+
+#ifdef HAVE_DEEPFIST
+void VfoWidget::refreshCwDecoderControls()
+{
+    if (!m_zeroBeatBtn) { return; }
+    const bool selected = CwDecodeSettings::deepFistSelected();
+    m_zeroBeatBtn->setEnabled(!selected);
+    m_zeroBeatBtn->setToolTip(selected
+        ? tr("Zero Beat is unavailable for DeepFist monitored-audio decoding") : QString{});
+}
+#endif
 
 void VfoWidget::updateFilterHighlight()
 {

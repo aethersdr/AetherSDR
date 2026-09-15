@@ -1,4 +1,5 @@
 #include "PanadapterApplet.h"
+#include "models/CwRxModel.h"
 #include "RttyDecodeSettings.h"
 #include "RttyDecoderSensitivity.h"
 #include "CallsignCard.h"
@@ -20,6 +21,7 @@
 #include <QHBoxLayout>
 #include <QComboBox>
 #include <QSlider>
+#include <QSignalBlocker>
 #include <QEvent>
 #include <QLabel>
 #include <QDateTime>
@@ -27,12 +29,14 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QTextEdit>
+#include <QTextCharFormat>
 #include <QWindow>
 #include <QGuiApplication>
 #include <QClipboard>
 #include "core/ThemeManager.h"
 
 #include <algorithm>
+#include <array>
 
 namespace AetherSDR {
 
@@ -194,6 +198,28 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         });
     cwBar->addWidget(m_cwSensSlider);
 
+#ifdef HAVE_DEEPFIST
+    m_cwEngineCombo = new GuardedComboBox(this);
+    m_cwEngineCombo->setObjectName("cwRxEngine");
+    m_cwEngineCombo->setAccessibleName(tr("CW receive decoder"));
+    m_cwEngineCombo->setAccessibleDescription(tr("Select ggmorse or the experimental DeepFist decoder for monitored audio"));
+    for (const QString& key : CwRxModel::availableBackends()) {
+        m_cwEngineCombo->addItem(key == "deepfist" ? tr("DeepFist") : key, key);
+    }
+    m_cwEngineCombo->setToolTip(tr("Receive decoder; transmit sidetone continues to use ggmorse"));
+    cwBar->addWidget(m_cwEngineCombo);
+    m_cwModelAction = new QPushButton(tr("Cancel"), this);
+    m_cwModelAction->setObjectName("cwModelAction");
+    m_cwModelAction->setAccessibleName(tr("CW model download action"));
+    m_cwModelAction->setFixedHeight(22);
+    m_cwModelAction->hide();
+    cwBar->addWidget(m_cwModelAction);
+    connect(m_cwModelAction, &QPushButton::clicked, this, &PanadapterApplet::cwModelActionRequested);
+    connect(m_cwEngineCombo, &QComboBox::currentIndexChanged, this, [this](int index) {
+        emit cwEngineChanged(m_cwEngineCombo->itemData(index).toString());
+    });
+#endif
+
     // Lock Pitch button
     m_lockPitchBtn = new QPushButton("\xF0\x9F\x94\x92P");  // 🔒P
     m_lockPitchBtn->setCheckable(true);
@@ -286,7 +312,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         " padding: 1px 6px; }"
         "QPushButton:hover { color: #ff6060; background: {{color.background.1}}; }");
     connect(closeBtn, &QPushButton::clicked, this, [this]() {
-        m_cwPanel->hide();
+        setCwPanelVisible(false);
         emit cwPanelCloseRequested();
     });
     cwBar->addWidget(closeBtn);
@@ -331,6 +357,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
             m_cwCallsignCard, &QWidget::hide);
     cwTextRow->addWidget(m_cwCallsignCard, 0, Qt::AlignTop);
     cwLayout->addLayout(cwTextRow);
+
 
     m_cwPanel->hide();
     layout->addWidget(m_cwPanel);
@@ -762,6 +789,9 @@ int PanadapterApplet::pitchRangeHigh() const
 
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
+#ifdef HAVE_DEEPFIST
+    if (m_cwEngineCombo->currentIndex() == 1) { return; }
+#endif
     // Filter by sensitivity threshold — drop low-confidence decodes
     if (cost >= m_cwCostThreshold) return;
 
@@ -794,6 +824,41 @@ void PanadapterApplet::appendCwText(const QString& text, float cost)
     emit cwRxTextDisplayed(clean);
 }
 
+#ifdef HAVE_DEEPFIST
+void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const QString& status,
+    bool preparing, bool canRetry, const QString& detail)
+{
+    const QSignalBlocker blocker(m_cwEngineCombo);
+    m_cwEngineCombo->setCurrentIndex(m_cwEngineCombo->findData(key));
+    const bool selected = !tuning;
+    for (QWidget* control : std::array<QWidget*, 5>{m_cwSensSlider, m_lockPitchBtn,
+            m_lockSpeedBtn, m_pitchRangeSlider, m_speedRangeSlider}) {
+        control->setEnabled(tuning);
+    }
+    m_cwModelAction->setVisible(selected && (preparing || canRetry));
+    m_cwModelAction->setText(preparing ? tr("Cancel") : tr("Retry"));
+    m_cwModelAction->setToolTip(preparing ? tr("Cancel model preparation") : tr("Retry model preparation"));
+    m_cwStatsLabel->setToolTip(selected
+        ? (detail.isEmpty() ? tr("Decodes monitored audio; multiple audible slices may interfere.") : detail)
+        : QString{});
+    if (selected) { m_cwStatsLabel->setText(status); }
+}
+void PanadapterApplet::appendUnscoredCwText(const QString& text)
+{
+    QString clean = text;
+    clean.replace('\n', ' ');
+    m_cwText->moveCursor(QTextCursor::End);
+    if (m_lastCwTextSource == CwTextSource::Tx) { m_cwText->insertPlainText(" "); }
+    m_lastCwTextSource = CwTextSource::Rx;
+    QTextCharFormat format;
+    format.setForeground(ThemeManager::instance().color(this, "color.text.primary"));
+    QTextCursor cursor = m_cwText->textCursor();
+    cursor.insertText(clean, format);
+    m_cwText->moveCursor(QTextCursor::End);
+    // No numeric ggmorse confidence or slice attribution is invented for the audio mix.
+}
+#endif
+
 void PanadapterApplet::appendCwTextTx(const QString& text, float cost)
 {
     // TX-side decoded keying (#2417).  Same confidence filter as the RX
@@ -821,6 +886,10 @@ void PanadapterApplet::appendCwTextTx(const QString& text, float cost)
 
 void PanadapterApplet::setCwStats(float pitchHz, float speedWpm)
 {
+#ifdef HAVE_DEEPFIST
+    // ggmorse may still have queued deliveries after the engine selector changes.
+    if (m_cwEngineCombo->currentIndex() == 1) { return; }
+#endif
     if (pitchHz > 0 && speedWpm > 0)
         m_cwStatsLabel->setText(QString("%1 Hz  %2 WPM").arg(pitchHz, 0, 'f', 0).arg(speedWpm, 0, 'f', 0));
     else
