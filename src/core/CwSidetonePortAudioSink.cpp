@@ -507,6 +507,17 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
         return false;
     }
 
+    // Everything from here to the "started" line below sits inside one
+    // unflushed window otherwise, so a hard kill anywhere in it leaves the
+    // same "calling Pa_OpenStream" tail as a kill INSIDE the open — the exact
+    // ambiguity that made #5713's log stop at "RX stream started", one stage
+    // up. Pa_StartStream can have the WASAPI callback running within
+    // microseconds (see below), which is at least as plausible a place for a
+    // heap fault as the open, so the two must not look alike in a bundle.
+    qCInfo(lcAudioSummary) << "CwSidetonePortAudioSink: Pa_OpenStream succeeded;"
+                           << "calling Pa_StartStream";
+    LogManager::instance().flushLog();
+
     // Zero the diagnostics BEFORE the stream starts: Pa_StartStream can have
     // the callback running within microseconds on WASAPI, and zeroing after it
     // races the callback — clobbering exactly the stream-prime underflow the
@@ -540,6 +551,10 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
                     << "rate=" << m_actualRate << "Hz"
                     << "outputLatency=" << (streamInfo ? streamInfo->outputLatency * 1000.0 : 0.0)
                     << "ms";
+    // The last flush of the sequence, so "the sidetone came up clean and the
+    // crash is downstream of it" is a fact the next bundle STATES rather than
+    // one the maintainer infers from an absence. (#5713)
+    LogManager::instance().flushLog();
     return true;
 }
 
