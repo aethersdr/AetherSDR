@@ -2,6 +2,8 @@
 
 #include "core/tnc/Ax25Connection.h"
 #include "core/tnc/HeardList.h"
+#include "core/tnc/YappTransferSession.h"
+#include <QTimer>
 
 #include <QDateTime>
 #include <QDir>
@@ -19,6 +21,30 @@ TncTerminal::TncTerminal(QObject* parent)
     : QObject(parent)
 {
     m_link = new Ax25Connection(this);
+    m_transfer = new YappTransferSession(this);
+    connect(m_transfer, &YappTransferSession::changed, this, &TncTerminal::stateChanged);
+    connect(m_transfer, &YappTransferSession::finished, this,
+            [this](bool success, const QString& summary) {
+        emitLine(QStringLiteral("*** %1").arg(summary));
+        const auto& stats = m_link->stats();
+        emitLine(QStringLiteral("*** Transfer AX.25: %1 retransmissions, %2 timeouts")
+            .arg(stats.iResent - m_transferResentStart)
+            .arg(stats.t1Timeouts - m_transferTimeoutStart));
+        // Failed/cancelled binary sessions cannot safely return to a text parser
+        // while peer data might still arrive. Reset on the next event-loop turn.
+        m_transferNeedsReset = !success;
+        if (success) {
+            const QByteArray tail = m_transfer->takeTrailingText();
+            QString text = QString::fromLatin1(tail);
+            text.replace(QLatin1String("\r\n"), QLatin1String("\n"));
+            text.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+            if (!text.isEmpty()) { emitOutput(text); }
+        }
+    });
+    auto* transferTimer = new QTimer(this);
+    transferTimer->setInterval(50);
+    connect(transferTimer, &QTimer::timeout, this, &TncTerminal::pumpTransfer);
+    transferTimer->start();
     m_link->setMaxRetries(8);
     // Timers are DERIVED from the air interface, never hardcoded. The previous
     // fixed 6 s T1 / 128 paclen were sized for 1200-baud VHF FM; at 300 baud
@@ -47,6 +73,9 @@ TncTerminal::~TncTerminal()
 
 void TncTerminal::setMyCall(const QString& callWithSsid)
 {
+    if (transferActive()) {
+        return;
+    }
     auto parsed = Address::parse(callWithSsid.trimmed());
     m_myCall = parsed ? *parsed : Address{};
     m_link->setLocalAddress(m_myCall);
@@ -69,12 +98,15 @@ void TncTerminal::setEscapeChar(QChar c)
         m_escape = c;
 }
 
-void TncTerminal::setRetryTimeoutMs(int t1) { m_link->setRetryTimeoutMs(t1); }
-void TncTerminal::setMaxRetries(int n2) { m_link->setMaxRetries(n2); }
-void TncTerminal::setPaclen(int bytes) { m_link->setPaclen(bytes); }
+void TncTerminal::setRetryTimeoutMs(int t1) { if (!transferActive()) { m_link->setRetryTimeoutMs(t1); } }
+void TncTerminal::setMaxRetries(int n2) { if (!transferActive()) { m_link->setMaxRetries(n2); } }
+void TncTerminal::setPaclen(int bytes) { if (!transferActive()) { m_link->setPaclen(bytes); } }
 
 void TncTerminal::setLinkProfile(const ax25::LinkTimingProfile& profile)
 {
+    if (transferActive()) {
+        return;
+    }
     m_link->setLinkProfile(profile);
     m_link->setPaclen(ax25::recommendedPaclen(profile.baud));
     m_link->applyRecommendedTimers();
@@ -157,6 +189,10 @@ void TncTerminal::onAirFrame(const QByteArray& rawNoFcs)
 
 void TncTerminal::submitLine(const QString& line)
 {
+    if (transferActive()) {
+        emitLine(QStringLiteral("*** File transfer owns this connection; Cancel or Disconnect first"));
+        return;
+    }
     if (m_mode == Mode::Converse) {
         // A lone escape character returns to the command prompt without dropping
         // the link, exactly like a hardware TNC's command character.
@@ -180,6 +216,10 @@ void TncTerminal::enterCommandMode()
 
 void TncTerminal::disconnectLink()
 {
+    if (transferActive()) {
+        reset();
+        return;
+    }
     if (m_link->state() == Ax25Connection::State::Disconnected) {
         emitLine(QStringLiteral("*** Not connected"));
         return;
@@ -190,6 +230,9 @@ void TncTerminal::disconnectLink()
 
 void TncTerminal::reset()
 {
+    emit transmitInvalidated();
+    m_transfer->stop(QStringLiteral("Terminal session ended; partial file retained"));
+    m_transferNeedsReset = false;
     m_connecting = false;
     m_failureReported = false;
     m_link->reset();
@@ -388,6 +431,9 @@ void TncTerminal::onLinkConnected(const Address& peer)
 
 void TncTerminal::onLinkDisconnected(const Address& peer, bool byPeer)
 {
+    emit transmitInvalidated();
+    m_transfer->stop(QStringLiteral("AX.25 link disconnected; partial file retained"));
+    m_transferNeedsReset = false;
     m_connecting = false;
     if (!m_failureReported) {
         emitLine(QStringLiteral("*** DISCONNECTED from %1%2")
@@ -408,6 +454,13 @@ void TncTerminal::onLinkConnectFailed(const Address& peer, const QString& reason
 void TncTerminal::onLinkData(const QByteArray& data)
 {
     m_rxBytes += static_cast<quint64>(data.size());
+    if (transferActive()) {
+        if (m_transfer->active()) {
+            m_transfer->receive(data);
+        }
+        emit stateChanged();
+        return;
+    }
     // Normalise the peer's line endings (bare CR or CRLF) to '\n' for the pane.
     QString text = QString::fromLatin1(data);
     text.replace(QLatin1String("\r\n"), QLatin1String("\n"));
@@ -563,4 +616,60 @@ void TncTerminal::setLogging(bool on)
     emitLine(QStringLiteral("*** Session logging to %1").arg(path));
 }
 
+} // namespace AetherSDR
+
+namespace AetherSDR {
+bool TncTerminal::transferActive() const
+{
+    return m_transfer && (m_transfer->active() || m_transferNeedsReset);
+}
+QJsonObject TncTerminal::transferStatus() const { return m_transfer->snapshot(); }
+bool TncTerminal::canStartTransfer(QString& error) const
+{
+    if (!isConnected() || transferActive() || m_link->sendQueueBytes() || m_link->unacked()) {
+        error = QStringLiteral("Connect to a peer and wait for pending terminal traffic to finish");
+        return false;
+    }
+    return true;
+}
+bool TncTerminal::sendFile(const QString& path, QString& error)
+{
+    if (!canStartTransfer(error)) { return false; }
+    m_transferResentStart = m_link->stats().iResent;
+    m_transferTimeoutStart = m_link->stats().t1Timeouts;
+    if (!m_transfer->startSend(path, peerCall(), error)) { return false; }
+    emitLine(QStringLiteral("*** YAPP-C send started to %1: %2").arg(peerCall(), QFileInfo(path).fileName()));
+    return true;
+}
+bool TncTerminal::receiveFile(const QString& directory, bool resume, QString& error)
+{
+    if (!canStartTransfer(error)) { return false; }
+    m_transferResentStart = m_link->stats().iResent;
+    m_transferTimeoutStart = m_link->stats().t1Timeouts;
+    if (!m_transfer->startReceive(directory, peerCall(), resume, error)) { return false; }
+    emitLine(QStringLiteral("*** YAPP-C receive armed for %1; acknowledgements will transmit").arg(peerCall()));
+    return true;
+}
+void TncTerminal::cancelTransfer() { m_transfer->cancel(); }
+void TncTerminal::pumpTransfer()
+{
+    if (m_transferNeedsReset) {
+        reset();
+        return;
+    }
+    if (!m_transfer->active()) { return; }
+    // A pull-based producer needs no new AX.25 callbacks: one YAPP packet at a
+    // time, after the previous bytes are ACKed, is bounded even under RNR/loss.
+    // The 50 ms check is negligible beside HF/VHF half-duplex turnaround.
+    const int deadline = qMax(180000, 2 * m_link->retryTimeoutMs() * (m_link->maxRetries() + 1));
+    m_transfer->checkTimeout(deadline);
+    if (m_transfer->active() && isConnected()
+        && m_link->sendQueueBytes() == 0 && m_link->unacked() == 0) {
+        const QByteArray packet = m_transfer->takeOutbound();
+        if (!packet.isEmpty()) {
+            m_txBytes += static_cast<quint64>(packet.size());
+            m_link->sendData(packet);
+        }
+    }
+}
 } // namespace AetherSDR

@@ -3652,6 +3652,8 @@ add_executable(tnc_terminal_test
     src/core/tnc/Ax25Connection.cpp
     src/core/tnc/HeardList.cpp
     src/core/tnc/TncTerminal.cpp
+    src/core/tnc/YappTransferSession.cpp
+    src/core/tnc/YappFileStore.cpp
     # HeardList now emits qCWarning(lcAx25) on persistence failure; pull in
     # LogManager + its deps so the category symbol resolves.
     src/core/LogManager.cpp
@@ -5850,3 +5852,13 @@ add_executable(droop_calibration_seam_test tests/droop_calibration_seam_test.cpp
 target_include_directories(droop_calibration_seam_test PRIVATE src tests)
 target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
 add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)
+
+# Published YAPP-C application-protocol vectors; no sockets or fake firmware.
+add_executable(yapp_transfer_test
+    tests/yapp_transfer_test.cpp
+    src/core/tnc/YappTransferSession.cpp
+    src/core/tnc/YappFileStore.cpp
+)
+target_include_directories(yapp_transfer_test PRIVATE src)
+target_link_libraries(yapp_transfer_test PRIVATE Qt6::Core)
+add_test(NAME yapp_transfer_test COMMAND yapp_transfer_test)

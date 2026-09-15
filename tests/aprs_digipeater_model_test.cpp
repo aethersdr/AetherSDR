@@ -58,5 +58,12 @@ int main(int argc, char** argv)
     model.setEnabled(true);
     model.setMyAddress(*ax25::Address::parse("N0CALL-8"));
     check(!model.isEnabled(), "identity change disarms");
+    model.enqueue("mailbox");
+    model.enqueue("terminal", false, true);
+    model.enqueue("kiss");
+    model.discardTerminal();
+    check(model.size() == 2, "terminal invalidation preserves other producers");
+    check(model.dequeue().raw == "mailbox", "mailbox packet preserved in order");
+    check(model.dequeue().raw == "kiss", "KISS packet preserved in order");
     return failures ? 1 : 0;
 }

@@ -960,6 +960,8 @@ set(CORE_SOURCES
     src/core/tnc/KissFraming.cpp
     src/core/tnc/KissTncServer.cpp
     src/core/tnc/TncTerminal.cpp
+    src/core/tnc/YappTransferSession.cpp
+    src/core/tnc/YappFileStore.cpp
     src/core/pms/PmsMailbox.cpp
     src/core/aprs/AprsPacket.cpp
     src/core/aprs/AprsStationList.cpp

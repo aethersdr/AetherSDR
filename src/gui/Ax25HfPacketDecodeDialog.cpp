@@ -48,6 +48,9 @@
 #include <QDoubleValidator>
 #include <QFile>
 #include <QFileInfo>
+#include <QFileDialog>
+#include <QProgressBar>
+#include <QAccessible>
 #include <QElapsedTimer>
 #include <QFont>
 #include <QFrame>
@@ -58,6 +61,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QList>
 #include <QMenu>
 #include <QMessageBox>
@@ -1248,7 +1252,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(m_pms, &PmsMailbox::transmitFrame, this, [this](const QByteArray& raw) {
         if (raw.isEmpty() || !m_audio || !m_radio)
             return;
-        m_digi->enqueue(raw); // shares the one-at-a-time keying/pacing path
+        m_digi->enqueue(raw, false, true); // tagged terminal ownership in the shared RF queue
     });
     connect(m_pms, &PmsMailbox::activity, this, &Ax25HfPacketDecodeDialog::appendSystemLine);
     connect(m_pms, &PmsMailbox::stateChanged, this, [this] { refreshPmsStatus(); });
@@ -1304,11 +1308,25 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         });
     }
 
+    if (m_radio) {
+        connect(m_radio, &RadioModel::connectionStateChanged, this, [this](bool connected) {
+            if (!connected && m_terminal) { m_terminal->reset(); }
+            refreshTerminalStatus();
+        });
+    }
+
     // TNC Terminal wiring.
     connect(m_terminal, &TncTerminal::transmitFrame, this, [this](const QByteArray& raw) {
         if (raw.isEmpty() || !m_audio || !m_radio)
             return;
-        m_digi->enqueue(raw); // shares the one-at-a-time keying/pacing path
+        m_digi->enqueue(raw, false, true); // tagged terminal ownership in the shared RF queue
+    });
+    connect(m_terminal, &TncTerminal::transmitInvalidated, this, [this] {
+        if (m_fileDialog) { m_fileDialog->reject(); }
+        m_digi->discardTerminal();
+        if (m_txFromTerminal && (m_txActive || m_txPendingStream)) {
+            finishTransmit(true, QStringLiteral("Terminal session ended"), true);
+        }
     });
     connect(m_terminal, &TncTerminal::output, this, [this](const QString& text) {
         if (!m_terminalView)
@@ -1415,6 +1433,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
 {
+    if (m_terminal) { m_terminal->reset(); }
     m_digi->setEnabled(false);
     m_digi->clear();
     if (m_txActive || m_txPendingStream)
@@ -1436,6 +1455,9 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
         refreshStatus();
         return;
     }
+
+    if (m_fileDialog) { m_fileDialog->reject(); }
+    if (m_terminal && m_terminal->transferActive()) { m_terminal->reset(); }
 
     if (m_sliceSquelchConnection)
         disconnect(m_sliceSquelchConnection);
@@ -1471,6 +1493,7 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
 
 void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool persist)
 {
+    if (m_terminal && m_terminal->transferActive()) { m_terminal->reset(); }
     m_shimConfig = ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal);
     if (m_digi) { m_digi->setBaud(m_shimConfig.baud); }
     if (m_digiEnable) { m_digiEnable->setEnabled(m_shimConfig.baud == 1200); }
@@ -1648,6 +1671,9 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
     // ── modem ───────────────────────────────────────────────────────────────
     if (!isLink) {
         if (action == QLatin1String("profile")) {
+            if (m_terminal && m_terminal->transferActive()) {
+                return automationError(QStringLiteral("Cancel the file transfer before changing modem profile"));
+            }
             const QString name = value.trimmed().toLower();
             QRadioButton* button = nullptr;
             if (name == QLatin1String("hf300") || name == QLatin1String("hf")
@@ -1884,6 +1910,7 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
         {QStringLiteral("summary"), m_terminal->statusSummary()},
         {QStringLiteral("txBytes"), double(m_terminal->txBytes())},
         {QStringLiteral("rxBytes"), double(m_terminal->rxBytes())},
+        {QStringLiteral("transfer"), m_terminal->transferStatus()},
     };
     if (const Ax25Connection* link = m_terminal->link())
         terminal.insert(QStringLiteral("link"), linkSnapshot(*link));
@@ -2240,7 +2267,7 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
     // (see armTxStreamWaitTimeout).
     ++m_txGeneration;
     m_txFromKiss = fromKiss;
-    if (!fromKiss) { m_txFromDigi = false; }
+    if (!fromKiss) { m_txFromDigi = false; m_txFromTerminal = false; }
     m_pendingTx = tx;
     m_txPcm = tx.stereoFloat32Pcm;
     m_txOffsetBytes = 0;
@@ -2758,6 +2785,7 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     m_txRestoreTransmitDax = false;
     m_txFromKiss = false;
     m_txFromDigi = false;
+    m_txFromTerminal = false;
     refreshTransmitControls();
 
     // Drain any queued KISS transmits. On a clean finish, kick the next one on a
@@ -2804,6 +2832,7 @@ void Ax25HfPacketDecodeDialog::updateDiagnostics(const Ax25DecoderDiagnostics& d
 
 void Ax25HfPacketDecodeDialog::updateHeartbeat()
 {
+    if (m_terminal && m_terminal->transferActive()) { refreshTerminalStatus(); }
     // Station-table ages tick whether or not the modem is running — the
     // roster persists across sessions and "how stale is this row" should
     // stay honest while the modem is idle.
@@ -3328,6 +3357,7 @@ void Ax25HfPacketDecodeDialog::maybeStartNextKissTx()
         return;
     }
     m_txFromDigi = pending.digi;
+    m_txFromTerminal = pending.terminal;
     beginTransmission(tx, true);
 }
 
@@ -3483,8 +3513,116 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
     layout->addWidget(controlsFrame);
 
     // --- Status ---------------------------------------------------------------
-    layout->addWidget(statusPanel(QStringLiteral("TERMINAL"),
-                                  &m_terminalStatusDot, &m_terminalStatusValue, page));
+    auto* terminalStats = panel(QStringLiteral("StatusFrame"), page);
+    auto* statsLayout = new QHBoxLayout(terminalStats);
+    statsLayout->setContentsMargins(16, 12, 16, 12);
+    statsLayout->setSpacing(16);
+    auto* connectionPanel = panel(QStringLiteral("ControlCell"), terminalStats);
+    connectionPanel->setObjectName(QStringLiteral("TerminalConnectionStats"));
+    auto* connectionLayout = new QVBoxLayout(connectionPanel);
+    connectionLayout->setContentsMargins(0, 0, 16, 0);
+    connectionLayout->setSpacing(8);
+    connectionLayout->addWidget(sectionLabel(QStringLiteral("TERMINAL"), connectionPanel));
+    auto* connectionRow = new QHBoxLayout;
+    connectionRow->setSpacing(8);
+    m_terminalStatusDot = new QLabel(connectionPanel);
+    m_terminalStatusDot->setObjectName(QStringLiteral("StatusDot"));
+    m_terminalStatusValue = new QLabel(connectionPanel);
+    m_terminalStatusValue->setObjectName(QStringLiteral("StatusValue"));
+    m_terminalStatusValue->setAccessibleName(QStringLiteral("Terminal connection status"));
+    m_terminalStatusValue->setWordWrap(true);
+    m_terminalStatusValue->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    connectionRow->addWidget(m_terminalStatusDot, 0, Qt::AlignTop);
+    connectionRow->addWidget(m_terminalStatusValue, 1);
+    connectionLayout->addLayout(connectionRow);
+    m_terminalLinkStats = new QLabel(connectionPanel);
+    m_terminalLinkStats->setObjectName(QStringLiteral("TerminalLinkStats"));
+    m_terminalLinkStats->setAccessibleName(QStringLiteral("AX.25 link statistics"));
+    m_terminalLinkStats->setWordWrap(true);
+    m_terminalLinkStats->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    connectionLayout->addWidget(m_terminalLinkStats);
+    connectionLayout->addStretch(1);
+    ThemeManager::instance().applyStyleSheet(connectionPanel,
+        "QFrame#TerminalConnectionStats { background: transparent;"
+        " border: none; border-right: 1px solid {{color.border.subtle}}; }");
+    statsLayout->addWidget(connectionPanel, 2);
+
+    auto* transferPanel = new QWidget(terminalStats);
+    transferPanel->setObjectName(QStringLiteral("YappTransferPanel"));
+    transferPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    // Keep the RF-instrument chrome; only give this compact action row less
+    // padding than the window's large connection buttons.
+    ThemeManager::instance().applyStyleSheet(transferPanel,
+        "QWidget#YappTransferPanel { background: transparent; }"
+        "QPushButton { padding: 6px 12px; }");
+    auto* transferLayout = new QVBoxLayout(transferPanel);
+    transferLayout->setContentsMargins(0, 0, 0, 0);
+    transferLayout->setSpacing(6);
+    statsLayout->addWidget(transferPanel, 3);
+    auto* files = new QHBoxLayout;
+    files->setSpacing(8);
+    files->addWidget(sectionLabel(QStringLiteral("YAPP-C"), transferPanel));
+    files->addStretch(1);
+    m_fileSendButton = new QPushButton(QStringLiteral("Send…"), transferPanel);
+    m_fileReceiveButton = new QPushButton(QStringLiteral("Receive…"), transferPanel);
+    m_fileCancelButton = new QPushButton(QStringLiteral("Cancel"), transferPanel);
+    m_fileSendButton->setObjectName(QStringLiteral("YappSend"));
+    m_fileReceiveButton->setObjectName(QStringLiteral("YappReceive"));
+    m_fileCancelButton->setObjectName(QStringLiteral("YappCancel"));
+    m_fileSendButton->setAccessibleName(QStringLiteral("Send file"));
+    m_fileReceiveButton->setAccessibleName(QStringLiteral("Receive file"));
+    m_fileCancelButton->setAccessibleName(QStringLiteral("Cancel file transfer"));
+    m_fileCancelButton->setAccessibleDescription(QStringLiteral("Cancel the transfer; retain checked partial data. The terminal link closes after cancellation."));
+    markTxKeying(m_fileSendButton);
+    markTxKeying(m_fileCancelButton); // graceful CAN handshake transmits too
+    markTxKeying(m_fileReceiveButton); // receive negotiation and ACKs also key TX
+    files->addWidget(m_fileSendButton);
+    files->addWidget(m_fileReceiveButton);
+    files->addWidget(m_fileCancelButton);
+    m_fileResume = new QCheckBox(QStringLiteral("Resume partial files"), transferPanel);
+    m_fileResume->setChecked(true);
+    m_fileResume->setObjectName(QStringLiteral("YappResume"));
+    m_fileResume->setAccessibleName(QStringLiteral("Resume partial files"));
+    m_fileResume->setAccessibleDescription(QStringLiteral("Resume only when peer, filename, size, timestamp and local checkpoint match. The protocol cannot prove the remote file prefix is unchanged."));
+    m_fileResume->setToolTip(m_fileResume->accessibleDescription());
+    transferLayout->addLayout(files);
+    auto* progressRow = new QHBoxLayout;
+    progressRow->setSpacing(10);
+    progressRow->addWidget(m_fileResume);
+    m_fileProgress = new QProgressBar(transferPanel);
+    m_fileProgress->setObjectName(QStringLiteral("YappProgress"));
+    m_fileProgress->setAccessibleName(QStringLiteral("File transfer progress"));
+    m_fileProgress->setRange(0, 1000);
+    m_fileProgress->setValue(0);
+    m_fileProgress->setTextVisible(false);
+    m_fileProgress->setFixedHeight(10);
+    m_fileProgress->setMinimumWidth(80);
+    m_fileProgress->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    ThemeManager::instance().applyStyleSheet(m_fileProgress,
+        "QProgressBar { background: {{color.background.0}};"
+        " border: 1px solid {{color.border.strong}}; border-radius: 3px; padding: 0px; }"
+        "QProgressBar::chunk { background: {{color.accent}}; border-radius: 2px; }");
+    progressRow->addWidget(m_fileProgress, 1);
+    m_filePercent = new QLabel(QStringLiteral("0%"), transferPanel);
+    m_filePercent->setObjectName(QStringLiteral("YappPercent"));
+    m_filePercent->setAccessibleName(QStringLiteral("File transfer percentage"));
+    m_filePercent->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_filePercent->setFixedWidth(m_filePercent->fontMetrics().horizontalAdvance(QStringLiteral("100%")) + 4);
+    progressRow->addWidget(m_filePercent);
+    transferLayout->addLayout(progressRow);
+    m_fileStatus = new QLabel(transferPanel);
+    m_fileStatus->setObjectName(QStringLiteral("YappStatus"));
+    m_fileStatus->setAccessibleName(QStringLiteral("File transfer status"));
+    m_fileStatus->setTextFormat(Qt::PlainText);
+    m_fileStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    m_fileStatus->setFixedHeight(2 * m_fileStatus->fontMetrics().lineSpacing() + 4);
+    m_fileStatus->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_fileStatus->installEventFilter(this);
+    transferLayout->addWidget(m_fileStatus);
+    layout->addWidget(terminalStats);
+    connect(m_fileSendButton, &QPushButton::clicked, this, [this] { chooseTransferFile(true); });
+    connect(m_fileReceiveButton, &QPushButton::clicked, this, [this] { chooseTransferFile(false); });
+    connect(m_fileCancelButton, &QPushButton::clicked, m_terminal, &TncTerminal::cancelTransfer);
 
     // --- Transcript -----------------------------------------------------------
     QFont mono(QStringLiteral("Menlo"));
@@ -3685,9 +3823,83 @@ void Ax25HfPacketDecodeDialog::refreshTerminalStatus()
     const bool connected = m_terminal->isConnected();
     const bool connecting = m_terminal->isConnecting();
     const bool converse = connected && m_terminal->mode() == TncTerminal::Mode::Converse;
+    const bool transferring = m_terminal->transferActive();
+    const bool ready = connected && !transferring && !m_fileDialog
+        && m_audio && m_radio && m_radio->isConnected() && m_attachedSlice
+        && m_enableDecode && m_enableDecode->isChecked();
+    for (QPushButton* button : {m_fileSendButton, m_fileReceiveButton}) {
+        if (button) {
+            button->setEnabled(ready);
+            const QString reason = ready
+                ? QStringLiteral("YAPP-C on the current peer connection; receiving also transmits acknowledgements")
+                : QStringLiteral("Requires an enabled modem, attached radio slice and connected peer, with no active transfer or file picker");
+            button->setAccessibleDescription(reason);
+            button->setToolTip(reason);
+        }
+    }
+    if (m_fileCancelButton) { m_fileCancelButton->setEnabled(transferring); }
+    if (m_fileResume) { m_fileResume->setEnabled(!transferring); }
+    for (QWidget* widget : QList<QWidget*>{m_terminalInput, m_terminalSendButton,
+            m_terminalMyCall, m_terminalRetrySecs, m_terminalMaxTries, m_terminalPaclen,
+            m_terminalTxPreamble, m_terminalTxTail, m_hf300Profile, m_vhf1200Profile}) {
+        if (widget) { widget->setEnabled(!transferring); }
+    }
+    if (m_fileStatus && m_fileProgress) {
+        const QJsonObject transfer = m_terminal->transferStatus();
+        const qint64 size = static_cast<qint64>(transfer.value(QStringLiteral("size")).toDouble());
+        const qint64 bytes = static_cast<qint64>(transfer.value(QStringLiteral("bytes")).toDouble());
+        const bool accepted = transfer.value(QStringLiteral("fileAccepted")).toBool();
+        m_fileProgress->setValue(size > 0 ? int(bytes * 1000 / size) : (accepted ? 1000 : 0));
+        const QString percent = QStringLiteral("%1%").arg(m_fileProgress->value() / 10);
+        if (m_filePercent->text() != percent) {
+            m_filePercent->setText(percent);
+            QAccessibleValueChangeEvent event(m_filePercent, percent);
+            QAccessible::updateAccessibility(&event);
+        }
+        const QString file = transfer.value(QStringLiteral("file")).toString();
+        const QString reason = transfer.value(QStringLiteral("reason")).toString();
+        QString heading = transfer.value(QStringLiteral("phase")).toString();
+        QString details;
+        const auto duration = [](double seconds) {
+            const qint64 whole = qMax<qint64>(0, static_cast<qint64>(seconds));
+            return QStringLiteral("%1:%2").arg(whole / 60).arg(whole % 60, 2, 10, QLatin1Char('0'));
+        };
+        if (!file.isEmpty()) {
+            heading += QStringLiteral(" · %1").arg(file);
+            const QLocale locale;
+            details = QStringLiteral("%1 / %2 · %3 B/s · %4")
+                .arg(locale.formattedDataSize(bytes, 1), locale.formattedDataSize(size, 1))
+                .arg(transfer.value(QStringLiteral("bytesPerSecond")).toDouble(), 0, 'f', 1)
+                .arg(duration(transfer.value(QStringLiteral("elapsedMs")).toDouble() / 1000));
+            const double eta = transfer.value(QStringLiteral("etaSeconds")).toDouble(-1);
+            if (transferring && eta >= 0) { details += QStringLiteral(" · ETA %1").arg(duration(eta)); }
+            const qint64 resumed = static_cast<qint64>(transfer.value(QStringLiteral("resumeOffset")).toDouble());
+            if (resumed > 0) { details += QStringLiteral(" · resumed %1").arg(locale.formattedDataSize(resumed, 1)); }
+        } else if (!transferring && reason.isEmpty()) {
+            heading = connected ? QStringLiteral("Ready to send or receive a file")
+                                : QStringLiteral("Connect to a peer to transfer a file");
+            details = QStringLiteral("Receiving also sends acknowledgements.");
+        } else if (transferring) {
+            details = QStringLiteral("Waiting for the peer to start YAPP-C.");
+        }
+        if (!reason.isEmpty()) { details = reason; }
+        const QString fullText = heading + QLatin1Char('\n') + details;
+        const QFontMetrics metrics = m_fileStatus->fontMetrics();
+        const int width = m_fileStatus->contentsRect().width();
+        m_fileStatus->setText(metrics.elidedText(heading, Qt::ElideMiddle, width)
+            + QLatin1Char('\n') + metrics.elidedText(details, Qt::ElideRight, width));
+        // Never make a long filename/error grow the group or squeeze the left
+        // stats. Full text remains available to hover and screen readers.
+        m_fileStatus->setToolTip(fullText);
+        if (m_fileStatus->accessibleDescription() != fullText) {
+            m_fileStatus->setAccessibleDescription(fullText);
+            QAccessibleEvent event(m_fileStatus, QAccessible::DescriptionChanged);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
 
-    m_terminalStatusValue->setText(QStringLiteral("%1   |   %2")
-        .arg(m_terminal->statusSummary(), m_terminal->linkStats()));
+    m_terminalStatusValue->setText(m_terminal->statusSummary());
+    m_terminalLinkStats->setText(m_terminal->linkStats());
     if (m_terminalStatusDot) {
         m_terminalStatusDot->setFixedSize(12, 12);
         const QString color = connected ? QStringLiteral("#5fce66")
@@ -3698,7 +3910,7 @@ void Ax25HfPacketDecodeDialog::refreshTerminalStatus()
     if (m_terminalConnectButton)
         m_terminalConnectButton->setEnabled(!connected && !connecting);
     if (m_terminalCmdButton)
-        m_terminalCmdButton->setEnabled(converse);
+        m_terminalCmdButton->setEnabled(converse && !transferring);
     if (m_terminalInput) {
         m_terminalInput->setPlaceholderText(converse
             ? QStringLiteral("Connected — type a line to send (or '%1' alone to return to commands)")
@@ -5245,6 +5457,9 @@ void Ax25HfPacketDecodeDialog::refreshPmsStatus()
 
 bool Ax25HfPacketDecodeDialog::eventFilter(QObject* watched, QEvent* event)
 {
+    if (watched == m_fileStatus && event->type() == QEvent::Resize) {
+        QTimer::singleShot(0, this, [this] { refreshTerminalStatus(); });
+    }
     if (watched == m_terminalInput && event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Up) {
@@ -5267,4 +5482,39 @@ bool Ax25HfPacketDecodeDialog::eventFilter(QObject* watched, QEvent* event)
     return PersistentDialog::eventFilter(watched, event);
 }
 
+} // namespace AetherSDR
+
+namespace AetherSDR {
+void Ax25HfPacketDecodeDialog::chooseTransferFile(bool sending)
+{
+    if (m_fileDialog || !m_terminal || m_terminal->transferActive()
+        || !m_terminal->isConnected() || !m_enableDecode->isChecked()) { return; }
+    auto* picker = new QFileDialog(this,
+        sending ? QStringLiteral("Send file using YAPP-C")
+                : QStringLiteral("Receive YAPP-C — select destination (ACKs transmit)"));
+    picker->setAttribute(Qt::WA_DeleteOnClose);
+    picker->setFileMode(sending ? QFileDialog::ExistingFile : QFileDialog::Directory);
+    picker->setOption(QFileDialog::ShowDirsOnly, !sending);
+    m_fileDialog = picker;
+    connect(picker, &QFileDialog::fileSelected, this, [this, sending](const QString& path) {
+        QString error;
+        if (!m_radio || !m_radio->isConnected() || !m_attachedSlice
+            || !m_enableDecode->isChecked()) {
+            error = QStringLiteral("Radio or modem is no longer available");
+        } else if (sending) {
+            m_terminal->sendFile(path, error);
+        } else {
+            m_terminal->receiveFile(path, m_fileResume->isChecked(), error);
+        }
+        if (!error.isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("YAPP-C transfer"), error);
+        }
+    });
+    connect(picker, &QObject::destroyed, this, [this] {
+        m_fileDialog = nullptr;
+        refreshTerminalStatus();
+    });
+    picker->open();
+    refreshTerminalStatus();
+}
 } // namespace AetherSDR

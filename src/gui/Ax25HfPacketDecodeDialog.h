@@ -19,6 +19,8 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QProgressBar;
+class QFileDialog;
 class QPlainTextEdit;
 class QPushButton;
 class QRadioButton;
@@ -226,6 +228,7 @@ private:
     QWidget* buildTerminalPage();
     void submitTerminalInput();
     void refreshTerminalStatus();
+    void chooseTransferFile(bool sending);
     void applyTerminalConfigFromUi(bool persist);
     // Push the active modem profile's air-interface timing into the terminal and
     // the mailbox, so T1/T2/T3 and paclen track the baud rate instead of being
@@ -418,6 +421,16 @@ private:
 
     // TNC Terminal service (connected-mode AX.25 client) and its controls.
     TncTerminal* m_terminal{nullptr};
+    QPushButton* m_fileSendButton{nullptr};
+    QPushButton* m_fileReceiveButton{nullptr};
+    QPushButton* m_fileCancelButton{nullptr};
+    QCheckBox* m_fileResume{nullptr};
+    QProgressBar* m_fileProgress{nullptr};
+    QLabel* m_fileStatus{nullptr};
+    QLabel* m_filePercent{nullptr};
+    QLabel* m_terminalLinkStats{nullptr};
+    QPointer<QFileDialog> m_fileDialog;
+    bool m_txFromTerminal{false};
     QAbstractButton* m_terminalTab{nullptr};
     QSpinBox* m_terminalTxPreamble{nullptr}; // TXDELAY flags; 0 = profile default
     QLineEdit* m_terminalMyCall{nullptr};

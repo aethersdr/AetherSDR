@@ -14,13 +14,14 @@ class AprsDigipeaterModel : public QObject {
 public:
     explicit AprsDigipeaterModel(QObject* parent = nullptr);
     using Stats = AprsFillInDigipeater::Stats;
-    struct PendingFrame { QByteArray raw; bool digi{false}; };
+    struct PendingFrame { QByteArray raw; bool digi{false}; bool terminal{false}; };
     static constexpr int kMaxQueueDepth = 64;
     bool isEnabled() const { return m_enabled; }
     void setEnabled(bool on);
     void setBaud(int baud);
     void receiveFrame(const QByteArray& raw);
-    void enqueue(const QByteArray& raw, bool digi = false);
+    void enqueue(const QByteArray& raw, bool digi = false, bool terminal = false);
+    void discardTerminal() { m_queue.removeIf([](const PendingFrame& frame) { return frame.terminal; }); }
     bool isEmpty() const { return m_queue.isEmpty(); }
     int size() const { return m_queue.size(); }
     void clear() { m_queue.clear(); }
