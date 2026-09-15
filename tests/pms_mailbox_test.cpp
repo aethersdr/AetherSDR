@@ -12,10 +12,16 @@
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QDir>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QVector>
 #include <QtGlobal>
 
 #include <cstdio>
+#include <filesystem>
+#include <system_error>
 
 using namespace AetherSDR;
 using AetherSDR::ax25::Address;
@@ -441,6 +447,225 @@ static void testOverlongInputIsDiscarded()
           "the mailbox still answers commands after discarding a runaway line");
 }
 
+static QJsonObject readJsonObject(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return QJsonDocument::fromJson(file.readAll()).object();
+}
+
+static QByteArray readFile(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return file.readAll();
+}
+
+static bool makeHardLink(const QString& source, const QString& destination)
+{
+#ifdef Q_OS_WIN
+    const std::filesystem::path sourcePath(source.toStdWString());
+    const std::filesystem::path destinationPath(destination.toStdWString());
+#else
+    const QByteArray sourceUtf8 = source.toUtf8();
+    const QByteArray destinationUtf8 = destination.toUtf8();
+    const std::filesystem::path sourcePath(sourceUtf8.constData());
+    const std::filesystem::path destinationPath(destinationUtf8.constData());
+#endif
+    std::error_code error;
+    std::filesystem::create_hard_link(sourcePath, destinationPath, error);
+    return !error;
+}
+
+// PMS JSON must be a whole-file replacement: a retained hard link observes the
+// old valid snapshot while the active path moves to the new one. The failure
+// portion temporarily makes the messages path a directory, so QSaveFile cannot
+// replace it, then proves compose/read/kill leave the in-memory and on-disk
+// message state recoverable.
+static void testPersistenceIsAtomicAndTransactional(const QString& baseDir)
+{
+    const QString store = baseDir + QStringLiteral("/pms-persistence");
+    QDir(store).removeRecursively();
+    QDir().mkpath(store);
+    qputenv("AETHER_PMS_DIR", store.toUtf8());
+
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+    const Address newHeard{QStringLiteral("W1NEW"), 0, false, false};
+
+    QStringList callerActivity;
+    QStringList heardActivity;
+    QStringList activity;
+    PmsMailbox pms;
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setEnabled(true);
+    QVector<QByteArray> tx;
+    QObject::connect(&pms, &PmsMailbox::transmitFrame,
+                     [&](const QByteArray& frame) { tx.append(frame); });
+    Peer session{&pms, local, peer, &tx, 0, 0};
+    pms.onAirFrame(Frame::makeU(local, peer, FrameType::SABM, true, true).encode());
+    session.drainText();
+
+    session.send(QByteArrayLiteral("SP K7ABC\r"));
+    session.drainText();
+    session.send(QByteArrayLiteral("first\r"));
+    session.drainText();
+    session.send(QByteArrayLiteral("body\r"));
+    session.send(QByteArrayLiteral("/EX\r"));
+    CHECK(session.drainText().contains(QLatin1String("SAVED")), "baseline message saved");
+
+    const QString messages = store + QStringLiteral("/messages.json");
+    const QString callers = store + QStringLiteral("/callers.json");
+    const QString heard = store + QStringLiteral("/heard.json");
+    const QString oldMessages = store + QStringLiteral("/messages-before.json");
+    const QString oldCallers = store + QStringLiteral("/callers-before.json");
+    const QString oldHeard = store + QStringLiteral("/heard-before.json");
+    CHECK(makeHardLink(messages, oldMessages), "hard-link baseline messages snapshot");
+    CHECK(makeHardLink(callers, oldCallers), "hard-link baseline callers snapshot");
+    CHECK(makeHardLink(heard, oldHeard), "hard-link baseline heard snapshot");
+
+    session.send(QByteArrayLiteral("R 1\r"));
+    session.drainText();
+    CHECK(readJsonObject(messages).value(QStringLiteral("messages")).toArray().at(0).toObject()
+              .value(QStringLiteral("read")).toBool(),
+          "active messages file records the read flag");
+    CHECK(!readJsonObject(oldMessages).value(QStringLiteral("messages")).toArray().at(0).toObject()
+               .value(QStringLiteral("read")).toBool(),
+          "message hard link retains the complete pre-replacement snapshot");
+
+    pms.onAirFrame(Frame::makeUI(local, newHeard, {}, QByteArrayLiteral("heard")).encode());
+    CHECK(readJsonObject(heard).value(QStringLiteral("heard")).toArray().size() == 2,
+          "active heard file contains the new station");
+    CHECK(readJsonObject(oldHeard).value(QStringLiteral("heard")).toArray().size() == 1,
+          "heard hard link retains the complete pre-replacement snapshot");
+
+    {
+        PmsMailbox callerWriter;
+        callerWriter.setListenCallsign(QStringLiteral("N0PMS-1"));
+        callerWriter.setEnabled(true);
+        callerWriter.onAirFrame(
+            Frame::makeU(local, Address{QStringLiteral("W1NEW"), 0, false, false},
+                         FrameType::SABM, true, true).encode());
+    }
+    CHECK(readJsonObject(callers).value(QStringLiteral("callers")).toArray().size() == 2,
+          "active callers file contains the new caller");
+    CHECK(readJsonObject(oldCallers).value(QStringLiteral("callers")).toArray().size() == 1,
+          "callers hard link retains the complete pre-replacement snapshot");
+
+    auto blockFile = [](const QString& path, const QString& backup) {
+        CHECK(QFile::rename(path, backup), "move durable file aside for failure fixture");
+        CHECK(QDir().mkdir(path), "make file path a directory so atomic open fails");
+    };
+    auto restoreFile = [](const QString& path, const QString& backup) {
+        CHECK(QDir().rmdir(path), "remove file failure fixture");
+        CHECK(QFile::rename(backup, path), "restore durable file after failure fixture");
+    };
+
+    const QByteArray durableCallers = readFile(callers);
+    const QString callersBackup = store + QStringLiteral("/callers-failure-backup.json");
+    blockFile(callers, callersBackup);
+    {
+        PmsMailbox callerFailure;
+        QObject::connect(&callerFailure, &PmsMailbox::activity,
+                         [&](const QString& message) { callerActivity.append(message); });
+        callerFailure.setListenCallsign(QStringLiteral("N0PMS-1"));
+        callerFailure.setEnabled(true);
+        callerFailure.onAirFrame(
+            Frame::makeU(local, Address{QStringLiteral("W2FAIL"), 0, false, false},
+                         FrameType::SABM, true, true).encode());
+    }
+    CHECK(callerActivity.join(QLatin1Char('\n')).contains(QLatin1String("could not save callers")),
+          "caller persistence failure is surfaced through mailbox activity");
+    CHECK(readFile(callersBackup) == durableCallers,
+          "caller persistence failure leaves the prior snapshot intact");
+    restoreFile(callers, callersBackup);
+
+    const QByteArray durableHeard = readFile(heard);
+    const QString heardBackup = store + QStringLiteral("/heard-failure-backup.json");
+    blockFile(heard, heardBackup);
+    QObject::connect(&pms, &PmsMailbox::activity,
+                     [&](const QString& message) { heardActivity.append(message); });
+    pms.onAirFrame(Frame::makeUI(local, Address{QStringLiteral("W3FAIL"), 0, false, false}, {},
+                                 QByteArrayLiteral("heard failure")).encode());
+    CHECK(heardActivity.join(QLatin1Char('\n')).contains(QLatin1String("could not save heard stations")),
+          "heard persistence failure is surfaced through mailbox activity");
+    CHECK(readFile(heardBackup) == durableHeard,
+          "heard persistence failure leaves the prior snapshot intact");
+    restoreFile(heard, heardBackup);
+
+    const QByteArray durableMessages = readFile(messages);
+    const QString composeBackup = store + QStringLiteral("/messages-compose-backup.json");
+    blockFile(messages, composeBackup);
+
+    QObject::connect(&pms, &PmsMailbox::activity,
+                     [&](const QString& message) { activity.append(message); });
+    session.send(QByteArrayLiteral("SP K7ABC\r"));
+    session.drainText();
+    session.send(QByteArrayLiteral("retry\r"));
+    session.drainText();
+    session.send(QByteArrayLiteral("body\r"));
+    session.send(QByteArrayLiteral("/EX\r"));
+    CHECK(session.drainText().contains(QLatin1String("NOT SAVED")),
+          "compose reports a failed persistence attempt");
+    CHECK(pms.messageCount() == 1, "failed compose does not change in-memory messages");
+
+    CHECK(activity.join(QLatin1Char('\n')).contains(QLatin1String("could not save messages")),
+          "failed persistence is surfaced through mailbox activity");
+
+    CHECK(readFile(composeBackup) == durableMessages,
+          "failed write did not truncate or replace the durable message snapshot");
+    restoreFile(messages, composeBackup);
+
+    session.send(QByteArrayLiteral("/EX\r"));
+    CHECK(session.drainText().contains(QLatin1String("SAVED")),
+          "retained draft can be saved after storage recovers");
+    CHECK(pms.messageCount() == 2, "recovered compose commits exactly once");
+    CHECK(readJsonObject(messages).value(QStringLiteral("nextId")).toInt() == 3,
+          "failed compose does not consume a message ID");
+
+    const QString readBackup = store + QStringLiteral("/messages-read-backup.json");
+    blockFile(messages, readBackup);
+    session.send(QByteArrayLiteral("R 2\r"));
+    CHECK(session.drainText().contains(QLatin1String("not saved")),
+          "read reports a failed persistence attempt");
+    session.send(QByteArrayLiteral("L\r"));
+    CHECK(session.drainText().contains(QLatin1String("PN")),
+          "failed read leaves the in-memory read flag unchanged");
+    CHECK(!readJsonObject(readBackup).value(QStringLiteral("messages")).toArray().at(1).toObject()
+               .value(QStringLiteral("read")).toBool(),
+          "failed read leaves the durable read flag unchanged");
+    restoreFile(messages, readBackup);
+
+    session.send(QByteArrayLiteral("R 2\r"));
+    session.drainText();
+    CHECK(readJsonObject(messages).value(QStringLiteral("messages")).toArray().at(1).toObject()
+              .value(QStringLiteral("read")).toBool(),
+          "read state saves after the messages path recovers");
+
+    const QString killBackup = store + QStringLiteral("/messages-kill-backup.json");
+    blockFile(messages, killBackup);
+    session.send(QByteArrayLiteral("K 1\r"));
+    CHECK(session.drainText().contains(QLatin1String("not killed")),
+          "kill reports a failed persistence attempt");
+    CHECK(pms.messageCount() == 2, "failed kill preserves in-memory messages");
+    CHECK(readJsonObject(killBackup).value(QStringLiteral("messages")).toArray().size() == 2,
+          "failed kill leaves the durable message snapshot intact");
+    restoreFile(messages, killBackup);
+
+    session.send(QByteArrayLiteral("K 1\r"));
+    CHECK(session.drainText().contains(QLatin1String("killed")), "recovered kill succeeds");
+    CHECK(pms.messageCount() == 1, "recovered kill updates the mailbox once");
+
+    PmsMailbox restarted;
+    restarted.setListenCallsign(QStringLiteral("N0PMS-1"));
+    restarted.setEnabled(true);
+    CHECK(restarted.messageCount() == 1, "restart recovers the last committed mailbox snapshot");
+}
+
 int main(int argc, char** argv)
 {
     // Isolate AppSettings / PMS storage from the real user config so the test is
@@ -466,6 +691,7 @@ int main(int argc, char** argv)
     testAliasDial();
     testSessionIdleTimeoutFreesMailbox();
     testOverlongInputIsDiscarded();
+    testPersistenceIsAtomicAndTransactional(settingsProfile.path());
 
     if (g_failures == 0) {
         std::printf("All PMS mailbox tests passed.\n");

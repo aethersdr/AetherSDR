@@ -1,6 +1,7 @@
 #include "core/pms/PmsMailbox.h"
 
 #include "core/AppSettings.h"
+#include "core/LogManager.h"
 #include "core/tnc/Ax25Connection.h"
 
 #include <QDir>
@@ -9,10 +10,12 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSaveFile>
 #include <QStorageInfo>
 #include <QTimer>
 
 #include <algorithm>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -27,6 +30,30 @@ QString lineEnding() { return QStringLiteral("\r"); }
 bool sameCall(const QString& a, const QString& b)
 {
     return a.compare(b, Qt::CaseInsensitive) == 0;
+}
+
+bool writeJsonAtomically(const QString& path, const QJsonObject& root, QString* error)
+{
+    QSaveFile file(path);
+    // Never fall back to writing the target directly: a failed replacement must
+    // leave the last complete mailbox snapshot available to the next startup.
+    file.setDirectWriteFallback(false);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        *error = file.errorString();
+        return false;
+    }
+
+    const QByteArray bytes = QJsonDocument(root).toJson();
+    if (file.write(bytes) != bytes.size()) {
+        *error = file.errorString();
+        file.cancelWriting();
+        return false;
+    }
+    if (!file.commit()) {
+        *error = file.errorString();
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -73,7 +100,7 @@ PmsMailbox::PmsMailbox(QObject* parent)
 PmsMailbox::~PmsMailbox()
 {
     if (m_loaded)
-        saveHeard();
+        saveHeard(m_heard);
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +135,7 @@ void PmsMailbox::setEnabled(bool on)
     } else {
         m_link->reset();
         m_beaconTimer->stop();
-        saveHeard();
+        saveHeard(m_heard);
         emit activity(QStringLiteral("PMS disabled."));
     }
     emit stateChanged();
@@ -369,7 +396,7 @@ void PmsMailbox::recordHeard(const Frame& frame)
                       [](const Heard& a, const Heard& b) { return a.utc > b.utc; });
             m_heard.resize(200);
         }
-        saveHeard();
+        saveHeard(m_heard);
         emit stateChanged();
     }
 }
@@ -380,9 +407,10 @@ void PmsMailbox::recordCaller(const Address& peer)
     c.call = peer.toString();
     c.utc = QDateTime::currentDateTimeUtc();
     m_callers.append(c);
-    if (m_callers.size() > 500)
+    if (m_callers.size() > 500) {
         m_callers.remove(0, m_callers.size() - 500);
-    saveCallers();
+    }
+    saveCallers(m_callers);
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +444,7 @@ void PmsMailbox::onLinkDisconnected(const Address& peer, bool byPeer)
     m_draftLines.clear();
     if (m_sessionIdleTimer)
         m_sessionIdleTimer->stop();
-    saveHeard();
+    saveHeard(m_heard);
     emit stateChanged();
 }
 
@@ -635,7 +663,8 @@ void PmsMailbox::cmdRead(const QString& args)
         reply(QStringLiteral("USAGE: R <message-number>"));
         return;
     }
-    for (Message& m : m_messages) {
+    for (int i = 0; i < m_messages.size(); ++i) {
+        const Message& m = m_messages.at(i);
         if (m.id != n)
             continue;
         if (!callerMayAccess(m)) {
@@ -650,8 +679,13 @@ void PmsMailbox::cmdRead(const QString& args)
         reply(m.body.isEmpty() ? QStringLiteral("(no text)") : m.body);
         reply(QStringLiteral("---"));
         if (!m.read && (sameCall(m.to, m_caller.toString()) || sameCall(m.to, m_caller.call))) {
-            m.read = true;
-            saveMessages();
+            QVector<Message> updated = m_messages;
+            updated[i].read = true;
+            if (saveMessages(updated, m_nextId)) {
+                m_messages = std::move(updated);
+            } else {
+                reply(QStringLiteral("*** Read state was not saved; message remains unread."));
+            }
         }
         return;
     }
@@ -679,8 +713,13 @@ void PmsMailbox::cmdKill(const QString& args)
             reply(QStringLiteral("Not authorized to kill message %1.").arg(n));
             return;
         }
-        m_messages.remove(i);
-        saveMessages();
+        QVector<Message> updated = m_messages;
+        updated.remove(i);
+        if (!saveMessages(updated, m_nextId)) {
+            reply(QStringLiteral("*** Message %1 was not killed; storage error.").arg(n));
+            return;
+        }
+        m_messages = std::move(updated);
         reply(QStringLiteral("Message %1 killed.").arg(n));
         emit stateChanged();
         return;
@@ -721,13 +760,21 @@ void PmsMailbox::cmdSendBegin(const QString& args, QChar type)
 void PmsMailbox::finishCompose(bool save)
 {
     if (save) {
-        m_draft.id = m_nextId++;
-        m_draft.utc = QDateTime::currentDateTimeUtc();
-        m_draft.body = m_draftLines.join(QStringLiteral("\n"));
-        m_draft.read = false;
-        m_messages.append(m_draft);
-        saveMessages();
-        reply(QStringLiteral("MESSAGE %1 SAVED.").arg(m_draft.id));
+        Message candidate = m_draft;
+        candidate.id = m_nextId;
+        candidate.utc = QDateTime::currentDateTimeUtc();
+        candidate.body = m_draftLines.join(QStringLiteral("\n"));
+        candidate.read = false;
+        QVector<Message> updated = m_messages;
+        updated.append(candidate);
+        if (!saveMessages(updated, m_nextId + 1)) {
+            reply(QStringLiteral("*** MESSAGE NOT SAVED; storage error. Draft retained: send /EX to retry."));
+            return;
+        }
+        m_messages = std::move(updated);
+        m_nextId += 1;
+        m_draft = candidate;
+        reply(QStringLiteral("MESSAGE %1 SAVED.").arg(candidate.id));
         emit stateChanged();
     } else {
         reply(QStringLiteral("Message aborted."));
@@ -805,9 +852,9 @@ QString PmsMailbox::messagesPath() const { return storageDir() + QStringLiteral(
 QString PmsMailbox::callersPath() const { return storageDir() + QStringLiteral("/callers.json"); }
 QString PmsMailbox::heardPath() const { return storageDir() + QStringLiteral("/heard.json"); }
 
-void PmsMailbox::ensureStorageDir() const
+bool PmsMailbox::ensureStorageDir() const
 {
-    QDir().mkpath(storageDir());
+    return QDir().mkpath(storageDir());
 }
 
 void PmsMailbox::loadAll()
@@ -869,11 +916,23 @@ void PmsMailbox::loadAll()
     }
 }
 
-void PmsMailbox::saveMessages() const
+void PmsMailbox::reportPersistenceFailure(const QString& store, const QString& detail)
 {
-    ensureStorageDir();
+    const QString message = QStringLiteral("PMS could not save %1: %2")
+                                .arg(store, detail);
+    qCWarning(lcAx25).noquote() << message;
+    emit activity(message);
+}
+
+bool PmsMailbox::saveMessages(const QVector<Message>& messages, int nextId)
+{
+    if (!ensureStorageDir()) {
+        reportPersistenceFailure(QStringLiteral("messages"), QStringLiteral("could not create %1")
+            .arg(storageDir()));
+        return false;
+    }
     QJsonArray arr;
-    for (const Message& m : m_messages) {
+    for (const Message& m : messages) {
         QJsonObject o;
         o.insert(QStringLiteral("id"), m.id);
         o.insert(QStringLiteral("type"), QString(m.type));
@@ -886,18 +945,25 @@ void PmsMailbox::saveMessages() const
         arr.append(o);
     }
     QJsonObject root;
-    root.insert(QStringLiteral("nextId"), m_nextId);
+    root.insert(QStringLiteral("nextId"), nextId);
     root.insert(QStringLiteral("messages"), arr);
-    QFile f(messagesPath());
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        f.write(QJsonDocument(root).toJson());
+    QString error;
+    if (!writeJsonAtomically(messagesPath(), root, &error)) {
+        reportPersistenceFailure(QStringLiteral("messages"), error);
+        return false;
+    }
+    return true;
 }
 
-void PmsMailbox::saveCallers() const
+bool PmsMailbox::saveCallers(const QVector<Caller>& callers)
 {
-    ensureStorageDir();
+    if (!ensureStorageDir()) {
+        reportPersistenceFailure(QStringLiteral("callers"), QStringLiteral("could not create %1")
+            .arg(storageDir()));
+        return false;
+    }
     QJsonArray arr;
-    for (const Caller& c : m_callers) {
+    for (const Caller& c : callers) {
         QJsonObject o;
         o.insert(QStringLiteral("call"), c.call);
         o.insert(QStringLiteral("utc"), c.utc.toString(Qt::ISODate));
@@ -905,16 +971,23 @@ void PmsMailbox::saveCallers() const
     }
     QJsonObject root;
     root.insert(QStringLiteral("callers"), arr);
-    QFile f(callersPath());
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        f.write(QJsonDocument(root).toJson());
+    QString error;
+    if (!writeJsonAtomically(callersPath(), root, &error)) {
+        reportPersistenceFailure(QStringLiteral("callers"), error);
+        return false;
+    }
+    return true;
 }
 
-void PmsMailbox::saveHeard() const
+bool PmsMailbox::saveHeard(const QVector<Heard>& heard)
 {
-    ensureStorageDir();
+    if (!ensureStorageDir()) {
+        reportPersistenceFailure(QStringLiteral("heard stations"), QStringLiteral("could not create %1")
+            .arg(storageDir()));
+        return false;
+    }
     QJsonArray arr;
-    for (const Heard& h : m_heard) {
+    for (const Heard& h : heard) {
         QJsonObject o;
         o.insert(QStringLiteral("call"), h.call);
         o.insert(QStringLiteral("dest"), h.dest);
@@ -925,9 +998,12 @@ void PmsMailbox::saveHeard() const
     }
     QJsonObject root;
     root.insert(QStringLiteral("heard"), arr);
-    QFile f(heardPath());
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        f.write(QJsonDocument(root).toJson());
+    QString error;
+    if (!writeJsonAtomically(heardPath(), root, &error)) {
+        reportPersistenceFailure(QStringLiteral("heard stations"), error);
+        return false;
+    }
+    return true;
 }
 
 } // namespace AetherSDR
