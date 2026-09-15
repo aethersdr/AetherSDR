@@ -4029,8 +4029,11 @@ add_test(NAME extension_namespace_gate_test COMMAND extension_namespace_gate_tes
 # seam, and #5554 §2.8 wants the matching dynamic_cast retired. The first check
 # is the load-bearing one: a self-registering TU that nothing references can be
 # dropped from a static archive silently, and the feature then does not exist.
-# Socket-free: the only address ever named is TEST-NET-1 and the refusal paths
-# construct no poller.
+# Socket-free, and it binds nothing: the model-level section injects the
+# transport, re-declaring the hl2 family with a recording double that owns no
+# socket. It did NOT hold before -- aiming the real source ran a synchronous
+# chain down to Hl2TelemetryPoller::applyCadence(), which bound a UDP socket and
+# wrote a discovery datagram (ten9876, #5642).
 add_executable(offline_health_registry_test tests/offline_health_registry_test.cpp)
 target_include_directories(offline_health_registry_test PRIVATE src)
 target_link_libraries(offline_health_registry_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)

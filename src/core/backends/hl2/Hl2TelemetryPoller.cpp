@@ -1,5 +1,6 @@
 #include "core/backends/hl2/Hl2TelemetryPoller.h"
 
+#include <QDebug>
 #include <QNetworkDatagram>
 #include <QTimer>
 #include <QUdpSocket>
@@ -155,7 +156,23 @@ void Hl2TelemetryPoller::applyCadence()
         // descriptor, and an unbound QUdpSocket has none yet (socketDescriptor()
         // returns -1 and the call silently does nothing). Hl2Discovery makes the
         // same ordering explicit for the same reason.
-        m_socket->bind(QHostAddress::AnyIPv4, 0, QUdpSocket::ShareAddress);
+        // THE RETURN IS NOT DECORATIVE. A discarded bind() leaves a socket
+        // with no descriptor, and everything downstream then lies in the same
+        // direction: writeDatagram() fails silently, m_unanswered climbs at
+        // send time for datagrams that structurally cannot leave, and `health`
+        // reports a radio that is not answering about a radio nobody asked.
+        // A sandbox that refuses raw UDP produced exactly that reading.
+        if (!m_socket->bind(QHostAddress::AnyIPv4, 0, QUdpSocket::ShareAddress)) {
+            qWarning()
+                << "HL2 telemetry: cannot bind a local UDP port"
+                << m_socket->errorString()
+                << "- the offline probe stays silent rather than counting "
+                   "unanswered polls it never sent";
+            m_socket->deleteLater();
+            m_socket = nullptr;
+            m_timer->stop();
+            return;
+        }
         enableBroadcast(*m_socket);
     }
 
