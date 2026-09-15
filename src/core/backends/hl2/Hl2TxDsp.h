@@ -111,39 +111,16 @@ public:
 public slots:
     // Mono TX audio at inputSampleRateHz.
     //
-    // `clientLeveled` marks audio whose level is owned by an external client —
-    // TCI or DAX TX audio (WSJT-X, fldigi, the PipeWire bridge), where the
-    // sender has already applied its own power/attenuation control.
-    //
-    // THE FLAG IS NOW INERT HERE, and saying so is the point of this comment.
-    //
-    // It used to select the ALC's ceiling: unity for client-leveled audio,
-    // alcMaxGainDb (40 dB) for everything else. That asymmetry was #4796 — an
-    // ALC applied to a client that sets its own level normalized that level
-    // control away above the hold threshold and froze into a path-dependent
-    // gain below it. The remedy was to ceiling the client path at unity.
-    //
-    // The ceiling is now unity on EVERY path, so the two branches have
-    // converged and there is nothing left for the flag to select. What
-    // survives is the half that was never the bug and never depended on the
-    // flag: the MODULATOR owns its own ceiling. Reduction still applies to
-    // everything, because m_micGain reaches 100x (+40 dB, Hl2TxLevelPolicy.h)
-    // and a full-scale source with the TX gain slider up arrives far inside
-    // the hard clamp below — and flat-topping an SSB modulator input splatters
-    // across the band. That clamp is a backstop, not a level control, and must
-    // not become the only thing standing between a hot source and the air.
-    //
-    // THE PARAMETER HAS A JOB AGAIN, AND IT IS THE MIC SLIDER.
-    //
-    // It went vestigial when the ceiling became unity — it had selected the
-    // ceiling and qualified the hold, and both went. It is now a THREE-STATE
-    // source (TxAudioSource), and what it decides is whether m_micGain applies
-    // at all:
+    // `source` SAYS WHOSE LEVEL THIS IS, and what it decides is whether
+    // m_micGain applies at all:
     //
     //   Microphone / ClientLeveled   m_micGain applies. On the mic path it is
     //                                the operator's own level control; on the
-    //                                client path it is a proportional
-    //                                attenuator, which is what #4796 left it.
+    //                                client path — TCI or DAX TX audio from
+    //                                WSJT-X, fldigi or the PipeWire bridge,
+    //                                whose sender already applied its own
+    //                                power control — it is the proportional
+    //                                attenuator #4796 left it.
     //   EngineGenerated              m_micGain DOES NOT APPLY. A mic slider is
     //                                a microphone control. The WSPR pump, the
     //                                AX.25 modem and the RADE waveform each
@@ -153,6 +130,26 @@ public slots:
     //                                predates the ALC change — it was merely
     //                                invisible while 40 dB of makeup
     //                                normalised every one of them to target.
+    //
+    // WHY IT IS A SOURCE AND NOT THE BOOL IT REPLACED. `clientLeveled` selected
+    // the ALC's ceiling: unity for client-leveled audio, alcMaxGainDb (40 dB)
+    // for everything else. That asymmetry was #4796 — an ALC applied to a
+    // client that sets its own level normalized that level control away above
+    // the hold threshold and froze into a path-dependent gain below it. The
+    // remedy was to ceiling the client path at unity, and then the ceiling
+    // became unity on EVERY path, which left the bool nothing to select. What
+    // it could never say is the distinction that matters once the makeup is
+    // gone: it answered "did an external client set this level?", so the
+    // operator's microphone and the engine's own generators shared one bucket.
+    //
+    // What survives from that era is the half that was never the bug and never
+    // depended on the flag: the MODULATOR owns its own ceiling. Reduction still
+    // applies to everything, because m_micGain reaches 100x (+40 dB,
+    // Hl2TxLevelPolicy.h) and a full-scale source with the TX gain slider up
+    // arrives far inside the hard clamp below — and flat-topping an SSB
+    // modulator input splatters across the band. That clamp is a backstop, not
+    // a level control, and must not become the only thing standing between a
+    // hot source and the air.
     //
     // The ALC itself is unchanged for all three: reduction-only, unity ceiling.
     // Engine audio is protected from splatter exactly like everything else; it
