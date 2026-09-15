@@ -91,13 +91,9 @@ SampleRate sampleRateEnum(int hz) noexcept
     }
 }
 
-// The IQ rates the HL2's DDC can be told to run, ascending. ONE list, because
-// this is simultaneously the capability advertisement, the panadapter's zoom
-// limits, and the set a zoom request snaps to — and on this radio those are the
-// same fact. The pan span IS the sample rate (Hl2Backend::emitPanState), so a
-// second list would be a way for the advertised span and the deliverable span to
-// drift apart, which is exactly the failure being fixed here.
-constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
+// kIqSampleRatesHz has moved to Hl2Backend.h — still ONE list, now visible to
+// the capability test so the declaration is pinned against the array production
+// reads rather than against a copy. See the comment there.
 
 // The radio's rated output, in watts, as the gauges' full-scale reference.
 //
@@ -1548,6 +1544,78 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.maxPanadapters = ceiling;
     for (const int rate : kIqSampleRatesHz)
         c.sampleRatesHz.append(rate);
+    // THE SPAN IS THE SAMPLE RATE, so the four rates above are not just stream
+    // rates — they are every span this radio can produce, and 48 kHz is a
+    // FLOOR, not a preference.
+    //
+    // This radio ships raw IQ and the spectrum is computed here from what
+    // arrives (Hl2Spectrum, fed by Hl2RxDsp). There is no stage between the
+    // DDC and the FFT that could narrow the window: a 5 kHz pan — the span a
+    // Flex CW or FT8 operator runs routinely — would need samples the radio
+    // never sent, because the DDC's decimation is what sets the rate in the
+    // first place. So the client must snap a zoom request to one of these
+    // (nearestIqSampleRateHz) and clamp the control at the narrowest, rather
+    // than pass a literal span down and get a silent refusal.
+    //
+    // Upstream #5223 is the RFC for showing a sub-window of a delivered span at
+    // full bin resolution. That would change what the DISPLAY shows; it would
+    // not change what this radio can deliver, which is what this declares.
+    c.panSpanFollowsSampleRate = true;
+    // ONE SPAN FOR THE WHOLE RADIO. The HPSDR config command carries a single
+    // two-bit sample-rate field for the board — MetisProtocol's ccConfig packs
+    // SampleRate into C1[1:0], alongside the receiver COUNT in C4, and there is
+    // no per-receiver rate anywhere in the frame. So changing one panadapter's
+    // span moves every receiver onto the new rate and rebuilds all of their DSP
+    // chains (applyPanBandwidth).
+    //
+    // This is also why receivePanBandwidthControl above is nullopt: the control
+    // is real, but it is radio-wide, and publishing it as a per-pan authority
+    // would let an operator narrow one window and silently retune the other
+    // three. The same shared budget is why receiverCeiling() FALLS as the span
+    // widens: span and receiver count draw on the same 100BASE-T link.
+    c.panSpanIsRadioWide = true;
+    // THE Y AXIS IS dBFS WEARING A dBm LABEL, and this says so rather than
+    // letting the label stand for a calibration that does not exist.
+    //
+    // Not "the HL2 cannot be calibrated" — it is that nothing on this radio
+    // reports what 0 dBFS is worth at the antenna, and no HL2 oracle states a
+    // figure for it. It is a per-unit property of the board, the ADC reference
+    // and the front end, so it can only come from a measurement against a
+    // reference source that has never been made on this station. Until it is,
+    // Hl2DbReference::fullScaleDbm stays 0.0 and isCalibrated() is false.
+    //
+    // Read from that object rather than hardcoded false: the day a per-unit
+    // fullScaleDbm is populated, the declaration follows it instead of having
+    // to be remembered. The numbers remain internally consistent — a 3 dB
+    // stronger signal still reads 3 dB higher — so what this denies is
+    // COMPARISON: a level from this radio must not be published as a spot, held
+    // against another station's report, or used as an absolute threshold.
+    c.reportsCalibratedDbm = m_dbRef.isCalibrated();
+    // radioOwnsDbmScale IS DELIBERATELY NOT DECLARED HERE, and the reason is a
+    // measurement rather than caution.
+    //
+    // The flag is wrong for this radio -- there is no command plane to send a
+    // display range to and nothing to echo one back, so declaring it true was
+    // always a claim about hardware this backend does not have. But it is ONE
+    // flag answering TWO questions, and on the HL2 the answers differ:
+    //
+    //   1. can the radio be commanded a dBm range?          no
+    //   2. does the auto-floor loop's MEASUREMENT depend
+    //      on such a command having been accepted?          no, also
+    //
+    // Setting the flag false answers 1 correctly and answers 2 wrongly, because
+    // SpectrumWidget::applyNoiseFloorAutoAdjust's early return keys on it and
+    // turns the local auto-floor off. Bench run d101, on this radio: the loop
+    // SETTLES. Quiescent it moved 0.307 dB in 74 s and 0.0000 dB/s over the
+    // second half; stepped 12 dB of LNA it moved 5.99 dB, re-settled within
+    // ~30 s and went flat again. With the flag declared false the reference
+    // level sat pinned at -40.000 dBm for 222 s while the measured floor moved
+    // 2 dB. So the declaration would remove a loop that demonstrably works.
+    //
+    // Splitting the flag is the fix and it is above this seam, so it is its own
+    // change. Until then the honest position is to leave the claim undeclared
+    // rather than trade a true statement about the command plane for a false
+    // one about the floor.
     // The AD9866 samples at 76.8 MHz, so the first Nyquist zone — everything
     // this receiver can hear without relying on an alias — is DC to 38.4 MHz
     // (oracle §7, which is also why the wideband bandscope spans exactly that).
