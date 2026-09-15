@@ -127,6 +127,54 @@ int main()
     static_assert(hl2PollIntervalMs(Hl2LinkState::HeldByOther, false) == 0,
                   "a display state is not polled with nothing on screen");
 
+    // ---- which replies the poller may believe ----------------------------
+    //
+    // acceptReply() is the rule lifted out of Hl2TelemetryPoller::onReadyRead()
+    // so it can be exercised without a socket. The defect it answers: 
+    // setExpectedMac() has no production caller, so the MAC filter it gated was
+    // dead on every live path and the address policy rested on it in the
+    // comments (ten9876, #5642).
+    {
+        const std::array<std::uint8_t, 6> radioA{{0x00, 0x1C, 0xC0, 0xA2, 0x13, 0xDD}};
+        const std::array<std::uint8_t, 6> radioB{{0x00, 0x1C, 0xC0, 0xA2, 0x13, 0xEE}};
+        const std::optional<std::array<std::uint8_t, 6>> none;
+
+        check(!acceptReply(false, radioA, none, none).accept,
+              "a reply that is not a Hermes-Lite 2 is never believed");
+
+        // THE LATCH, and what it does NOT buy. The first answer from the named
+        // address is accepted whoever sent it -- an aim names an IP and the MAC
+        // cannot be known before something replies, so there is nothing to
+        // check it against. Saying otherwise is what the old comment did.
+        const auto first = acceptReply(true, radioA, none, none);
+        check(first.accept, "the first HL2 answer at a target IS believed");
+        check(first.latch.has_value() && *first.latch == radioA,
+              "and it latches the MAC that answered");
+
+        // What it DOES buy: the responder cannot change underneath a live aim.
+        // A DHCP reassignment, a second radio on the same address, or a NAT
+        // answering for whatever is behind it today all produce a reading that
+        // is continuous and wrong, which is the failure that survives longest
+        // without being noticed.
+        const auto changed = acceptReply(true, radioB, none, first.latch);
+        check(!changed.accept,
+              "a DIFFERENT MAC at the same address is refused once latched");
+        check(!changed.latch.has_value(),
+              "and a refused reply does not move the latch");
+        check(acceptReply(true, radioA, none, first.latch).accept,
+              "while the latched radio keeps being believed");
+
+        // An explicitly supplied MAC wins outright and never latches: a caller
+        // that named a radio is not asking to have its choice replaced by
+        // whoever answered first.
+        check(acceptReply(true, radioA, radioA, none).accept,
+              "a supplied MAC admits the radio it names");
+        check(!acceptReply(true, radioB, radioA, none).accept,
+              "and refuses the one it does not, on the FIRST reply");
+        check(!acceptReply(true, radioA, radioA, none).latch.has_value(),
+              "a supplied MAC is not overwritten by a latch");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_cadence_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

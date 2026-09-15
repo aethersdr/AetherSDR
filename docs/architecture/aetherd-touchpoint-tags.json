@@ -1103,6 +1103,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/HealthSnapshotMerge.h": {
+  "tag": "universal",
+  "note": "The snapshot merge rule, family-neutral by construction: a key the winner declares but omits from `values` means \"not reported\" and must not erase a base value. Moved out of backends/hl2/Hl2TelemetrySource.h (which keeps hl2MergeHealth as a forwarder) because AutomationServer::doHealth() and RadioHealthDialog both need it, and neither may include a family header to get it. Names no family.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/IRadioBackend.h": {
   "tag": "universal",
   "note": "THE radio seam (RFC §5.5) — the canonical intent verbs, typed deltas and normalized signals every family implements. Universal by definition: the UI reaching this header is the seam working as designed, not coupling. Everything below it in core/backends/<family>/ is family-private.",

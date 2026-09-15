@@ -1,5 +1,9 @@
 #pragma once
 
+#include <array>
+
+#include <optional>
+
 // When to poll the HL2's alternate control port for telemetry, as a pure
 // function of what the IQ path is doing.
 //
@@ -129,6 +133,46 @@ inline constexpr long long kStreamStallDeclareMs = 2500;
         return heldByOther ? Hl2LinkState::HeldByOther : Hl2LinkState::NotConnected;
     return msSinceRxAdvanced >= kStreamStallDeclareMs ? Hl2LinkState::StreamStalled
                                                       : Hl2LinkState::Streaming;
+}
+
+// ---- Which replies this poller may believe --------------------------------
+//
+// Lifted out of Hl2TelemetryPoller::onReadyRead() so the decision can be tested
+// without a socket. The transport stays in the poller; the RULE lives here,
+// beside the cadence rule, for the same reason: both are policy that a test
+// must be able to reach directly rather than by putting datagrams on a wire.
+//
+// `expected` is a MAC a caller supplied (setExpectedMac); `latched` is the one
+// remembered from the first accepted answer. The distinction matters because
+// only the second can be armed on the live path -- an aim names an IP and the
+// MAC is not knowable until something replies.
+struct ReplyAcceptance {
+    bool accept = false;
+    // The MAC to remember for next time. Unset means "leave the latch alone".
+    std::optional<std::array<std::uint8_t, 6>> latch;
+    const char* why = "";
+};
+
+[[nodiscard]] inline ReplyAcceptance
+acceptReply(bool isHermesLite2,
+            const std::array<std::uint8_t, 6>& replyMac,
+            const std::optional<std::array<std::uint8_t, 6>>& expected,
+            const std::optional<std::array<std::uint8_t, 6>>& latched)
+{
+    if (!isHermesLite2)
+        return {false, std::nullopt, "not a Hermes-Lite 2"};
+    // An explicitly supplied MAC wins outright and never latches: a caller that
+    // named a radio is not asking to have its choice replaced by whoever
+    // answered first.
+    if (expected)
+        return {replyMac == *expected, std::nullopt,
+                replyMac == *expected ? "matches the supplied MAC"
+                                      : "a different radio answered"};
+    if (!latched)
+        return {true, replyMac, "first answer at this target — latched"};
+    return {replyMac == *latched, std::nullopt,
+            replyMac == *latched ? "matches the latched MAC"
+                                 : "the responder at this address CHANGED"};
 }
 
 }  // namespace AetherSDR::hl2

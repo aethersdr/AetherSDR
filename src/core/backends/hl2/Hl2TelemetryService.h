@@ -24,6 +24,7 @@
 // precedence over these at the merge point.
 
 #include "core/backends/IRadioBackend.h"        // HealthSnapshot
+#include "core/backends/OfflineHealthSource.h" // IOfflineHealthSource, the seam it implements
 #include "core/backends/hl2/Hl2TelemetryCadence.h"
 #include "core/backends/hl2/MetisProtocol.h"    // DiscoveryReply
 
@@ -38,7 +39,11 @@ namespace AetherSDR::hl2 {
 
 class Hl2TelemetryPoller;
 
-class Hl2TelemetryService : public QObject {
+// Implements IOfflineHealthSource, which is how anything above the seam reaches
+// it. Nothing in src/models or src/core names this class or this family: the
+// model holds the interface, and `Hl2TelemetryService.cpp` declares "hl2" to
+// the registry from down here where the name belongs.
+class Hl2TelemetryService : public QObject, public IOfflineHealthSource {
     Q_OBJECT
 
 public:
@@ -94,12 +99,41 @@ public:
     // claims and only one is a measurement.
     [[nodiscard]] std::optional<DiscoveryReply> lastReply() const;
 
+    // ---- IOfflineHealthSource ----
+    //
+    // Thin forwarders on purpose. The interface is the vocabulary shared code
+    // is allowed to use; these names are this family's. Keeping both means a
+    // later change to what "demand" means here cannot silently redefine the
+    // seam, and the HL2 tests go on driving the HL2 names.
+    void setOfflineTarget(const QHostAddress& addr) override { setTarget(addr); }
+    [[nodiscard]] bool hasOfflineTarget() const override;
+    void noteOfflineDemand() override { noteDemand(); }
+    [[nodiscard]] IRadioBackend::HealthSnapshot offlineHealthRows() const override
+    {
+        return healthRows();
+    }
+
 private:
+    // Test access to the cached reply, which otherwise only the poller's signal
+    // can set. Two of this class's rows are conditional on a reply having
+    // arrived -- radioInUse among them, and it is the one whose correctness
+    // depends on WHICH session the reply describes -- so a test that cannot
+    // place one cannot reach them at all. The friend struct is the idiom
+    // Hl2Backend already uses (Hl2DspReadbackTestAccess), and it adds no public
+    // surface: a caller outside the test cannot name it.
+    friend struct Hl2TelemetryServiceTestAccess;
+
     // Pimpl by unique_ptr, not a raw owning pointer: the destructor is the only
     // thing that has to see the complete type, and it is out of line below for
     // exactly that reason.
     struct Impl;
     std::unique_ptr<Impl> d;
+};
+
+// See the friend declaration above. Declared here and defined in the .cpp,
+// where Impl is complete; nothing in production names it.
+struct Hl2TelemetryServiceTestAccess {
+    static void placeReply(Hl2TelemetryService& svc, const DiscoveryReply& r);
 };
 
 }  // namespace AetherSDR::hl2
