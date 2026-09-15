@@ -4178,6 +4178,42 @@ void Hl2Backend::setTxDriveLevel(int level)
 
 namespace {
 
+// A restored mic level, read against the curve the document that carries it was
+// written on.
+//
+// The document says which curve with `micLevelCurve`. ABSENT MEANS CURVE 1 —
+// the key did not exist while curve 1 was the only curve, so its absence is a
+// positive statement about the writer rather than a gap, and that is the whole
+// reason the migration can be one-shot: writing the level back stamps the curve
+// beside it, so the next read takes the identity branch and the level stops
+// moving.
+//
+// Anything else present and readable is taken at face value, including a curve
+// number from the future. This function's job is to not misread a document, and
+// a level written by a build that knows a curve this one does not is a level
+// this build cannot re-derive; re-mapping it on the guess that a higher number
+// means a wider leg would be inventing a setpoint, which is what the DROPPED
+// rule above the caller exists to refuse. A future curve therefore restores
+// as-written, and the operator's own next slider move re-stamps it.
+[[nodiscard]] int migrateRestoredMicLevel(int level, const QJsonObject& txSetpoints)
+{
+    const QJsonValue curve = txSetpoints.value(QStringLiteral("micLevelCurve"));
+    if (curve.isDouble() && curve.toInt() != 1)
+        return level;
+    if (!curve.isUndefined() && !curve.isDouble()) {
+        qCInfo(lcHl2) << "HL2: restored mic level carries a malformed curve"
+                      << curve.toVariant() << "- reading it as written";
+        return level;
+    }
+    const int migrated = AetherSDR::hl2::micLevelFromCurve1(level);
+    if (migrated != level)
+        qCInfo(lcHl2) << "HL2: restored mic level" << level
+                      << "was stored against mic curve 1; it is"
+                      << migrated << "on curve" << AetherSDR::hl2::kMicLevelCurve
+                      << "- the same gain, a different position";
+    return migrated;
+}
+
 // WDSP's AGC mode integer as the string the bridge and the operator use, so a
 // read-back can be compared against what was asked for without the reader
 // having to know WDSP's enumeration.
@@ -4906,7 +4942,7 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
         const QJsonValue raw = txSetpoints.value(QStringLiteral("micLevel"));
         const int level = raw.toInt(-1);
         if (raw.isDouble() && level >= 0 && level <= 100) {
-            m_restoredMicLevel = level;
+            m_restoredMicLevel = migrateRestoredMicLevel(level, txSetpoints);
         } else {
             qCInfo(lcHl2) << "HL2: dropping invalid restored mic level"
                           << raw.toVariant();
@@ -5136,6 +5172,14 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     // it cannot be filtered out as "absent" — see the -1 sentinel on
     // m_restoredMicLevel.
     txSetpoints.insert(QStringLiteral("micLevel"), m_micLevel);
+    // The curve that level is a position ON, so a document written by one build
+    // is not silently re-interpreted by another. Absent means curve 1, the
+    // +20 dB upper leg this radio shipped with before the ALC's makeup gain was
+    // removed; see migrateRestoredMicLevel(). Written unconditionally beside the
+    // level, because a level without its curve is the ambiguity this key exists
+    // to end — and written as a NUMBER rather than a build string, so the next
+    // change to the mapping is a comparison rather than a table of versions.
+    txSetpoints.insert(QStringLiteral("micLevelCurve"), kMicLevelCurve);
     state.extension = QJsonObject{{QStringLiteral("rfGain"), rfGain},
                                   {QStringLiteral("txSetpoints"), txSetpoints}};
     state.extensionSchemaVersion = 1;

@@ -102,6 +102,52 @@ namespace AetherSDR::hl2 {
     return std::pow(10.0, micSliderToGainDb(level) / 20.0);
 }
 
+// ---- Persisted level migration ---------------------------------------------
+
+// The curve micSliderToGainDb implements, as a number a stored document can
+// carry.
+//
+// Curve 1 was the mapping this radio shipped with while Hl2TxDsp's ALC still
+// had 40 dB of makeup gain: -20 dB below unity, +20 dB above, both legs at
+// 0.4 dB per step. Curve 2 is what is above — the lower leg unchanged, the
+// upper leg widened to +40 dB at 0.8 dB per step, because the makeup gain that
+// used to close the ~30 dB speech-to-target shortfall is gone and the slider is
+// now the only thing that closes it.
+//
+// It is a curve number rather than a schema version because it describes what a
+// stored NUMBER means, not what keys a document has. A document can gain and
+// lose keys without any level in it changing meaning; this changes when the
+// meaning of one key does, and only then.
+inline constexpr int kMicLevelCurve = 2;
+
+// A slider position stored against curve 1, re-expressed against curve 2 so it
+// puts the same gain on the air.
+//
+// THIS IS NOT A CLAMP AND NOT A PREFERENCE. An operator who parked the slider
+// at 80 under curve 1 asked for +12 dB. Under curve 2, 80 means +24 dB — so
+// restoring the raw number would hand them 15.849x where they chose 3.981x, on
+// the first over after an upgrade, with nothing on the panel to say why. The
+// position moves precisely so that the level does not.
+//
+// Only the upper leg needs it: below 50 both curves are 0.4 dB per step and the
+// number already means what it meant. At and below 50 this is the identity,
+// including the mute at 0.
+//
+// The halving is exact in dB and inexact in slider steps — curve 2 has half the
+// resolution above unity, so an odd position lands between two steps and rounds
+// up, at most 0.4 dB above where it sat. Rounding the other way was the
+// alternative and is worse: it rounds toward the unity the operator moved away
+// from, and 0.4 dB of extra level is a far smaller surprise on a control whose
+// whole upper half is now +40 dB.
+[[nodiscard]] constexpr int micLevelFromCurve1(int level) noexcept
+{
+    if (level <= 50)
+        return level;
+    const int clamped = level > 100 ? 100 : level;
+    // +1 before the integer divide is round-half-up on a non-negative value.
+    return 50 + (clamped - 50 + 1) / 2;
+}
+
 // ---- Forward-power peak hold -----------------------------------------------
 
 // One step of the transmit forward-power peak hold, in watts.

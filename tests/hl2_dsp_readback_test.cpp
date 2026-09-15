@@ -15,6 +15,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
 #include <QCoreApplication>
 #include <QEvent>
@@ -287,9 +288,14 @@ int main(int argc, char** argv)
         Hl2Backend backend;
         AetherSDR::RestoredRadioState restored;
         restored.extensionSchemaVersion = 1;
+        // Stamped with the curve, as every document this build writes is. The
+        // case is about the seed being one-shot; the curve keeps it from
+        // silently becoming a migration case as well.
         restored.extension = QJsonObject{
             {QStringLiteral("txSetpoints"),
-             QJsonObject{{QStringLiteral("micLevel"), 70}}}};
+             QJsonObject{{QStringLiteral("micLevel"), 70},
+                         {QStringLiteral("micLevelCurve"),
+                          AetherSDR::hl2::kMicLevelCurve}}}};
         backend.applyRestoredState(restored);
 
         Access::pushInitialState(backend);
@@ -300,6 +306,54 @@ int main(int argc, char** argv)
         Access::pushInitialState(backend);
         check(Access::micLevel(backend) == 80,
               "a transient link-up does not replay stale MIC state");
+    }
+
+    // A document written before the slider's upper leg was widened carries no
+    // curve, and its level means what curve 1 said it meant. Restoring the raw
+    // number would double the gain the operator chose — 70 was +8 dB and is
+    // +16 dB on curve 2 — so the POSITION moves and the level does not.
+    //
+    // The three legs are the three things that can go wrong: an unstamped upper
+    // position must migrate, an unstamped position at or below unity must not
+    // (both curves agree there, and moving it would be the invention the
+    // restore path refuses), and a stamped position must be taken as written
+    // however high it is, or the migration would fire again on every connect.
+    {
+        using Access = AetherSDR::hl2::Hl2DspReadbackTestAccess;
+        // A fresh backend per leg: applyRestoredState arms a one-shot seed, so
+        // reusing one would have the second leg read the first leg's state.
+        const auto restoredLevel = [](const QJsonObject& txSetpoints) {
+            Hl2Backend backend;
+            AetherSDR::RestoredRadioState restored;
+            restored.extensionSchemaVersion = 1;
+            restored.extension =
+                QJsonObject{{QStringLiteral("txSetpoints"), txSetpoints}};
+            backend.applyRestoredState(restored);
+            Access::pushInitialState(backend);
+            return Access::micLevel(backend);
+        };
+
+        const int curve1Hot =
+            restoredLevel(QJsonObject{{QStringLiteral("micLevel"), 70}});
+        std::printf("  mic curve: unstamped 70 restores as %d "
+                    "(curve 1 said %+.1f dB; curve 2 says %+.1f dB there)\n",
+                    curve1Hot, (70 - 50) * 0.4,
+                    AetherSDR::hl2::micSliderToGainDb(curve1Hot));
+        check(curve1Hot == 60,
+              "an unstamped level above unity is read on curve 1 and moved");
+        check(std::fabs(AetherSDR::hl2::micSliderToGainDb(curve1Hot)
+                        - (70 - 50) * 0.4) < 0.001,
+              "the migrated position puts the curve-1 gain on the air");
+
+        check(restoredLevel(QJsonObject{{QStringLiteral("micLevel"), 30}}) == 30,
+              "an unstamped level below unity is unchanged — both curves agree");
+
+        check(restoredLevel(QJsonObject{
+                  {QStringLiteral("micLevel"), 70},
+                  {QStringLiteral("micLevelCurve"),
+                   AetherSDR::hl2::kMicLevelCurve}}) == 70,
+              "a stamped level is taken as written, so the migration is "
+              "one-shot");
     }
 
     if (g_failures == 0) {

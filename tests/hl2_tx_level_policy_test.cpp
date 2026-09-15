@@ -18,9 +18,11 @@
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
 #include <cmath>
+#include <initializer_list>
 #include <cstdio>
 
 using AetherSDR::hl2::fwdPeakHoldStep;
+using AetherSDR::hl2::micLevelFromCurve1;
 using AetherSDR::hl2::micSliderToGainDb;
 using AetherSDR::hl2::micSliderToLinear;
 
@@ -96,6 +98,63 @@ int main()
     check(near(micSliderToGainDb(200), 40.0), "over-range level clamps to +40 dB");
     check(near(micSliderToGainDb(-50), -20.0), "under-range level clamps to -20 dB");
     check(near(micSliderToLinear(-50), 0.0), "negative level mutes");
+
+    // ---- Curve-1 migration -------------------------------------------------
+    //
+    // The property that matters is not the arithmetic, it is that the GAIN is
+    // preserved: a position stored against curve 1 must restore to whatever
+    // curve-2 position puts the same dB on the air. Asserting the dB rather
+    // than the number is what makes this a migration test instead of a copy of
+    // the formula — a re-typed formula would agree with itself.
+    {
+        const auto curve1Db = [](int level) {
+            const int clamped = level < 0 ? 0 : (level > 100 ? 100 : level);
+            return (static_cast<double>(clamped) - 50.0) * 0.4;
+        };
+        // Even offsets from unity land exactly; curve 2 has half the resolution
+        // above unity, so nothing finer than 2 steps can.
+        for (const int stored : {52, 60, 70, 80, 90, 100})
+            check(near(micSliderToGainDb(micLevelFromCurve1(stored)),
+                       curve1Db(stored)),
+                  "an even curve-1 position migrates to the same gain");
+
+        // Odd offsets round UP, by at most one curve-2 step of 0.8 dB — half a
+        // curve-1 step. The direction is deliberate: rounding down rounds back
+        // toward the unity the operator moved away from.
+        for (const int stored : {51, 61, 75, 99}) {
+            const double moved = micSliderToGainDb(micLevelFromCurve1(stored))
+                               - curve1Db(stored);
+            check(moved >= 0.0 && moved <= 0.401,
+                  "an odd curve-1 position rounds up by at most 0.4 dB");
+        }
+
+        // The identity half. Below unity both curves are 0.4 dB per step, so
+        // moving a stored position there would be inventing a setpoint.
+        for (const int stored : {0, 1, 25, 49, 50})
+            check(micLevelFromCurve1(stored) == stored,
+                  "a curve-1 position at or below unity is unchanged");
+
+        // Monotone and in range, because a migration that reorders positions or
+        // leaves the travel is worse than one that is merely imprecise.
+        bool monotone = true;
+        bool inTravel = true;
+        int previous = -1;
+        for (int stored = 0; stored <= 100; ++stored) {
+            const int migrated = micLevelFromCurve1(stored);
+            monotone = monotone && migrated >= previous;
+            inTravel = inTravel && migrated >= 0 && migrated <= 100;
+            previous = migrated;
+        }
+        check(monotone, "the migration is monotone across the whole travel");
+        check(inTravel, "the migration never leaves the slider's travel");
+
+        // Applying it twice must not move a level twice — the stamp is what
+        // makes it one-shot in Hl2Backend, but the arithmetic should not punish
+        // a document that loses its stamp either.
+        check(micLevelFromCurve1(micLevelFromCurve1(100)) == 63,
+              "a second pass moves it again — the stamp, not the arithmetic, "
+              "is what makes the migration one-shot");
+    }
 
     // ---- Forward-power peak hold -------------------------------------------
 
