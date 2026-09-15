@@ -52,8 +52,18 @@ public:
     // block, the state word, the antenna map and the alert channel.
     void setAmpModel(AmpModel* model);
 
-    void setFwdPower(float watts);
-    void setSwr(float swr);
+    // Two transports carry the same two readings. Both stamp their arrival and
+    // defer to applyMeters(), which picks one — see the note there. Callers
+    // must use these rather than setFwdPower/setSwr, which apply blind.
+    void setRadioMeters(float watts, float swr);   // radio-relayed AMP meters
+    void setDeviceMeters(float watts, float swr);  // the amplifier's own socket
+
+    // Exciter power measured at the amplifier's input (the PGXL "DRV" meter).
+    // valid=false blanks the row: not every amplifier publishes one, and a
+    // drive gauge resting at zero would read as "no drive" rather than
+    // "not measured".
+    void setDrivePower(float watts, bool valid);
+
     void setTemp(float degC);
     void setTempB(float degC);
     void setDrainCurrent(float amps);
@@ -128,6 +138,23 @@ private:
     // Outlines exactly the port transmit is routed to, or neither when that
     // is not knowable. Never both.
     void updateActivePort();
+    // One rule, one place: the radio-relayed AMP meters and the amplifier's own
+    // port-9008 status carry the SAME measurement — on a steady carrier the
+    // relayed FWD meter and the device's `fwd` field agree to within 0.05 dB —
+    // so the choice between them is about rate, not truth. The relay arrives
+    // with the radio's meter packets (~20 fps); the device is polled at 5 Hz.
+    // The relay therefore wins while its sample is fresh, and the device feed
+    // takes over when the radio is not publishing amplifier meters at all
+    // (no relay, or before the meter manifest lands). Last-writer-wins between
+    // two live sources is what this replaces.
+    void applyMeters(float watts, float swr);
+    // Apply blind, without consulting the source rule. Private precisely so
+    // that they cannot be reached from the wiring: reintroducing a second
+    // unmediated writer is the defect this whole path exists to remove.
+    void setFwdPower(float watts);
+    void setSwr(float swr);
+    void updateDriveLabel();
+
     void setAlertText(const QString& text);
     void applyAlertStyle();
     void layOutAlertOverlay();
@@ -136,11 +163,13 @@ private:
 
     // Bargraph gauges
     HGauge*  m_fwdGauge{nullptr};
+    HGauge*  m_drvGauge{nullptr};
     HGauge*  m_swrGauge{nullptr};
     HGauge*  m_idGauge{nullptr};
 
     // Left-side label+value (updated as telemetry arrives)
     QLabel*  m_pwrLabel{nullptr};   // "PWR 1148"
+    QLabel*  m_drvLabel{nullptr};   // "DRV   11"
     QLabel*  m_swrLabel{nullptr};   // "SWR 1.2:1"
     QLabel*  m_idLabel{nullptr};    // "Id   39"
 
@@ -234,9 +263,15 @@ private:
     QTimer*  m_peakTimer{nullptr};
     float    m_peakFwd{0.0f};
 
+    // When the radio relay last delivered a power/SWR sample. See
+    // setDeviceMeters() for the rule it decides.
+    qint64   m_radioMetersMs{0};
+
     // Cached telemetry values — gauges update every call, labels update at 10 Hz
     float    m_fwdWatts{0.0f};
     float    m_swrVal{1.0f};
+    float    m_drvWatts{0.0f};
+    bool     m_haveDrive{false};
     float    m_drainAmps{0.0f};
     float    m_tempA{0.0f};
     float    m_tempB{0.0f};

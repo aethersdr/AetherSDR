@@ -1,6 +1,8 @@
 #include "AmpModel.h"
 #include "core/PgxlConnection.h"
 
+#include <cmath>
+
 namespace AetherSDR {
 
 namespace {
@@ -49,6 +51,13 @@ void AmpModel::setDirectConnection(PgxlConnection* conn)
         // Everything below came from a device we can no longer see. A frozen
         // band or bias claims the amplifier is set up a way we have stopped
         // being told about, which is worse than showing nothing.
+        //
+        // The meters included: a gauge left standing at the last reading taken
+        // before the link dropped reports power out of an amplifier we are no
+        // longer talking to. Zero watts is what we now know.
+        m_directFwdWatts = 0.0f;
+        m_directSwr = 1.0f;
+        emit directMetersChanged(m_directFwdWatts, m_directSwr);
         if (!m_alert.isEmpty()) {
             m_alert.clear();
             emit alertChanged(m_alert);
@@ -90,6 +99,35 @@ void AmpModel::applyDirectStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains(QStringLiteral("state"))) {
         applyStateWord(kvs.value(QStringLiteral("state")));
     }
+
+    // Metering first, and independently of the per-port block below: the two
+    // are not carried by the same frames in every firmware, and a status that
+    // omits bandA/bandB must not cost us the power reading with it.
+    //
+    // `fwd` is dBm on the wire -- the amplifier's own FWD meter declares
+    // 30.0..63.0 dBm (1 W..2 kW) and the direct status floors at exactly
+    // 30.0 when nothing is being transmitted. `swr` is return loss in dB,
+    // reported NEGATIVE here (-60.0 at rest), unlike the relayed RL meter
+    // which reports the same quantity positive.
+    bool meters = false;
+    if (kvs.contains(QStringLiteral("fwd"))) {
+        const float dBm = kvs.value(QStringLiteral("fwd")).toFloat();
+        m_directFwdWatts = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+        meters = true;
+    }
+    if (kvs.contains(QStringLiteral("swr"))) {
+        const float returnLossDb = kvs.value(QStringLiteral("swr")).toFloat();
+        // Take the magnitude: the sign is this transport's convention, not a
+        // measurement, and a firmware that dropped it would otherwise invert
+        // the ratio.
+        const float rho = std::pow(10.0f, -std::abs(returnLossDb) / 20.0f);
+        m_directSwr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+        meters = true;
+    }
+    // Emitted unconditionally when the fields are present, never gated on the
+    // value having moved: a meter that settles on one number is still a live
+    // meter, and suppressing the repeat is what freezes a gauge (#1530).
+    if (meters) emit directMetersChanged(m_directFwdWatts, m_directSwr);
 
     if (!kvs.contains(QStringLiteral("bandA")) && !kvs.contains(QStringLiteral("bandB"))) {
         return;   // an info or partial frame, not the per-port block

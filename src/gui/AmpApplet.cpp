@@ -4,6 +4,7 @@
 #include "GuardedSlider.h"
 #include "core/AppSettings.h"
 #include "models/AmpModel.h"
+#include <QDateTime>
 
 #include <QAbstractItemView>
 #include <QAccessible>
@@ -80,7 +81,7 @@ QLabel* makeValueLabel(QWidget* parent)
 constexpr qreal kDesignWidth  = 420.0;
 // Only a first guess: applyDensity replaces it with the measured value as
 // soon as there is a laid-out column to measure.
-constexpr qreal kDesignHeight = 250.0;
+constexpr qreal kDesignHeight = 292.0;
 constexpr int   kBottomGap = kPanelBottomGap;
 
 // The panel key stands as tall as the tuner's do, so an operator with both
@@ -266,6 +267,31 @@ void AmpApplet::buildUI()
     pwrRow->addWidget(m_pwrLabel);
     pwrRow->addWidget(m_fwdGauge, 1);
     vbox->addLayout(pwrRow);
+
+    // ── DRV row ──────────────────────────────────────────────────────────────
+    // Exciter power at the amplifier's input, directly under the output it
+    // produces: the pair is the amplifier's gain, and reading it off two
+    // stacked bars is the whole reason this row exists. A PGXL delivering
+    // 16 W for 11 W of drive is visibly broken here and invisible anywhere
+    // else in the application.
+    //
+    // Full scale is the meter's own declared ceiling — the radio publishes
+    // DRV as 10.0..50.0 dBm, and 50 dBm is 100 W. The amplifier reaches rated
+    // output well below that, so the top of the scale is a limit, not a
+    // target: yellow from 50 W, red from 75 W.
+    m_drvLabel = makeValueLabel(this);
+    m_drvLabel->setText("DRV");
+    m_drvGauge = new HGauge(0.0f, 100.0f, 75.0f, "", "",
+        {{0, "0"}, {25, "25"}, {50, "50"}, {75, "75"}, {100, "100"}},
+        this, 50.0f);
+    m_drvGauge->setBallistics({0.030f, 0.800f});
+    m_drvGauge->setAccessibleName(tr("Drive power"));
+    auto* drvRow = new QHBoxLayout;
+    drvRow->setContentsMargins(0, 0, 0, 0);
+    drvRow->setSpacing(4);
+    drvRow->addWidget(m_drvLabel);
+    drvRow->addWidget(m_drvGauge, 1);
+    vbox->addLayout(drvRow);
 
     // ── SWR row ──────────────────────────────────────────────────────────────
     m_swrLabel = makeValueLabel(this);
@@ -648,13 +674,13 @@ void AmpApplet::applyDensityAtScale(qreal scale)
     setSizePolicy(QSizePolicy::Preferred,
                   f ? QSizePolicy::Preferred : QSizePolicy::Fixed);
 
-    for (auto* lbl : {m_pwrLabel, m_swrLabel, m_idLabel}) {
+    for (auto* lbl : {m_pwrLabel, m_drvLabel, m_swrLabel, m_idLabel}) {
         lbl->setFixedWidth(f ? px(96) : 72);
         theme.applyStyleSheet(lbl, QStringLiteral(
             "QLabel { color: {{color.text.primary}}; font-size: %1px; font-weight: bold; }")
             .arg(f ? px(14) : 11));
     }
-    for (auto* gauge : {m_fwdGauge, m_swrGauge, m_idGauge}) {
+    for (auto* gauge : {m_fwdGauge, m_drvGauge, m_swrGauge, m_idGauge}) {
         gauge->setFixedHeight(f ? px(34) : 24);
         // The bar grows with the panel; without this its tick lettering would
         // not, which is most of what "it just stretches" looks like.
@@ -963,6 +989,60 @@ void AmpApplet::updateActivePort()
 
 // ── Telemetry ───────────────────────────────────────────────────────────────
 
+void AmpApplet::setRadioMeters(float watts, float swr)
+{
+    m_radioMetersMs = QDateTime::currentMSecsSinceEpoch();
+    applyMeters(watts, swr);
+}
+
+void AmpApplet::setDeviceMeters(float watts, float swr)
+{
+    // Dropped on the floor while the relay is live, rather than applied and
+    // then overwritten: two sources writing the same gauge at different rates
+    // is what made the bar jitter between two slightly different numbers.
+    if (m_radioMetersMs > 0
+            && QDateTime::currentMSecsSinceEpoch() - m_radioMetersMs
+                   < kRelayMeterFreshnessMs) {
+        return;
+    }
+    applyMeters(watts, swr);
+}
+
+void AmpApplet::applyMeters(float watts, float swr)
+{
+    // Power BEFORE SWR, and neither value written to its cache first.
+    // setFwdPower reads the PREVIOUS m_fwdWatts to spot the crossing in and
+    // out of "there is power flowing", which is what clears the SWR bar at
+    // idle and restores it when power resumes; assigning m_fwdWatts here
+    // would make that comparison read the new value against itself and the
+    // crossing would never be seen. setSwr then reads the power that
+    // setFwdPower has just stored.
+    setFwdPower(watts);
+    setSwr(swr);
+}
+
+void AmpApplet::setDrivePower(float watts, bool valid)
+{
+    m_haveDrive = valid;
+    m_drvWatts = valid ? watts : 0.0f;
+    m_drvGauge->setValue(m_drvWatts);
+    updateDriveLabel();
+}
+
+void AmpApplet::updateDriveLabel()
+{
+    if (!m_drvLabel) return;
+    // The meter floors at its declared low bound, 10 dBm = 0.01 W, so a
+    // reading an order of magnitude above that is real drive rather than the
+    // floor. Below it the row keeps its name and drops the number, the way
+    // PWR/SWR/Id do.
+    if (m_haveDrive && m_drvWatts >= 0.1f) {
+        m_drvLabel->setText(QStringLiteral("DRV  %1").arg(m_drvWatts, 0, 'f', 1));
+    } else {
+        m_drvLabel->setText(QStringLiteral("DRV"));
+    }
+}
+
 void AmpApplet::setFwdPower(float watts)
 {
     const bool wasPowered = (m_fwdWatts >= 5.0f);
@@ -1059,6 +1139,8 @@ void AmpApplet::setDrainCurrent(float amps)
 
 void AmpApplet::updateValueLabels()
 {
+    updateDriveLabel();
+
     // PWR: only show value when there is meaningful power
     if (m_fwdWatts >= 5.0f)
         m_pwrLabel->setText(QStringLiteral("PWR  %1").arg(static_cast<int>(m_fwdWatts)));

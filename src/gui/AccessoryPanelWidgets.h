@@ -33,6 +33,21 @@ constexpr qreal kPanelMaxScale = 3.0;
 // scaling did not use.
 constexpr int kPanelBottomGap = 8;
 
+// How long a radio-relayed meter sample stays authoritative before an
+// accessory's own connection is allowed to drive the gauges instead.
+//
+// The PGXL and the TGXL each publish forward power and SWR twice: once as
+// radio-relayed AMP meters, and once on their own management socket. They are
+// the same measurement — on a steady carrier the relayed FWD meter and the
+// device's `fwd` field agree to within 0.05 dB — so the choice is about rate.
+// The relay rides the radio's meter packets (~20 fps); the sockets are polled
+// at 1–5 Hz. The relay therefore wins while it is fresh.
+//
+// 1500 ms is comfortably longer than the slowest relay gap yet short enough
+// that losing the relay hands over within about a second. Both accessory
+// applets read this one constant so the rule cannot drift apart between them.
+constexpr qint64 kRelayMeterFreshnessMs = 1500;
+
 // Panel keys are letterbox-shaped rather than square. Their height is tied to
 // the instruments beside them so the two groups read as one row of peers, and
 // the width follows from it at this aspect.

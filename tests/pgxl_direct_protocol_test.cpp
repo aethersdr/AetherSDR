@@ -24,6 +24,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 
+#include <cmath>
 #include <cstdio>
 #include <functional>
 
@@ -45,9 +46,30 @@ bool spin(std::function<bool()> done, int timeoutMs = 5000)
     return done();
 }
 
+// A status reply captured with the amplifier keyed, so the meter fields carry
+// something to read. Verbatim off 192.168.50.102 on firmware 3.8.9
+// (2026-09-15) apart from the sequence number:
+//
+//   vdd=51.9 id=7.5 peakid=7.5 fwd=42.2 peakfwd=43.6 swr=-60.0 temp=43.9
+//
+// fwd is dBm (42.2 dBm = 16.6 W) and swr is return loss in dB, reported
+// negative on this transport.
+QByteArray transmittingStatusReply(const char* seq)
+{
+    return QByteArray("R") + seq + "|0|state=TRANSMIT_A"
+        " bandA=40 bandB=0 bsrcA=FLEX bsrcB=FLEX bsrcAutoA=0 bsrcAutoB=0"
+        " flexA=FLEX-8600 flexB=FLEX-8600 vac=246 vdd=51.9 id=7.5 peakid=7.5"
+        " fwd=42.2 peakfwd=43.6 swr=-60.0 temp=43.9 cntfreq=0 cat1freq=0"
+        " cat2freq=0 hltemp=24.8 biasA=RADIO_AAB biasB=RADIO_AB"
+        " fanmode=STANDARD meffa=STANDBY\n";
+}
+
 // The status reply, verbatim, with the state word substituted. Everything
 // else — the bands, the bias profiles, the FLEX-8600 on both ports — is
 // exactly what the amplifier sent.
+//
+// fwd=30.0 is not a low reading, it is the FLOOR: the amplifier's own FWD
+// meter is declared 30.0..63.0 dBm and an idle PGXL rests at exactly 30.0.
 QByteArray statusReply(const char* seq, const char* state)
 {
     return QByteArray("R") + seq + "|0|state=" + state +
@@ -168,6 +190,40 @@ int main(int argc, char** argv)
         peer->flush();
         CHECK(spin([&] { return !model.portB().ptt; }));
         CHECK(!model.portA().ptt);
+    }
+
+    // ── Forward power and SWR off the amplifier's own socket ──────────
+    //
+    // The radio relays AMP/FWD and AMP/RL for the same amplifier, but only
+    // when a radio is relaying at all. This is the other source, and it is the
+    // only one on a station whose radio publishes no amplifier meters.
+    {
+        QSignalSpy meters(&model, &AmpModel::directMetersChanged);
+        CHECK(meters.isValid());
+        peer->write(transmittingStatusReply("7"));
+        peer->flush();
+        CHECK(spin([&] { return meters.count() >= 1; }));
+        const QList<QVariant> last = meters.last();
+        // 42.2 dBm = 16.6 W.
+        CHECK(std::fabs(last.at(0).toFloat() - 16.6f) < 0.2f);
+        // Return loss 60 dB is a matched load: rho = 0.001, SWR 1.002:1.
+        CHECK(std::fabs(last.at(1).toFloat() - 1.002f) < 0.01f);
+
+        // Repeated identically on the next poll, and emitted again: a meter
+        // that settles on one number is still live, and suppressing the repeat
+        // is what freezes a gauge.
+        const int settled = meters.count();
+        peer->write(transmittingStatusReply("8"));
+        peer->flush();
+        CHECK(spin([&] { return meters.count() > settled; }));
+
+        // Idle floors the reading at 30.0 dBm — 1 W, not 16.6.
+        peer->write(statusReply("9", "IDLE"));
+        peer->flush();
+        CHECK(spin([&] {
+            return !meters.isEmpty()
+                && std::fabs(meters.last().at(0).toFloat() - 1.0f) < 0.01f;
+        }));
     }
 
     // A state push with a prefix word before the first key parses the same

@@ -100,6 +100,17 @@ signals:
     void alertChanged(const QString& text);
     // The antenna → output map moved (see outputForAntenna).
     void antennaMapChanged();
+    // Forward power (watts) and SWR read off the amplifier's OWN port-9008
+    // status, as opposed to the radio-relayed AMP meters. Same quantities,
+    // different transport: this one survives the radio not publishing amp
+    // meters at all, and it is the only source when no radio is relaying.
+    //
+    // Sourced from `fwd`, never `peakfwd`. `peakfwd` is a peak the DEVICE
+    // latches and does not decay -- an idle PGXL with its drain rail down
+    // (vdd=0.0, state=IDLE) was observed still reporting peakfwd=44.8 dBm,
+    // i.e. 30 W out of an amplifier that was not transmitting. Peak-hold that
+    // releases belongs to the gauge, which has a timer for it.
+    void directMetersChanged(float fwdWatts, float swr);
 
 private:
     bool    m_present{false};
@@ -111,6 +122,8 @@ private:
     QString m_alert;
     AmpPortInfo m_portA;
     AmpPortInfo m_portB;
+    float       m_directFwdWatts{0.0f};
+    float       m_directSwr{1.0f};
     bool        m_havePortInfo{false};
     QMap<QString, QString> m_antennaOutputs;   // "ANT1" -> "PORTA"
     PgxlConnection* m_directConn{nullptr};

@@ -153,7 +153,12 @@ int main(int argc, char** argv)
     model.setDirectConnection(&conn);
     QSignalSpy ports(&model, &TunerModel::portsChanged);
 
-    peer->write("S230|status fwd=21.42 peak=21.42 max=61.76 swr=-60.0000 "
+    // `max` is a running maximum the tuner latches across transmissions, not a
+    // rating: a live TGXL on firmware 1.2.17 was captured reporting max=0.00
+    // on a freshly-opened session and 62.43 after a transmit. Nothing here
+    // asserts on it; it is carried so the frame stays the shape the device
+    // sends.
+    peer->write("S230|status fwd=21.42 peak=21.42 max=62.43 swr=-60.0000 "
                 "pttA=0 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
                 "bypassA=0 bypassRxA=0 antA=0 "
                 "pttB=0 bandB=0 modeB=0 flexB=FLEX-8600 freqB=0.000 "
@@ -194,7 +199,7 @@ int main(int argc, char** argv)
         CHECK(tuning.count() == 1);
 
         // The status frame carries it too, and ends the tune.
-        peer->write("S233|status fwd=21.42 peak=21.42 max=61.76 swr=-60.0000 "
+        peer->write("S233|status fwd=21.42 peak=21.42 max=62.43 swr=-60.0000 "
                     "pttA=0 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
                     "bypassA=0 bypassRxA=0 antA=0 "
                     "pttB=0 bandB=0 modeB=0 flexB=FLEX-8600 freqB=0.000 "
@@ -208,7 +213,7 @@ int main(int argc, char** argv)
 
     // Keying on the direct path drives the lamps without the radio relaying it.
     QSignalSpy ptt(&model, &TunerModel::pttChanged);
-    peer->write("S231|status fwd=36.88 peak=36.88 max=61.76 swr=-60.0000 "
+    peer->write("S231|status fwd=36.88 peak=36.88 max=62.43 swr=-60.0000 "
                 "pttA=1 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
                 "bypassA=0 bypassRxA=0 antA=0 "
                 "pttB=0 bandB=0 modeB=0 flexB=FLEX-8600 freqB=0.000 "
@@ -223,7 +228,7 @@ int main(int argc, char** argv)
     // An unchanged status does not re-announce: the tuner polls ~20x a second
     // and a repaint per poll is a repaint per poll forever.
     const int settled = ports.count();
-    peer->write("S232|status fwd=36.88 peak=36.88 max=61.76 swr=-60.0000 "
+    peer->write("S232|status fwd=36.88 peak=36.88 max=62.43 swr=-60.0000 "
                 "pttA=1 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
                 "bypassA=0 bypassRxA=0 antA=0 "
                 "pttB=0 bandB=0 modeB=0 flexB=FLEX-8600 freqB=0.000 "

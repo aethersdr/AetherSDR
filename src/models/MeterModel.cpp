@@ -86,6 +86,9 @@ void MeterModel::setTgxlHandle(quint32 handle)
     m_lastTgxlSwrUpdateMs = 0;
     m_ampFwdPwrIdx = -1;
     m_ampSwrIdx = -1;
+    m_ampDrvIdx = -1;
+    m_ampDrv = 0.0f;
+    m_hasAmpDrvValue = false;
     m_ampTempIdx = -1;
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const auto& def = *it;
@@ -99,6 +102,13 @@ void MeterModel::setTgxlHandle(quint32 handle)
                 m_tgxlSwrIdx = def.index;
             else
                 m_ampSwrIdx = def.index;
+        } else if (def.source == "AMP" && def.name == "DRV" && def.unit == "dBm") {
+            // Handle-matched like FWD and RL even though only the PGXL
+            // publishes DRV today: the routing rule is "which device is this
+            // meter about", and answering it per-name would put a tuner's
+            // drive meter on the amplifier's panel the day one appears.
+            if (handle == 0 || def.sourceIndex != static_cast<int>(handle))
+                m_ampDrvIdx = def.index;
         } else if (def.source == "AMP" && def.name == "TEMP") {
             m_ampTempIdx = def.index;
         }
@@ -211,6 +221,12 @@ void MeterModel::defineMeter(const MeterDef& def)
         else
             m_ampSwrIdx = def.index;
     }
+    else if (def.source == "AMP" && def.name == "DRV" && def.unit == "dBm") {
+        // Exciter power measured at the amplifier's input. See setTgxlHandle
+        // for why this is handle-matched rather than name-matched.
+        if (m_tgxlHandle == 0 || def.sourceIndex != static_cast<int>(m_tgxlHandle))
+            m_ampDrvIdx = def.index;
+    }
     else if (def.source == "AMP" && def.name == "TEMP")
         m_ampTempIdx = def.index;
 
@@ -311,6 +327,11 @@ void MeterModel::removeMeter(int index)
     }
     if (index == m_ampFwdPwrIdx) m_ampFwdPwrIdx = -1;
     if (index == m_ampSwrIdx)    m_ampSwrIdx = -1;
+    if (index == m_ampDrvIdx) {
+        m_ampDrvIdx = -1;
+        m_ampDrv = 0.0f;
+        m_hasAmpDrvValue = false;
+    }
     if (index == m_ampTempIdx)   m_ampTempIdx = -1;
     if (index == m_tgxlFwdIdx) {
         m_tgxlFwdIdx = -1;
@@ -418,6 +439,7 @@ void MeterModel::clear()
     m_hasSupplyVoltsValue = false;
     m_ampFwdPwrIdx = -1;
     m_ampSwrIdx = -1;
+    m_ampDrvIdx = -1;
     m_ampTempIdx = -1;
     m_tgxlFwdIdx = -1;
     m_tgxlSwrIdx = -1;
@@ -450,6 +472,8 @@ void MeterModel::clear()
     m_supplyVolts = 0.0f;
     m_ampFwdPwr = 0.0f;
     m_ampSwr = 1.0f;
+    m_ampDrv = 0.0f;
+    m_hasAmpDrvValue = false;
     m_ampTemp = 0.0f;
     emit metersCleared();
 }
@@ -959,6 +983,10 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             float rho = std::pow(10.0f, -v / 20.0f);
             m_ampSwr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
             ampChanged = true;
+        } else if (idx == m_ampDrvIdx) {
+            m_ampDrv = std::pow(10.0f, v / 10.0f) / 1000.0f;  // dBm → watts
+            m_hasAmpDrvValue = true;
+            ampChanged = true;
         } else if (idx == m_ampTempIdx) {
             m_ampTemp = v;
             ampChanged = true;
@@ -1036,7 +1064,9 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
     if (hwChanged)
         emit hwTelemetryChanged(m_paTemp, m_supplyVolts);
     if (ampChanged)
-        emit ampMetersChanged(m_ampFwdPwr, m_ampSwr, m_ampTemp);
+        emit ampMetersChanged(m_ampFwdPwr, m_ampSwr, m_ampTemp,
+                              m_hasAmpDrvValue ? m_ampDrv : 0.0f,
+                              m_hasAmpDrvValue);
     if (tgxlChanged)
         emit tgxlMetersChanged(m_tgxlFwdPwr, m_tgxlSwr);
 }
