@@ -348,6 +348,87 @@ void testSwrBarFollowsThePowerCrossing()
            QString::number(gaugeValue(applet, swr)));
 }
 
+// MEffA wears three states and the operator controls one bit of them. A plain
+// on/off control would be wrong in the middle state: enabling the algorithm
+// while the PA is in class AAB — which is where SSB and AM put it — reports
+// STANDBY, and showing that as "off" tells the operator their setting did not
+// take.
+void testMeffaShowsThreeStates()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* btn = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+    report("MEffA control exists", btn != nullptr);
+    if (!btn) return;
+
+    // Nothing before the amplifier has reported a state.
+    report("MEffA control is hidden until the amplifier reports",
+           !btn->isVisible());
+
+    applet.setMeffa(QStringLiteral("OFF"), true);
+    report("OFF reads as disabled",
+           btn->accessibleName() == QStringLiteral("MEffA off"),
+           btn->accessibleName());
+
+    applet.setMeffa(QStringLiteral("STANDBY"), true);
+    report("STANDBY reads as enabled-but-idle, not as off",
+           btn->accessibleName() == QStringLiteral("MEffA on — idle in class AAB"),
+           btn->accessibleName());
+
+    applet.setMeffa(QStringLiteral("ACTIVE"), true);
+    report("ACTIVE reads as optimising",
+           btn->accessibleName() == QStringLiteral("MEffA on — optimising"),
+           btn->accessibleName());
+}
+
+// The toggle carries the operator's bit, never the reported word: from STANDBY
+// — which is ENABLED — a press must ask to turn it OFF, not on.
+void testMeffaToggleSendsTheOperatorsBit()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* btn = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+    if (!btn) { report("MEffA toggle bit", false); return; }
+    QSignalSpy toggled(&applet, &AmpApplet::meffaToggled);
+
+    applet.setMeffa(QStringLiteral("OFF"), true);
+    btn->click();
+    report("pressing while OFF asks to enable",
+           toggled.count() == 1 && toggled.last().at(0).toBool());
+
+    applet.setMeffa(QStringLiteral("STANDBY"), true);
+    btn->click();
+    report("pressing while STANDBY asks to DISABLE, because STANDBY is enabled",
+           toggled.count() == 2 && !toggled.last().at(0).toBool());
+
+    applet.setMeffa(QStringLiteral("ACTIVE"), true);
+    btn->click();
+    report("pressing while ACTIVE asks to disable",
+           toggled.count() == 3 && !toggled.last().at(0).toBool());
+}
+
+// A write needs the whole `setup` group, which is not known until the
+// amplifier has answered `setup read`. Until then the control is visible but
+// inert — a control that cannot complete is worse than one that visibly
+// cannot be pressed yet.
+void testMeffaIsInertUntilTheSetupGroupIsKnown()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* btn = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+    if (!btn) { report("MEffA inert gate", false); return; }
+    QSignalSpy toggled(&applet, &AmpApplet::meffaToggled);
+
+    applet.setMeffa(QStringLiteral("STANDBY"), false);
+    report("control is disabled while the setup group is unknown",
+           !btn->isEnabled());
+    btn->click();
+    report("a press while inert commands nothing", toggled.count() == 0);
+
+    applet.setMeffa(QStringLiteral("STANDBY"), true);
+    report("control becomes live once the group is known", btn->isEnabled());
+}
+
 void testReadoutWidthIsStable()
 {
     resetSettings();
@@ -463,6 +544,9 @@ int main(int argc, char** argv)
     testRelayedMetersWinOverTheDeviceWhileFresh();
     testDeviceMetersDriveTheGaugesWithoutARelay();
     testSwrBarFollowsThePowerCrossing();
+    testMeffaShowsThreeStates();
+    testMeffaToggleSendsTheOperatorsBit();
+    testMeffaIsInertUntilTheSetupGroupIsKnown();
 
     std::printf("\n%s\n",
                 g_failed == 0

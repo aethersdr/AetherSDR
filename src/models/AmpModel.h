@@ -70,6 +70,48 @@ public:
     // since `state` only distinguishes the two once RF is already flowing.
     QString outputForAntenna(const QString& antenna) const;
 
+    // The Maximum Efficiency Algorithm's reported state, upper-cased, or empty
+    // before the amplifier has reported one.
+    //
+    // THREE states, not two (Power Genius XL User Guide §9.4). The operator
+    // controls one bit — enabled or not — but what the amplifier reports also
+    // depends on the PA bias class, which follows the modulation mode:
+    //
+    //   OFF     — disabled.
+    //   STANDBY — enabled, but the PA is in class AAB (SSB, AM, PSK), where
+    //             MEffA does not apply. Not a fault and not a failure to
+    //             engage: §4.3.1, "MEffA is not available in this class".
+    //   ACTIVE  — enabled and optimising, in class AB.
+    //
+    // So a control that presents this as a plain on/off toggle lies whenever
+    // the operator enables it on SSB and it reports STANDBY.
+    QString meffa() const { return m_meffa; }
+    bool hasMeffa() const { return !m_meffa.isEmpty(); }
+    bool meffaEnabled() const { return hasMeffa() && m_meffa != QLatin1String("OFF"); }
+    // True once the whole `setup` write group is known, which is what a write
+    // needs. Until then the control cannot be operated without risking the
+    // four values it would have to send back.
+    bool canWriteSetup() const { return m_haveSetupGroup && hasMeffa(); }
+
+    // Enable or disable MEffA. Volatile by design, exactly like the vendor
+    // utility's indicator: §9.4, "the change is not recorded in the
+    // amplifier's configuration memory". Persisting it takes a separate
+    // `save`, which this deliberately does not send — a panel toggle should
+    // not rewrite the amplifier's stored configuration.
+    void setMeffaEnabled(bool on);
+    // Same group write, for the fan mode.
+    void setFanMode(const QString& mode);
+
+    void applySetupGroup(const QMap<QString, QString>& kvs);
+
+private:
+    // Sends the whole `setup` group with these two values substituted. One
+    // place, so a fan-mode change and a MEffA change cannot disagree about
+    // what a write looks like.
+    void writeSetupGroup(const QString& meffa, const QString& fanMode);
+
+public:
+
     // Direct PGXL connection (port 9008) — telemetry only, no commands.
     void setDirectConnection(PgxlConnection* conn);
 
@@ -111,6 +153,9 @@ signals:
     // i.e. 30 W out of an amplifier that was not transmitting. Peak-hold that
     // releases belongs to the gauge, which has a timer for it.
     void directMetersChanged(float fwdWatts, float swr);
+    // The Maximum Efficiency Algorithm's reported state: ACTIVE, STANDBY or
+    // OFF. Empty until the amplifier has reported one. See meffa().
+    void meffaChanged(const QString& state);
 
 private:
     bool    m_present{false};
@@ -124,6 +169,20 @@ private:
     AmpPortInfo m_portB;
     float       m_directFwdWatts{0.0f};
     float       m_directSwr{1.0f};
+
+    // The `setup` write group, exactly as the vendor utility sends it:
+    //   setup nickname=<n> meffa=<m> ledintens=<i> fanmode=<f> authcode=<a>
+    //
+    // A write carries ALL FIVE. nickname, ledintens and authcode come from
+    // `setup read`; meffa and fanmode come from the status frame, which is the
+    // only place they appear — `setup read` does not report them. Changing one
+    // therefore means holding the other four, which is what these are for.
+    QString m_setupNickname;
+    QString m_setupLedIntens;
+    QString m_setupAuthCode;
+    bool    m_haveSetupGroup{false};
+    QString m_meffa;
+    QString m_fanMode;
     bool        m_havePortInfo{false};
     QMap<QString, QString> m_antennaOutputs;   // "ANT1" -> "PORTA"
     PgxlConnection* m_directConn{nullptr};

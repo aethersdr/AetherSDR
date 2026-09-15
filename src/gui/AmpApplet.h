@@ -71,6 +71,11 @@ public:
     void setMainsVoltage(int volts);
     void setState(const QString& state);
     void setFanMode(const QString& mode);  // STANDARD, CONTEST, BROADCAST
+    // The Maximum Efficiency Algorithm's reported state — ACTIVE, STANDBY or
+    // OFF — or empty when the amplifier has not reported one. `settable` is
+    // false until the whole `setup` write group is known, which is what a
+    // write needs; the control is shown but inert until then.
+    void setMeffa(const QString& state, bool settable);
     void setMeff(const QString& meff);
     void setDirectConnected(bool direct);
 
@@ -94,6 +99,10 @@ public:
 signals:
     void operateToggled(bool on);
     void fanModeChanged(const QString& mode);  // uppercase, ready for sendCommand
+    // The operator asked to enable or disable MEffA. Only ever the one bit:
+    // whether the amplifier then reports ACTIVE or STANDBY is its own call,
+    // decided by the PA bias class. See AmpModel::meffa().
+    void meffaToggled(bool enabled);
 
 protected:
     // Keeps the alert overlay covering the applet as it resizes.
@@ -132,6 +141,9 @@ private:
     // Same for the two fan controls — the rail's pull-down and the panel's
     // one-letter key are two faces of one mode.
     void applyFanControls();
+    // MEffA wears three states and the operator controls one bit of them, so
+    // one place decides what both controls say and how each is lit.
+    void applyMeffaControls();
 
     void updatePortRows();
     void applyPortInfo(AccessoryPortRow* row, const AmpPortInfo& info);
@@ -239,6 +251,14 @@ private:
     // a single glyph has nothing for the extra width to hold, and exactly as
     // tall as the key beside it.
     PanelKey*    m_fanKey{nullptr};
+    // MEffA: the rail's button and the panel's key, two faces of one control.
+    // Placed beside the fan controls because it is the same kind of thing — a
+    // run-time mode the amplifier holds until it is told otherwise, not a
+    // stored setting (see AmpModel::setMeffaEnabled on why no `save` follows).
+    QPushButton* m_meffaBtn{nullptr};
+    PanelKey*    m_meffaKey{nullptr};
+    QString      m_meffaState;
+    bool         m_meffaSettable{false};
     // The widest caption's natural width at scale 1.0, measured once before
     // the key has been given a fixed size — deriving it from the laid-out row
     // instead is a one-way ratchet.

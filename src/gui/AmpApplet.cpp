@@ -117,6 +117,21 @@ constexpr const char* kPanelKeyIdleStyle =
     "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
     "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
     "QPushButton:hover { background: {{color.background.1}}; }";
+// MEffA lit and optimising. The vendor's indicator turns red for this; red on
+// this panel already means a fault, so the amplifier's own "working" green is
+// used and the dimmed state below carries the distinction instead.
+constexpr const char* kPanelKeyMeffaActiveStyle =
+    "QPushButton { background: #006030; border: 1px solid #008040; "
+    "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
+    "QPushButton:hover { background: #007040; }";
+// MEffA enabled but inapplicable — the PA is in class AAB, where the algorithm
+// does not apply (§4.3.1). The vendor dims its indicator for exactly this and
+// so does this: outlined, not filled, because the operator HAS enabled it and
+// nothing is wrong.
+constexpr const char* kPanelKeyMeffaStandbyStyle =
+    "QPushButton { background: transparent; border: 1px solid #008040; "
+    "border-radius: 3px; color: #008040; font-weight: bold; }"
+    "QPushButton:hover { background: {{color.background.1}}; }";
 constexpr const char* kPanelKeyStandbyStyle =
     "QPushButton { background: {{color.accessory.key.standby.background}}; "
     "border: 1px solid {{color.accessory.key.standby.foreground}}; border-radius: 3px; "
@@ -363,6 +378,7 @@ void AmpApplet::buildUI()
         // — which the scale sets — instead of stretching it to fill the cell.
         // The standby banner replaces the strips beside them, never the keys:
         // pressing STBY is how the amplifier comes back out of standby.
+        portRow->addWidget(m_meffaKey, 0, Qt::AlignCenter);
         portRow->addWidget(m_fanKey, 0, Qt::AlignCenter);
         portRow->addWidget(m_stbyKey, 0, Qt::AlignCenter);
 
@@ -453,6 +469,17 @@ void AmpApplet::buildUI()
         applyFanControls();
         emit fanModeChanged(m_fanMode);
     });
+    m_meffaBtn = new QPushButton(QStringLiteral("MEffA"), this);
+    m_meffaBtn->setObjectName(QStringLiteral("ampMeffaButton"));
+    m_meffaBtn->setFocusPolicy(Qt::TabFocus);
+    m_meffaBtn->setCursor(Qt::PointingHandCursor);
+    m_meffaBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    m_meffaBtn->hide();
+    connect(m_meffaBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_meffaSettable) return;
+        emit meffaToggled(m_meffaState == QLatin1String("OFF"));
+    });
+    btnRow->addWidget(m_meffaBtn);
     btnRow->addWidget(m_fanCombo);
 
     m_operateBtn = new QPushButton("OPERATE");
@@ -563,6 +590,16 @@ void AmpApplet::buildExpandedUI()
         m_fanCombo->setCurrentIndex((m_fanCombo->currentIndex() + 1) % m_fanCombo->count());
     });
 
+    // "ME" rather than "MEffA": one key's width, and the tooltip carries the
+    // full name and the state it is actually in.
+    m_meffaKey = new PanelKey(QStringLiteral("ME"), this);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_meffaKey, kPanelKeyIdleStyle);
+    m_meffaKey->hide();
+    connect(m_meffaKey, &QPushButton::clicked, this, [this]() {
+        if (!m_meffaSettable) return;
+        emit meffaToggled(m_meffaState == QLatin1String("OFF"));
+    });
+
     m_stbyKey = new PanelKey(tr("STBY"), this);
     m_stbyKey->setToolTip(tr("Toggle standby — the amplifier drops out of circuit"));
     m_stbyKey->setAccessibleName(tr("STBY"));
@@ -593,12 +630,23 @@ void AmpApplet::setAmpModel(AmpModel* model)
     connect(m_model, &AmpModel::antennaMapChanged, this, &AmpApplet::updateActivePort);
     connect(m_model, &AmpModel::ampStateChanged, this, &AmpApplet::setState);
     connect(m_model, &AmpModel::alertChanged, this, &AmpApplet::setAlertText);
+    // MEffA rides the model rather than the wiring layer, like every other
+    // amplifier-owned state on this panel. The model is also what a write has
+    // to go through — a `setup` write carries the whole configuration group
+    // and only the model holds the rest of it — so both directions live here
+    // and the applet needs no help from MainWindow to operate the control.
+    connect(m_model, &AmpModel::meffaChanged, this, [this](const QString& state) {
+        setMeffa(state, m_model->canWriteSetup());
+    });
+    connect(this, &AmpApplet::meffaToggled, m_model, &AmpModel::setMeffaEnabled);
+    connect(this, &AmpApplet::fanModeChanged, m_model, &AmpModel::setFanMode);
     // Seed from what the model already holds. The applet is attached after
     // the connection is wired, so anything that arrived in between — an
     // alert standing when the applet was built, the first state word — would
     // otherwise be missed until the device happened to send it again.
     if (!m_model->stateText().isEmpty()) setState(m_model->stateText());
     setAlertText(m_model->alert());
+    setMeffa(m_model->meffa(), m_model->canWriteSetup());
     updatePortRows();
 }
 
@@ -703,6 +751,7 @@ void AmpApplet::applyDensityAtScale(qreal scale)
     }
     m_swrGauge->setTrackGradient(swrStops);
 
+    applyMeffaControls();
     applyTelemetryLayout();
     m_telemetryGrid->setHorizontalSpacing(f ? px(14) : 0);
     applyTelemetryStyles(s);
@@ -739,6 +788,11 @@ void AmpApplet::applyDensityAtScale(qreal scale)
     QFont fanFont = m_fanKey->font();
     fanFont.setPixelSize(px(kFanKeyFontDesignPx));
     m_fanKey->setFont(fanFont);
+    // Two glyphs, so it takes the caption face rather than the fan key's
+    // single-glyph one.
+    QFont meffaFont = m_meffaKey->font();
+    meffaFont.setPixelSize(px(kKeyFontDesignPx));
+    m_meffaKey->setFont(meffaFont);
     applyKeySize(f ? s : 1.0);
 
     // Only one of each pair is ever up, and neither is shown before the
@@ -817,6 +871,9 @@ void AmpApplet::applyKeySize(qreal scale)
     // 1:1. The letterbox width exists to hold a word; this key holds a letter,
     // and a square reads as the toggle it is rather than as a second STBY.
     m_fanKey->setTargetSize(QSize(h, h));
+    // "ME" is a caption, not a glyph, so it takes the letterbox the standby
+    // key takes — the two read as peers, which is what they are.
+    m_meffaKey->setTargetSize(panelKeySize(h, m_keySeedWidth, scale));
 }
 
 void AmpApplet::applyTelemetryStyles(qreal scale)
@@ -1229,6 +1286,71 @@ void AmpApplet::applyFanControls()
     // presentation. Neither before the amplifier has reported a mode.
     m_fanCombo->setVisible(m_haveFanMode && !m_floating);
     m_fanKey->setVisible(m_haveFanMode && m_floating);
+}
+
+void AmpApplet::setMeffa(const QString& state, bool settable)
+{
+    const QString word = state.trimmed().toUpper();
+    if (m_meffaState == word && m_meffaSettable == settable) return;
+    m_meffaState = word;
+    m_meffaSettable = settable;
+    applyMeffaControls();
+}
+
+void AmpApplet::applyMeffaControls()
+{
+    if (!m_meffaBtn || !m_meffaKey) return;
+    auto& theme = AetherSDR::ThemeManager::instance();
+
+    // Three states, one operator-controlled bit. OFF is disabled; ACTIVE is
+    // enabled and optimising; STANDBY is enabled but inapplicable because the
+    // PA is in class AAB, which is where SSB and AM put it. Presenting STANDBY
+    // as "off" would tell an operator their setting had not taken, and
+    // presenting it as "on" would claim the algorithm is doing something.
+    const bool off     = (m_meffaState == QLatin1String("OFF"));
+    const bool standby = (m_meffaState == QLatin1String("STANDBY"));
+    const bool active  = (m_meffaState == QLatin1String("ACTIVE"));
+
+    const QString caption =
+        off     ? tr("MEffA off")
+        : standby ? tr("MEffA on — idle in class AAB")
+        : active  ? tr("MEffA on — optimising")
+                  : tr("MEffA");
+    const QString description =
+        off     ? tr("Maximum Efficiency Algorithm is disabled. Activates it.")
+        : standby ? tr("Maximum Efficiency Algorithm is enabled but does not "
+                       "apply in class AAB, which SSB and AM use. Disables it.")
+        : active  ? tr("Maximum Efficiency Algorithm is optimising the "
+                       "amplifier. Disables it.")
+                  : tr("Maximum Efficiency Algorithm state is not known yet.");
+
+    const char* style = active  ? kPanelKeyMeffaActiveStyle
+                      : standby ? kPanelKeyMeffaStandbyStyle
+                                : kPanelKeyIdleStyle;
+    theme.applyStyleSheet(m_meffaKey, style);
+    theme.applyStyleSheet(m_meffaBtn, style);
+
+    for (QWidget* w : {static_cast<QWidget*>(m_meffaKey),
+                       static_cast<QWidget*>(m_meffaBtn)}) {
+        w->setToolTip(caption);
+        w->setAccessibleName(caption);
+        w->setAccessibleDescription(description);
+        // Shown but inert until the whole `setup` group is known: a write has
+        // to send four other values back, and pressing a control that cannot
+        // complete is worse than one that visibly cannot be pressed yet.
+        w->setEnabled(m_meffaSettable);
+    }
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(m_meffaKey, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
+
+    // Nothing before the amplifier has reported a state, on the same rule the
+    // fan controls follow: a control that cannot say what it is set to is
+    // worse than none.
+    const bool known = !m_meffaState.isEmpty();
+    m_meffaBtn->setVisible(known && !m_floating);
+    m_meffaKey->setVisible(known && m_floating);
 }
 
 void AmpApplet::setState(const QString& state)

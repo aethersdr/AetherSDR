@@ -40,6 +40,9 @@ void AmpModel::setDirectConnection(PgxlConnection* conn)
     connect(m_directConn, &PgxlConnection::statusUpdated, this,
             [this](const QMap<QString, QString>& kvs) { applyDirectStatus(kvs); });
 
+    connect(m_directConn, &PgxlConnection::setupRead, this,
+            [this](const QMap<QString, QString>& kvs) { applySetupGroup(kvs); });
+
     connect(m_directConn, &PgxlConnection::alertChanged, this,
             [this](const QString& text) {
         if (m_alert == text) return;
@@ -58,6 +61,18 @@ void AmpModel::setDirectConnection(PgxlConnection* conn)
         m_directFwdWatts = 0.0f;
         m_directSwr = 1.0f;
         emit directMetersChanged(m_directFwdWatts, m_directSwr);
+        // The setup group is only knowable over this link, and writing it back
+        // is only safe while the four values we would have to resend are
+        // current. Both go with the connection.
+        m_haveSetupGroup = false;
+        m_setupNickname.clear();
+        m_setupLedIntens.clear();
+        m_setupAuthCode.clear();
+        m_fanMode.clear();
+        if (!m_meffa.isEmpty()) {
+            m_meffa.clear();
+            emit meffaChanged(m_meffa);
+        }
         if (!m_alert.isEmpty()) {
             m_alert.clear();
             emit alertChanged(m_alert);
@@ -129,6 +144,21 @@ void AmpModel::applyDirectStatus(const QMap<QString, QString>& kvs)
     // meter, and suppressing the repeat is what freezes a gauge (#1530).
     if (meters) emit directMetersChanged(m_directFwdWatts, m_directSwr);
 
+    // meffa and fanmode appear ONLY here, never in the `setup read` reply, and
+    // a `setup` write has to send them back. Held for that, and for the panel.
+    // Gated on change, unlike the meters: these are states, not measurements,
+    // and re-announcing one on every poll is a repaint per poll forever.
+    if (kvs.contains(QStringLiteral("fanmode"))) {
+        m_fanMode = kvs.value(QStringLiteral("fanmode")).trimmed().toUpper();
+    }
+    if (kvs.contains(QStringLiteral("meffa"))) {
+        const QString meffa = kvs.value(QStringLiteral("meffa")).trimmed().toUpper();
+        if (m_meffa != meffa) {
+            m_meffa = meffa;
+            emit meffaChanged(m_meffa);
+        }
+    }
+
     if (!kvs.contains(QStringLiteral("bandA")) && !kvs.contains(QStringLiteral("bandB"))) {
         return;   // an info or partial frame, not the per-port block
     }
@@ -154,6 +184,69 @@ void AmpModel::applyDirectStatus(const QMap<QString, QString>& kvs)
         m_havePortInfo = true;
         emit portsChanged();
     }
+}
+
+void AmpModel::applySetupGroup(const QMap<QString, QString>& kvs)
+{
+    // The reply to `setup read`. It carries ledintens, txdelay,
+    // inactivity-timeout, nickname and authcode — note that meffa and fanmode
+    // are NOT among them, which is why those two are taken off the status
+    // frame instead.
+    m_setupNickname  = kvs.value(QStringLiteral("nickname"));
+    m_setupLedIntens = kvs.value(QStringLiteral("ledintens"));
+    // Present but empty on an amplifier with no auth configured, and empty is
+    // the value to send back — value() returning a default here is correct.
+    m_setupAuthCode  = kvs.value(QStringLiteral("authcode"));
+    const bool becameWritable = !m_haveSetupGroup;
+    m_haveSetupGroup = true;
+    // Re-announce MEffA. Its VALUE has not moved, but whether it can be
+    // operated has — canWriteSetup() is false until this reply lands, and the
+    // control that reads it has no other signal to learn that from.
+    if (becameWritable && !m_meffa.isEmpty()) emit meffaChanged(m_meffa);
+}
+
+void AmpModel::writeSetupGroup(const QString& meffa, const QString& fanMode)
+{
+    if (!m_directConn || !m_directConn->isConnected()) return;
+    if (!m_haveSetupGroup) return;   // see canWriteSetup()
+
+    // Byte-for-byte the shape the vendor utility sends, captured off the wire:
+    //
+    //   setup nickname=PowerGeniusXL meffa=OFF ledintens=141 fanmode=STANDARD authcode=
+    //
+    // ALL FIVE KEYS, EVERY TIME, in this order. A `setup` that names only the
+    // key being changed is not how the amplifier is ever written to by its own
+    // utility, and the four omitted values are real configuration — a nickname
+    // and an LED intensity the operator set, and the auth code. Sending the
+    // group back unchanged is what makes a one-field change a one-field
+    // change.
+    //
+    // No `save` follows. That is deliberate and it is what the vendor does for
+    // the front-panel indicator: §9.4, "the change is not recorded in the
+    // amplifier's configuration memory. To make the MEffA mode change
+    // permanent, use the Save button on the Configuration screen." A panel
+    // toggle is a run-time choice, not an edit to the amplifier's stored
+    // configuration.
+    m_directConn->sendCommand(
+        QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4 authcode=%5")
+            .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode, m_setupAuthCode));
+}
+
+void AmpModel::setMeffaEnabled(bool on)
+{
+    if (!canWriteSetup()) return;
+    // OFF is the disable value; ON is not a value the amplifier uses. Enabling
+    // asks for ACTIVE, and the amplifier answers with ACTIVE or STANDBY
+    // depending on the PA bias class — which is its call, not ours. See
+    // meffa().
+    writeSetupGroup(on ? QStringLiteral("ACTIVE") : QStringLiteral("OFF"),
+                    m_fanMode);
+}
+
+void AmpModel::setFanMode(const QString& mode)
+{
+    if (!canWriteSetup()) return;
+    writeSetupGroup(m_meffa, mode.trimmed().toUpper());
 }
 
 void AmpModel::applyChanges(const AmpDelta& d)

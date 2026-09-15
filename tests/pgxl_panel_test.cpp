@@ -392,7 +392,10 @@ int main(int argc, char** argv)
     {
         PanelKey* key = nullptr;
         for (PanelKey* k : applet.findChildren<PanelKey*>()) {
-            if (!k->accessibleName().contains(QStringLiteral("Fan"))) key = k;
+            // By name, not by "whichever is not the fan key": the panel
+            // carries a third key now (MEffA) and a fourth would silently
+            // become the one this picked up.
+            if (k->accessibleName().contains(QStringLiteral("STBY"))) key = k;
         }
         QPushButton* rail = nullptr;
         for (QPushButton* b : applet.findChildren<QPushButton*>()) {
@@ -463,7 +466,10 @@ int main(int argc, char** argv)
         // for a moment ago, from the same press.
         PanelKey* key = nullptr;
         for (PanelKey* k : applet.findChildren<PanelKey*>()) {
-            if (!k->accessibleName().contains(QStringLiteral("Fan"))) key = k;
+            // By name, not by "whichever is not the fan key": the panel
+            // carries a third key now (MEffA) and a fourth would silently
+            // become the one this picked up.
+            if (k->accessibleName().contains(QStringLiteral("STBY"))) key = k;
         }
         CHECK(key != nullptr);
         if (key) {
@@ -549,7 +555,10 @@ int main(int argc, char** argv)
     {
         PanelKey* key = nullptr;
         for (PanelKey* k : applet.findChildren<PanelKey*>()) {
-            if (!k->accessibleName().contains(QStringLiteral("Fan"))) key = k;
+            // By name, not by "whichever is not the fan key": the panel
+            // carries a third key now (MEffA) and a fourth would silently
+            // become the one this picked up.
+            if (k->accessibleName().contains(QStringLiteral("STBY"))) key = k;
         }
         CHECK(key != nullptr);
         if (key) {
