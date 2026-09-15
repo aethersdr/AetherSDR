@@ -2068,6 +2068,16 @@ target_include_directories(firmware_uploader_test PRIVATE src)
 target_link_libraries(firmware_uploader_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME firmware_uploader_test COMMAND firmware_uploader_test)
 
+# #5665 — stale DVK command/socket/timer callbacks must not settle a restart.
+# Inert QTcpSocket objects inject the production handlers; no listener or radio
+# peer is used.
+add_executable(dvk_wav_transfer_generation_test
+    tests/dvk_wav_transfer_generation_test.cpp
+)
+target_include_directories(dvk_wav_transfer_generation_test PRIVATE src)
+target_link_libraries(dvk_wav_transfer_generation_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME dvk_wav_transfer_generation_test COMMAND dvk_wav_transfer_generation_test)
+
 # Local Qt dialog + injected uploader callbacks; no radio connection or peer.
 add_executable(firmware_close_dialog_test
     tests/firmware_close_dialog_test.cpp
