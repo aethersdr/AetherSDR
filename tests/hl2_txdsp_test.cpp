@@ -589,6 +589,56 @@ int main(int argc, char** argv)
                   "an over-level client is limited cleanly, with no clipping "
                   "distortion on the wire");
         }
+
+        // AND THE TOP OF THE SLIDER, measured over the WHOLE RUN.
+        //
+        // The case above is a settled-state measurement by construction:
+        // settledTail() drops the first half, which is the entire key-on
+        // window. That was sound while the slider stopped at +20 dB — at 10x a
+        // full-scale source peaks inside the clamp even on the first block, so
+        // there was nothing in the excluded half to see. The widening to +40 dB
+        // ended that: reset() leaves the ALC at unity and the loop has to come
+        // DOWN 40 dB, which on a 5 ms attack and a 5 ms block takes ~17 ms —
+        // seventeen milliseconds of flat-topped modulator input at the start of
+        // EVERY over, on every path, reported by no meter because TX:ALC is
+        // measured after the clamp.
+        //
+        // So this leg asserts on the whole run rather than the tail, and it is
+        // the key-on seed in processAudioBlock that makes it pass. Reverting
+        // that seed to the old `m_alcGain += a * (target - m_alcGain)` fails
+        // this check and no other in the file, which is what makes it a guard
+        // rather than a restatement.
+        const double kSliderTopGain = micSliderToLinear(100);   // 100x, +40 dB
+        const auto slam = modulate(WdspChannel::Mode::Usb, kHarmTone, 1.0,
+                                   kSliderTopGain, 1.5, nullptr, true, nullptr,
+                                   /*clientLeveled=*/true);
+        if (!slam.empty()) {
+            double mx = 0.0;
+            std::size_t atClamp = 0;
+            for (const auto& v : slam) {
+                const double m = std::abs(v);
+                mx = std::max(mx, m);
+                if (m >= 0.999)
+                    ++atClamp;
+            }
+            // Derived from the run itself (1.5 s above) rather than from a
+            // named rate, so the figure stays honest if the modulator's
+            // upsample factor ever changes underneath it.
+            const double msAtClamp = 1500.0 * static_cast<double>(atClamp)
+                                   / static_cast<double>(slam.size());
+            std::fprintf(stderr,
+                         "slider top: %.0fx full-scale, whole-run |IQ| peak "
+                         "%.4f, %zu samples at the clamp (%.1f ms)\n",
+                         kSliderTopGain, mx, atClamp, msAtClamp);
+            check(mx < 0.999,
+                  "the slider at 100 on a full-scale source never reaches the "
+                  "modulator's clamp, key-on window included");
+            check(crest(slam) < 1.05,
+                  "and puts no clipping distortion on the wire at any point in "
+                  "the over");
+            check(mx > 0.5,
+                  "the transmission is still on the air (case is real)");
+        }
     }
 
     // ── #4796 review: the reduction half must RELEASE — it may not latch ────

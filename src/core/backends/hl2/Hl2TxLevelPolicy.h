@@ -77,8 +77,21 @@ namespace AetherSDR::hl2 {
 // (-18 dB) is a real -18 dB. It stops being straight only where it has to:
 // drive a full-scale source through the top of this slider's +40 dB and the ALC
 // limits, rather than letting the modulator's hard clamp flat-top it, so the
-// last stretch of travel buys reduced headroom rather than more power. At 0
-// nothing transmits, as a plain 0.0x multiply on every path. That is the honest
+// last stretch of travel buys reduced headroom rather than more power.
+//
+// THAT LAST SENTENCE IS TRUE ONLY BECAUSE OF THE KEY-ON SEED, and it is worth
+// saying which mechanism holds it up. The ALC reduces on a 5 ms attack from
+// wherever it starts, and reset() starts it at unity on every unkey. A loop
+// ramping down from unity does not reach 0.01 within a block, so at 100x the
+// clamp WOULD be reached first and would flat-top the first ~17 ms of every
+// over — measured at |IQ| 1.5391 with 800 clipped samples, on the mic path and
+// the TCI/DAX one alike. Hl2TxDsp seeds the gain at its target on the first
+// block carrying signal instead of ramping to it, which is what keeps the
+// widening inside the modulator's headroom. hl2_txdsp_test's slider-top case
+// asserts it over the WHOLE run rather than the settled tail, because the
+// settled tail is precisely the half that cannot see this.
+//
+// At 0 nothing transmits, as a plain 0.0x multiply on every path. That is the honest
 // reading of a slider at the bottom of its travel on a host modulator — there
 // is one modulator and it is off — but it is worth knowing before parking the
 // control at 0 between voice sessions.

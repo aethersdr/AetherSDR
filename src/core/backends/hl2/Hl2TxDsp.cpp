@@ -152,7 +152,12 @@ double Hl2TxDsp::alcGainDb() const noexcept
 
 void Hl2TxDsp::reset()
 {
-    m_alcGain = 1.0;   // a new transmission starts from unity, not mid-ramp
+    // A new transmission starts from unity, not mid-ramp — but it does not
+    // TRANSMIT at unity: the first block that carries signal seeds the loop at
+    // its own target rather than ramping down to it. Unity is the value the
+    // gain reports until then, and the value a silent key-up keeps.
+    m_alcGain = 1.0;
+    m_alcSeedPending = true;
     m_inBuffer.clear();
     std::fill(m_hist.begin(), m_hist.end(), 0.0f);
     m_histPos = 0;
@@ -258,18 +263,44 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
             const double wanted = m_config.alcTargetPeak / blockPeak;
             // The unity ceiling, and the whole of what this stage promises.
             const double target = std::min(wanted, 1.0);
-            // Per-block time constants. Attack when we need LESS gain (the
-            // signal got louder) so overshoot is corrected immediately;
-            // release, slowly, back toward unity when it does not. The split
-            // survives the ceiling — a limiter that releases as fast as it
-            // attacks pumps, and one that never releases latches.
             const double blockSec = static_cast<double>(consumed)
                                   / static_cast<double>(m_config.inputSampleRateHz);
-            const bool reducing = target < m_alcGain;
-            const double tau = reducing ? m_config.alcAttackSec
-                                        : m_config.alcReleaseSec;
-            const double a = 1.0 - std::exp(-blockSec / std::max(1e-6, tau));
-            m_alcGain += a * (target - m_alcGain);
+            if (m_alcSeedPending) {
+                // KEY-ON SEED. reset() leaves the gain at unity, so without
+                // this the loop has to attack DOWN from 1.0 at the start of
+                // every over, and one 5 ms block on a 5 ms attack closes only
+                // 63% of that distance. While the mic slider stopped at +20 dB
+                // that cost nothing measurable — the old maximum of 10x on a
+                // full-scale source still peaked inside the clamp. At +40 dB it
+                // stops being free: 100x needs the loop to travel 40 dB and the
+                // hard limit below is reached long before it arrives, so the
+                // first ~17 ms of the over leaves the modulator flat-topped,
+                // which is splatter rather than our own audio clipping.
+                //
+                // Jumping to `target` is not a shortcut around the time
+                // constants; it is what having no history means. There is
+                // nothing to smooth FROM on the first block, and `target` is
+                // already ceilinged at 1.0 above, so this can only ever seed
+                // downward — a quiet key-up seeds at unity, which is exactly
+                // where reset() had already put it.
+                //
+                // Deliberately keyed on the first block WITH SIGNAL rather than
+                // the first block at all: seeding on a silent lead-in would
+                // latch unity and hand the next block the ramp again.
+                m_alcGain = target;
+                m_alcSeedPending = false;
+            } else {
+                // Per-block time constants. Attack when we need LESS gain (the
+                // signal got louder) so overshoot is corrected immediately;
+                // release, slowly, back toward unity when it does not. The
+                // split survives the ceiling — a limiter that releases as fast
+                // as it attacks pumps, and one that never releases latches.
+                const bool reducing = target < m_alcGain;
+                const double tau = reducing ? m_config.alcAttackSec
+                                            : m_config.alcReleaseSec;
+                const double a = 1.0 - std::exp(-blockSec / std::max(1e-6, tau));
+                m_alcGain += a * (target - m_alcGain);
+            }
         }
     } else {
         // ALC configured off: unity, and the clamp below is then the only
