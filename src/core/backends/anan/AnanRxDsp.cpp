@@ -1,10 +1,13 @@
 #include "core/backends/anan/AnanRxDsp.h"
 
 #include <QDebug>
+#include <QLoggingCategory>
 #include <QMetaType>
 
 #include <algorithm>
 #include <cmath>
+
+Q_LOGGING_CATEGORY(lcAnanRxDsp, "aether.anan.rxdsp")
 
 namespace AetherSDR::anan {
 
@@ -19,7 +22,30 @@ AnanRxDsp::AnanRxDsp(QObject* parent) : QObject(parent)
     qRegisterMetaType<WdspChannel::Mode>("WdspChannel::Mode");
 }
 
-AnanRxDsp::~AnanRxDsp() = default;
+AnanRxDsp::~AnanRxDsp()
+{
+    // Same shape as Hl2RxDsp's destructor, and for the same reason: a channel
+    // destroyed while WDSP still thinks it is running makes
+    // WdspChannel::close() sit out WDSP's full 100 ms stop-and-flush timeout,
+    // because behind the control fence nothing is left calling fexchange* to
+    // satisfy it. Stopping here makes that SetChannelState a no-op.
+    // docs/HERMES.md §13 item 9b.
+    //
+    // No drain: nothing feeds this object after it is destroyed, so WDSP's mute
+    // ramp does not actually run. The saving is the skipped wait.
+    //
+    // CHECKED, not discarded. setRunning() goes through beginControlOperation(),
+    // which REFUSES rather than waits when a processIq() callback is in flight.
+    // It cannot be, here: this object is destroyed on the thread that drives
+    // processIq(). A false therefore reports that that assumption has stopped
+    // holding, which is worth a line in the log rather than a silent 100 ms.
+    if (m_channel && !m_channel->setRunning(false)) {
+        qCWarning(lcAnanRxDsp)
+            << "could not stop the WDSP channel before destroying it: a "
+               "processIq callback was in flight. Teardown will pay WDSP's "
+               "100 ms stop-and-flush timeout.";
+    }
+}
 
 bool AnanRxDsp::configure(const Config& config, std::string* error)
 {
@@ -174,6 +200,26 @@ void AnanRxDsp::installChannel(RebuildResult result)
     if (m_shiftHz != 0.0)
         result.channel->setShift(m_shiftHz);
 
+    // Stop the OUTGOING channel before the assignment below destroys it, so
+    // close() finds the state already 0 and skips WDSP's 100 ms stop-and-flush
+    // timeout. This runs on this object's own thread, which is also the thread
+    // that calls processIq(), so no block reaches the old channel between here
+    // and its destruction: the down-slew does NOT complete and this buys the
+    // skipped wait, nothing more.
+    //
+    // NOT moved up into beginRebuild(), where a stop WOULD drain — the old
+    // channel keeps processing for the whole background build, so samples are
+    // genuinely still flowing there. Stopping that early would trade the
+    // receive audio that the asynchronous rebuild exists to preserve for
+    // 100 ms of teardown, which is the wrong way round.
+    //
+    // Checked for the same reason as the destructor's — see there.
+    if (m_channel && !m_channel->setRunning(false)) {
+        qCWarning(lcAnanRxDsp)
+            << "could not stop the outgoing WDSP channel before the swap: a "
+               "processIq callback was in flight. The rebuild will pay WDSP's "
+               "100 ms stop-and-flush timeout.";
+    }
     m_channel = std::move(result.channel);
     m_spectrum = std::move(result.spectrum);
 }
