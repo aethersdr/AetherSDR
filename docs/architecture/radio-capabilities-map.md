@@ -454,6 +454,135 @@ read at use time, not baked into a key at construction, so the ordering problem
 does not arise. It is still its own change, and it applies to more than this one
 control.
 
+### The display scale: who owns it, and whether its numbers mean anything
+
+Two separate questions that both land on the vertical axis of the panadapter,
+and conflating them would hide one of them.
+
+| Field | Flex | HL2 | Icom | ANAN | Question it answers |
+|---|:--:|:--:|:--:|:--:|---|
+| `radioOwnsDbmScale` | ✅ (default) | ❌ | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
+| `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
+| `panBinsAbsolute()` (`panAmplitude->binsAbsolute`) | ❌ (absent) | ✅ | ❌ (absent) | ✅ | Do the spectrum bins hold still while the reference level moves? |
+
+**`panBinsAbsolute()` is consumed too, and it is the second term of ONE gate.**
+`noiseFloorAutoAdjustAllowed(radioOwnsDbmScale, panBinsAbsolute)` in
+`core/backends/NoiseFloorAutoAdjustGate.h` is an OR: a real echo from the radio
+ends the auto-floor loop by confirmation, absolute bins end it by giving it a
+fixed target, and either alone is enough. `SpectrumWidget::applyNoiseFloorAutoAdjust`
+and the auto-floor branch of `dbmRangeChangeRequested` both call it, so the
+widget and its backstop cannot drift apart. The other three
+`radioOwnsDbmScale` gates below are about whether a range can be **sent** and
+stay on the echo alone. HL2, ANAN and RTL-SDR declare `binsAbsolute = true`,
+each quoting the expression that produces its bins; ANAN is the one whose loop
+this turned back on.
+
+**`radioOwnsDbmScale` is consumed**, and a backend declaring `false` changes
+behaviour at four gates plus two fan-out sites:
+
+| Site | What `false` does |
+|---|---|
+| `SpectrumWidget::applyNoiseFloorAutoAdjust` | Early return — the gate that actually stops the runaway, because `m_refLevel` is local and would keep marching without it |
+| `sendDbmRangeCommand` (`MainWindow_Wiring.cpp`) | Backstop: no dBm range leaves for the radio, whichever caller asked |
+| `radioDbmHeadroomRecoveryRequested` handler | Return — the second ratchet source; gating `dbmRangeChangeRequested` alone did not stop it |
+| `dbmRangeChangeRequested`, auto-floor branch | Re-seeds the widget from the pan's real range instead of commanding one |
+| `dbmRangeDragFinished` | A hand drag still moves the LOCAL scale, but skips the handshake and the command |
+| `MainWindow::applyCapabilitiesToUi`, and the per-pane wiring for a pane added after connect | Pushes the value into every `SpectrumWidget`, restoring the permissive default on disconnect (`!connected \|\| caps.radioOwnsDbmScale`) per rule 2 above |
+
+The flag is about a **command plane**, not about a measurement. The auto-floor
+loop is built on an echo: the widget moves its reference level, sends
+`display pan set <id> min_dbm=… max_dbm=…`, and waits for the radio to confirm
+before moving again. `FlexBackend` is the only reader of `min_dbm` in the tree,
+and `RadioModel::sendCmd` drops the text at `hasCommandPlane()` for every
+backend but Flex and Sim. So on the HL2 the request cannot arrive and the
+confirmation cannot come back — which is what `false` states.
+
+What that declaration does **not** state is that the 24 dB/s ratchet
+`RadioCapabilities.h` describes was observed on an HL2. It was not, and the two
+radios differ in the way that decides it: an Icom's scope bins are decoded
+against the **commanded** range, so a dropped command leaves the measurement
+stale and the loop cannot converge, while `RadioModel::onBackendSpectrumFrame`
+passes the HL2's absolute float dBFS bins through untouched and
+`SpectrumWidget::estimateNoiseFloorDbm` reads them directly — an input that does
+not move with `m_refLevel`. The declaration rests on the source fact (there is no
+echo to wait for); the runtime question is open.
+
+**One read of this flag is doing a second job**, and it is worth knowing before
+the next backend sets it. Four of the gates above stop outbound traffic that
+cannot arrive. The first — `SpectrumWidget::applyNoiseFloorAutoAdjust` — turns
+the noise-floor auto-adjust off, justified in its own comment by a radio whose
+floor "is already where the calibration puts it". That is true of an Icom and
+false of a raw-IQ backend, whose scale is arbitrary and local and where a local
+auto-floor is the only one available. The two questions coincide on a Flex and an
+Icom and come apart here; the gate should eventually ask whether the floor
+MEASUREMENT depends on a commanded range.
+
+**The calibration claim is declared and nothing reads it yet.** It is the
+second question: an HL2's axis is dBFS wearing a dBm label, because nothing on
+the board reports what 0 dBFS is worth at the antenna and no HL2 oracle states a
+figure for it. `Hl2Backend` reads the declaration off
+`Hl2DbReference::isCalibrated()` rather than hardcoding it, so a per-unit
+`fullScaleDbm` measured later moves the capability with it. The values stay
+internally consistent — a 3 dB stronger signal reads 3 dB higher — so what the
+`false` denies is comparison: no spot level, no cross-station claim, no absolute
+threshold.
+
+It is **not a bool**. It is a field of `PanAmplitudeModel`, held as
+`std::optional<PanAmplitudeModel> panAmplitude`, and read through
+`RadioCapabilities::dbmAxisIsCalibrated()`. Absent means *no backend has been
+read on the question*, which is not the same as "no" — the distinction a bool
+cannot carry, and the reason #5262 M2 asks for a record. The accessor exists
+because absence has to fall to the **legacy** answer (`true`): every backend
+predating the field labelled its axis dBm and was consumed as though it meant
+it, so answering `false` for an unread backend would silently restate a claim
+about radios nobody has looked at.
+
+`panBinsAbsolute()` reads the *other* field of the same record and falls the
+**opposite** way on the same absent value — undeclared is not "absolute". Two
+opposite defaults on one record is precisely why neither is unwrapped at a call
+site.
+
+Flex and Icom leave the record absent and keep the legacy `✅` above; that is an
+unexamined default, not a finding, and it is exactly the trap rule 1 names,
+sitting in the tree. ANAN and RTL-SDR no longer inherit it: both are raw-IQ
+paths, both have now been read, and both declare `calibratedDbm = false` with
+the bin expression quoted in their own `capabilities()`.
+
+### The panadapter span is a hardware property on a raw-IQ radio
+
+| Field | Flex | HL2 | RTL | Question it answers |
+|---|:--:|:--:|:--:|---|
+| `panSpanModel->followsSampleRate` | — (absent) | ✅ | — (absent) | Is `sampleRatesHz` the complete set of spans, floor included? |
+| `panSpanModel->radioWide` | — (absent) | ✅ | — (absent) | Does changing one pan's span change every receiver's? |
+
+Both live in one `std::optional<PanSpanModel> panSpanModel`. Absent is *not* a
+pair of `false`s: it means no backend has been read, and a client that needs the
+distinction checks `has_value()` before the fields.
+
+Both are declared and nothing reads them yet — the behaviour they describe is
+already implemented, by `Hl2Backend::applyPanBandwidth` snapping through
+`nearestIqSampleRateHz` and by `panBandwidthLimitsChanged` clamping the zoom
+control. What was missing was the **claim**, so a client had no way to ask.
+
+On the HL2 the pan span *is* the DDC sample rate, so `sampleRatesHz` is not a
+list of stream rates that happens to exist alongside a span control: it is every
+span the radio can deliver, and its first entry (48 kHz) is a floor rather than a
+default. A narrower window would need samples the DDC never sent. One array in
+`Hl2Backend.h`, `kIqSampleRatesHz`, is simultaneously the capability, the zoom
+clamp and the snap target, and `tests/hl2_pan_limits_declaration_test.cpp`
+asserts the capability against that array rather than a copy of its values.
+
+`panSpanModel->radioWide` is why `receivePanBandwidthControl` is `nullopt` on a radio
+that plainly does change its span: `MetisProtocol::ccConfig` packs one
+`SampleRate` into C1[1:0] for the whole board, so the control is real but
+radio-wide. Publishing it as a per-pan authority would let an operator narrow one
+window and silently retune the other three. The same shared budget is why
+`Hl2Backend::receiverCeiling()` falls as the span widens.
+
+Upstream RFC #5223 (display-side crop: show a sub-window of a delivered span at
+full bin resolution) would change what the **display** shows. It would not change
+what the radio can deliver, which is what these two fields declare.
+
 ## Previously bypassed, now reconciled
 
 `maxSlices` / `maxPanadapters` sat here for weeks: declared by every backend
@@ -478,7 +607,10 @@ backend side the whole time.
 
 | Field | Flex | HL2 | Sim | Note |
 |---|:--:|:--:|:--:|---|
-| `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists |
+| `sampleRatesHz` | — | 4 rates | `{}` | HL2 populates it honestly; no consumer exists. On the HL2 it is also the complete span set — see `panSpanModel` below |
+| `panSpanModel->followsSampleRate` | — (absent) | ✅ | — (absent) | The span IS the rate, so `sampleRatesHz` is every deliverable span and its first entry is a floor |
+| `panSpanModel->radioWide` | — (absent) | ✅ | — (absent) | One DDC rate for the board; a span change moves every receiver |
+| `dbmAxisIsCalibrated()` | — (absent ⇒ ✅) | ❌ | — (absent ⇒ ✅) | Whether the dBm axis is absolute. HL2 reads it off `Hl2DbReference::isCalibrated()` |
 | `txPowerMaxWatts` | — (0.0) | 0.0 | 0.0 | Global fallback ceiling; Flex still omits it despite transmitting, which remains wrong but inert while `txPowerBands` is empty |
 | `hasAmplifier` | — (❌) | ❌ | ❌ | The AMP applet is driven by `TunerModel::presenceChanged`, not by this |
 | `extensions` | — | — | — | The namespaced vendor bag; never populated |
@@ -553,7 +685,17 @@ predicates the readouts ask before printing. See [`HERMES.md`](../HERMES.md)
 asserts the model-profile capabilities and the refusals they gate, and that the
 other backends keep the controls those refusals take away.
 [`tests/icom_ptt_authority_test.cpp`](../../tests/icom_ptt_authority_test.cpp)
-covers the keying-authority side. Every assertion reads a **capability** —
+covers the keying-authority side.
+[`tests/hl2_pan_limits_declaration_test.cpp`](../../tests/hl2_pan_limits_declaration_test.cpp)
+pins the HL2's panadapter-limit declarations — `radioOwnsDbmScale`,
+`panSpanModel` and `panAmplitude` — and asserts the rate list against
+`hl2::kIqSampleRatesHz` and the axis against
+`Hl2DbReference::isCalibrated()` rather than against re-typed values, so the
+declaration cannot drift away from the code it describes without a failure. It is
+its own socket-free target on purpose: the fake-EP6 fixture that once carried the
+HL2 seam contract is retired inside a bracket comment in `tests/tests.cmake`, and
+a declaration pinned only there would be pinned in something that never builds.
+Every assertion reads a **capability** —
 never `caps.family`, never a backend type. A test that asserted the family
 would pass just as happily against the anti-pattern the struct exists to
 prevent.
