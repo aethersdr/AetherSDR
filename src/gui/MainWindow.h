@@ -36,6 +36,7 @@
 #include "core/SmartLinkClient.h"
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
+#include "models/CwRxModel.h"
 #include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
@@ -1141,7 +1142,18 @@ private:
     SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
-    CwDecoder         m_cwDecoder;
+#ifdef HAVE_DEEPFIST
+    QPointer<SliceModel> m_cwRxSlice;
+    QMetaObject::Connection m_cwRxFrequencyConnection;
+    QMetaObject::Connection m_cwRxModeConnection;
+    void refreshCwRxContext();
+    void selectCwRxBackend(const QString& backend);
+    void cwRxModelAction();
+    void refreshCwRxStatus();
+    void appendUnscoredCwText(const QString& text);
+    void refreshCwRxBackend();
+#endif
+    CwRxModel         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};
     float             m_cwLastSpeedWpm{0.0f};
     CwDecoder         m_cwDecoderTx;

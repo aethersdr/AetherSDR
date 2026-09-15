@@ -87,7 +87,7 @@ void MainWindow::wireSpotSubsystem()
     // RX decoder uses rx:true; TX sidetone decoder uses rx:false.
     // Any MQTT subscriber (e.g. a contest logger) receives the stream
     // without additional AetherSDR interfaces.
-    connect(&m_cwDecoder,   &CwDecoder::textDecoded, this,
+    connect(&m_cwDecoder,   &CwRxModel::textDecoded, this,
             [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, true);  });
     connect(&m_cwDecoderTx, &CwDecoder::textDecoded, this,
             [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, false); });
