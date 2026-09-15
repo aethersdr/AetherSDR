@@ -335,6 +335,18 @@ RadioCapabilities AnanBackend::capabilities() const
 {
     RadioCapabilities c;
     c.family = QStringLiteral("anan");
+    // THE dBm AXIS IS dBFS WEARING A dBm LABEL, and this file says so in its own
+    // words twice over. kUncalibratedDbfsToDbmOffset is 0.0f, carrying a TODO
+    // that calls it "an unexplained 1:1 dBFS/dBm mapping", and the spectrum path
+    // emits `binsDbfs[i] + kUncalibratedDbfsToDbmOffset` -- the bins ARE the
+    // dBFS, relabelled. The SignalPeak comment states the consequence directly:
+    // registering it as SLC:LEVEL "would feed the shared S-meter, whose scale
+    // and S-unit labels require real dBm".
+    //
+    // The numbers stay internally consistent; what is denied is COMPARISON. A
+    // level from this radio may not be published as a spot, held against another
+    // station's report, or used as an absolute threshold.
+    c.reportsCalibratedDbm = false;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");

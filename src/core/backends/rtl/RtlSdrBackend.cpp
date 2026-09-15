@@ -107,6 +107,16 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // a direct-sampling range that depends on the IC), it becomes revisable and
     // this comment stops being true.
     RadioCapabilities c;
+    // THE dBm AXIS IS UNCALIBRATED, and on this backend that is not a nuance:
+    // RtlSdrDdc's FFT path computes `20 * log10(mag / kFftSize)` on raw ADC
+    // magnitudes and emits that straight out as the spectrum frame. There is no
+    // reference object, no offset and no per-unit figure anywhere in this
+    // family -- the axis is dBFS relative to the converter's own full scale.
+    //
+    // A relative reading is still useful; an absolute one is not available, so
+    // a level from this radio may not be published as a spot, held against
+    // another station's report, or used as an absolute threshold.
+    c.reportsCalibratedDbm = false;
     c.family = QStringLiteral("rtl");
     c.model  = m_modelName;
     c.manufacturer = m_vendor.isEmpty() ? QStringLiteral("Realtek") : m_vendor;

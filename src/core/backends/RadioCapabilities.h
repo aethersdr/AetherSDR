@@ -171,6 +171,37 @@ struct RadioCapabilities {
     int maxPanadapters = 1;        // simultaneous panadapters
     QVector<int> sampleRatesHz;    // supported per-receiver sample rates (Hz)
 
+    // The panadapter span IS the receiver sample rate, so `sampleRatesHz` is
+    // not merely a list of stream rates — it is the COMPLETE set of spans this
+    // radio can deliver, and its first entry is a hard floor.
+    //
+    // True for a direct-sampling backend that ships raw IQ and computes the
+    // spectrum from it: there is no display-side decimation stage between the
+    // DDC and the FFT, so asking for a narrower window than the narrowest rate
+    // asks for samples that were never sent. False for a radio that computes
+    // its own spectrum and treats span as a display parameter (a Flex, whose
+    // span is continuous and independent of any stream rate).
+    //
+    // The consequence a client has to respect: a span request must SNAP to one
+    // of `sampleRatesHz` rather than being taken literally, and the zoom
+    // control must stop at the narrowest one instead of offering a span the
+    // backend will silently refuse.
+    bool panSpanFollowsSampleRate = false;
+
+    // One span register for the whole radio: changing any panadapter's span
+    // changes every receiver's, because they share one DDC rate.
+    //
+    // True for the HL2, whose sample rate is a single two-bit field in the
+    // HPSDR config command, in front of every DDC. False for a radio with per-pan
+    // span (a Flex), and false — correctly, by the default — for a
+    // single-receiver backend where the question does not arise.
+    //
+    // This is why `receivePanBandwidthControl` can be absent on a radio that
+    // plainly does change its span: the control exists, but it is not a
+    // per-panadapter one, and offering it as per-pan would let an operator
+    // narrow one window and silently retune the other three.
+    bool panSpanIsRadioWide = false;
+
     // The frequency range the receiver can actually be tuned to, in Hz.
     //
     // Both zero means "not reported" — clients then keep whatever range they
@@ -313,6 +344,25 @@ struct RadioCapabilities {
     // A backend with a fixed scale needs no auto-adjust: its floor is already
     // where the calibration puts it.
     bool radioOwnsDbmScale = true;
+
+    // The numbers on the display's vertical axis are ABSOLUTE dBm at the
+    // antenna. True for a radio that carries a per-unit factory calibration
+    // (a Flex reports true dBm; an Icom decodes its scope against
+    // ScopeCalibration), so an S-meter reading, a noise-floor readout and a
+    // recorded spot level all mean something off this radio.
+    //
+    // FALSE means the axis is dBFS wearing a dBm label: the numbers are
+    // self-consistent — a 3 dB stronger signal still reads 3 dB higher — but
+    // the zero point is arbitrary, so no value may be compared against another
+    // station's, published as a spot level, or used as an absolute threshold.
+    //
+    // Like radioOwnsDbmScale above, the default is the LEGACY shape rather than
+    // the conservative one: every backend that predates this field labelled its
+    // axis dBm and was consumed as though it meant it, so defaulting false here
+    // would silently restate a claim about backends nobody has read. A backend
+    // sets false when its own reference object says so — the HL2's
+    // Hl2DbReference::isCalibrated() is exactly that predicate.
+    bool reportsCalibratedDbm = true;
 
     // The RADIO stores memory channels and re-dumps them on connect. True for a
     // Flex, whose memory slots live in the radio and are shared by every client
