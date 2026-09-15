@@ -335,6 +335,8 @@ RadioCapabilities AnanBackend::capabilities() const
 {
     RadioCapabilities c;
     c.family = QStringLiteral("anan");
+    // No setTune() implementation, so no tune generator to select a mode on.
+    c.twoToneGenerator = std::nullopt;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");

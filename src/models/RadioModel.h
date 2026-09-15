@@ -121,6 +121,7 @@ public:
 
     // Sub-models owned by RadioModel (main thread). (#502)
     MeterModel&       meterModel()       { return m_meterModel; }
+    const MeterModel& meterModel() const { return m_meterModel; }
 
     // PROOF OF LIFE, per data class, in milliseconds since the last arrival.
     //

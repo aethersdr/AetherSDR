@@ -1844,6 +1844,12 @@ QJsonObject vfoFlagSnapshot(QWidget* vfo, RadioModel* radio)
     return flag;
 }
 
+// Defined below beside the meter snapshot. radioSnapshot's legacy `paTemp`
+// scalar has to give the SAME answer as `get meters`, or `radiocert persist`
+// ships both truths about one sensor in a single document (#5516 review).
+QJsonArray  annotatedMeters(const MeterModel& m, const QString& radioModel);
+QJsonObject meterObservation(const QJsonArray& meters, const QString& name);
+
 QJsonObject radioSnapshot(const RadioModel* r)
 {
     // Multi-Flex slot occupancy across the radio's whole slice capacity: each
@@ -1878,7 +1884,12 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("fullDuplex"),   r->fullDuplexEnabled()},
         {QStringLiteral("transmitting"), r->isRadioTransmitting()},
         {QStringLiteral("txPower"),      r->txPower()},
-        {QStringLiteral("paTemp"),       r->paTemp()},
+        // Qualified, not the scalar: an absent or stale sensor reads null here
+        // exactly as it does in `get meters`.
+        {QStringLiteral("paTemp"),
+         meterObservation(annotatedMeters(r->meterModel(), r->model()),
+                          QStringLiteral("PATEMP"))
+             .value(QStringLiteral("value"))},
         {QStringLiteral("sliceCount"),   r->slices().size()},
         {QStringLiteral("maxSlices"),    maxSlices},
         {QStringLiteral("slots"),        slotArr},
@@ -2214,6 +2225,58 @@ QString unreliableMeterNote(const QString& meterName, const QString& radioModel)
     return QString();
 }
 
+// A scalar constructor default is not a meter reading. Keep support, liveness
+// and units beside the value for the low-rate vitals as well as the TX meters.
+//
+// The budget matches FRESH_MS in tools/tx_meter_test.py, which reports the same
+// rows. It applies to the LOW-RATE vitals rather than the TX meters that
+// MeterModel::kTxMeterStaleMs governs: Icom polls "+13.8A" on a 1000 ms budget
+// (IcomMeters.cpp), so this leaves roughly half a poll interval of slack before
+// an ordinary scheduler delay reads as stale. Shorten it and a healthy radio
+// starts reporting `stale` between polls.
+constexpr qint64 kVitalsFreshMs = 1500;
+
+QJsonObject meterObservation(const QJsonArray& meters, const QString& name)
+{
+    QJsonObject selected;
+    bool supported = false;
+    for (const QJsonValue& item : meters) {
+        const QJsonObject row = item.toObject();
+        if (row.value(QStringLiteral("name")).toString() != name
+            || row.value(QStringLiteral("source")).toString() == QLatin1String("AMP")) {
+            continue;
+        }
+        supported = true;
+        if (selected.isEmpty() || (row.value(QStringLiteral("has_value")).toBool()
+            && (!selected.value(QStringLiteral("has_value")).toBool()
+                || row.value(QStringLiteral("age_ms")).toDouble()
+                    < selected.value(QStringLiteral("age_ms")).toDouble()))) {
+            selected = row;
+        }
+    }
+    const qint64 age = selected.value(QStringLiteral("age_ms")).toInteger(-1);
+    const bool fed = selected.value(QStringLiteral("has_value")).toBool() && age >= 0;
+    // A meter this snapshot has itself just annotated `reliable:false` must not
+    // come back as a qualified reading: `reported_meter()` in
+    // tools/tx_meter_test.py rejects those first, and the two halves of one
+    // idea have to agree or the harness and the bridge disagree about one row.
+    // Today only PACURRENT on a FLEX-8xxx is ever flagged.
+    const bool trusted = selected.value(QStringLiteral("reliable")) != QJsonValue(false);
+    const bool fresh = fed && trusted && age < kVitalsFreshMs;
+    // An undefined QJsonValue is DROPPED on insert rather than stored as null,
+    // so default the unit: otherwise an unsupported vital omits the key while
+    // its neighbours carry it, and a client doing obs["unit"] gets a KeyError
+    // on one meter and "" on the next.
+    const QJsonValue unit = selected.value(QStringLiteral("unit"));
+    return {{QStringLiteral("status"), !supported ? QStringLiteral("unsupported")
+        : !trusted ? QStringLiteral("unreliable")
+        : !fed ? QStringLiteral("never-fed")
+        : fresh ? QStringLiteral("fresh") : QStringLiteral("stale")},
+        {QStringLiteral("value"), fresh ? selected.value(QStringLiteral("value")) : QJsonValue()},
+        {QStringLiteral("unit"), unit.isUndefined() ? QJsonValue(QString()) : unit},
+        {QStringLiteral("ageMs"), age}};
+}
+
 // Live meter readout. The flat convenience fields are the headline TX meters
 // with their freshness age (ms since last update, -1 if never) so a reader can
 // reject stale values — critical because some meters (notably PACURRENT) are
@@ -2221,12 +2284,12 @@ QString unreliableMeterNote(const QString& meterName, const QString& radioModel)
 // per-meter index/source_index/age_ms so duplicate-named meters (one live, one
 // floored) are distinguishable, plus a `reliable:false`+`note` flag on meters
 // known-bad for the connected radio. (#3646, #3729)
-QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
+// Every declared meter with the known-bad annotation already applied. Split out
+// of metersSnapshot so radioSnapshot qualifies its vitals against exactly the
+// same rows, `reliable` flag included.
+QJsonArray annotatedMeters(const MeterModel& m, const QString& radioModel)
 {
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    auto age = [now](qint64 ts) -> qint64 { return ts > 0 ? now - ts : -1; };
-
-    QJsonArray all = m->allMeters();
+    QJsonArray all = m.allMeters();
     for (int i = 0; i < all.size(); ++i) {
         QJsonObject meter = all[i].toObject();
         const QString note = unreliableMeterNote(meter.value(QStringLiteral("name")).toString(),
@@ -2237,8 +2300,21 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
             all[i] = meter;
         }
     }
+    return all;
+}
 
+QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    auto age = [now](qint64 ts) -> qint64 { return ts > 0 ? now - ts : -1; };
+
+    const QJsonArray all = annotatedMeters(*m, radioModel);
+
+    const QJsonObject temperature = meterObservation(all, QStringLiteral("PATEMP"));
+    const QJsonObject voltage = meterObservation(all, QStringLiteral("+13.8A"));
     return QJsonObject{
+        {QStringLiteral("temperature"), temperature},
+        {QStringLiteral("voltage"), voltage},
         {QStringLiteral("fwdPower"),        m->fwdPower()},           // Watts (smoothed)
         {QStringLiteral("fwdPowerInstant"), m->fwdPowerInstant()},    // Watts (peak)
         {QStringLiteral("fwdPowerAgeMs"),   age(m->fwdPowerUpdatedAtMs())},
@@ -2254,8 +2330,8 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         {QStringLiteral("swr"),
          m->swrIfLive() ? QJsonValue(*m->swrIfLive()) : QJsonValue()},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
-        {QStringLiteral("paTemp"),          m->paTemp()},             // °C
-        {QStringLiteral("supplyVolts"),     m->supplyVolts()},        // V
+        {QStringLiteral("paTemp"),          temperature.value(QStringLiteral("value"))},
+        {QStringLiteral("supplyVolts"),     voltage.value(QStringLiteral("value"))},
         {QStringLiteral("alc"), QJsonObject{
             {QStringLiteral("value"), m->alcUpdatedAtMs() > 0 ? QJsonValue(m->alcValue()) : QJsonValue()},
             {QStringLiteral("unit"), m->alcUnit()},
@@ -6900,6 +6976,18 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("off")}};
     }
     if (action == QLatin1String("twotone")) {
+        // CAPABILITY, NOT FAMILY (Constitution II/III). The question is whether
+        // the backend behind this verb has a two-tone generator, and only Flex
+        // does: `transmit set tune_mode=two_tone` is read by FlexBackend alone.
+        // Every other backend drives the same button into a single carrier —
+        // Icom's setTune(), the HL2's test tone at zero offset — so a family
+        // check written for Icom would have left HL2 certifying two-tone RF it
+        // never produced. Refuse before the TX gate: this is about what the
+        // evidence would claim, so it is wrong to key even when TX is allowed.
+        if (!m_radioModel->backendCapabilities().twoToneGenerator) {
+            return err(QStringLiteral("two-tone generation is not implemented on this radio; "
+                                      "use ordinary TUNE for a single tone"));
+        }
         if (!m_txAllowed)
             return err(QStringLiteral("blocked: txtest keys the transmitter — "
                                       "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
@@ -8519,6 +8607,8 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             {QStringLiteral("settingsDirectory"), SettingsPaths::configDir()},
             {QStringLiteral("family"), m_radioModel->family()},
             {QStringLiteral("clientSettingsDomains"), static_cast<int>(caps.clientSettingsDomains)},
+            {QStringLiteral("backendDiagnostics"), m_radioModel->family() == QLatin1String("icom")
+                ? doCiv(QStringLiteral("scheduler"), {}) : QJsonObject{}},
             {QStringLiteral("radio"), radioSnapshot(m_radioModel)},
             {QStringLiteral("slices"), doGet(QStringLiteral("slices"), {}, {}).value(QStringLiteral("slices"))},
             {QStringLiteral("pans"), doGet(QStringLiteral("pans"), {}, {}).value(QStringLiteral("pans"))},
