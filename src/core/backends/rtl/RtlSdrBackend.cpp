@@ -116,7 +116,9 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // A relative reading is still useful; an absolute one is not available, so
     // a level from this radio may not be published as a spot, held against
     // another station's report, or used as an absolute threshold.
-    c.reportsCalibratedDbm = false;
+    PanAmplitudeModel amplitude;
+    amplitude.calibratedDbm = false;
+    c.panAmplitude = amplitude;
     c.family = QStringLiteral("rtl");
     c.model  = m_modelName;
     c.manufacturer = m_vendor.isEmpty() ? QStringLiteral("Realtek") : m_vendor;

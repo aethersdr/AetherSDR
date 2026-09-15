@@ -1544,6 +1544,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.maxPanadapters = ceiling;
     for (const int rate : kIqSampleRatesHz)
         c.sampleRatesHz.append(rate);
+    PanSpanModel span;
     // THE SPAN IS THE SAMPLE RATE, so the four rates above are not just stream
     // rates — they are every span this radio can produce, and 48 kHz is a
     // FLOOR, not a preference.
@@ -1560,7 +1561,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Upstream #5223 is the RFC for showing a sub-window of a delivered span at
     // full bin resolution. That would change what the DISPLAY shows; it would
     // not change what this radio can deliver, which is what this declares.
-    c.panSpanFollowsSampleRate = true;
+    span.followsSampleRate = true;
     // ONE SPAN FOR THE WHOLE RADIO. The HPSDR config command carries a single
     // two-bit sample-rate field for the board — MetisProtocol's ccConfig packs
     // SampleRate into C1[1:0], alongside the receiver COUNT in C4, and there is
@@ -1573,7 +1574,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     // would let an operator narrow one window and silently retune the other
     // three. The same shared budget is why receiverCeiling() FALLS as the span
     // widens: span and receiver count draw on the same 100BASE-T link.
-    c.panSpanIsRadioWide = true;
+    span.radioWide = true;
+    c.panSpanModel = span;
+
+    PanAmplitudeModel amplitude;
     // THE Y AXIS IS dBFS WEARING A dBm LABEL, and this says so rather than
     // letting the label stand for a calibration that does not exist.
     //
@@ -1590,7 +1594,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     // stronger signal still reads 3 dB higher — so what this denies is
     // COMPARISON: a level from this radio must not be published as a spot, held
     // against another station's report, or used as an absolute threshold.
-    c.reportsCalibratedDbm = m_dbRef.isCalibrated();
+    amplitude.calibratedDbm = m_dbRef.isCalibrated();
+    c.panAmplitude = amplitude;
+
     // radioOwnsDbmScale IS DELIBERATELY NOT DECLARED HERE, and the reason is a
     // measurement rather than caution.
     //
