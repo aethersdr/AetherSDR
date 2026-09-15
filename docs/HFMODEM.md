@@ -456,3 +456,40 @@ should be restricted to the VHF profile. Settle it before writing code.
   cannot resume from an offset is useless for anything but small files.
 - **CRC per block for detection only**, not recovery — AX.25 already recovers.
 
+
+
+## Terminal YAPP-C file transfer
+
+The TERMINAL statistics group provides **Send…**, **Receive…**, **Cancel** and
+**Resume partial files**. Connect to the other station first and coordinate
+send/receive with its operator or BBS. Send selects one file. Receive selects a
+local destination directory and arms one transfer for the current peer; it also
+transmits acknowledgements. Both stations must support YAPP-C checksum mode.
+Plain YAPP fallback, batch transfer and mailbox file commands are not enabled.
+
+The status group shows the transfer phase, bytes, elapsed time, useful rate,
+resume offset and ETA once enough data has moved. Completion or failure, the
+saved destination and transfer-relative AX.25 retransmission/timeout totals
+appear in the terminal transcript and its optional log. Binary content never
+passes through the transcript's text conversion.
+
+Interrupted receives retain hidden `.aether-yapp-*.part` files and checkpoint
+metadata in the chosen directory. To resume, reconnect, select the same receive
+directory with **Resume partial files** enabled, and have the peer resend the
+same file. Matching uses peer, filename, total length, timestamp and a checksum
+of the locally saved prefix. YAPP-C cannot prove that a remote file with identical
+metadata is unchanged. Changed or damaged local checkpoints are refused; choose
+a new empty directory for a fresh receive. Existing complete files are never
+overwritten. Maximum size is 64 MiB; use portable ASCII filenames up to 120
+characters (no paths or reserved device names).
+
+Cancel performs a bounded protocol cancellation and then closes the terminal
+link; Disconnect or disabling the modem stops the local transfer immediately.
+Neither action automatically reconnects. Ordinary text entry and modem-profile
+changes are disabled during transfer. A successful transfer returns the existing
+connection to text conversation.
+
+The transfer uses the selected HF/VHF profile's existing AX.25 pacing and the
+same guarded packet audio/PTT path on Flex and Icom. These shared paths do not
+replace independent peer interoperability testing or separate live-radio proof.
+Implementation and validation details: [YAPP-C design](yapp-c-terminal-design.md).

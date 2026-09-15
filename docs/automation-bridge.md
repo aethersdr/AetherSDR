@@ -3925,6 +3925,14 @@ full data-link snapshot.
 > `link mycall`, `link listen` and `link alias` never transmit.
 
 - **`link status`** (or bare `link`) — the block above, read-only.
+  `terminal.transfer` additionally exposes YAPP-C `active`, `phase`, `direction`,
+  `file`, `peer`, `size`, `bytes`, `resumeOffset`, `elapsedMs`, `bytesPerSecond`,
+  `etaSeconds` (-1 before an estimate is available), `fileAccepted`, `success`,
+  `reason` and `savedPath`. Send progress counts bytes handed to the link;
+  success requires the remote EOF/EOT acknowledgements. UI targets `YappSend`,
+  `YappReceive` and `YappCancel` are TX-marked because negotiation, ACKs and
+  graceful cancellation can transmit. `YappResume`, `YappProgress`, `YappPercent` and
+  `YappStatus` are visible through `dumpTree`; no new wire verb is added.
 - **`link mycall <call>`** — set the terminal callsign (persisted).
 - **`link connect <call> [via <digi>[,<digi>]]`** ⚠️ — dial a BBS. Routed through
   the terminal's own `CONNECT` parser, so VIA paths and callsign validation

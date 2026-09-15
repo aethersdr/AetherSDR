@@ -39,7 +39,7 @@ void AprsDigipeaterModel::setMyAddress(const ax25::Address& address)
     m_beacon.setMyAddress(address);
 }
 
-void AprsDigipeaterModel::enqueue(const QByteArray& raw, bool digi)
+void AprsDigipeaterModel::enqueue(const QByteArray& raw, bool digi, bool terminal)
 {
     if (raw.isEmpty() || (digi && !m_enabled)) {
         return;
@@ -48,7 +48,7 @@ void AprsDigipeaterModel::enqueue(const QByteArray& raw, bool digi)
         m_queue.dequeue();
         emit activity(QStringLiteral("Modem TX queue full; dropping oldest pending frame."));
     }
-    m_queue.enqueue({raw, digi});
+    m_queue.enqueue({raw, digi, terminal});
     emit queued();
 }
 

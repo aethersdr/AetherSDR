@@ -5,6 +5,7 @@
 
 #include <QByteArray>
 #include <QObject>
+#include <QJsonObject>
 #include <QString>
 
 class QFile;
@@ -13,6 +14,7 @@ namespace AetherSDR {
 
 class Ax25Connection;
 class HeardList;
+class YappTransferSession;
 
 // A simple, reliable connected-mode AX.25 *client* terminal — the calling-side
 // counterpart of the PmsMailbox (which is the answering side). It drives an
@@ -96,6 +98,13 @@ public:
     // RTT samples rather than the formatted STATUS text.
     const Ax25Connection* link() const { return m_link; }
 
+    // Binary transfer API shared by the Terminal UI and its automation snapshot.
+    bool sendFile(const QString& path, QString& error);
+    bool receiveFile(const QString& directory, bool resume, QString& error);
+    void cancelTransfer();
+    bool transferActive() const;
+    QJsonObject transferStatus() const;
+
     Mode mode() const { return m_mode; }
     bool isConnected() const;
     bool isConnecting() const { return m_connecting; }
@@ -132,6 +141,7 @@ public slots:
 signals:
     // A raw AX.25 frame (address..info, no FCS) to key on the air.
     void transmitFrame(const QByteArray& rawNoFcs);
+    void transmitInvalidated(); // discard this terminal session's queued RF work
 
     // Text to append to the terminal transcript pane. Already newline-normalised
     // (peer CR / CRLF collapsed to '\n'); never carries a trailing prompt.
@@ -149,6 +159,8 @@ signals:
     void connectRequested(const QString& peer);
 
 private:
+    void pumpTransfer();
+    bool canStartTransfer(QString& error) const;
     void onLinkConnected(const ax25::Address& peer);
     void onLinkDisconnected(const ax25::Address& peer, bool byPeer);
     void onLinkConnectFailed(const ax25::Address& peer, const QString& reason);
@@ -164,6 +176,10 @@ private:
     void cmdStatus();
 
     Ax25Connection* m_link{nullptr};
+    YappTransferSession* m_transfer{nullptr};
+    bool m_transferNeedsReset{false};
+    quint32 m_transferResentStart{0};
+    quint32 m_transferTimeoutStart{0};
     HeardList* m_heard{nullptr}; // non-owning; shared station-heard log
     ax25::Address m_myCall;
     Mode m_mode{Mode::Command};

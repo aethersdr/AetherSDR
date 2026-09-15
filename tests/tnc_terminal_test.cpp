@@ -16,6 +16,11 @@
 #include <QStringList>
 
 #include <cstdio>
+#include <QTemporaryDir>
+#include <QFile>
+#include <QElapsedTimer>
+#include <QQueue>
+#include <QThread>
 
 using namespace AetherSDR;
 using AetherSDR::ax25::Address;
@@ -508,11 +513,138 @@ static void testConvAndStatusCommands()
     CHECK(client.mode() == TncTerminal::Mode::Converse, "CONV returns to converse mode");
 }
 
+
+// Inject public AX.25 frame types and YAPP-C bytes, not a firmware peer. The
+// event loop exercises the real bounded producer timer for both link profiles.
+static void testYappTerminalStream()
+{
+    for (int baud : {300, 1200}) {
+        QTemporaryDir dir;
+        QFile file(dir.filePath(QStringLiteral("binary.bin")));
+        CHECK(file.open(QIODevice::WriteOnly), "create source");
+        QByteArray content;
+        for (int i = 0; i < 600; ++i) { content.append(char(i & 255)); }
+        CHECK(file.write(content) == content.size(), "write source");
+        file.close();
+        TncTerminal terminal;
+        terminal.setMyCall(QStringLiteral("N0AAA"));
+        terminal.setLinkProfile(ax25::LinkTimingProfile::forBaud(baud));
+        terminal.setPaclen(16); // deliberately split every YAPP packet
+        QQueue<QByteArray> frames;
+        QString transcript;
+        QObject::connect(&terminal, &TncTerminal::transmitFrame,
+                         [&](const QByteArray& bytes) { frames.enqueue(bytes); });
+        QObject::connect(&terminal, &TncTerminal::output,
+                         [&](const QString& text) { transcript += text; });
+        terminal.submitLine(QStringLiteral("C N0BBB"));
+        frames.clear();
+        terminal.onAirFrame(Frame::makeU(call("N0AAA"), call("N0BBB"),
+                                        FrameType::UA, true, false).encode());
+        CHECK(terminal.isConnected(), "injected UA establishes terminal link");
+        QString error;
+        CHECK(terminal.sendFile(file.fileName(), error), "start binary send");
+        terminal.submitLine(QStringLiteral("THIS MUST NOT REACH WIRE"));
+        int ns = 0;
+        const auto inject = [&](const QByteArray& bytes) {
+            terminal.onAirFrame(Frame::makeI(call("N0AAA"), call("N0BBB"),
+                ns, terminal.link()->sendSeq(), true, bytes).encode());
+            ns = (ns + 1) % 8;
+        };
+        QByteArray stream;
+        const auto collect = [&](int atLeast) {
+            QElapsedTimer wait; wait.start();
+            while (stream.size() < atLeast && wait.elapsed() < 3000) {
+                QCoreApplication::processEvents();
+                while (!frames.isEmpty()) {
+                    const auto frame = Frame::decode(frames.dequeue());
+                    if (frame && frame->type == FrameType::I) {
+                        stream.append(frame->info);
+                        terminal.onAirFrame(Frame::makeS(call("N0AAA"), call("N0BBB"),
+                            FrameType::RR, (frame->ns + 1) % 8, true, false).encode());
+                    }
+                }
+                QThread::msleep(1);
+            }
+            CHECK(stream.size() >= atLeast, "producer delivered expected bytes");
+        };
+        collect(2);
+        CHECK(stream == QByteArray::fromHex("0501"), "send init is binary exact");
+        stream.clear(); inject(QByteArray::fromHex("0601"));
+        collect(2);
+        const int headerLength = 2 + static_cast<quint8>(stream.at(1));
+        collect(headerLength);
+        CHECK(stream.startsWith(QByteArray::fromHex("01")), "binary header");
+        stream.clear(); inject(QByteArray::fromHex("0606"));
+        collect(259 + 259 + 91 + 2);
+        CHECK(stream.left(259).mid(2, 256) == content.left(256), "all 256 byte values survive AX25 segmentation");
+        CHECK(stream.right(2) == QByteArray::fromHex("0301"), "EOF waits behind file bytes");
+        CHECK(!stream.contains("THIS MUST NOT REACH WIRE"), "text input excluded during transfer");
+        CHECK(!terminal.transferStatus().value("success").toBool(), "queued bytes do not prove completion");
+        stream.clear(); inject(QByteArray::fromHex("0603")); collect(2);
+        CHECK(stream == QByteArray::fromHex("0401"), "EOT after file acknowledgement");
+        stream.clear(); inject(QByteArray::fromHex("0604") + "Ready>\r");
+        QElapsedTimer done; done.start();
+        while (terminal.transferActive() && done.elapsed() < 1000) {
+            QCoreApplication::processEvents(); QThread::msleep(1);
+        }
+        CHECK(terminal.transferStatus().value("success").toBool(), "terminal completion acknowledged");
+        CHECK(transcript.contains("complete") && transcript.contains("retransmissions"), "transfer result and stats in transcript");
+        CHECK(transcript.contains("Ready>"), "coalesced post-transfer prompt preserved");
+        CHECK(!transcript.contains(QChar(0)), "binary payload not displayed");
+        CHECK(terminal.isConnected(), "successful transfer preserves terminal connection");
+
+        // Withhold ACKs: the producer must retain at most one YAPP packet.
+        CHECK(terminal.sendFile(file.fileName(), error), "second transfer starts");
+        QElapsedTimer stalled; stalled.start();
+        while (stalled.elapsed() < 250) { QCoreApplication::processEvents(); QThread::msleep(1); }
+        CHECK(terminal.link()->unacked() == 1 && terminal.link()->sendQueueBytes() == 0,
+              "unacknowledged init prevents further production");
+        int invalidated = 0;
+        QObject::connect(&terminal, &TncTerminal::transmitInvalidated, [&] { ++invalidated; });
+        terminal.reset();
+        frames.clear();
+        CHECK(!terminal.transferActive() && !terminal.isConnected(), "reset ends transfer and link");
+        CHECK(invalidated > 0, "reset invalidates pending terminal RF work");
+        QElapsedTimer quiet; quiet.start();
+        while (quiet.elapsed() < 100) { QCoreApplication::processEvents(); QThread::msleep(1); }
+        CHECK(frames.isEmpty(), "reset has no late transfer emissions");
+
+        // Receive through the terminal's binary/text ownership switch too.
+        QTemporaryDir receiveDir;
+        terminal.submitLine(QStringLiteral("C N0BBB")); frames.clear(); stream.clear(); ns = 0;
+        terminal.onAirFrame(Frame::makeU(call("N0AAA"), call("N0BBB"),
+                                        FrameType::UA, true, false).encode());
+        CHECK(terminal.receiveFile(receiveDir.path(), true, error), "arm terminal receive");
+        inject(QByteArray::fromHex("0501")); collect(2);
+        CHECK(stream == QByteArray::fromHex("0601"), "receive ready on connected wire");
+        QByteArray h("incoming.bin"); h.append('\0'); h.append('5'); h.append('\0');
+        h.append("5B2E6400"); h.append('\0');
+        QByteArray header; header.append(char(1)); header.append(char(h.size())); header.append(h);
+        stream.clear(); inject(header.left(7)); inject(header.mid(7)); collect(2);
+        CHECK(stream == QByteArray::fromHex("0606"), "receiver negotiates checksum across AX25 frames");
+        stream.clear(); inject(QByteArray::fromHex("020500410D0AFF570301")); collect(2);
+        CHECK(stream == QByteArray::fromHex("0603"), "receiver accepts checked complete file");
+        QFile received(receiveDir.filePath(QStringLiteral("incoming.bin")));
+        CHECK(received.open(QIODevice::ReadOnly), "received file published");
+        CHECK(received.readAll() == QByteArray::fromHex("00410D0AFF"), "received binary CR/LF preserved exactly");
+        stream.clear(); inject(QByteArray::fromHex("0401")); collect(2);
+        CHECK(stream == QByteArray::fromHex("0604"), "receiver acknowledges EOT");
+        done.restart();
+        while (terminal.transferActive() && done.elapsed() < 1000) {
+            QCoreApplication::processEvents(); QThread::msleep(1);
+        }
+        CHECK(terminal.transferStatus().value("success").toBool(), "terminal receive completed");
+        CHECK(transcript.contains("saved:") && !transcript.contains(QChar(0)), "receive result is readable without binary payload");
+
+    }
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
 
     testConvAndStatusCommands();
+    testYappTerminalStream();
     testConnectConverseDisconnect();
     testConnectRefusedDm();
     testCommandGuards();
