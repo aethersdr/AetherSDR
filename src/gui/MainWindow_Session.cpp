@@ -2375,12 +2375,7 @@ void MainWindow::wireRxDemodAudioSinks()
 {
     if (m_qsoRecorder) {
         connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-                m_qsoRecorder, [recorder = m_qsoRecorder](const PcmFrame& frame) {
-            const QByteArray pcm = frame.legacyStereo24();
-            if (!pcm.isEmpty()) {
-                recorder->feedRxAudio(pcm);
-            }
-        });
+                m_qsoRecorder, &QsoRecorder::feedRxFrame);
     }
 
     // CW decoder RX feed — gated live on the toggle (#2417).

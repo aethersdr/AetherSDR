@@ -1757,7 +1757,7 @@ MainWindow::MainWindow(QWidget* parent)
     // cwRecordingActiveChanged opens the recorder's TX gate for our CW — driven
     // by our own keyer, so another client's TX never gates our recorder.
     connect(m_audio, &AudioEngine::cwSidetoneRecordPcmReady,
-            m_qsoRecorder, &QsoRecorder::feedTxAudio);
+            m_qsoRecorder, &QsoRecorder::feedCwAudio);
     connect(m_audio, &AudioEngine::cwRecordingActiveChanged,
             m_qsoRecorder, &QsoRecorder::setCwOverActive);
     // Queued, unlike the two direct connections below: setCwOverActive reaches

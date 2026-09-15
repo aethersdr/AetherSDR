@@ -1,10 +1,10 @@
 # QSO recording formats (RFC #5468 A3)
 
-**Integration status:** the independent format, conversion and playback helpers
-are implemented. `QsoRecorder` and its production bindings still use the existing
-24 kHz path. The recording feed/header/finalization and TX ownership integration
-awaits the active recorder/TX prerequisite work. The contracts below describe
-the helper behavior and the intended integration, not completed runtime support.
+`QsoRecorder` consumes typed normalized RX frames and records each file at one
+immutable 24 or 48 kHz rate. Fixed24 voice and CW feeds use separate conversion
+histories. Playback parses the actual WAV format before converting to the
+negotiated sink. These are software contracts; native device negotiation,
+audible output and live radio qualification are separate.
 
 ## Immutable file format
 
@@ -35,6 +35,9 @@ integer number of seconds represented by accepted PCM bytes at the immutable
 rate. Wall time remains useful for the existing empty-capture diagnostic but
 cannot stand in for recorded duration. Exclusive file creation, partial-write
 accounting, finalization, cleanup and errors remain recorder responsibilities.
+After a short write, the finalizer patches the exact accepted byte count even
+if it ends inside a stereo frame, and keeps that failed recording unavailable
+for playback. It does not round the count to make an incomplete file look valid.
 
 ## Source conversion
 
@@ -100,11 +103,14 @@ duration depends on the negotiated format. Larger-file streaming is outside A3.
 
 Device selection and negotiation stay with the current recorder: configured
 device if still present, then default device and the existing format ladder.
-Playback integration must preserve failed-start cleanup, completion/cancellation,
-replay, and RX mute/unmute ordering. The pure helper provides no claim about
+The recorder preserves failed-start cleanup, completion/cancellation, replay,
+and RX mute/unmute ordering. It tries the entire existing stereo format ladder
+before a mono fallback. A synchronous sink failure is cleaned up before RX can
+be muted; stop and destruction retire the sink before its PCM buffer. The
+injected-sink lifecycle test provides no claim about
 WASAPI/CoreAudio/PipeWire negotiation or audible output.
 
-## Integration requirements still pending
+## Recorder admission and lifetime
 
 The recorder receives typed RX from the existing normalized `rxDemodAudioReady`
 subscriber, while CW/RTTY stay on their existing compatibility routes until A5.
@@ -114,7 +120,9 @@ No speaker-output tap or second producer feed is introduced.
 
 Recorder ingress serializes the per-consumer replay gate, format selection,
 converter state and accepted file writes with its existing write lifecycle.
-It must reject a pending revoked frame immediately before writing; file bytes
+The final acquire-load of the epoch token admits each converted PCM write. A
+revocation before that load rejects pending output; a later revocation cannot
+undo a write that has already been admitted. File bytes
 already accepted are committed history and cannot be erased by later revocation.
 A rejected source must not consume another source's cursor. One current normalized
 RX source is admitted; a competing live producer cannot replace it silently.
@@ -122,16 +130,19 @@ Forward gaps are admitted after retiring that segment's conversion history, with
 no invented silence for unknown missing capture time and no permanent cursor stall.
 
 Normal RX/voice/CW changes finish the departing admitted segment before beginning
-the next, preserving each segment's own duration and attribution. Revocation drops
-uncommitted pending conversion; it must not contaminate the replacement. Stop,
-disconnect/reconnect, slot reuse, format epochs, and stop/start must be exercised
-against production recorder behavior, including actual concurrent feed/stop and
-token revocation under instrumented-Qt TSan. These statements remain integration
-requirements until those tests and the production bindings are delivered.
+the next, preserving each segment's own duration and attribution. MOX element
+edges within an active CW over keep that over's history. An unrelated CW edge
+while MOX still admits voice keeps the voice history until actual CW PCM takes
+over. Revocation drops
+uncommitted pending conversion without contaminating the replacement. The
+production rates test covers stop/start, reconnect and stream replacement,
+format epochs, forward gaps, replay, concurrent feeds and concurrent feed/stop
+with epoch revocation. Sanitizer results qualify the specific executed build;
+the existence of a concurrency test alone is not a TSan result.
 
 Existing MOX/CW over gates, local TX ownership, CW over-hang, auto/manual start
 policy, metadata slice lifetime, filename collision safety, and short-write/error
 cleanup remain authoritative. Playback cannot key TX. `DEFAULT_SAMPLE_RATE` stays
 24000 and `m_rxOutputRate` stays the device rate. RTL48/multi-receiver runtime,
 A4 TCI, A5 decoder/clock, hardware integration, and #5554 whole-track sign-off are
-separate from A3 helper software evidence.
+separate from A3 software evidence.

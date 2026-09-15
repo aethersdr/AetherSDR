@@ -2014,6 +2014,9 @@ add_test(NAME tx_capture_health_test COMMAND tx_capture_health_test)
 add_executable(qso_recorder_write_error_test
     tests/qso_recorder_write_error_test.cpp
     src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
@@ -2036,6 +2039,9 @@ add_test(NAME qso_recorder_write_error_test COMMAND qso_recorder_write_error_tes
 add_executable(qso_recorder_slice_lifetime_test
     tests/qso_recorder_slice_lifetime_test.cpp
     src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
@@ -2051,6 +2057,54 @@ target_include_directories(qso_recorder_slice_lifetime_test PRIVATE
 )
 target_link_libraries(qso_recorder_slice_lifetime_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME qso_recorder_slice_lifetime_test COMMAND qso_recorder_slice_lifetime_test)
+
+# RFC #5468 A3: real recorder files and concurrent feeds; injected sink only,
+# no sockets, audio devices, or radio. Separate targets keep sanitizer scope small.
+add_executable(qso_recorder_rates_test
+    tests/qso_recorder_rates_test.cpp
+    src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(qso_recorder_rates_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_rates_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_rates_test COMMAND qso_recorder_rates_test)
+set_tests_properties(qso_recorder_rates_test PROPERTIES TIMEOUT 120)
+
+add_executable(qso_recorder_playback_lifecycle_test
+    tests/qso_recorder_playback_lifecycle_test.cpp
+    src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(qso_recorder_playback_lifecycle_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_playback_lifecycle_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_playback_lifecycle_test COMMAND qso_recorder_playback_lifecycle_test)
+set_tests_properties(qso_recorder_playback_lifecycle_test PROPERTIES TIMEOUT 120)
 
 # RFC #5468 A3 format/parser/converter helpers: no sockets or audio devices.
 add_executable(qso_recording_format_test
@@ -2104,6 +2158,9 @@ add_test(NAME qso_record_start_policy_test COMMAND qso_record_start_policy_test)
 add_executable(qso_recorder_pc_audio_guard_test
     tests/qso_recorder_pc_audio_guard_test.cpp
     src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
@@ -2164,6 +2221,9 @@ add_test(NAME dvk_wav_upload_test COMMAND dvk_wav_upload_test)
 add_executable(qso_recorder_filename_collision_test
     tests/qso_recorder_filename_collision_test.cpp
     src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
@@ -5823,6 +5883,8 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 set(AETHER_SETTINGS_CONSUMERS
     bandscope_trace_render_test
     noise_floor_auto_adjust_gate_test
+    qso_recorder_rates_test
+    qso_recorder_playback_lifecycle_test
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
