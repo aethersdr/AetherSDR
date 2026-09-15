@@ -34,6 +34,12 @@ class SettingsDatabase {
 public:
     static constexpr int kSchemaVersion = 1;
 
+    // A check that could not execute is deliberately distinct from a check
+    // that returned a corruption report. AppSettings may only move the live
+    // store aside after the latter: permissions, I/O and lock failures must
+    // leave the original database available for a later retry.
+    enum class IntegrityCheckResult { Ok, Corrupt, Failed };
+
     SettingsDatabase();
     ~SettingsDatabase();
     SettingsDatabase(const SettingsDatabase&) = delete;
@@ -54,12 +60,16 @@ public:
     // (PR #4612 review: POSIX rename() succeeds on open files, so quarantining
     // a busy store split-brains a concurrent instance's committed writes).
     bool lastOpenWasBusy() const { return m_lastOpenBusy; }
+    // True only when SQLite explicitly reported SQLITE_CORRUPT/SQLITE_NOTADB
+    // while opening this database. This is the open-path counterpart to an
+    // IntegrityCheckResult::Corrupt report.
+    bool lastOpenWasCorrupt() const { return m_lastOpenCorrupt; }
     QString path() const { return m_path; }
     QString lastError() const { return m_lastError; }
 
     // Integrity: cheap check for every startup; full check when cheap fails.
-    bool quickCheck();
-    bool integrityCheck();
+    IntegrityCheckResult quickCheck();
+    IntegrityCheckResult integrityCheck();
 
     // meta table -------------------------------------------------------------
     QString metaValue(const QString& key, const QString& defaultValue = {});
@@ -132,6 +142,8 @@ public:
 private:
     bool exec(const char* sql);
     bool createSchema();
+    void recordSqliteFailure(int resultCode);
+    IntegrityCheckResult runIntegrityCheck(const char* pragma);
 
     sqlite3* m_db = nullptr;
     QString m_path;
@@ -139,6 +151,7 @@ private:
     bool m_newerSchema = false;
     bool m_readOnly = false;
     bool m_lastOpenBusy = false;
+    bool m_lastOpenCorrupt = false;
 };
 
 } // namespace AetherSDR

@@ -6,7 +6,8 @@
 //   - save() before a successful load() can never create or damage a store
 //   - the one-time XML import: parity, recovery-ladder sources, frozen
 //     snapshot, meta stamping, credential exodus, no re-import
-//   - corruption handling: quarantine + backup restore, XML re-import
+//   - corruption handling: quarantine + backup restore, XML re-import, while
+//     permission/I/O failures leave healthy databases in place
 //   - newer-schema databases open read-only
 //   - dirty-row saves persist exactly the mutated rows
 #include "TestSettingsProfile.h"
@@ -536,6 +537,123 @@ void testLockedDbFailsClosed()
            "the next launch recovers normally once the lock is gone");
 }
 
+// A read-only owner file can still be opened and queried before SQLite reaches
+// createSchema()'s user_version write. That ordinary write refusal is not a
+// corruption report: quarantining it would replace current settings with an
+// older backup or legacy XML. Exercise both no-backup and backup-present forms
+// because recovery must stay forbidden in either case.
+int testReadOnlyDbFailsClosed(bool hasOlderBackup)
+{
+#ifdef Q_OS_WIN
+    Q_UNUSED(hasOlderBackup);
+    std::printf("[SKIP] POSIX owner-read-only fixture is not available on Windows\n");
+    return 77;
+#else
+    AppSettings& settings = AppSettings::instance();
+    const QByteArray frozenXml = settingsDocument(10, QStringLiteral("legacy"));
+    expect(writeFile(xmlPath(), frozenXml), "frozen legacy XML fixture is written");
+    settings.load();
+    settings.setValue(QStringLiteral("Survivor"), QStringLiteral("current"));
+    settings.save();
+    settings.reset();
+
+    QDir backups(SettingsPaths::backupsDir());
+    if (hasOlderBackup) {
+        expect(!backups.entryList({QStringLiteral("*.db")}, QDir::Files).isEmpty(),
+               "a verified older backup exists before the read-only failure");
+    } else {
+        const QStringList backupFiles = backups.entryList({QStringLiteral("*.db")},
+                                                           QDir::Files);
+        for (const QString& name : backupFiles) {
+            expect(backups.remove(name), "fixture backup is removed");
+        }
+        expect(backups.entryList({QStringLiteral("*.db")}, QDir::Files).isEmpty(),
+               "no backup remains before the read-only failure");
+    }
+    SettingsDatabase verifier;
+    expect(verifier.open(dbPath())
+               && verifier.quickCheck()
+                      == SettingsDatabase::IntegrityCheckResult::Ok,
+           "original database is healthy before permissions are changed");
+    verifier.close();
+    expect(QFile::setPermissions(dbPath(), QFileDevice::ReadOwner),
+           "healthy database is made owner-read-only");
+    if (g_failures != 0) {
+        return 1;
+    }
+    if (QFileInfo(dbPath()).isWritable()) {
+        QFile::setPermissions(dbPath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        std::printf("[SKIP] this process can bypass owner-read-only permissions\n");
+        return 77;
+    }
+
+    settings.load();
+    settings.setValue(QStringLiteral("MustNotSave"), QStringLiteral("x"));
+    settings.save();
+
+    expect(QFile::exists(dbPath()), "a read-only database remains in place");
+    expect(!settings.storeWritable(),
+           "a read-only database failure keeps the session non-writable");
+    expect(!settings.loadNotice().isEmpty(),
+           "a read-only database failure is surfaced to the operator");
+    const QDir quarantine(SettingsPaths::quarantineDir());
+    expect(quarantine.entryList(QDir::Files).isEmpty(),
+           "a read-only database is never quarantined");
+    QString survivor;
+    expect(dbRow(QStringLiteral("Survivor"), survivor)
+               && survivor == QStringLiteral("current"),
+           "the original current database remains authoritative");
+    expect(!dbHas(QStringLiteral("MustNotSave")),
+           "the failed read-only session cannot save");
+    expect(readFile(xmlPath()) == frozenXml,
+           "the frozen legacy XML is unchanged by the failed read-only session");
+
+    expect(QFile::setPermissions(dbPath(),
+                                 QFileDevice::ReadOwner | QFileDevice::WriteOwner),
+           "database permissions are restored for the retry");
+    settings.reset();
+    settings.load();
+    expect(settings.value(QStringLiteral("Survivor")).toString()
+               == QStringLiteral("current"),
+           "a later writable launch loads the original database without recovery");
+    return g_failures == 0 ? 0 : 1;
+#endif
+}
+
+void testUnavailableIntegrityCheck()
+{
+    SettingsDatabase database;
+    expect(database.quickCheck() == SettingsDatabase::IntegrityCheckResult::Failed,
+           "an unavailable quick check is an execution failure, not corruption");
+    expect(database.integrityCheck() == SettingsDatabase::IntegrityCheckResult::Failed,
+           "an unavailable full check is an execution failure, not corruption");
+    expect(!database.lastOpenWasCorrupt() && !database.lastOpenWasBusy(),
+           "integrity execution failures do not change open-path classification");
+    expect(!database.lastError().isEmpty(), "an unavailable check reports its error");
+}
+
+void testFilesystemFailureFailsClosed()
+{
+    const QString markerPath = dbPath() + QStringLiteral("/ordinary-failure-marker");
+    expect(QDir().mkpath(dbPath()), "database-path directory obstacle is created");
+    expect(writeFile(markerPath, QByteArray("leave this ordinary filesystem failure")),
+           "database-path obstacle marker is written");
+
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    settings.setValue(QStringLiteral("MustNotSave"), QStringLiteral("x"));
+    settings.save();
+
+    expect(QDir(dbPath()).exists(),
+           "an ordinary filesystem failure leaves the existing path in place");
+    expect(readFile(markerPath) == QByteArray("leave this ordinary filesystem failure"),
+           "an ordinary filesystem failure leaves existing path contents intact");
+    expect(!settings.storeWritable(),
+           "an ordinary filesystem failure keeps the session non-writable");
+    expect(!settings.loadNotice().isEmpty(),
+           "an ordinary filesystem failure is surfaced to the operator");
+}
+
 void testNewerSchemaOpensReadOnly()
 {
     // Create a healthy store, then stamp a schema version from the future.
@@ -950,6 +1068,14 @@ int main(int argc, char** argv)
         testCorruptDbReimportsFrozenXml();
     } else if (scenario == QStringLiteral("locked-db-fails-closed")) {
         testLockedDbFailsClosed();
+    } else if (scenario == QStringLiteral("readonly-db-fails-closed")) {
+        return testReadOnlyDbFailsClosed(false);
+    } else if (scenario == QStringLiteral("readonly-db-with-backup-fails-closed")) {
+        return testReadOnlyDbFailsClosed(true);
+    } else if (scenario == QStringLiteral("unavailable-integrity-check")) {
+        testUnavailableIntegrityCheck();
+    } else if (scenario == QStringLiteral("filesystem-failure-fails-closed")) {
+        testFilesystemFailureFailsClosed();
     } else if (scenario == QStringLiteral("newer-schema-readonly")) {
         testNewerSchemaOpensReadOnly();
     } else if (scenario == QStringLiteral("dirty-row-save")) {
