@@ -3427,6 +3427,18 @@ target_include_directories(cw_sidetone_test PRIVATE src)
 target_link_libraries(cw_sidetone_test PRIVATE Qt6::Core)
 add_test(NAME cw_sidetone_test COMMAND cw_sidetone_test)
 
+# #5713 — WHICH sidetone backend gets constructed, before the #4978 policy
+# below decides what it is handed. Pure, header-only, so the platform/build/
+# preference truth table is a compile-time assertion. The row that matters is
+# "Windows + PortAudio built + nothing saved -> QAudioSink": shipping PortAudio
+# in the Windows installer (#5200/#5201) flipped that default with no line of
+# code saying so, and v26.9.3 heap-corrupted at connect on three field boxes.
+add_executable(cw_sidetone_backend_policy_test
+    tests/cw_sidetone_backend_policy_test.cpp
+)
+target_include_directories(cw_sidetone_backend_policy_test PRIVATE src)
+add_test(NAME cw_sidetone_backend_policy_test COMMAND cw_sidetone_backend_policy_test)
+
 # #4978 — which device the CW sidetone backend is handed at start(). Pure,
 # header-only policy, so the whole truth table is a compile-time assertion; the
 # "saved device that IS the system default still takes the name-match path" row

@@ -5,6 +5,7 @@
 #include "AppSettings.h"
 #include "AudioSummaryLogger.h"
 #include "AudioDeviceNegotiator.h"
+#include "CwSidetoneBackendPolicy.h"
 #include "CwSidetoneStartPolicy.h"
 #include "TxCaptureBuffer.h"
 #include "ShutdownTrace.h"
@@ -82,6 +83,7 @@
 #include <cstring>
 #include <functional>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace AetherSDR {
@@ -4287,21 +4289,41 @@ void AudioEngine::setMuted(bool muted)
         emit mutedChanged(muted);
 }
 
-// Pick the sidetone backend based on build flag + AppSettings override.
-// PortAudio when available (the callback path: lower latency on every
-// platform that builds it — Windows joined Linux/macOS in #5200, where the
-// shipped installer started providing it); QAudioSink fallback otherwise or
-// when explicitly requested by the user.
+// Pick the sidetone backend from the build flag, the platform and the
+// operator's AppSettings override. The rule — including why the default is
+// PortAudio on Linux/macOS but QAudioSink on Windows (#5713) — lives in
+// CwSidetoneBackendPolicy.h, where it is pinned by
+// tests/cw_sidetone_backend_policy_test.cpp.
 static std::unique_ptr<CwSidetoneSinkBackend> makeSidetoneBackend(QObject* qparent)
 {
-    const QString pref =
-        AppSettings::instance().value("CwSidetoneBackend", "PortAudio").toString();
+#ifdef HAVE_PORTAUDIO
+    constexpr bool kPortAudioBuilt = true;
+#else
+    constexpr bool kPortAudioBuilt = false;
+#endif
+#ifdef Q_OS_WIN
+    constexpr bool kPlatformIsWindows = true;
+#else
+    constexpr bool kPlatformIsWindows = false;
+#endif
+
+    // Held in a local: string_view does not own, and a temporary QByteArray
+    // would be gone before the policy read it.
+    const QByteArray saved =
+        AppSettings::instance().value("CwSidetoneBackend").toString().trimmed().toUtf8();
+    const SidetoneBackendChoice choice = sidetoneBackendChoice(
+        kPortAudioBuilt,
+        kPlatformIsWindows,
+        parseSidetoneBackendPreference(
+            std::string_view(saved.constData(), static_cast<std::size_t>(saved.size()))));
 
 #ifdef HAVE_PORTAUDIO
-    if (pref != "QAudioSink") {
+    if (choice == SidetoneBackendChoice::PortAudio) {
         return std::unique_ptr<CwSidetoneSinkBackend>(
             new CwSidetonePortAudioSink());
     }
+#else
+    Q_UNUSED(choice);
 #endif
     return std::unique_ptr<CwSidetoneSinkBackend>(
         new CwSidetoneQAudioSink(qparent));
