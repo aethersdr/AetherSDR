@@ -1,5 +1,6 @@
 #include "core/backends/anan/AnanBackend.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
+#include "core/backends/anan/AnanDroopDefaults.h"
 #include "core/backends/anan/AnanSettings.h"
 #include "core/AppSettings.h"
 #include "core/RadioSettingsScope.h"
@@ -7,6 +8,7 @@
 #include <QHostAddress>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QLoggingCategory>
 #include <QMetaObject>
 #include <QTimer>
 #include <QVariantList>
@@ -17,6 +19,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+
+Q_LOGGING_CATEGORY(lcAnanDefaults, "aether.anan.droopdefaults", QtWarningMsg)
 
 namespace AetherSDR::anan {
 
@@ -273,6 +277,29 @@ AnanBackend::AnanBackend(QObject* parent)
         m_discoveredFirmwareVer = firmwareVer;
         m_discoveredNumDdc = numDdc;
         m_discoveryInfoReceived = true;
+        // The shipped droop defaults are derived from ONE gateware's filter
+        // coefficients (AnanDroopDefaults.h). They are still applied on a
+        // mismatch -- a slightly-wrong correction beats none, and an operator
+        // who disagrees can sweep their own -- but say so, or a future
+        // re-tune presents as "the panadapter looks a bit off" with nothing
+        // anywhere connecting it to the defaults. Logged here rather than at
+        // the seed site because connectRadio() zeroes m_discoveredFirmwareVer
+        // and the discovery reply fills it in afterwards.
+        //
+        // firmwareVer only, deliberately: P2Protocol.h's own rule is that
+        // board type is a discovery-time picker filter and must not decide
+        // what the backend does. The honest limit of that is worth naming --
+        // the shipped curve comes from SATURN filter coefficients
+        // specifically, so a non-Saturn board reporting this same build
+        // number is the one mismatch this warning cannot see.
+        if (firmwareVer != kDefaultsGatewareVersion) {
+            qCWarning(lcAnanDefaults).nospace()
+                << "ANAN: radio reports gateware " << firmwareVer
+                << ", shipped droop defaults were derived against "
+                << kDefaultsGatewareVersion
+                << " -- applying them anyway; run the in-app droop sweep if "
+                   "the panadapter edges look wrong";
+        }
         emit capabilitiesChanged();
     });
 
@@ -428,13 +455,31 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         // AnanRxDsp::clearDroopCorrectionTables().
         QMetaObject::invokeMethod(m_dsp, "clearDroopCorrectionTables",
                                   Qt::QueuedConnection);
+
+        auto pushTable = [this](int rateKsps, const DroopCorrectionTable& t) {
+            QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionTable", Qt::QueuedConnection,
+                Q_ARG(int, rateKsps),
+                Q_ARG(std::vector<float>, std::vector<float>(t.begin(), t.end())));
+        };
+
+        // Shipped defaults FIRST, so an uncalibrated radio still gets a
+        // corrected panadapter on its first connect. One curve serves all six
+        // rates -- it is derived from the DDC's own filter coefficients rather
+        // than measured, so it is a property of the gateware, not of a unit.
+        // See AnanDroopDefaults.h.
+        for (const int rateKsps : defaultDroopRatesKsps()) {
+            if (const DroopCorrectionTable* t = defaultDroopTableForRate(rateKsps))
+                pushTable(rateKsps, *t);
+        }
+
+        // Then THIS radio's own bench calibration on top, per rate. An
+        // operator who measured their own hardware always outranks a shipped
+        // default, and a partial sweep only overrides the rates it actually
+        // covered rather than wiping the rest back to the default.
         const auto tables = AnanDroopCalibrator::loadTables(
             RadioSettingsScope(QStringLiteral("anan"), m_radioSerial));
-        for (auto it = tables.constBegin(); it != tables.constEnd(); ++it) {
-            QMetaObject::invokeMethod(m_dsp, "setDroopCorrectionTable", Qt::QueuedConnection,
-                Q_ARG(int, it.key()),
-                Q_ARG(std::vector<float>, std::vector<float>(it.value().begin(), it.value().end())));
-        }
+        for (auto it = tables.constBegin(); it != tables.constEnd(); ++it)
+            pushTable(it.key(), it.value());
     }
 
     m_pendingParams.host = request.host;
