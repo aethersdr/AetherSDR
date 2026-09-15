@@ -21,6 +21,33 @@ inline bool isEp6Header(std::span<const std::uint8_t> pkt) noexcept
         && pkt[2] == 0x01 && pkt[3] == 0x06;
 }
 
+// The wideband bandscope's header, `EF FE 01 04`. Same shape as isEp6Header
+// and the same length: the bandscope datagram is also 1032 bytes (usopenhpsdr1.v
+// `START` sets `udp_tx_length_next = 'd1032` before entering `WIDE1`), it just
+// spends all 1024 payload bytes on raw ADC codes instead of framed IQ rounds.
+inline bool isEp4Header(std::span<const std::uint8_t> pkt) noexcept
+{
+    return pkt.size() >= kUsbPacketSize && pkt[0] == 0xEF && pkt[1] == 0xFE
+        && pkt[2] == 0x01 && pkt[3] == 0x04;
+}
+
+// One 12-bit ADC code out of a little-endian 16-bit wire word holding it
+// shifted left by four.
+//
+// Written as a logical shift of a NON-NEGATIVE value followed by an explicit
+// 12-bit sign extension, rather than `int16_t(w) >> 4`. Both the narrowing
+// conversion and the right shift of a negative integer were only fully pinned
+// down in C++20; this form is portable to every standard and reads the same.
+inline int decodeEp4Code(const std::uint8_t* p) noexcept
+{
+    const unsigned w = static_cast<unsigned>(p[0])
+                     | (static_cast<unsigned>(p[1]) << 8);
+    int code = static_cast<int>((w >> 4) & 0x0FFFu);
+    if (code & 0x800)
+        code -= 0x1000;                                  // sign-extend 12 -> 32
+    return code;
+}
+
 inline std::uint32_t readBe32(const std::uint8_t* p) noexcept
 {
     return (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16)
@@ -721,6 +748,80 @@ int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
     return ep6DecodeRounds(pkt, numRx, [&out](int rx, float i, float q) {
         out[static_cast<std::size_t>(rx)].emplace_back(i, q);
     });
+}
+
+double Ep4Stats::peakDbfs() const noexcept
+{
+    if (samples <= 0 || peakAbs <= 0)
+        return kEp4FloorDbfs;
+    return 20.0 * std::log10(static_cast<double>(peakAbs)
+                             / static_cast<double>(kEp4FullScale));
+}
+
+double Ep4Stats::rmsDbfs() const noexcept
+{
+    if (samples <= 0 || sumSquares <= 0.0)
+        return kEp4FloorDbfs;
+    const double rms = std::sqrt(sumSquares / static_cast<double>(samples));
+    if (rms <= 0.0)
+        return kEp4FloorDbfs;
+    return 20.0 * std::log10(rms / static_cast<double>(kEp4FullScale));
+}
+
+void Ep4Stats::merge(const Ep4Stats& other) noexcept
+{
+    samples += other.samples;
+    // Peak is the MAX and not a sum, which is what lets a block's stats and a
+    // packet's stats be the same type: merging four packets of a block gives
+    // the peak of the 2048-sample record, not four times one packet's.
+    if (other.peakAbs > peakAbs)
+        peakAbs = other.peakAbs;
+    sumSquares += other.sumSquares;
+    clippedSamples += other.clippedSamples;
+}
+
+std::optional<std::uint32_t> ep4Seq(std::span<const std::uint8_t> pkt) noexcept
+{
+    if (!isEp4Header(pkt))
+        return std::nullopt;
+    // Byte 4 is a hardwired 8'h00 and byte 5 carries only ep4_seq_no[19:16], so
+    // a well-formed header needs no mask. It is applied anyway: this value
+    // seeds the gap arithmetic, which assumes everything it sees is inside
+    // kEp4SeqModulus, and a header that is not well-formed must not be able to
+    // walk that state outside the modulus (Principle VII).
+    return readBe32(pkt.data() + 4) & (kEp4SeqModulus - 1);
+}
+
+int ep4Samples(std::span<const std::uint8_t> pkt, std::vector<float>& out) noexcept
+{
+    if (!isEp4Header(pkt))
+        return -1;
+    constexpr float kInvFullScale = 1.0f / static_cast<float>(kEp4FullScale);
+    const std::uint8_t* p = pkt.data() + 8;
+    for (std::size_t i = 0; i < kEp4SamplesPerPacket; ++i)
+        out.push_back(static_cast<float>(decodeEp4Code(p + 2 * i)) * kInvFullScale);
+    return static_cast<int>(kEp4SamplesPerPacket);
+}
+
+std::optional<Ep4Stats> ep4Stats(std::span<const std::uint8_t> pkt) noexcept
+{
+    if (!isEp4Header(pkt))
+        return std::nullopt;
+    Ep4Stats s;
+    const std::uint8_t* p = pkt.data() + 8;
+    for (std::size_t i = 0; i < kEp4SamplesPerPacket; ++i) {
+        const int code = decodeEp4Code(p + 2 * i);
+        const int mag = code < 0 ? -code : code;
+        if (mag > s.peakAbs)
+            s.peakAbs = mag;
+        s.sumSquares += static_cast<double>(code) * static_cast<double>(code);
+        // The gateware's own rails, not a symmetric threshold. See
+        // Ep4Stats::clippedSamples in the header.
+        if (code >= kEp4FullScale - 1 || code <= -kEp4FullScale)
+            ++s.clippedSamples;
+    }
+    s.samples = static_cast<int>(kEp4SamplesPerPacket);
+    return s;
 }
 
 }  // namespace AetherSDR::hl2
