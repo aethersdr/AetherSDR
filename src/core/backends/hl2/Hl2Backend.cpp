@@ -306,13 +306,21 @@ double cwBfoOffsetHz(const QString& mode, int pitchHz) noexcept
 //
 //   RX (RXANBPSetFreqs): the SIGN of the passband selects the sideband. The
 //                        mode does not.
-//   TX (SetTXABandpassFreqs): the MODE selects the sideband; the bandpass is an
-//                        audio-domain magnitude. Handing it a negative pair
-//                        flips LSB and DIGL onto the upper sideband.
+//   TX (Hl2TxDsp):       the MODE selects the sideband -- isLowerSideband()
+//                        negates Q -- and the bandpass is an audio-domain
+//                        magnitude. Handing it a negative pair flips LSB and
+//                        DIGL onto the upper sideband.
 //
 // Measured, not assumed: hl2_txdsp_test drives a 1 kHz tone through the real
 // modulator and reads the sideband off the emitted IQ. With a negative pair,
 // LSB lands on the same wire bin as USB.
+//
+// THE TX RULE ABOVE IS Hl2TxDsp'S, NOT WDSP'S. SetTXABandpassFreqs is signed
+// exactly like RXA: TXASetupBPFilters handles TXA_LSB and TXA_USB in one
+// fall-through case with identical CalcBandpassFilter arguments, and create_txa
+// defaults TXA_LSB to f_low = -5000, f_high = -100. Give a TXA channel this
+// table's positive pairs and LSB comes out on the SAME sideband as USB. Read
+// docs/HERMES.md section 5 before migrating transmit onto a WDSP TXA channel.
 //
 // Voice stays at the established 300..2700 rather than inheriting the wider RX
 // window — that width is deliberate (see Hl2TxDsp::Config), and widening every
