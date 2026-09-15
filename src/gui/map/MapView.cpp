@@ -1,4 +1,5 @@
 #include "MapView.h"
+#include "RadarCoverageItem.h"
 #include "DarkBasemapLayer.h"
 #include "MapProviderNetworkAccessManager.h"
 #include "CityLightsItem.h"
@@ -220,6 +221,10 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
     lightsLayer->addItem(m_cityLightsItem);
     m_cityLightsItem->setVisible(false);
 
+    m_radarCoverageItem = new RadarCoverageItem();
+    m_radarCoverageItem->setZValue(-31000);
+    m_map->addItem(m_radarCoverageItem);
+    m_radarCoverageItem->setVisible(false);
     m_weatherRadarLayer = new WeatherRadarTileLayer();
     m_weatherRadarLayer->setEnabled(false);
     m_weatherRadarLayer->setZValue(-32000);
@@ -231,6 +236,12 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
     m_map->addItem(m_weatherRadarNextLayer);
     for (WeatherRadarTileLayer* layer : { m_weatherRadarLayer,
                                           m_weatherRadarNextLayer }) {
+        connect(layer, &WeatherRadarTileLayer::providersChanged, this,
+            [this, layer](int providers) {
+                if (layer == m_weatherRadarLayer && !m_weatherRadarPlaybackActive) {
+                    emit weatherRadarProvidersChanged(providers);
+                }
+            });
         connect(layer, &WeatherRadarTileLayer::frameReady, this,
                 [this, layer](const QDateTime& frameTime) {
                     handleWeatherRadarFrameReady(layer, frameTime);
@@ -270,6 +281,7 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
                 m_weatherRadarNextLayer->setOpacity(0.0);
                 m_weatherRadarNextLayer->setZValue(-31999);
                 m_pendingWeatherRadarFrameId.clear();
+                emit weatherRadarProvidersChanged(m_weatherRadarLayer->displayedProviders());
                 emit weatherRadarFrameLoaded(
                     m_weatherRadarLayer->source().frameTime());
             });
@@ -316,8 +328,9 @@ MapView::MapView(QWidget* parent, ViewportMode viewportMode)
 
     // Mandatory attribution per the OSM tile usage policy.
     m_attribution = new QLabel(
-        QStringLiteral("© OpenStreetMap contributors"), this);
-    m_attribution->setAttribute(Qt::WA_TransparentForMouseEvents);
+        QStringLiteral("© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors"), this);
+    m_attribution->setObjectName(QStringLiteral("flatMapAttribution"));
+    m_attribution->setOpenExternalLinks(true);
     updateAttributionStyle();
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &MapView::updateAttributionStyle);
@@ -471,6 +484,18 @@ void MapView::showHoverTooltip(const QPointF& projPos)
 {
     const int hit = m_markerBatch != nullptr
         ? m_markerBatch->markerAt(projPos) : -1;
+    const QString radarTooltip = hit < 0 ? m_radarCoverageItem->tooltipAt(projPos) : QString{};
+    if (!radarTooltip.isEmpty()) {
+        m_hoverMarkerIndex = -1;
+        m_hoverCard->setTextFormat(Qt::PlainText);
+        m_hoverCard->setText(radarTooltip);
+        m_hoverCard->adjustSize();
+        m_hoverCard->move(mapFromGlobal(QCursor::pos()) + QPoint(12, 12));
+        m_hoverCard->show(); m_hoverCard->raise();
+        clearHoverPath();
+        return;
+    }
+    m_hoverCard->setTextFormat(Qt::AutoText);
     if (hit < 0 || m_markerBatch->marker(hit).tooltip.isEmpty()) {
         m_hoverMarkerIndex = -1;
         m_hoverCard->hide();
@@ -619,6 +644,13 @@ bool MapView::dayNightTerminatorVisible() const
     return m_terminatorItem != nullptr && m_terminatorItem->isVisible();
 }
 
+void MapView::setRadarSites(const QVector<RadarSite>& sites, bool visible)
+{
+    m_radarCoverageItem->setSites(sites);
+    m_radarCoverageItem->setVisible(visible);
+    updateMapAttribution();
+}
+
 void MapView::setWeatherRadarVisible(bool visible)
 {
     if (m_weatherRadarEnabled == visible) {
@@ -661,12 +693,13 @@ void MapView::refreshWeatherRadar()
     if (!m_weatherRadarLayer->isVisible()) {
         return;
     }
-    setWeatherRadarSource(WeatherRadarSource::currentNoaaFrame());
+    setWeatherRadarSource(m_weatherRadarSource.latestFrame());
 }
 
 void MapView::setWeatherRadarSource(const WeatherRadarSource& source)
 {
     m_weatherRadarSource = source;
+    updateMapAttribution();
     if (!m_weatherRadarLayer->isVisible()) {
         m_weatherRadarLayer->setSource(source);
         return;
@@ -815,14 +848,23 @@ void MapView::setCityLightsBrightness(int percent)
     m_cityLightsItem->setOpacity(std::clamp(percent, 0, 100) / 100.0);
 }
 
+void MapView::setDetailedAttributionVisible(bool visible)
+{
+    m_detailedAttributionVisible = visible;
+    updateMapAttribution();
+}
+
 void MapView::updateMapAttribution()
 {
-    QString text = QStringLiteral("© OpenStreetMap contributors");
-    if (m_cityLightsVisible) {
+    QString text = QStringLiteral("© <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors");
+    if (m_detailedAttributionVisible && m_cityLightsVisible) {
         text += QStringLiteral(" · Lights: NASA/GSFC, 2016");
     }
-    if (m_weatherRadarEnabled) {
-        text += QStringLiteral(" · Radar: NOAA/NWS");
+    if (m_detailedAttributionVisible && m_weatherRadarEnabled) {
+        text += QStringLiteral(" · ") + m_weatherRadarSource.attribution();
+    }
+    if (m_detailedAttributionVisible && m_radarCoverageItem && m_radarCoverageItem->isVisible()) {
+        text += QStringLiteral(" · Sites: NOAA/NWS, EUMETNET OPERA · nominal range");
     }
     m_attribution->setText(text);
     m_attribution->adjustSize();

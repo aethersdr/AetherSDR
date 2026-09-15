@@ -3,8 +3,22 @@
 #include "WeatherRadarWorldWrap.h"
 
 #include <QSize>
+#include <limits>
 
 namespace AetherSDR {
+
+constexpr qint64 kMaximumWeatherRadarPixels = 4 * 1024 * 1024;
+
+inline QSize weatherRadarLimitedSize(const QSize& size)
+{
+    const qint64 pixels = qint64(size.width()) * size.height();
+    if (size.isEmpty() || pixels <= kMaximumWeatherRadarPixels) {
+        return size;
+    }
+    const double scale = std::sqrt(double(kMaximumWeatherRadarPixels) / pixels);
+    return QSize(std::max(1, int(std::floor(size.width() * scale))),
+                 std::max(1, int(std::floor(size.height() * scale))));
+}
 
 struct WeatherRadarViewGeometry {
     // Always conventional EPSG:3857 (north positive), including cache entries.
@@ -28,7 +42,8 @@ struct WeatherRadarViewGeometry {
 };
 
 inline WeatherRadarViewGeometry weatherRadarPaddedView(
-    const WeatherRadarViewGeometry& view, int maximumDimension)
+    const WeatherRadarViewGeometry& view, int maximumDimension,
+    qint64 maximumPixels = std::numeric_limits<qint64>::max())
 {
     if (view.bounds.isEmpty() || view.size.isEmpty()) {
         return {};
@@ -59,9 +74,15 @@ inline WeatherRadarViewGeometry weatherRadarPaddedView(
     const auto x = axis(view.bounds.left(), view.bounds.width(), unitsX);
     const auto y = axis(view.bounds.top(), view.bounds.height(), unitsY);
     const QRectF bounds(x.first, y.first, x.second - x.first, y.second - y.first);
-    return {bounds, QSize(
+    const QSize size(
         qRound(std::clamp(bounds.width() / unitsX, 1.0, double(maximumDimension))),
-        qRound(std::clamp(bounds.height() / unitsY, 1.0, double(maximumDimension))))};
+        qRound(std::clamp(bounds.height() / unitsY, 1.0, double(maximumDimension))));
+    // Spend the pixel budget on the visible data first. Optional margins may
+    // be dropped without softening the image or creating a cache/rebuffer loop.
+    if (qint64(size.width()) * size.height() > maximumPixels) {
+        return view;
+    }
+    return {bounds, size};
 }
 
 // Reorder only waiting work; do not abort useful in-flight frames whenever

@@ -1348,5 +1348,11 @@
   "note": "Session-local APRS fill-in policy and bounded modem queue; no backend-specific commands or transport ownership.",
   "split": "",
   "confidence": "high"
+ },
+ "core/weather/OperaRadarImage.h": {
+  "tag": "ui-support",
+  "note": "Bounded OPERA CIRRUS byte decoder placed in aethercore with existing zlib under RFC #5630 condition B; no radio state or widget dependency.",
+  "split": "",
+  "confidence": "high"
  }
 }
