@@ -51,6 +51,29 @@ accessor set, and two channel-state fixes:
    Interlocked shims are seq_cst `__atomic_*` builtins, so the edge is real to
    TSan, not merely quiet.
 
+   **THE SINGLE POST IS NOT ENOUGH, and that was found in review of #5628.**
+   The handshake posts one token to `Sem_BuffReady` so the worker wakes, sees
+   `run == 0` and exits. That token can be STOLEN: `flush_iobuffs()`
+   (`upstream/iobuffs.c`) drains the same semaphore with
+   `while (!WaitForSingleObject (a->Sem_BuffReady, 1));`, and a stop that was
+   clocked out leaves `flushChannel` runnable. If the flush thread gets its slot
+   while the wait loop is running it consumes the worker's wake-up; the worker
+   parks forever, the loop falls through its cap exactly as designed, and
+   `destroy_iobuffs()` then closes the semaphore under a live waiter — where
+   glibc's `pthread_cond_destroy()` blocks and never returns.
+
+   So the loop now RE-POSTS the token on every iteration. The worker exits on
+   `run == 0` however many tokens are outstanding and the `iob` is freed
+   immediately afterwards, so the extras cost nothing. Measured by ten9876 on
+   #5628: 7 hangs in 16 runs of `wdsp_channel_test` under 8-way parallel load on
+   Arch/glibc, 0 in 32 with the re-post. **The hang does not reproduce on
+   macOS/arm64 — 16 runs clean with the fix AND 16 clean without it — so this
+   platform cannot confirm the fix, only that it causes no regression.**
+
+   The general statement, for whoever refreshes this next: the handshake is
+   sound only while nothing else drains `Sem_BuffReady`, and `flush_iobuffs()`
+   does.
+
    Three details are not obvious and were all found in review of #5411:
 
    - **The worker had two exits; it now has one.** `dexchange()` (`iobuffs.c`)

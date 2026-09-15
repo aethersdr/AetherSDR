@@ -141,6 +141,27 @@ void pre_main_destroy (int channel)
 		while (_InterlockedAnd (&ch[channel].mainExited, ~0L) != gen && waited < 1000)
 		{
 			Sleep (1);
+			// AND RE-POST THE TOKEN, because the single post above can be
+			// STOLEN. flush_iobuffs() drains this same semaphore with
+			// `while (!WaitForSingleObject (a->Sem_BuffReady, 1));`, and a stop
+			// that was clocked out leaves flushChannel runnable -- a shape this
+			// branch is what first makes reachable. If the flush thread gets its
+			// slot while this loop is running, it consumes the worker's wake-up,
+			// the worker stays parked on Sem_BuffReady forever, this loop falls
+			// through its cap exactly as designed, and destroy_iobuffs() then
+			// CloseHandle()s the semaphore under a live waiter -- where glibc's
+			// pthread_cond_destroy() blocks and never returns.
+			//
+			// Measured by ten9876 on #5628: 7 hangs in 16 runs of
+			// wdsp_channel_test under 8-way parallel load, 0 in 32 with this
+			// line. Both captured cores show pthread_cond_destroy <- CloseHandle
+			// <- destroy_iobuffs with wdspmain still in WaitForSingleObject.
+			//
+			// Extra tokens cost nothing: the worker exits on run == 0 however
+			// many are outstanding, and the whole iob is freed immediately
+			// afterwards. A post past the semaphore's 1000 maximum simply fails,
+			// which is also harmless here.
+			ReleaseSemaphore (a->Sem_BuffReady, 1, 0);
 			++waited;
 		}
 	}
@@ -395,8 +416,9 @@ int SetChannelState (int channel, int state, int dmode)
 			// AetherSDR patch 8 (K5PTB, PR #5628): CANCELLING THE RAMP IS NOT ENOUGH. The
 			// flush_slews() below cancels a ramp that is still PENDING. It cannot cancel a
 			// flush that a ramp which already COMPLETED has requested: at that completion
-			// fexchange0/fexchange2 cleared exchange and released Sem_Flush (iobuffs.c:502,
-			// :561) and the flushChannel thread is now runnable but may not have been
+			// fexchange0/fexchange2 cleared exchange and released Sem_Flush
+			// (iobuffs.c, the ReleaseSemaphore calls in each) and the flushChannel
+			// thread is now runnable but may not have been
 			// scheduled. It takes csDSP then csEXCH, flushes, and does
 			//     InterlockedBitTestAndSet (&a->exec_bypass, 0);
 			// (channel.c). Arm in that window and flushChannel sets exec_bypass AFTER this

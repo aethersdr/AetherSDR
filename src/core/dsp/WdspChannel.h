@@ -226,9 +226,23 @@ public:
     // block up to WDSP's 100 ms timeout waiting for the flush thread — in
     // practice under 3 ms, and 0 unless the previous stop's ramp was clocked
     // out; and a stopped channel may be clocked for as long as the caller likes
-    // and then destroyed, with no ordering obligation on the caller. What is NOT
-    // claimed: none of this has run on hardware, and the measurements behind it
-    // are synthetic probes, not a T/R edge. Pinned by
+    // and then destroyed, with no ordering obligation on the caller.
+    //
+    // THAT LAST CLAUSE RESTS ON A PATCH, and it was false before it. Clocking a
+    // stopped channel completes the down-ramp, which leaves WDSP's flushChannel
+    // thread runnable; its flush_iobuffs() then drained the very token
+    // pre_main_destroy() posts to wake the worker, the worker parked forever,
+    // and destroy_iobuffs() closed that semaphore under a live waiter -- where
+    // glibc's pthread_cond_destroy() blocks and never returns. ten9876 measured
+    // it on #5628: 7 hangs in 16 runs under 8-way parallel load. Patch 4's wait
+    // loop now re-posts the token on every iteration, which closes it. See
+    // third_party/wdsp/AETHERSDR-PATCHES.md, patch 4.
+    //
+    // What is NOT claimed: none of this has run on hardware, the measurements
+    // behind it are synthetic probes rather than a T/R edge, and the hang above
+    // does not reproduce on macOS/arm64 at all -- 16 runs clean with the fix and
+    // 16 clean without it -- so that platform cannot confirm the fix, only that
+    // it causes no regression. Pinned by
     // runRestartDuringRampTest, whose scenarios straddle the ramp, and by
     // runCloseAfterStoppedClockingTest.
     //
