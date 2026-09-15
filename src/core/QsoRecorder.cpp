@@ -398,6 +398,13 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
         dataBytes = m_dataBytes;
 
         m_file->close();
+        // QFile can report a native close error after a successful flush.
+        // Preserve an earlier header failure, otherwise sample the final
+        // device result before releasing the handle and advertising playback.
+        if (finalized && m_file->error() != QFileDevice::NoError) {
+            finalized = false;
+            finalizeError = m_file->errorString();
+        }
         m_file->deleteLater();
         m_file = nullptr;
 
@@ -417,7 +424,7 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
     if (!finalized || writeFailed) {
         if (report == FinalizeReport::Diagnose) {
             const QString detail = writeFailed ? writeFailure
-                : QStringLiteral("Could not finalize WAV header")
+                : QStringLiteral("Could not finalize WAV recording")
                       + (finalizeError.isEmpty() ? QString{} : QStringLiteral(": ") + finalizeError);
             qCWarning(lcAudio) << "QsoRecorder:" << detail << filePath;
             emit recordingError(QStringLiteral("Recording write failed: %1\n\n%2")

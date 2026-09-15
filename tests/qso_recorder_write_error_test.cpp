@@ -22,6 +22,13 @@
 #include <memory>
 #include <thread>
 
+#ifdef Q_OS_WIN
+#include <io.h>
+#include <qt_windows.h>
+#else
+#include <unistd.h>
+#endif
+
 using namespace AetherSDR;
 
 namespace AetherSDR {
@@ -464,6 +471,51 @@ void testFinalizationFailures()
     }
 }
 
+void testCloseFailureAfterSuccessfulFlush()
+{
+    QTemporaryDir tmp;
+    EXPECT_TRUE(tmp.isValid());
+    Events events;
+    int flushes = 0;
+    bool finalFlushSucceeded = false;
+    QsoRecorder recorder;
+    configure(recorder, tmp.path());
+    connectEvents(recorder, events);
+    QsoRecorderWriteErrorTestAccess::setFlushHook(
+        recorder, [&flushes, &finalFlushSucceeded](QFile& file) {
+            const bool flushed = file.flush();
+            if (++flushes == 2 && flushed) {
+                finalFlushSucceeded = true;
+                // Invalidate only this test-owned handle after the header and
+                // final flush succeeded. QFile::close() must now report its
+                // native close error; no real storage failure is required.
+#ifdef Q_OS_WIN
+                // Leave the CRT descriptor valid for Qt's _close cleanup;
+                // invalidating the descriptor itself invokes MSVC's invalid-
+                // parameter handler when Qt closes it a second time.
+                const HANDLE handle = reinterpret_cast<HANDLE>(::_get_osfhandle(file.handle()));
+                EXPECT_TRUE(::CloseHandle(handle));
+#else
+                EXPECT_EQ(::close(file.handle()), 0);
+#endif
+            }
+            return flushed;
+        });
+
+    recorder.startRecording();
+    recorder.feedRxAudio(rxFrame());
+    recorder.stopRecording();
+    EXPECT_TRUE(finalFlushSucceeded);
+    EXPECT_TRUE(!recorder.isRecording());
+    EXPECT_EQ(events.stopped, 1);
+    EXPECT_EQ(events.errors, 1);
+    EXPECT_TRUE(!recorder.hasLastRecording());
+    EXPECT_TRUE(recorder.recordingFilePath().isEmpty());
+    EXPECT_EQ(wavDataSize(events.stoppedPath), rxFrame().size() / 2);
+    recorder.stopRecording();
+    EXPECT_EQ(events.errors, 1);
+}
+
 void testStaleQueuedFailureCannotTouchRestart()
 {
     QTemporaryDir tmp;
@@ -542,6 +594,7 @@ int main(int argc, char** argv)
     testActualReadOnlyFileFailure();
     testFailedRunClearsPriorPlaybackPath();
     testFinalizationFailures();
+    testCloseFailureAfterSuccessfulFlush();
     testStaleQueuedFailureCannotTouchRestart();
     testDestructionCancelsQueuedFailure();
 
