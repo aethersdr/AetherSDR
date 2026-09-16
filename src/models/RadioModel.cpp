@@ -66,6 +66,18 @@ constexpr quint32 kNeutralPanStreamIdBase = 0xE1000000u;
 // plane. Not a SmartSDR protocol response code; numbered alongside
 // kProfileLoadSuppressedCommandCode (0x50000061), the other such drop.
 constexpr int kNoCommandPlaneCode = 0x50000063;
+
+// True when sendCmd() answered without the command ever reaching a radio: this
+// backend has no command plane, or the session ended while the command was in
+// flight and expirePendingCallbacks() drained it. It is NOT a radio rejection.
+//
+// Any callback that treats a non-zero result as "the radio refused" MUST check
+// this first. Skipping it is not cosmetic: the `client gui` callback below
+// routes a refusal into handleGuiClientRegistrationFailure(), which latches
+// m_intentionalDisconnect and stops the reconnect timer -- so a plain network
+// blip during registration ended the session permanently and told the operator
+// a GUI-client slot was taken. (#5653 review)
+constexpr bool commandNeverReachedRadio(int code) { return code == kNoCommandPlaneCode; }
 // Waterfall ids must be distinct from pan ids: the UI routes waterfall rows by
 // PanadapterModel::wfStreamId() and spectrum frames by panStreamId().
 constexpr quint32 kNeutralWfStreamIdBase  = 0xE2000000u;
@@ -1904,11 +1916,23 @@ void RadioModel::expirePendingCallbacks(const QString& reason)
 
     const QMap<quint32, ResponseCallback> pending = std::move(m_pendingCallbacks);
     m_pendingCallbacks.clear();
+
+    // Refuse new commands for the duration of the drain. hasCommandPlane() is
+    // only a pointer check (m_connection outlives the socket), so without this
+    // a callback that chains another sendCmd() -- createAudioStream()'s
+    // `stream remove` -> createRxAudioStream() is the live one -- lands a fresh
+    // entry in the map we just cleared and queues a write to a dead socket,
+    // re-creating the exact leak this drain exists to close. Saved and restored
+    // rather than set/cleared, so a nested disconnect can't lift the refusal
+    // while an outer drain is still iterating. (#5653 review)
+    const bool wasExpiring = m_expiringPendingCallbacks;
+    m_expiringPendingCallbacks = true;
     for (const ResponseCallback& callback : pending) {
         if (callback) {
             callback(kNoCommandPlaneCode, reason);
         }
     }
+    m_expiringPendingCallbacks = wasExpiring;
 }
 
 namespace {
@@ -6920,7 +6944,7 @@ void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHand
         const QString command = QString("client disconnect 0x%1").arg(handle, 0, 16);
         qCDebug(lcProtocol) << "RadioModel: disconnecting occupied client" << Qt::hex << handle;
         sendCmd(command, [handle, step](int code, const QString& body) {
-            if (code == kNoCommandPlaneCode) {
+            if (commandNeverReachedRadio(code)) {
                 return;
             }
             if (code != 0) {
@@ -6957,11 +6981,11 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
     // mf_enable and the live connected-client list directly from the radio.
     // 400 ms is enough for the radio's status burst to arrive on a LAN path.
     sendCmd("sub radio all", [this](int code, const QString&) {
-        if (code == kNoCommandPlaneCode) {
+        if (commandNeverReachedRadio(code)) {
             return;
         }
         sendCmd("sub client all", [this](int clientCode, const QString&) {
-            if (clientCode == kNoCommandPlaneCode) {
+            if (commandNeverReachedRadio(clientCode)) {
                 return;
             }
             resolveLiveGuiClientIdCollision();
@@ -6981,7 +7005,14 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
                 }
                 return;
             }
-            QTimer::singleShot(400, this, [this] {
+            QTimer::singleShot(400, this, [this, generation = m_sessionGeneration] {
+                // The link can drop inside this window. Everything below reads
+                // live session state and can re-drive the handshake, so a timer
+                // from a dead session must not run. (#5653 review)
+                if (generation != m_sessionGeneration) {
+                    qCDebug(lcProtocol) << "RadioModel: multiFLEX peek window belonged to a closed session — dropping";
+                    return;
+                }
                 // On the non-fast path, client status may arrive during the
                 // collection window rather than before the subscription reply.
                 resolveLiveGuiClientIdCollision();
@@ -7205,6 +7236,14 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
     emit sliceConnectEnumerationStarted();
     sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
         armClientConnectionNoticeSuppression();
+        if (commandNeverReachedRadio(code)) {
+            // The session died before the radio answered -- a mid-handshake TCP
+            // drop, which is exactly the recovery path #5649 protects. This is
+            // not a rejection: fall through to onDisconnected()'s auto-reconnect
+            // rather than latching a terminal registration failure. (#5653 review)
+            qCDebug(lcProtocol) << "RadioModel: client gui unanswered — session ended, not a rejection";
+            return;
+        }
         if (code != 0) {
             // Commit the rejection before a prompt TCP close can reset the
             // registration state and re-arm automatic reconnect (#4560).
@@ -7677,6 +7716,15 @@ void RadioModel::onDisconnected()
     expirePendingCallbacks(QStringLiteral("the radio connection was disconnected"));
     qCDebug(lcProtocol) << "RadioModel: disconnected";
     m_guiClientRegistrationState.reset();
+
+    // End the session for anything still holding a generation. The multiFLEX
+    // peek arms a 400 ms singleShot that can outlive the link: fired after a
+    // drop it would consume a continuation belonging to the dead session and
+    // re-drive `client gui` into the next one. Bumping here invalidates it, and
+    // dropping the continuation makes sure a reconnect starts from a fresh
+    // peek rather than resuming a half-finished one. (#5653 review)
+    ++m_sessionGeneration;
+    m_multiFlexContinuation = nullptr;
 
     // #4142 — void any pan centers deferred during a profile load. The session
     // they belonged to is gone: the radio rebuilds its topology on reconnect, so
@@ -9536,6 +9584,18 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
 
     if (m_wanConn)
         return m_wanConn->sendCommand(command, std::move(cb));
+
+    // A callback being expired at the session boundary tried to chain another
+    // command. There is no session left to write to, and registering it would
+    // repopulate the map expirePendingCallbacks() is draining. Drop it without
+    // invoking the callback: the chain terminates here instead of stranding an
+    // entry nothing will ever answer. Sequence 0 means "not dispatched", the
+    // same contract sendCmd()'s other drops use. (#5653 review)
+    if (m_expiringPendingCallbacks) {
+        qCDebug(lcProtocol).noquote()
+            << "RadioModel: dropping command issued from an expiring callback" << command;
+        return 0;
+    }
 
     // A backend that is not Flex or Sim owns no RadioConnection, so there is
     // nothing to write to — invokeMethod() below would dereference null. This

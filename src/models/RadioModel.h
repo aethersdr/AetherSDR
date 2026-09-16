@@ -1748,6 +1748,14 @@ private:
     friend class RadioModelSliceLifecycleTestAccess;
     friend class TxOperationIntegrationTestAccess;
     void expirePendingCallbacks(const QString& reason);
+
+    // True only while expirePendingCallbacks() is invoking the drained
+    // callbacks. sendCmd() refuses for the duration so an expiring callback
+    // cannot repopulate the map being drained. (#5653 review)
+    bool m_expiringPendingCallbacks{false};
+    // Bumped at every session end. Captured by deferred work (the multiFLEX
+    // peek window) so a timer armed in one session cannot fire into the next.
+    quint64 m_sessionGeneration{0};
     void wireBackendReceiverState();
     bool dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback = {});
     quint64 m_backendReceiverGeneration = 0;

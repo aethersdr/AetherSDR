@@ -57,6 +57,10 @@ public:
         connection.m_state.store(ConnectionState::Disconnected);
     }
     static void beginDemo(RadioConnection& connection) { connection.startSyntheticDemoConnect(); }
+    static quint64 sessionGeneration(const RadioConnection& connection)
+    {
+        return connection.m_sessionGeneration;
+    }
     static void pendingPing(RadioConnection& connection)
     {
         connection.m_lastPingSeq = 42;
@@ -146,6 +150,31 @@ private slots:
         QCOMPARE(responses.size(), 1);
         QCOMPARE(pings.size(), 0);
         QCOMPARE(socket->socketDescriptor(), qintptr(-1));
+    }
+    void staleDemoTimersCannotReplayIntoANewSession()
+    {
+        // The queued synthetic handshake used to test only m_syntheticDemo, which
+        // a fast reconnect sets straight back to true — so the old session's
+        // timers replayed version/connected/status into the NEW session.
+        RadioConnection connection;
+        RadioConnectionSessionTestAccess::attach(connection);
+        QSignalSpy versions(&connection, &RadioConnection::versionReceived);
+        QSignalSpy connected(&connection, &RadioConnection::connected);
+
+        RadioConnectionSessionTestAccess::beginDemo(connection);
+        const quint64 first = RadioConnectionSessionTestAccess::sessionGeneration(connection);
+        connection.disconnectFromRadio();          // tears the first session down
+        RadioConnectionSessionTestAccess::beginDemo(connection);   // ...and a new one starts
+        const quint64 second = RadioConnectionSessionTestAccess::sessionGeneration(connection);
+        QVERIFY(second != first);                  // the sessions are distinguishable
+
+        // Let every queued handshake timer from BOTH sessions run.
+        QTest::qWait(150);
+
+        // Exactly one handshake, the live session's — not two.
+        QCOMPARE(versions.size(), 1);
+        QCOMPARE(connected.size(), 1);
+        connection.disconnectFromRadio();
     }
     void newDemoSessionResetsOldBytes()
     {

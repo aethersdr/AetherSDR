@@ -71,6 +71,31 @@ public:
     {
         radio.disconnectClientHandlesThen(handles, std::move(continuation));
     }
+    static void primeGuiRegistration(RadioModel& radio, PanadapterStream& stream,
+                                     QStringList& commands)
+    {
+        radio.m_family = QStringLiteral("flex");
+        radio.m_panStream = &stream;
+        radio.m_connection->m_commandSinkForTest =
+            [&commands](quint32, const QString& c) { commands << c; };
+        radio.m_lastInfo.address = QHostAddress(QStringLiteral("192.168.1.100"));
+        radio.m_intentionalDisconnect = false;
+        radio.m_radioWakeActive = false;
+        radio.registerAsGuiClient(QStringLiteral("00000000-0000-0000-0000-0000000000AA"));
+        // onDisconnected() stops the stream with a BlockingQueuedConnection the
+        // harness cannot service; detach it once the command is registered.
+        radio.m_panStream = nullptr;
+    }
+    static void primeChainedStreamCommand(RadioModel& radio, QStringList& commands)
+    {
+        radio.m_family = QStringLiteral("flex");
+        radio.m_connection->m_commandSinkForTest =
+            [&commands](quint32, const QString& c) { commands << c; };
+        radio.m_rxAudio.streamId = 0x12345678;
+        radio.createAudioStream();   // `stream remove` whose callback chains more sendCmds
+    }
+    static bool intentionalDisconnect(const RadioModel& radio) { return radio.m_intentionalDisconnect; }
+    static bool reconnectArmed(const RadioModel& radio) { return radio.m_reconnectTimer.isActive(); }
     static void injectNetCwTransport(RadioModel& radio, PanadapterStream& stream,
                                     std::function<void(const QByteArray&)> sink)
     {
@@ -410,8 +435,8 @@ void pendingCallbackDisconnectExpiry()
         if (clientSubscriptionSequence != 0) {
             TxOperationIntegrationTestAccess::disconnect(radio);
             check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0
-                      && TxOperationIntegrationTestAccess::hasMultiFlexContinuation(radio),
-                  "an expired client subscription cannot continue the MultiFlex handshake");
+                      && !TxOperationIntegrationTestAccess::hasMultiFlexContinuation(radio),
+                  "an expired client subscription drops the dead session's MultiFlex continuation");
         }
     }
 
@@ -424,6 +449,59 @@ void pendingCallbackDisconnectExpiry()
     check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0
               && !clientDisconnectContinuationRan,
           "disconnect expiration cannot advance the client-disconnect callback chain");
+}
+
+
+// A mid-handshake TCP drop is a network blip, not a radio rejection. Before
+// #5653's review the disconnect-edge expiry answered the in-flight `client gui`
+// callback with the terminal code, which that callback read as a refusal:
+// m_intentionalDisconnect latched, the reconnect timer stopped, and the operator
+// was told a GUI-client slot was taken. Auto-reconnect never fired again.
+void guiRegistrationDropIsNotARejection()
+{
+    RadioModel radio;
+    PanadapterStream stream;
+    QStringList commands;
+    int registrationFailed = 0;
+    int connectionErrors = 0;
+    QObject::connect(&radio, &RadioModel::guiClientRegistrationFailed,
+                     [&](const QString&) { ++registrationFailed; });
+    QObject::connect(&radio, &RadioModel::connectionError,
+                     [&](const QString&) { ++connectionErrors; });
+
+    TxOperationIntegrationTestAccess::primeGuiRegistration(radio, stream, commands);
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 1,
+          "client gui is in flight before the drop");
+
+    TxOperationIntegrationTestAccess::disconnect(radio);
+
+    check(registrationFailed == 0,
+          "a transport drop is not reported as a GUI-client registration failure");
+    check(connectionErrors == 0,
+          "a transport drop raises no registration connectionError");
+    check(!TxOperationIntegrationTestAccess::intentionalDisconnect(radio),
+          "a transport drop is not latched as an intentional disconnect");
+    check(TxOperationIntegrationTestAccess::reconnectArmed(radio),
+          "auto-reconnect stays armed after a drop during GUI registration");
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0,
+          "the expired client gui callback is not left in the map");
+}
+
+// expirePendingCallbacks() drains the map, but hasCommandPlane() is only a
+// pointer check -- so a drained callback that chains another sendCmd() used to
+// land a fresh entry in the map just cleared, re-creating the leak being closed.
+void expiringCallbackCannotRepopulateTheMap()
+{
+    RadioModel radio;
+    QStringList commands;
+    TxOperationIntegrationTestAccess::primeChainedStreamCommand(radio, commands);
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 1,
+          "the chaining stream command is in flight before the drop");
+
+    TxOperationIntegrationTestAccess::disconnect(radio);
+
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0,
+          "a callback chained from an expiring callback cannot repopulate the map");
 }
 
 void disconnectAdmission()
@@ -827,6 +905,8 @@ int main(int argc, char** argv)
     flexEncoding();
     teardownAdmission();
     pendingCallbackDisconnectExpiry();
+    guiRegistrationDropIsNotARejection();
+    expiringCallbackCannotRepopulateTheMap();
     disconnectAdmission();
     reentrantIntents();
     quindarNormalRelease();

@@ -122,6 +122,11 @@ private:
 
     QTcpSocket*  m_socket{nullptr};
     QByteArray   m_readBuffer;
+    // Bumped by resetSessionState() at every session edge. Deferred work
+    // captures it so a timer armed in one session cannot fire into the next
+    // (the synthetic-demo handshake). Connection-thread only, like the
+    // buffer above. (#5653 review)
+    quint64      m_sessionGeneration{0};
     QTimer*      m_heartbeat{nullptr};
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
