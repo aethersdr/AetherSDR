@@ -169,9 +169,21 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         maxBtn->setFixedSize(16, 16);
         maxBtn->setCursor(Qt::ArrowCursor);
         maxBtn->setStyleSheet(btnStyle);
-        maxBtn->setToolTip("Maximize");
+        // FULL SCREEN, not maximize, and the distinction is the point on this
+        // window in particular. showMaximized() fills the desktop and keeps the
+        // menu bar, the dock and this window's own frame; an operator who
+        // enlarges the audio strip is trying to READ it across the room, and
+        // the furniture is what they are trying to get rid of.
+        //
+        // The platform already has this and it is what the View menu's "Enter
+        // Full Screen" reaches. Offering a button that looks like that menu
+        // item and does something else is the fault being fixed, not the
+        // absence of a button.
+        //
+        // Reported on the air by ON8ST (on8st), operating a Hermes-Lite 2.
+        maxBtn->setToolTip("Enter full screen");
         connect(maxBtn, &QPushButton::clicked, this, [this]() {
-            if (isMaximized()) showNormal(); else showMaximized();
+            if (isFullScreen()) showNormal(); else showFullScreen();
         });
         row->addWidget(maxBtn);
 
