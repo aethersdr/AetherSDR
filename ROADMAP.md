@@ -11,7 +11,7 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### In flight
 
-- **aetherd — vendor-neutral radio backend** ([RFC #3849](https://github.com/aethersdr/AetherSDR/issues/3849)) — extracting an
+- **aetherd — vendor-neutral radio backend** ([RFC #3849](https://github.com/aethersdr/AetherSDR/issues/3849), approved) — extracting an
   `IRadioBackend` seam (`RadioCapabilities` + typed status/command deltas)
   so radio-family logic lives behind a stable interface instead of being
   woven through `RadioModel`. FlexBackend owns the Flex wire objects
@@ -35,8 +35,8 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   UDP transport, brought up in v26.8.2 against a live **IC-705** (RX, scope,
   transmit, and FT8 both decoding and spotting on PSK Reporter) and an
   **IC-7300** (RX, scope and stability; transmit unverified). Only the IC-705
-  and IC-7300MK2 are `verified` against their own CI-V guides ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517)
-  proposes promoting the IC-7300MK2 to Supported); an unknown model
+  and IC-7300MK2 are `verified` against their own CI-V guides ([RFC #5517](https://github.com/aethersdr/AetherSDR/issues/5517),
+  approved, promotes the IC-7300MK2 to Supported); an unknown model
   gets no scope and no transmit rather than optimistic defaults. v26.8.3 gave
   the backend a **command plane**: every meter read, control write,
   reconciliation poll and PTT transition goes through one CI-V scheduler with
@@ -72,7 +72,7 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   and tested but not yet wired to a live backend. Remaining: selectable sharp
   passband filtering, and the USB/DSP/audio/viewport integration that turns the
   policy into real multi-receiver capture.
-- **Workspace canvas — experimental** — RFC #4887 landed complete in v26.8.3,
+- **Workspace canvas — experimental** — [RFC #4887](https://github.com/aethersdr/AetherSDR/issues/4887) landed complete in v26.8.3,
   all seven phases: pans and applets as freely placed, resizable, layered items
   on a canvas that can span several top-level windows, with named workspaces,
   full-recall switching and radio-profile bindings. It is **off by default**, and
