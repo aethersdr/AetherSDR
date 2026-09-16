@@ -7,7 +7,7 @@
 #include <complex>
 #include <string>
 #include <vector>
-#include "core/backends/IRadioBackend.h"
+#include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR::hl2 {
 
@@ -122,14 +122,23 @@ public slots:
     //                                power control — it is the proportional
     //                                attenuator #4796 left it.
     //   EngineGenerated              m_micGain DOES NOT APPLY. A mic slider is
-    //                                a microphone control. The WSPR pump, the
-    //                                AX.25 modem and the RADE waveform each
-    //                                generate at a level chosen for them, and
-    //                                yoking a beacon to the setting an operator
+    //                                a microphone control, and the WSPR pump —
+    //                                the only source tagged this way — keys for
+    //                                111.6 s with nobody at the microphone.
+    //                                Yoking a beacon to the setting an operator
     //                                picked for their voice is a defect that
-    //                                predates the ALC change — it was merely
-    //                                invisible while 40 dB of makeup
-    //                                normalised every one of them to target.
+    //                                predates the ALC change; it was merely
+    //                                invisible while 40 dB of makeup normalised
+    //                                every source onto the target.
+    //
+    // THE AX.25 MODEM IS Microphone, NOT EngineGenerated, and the reason is a
+    // level rather than a label: its AFSK amplitude is a compile-time constant
+    // (kTxAfskAmplitude = 0.35, -9.12 dBFS) and the packet dialog carries no
+    // level control, so this slider is the only thing in the product that can
+    // move a packet frame. Bypassing it would pin HF packet 7.71 dB under
+    // alcTargetPeak with nothing able to raise it. (RADE never reaches here at
+    // all: it needs DAX audio, activateRADE() refuses any radio that cannot
+    // provide it, and a Flex modulates on its own side.)
     //
     // WHY IT IS A SOURCE AND NOT THE BOOL IT REPLACED. `clientLeveled` selected
     // the ALC's ceiling: unity for client-leveled audio, alcMaxGainDb (40 dB)
@@ -154,6 +163,11 @@ public slots:
     // The ALC itself is unchanged for all three: reduction-only, unity ceiling.
     // Engine audio is protected from splatter exactly like everything else; it
     // simply is not RE-LEVELLED on its way in.
+    //
+    // RESIDUE: m_inBuffer carries up to dspBlockSize-1 samples between calls and
+    // would be levelled with the NEW block's multiplier, so a source change
+    // inside one transmission drops the carry rather than mislevelling it. See
+    // the guard at the top of processAudioBlock().
     //
     // hl2_txdsp_test's #4796 cases still pass unchanged, which is the evidence
     // that none of this moved the TCI/DAX path.
@@ -195,6 +209,10 @@ private:
     Config m_config;
     bool m_configured = false;
     double m_micGain = 1.0;
+    // The source of the last block processed, so carried m_inBuffer residue is
+    // never levelled as a different source. See processAudioBlock().
+    TxAudioSource m_lastSource = TxAudioSource::Microphone;
+    bool m_sourceChangeWarned = false;   // one warning per transmission
     int m_upsample = 2;
     double m_alcGain = 1.0;      // current ALC gain, carried across blocks
 

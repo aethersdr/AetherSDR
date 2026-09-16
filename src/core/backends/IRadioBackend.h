@@ -26,27 +26,9 @@
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
+#include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR {
-
-// Where a block of transmit audio originated. See submitTxAudio() below for
-// why this is three states and not the bool it replaced.
-//
-// Declared as a metatype because it travels on AudioEngine's
-// txFinalMonitorPcmReady signal, and AudioEngine lives on its own thread —
-// a queued connection cannot marshal a type Qt has never been told about,
-// and the failure is a runtime warning and a dropped signal, not a compile
-// error.
-//
-// It lives inside AetherSDR like every other name this header declares. It was
-// briefly at global scope, which this header reaches into most of the tree —
-// AudioEngine.h and Hl2TxDsp.h now include it — so the convention is not a
-// formality here.
-enum class TxAudioSource {
-    Microphone = 0,
-    ClientLeveled,
-    EngineGenerated,
-};
 
 // Neutral, family-agnostic connect descriptor. Core fields cover the common
 // case; vendor-specific parameters (SmartLink token, Kiwi endpoint path, …)
@@ -867,29 +849,14 @@ public:
     // the microphone and any future source all reach the air through ONE path,
     // so what the operator monitors is what gets transmitted.
     //
-    // WHERE THE TRANSMIT AUDIO CAME FROM, which decides whose level it is.
+    // `source` says WHERE THE AUDIO CAME FROM, which decides whose level it is.
+    // TxAudioSource.h carries the full contract for the three states and why it
+    // is not the bool it replaced; the short version is that the mic slider
+    // applies to Microphone and ClientLeveled and not to EngineGenerated.
     //
-    // This was a bool named `clientLeveled` and the bool could not say enough.
-    // It answered "did an external client set this level?" — true for TCI/DAX,
-    // false for EVERYTHING ELSE — which put the operator's microphone and the
-    // engine's own generated tones in one bucket. They are not the same thing
-    // and they must not be levelled the same way:
-    //
-    //   Microphone       the operator sets the level, with the mic slider,
-    //                    deliberately, and is standing there to hear the result.
-    //   ClientLeveled    TCI/DAX. The sender already applied its own control,
-    //                    so a host-modulating backend must not add makeup over
-    //                    it (#4796).
-    //   EngineGenerated  the WSPR pump, the AX.25 modem and the RADE waveform.
-    //                    WE generated this, at a level WE chose, and NOBODY IS
-    //                    WATCHING — a WSPR frame keys for 111.6 s unattended.
-    //                    The mic slider is a microphone control and has no
-    //                    business moving it.
-    //
-    // The distinction was harmless while the ALC carried up to 40 dB of makeup:
-    // it normalised every one of these to its target, so generated audio came
-    // out right no matter what level it was generated at. Removing the makeup
-    // made the difference load-bearing, and made this enum necessary.
+    // ORIGIN, NOT TREATMENT. What a backend does with the tag is the backend's
+    // business, and most do nothing: Hl2TxDsp is the only consumer in the tree,
+    // and a radio that modulates on its own side ignores it entirely.
     //
     // No default argument — defaults on virtuals bind statically, and the
     // override a caller actually reaches would quietly diverge from it.
@@ -1400,5 +1367,3 @@ private:
 // RadioModel's constructor, so a queued or QMetaMethod-based connection of
 // linkStatsUpdated delivers rather than silently dropping.
 Q_DECLARE_METATYPE(AetherSDR::IRadioBackend::LinkStats)
-
-Q_DECLARE_METATYPE(AetherSDR::TxAudioSource)

@@ -632,7 +632,7 @@ int main(int argc, char** argv)
         const double kSliderTopGain = micSliderToLinear(100);   // 100x, +40 dB
         const auto slam = modulate(WdspChannel::Mode::Usb, kHarmTone, 1.0,
                                    kSliderTopGain, 1.5, nullptr, true, nullptr,
-                                   /*clientLeveled=*/true);
+                                   TxAudioSource::ClientLeveled);
         if (!slam.empty()) {
             double mx = 0.0;
             std::size_t atClamp = 0;
@@ -713,7 +713,7 @@ int main(int argc, char** argv)
                         std::vector<float>(
                             audio.begin() + static_cast<std::ptrdiff_t>(off),
                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        /*clientLeveled=*/false);
+                        TxAudioSource::Microphone);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -781,7 +781,7 @@ int main(int argc, char** argv)
                         std::vector<float>(
                             audio.begin() + static_cast<std::ptrdiff_t>(off),
                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        /*clientLeveled=*/false);
+                        TxAudioSource::Microphone);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -865,7 +865,7 @@ int main(int argc, char** argv)
                         std::vector<float>(
                             audio.begin() + static_cast<std::ptrdiff_t>(off),
                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        /*clientLeveled=*/false);
+                        TxAudioSource::Microphone);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1000,9 +1000,9 @@ int main(int argc, char** argv)
 
     // ── The engine's own generated audio keeps the level it was generated at ──
     //
-    // WSPR, the AX.25 modem and the RADE waveform reach the modulator as
-    // TxAudioSource::EngineGenerated. Two properties, and the second is the one
-    // that was actually broken on the air.
+    // The WSPR pump reaches the modulator as TxAudioSource::EngineGenerated —
+    // the only source tagged so. Two properties, and the second is the one that
+    // was actually broken on the air.
     //
     // 1. THE MIC SLIDER DOES NOT REACH IT. A slider set for a voice is not a
     //    control over an unattended beacon. Before the source enum, engine
@@ -1015,7 +1015,12 @@ int main(int argc, char** argv)
     // (bench-runner runs/wspr-unattended-ab, both binaries, same stimulus).
     {
         constexpr double kGenerated = 0.1;      // -20.000 dBFS, the WSPR default
-        float mp = 0.0f;
+        // A mic peak per call, not one scratch variable reused and discarded:
+        // on the EngineGenerated path processAudioBlock computes preAlc from the
+        // SUBSTITUTED multiplier, so this is the pre-slider level, and it is the
+        // one number that separates "the slider was bypassed" from "the slider
+        // happened to sit at unity". Asserted below.
+        float mpUnity = 0.0f, mpUp = 0.0f, mpDown = 0.0f, mpMic = 0.0f;
         auto peak = [](const std::vector<std::complex<float>>& iq) {
             double m = 0.0;
             for (const auto& v : iq) m = std::max(m, static_cast<double>(std::abs(v)));
@@ -1023,11 +1028,11 @@ int main(int argc, char** argv)
         };
 
         const double pUnity = peak(modulate(WdspChannel::Mode::Usb, kTone,
-            kGenerated, 1.0, 1.0, &mp, true, nullptr, TxAudioSource::EngineGenerated));
+            kGenerated, 1.0, 1.0, &mpUnity, true, nullptr, TxAudioSource::EngineGenerated));
         const double pUp    = peak(modulate(WdspChannel::Mode::Usb, kTone,
-            kGenerated, 100.0, 1.0, &mp, true, nullptr, TxAudioSource::EngineGenerated));
+            kGenerated, 100.0, 1.0, &mpUp, true, nullptr, TxAudioSource::EngineGenerated));
         const double pDown  = peak(modulate(WdspChannel::Mode::Usb, kTone,
-            kGenerated, 0.1, 1.0, &mp, true, nullptr, TxAudioSource::EngineGenerated));
+            kGenerated, 0.1, 1.0, &mpDown, true, nullptr, TxAudioSource::EngineGenerated));
 
         const double spreadDb = 20.0 * std::log10(
             std::max(pUp, pDown) / std::max(1e-12, std::min(pUp, pDown)));
@@ -1037,10 +1042,28 @@ int main(int argc, char** argv)
         check(spreadDb < 0.5,
               "the mic slider does not reach engine-generated audio");
 
+        // THE METER AGREES WITH THE AIR. The IQ spread above could in principle
+        // be flat because something downstream re-levelled it; the pre-ALC peak
+        // is measured at the multiplier itself, so a slider that still reached
+        // this audio would move THIS by 1000x whatever the modulator did after.
+        // 100x, 1x and 0.1x must all report the generated level.
+        // micPeak() publishes dBFS, so the spread is a difference, not a ratio.
+        const double mpSpreadDb = std::max({mpUnity, mpUp, mpDown})
+                                - std::min({mpUnity, mpUp, mpDown});
+        const double generatedDbfs = 20.0 * std::log10(kGenerated);
+        std::fprintf(stderr,
+            "engine-generated pre-ALC mic peak: 1x %.3f, 100x %.3f, 0.1x %.3f dBFS"
+            " -> spread %.2f dB (generated %.3f dBFS)\n",
+            mpUnity, mpUp, mpDown, mpSpreadDb, generatedDbfs);
+        check(mpSpreadDb < 0.1,
+              "the pre-ALC mic peak is unmoved by the slider for engine audio");
+        check(std::fabs(static_cast<double>(mpUnity) - generatedDbfs) < 0.1,
+              "the pre-ALC mic peak reports the level the generator chose");
+
         // And the mic path is untouched by all of it. This one is also the
         // CONTROL for the level assertion below.
         const double micUnity = peak(modulate(WdspChannel::Mode::Usb, kTone,
-            kGenerated, 1.0, 1.0, &mp, true));
+            kGenerated, 1.0, 1.0, &mpMic, true));
 
         // Consistency alone is not enough -- three identical WRONG answers
         // would pass the spread check. The level must be RIGHT, and "right" is
@@ -1058,12 +1081,73 @@ int main(int argc, char** argv)
         check(std::fabs(vsControlDb) < 0.1,
               "engine-generated audio transmits at the level it was generated at");
         const double micHalf  = peak(modulate(WdspChannel::Mode::Usb, kTone,
-            kGenerated, 0.5, 1.0, &mp, true));
+            kGenerated, 0.5, 1.0, &mpMic, true));
         const double micDropDb =
             20.0 * std::log10(std::max(1e-12, micHalf / micUnity));
         std::fprintf(stderr,
             "mic path still follows the slider: %.2f dB for a 2:1 cut\n", micDropDb);
         check(micDropDb < -3.0, "the mic slider still moves microphone audio");
+    }
+
+    // ── Residue from one source is never levelled as another ─────────────
+    //
+    // m_inBuffer carries up to dspBlockSize-1 samples between calls, and the
+    // multiplier is chosen from the CURRENT block's source and applied to all of
+    // them. While every source shared one multiplier that cost nothing. Now
+    // EngineGenerated bypasses m_micGain, so a carried sample can be levelled up
+    // to 40 dB from where its own source wanted it.
+    //
+    // Nothing upstream should interleave two sources inside one transmission
+    // (startWsprPump's setDaxTxMode(true) fences the mic path, feedDaxTxAudio's
+    // m_wsprBeacon->isActive() fences the client path), but that is an argument
+    // about call sites in another class. This is the structural half.
+    {
+        Hl2TxDsp tx;
+        Hl2TxDsp::Config cfg;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.alcEnabled = true;
+        std::string err;
+        if (!tx.configure(cfg, &err)) {
+            std::fprintf(stderr, "FAIL: residue configure: %s\n", err.c_str());
+            ++g_failures;
+        } else {
+            tx.setMicGain(100.0);        // +40 dB, the top of the slider
+            float micPeakDb = -999.0f;
+            QObject::connect(&tx, &Hl2TxDsp::micPeak, &tx,
+                             [&micPeakDb](float db) { micPeakDb = db; });
+            std::vector<std::complex<float>> out;
+            QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                             [&out](const std::vector<std::complex<float>>& iq) {
+                out.insert(out.end(), iq.begin(), iq.end());
+            });
+
+            // Half a block of engine-generated tone: buffered, nothing emitted.
+            const std::size_t half = static_cast<std::size_t>(cfg.dspBlockSize) / 2;
+            std::vector<float> tone(half);
+            for (std::size_t n = 0; n < half; ++n) {
+                tone[n] = static_cast<float>(
+                    0.1 * std::sin(2.0 * M_PI * 1000.0 * static_cast<double>(n)
+                                   / cfg.inputSampleRateHz));
+            }
+            tx.processAudioBlock(tone, TxAudioSource::EngineGenerated);
+            check(out.empty() && micPeakDb < -998.0f,
+                  "a partial block emits nothing and is carried");
+
+            // Now half a block of SILENCE tagged Microphone. The carried engine
+            // samples would complete the block and be multiplied by the mic
+            // slider's 100x -- a -20 dBFS beacon arriving on the air at full
+            // scale. With the guard they are dropped, the buffer holds only
+            // silence, and it is under a block again: nothing is emitted.
+            const std::vector<float> silence(half, 0.0f);
+            tx.processAudioBlock(silence, TxAudioSource::Microphone);
+            std::fprintf(stderr,
+                "residue guard: after a source change, emitted %zu IQ samples,"
+                " mic peak %.1f dBFS\n", out.size(), micPeakDb);
+            check(out.empty(),
+                  "engine residue is dropped, not levelled as the new source");
+            check(micPeakDb < -998.0f,
+                  "no block is completed out of two sources' samples");
+        }
     }
 
     if (g_failures == 0)

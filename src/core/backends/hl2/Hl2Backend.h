@@ -954,10 +954,12 @@ private:
     // to keep that change from reading as a revert. Set in submitTxAudio(),
     // cleared on each key edge in setKeying().
     bool m_txAudioClientLeveled = false;
-    // Set when any block of THIS transmission came from the engine's own
-    // generators (WSPR pump, AX.25 modem, RADE waveform). Gates the unkey
-    // "raise mic gain" diagnostic off: the mic slider is not in that audio's
-    // path, so the advice would name a control that cannot help.
+    // Set when any block of THIS transmission was tagged EngineGenerated — the
+    // WSPR pump, which is the only producer. Gates the unkey "raise mic gain"
+    // diagnostic off: a beacon has no mic slider in its path, so the advice
+    // would name a control that cannot move it. NOT set for the AX.25 modem,
+    // which is tagged Microphone precisely because the slider IS its only
+    // control, so the advice is right for a quiet packet frame.
     bool m_txAudioEngineGenerated = false;
 
     // The passband to push at the modulator for `mode`: the operator's if they

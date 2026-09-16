@@ -1939,7 +1939,7 @@ AudioEngine::AudioEngine(QObject* parent)
     // cannot marshal a type Qt has not been told about, and the failure is a
     // runtime warning and a silently dropped signal — no transmit audio, no
     // compile error to catch it.
-    qRegisterMetaType<TxAudioSource>("TxAudioSource");
+    qRegisterMetaType<AetherSDR::TxAudioSource>("AetherSDR::TxAudioSource");
     m_wsprBeacon->prepare(DEFAULT_SAMPLE_RATE);
 
     TxVoiceProcessor::Processors txProcessors;
@@ -9460,7 +9460,7 @@ void AudioEngine::onTxAudioReady()
     // Mic-chain audio: the OPERATOR's level, set with the mic slider, with the
     // operator present to hear the result. The backend's ALC stays in play as
     // protection, and the slider applies — which is exactly what does NOT
-    // happen for the engine's own generators; see feedDaxTxAudioInternal.
+    // happen for the WSPR pump; see startWsprPump().
     emit txFinalMonitorPcmReady(data, TxAudioSource::Microphone);
 
     // ── TX post-final-limiter scope tap ─────────────────────────
@@ -9776,8 +9776,23 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     // interlock status a host-modulating radio never sends, so testing it would
     // discard everything.
     if (m_hostModulation) {
+        // Microphone, NOT EngineGenerated, and the distinction is a transmit
+        // level rather than a label. The only generator that reaches this
+        // branch on a host-modulating radio is the AX.25 modem — RADE needs DAX
+        // audio and activateRADE() refuses any radio that cannot provide it, so
+        // it is Flex-only and a Flex modulates on its own side.
+        //
+        // The AFSK amplitude is a compile-time constant (kTxAfskAmplitude =
+        // 0.35, -9.12 dBFS in AetherAx25LibmodemShim.cpp) and the packet dialog
+        // has no level control at all, so the mic slider is the ONLY thing in
+        // the product that can move an AX.25 frame. Tagging it EngineGenerated
+        // bypasses that slider and pins HF packet 7.71 dB under the ALC target
+        // (0.85, -1.41 dBFS) with nothing able to raise it. The beacon argument
+        // does not reach this far: the WSPR pump is the unattended source, it
+        // feeds from its own call site below, and #5651 sets its default.
         feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
-                               /*forceRadioDaxRoute=*/true);
+                               /*forceRadioDaxRoute=*/true,
+                               TxAudioSource::Microphone);
         return;
     }
 
@@ -9942,12 +9957,13 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
     if (m_wsprBeacon && m_wsprBeacon->isActive()) {
         return;
     }
-    feedDaxTxAudioInternal(inPcm, true, false);
+    feedDaxTxAudioInternal(inPcm, true, false, TxAudioSource::ClientLeveled);
 }
 
 void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                                          bool markExternalSource,
-                                         bool forceRadioDaxRoute)
+                                         bool forceRadioDaxRoute,
+                                         TxAudioSource source)
 {
     if (inPcm.isEmpty()) return;
     // A host-modulating backend (HL2) has no Flex TX stream id and never will —
@@ -10031,28 +10047,23 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
             dst[i] = static_cast<qint16>(
                 std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
         }
-        // THE SPLIT THIS TAP NEEDS IS THREE-WAY, NOT TWO (#4796, and the WSPR
-        // level regression that followed the ALC change).
+        // THE SPLIT THIS TAP NEEDS IS THREE-WAY, AND THE CALLER DECIDES IT.
         //
-        // markExternalSource distinguishes TCI/DAX client audio — whose sender
-        // owns its level — from the engine's own pre-shaped audio: the WSPR
-        // pump, the AX.25 modem and the RADE modem waveform, all of which
-        // reach here with it false. The comment that used to sit here said
-        // that engine audio "keeps the ALC so its on-air level does not
-        // change". THAT IS NO LONGER TRUE and its being true was never a
-        // property of this file: it depended on the ALC's 40 dB of makeup,
-        // which normalised any generated level to the modulator's target. With
-        // the makeup gone, a beacon generated at -20 dBFS transmits at
-        // -20 dBFS. Measured: 18.58 dB down, a factor of 72 in power.
+        // The tag used to be derived here, as `markExternalSource ?
+        // ClientLeveled : EngineGenerated`, which made "not a TCI client" mean
+        // "an unattended beacon" — and swept the AX.25 modem in with the WSPR
+        // pump. It is passed in now, so each entry point states its own origin
+        // and a reader does not have to reason backwards from a flag that
+        // means something else. See TxAudioSource.h.
         //
-        // So the flag becomes a source rather than a boolean, and engine audio
-        // says so in its own right instead of being "whatever is left". What
-        // the HL2 backend does with it is bypass the mic slider — a microphone
-        // control has no business moving an unattended beacon — and the level
-        // the generator chose is the level that goes out.
-        emit txFinalMonitorPcmReady(out, markExternalSource
-                                         ? TxAudioSource::ClientLeveled
-                                         : TxAudioSource::EngineGenerated);
+        // What rides on it: the HL2 backend bypasses the mic slider for
+        // EngineGenerated alone. That matters because the ALC's 40 dB of makeup
+        // is gone (#5646) — it used to normalise any generated level onto the
+        // modulator's target, so a beacon came out right whatever level it was
+        // generated at. Without it, a beacon generated at -20 dBFS transmits at
+        // -20 dBFS, and the mic slider was moving it by up to 40 dB. Measured:
+        // 18.58 dB down, a factor of 72 in power.
+        emit txFinalMonitorPcmReady(out, source);
         return;
     }
 
@@ -10242,7 +10253,10 @@ void AudioEngine::pumpWsprBeacon()
     m_wsprFloatScratch.fill('\0');
     m_wsprBeacon->process(
         reinterpret_cast<float*>(m_wsprFloatScratch.data()), frames, 2);
-    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true);
+    // The one EngineGenerated source in the tree: a WSPR frame keys for 111.6 s
+    // with nobody at the microphone, so the mic slider must not move it.
+    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true,
+                           TxAudioSource::EngineGenerated);
     m_wsprPumpedFrames += frames;
 }
 

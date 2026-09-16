@@ -1,44 +1,37 @@
-// WHO TAGS TRANSMIT AUDIO, AND AS WHAT.
+// WHO TAGS TRANSMIT AUDIO, AND AS WHAT -- THE PART A RUNNING TEST CANNOT REACH.
 //
-// PR "engine-generated audio keeps the level it was generated at" turns on one
-// claim: that the WSPR pump, the AX.25 modem and the RADE waveform reach the
-// modulator as TxAudioSource::EngineGenerated, while the microphone reaches it
-// as Microphone and TCI/DAX as ClientLeveled. Hl2TxDsp's own test proves what
-// the DSP DOES with each of those. Nothing proved the audio is tagged right in
-// the first place, and a mis-tag is silent: a beacon would simply go out
-// 18.58 dB down again, unattended, with every unit test still green.
+// The claim: the WSPR pump reaches the modulator as
+// TxAudioSource::EngineGenerated, while the microphone and the AX.25 modem
+// reach it as Microphone and TCI/DAX as ClientLeveled. Hl2TxDsp's own test
+// proves what the DSP DOES with each. A mis-tag is otherwise silent: a beacon
+// goes out 18.58 dB down, unattended, with every unit test still green.
 //
-// WHY THIS IS A SOURCE-TEXT TEST. An earlier draft of this comment said
-// AudioEngine.cpp is compiled into no test target. THAT WAS WRONG, and the
-// correction matters because it was the whole justification. The filename does
-// not appear in tests/tests.cmake, but src/core/AudioEngine.cpp is in
-// CORE_SOURCES and therefore inside the aethercore library, which several
-// registered tests link. icom_identity_test is one: it stands up a real
-// AudioEngine with hostModulation() true and already asserts
-// source == TxAudioSource::ClientLeveled on a live txFinalMonitorPcmReady.
-// One of the three tags has behavioural coverage today.
+// WHAT IS COVERED BEHAVIOURALLY, AND SO IS NOT COVERED HERE. icom_identity_test
+// stands up a real AudioEngine with hostModulation() true and asserts the tag
+// that arrives on a live txFinalMonitorPcmReady for TWO of the three entry
+// points -- feedDaxTxAudio -> ClientLeveled, and sendModemTxAudio -> Microphone.
+// AGENTS.md prefers exactly that ("Prefer behavioral seams over source-text
+// assertions"), and an earlier revision of this file argued for source text on
+// a premise -- "AudioEngine.cpp is compiled into no test target" -- that was
+// simply false: it is in CORE_SOURCES and therefore in aethercore.
 //
-// The EngineGenerated tag is reachable there too, in principle --
-// sendModemTxAudio(const QByteArray&) is public and takes the m_hostModulation
-// branch into feedDaxTxAudioInternal with markExternalSource false -- so the
-// 111.6 s WSPR frame is not what stands between this repository and a
-// behavioural check of that branch. The frame argument is real, but it belongs
-// to the END-TO-END BEACON leg: a frame keys for 111.6 s and the bench's
-// loopback approval class permits a 35 s transmit ceiling, and raising a rail
-// to fit a convenience is exactly what that ceiling's own comment forbids
-// ("raise the class ceiling deliberately, not the run"). That leg stays open,
-// and this test does not close it.
+// WHAT IS LEFT, AND WHY IT IS HERE. AudioEngine::startWsprPump() is the only
+// EngineGenerated producer, and reaching it behaviourally needs a prepared
+// beacon and a timer tick for a frame that keys for 111.6 s -- against a bench
+// loopback approval that permits 35 s, and raising a rail to fit a convenience
+// is what that ceiling's own comment forbids. So this file pins THAT call site,
+// and the metatype, and nothing that already has a behavioural home.
 //
-// So the claim this file makes for itself is the narrower one: it pins all
-// three tags, the metatype, and each of the three call sites in ONE cheap
-// place, where the behavioural coverage that exists reaches one tag in one
-// backend. It is a reversal tripwire, not the instrument.
+// SO BE HONEST ABOUT WHAT THIS PROVES. It proves one call site is WRITTEN as
+// claimed and fails loudly if someone reverses it. It does NOT prove the code
+// runs, and it does not close the end-to-end beacon leg, which remains open.
 //
-// SO BE HONEST ABOUT WHAT THIS PROVES. It proves the wiring is WRITTEN as
-// claimed, and it fails loudly if someone reverses it. It does NOT prove the
-// code runs, and it is not a substitute for the end-to-end beacon leg, which
-// remains open. The same idiom, and the same caveat, as
-// meter_applet_capability_test's source assertions.
+// AND ABOUT HOW IT CAN LIE. Matching a name anywhere in a file is not the same
+// as matching a declaration: the doc comments in these headers spell every
+// enumerator in prose, so a file-wide contains() for "EngineGenerated" passes
+// with the enum deleted. The assertions below are scoped to the enum body for
+// that reason -- the first revision of this file was not, and all three of its
+// "declares X" checks passed against a gutted enum.
 
 #include <QByteArray>
 #include <QFile>
@@ -79,17 +72,21 @@ int main()
 {
     const QString engine = flat(readSource("src/core/AudioEngine.cpp"));
     const QString backend = flat(readSource("src/core/backends/hl2/Hl2Backend.cpp"));
-    const QString iface = flat(readSource("src/core/backends/IRadioBackend.h"));
+    const QString iface = flat(readSource("src/core/backends/TxAudioSource.h"));
 
     check(!engine.isEmpty(), "AudioEngine.cpp is readable");
     check(!backend.isEmpty(), "Hl2Backend.cpp is readable");
-    check(!iface.isEmpty(), "IRadioBackend.h is readable");
+    check(!iface.isEmpty(), "TxAudioSource.h is readable");
 
     // ── The three states exist and are distinct ──────────────────────────
-    check(iface.contains(QLatin1String("enum class TxAudioSource")),
-          "TxAudioSource is an enum, not a bool");
+    const qsizetype enumAt =
+        iface.indexOf(QLatin1String("enum class TxAudioSource {"));
+    check(enumAt >= 0, "TxAudioSource is an enum, not a bool");
+    const QString enumBody = enumAt < 0
+        ? QString()
+        : iface.mid(enumAt, iface.indexOf(QLatin1Char('}'), enumAt) - enumAt);
     for (const char* state : {"Microphone", "ClientLeveled", "EngineGenerated"})
-        check(iface.contains(QLatin1String(state)),
+        check(enumBody.contains(QLatin1String(state)),
               qPrintable(QStringLiteral("TxAudioSource declares %1").arg(state)));
 
     // A queued signal carries it across AudioEngine's thread. Without the
@@ -97,34 +94,28 @@ int main()
     // signal -- no transmit audio and no compile error to catch it.
     check(iface.contains(QLatin1String("Q_DECLARE_METATYPE(AetherSDR::TxAudioSource)")),
           "TxAudioSource is declared as a metatype");
-    check(engine.contains(QLatin1String("qRegisterMetaType<TxAudioSource>")),
+    check(engine.contains(QLatin1String("qRegisterMetaType<AetherSDR::TxAudioSource>")),
           "AudioEngine registers the TxAudioSource metatype");
 
-    // ── The microphone is tagged Microphone ──────────────────────────────
-    check(engine.contains(QLatin1String(
-              "emit txFinalMonitorPcmReady(data, TxAudioSource::Microphone)")),
-          "the mic chain emits TxAudioSource::Microphone");
-
-    // ── The engine's own generators are tagged EngineGenerated ───────────
+    // ── THE ONE CALL SITE WITHOUT A BEHAVIOURAL HOME ────────────────────
     //
-    // Both the WSPR pump and sendModemTxAudio's host-modulation branch reach
-    // feedDaxTxAudioInternal with markExternalSource FALSE, and that single
-    // emit is what maps false onto EngineGenerated. Pin the mapping and pin
-    // both callers, because either half reversing alone is enough to lose it.
+    // AudioEngine::startWsprPump() is the only EngineGenerated producer. The
+    // tag is passed explicitly now rather than derived from markExternalSource:
+    // deriving it is what swept the AX.25 modem into the beacon's bucket, and
+    // an explicit argument is also the thing a reader can check at the call
+    // site. If this ever reads Microphone or ClientLeveled, a WSPR beacon goes
+    // back to being moved by the mic slider.
     check(engine.contains(QLatin1String(
-              "markExternalSource ? TxAudioSource::ClientLeveled "
-              ": TxAudioSource::EngineGenerated")),
-          "markExternalSource=false maps to EngineGenerated, true to ClientLeveled");
-    check(engine.contains(QLatin1String(
-              "feedDaxTxAudioInternal(m_wsprFloatScratch, false, true)")),
-          "the WSPR pump feeds with markExternalSource=false (EngineGenerated)");
-    check(engine.contains(QLatin1String(
-              "feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,")),
-          "sendModemTxAudio's host-modulation branch feeds false (EngineGenerated)");
+              "feedDaxTxAudioInternal(m_wsprFloatScratch, false, true, "
+              "TxAudioSource::EngineGenerated)")),
+          "the WSPR pump feeds TxAudioSource::EngineGenerated");
 
-    // ── TCI/DAX stays ClientLeveled: #4796 must not regress ──────────────
-    check(engine.contains(QLatin1String("feedDaxTxAudioInternal(inPcm, true, false)")),
-          "external DAX/TCI feeds with markExternalSource=true (ClientLeveled)");
+    // NOBODY DERIVES THE TAG FROM markExternalSource AGAIN. That flag means "a
+    // TCI/DAX client is feeding" and arms the TCI active-audio timer; it is NOT
+    // "not a beacon", and reading it as one is the defect this pins. The two
+    // tags it used to produce are asserted behaviourally in icom_identity_test.
+    check(!engine.contains(QLatin1String("markExternalSource ? TxAudioSource::")),
+          "the tag is never derived from markExternalSource");
 
     // ── The backend acts on the distinction ──────────────────────────────
     check(backend.contains(QLatin1String("TxAudioSource::EngineGenerated")),

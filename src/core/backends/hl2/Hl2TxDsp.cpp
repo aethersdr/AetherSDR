@@ -157,6 +157,8 @@ void Hl2TxDsp::reset()
     // reduction in this stage is instantaneous.
     m_alcGain = 1.0;
     m_inBuffer.clear();
+    // Re-arm the mid-buffer source-change warning for the next transmission.
+    m_sourceChangeWarned = false;
     std::fill(m_hist.begin(), m_hist.end(), 0.0f);
     m_histPos = 0;
 }
@@ -178,6 +180,41 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
 {
     if (m_bandpass.empty() || mono.empty())
         return;
+
+    // RESIDUE FROM THE PREVIOUS BLOCK IS NOT THIS BLOCK'S TO LEVEL.
+    //
+    // m_inBuffer keeps up to dspBlockSize-1 samples between calls, and micGain
+    // below is chosen from THIS block's source and applied to all of them. That
+    // cost nothing while every source shared one multiplier; now EngineGenerated
+    // bypasses m_micGain, so a carried-over sample can be levelled up to 40 dB
+    // away from where its own source wanted it.
+    //
+    // Nothing upstream should interleave two sources inside one transmission:
+    // AudioEngine::startWsprPump() calls setDaxTxMode(true), which makes
+    // onTxAudioReady() return early (the mic path), and feedDaxTxAudio() returns
+    // early while m_wsprBeacon->isActive() (the client path). That is an
+    // argument about three call sites in another class, and it is the kind of
+    // argument that stops being true quietly. This makes it structural instead:
+    // if the source changes mid-transmission the stale residue is dropped rather
+    // than mislevelled. It costs at most dspBlockSize-1 samples (~21 ms at
+    // 24 kHz) in a state that is already wrong, and nothing at all in normal
+    // operation, where this branch never runs.
+    if (source != m_lastSource && !m_inBuffer.empty()) {
+        // Once per transmission, not once per block: this runs on the DSP
+        // worker, and a sustained interleave would alternate every block.
+        if (!m_sourceChangeWarned) {
+            m_sourceChangeWarned = true;
+            qWarning() << "Hl2TxDsp: transmit audio source changed mid-buffer ("
+                       << static_cast<int>(m_lastSource) << "->"
+                       << static_cast<int>(source) << "); dropping"
+                       << m_inBuffer.size()
+                       << "carried samples rather than levelling them as the"
+                          " new source. Two producers are feeding one"
+                          " transmission.";
+        }
+        m_inBuffer.clear();
+    }
+    m_lastSource = source;
 
     m_inBuffer.insert(m_inBuffer.end(), mono.begin(), mono.end());
 
@@ -247,7 +284,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     // response degrades to smooth limiting instead of clipping.
     //
     // THE MIC SLIDER IS A MICROPHONE CONTROL, so it does not reach the engine's
-    // own generated audio. See the note on the declaration in Hl2TxDsp.h.
+    // own unattended audio. See the note on the declaration in Hl2TxDsp.h.
     //
     // Decided ONCE per block and used by both loops below, so the level the ALC
     // measures and the level that reaches the modulator cannot disagree — they

@@ -42,7 +42,7 @@ class QMediaDevices;
 #include <deque>
 #include <vector>
 #include <cstdint>
-#include "core/backends/IRadioBackend.h"
+#include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR {
 
@@ -750,32 +750,25 @@ signals:
     // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
     // receivers connect via Qt::AutoConnection (queued across threads).
     //
-    // `source` says WHERE the frames came from — see TxAudioSource. It is three
-    // states because the bool it replaced could only ask "did an external client
-    // set this level?", which put the operator's microphone and the engine's own
-    // generators into one bucket and let a microphone control move an unattended
-    // beacon:
+    // `source` says WHERE the frames came from — TxAudioSource.h carries the
+    // contract. Which emitter sets what:
     //
-    //   Microphone       the capture chain — onTxAudioReady, through the full
-    //                    voice TX DSP. The operator is standing at the mic, and
-    //                    the mic level control is theirs to use.
-    //   ClientLeveled    external TCI/DAX client audio (feedDaxTxAudio's
-    //                    markExternalSource). The client owns its level —
-    //                    WSJT-X's Pwr slider attenuates the audio it streams —
-    //                    so a host-modulating backend must not run makeup gain
-    //                    over it (#4796).
-    //   EngineGenerated  audio this engine produced already shaped and already
-    //                    levelled: the WSPR pump, the AX.25 modem, the RADE
-    //                    waveform. Nobody is at the mic, the generator chose the
-    //                    level on purpose, and a host-modulating backend keeps
-    //                    it — see Hl2TxDsp::processAudioBlock, which bypasses
-    //                    the mic slider for this source alone.
+    //   onTxAudioReady            → Microphone (the capture chain, through the
+    //                               full voice TX DSP)
+    //   feedDaxTxAudio            → ClientLeveled (external TCI/DAX; the client
+    //                               owns its level, #4796)
+    //   sendModemTxAudio          → Microphone (the AX.25 modem — its AFSK
+    //                               amplitude is a fixed constant and the packet
+    //                               dialog has no level control, so the mic
+    //                               slider is the only thing that can move it)
+    //   startWsprPump             → EngineGenerated (111.6 s unattended; the mic
+    //                               slider must not reach it)
     //
-    // The tag is a claim about ORIGIN, not about treatment: what a backend does
-    // with it is the backend's business, and a radio that modulates on its own
-    // side does nothing with it at all. Slots that only record or meter the
-    // stream can ignore it (Qt permits connecting to a slot with fewer
-    // arguments).
+    // The tag is a claim about ORIGIN, not about treatment. Slots that only
+    // record or meter the stream can ignore it (Qt permits connecting to a slot
+    // with fewer arguments) — but a slot that ASSERTS on it must compare against
+    // the enum: QVariant::toBool() on this type reads both ClientLeveled and
+    // EngineGenerated as true, which silently retired a guard once already.
     void txFinalMonitorPcmReady(const QByteArray& int16Stereo,
                                 TxAudioSource source);
     void modemTxAudioFinished(quint64 token);
@@ -1034,9 +1027,16 @@ private:
     qint64 txCaptureNowMs() const;
     bool tciAudioFresh() const;
     void pumpWsprBeacon();
+    // `markExternalSource` arms the TCI active-audio timer (it means "a TCI/DAX
+    // client is feeding"); `source` is the origin tag forwarded to the backend.
+    // They are SEPARATE because they stopped agreeing: the AX.25 modem and the
+    // WSPR pump both feed with markExternalSource false, and only one of them is
+    // EngineGenerated. Deriving the tag from the flag is what put AX.25 in the
+    // beacon's bucket, and a beacon's bucket has no mic slider in it.
     void feedDaxTxAudioInternal(const QByteArray& float32pcm,
                                 bool markExternalSource,
-                                bool forceRadioDaxRoute);
+                                bool forceRadioDaxRoute,
+                                TxAudioSource source);
     void observeTxCaptureState(QAudio::State state);
     // Overload for callers that must sample the unread depth before draining it.
     void observeTxCaptureState(QAudio::State state, qint64 bufferedBytes);

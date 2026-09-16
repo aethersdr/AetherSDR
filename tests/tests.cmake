@@ -3777,7 +3777,8 @@ set_tests_properties(health_applet_test PROPERTIES
 add_executable(tx_audio_source_wiring_test
     tests/tx_audio_source_wiring_test.cpp
 )
-target_include_directories(tx_audio_source_wiring_test PRIVATE src)
+# No target_include_directories: this test includes only Qt headers and reaches
+# the sources through AETHER_SOURCE_DIR and QFile, never the search path.
 target_compile_definitions(tx_audio_source_wiring_test PRIVATE
     AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(tx_audio_source_wiring_test PRIVATE Qt6::Core)
