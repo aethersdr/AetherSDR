@@ -10006,6 +10006,22 @@ void MainWindow::updateToolsMenuState()
         m_gpsDashboardAction->setVisible(!connected
             || (caps.hasGpsLocation && m_radioModel.hasGpsHardware()));
     }
+
+    if (m_agcTCalibrationMenuAction) {
+        SliceModel* active = activeSlice();
+        const bool externalRx = active
+            && active->externalReceiveReplacementActive();
+        m_agcTCalibrationMenuAction->setEnabled(connected && active && !externalRx);
+        m_agcTCalibrationMenuAction->setToolTip(
+            !connected
+                ? tr("Connect to a radio first")
+            : !active
+                ? tr("No active receiver to calibrate")
+            : externalRx
+                ? tr("Not available while an external receive source "
+                     "replaces this slice's RX")
+            : QString());
+    }
 }
 
 void MainWindow::updateKeyerAvailability()

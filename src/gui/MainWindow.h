@@ -1527,6 +1527,7 @@ private:
     QAction*         m_cwKeyerAction{nullptr};
     QAction*         m_copyAssistAction{nullptr};
     QAction*         m_gpsDashboardAction{nullptr};
+    QAction*         m_agcTCalibrationMenuAction{nullptr};
     // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from
     // applyCapabilitiesToUi() *and* the menu's aboutToShow, because the
     // automation bridge reaches menu-bar actions without popping the menu
