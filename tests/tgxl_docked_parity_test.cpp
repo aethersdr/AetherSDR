@@ -162,11 +162,60 @@ int main(int argc, char** argv)
                                             .split(QLatin1Char('p')).first().toInt();
                     CHECK(pixels > 0);
 
+                    // WHAT THIS GUARDS, AND WHY IT IS NOT "THE CAPTION FITS".
+                    //
+                    // The regression was "OPERATE" drawn as "OPERATI":
+                    // fittedRailFontPx() left a size on the button that was too
+                    // large for it. The property that catches that is
+                    // MAXIMALITY — the chosen size is the largest in range that
+                    // fits — and maximality compares the SAME font at two
+                    // sizes, so it holds whatever fonts the machine has.
+                    //
+                    // Asserting the caption fits OUTRIGHT does not hold
+                    // everywhere, and asserting it turned main's full suite red
+                    // on every run from #5676 until this. fittedRailFontPx()
+                    // searches [kRailCaptionMinPx, kRailCaptionMaxPx] and
+                    // CLAMPS to the minimum when nothing in range fits —
+                    // deliberately, because a caption shrunk past 7px is not
+                    // readable. With the project's fonts present the floor is
+                    // never reached; in a container falling back to whatever is
+                    // installed it is, and the button then legitimately
+                    // overflows. CI reported exactly that, one line above the
+                    // failure: "ThemeManager: Default Dark also failed to load
+                    // — UI will render with compiled-in defaults". That is a
+                    // rendering-environment fact, not a defect in the fitter,
+                    // and a test that cannot tell them apart reports the wrong
+                    // one.
+                    //
+                    // Mirrors of TunerApplet.cpp's own constants; the padding
+                    // is the fitter's, not a looser number, so "fits" here and
+                    // "fits" there are the same predicate.
+                    constexpr int kFitMinPx = 7;     // kRailCaptionMinPx
+                    constexpr int kFitMaxPx = 10;    // kRailCaptionMaxPx
+                    constexpr int kFitPadding = 8;   // kRailCaptionPadding
+                    CHECK(pixels >= kFitMinPx && pixels <= kFitMaxPx);
+
                     QFont drawn = btn->font();
                     drawn.setBold(true);      // the sheet draws these bold
                     drawn.setPixelSize(pixels);
-                    CHECK(QFontMetrics(drawn).horizontalAdvance(btn->text())
-                          <= btn->width() - 6);
+                    const int available = btn->width() - kFitPadding;
+                    const bool fits =
+                        QFontMetrics(drawn).horizontalAdvance(btn->text())
+                        <= available;
+
+                    // Either it fits, or the fitter exhausted its range and
+                    // clamped. Never a size it could still have shrunk.
+                    CHECK(fits || pixels == kFitMinPx);
+
+                    // MAXIMALITY, which is the half that catches the clipping:
+                    // one size larger must NOT fit, or the fitter stopped
+                    // short and the caption is smaller than it needed to be.
+                    if (pixels < kFitMaxPx) {
+                        QFont bigger = drawn;
+                        bigger.setPixelSize(pixels + 1);
+                        CHECK(QFontMetrics(bigger).horizontalAdvance(btn->text())
+                              > available);
+                    }
                 }
                 CHECK(found);   // the full word, not an abbreviation
             }
