@@ -4,12 +4,12 @@ This is the canonical project guide for any AI assistant working on
 AetherSDR — Claude Code, OpenAI Codex, Cursor, GitHub Copilot, Gemini
 Code Assist, Aider, AetherClaude (our orchestrator bot), or any other
 tool. Each tool has its own well-known file at a different path
-(`CLAUDE.md`, `.github/copilot-instructions.md`, `GEMINI.md`,
-`CONVENTIONS.md`, etc.); those are thin pointers back here. Everything
-project-wide lives in **this** file.
+(`CLAUDE.md`, `.github/copilot-instructions.md`, `GEMINI.md`, etc.);
+those are thin pointers back here. Everything project-wide lives in
+**this** file.
 
 If you are an AI assistant: read this file end-to-end before writing
-code or recommending merges. The file is ~830 lines; that is the cost
+code or recommending merges. The file is ~1150 lines; that is the cost
 of doing the job right on this codebase.
 
 **This file is documentation, not policy.** It describes how to build
@@ -56,7 +56,7 @@ When helping with AetherSDR:
 - Use RAII everywhere (no naked new/delete)
 - Comment non-obvious protocol decisions with firmware version
 - When suggesting code: show **diff-style** changes or full function/class if small
-- Test suggestions locally if possible (assume Arch Linux build env)
+- Test suggestions locally if possible — the build must work on Linux, macOS and Windows
 - Never suggest Wine/Crossover workarounds — goal is native
 - Flag any proposal that would break slice 0 RX flow
 - If unsure about protocol behavior → ask for logs/wireshark captures first
@@ -205,8 +205,8 @@ is the sole authority on visual design and UX direction.
 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build -j$(nproc)
-./build/AetherSDR
+cmake --build build --parallel
+./build/AetherSDR          # Windows: build\AetherSDR.exe
 ```
 
 **Optional — DFNR (DeepFilterNet3) noise reduction.** Run
@@ -383,10 +383,6 @@ CI runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest` (~5 min builds).
 corresponding `-dev` package to `.github/docker/Dockerfile` and push.** The
 `docker-ci-image.yml` workflow rebuilds the image automatically (~3 min); wait
 for that before the next CI run can use it.
-
-**`git ship`** alias — squashes local commits ahead of origin/main, creates a
-branch, pushes, opens a PR with auto-squash-merge enabled. Commit freely
-locally, then ship once.
 
 Branch protection: signed commits required on main, CI must pass, CODEOWNERS
 review required, branches auto-delete after merge.
@@ -814,10 +810,13 @@ document why.
 
 **IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
 settings are stored via `AppSettings` (`src/core/AppSettings.h`), which
-persists to a **SQLite database** at `~/.config/AetherSDR/AetherSDR.db`
-(RFC #4603; design doc: `docs/settings-store-sqlite-design.md`). Key names use
-PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftFillColor`). Boolean
-values are stored as `"True"` / `"False"` strings.
+persists to a **SQLite database** named `AetherSDR.db` under Qt's
+`QStandardPaths::AppConfigLocation` — `~/.config/AetherSDR/` on Linux,
+`~/Library/Preferences/AetherSDR/` on macOS, `%LOCALAPPDATA%\AetherSDR\` on
+Windows (RFC #4603; design doc: `docs/settings-store-sqlite-design.md`).
+Key names use PascalCase (e.g. `LastConnectedRadioSerial`,
+`DisplayFftFillColor`). Boolean values are stored as `"True"` / `"False"`
+strings.
 
 ```cpp
 auto& s = AppSettings::instance();
