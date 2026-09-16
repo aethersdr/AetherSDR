@@ -209,7 +209,14 @@ WdspChannel::Mode modeFromString(const QString& mode) noexcept
 // to USB)? The restore boundary uses this so a corrupt document's mode string
 // is dropped instead of reaching Receiver::mode, the UI, and — via capture —
 // re-persisting itself (PR #4619 review, Ozy311).
-bool isKnownModeString(const QString& mode) noexcept
+// The modes modeFromString() genuinely maps, as ONE list.
+//
+// Hoisted out of isKnownModeString() so the capability published to the UI and
+// the restore boundary's guard cannot drift apart. They are the same question
+// -- "does this backend really do this mode" -- and a second copy would answer
+// it twice, which is how a UI comes to offer a mode the backend silently turns
+// into USB.
+const QStringList& knownModeStrings() noexcept
 {
     static const QStringList kKnown = {
         QStringLiteral("LSB"), QStringLiteral("USB"), QStringLiteral("DSB"),
@@ -218,7 +225,12 @@ bool isKnownModeString(const QString& mode) noexcept
         QStringLiteral("DIGU"), QStringLiteral("DIGL"), QStringLiteral("SAM"),
         QStringLiteral("DRM"), QStringLiteral("WBFM"), QStringLiteral("WFM"),
     };
-    return kKnown.contains(mode.toUpper());
+    return kKnown;
+}
+
+bool isKnownModeString(const QString& mode) noexcept
+{
+    return knownModeStrings().contains(mode.toUpper());
 }
 
 // The same question for the AGC vocabulary, and it needs asking for the same
@@ -7114,6 +7126,20 @@ void Hl2Backend::emitSliceState(int ddc)
 
     SliceDelta d;
     d.panId = ids->panId;
+    // WHAT THIS RADIO ACTUALLY DEMODULATES, published so the UI stops offering
+    // what it does not.
+    //
+    // modeFromString() FALLS BACK TO USB for anything it does not recognise, so
+    // selecting RTTY, DFM or DSTR on an HL2 put the receiver in USB while every
+    // readback agreed the mode was RTTY -- the slice keeps the string it was
+    // given. The operator sees a mode they chose and hears a mode they did not,
+    // and nothing in the path disagrees with them.
+    //
+    // The same list the restore boundary already guards with, not a second copy
+    // of it: isKnownModeString() and this now read knownModeStrings(). A UI
+    // offering a mode the restore boundary would REJECT is the same fault seen
+    // from the other end.
+    d.modeList = knownModeStrings();
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;
