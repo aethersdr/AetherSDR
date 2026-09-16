@@ -18,9 +18,12 @@ nothing keys a transmitter** — it is buffers and tests only. What was *not* me
 listed in §7 and is listed there in full.
 
 > **Status, added when TXA landed.** This document was written while TXA was a
-> *candidate*. It is now the default build's transmit modulator:
-> `AETHER_HL2_TX_TXA` is ON, `Hl2TxDsp` opens a TXA channel at the geometry
-> derived here, and the phasing modulator is compiled out. The configuration in
+> *candidate*. It is now a BUILD OPTION, `AETHER_HL2_TX_TXA`, and it is
+> **OFF by default**: a stock build still ships the phasing modulator, and
+> `-DAETHER_HL2_TX_TXA=ON` opens a TXA channel at the geometry derived here and
+> compiles the phasing modulator out. The default is OFF because #5678's
+> approval asked for hardware time and §7 below records that there has been
+> none — not because anything here is in doubt. The configuration in
 > §1 and §2 is what `Hl2TxDsp::buildModulator` and `applyModeAndFilter` now do;
 > the measurements in §3 and §4 stand as written. Two details have moved on:
 > `hl2_txdsp_test`'s DIGU low-edge block is an **assertion** rather than a

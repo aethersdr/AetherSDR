@@ -839,11 +839,11 @@ sub-actions, so action-level drift is invisible to CI.
 1. ~~**Read back what the DSP was actually configured with.**~~ **DONE.**
    `get_state model=dsp` now carries a `backend` object alongside the
    client-side chain: `family`, and a `chains` list. Each entry names its
-   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive and, since
-   the TXA migration, a WDSP TXA channel on transmit too, whose config is a
-   different struct; `modulator` on that entry names the transmit modulator the
-   binary was built with, `wdsp-txa` or `phasing`, and there is no runtime
-   switch between them) and its `level`, because "read-back" is used loosely
+   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive, and
+   optionally a WDSP TXA channel on transmit whose config is a different struct;
+   `modulator` on that entry names the transmit modulator the binary was built
+   with, `phasing` in a stock build or `wdsp-txa` under
+   `-DAETHER_HL2_TX_TXA=ON`, and there is no runtime switch between them) and its `level`, because "read-back" is used loosely
    and the
    difference decides what a mismatch proves: `channel-config` is what
    `WdspChannel` was OPENED with after clamping or refusal, `dsp-config` is the
