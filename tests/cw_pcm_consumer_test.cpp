@@ -1,15 +1,18 @@
-// The A5 CW consumer boundary, not a CW decoder/facade or a TX test.
+// The A5 CW consumer boundary and real receive decoder, without radio/TX.
 // Checks stereo-averaged carrier/interference, Morse envelope timing, and
 // rejection of a retired receiver before the replacement word arrives.
 #include "CwPcmFixture.h"
 #include "TestSettingsProfile.h"
 #include "core/backends/IRadioBackend.h"
 #include "models/DecoderAudioModel.h"
+#include "models/CwRxModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QThread>
+#include <QElapsedTimer>
 
 #include <algorithm>
 #include <array>
@@ -53,6 +56,8 @@ public:
 
 struct Capture {
     QVector<float> samples;
+    QVector<float> nativeSamples;
+    PcmFormat nativeFormat;
     PcmEpochLease source;
     double delaySeconds = 0;
     int resets = 0;
@@ -63,6 +68,8 @@ struct Fixture {
     Source* source = nullptr;
     DecoderAudioModel consumer{radio, DecoderAudioModel::Consumer::Cw};
     Capture captured;
+    CwRxModel decoder;
+    QString decoded;
 
     Fixture()
     {
@@ -72,7 +79,17 @@ struct Fixture {
         source->connectRadio({});
         QObject::connect(&consumer, &DecoderAudioModel::sourceReset, &consumer, [this] {
             ++captured.resets;
+            decoder.reset();
         });
+        QObject::connect(&consumer, &DecoderAudioModel::nativePcmReady, &consumer,
+                         [this](const PcmFrame& frame) {
+            captured.nativeSamples += frame.samples();
+            captured.nativeFormat = frame.stream().format;
+        });
+        QObject::connect(&consumer, &DecoderAudioModel::nativePcmReady, &decoder, &CwRxModel::feed);
+        QObject::connect(&consumer, &DecoderAudioModel::pcmReady, &decoder, &CwRxModel::feedFixed24);
+        QObject::connect(&decoder, &CwRxModel::textDecoded, &consumer,
+                         [this](const QString& text, float) { decoded += text; });
         QObject::connect(&consumer, &DecoderAudioModel::pcmReady, &consumer,
                          [this](const DecoderPcmBlock& block) {
             captured.samples += block.samples;
@@ -172,6 +189,9 @@ void waveformContract()
             const Capture regular = converted({rate, layout}, false);
             const Capture uneven = converted({rate, layout}, true);
             check(regular.samples == uneven.samples, "CW waveform is invariant under producer chunking");
+            check(regular.nativeFormat == PcmFormat{rate, layout}
+                  && regular.nativeSamples == CwPcmFixture::sos({rate, layout}),
+                  "native DeepFist input preserves original format and samples");
             check(expectedMarks(regular), "CW dit/dah and letter gaps survive rate/layout conversion");
             check(std::abs(carrierAmplitude(regular.samples, 600, regular.delaySeconds) - .4) < .015,
                   "CW carrier frequency and level survive mono/stereo conversion");
@@ -210,6 +230,115 @@ void retiredReceiverCannotOwnNextWord()
     check(expectedMarks(fixture.captured) && fixture.captured.resets > resets,
           "replacement CW word starts with fresh filter/timing history after retirement");
 }
+void pump(int milliseconds)
+{
+    QElapsedTimer timer;
+    timer.start();
+    do {
+        QCoreApplication::processEvents();
+        QThread::msleep(1);
+    } while (timer.elapsed() < milliseconds);
+}
+
+QVector<float> letterV(PcmFormat format)
+{
+    // Independent Morse fixture: V is three dits then one dah, 20 WPM.
+    QVector<float> mono(format.sampleRateHz / 2, 0);
+    auto silence = [&](int units) {
+        mono.resize(mono.size() + qRound(units * .06 * format.sampleRateHz));
+    };
+    for (int letter = 0; letter < 12; ++letter) {
+        if (letter) { silence(letter % 3 ? 3 : 7); }
+        for (int mark = 0; mark < 4; ++mark) {
+            if (mark) { silence(1); }
+            const int count = qRound((mark == 3 ? 3 : 1) * .06 * format.sampleRateHz);
+            for (int i = 0; i < count; ++i) {
+                const double edge = std::min({1.0, i / (.005 * format.sampleRateHz),
+                                              (count - 1 - i) / (.005 * format.sampleRateHz)});
+                mono.append(.5f * edge * std::sin(2 * std::numbers::pi * 600 * i / format.sampleRateHz));
+            }
+        }
+    }
+    silence(35);
+    QVector<float> samples;
+    samples.reserve(mono.size() * format.channels());
+    for (qsizetype i = 0; i < mono.size(); ++i) {
+        const float other = .1f * std::sin(2 * std::numbers::pi * 1100 * i / format.sampleRateHz);
+        samples.append(mono[i] + (format.channels() == 2 ? other : 0));
+        if (format.channels() == 2) { samples.append(mono[i] - other); }
+    }
+    return samples;
+}
+
+void actualDecodeAndRetirement()
+{
+    for (int rate : {24000, 48000}) {
+        for (PcmLayout layout : {PcmLayout::Mono, PcmLayout::Stereo}) {
+            const PcmFormat format{rate, layout};
+            Fixture fixture;
+            fixture.consumer.setSlice(fixture.addSlice(3));
+            fixture.consumer.setEnabled(true);
+            fixture.decoder.setPitchRange(550, 650);
+            fixture.decoder.setSpeedRange(18, 22);
+            fixture.decoder.start();
+            PcmProducer producer;
+            producer.start(PcmPurpose::Slice, 3, format);
+            const QVector<float> samples = letterV(format);
+            const qsizetype chunk = rate / 10 * format.channels();
+            for (qsizetype offset = 0; offset < samples.size(); offset += chunk) {
+                const auto frame = producer.produce(samples.mid(offset, chunk));
+                emit fixture.source->sliceAudioFrameReady(3, *frame);
+                pump(10);
+            }
+            pump(300);
+            std::fprintf(stderr, "CW RX %d Hz/%d ch: %s\n", rate, format.channels(),
+                         qPrintable(fixture.decoded.simplified()));
+            check(fixture.decoded.count('V') >= 3,
+                  "production selected-source adapter/facade/worker recognizes Morse V");
+            check(fixture.decoder.estimatedPitch() > 550 && fixture.decoder.estimatedPitch() < 650,
+                  "actual worker reports the selected CW tone");
+            fixture.decoder.lockPitch(true);
+            fixture.decoder.lockSpeed(true);
+            const float pitch = fixture.decoder.estimatedPitch();
+            const float speed = fixture.decoder.estimatedSpeed();
+#ifdef HAVE_DEEPFIST
+            check(fixture.decoder.selectBackend("deepfist"), "optional backend selection succeeds");
+            check(fixture.decoder.selectBackend("ggmorse"), "default backend restoration succeeds");
+            check(fixture.decoder.estimatedPitch() == pitch && fixture.decoder.estimatedSpeed() == speed,
+                  "backend switch retains independently locked estimates");
+#endif
+            fixture.decoder.start();
+            fixture.decoder.reset();
+            check(fixture.decoder.estimatedPitch() == pitch && fixture.decoder.estimatedSpeed() == speed,
+                  "source reset retains operator locks");
+            fixture.decoder.lockPitch(false);
+            fixture.decoder.lockSpeed(false);
+            fixture.decoder.stop();
+            pump(20);
+            check(fixture.decoder.estimatedPitch() == 0 && fixture.decoder.estimatedSpeed() == 0,
+                  "stop clears unlocked estimates");
+
+            // Fill the real worker while withholding owner-thread result delivery.
+            // Revocation must reject already-posted text as well as buffered PCM.
+            fixture.decoder.start();
+            DecoderPcmAdapter adapter;
+            adapter.selectRoute(DecoderPcmAdapter::RouteLane::NativeSlice, 3);
+            for (qsizetype offset = 0; offset < samples.size(); offset += chunk) {
+                const auto frame = producer.produce(samples.mid(offset, chunk));
+                const auto block = adapter.accept(*frame);
+                if (block) { fixture.decoder.feedFixed24(*block); }
+                QThread::msleep(10);
+            }
+            QThread::msleep(200);
+            producer.invalidate();
+            fixture.decoded.clear();
+            pump(100);
+            check(fixture.decoded.isEmpty(), "revoked source cannot publish already queued CW text");
+            fixture.decoder.stop();
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -217,6 +346,7 @@ int main(int argc, char** argv)
     TestSettingsProfile settings(QStringLiteral("cw-pcm-consumer"));
     QCoreApplication app(argc, argv);
     waveformContract();
+    actualDecodeAndRetirement();
     retiredReceiverCannotOwnNextWord();
     std::printf("cw_pcm_consumer_test: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -26,6 +26,9 @@ public:
     void setEnabled(bool enabled);
 
 signals:
+    // The same admitted source, before fixed-rate conversion. Native-rate
+    // consumers retain the producer frame/lease and perform their own SRC.
+    void nativePcmReady(const AetherSDR::PcmFrame& frame);
     void pcmReady(const AetherSDR::DecoderPcmBlock& block);
     void sourceReset();
 

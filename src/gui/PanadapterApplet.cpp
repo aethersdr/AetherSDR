@@ -202,7 +202,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_cwEngineCombo = new GuardedComboBox(this);
     m_cwEngineCombo->setObjectName("cwRxEngine");
     m_cwEngineCombo->setAccessibleName(tr("CW receive decoder"));
-    m_cwEngineCombo->setAccessibleDescription(tr("Select ggmorse or the experimental DeepFist decoder for monitored audio"));
+    m_cwEngineCombo->setAccessibleDescription(tr("Select ggmorse or the experimental DeepFist decoder for the selected slice"));
     for (const QString& key : CwRxModel::availableBackends()) {
         m_cwEngineCombo->addItem(key == "deepfist" ? tr("DeepFist") : key, key);
     }
@@ -831,8 +831,12 @@ void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const 
     const QSignalBlocker blocker(m_cwEngineCombo);
     m_cwEngineCombo->setCurrentIndex(m_cwEngineCombo->findData(key));
     const bool selected = !tuning;
+    const QString unavailableReason = tuning ? QString{}
+        : tr("%1 does not support manual decoder tuning.")
+              .arg(m_cwEngineCombo->currentText());
     for (QWidget* control : std::array<QWidget*, 5>{m_cwSensSlider, m_lockPitchBtn,
             m_lockSpeedBtn, m_pitchRangeSlider, m_speedRangeSlider}) {
+        control->setAccessibleDescription(unavailableReason);
         control->setEnabled(tuning);
     }
     m_cwModelAction->setVisible(selected && (preparing || canRetry));

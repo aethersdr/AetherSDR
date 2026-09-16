@@ -764,6 +764,7 @@ private:
     void setDecoderPanelVisibleOnly(PanadapterApplet* target, bool shouldShow,
                                     void (PanadapterApplet::*setter)(bool));
     void refreshCwDecodeState();
+    void stopCwRx();
     // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
     // service → contact card on the CW decode panel + lookup dialog.
     void wireCallsignLookup();
@@ -1144,10 +1145,6 @@ private:
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_DEEPFIST
-    QPointer<SliceModel> m_cwRxSlice;
-    QMetaObject::Connection m_cwRxFrequencyConnection;
-    QMetaObject::Connection m_cwRxModeConnection;
-    void refreshCwRxContext();
     void selectCwRxBackend(const QString& backend);
     void cwRxModelAction();
     void refreshCwRxStatus();
@@ -1155,6 +1152,7 @@ private:
     void refreshCwRxBackend();
 #endif
     CwRxModel         m_cwDecoder;
+    std::unique_ptr<DecoderAudioModel> m_cwAudio;
     float             m_cwLastPitchHz{0.0f};
     float             m_cwLastSpeedWpm{0.0f};
     CwDecoder         m_cwDecoderTx;

@@ -1,5 +1,6 @@
 #include "CwRxModel.h"
 #include "core/CwDecoder.h"
+#include <QPointer>
 #ifdef HAVE_DEEPFIST
 #include "DeepFistCwModel.h"
 #endif
@@ -26,11 +27,8 @@ public:
         m_decoder.disconnect(this);
         m_decoder.stop();
     }
-    void reset() override { const bool running = isRunning(); stop(); if (running) { start(); } }
-    void feed(const PcmFrame& frame) override {
-        const QByteArray pcm = frame.legacyStereo24();
-        if (!pcm.isEmpty()) { m_decoder.feedAudio(pcm); }
-    }
+    void reset() override { m_decoder.resetInput(); }
+    void feedFixed24(const DecoderPcmBlock& block) override { m_decoder.feedPcmBlock(block); }
     bool isRunning() const override { return m_decoder.isRunning(); }
     bool supportsTuning() const override { return true; }
     void lockPitch(bool on) override { m_decoder.lockPitch(on); }
@@ -38,6 +36,7 @@ public:
     void setPitchRange(int low, int high) override { m_decoder.setPitchRange(low, high); }
     void setSpeedRange(int low, int high) override { m_decoder.setSpeedRange(low, high); }
     float estimatedPitch() const override { return m_decoder.estimatedPitch(); }
+    float estimatedSpeed() const override { return m_decoder.estimatedSpeed(); }
 private:
     CwDecoder m_decoder;
     quint64 m_generation{0};
@@ -65,17 +64,26 @@ private:
     DeepFistCwModel m_decoder;
 };
 #endif
-std::unique_ptr<CwRxBackend> makeBackend(const QString& key)
+std::shared_ptr<CwRxBackend> makeBackend(const QString& key)
 {
-    if (key == "ggmorse") { return std::make_unique<GgmorseRxBackend>(); }
+    if (key == "ggmorse") { return std::make_shared<GgmorseRxBackend>(); }
 #ifdef HAVE_DEEPFIST
-    if (key == "deepfist") { return std::make_unique<DeepFistRxBackend>(); }
+    if (key == "deepfist") { return std::make_shared<DeepFistRxBackend>(); }
 #endif
     return {};
 }
 }
-CwRxModel::CwRxModel(QObject* parent) : QObject(parent), m_backend(makeBackend(QStringLiteral("ggmorse"))) { bind(); }
-CwRxModel::~CwRxModel() { stop(); }
+CwRxModel::CwRxModel(QObject* parent)
+    : QObject(parent), m_ggmorse(makeBackend(QStringLiteral("ggmorse"))), m_backend(m_ggmorse)
+{
+    bind();
+}
+CwRxModel::~CwRxModel()
+{
+    ++m_generation;
+    m_backend->disconnect(this);
+    m_backend->stop();
+}
 QStringList CwRxModel::availableBackends()
 {
     QStringList result{QStringLiteral("ggmorse")};
@@ -87,14 +95,15 @@ QStringList CwRxModel::availableBackends()
 bool CwRxModel::selectBackend(const QString& key)
 {
     if (key == m_key) { return true; }
-    std::unique_ptr<CwRxBackend> next = makeBackend(key);
+    std::shared_ptr<CwRxBackend> next = key == "ggmorse" ? m_ggmorse : makeBackend(key);
     if (!next) { return false; }
-    stop();
+    ++m_generation;
+    m_backend->disconnect(this);
+    m_backend->stop();
     m_backend = std::move(next);
     m_key = key;
     bind();
-    emit statsUpdated(0, 0);
-    emit statusChanged();
+    queueState();
     return true;
 }
 void CwRxModel::bind()
@@ -113,10 +122,39 @@ void CwRxModel::bind()
         [this, generation](float pitch, float speed) {
             if (generation == m_generation && isRunning()) { emit statsUpdated(pitch, speed); }
         });
-    connect(m_backend.get(), &CwRxBackend::statusChanged, this, &CwRxModel::statusChanged);
+    // Asset/status callbacks can run inside start/stop/ensure. Defer outward
+    // publication until those operations unwind; stale backend posts die here.
+    connect(m_backend.get(), &CwRxBackend::statusChanged, this, [this, generation] {
+        if (generation == m_generation) { emit statusChanged(); }
+    }, Qt::QueuedConnection);
 }
 void CwRxModel::start() { if (!isRunning()) { bind(); m_backend->start(); } }
-void CwRxModel::stop() { ++m_generation; m_backend->stop(); }
-void CwRxModel::reset() { m_backend->reset(); bind(); }
+void CwRxModel::stop()
+{
+    ++m_generation;
+    m_backend->stop();
+    bind();
+    queueState();
+}
+void CwRxModel::reset()
+{
+    m_backend->reset();
+    bind();
+    queueState();
+}
+void CwRxModel::queueState()
+{
+    const quint64 generation = m_generation;
+    QMetaObject::invokeMethod(this, [this, generation] {
+        if (generation != m_generation) { return; }
+        const QPointer<CwRxModel> guard(this);
+        emit statsUpdated(estimatedPitch(), estimatedSpeed());
+        if (guard && generation == m_generation) { emit statusChanged(); }
+    }, Qt::QueuedConnection);
+}
 void CwRxModel::feed(const PcmFrame& frame) { if (isRunning()) { m_backend->feed(frame); } }
+void CwRxModel::feedFixed24(const DecoderPcmBlock& block)
+{
+    if (isRunning()) { m_backend->feedFixed24(block); }
+}
 }

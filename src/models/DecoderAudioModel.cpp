@@ -135,6 +135,10 @@ struct DecoderAudioModel::Impl {
                 }
             }
             if (box == inbox && block->current()) {
+                emit owner->nativePcmReady(frame);
+                if (!guard || box != inbox || !block->current()) {
+                    return;
+                }
                 emit owner->pcmReady(*block);
                 if (!guard || box != inbox) {
                     return;

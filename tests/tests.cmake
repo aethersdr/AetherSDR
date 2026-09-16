@@ -88,7 +88,7 @@ set_tests_properties(decoder_audio_routing_test PROPERTIES TIMEOUT 30)
 add_executable(cw_pcm_consumer_test tests/cw_pcm_consumer_test.cpp)
 target_link_libraries(cw_pcm_consumer_test PRIVATE aethercore Qt6::Core)
 add_test(NAME cw_pcm_consumer_test COMMAND cw_pcm_consumer_test)
-set_tests_properties(cw_pcm_consumer_test PROPERTIES TIMEOUT 30)
+set_tests_properties(cw_pcm_consumer_test PROPERTIES TIMEOUT 60)
 
 add_executable(rtty_decoder_pcm_test tests/rtty_decoder_pcm_test.cpp)
 target_link_libraries(rtty_decoder_pcm_test PRIVATE aethercore Qt6::Core)
@@ -113,6 +113,18 @@ target_include_directories(cw_decoder_parameters_test PRIVATE
 target_link_libraries(cw_decoder_parameters_test PRIVATE Qt6::Core)
 add_test(NAME cw_decoder_parameters_test COMMAND cw_decoder_parameters_test)
 set_tests_properties(cw_decoder_parameters_test PROPERTIES TIMEOUT 60)
+
+# Real worker decoding and typed lease retirement, without sockets or hardware.
+add_executable(cw_decoder_pcm_lifecycle_test
+    tests/cw_decoder_pcm_lifecycle_test.cpp
+    src/core/CwDecoder.cpp
+    ${GGMORSE_SOURCES}
+)
+target_include_directories(cw_decoder_pcm_lifecycle_test PRIVATE
+    src src/core third_party/ggmorse/include third_party/ggmorse/src)
+target_link_libraries(cw_decoder_pcm_lifecycle_test PRIVATE Qt6::Core)
+add_test(NAME cw_decoder_pcm_lifecycle_test COMMAND cw_decoder_pcm_lifecycle_test)
+set_tests_properties(cw_decoder_pcm_lifecycle_test PROPERTIES TIMEOUT 60)
 
 # Socket/device-free production RX queue, processing-domain and output checks.
 add_executable(audio_engine_rates_test tests/audio_engine_rates_test.cpp)
@@ -6008,18 +6020,23 @@ target_include_directories(droop_calibration_seam_test PRIVATE src tests)
 target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
 add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)
 
-# Opt-in prototype: file/PCM tests only; no sockets or sound devices.
-if(ENABLE_DEEPFIST_EXPERIMENT)
+# Model-free algorithms and injected HTTP replies: no sockets, weights or ORT.
+add_executable(deepfist_committer_test tests/deepfist_committer_test.cpp)
+target_include_directories(deepfist_committer_test PRIVATE src)
+target_link_libraries(deepfist_committer_test PRIVATE Qt6::Core)
+add_test(NAME deepfist_committer_test COMMAND deepfist_committer_test)
+set_tests_properties(deepfist_committer_test PROPERTIES TIMEOUT 20)
+add_executable(deepfist_model_assets_test
+    tests/deepfist_model_assets_test.cpp
+    src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h)
+target_include_directories(deepfist_model_assets_test PRIVATE src tests)
+target_compile_definitions(deepfist_model_assets_test PRIVATE DEEPFIST_MODEL_BASE_URL="")
+target_link_libraries(deepfist_model_assets_test PRIVATE Qt6::Core Qt6::Network Qt6::Concurrent)
+add_test(NAME deepfist_model_assets_test COMMAND deepfist_model_assets_test)
+set_tests_properties(deepfist_model_assets_test PROPERTIES TIMEOUT 20)
 
-    add_executable(deepfist_committer_test tests/deepfist_committer_test.cpp)
-    target_include_directories(deepfist_committer_test PRIVATE src)
-    target_link_libraries(deepfist_committer_test PRIVATE Qt6::Core)
-    add_test(NAME deepfist_committer_test COMMAND deepfist_committer_test)
-    add_executable(deepfist_model_assets_test tests/deepfist_model_assets_test.cpp)
-    target_include_directories(deepfist_model_assets_test PRIVATE src tests)
-    target_link_libraries(deepfist_model_assets_test PRIVATE aethercore Qt6::Core Qt6::Network)
-    add_test(NAME deepfist_model_assets_test COMMAND deepfist_model_assets_test)
-    set_tests_properties(deepfist_model_assets_test PROPERTIES TIMEOUT 20)
+# Opt-in real backend: file/PCM tests only; no sockets or sound devices.
+if(ENABLE_DEEPFIST_EXPERIMENT)
     add_executable(deepfist_cw_model_test tests/deepfist_cw_model_test.cpp)
     target_include_directories(deepfist_cw_model_test PRIVATE src third_party/deepfist)
     target_link_libraries(deepfist_cw_model_test PRIVATE aethercore Qt6::Core)

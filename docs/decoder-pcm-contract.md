@@ -43,9 +43,22 @@ hold provider. Its production callbacks carry a selection generation; disconnect
 a Qt signal alone would leave previously posted calls deliverable. Converter,
 detector, frame/vote/lock and diagnostics history reset together.
 
-CW receive wiring is unchanged in this checkpoint because the separately owned
-CW worker/facade changes must be coordinated before integration. This checkpoint
-does not complete RFC #5468 A5. Existing fixed24 CW transmit sidetone is unchanged.
+CW receive uses the same selected-source model. After route/epoch/replay admission,
+`nativePcmReady` publishes the original `PcmFrame` and `pcmReady` publishes the
+converted `DecoderPcmBlock`. `CwRxModel` sends only the matching input to its
+selected backend: GGMorse receives mono24 blocks, while DeepFist keeps native
+24/48 kHz mono/stereo frames and performs its own worker-side 3.2 kHz conversion.
+The shared adapter also supplies admission/discontinuity detection on the native
+path; its converted samples are unused by DeepFist. No new producer relabels
+converted samples, and both paths retain the original revocation witness.
+
+GGMorse owns its engine on the worker and replaces its detector state on input
+reset, discontinuity, source change or ring overflow. The ring and each queued
+result carry an input generation; publication and estimate getters reject retired
+sources. Existing parameter snapshots and locked values survive worker resets.
+A stopped GGMorse backend retains its operator locks across neural selection;
+only the selected backend runs. Closing the panel releases the CW DAX hold.
+TX sidetone remains a separate fixed24 GGMorse instance.
 
 ## Clock time mapping
 

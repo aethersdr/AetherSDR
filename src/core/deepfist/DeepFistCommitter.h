@@ -17,15 +17,19 @@ public:
     {
         QString output;
         if (gated) {
+            bool pendingTail = false;
             if (carry) {
                 for (const Pending& token : m_pending) {
                     if (token.seen >= 2 && token.seconds > m_committed
-                        && token.seconds <= settled && end - token.last <= 1.21) {
-                        output += token.text;
+                        && end - token.last <= 1.21) {
+                        if (token.seconds <= settled) { output += token.text; }
+                        else { pendingTail = true; }
                     }
                 }
             }
-            if (!m_idle) { output += QLatin1Char(' '); m_idle = true; }
+            // Close the word only after its confirmed tail has settled or
+            // expired; a separator cannot be taken back after publication.
+            if (!pendingTail && !m_idle) { output += QLatin1Char(' '); m_idle = true; }
         } else {
             m_idle = false;
             std::vector<Pending> next;

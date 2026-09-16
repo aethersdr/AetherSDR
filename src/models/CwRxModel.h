@@ -1,5 +1,5 @@
 #pragma once
-#include "core/PcmFrame.h"
+#include "core/DecoderPcmAdapter.h"
 #include <QObject>
 #include <QStringList>
 #include <memory>
@@ -13,7 +13,9 @@ public:
     virtual void start() = 0;
     virtual void stop() = 0;
     virtual void reset() = 0;
-    virtual void feed(const PcmFrame&) = 0;
+    // Native frames and converted samples are distinct ownership contracts.
+    virtual void feed(const PcmFrame&) {}
+    virtual void feedFixed24(const DecoderPcmBlock&) {}
     virtual bool isRunning() const = 0;
     virtual bool supportsTuning() const { return false; }
     virtual void lockPitch(bool) {}
@@ -21,6 +23,7 @@ public:
     virtual void setPitchRange(int, int) {}
     virtual void setSpeedRange(int, int) {}
     virtual float estimatedPitch() const { return 0; }
+    virtual float estimatedSpeed() const { return 0; }
     virtual QString status() const { return {}; }
     virtual QString detail() const { return {}; }
     virtual bool preparing() const { return false; }
@@ -46,7 +49,10 @@ public:
     void start();
     void stop();
     void reset();
+    // DecoderAudioModel supplies both outputs; only the selected backend's
+    // matching entry point consumes audio. No converted block becomes a producer.
     void feed(const PcmFrame& frame);
+    void feedFixed24(const DecoderPcmBlock& block);
     bool isRunning() const { return m_backend->isRunning(); }
     bool supportsTuning() const { return m_backend->supportsTuning(); }
     void lockPitch(bool on) { m_backend->lockPitch(on); }
@@ -54,6 +60,7 @@ public:
     void setPitchRange(int low, int high) { m_backend->setPitchRange(low, high); }
     void setSpeedRange(int low, int high) { m_backend->setSpeedRange(low, high); }
     float estimatedPitch() const { return m_backend->estimatedPitch(); }
+    float estimatedSpeed() const { return m_backend->estimatedSpeed(); }
     QString status() const { return m_backend->status(); }
     QString detail() const { return m_backend->detail(); }
     bool preparing() const { return m_backend->preparing(); }
@@ -67,7 +74,11 @@ signals:
     void statusChanged();
 private:
     void bind();
-    std::unique_ptr<CwRxBackend> m_backend;
+    void queueState();
+    // Keep the inactive DSP backend's operator locks/ranges, with its worker
+    // stopped. A backend selection must not turn a checked lock into auto mode.
+    std::shared_ptr<CwRxBackend> m_ggmorse;
+    std::shared_ptr<CwRxBackend> m_backend;
     QString m_key = QStringLiteral("ggmorse");
     quint64 m_generation = 0;
 };

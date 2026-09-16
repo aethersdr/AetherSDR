@@ -63,27 +63,14 @@
 
 namespace AetherSDR {
 
-#ifdef HAVE_DEEPFIST
-void MainWindow::refreshCwRxContext()
+void MainWindow::stopCwRx()
 {
-    SliceModel* slice = activeSlice();
-    if (slice == m_cwRxSlice) { return; }
-    disconnect(m_cwRxFrequencyConnection);
-    disconnect(m_cwRxModeConnection);
-    m_cwRxSlice = slice;
-    m_cwDecoder.reset();
-    m_cwCallsignSpotter.clear();
-    if (slice) {
-        m_cwRxFrequencyConnection = connect(slice, &SliceModel::frequencyChanged,
-            this, [this] {
-                m_cwDecoder.reset();
-            });
-        m_cwRxModeConnection = connect(slice, &SliceModel::modeChanged,
-            this, [this] {
-                m_cwDecoder.reset();
-            });
-    }
+    if (m_cwAudio) { m_cwAudio->setEnabled(false); }
+    m_cwDecoder.stop();
 }
+
+
+#ifdef HAVE_DEEPFIST
 void MainWindow::selectCwRxBackend(const QString& backend)
 {
     if (!m_cwDecoder.selectBackend(backend)) { return; }
@@ -92,8 +79,6 @@ void MainWindow::selectCwRxBackend(const QString& backend)
     if (m_cwDecoderApplet && m_cwDecoder.supportsTuning()) {
         m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(), m_cwDecoderApplet->pitchRangeHigh());
         m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(), m_cwDecoderApplet->speedRangeHigh());
-        m_cwDecoder.lockPitch(m_cwDecoderApplet->lockPitchButton()->isChecked());
-        m_cwDecoder.lockSpeed(m_cwDecoderApplet->lockSpeedButton()->isChecked());
     }
     if (m_panStack) {
         for (PanadapterApplet* applet : m_panStack->allApplets()) {
@@ -139,7 +124,7 @@ void MainWindow::refreshCwRxBackend()
         connect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
             this, &MainWindow::cwRxModelAction, Qt::UniqueConnection);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-            &m_cwDecoder, &CwRxModel::stop, Qt::UniqueConnection);
+            this, &MainWindow::stopCwRx, Qt::UniqueConnection);
     }
     refreshCwRxStatus();
 }

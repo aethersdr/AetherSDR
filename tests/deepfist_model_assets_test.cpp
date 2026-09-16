@@ -8,6 +8,7 @@
 #include <QTemporaryDir>
 #include <QElapsedTimer>
 #include <cstdio>
+#include <memory>
 using namespace AetherSDR;
 namespace {
 int failures = 0;
@@ -116,12 +117,58 @@ void lifecycle()
     QObject::connect(&unavailable, &DeepFistModelAssets::failed, &unavailable, [&](const QString&) { failed = true; });
     unavailable.ensure(); expect(wait([&] { return failed; }), "unpublished source fails explicitly");
 }
+void progressLifetime(bool finishOnly, bool destroy)
+{
+    QTemporaryDir dir;
+    DeepFistTestNetwork network;
+    const auto assets = catalog(network);
+    // Some replies expose the last bytes only when finished is delivered.
+    network.files["model"].notifyReadyRead = !finishOnly;
+    auto manager = std::make_unique<DeepFistModelAssets>(dir.path(),
+        "https://fixture.invalid/v1", assets, &network);
+    int ready = 0, failed = 0;
+    bool interrupted = false;
+    QObject::connect(manager.get(), &DeepFistModelAssets::ready, &network, [&] { ++ready; });
+    QObject::connect(manager.get(), &DeepFistModelAssets::failed, &network, [&] { ++failed; });
+    QObject::connect(manager.get(), &DeepFistModelAssets::progress, &network,
+        [&](qint64 got, qint64) {
+            if (got == 0 || interrupted) { return; }
+            interrupted = true;
+            if (destroy) { manager.reset(); }
+            else { manager->cancel(); manager->ensure(); }
+        });
+    manager->ensure();
+    expect(wait([&] { return interrupted; }), "progress observer interrupts active transfer");
+    if (destroy) {
+        pump(20);
+        expect(!manager && ready == 0 && failed == 0, "deleted manager publishes no completion");
+        expect(network.requests == 1, "deleted manager does not request the next asset");
+        expect(QDir(dir.path()).entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty(),
+            "progress deletion removes incomplete file and cache lock");
+    } else {
+        expect(wait([&] { return ready != 0 || failed != 0; }) && ready == 1 && failed == 0,
+            "progress cancellation and immediate retry completes only replacement");
+        expect(network.requests == 4, "retry replaces canceled first request and completes bundle");
+        for (const auto& asset : assets) {
+            expect(read(dir.filePath(asset.name)) == network.files[asset.name].bytes,
+                "progress retry installs exact asset bytes");
+        }
+    }
+}
 }
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    if (argc > 1) {
+        progressLifetime(QString::fromLocal8Bit(argv[1]) == "--delete-finish", true);
+        return failures ? 1 : 0;
+    }
     successAndCancel();
     for (int i = 0; i < 5; ++i) { rejection(i); }
     lifecycle();
+    for (bool finishOnly : {false, true}) {
+        progressLifetime(finishOnly, true);
+        progressLifetime(finishOnly, false);
+    }
     return failures ? 1 : 0;
 }

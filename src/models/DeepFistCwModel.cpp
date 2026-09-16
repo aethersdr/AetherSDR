@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QStandardPaths>
+#include <QPointer>
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -46,8 +47,10 @@ DeepFistCwModel::DeepFistCwModel(QString directory, QString baseUrl,
     connect(m_assets.get(), &DeepFistModelAssets::ready, this, [this] {
         if (!m_running || !m_preparing) { return; }
         m_preparing = false;
-        setStatus(tr("Loading DeepFist…"));
         const quint64 generation = m_runId;
+        const QPointer<DeepFistCwModel> guard(this);
+        setStatus(tr("Loading DeepFist…"));
+        if (!guard || !m_running || generation != m_runId) { return; }
         m_worker = std::thread([this, generation] { run(generation, m_directory); });
     });
 }
@@ -56,7 +59,12 @@ DeepFistCwModel::DeepFistCwModel(DeepFistStream::Parameters parameters, QObject*
 {
     m_parameters = parameters;
 }
-DeepFistCwModel::~DeepFistCwModel() { stop(); }
+DeepFistCwModel::~DeepFistCwModel()
+{
+    // Destruction must not publish status into a still-connected owner.
+    disconnect();
+    stop();
+}
 QString DeepFistCwModel::modelDirectory()
 {
     // Development-only override in this opt-in prototype. No file picker or installer.
@@ -91,7 +99,10 @@ void DeepFistCwModel::start()
     m_preparing = true;
     m_canRetry = false;
     m_detail.clear();
+    const quint64 runId = m_runId;
+    const QPointer<DeepFistCwModel> guard(this);
     setStatus(tr("Checking model…"));
+    if (!guard || !m_running || !m_preparing || runId != m_runId) { return; }
     m_assets->ensure();
 }
 void DeepFistCwModel::cancelPreparation()
@@ -105,8 +116,10 @@ void DeepFistCwModel::cancelPreparation()
 void DeepFistCwModel::retry()
 {
     if (!m_running || !m_canRetry) { return; }
+    const quint64 expectedRunId = m_runId + 1;
+    const QPointer<DeepFistCwModel> guard(this);
     stop();
-    start();
+    if (guard && !m_running && m_runId == expectedRunId) { start(); }
 }
 void DeepFistCwModel::reset()
 {

@@ -2379,11 +2379,18 @@ void MainWindow::wireRxDemodAudioSinks()
         });
     }
 
-    // CW decoder RX feed — gated live on the toggle (#2417).
-    connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
-            &m_cwDecoder, [this](const PcmFrame& frame) {
-                if (CwDecodeSettings::rxEnabled()) { m_cwDecoder.feed(frame); }
-            });
+    // A5: both RX backends consume the selected pre-monitor source. The facade
+    // dispatches native PCM to DeepFist and converted mono24 to GGMorse.
+    m_cwAudio = std::make_unique<DecoderAudioModel>(
+        m_radioModel, DecoderAudioModel::Consumer::Cw);
+    connect(m_cwAudio.get(), &DecoderAudioModel::nativePcmReady,
+            &m_cwDecoder, &CwRxModel::feed);
+    connect(m_cwAudio.get(), &DecoderAudioModel::pcmReady,
+            &m_cwDecoder, &CwRxModel::feedFixed24);
+    connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
+            &m_cwDecoder, &CwRxModel::reset);
+    connect(m_cwAudio.get(), &DecoderAudioModel::sourceReset,
+            &m_cwCallsignSpotter, &CwCallsignSpotter::clear);
 
     // RFC #5468 A5: selected receiver/DAX tap, before speaker gain/mute/mix.
     m_rttyAudio = std::make_unique<DecoderAudioModel>(
