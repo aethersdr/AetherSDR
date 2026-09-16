@@ -1,0 +1,268 @@
+// aethersdr/radio/state payload + timing contract (#5518).
+//
+// The topic grew `drive` / `max_power_level` for an amplifier interlock, so the
+// states this test cares about are the ones where a naive implementation
+// publishes something plausible and wrong: before the radio has reported power
+// at all, after a disconnect, and with no slice open. All three are ordering
+// states, which is why the payload builder is a pure function over an input
+// struct rather than a body inside MainWindow — they can be driven directly.
+//
+// The second half drives the real TransmitModel and a QTimer configured exactly
+// as MainWindow_Spots.cpp configures m_radioStateCoalesceTimer, because the
+// have-status latch and the debounce are where #5518's findings actually live.
+
+#include "core/MqttRadioState.h"
+#include "models/TransmitModel.h"
+
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QTimer>
+
+#include <iostream>
+
+using namespace AetherSDR;
+
+namespace {
+
+bool expect(bool condition, const char* label)
+{
+    std::cout << (condition ? "[ OK ] " : "[FAIL] ") << label << '\n';
+    return condition;
+}
+
+// A connected Flex mid-session: slice up, power reported.
+MqttRadioStateInputs liveInputs()
+{
+    MqttRadioStateInputs in;
+    in.connected           = true;
+    in.transmitting        = false;
+    in.haveSlice           = true;
+    in.sliceLetter         = QStringLiteral("A");
+    in.sliceFrequencyMhz   = 14.074;
+    in.sliceMode           = QStringLiteral("DIGU");
+    in.haveTransmitStatus  = true;
+    in.drive               = 10;
+    in.maxPowerLevel       = 100;
+    in.driveIsReadback     = true;
+    return in;
+}
+
+// Pump the event loop until `predicate` holds or `budgetMs` elapses. Returns
+// whether the predicate held; a timeout is a failure the caller reports, not a
+// hang.
+template <class Predicate>
+bool pumpUntil(Predicate predicate, int budgetMs)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (!predicate() && clock.elapsed() < budgetMs)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+    return predicate();
+}
+
+}  // namespace
+
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+    bool ok = true;
+
+    // ── Payload shape, the ordinary case ────────────────────────────────────
+    {
+        const QJsonObject obj = buildMqttRadioStatePayload(liveInputs());
+        ok &= expect(obj.value(QStringLiteral("slice")).toString() == QStringLiteral("A"),
+                     "live payload carries slice letter");
+        ok &= expect(qFuzzyCompare(obj.value(QStringLiteral("freq")).toDouble(), 14.074),
+                     "live payload carries slice frequency in MHz");
+        ok &= expect(obj.value(QStringLiteral("mode")).toString() == QStringLiteral("DIGU"),
+                     "live payload carries slice mode");
+        ok &= expect(obj.value(QStringLiteral("tx")).toBool() == false,
+                     "live payload carries tx");
+        ok &= expect(obj.value(QStringLiteral("connected")).toBool() == true,
+                     "live payload carries connected");
+        ok &= expect(obj.value(QStringLiteral("drive")).toInt() == 10,
+                     "live payload carries raw 0..100 drive");
+        ok &= expect(obj.value(QStringLiteral("max_power_level")).toInt() == 100,
+                     "live payload carries max_power_level beside drive");
+        ok &= expect(obj.value(QStringLiteral("drive_confirmed")).toBool() == true,
+                     "readback backend reports drive_confirmed true");
+    }
+
+    // ── Drive is the RAW SETTING, not watts. A 500 W PGXL running 50% must not
+    //    be mistaken for 50 W by a subscriber, which is the entire reason
+    //    max_power_level ships alongside it.
+    {
+        MqttRadioStateInputs in = liveInputs();
+        in.drive         = 50;
+        in.maxPowerLevel = 500;
+        const QJsonObject obj = buildMqttRadioStatePayload(in);
+        ok &= expect(obj.value(QStringLiteral("drive")).toInt() == 50,
+                     "drive stays the raw percent on a 500 W rig");
+        ok &= expect(obj.value(QStringLiteral("max_power_level")).toInt() == 500,
+                     "max_power_level carries the real ceiling, not 100");
+    }
+
+    // ── No active slice: the power fields must still publish. Amplifier logic
+    //    cannot depend on a slice existing (the Mission requirement on #5518).
+    {
+        MqttRadioStateInputs in = liveInputs();
+        in.haveSlice = false;
+        in.sliceLetter.clear();
+        in.sliceFrequencyMhz = 0.0;
+        in.sliceMode.clear();
+        const QJsonObject obj = buildMqttRadioStatePayload(in);
+        ok &= expect(!obj.contains(QStringLiteral("slice"))
+                         && !obj.contains(QStringLiteral("freq"))
+                         && !obj.contains(QStringLiteral("mode")),
+                     "slice-less payload omits the slice fields entirely");
+        ok &= expect(obj.value(QStringLiteral("drive")).toInt() == 10,
+                     "slice-less payload still carries drive");
+        ok &= expect(obj.contains(QStringLiteral("max_power_level")),
+                     "slice-less payload still carries max_power_level");
+        ok &= expect(obj.contains(QStringLiteral("tx"))
+                         && obj.contains(QStringLiteral("connected")),
+                     "slice-less payload still carries radio-level tx/connected");
+    }
+
+    // ── Before the first transmit status: OMITTED, not published as the class
+    //    default. A phantom 100 is indistinguishable from confirmed full drive.
+    {
+        MqttRadioStateInputs in = liveInputs();
+        in.haveTransmitStatus = false;
+        in.drive              = 100;   // the TransmitModel class default
+        in.maxPowerLevel      = 100;
+        const QJsonObject obj = buildMqttRadioStatePayload(in);
+        ok &= expect(!obj.contains(QStringLiteral("drive")),
+                     "unreported drive is absent, never a default 100");
+        ok &= expect(!obj.contains(QStringLiteral("max_power_level")),
+                     "unreported max_power_level is absent too");
+        ok &= expect(!obj.contains(QStringLiteral("drive_confirmed")),
+                     "drive_confirmed is absent when there is no drive to qualify");
+        ok &= expect(obj.contains(QStringLiteral("slice"))
+                         && obj.contains(QStringLiteral("tx")),
+                     "missing power does not suppress the rest of the payload");
+    }
+
+    // ── Disconnect: connected:false and no power fields, so the topic does not
+    //    carry a dead session's drive into the next one.
+    {
+        MqttRadioStateInputs in;   // defaults ARE the disconnected reading
+        const QJsonObject obj = buildMqttRadioStatePayload(in);
+        ok &= expect(obj.value(QStringLiteral("connected")).toBool() == false,
+                     "disconnected payload says connected:false");
+        ok &= expect(obj.value(QStringLiteral("tx")).toBool() == false,
+                     "disconnected payload says tx:false");
+        ok &= expect(!obj.contains(QStringLiteral("drive"))
+                         && !obj.contains(QStringLiteral("max_power_level")),
+                     "disconnected payload retires the power fields");
+    }
+
+    // ── An intent-only backend (HL2) must say so: drive present, but flagged.
+    {
+        MqttRadioStateInputs in = liveInputs();
+        in.driveIsReadback = false;
+        in.drive           = 100;
+        const QJsonObject obj = buildMqttRadioStatePayload(in);
+        ok &= expect(obj.value(QStringLiteral("drive_confirmed")).toBool() == false,
+                     "intent-only backend reports drive_confirmed false");
+        ok &= expect(obj.value(QStringLiteral("drive")).toInt() == 100,
+                     "intent-only backend still publishes the requested drive");
+    }
+
+    // ── tx is never inferred from drive. Drive 0 while keyed is a real state
+    //    (HL2 gated, or an operator at zero power) and must not read as tx:false.
+    {
+        MqttRadioStateInputs in = liveInputs();
+        in.transmitting = true;
+        in.drive        = 0;
+        const QJsonObject obj = buildMqttRadioStatePayload(in);
+        ok &= expect(obj.value(QStringLiteral("tx")).toBool() == true,
+                     "tx stays true with drive 0 — never inferred from power");
+        ok &= expect(obj.contains(QStringLiteral("drive"))
+                         && obj.value(QStringLiteral("drive")).toInt() == 0,
+                     "a reported drive of 0 publishes as 0, not as absent");
+    }
+
+    // ── The have-status latch on the real model ─────────────────────────────
+    {
+        TransmitModel tm;
+        ok &= expect(!tm.haveTransmitStatus(),
+                     "fresh model has not seen a transmit status");
+        ok &= expect(tm.rfPower() == 100,
+                     "fresh model holds the 100 default that must stay unpublished");
+
+        // The value-identical case: a radio reporting 100 into a model already at
+        // 100 changes nothing, so a latch keyed on the change would never fire for
+        // the exact value it most needs to confirm.
+        TransmitDelta same;
+        same.rfPower = 100;
+        tm.applyChanges(same);
+        ok &= expect(tm.haveTransmitStatus(),
+                     "status equal to the default still latches have-status");
+
+        TransmitDelta moved;
+        moved.rfPower = 27;
+        tm.applyChanges(moved);
+        ok &= expect(tm.rfPower() == 27 && tm.haveTransmitStatus(),
+                     "reported drive applies and stays latched");
+
+        tm.resetState();
+        ok &= expect(!tm.haveTransmitStatus(),
+                     "disconnect clears have-status so 100 is a default again");
+        ok &= expect(tm.rfPower() == 100,
+                     "disconnect restores the drive default");
+
+        // resetState must NOT emit rfPowerChanged: that signal drives a TCI
+        // `drive:` broadcast and the TX meter scale, and a departing radio did not
+        // move its power to 100.
+        int emits = 0;
+        QObject::connect(&tm, &TransmitModel::rfPowerChanged,
+                         &tm, [&emits](int) { ++emits; });
+        TransmitDelta again;
+        again.rfPower = 42;
+        tm.applyChanges(again);
+        ok &= expect(emits == 1, "a reported change emits rfPowerChanged once");
+        tm.resetState();
+        ok &= expect(emits == 1, "resetState does not emit a phantom rfPowerChanged");
+    }
+
+    // ── Coalescing: a slider drag must produce ONE publish carrying the FINAL
+    //    value, not a publish per step and not an intermediate value.
+    {
+        TransmitModel tm;
+        QTimer coalesce;                 // same shape as m_radioStateCoalesceTimer
+        coalesce.setSingleShot(true);
+        coalesce.setInterval(150);
+
+        int publishes = 0;
+        int lastDrive = -1;
+        QObject::connect(&coalesce, &QTimer::timeout, &tm, [&] {
+            ++publishes;
+            MqttRadioStateInputs in;
+            in.connected          = true;
+            in.haveTransmitStatus = tm.haveTransmitStatus();
+            in.drive              = tm.rfPower();
+            const QJsonObject obj = buildMqttRadioStatePayload(in);
+            lastDrive = obj.contains(QStringLiteral("drive"))
+                            ? obj.value(QStringLiteral("drive")).toInt()
+                            : -1;
+        });
+        QObject::connect(&tm, &TransmitModel::rfPowerChanged,
+                         &coalesce, [&](int) { coalesce.start(); });
+
+        for (int step : {20, 30, 40, 50, 60}) {   // the drag
+            TransmitDelta d;
+            d.rfPower = step;
+            tm.applyChanges(d);
+        }
+        ok &= expect(publishes == 0, "no publish lands mid-drag");
+        ok &= expect(pumpUntil([&] { return publishes > 0; }, 2000),
+                     "the coalesced publish arrives after the drag settles");
+        ok &= expect(publishes == 1, "five drive steps coalesce into one publish");
+        ok &= expect(lastDrive == 60,
+                     "the coalesced publish carries the final drive, not an "
+                     "intermediate step");
+    }
+
+    return ok ? 0 : 1;
+}

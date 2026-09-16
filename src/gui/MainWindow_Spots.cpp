@@ -100,6 +100,27 @@ void MainWindow::wireSpotSubsystem()
             this, &MainWindow::publishRadioStateMqtt);
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool) { publishRadioStateMqtt(); });
+    // RF drive and the max-power ceiling it scales against (#5518). Without these
+    // the fields would publish once and then sit stale until the next retune or
+    // PTT — the topic has no other drive-change edge. rfPowerChanged rather than
+    // the catch-all stateChanged() because the radio restores per-band power on
+    // QSY, so drive moves on its own and that edge must stay distinguishable.
+    // Through the coalesce timer, not a direct publish: dragging the drive slider
+    // emits per step, exactly the reason freq/mode already go through it.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::rfPowerChanged,
+            this, [this](int) { m_radioStateCoalesceTimer.start(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::maxPowerLevelChanged,
+            this, [this](int) { m_radioStateCoalesceTimer.start(); });
+    // Connect/disconnect edges. On disconnect this is the message that retires the
+    // session's power: TransmitModel::resetState() has already cleared its
+    // have-status latch by the time this fires (RadioModel::onDisconnected calls
+    // it well before emitting connectionStateChanged(false)), so the payload drops
+    // drive/max_power_level and carries connected:false instead of leaving a dead
+    // radio's drive on the topic for the next session to inherit. Direct publish,
+    // not coalesced — an interlock should not wait 150 ms to learn the radio is
+    // gone.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool) { publishRadioStateMqtt(); });
     // Debounce timer for end-of-CWX detection (queueEmpty unreliable with sync_cwx=0).
     // Fires 1 s after the last tx:false with no intervening tx:true = transmission done.
     m_cwxTxEndTimer.setSingleShot(true);

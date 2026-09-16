@@ -24,6 +24,13 @@ void TransmitModel::resetState()
     m_apdEqActive = false;
     m_apdSamplers.clear();
     m_rfPower = 100;
+    // The 100 above is a DEFAULT again, not a reported value: the session that
+    // could confirm it is over (#5518). Clearing this is what stops the MQTT
+    // radio-state topic republishing a dead session's drive as live on the next
+    // connect. Deliberately NOT emitting rfPowerChanged here — that signal drives
+    // a TCI `drive:` broadcast and the TX power-meter scale, and neither should be
+    // told the radio moved its power to 100 as it went away.
+    m_haveTransmitStatus = false;
     m_tunePower = 10;
     m_tune = false;
     m_mox = false;
@@ -103,6 +110,11 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     // rf_power / tune_power emit inline (like max_power_level below): the
     // radio restores per-band power on QSY, and TCI clients need that edge
     // distinctly, not folded into the catch-all stateChanged() (#4161).
+    // Latch on PRESENCE, not on change (#5518): a radio that reports 100% into a
+    // model already sitting at the 100 default makes assign() return false, and a
+    // latch keyed on that would never fire for exactly the value it most needs to
+    // confirm.
+    if (d.rfPower) m_haveTransmitStatus = true;
     if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
     if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }

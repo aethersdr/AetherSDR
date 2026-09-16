@@ -19,6 +19,7 @@
 #include "MqttApplet.h"
 #include "MqttSettingsDialog.h"
 #include "core/MqttAntennaAlias.h"
+#include "core/MqttRadioState.h"
 #include "core/MqttSettings.h"
 #endif
 #include "ConnectionPanel.h"
@@ -3377,15 +3378,28 @@ void MainWindow::publishRadioStateMqtt()
         if (m_cwxPublishedTxTrue) return;
         m_cwxPublishedTxTrue = true;
     }
-    auto* s = activeSlice();
-    if (!s) return;
-    QJsonObject obj;
-    obj[QStringLiteral("slice")] = s->letter();
-    obj[QStringLiteral("freq")]  = s->frequency();
-    obj[QStringLiteral("mode")]  = s->mode();
-    obj[QStringLiteral("tx")]    = m_radioModel.isRadioTransmitting();
+    // No early return on a missing slice (#5518). `drive`/`max_power_level` are
+    // RADIO-level properties, and the consumer this topic grew them for is an
+    // amplifier interlock that must be able to read power on a freshly connected
+    // radio before any slice exists. The slice fields simply go absent; the
+    // builder owns that conditionality and the test drives it directly.
+    MqttRadioStateInputs in;
+    in.connected     = m_radioModel.isConnected();
+    in.transmitting  = m_radioModel.isRadioTransmitting();
+    if (auto* s = activeSlice()) {
+        in.haveSlice          = true;
+        in.sliceLetter        = s->letter();
+        in.sliceFrequencyMhz  = s->frequency();
+        in.sliceMode          = s->mode();
+    }
+    const auto& tm = m_radioModel.transmitModel();
+    in.haveTransmitStatus = tm.haveTransmitStatus();
+    in.drive              = tm.rfPower();
+    in.maxPowerLevel      = tm.maxPowerLevel();
+    in.driveIsReadback    = m_radioModel.backendCapabilities().driveIsReadback;
     m_mqttClient->publish(QString::fromLatin1(kRadioStateTopic),
-                          QJsonDocument(obj).toJson(QJsonDocument::Compact));
+                          QJsonDocument(buildMqttRadioStatePayload(in))
+                              .toJson(QJsonDocument::Compact));
 }
 #endif
 

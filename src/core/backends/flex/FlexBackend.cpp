@@ -217,6 +217,9 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.canTransmit = true;
     // Flex meter samples retain the established client-side PEP response.
     caps.forwardPowerRequiresSmoothing = true;
+    // `transmit rfpower=` is parsed off radio status, so rfPower() is confirmed
+    // radio state rather than this client's request (#5518, Principle II).
+    caps.driveIsReadback = true;
     // A Flex transmits in every mode it demodulates, so there is nothing for the
     // receive-only mode guard to refuse. Stated rather than defaulted, per the
     // "adding a field" rule in RadioCapabilities.h.

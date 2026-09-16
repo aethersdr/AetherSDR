@@ -237,6 +237,24 @@ struct RadioCapabilities {
     // inclusive and expressed in Hz, matching the tuning fields above.
     QVector<TxPowerBand> txPowerBands;
 
+    // Whether TransmitModel::rfPower() holds what the RADIO reports its drive
+    // to be, or only what the OPERATOR asked for (#5518).
+    //
+    // Flex and Icom parse drive back off the wire — `transmit rfpower=` status
+    // and a CI-V level read — so their value is confirmed radio state and this
+    // is true. The HL2 deliberately records operator intent instead: setTxPower()
+    // stores the requested percent BEFORE the transmit gate, and applyDrive()
+    // holds the hardware drive register at 0 for as long as TX is blocked, so
+    // rfPower() can read 100 with no RF leaving the radio. HL2's own diagnostics
+    // carry txDriveRegister/txDriveGated separately for exactly this reason.
+    //
+    // Exported on the MQTT `aethersdr/radio/state` topic as `drive_confirmed` so
+    // a consumer that acts on drive — an amplifier interlock is the stated use
+    // case — can tell the two apart instead of reading intent as applied power.
+    // Defaults true because that is the established shape for every backend that
+    // populates rfPower at all today; a backend that models intent must say so.
+    bool driveIsReadback = true;
+
     // Whether forward-power telemetry needs client-side attack/decay
     // ballistics. True preserves the established Flex presentation. A backend
     // whose telemetry already carries a stable indicated value can disable the

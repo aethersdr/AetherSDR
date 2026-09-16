@@ -46,6 +46,17 @@ public:
 
     // ── Transmit getters ────────────────────────────────────────────────────
     int     rfPower()       const { return m_rfPower; }
+
+    // Whether rfPower() has ever been filled from a backend TransmitDelta in
+    // THIS session, or is still the class default (#5518).
+    //
+    // m_rfPower{100} is indistinguishable from a radio that genuinely reports
+    // 100%, so a consumer acting on drive before the first transmit status has
+    // arrived would act on a phantom. resetState() clears this on every
+    // disconnect, so it answers per-session, not per-process. Distinct from
+    // RadioCapabilities::driveIsReadback, which is per-BACKEND: that says whether
+    // this value CAN be confirmed, this says whether it HAS been reported yet.
+    bool    haveTransmitStatus() const { return m_haveTransmitStatus; }
     int     tunePower()     const { return m_tunePower; }
     bool    isTuning()      const { return m_tune; }
     // CW admission while TUNE is active (#5422). Measured on a FLEX-8400 fw
@@ -500,6 +511,7 @@ private:
 
     // Transmit state
     int    m_rfPower{100};
+    bool   m_haveTransmitStatus{false};  // see haveTransmitStatus() (#5518)
     bool   m_hostModulation{false};
     bool   m_hasTuner{true};
     bool   m_hasTunerMemories{true};
