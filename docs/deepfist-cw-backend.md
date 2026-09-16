@@ -6,8 +6,8 @@ continues to decode transmit sidetone. Only the selected receive backend runs.
 The RFC is #4817; DeepCW remains outside this change. The operator authorized
 preparing this PR before DeepCW, overriding the earlier implementation order.
 
-DeepFist consumes selected-slice pre-monitor PCM through `PcmFrame`, resamples on its worker,
-and uses the pinned native Lyra frontend. Source changes, discontinuities,
+DeepFist consumes selected-slice pre-monitor PCM through `PcmFrame`, resamples
+on its worker, and uses the pinned native Lyra frontend. Source changes, discontinuities,
 queue overflow, resets and backend switches invalidate previous work. The
 queue holds at most two seconds of PCM. Model loading and inference run off
 the UI thread; stopping joins the current inference before destroying state.
@@ -16,8 +16,9 @@ The single DeepFist choice enables activity normalization, completed-mark
 admission and bounded pending-character carry. These are developer settings;
 there is no second normalized decoder in the UI. Output has no calibrated
 ggmorse cost and is displayed without inventing confidence, pitch or speed.
-DeepFist output does not feed automatic callsign spotting. Other monitored slices and speaker gain/mute do not alter the selected decoder
-input. This is an audio slice tap, not an RF separation claim.
+DeepFist output does not feed automatic callsign spotting. Other monitored
+slices and speaker gain/mute do not alter the selected decoder input. This is
+an audio slice tap, not an RF separation claim.
 
 ## Distribution prerequisite
 
@@ -52,8 +53,8 @@ removed asset available to new installations.
 | deepfist.onnx.json | 1257 | 840ceb8dba9d46d04495547a8a3789968b1acd2f8ac3a3a5c631f84008ac2217 |
 | LICENSE | 1068 | 9ad70a9ed30d58502e29f9e691a008ee7bccb6eba49d4384f2b7e675d68dc4f3 |
 
-The qualification bundle was extracted from the Lyra 0.24.0 installer as an
-archive. It is not committed or bundled into AetherSDR. Native helpers retain
+The original PR's qualification used a bundle extracted from the Lyra 0.24.0
+installer as an archive. It is not committed or bundled into AetherSDR. Native helpers retain
 their pinned historical MIT license and attribution under
 `third_party/deepfist`; later upstream licensing does not identify the license
 of a different checkpoint or future update.
@@ -62,8 +63,9 @@ of a different checkpoint or future update.
 
 `cw_rx_model_test` exercises the production receive facade without sockets,
 model downloads, audio devices or radio hardware. It also builds when DeepFist
-is disabled. The optional committer, model-assets and worker tests use injected
-PCM and download replies. Real inference tests require the pinned local
+is disabled. The committer and injected model-assets tests also run in the
+default build, without ONNX Runtime or weights. Optional worker tests use
+injected PCM and download replies. Real inference tests require the pinned local
 bundle and return skip code 77 when absent; a skipped test is not model proof.
 Tests behind the default-OFF option do not run in the default CI graph.
 
@@ -75,7 +77,7 @@ not train or improve itself during use.
 
 The preserved comparison build, Fldigi experiment and experimental ggmorse
 changes are separate from this PR. No Fldigi implementation or comparison
-panel is included here. The merged ggmorse concurrency fix (#5645) is preserved: worker-owned engine,
-coherent parameter updates, frame-bounded work and joined teardown. A5 extends
+panel is included here. The merged ggmorse concurrency fix (#5645) is preserved:
+worker-owned engine, coherent parameter updates, frame-bounded work and joined teardown. A5 extends
 that worker with typed source leases and generations; TX sidetone stays on its
 existing byte API.

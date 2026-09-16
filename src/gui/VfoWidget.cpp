@@ -5899,8 +5899,10 @@ void VfoWidget::refreshCwDecoderControls()
     if (!m_zeroBeatBtn) { return; }
     const bool selected = CwDecodeSettings::deepFistSelected();
     m_zeroBeatBtn->setEnabled(!selected);
-    m_zeroBeatBtn->setToolTip(selected
-        ? tr("Zero Beat is unavailable for DeepFist monitored-audio decoding") : QString{});
+    const QString reason = selected
+        ? tr("DeepFist does not provide a pitch estimate for Zero Beat") : QString{};
+    m_zeroBeatBtn->setToolTip(reason);
+    m_zeroBeatBtn->setAccessibleDescription(reason);
 }
 #endif
 
