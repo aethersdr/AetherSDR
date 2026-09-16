@@ -263,7 +263,8 @@ void MainWindow::beginSwrSweepRf()
 }
 
 void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts,
-                               double customLowMhz, double customHighMhz)
+                               double customLowMhz, double customHighMhz,
+                               bool forceLicenseConfirm)
 {
     if (m_swrSweep.running)
         return;
@@ -403,7 +404,7 @@ void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts,
     // presses are silent once the user ticks "Remember my answer" and
     // accepts.  Placed after all preconditions clear so the dialog only
     // fires when an actual transmission would follow.
-    if (!SwrSweepLicenseDialog::confirm(this)) {
+    if (!SwrSweepLicenseDialog::confirm(this, forceLicenseConfirm)) {
         return;
     }
 

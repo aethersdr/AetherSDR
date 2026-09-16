@@ -53,6 +53,9 @@ public:
     // (#5510)
     void buildAtuContextMenu(QMenu& menu);
     void buildTuneContextMenu(QMenu& menu);
+    // Shared entry points for the ATU context menu and main Tools menu.
+    void openPreTuneDialog();
+    void confirmAndClearAtuMemories();
 
 public slots:
     void updateMeters(float fwdPower, float swr, bool swrValid);
@@ -78,8 +81,6 @@ private:
     // Right-click menu on the ATU button — exposes Pre-tune Bands and
     // Clear ATU Memories. Pre-tune is grayed when MEM is off. (#2624)
     void showAtuContextMenu(const QPoint& pos);
-    void openPreTuneDialog();
-    void confirmAndClearAtuMemories();
     // Right-click menu on the TUNE button — picks the carrier shape for
     // the *next* tune cycle: "Mono Tone" (single_tone) or "Two Tone".
     // Nothing is persisted — selecting Two Tone is a transient one-shot

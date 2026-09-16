@@ -2,7 +2,7 @@
 
 This file is part of a program that implements a Software-Defined Radio.
 
-Copyright (C) 2018 Warren Pratt, NR0V
+Copyright (C) 2018, 2026 Warren Pratt, NR0V
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -26,18 +26,77 @@ warren@pratt.one
 #define _CRT_SECURE_NO_DEPRECATE
 #include "comm.h"
 
+#include "firmin.h"
+
+typedef struct _icfirimp
+{
+	int nc;
+	int wintype;
+	double* A;
+	double* xistion;
+	double* impulse;
+	FSAMP pfsamp;
+} icfirimp, * ICFIRIMP;
+
+typedef struct _icfir
+{
+	int run;
+	int size;
+	int nc;
+	int mp;
+	double* in;
+	double* out;
+	int runrate;
+	int cicrate;
+	int DD;
+	int R;
+	int Pairs;
+	double cutoff;
+	double scale;
+	int xtype;
+	double xbw;
+	int wintype;
+	ICFIRIMP picfirimp;
+	FIRCORE p;
+} icfir, * ICFIR;
+
+void icfir_impulse(ICFIRIMP a, int N, int DD, int R, int Pairs, double runrate, double cicrate, 
+	double cutoff, int xtype, double xbw, int rtype, double scale, int wintype);
+
+ICFIRIMP build_icfir_impulse(int nc, int wintype)
+{
+	ICFIRIMP s = (ICFIRIMP)malloc0(sizeof(icfirimp));
+	s->nc = nc;
+	s->wintype = wintype;
+	s->A = (double*)malloc0(nc * sizeof(double));
+	s->xistion = (double*)malloc0(nc * sizeof(double));
+	s->impulse = (double*)malloc0(nc * sizeof(complex));
+	s->pfsamp = create_fsamp(s->nc, s->wintype);
+	return s;
+}
+
+void teardown_icfir_impulse(ICFIRIMP s)
+{
+	destroy_fsamp(s->pfsamp);
+	_aligned_free(s->impulse);
+	_aligned_free(s->xistion);
+	_aligned_free(s->A);
+	_aligned_free(s);
+}
+
 void calc_icfir (ICFIR a)
 {
-	double* impulse;
+	a->picfirimp = build_icfir_impulse(a->nc, a->wintype);
 	a->scale = 1.0 / (double)(2 * a->size);
-	impulse = icfir_impulse (a->nc, a->DD, a->R, a->Pairs, a->runrate, a->cicrate, a->cutoff, a->xtype, a->xbw, 1, a->scale, a->wintype);
-	a->p = create_fircore (a->size, a->in, a->out, a->nc, a->mp, 16, impulse);
-	_aligned_free (impulse);
+	icfir_impulse(a->picfirimp, a->nc, a->DD, a->R, a->Pairs, a->runrate, a->cicrate,
+		a->cutoff, a->xtype, a->xbw, 1, a->scale, a->wintype);
+	a->p = create_fircore (a->size, a->in, a->out, a->nc, a->mp, 16, a->picfirimp->impulse);
 }
 
 void decalc_icfir (ICFIR a)
 {
 	destroy_fircore (a->p);
+	teardown_icfir_impulse(a->picfirimp);
 }
 
 ICFIR create_icfir (int run, int size, int nc, int mp, double* in, double* out, int runrate, int cicrate, 
@@ -124,7 +183,8 @@ void setOutRate_icfir (ICFIR a, int rate)
 	calc_icfir (a);
 }
 
-double* icfir_impulse (int N, int DD, int R, int Pairs, double runrate, double cicrate, double cutoff, int xtype, double xbw, int rtype, double scale, int wintype)
+void icfir_impulse (ICFIRIMP a, int N, int DD, int R, int Pairs, double runrate, double cicrate, 
+	double cutoff, int xtype, double xbw, int rtype, double scale, int wintype)
 {
 	// N:		number of impulse response samples
 	// DD:		differential delay used in the CIC filter
@@ -139,23 +199,20 @@ double* icfir_impulse (int N, int DD, int R, int Pairs, double runrate, double c
 	// scale:	scale factor to be applied to the output
 	int i, j;
 	double tmp, local_scale, ri, fn, mag = 1.0;
-	double* impulse;
-	double* A = (double *) malloc0 (N * sizeof (double));
-	double ft = cutoff / cicrate;										// normalized cutoff frequency
-	int u_samps = (N + 1) / 2;											// number of unique samples,  OK for odd or even N
-	int c_samps = (int)(cutoff / runrate * N) + (N + 1) / 2 - N / 2;	// number of unique samples within bandpass, OK for odd or even N
-	int x_samps = (int)(xbw / runrate * N);								// number of unique samples in transition region, OK for odd or even N
-	double offset = 0.5 - 0.5 * (double)((N + 1) / 2 - N / 2);			// sample offset from center, OK for odd or even N
-	double* xistion = (double *) malloc0 ((x_samps + 1) * sizeof (double));
+	double ft = cutoff / cicrate;
+	int u_samps = (N + 1) / 2;
+	int c_samps = (int)(cutoff / runrate * N) + (N + 1) / 2 - N / 2;
+	int x_samps = (int)(xbw / runrate * N);
+	double offset = 0.5 - 0.5 * (double)((N + 1) / 2 - N / 2);
 	double delta = PI / (double)x_samps;
 	double L = cicrate / runrate;
 	double phs = 0.0;
 	for (i = 0; i <= x_samps; i++)
 	{
-		xistion[i] = 0.5 * (cos (phs) + 1.0);
+		a->xistion[i] = 0.5 * (cos (phs) + 1.0);
 		phs += delta;
 	}
-	if ((tmp = DD * R * sin (PI * ft / R) / sin (PI * DD * ft)) < 0.0)	//normalize by peak gain
+	if ((tmp = DD * R * sin (PI * ft / R) / sin (PI * DD * ft)) < 0.0)
 		tmp = -tmp;
 	local_scale = scale / pow (tmp, Pairs);
 	if (xtype == 0)
@@ -172,7 +229,7 @@ double* icfir_impulse (int N, int DD, int R, int Pairs, double runrate, double c
 			}
 			else
 				mag *= (ft * ft * ft * ft) / (fn * fn * fn * fn);
-			A[i] = mag; 
+			a->A[i] = mag;
 		}
 	}
 	else if (xtype == 1)
@@ -186,24 +243,22 @@ double* icfir_impulse (int N, int DD, int R, int Pairs, double runrate, double c
 				else if ((tmp = sin (PI * DD * fn) / (DD * R * sin (PI * fn / R))) < 0.0)
 					tmp = -tmp;
 				mag = pow (tmp, Pairs) * local_scale;
-				A[i] = mag;
+				a->A[i] = mag;
 			}
 			else if ( i >= c_samps && i <= c_samps + x_samps)
-				A[i] = mag * xistion[i - c_samps];
+				a->A[i] = mag * a->xistion[i - c_samps];
 			else
-				A[i] = 0.0;
+				a->A[i] = 0.0;
 		}
 	}
 	if (N & 1)
 		for (i = u_samps, j = 2; i < N; i++, j++)
-			A[i] = A[u_samps - j];
+			a->A[i] = a->A[u_samps - j];
 	else
 		for (i = u_samps, j = 1; i < N; i++, j++)
-			A[i] = A[u_samps - j];
-	impulse = fir_fsamp (N, A, rtype, 1.0, wintype);
-	// print_impulse ("icfirImpulse.txt", N, impulse, 1, 0);
-	_aligned_free (A);
-	return impulse;
+			a->A[i] = a->A[u_samps - j];
+	fsamp_exec(a->pfsamp, a->A, a->impulse, rtype, 1.0);
+	// print_impulse ("icfirImpulse.txt", N, a->impulse, 1, 0);
 }
 
 /********************************************************************************************************

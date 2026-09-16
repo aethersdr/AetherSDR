@@ -2,7 +2,7 @@
 
 This file is part of a program that implements a Software-Defined Radio.
 
-Copyright (C) 2015 Warren Pratt, NR0V
+Copyright (C) 2015, 2026 Warren Pratt, NR0V
 
 This program is free software; you can redistribute it and/or
 modify it under the terms of the GNU General Public License
@@ -196,9 +196,7 @@ typedef struct _emnr
 		double tc_decay;
 		double rate_decay;
 		double* w;
-		int noise_frames;
-		int noise_frame_index;
-		double* noise_frame;
+		unsigned int rngstate;
 		double olddmag;
 	} post2;
 }emnr, *EMNR;

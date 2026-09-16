@@ -66,6 +66,21 @@ public:
         write(o);
     }
 
+    // Sibling of extendedPassband for tracking-notch markers. Same default and
+    // same reasoning: the waterfall is a record of what was received, so an
+    // overlay that paints over that history is opt-in.
+    static bool extendedTnf()
+    {
+        return readObj().value("extendedTnf").toString("False") == "True";
+    }
+
+    static void setExtendedTnf(bool on)
+    {
+        QJsonObject o = readObj();
+        o["extendedTnf"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
     // Perspective shadow for slice markers and passbands in the 3D
     // stacked-trace view. Global across panadapters; dormant in 2D. Defaults
     // off (like every sibling Display toggle) so an upgrade never silently

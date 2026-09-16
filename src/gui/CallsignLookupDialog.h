@@ -10,7 +10,7 @@ namespace AetherSDR {
 
 class CallsignCard;
 
-// View → Callsign Lookup: type a callsign, get the large contact card.
+// Tools → Callsign Lookup: type a callsign, get the large contact card.
 // Results ride CallsignLookupService (same QRZ client + 7-day cache the
 // CW decoder card uses), so repeated lookups cost nothing and the two
 // surfaces always agree.

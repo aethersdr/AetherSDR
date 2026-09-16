@@ -71,15 +71,15 @@ extern void setFreqs_bps (BPS a, double f_low, double f_high);
 
 // RXA Prototypes
 
-extern __declspec (dllexport) void SetRXABPSRun (int channel, int run);
+// extern __declspec (dllexport) void SetRXABPSRun (int channel, int run);
 
-extern __declspec (dllexport) void SetRXABPSFreqs (int channel, double low, double high);
+// extern __declspec (dllexport) void SetRXABPSFreqs (int channel, double low, double high);
 
 // TXA Prototypes
 
-extern __declspec (dllexport) void SetTXABPSRun (int channel, int run);
+// extern __declspec (dllexport) void SetTXABPSRun (int channel, int run);
 
-extern __declspec (dllexport) void SetTXABPSFreqs (int channel, double low, double high);
+// extern __declspec (dllexport) void SetTXABPSFreqs (int channel, double low, double high);
 
 #endif
 

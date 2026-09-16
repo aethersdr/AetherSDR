@@ -295,6 +295,18 @@ CW sidetone and Quindar local monitor output are independent local paths:
   `ClientQuindarTone::processSidetone()` so the operator hears the local
   Quindar tones corresponding to TX tone insertion.
 
+Which backend is constructed is decided by `CwSidetoneBackendPolicy.h` from
+three facts: whether `HAVE_PORTAUDIO` was defined at build time, the platform,
+and `AppSettings["CwSidetoneBackend"]`. An operator preference wins everywhere;
+the platform only supplies the default for an install that has never set one.
+That default is PortAudio on Linux and macOS — the callback path, sub-5 ms
+against PipeWire and CoreAudio — and `QAudioSink` on Windows, where the
+PortAudio path shipped for the first time in v26.9.3 and corrupted the process
+heap at connect (#5713). Windows operators can still opt in with
+`AetherSDR.exe --config set CwSidetoneBackend PortAudio`; the value is matched
+case-insensitively, because the setting has no GUI and is typed at a command
+line.
+
 The sidetone backend is opened against the same PC output selection as RX audio.
 When the operator has selected a specific output, the PortAudio backend maps the
 Qt device name to a PortAudio output; if that mapping is missing or ambiguous,

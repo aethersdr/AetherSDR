@@ -190,7 +190,11 @@ private:
     // The receiver a client is actually operating: its declared audio_start
     // receiver when it has one, else the trx it put on the wire (#4547).
     int effectiveTrx(QWebSocket* client, int requestedTrx) const;
-    QVector<TciSliceEndpoint> routingEndpoints() const;
+    // With a requester, slices that OTHER clients operate as their receiver
+    // (declared audio_start receiver, the same signal effectiveTrx() reads)
+    // are flagged so resolveVfoB() never adopts one as the requester's VFO B
+    // (#5193). Without a requester no slice is flagged.
+    QVector<TciSliceEndpoint> routingEndpoints(const QWebSocket* requester = nullptr) const;
     // Diagnostics helpers for the PTT routing decision log.
     static const char* txRouteOwnerName(TciRoutingState::TxRouteOwner owner);
     // "<sliceId>(trx<n>)", "<sliceId>(gone)" for a slice that is no longer

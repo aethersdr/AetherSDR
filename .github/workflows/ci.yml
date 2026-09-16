@@ -64,6 +64,13 @@ env:
   # failed the first main run, which is exactly the shape of that bug.
   # Not in the Qt cache key: the extractor does not change what is laid down.
   PY7ZR_VERSION: '1.0.0'
+  # Anti-vacuity floor for the restored-tree check in both per-PR legs: a
+  # lib/cmake that declares fewer modules than this is itself short, and
+  # "every framework/include dir it declared is present" stops meaning
+  # anything. A bare qtbase install declares 13; this workflow's module
+  # set declares far more, so the floor only has to exclude a gutted tree,
+  # not track the -m line (which would be the drift the check avoids).
+  QT_MODULE_FLOOR: '10'
 
 jobs:
   build:
@@ -414,8 +421,73 @@ jobs:
           path: ${{ runner.workspace }}\Qt
           key: qt-${{ env.QT_VERSION }}-windows-${{ env.QT_ARCH }}-aqt${{ env.AQTINSTALL_VERSION }}-mm.ws.sp.st
 
+      # Same guard as the macOS job's, same reason and same derivation — see
+      # the long note there. Windows has no framework layout to walk, so the
+      # structural equivalent of "every framework lib/cmake names is present
+      # with headers" is "every include\Qt* directory lib/cmake names is
+      # present and populated". Deliberately not a named module list: the
+      # module set is the install step's own `-m` line, and a second copy here
+      # would drift out of step with it silently.
+      - name: Verify the restored Qt tree
+        id: qt-verify-win
+        if: steps.cache-qt-win.outputs.cache-hit == 'true'
+        shell: pwsh
+        run: |
+          $qtRoot = "$env:RUNNER_WORKSPACE\Qt\$env:QT_VERSION\" + ($env:QT_ARCH -replace '^win64_', '')
+          $complete = $true
+          # -PathType Leaf so a directory of that name cannot pass. There is no
+          # Windows analogue of the macOS side's executable-bit test.
+          if (-not (Test-Path "$qtRoot\bin\qmake.exe" -PathType Leaf)) {
+            Write-Host "missing: bin\qmake.exe"
+            $complete = $false
+          }
+          # The path Export Qt environment hands find_package(Qt6) as Qt6_DIR.
+          if (-not (Test-Path "$qtRoot\lib\cmake\Qt6\Qt6Config.cmake" -PathType Leaf)) {
+            Write-Host "missing: lib\cmake\Qt6\Qt6Config.cmake"
+            $complete = $false
+          }
+          $targets = @(Get-ChildItem "$qtRoot\lib\cmake" -Filter 'Qt6*Targets*.cmake' -Recurse -File -ErrorAction SilentlyContinue)
+          $modules = @($targets |
+            Select-String -Pattern '\$\{_IMPORT_PREFIX\}/include/(Qt[A-Za-z0-9_]+)' -AllMatches |
+            ForEach-Object { $_.Matches } |
+            ForEach-Object { $_.Groups[1].Value } |
+            Sort-Object -Unique)
+          foreach ($m in $modules) {
+            $dir = "$qtRoot\include\$m"
+            if (-not (Test-Path $dir -PathType Container)) {
+              Write-Host "missing: include\$m"
+              $complete = $false
+            } elseif (-not (Get-ChildItem $dir -File -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+              Write-Host "empty include directory: include\$m"
+              $complete = $false
+            }
+          }
+          # Anti-vacuity, as on macOS, and on the same quantity: declared
+          # modules, not directories found.
+          if ($modules.Count -lt [int]$env:QT_MODULE_FLOOR) {
+            Write-Host "only $($modules.Count) Qt module(s) declared under lib\cmake (floor $env:QT_MODULE_FLOOR)"
+            $complete = $false
+          }
+          if ($complete) {
+            Write-Host "Qt tree complete: $($modules.Count) module(s) declared, every include directory present and populated"
+            "complete=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+            $key = "qt-${env:QT_VERSION}-windows-${env:QT_ARCH}-aqt${env:AQTINSTALL_VERSION}-mm.ws.sp.st"
+            Write-Host "::warning title=Qt cache restore incomplete::Restored Qt tree is short; discarding it and reinstalling via aqt. If this repeats on the same key the stored entry is bad, and it can only be cleared by hand: gh cache delete $key --ref refs/heads/main"
+            Remove-Item -Recurse -Force "$env:RUNNER_WORKSPACE\Qt" -ErrorAction SilentlyContinue
+            # A partial delete would leave aqt extracting over the corrupt tree
+            # this step just rejected, which is the state it exists to avoid.
+            if (Test-Path "$env:RUNNER_WORKSPACE\Qt") {
+              Write-Host "ERROR: could not remove the incomplete Qt tree at $env:RUNNER_WORKSPACE\Qt"
+              exit 1
+            }
+            "complete=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          }
+
       - name: Install Qt LTS via aqtinstall
-        if: steps.cache-qt-win.outputs.cache-hit != 'true'
+        if: >-
+          steps.cache-qt-win.outputs.cache-hit != 'true'
+          || steps.qt-verify-win.outputs.complete != 'true'
         shell: pwsh
         run: |
           # aqt goes in a venv and is pinned, for the reason check-macos and
@@ -447,7 +519,7 @@ jobs:
             # A bad entry on main is only clearable by hand: the key is a
             # content hash nothing re-saves, and no sweeper matches qt-* there.
             Write-Host "ERROR: no qmake at $qtRoot — aqt layout changed, or a stale cache entry"
-            Write-Host "       (clear a stale entry: gh cache delete --key <the Restore Qt key> --ref refs/heads/main)"
+            Write-Host "       (clear a stale entry: gh cache delete <the Restore Qt key> --ref refs/heads/main)"
             Get-ChildItem "$env:RUNNER_WORKSPACE\Qt\$env:QT_VERSION" -ErrorAction SilentlyContinue
             exit 1
           }
@@ -800,8 +872,90 @@ jobs:
           path: ${{ github.workspace }}/Qt
           key: qt-${{ env.QT_VERSION }}-macos-clang64-aqt${{ env.AQTINSTALL_VERSION }}-mm.ws.sp.st
 
+      # A cache HIT is not the same as a usable Qt tree, and until now nothing
+      # between the two could tell the difference.
+      #
+      # 2026-09-12, run 34708649276 attempt 1: this step restored the 1.3 GB
+      # macOS entry, gtar reported "Cache restored successfully", Export Qt
+      # environment ran qmake and got 6.8.3 back — and Configure then died with
+      # six copies of
+      #
+      #   Imported target "Qt6::SerialPort" includes non-existent path
+      #     ".../Qt/6.8.3/macos/lib/QtSerialPort.framework/Headers"
+      #
+      # The stored entry was fine. The immediate re-run restored the same key,
+      # byte for byte, and configured cleanly. The extraction had silently
+      # dropped part of the tree, and the only thing standing between that and
+      # CMake was the bin/qmake test below, which a short tree still passes.
+      #
+      # What made it fatal rather than slow is the `cache-hit != 'true'` gate on
+      # the install step: once the cache reports a hit there is no route back to
+      # aqt, so an incomplete tree can only surface 200 lines deep inside CMake,
+      # blaming a "faulty installation package" and sending the reader to
+      # inspect cache contents that are not the problem. This step gives that
+      # state a way out.
+      #
+      # What "complete" means here is derived from the tree itself rather than
+      # from a second copy of the install step's `-m` line: every
+      # Qt6*Targets.cmake under lib/cmake names the frameworks its module
+      # needs, and lib/cmake ships in the same archives as the frameworks, so
+      # the two cannot drift apart. That also makes this the exact invariant
+      # that failed above — CMake was reading one of these very paths out of
+      # INTERFACE_INCLUDE_DIRECTORIES.
+      #
+      # Walking only the frameworks that survived would not have caught it. A
+      # framework dropped whole is simply absent from the walk, and the error
+      # text above does not say which of the two happened: Qt6SerialPortConfig
+      # lives under lib/cmake, not inside the bundle, so CMake prints it either
+      # way. Asking lib/cmake what should be there covers both.
+      - name: Verify the restored Qt tree
+        id: qt-verify-mac
+        if: steps.cache-qt-mac.outputs.cache-hit == 'true'
+        run: |
+          set -o pipefail
+          QT_ROOT="${{ github.workspace }}/Qt/$QT_VERSION/macos"
+          complete=true
+          [ -x "$QT_ROOT/bin/qmake" ] || { echo "missing: bin/qmake"; complete=false; }
+          # The path Export Qt environment hands find_package(Qt6) as Qt6_DIR.
+          [ -f "$QT_ROOT/lib/cmake/Qt6/Qt6Config.cmake" ] \
+            || { echo "missing: lib/cmake/Qt6/Qt6Config.cmake"; complete=false; }
+          # A file rather than a pipeline: the loop has to run in this shell or
+          # `complete` is set in a subshell and thrown away.
+          grep -rhoE '\$\{_IMPORT_PREFIX\}/lib/Qt[A-Za-z0-9_]*\.framework' \
+            "$QT_ROOT"/lib/cmake/Qt6*/Qt6*Targets*.cmake 2>/dev/null \
+            | sed "s|\${_IMPORT_PREFIX}|$QT_ROOT|" | sort -u \
+            > "$RUNNER_TEMP/qt-frameworks.txt" || true
+          modules=0
+          while IFS= read -r fw; do
+            [ -n "$fw" ] || continue
+            modules=$((modules + 1))
+            if [ ! -d "$fw" ]; then
+              echo "missing: lib/${fw##*/}"
+              complete=false
+            elif [ ! -d "$fw/Headers" ] || [ -z "$(ls -A "$fw/Headers" 2>/dev/null)" ]; then
+              echo "missing or empty: lib/${fw##*/}/Headers"
+              complete=false
+            fi
+          done < "$RUNNER_TEMP/qt-frameworks.txt"
+          # Anti-vacuity. A gutted lib/cmake names nothing, and "every framework
+          # it named is present" is trivially true of nothing. The floor is on
+          # declared modules, not on frameworks found, so it cannot be satisfied
+          # by the same damage it is meant to detect.
+          [ "$modules" -ge "$QT_MODULE_FLOOR" ] \
+            || { echo "only $modules Qt module(s) declared under lib/cmake (floor $QT_MODULE_FLOOR)"; complete=false; }
+          if [ "$complete" = true ]; then
+            echo "Qt tree complete: $modules module(s) declared, every framework present with headers"
+            echo "complete=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=Qt cache restore incomplete::Restored Qt tree is short; discarding it and reinstalling via aqt. If this repeats on the same key the stored entry is bad, and it can only be cleared by hand: gh cache delete qt-${QT_VERSION}-macos-clang64-aqt${AQTINSTALL_VERSION}-mm.ws.sp.st --ref refs/heads/main"
+            rm -rf "${{ github.workspace }}/Qt"
+            echo "complete=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install Qt LTS via aqtinstall
-        if: steps.cache-qt-mac.outputs.cache-hit != 'true'
+        if: >-
+          steps.cache-qt-mac.outputs.cache-hit != 'true'
+          || steps.qt-verify-mac.outputs.complete != 'true'
         run: |
           set -o pipefail
           # aqt goes in a venv, and is pinned: it is the tool that decides what
@@ -824,7 +978,7 @@ jobs:
             # A bad entry on main is only clearable by hand: the key is a
             # content hash nothing re-saves, and no sweeper matches qt-* there.
             echo "ERROR: no qmake at $QT_ROOT — aqt layout changed, or a stale cache entry"
-            echo "       (clear a stale entry: gh cache delete --key <the Restore Qt key> --ref refs/heads/main)"
+            echo "       (clear a stale entry: gh cache delete <the Restore Qt key> --ref refs/heads/main)"
             ls -la "${{ github.workspace }}/Qt/$QT_VERSION/" || true
             exit 1
           fi

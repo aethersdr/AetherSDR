@@ -751,7 +751,7 @@ void SetTXAMode (int channel, int mode)
 		txa[channel].mode = mode;
 		txa[channel].ammod.p->run   = 0;
 		txa[channel].fmmod.p->run   = 0;
-		txa[channel].preemph.p->run = 0;
+		SetTXAFMPreEmphRun (channel, 0);
 		switch (mode)
 		{
 		case TXA_AM:
@@ -770,7 +770,7 @@ void SetTXAMode (int channel, int mode)
 			break;
 		case TXA_FM:
 			txa[channel].fmmod.p->run   = 1;
-			txa[channel].preemph.p->run = 1;
+			SetTXAFMPreEmphRun (channel, 1);
 			break;
 		default:
 

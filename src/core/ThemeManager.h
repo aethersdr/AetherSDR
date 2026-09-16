@@ -166,6 +166,12 @@ public:
     // dangling pointers.
     void applyStyleSheet(QWidget* widget, const QString& stylesheetTemplate);
 
+    // Temporarily own a standard widget's text foreground without replacing its
+    // base stylesheet. Empty token restores the latest base style. Both layers
+    // remain theme/scope aware; subsequent applyStyleSheet calls preserve this
+    // treatment. Custom paint code must consume the token itself.
+    void setWidgetForegroundToken(QWidget* widget, const QString& token);
+
     // Shared QCheckBox::indicator style fragment — ThemeManager tokens plus
     // the full hover/checked/disabled pseudo-state set — so every dialog gets
     // a visible, theme-reactive indicator in dark mode without hand-rolling
@@ -578,6 +584,8 @@ private:
     // drained by onTrackedWidgetDestroyed.
     struct TrackedWidget {
         QString             stylesheetTemplate;
+        QString             foregroundToken;
+        QString effectiveTemplate(const QWidget* widget) const;
         // Exactly the QSS *we* last pushed onto the widget.  If the widget's
         // current stylesheet still equals this, nobody has overridden us and
         // a re-resolve is safe.  If it differs, a caller set its own sheet

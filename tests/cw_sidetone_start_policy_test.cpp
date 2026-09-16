@@ -85,9 +85,9 @@ int main()
     EXPECT_START_DEVICE(true, true, SidetoneStartDevice::Resolved,
         "Linux/macOS, saved+present device, PortAudio -> resolved device, name-matched (explicit path unchanged)");
     EXPECT_START_DEVICE(false, false, SidetoneStartDevice::Resolved,
-        "Windows (no PortAudio) or CwSidetoneBackend=QAudioSink, nothing saved -> resolved device, not null");
+        "Windows default (QAudioSink since #5713), no PortAudio build, or CwSidetoneBackend=QAudioSink, nothing saved -> resolved device, not null");
     EXPECT_START_DEVICE(true, false, SidetoneStartDevice::Resolved,
-        "Windows (no PortAudio) or CwSidetoneBackend=QAudioSink, saved device -> resolved device");
+        "Windows default (QAudioSink since #5713), no PortAudio build, or CwSidetoneBackend=QAudioSink, saved device -> resolved device");
 
     // ── isExplicitSidetoneSelection: what counts as explicit ───────────────
     EXPECT_EXPLICIT(false, false, false,

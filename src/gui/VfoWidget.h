@@ -640,8 +640,12 @@ public:
     // markerWidth: 0 = off, 1 = 1 px, 3 = 3 px.
     int  markerWidth() const { return m_markerWidth; }
     bool filterEdgesHidden() const { return m_filterEdgesHidden; }
-    void setMarkerWidth(int widthPx);
-    void setFilterEdgesHidden(bool hide);
+    static int defaultMarkerWidth();
+    static bool defaultFilterEdgesHidden();
+    static void setDefaultMarkerWidth(int widthPx);
+    static void setDefaultFilterEdgesHidden(bool hide);
+    void setMarkerWidth(int widthPx, bool persist = true);
+    void setFilterEdgesHidden(bool hide, bool persist = true);
 private:
     int  m_markerWidth{1};
     bool m_filterEdgesHidden{false};
@@ -652,7 +656,8 @@ private:
     // unchecked = edges hidden.
     class QPushButton* m_edgesBtn{nullptr};
     void loadDisplayPrefs();
-    void saveDisplayPrefs();
+    void saveMarkerWidthPref();
+    void saveFilterEdgesPref();
     // Adaptive RX filter controls (SSB-only, rebuilt with the Mode tab) — RFC #3878
     // Reusable adaptive-RX-filter control group (shared with the RX applet);
     // recreated on each SSB grid rebuild, bound to the slice as source of truth.
