@@ -1,11 +1,15 @@
 #include <QCoreApplication>
-#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QTcpSocket>
-#include <QThread>
 #include <QTimer>
 
 #include "core/ProfileTransfer.h"
+
+// Socket-free by construction. Every fixture is ProfileTransfer(nullptr), and
+// that null model is load-bearing: connectUploadSocket() does build a real
+// QTcpSocket, but its deferred connect action is gated on the model, so
+// connectToHost() is unreachable and no descriptor is ever opened. Give a
+// fixture a RadioModel and this test starts doing real network I/O.
 
 #include <functional>
 #include <iostream>
@@ -94,6 +98,40 @@ public:
     {
         return transfer.m_phase == phase;
     }
+
+    static void completeImport(ProfileTransfer& transfer)
+    {
+        transfer.completeImport();
+    }
+
+    static void startCommandTimeout(ProfileTransfer& transfer, int timeoutMs, Phase phase)
+    {
+        transfer.startCommandTimeout(timeoutMs, phase);
+    }
+
+    static void startIdleTimeout(ProfileTransfer& transfer, Phase phase)
+    {
+        transfer.startIdleTimeout(phase);
+    }
+
+    static bool anyTimeoutArmed(const ProfileTransfer& transfer)
+    {
+        return transfer.m_timeout->isActive() || transfer.m_idleTimer->isActive()
+            || transfer.m_overallTimer->isActive();
+    }
+
+    static bool anyTimeoutGenerationLive(const ProfileTransfer& transfer)
+    {
+        return transfer.m_commandTimeoutGeneration != 0
+            || transfer.m_idleTimeoutGeneration != 0
+            || transfer.m_overallTimeoutGeneration != 0;
+    }
+
+    // Read the production constants rather than restating them: a raised
+    // settle time would otherwise make every wait below expire early and the
+    // assertions pass vacuously.
+    static constexpr int importSettleMs() { return ProfileTransfer::kImportSettleMs; }
+    static constexpr int metaSubsetSettleMs() { return ProfileTransfer::kMetaSubsetSettleMs; }
 };
 
 } // namespace AetherSDR
@@ -110,13 +148,15 @@ bool expect(bool condition, const char* message)
 
 void waitForMilliseconds(int milliseconds)
 {
-    QElapsedTimer elapsed;
-    elapsed.start();
-    while (elapsed.elapsed() < milliseconds) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-        QThread::msleep(5);
-    }
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    QEventLoop loop;
+    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+    loop.exec();
+}
+
+// Long enough for a settle callback to have fired if it were going to.
+int pastSettle(int settleMs)
+{
+    return settleMs + 600;
 }
 
 } // namespace
@@ -238,7 +278,7 @@ int main(int argc, char* argv[])
                                         : AetherSDR::ProfileTransfer::Operation::ImportDatabase,
             replacementPhase);
 
-        waitForMilliseconds(5600);
+        waitForMilliseconds(pastSettle(AetherSDR::ProfileTransferTestAccess::importSettleMs()));
 
         ok &= expect(finished == 0,
                      "the canceled import completion callback cannot finish a replacement");
@@ -267,13 +307,15 @@ int main(int argc, char* argv[])
         staleMetadata();
         ok &= expect(metadataCompletions == 0,
                      "metadata completion is refused after a same-operation phase transition");
-        QTimer::singleShot(5000, &transfer, staleMetadata);
+        QTimer::singleShot(AetherSDR::ProfileTransferTestAccess::metaSubsetSettleMs(),
+                           &transfer, staleMetadata);
         transfer.cancel();
         AetherSDR::ProfileTransferTestAccess::begin(
             transfer, AetherSDR::ProfileTransfer::Operation::ImportDatabase,
             AetherSDR::ProfileTransferTestAccess::Phase::UploadImport);
 
-        waitForMilliseconds(5600);
+        waitForMilliseconds(
+            pastSettle(AetherSDR::ProfileTransferTestAccess::metaSubsetSettleMs()));
 
         ok &= expect(metadataCompletions == 0,
                      "stale metadata settle cannot invoke its completion action");
@@ -307,10 +349,77 @@ int main(int argc, char* argv[])
             AetherSDR::ProfileTransferTestAccess::Phase::WaitingForImport);
         AetherSDR::ProfileTransferTestAccess::scheduleImportCompletion(transfer);
 
-        waitForMilliseconds(5600);
+        waitForMilliseconds(pastSettle(AetherSDR::ProfileTransferTestAccess::importSettleMs()));
 
         ok &= expect(finished == 1, "current import completion emits finished once");
         ok &= expect(!transfer.isBusy(), "current import completion returns the transfer to idle");
+    }
+
+    {
+        // The three shared QTimers are generation-bound like everything else,
+        // but the reason a stale one cannot fire at all is that cleanup()
+        // disarms them on every terminal path. That invariant is what this
+        // pins -- it is what would actually break, and it is what keeps the
+        // generation check on those timers unreachable rather than dead.
+        AetherSDR::ProfileTransfer transfer(nullptr);
+        AetherSDR::ProfileTransferTestAccess::begin(
+            transfer, AetherSDR::ProfileTransfer::Operation::ImportDatabase,
+            AetherSDR::ProfileTransferTestAccess::Phase::UploadImport);
+        AetherSDR::ProfileTransferTestAccess::startCommandTimeout(
+            transfer, 50, AetherSDR::ProfileTransferTestAccess::Phase::UploadImport);
+        AetherSDR::ProfileTransferTestAccess::startIdleTimeout(
+            transfer, AetherSDR::ProfileTransferTestAccess::Phase::UploadImport);
+        ok &= expect(AetherSDR::ProfileTransferTestAccess::anyTimeoutArmed(transfer),
+                     "a running operation arms its timeouts");
+
+        transfer.cancel();
+        ok &= expect(!AetherSDR::ProfileTransferTestAccess::anyTimeoutArmed(transfer),
+                     "cancel disarms every shared timeout");
+        ok &= expect(!AetherSDR::ProfileTransferTestAccess::anyTimeoutGenerationLive(transfer),
+                     "cancel retires every armed timeout generation");
+
+        AetherSDR::ProfileTransferTestAccess::begin(
+            transfer, AetherSDR::ProfileTransfer::Operation::ImportDatabase,
+            AetherSDR::ProfileTransferTestAccess::Phase::UploadImport);
+        waitForMilliseconds(300);
+        ok &= expect(transfer.isBusy(),
+                     "a cancelled operation's command timeout cannot fail its replacement");
+        ok &= expect(AetherSDR::ProfileTransferTestAccess::socket(transfer) == nullptr,
+                     "a cancelled operation's command timeout cannot open a fallback socket "
+                     "on its replacement");
+    }
+
+    {
+        // A progress slot that cancels and begins a same-phase replacement
+        // import must not let the old completion finish the replacement. This
+        // is the only thing pinning completeImport()'s post-emit re-checks;
+        // with them removed, every other assertion in this file still passes.
+        // Calls completeImport() directly, so it adds no wall-clock.
+        AetherSDR::ProfileTransfer transfer(nullptr);
+        int finished = 0;
+        QObject::connect(&transfer, &AetherSDR::ProfileTransfer::finished, &transfer,
+                         [&finished](AetherSDR::ProfileTransfer::Operation, const QString&) {
+                             ++finished;
+                         });
+        AetherSDR::ProfileTransferTestAccess::begin(
+            transfer, AetherSDR::ProfileTransfer::Operation::ImportDatabase,
+            AetherSDR::ProfileTransferTestAccess::Phase::WaitingForImport);
+        bool restarted = false;
+        QObject::connect(&transfer, &AetherSDR::ProfileTransfer::progress, &transfer,
+                         [&transfer, &restarted](const QString& status) {
+            if (!restarted && status.startsWith(QStringLiteral("Import complete."))) {
+                restarted = true;
+                transfer.cancel();
+                AetherSDR::ProfileTransferTestAccess::begin(
+                    transfer, AetherSDR::ProfileTransfer::Operation::ImportDatabase,
+                    AetherSDR::ProfileTransferTestAccess::Phase::WaitingForImport);
+            }
+        });
+        AetherSDR::ProfileTransferTestAccess::completeImport(transfer);
+        ok &= expect(restarted, "the progress slot restarted the import during completion");
+        ok &= expect(finished == 0,
+                     "an import restarted from a progress slot is not finished by the old completion");
+        ok &= expect(transfer.isBusy(), "the replacement import remains active");
     }
 
     {

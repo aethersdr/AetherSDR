@@ -59,7 +59,7 @@ ProfileTransfer::ProfileTransfer(RadioModel* model, QObject* parent)
     m_timeout = new QTimer(this);
     m_timeout->setSingleShot(true);
     connect(m_timeout, &QTimer::timeout, this, [this] {
-        if (isCurrent(m_operationGeneration, m_commandTimeoutPhase)) {
+        if (isCurrent(m_commandTimeoutGeneration, m_commandTimeoutPhase)) {
             handleTimeout();
         }
     });
@@ -67,7 +67,7 @@ ProfileTransfer::ProfileTransfer(RadioModel* model, QObject* parent)
     m_idleTimer = new QTimer(this);
     m_idleTimer->setSingleShot(true);
     connect(m_idleTimer, &QTimer::timeout, this, [this] {
-        if (isCurrent(m_operationGeneration, m_idleTimeoutPhase)) {
+        if (isCurrent(m_idleTimeoutGeneration, m_idleTimeoutPhase)) {
             fail(QStringLiteral("Transfer timed out while waiting for data."));
         }
     });
@@ -75,7 +75,9 @@ ProfileTransfer::ProfileTransfer(RadioModel* model, QObject* parent)
     m_overallTimer = new QTimer(this);
     m_overallTimer->setSingleShot(true);
     connect(m_overallTimer, &QTimer::timeout, this, [this] {
-        if (m_busy) {
+        // The overall budget belongs to the operation begin() armed it for, so
+        // it is generation-bound like every other deferred path in this class.
+        if (m_busy && m_operationGeneration == m_overallTimeoutGeneration) {
             fail(QStringLiteral("Profile database transfer timed out."));
         }
     });
@@ -217,10 +219,15 @@ void ProfileTransfer::invalidateOperation()
     }
     m_uploadPortRequestId = 0;
     m_downloadPortRequestId = 0;
+    m_commandTimeoutGeneration = 0;
+    m_idleTimeoutGeneration = 0;
+    m_commandTimeoutPhase = Phase::Idle;
+    m_idleTimeoutPhase = Phase::Idle;
 }
 
 void ProfileTransfer::startCommandTimeout(int timeoutMs, Phase expectedPhase)
 {
+    m_commandTimeoutGeneration = m_operationGeneration;
     m_commandTimeoutPhase = expectedPhase;
     m_timeout->start(timeoutMs);
 }
@@ -228,11 +235,13 @@ void ProfileTransfer::startCommandTimeout(int timeoutMs, Phase expectedPhase)
 void ProfileTransfer::stopCommandTimeout()
 {
     m_timeout->stop();
+    m_commandTimeoutGeneration = 0;
     m_commandTimeoutPhase = Phase::Idle;
 }
 
 void ProfileTransfer::startIdleTimeout(Phase expectedPhase)
 {
+    m_idleTimeoutGeneration = m_operationGeneration;
     m_idleTimeoutPhase = expectedPhase;
     m_idleTimer->start(kIdleTimeoutMs);
 }
@@ -240,6 +249,7 @@ void ProfileTransfer::startIdleTimeout(Phase expectedPhase)
 void ProfileTransfer::stopIdleTimeout()
 {
     m_idleTimer->stop();
+    m_idleTimeoutGeneration = 0;
     m_idleTimeoutPhase = Phase::Idle;
 }
 
@@ -258,6 +268,7 @@ quint64 ProfileTransfer::begin(Operation operation, Phase phase)
     m_bytesQueued = 0;
     m_bytesTotal = 0;
     m_uploadPort = 0;
+    m_overallTimeoutGeneration = generation;
     m_overallTimer->start(kOverallTimeoutMs);
     emit started(operation);
     return generation;
@@ -292,6 +303,7 @@ void ProfileTransfer::cleanup()
     stopCommandTimeout();
     stopIdleTimeout();
     m_overallTimer->stop();
+    m_overallTimeoutGeneration = 0;
     QObject::disconnect(m_importingChangedConnection);
     m_importingChangedConnection = {};
 
@@ -340,9 +352,9 @@ void ProfileTransfer::destroyServer()
 
     // Same detach-then-act ordering as destroySocket(). close() does not emit
     // synchronously, but a newConnection already queued before cleanup would
-    // otherwise reach onDownloadConnection() with m_server null; today only the
-    // !m_busy guard stops it dereferencing that. Severing the handler makes the
-    // teardown safe by construction rather than by guard ordering.
+    // otherwise reach handleDownloadConnection() with m_server null; its
+    // m_server != server test stops it dereferencing that. Severing the handler
+    // makes the teardown safe by construction rather than by guard ordering.
     QTcpServer* server = m_server;
     m_server = nullptr;
     QObject::disconnect(server, nullptr, this, nullptr);
@@ -461,7 +473,16 @@ bool ProfileTransfer::validateImportFile(const QString& path, QString* error) co
 
 void ProfileTransfer::requestUploadPort(const QByteArray& payload, const QString& uploadKind)
 {
-    if (!m_model || !isCurrent(m_operationGeneration, m_phase)) {
+    if (!m_model) {
+        // The QPointer nulled between begin() and here. Report it: begin() has
+        // already armed the 180 s overall budget, and a silent return would
+        // spend all of it before showing a generic timeout.
+        fail(QStringLiteral("The radio connection was lost before the transfer could start."));
+        return;
+    }
+    // Callers re-check their own generation before calling in, so this is the
+    // plain still-running test it looks like -- not a generation comparison.
+    if (!m_busy || m_cancelled) {
         return;
     }
     m_uploadPayload = payload;
@@ -493,11 +514,6 @@ std::function<void(int, const QString&)> ProfileTransfer::makeUploadPortCallback
         }
         transfer->handleUploadPortReceived(generation, expectedPhase, requestId, code, body);
     };
-}
-
-void ProfileTransfer::onUploadPortReceived(int code, const QString& body)
-{
-    handleUploadPortReceived(m_operationGeneration, m_phase, m_uploadPortRequestId, code, body);
 }
 
 void ProfileTransfer::handleUploadPortReceived(quint64 generation, Phase expectedPhase,
@@ -606,11 +622,6 @@ void ProfileTransfer::tryFallbackUploadPort()
     connectUploadSocket(kFallbackTransferPort);
 }
 
-void ProfileTransfer::onUploadConnected()
-{
-    handleUploadConnected(m_operationGeneration, m_phase, m_socket);
-}
-
 void ProfileTransfer::handleUploadConnected(quint64 generation, Phase expectedPhase,
                                             QTcpSocket* socket)
 {
@@ -627,12 +638,13 @@ void ProfileTransfer::handleUploadConnected(quint64 generation, Phase expectedPh
     if (!isCurrentSocket(generation, expectedPhase, socket)) {
         return;
     }
-    sendNextUploadChunk();
+    sendNextUploadChunk(generation, expectedPhase, socket);
 }
 
-void ProfileTransfer::sendNextUploadChunk()
+void ProfileTransfer::sendNextUploadChunk(quint64 generation, Phase expectedPhase,
+                                          QTcpSocket* socket)
 {
-    if (!m_socket || m_cancelled)
+    if (!isCurrentSocket(generation, expectedPhase, socket))
         return;
 
     const qint64 remaining = m_uploadPayload.size() - m_bytesQueued;
@@ -642,14 +654,9 @@ void ProfileTransfer::sendNextUploadChunk()
     const qint64 toSend = qMin<qint64>(kUploadChunkSize, remaining);
     const qint64 written = m_socket->write(m_uploadPayload.constData() + m_bytesQueued, toSend);
     if (written < 0)
-        onUploadError();
+        handleUploadError(generation, expectedPhase, socket);
     else
         m_bytesQueued += written;
-}
-
-void ProfileTransfer::onUploadBytesWritten(qint64 bytes)
-{
-    handleUploadBytesWritten(m_operationGeneration, m_phase, m_socket, bytes);
 }
 
 void ProfileTransfer::handleUploadBytesWritten(quint64 generation, Phase expectedPhase,
@@ -678,12 +685,7 @@ void ProfileTransfer::handleUploadBytesWritten(quint64 generation, Phase expecte
     }
 
     if (m_bytesQueued < m_bytesTotal)
-        sendNextUploadChunk();
-}
-
-void ProfileTransfer::onUploadDisconnected()
-{
-    handleUploadDisconnected(m_operationGeneration, m_phase, m_socket);
+        sendNextUploadChunk(generation, expectedPhase, socket);
 }
 
 void ProfileTransfer::handleUploadDisconnected(quint64 generation, Phase expectedPhase,
@@ -732,11 +734,6 @@ std::function<void()> ProfileTransfer::makeMetadataSettleCallback(quint64 genera
     };
 }
 
-void ProfileTransfer::onUploadError()
-{
-    handleUploadError(m_operationGeneration, m_phase, m_socket);
-}
-
 void ProfileTransfer::handleUploadError(quint64 generation, Phase expectedPhase,
                                         QTcpSocket* socket)
 {
@@ -755,8 +752,12 @@ void ProfileTransfer::handleUploadError(quint64 generation, Phase expectedPhase,
 
 void ProfileTransfer::requestPackageDownload()
 {
-    if (!m_busy || !m_model)
+    if (!m_busy)
         return;
+    if (!m_model) {
+        fail(QStringLiteral("The radio connection was lost before the database package could be requested."));
+        return;
+    }
 
     const quint64 generation = m_operationGeneration;
     m_phase = Phase::DownloadPackage;
@@ -785,11 +786,6 @@ std::function<void(int, const QString&)> ProfileTransfer::makeDownloadPortCallba
         }
         transfer->handleDownloadPortReceived(generation, expectedPhase, requestId, code, body);
     };
-}
-
-void ProfileTransfer::onDownloadPortReceived(int code, const QString& body)
-{
-    handleDownloadPortReceived(m_operationGeneration, m_phase, m_downloadPortRequestId, code, body);
 }
 
 void ProfileTransfer::handleDownloadPortReceived(quint64 generation, Phase expectedPhase,
@@ -848,14 +844,6 @@ void ProfileTransfer::startDownloadServer(quint16 port)
     emit progress(QStringLiteral("Waiting for radio database download on port %1...").arg(port), 0, 0);
 }
 
-void ProfileTransfer::onDownloadConnection()
-{
-    if (!m_server) {
-        return;
-    }
-    handleDownloadConnection(m_operationGeneration, m_phase, m_server);
-}
-
 void ProfileTransfer::handleDownloadConnection(quint64 generation, Phase expectedPhase,
                                                QTcpServer* server)
 {
@@ -893,11 +881,6 @@ void ProfileTransfer::handleDownloadConnection(quint64 generation, Phase expecte
     emit progress(QStringLiteral("Receiving SmartSDR database package..."), 0, 0);
 }
 
-void ProfileTransfer::onDownloadReadyRead()
-{
-    handleDownloadReadyRead(m_operationGeneration, m_phase, m_socket);
-}
-
 void ProfileTransfer::handleDownloadReadyRead(quint64 generation, Phase expectedPhase,
                                               QTcpSocket* socket)
 {
@@ -918,11 +901,6 @@ void ProfileTransfer::handleDownloadReadyRead(quint64 generation, Phase expected
     }
     m_bytesDone += written;
     emit progress(QStringLiteral("Receiving SmartSDR database package..."), m_bytesDone, 0);
-}
-
-void ProfileTransfer::onDownloadDisconnected()
-{
-    handleDownloadDisconnected(m_operationGeneration, m_phase, m_socket);
 }
 
 void ProfileTransfer::handleDownloadDisconnected(quint64 generation, Phase expectedPhase,
@@ -954,11 +932,6 @@ void ProfileTransfer::handleDownloadDisconnected(quint64 generation, Phase expec
     finish(finishedPath);
 }
 
-void ProfileTransfer::onDownloadError()
-{
-    handleDownloadError(m_operationGeneration, m_phase, m_socket);
-}
-
 void ProfileTransfer::handleDownloadError(quint64 generation, Phase expectedPhase,
                                           QTcpSocket* socket)
 {
@@ -967,7 +940,7 @@ void ProfileTransfer::handleDownloadError(quint64 generation, Phase expectedPhas
     }
 
     if (m_socket && m_socket->error() == QAbstractSocket::RemoteHostClosedError && m_bytesDone > 0) {
-        onDownloadDisconnected();
+        handleDownloadDisconnected(generation, expectedPhase, socket);
         return;
     }
 

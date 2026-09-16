@@ -257,7 +257,6 @@ private:
     void requestUploadPort(const QByteArray& payload, const QString& uploadKind);
     std::function<void(int, const QString&)> makeUploadPortCallback(
         quint64 generation, Phase expectedPhase, quint64 requestId);
-    void onUploadPortReceived(int code, const QString& body);
     void handleUploadPortReceived(quint64 generation, Phase expectedPhase, quint64 requestId,
                                   int code, const QString& body);
     void connectUploadSocket(quint16 port);
@@ -265,33 +264,24 @@ private:
                                                     QTcpSocket* socket,
                                                     std::function<void()> connectAction);
     void tryFallbackUploadPort();
-    void onUploadConnected();
     void handleUploadConnected(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
-    void sendNextUploadChunk();
-    void onUploadBytesWritten(qint64 bytes);
+    void sendNextUploadChunk(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
     void handleUploadBytesWritten(quint64 generation, Phase expectedPhase, QTcpSocket* socket,
                                   qint64 bytes);
-    void onUploadDisconnected();
     void handleUploadDisconnected(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
     std::function<void()> makeMetadataSettleCallback(quint64 generation, Phase expectedPhase,
                                                      std::function<void()> settleAction);
-    void onUploadError();
     void handleUploadError(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
 
     void requestPackageDownload();
     std::function<void(int, const QString&)> makeDownloadPortCallback(
         quint64 generation, Phase expectedPhase, quint64 requestId);
-    void onDownloadPortReceived(int code, const QString& body);
     void handleDownloadPortReceived(quint64 generation, Phase expectedPhase, quint64 requestId,
                                     int code, const QString& body);
     void startDownloadServer(quint16 port);
-    void onDownloadConnection();
     void handleDownloadConnection(quint64 generation, Phase expectedPhase, QTcpServer* server);
-    void onDownloadReadyRead();
     void handleDownloadReadyRead(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
-    void onDownloadDisconnected();
     void handleDownloadDisconnected(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
-    void onDownloadError();
     void handleDownloadError(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
 
     void waitForImportCompletion();
@@ -308,6 +298,9 @@ private:
     quint64 m_nextAsyncId{0};
     quint64 m_uploadPortRequestId{0};
     quint64 m_downloadPortRequestId{0};
+    quint64 m_commandTimeoutGeneration{0};
+    quint64 m_idleTimeoutGeneration{0};
+    quint64 m_overallTimeoutGeneration{0};
     Phase m_commandTimeoutPhase{Phase::Idle};
     Phase m_idleTimeoutPhase{Phase::Idle};
     bool m_busy{false};
