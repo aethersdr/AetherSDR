@@ -45,7 +45,11 @@ void CwDecoder::stop()
     m_running = false;
 
     if (m_workerThread) {
-        // The callback checks m_running and each decode call is frame-bounded.
+        // A JOIN, never a timeout.  The callback checks m_running and each
+        // decode call is frame-bounded, so this returns promptly -- and the
+        // m_pitch/m_speed writes below run OUTSIDE m_parametersMutex, which
+        // the worker holds when writing the same members.  They are safe only
+        // because the worker is provably dead by the time wait() returns.
         // Never destroy the buffer/owner while a slow frame is still running.
         m_workerThread->wait();
         m_workerThread.reset();
@@ -267,8 +271,6 @@ void CwDecoder::decodeLoop()
         }
 
         if (stats.estimatedPitch_Hz > 0) {
-            float pitch;
-            float speed;
             {
                 std::lock_guard lock(m_parametersMutex);
                 // A just-completed old frame must not overwrite a newer lock
@@ -280,10 +282,15 @@ void CwDecoder::decodeLoop()
                 if (!m_speedLocked || m_pendingParameters.speedWpm <= 0.0f) {
                     m_speed = stats.estimatedSpeed_wpm;
                 }
-                pitch = m_pitch;
-                speed = m_speed;
             }
-            emit statsUpdated(pitch, speed);
+            // Read the members at DELIVERY, not here.  A value copied now is
+            // already stale by the time the queued emission lands if a setter
+            // ran in between, and when no further frame arrives the panel keeps
+            // that dead reading forever even though estimatedPitch() is right
+            // (#5645 review).  Same queued-read shape stop() uses below.
+            QMetaObject::invokeMethod(this, [this] {
+                emit statsUpdated(m_pitch, m_speed);
+            }, Qt::QueuedConnection);
         }
     }
 

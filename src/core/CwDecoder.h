@@ -68,8 +68,13 @@ private:
     struct DecodeParameters {
         float pitchHz{-1.0f};
         float speedWpm{-1.0f};
-        float pitchRangeMin{500.0f};
-        float pitchRangeMax{700.0f};
+        // GGMorse::getDefaultParametersDecode()'s own band (ggmorse.cpp:196).
+        // start() re-publishes this snapshot on every start, so an unconfigured
+        // decoder must land on ggmorse's defaults, not a narrower app-level
+        // guess: 500-700 Hz silences a 400 Hz note outright (#5645 review).
+        // The CW panel's slider supplies the operator's band via setPitchRange().
+        float pitchRangeMin{200.0f};
+        float pitchRangeMax{1200.0f};
         float speedRangeMin{-1.0f};
         float speedRangeMax{-1.0f};
     };

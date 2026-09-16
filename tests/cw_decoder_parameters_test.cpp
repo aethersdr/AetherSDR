@@ -221,6 +221,27 @@ int main(int argc, char** argv)
     expect(near(decoder.estimatedPitch(), 0.0f) && near(decoder.estimatedSpeed(), 0.0f),
            "stop clears only unlocked estimates");
 
+    // Restart a second time with NOTHING configuring the decoder in between.
+    // The stopped-state setters above already had their dirty flag consumed by
+    // the previous worker, so start()'s own re-publish is the only thing left
+    // that can carry the 800--900 Hz band into a fresh worker. That is the path
+    // #5641 needed for the TX decoder, which reverted to auto-detect after
+    // every MOX cycle because start() rebuilt GGMorse from library defaults.
+    // Without the re-publish the fresh instance auto-detects over ggmorse's
+    // own 200--1200 Hz band and lands on the fixture's 600 Hz tone instead.
+    observedPitches.clear();
+    decoder.start();
+    feedKnownSignal(decoder, pcm);
+    pumpEvents(1000);
+    expect(!observedPitches.isEmpty(),
+           "second restart consumes PCM and publishes fresh observations");
+    if (!observedPitches.isEmpty()) {
+        expect(observedPitches.constLast() >= 795.0f && observedPitches.constLast() <= 905.0f,
+               "start() re-publishes the pending configuration to a fresh worker");
+    }
+    decoder.stop();
+    pumpEvents(20);
+
     decoder.stop();
 
     // Destruction while the worker owns queued audio must join the bounded

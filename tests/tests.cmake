@@ -84,14 +84,13 @@ set_tests_properties(pcm_compatibility_test PROPERTIES TIMEOUT 60)
 add_executable(cw_decoder_parameters_test
     tests/cw_decoder_parameters_test.cpp
     src/core/CwDecoder.cpp
-    third_party/ggmorse/src/ggmorse.cpp
-    third_party/ggmorse/src/resampler.cpp
+    ${GGMORSE_SOURCES}
 )
 target_include_directories(cw_decoder_parameters_test PRIVATE
     src src/core third_party/ggmorse/include third_party/ggmorse/src)
 target_link_libraries(cw_decoder_parameters_test PRIVATE Qt6::Core)
 add_test(NAME cw_decoder_parameters_test COMMAND cw_decoder_parameters_test)
-set_tests_properties(cw_decoder_parameters_test PROPERTIES TIMEOUT 60 LABELS sanitizer)
+set_tests_properties(cw_decoder_parameters_test PROPERTIES TIMEOUT 60)
 
 # Socket/device-free production RX queue, processing-domain and output checks.
 add_executable(audio_engine_rates_test tests/audio_engine_rates_test.cpp)
