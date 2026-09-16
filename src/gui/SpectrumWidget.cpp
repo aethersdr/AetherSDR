@@ -18185,9 +18185,34 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
 // bandmap tick with "this is where WSJT-X is right now". Decoded-station
 // markers are unaffected — those already exist via SpotHub's WSJT-X feed and
 // drawSpotMarkers(), per the triage on #4526.
+// Occupied-bandwidth widths per WSJT-X mode, used to render each Rx/Tx cue as
+// a double line (two edges) instead of a single centre line. These are fixed
+// protocol values (not derived from tone/symbol-rate math) per operator
+// direction, 2026-09-16.
+constexpr double kWsjtxFt8WidthHz = 50.0;
+constexpr double kWsjtxFt4WidthHz = 90.0;
+constexpr double kWsjtxFt2WidthHz = 150.0;
+
+namespace {
+double wsjtxModeWidthHz(const QString& mode)
+{
+    if (mode.compare(QStringLiteral("FT4"), Qt::CaseInsensitive) == 0) {
+        return kWsjtxFt4WidthHz;
+    }
+    if (mode.compare(QStringLiteral("FT2"), Qt::CaseInsensitive) == 0) {
+        return kWsjtxFt2WidthHz;
+    }
+    // FT8 and any unrecognized/empty mode string both fall back to the FT8
+    // width rather than a single line, so an unknown mode still renders a
+    // sensible bracket instead of silently changing shape.
+    return kWsjtxFt8WidthHz;
+}
+} // namespace
+
 void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect)
 {
-    if (!m_showWsjtxFreq || m_wsjtxMarkers.isEmpty()) {
+    Q_UNUSED(specRect);
+    if (!m_showWsjtxFreq || m_wsjtxMarkers.isEmpty() || wfRect.isEmpty()) {
         return;
     }
 
@@ -18201,12 +18226,22 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
     const QColor rxColor = AetherSDR::ThemeManager::instance().color("color.accent.success");
     const QColor txColor = AetherSDR::ThemeManager::instance().color("color.accent.danger");
 
+    // Waterfall-only (2026-09-16): the spectrum trace already shows the live
+    // signal shape, so a persistent Rx/Tx cue there duplicates information
+    // and competes visually with the FFT peaks. The waterfall is the
+    // historical record (#1270-style reasoning, see drawSliceMarkers'
+    // passband fill above), so that's where a standing position cue belongs.
     auto drawFrequencyLine = [&](int x, const QColor& col) {
         p.setPen(QPen(col, 1));
-        p.drawLine(x, specRect.top(), x, specRect.bottom());
-        if (!wfRect.isEmpty()) {
-            p.drawLine(x, wfRect.top(), x, wfRect.bottom());
-        }
+        p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+    };
+
+    // Double line: one at each edge of the mode's occupied bandwidth,
+    // centred on the reported (dial + audio-offset) frequency.
+    auto drawModeWidthLines = [&](double freqMhz, const QColor& col, const QString& mode) {
+        const double halfHz = wsjtxModeWidthHz(mode) / 2.0;
+        drawFrequencyLine(mhzToX(freqMhz - halfHz / 1.0e6), col);
+        drawFrequencyLine(mhzToX(freqMhz + halfHz / 1.0e6), col);
     };
 
     QFont labelFont = p.font();
@@ -18214,15 +18249,14 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
     labelFont.setBold(true);
     p.setFont(labelFont);
     const QFontMetrics fm(labelFont);
-    const int labelY = specRect.top() + fm.height();
+    const int labelY = wfRect.top() + fm.height();
 
     for (const auto& marker : std::as_const(m_wsjtxMarkers)) {
         const double rxMhz = marker.rxFreqHz / 1.0e6;
         if (rxMhz >= startMhz && rxMhz <= endMhz) {
-            const int x = mhzToX(rxMhz);
-            drawFrequencyLine(x, rxColor);
+            drawModeWidthLines(rxMhz, rxColor, marker.mode);
             p.setPen(rxColor);
-            p.drawText(x + 3, labelY,
+            p.drawText(mhzToX(rxMhz) + 3, labelY,
                        QString::number(marker.rxFreqHz, 'f', 0) + " Hz");
         }
 
@@ -18234,7 +18268,7 @@ void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const 
         if (marker.transmitting || txDiffersFromRx) {
             const double txMhz = marker.txFreqHz / 1.0e6;
             if (txMhz >= startMhz && txMhz <= endMhz) {
-                drawFrequencyLine(mhzToX(txMhz), txColor);
+                drawModeWidthLines(txMhz, txColor, marker.mode);
             }
         }
     }
