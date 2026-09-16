@@ -16,6 +16,7 @@
 #include <numeric>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1402,6 +1403,69 @@ TransmitRun runTransmitChannel(int plane, double toneHz, WdspChannel::Mode mode,
     return run;
 }
 
+// The same run, retried if the caller was STARVED.
+//
+// runTransmitChannel restarts collection after any non-Ok block, because an
+// underrun slips the output stream by a whole DSP buffer permanently and
+// correlating across that seam averages two time origins. So a starved run does
+// not announce itself as starvation -- it comes back with a SHORT capture, and
+// every figure derived from it is worse than it should be because this
+// instrument's floor rises as 1/sqrt(N).
+//
+// THIS IS NOT HYPOTHETICAL AND IT IS NOT ABOUT THE CHAIN. Measured on this
+// machine under load averages between 180 and 343, with another agent's -j8
+// build running: the spectral leg below underran 2 of 96 blocks at a 5 ms pace
+// while the pacing census in the SAME case reported 0 of 64 at 1 ms, 5 ms and
+// at the live 21.33 ms period. Retried, it comes back clean. A transient on a
+// shared machine must not read as a transmit regression.
+//
+// THE PREDICATE IS "NO UNDERRUN", NOT "LONG ENOUGH", and the difference was
+// found the hard way. A capture length guard was tried first and let the defect
+// through: an underrun at block 31 of 104 leaves 72 contiguous blocks, 90% of
+// the full length and a whole number of cycles of every tone -- and the LSB
+// 2000 Hz point still read 81.91 dB where a clean run reads 289.61. The reason
+// is that collection restarts IMMEDIATELY after the fault, with no second
+// discard, so the retained span opens inside the post-underrun transient. A
+// transient is amplitude modulation and amplitude modulation lands in the image
+// bin: the figure is the envelope, not the filter. It is the same trap
+// hl2_txdsp_test's kSettleSamples exists for, arriving through a different
+// door. Any underrun invalidates the point however much of it survives.
+//
+// Retrying belongs in the harness and would be wrong inside Hl2TxDsp: pacing is
+// the CALLER's responsibility, and a sleep-and-retry on the audio I/O thread
+// would hide a timing fault behind a spin. The runtime path counts and logs the
+// fault instead.
+TransmitRun runTransmitChannelSettled(int plane, double toneHz,
+                                      WdspChannel::Mode mode, double lowHz,
+                                      double highHz, std::size_t blocks,
+                                      std::size_t discardBlocks, int paceUs,
+                                      double amplitude = 0.1)
+{
+    TransmitRun best;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        // BACK THE PACE OFF on each retry rather than rolling the dice again.
+        // Starvation has a cause -- the caller is feeding faster than the
+        // channel drains on a machine that is busy elsewhere -- and slowing the
+        // caller addresses it, where a retry at the same pace only hopes the
+        // machine is quieter. Capped below the LIVE 21.33 ms block period, so
+        // even the last attempt is a pace the radio itself would beat.
+        const int pace = paceUs * (attempt + 1);
+        TransmitRun run = runTransmitChannel(plane, toneHz, mode, lowHz, highHz,
+                                             blocks, discardBlocks, pace,
+                                             amplitude);
+        if (!run.created || run.underrunBlocks == 0) {
+            return run;
+        }
+        const int had = run.underrunBlocks;
+        if (run.iq.size() > best.iq.size()) {
+            best = std::move(run);
+        }
+        std::cout << "  (starved at " << toneHz << " Hz: " << had
+                  << " underrun(s) at " << pace << " us -- retrying slower)\n";
+    }
+    return best;
+}
+
 // Goertzel-style complex-bin correlation. The same instrument hl2_txdsp_test
 // runs on the phasing modulator, extended only to take each sample's absolute
 // index so a dropped block does not silently become a phase step.
@@ -1572,7 +1636,7 @@ bool runTransmitLiveGeometryTest()
 
     // 2. The backend's arrangement: mono audio in I, Q empty.
     const TransmitRun iOnly =
-        runTransmitChannel(0, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+        runTransmitChannelSettled(0, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
                            kBlocks, kDiscard, kSpectralPaceUs);
     if (!require(iOnly.created, "live-geometry transmit channel was refused")) {
         return false;
@@ -1641,7 +1705,7 @@ bool runTransmitLiveGeometryTest()
     //    does not select the sideband in TXA -- the passband sign does, exactly
     //    as it does in RXA.
     const TransmitRun mirrored =
-        runTransmitChannel(0, 1000.0, WdspChannel::Mode::Usb, -2700.0, -300.0,
+        runTransmitChannelSettled(0, 1000.0, WdspChannel::Mode::Usb, -2700.0, -300.0,
                            kBlocks, kDiscard, kSpectralPaceUs);
     if (!require(mirrored.created && !mirrored.iq.empty(),
                  "mirrored-passband transmit channel produced nothing")) {
@@ -1677,7 +1741,7 @@ bool runTransmitLiveGeometryTest()
     // 7. Out-of-passband rejection -- the assertion that caught the wideband
     //    Hilbert bug on the phasing modulator.
     const TransmitRun outOfBand =
-        runTransmitChannel(0, 5000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+        runTransmitChannelSettled(0, 5000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
                            kBlocks, kDiscard, kSpectralPaceUs);
     if (!require(outOfBand.created && !outOfBand.iq.empty(),
                  "out-of-band transmit channel produced nothing")) {
@@ -1711,9 +1775,17 @@ bool runTransmitLiveGeometryTest()
 //
 // THIS BLOCK IS THE OTHER HALF: the same measurement, the same fourteen tones,
 // the same two passbands, the same rectangular-window correction -- run against
-// a WDSP TXA channel opened at the LIVE HL2 transmit geometry. Nothing about
-// Hl2TxDsp changes here and nothing in the runtime path is touched; this is a
-// measurement of a candidate, made beside the incumbent, in the same units.
+// a WDSP TXA channel opened at the LIVE HL2 transmit geometry.
+//
+// IT WAS WRITTEN AS A MEASUREMENT OF A CANDIDATE and it is now a measurement of
+// the DEFAULT BUILD's transmit modulator: AETHER_HL2_TX_TXA is on, Hl2TxDsp
+// opens a channel at this geometry, and the phasing modulator is compiled out.
+// What this case still is, and why it stays separate from hl2_txdsp_test, is a
+// measurement of the RAW CHANNEL -- opened here, by this file, with no level
+// chain in front of it. hl2_txdsp_test measures the same quantity through the
+// shipped stage. That the two agree (180.62 dB here against 180.6 there at
+// DIGU 150 Hz) is worth more than either figure alone, because the two harnesses
+// share no code but the arithmetic.
 //
 // WHERE IT DIFFERS FROM THE PHASING MODULATOR'S SWEEP, AND WHY. Three
 // deliberate differences, each forced by what a TXA channel is:
@@ -1824,6 +1896,51 @@ SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz
     return point;
 }
 
+// One sweep point, re-run if the modulator was STARVED.
+//
+// A starved run does not announce itself. runTransmitChannel restarts
+// collection after any non-Ok block -- correlating across the seam would
+// average two time origins -- so what comes back is a SHORTER capture that
+// opens inside the post-underrun transient, with no second discard in front of
+// it. Both of those corrupt the figure, and the second one dominates: a
+// transient is amplitude modulation and amplitude modulation lands in the image
+// bin. Measured under a load average of 252, the USB 2500 Hz point read
+// 77.80 dB where a clean run reads 171.98, and the suite failed claiming TXA's
+// suppression had fallen below the phasing modulator's best point. That is a
+// true statement about the capture and a false one about the chain, and only
+// the second one is what the assertion is for.
+//
+// THE PREDICATE IS "NO UNDERRUN", NOT "LONG ENOUGH". A length guard was tried
+// first and let the defect through -- see runTransmitChannelSettled.
+//
+// Retrying is the right place for this and a retry inside Hl2TxDsp would not
+// be: pacing is the CALLER's responsibility, and here the caller is this
+// function. Four attempts, and each retry is PRINTED rather than hidden -- a
+// point that needs retrying on an idle machine is evidence about the chain.
+SweepPoint measureSweepPointSettled(WdspChannel::Mode mode, double lowHz,
+                                    double highHz, bool wireUpper, double toneHz,
+                                    std::size_t blocks, std::size_t discardBlocks,
+                                    int paceUs, double amplitude)
+{
+    SweepPoint best;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        // The pace BACKS OFF on each retry -- see runTransmitChannelSettled.
+        const int pace = paceUs * (attempt + 1);
+        const SweepPoint point =
+            measureSweepPoint(mode, lowHz, highHz, wireUpper, toneHz, blocks,
+                              discardBlocks, pace, amplitude);
+        if (point.measured && point.underruns == 0) {
+            return point;
+        }
+        if (point.samples > best.samples) {
+            best = point;
+        }
+        std::cout << "  (starved at " << toneHz << " Hz: " << point.underruns
+                  << " underrun(s) at " << pace << " us -- retrying slower)\n";
+    }
+    return best;
+}
+
 bool runTransmitSuppressionSweepTest()
 {
     // 104 blocks of 1024 output samples with the first 24 discarded leaves
@@ -1834,6 +1951,8 @@ bool runTransmitSuppressionSweepTest()
     // 56 points to about twelve seconds of wall clock.
     constexpr std::size_t kBlocks = 104;
     constexpr std::size_t kDiscard = 24;
+    // The FIRST attempt's pace. measureSweepPointSettled backs it off on each
+    // retry, up to 8 ms, which is still under half the live 21.33 ms period.
     constexpr int kPaceUs = 2000;
     constexpr double kAmplitude = 0.5;   // hl2_txdsp_test's sweep amplitude
 
@@ -1883,13 +2002,25 @@ bool runTransmitSuppressionSweepTest()
         const double absHigh = std::max(std::abs(band.lowHz), std::abs(band.highHz));
         for (const double toneHz : tones) {
             const SweepPoint point =
-                measureSweepPoint(band.mode, band.lowHz, band.highHz,
-                                  band.wireUpper, toneHz, kBlocks, kDiscard,
-                                  kPaceUs, kAmplitude);
+                measureSweepPointSettled(band.mode, band.lowHz, band.highHz,
+                                         band.wireUpper, toneHz, kBlocks,
+                                         kDiscard, kPaceUs, kAmplitude);
             std::string what = std::string("sweep ") + band.name + " at " +
                                std::to_string(static_cast<int>(toneHz)) +
                                " Hz produced analysable IQ";
             if (!require(point.measured, what.c_str())) {
+                return false;
+            }
+            // STARVATION IS REPORTED AS STARVATION, and not folded into the
+            // dB assertion below -- see measureSweepPointSettled. Named
+            // separately so a failure here sends the reader to the machine's
+            // load and a failure there sends them to the chain. On a shared
+            // machine these are indistinguishable from the decibel figure
+            // alone, and only one of them is about the transmitter.
+            what = std::string("sweep ") + band.name + " at " +
+                   std::to_string(static_cast<int>(toneHz)) +
+                   " Hz was not starved (no underruns in the measured run)";
+            if (!require(point.underruns == 0, what.c_str())) {
                 return false;
             }
 
@@ -2029,8 +2160,9 @@ bool runTransmitSuppressionSweepTest()
         const std::size_t halfLength =
             wholeCycleCount(full.samples / 2, 1000.0, 48000.0);
         const TransmitRun probe =
-            runTransmitChannel(0, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
-                               kBlocks, kDiscard, kPaceUs, kAmplitude);
+            runTransmitChannelSettled(0, 1000.0, WdspChannel::Mode::Usb, 300.0,
+                                      2700.0, kBlocks, kDiscard, kPaceUs,
+                                      kAmplitude);
         if (!require(probe.created && probe.iq.size() >= full.samples,
                      "the floor probe produced no IQ")) {
             return false;

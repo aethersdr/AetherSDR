@@ -206,6 +206,30 @@ int main(int argc, char** argv)
                   && near(t.value(QStringLiteral("filterHighHz")).toDouble(), 3900.0),
               "and reports the modulator's CURRENT passband");
 
+        // WHICH MODULATOR PRODUCED THE SIGNAL. There is no runtime switch --
+        // AETHER_HL2_TX_TXA decides it at build time and the other chain is not
+        // in the process -- so this is not a control, it is the readback that
+        // makes a transmit bug report actionable. Checked against the macro
+        // rather than against a literal, so the day the default flips this
+        // fails to compile a wrong expectation rather than passing quietly.
+        check(t.value(QStringLiteral("modulator")).toString()
+                  == QLatin1String(AETHER_HL2_TX_TXA ? "wdsp-txa" : "phasing"),
+              "the TX chain names the modulator this binary was built with");
+        // The level-4 reads exist exactly where a WDSP channel does, and the
+        // fault counter is present WHENEVER the channel is -- including at
+        // zero. "No blocks were dropped" and "nobody counted" must not look the
+        // same: that they did is the whole reason the prior TXA attempt failed
+        // silently, and the reason this is a build flag at all.
+        if (AETHER_HL2_TX_TXA) {
+            check(t.value(QStringLiteral("wdspChannelId")).toInt() >= 0,
+                  "the TXA modulator reports the channel WDSP allocated");
+            check(t.contains(QStringLiteral("modulatorFaultBlocks")),
+                  "and reports dropped blocks even when there are none");
+        } else {
+            check(!t.contains(QStringLiteral("wdspChannelId")),
+                  "the phasing modulator claims no WDSP channel");
+        }
+
         Hl2TxDsp::Config moved = dsp.config();
         moved.filterLowHz = 200.0;
         moved.filterHighHz = 2800.0;
