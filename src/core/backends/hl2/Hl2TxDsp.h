@@ -176,12 +176,19 @@ private:
     double m_micGain = 1.0;
     int m_upsample = 2;
     double m_alcGain = 1.0;      // current ALC gain, carried across blocks
-    // Set by reset(), cleared by the first block that carries signal. The ALC
-    // JUMPS to its target on that block instead of ramping to it — see the
-    // seeding note in processAudioBlock. The flag exists because the first
-    // block of an over is the one case where the loop has no history to smooth
-    // from, and since the mic slider reaches +40 dB the distance it would have
-    // had to ramp is now larger than the modulator's headroom.
+    // Set by reset() and by an upward setMicGain(); cleared by the first block
+    // that actually wants REDUCTION. The ALC jumps straight to its target on
+    // that block instead of ramping to it — see the seeding note in
+    // processAudioBlock.
+    //
+    // The flag exists because the loop sometimes has no history worth
+    // smoothing from, and since the mic slider reaches +40 dB the distance it
+    // would otherwise have to travel is larger than the modulator's headroom.
+    // Two occasions qualify: the first block of an over, and the block after
+    // the operator raises the gain mid-over. Staying armed through quiet
+    // blocks is the point — a lead-in below the ALC's target wants unity,
+    // which is where reset() already left the gain, so disarming there would
+    // hand the next loud block an unprotected ramp.
     bool m_alcSeedPending = true;
 
     std::vector<float> m_bandpass;      // real bandpass

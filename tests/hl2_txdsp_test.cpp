@@ -27,6 +27,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdio>
+#include <random>
 #include <vector>
 
 using namespace AetherSDR::hl2;
@@ -409,6 +410,24 @@ int main(int argc, char** argv)
         // and the reported failure was 20.5 dB in arriving as 0.33 dB out.
         check(outSeparationDb > 19.0 && outSeparationDb < 21.0,
               "20 dB of input separation arrives as 20 dB of output separation");
+
+        // AND THE REPORTER'S OWN LEVELS, verbatim. The pair above is a round
+        // 20 dB chosen for legibility; #5463's digital-loopback table is
+        // -37.05 dBFS in the pauses and -12.4 dBFS on speech, measured at the
+        // ALC's own input, and it is the leg where the merge base produced
+        // 0.33 dB of output separation from 24.65 dB of input. Asserting the
+        // issue's numbers rather than a tidied version of them is what makes
+        // this the regression test for the report rather than for the rewrite.
+        const Settled reported  = settled(0.01405);   // -37.05 dBFS
+        const Settled reportedSpeech = settled(0.2399);   // -12.4 dBFS
+        const double reportedSeparationDb =
+            20.0 * std::log10((reportedSpeech.outPeak + 1e-12)
+                              / (reported.outPeak + 1e-12));
+        std::fprintf(stderr,
+                     "separation (#5463's own levels): 24.65 dB in -> %.2f dB out "
+                     "(merge base gave 0.33)\n", reportedSeparationDb);
+        check(reportedSeparationDb > 23.6 && reportedSeparationDb < 25.7,
+              "#5463's own 24.65 dB of input separation survives the stage");
     }
 
     // ── #4796: client-leveled audio bypasses the ALC entirely ──────────────
@@ -638,6 +657,148 @@ int main(int argc, char** argv)
                   "the over");
             check(mx > 0.5,
                   "the transmission is still on the air (case is real)");
+        }
+
+        // ── AND THE SAME OVER WITH A LEAD-IN, which is the shape a real one
+        //    has. The leg above opens at full scale, so the seed's first
+        //    reduction IS its first block — the one opening that a seed keyed
+        //    on "the first block carrying signal" also handled. Every other
+        //    over starts quieter than the ALC target: a microphone's room
+        //    floor, a TCI client's ramp-in, a beacon's first symbol.
+        //
+        //    blockPeak is measured after m_micGain, so at 100x the loop's
+        //    `> 1e-6` signal test corresponds to an input of 1e-8 (-160 dBFS)
+        //    — it is "not bit-exactly zero", not "carries signal". A seed that
+        //    disarms there is spent by the lead-in and the loud block that
+        //    follows gets the full 40 dB ramp anyway: measured at |IQ| 1.5391
+        //    with 239 samples clipped, the same figure as no seed at all.
+        //
+        //    So the discriminator is the LEAD-IN, not the level. This leg
+        //    fails on a seed gated by signal presence and passes on one gated
+        //    by `reducing`, and neither the leg above nor any other case in
+        //    this file can tell those two apart.
+        {
+            const int fs = 24000;
+            std::mt19937 rng(20260915);
+            std::normal_distribution<double> room(0.0, 0.001 / 3.0);  // -60 dBFS
+            std::vector<float> audio;
+            for (int n = 0; n < fs / 10; ++n)          // 100 ms of shack
+                audio.push_back(static_cast<float>(room(rng)));
+            for (int n = 0; n < fs * 3 / 2; ++n)       // then 1.5 s at full scale
+                audio.push_back(static_cast<float>(
+                    std::sin(2.0 * M_PI * kHarmTone * n / fs) + room(rng)));
+
+            Hl2TxDsp tx;
+            Hl2TxDsp::Config cfg;
+            cfg.mode = WdspChannel::Mode::Usb;
+            cfg.alcEnabled = true;
+            std::string err;
+            if (!tx.configure(cfg, &err)) {
+                std::fprintf(stderr, "FAIL: lead-in configure: %s\n", err.c_str());
+                ++g_failures;
+            } else {
+                tx.reset();                  // exactly what unkey does
+                tx.setMicGain(kSliderTopGain);
+                std::vector<std::complex<float>> out;
+                QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                                 [&out](const std::vector<std::complex<float>>& iq) {
+                    out.insert(out.end(), iq.begin(), iq.end());
+                });
+                constexpr std::size_t kChunk = 240;
+                for (std::size_t off = 0; off < audio.size(); off += kChunk) {
+                    const std::size_t n = std::min(kChunk, audio.size() - off);
+                    tx.processAudioBlock(
+                        std::vector<float>(
+                            audio.begin() + static_cast<std::ptrdiff_t>(off),
+                            audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
+                        /*clientLeveled=*/false);
+                }
+                double mx = 0.0;
+                std::size_t atClamp = 0;
+                for (const auto& v : out) {
+                    const double m = std::abs(v);
+                    mx = std::max(mx, m);
+                    if (m >= 0.999)
+                        ++atClamp;
+                }
+                std::fprintf(stderr,
+                             "lead-in: 100 ms of -60 dBFS room then full scale at "
+                             "%.0fx, whole-run |IQ| peak %.4f, %zu at the clamp\n",
+                             kSliderTopGain, mx, atClamp);
+                check(mx < 0.999,
+                      "a quiet lead-in does not spend the ALC seed — the loud "
+                      "block after it is still caught before the clamp");
+                check(atClamp == 0,
+                      "and no sample of that over reaches the modulator's clamp");
+            }
+        }
+
+        // ── THE OPERATOR RAISES THE GAIN MID-OVER, which is the other way the
+        //    loop ends up with history that describes a different chain. The
+        //    widening doubled how far a single move can jump, and the ALC
+        //    cannot attack 40 dB inside one block: before setMicGain() re-armed
+        //    the seed, a 50 -> 100 move on a full-scale source flat-topped the
+        //    modulator for 17.1 ms (|IQ| 1.4952, 816 samples at the clamp).
+        //
+        //    The re-arm is upward-only and the seed itself only ever reduces,
+        //    so this cannot step an operator's level UP mid-word. That half is
+        //    what the second assertion pins.
+        {
+            const int fs = 24000;
+            std::vector<float> audio(static_cast<std::size_t>(fs * 3 / 2));
+            for (std::size_t n = 0; n < audio.size(); ++n)
+                audio[n] = static_cast<float>(
+                    std::sin(2.0 * M_PI * kHarmTone * static_cast<double>(n) / fs));
+
+            Hl2TxDsp tx;
+            Hl2TxDsp::Config cfg;
+            cfg.mode = WdspChannel::Mode::Usb;
+            cfg.alcEnabled = true;
+            std::string err;
+            if (!tx.configure(cfg, &err)) {
+                std::fprintf(stderr, "FAIL: mid-over configure: %s\n", err.c_str());
+                ++g_failures;
+            } else {
+                tx.reset();
+                tx.setMicGain(micSliderToLinear(50));     // unity, where an over starts
+                std::vector<std::complex<float>> out;
+                QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                                 [&out](const std::vector<std::complex<float>>& iq) {
+                    out.insert(out.end(), iq.begin(), iq.end());
+                });
+                constexpr std::size_t kChunk = 240;
+                const std::size_t moveAt = audio.size() / 2;
+                bool moved = false;
+                for (std::size_t off = 0; off < audio.size(); off += kChunk) {
+                    if (!moved && off >= moveAt) {
+                        tx.setMicGain(kSliderTopGain);    // 50 -> 100, mid-word
+                        moved = true;
+                    }
+                    const std::size_t n = std::min(kChunk, audio.size() - off);
+                    tx.processAudioBlock(
+                        std::vector<float>(
+                            audio.begin() + static_cast<std::ptrdiff_t>(off),
+                            audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
+                        /*clientLeveled=*/false);
+                }
+                double mx = 0.0;
+                std::size_t atClamp = 0;
+                for (const auto& v : out) {
+                    const double m = std::abs(v);
+                    mx = std::max(mx, m);
+                    if (m >= 0.999)
+                        ++atClamp;
+                }
+                std::fprintf(stderr,
+                             "mid-over: slider 50 -> 100 on a full-scale source, "
+                             "whole-run |IQ| peak %.4f, %zu at the clamp\n",
+                             mx, atClamp);
+                check(mx < 0.999,
+                      "raising the mic slider mid-over does not drive the "
+                      "modulator into its clamp");
+                check(mx > 0.5,
+                      "and the transmission is still on the air (case is real)");
+            }
         }
     }
 
