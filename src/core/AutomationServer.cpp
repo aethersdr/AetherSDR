@@ -3320,6 +3320,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doFreqCal(a.action, a.value);
             });
 
+        add("bandscope", {},
+            "bandscope [status|on|off] — Hermes-Lite 2 wideband bandscope gate (endpoint 0x04); uncalibrated pre-DDC ADC headroom, reported in `health`",
+            parseActionValue,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doBandscope(a.action);
+            });
+
         add("droopcal", {},
             "droopcal [status|start|stop|apply|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop)",
             parseActionValue,
@@ -8154,6 +8161,106 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
                        {QStringLiteral("gps"), QStringLiteral("fixture")},
                        {QStringLiteral("profile"), profile},
                        {QStringLiteral("snapshot"), gpsSnapshot(m_radioModel)}};
+}
+
+// ── Wideband bandscope gate (HL2, endpoint 0x04) ─────────────────
+// status / on / off. This verb is the ONLY thing that reaches
+// Hl2Backend's `bandscope.enable`: the sensor has no UI and no setting on
+// purpose (it is a diagnostic, and the operator-facing shape is #5535), so
+// without a route here the whole endpoint would be unreachable in a shipped
+// build and its health rows would read off/0/0/0/0/0 forever. Enabling costs
+// one 2048-sample block a second — twelve datagrams, ~0.11 Mbit/s — against
+// ~3.3 Mbit/s if the stream ran ungated.
+//
+// It cannot key and it cannot transmit: the gate refuses to arm while the
+// radio is keyed by anything, and it only ever raises a receive-side bit.
+// The readings land in `health` (Converter section), uncalibrated and pre-DDC.
+QJsonObject AutomationServer::doBandscope(const QString& action)
+{
+    RadioModel* radio = m_radioModel;
+    if (!radio)
+        return err(QStringLiteral("no radio model available"));
+    // Asks whether the BACKEND declares the namespace, not whether it is an
+    // HL2 by family string (#5262 M1): a future backend answering the same
+    // verb should not be excluded by name.
+    if (!radio->backendDeclaresExtension(QStringLiteral("hl2"))) {
+        return err(QStringLiteral(
+            "bandscope: this radio has no wideband bandscope — endpoint 0x04 "
+            "is a Hermes-Lite 2 feature"));
+    }
+    IRadioBackend* backend = radio->backend();
+    if (!backend)
+        return err(QStringLiteral("no backend attached"));
+
+    // Read STRAIGHT OFF the health snapshot rather than inventing a second
+    // readback path: those rows are already the gate's published state, and a
+    // status that could disagree with `health` would be worse than none.
+    auto report = [backend](const QString& what) {
+        const auto snap = backend->healthSnapshot();
+        auto row = [&snap](const char* key) {
+            return QJsonValue::fromVariant(
+                snap.values.value(QString::fromLatin1(key)));
+        };
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("bandscope"), what},
+            {QStringLiteral("enabled"), row("bandscopeEnabled")},
+            {QStringLiteral("ep4Packets"), row("ep4Packets")},
+            {QStringLiteral("ep4Drops"), row("ep4Drops")},
+            {QStringLiteral("ep4Rewinds"), row("ep4Rewinds")},
+            {QStringLiteral("blocks"), row("bandscopeBlocks")},
+            {QStringLiteral("timeouts"), row("bandscopeTimeouts")},
+            // Absent until a block has arrived — the rows carry an invalid
+            // variant until then, which lands here as a JSON null rather than
+            // as a fabricated 0.00 dBFS.
+            {QStringLiteral("adcPeakDbfs"), row("adcPeakDbfs")},
+            {QStringLiteral("adcRmsDbfs"), row("adcRmsDbfs")},
+            {QStringLiteral("adcCrestDb"), row("adcCrestDb")},
+            {QStringLiteral("adcClippedPerBlock"), row("adcClippedPerBlock")},
+            {QStringLiteral("adcObservedAgoMs"), row("adcObservedAgoMs")},
+        };
+    };
+
+    const QString verb = action.isEmpty() ? QStringLiteral("status") : action.toLower();
+    if (verb == QLatin1String("status"))
+        return report(verb);
+    if (verb != QLatin1String("on") && verb != QLatin1String("off"))
+        return err(QStringLiteral("bandscope: expected status, on or off"));
+
+    const bool on = (verb == QLatin1String("on"));
+    // Same synchronous-extension contract doFreqCal and hostnb document: the
+    // HL2 answers inside invokeExtension, so a direct connection lands before
+    // the call returns, and a backend that does not answer is reported as
+    // unsupported rather than as an empty success.
+    bool answered = false;
+    bool failed = false;
+    QString failure;
+    const quint64 rid = ++m_extensionRequestId;
+    auto okConn = connect(backend, &IRadioBackend::extensionResult, this,
+                          [&](quint64 id, const QVariant&) {
+        if (id != rid) return;
+        answered = true;
+    }, Qt::DirectConnection);
+    auto errConn = connect(backend, &IRadioBackend::extensionError, this,
+                           [&](quint64 id, const QString& msg) {
+        if (id != rid) return;
+        answered = true;
+        failed = true;
+        failure = msg;
+    }, Qt::DirectConnection);
+    backend->invokeExtension(QStringLiteral("hl2"),
+                             QStringLiteral("bandscope.enable"), rid, QVariant(on));
+    disconnect(okConn);
+    disconnect(errConn);
+    if (!answered)
+        return err(QStringLiteral("this backend does not implement bandscope.enable"));
+    if (failed)
+        return err(failure);
+    // Reported from the SNAPSHOT and not from the request: the gate runs on the
+    // I/O thread and publishes its real state on LinkCounters, so a row that
+    // still reads off here means the enable has not landed yet — or was refused
+    // because the link is down. Echoing `on` back would hide both.
+    return report(verb);
 }
 
 // ── Manual frequency calibration (HL2) ───────────────────────────

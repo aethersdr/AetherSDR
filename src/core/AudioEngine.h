@@ -13,6 +13,8 @@
 #include <QUdpSocket>
 #include <QTimer>
 #include <QVector>
+#include "NnrControls.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -324,6 +326,11 @@ public:
     void setNr2GainMethod(int method);
     void setNr2NpeMethod(int method);
     void setNr2AeFilter(bool on);
+    // Push the post-processing controls from Nr2SettingsModel to every live
+    // NR2 instance. One entry point rather than four setters: the model is
+    // already where the UI writes, so this is the only direction that needs
+    // plumbing (#5702).
+    Q_INVOKABLE void applyNr2Post2Settings();
     QJsonObject nr2RuntimeDiagnostics() const;
     QJsonObject opusTxPacingDiagnostics() const;
     // Tell the engine the main RX source is (or is not) the demo, so the main NR2
@@ -1312,7 +1319,7 @@ private:
     std::unique_ptr<NnrFilter> m_nnr;
     std::unique_ptr<NnrFilter> m_kiwiSdrNnr;
     std::atomic<bool> m_nnrEnabled{false};
-    std::atomic<int>  m_nnrStrength{50};
+    std::atomic<int>  m_nnrStrength{Nnr::kMaskFloorDefaultStrength};
     std::atomic<int>  m_nnrModel{0};
 
     // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so

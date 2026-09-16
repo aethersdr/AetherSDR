@@ -1,3 +1,22 @@
+// THIS FILE IS NOT BUILT. Read this before you add anything to it.
+//
+// `add_executable(hl2_backend_test ...)` sits inside the `#[==[` block in
+// tests/tests.cmake headed "Retired fake-radio fixtures". There is no target,
+// `ctest -N` does not list it, and nothing here compiles or runs. An assertion
+// added below is not a failing test — it is no test at all, and it reads as
+// coverage to everyone who greps for one. #5650 lost 41 lines that way.
+//
+// Do not un-comment the block to fix that. It was retired on purpose, and the
+// reason is stated where it was retired: positive backend and telemetry
+// convergence is certified against real hardware, and a localhost peer is kept
+// out of the default compile and CTest graph. Follow what that comment
+// prescribes instead — extract the deterministic, socket-free part of your
+// assertion into a target that runs, and drop the part that needs a fake radio.
+// A default-constructed Hl2Backend answers capabilities(), healthSnapshot() and
+// invokeExtension() with no socket at all; `m_connected` is what a peer buys
+// you, and it is set only by MetisClient::linkUp. Worked example:
+// tests/hl2_ep4_ingest_test.cpp, "the backend's EP4 seam, with no link".
+//
 // aetherd HL2 Phase 1b — Hl2Backend seam test. A capped fake HL2 on localhost
 // lets the backend connect and produce a panadapter frame; verifies the
 // IRadioBackend contract: capabilities (family=hl2, transmit availability),

@@ -2,6 +2,8 @@
 
 #include "PersistentDialog.h"
 
+#include <optional>
+
 #include <QTimer>
 
 class QCheckBox;
@@ -63,6 +65,13 @@ private:
     // boundary was missed, or when the DAX TX stream is still being created.
     void deferBeaconToNextSlot(const QString& reason);
     void updateBeaconDefaults();
+    // The WSPR beacon's generated level, per radio. applyBeaconLevel() rides
+    // TransmitModel::hostModulationChanged so the answer follows the connected
+    // radio's transmit chain; the other two are its store side. Decisions live
+    // in PskBeaconLevelPolicy.h.
+    void applyBeaconLevel();
+    std::optional<int> storedBeaconLevelDbFs(bool hostModulates);
+    void writeBeaconLevelDbFs(int dbfs);
     void setBeaconControlsEnabled(bool enabled);
     bool applyBeaconBand();
     // Re-sends mode and both passbands immediately before the key, and reports

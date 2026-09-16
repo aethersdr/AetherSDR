@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MonoDspStereoAdapter.h"
+#include "NnrControls.h"
 
 #include <QByteArray>
 #include <atomic>
@@ -54,7 +55,9 @@ public:
     // Clears the FIFO, overlap-add state and the network's recurrent state.
     void reset();
 
-    // Algorithmic delay through the block, in samples at sampleRate().
+    // End-to-end delay through this filter, in samples at sampleRate() --
+    // NNR's own plus the resamplers' group delay on the 24 kHz path, where the
+    // latter is the larger of the two.
     int delaySamples() const;
 
     // ── The documented operator controls ──────────────────────────────────
@@ -80,6 +83,7 @@ public:
 
 private:
     void applyPendingParameters();
+    int totalLatencyFrames() const;
 
     const int m_sampleRate;
     void* m_nnr{nullptr};                   // NNR, opaque to keep WDSP out of this header
@@ -96,7 +100,7 @@ private:
 
     int m_blockFrames{0};
 
-    std::atomic<int>    m_strength{50};
+    std::atomic<int>    m_strength{Nnr::kMaskFloorDefaultStrength};
     std::atomic<int>    m_requestedModel{0};
     std::atomic<int>    m_appliedModel{0};
     std::atomic<double> m_alpha{1.0};

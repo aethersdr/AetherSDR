@@ -91,6 +91,22 @@ target_link_libraries(audio_engine_pcm_lifetime_test PRIVATE aethercore Qt6::Cor
 add_test(NAME audio_engine_pcm_lifetime_test COMMAND audio_engine_pcm_lifetime_test)
 set_tests_properties(audio_engine_pcm_lifetime_test PROPERTIES TIMEOUT 120)
 
+# #5687 follow-up: managed Kiwi sources must actually be given an NNR filter.
+# Drives the real DSP initializer through the friend seam; no sockets/devices.
+add_executable(nnr_external_source_test tests/nnr_external_source_test.cpp)
+target_include_directories(nnr_external_source_test PRIVATE src tests)
+target_link_libraries(nnr_external_source_test PRIVATE aethercore Qt6::Core)
+add_test(NAME nnr_external_source_test COMMAND nnr_external_source_test)
+set_tests_properties(nnr_external_source_test PROPERTIES TIMEOUT 120)
+
+# #5687 follow-up: nnrModel() must converge on the slot WDSP actually applied.
+# Drives the real RX path against a QBuffer sink; no sockets/devices.
+add_executable(nnr_model_publication_test tests/nnr_model_publication_test.cpp)
+target_include_directories(nnr_model_publication_test PRIVATE src tests)
+target_link_libraries(nnr_model_publication_test PRIVATE aethercore Qt6::Core)
+add_test(NAME nnr_model_publication_test COMMAND nnr_model_publication_test)
+set_tests_properties(nnr_model_publication_test PROPERTIES TIMEOUT 120)
+
 add_executable(rx_client_effects_test tests/rx_client_effects_test.cpp
     src/core/RxClientEffects.cpp src/core/ClientEq.cpp src/core/ClientGate.cpp
     src/core/ClientComp.cpp src/core/ClientDeEss.cpp src/core/ClientTube.cpp
@@ -618,6 +634,16 @@ add_executable(nnr_controls_test tests/nnr_controls_test.cpp)
 target_link_libraries(nnr_controls_test PRIVATE aethercore)
 add_test(NAME nnr_controls_test COMMAND nnr_controls_test)
 
+# WDSP's post2 psychoacoustic stage as ported into SpectralNR. Pins the two
+# parts that could not be copied verbatim: the band limit is a frequency
+# derived from the live FFT geometry rather than WDSP's bin fraction, and the
+# white term's level is a ratio rather than WDSP's constant, which only means
+# what it means when paired with WDSP's own gain.
+add_executable(nr2_post2_test tests/nr2_post2_test.cpp)
+target_link_libraries(nr2_post2_test PRIVATE aethercore Qt6::Core)
+add_test(NAME nr2_post2_test COMMAND nr2_post2_test)
+set_tests_properties(nr2_post2_test PROPERTIES TIMEOUT 120)
+
 # Real audio through WDSP's NNR: noise down, voice-shaped content through, the
 # controls moving the result the direction they claim, and the NnrControls.h
 # markers still describing the WDSP being linked.
@@ -637,6 +663,16 @@ add_executable(hl2_metis_protocol_test
     src/core/backends/hl2/MetisProtocol.cpp)
 target_include_directories(hl2_metis_protocol_test PRIVATE src)
 add_test(NAME hl2_metis_protocol_test COMMAND hl2_metis_protocol_test)
+
+# HL2 wideband bandscope (EP4) parser — the 12-bit ADC codes, the 20-bit
+# sequence counter and its forward-gap guard. Same shape as the target above:
+# compiles MetisProtocol.cpp directly, no Qt, no aethercore, no socket. Its
+# sequence expectations replay tests/Hl2Ep4ArrivalsD94.h, a recorded bench leg.
+add_executable(hl2_ep4_bandscope_test
+    tests/hl2_ep4_bandscope_test.cpp
+    src/core/backends/hl2/MetisProtocol.cpp)
+target_include_directories(hl2_ep4_bandscope_test PRIVATE src tests)
+add_test(NAME hl2_ep4_bandscope_test COMMAND hl2_ep4_bandscope_test)
 
 # HL2 IO-board push scheduling — pure policy, standalone (no Qt, no radio).
 add_executable(hl2_io_board_policy_test
@@ -1915,6 +1951,27 @@ target_include_directories(tx_capture_health_test PRIVATE src)
 target_link_libraries(tx_capture_health_test PRIVATE Qt6::Core)
 add_test(NAME tx_capture_health_test COMMAND tx_capture_health_test)
 
+# #5648 — post-open QFile failures are finalized on the recorder owner thread;
+# no socket, device, or radio is involved.
+add_executable(qso_recorder_write_error_test
+    tests/qso_recorder_write_error_test.cpp
+    src/core/QsoRecorder.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(qso_recorder_write_error_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_write_error_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_write_error_test COMMAND qso_recorder_write_error_test)
+
 # Regression test for #4003 — QsoRecorder must not dereference a SliceModel that
 # was freed (reconnect prune) before recording starts. QPointer auto-nulls the
 # reference; the test deletes the slice and asserts the metadata is cleared.
@@ -1966,6 +2023,27 @@ target_include_directories(qso_recorder_pc_audio_guard_test PRIVATE
 )
 target_link_libraries(qso_recorder_pc_audio_guard_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME qso_recorder_pc_audio_guard_test COMMAND qso_recorder_pc_audio_guard_test)
+
+# #5640 — QsoRecorder claims filename candidates atomically so a same-second
+# recording cannot truncate a populated WAV or a concurrently-created file.
+add_executable(qso_recorder_filename_collision_test
+    tests/qso_recorder_filename_collision_test.cpp
+    src/core/QsoRecorder.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(qso_recorder_filename_collision_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_filename_collision_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_filename_collision_test COMMAND qso_recorder_filename_collision_test)
 
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
@@ -3973,6 +4051,30 @@ target_include_directories(hl2_band_filter_frame_test PRIVATE src)
 target_link_libraries(hl2_band_filter_frame_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_band_filter_frame_test COMMAND hl2_band_filter_frame_test)
 
+# HL2 wideband bandscope ingest — EP4 and EP6 accounted separately on one
+# socket. Binds nothing: recorded datagrams go straight into MetisClient's
+# drain path through the MetisClientTestAccess friend seam.
+# Its section 8 carries the same claim up to the IRadioBackend seam — the
+# health rows and the bandscope.enable verb on a default-constructed
+# Hl2Backend, which needs no socket because m_connected is the only thing a
+# peer buys. The positive path is certified against hardware, not faked here.
+# That section lives in this target and not in tests/hl2_backend_test.cpp,
+# which the retired-fixtures block below leaves with no target at all.
+add_executable(hl2_ep4_ingest_test tests/hl2_ep4_ingest_test.cpp)
+target_include_directories(hl2_ep4_ingest_test PRIVATE src tests)
+target_link_libraries(hl2_ep4_ingest_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_ep4_ingest_test COMMAND hl2_ep4_ingest_test)
+
+# HL2 wideband bandscope duty-cycle gate — the four-state machine, its guard
+# timer and the transmit interlocks. Socket-free and event-loop-free: recorded
+# enable/disable cycles go in through the same MetisClientTestAccess seam and
+# both timers are fired by hand. Qt6::Test is for QSignalSpy, which is how
+# "one block per arming cycle, never one per packet" is asserted.
+add_executable(hl2_ep4_gate_test tests/hl2_ep4_gate_test.cpp)
+target_include_directories(hl2_ep4_gate_test PRIVATE src tests)
+target_link_libraries(hl2_ep4_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME hl2_ep4_gate_test COMMAND hl2_ep4_gate_test)
+
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
 add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
@@ -4301,6 +4403,16 @@ target_link_libraries(automation_rn2_probe_test PRIVATE
     aethercore Qt6::Core Qt6::Network
 )
 add_test(NAME automation_rn2_probe_test COMMAND automation_rn2_probe_test)
+
+# #5687 follow-up: the probe's mode table and its `all` sweep must include NNR.
+add_executable(automation_nnr_probe_test
+    tests/automation_nnr_probe_test.cpp
+)
+target_include_directories(automation_nnr_probe_test PRIVATE src)
+target_link_libraries(automation_nnr_probe_test PRIVATE
+    aethercore Qt6::Core Qt6::Network
+)
+add_test(NAME automation_nnr_probe_test COMMAND automation_nnr_probe_test)
 
 add_executable(aetherclock_model_test tests/aetherclock_model_test.cpp)
 target_include_directories(aetherclock_model_test PRIVATE src)
@@ -4930,6 +5042,12 @@ add_executable(hl2_dsp_setup_policy_test
 )
 target_include_directories(hl2_dsp_setup_policy_test PRIVATE src)
 add_test(NAME hl2_dsp_setup_policy_test COMMAND hl2_dsp_setup_policy_test)
+add_executable(psk_beacon_level_policy_test
+    tests/psk_beacon_level_policy_test.cpp
+)
+target_include_directories(psk_beacon_level_policy_test PRIVATE src)
+add_test(NAME psk_beacon_level_policy_test COMMAND psk_beacon_level_policy_test)
+
 add_executable(hl2_tx_level_policy_test
     tests/hl2_tx_level_policy_test.cpp
 )
@@ -5432,6 +5550,9 @@ set(AETHER_SETTINGS_CONSUMERS
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
+    nnr_external_source_test
+    nnr_model_publication_test
+    automation_nnr_probe_test
     pcm_compatibility_test
     firmware_close_dialog_test
     atu_seam_gate_test
@@ -5468,8 +5589,10 @@ set(AETHER_SETTINGS_CONSUMERS
     nr2_tx_rx_reset_test
     rn2_settings_model_test
     panadapter_model_rx_antenna_test
+    qso_recorder_write_error_test
     qso_recorder_slice_lifetime_test
     qso_recorder_pc_audio_guard_test
+    qso_recorder_filename_collision_test
     band_plan_license_filter_test
     kiwisdr_dx_spots_test
     passive_spots_policy_test
@@ -5546,6 +5669,7 @@ set(AETHER_AUTOMATION_SERVER_TESTS
     automation_drag_at_test
     automation_tx_watchdog_test
     automation_rn2_probe_test
+    automation_nnr_probe_test
     connect_state_model_test
     automation_dsp_backend_readback_test
     backend_slice_lifecycle_test
