@@ -165,7 +165,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     auto* cwTitle = new QLabel("CW");
     AetherSDR::ThemeManager::instance().applyStyleSheet(cwTitle, "QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold; background: transparent; }");
     cwBar->addWidget(cwTitle);
-    auto* cwHint = new QLabel("(requires PC Audio)");
+    auto* cwHint = new QLabel(tr("(selected slice)"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(cwHint, "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; background: transparent; }");
     cwBar->addWidget(cwHint);
 
@@ -843,7 +843,7 @@ void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const 
     m_cwModelAction->setText(preparing ? tr("Cancel") : tr("Retry"));
     m_cwModelAction->setToolTip(preparing ? tr("Cancel model preparation") : tr("Retry model preparation"));
     m_cwStatsLabel->setToolTip(selected
-        ? (detail.isEmpty() ? tr("Decodes monitored audio; multiple audible slices may interfere.") : detail)
+        ? (detail.isEmpty() ? tr("Decodes the selected slice independently of speaker volume or mute.") : detail)
         : QString{});
     if (selected) { m_cwStatsLabel->setText(status); }
 }
@@ -859,7 +859,7 @@ void PanadapterApplet::appendUnscoredCwText(const QString& text)
     QTextCursor cursor = m_cwText->textCursor();
     cursor.insertText(clean, format);
     m_cwText->moveCursor(QTextCursor::End);
-    // No numeric ggmorse confidence or slice attribution is invented for the audio mix.
+    // DeepFist does not provide a calibrated ggmorse confidence score.
 }
 #endif
 
