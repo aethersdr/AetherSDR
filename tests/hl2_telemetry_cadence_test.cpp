@@ -29,6 +29,22 @@
 
 #include "core/backends/hl2/Hl2TelemetryCadence.h"
 
+// Included here rather than reached through the header under test.
+//
+// All three arrive today only because Hl2TelemetryCadence.h needs them for its
+// OWN declarations. That is a coincidence of the header'''s current shape, not a
+// contract: the day acceptReply() stops taking a std::array or its optional
+// parameters change form, the header drops the include it no longer needs and
+// this file stops compiling -- reporting it as a failure of the thing it tests.
+//
+// (It is NOT that the header could tidy these away while still needing them. It
+// could not, and an earlier version of this comment said so wrongly: stripping
+// them from the header fails the header itself, fix or no fix. What this buys
+// is independence from a future change to what the header needs.)
+#include <array>
+#include <cstdint>
+#include <optional>
+
 #include <cstdio>
 #include <initializer_list>
 
