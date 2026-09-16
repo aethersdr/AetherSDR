@@ -64,6 +64,36 @@ if (-not $srcDir) {
     exit 1
 }
 
+# ── Patch: free the right pointer in WdmGetPinPropertyMulti (#5713) ─────
+# PortAudio v19.7.0 (and master as of 2026-09-16) has a one-token bug in
+# src/os/win/pa_win_wdmks_utils.c: WdmGetPinPropertyMulti()'s error branch,
+# taken when a driver's second IOCTL_KS_PROPERTY reply does not match its own
+# size query, calls PaUtil_FreeMemory( ksMultipleItem ) — the KSMULTIPLE_ITEM**
+# (the caller's stack slot) — instead of *ksMultipleItem. PaUtil_FreeMemory is
+# GlobalFree on Windows, so the heap manager gets a stack address and the
+# process dies with 0xc0000374 STATUS_HEAP_CORRUPTION inside Pa_Initialize().
+# The branch is reached from the DirectSound host API's per-device WDM-KS
+# channel-count query (PA_USE_WDMKS_DEVICE_INFO, on by default). FlexRadio DAX
+# 2.0.3 endpoints take it on every filter (pin 0, KSPROPERTY_PIN_DATARANGES:
+# size query says 96 bytes / ERROR_MORE_DATA, data query returns 0 bytes /
+# ERROR_MORE_DATA), which is the #5713 connect crash whenever DAX.exe is running.
+# Measured on a FLEX-8400 Windows box: 3/3 crashes unpatched, clean with this
+# line fixed. The replacement is exact-match and fails loudly if the upstream
+# text ever changes, so a PortAudio bump cannot silently drop it.
+$wdmksUtils = Join-Path $srcDir.FullName "src\os\win\pa_win_wdmks_utils.c"
+$wdmksText  = Get-Content -Raw -Encoding UTF8 $wdmksUtils
+$badFree    = "        PaUtil_FreeMemory( ksMultipleItem );`n        return paUnanticipatedHostError;"
+$goodFree   = "        PaUtil_FreeMemory( *ksMultipleItem );   /* AetherSDR #5713: was ksMultipleItem (the caller's stack slot) */`n        *ksMultipleItem = NULL;`n        return paUnanticipatedHostError;"
+$wdmksLf    = $wdmksText -replace "`r`n", "`n"
+$hits = ([regex]::Matches($wdmksLf, [regex]::Escape($badFree))).Count
+if ($hits -ne 1) {
+    Write-Error "pa_win_wdmks_utils.c: expected exactly one WdmGetPinPropertyMulti error-branch free to patch, found $hits — PortAudio source changed, re-check the #5713 patch"
+    exit 1
+}
+[IO.File]::WriteAllText($wdmksUtils, $wdmksLf.Replace($badFree, $goodFree), (New-Object Text.UTF8Encoding $false))
+Write-Host "Applied #5713 fix to pa_win_wdmks_utils.c (WdmGetPinPropertyMulti frees *ksMultipleItem)" -ForegroundColor Yellow
+
+
 # ── Build with CMake + MSVC ──────────────────────────────────────────────
 Write-Host "Building PortAudio from source with MSVC..." -ForegroundColor Cyan
 
