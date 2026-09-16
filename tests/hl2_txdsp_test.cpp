@@ -452,6 +452,83 @@ int main(int argc, char** argv)
               "24 kHz audio in -> ~48 kHz IQ out (2:1 rate conversion)");
     }
 
+    // ---- A MODE CHANGE ON A RUNNING MODULATOR MOVES THE SIDEBAND ----
+    //
+    // THE ONE PATH EVERY OTHER CASE IN THIS FILE MISSES. Each case above
+    // constructs a fresh Hl2TxDsp already in the mode it measures, so the
+    // signed passband is baked in by buildModulator() at open time and
+    // applyModeAndFilter() is never reached. Its two callers are setMode() and
+    // setFilter() on an ALREADY OPEN channel, which nothing exercised.
+    //
+    // That is exactly the path Hl2TxDsp::applyModeAndFilter warns about in its
+    // own comment: in the TXA build SetTXAMode does NOT choose a sideband --
+    // TXASetupBPFilters gives TXA_LSB and TXA_USB the identical
+    // CalcBandpassFilter call, so the sideband rides entirely on the SIGN of
+    // the passband. A mode change pushing only the mode leaves the transmitter
+    // on the previous sideband with the readout saying otherwise, and it is
+    // invisible from inside this application because the panadapter reads the
+    // same wire order.
+    //
+    // Found by mutation, not by inspection: deleting the setFilter() call from
+    // applyModeAndFilter() left this whole file green.
+    {
+        Hl2TxDsp tx;
+        Hl2TxDsp::Config cfg;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.alcEnabled = false;
+        std::string err;
+        if (tx.configure(cfg, &err)) {
+            tx.setMicGain(1.0);
+            std::vector<std::complex<float>> cap;
+            QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                             [&cap](const std::vector<std::complex<float>>& iq) {
+                cap.insert(cap.end(), iq.begin(), iq.end());
+            });
+            const int fs = cfg.inputSampleRateHz;
+            constexpr std::size_t kChunk = 240;
+            auto run = [&](double seconds) {
+                const int total = static_cast<int>(fs * seconds);
+                std::vector<float> chunk(kChunk);
+                for (int off = 0; off + static_cast<int>(kChunk) <= total;
+                     off += static_cast<int>(kChunk)) {
+                    for (std::size_t n = 0; n < kChunk; ++n)
+                        chunk[n] = static_cast<float>(
+                            0.5 * std::sin(2.0 * M_PI * kTone
+                                           * (off + static_cast<int>(n)) / fs));
+                    feed(tx, chunk, TxAudioSource::Microphone);
+                }
+            };
+            auto sidebandDb = [&]() {
+                const double up = binPower(cap, +kTone, kFsOut, true);
+                const double lo = binPower(cap, -kTone, kFsOut, true);
+                return 20.0 * std::log10((lo + 1e-12) / (up + 1e-12));
+            };
+
+            run(1.0);
+            const double usbDb = sidebandDb();     // + means energy on the LOWER wire bin
+            std::fprintf(stderr, "mode change: as USB %.1f dB (lower-over-upper)\n", usbDb);
+            check(usbDb > 0.0,
+                  "mode change: a fresh USB modulator puts energy on the LOWER wire bin");
+
+            // THE CHANGE ITSELF, on the open channel.
+            tx.setMode(WdspChannel::Mode::Lsb);
+            cap.clear();
+            run(1.0);
+            const double lsbDb = sidebandDb();
+            std::fprintf(stderr, "mode change: after setMode(Lsb) %.1f dB "
+                                 "(lower-over-upper)\n", lsbDb);
+            check(lsbDb < 0.0,
+                  "mode change: setMode(Lsb) on a RUNNING modulator moves the "
+                  "sideband to the UPPER wire bin");
+            check(std::fabs(lsbDb - usbDb) > 20.0,
+                  "mode change: and it actually moves -- the two sidebands are "
+                  "not the same measurement");
+        } else {
+            std::fprintf(stderr, "FAIL: mode-change case configure: %s\n", err.c_str());
+            ++g_failures;
+        }
+    }
+
     // ---- USB puts the tone ABOVE the carrier ----
     {
         const auto iq = modulate(WdspChannel::Mode::Usb, kTone, 0.5, 1.0, 1.0);
