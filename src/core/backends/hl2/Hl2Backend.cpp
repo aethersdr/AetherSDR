@@ -6535,11 +6535,36 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // cannot make until the restored baseline has actually been applied. So
     // this records the WISH and the connect edge acts on it.
     //
-    // Absent means off, which is the right default: a session that predates
-    // this key never armed anything, and reading a missing key as "on" would
-    // switch a control on for an operator who never asked.
+    // ABSENT MEANS ON, and this reverses what an earlier revision of this
+    // comment argued. That argument was: "a session that predates this key
+    // never armed anything, and reading a missing key as on would switch a
+    // control on for an operator who never asked." It was right about the
+    // mechanism and wrong about the alternative, because there was no neutral
+    // option -- only a choice between two defaults, one of which was broken.
+    //
+    // WHAT CHANGED IS THE GAIN AXIS UNDER IT. This radio's constructed LNA
+    // default was +20 dB, which ccRxGain encoded as code 32 and the gateware
+    // decoded as code 0 = -12 dB: a fresh connect sat at the BOTTOM of the
+    // range reporting the top. And +20 is one dB above
+    // kAutoRfGainMaxBaselineDb, so setAutoRfGain(true) REFUSED -- the control
+    // could not be armed from the default at all, by anyone, ever. "Off by
+    // default" was not a conservative choice; it was the only reachable state.
+    //
+    // With the ceiling at +19 and the default at 0 dB, arming from a fresh
+    // connect works and starts from a baseline that means what it says. An
+    // operator who wants a fixed gain still has one: switching the control off
+    // WRITES `autoEnabled: false` here, and an explicit false is honoured. What
+    // absence now means is "this operator has never expressed a preference",
+    // and for them a loop that finds the right gain is a better answer than a
+    // constant that cannot.
+    //
+    // ON8ST, 2026-09-16, operating the radio this was measured on: "I would
+    // also make the auto gain setting the default."
+    //
+    // DEPENDS ON THE CEILING LANDING. Without the +19 clamp and the 0 dB
+    // default, this line arms nothing -- the baseline guard refuses.
     m_autoRfGainWanted =
-        rfGain.value(QStringLiteral("autoEnabled")).toBool(false);
+        rfGain.value(QStringLiteral("autoEnabled")).toBool(true);
     const QJsonObject lnaByBand =
         rfGain.value(QStringLiteral("lnaDbByBand")).toObject();
     for (auto it = lnaByBand.constBegin(); it != lnaByBand.constEnd(); ++it)
