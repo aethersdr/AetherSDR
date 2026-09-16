@@ -39,6 +39,7 @@ void PgxlConnection::connectToPgxl(const QString& host, quint16 port)
         m_deliberateDisconnect = false;
     }
     m_seq = 0;
+    m_setupReadSeq = 0;
     m_gotVersion = false;
     m_version.clear();
     m_readBuf.clear();
@@ -111,6 +112,10 @@ void PgxlConnection::processLine(const QString& line)
         qCInfo(lcTuner) << "PgxlConnection: PGXL version" << m_version;
 
         sendCommand("info");
+        // Read the stored configuration up front. A `setup` write has to carry
+        // the whole group, so the values we are not changing have to be known
+        // before the operator can change the one they are.
+        m_setupReadSeq = sendCommand("setup read");
         sendCommand("status");
 
         m_connected = true;
@@ -137,6 +142,7 @@ void PgxlConnection::processLine(const QString& line)
         int pipe1 = line.indexOf('|');
         int pipe2 = (pipe1 >= 0) ? line.indexOf('|', pipe1 + 1) : -1;
         if (pipe2 >= 0) {
+            const quint32 seq = line.mid(1, pipe1 - 1).toUInt();
             QString body = line.mid(pipe2 + 1).trimmed();
             if (!body.isEmpty()) {
                 QMap<QString, QString> kvs;
@@ -146,8 +152,17 @@ void PgxlConnection::processLine(const QString& line)
                     if (eq > 0)
                         kvs.insert(part.left(eq), part.mid(eq + 1));
                 }
-                if (!kvs.isEmpty())
-                    emit statusUpdated(kvs);
+                if (!kvs.isEmpty()) {
+                    // A `setup read` reply looks exactly like a status reply —
+                    // key/value pairs in an R frame — so it is told apart by
+                    // the sequence number that asked for it, not by shape.
+                    if (m_setupReadSeq != 0 && seq == m_setupReadSeq) {
+                        m_setupReadSeq = 0;
+                        emit setupRead(kvs);
+                    } else {
+                        emit statusUpdated(kvs);
+                    }
+                }
             }
         }
         return;

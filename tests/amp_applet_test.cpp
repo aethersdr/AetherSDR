@@ -1,6 +1,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/AmpApplet.h"
+#include "gui/HGauge.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -15,6 +16,7 @@
 #include <QTemporaryDir>
 
 #include <cstdio>
+#include <limits>
 
 using namespace AetherSDR;
 
@@ -233,6 +235,200 @@ void testFanModePulldown()
 // are load-bearing: a fixed-width face so a 1 and an 8 cost the same, and a
 // fixed field so 9.9 and 100.4 do. Miss either and the bottom row twitches on
 // every poll, five times a second.
+// Find the label a gauge row carries, by the name it starts with.
+QString rowLabel(const AmpApplet& applet, const QString& prefix)
+{
+    for (QLabel* l : applet.findChildren<QLabel*>()) {
+        if (l->text().startsWith(prefix)) return l->text();
+    }
+    return QString();
+}
+
+// The gauges take their value synchronously; the row LABELS are refreshed by
+// a 100 ms timer, so a test that reads a number wants the gauge.
+float gaugeValue(const AmpApplet& applet, const QString& accessibleName)
+{
+    // HGauge declares no Q_OBJECT, so findChildren cannot select it directly;
+    // it is still a polymorphic QWidget, which dynamic_cast can.
+    for (QWidget* w : applet.findChildren<QWidget*>()) {
+        if (w->accessibleName() != accessibleName) continue;
+        if (auto* g = dynamic_cast<HGauge*>(w)) return g->value();
+    }
+    return std::numeric_limits<float>::quiet_NaN();
+}
+
+// The drive row shows the amplifier's measured exciter power. It is the other
+// half of the gain reading: PWR alone cannot say whether an amplifier that is
+// making little power is being driven with little power.
+void testDriveRowShowsMeasuredDrive()
+{
+    resetSettings();
+    AmpApplet applet;
+    // Present but unmeasured: the row keeps its name and no number, so an
+    // amplifier that publishes no DRV meter does not read as "no drive".
+    report("drive row starts unmeasured",
+           rowLabel(applet, QStringLiteral("DRV")) == QStringLiteral("DRV"),
+           rowLabel(applet, QStringLiteral("DRV")));
+
+    applet.setDrivePower(10.9f, true);
+    report("drive row shows the measured watts",
+           rowLabel(applet, QStringLiteral("DRV")) == QStringLiteral("DRV  10.9"),
+           rowLabel(applet, QStringLiteral("DRV")));
+
+    // Withdrawn: back to the name alone, not to "0.0".
+    applet.setDrivePower(0.0f, false);
+    report("withdrawn drive blanks the number rather than reading zero",
+           rowLabel(applet, QStringLiteral("DRV")) == QStringLiteral("DRV"),
+           rowLabel(applet, QStringLiteral("DRV")));
+}
+
+// Two transports carry forward power and SWR. They are the same measurement,
+// so the rule is about rate: the radio relay runs at the radio's meter rate
+// and the amplifier's own socket is polled at 5 Hz. The relay wins while it
+// is fresh; without this, the slower source kept dragging the bar back.
+void testRelayedMetersWinOverTheDeviceWhileFresh()
+{
+    resetSettings();
+    AmpApplet applet;
+
+    applet.setRadioMeters(1000.0f, 1.2f);
+    const float relayed = gaugeValue(applet, QStringLiteral("Forward power"));
+    report("relayed meters reach the gauge", qFuzzyCompare(relayed, 1000.0f),
+           QString::number(relayed));
+
+    // The device's own (slower) sample must not overwrite it.
+    applet.setDeviceMeters(16.0f, 1.0f);
+    const float afterDevice = gaugeValue(applet, QStringLiteral("Forward power"));
+    report("a device sample is discarded while the relay is fresh",
+           qFuzzyCompare(afterDevice, 1000.0f), QString::number(afterDevice));
+}
+
+// With no relay at all — a radio that publishes no amplifier meters, or before
+// the meter manifest lands — the amplifier's own socket is the only source and
+// must drive the gauges.
+void testDeviceMetersDriveTheGaugesWithoutARelay()
+{
+    resetSettings();
+    AmpApplet applet;
+
+    applet.setDeviceMeters(16.6f, 1.002f);
+    const float v = gaugeValue(applet, QStringLiteral("Forward power"));
+    report("device meters drive the gauges when nothing is relaying",
+           qFuzzyCompare(v, 16.6f), QString::number(v));
+}
+
+// Forward power crossing the 5 W mark clears and restores the SWR bar: SWR is
+// not a measurement when nothing is being transmitted, and a bar left standing
+// at the last ratio claims it is.
+//
+// The crossing is spotted by comparing the arriving reading against the
+// PREVIOUS one, so any path that caches the new value before applying it
+// disables this silently — the bar simply stops clearing. That is exactly what
+// routing the gauges through a shared entry point did on the first attempt,
+// which is why it is pinned here.
+void testSwrBarFollowsThePowerCrossing()
+{
+    resetSettings();
+    AmpApplet applet;
+    const QString swr = QStringLiteral("SWR");
+
+    applet.setRadioMeters(1000.0f, 2.4f);
+    report("SWR bar shows the ratio while power is flowing",
+           qFuzzyCompare(gaugeValue(applet, swr), 2.4f),
+           QString::number(gaugeValue(applet, swr)));
+
+    applet.setRadioMeters(0.0f, 2.4f);
+    report("SWR bar clears when the power stops",
+           qFuzzyCompare(gaugeValue(applet, swr), 1.0f),
+           QString::number(gaugeValue(applet, swr)));
+
+    applet.setRadioMeters(1000.0f, 2.4f);
+    report("SWR bar returns when power resumes",
+           qFuzzyCompare(gaugeValue(applet, swr), 2.4f),
+           QString::number(gaugeValue(applet, swr)));
+}
+
+// MEffA wears three states and the operator controls one bit of them. A plain
+// on/off control would be wrong in the middle state: enabling the algorithm
+// while the PA is in class AAB — which is where SSB and AM put it — reports
+// STANDBY, and showing that as "off" tells the operator their setting did not
+// take.
+void testMeffaShowsThreeStates()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* btn = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+    report("MEffA control exists", btn != nullptr);
+    if (!btn) return;
+
+    // Nothing before the amplifier has reported a state.
+    report("MEffA control is hidden until the amplifier reports",
+           !btn->isVisible());
+
+    applet.setMeffa(QStringLiteral("OFF"), true);
+    report("OFF reads as disabled",
+           btn->accessibleName() == QStringLiteral("MEffA off"),
+           btn->accessibleName());
+
+    applet.setMeffa(QStringLiteral("STANDBY"), true);
+    report("STANDBY reads as enabled-but-idle, not as off",
+           btn->accessibleName() == QStringLiteral("MEffA on — idle in class AAB"),
+           btn->accessibleName());
+
+    applet.setMeffa(QStringLiteral("ACTIVE"), true);
+    report("ACTIVE reads as optimising",
+           btn->accessibleName() == QStringLiteral("MEffA on — optimising"),
+           btn->accessibleName());
+}
+
+// The toggle carries the operator's bit, never the reported word: from STANDBY
+// — which is ENABLED — a press must ask to turn it OFF, not on.
+void testMeffaToggleSendsTheOperatorsBit()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* btn = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+    if (!btn) { report("MEffA toggle bit", false); return; }
+    QSignalSpy toggled(&applet, &AmpApplet::meffaToggled);
+
+    applet.setMeffa(QStringLiteral("OFF"), true);
+    btn->click();
+    report("pressing while OFF asks to enable",
+           toggled.count() == 1 && toggled.last().at(0).toBool());
+
+    applet.setMeffa(QStringLiteral("STANDBY"), true);
+    btn->click();
+    report("pressing while STANDBY asks to DISABLE, because STANDBY is enabled",
+           toggled.count() == 2 && !toggled.last().at(0).toBool());
+
+    applet.setMeffa(QStringLiteral("ACTIVE"), true);
+    btn->click();
+    report("pressing while ACTIVE asks to disable",
+           toggled.count() == 3 && !toggled.last().at(0).toBool());
+}
+
+// A write needs the whole `setup` group, which is not known until the
+// amplifier has answered `setup read`. Until then the control is visible but
+// inert — a control that cannot complete is worse than one that visibly
+// cannot be pressed yet.
+void testMeffaIsInertUntilTheSetupGroupIsKnown()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* btn = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+    if (!btn) { report("MEffA inert gate", false); return; }
+    QSignalSpy toggled(&applet, &AmpApplet::meffaToggled);
+
+    applet.setMeffa(QStringLiteral("STANDBY"), false);
+    report("control is disabled while the setup group is unknown",
+           !btn->isEnabled());
+    btn->click();
+    report("a press while inert commands nothing", toggled.count() == 0);
+
+    applet.setMeffa(QStringLiteral("STANDBY"), true);
+    report("control becomes live once the group is known", btn->isEnabled());
+}
+
 void testReadoutWidthIsStable()
 {
     resetSettings();
@@ -344,6 +540,13 @@ int main(int argc, char** argv)
     testPreferenceReload();
     testFanModePulldown();
     testReadoutWidthIsStable();
+    testDriveRowShowsMeasuredDrive();
+    testRelayedMetersWinOverTheDeviceWhileFresh();
+    testDeviceMetersDriveTheGaugesWithoutARelay();
+    testSwrBarFollowsThePowerCrossing();
+    testMeffaShowsThreeStates();
+    testMeffaToggleSendsTheOperatorsBit();
+    testMeffaIsInertUntilTheSetupGroupIsKnown();
 
     std::printf("\n%s\n",
                 g_failed == 0

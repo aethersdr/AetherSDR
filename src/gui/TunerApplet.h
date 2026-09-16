@@ -81,8 +81,17 @@ public:
     void setTxAntenna(const QString& antenna);
 
 public slots:
-    // Feed forward power (W) and SWR from MeterModel::txMetersChanged.
+    // Apply a forward-power (W) / SWR pair to the gauges immediately. Prefer
+    // the two source-aware entry points below; this one applies blind and is
+    // what both of them end at.
     void updateMeters(float fwdPower, float swr);
+
+    // The tuner reports forward power and SWR twice — as radio-relayed AMP
+    // meters and on its own port-9010 status. Same measurement, different
+    // rate, so these stamp their arrival and the relay wins while it is
+    // fresh. See kRelayMeterFreshnessMs.
+    void setRadioMeters(float fwdPower, float swr);
+    void setDeviceMeters(float fwdPower, float swr);
 
     // The floor the panel may be shrunk to. Derived from the minimum scale,
     // not from the children's current sizes. Public because QWidget declares
@@ -250,6 +259,9 @@ private:
     QWidget*     m_antContainer{nullptr};
 
     // Meter values (updated by updateMeters)
+    // When the radio relay last delivered a meter sample. See setDeviceMeters().
+    qint64 m_radioMetersMs{0};
+
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
 

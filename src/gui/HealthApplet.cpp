@@ -526,7 +526,7 @@ void HealthApplet::setMeterModel(MeterModel* model)
     connect(m_model, &MeterModel::tgxlMetersChanged,
             this, &HealthApplet::updateTunerMeters);
     connect(m_model, &MeterModel::ampMetersChanged,
-            this, [this](float fwdPower, float swr, float) {
+            this, [this](float fwdPower, float swr, float, float, bool) {
         updateAmplifierMeters(fwdPower, swr);
     });
 }

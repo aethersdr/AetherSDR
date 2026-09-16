@@ -1,6 +1,8 @@
 #include "AmpModel.h"
 #include "core/PgxlConnection.h"
 
+#include <cmath>
+
 namespace AetherSDR {
 
 namespace {
@@ -38,6 +40,9 @@ void AmpModel::setDirectConnection(PgxlConnection* conn)
     connect(m_directConn, &PgxlConnection::statusUpdated, this,
             [this](const QMap<QString, QString>& kvs) { applyDirectStatus(kvs); });
 
+    connect(m_directConn, &PgxlConnection::setupRead, this,
+            [this](const QMap<QString, QString>& kvs) { applySetupGroup(kvs); });
+
     connect(m_directConn, &PgxlConnection::alertChanged, this,
             [this](const QString& text) {
         if (m_alert == text) return;
@@ -49,6 +54,25 @@ void AmpModel::setDirectConnection(PgxlConnection* conn)
         // Everything below came from a device we can no longer see. A frozen
         // band or bias claims the amplifier is set up a way we have stopped
         // being told about, which is worse than showing nothing.
+        //
+        // The meters included: a gauge left standing at the last reading taken
+        // before the link dropped reports power out of an amplifier we are no
+        // longer talking to. Zero watts is what we now know.
+        m_directFwdWatts = 0.0f;
+        m_directSwr = 1.0f;
+        emit directMetersChanged(m_directFwdWatts, m_directSwr);
+        // The setup group is only knowable over this link, and writing it back
+        // is only safe while the four values we would have to resend are
+        // current. Both go with the connection.
+        m_haveSetupGroup = false;
+        m_setupNickname.clear();
+        m_setupLedIntens.clear();
+        m_setupAuthCode.clear();
+        m_fanMode.clear();
+        if (!m_meffa.isEmpty()) {
+            m_meffa.clear();
+            emit meffaChanged(m_meffa);
+        }
         if (!m_alert.isEmpty()) {
             m_alert.clear();
             emit alertChanged(m_alert);
@@ -91,6 +115,50 @@ void AmpModel::applyDirectStatus(const QMap<QString, QString>& kvs)
         applyStateWord(kvs.value(QStringLiteral("state")));
     }
 
+    // Metering first, and independently of the per-port block below: the two
+    // are not carried by the same frames in every firmware, and a status that
+    // omits bandA/bandB must not cost us the power reading with it.
+    //
+    // `fwd` is dBm on the wire -- the amplifier's own FWD meter declares
+    // 30.0..63.0 dBm (1 W..2 kW) and the direct status floors at exactly
+    // 30.0 when nothing is being transmitted. `swr` is return loss in dB,
+    // reported NEGATIVE here (-60.0 at rest), unlike the relayed RL meter
+    // which reports the same quantity positive.
+    bool meters = false;
+    if (kvs.contains(QStringLiteral("fwd"))) {
+        const float dBm = kvs.value(QStringLiteral("fwd")).toFloat();
+        m_directFwdWatts = std::pow(10.0f, dBm / 10.0f) / 1000.0f;
+        meters = true;
+    }
+    if (kvs.contains(QStringLiteral("swr"))) {
+        const float returnLossDb = kvs.value(QStringLiteral("swr")).toFloat();
+        // Take the magnitude: the sign is this transport's convention, not a
+        // measurement, and a firmware that dropped it would otherwise invert
+        // the ratio.
+        const float rho = std::pow(10.0f, -std::abs(returnLossDb) / 20.0f);
+        m_directSwr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+        meters = true;
+    }
+    // Emitted unconditionally when the fields are present, never gated on the
+    // value having moved: a meter that settles on one number is still a live
+    // meter, and suppressing the repeat is what freezes a gauge (#1530).
+    if (meters) emit directMetersChanged(m_directFwdWatts, m_directSwr);
+
+    // meffa and fanmode appear ONLY here, never in the `setup read` reply, and
+    // a `setup` write has to send them back. Held for that, and for the panel.
+    // Gated on change, unlike the meters: these are states, not measurements,
+    // and re-announcing one on every poll is a repaint per poll forever.
+    if (kvs.contains(QStringLiteral("fanmode"))) {
+        m_fanMode = kvs.value(QStringLiteral("fanmode")).trimmed().toUpper();
+    }
+    if (kvs.contains(QStringLiteral("meffa"))) {
+        const QString meffa = kvs.value(QStringLiteral("meffa")).trimmed().toUpper();
+        if (m_meffa != meffa) {
+            m_meffa = meffa;
+            emit meffaChanged(m_meffa);
+        }
+    }
+
     if (!kvs.contains(QStringLiteral("bandA")) && !kvs.contains(QStringLiteral("bandB"))) {
         return;   // an info or partial frame, not the per-port block
     }
@@ -116,6 +184,75 @@ void AmpModel::applyDirectStatus(const QMap<QString, QString>& kvs)
         m_havePortInfo = true;
         emit portsChanged();
     }
+}
+
+void AmpModel::applySetupGroup(const QMap<QString, QString>& kvs)
+{
+    // The reply to `setup read`. It carries ledintens, txdelay,
+    // inactivity-timeout, nickname and authcode — note that meffa and fanmode
+    // are NOT among them, which is why those two are taken off the status
+    // frame instead.
+    m_setupNickname  = kvs.value(QStringLiteral("nickname"));
+    m_setupLedIntens = kvs.value(QStringLiteral("ledintens"));
+    // Present but empty on an amplifier with no auth configured, and empty is
+    // the value to send back — value() returning a default here is correct.
+    m_setupAuthCode  = kvs.value(QStringLiteral("authcode"));
+    const bool becameWritable = !m_haveSetupGroup;
+    m_haveSetupGroup = true;
+    // Re-announce MEffA. Its VALUE has not moved, but whether it can be
+    // operated has — canWriteSetup() is false until this reply lands, and the
+    // control that reads it has no other signal to learn that from.
+    if (becameWritable && !m_meffa.isEmpty()) emit meffaChanged(m_meffa);
+}
+
+void AmpModel::writeSetupGroup(const QString& meffa, const QString& fanMode)
+{
+    if (!m_directConn || !m_directConn->isConnected()) return;
+    if (!m_haveSetupGroup) return;   // see canWriteSetup()
+
+    // Byte-for-byte the shape the vendor utility sends, captured off the wire:
+    //
+    //   setup nickname=PowerGeniusXL meffa=OFF ledintens=141 fanmode=STANDARD authcode=
+    //
+    // ALL FIVE KEYS, EVERY TIME, in this order. A `setup` that names only the
+    // key being changed is not how the amplifier is ever written to by its own
+    // utility, and the four omitted values are real configuration — a nickname
+    // and an LED intensity the operator set, and the auth code. Sending the
+    // group back unchanged is what makes a one-field change a one-field
+    // change.
+    //
+    // No `save` follows. That is deliberate and it is what the vendor does for
+    // the front-panel indicator: §9.4, "the change is not recorded in the
+    // amplifier's configuration memory. To make the MEffA mode change
+    // permanent, use the Save button on the Configuration screen." A panel
+    // toggle is a run-time choice, not an edit to the amplifier's stored
+    // configuration.
+    m_directConn->sendCommand(
+        QStringLiteral("setup nickname=%1 meffa=%2 ledintens=%3 fanmode=%4 authcode=%5")
+            .arg(m_setupNickname, meffa, m_setupLedIntens, fanMode, m_setupAuthCode));
+}
+
+void AmpModel::setMeffaEnabled(bool on)
+{
+    if (!canWriteSetup()) return;
+    // The SETTABLE vocabulary is not the REPORTED one, and assuming otherwise
+    // is how this first shipped broken. Status reports OFF, STANDBY or ACTIVE
+    // — what the algorithm is doing. A write accepts AUTO or OFF — whether it
+    // is allowed to run at all. `setup … meffa=ACTIVE …` is refused with
+    // 50000013, a bad-parameter code distinct from the 50000015 an unknown
+    // command gets, and the amplifier is left exactly as it was.
+    //
+    // AUTO is the amplifier's own word for the checkbox in §9.6.4, captured
+    // off the vendor utility enabling it. What follows is the amplifier's
+    // call: AUTO in class AB becomes ACTIVE, in class AAB it becomes STANDBY.
+    writeSetupGroup(on ? QStringLiteral("AUTO") : QStringLiteral("OFF"),
+                    m_fanMode);
+}
+
+void AmpModel::setFanMode(const QString& mode)
+{
+    if (!canWriteSetup()) return;
+    writeSetupGroup(m_meffa, mode.trimmed().toUpper());
 }
 
 void AmpModel::applyChanges(const AmpDelta& d)

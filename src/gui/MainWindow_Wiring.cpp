@@ -6220,10 +6220,17 @@ void MainWindow::wireMeters()
     // ── Tuner: MeterModel TX meters → TunerApplet gauges ────────────────
     // Use TGXL-specific meters when available (disambiguated from PGXL by handle)
     connect(&m_radioModel.meterModel(), &MeterModel::tgxlMetersChanged,
-            m_appletPanel->tunerApplet(), &TunerApplet::updateMeters);
+            m_appletPanel->tunerApplet(), &TunerApplet::setRadioMeters);
     // Note: txMetersChanged NOT connected to TunerApplet — exciter power
-    // would overwrite TGXL readings. TGXL meters come from TunerModel
-    // via the direct TCP connection (port 9010). (#625)
+    // would overwrite TGXL readings.
+    //
+    // The tuner's own port-9010 status carries the same two readings and is
+    // wired in TunerApplet::setTunerModel. BOTH feeds are live, and they are
+    // the same measurement: on a steady carrier the relayed AMP/FWD meter and
+    // the device's `fwd` field agreed to within 0.05 dB. They are no longer
+    // last-writer-wins — each arrives through a stamped entry point and the
+    // relay wins while fresh, because it runs at the radio's meter rate while
+    // the socket is polled at 1 Hz. (#625)
     m_appletPanel->tunerApplet()->setTunerModel(&m_radioModel.tunerModel());
     m_appletPanel->tunerApplet()->setMeterModel(&m_radioModel.meterModel());
 
@@ -6346,35 +6353,40 @@ void MainWindow::wireMeters()
             amp->setFanMode(kvs["fanmode"]);
         if (kvs.contains("meffa"))
             amp->setMeff(kvs["meffa"]);
-        // Convert PGXL dBm to watts and feed S-Meter alongside radio meters.
-        // Use peakfwd (actual peak power) not fwd (floor/minimum).
-        // Skip when amp is STANDBY — peakfwd reads ~0 dBm in standby and would
-        // stomp on the exciter feed that should drive the barefoot scale.
-        if (kvs.contains("peakfwd") && m_radioModel.amplifier().present()
-                && m_radioModel.amplifier().operate()) {
-            float dbm = kvs["peakfwd"].toFloat();
-            float watts = std::pow(10.0f, (dbm - 30.0f) / 10.0f);
-            qCDebug(lcTuner) << "PGXL→SMeter: peakfwd=" << dbm << "dBm =" << watts << "W";
-            float swr = 1.0f;
-            if (kvs.contains("swr")) {
-                float rl = std::abs(kvs["swr"].toFloat());
-                float rho = std::pow(10.0f, -rl / 20.0f);
-                swr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.0f;
-            }
-            // Ensure S-Meter is in TX mode when PGXL reports transmitting
-            if (kvs.value("state").startsWith("TRANSMIT"))
-                m_appletPanel->setMeterTransmitting(true);
-            else if (kvs.contains("state") && !kvs.value("state").startsWith("TRANSMIT"))
-                m_appletPanel->setMeterTransmitting(false);
-            m_appletPanel->setMeterTxValues(watts, swr);
-#ifdef HAVE_HIDAPI
-            m_tmate2TxWatts = watts;
-            if (m_radioModel.transmitModel().isTransmitting()) {
-                updateTMate2Display();
-                updateTMate2Indicators();
-            }
-#endif
+        // Ensure the S-Meter is in TX mode when the PGXL reports transmitting.
+        // The VALUES come from AmpModel::directMetersChanged below — this is
+        // the state word, which only the raw kv-set carries.
+        if (kvs.contains("state")) {
+            m_appletPanel->setMeterTransmitting(
+                kvs.value("state").startsWith("TRANSMIT"));
         }
+    });
+    // The amplifier's own forward power and SWR, off its port-9008 status.
+    // AmpModel owns the dBm→watts and return-loss→ratio conversions so this
+    // path and the relayed meters cannot disagree about the arithmetic.
+    //
+    // This deliberately follows `fwd`, NOT `peakfwd`. peakfwd is a peak the
+    // DEVICE latches and never decays: an idle PGXL with its drain rail down
+    // (state=IDLE, vdd=0.0) was captured still reporting peakfwd=44.8 dBm —
+    // 30 W of forward power out of an amplifier that was not transmitting,
+    // pushed at the S-Meter five times a second. The gauges do their own
+    // peak-hold, with a timer that releases it.
+    connect(&m_radioModel.amplifier(), &AmpModel::directMetersChanged,
+            this, [this](float watts, float swr) {
+        m_appletPanel->ampApplet()->setDeviceMeters(watts, swr);
+        if (!m_radioModel.amplifier().present()
+                || !m_radioModel.amplifier().operate()) {
+            // Out of circuit: the barefoot exciter feed owns the scale.
+            return;
+        }
+        m_appletPanel->setMeterTxValues(watts, swr);
+#ifdef HAVE_HIDAPI
+        m_tmate2TxWatts = watts;
+        if (m_radioModel.transmitModel().isTransmitting()) {
+            updateTMate2Display();
+            updateTMate2Indicators();
+        }
+#endif
     });
     connect(&m_pgxlConn, &PgxlConnection::connected, this, [this]() {
         qDebug() << "PGXL direct connection established, version:" << m_pgxlConn.version();
@@ -6417,10 +6429,17 @@ void MainWindow::wireMeters()
         if (kvs.contains("meffa"))
             amp->setMeff(kvs["meffa"]);
     });
-    // Fan mode cycle button → direct PGXL command (fan control is not in the radio API)
-    connect(m_appletPanel->ampApplet(), &AmpApplet::fanModeChanged, this, [this](const QString& mode) {
-        m_pgxlConn.sendCommand(QString("setup fanmode=%1").arg(mode));
-    });
+    // Fan mode cycle button → direct PGXL command (fan control is not in the
+    // radio API).
+    //
+    // Routed through AmpModel rather than sent straight down the socket. A
+    // `setup` write carries the whole configuration group — the vendor utility
+    // was captured sending `setup nickname=… meffa=… ledintens=… fanmode=…
+    // authcode=` as one line — and the single-key form this used to send names
+    // only fanmode, leaving the amplifier's nickname, LED intensity, MEffA
+    // state and auth code out of a write to the group that holds them.
+    // Both directions are wired in AmpApplet::setAmpModel, against the model
+    // that owns the configuration group. Nothing to do here.
     // OPERATE button → PGXL standby/operate command (relayed via the radio's
     // amplifier API by AmpModel::setOperate; no-op if no amp handle). #4094.
     connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
@@ -6980,10 +6999,16 @@ void MainWindow::wireMeters()
         if (present) updatePgxlStyle();
     });
     connect(&m_radioModel.meterModel(), &MeterModel::ampMetersChanged,
-            this, [this](float fwdPwr, float swr, float temp) {
-        m_appletPanel->ampApplet()->setFwdPower(fwdPwr);
-        m_appletPanel->ampApplet()->setSwr(swr);
+            this, [this](float fwdPwr, float swr, float temp,
+                         float drivePwr, bool driveValid) {
+        m_appletPanel->ampApplet()->setRadioMeters(fwdPwr, swr);
         m_appletPanel->ampApplet()->setTemp(temp);
+        // Exciter power at the amplifier's input — the amp's own DRV meter,
+        // relayed by the radio. There is no second source for it: the PGXL's
+        // port-9008 status carries no drive field (probed on firmware 3.8.9;
+        // `drive`, `meter`, `meters` and `help` all answer 50000015, unknown
+        // command), so the relay is the only way to see it.
+        m_appletPanel->ampApplet()->setDrivePower(drivePwr, driveValid);
         // S-Meter TX power follows the scale: amp output when PGXL is OPERATE,
         // exciter output when it's STANDBY (txMetersChanged already handles that
         // path, so we just stop overriding it here).
