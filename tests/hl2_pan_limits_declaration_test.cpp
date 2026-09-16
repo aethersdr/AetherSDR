@@ -138,10 +138,20 @@ int main(int argc, char** argv)
 
     // ---- the Y axis is dBFS wearing a dBm label ----
     //
-    // Asserted against Hl2DbReference's own predicate rather than a hardcoded
-    // false, so the day a per-unit fullScaleDbm is measured and populated the
-    // declaration follows it and this assertion keeps holding instead of having
-    // to be remembered. The second check is what today's answer is.
+    // THIS ASSERTION PINS TODAY'S ANSWER AND WILL NEED REVISITING. An earlier
+    // version of this comment claimed the opposite — that asserting against
+    // Hl2DbReference's own predicate rather than a hardcoded false means "the
+    // day a per-unit fullScaleDbm is populated the declaration follows it and
+    // this assertion keeps holding". It does not, and aethersdr-agent showed
+    // why on #5726: production reads the BACKEND's m_dbRef, while the
+    // right-hand side here is a default-constructed Hl2DbReference{} whose
+    // m_fullScaleDbm is 0.0 by definition. On the day a measurement lands the
+    // two sides diverge and this FAILS.
+    //
+    // Reading the reference off the backend instance would make the original
+    // claim true. m_dbRef is private with no accessor, and inventing a test
+    // seam so a comment can be accurate is the worse trade — so the comment is
+    // corrected instead. Today both sides are false and the check is right.
     check(caps.panAmplitude.has_value(),
           "the HL2 DECLARES an amplitude model — this is a read backend, not a "
           "silent one, and dbmAxisIsCalibrated() must not be answering from the "
@@ -164,8 +174,11 @@ int main(int argc, char** argv)
     // `amplitude.calibratedDbm = m_dbRef.isCalibrated()` in
     // Hl2Backend::capabilities() with a literal `false` and every assertion
     // above still passes. So "the day a per-unit fullScaleDbm is populated the
-    // declaration follows it" is NOT something this test observes — it is a
-    // property of the expression, checked by reading.
+    // declaration follows it" is NOT something this test observes — and worse
+    // than that, per aethersdr-agent on #5726: when that day comes the two
+    // sides of the comparison diverge and this assertion FAILS, because
+    // production reads the backend's m_dbRef and this reads a
+    // default-constructed one.
     //
     // Nothing better is reachable without a seam to set fullScaleDbm on a
     // pre-connect backend, and inventing one for a test is a worse trade than
