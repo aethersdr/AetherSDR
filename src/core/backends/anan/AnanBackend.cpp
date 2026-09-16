@@ -261,6 +261,28 @@ AnanBackend::AnanBackend(QObject* parent)
         // a receiver rather than going nowhere; a future commit can surface
         // it through IRadioBackend::linkStats().
     });
+    // THE SAME LOSS, DELIVERED TO THE DSP. The empty lambda immediately above is
+    // the measure of what a sequence gap reached on this backend until now:
+    // nothing at all. AnanSpectrum builds one FFT frame out of many DDC
+    // packets, so a gap mid-frame left it stitching pre-gap samples to post-gap
+    // ones and transforming across the seam -- a phase-coherent measurement of
+    // an instant that never existed. That is a fact only the DSP can act on,
+    // which is why it is a second signal and not a second reader of the
+    // cumulative total.
+    //
+    // DDC0 ONLY: m_dsp is DDC0's chain, and ddc0IqReady is what feeds it. A gap
+    // on another DDC belongs to a receiver this phase does not run.
+    //
+    // DirectConnection with m_dsp as the context object, matching the
+    // ddc0IqReady -> processIqBlock wiring above exactly: m_client and m_dsp
+    // both live on m_ioThread, so this is a plain call on that thread and not a
+    // cross-thread hop, and the connection dies with the receiver rather than
+    // outliving it. P2Client emits it BEFORE the decode, so the discard always
+    // precedes the post-gap samples.
+    connect(m_client, &P2Client::ddcSequenceGap, m_dsp, [dsp = m_dsp](int ddcIndex) {
+        if (ddcIndex == 0)
+            dsp->onSequenceGap();
+    }, Qt::DirectConnection);
     connect(m_client, &P2Client::discoveryInfoReceived, this,
             [this](quint8 boardId, quint8 firmwareVer, quint8 numDdc) {
         // See capabilities()'s own comment for where these surface. Reported

@@ -262,6 +262,32 @@ public:
         return m_processTally.snapshot();
     }
 
+    // ── Panadapter integrity across a transport gap ───────────────────────
+    //
+    // How many partial FFT frames were thrown away because EP6 packets went
+    // missing part-way through building one. MONOTONIC for the life of this
+    // DSP stage; a reconfigure() builds a new Hl2Spectrum and this count starts
+    // again with it, which is honest -- the frames it counts belonged to a
+    // geometry that no longer exists.
+    //
+    // THIS IS NOT "how lossy is the link". Hl2Backend's `droppedPackets` row is
+    // that, and it comes from MetisClient's cumulative counter. This is the
+    // narrower and more actionable question: did the loss reach the SPECTRUM.
+    // The two diverge in both directions -- a gap that lands exactly on a frame
+    // boundary costs nothing and is not counted here, and one lost packet
+    // mid-frame costs a whole frame -- so a script that wants to know whether
+    // the panadapter it is about to measure is trustworthy must assert on this
+    // one. See docs/automation-bridge.md under `health`.
+    //
+    // Relaxed, like the ADC peak above and for the same reason: this is written
+    // on the I/O thread and read by healthSnapshot() on the GUI thread, it
+    // orders nothing else, and a reader that sees the previous value for one
+    // poll interval has read a 500 ms old diagnostic count.
+    [[nodiscard]] quint64 spectrumGapDiscards() const noexcept
+    {
+        return m_spectrumGapDiscards.load(std::memory_order_relaxed);
+    }
+
     // ── Manual notch filters ──────────────────────────────────────────────
     //
     // `index` is WDSP's POSITIONAL handle, and Hl2Backend is what maps stable
@@ -422,6 +448,27 @@ public slots:
     // frame and audioReady/meterUpdate per completed WdspChannel block.
     void processIqBlock(const std::vector<std::complex<float>>& iq);
 
+    // An EP6 sequence gap preceded the NEXT block this stage will be handed.
+    // Hl2Backend fans MetisClient::rxSequenceGap out to every receiver's DSP
+    // here, by DirectConnection on the I/O thread this object already lives on
+    // -- the same thread and the same call chain that then delivers the block,
+    // so this is a plain call and introduces no cross-thread edge.
+    //
+    // WHAT IT DOES: discards the partial panadapter frame, so the next spectrum
+    // is built entirely from post-gap samples instead of being transformed
+    // across a time discontinuity. See Hl2Spectrum::reset() for why that is the
+    // only available answer.
+    //
+    // WHAT IT DELIBERATELY DOES NOT DO: touch the AUDIO path. m_iqBuffer is
+    // left alone and WdspChannel is not reset. A gap is already a discontinuity
+    // the demodulator will hear as a click; discarding the buffered samples
+    // would throw away sound the radio DID send and lengthen the hole, and
+    // resetting the channel would restart WDSP's filter and AGC state on a
+    // single lost datagram. The spectrum is different because it does not
+    // merely pass a discontinuity through -- it computes a phase-coherent
+    // transform ACROSS it and presents the result as a measurement.
+    void onSequenceGap();
+
 signals:
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
@@ -451,6 +498,9 @@ private:
     // another thread.
     std::atomic<float> m_adcPeakDbfs {std::numeric_limits<float>::quiet_NaN()};
     std::atomic<std::int64_t> m_adcPeakAtNs {0};
+    // See spectrumGapDiscards(). Written on the I/O thread by onSequenceGap(),
+    // read from the GUI thread by Hl2Backend::healthSnapshot().
+    std::atomic<quint64> m_spectrumGapDiscards {0};
     Config m_config;
 
     // Notch set, mirrored so reconfigure() can replay it — see the note on

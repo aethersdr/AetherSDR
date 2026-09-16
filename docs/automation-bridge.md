@@ -3406,6 +3406,26 @@ other side has.
       "label":"Forward (W, approx — peak HOLD, display only)","value":4.56}]}
 ```
 
+**Assert on `spectrumGapDiscards<n>` for panadapter integrity, and on
+`droppedPackets` for link loss — they are different questions.** On the HL2,
+`droppedPackets` is the cumulative count of EP6 sequence gaps: the link's own
+health. `spectrumGapDiscards0` (and `…1`, `…2`, … one per active receiver) is
+how many times such a gap landed part-way through building an FFT frame and
+cost the whole frame. The panadapter accumulates one frame out of roughly 8
+EP6 blocks at the 1024-point FFT the backend runs, so the two diverge in
+**both** directions: a gap that falls on a frame boundary adds to `droppedPackets` and
+nothing here, while a single lost packet mid-frame costs a frame. A soak test
+that wants to know whether the spectrum it is about to measure is trustworthy
+must threshold this row — `droppedPackets` alone cannot answer it, and a
+non-zero `droppedPackets` with a zero `spectrumGapDiscards0` is a healthy,
+expected state on a lossy link. Both are monotonic within one DSP geometry:
+changing sample rate or receiver count rebuilds the receive chain and restarts
+`spectrumGapDiscards<n>` from zero, so compare a **delta** across a run rather
+than an absolute against a session. The row is `null` for a receiver between
+rebuilds, which is "not reported" and not "clean". **There is no equivalent row
+on the ANAN backend** — that backend publishes no health rows at all yet; the
+counter exists on its DSP stage and becomes readable here when it does.
+
 **Assert on `forwardPowerW`, never on `forwardPowerPeakW`.** The peak row is a
 meter's display hold: a single key-edge ADC sample decays over seconds, so a
 script that asserts on it reads a transient from the start of the over as

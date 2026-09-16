@@ -452,6 +452,28 @@ signals:
     // this object reuses, so a receiver must copy anything it keeps.
     void iqBlocksReady(const std::vector<std::vector<std::complex<float>>>& blocks);
     void dropsUpdated(quint64 drops);                             // cumulative EP6 gaps
+    // THE SAME LOSS, delivered to the DSP instead of to a counter.
+    // dropsUpdated above is a cumulative total for the health rows; it is
+    // mirrored onto the GUI thread (Hl2Backend's `m_drops` lambda) and reaches
+    // no sample-path object at all. This one says "the block you are about to
+    // be handed does not continue the block you were handed last", which is a
+    // fact only the receive DSP can act on -- Hl2Spectrum accumulates a partial
+    // FFT frame across EP6 blocks, and a frame stitched across a gap is a
+    // transform over a time discontinuity.
+    //
+    // EMITTED BEFORE the iqBlockReady/iqBlocksReady for the SAME datagram, from
+    // the same handleDatagram() call -- the EP6 branch of it, which is where
+    // the sequence accounting and the IQ decode both live. That ordering is the
+    // whole contract: a
+    // consumer must be able to discard its pre-gap state and then receive the
+    // post-gap samples, and the reverse order would discard the post-gap ones
+    // it had just accepted. Both signals leave the I/O thread by
+    // DirectConnection, so "before" is a plain sequence point and not a queue
+    // ordering that could be reordered by an event loop.
+    //
+    // `lost` is the forward gap in packets for THIS discontinuity, not the
+    // session total -- dropsUpdated already carries the total.
+    void rxSequenceGap(quint32 lost);
     // Transport counters, published about once a second from the receive path.
     // Rate-limited for the same reason telemetryUpdated is: this would otherwise
     // cross to the GUI thread thousands of times a second to move a byte count.

@@ -285,6 +285,11 @@ void P2Client::onReadyRead()
         if (m_expectedSeq[slot] && frame->seq != *m_expectedSeq[slot]) {
             ++m_drops;
             emit dropsUpdated(m_drops);
+            // The DSP-facing half of the same fact, and BEFORE the decode
+            // below, so a consumer discards its pre-gap state ahead of the
+            // post-gap samples rather than after them. See ddcSequenceGap's
+            // note in the header.
+            emit ddcSequenceGap(*ddcIndex);
         }
         m_expectedSeq[slot] = frame->seq + 1;
 

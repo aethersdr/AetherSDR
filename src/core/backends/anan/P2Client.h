@@ -166,6 +166,23 @@ signals:
     // connecting per-DDC signals.
     void ddcIqReady(int ddcIndex, const std::vector<std::complex<float>>& block);
     void dropsUpdated(quint64 totalDrops);
+    // THE SAME LOSS, delivered to the DSP instead of to a counter. See
+    // MetisClient::rxSequenceGap, which this mirrors exactly: dropsUpdated is a
+    // session-wide total for a health readout -- and on this backend it is
+    // currently connected to an empty lambda in AnanBackend -- while this says
+    // "the block you are about to be handed does not continue the last one",
+    // which is the only form AnanSpectrum's cross-block FFT accumulator can act
+    // on.
+    //
+    // Carries the DDC index because gap detection is per DDC (see
+    // m_expectedSeq) and only DDC0 feeds AnanRxDsp today; a consumer filters
+    // rather than being handed a gap that belongs to a receiver it does not
+    // own.
+    //
+    // EMITTED BEFORE ddcIqReady/ddc0IqReady for the SAME datagram, from the
+    // same onReadyRead() iteration -- the ordering is the contract, for the
+    // reason spelled out on MetisClient::rxSequenceGap.
+    void ddcSequenceGap(int ddcIndex);
     // This session's own Discovery reply -- the SAME radio start() already
     // sent a Discovery packet to, on this socket, per the class comment.
     // Emitted at most once per start(), whenever it happens to arrive
