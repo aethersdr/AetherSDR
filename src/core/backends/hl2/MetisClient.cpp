@@ -159,7 +159,18 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
             return;   // the connect watchdog reports the failure
         }
         ++m_startAttempts;
-        countTx(sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port));
+        // NOT metisStart(): that is 0x01, and a retry landing while the gate
+        // holds a cycle would drop wide_spectrum mid-capture. The cycle could
+        // then only end in a guard timeout, charging bandscopeTimeouts for
+        // something this client did and logging a line that blames the radio.
+        // Identical to metisStart() whenever the gate is idle -- both are
+        // 0x01 -- so this is a strict superset. (PR #5650 review round 3;
+        // a THIRD benign cause of bandscopeTimeouts, and the only one of the
+        // three that is ours.)
+        countTx(sendTo(*m_socket,
+                       metisRunCommand(m_bsState != BandscopeState::Idle,
+                                       m_watchdogEnabled),
+                       m_host, m_port));
     });
 
     m_connectWatchdog = new QTimer(this);
@@ -264,6 +275,7 @@ bool MetisClient::start(const Params& params)
     // (PR #5650 review, K5PTB.)
     m_bsBlocks = 0;
     m_bsTimeouts = 0;
+    m_bsConsecutiveTimeouts = 0;
     // A CONNECT is where the gate's standing intent is cleared, and one of only
     // two places: a receiver-count restart CARRIES it (Params::bandscope), a
     // stop ends the session it belonged to. Cleared after `m_params = params`
@@ -398,6 +410,20 @@ void MetisClient::onWatchdogTick()
         // publishing fresh ADC levels. It also stops the gate arming against a
         // radio that has gone quiet, which only manufactures block timeouts.
         // (PR #5650 review, K5PTB.)
+        // LOWER wide_spectrum ON THE WIRE before dropping the state that
+        // remembers it was raised. stop() gets this for free — metisStop()'s
+        // 0x00 clears both bits — but there is no metis-stop on this path, the
+        // socket is still open, and the radio may simply have gone quiet on
+        // EP6. A bit left set here is never lowered again: if EP6 resumes
+        // before RadioModel's reconnect timer fires, handleDatagram re-emits
+        // linkUp() with no start() behind it and no run byte, so the radio
+        // streams EP4 ungated (~3.3 Mbit/s) for the rest of the session while
+        // the health row reads off. The gate raises the bit at every 1 Hz tick
+        // and the guard lowers it 420 ms later, so during the silence this
+        // watchdog is measuring the bit is up ~42 % of the time.
+        // (PR #5650 review round 3.)
+        if (m_bsState != BandscopeState::Idle)
+            bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
         resetBandscopeGate();
         m_params.bandscope = false;
         emit linkDown();
@@ -1168,6 +1194,10 @@ void MetisClient::publishLinkCountersIfDue()
                            ? usToMs(m_linkWindowGapSumUs / m_linkWindowWakeups)
                            : -1;
     m_link.maxGapMs = m_linkWindowWakeups > 0 ? usToMs(m_linkWindowGapMaxUs) : -1;
+    // Taken here, at the one place the counters leave this thread, so no path
+    // that clears the intent — stop(), the silence watchdog, the give-up in
+    // onBandscopeGuardTimeout — can forget to update it.
+    m_link.bandscopeEnabled = m_params.bandscope;
 
     emit linkCountersUpdated(m_link);
 
@@ -1260,7 +1290,10 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
                 // Hl2Telemetry::apply refuses it too, belt and braces.
                 ingestControlResponse(*resp);
             } else {
+                const bool wasRadioPtt = m_telemetry.ptt;
                 m_telemetry.apply(*resp);
+                if (m_telemetry.ptt != wasRadioPtt)
+                    onRadioPttEdge(m_telemetry.ptt);
                 telemetryChanged = true;
             }
         }
@@ -1335,6 +1368,10 @@ void MetisClient::handleEp4(std::uint32_t seq, std::span<const std::uint8_t> byt
 {
     ++m_link.ep4Packets;
 
+    // Hoisted out of the branch below because the GATE needs it too, not just
+    // the counters: a loss of a multiple of kEp4PacketsPerBlock leaves
+    // `seq % 4` unchanged, so the phase test alone cannot see it.
+    std::uint32_t stepDrops = 0;
     if (m_haveEp4Seq) {
         // The classification lives in MetisProtocol (ep4SeqStep) so it can be
         // proved against recorded arrivals without a client, a socket or Qt.
@@ -1348,6 +1385,7 @@ void MetisClient::handleEp4(std::uint32_t seq, std::span<const std::uint8_t> byt
         // forward gap that reads as 1,048,573 lost packets, in the first second
         // of every session the bandscope is used.
         const Ep4SeqStep step = ep4SeqStep(m_expectedEp4Seq, seq);
+        stepDrops = step.drops;
         m_ep4Drops += step.drops;
         if (step.rewind)
             ++m_ep4Rewinds;
@@ -1363,14 +1401,14 @@ void MetisClient::handleEp4(std::uint32_t seq, std::span<const std::uint8_t> byt
     // The counters above describe the WIRE and are kept for every datagram
     // whatever the gate is doing. Whether this packet becomes part of a READING
     // is a separate question, and the gate answers it.
-    bandscopeOnPacket(seq, bytes);
+    bandscopeOnPacket(seq, stepDrops, bytes);
 }
 
 // ---------------------------------------------------------------------------
 // The duty-cycle gate
 // ---------------------------------------------------------------------------
 
-void MetisClient::bandscopeOnPacket(std::uint32_t seq,
+void MetisClient::bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
                                     std::span<const std::uint8_t> bytes)
 {
     // THE TRAILING PACKET, FIRST AND UNCONDITIONALLY.
@@ -1421,7 +1459,10 @@ void MetisClient::bandscopeOnPacket(std::uint32_t seq,
         // went up. Its samples predate the enable by an unknown amount, so it
         // is consumed and thrown away — accumulating nothing is the point of
         // this state.
-        if (phase != m_bsPhase) {
+        // `drops` and not only the phase: PHASE IS MODULO FOUR, so a loss of
+        // exactly four — or eight, or twelve — leaves it intact and this test
+        // alone would accept a packet from a later capture as the next one.
+        if (drops != 0 || phase != m_bsPhase) {
             // A packet lost mid-flush breaks the phase. Go back to waiting for
             // a boundary rather than guessing; the guard bounds how long that
             // can go on.
@@ -1436,7 +1477,13 @@ void MetisClient::bandscopeOnPacket(std::uint32_t seq,
         return;
 
     case BandscopeState::Capturing:
-        if (phase != m_bsPhase) {
+        // AGAIN `drops`, and here it is the whole guarantee. seq % 4 survives
+        // a loss of any multiple of four, so the phase test on its own emitted
+        // a block built from packets 4, 5, 10 and 11 — two hardware captures
+        // ~10 ms apart with a hole between them — published as one contiguous
+        // 2048-sample record, while ep4Drops had already counted the four that
+        // went missing. (PR #5650 review round 3; hl2_ep4_gate_test section 15.)
+        if (drops != 0 || phase != m_bsPhase) {
             // Four CONSECUTIVE in-phase packets or none. A gap here would make
             // the 2048 samples span two hardware blocks with a hole between
             // them, and Ep4Stats has no way to say so.
@@ -1450,6 +1497,9 @@ void MetisClient::bandscopeOnPacket(std::uint32_t seq,
 
         // A COMPLETE BLOCK: 2048 contiguous converter samples.
         ++m_bsBlocks;
+        // The RUN of timeouts ends here, not the total: m_bsTimeouts is the
+        // session's history and is what the health row reports.
+        m_bsConsecutiveTimeouts = 0;
         m_link.bandscopeBlocks = m_bsBlocks;
         emit bandscopeBlockReady(m_bsBlock);
         // Down again immediately. The duty cycle is the whole point: one block
@@ -1465,9 +1515,38 @@ bool MetisClient::bandscopeInterlocked() const noexcept
 {
     if (m_mox)
         return true;
+    // THE RADIO'S OWN KEYING, which m_mox never sees. m_mox is the final
+    // authority for keying THIS CLIENT initiated; it is not the final
+    // authority for whether the PA is on the air. ptt_resp is
+    // `cw_on | ext_ptt` (see Hl2Response::ptt), so a PTT jack, a foot switch
+    // or the radio's internal keyer transmits without m_mox ever becoming
+    // true -- and a block taken then is still a picture of us at a level with
+    // no relation to the band. The bit is already decoded on this object and
+    // already published as the "PTT (radio)" health row; it just was not
+    // consulted here. (PR #5650 review round 3.)
+    if (m_telemetry.ptt)
+        return true;
     // Invalid until the first unkey of the session, which is the right default:
     // a session that has never transmitted has no transient to wait out.
     return m_sinceUnkey.isValid() && m_sinceUnkey.elapsed() < kBandscopeUnkeyHoldoffMs;
+}
+
+// The radio keyed or unkeyed itself. Same two jobs setMox does on its own
+// edges, and for the same reasons -- abandon a cycle that would be
+// transmit-contaminated, and start the post-unkey hold-off -- but driven by
+// ptt_resp rather than by anything this client asked for.
+void MetisClient::onRadioPttEdge(bool keyed)
+{
+    if (keyed) {
+        if (m_bsState != BandscopeState::Idle)
+            bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
+        return;
+    }
+    // d83's measured post-unkey transient runs 178-285 ms past the falling
+    // edge whoever caused it, so the hold-off is the same one setMox starts.
+    // Not conditioned on m_mox: if the host is still keyed the interlock holds
+    // on m_mox anyway, and this timer only starts mattering once it drops.
+    m_sinceUnkey.restart();
 }
 
 void MetisClient::sendBandscopeRunByte(bool wideSpectrum)
@@ -1552,12 +1631,33 @@ void MetisClient::onBandscopeGuardTimeout()
     if (m_bsState == BandscopeState::Idle)
         return;
     ++m_bsTimeouts;
+    ++m_bsConsecutiveTimeouts;
     m_link.bandscopeTimeouts = m_bsTimeouts;
-    qWarning() << "MetisClient: bandscope block did not complete within"
-               << bandscopeGuardIntervalMs() << "ms; abandoning this cycle";
     // A cycle that never saw a packet has no trailing packet coming. One that
     // reached Flushing or Capturing does.
     bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
+
+    // GIVE UP ON A RADIO THAT DOES NOT HAVE THIS ENDPOINT, and only on that
+    // radio. The condition is deliberately narrow: a long run of timeouts AND
+    // not one EP4 datagram in the whole session. A lossy link, a busy gateware
+    // or a receiver-count change all produce timeouts with packets flowing, and
+    // none of them should stop a sensor the operator asked for. Gateware that
+    // does not implement endpoint 0x04 produces timeouts with the packet count
+    // still at zero, forever -- one re-arm, two run-byte datagrams and one log
+    // line every second for the life of the session, with nothing giving up.
+    // (PR #5650 review round 3.)
+    if (m_bsConsecutiveTimeouts >= kMaxConsecutiveBandscopeTimeouts
+        && m_link.ep4Packets == 0) {
+        qCWarning(lcHl2)
+            << "HL2: no EP4 datagram in" << m_bsConsecutiveTimeouts
+            << "bandscope cycles — this gateware does not answer endpoint 0x04."
+            << "Stopping the gate; re-enable it to try again.";
+        m_params.bandscope = false;
+        applyBandscopeGate();   // takes the !bandscope branch: stops both timers
+        return;
+    }
+    qCWarning(lcHl2) << "HL2: bandscope block did not complete within"
+                     << bandscopeGuardIntervalMs() << "ms; abandoning this cycle";
 }
 
 void MetisClient::resetBandscopeGate() noexcept
@@ -1611,9 +1711,9 @@ void MetisClient::setBandscopeEnabled(bool on)
     if (!on)
         bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Idle);
     applyBandscopeGate();
-    qInfo() << "MetisClient: wideband bandscope gate (EP4)"
-            << (on ? "running" : "stopped") << "— one block per"
-            << kBandscopeSampleMs << "ms";
+    qCInfo(lcHl2) << "HL2: wideband bandscope gate (EP4)"
+                  << (on ? "running" : "stopped") << "— one block per"
+                  << kBandscopeSampleMs << "ms";
 }
 
 }  // namespace AetherSDR::hl2

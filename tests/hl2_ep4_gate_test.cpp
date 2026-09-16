@@ -80,6 +80,26 @@ struct MetisClientTestAccess {
     }
     static void watchdogTick(MetisClient& client) { client.onWatchdogTick(); }
     static int silenceTimeoutMs() noexcept { return MetisClient::kSilenceTimeoutMs; }
+    // What a telemetry response carrying a ptt_resp TRANSITION does: the bit
+    // the interlock reads, plus the edge handler handleDatagram would call.
+    // Injected rather than framed so the radio-keyed path can be driven without
+    // an EP6 C&C builder in this file.
+    static void setRadioPtt(MetisClient& client, bool keyed)
+    {
+        if (client.m_telemetry.ptt == keyed)
+            return;
+        client.m_telemetry.ptt = keyed;
+        client.onRadioPttEdge(keyed);
+    }
+    // The post-unkey hold-off, elapsed. bandscopeInterlocked() treats an
+    // INVALID m_sinceUnkey and an expired one identically — both mean "no
+    // transient to wait out" — so invalidating it is the hold-off expiring,
+    // without spending 300 ms of wall clock to say so.
+    static void expireUnkeyHoldoff(MetisClient& client) { client.m_sinceUnkey.invalidate(); }
+    static int maxConsecutiveTimeouts() noexcept
+    {
+        return MetisClient::kMaxConsecutiveBandscopeTimeouts;
+    }
 };
 }  // namespace AetherSDR::hl2
 
@@ -291,14 +311,14 @@ int main(int argc, char** argv)
         QSignalSpy spy(&c, &MetisClient::bandscopeBlockReady);
         c.setBandscopeEnabled(true);
 
-        check(kD94Ep4SeqToggleCount == 3048, "the recorded toggle leg holds 3048 arrivals");
-        check(kD94Ep4SeqToggle[0] == 0 && kD94Ep4SeqToggle[3047] == 3047,
-              "...numbered 0 to 3047");
+        check(kD94Ep4ToggleArrivals == 3048, "the recorded toggle leg holds 3048 arrivals");
+        check(kD94Ep4ToggleFirstSeq == 0 && kD94Ep4ToggleLastSeq == 3047,
+              "...numbered 0 to 3047, with no gap");
 
         std::size_t at = 0;
         for (std::size_t k = 0; k < kD94Ep4ToggleCycleCount; ++k) {
             const D94Ep4ToggleCycle& cyc = kD94Ep4ToggleCycles[k];
-            check(kD94Ep4SeqToggle[at] == cyc.firstSeqAfterEnable,
+            check(at == static_cast<std::size_t>(cyc.firstSeqAfterEnable),
                   "the recording resumes where the cycle table says it does");
             check(static_cast<int>(cyc.firstSeqAfterEnable % 4) == cyc.firstSeqPhase,
                   "...on the recorded phase");
@@ -337,14 +357,14 @@ int main(int argc, char** argv)
 
             at = static_cast<std::size_t>(cyc.lastSeqBeforeDisable) + 2u;
         }
-        check(at == kD94Ep4SeqToggleCount, "the whole recording was replayed");
+        check(at == kD94Ep4ToggleArrivals, "the whole recording was replayed");
         check(spy.count() == 4, "four cycles, four blocks");
 
         // The whole point of the alignment rule: nothing in the sequence
         // accounting would ever have complained.
         check(c.ep4Drops() == 0, "3048 recorded arrivals across four cycles lost nothing");
         check(c.ep4Rewinds() == 0, "...and never rewound: `run` never dropped");
-        check(c.linkCounters().ep4Packets == kD94Ep4SeqToggleCount,
+        check(c.linkCounters().ep4Packets == kD94Ep4ToggleArrivals,
               "every recorded arrival was counted on the wire");
         check(c.bandscopeBlocks() == 4, "and four of them became readings");
     }
@@ -588,9 +608,16 @@ int main(int argc, char** argv)
     // quiet, manufacturing block timeouts. (PR #5650 review, K5PTB, who
     // reproduced the OFF-beside-a-fresh-reading row through a real Hl2Backend.)
     //
-    // Real wall clock: m_sinceLastEp6 is a QElapsedTimer and cannot be
-    // backdated. Overshooting is safe — elapsed() only grows — so the wait is
-    // robust under load rather than flaky.
+    // Real wall clock, and the ONE wait in this otherwise timer-injected file.
+    // m_sinceLastEp6 is a QElapsedTimer: it can be started, restarted or
+    // invalidated, but not backdated, and an invalid one makes onWatchdogTick
+    // return without ever reaching the silence branch — so there is no seam
+    // that removes this. Making kSilenceTimeoutMs injectable would, and was
+    // rejected: that constant is load-bearing for the start-retry budget
+    // (4 * kStartRetryMs must stay inside it, see the retry lambda), and a
+    // test-only setter on it invites exactly the drift that comment guards
+    // against. Overshooting is safe — elapsed() only grows — so the wait is
+    // robust under load rather than flaky. (Weighed again in review round 3.)
     {
         MetisClient c;
         QSignalSpy down(&c, &MetisClient::linkDown);
@@ -607,11 +634,177 @@ int main(int argc, char** argv)
         check(!c.bandscopeEnabled(),
               "...and the gate's standing intent ended with the link, as stop() ends it");
         check(MetisClientTestAccess::idle(c), "...leaving no cycle in flight");
+        // ...AND TOLD THE RADIO SO. stop() lowers wide_spectrum for free —
+        // metisStop()'s 0x00 clears both bits — but this path sends no
+        // metis-stop, so without an explicit disarm the bit stays raised on a
+        // radio that may still be alive, and the stream runs ungated for the
+        // rest of the session while this row reads off. The state going Idle
+        // is not the same claim. (PR #5650 review round 3.)
+        check((MetisClientTestAccess::lastRunByte(c) & 0x03) == 0x01,
+              "...and lowered wide_spectrum ON THE WIRE, as stop() does");
 
         // The premise Hl2Backend's linkUp reset depends on: whatever brings the
         // link back, the gate is not still running behind it.
         MetisClientTestAccess::tick(c);
         check(MetisClientTestAccess::idle(c), "and nothing re-arms on the dead link");
+    }
+
+    // ---- 15 · A HOLE OF A MULTIPLE OF FOUR IS STILL A HOLE ----
+    //
+    // `phase` is seq % kEp4PacketsPerBlock, so a loss of exactly four — or
+    // eight, or twelve — leaves it intact and the phase test alone accepts a
+    // packet from a LATER capture as the next one of this block. The gate then
+    // emitted 2048 samples built from packets 4, 5, 10 and 11, two hardware
+    // captures ~10 ms apart, and published them as one contiguous record while
+    // ep4Drops had already counted the four that went missing. The drop count
+    // ep4SeqStep() computes is now passed down and closes it.
+    // (PR #5650 review round 3.)
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy spy(&c, &MetisClient::bandscopeBlockReady);
+        c.setBandscopeEnabled(true);
+        for (std::uint32_t s = 0; s < 4; ++s) feed(c, s);   // flush 0..3
+        feed(c, 4);                                        // capture, phase 0
+        feed(c, 5);                                        // capture, phase 1
+        // 6, 7, 8, 9 are LOST on the wire. 10 is phase 2 — it aliases.
+        feed(c, 10);
+        feed(c, 11);
+        check(c.ep4Drops() == 4, "the four lost packets are counted as drops");
+        check(spy.count() == 0,
+              "a block spanning a four-packet hole is NOT emitted as contiguous");
+        // And the gate recovers on the next clean block rather than wedging.
+        for (std::uint32_t s = 12; s < 20; ++s) feed(c, s);
+        check(spy.count() == 1, "...and the next aligned block is taken normally");
+        check(spy.count() == 1
+                  && spy.at(0).at(0).value<Ep4Stats>().peakAbs == expectedPeak(16),
+              "...from four genuinely consecutive packets");
+    }
+
+    // ---- 15b · the same hole, during the FLUSH ----
+    //
+    // Flushing has the identical phase test and therefore the identical blind
+    // spot. It matters less — the flushed block is thrown away — but a flush
+    // that silently resumed on a later capture would put the CAPTURE that
+    // follows it on the wrong boundary, which is the thing section 15 is about.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy spy(&c, &MetisClient::bandscopeBlockReady);
+        c.setBandscopeEnabled(true);
+        feed(c, 0);                                   // flush begins, phase 0
+        // 1, 2, 3, 4 are LOST. 5 is phase 1 — it aliases onto the flush.
+        for (std::uint32_t s = 5; s < 16; ++s) feed(c, s);
+        check(c.ep4Drops() == 4, "the four lost packets are counted as drops");
+        // With the hole rejected the flush restarts at 8 and the block kept is
+        // 12..15. Accepting the alias would have flushed 0,5,6,7 and kept 8..11.
+        check(spy.count() == 1, "one block");
+        check(spy.count() == 1
+                  && spy.at(0).at(0).value<Ep4Stats>().peakAbs == expectedPeak(12),
+              "the flush restarted at the next boundary rather than resuming "
+              "across the hole");
+    }
+
+    // ---- 16 · THE RADIO'S OWN PTT INTERLOCKS THE GATE ----
+    //
+    // m_mox is the final authority for keying THIS CLIENT initiated. It is not
+    // the final authority for whether the PA is on the air: ptt_resp is
+    // `cw_on | ext_ptt`, so a PTT jack, a foot switch or the radio's internal
+    // keyer transmits without m_mox ever becoming true. A block taken then is
+    // still a picture of us. (PR #5650 review round 3.)
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        c.setBandscopeEnabled(true);
+        check(!MetisClientTestAccess::idle(c), "armed on a quiet radio");
+
+        MetisClientTestAccess::setRadioPtt(c, true);
+        check(MetisClientTestAccess::idle(c),
+              "the radio keying itself abandons the cycle, as MOX does");
+        MetisClientTestAccess::tick(c);
+        check(MetisClientTestAccess::idle(c),
+              "...and nothing re-arms while the radio is keyed");
+        check((MetisClientTestAccess::lastRunByte(c) & 0x03) == 0x01,
+              "...with wide_spectrum lowered and run still set");
+
+        // Unkey: the post-unkey hold-off runs from the RADIO's falling edge.
+        MetisClientTestAccess::setRadioPtt(c, false);
+        MetisClientTestAccess::tick(c);
+        check(MetisClientTestAccess::idle(c),
+              "the measured post-unkey transient is still refused");
+        // Past the hold-off, it resumes on its own — the operator's intent was
+        // never touched.
+        MetisClientTestAccess::expireUnkeyHoldoff(c);
+        MetisClientTestAccess::tick(c);
+        check(!MetisClientTestAccess::idle(c), "...and then the sensor resumes");
+        check(c.bandscopeEnabled(), "the standing intent survived the whole thing");
+    }
+
+    // ---- 17 · A GATEWARE THAT NEVER ANSWERS EP4 IS GIVEN UP ON ----
+    //
+    // Without this the gate re-arms at 1 Hz forever on a board that does not
+    // implement endpoint 0x04: two run-byte datagrams and one log line every
+    // second for the life of the session, with nothing concluding anything.
+    // The condition is narrow on purpose — a long run of timeouts AND not one
+    // EP4 datagram in the whole session — so a lossy link never trips it.
+    // (PR #5650 review round 3.)
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        c.setBandscopeEnabled(true);
+        for (int i = 0; i < MetisClientTestAccess::maxConsecutiveTimeouts(); ++i) {
+            check(c.bandscopeEnabled(), "still trying");
+            MetisClientTestAccess::fireGuard(c);
+            MetisClientTestAccess::tick(c);
+        }
+        check(!c.bandscopeEnabled(),
+              "a radio that answered nothing at all stops being asked");
+        check(MetisClientTestAccess::idle(c), "...with no cycle left in flight");
+        check((MetisClientTestAccess::lastRunByte(c) & 0x03) == 0x01,
+              "...and wide_spectrum lowered on the way out");
+        check(c.bandscopeTimeouts()
+                  == static_cast<quint64>(MetisClientTestAccess::maxConsecutiveTimeouts()),
+              "every abandoned cycle was counted");
+    }
+
+    // ---- 18 · ONE EP4 PACKET IS ENOUGH TO KEEP TRYING ----
+    //
+    // The other half of section 17, and the reason the condition is an AND: a
+    // link that drops blocks but does deliver packets is a link problem, not a
+    // gateware that lacks the endpoint, and the operator asked for this sensor.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        c.setBandscopeEnabled(true);
+        feed(c, 0);   // one arrival, ever
+        for (int i = 0; i < MetisClientTestAccess::maxConsecutiveTimeouts() * 2; ++i) {
+            MetisClientTestAccess::fireGuard(c);
+            MetisClientTestAccess::tick(c);
+        }
+        check(c.bandscopeEnabled(),
+              "a radio that HAS produced EP4 keeps being retried, however many "
+              "cycles time out");
+    }
+
+    // ---- 19 · A TICK DOES NOT STACK A SECOND CYCLE ON A LIVE ONE ----
+    //
+    // The guard is shorter than the sampling period, so this is defensive — but
+    // both are QTimers and either can slip under load, and re-arming mid-cycle
+    // would re-send the run byte and restart the guard around a capture already
+    // half-built. Nothing pinned it. (PR #5650 review round 3.)
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy spy(&c, &MetisClient::bandscopeBlockReady);
+        c.setBandscopeEnabled(true);
+        for (std::uint32_t s = 0; s < 6; ++s) feed(c, s);   // mid-capture
+        check(!MetisClientTestAccess::idle(c), "a cycle is in flight");
+        MetisClientTestAccess::tick(c);                     // the period comes round
+        for (std::uint32_t s = 6; s < 8; ++s) feed(c, s);
+        check(spy.count() == 1, "the cycle in flight completed rather than restarting");
+        check(spy.count() == 1
+                  && spy.at(0).at(0).value<Ep4Stats>().peakAbs == expectedPeak(4),
+              "...on its own four packets, not a set the re-arm would have begun");
     }
 
     if (g_failures == 0)

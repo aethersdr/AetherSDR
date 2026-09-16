@@ -119,6 +119,16 @@ public:
         // Blocks the gate ACCEPTED — four in-phase packets, after the stale
         // block was flushed. Not ep4Packets/4: most of what arrives is armed,
         // flushed or trailing, and none of that becomes a reading.
+        // Whether the GATE IS ACTUALLY RUNNING, read off m_params.bandscope at
+        // publish time rather than echoed by whoever asked for it. The backend
+        // used to mirror its own request, which could disagree with the client:
+        // an enable posted across the thread hop just as the silence watchdog
+        // cleared the intent left the health row saying one thing and the gate
+        // doing another. Riding the counters makes the row true by
+        // construction, at the cost of up to kLinkPublishIntervalMs of lag —
+        // which is the honest reading, because until the client has it there
+        // is nothing running to report. (PR #5650 review round 3.)
+        bool bandscopeEnabled = false;
         quint64 bandscopeBlocks = 0;
         // Arming cycles abandoned because no complete block arrived inside
         // bandscopeGuardMs(). Should read zero in steady state, but a non-zero
@@ -519,7 +529,14 @@ private:
     //
     // Not noexcept, and neither is handleEp4 any longer: this one EMITS, and a
     // queued connection copies the block into a QVariant to cross the thread.
-    void bandscopeOnPacket(std::uint32_t seq, std::span<const std::uint8_t> bytes);
+    // `drops` is what ep4SeqStep() charged for the gap BEFORE this packet.
+    // The gate needs it because `seq % kEp4PacketsPerBlock` cannot see a loss
+    // of a multiple of four: the phase survives it intact.
+    // A ptt_resp transition reported by the radio: the bandscope's interlock
+    // edges for keying this client did not initiate.
+    void onRadioPttEdge(bool keyed);
+    void bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
+                           std::span<const std::uint8_t> bytes);
     // Begin one arming cycle: raise wide_spectrum, clear the accumulator, arm
     // the guard. Refused, and silently, while the interlocks below say so.
     void bandscopeArm();
@@ -703,6 +720,12 @@ private:
     // CHOICE is 1000 ms — one sample per dwell-third, 12 datagrams/s,
     // 0.11 Mbit/s. Nothing measured supports a faster one.
     static constexpr int kBandscopeSampleMs = 1000;
+    // Consecutive guard timeouts, with NO EP4 datagram seen in the whole
+    // session, after which the gate stops asking. Ten seconds of a gateware
+    // that does not implement endpoint 0x04 is enough to conclude it never
+    // will; anything that has produced even one EP4 packet is a link or timing
+    // problem and keeps retrying. (PR #5650 review round 3.)
+    static constexpr int kMaxConsecutiveBandscopeTimeouts = 10;
     // How long after unkey a block is still refused. FIND-16 / d83's measured
     // post-unkey transient is 178-285 ms, median 229; 300 ms clears it. The HL2
     // receives while it transmits and hears itself at enormous strength, so a
@@ -737,6 +760,9 @@ private:
     std::uint8_t m_lastBandscopeRunByte = 0;
     quint64 m_bsBlocks = 0;
     quint64 m_bsTimeouts = 0;
+    // The current RUN, cleared by any completed block. m_bsTimeouts above is
+    // the session total and never falls.
+    int m_bsConsecutiveTimeouts = 0;
     // Since the MOX falling edge; invalid until the first unkey of the session.
     QElapsedTimer m_sinceUnkey;
     bool m_running = false;

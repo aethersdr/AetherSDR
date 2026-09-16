@@ -660,6 +660,9 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // The bandscope's counters ride this same publish rather than a signal
         // or a timer of their own — the point of putting them on LinkCounters.
         // They stay off LinkStats: see the members' comment in the header.
+        // The GATE's state as the client has it, not the request this backend
+        // made. See LinkCounters::bandscopeEnabled.
+        m_bandscopeEnabled = c.bandscopeEnabled;
         m_ep4Packets = c.ep4Packets;
         m_ep4Drops = c.ep4Drops;
         m_ep4Rewinds = c.ep4Rewinds;
@@ -4396,16 +4399,14 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
         // purpose: it is a diagnostic, nothing in the app makes a decision from
         // it, and it is off again at the next connect.
         //
-        // AND NO CALLER, WHICH IS NOT THE SAME THING. An earlier version of
-        // this comment said "an operator who wants it asks for it here, once",
-        // and there is no HERE: nothing in src/ invokes this verb. There is no
-        // UI, no setting, and no AutomationServer route — that server
-        // hand-routes every verb it exposes, and this one is not among them. So
-        // as this PR stands the health rows read off/0/0/0/0/0 on every install
-        // and the ADC rows never appear at all. Whether inert-until-a-consumer
-        // is the right shape to land is a maintainer's call and is not made
-        // here; what this comment must not do is describe a path that does not
-        // exist (PR #5650 review, finding 2).
+        // ONE CALLER, and it is the automation bridge: AutomationServer's
+        // `bandscope` verb (doBandscope). That is the whole operator-facing
+        // surface this feature has, and deliberately so — the panadapter-style
+        // display and the policy that would act on what it sees are #5535 and a
+        // display RFC, neither of which this PR pre-empts. Earlier rounds of
+        // review held this open as "no caller anywhere in src/", which was true
+        // and is no longer: the route landed in review round 3 rather than
+        // shipping an endpoint nothing could reach.
         //
         // What this starts is MetisClient's DUTY-CYCLE GATE, not the stream:
         // one 2048-sample block per sampling period, TWELVE datagrams a second,
@@ -4424,7 +4425,10 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             // request back would be this side inventing a state the radio was
             // never told about.
             const bool on = arg.toBool() && m_connected;
-            m_bandscopeEnabled = on;
+            // NOT mirrored here. The health row follows LinkCounters, which
+            // reports what MetisClient actually has rather than what this side
+            // asked for — the two can disagree across the thread hop, and when
+            // they do the gate is right and the request is stale.
             QMetaObject::invokeMethod(m_metis, "setBandscopeEnabled",
                                       Qt::QueuedConnection, Q_ARG(bool, on));
             if (requestId != 0) {
@@ -5015,10 +5019,19 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 
     // ---- the headroom rows ----
     //
-    // ABSENT UNTIL A BLOCK HAS ARRIVED, which is HealthSnapshot's "absent means
-    // not reported" contract doing the work no default value could: there is no
-    // number that honestly stands for "the converter's level has never been
+    // NOT REPORTED until a block has arrived, and that is the INVALID VARIANT
+    // and not a missing key. put()'s own contract above is the mechanism --
+    // "An INVALID variant is left out of `values` on purpose: that is what
+    // renders as 'not reported'" -- so the row is always in `order`, always
+    // labelled, and reads as a dash until there is something to say. There is
+    // no number that honestly stands for "the converter's level has never been
     // looked at", and 0.00 dBFS in particular would read as a hard clip.
+    //
+    // Guarding the put() calls themselves, as this first did, drops the keys
+    // out of `order` entirely: four rows then appeared the moment the first
+    // block landed and vanished again on every link edge through
+    // resetBandscopeMirrors(), so the dialog's row list changed shape under a
+    // reader mid-refresh. (PR #5650 review round 3.)
     //
     // LABELLED UNCALIBRATED, PRE-DDC, and the label is the point. These come
     // off the AD9866 before the DDC, the decimation and the NCO, on the
@@ -5030,31 +5043,39 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     //
     // And per IRadioBackend.h: "Purely for display — nothing in the app makes a
     // decision from it." Nothing reads these rows back.
-    if (m_bandscopeBlock.samples > 0) {
-        const double peak = m_bandscopeBlock.peakDbfs();
-        const double rms  = m_bandscopeBlock.rmsDbfs();
-        put("adcPeakDbfs", QStringLiteral("ADC peak (uncalibrated pre-DDC dBFS)"),
-            QString::number(peak, 'f', 2));
-        put("adcRmsDbfs", QStringLiteral("ADC RMS (uncalibrated pre-DDC dBFS)"),
-            QString::number(rms, 'f', 2));
-        // Peak-to-RMS, which is the one figure here that IS scale-free: it
-        // survives the missing calibration intact, because both terms carry the
-        // same unknown offset and it cancels.
-        put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"),
-            QString::number(peak - rms, 'f', 2));
-        // Counted with ad9866.v's OWN two thresholds — rxclipp at +2047 and
-        // rxclipn at -2048 — and not a symmetric |code| >= 2048, which can
-        // never fire on a positive clip because +2048 is not a code a 12-bit
-        // two's-complement converter can produce.
-        put("adcClippedPerBlock", QStringLiteral("ADC samples at the rail (per 2048)"),
-            static_cast<qulonglong>(m_bandscopeBlock.clippedSamples));
-        // How old the reading is. A gated sensor's number is a snapshot, and a
-        // snapshot with no age on it invites being read as current.
-        put("adcObservedAgoMs", QStringLiteral("ADC level observed (ms ago)"),
-            static_cast<qulonglong>(m_bandscopeBlockClock.isValid()
-                                        ? m_bandscopeBlockClock.elapsed()
-                                        : 0));
-    }
+    // WITH the clip flag, not with the link counters. These are the AD9866's
+    // own scale and their entire justification is that they are commensurable
+    // with adcOverload, which sits under "Converter" — reporting them under
+    // "Link", where the last section marker left them, put the two at opposite
+    // ends of the dialog. (PR #5650 review round 3.)
+    section("adcPeakDbfs", QStringLiteral("Converter"));
+    const bool haveBlock = m_bandscopeBlock.samples > 0;
+    const double peak = haveBlock ? m_bandscopeBlock.peakDbfs() : 0.0;
+    const double rms  = haveBlock ? m_bandscopeBlock.rmsDbfs()  : 0.0;
+    auto dbfs = [haveBlock](double v) {
+        return haveBlock ? QVariant(QString::number(v, 'f', 2)) : QVariant();
+    };
+    put("adcPeakDbfs", QStringLiteral("ADC peak (uncalibrated pre-DDC dBFS)"),
+        dbfs(peak));
+    put("adcRmsDbfs", QStringLiteral("ADC RMS (uncalibrated pre-DDC dBFS)"),
+        dbfs(rms));
+    // Peak-to-RMS, which is the one figure here that IS scale-free: it
+    // survives the missing calibration intact, because both terms carry the
+    // same unknown offset and it cancels.
+    put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"), dbfs(peak - rms));
+    // Counted with ad9866.v's OWN two thresholds — rxclipp at +2047 and
+    // rxclipn at -2048 — and not a symmetric |code| >= 2048, which can
+    // never fire on a positive clip because +2048 is not a code a 12-bit
+    // two's-complement converter can produce.
+    put("adcClippedPerBlock", QStringLiteral("ADC samples at the rail (per 2048)"),
+        haveBlock ? QVariant(static_cast<qulonglong>(m_bandscopeBlock.clippedSamples))
+                  : QVariant());
+    // How old the reading is. A gated sensor's number is a snapshot, and a
+    // snapshot with no age on it invites being read as current.
+    put("adcObservedAgoMs", QStringLiteral("ADC level observed (ms ago)"),
+        (haveBlock && m_bandscopeBlockClock.isValid())
+            ? QVariant(static_cast<qulonglong>(m_bandscopeBlockClock.elapsed()))
+            : QVariant());
     return h;
 }
 

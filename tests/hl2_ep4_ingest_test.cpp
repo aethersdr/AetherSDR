@@ -295,9 +295,14 @@ int main(int argc, char** argv)
         // about. This is the assertion the connected case cannot make.
         check(!lastPayload.toMap().value(QStringLiteral("enabled")).toBool(),
               "a bandscope enable with no link is refused, not echoed");
+        // The row follows LinkCounters — what MetisClient actually has — and
+        // not this side's request, so a refused enable cannot light it up and
+        // neither can an accepted one until the client reports it. That is the
+        // point: the two can disagree across the thread hop, and when they do
+        // the gate is right. (PR #5650 review round 3.)
         check(!backend.healthSnapshot().values
                    .value(QStringLiteral("bandscopeEnabled")).toBool(),
-              "and the health row reports the refusal, not the request");
+              "and the health row follows the client, never the request");
 
         // requestId 0 is the fire-and-forget form a caller uses when it wants no
         // reply. NOT "the UI uses": no UI reaches this verb at all — the

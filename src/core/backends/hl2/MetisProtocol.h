@@ -943,7 +943,6 @@ int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
 // (ad9866.v: `rxclipp = (rx_data == 12'b011111111111)`), so a level taken from
 // these codes and the ADC-overload bit in the EP6 telemetry are on ONE scale by
 // construction. That is the whole reason this stream is worth parsing.
-inline constexpr std::size_t kEp4PayloadBytes     = 1024;
 inline constexpr std::size_t kEp4SamplesPerPacket = 512;   // 1024 bytes / 2
 // Four packets drain the 2048-word usbs_fifo, and they are NOT four packets
 // apart in wall time — measured at ~2.6 ms between the packets of a block and
@@ -959,9 +958,6 @@ inline constexpr int         kEp4BlockSamples     = 2048;
 // NOT kFullScale: that is the EP6 24-bit DDC scale and applying it here would
 // read every bandscope block as ~66 dB quieter than it is.
 inline constexpr int         kEp4FullScale        = 2048;
-// hermeslite_core.v `parameter CLK_FREQ = 76800000`; clk_ad9866 is derived from
-// rffe_ad9866_clk76p8. First Nyquist zone DC..38.4 MHz.
-inline constexpr double      kAdcSampleRateHz     = 76.8e6;
 // `ep4_seq_no` is declared `logic [19:0]`: byte 4 of the header is a hardwired
 // 8'h00 and byte 5 masks to a nibble. It wraps at 1,048,576 — about 46 minutes
 // at the measured 381 packets/s — and a detector that assumes EP6's 32 bits
@@ -1153,6 +1149,13 @@ std::optional<std::uint32_t> ep4Seq(std::span<const std::uint8_t> pkt) noexcept;
 // Decode an EP4 packet's 512 ADC codes, normalised to [-1, 1) by
 // kEp4FullScale, and append them to `out`. Returns the count appended, or -1
 // if `pkt` is not a valid EP4 packet.
+//
+// NO PRODUCTION CALLER YET, and that is deliberate rather than an oversight:
+// the gate needs only ep4Stats(), and the consumer that wants samples is the
+// display phase this PR stops short of. It is kept, and tested directly in
+// hl2_ep4_bandscope_test, because the shift-and-sign-extend encoding is the
+// one thing a future display must not get wrong. Do not read it as live API.
+// (PR #5650 review round 3.)
 //
 // The wire word is little-endian 16-bit and holds the 12-bit code SHIFTED LEFT
 // BY FOUR (usopenhpsdr1.v `WIDE3` emits `{bs_tdata[3:0], 4'b0000}` and `WIDE4`

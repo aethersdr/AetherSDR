@@ -807,8 +807,9 @@ private:
     quint64 m_ep4Rewinds = 0;
     quint64 m_ep4Blocks = 0;
     quint64 m_ep4Timeouts = 0;
-    // The last bandscope GATE state requested of MetisClient, mirrored so
-    // healthSnapshot() need not reach across the I/O thread to read it.
+    // The bandscope GATE's state as MetisClient reports it on LinkCounters —
+    // never this backend's own request. Mirrored so healthSnapshot() need not
+    // reach across the I/O thread to read it.
     bool m_bandscopeEnabled = false;
     // THE MOST RECENT ACCEPTED BANDSCOPE BLOCK, mirrored onto this thread from
     // MetisClient::bandscopeBlockReady for exactly the reason m_drops is: that
