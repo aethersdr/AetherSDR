@@ -175,14 +175,54 @@ int main()
         check((f[0] & 0x01) == 0, "rx1freq C0 even (MOX=0)");
     }
 
-    // ---- LNA gain: C4 = 0x40 | (dB+12), clamped to [-12,+48] ----
+    // ---- LNA gain: C4 = 0x40 | (dB+12), clamped to [-12,+19] ----
+    //
+    // THIS BLOCK USED TO PIN THE FOLD. It asserted `ccRxGain(20) -> code 32`
+    // and `ccRxGain(48) -> code 60`, both of which are inside the range the
+    // gateware decodes as `code & 0x1F`: code 32 replays as 0 and code 60 as
+    // 28. So the test enshrined two encodings that ask the radio for a gain it
+    // will never deliver, and did it under the words "(max)" and "clamps high"
+    // -- which is what a clamp is NOT doing when the value wraps.
+    //
+    // The fold is design intent (softerhardware/Hermes-Lite2#177: "design
+    // intent to work with older protocol 1 software which only had 5 bits for
+    // gain"), so the fix is to stop at the last code that means what it says.
     {
-        check(ccRxGain(20)[4] == (0x40 | 32), "gain +20 dB -> code 32");
+        check(ccRxGain(19)[4] == (0x40 | 31), "gain +19 dB -> code 31 (max)");
         check(ccRxGain(-12)[4] == (0x40 | 0), "gain -12 dB -> code 0 (min)");
-        check(ccRxGain(48)[4] == (0x40 | 60), "gain +48 dB -> code 60 (max)");
-        check(ccRxGain(999)[4] == (0x40 | 60), "gain clamps high");
+        check(ccRxGain(0)[4] == (0x40 | 12), "gain 0 dB -> code 12");
+        check(ccRxGain(20)[4] == (0x40 | 31), "gain +20 dB STOPS at code 31");
+        check(ccRxGain(48)[4] == (0x40 | 31), "gain +48 dB STOPS at code 31");
+        check(ccRxGain(999)[4] == (0x40 | 31), "gain clamps high");
         check(ccRxGain(-999)[4] == (0x40 | 0), "gain clamps low");
         check(ccRxGain(20)[0] == 0x14, "gain C0 = 0x14 (register 0x0a)");
+
+        // THE PROPERTY THE OLD BLOCK COULD NOT STATE, and the one that would
+        // have caught this: every code this function can emit must survive the
+        // gateware's 5-bit decode UNCHANGED. A code that folds is a request the
+        // radio answers with a different gain, silently.
+        bool allSurvive = true;
+        int worstDb = 0;
+        for (int db = -999; db <= 999; ++db) {
+            const int code = ccRxGain(db)[4] & 0x3F;
+            if ((code & 0x1F) != code) { allSurvive = false; worstDb = db; break; }
+        }
+        check(allSurvive,
+              "every emitted code survives the gateware's `code & 0x1F` decode");
+        if (!allSurvive)
+            std::fprintf(stderr, "  first folding request: %d dB\n", worstDb);
+
+        // And MONOTONIC in the dB the radio actually applies. The fold made the
+        // mapping fold back on itself: winding up from +19 walked the applied
+        // gain DOWN through the bottom of its own range.
+        int prev = -1;
+        bool monotonic = true;
+        for (int db = -12; db <= 48; ++db) {
+            const int applied = (ccRxGain(db)[4] & 0x1F);
+            if (applied < prev) { monotonic = false; break; }
+            prev = applied;
+        }
+        check(monotonic, "applied gain never decreases as the request rises");
     }
 
     // ---- metis command + discovery request ----

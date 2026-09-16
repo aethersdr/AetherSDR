@@ -56,10 +56,27 @@ inline ConnectLna connectLna(bool haveRestoredState,
     // pins the gain outright, and a stored entry must not silently ignore what
     // the caller asked for. This header does not reverse it.
     if (paramPresent) {
-        // Preserve the pre-existing explicit-parameter behavior; this PR
-        // changes persistence, not the connect parameter's range handling.
-        out.liveDb = paramDb;
-        out.sessionPin = haveRestoredState && hasStoredEntry && paramDb != storedDb;
+        // CLAMPED, WHICH IT WAS NOT. The comment here used to say "preserve the
+        // pre-existing explicit-parameter behavior; this PR changes
+        // persistence, not the connect parameter's range handling" -- a
+        // deliberate deferral, and harmless while the ceiling was +48, because
+        // ccRxGain's own clamp caught anything higher on the way to the wire.
+        //
+        // It stopped being harmless when the ceiling became +19 (the last code
+        // before the AD9866's `code & 0x1F` fold). An unclamped param then PINS
+        // a value the radio will never apply: connect with lnaGainDb=20 and the
+        // session pins 20 while the hardware runs 19, so the pinned value and
+        // the live value disagree for the whole session. An operator who then
+        // writes "the pinned value" writes something the pin does not
+        // recognise.
+        //
+        // Clamping here makes the pin a statement about the radio rather than
+        // about the request. The comparison below uses the CLAMPED value for
+        // the same reason: a param of +48 and a stored +19 are the same applied
+        // gain and must not be read as a divergence worth pinning.
+        out.liveDb = clampDb(minDb, paramDb, maxDb);
+        out.sessionPin =
+            haveRestoredState && hasStoredEntry && out.liveDb != storedDb;
         return out;
     }
     if (haveRestoredState) {

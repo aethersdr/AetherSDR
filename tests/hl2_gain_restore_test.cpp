@@ -34,7 +34,7 @@ RestoredRadioState rememberedGain()
     state.extensionSchemaVersion = 1;
     state.extension = QJsonObject{
         {QStringLiteral("rfGain"), QJsonObject{
-            {QStringLiteral("defaultDb"), 20},
+            {QStringLiteral("defaultDb"), 15},
             {QStringLiteral("lnaDbByBand"), QJsonObject{
                 {QStringLiteral("20m"), -12}, {QStringLiteral("40m"), -6}}}}}};
     return state;
@@ -107,8 +107,8 @@ int main(int argc, char** argv)
         check(caps.clientSettingsDomains.testFlag(RadioCapabilities::ClientSettingsDomain::RfGain),
               "HL2 retains the RF-gain domain required by per-band storage");
         int writes = 0;
-        check(session.restoreDisplay(20, writes) == -12 && writes == 0,
-              "startup displays the restored band gain without replaying the legacy +20");
+        check(session.restoreDisplay(15, writes) == -12 && writes == 0,
+              "startup displays the restored band gain without replaying the legacy override");
         check(session.liveGain() == -12, "legacy display restore leaves live 20m gain at -12");
         session.backend.setSliceFrequency(0, 14'080'000.0);
         check(bandGain(session.backend.currentOperatingState(), QStringLiteral("20m")) == -12,
@@ -128,14 +128,14 @@ int main(int argc, char** argv)
     {
         GainSession session(RadioStateMemory::load(scope, caps));
         int writes = 0;
-        check(session.restoreDisplay(20, writes) == 5 && writes == 0 && session.liveGain() == 5,
-              "a recreated session restores the operator's +5 despite stale global +20");
+        check(session.restoreDisplay(15, writes) == 5 && writes == 0 && session.liveGain() == 5,
+              "a recreated session restores the operator's +5 despite a stale global override");
         check(bandGain(session.backend.currentOperatingState(), QStringLiteral("40m")) == -6,
               "saving 20m leaves 40m unchanged");
     }
     {
-        GainSession session(rememberedGain(), 20);
-        check(session.liveGain() == 20, "explicit connect override really sets live gain to +20");
+        GainSession session(rememberedGain(), 15);
+        check(session.liveGain() == 15, "explicit connect override really sets live gain to +15");
         check(bandGain(session.backend.currentOperatingState(), QStringLiteral("20m")) == -12,
               "production capture preserves -12 while the connect override is active");
         session.backend.setSliceFrequency(0, 14'080'000.0);
@@ -154,16 +154,16 @@ int main(int argc, char** argv)
     // as a moving write does. setPanRfGain's equality early return used to sit
     // above both, so this operator got neither. (#5402 review nit 3.)
     {
-        GainSession session(rememberedGain(), 20);
-        check(session.liveGain() == 20 && bandGain(session.backend.currentOperatingState(),
+        GainSession session(rememberedGain(), 15);
+        check(session.liveGain() == 15 && bandGain(session.backend.currentOperatingState(),
                                                    QStringLiteral("20m")) == -12,
-              "same-value case starts pinned at +20 with 20m still stored as -12");
-        session.backend.setPanRfGain(session.panId, 20);
-        check(bandGain(session.backend.currentOperatingState(), QStringLiteral("20m")) == 20,
+              "same-value case starts pinned at +15 with 20m still stored as -12");
+        session.backend.setPanRfGain(session.panId, 15);
+        check(bandGain(session.backend.currentOperatingState(), QStringLiteral("20m")) == 15,
               "an operator write of the pinned value itself records the band");
         session.backend.setSliceFrequency(0, 7'074'000.0);
         session.backend.setSliceFrequency(0, 14'074'000.0);
-        check(session.liveGain() == 20,
+        check(session.liveGain() == 15,
               "the confirmed value survives a band round trip instead of reverting to -12");
     }
     // Cross-family compatibility at the exact display-restore seam. No Flex or
