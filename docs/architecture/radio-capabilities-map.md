@@ -688,8 +688,10 @@ other backends keep the controls those refusals take away.
 [`tests/icom_ptt_authority_test.cpp`](../../tests/icom_ptt_authority_test.cpp)
 covers the keying-authority side.
 [`tests/hl2_pan_limits_declaration_test.cpp`](../../tests/hl2_pan_limits_declaration_test.cpp)
-pins the HL2's panadapter-limit declarations — `radioOwnsDbmScale`,
-`panSpanModel` and `panAmplitude` — and asserts the rate list against
+pins the HL2's panadapter-limit declarations — `panSpanModel` and
+`panAmplitude`, and **not** `radioOwnsDbmScale`, which the HL2 deliberately
+leaves undeclared: that target asserts only its *default*, which is a different
+fact — and asserts the rate list against
 `hl2::kIqSampleRatesHz` and the axis against
 `Hl2DbReference::isCalibrated()` rather than against re-typed values, so the
 declaration cannot drift away from the code it describes without a failure. It is
