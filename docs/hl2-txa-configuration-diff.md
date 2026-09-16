@@ -414,19 +414,32 @@ it deliberate sleeping.
 
 ## 8. ctest
 
-Full suite on this machine at `85e4a1ff` plus these changes: **443 of 445 passed.**
-`wdsp_channel_test` and `hl2_txdsp_test` both pass.
+Rebased onto `origin/main` at `8f4b4dc1`, which is the tip carrying #5646 and
+#5647 — the two @ten9876 asked to land before TXA work touched `Hl2TxDsp`. That
+precondition is now met rather than worked around.
 
-- `tgxl_docked_parity_test` — **deterministic, not ours.** Fails at
-  `tests/tgxl_docked_parity_test.cpp:169` on
-  `QFontMetrics(drawn).horizontalAdvance(btn->text()) <= btn->width() - 6`, preceded by
-  `ThemeManager: saved theme "Default Dark" is unavailable` and
-  `qt.qpa.fonts: ... missing font family "Sans Serif"`. A font/theme-resource environment
-  failure; #5676. Its `tests.cmake` block compiles `tests/tgxl_docked_parity_test.cpp` plus
-  the TunerApplet/TGXL/ThemeManager sources and links Qt6 Core/Gui/Widgets/Network — it
-  shares no translation unit with anything changed here.
-- `vkamp_connection_test` — **flaky, not ours.** Failed in the full run, **passed on
-  re-run**. Its block compiles `tests/vkamp_connection_test.cpp`,
+**Both builds, full suite:**
+
+| build | result | failures |
+|---|---|---|
+| `AETHER_HL2_TX_TXA=ON` (default) | **461 / 463** | `tgxl_docked_parity_test`, `vkamp_connection_test` |
+| `AETHER_HL2_TX_TXA=OFF` (phasing) | **462 / 463** | `tgxl_docked_parity_test` |
+
+`wdsp_channel_test` and `hl2_txdsp_test` pass in both.
+
+- `tgxl_docked_parity_test` — **deterministic, not ours.** Fails on the
+  `QFontMetrics(drawn).horizontalAdvance(btn->text()) <= btn->width() - 6`
+  assertion, preceded by `ThemeManager: saved theme "Default Dark" is
+  unavailable` and `qt.qpa.fonts: ... missing font family "Sans Serif"`. A
+  font/theme-resource environment failure; #5676. Its `tests.cmake` block
+  compiles the TunerApplet/TGXL/ThemeManager sources and links Qt6
+  Core/Gui/Widgets/Network — it shares no translation unit with anything changed
+  here.
+- `vkamp_connection_test` — **flaky, not ours, and flaky in isolation too.** It
+  failed the full TXA run; re-run alone it failed once and then passed. So it is
+  not merely parallel-execution contention — it is intermittent on its own,
+  which matches the socket-binding behaviour @ten9876 reported. It does not
+  appear in the phasing run at all. Its block compiles `tests/vkamp_connection_test.cpp`,
   `src/core/VkampConnection.cpp`, `src/core/VkampProtocol.cpp`, the settings sources and
   the log writer, and links Qt6 Core/Network/Test — again no shared translation unit.
 
