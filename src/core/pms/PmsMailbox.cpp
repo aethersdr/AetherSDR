@@ -11,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QSignalBlocker>
 #include <QStorageInfo>
 #include <QTimer>
 
@@ -99,8 +100,12 @@ PmsMailbox::PmsMailbox(QObject* parent)
 
 PmsMailbox::~PmsMailbox()
 {
-    if (m_loaded)
+    if (m_loaded) {
+        // Parent dialog slots (appendSystemLine) are already gone when QWidget
+        // deletes this child. Keep the qCWarning; do not emit activity.
+        const QSignalBlocker blocker(this);
         saveHeard(m_heard);
+    }
 }
 
 // ---------------------------------------------------------------------------

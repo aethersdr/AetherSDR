@@ -664,6 +664,31 @@ static void testPersistenceIsAtomicAndTransactional(const QString& baseDir)
     restarted.setListenCallsign(QStringLiteral("N0PMS-1"));
     restarted.setEnabled(true);
     CHECK(restarted.messageCount() == 1, "restart recovers the last committed mailbox snapshot");
+
+    // Destructor save must not emit activity: the app parents PmsMailbox on a
+    // QWidget whose derived slots are already gone when the child is deleted.
+    {
+        const QString dtorStore = baseDir + QStringLiteral("/pms-dtor");
+        QDir(dtorStore).removeRecursively();
+        QDir().mkpath(dtorStore);
+        qputenv("AETHER_PMS_DIR", dtorStore.toUtf8());
+        QStringList dtorActivity;
+        {
+            PmsMailbox box;
+            QObject::connect(&box, &PmsMailbox::activity,
+                             [&](const QString& message) { dtorActivity.append(message); });
+            box.setListenCallsign(QStringLiteral("N0PMS-1"));
+            box.setEnabled(true);
+            const QString heardPath = dtorStore + QStringLiteral("/heard.json");
+            QFile::remove(heardPath);
+            CHECK(QDir().mkdir(heardPath), "make heard.json a directory so destructor save fails");
+        }
+        CHECK(!dtorActivity.join(QLatin1Char('\n'))
+                  .contains(QLatin1String("could not save heard")),
+              "destructor save does not emit activity on failure");
+        QDir(dtorStore).removeRecursively();
+        qputenv("AETHER_PMS_DIR", store.toUtf8());
+    }
 }
 
 int main(int argc, char** argv)
