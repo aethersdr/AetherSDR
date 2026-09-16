@@ -140,6 +140,23 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none")
     unset(_aether_san_list)
 endif()
 option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
+# Which SSB modulator the Hermes-Lite 2 transmit path is BUILT with. There is
+# no runtime switch and there must not be one: two silent transmit paths are
+# worse than one, and Hl2TxDsp.cpp records that the prior TXA attempt failed
+# SILENTLY. A compile flag gives a way back without giving an operator a way to
+# be on the wrong one (#5678).
+#
+# ON  — WDSP's TXA chain. The migration's payoff is the LOW EDGE: measured
+#       opposite-sideband suppression on the {150, 3000} DIGU/DIGL passband
+#       goes from 22 dB at 150 Hz to past this instrument's numerical floor.
+#       At 1 kHz the incumbent already reads 87 dB against EP2's ~96 dB
+#       signed-16-bit wire (MetisProtocol.cpp, ep2WriteTxIq), so TXA's
+#       advantage THERE is below the wire and unusable.
+# OFF — the in-tree phasing modulator, unchanged. The fallback, kept building
+#       and kept tested, for a machine or a report where TXA misbehaves.
+option(AETHER_HL2_TX_TXA
+       "Hermes-Lite 2 SSB transmit modulator: ON uses WDSP's TXA chain, OFF the in-tree phasing modulator"
+       ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -2217,6 +2234,19 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::OpenGLWidgets
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
+
+# PUBLIC, not PRIVATE: tests/hl2_txdsp_test.cpp asserts a different
+# opposite-sideband floor for each modulator and has to know which one it
+# linked, and tests link aethercore. Defined in BOTH directions rather than
+# only when ON, so a source that reads it can be compiled with -Wundef and so
+# that "the flag was never plumbed" cannot look like "the flag is off".
+if(AETHER_HL2_TX_TXA)
+    target_compile_definitions(aethercore PUBLIC AETHER_HL2_TX_TXA=1)
+    message(STATUS "HL2 transmit modulator ... WDSP TXA (AETHER_HL2_TX_TXA=ON)")
+else()
+    target_compile_definitions(aethercore PUBLIC AETHER_HL2_TX_TXA=0)
+    message(STATUS "HL2 transmit modulator ... in-tree phasing modulator (AETHER_HL2_TX_TXA=OFF)")
+endif()
 
 if(Qt6SerialPort_FOUND)
     # PUBLIC: gui (MainWindow.cpp, RadioSetupDialog.cpp) uses QSerialPort and
