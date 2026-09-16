@@ -84,6 +84,12 @@ target_link_libraries(decoder_audio_routing_test PRIVATE aethercore Qt6::Core)
 add_test(NAME decoder_audio_routing_test COMMAND decoder_audio_routing_test)
 set_tests_properties(decoder_audio_routing_test PROPERTIES TIMEOUT 30)
 
+# CW waveform at the selected pre-monitor boundary; no decoder, socket or TX.
+add_executable(cw_pcm_consumer_test tests/cw_pcm_consumer_test.cpp)
+target_link_libraries(cw_pcm_consumer_test PRIVATE aethercore Qt6::Core)
+add_test(NAME cw_pcm_consumer_test COMMAND cw_pcm_consumer_test)
+set_tests_properties(cw_pcm_consumer_test PROPERTIES TIMEOUT 30)
+
 add_executable(rtty_decoder_pcm_test tests/rtty_decoder_pcm_test.cpp)
 target_link_libraries(rtty_decoder_pcm_test PRIVATE aethercore Qt6::Core)
 add_test(NAME rtty_decoder_pcm_test COMMAND rtty_decoder_pcm_test)
@@ -5508,6 +5514,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
     decoder_audio_routing_test
+    cw_pcm_consumer_test
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
