@@ -963,6 +963,8 @@ public:
         double  rxFreqHz{0.0};
         double  txFreqHz{0.0};
         bool    transmitting{false};
+        QString mode;           // WSJT-X mode name ("FT8"/"FT4"/"FT2"/...), drives
+                                 // the double-line occupied-bandwidth width below.
     };
     void setWsjtxMarkers(const QVector<WsjtxMarker>& markers);
     // Per-pan, unlike setShowTuneGuides/setExtendedFrequencyLine (which
