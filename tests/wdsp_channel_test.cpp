@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstddef>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -12,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <numbers>
+#include <numeric>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1311,7 +1313,7 @@ WdspChannel::Config liveTransmitConfig(WdspChannel::Mode mode,
 TransmitRun runTransmitChannel(int plane, double toneHz, WdspChannel::Mode mode,
                                double lowHz, double highHz,
                                std::size_t blocks, std::size_t discardBlocks,
-                               int paceUs)
+                               int paceUs, double amplitude = 0.1)
 {
     TransmitRun run;
     const WdspChannel::Config config = liveTransmitConfig(mode, lowHz, highHz);
@@ -1334,7 +1336,7 @@ TransmitRun runTransmitChannel(int plane, double toneHz, WdspChannel::Mode mode,
             const double phase = 2.0 * std::numbers::pi * toneHz *
                                  static_cast<double>(block * inputI.size() + sample) /
                                  static_cast<double>(config.inputSampleRate);
-            const float value = static_cast<float>(0.1 * std::cos(phase));
+            const float value = static_cast<float>(amplitude * std::cos(phase));
             inputI[sample] = (plane == 1) ? 0.0f : value;
             inputQ[sample] = (plane == 0) ? 0.0f : value;
         }
@@ -1404,19 +1406,23 @@ TransmitRun runTransmitChannel(int plane, double toneHz, WdspChannel::Mode mode,
 // runs on the phasing modulator, extended only to take each sample's absolute
 // index so a dropped block does not silently become a phase step.
 double binPower(const std::vector<std::complex<float>>& iq,
-                const std::vector<std::size_t>& index, double hz, double fs)
+                const std::vector<std::size_t>& index, double hz, double fs,
+                std::size_t count = 0)
 {
-    if (iq.empty()) {
+    if (count == 0 || count > iq.size()) {
+        count = iq.size();
+    }
+    if (count == 0) {
         return 0.0;
     }
     std::complex<double> acc {0.0, 0.0};
     const double w = -2.0 * std::numbers::pi * hz / fs;
-    for (std::size_t n = 0; n < iq.size(); ++n) {
+    for (std::size_t n = 0; n < count; ++n) {
         const double ph = w * static_cast<double>(index[n]);
         acc += std::complex<double>(iq[n].real(), iq[n].imag()) *
                std::complex<double>(std::cos(ph), std::sin(ph));
     }
-    return std::abs(acc) / static_cast<double>(iq.size());
+    return std::abs(acc) / static_cast<double>(count);
 }
 
 double suppressionDb(double wanted, double unwanted)
@@ -1425,6 +1431,48 @@ double suppressionDb(double wanted, double unwanted)
     // arithmetic floor prints its real value rather than a clamp artefact.
     return 20.0 * std::log10(std::max(1.0e-20, unwanted) /
                              std::max(1.0e-20, wanted));
+}
+
+// Longest prefix of a capture that is a WHOLE number of cycles of `hz`.
+//
+// THIS IS NOT TIDINESS, and without it the sweep below measures its own
+// analysis window rather than the modulator.
+//
+// binPower correlates against a RECTANGULAR window. A strong component at -f
+// leaks into the bin at +f through the Dirichlet kernel, and for a capture of N
+// samples that leakage is about wanted * fs / (pi * 2f * N). At 1.5 s of 48 kHz
+// output and a 150 Hz tone that is roughly 7e-4 of the wanted bin -- about
+// 63 dB down. Anything genuinely quieter than that is invisible: the number
+// reported is the window's.
+//
+// THIS IS NOT HYPOTHETICAL AND IT ALREADY BIT THIS BRANCH. The DIGU rows
+// printed by runTransmitLiveGeometryTest -- 67.8 dB at 150 Hz, 66.1 dB at
+// 200 Hz, 69.7 dB at 300 Hz -- sit within a decibel or two of that estimate at
+// every one of those three tones, because 73728 samples is not a whole number
+// of cycles of 150, 200 or 300 Hz. They are the instrument. Only the 1 kHz row
+// escaped it, by accident: 73728 is exactly 1536 periods of 1 kHz at 48 kHz, so
+// the kernel was already nulled there, which is why that row alone reads a
+// floor figure rather than a filter figure.
+//
+// Truncating to a whole number of cycles puts the image bin exactly on a null
+// of the kernel: the bin spacing fs/N then divides the 2f separation exactly
+// and the leakage term vanishes. The period is fs/gcd(f, fs) samples, which is
+// why every tone in the sweep is an integer number of hertz. The capture's
+// absolute start index does not matter -- an offset only rotates the leakage
+// term's phase, it does not stop it summing to zero.
+//
+// This is the same correction tests/hl2_txdsp_test.cpp's characterisation
+// sweep makes with wholeCycles(). Both chains have to be measured through the
+// same instrument or the comparison is not one.
+std::size_t wholeCycleCount(std::size_t have, double hz, double fs)
+{
+    const long f = std::lround(hz);
+    const long r = std::lround(fs);
+    if (f <= 0 || r <= 0) {
+        return 0;
+    }
+    const std::size_t period = static_cast<std::size_t>(r / std::gcd(f, r));
+    return (have / period) * period;
 }
 
 // Input block period at the live rates, in microseconds: what
@@ -1558,8 +1606,15 @@ bool runTransmitLiveGeometryTest()
     //    instrument and on the same convention hl2_txdsp_test uses: the
     //    wire-facing plane pair, against an audio tone, with nothing
     //    downstream. Two conjugations cannot cancel here.
-    const double upper = binPower(iOnly.iq, iOnly.index, 1000.0, 48000.0);
-    const double lower = binPower(iOnly.iq, iOnly.index, -1000.0, 48000.0);
+    // Trimmed to a whole number of 1 kHz cycles, like every figure in
+    // runTransmitSuppressionSweepTest. At this capture length it happens to be
+    // a no-op -- 73728 samples is exactly 1536 periods of 1 kHz at 48 kHz --
+    // but it is written rather than relied on, because the tones where it is
+    // NOT a no-op are the ones that matter and the two places must agree.
+    const std::size_t iOnlyTrim =
+        wholeCycleCount(iOnly.iq.size(), 1000.0, 48000.0);
+    const double upper = binPower(iOnly.iq, iOnly.index, 1000.0, 48000.0, iOnlyTrim);
+    const double lower = binPower(iOnly.iq, iOnly.index, -1000.0, 48000.0, iOnlyTrim);
     std::cout << "  TX USB {300,2700} 1 kHz: +1 kHz " << upper
               << "  -1 kHz " << lower << "  suppression "
               << suppressionDb(std::max(upper, lower), std::min(upper, lower))
@@ -1603,23 +1658,21 @@ bool runTransmitLiveGeometryTest()
         return false;
     }
 
-    // 6. The DIGU/DIGL passband at its low edge. Hl2TxDsp's 255 Blackman taps
-    //    at 48 kHz give a derived 22 dB at 150 Hz and 30.6 dB at 200 Hz on this
-    //    passband; TXA's bp0 is max(2048, dsp_size) taps at the same rate.
-    for (const double toneHz : {150.0, 200.0, 300.0, 1000.0}) {
-        const TransmitRun dig =
-            runTransmitChannel(0, toneHz, WdspChannel::Mode::Digu, 150.0, 3000.0,
-                               kBlocks, kDiscard, kSpectralPaceUs);
-        if (!require(dig.created && !dig.iq.empty(),
-                     "DIGU transmit channel produced nothing")) {
-            return false;
-        }
-        const double wanted = binPower(dig.iq, dig.index, -toneHz, 48000.0);
-        const double image = binPower(dig.iq, dig.index, toneHz, 48000.0);
-        std::cout << "  TX DIGU {150,3000} tone " << toneHz
-                  << " Hz: wanted " << wanted << "  image " << image
-                  << "  suppression " << suppressionDb(wanted, image) << " dB\n";
-    }
+    // 6. The DIGU/DIGL low edge used to be measured here, at 150, 200, 300 and
+    //    1000 Hz, and the figures it printed -- 67.8, 66.1 and 69.7 dB -- WERE
+    //    WRONG. They were the rectangular analysis window's Dirichlet leakage,
+    //    not bp0's stopband: 73728 samples is not a whole number of cycles of
+    //    150, 200 or 300 Hz, so the wanted bin bled into the image bin at
+    //    roughly wanted * fs / (pi * 2f * N), which comes to within a decibel
+    //    or two of each of those three numbers. Only the 1 kHz row escaped,
+    //    because 73728 IS exactly 1536 periods of 1 kHz -- and that row alone
+    //    read a floor figure rather than a filter figure, which was the clue.
+    //
+    //    Correctly trimmed, the same four points read 173.1, 172.8, 170.1 and
+    //    283.2 dB. The whole low-edge comparison now lives in
+    //    runTransmitSuppressionSweepTest, which measures all four modes at all
+    //    fourteen of hl2_txdsp_test's tones through hl2_txdsp_test's own
+    //    correction, so that the two chains are read by one instrument.
 
     // 7. Out-of-passband rejection -- the assertion that caught the wideband
     //    Hilbert bug on the phasing modulator.
@@ -1630,14 +1683,367 @@ bool runTransmitLiveGeometryTest()
                  "out-of-band transmit channel produced nothing")) {
         return false;
     }
+    const std::size_t outOfBandTrim =
+        wholeCycleCount(outOfBand.iq.size(), 5000.0, 48000.0);
     const double leak =
-        std::max(binPower(outOfBand.iq, outOfBand.index, 5000.0, 48000.0),
-                 binPower(outOfBand.iq, outOfBand.index, -5000.0, 48000.0));
+        std::max(binPower(outOfBand.iq, outOfBand.index, 5000.0, 48000.0,
+                          outOfBandTrim),
+                 binPower(outOfBand.iq, outOfBand.index, -5000.0, 48000.0,
+                          outOfBandTrim));
     std::cout << "  TX out-of-band 5 kHz against a 2700 Hz edge: "
               << suppressionDb(lower, leak) << " dB below an in-band tone\n";
     if (!require(suppressionDb(lower, leak) < -60.0,
                  "a 5 kHz tone leaked through a 2700 Hz transmit filter")) {
         return false;
+    }
+
+    return true;
+}
+
+// ── The characterisation sweep, run against a TXA channel ────────────────
+//
+// WHAT THIS IS. tests/hl2_txdsp_test.cpp carries a CHARACTERISATION SWEEP over
+// four modes and fourteen tones that measures the PHASING MODULATOR's
+// opposite-sideband suppression at the passband each mode actually gets. That
+// sweep is the instrument this migration is judged by, and it was pointed at
+// today's code first, deliberately, so that it was known to discriminate before
+// it was asked to judge a replacement.
+//
+// THIS BLOCK IS THE OTHER HALF: the same measurement, the same fourteen tones,
+// the same two passbands, the same rectangular-window correction -- run against
+// a WDSP TXA channel opened at the LIVE HL2 transmit geometry. Nothing about
+// Hl2TxDsp changes here and nothing in the runtime path is touched; this is a
+// measurement of a candidate, made beside the incumbent, in the same units.
+//
+// WHERE IT DIFFERS FROM THE PHASING MODULATOR'S SWEEP, AND WHY. Three
+// deliberate differences, each forced by what a TXA channel is:
+//
+//  1. THE PASSBAND SIGN CARRIES THE SIDEBAND, NOT THE MODE. TXASetupBPFilters
+//     handles TXA_LSB and TXA_USB with the identical CalcBandpassFilter call,
+//     so SetTXAMode does not choose a sideband for SSB -- SetTXABandpassFreqs
+//     does, through the sign of its edges, exactly as it does in RXA. The LSB
+//     and DIGL rows therefore run {-2700, -300} and {-3000, -150} where
+//     hl2_txdsp_test's rows run the positive edges
+//     Hl2Backend::defaultTxPassbandForMode returns today. The MODE is still set
+//     per row, because a migration would set it.
+//
+//  2. THE ALC CANNOT BE SWITCHED OFF, SO IT IS MEASURED INSTEAD. The phasing
+//     modulator's sweep runs with Hl2TxDsp's ALC off. A TXA channel has no such
+//     switch: create_txa brings alc up with run = 1, max_gain = 1.0 and
+//     out_targ = 1.0. It cannot BOOST -- max_gain 1.0 is unity -- but it will
+//     pull down anything that reaches the target, and a sweep run through a
+//     limiter measures gain-riding rather than a filter.
+//
+//     The amplitude is therefore hl2_txdsp_test's own 0.5, and the linearity
+//     probe below is what licenses it: halving the audio halves the emitted
+//     carrier exactly, which a limiter in circuit cannot do. THIS REPLACED AN
+//     EARLIER AND WRONG REASON FOR RUNNING AT 0.1 -- that bp0's analytic gain
+//     of 2.0 would put a 0.5 tone on the limiter's threshold. It does not.
+//     The gain of 2.0 applies to the HALF of a real cosine that survives, so
+//     the complex envelope comes out at the tone's own amplitude: a 0.5 tone
+//     reaches 0.5 against out_targ = 1.0, with 6 dB in hand. Measured both
+//     ways, the sweep's worst in-band point moves from 163.8 dB at 0.1 to
+//     167.3 dB at 0.5 -- the ALC is idle at both and the choice changes
+//     nothing. It is set to 0.5 so that not even the amplitude differs between
+//     the two chains' tables.
+//
+//  3. THE CAPTURE IS INDEXED. runTransmitChannel records each sample's ABSOLUTE
+//     position and restarts collection after any non-Ok block, because at
+//     bfo = 0 an underrun slips the output stream by a whole DSP buffer
+//     permanently (see the census in runTransmitLiveGeometryTest). The phasing
+//     modulator has no such seam.
+//
+// AND THE WIRE CANNOT CARRY WHAT THIS MEASURES. MetisProtocol.cpp's
+// ep2WriteTxIq packs I and Q as SIGNED 16-BIT samples -- `v * 32767.0f`, two
+// bytes each -- so EP2 quantises the transmit stream at about 96 dB of dynamic
+// range before a single sample reaches the radio, and less than that in
+// practice because the modulator does not run at full scale. Every figure in
+// the table below is therefore ABOVE THE WIRE, and above roughly 96 dB it
+// describes a chain the HL2's transmit endpoint cannot deliver.
+//
+// That is not an argument against the migration; it is an argument about WHERE
+// the migration pays. At 1 kHz the phasing modulator already measures 87.15 dB,
+// which is at the wire's own floor, so TXA's advantage there is unusable. At
+// 150 Hz on the DIGU/DIGL passband the incumbent measures 22.06 dB -- seventy
+// decibels of headroom that the wire could carry and the modulator does not
+// fill. THAT is the gap this replaces, and it is the gap in the modes WSJT-X
+// transmits in.
+//
+// WHAT IS NOT MEASURED HERE, and it is most of what a transmitter does. No
+// radio is keyed, no hpsdrsim runs, no socket opens. These are a WDSP channel's
+// own emitted IQ read in wire order inside a unit test -- the same class of
+// measurement hl2_txdsp_test makes, with the same blindness. It sees no PA, no
+// wire, no antenna, no IMD, no EP2 pacing and no MetisClient queue. It says
+// nothing about whether a TXA channel can be driven by the live caller for a
+// whole over; that is the census's job, and the census is a 64-block run on an
+// idle Mac, not an over.
+struct SweepPoint
+{
+    bool measured = false;
+    double wanted = 0.0;
+    double image = 0.0;
+    double suppDb = 0.0;
+    double untrimmedSuppDb = 0.0;
+    std::size_t samples = 0;        // after the whole-cycle trim
+    std::size_t captured = 0;       // before it
+    int underruns = 0;
+};
+
+SweepPoint measureSweepPoint(WdspChannel::Mode mode, double lowHz, double highHz,
+                             bool wireUpper, double toneHz,
+                             std::size_t blocks, std::size_t discardBlocks,
+                             int paceUs, double amplitude)
+{
+    SweepPoint point;
+    const TransmitRun run =
+        runTransmitChannel(0, toneHz, mode, lowHz, highHz, blocks, discardBlocks,
+                           paceUs, amplitude);
+    point.underruns = run.underrunBlocks;
+    if (!run.created || run.iq.empty()) {
+        return point;
+    }
+    point.captured = run.iq.size();
+
+    const double rawUpper = binPower(run.iq, run.index, toneHz, 48000.0);
+    const double rawLower = binPower(run.iq, run.index, -toneHz, 48000.0);
+    point.untrimmedSuppDb =
+        -suppressionDb(wireUpper ? rawUpper : rawLower,
+                       wireUpper ? rawLower : rawUpper);
+
+    const std::size_t trimmed = wholeCycleCount(run.iq.size(), toneHz, 48000.0);
+    if (trimmed == 0) {
+        return point;
+    }
+    point.samples = trimmed;
+    const double upper = binPower(run.iq, run.index, toneHz, 48000.0, trimmed);
+    const double lower = binPower(run.iq, run.index, -toneHz, 48000.0, trimmed);
+    point.wanted = wireUpper ? upper : lower;
+    point.image = wireUpper ? lower : upper;
+    point.suppDb = -suppressionDb(point.wanted, point.image);
+    point.measured = true;
+    return point;
+}
+
+bool runTransmitSuppressionSweepTest()
+{
+    // 104 blocks of 1024 output samples with the first 24 discarded leaves
+    // 81920 samples -- 1.71 s at 48 kHz -- which is a whole number of cycles of
+    // every tone in the table once trimmed. The pace is four times faster than
+    // the live 21.3 ms block period and twice as fast as the slowest leg the
+    // census shows running clean, so it is not measuring a race; it keeps the
+    // 56 points to about twelve seconds of wall clock.
+    constexpr std::size_t kBlocks = 104;
+    constexpr std::size_t kDiscard = 24;
+    constexpr int kPaceUs = 2000;
+    constexpr double kAmplitude = 0.5;   // hl2_txdsp_test's sweep amplitude
+
+    // The floor of this instrument, not of the chain. Below about -200 dB the
+    // image bin is at the numerical floor of a double-precision correlation
+    // over float32 samples and the figure printed is not a filter measurement.
+    // Rows at or past it are reported as a bound, never as a value.
+    constexpr double kInstrumentFloorDb = 200.0;
+
+    struct SweepBand
+    {
+        const char* name;
+        WdspChannel::Mode mode;
+        double lowHz;       // SIGNED, as SetTXABandpassFreqs wants it
+        double highHz;
+        bool wireUpper;     // which wire bin carries the wanted sideband
+    };
+    // The audio-domain passbands are hl2_txdsp_test's: {300, 2700} for the
+    // voice modes and {150, 3000} for the digital ones, from
+    // Hl2Backend::defaultTxPassbandForMode. The SIGNS are TXA's.
+    const SweepBand bands[] = {
+        {"USB",  WdspChannel::Mode::Usb,    300.0,  2700.0, false},
+        {"LSB",  WdspChannel::Mode::Lsb,  -2700.0,  -300.0, true},
+        {"DIGU", WdspChannel::Mode::Digu,   150.0,  3000.0, false},
+        {"DIGL", WdspChannel::Mode::Digl, -3000.0,  -150.0, true},
+    };
+    // Integer hertz, so wholeCycleCount can null the analysis leakage exactly.
+    // The same fourteen hl2_txdsp_test's sweep uses, including the two that sit
+    // outside the voice passband on purpose.
+    const double tones[] = {100.0,  150.0,  200.0,  250.0,  300.0,  400.0,
+                            500.0,  700.0, 1000.0, 1500.0, 2000.0, 2500.0,
+                           2700.0, 3000.0};
+
+    std::cout << "  === TXA opposite-sideband characterisation sweep "
+                 "(live geometry, 512 in / 1024 dsp, 24k->48k, bfo=0, "
+                 "amplitude 0.5) ===\n";
+    std::cout << "  mode passband      tone     wanted        image"
+                 "     supp dB   untrimmed  samples\n";
+
+    double worstInBandDb = 1.0e9;
+    double worstInBandHz = 0.0;
+    const char* worstInBandMode = "";
+    double worstSettledDb = 1.0e9;
+
+    for (const SweepBand& band : bands) {
+        const double absLow = std::min(std::abs(band.lowHz), std::abs(band.highHz));
+        const double absHigh = std::max(std::abs(band.lowHz), std::abs(band.highHz));
+        for (const double toneHz : tones) {
+            const SweepPoint point =
+                measureSweepPoint(band.mode, band.lowHz, band.highHz,
+                                  band.wireUpper, toneHz, kBlocks, kDiscard,
+                                  kPaceUs, kAmplitude);
+            std::string what = std::string("sweep ") + band.name + " at " +
+                               std::to_string(static_cast<int>(toneHz)) +
+                               " Hz produced analysable IQ";
+            if (!require(point.measured, what.c_str())) {
+                return false;
+            }
+
+            // The dB figures and the handedness assertion apply IN-BAND only,
+            // on the same reasoning hl2_txdsp_test gives -- and here the
+            // reasoning is much stronger than it is there. bp0 is 2048 taps
+            // against Hl2TxDsp's 255, so a tone below the low edge is not
+            // merely attenuated, it is GONE: at 100 Hz on {300, 2700} both
+            // bins land near 1e-11, which is the chain's own numerical floor
+            // and has no handedness at all. The phasing modulator passes that
+            // same tone about 12 dB down with 14.3 dB of sideband suppression,
+            // so its sweep can meaningfully assert a wire bin out of band and
+            // this one cannot. Out-of-band rows are printed as a REJECTION
+            // figure, which is what they are evidence about.
+            const bool inBand = (toneHz >= absLow && toneHz <= absHigh);
+
+            char line[224];
+            std::snprintf(line, sizeof(line),
+                          "  %-4s %6.0f..%-6.0f %5.0f %12.5e %12.5e %9.2f %11.2f %8zu",
+                          band.name, band.lowHz, band.highHz, toneHz,
+                          point.wanted, point.image, point.suppDb,
+                          point.untrimmedSuppDb, point.samples);
+            std::cout << line;
+            if (!inBand) {
+                const double rejectionDb =
+                    20.0 * std::log10(kAmplitude /
+                                      std::max(1.0e-30,
+                                               std::max(point.wanted, point.image)));
+                std::cout << "   out of band, rejected " << rejectionDb << " dB";
+            } else if (point.suppDb >= kInstrumentFloorDb) {
+                std::cout << "   (image at the instrument floor)";
+            }
+            std::cout << '\n';
+
+            what = std::string("sweep ") + band.name + " at " +
+                   std::to_string(static_cast<int>(toneHz)) +
+                   " Hz: the sideband is on the expected wire bin";
+            if (inBand && !require(point.wanted > point.image, what.c_str())) {
+                return false;
+            }
+
+            if (inBand) {
+                if (point.suppDb < worstInBandDb) {
+                    worstInBandDb = point.suppDb;
+                    worstInBandHz = toneHz;
+                    worstInBandMode = band.name;
+                }
+                if (toneHz >= 500.0) {
+                    worstSettledDb = std::min(worstSettledDb, point.suppDb);
+                }
+            }
+        }
+    }
+
+    std::cout << "  worst in-band point: " << worstInBandDb << " dB at "
+              << worstInBandHz << " Hz (" << worstInBandMode << ")\n";
+    std::cout << "  worst in-band point at or above 500 Hz: " << worstSettledDb
+              << " dB\n";
+    std::cout << "  READ THESE AS LOWER BOUNDS. Every in-band image bin above "
+                 "is at or near this\n  instrument's own numerical floor, not "
+                 "at a filter response -- see the halving probe\n  below. What "
+                 "the table establishes is that TXA's opposite sideband is "
+                 "nowhere\n  observable at the float32 interface "
+                 "WdspChannel::processIq hands back.\n";
+
+    // ONE FLOOR, NOT hl2_txdsp_test's TWO, and the difference is the finding.
+    //
+    // That sweep needs a second, tighter bound above 500 Hz because the phasing
+    // modulator's curve VARIES -- 22 dB at the low edge, 87 dB at mid-band --
+    // so a single floor set from the low edge is passed by degradations that
+    // only show up where the filter has settled. TXA's curve does not vary:
+    // every in-band point in the table above is against the instrument's floor,
+    // the low edge included. A second tier would be measuring the same thing
+    // twice.
+    //
+    // 100 dB is chosen to sit ABOVE THE PHASING MODULATOR'S BEST MEASURED
+    // POINT. hl2_txdsp_test's sweep measures the incumbent at 87.15 dB at its
+    // strongest (USB, 1 kHz) and 22.06 dB at its weakest (DIGU, 150 Hz). So
+    // this assertion reads: TXA's WORST in-band point still beats the phasing
+    // modulator's BEST one. Today it does so with 63 dB to spare. If a future
+    // change brings TXA anywhere near the chain it is replacing, the migration
+    // has lost the argument it was made on, and this is the line that says so.
+    //
+    // It is not a tight bound and is not meant to be. What it catches is a
+    // channel that has been MIS-OPENED -- the wrong passband sign, bp0 not run,
+    // a refused setFilter leaving create_txa's {-5000, -100} default in place,
+    // audio put in Q -- every one of which lands tens of dB below it, most of
+    // them below zero.
+    constexpr double kSweepFloorDb = 100.0;
+    if (!require(worstInBandDb > kSweepFloorDb,
+                 "TXA in-band opposite-sideband suppression fell below 100 dB, "
+                 "the phasing modulator's best measured point")) {
+        return false;
+    }
+
+    // ── The ALC is not riding the sweep, and the floor is the instrument's ──
+    //
+    // Two checks on the method, not on the chain.
+    //
+    // FIRST: halving the amplitude must halve the emitted carrier exactly.
+    // create_txa's alc runs with max_gain = 1.0 and out_targ = 1.0 and cannot be
+    // turned off; if it were acting at the sweep's amplitude the two runs would
+    // not scale, because a limiter is not a linear stage. This is the assertion
+    // that makes "the ALC is idle here" a measurement rather than a reading of
+    // TXA.c.
+    //
+    // SECOND: the deepest rows above read past 200 dB, which no float32 FIR
+    // achieves. If that figure were a real filter response it would not move
+    // when the capture is halved; if it is the numerical floor of the
+    // correlation it rises by about 3 dB, because the floor is broadband and
+    // averages down as 1/sqrt(N) while a real tone does not. The point of
+    // printing it is to be able to say which, rather than quoting 297 dB at
+    // anyone.
+    {
+        const SweepPoint full =
+            measureSweepPoint(WdspChannel::Mode::Usb, 300.0, 2700.0, false,
+                              1000.0, kBlocks, kDiscard, kPaceUs, kAmplitude);
+        const SweepPoint half =
+            measureSweepPoint(WdspChannel::Mode::Usb, 300.0, 2700.0, false,
+                              1000.0, kBlocks, kDiscard, kPaceUs,
+                              0.5 * kAmplitude);
+        if (!require(full.measured && half.measured,
+                     "the ALC linearity probe produced no IQ")) {
+            return false;
+        }
+        const double ratio = half.wanted / std::max(1.0e-20, full.wanted);
+        std::cout << "  ALC linearity: audio " << kAmplitude << " -> carrier "
+                  << full.wanted << ", audio " << (0.5 * kAmplitude)
+                  << " -> carrier " << half.wanted << " (ratio " << ratio
+                  << "; an idle ALC gives 0.5)\n";
+        if (!require(std::abs(ratio - 0.5) < 0.01,
+                     "halving the transmit audio did not halve the emitted "
+                     "carrier; the TXA ALC is acting at this level")) {
+            return false;
+        }
+
+        const std::size_t halfLength =
+            wholeCycleCount(full.samples / 2, 1000.0, 48000.0);
+        const TransmitRun probe =
+            runTransmitChannel(0, 1000.0, WdspChannel::Mode::Usb, 300.0, 2700.0,
+                               kBlocks, kDiscard, kPaceUs, kAmplitude);
+        if (!require(probe.created && probe.iq.size() >= full.samples,
+                     "the floor probe produced no IQ")) {
+            return false;
+        }
+        const double imageFull =
+            binPower(probe.iq, probe.index, 1000.0, 48000.0, full.samples);
+        const double imageHalf =
+            binPower(probe.iq, probe.index, 1000.0, 48000.0, halfLength);
+        std::cout << "  instrument floor probe at USB 1 kHz: image over "
+                  << full.samples << " samples " << imageFull << ", over "
+                  << halfLength << " samples " << imageHalf << " (ratio "
+                  << (imageHalf / std::max(1.0e-30, imageFull))
+                  << "; a real tone gives 1, broadband floor gives ~1.41)\n";
     }
 
     return true;
@@ -2125,6 +2531,7 @@ int main()
         return runVector(WdspChannel::Direction::Transmit);
     }));
     check(runLeakChecked("TX live geometry", runTransmitLiveGeometryTest));
+    check(runLeakChecked("TX suppression sweep", runTransmitSuppressionSweepTest));
     check(runLeakChecked("TX zeros census", runTransmitZerosCensusTest));
     check(runLeakChecked("underrun test", runUnderrunTest));
     check(runLeakChecked("reconfiguration test", runReconfigurationTest));
