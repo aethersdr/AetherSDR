@@ -9,7 +9,8 @@
 #include "DigitalVoiceWaveformSettings.h"
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "AudioEngine.h"
-#include "NvidiaBnrSettings.h"   // BNR intensity (in-process AFX, #3902)
+#include "NvidiaBnrSettings.h"
+#include "NnrSettings.h"   // BNR intensity (in-process AFX, #3902)
 #include "ClientTxTestTone.h"     // testtone() verb — client-side TX test tone
 #include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
 #include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
@@ -17,6 +18,11 @@
 #include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
+#include "core/backends/HealthSnapshotMerge.h"   // mergeHealthSnapshots — family-neutral
+#include <QHostAddress>                          // telemetry target <ip>
+#include <QNetworkInterface>                      // directed-broadcast refusal
+#include "core/backends/OfflineHealthSource.h"    // OfflineHealthRegistry (family-neutral)
+#include <algorithm>
 #include "core/backends/hl2/Hl2FreqCal.h"  // freqcal() verb — manual frequency calibration
 #include "core/MeterSurfaces.h"
 #include "models/AetherClockModel.h"  // AetherClockModel (get clock)
@@ -2120,6 +2126,9 @@ QJsonObject dspEngineSnapshot(const AudioEngine* a)
 #else
                                    false},
 #endif
+        // Always available: both trained models are compiled into the
+        // vendored WDSP, so there is no library to find and no GPU to require.
+        {"NNR",  a->nnrEnabled(),  true},
     };
 
     QJsonObject methods;
@@ -2142,6 +2151,15 @@ QJsonObject dspEngineSnapshot(const AudioEngine* a)
     // the old address/connected fields are gone; report the persisted intensity.
     tuning[QStringLiteral("bnr")] =
         QJsonObject{{QStringLiteral("intensity"), NvidiaBnrSettings::intensity()}};
+    tuning[QStringLiteral("nnr")] =
+        QJsonObject{{QStringLiteral("strength"), a->nnrStrength()},
+                    {QStringLiteral("model"), a->nnrModel()},
+                    {QStringLiteral("alpha"), NnrSettings::alpha()},
+                    {QStringLiteral("alphaKneeDb"), NnrSettings::alphaKnee()},
+                    {QStringLiteral("tauSeconds"), NnrSettings::tau()},
+                    {QStringLiteral("maxGainDb"), NnrSettings::maxGain()},
+                    {QStringLiteral("smoothAttackMs"), NnrSettings::smoothAttackMs()},
+                    {QStringLiteral("smoothReleaseMs"), NnrSettings::smoothReleaseMs()}};
 
     return QJsonObject{{QStringLiteral("active"), active},
                        {QStringLiteral("methods"), methods},
@@ -3302,6 +3320,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
                 return s.doFreqCal(a.action, a.value);
             });
 
+        add("bandscope", {},
+            "bandscope [status|on|off] — Hermes-Lite 2 wideband bandscope gate (endpoint 0x04); uncalibrated pre-DDC ADC headroom, reported in `health`",
+            parseActionValue,
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doBandscope(a.action);
+            });
+
         add("droopcal", {},
             "droopcal [status|start|stop|apply|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop)",
             parseActionValue,
@@ -3679,6 +3704,13 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("health", {}, "backend health snapshot — what the RADIO reports, not what was asked for",
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doHealth(); });
+
+        add("telemetry", {}, "telemetry target <ip|off> — aim a discovered radio's "
+                             "offline health source WITHOUT connecting (read-only)",
+            parseActionRest,
+            [](AutomationServer& s, A& a, QLocalSocket*) {
+                return s.doTelemetry(a.action, a.value);
+            });
 
         add("log", {}, "log <categories|get|set|reset|tail|subscribe|unsubscribe> [args]",
             parseActionRest,
@@ -6828,15 +6860,244 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
 // diagnosis.
 //
 // Read-only and TX-safe: it keys nothing and changes nothing.
+namespace {
+// One wording per reason, so the "off" and "aim" paths cannot drift -- and the
+// reason comes FROM THE MODEL rather than being re-derived here.
+//
+// It used to be re-derived, by testing `connected` first. The model refuses on
+// the declaration first and on the connection second, so a connected session of
+// a family with no offline instrument was told to disconnect and retry -- the
+// one retry that can never work, which is precisely the confusion two reasons
+// exist to prevent (#5642 review). Taking the model's own verdict makes the two
+// unable to disagree.
+QString offlineHealthRefusal(RadioModel::OfflineAimResult why, const QString& family)
+{
+    if (why == RadioModel::OfflineAimResult::SessionConnected)
+        return QStringLiteral(
+            "telemetry: this session is connected, and there is ONE poller — "
+            "aiming it would repoint the instrument the live session is "
+            "reading, so its health would merge another radio's rows as its "
+            "own. A connected session is already aimed at its own radio; "
+            "disconnect first, or just read `health`");
+    return QStringLiteral("telemetry: '%1' declares no offline health source, "
+                          "so there is nothing to aim")
+        .arg(family.isEmpty() ? QStringLiteral("this radio's family") : family);
+}
+}  // namespace
+
+QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& value)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    if (action != QStringLiteral("target"))
+        return err(QStringLiteral("telemetry requires an action (target)"));
+    if (value.isEmpty())
+        return err(QStringLiteral("telemetry target requires an IP, or 'off'"));
+
+    // WHY THIS VERB EXISTS, because "just connect first" is the obvious
+    // alternative and it is wrong.
+    //
+    // An offline health source reads a radio we are NOT connected to —
+    // typically because another client is holding it. The only way to give it
+    // an address used to be connectRadio(), which sets the target on its way to
+    // taking the session. Against a radio somebody else holds, that is a WRITE
+    // during their session: it risks disturbing the very stream the measurement
+    // is about, and "the holder was undisturbed" is a pass criterion of the run
+    // this serves.
+    //
+    // Discovery cannot supply it either. Discovery is a broadcast, so it only
+    // finds radios on the local segment; a radio behind a gateway is invisible
+    // to it, and the broadcast itself lands on whatever else shares that
+    // segment. On this bench that is exactly backwards — the radio is off-net
+    // and the segment holds a receiver that must not be polled.
+    //
+    // So: name the radio, send nothing but read-only probes to it, never
+    // connect.
+    //
+    // FAMILY-NEUTRAL AND GATED BY DECLARATION, not by name. This verb is
+    // registered globally because the registry is; RadioModel refuses when the
+    // family being aimed at declared no offline source, and that refusal is
+    // reported here rather than silently succeeding. Without it, driving the
+    // poller from a `sim` session put real datagrams on the wire and grew
+    // another family's attribution rows on that session's `health` that nothing
+    // could remove.
+    if (value.compare(QStringLiteral("off"), Qt::CaseInsensitive) == 0) {
+        // "off" names no radio, so there is no address to resolve a family
+        // from: it stops whatever this model currently holds, which is what the
+        // caller means. offlineHealthFamily() is empty when nothing is held,
+        // and the model then treats it as the no-op it is.
+        const QString held = m_radioModel->offlineHealthFamily();
+        const auto why =
+            m_radioModel->setOfflineHealthTarget(held, QHostAddress());
+        if (why != RadioModel::OfflineAimResult::Ok)
+            return err(offlineHealthRefusal(why, held));
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("telemetry"), QStringLiteral("target")},
+                           {QStringLiteral("target"), QJsonValue::Null}};
+    }
+
+    const QHostAddress addr(value);
+    if (addr.isNull())
+        return err(QStringLiteral("telemetry target: '%1' is not an IP address").arg(value));
+    // "IS AN IP LITERAL" IS NOT ENOUGH, and the design note's own §2.1a says
+    // why: the broadcast fallback was removed because it could not prove who
+    // would receive the datagram. An explicit target that accepts anything
+    // syntactically valid reopens the same hole by hand — this aims a 60-byte
+    // UDP datagram EVERY SECOND for as long as anything reads `health`, and
+    // each read renews the 5 s demand window (aethersdr-agent, #5642 review).
+    //
+    // Refused: multicast, broadcast and the unspecified address. Each of those
+    // reaches hosts nobody named, which is the property §2.1a objected to.
+    //
+    // A UNICAST ADDRESS OFF THIS SUBNET IS STILL ALLOWED, deliberately: this
+    // lab's own radio sits at 192.168.8.2 behind a gateway while the host is on
+    // 192.168.36.0/24, so a same-subnet rule would refuse the one radio the
+    // feature exists for.
+    //
+    // WHAT PROTECTS THE WRONG-UNICAST CASE, stated accurately. The filters
+    // applied to a reply are sender-address equality, isHermesLite2(), and a
+    // latch on the first answering MAC. (A caller-supplied MAC filter used to
+    // be listed here too; it had no production caller and has been removed --
+    // an aim names an IP and the MAC is unknowable until something replies.)
+    //
+    // So the honest statement is narrower. A mistyped address that happens to
+    // host an HPSDR-speaking device gets its FIRST reading believed and
+    // rendered as this radio's health; what the latch prevents is the responder
+    // changing afterwards. A stranger also receives an unsolicited probe. Both
+    // are residual costs and both are stated rather than hidden.
+    //
+    // IPv6 is refused outright rather than half-supported. AnyIPv6 slipped the
+    // gate below because it equals neither AnyIPv4 nor Any, and an IPv6 unicast
+    // was accepted but unpollable: applyCadence() binds AnyIPv4, writeDatagram
+    // fails, and m_unanswered climbs at send time -- so `health` reported a
+    // radio not answering for datagrams that structurally could not leave.
+    if (addr.protocol() == QAbstractSocket::IPv6Protocol) {
+        return err(QStringLiteral(
+                       "telemetry target: '%1' is IPv6, and this poller binds "
+                       "an IPv4 socket — it would report unanswered polls for "
+                       "datagrams that never left")
+                       .arg(value));
+    }
+    // A DIRECTED BROADCAST IS NOT QHostAddress::Broadcast, and that is the hole
+    // the list below used to leave open. 255.255.255.255 is caught by the
+    // compare and 224.0.0.0/4 by isMulticast(), but 192.168.50.255 is neither —
+    // and applyCadence() sets SO_BROADCAST on every socket it binds, so the
+    // datagram really does leave and really does reach every host on that
+    // segment, once a second, for as long as anything reads `health`. That is
+    // the exact property §2.1a objected to when the broadcast fallback was
+    // removed, arrived at by typing an address instead (#5642 review).
+    //
+    // Only a LOCAL segment's broadcast is identifiable: a remote one
+    // (10.255.255.255 from a 192.168 host) is indistinguishable from a unicast
+    // without that segment's prefix, which no local API can supply. Said here
+    // rather than implying the list is complete.
+    bool directedBroadcast = false;
+    for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+        const auto entries = iface.addressEntries();
+        if (std::any_of(entries.cbegin(), entries.cend(),
+                        [&addr](const QNetworkAddressEntry& e) {
+                            return !e.broadcast().isNull() && e.broadcast() == addr;
+                        })) {
+            directedBroadcast = true;
+            break;
+        }
+    }
+    if (addr == QHostAddress::Broadcast || addr.isMulticast() || directedBroadcast
+        || addr == QHostAddress::AnyIPv4 || addr == QHostAddress::Any
+        || addr == QHostAddress::AnyIPv6) {
+        return err(QStringLiteral(
+                       "telemetry target: '%1' is a broadcast, multicast or "
+                       "unspecified address — this sends one datagram a second "
+                       "and must name a single radio")
+                       .arg(value));
+    }
+
+    // WHICH FAMILY'S INSTRUMENT TO BUILD, answered by the radio at the address
+    // rather than by the session.
+    //
+    // Gating on this session's family made the verb unreachable in the state it
+    // exists for: m_family is set only by connectToRadio(), so on a fresh app
+    // it is the default and every aim was refused — and the only cure was to
+    // connect to the radio first, the write into somebody else's session this
+    // verb exists to avoid (#5642 review).
+    //
+    // Discovery already knows. `connect list` reads the same table, so an
+    // address the operator can see in the picker is an address that can be
+    // aimed at, and one that is not discovered is refused rather than probed on
+    // a guess. Falling back to the SESSION's family when the address is not in
+    // the table would quietly reintroduce the cross-family leak, so it does not.
+    QString family;
+    if (IConnectionAutomation* conn = connection()) {
+        const QList<RadioInfo> radios = conn->automationLocalRadios();
+        const auto it = std::find_if(radios.cbegin(), radios.cend(),
+                                     [&addr](const RadioInfo& r) {
+                                         return r.address == addr;
+                                     });
+        if (it != radios.cend())
+            family = it->family;
+    }
+    // A radio this session is CONNECTED to is known even when discovery has
+    // aged out, and refusing it there would be a worse answer than the model's
+    // own "you are connected" refusal below.
+    if (family.isEmpty() && m_radioModel->isConnected())
+        family = m_radioModel->family();
+    if (family.isEmpty()) {
+        return err(QStringLiteral(
+                       "telemetry target: no discovered radio at '%1' — this "
+                       "aims a family's own instrument, so the radio has to be "
+                       "one `connect list` can see")
+                       .arg(value));
+    }
+
+    const auto why = m_radioModel->setOfflineHealthTarget(family, addr);
+    if (why != RadioModel::OfflineAimResult::Ok)
+        return err(offlineHealthRefusal(why, family));
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("telemetry"), QStringLiteral("target")},
+                       {QStringLiteral("target"), addr.toString()},
+                       {QStringLiteral("family"), family},
+                       // Say plainly that nothing was connected, because the
+                       // caller's next question is always "did that grab the
+                       // radio?" and the answer must not require reading source.
+                       {QStringLiteral("connected"), m_radioModel->isConnected()},
+                       {QStringLiteral("readOnly"), true}};
+}
+
 QJsonObject AutomationServer::doHealth()
 {
     if (!m_radioModel)
         return err(QStringLiteral("no radio model available"));
 
-    const IRadioBackend::HealthSnapshot snap = m_radioModel->backendHealthSnapshot();
+    // TWO SOURCES, merged when — and only when — both are in play.
+    //
+    // The backend reports only while it is talking to a radio: every family
+    // blanks its rows when the link is not delivering, so on a disconnected app
+    // it contributes nothing even though the object itself is still there. An
+    // offline health source keeps answering, because what it reads does not
+    // depend on a session. Reading `health` on an app that is not connected
+    // used to return zero rows for exactly that reason, in the state the
+    // offline source exists to serve.
+    //
+    // GATED, because `health` is family-agnostic. Merging unconditionally gave
+    // a connected Flex or Icom snapshot another family's attribution rows, so a
+    // Flex consumer could no longer read the snapshot as backend-only.
+    // hasOfflineHealth() is false until the selected family's source has
+    // actually been constructed.
+    //
+    // The backend WINS on key collision: its readings are in-band, arrive on
+    // our own cadence, and an out-of-band probe's do not. The offline source
+    // fills the gaps and owns the rows that say which path spoke.
+    //
+    // The merge rule itself is family-neutral (backends/HealthSnapshotMerge.h).
+    // This file must not include a family header to merge two snapshots.
+    const IRadioBackend::HealthSnapshot snap =
+        m_radioModel->hasOfflineHealth()
+            ? mergeHealthSnapshots(
+                  m_radioModel->offlineHealthRows(),          // base: offline
+                  m_radioModel->backendHealthSnapshot())      // winner: in-band
+            : m_radioModel->backendHealthSnapshot();
     if (snap.isEmpty()) {
-        // Not an error: a backend with nothing to report is a real state (no
-        // radio connected, or a family that publishes no health rows). Say which
+        // Still a real state: no backend AND nothing offline to say. Name it
         // rather than returning an empty object the caller has to guess about.
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("connected"), m_radioModel->isConnected()},
@@ -7900,6 +8161,106 @@ QJsonObject AutomationServer::doGps(const QString& action, const QString& format
                        {QStringLiteral("gps"), QStringLiteral("fixture")},
                        {QStringLiteral("profile"), profile},
                        {QStringLiteral("snapshot"), gpsSnapshot(m_radioModel)}};
+}
+
+// ── Wideband bandscope gate (HL2, endpoint 0x04) ─────────────────
+// status / on / off. This verb is the ONLY thing that reaches
+// Hl2Backend's `bandscope.enable`: the sensor has no UI and no setting on
+// purpose (it is a diagnostic, and the operator-facing shape is #5535), so
+// without a route here the whole endpoint would be unreachable in a shipped
+// build and its health rows would read off/0/0/0/0/0 forever. Enabling costs
+// one 2048-sample block a second — twelve datagrams, ~0.11 Mbit/s — against
+// ~3.3 Mbit/s if the stream ran ungated.
+//
+// It cannot key and it cannot transmit: the gate refuses to arm while the
+// radio is keyed by anything, and it only ever raises a receive-side bit.
+// The readings land in `health` (Converter section), uncalibrated and pre-DDC.
+QJsonObject AutomationServer::doBandscope(const QString& action)
+{
+    RadioModel* radio = m_radioModel;
+    if (!radio)
+        return err(QStringLiteral("no radio model available"));
+    // Asks whether the BACKEND declares the namespace, not whether it is an
+    // HL2 by family string (#5262 M1): a future backend answering the same
+    // verb should not be excluded by name.
+    if (!radio->backendDeclaresExtension(QStringLiteral("hl2"))) {
+        return err(QStringLiteral(
+            "bandscope: this radio has no wideband bandscope — endpoint 0x04 "
+            "is a Hermes-Lite 2 feature"));
+    }
+    IRadioBackend* backend = radio->backend();
+    if (!backend)
+        return err(QStringLiteral("no backend attached"));
+
+    // Read STRAIGHT OFF the health snapshot rather than inventing a second
+    // readback path: those rows are already the gate's published state, and a
+    // status that could disagree with `health` would be worse than none.
+    auto report = [backend](const QString& what) {
+        const auto snap = backend->healthSnapshot();
+        auto row = [&snap](const char* key) {
+            return QJsonValue::fromVariant(
+                snap.values.value(QString::fromLatin1(key)));
+        };
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("bandscope"), what},
+            {QStringLiteral("enabled"), row("bandscopeEnabled")},
+            {QStringLiteral("ep4Packets"), row("ep4Packets")},
+            {QStringLiteral("ep4Drops"), row("ep4Drops")},
+            {QStringLiteral("ep4Rewinds"), row("ep4Rewinds")},
+            {QStringLiteral("blocks"), row("bandscopeBlocks")},
+            {QStringLiteral("timeouts"), row("bandscopeTimeouts")},
+            // Absent until a block has arrived — the rows carry an invalid
+            // variant until then, which lands here as a JSON null rather than
+            // as a fabricated 0.00 dBFS.
+            {QStringLiteral("adcPeakDbfs"), row("adcPeakDbfs")},
+            {QStringLiteral("adcRmsDbfs"), row("adcRmsDbfs")},
+            {QStringLiteral("adcCrestDb"), row("adcCrestDb")},
+            {QStringLiteral("adcClippedPerBlock"), row("adcClippedPerBlock")},
+            {QStringLiteral("adcObservedAgoMs"), row("adcObservedAgoMs")},
+        };
+    };
+
+    const QString verb = action.isEmpty() ? QStringLiteral("status") : action.toLower();
+    if (verb == QLatin1String("status"))
+        return report(verb);
+    if (verb != QLatin1String("on") && verb != QLatin1String("off"))
+        return err(QStringLiteral("bandscope: expected status, on or off"));
+
+    const bool on = (verb == QLatin1String("on"));
+    // Same synchronous-extension contract doFreqCal and hostnb document: the
+    // HL2 answers inside invokeExtension, so a direct connection lands before
+    // the call returns, and a backend that does not answer is reported as
+    // unsupported rather than as an empty success.
+    bool answered = false;
+    bool failed = false;
+    QString failure;
+    const quint64 rid = ++m_extensionRequestId;
+    auto okConn = connect(backend, &IRadioBackend::extensionResult, this,
+                          [&](quint64 id, const QVariant&) {
+        if (id != rid) return;
+        answered = true;
+    }, Qt::DirectConnection);
+    auto errConn = connect(backend, &IRadioBackend::extensionError, this,
+                           [&](quint64 id, const QString& msg) {
+        if (id != rid) return;
+        answered = true;
+        failed = true;
+        failure = msg;
+    }, Qt::DirectConnection);
+    backend->invokeExtension(QStringLiteral("hl2"),
+                             QStringLiteral("bandscope.enable"), rid, QVariant(on));
+    disconnect(okConn);
+    disconnect(errConn);
+    if (!answered)
+        return err(QStringLiteral("this backend does not implement bandscope.enable"));
+    if (failed)
+        return err(failure);
+    // Reported from the SNAPSHOT and not from the request: the gate runs on the
+    // I/O thread and publishes its real state on LinkCounters, so a row that
+    // still reads off here means the enable has not landed yet — or was refused
+    // because the link is down. Echoing `on` back would hide both.
+    return report(verb);
 }
 
 // ── Manual frequency calibration (HL2) ───────────────────────────

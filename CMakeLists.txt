@@ -745,6 +745,7 @@ set(CORE_SOURCES
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
     src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
+    src/core/backends/OfflineHealthSource.cpp # family-neutral registry: health that survives disconnection
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
     src/core/backends/hl2/Hl2ControlRequest.cpp # RQST/ACK: one outstanding, echo-matched (§13 item 13)
@@ -919,6 +920,7 @@ set(CORE_SOURCES
     src/core/NvidiaAfxFilter.cpp
     src/core/NvidiaAfxPack.cpp
     src/core/DeepFilterFilter.cpp
+    src/core/NnrFilter.cpp
     src/core/RADEEngine.cpp
     src/core/AsyncLogWriter.cpp
     src/core/LogManager.cpp
@@ -1028,6 +1030,7 @@ add_subdirectory(third_party/QGeoView/lib EXCLUDE_FROM_ALL)
 
 set(GUI_SOURCES
     src/gui/Contribute.cpp
+    src/gui/ControlAvailabilityRegistry.cpp
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
     src/gui/WindowGeometryRestore.cpp
@@ -1157,6 +1160,7 @@ set(GUI_SOURCES
     src/gui/CrossNeedleMeterSettings.cpp
     src/gui/VuMeterSettings.cpp
     src/gui/TunerApplet.cpp
+    src/gui/AccessoryPanelWidgets.cpp
     src/gui/TxApplet.cpp
     src/gui/AtuPreTuneDialog.cpp
     src/gui/SwrSweepLicenseDialog.cpp

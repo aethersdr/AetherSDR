@@ -117,14 +117,22 @@ bool RadioConnection::isDemoTarget(const RadioInfo& info)
 
 void RadioConnection::startSyntheticDemoConnect()
 {
+    resetSessionState();
+    // Pin this session. m_syntheticDemo alone cannot distinguish "still the
+    // demo session I queued from" from "a NEW demo session started after mine
+    // was torn down" -- a fast disconnect/reconnect sets the flag back to true
+    // and the old timers then replay a stale version/connected/status burst
+    // into the new session. (#5653 review)
+    const quint64 generation = m_sessionGeneration;
     m_syntheticDemo = true;
     setState(ConnectionState::Connecting);
     // Drive the connect sequence asynchronously (like a real socket connect),
     // so callers that expect connectToRadio() to return before `connected`
     // fires behave identically. Mirrors the real V-line then H-line order:
     // versionReceived, then a nonzero handle + connected().
-    QTimer::singleShot(0, this, [this]() {
-        if (!m_syntheticDemo) return;   // disconnected before we ran
+    QTimer::singleShot(0, this, [this, generation]() {
+        if (!m_syntheticDemo || generation != m_sessionGeneration)
+            return;   // disconnected, or a newer demo session took over
         emit versionReceived(QStringLiteral("1.4.0.0"));
         m_handle = 0xDE30'0001u;        // stable, nonzero synthetic client handle
         setState(ConnectionState::Connected);
@@ -149,8 +157,9 @@ void RadioConnection::startSyntheticDemoConnect()
         // waiting for this slice status — so it must land inside that window with
         // margin. 50ms lets connected()/onConnected() run first without racing the
         // defer. (RFC #4288 — the VFO=0 fix.)
-        QTimer::singleShot(50, this, [this]() {
-            if (!m_syntheticDemo) return;
+        QTimer::singleShot(50, this, [this, generation]() {
+            if (!m_syntheticDemo || generation != m_sessionGeneration)
+                return;   // disconnected, or a newer demo session took over
             emitSyntheticStatus(QStringLiteral(
                 // 8 kHz span — this MUST equal SimBackend's spectrum span
                 // (kAudioSpanHz), because the demo's spectrum row IS the ±4 kHz
@@ -228,6 +237,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
     m_localAddr = QHostAddress();
     m_localPort = 0;
     m_socket->abort();
+    resetSessionState();
 
     const QHostAddress preferredBindAddr =
         (bindMode == RadioBindMode::Explicit) ? explicitBindAddr : sessionBindAddr;
@@ -272,13 +282,38 @@ void RadioConnection::connectToHost(const QHostAddress& address,
     m_socket->connectToHost(address, port);
 }
 
+void RadioConnection::resetSessionState()
+{
+    // Partial lines and ping replies belong to exactly one TCP session.
+    //
+    // FlexLib does this explicitly too, and for the same reason: its
+    // TcpCommandCommunication keeps the line-assembly buffer as a member of a
+    // long-lived object and clears it under _tcpReadSyncObj in Disconnect()
+    // (reference/FlexLib_API_v4.1.5.39794/FlexLib/TcpCommandCommunication.cs:249).
+    // It is not per-session by lifetime. We also reset at the connect edge,
+    // which covers a hard kill that never reaches a disconnect path. (#5649)
+    m_readBuffer.clear();
+    m_handle = 0;
+    m_lastPingSeq = 0;
+    m_pingStopwatch.invalidate();
+    // Every session edge invalidates work queued by the previous session --
+    // see the synthetic-demo handshake timers. (#5653 review)
+    ++m_sessionGeneration;
+}
+
 void RadioConnection::disconnectFromRadio()
 {
+    // Reset twice, deliberately. Here, so the synthetic-demo branch below --
+    // which returns early -- is covered; and again at the end, because
+    // waitForDisconnected(2000) pumps the event loop and can deliver readyRead,
+    // refilling m_readBuffer and m_handle after this first pass. Neither call
+    // is redundant; do not collapse them. (#5653 review)
+    resetSessionState();
     if (m_heartbeat) m_heartbeat->stop();
     if (m_syntheticDemo) {
         // Demo teardown: no socket to close — just drop state and notify.
+        // (m_handle was already zeroed by resetSessionState() above.)
         m_syntheticDemo = false;
-        m_handle = 0;
         setState(ConnectionState::Disconnected);
         emit disconnected();
         return;
@@ -289,7 +324,7 @@ void RadioConnection::disconnectFromRadio()
         if (m_socket->state() != QAbstractSocket::UnconnectedState)
             m_socket->waitForDisconnected(2000);
     }
-    m_handle = 0;
+    resetSessionState();
 }
 
 void RadioConnection::gracefulDisconnect(quint32 handle,
@@ -494,6 +529,7 @@ void RadioConnection::onSocketConnected()
 
 void RadioConnection::onSocketDisconnected()
 {
+    resetSessionState();
     qCDebug(lcConnection) << "RadioConnection: TCP disconnected";
     if (m_heartbeat) m_heartbeat->stop();
     m_localAddr = QHostAddress();
@@ -509,8 +545,10 @@ void RadioConnection::onSocketError(QAbstractSocket::SocketError)
     qCWarning(lcConnection) << "RadioConnection: socket error:" << msg;
     setState(ConnectionState::Error);
     emit errorOccurred(msg);
-    if (m_socket->state() == QAbstractSocket::UnconnectedState)
+    if (m_socket->state() == QAbstractSocket::UnconnectedState) {
+        resetSessionState();
         setState(ConnectionState::Disconnected);
+    }
 }
 
 void RadioConnection::onReadyRead()

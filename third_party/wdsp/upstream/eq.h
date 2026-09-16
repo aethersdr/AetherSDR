@@ -112,7 +112,7 @@ __declspec (dllexport) void SetTXAEQMP (int channel, int mp);
 
 typedef struct _eq
 {
-	int run;
+	int run;				
 	int size;
 	double* in;
 	double* out;

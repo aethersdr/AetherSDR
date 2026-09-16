@@ -2609,6 +2609,7 @@ void SpectrumWidget::loadSettings()
     m_showTuneGuides  = s.value("ShowTuneGuides", "False").toString() == "True";
     m_extendedFrequencyLine = s.value("ExtendedFrequencyLine", "False").toString() == "True";
     m_extendedPassband = DisplaySettings::extendedPassband();
+    m_extendedTnf = DisplaySettings::extendedTnf();
     m_threeDSliceDepth = DisplaySettings::threeDSliceDepth();
 
     // Background image — default to bundled logo, "none" = explicitly cleared
@@ -4207,55 +4208,83 @@ void SpectrumWidget::setShowTuneGuides(bool on) {
     s.save();
     markOverlayDirty();
 
-    // Propagate to all sibling SpectrumWidgets so the toggle is global
-    if (QWidget* top = window()) {
-        const auto siblings = top->findChildren<SpectrumWidget*>();
-        for (SpectrumWidget* sw : siblings) {
-            if (sw != this && sw->m_showTuneGuides != on) {
-                sw->m_showTuneGuides = on;
-                if (!on) {
-                    sw->m_tuneGuideVisible = false;
-                    sw->m_tuneGuideTimer->stop();
-                }
-                sw->markOverlayDirty();
-            }
+    // Turning the guides off has to tear down each sibling's in-flight guide
+    // too, not just clear the flag -- otherwise a pan mid-timeout keeps a
+    // visible guide and a live timer after the operator switched them off.
+    propagateGlobalDisplayToggle(&SpectrumWidget::m_showTuneGuides, on,
+                                 "showTuneGuidesSibling",
+                                 [on](SpectrumWidget* sw) {
+                                     if (!on) {
+                                         sw->m_tuneGuideVisible = false;
+                                         sw->m_tuneGuideTimer->stop();
+                                     }
+                                 });
+}
+// Push a global pan-display toggle onto every other open panadapter.
+//
+// The walk has to be over topLevelWidgets(), not window()->findChildren():
+// a panadapter popped out into its own top-level window is NOT a descendant
+// of this widget's window(), so the narrower walk silently skips it and the
+// floating pan keeps the old value until the next loadSettings(). Three
+// adjacent items in the same context menu each carried their own copy of this
+// loop and two of them had the narrow one, which is exactly how they drifted
+// apart -- hence one shared helper rather than a fifth copy.
+//
+// `onApplied` runs on each sibling that actually changed, between the flag
+// write and the repaint, for toggles that own more than a flag (Show Tune
+// Guides also has to stop the sibling's timeout timer).
+void SpectrumWidget::propagateGlobalDisplayToggle(
+    bool SpectrumWidget::*flag,
+    bool on,
+    const char* cause,
+    const std::function<void(SpectrumWidget*)>& onApplied)
+{
+    const auto applyToSibling = [&](SpectrumWidget* sw) {
+        if (!sw || sw == this || sw->*flag == on) {
+            return;
+        }
+        sw->*flag = on;
+        if (onApplied) {
+            onApplied(sw);
+        }
+        sw->markOverlayDirty(cause);
+    };
+    for (QWidget* top : QApplication::topLevelWidgets()) {
+        applyToSibling(qobject_cast<SpectrumWidget*>(top));
+        const auto pans = top->findChildren<SpectrumWidget*>();
+        for (SpectrumWidget* sw : pans) {
+            applyToSibling(sw);
         }
     }
 }
+
 void SpectrumWidget::setExtendedFrequencyLine(bool on) {
     m_extendedFrequencyLine = on;
     auto& s = AppSettings::instance();
     s.setValue("ExtendedFrequencyLine", on ? "True" : "False");
     s.save();
     markOverlayDirty();
-
-    // Propagate to all sibling SpectrumWidgets so the toggle is global.
-    if (QWidget* top = window()) {
-        const auto siblings = top->findChildren<SpectrumWidget*>();
-        for (SpectrumWidget* sw : siblings) {
-            if (sw != this && sw->m_extendedFrequencyLine != on) {
-                sw->m_extendedFrequencyLine = on;
-                sw->markOverlayDirty();
-            }
-        }
-    }
+    propagateGlobalDisplayToggle(&SpectrumWidget::m_extendedFrequencyLine, on,
+                                 "extendedFrequencyLineSibling");
 }
 
 void SpectrumWidget::setExtendedPassband(bool on) {
     m_extendedPassband = on;
     DisplaySettings::setExtendedPassband(on);
     markOverlayDirty();
+    propagateGlobalDisplayToggle(&SpectrumWidget::m_extendedPassband, on,
+                                 "extendedPassbandSibling");
+}
 
-    // Propagate to all sibling SpectrumWidgets so the toggle is global.
-    if (QWidget* top = window()) {
-        const auto siblings = top->findChildren<SpectrumWidget*>();
-        for (SpectrumWidget* sw : siblings) {
-            if (sw != this && sw->m_extendedPassband != on) {
-                sw->m_extendedPassband = on;
-                sw->markOverlayDirty();
-            }
-        }
+void SpectrumWidget::setExtendedTnf(bool on) {
+    if (m_extendedTnf == on) {
+        return;
     }
+    m_extendedTnf = on;
+    DisplaySettings::setExtendedTnf(on);
+    markOverlayDirty("extendedTnf");
+    propagateGlobalDisplayToggle(&SpectrumWidget::m_extendedTnf, on,
+                                 "extendedTnfSibling");
 }
 
 void SpectrumWidget::setThreeDSliceDepth(bool on)
@@ -4267,25 +4296,8 @@ void SpectrumWidget::setThreeDSliceDepth(bool on)
     DisplaySettings::setThreeDSliceDepth(on);
     markOverlayDirty("threeDSliceDepth");
 
-    // This is a global display treatment: every open pan should agree,
-    // including panadapters popped out into their own top-level window, which
-    // are NOT descendants of this widget's window(). Walk every top-level
-    // window so a floating pan updates live rather than waiting for the next
-    // loadSettings() to pick up the persisted value.
-    const auto applyToSibling = [this, on](SpectrumWidget* sw) {
-        if (!sw || sw == this || sw->m_threeDSliceDepth == on) {
-            return;
-        }
-        sw->m_threeDSliceDepth = on;
-        sw->markOverlayDirty("threeDSliceDepthSibling");
-    };
-    for (QWidget* top : QApplication::topLevelWidgets()) {
-        applyToSibling(qobject_cast<SpectrumWidget*>(top));
-        const auto pans = top->findChildren<SpectrumWidget*>();
-        for (SpectrumWidget* sw : pans) {
-            applyToSibling(sw);
-        }
-    }
+    propagateGlobalDisplayToggle(&SpectrumWidget::m_threeDSliceDepth, on,
+                                 "threeDSliceDepthSibling");
 }
 
 void SpectrumWidget::setFftLineWidth(float w) {
@@ -10091,6 +10103,17 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     action->setChecked(currentDepth == option.second);
                 }
             }
+            // Client-side render preference, not a notch attribute, so it is
+            // separated from the radio-owned Width/Depth entries above it.
+            // Global on purpose (like Extended Passband): TNF ids are
+            // radio-assigned and get recycled, so a per-notch flag would follow
+            // the id onto a different notch after a reconnect.
+            menu.addSeparator();
+            QAction* extendedTnfAction = menu.addAction("Extended TNF");
+            extendedTnfAction->setCheckable(true);
+            extendedTnfAction->setChecked(m_extendedTnf);
+            connect(extendedTnfAction, &QAction::toggled, this, &SpectrumWidget::setExtendedTnf);
+
             // "Permanent" means the RADIO keeps the notch across a power cycle,
             // so it needs a radio with somewhere to keep it — which an HL2, with
             // no configuration store at all, does not have.
@@ -10189,6 +10212,21 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             extendedPassbandAction->setCheckable(true);
             extendedPassbandAction->setChecked(m_extendedPassband);
             connect(extendedPassbandAction, &QAction::toggled, this, &SpectrumWidget::setExtendedPassband);
+
+            // Same toggle the TNF marker's own menu offers, surfaced beside its
+            // sibling overlay switches so it is findable without hunting for a
+            // notch. Gated on the notch CAPABILITY, not on the current notch
+            // list: a radio with an engine and no notches yet should still be
+            // able to arm the overlay in advance, and gating on the list would
+            // hide the entry in exactly the case this second surface exists to
+            // serve. Absent (not disabled) on a radio with no notch engine,
+            // which never grows one mid-session.
+            if (m_maxNotchFilters > 0) {
+                QAction* extendedTnfAction = menu.addAction("Extended TNF");
+                extendedTnfAction->setCheckable(true);
+                extendedTnfAction->setChecked(m_extendedTnf);
+                connect(extendedTnfAction, &QAction::toggled, this, &SpectrumWidget::setExtendedTnf);
+            }
 
             if (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) {
                 QAction* depthAction = menu.addAction("3D Slice Shadow");
@@ -14044,7 +14082,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             if (m_bandPlanFontSize > 0) {
                 drawBandPlan(frequencyPainter, specRect);
             }
-            drawTnfMarkers(frequencyPainter, specRect);
+            drawTnfMarkers(frequencyPainter, specRect, wfRect);
             if (m_showSpots || m_showSHistory) {
                 drawSpotMarkers(frequencyPainter, specRect);
             }
@@ -15303,7 +15341,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         drawDssDepthGeometry(
             p, buildDssDepthGeometry(specRect, dssFrameFloorDbm));
     }
-    drawTnfMarkers(p, specRect);
+    drawTnfMarkers(p, specRect, wfRect);
     if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
     drawSwrSweep(p, specRect);
     drawSliceMarkers(p, specRect, wfRect);
@@ -15929,9 +15967,19 @@ void SpectrumWidget::setTnfGlobalEnabled(bool on)
     markOverlayDirty();
 }
 
-void SpectrumWidget::drawTnfMarkers(QPainter& p, const QRect& specRect)
+void SpectrumWidget::drawTnfMarkers(QPainter& p, const QRect& specRect,
+                                    const QRect& wfRect)
 {
     if (m_tnfMarkers.isEmpty()) return;
+
+    // Opt-in mirror of the notch band in the waterfall (sibling of Extended
+    // Passband). The band itself -- fill, hatch and both edge lines -- is
+    // reproduced exactly, so the extended part is the same object seen further
+    // down rather than a fainter cousin of it. Only the drag triangle stays
+    // behind: it is a grab handle, the notch is draggable in the FFT area
+    // alone, and a second one over the waterfall would advertise a control
+    // that isn't there.
+    const bool extendToWaterfall = m_extendedTnf && !wfRect.isEmpty();
 
     const auto drawDepthHatch = [&](const QRect& rect, const QColor& color, int left, int right, int spacing) {
         if (rect.isEmpty()) {
@@ -15941,7 +15989,16 @@ void SpectrumWidget::drawTnfMarkers(QPainter& p, const QRect& specRect)
         p.setClipRect(rect);
         p.setPen(QPen(color, 1));
         const int height = rect.height();
-        for (int x = left - height; x < right; x += spacing) {
+        // Seed at a whole number of `spacing` steps back from `left`, not at
+        // `left - height`. Each 45-degree line crosses the band at a height of
+        // (left - x) above the bottom edge, so seeding from the rect's own
+        // height puts the rungs at a phase of (height % spacing) -- different
+        // for the spectrum and waterfall bands, which have different heights,
+        // leaving the extended copy visibly out of step with the original.
+        // Rounding the seed UP to a multiple of spacing pins the first rung to
+        // each band's bottom edge and still starts far enough left to cover it.
+        const int steps = (height + spacing - 1) / spacing;
+        for (int x = left - steps * spacing; x < right; x += spacing) {
             p.drawLine(x, rect.bottom(), x + height, rect.top());
         }
         p.restore();
@@ -15960,15 +16017,26 @@ void SpectrumWidget::drawTnfMarkers(QPainter& p, const QRect& specRect)
         const QColor baseColor = tnfColor(tnf);
         const QColor fillColor = tnfFillColor(tnf);
         const QColor lineColor = tnfLineColor(tnf);
-        p.fillRect(left, specRect.top(), right - left, specRect.height(), fillColor);
         const int hatchSpacing = (tnf.depthDb <= 1) ? 12 : (tnf.depthDb == 2 ? 8 : 5);
-        drawDepthHatch(QRect(left, specRect.top(), right - left, specRect.height()), lineColor, left, right, hatchSpacing);
 
-        // Edge lines
-        const QPen edgePen(lineColor, 1, Qt::SolidLine);
-        p.setPen(edgePen);
-        p.drawLine(left, specRect.top(), left, specRect.bottom());
-        p.drawLine(right, specRect.top(), right, specRect.bottom());
+        // One renderer for both regions. The waterfall copy has to be
+        // indistinguishable from the spectrum one, and the edge lines are most
+        // of what a narrow notch actually shows -- fill (alpha 40) and a 45
+        // degree hatch alone read as a dashed line, not a band. Drawing the two
+        // from one lambda is what keeps them identical; the first cut hand-rolled
+        // the waterfall copy without the edges and promptly looked wrong.
+        const auto drawBand = [&](int top, int height) {
+            p.fillRect(left, top, right - left, height, fillColor);
+            drawDepthHatch(QRect(left, top, right - left, height), lineColor, left, right, hatchSpacing);
+            p.setPen(QPen(lineColor, 1, Qt::SolidLine));
+            p.drawLine(left, top, left, top + height - 1);
+            p.drawLine(right, top, right, top + height - 1);
+        };
+
+        drawBand(specRect.top(), specRect.height());
+        if (extendToWaterfall) {
+            drawBand(wfRect.top(), wfRect.height());
+        }
 
         // Center triangle (grab handle) at top of spectrum
         const int triH = 8 + tnf.depthDb * 2;  // bigger triangle for deeper notch

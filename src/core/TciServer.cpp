@@ -1625,7 +1625,7 @@ QString TciServer::sliceTag(int sliceId) const
     return QStringLiteral("%1(trx%2)").arg(sliceId).arg(m_trxMap.trxForSlice(m_model, slice));
 }
 
-QVector<TciSliceEndpoint> TciServer::routingEndpoints() const
+QVector<TciSliceEndpoint> TciServer::routingEndpoints(const QWebSocket* requester) const
 {
     QVector<TciSliceEndpoint> endpoints;
     if (!m_model) {
@@ -1636,6 +1636,33 @@ QVector<TciSliceEndpoint> TciServer::routingEndpoints() const
     for (SliceModel* slice : slices) {
         if (slice) {
             endpoints.append({ slice->sliceId(), slice->isTxSlice() });
+        }
+    }
+    if (!requester) {
+        return endpoints;
+    }
+    // Every WSJT-X instance addresses trx 0 on the wire; the declared
+    // audio_start receiver is the one per-client signal that says which slice
+    // an instance actually operates (#4547). A slice some other client
+    // operates that way is that client's receiver, not a spare TX slice for
+    // the requester's VFO B (#5193).
+    for (const ClientState& cs : m_clients) {
+        if (!cs.socket || cs.socket == requester || cs.audioReceiver < 0) {
+            continue;
+        }
+        // Strict resolver: a declared receiver that no longer maps to a live
+        // slice claims nothing. The loose resolver's first-slice fallback
+        // would flag slice 0 on a stale declaration and, if slice 0 holds TX,
+        // silence every other client's VFO B (#4547 rule: decisions that gate
+        // a write never use the read-path guess).
+        const SliceModel* operated = sliceForTrxStrict(cs.audioReceiver);
+        if (!operated) {
+            continue;
+        }
+        for (TciSliceEndpoint& endpoint : endpoints) {
+            if (endpoint.sliceId == operated->sliceId()) {
+                endpoint.operatedByAnotherClient = true;
+            }
         }
     }
     return endpoints;
@@ -2077,7 +2104,24 @@ void TciServer::handleVfoRequest(QWebSocket* client, const TciProtocol::VfoReque
     }
 
     const TciRoutingState::RouteDecision route
-        = m_routingState.resolveVfoB(rxSlice->sliceId(), routingEndpoints());
+        = m_routingState.resolveVfoB(rxSlice->sliceId(), routingEndpoints(client));
+    if (route.action == TciRoutingState::RouteAction::EchoOnly) {
+        // The only TX slice is another client's receiver and no split was
+        // requested: this receiver has no VFO B to tune. TCI has no error
+        // frame, so answer with the channel-1 projection of the RX slice —
+        // channel 0 has normally just been set to the same value, so the
+        // client's rig-control wait is satisfied without touching any other
+        // slice (#5193).
+        qCDebug(lcCat).noquote()
+            << QStringLiteral("TCI: vfo:%1,1 echoed without tuning - the TX slice is another"
+                              " client's receiver (#5193)")
+                   .arg(request.trx);
+        replyText(client,
+            QStringLiteral("vfo:%1,1,%2;")
+                .arg(request.trx)
+                .arg(TciProtocol::mhzToHz(rxSlice->frequency())));
+        return;
+    }
     if (route.action == TciRoutingState::RouteAction::UseExisting) {
         tuneSliceAndConfirm(client, request.trx, 1, route.txSliceId, request.frequencyHz);
         return;
@@ -2141,7 +2185,7 @@ void TciServer::handleSplitRequest(QWebSocket* client, const TciProtocol::SplitR
         }
 
         const TciRoutingState::RouteDecision route
-            = m_routingState.resolveVfoB(rxSlice->sliceId(), routingEndpoints());
+            = m_routingState.resolveVfoB(rxSlice->sliceId(), routingEndpoints(client));
         if (route.action == TciRoutingState::RouteAction::UseExisting) {
             broadcast(confirmation);
             return;
@@ -2391,7 +2435,10 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         replyText(client, QStringLiteral("trx:%1,false;").arg(request.trx));
         return;
     }
-    const QVector<TciSliceEndpoint> endpoints = routingEndpoints();
+    // With the requester: a TX slice another client operates as its receiver
+    // is never this client's PTT target, even through a route cached before
+    // that client declared it (#5193, the PTT twin of the VFO-B rule above).
+    const QVector<TciSliceEndpoint> endpoints = routingEndpoints(client);
     const int liveTx = TciRoutingState::currentTxSlice(endpoints);
     // Sample the cached route BEFORE resolving. resolvePttSlice() writes the
     // live TX assignment through to the cache on the external-TX branch, so

@@ -5,6 +5,7 @@
 #include "AppSettings.h"
 #include "AudioSummaryLogger.h"
 #include "AudioDeviceNegotiator.h"
+#include "CwSidetoneBackendPolicy.h"
 #include "CwSidetoneStartPolicy.h"
 #include "TxCaptureBuffer.h"
 #include "ShutdownTrace.h"
@@ -41,6 +42,8 @@
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
 #endif
+#include "NnrFilter.h"
+#include "NnrSettings.h"
 #ifdef HAVE_NVIDIA_AFX
 #include "NvidiaAfxFilter.h"
 #include "NvidiaBnrSettings.h"
@@ -80,6 +83,7 @@
 #include <cstring>
 #include <functional>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace AetherSDR {
@@ -1116,6 +1120,38 @@ AudioEngine::createMnrFilter(const QString& label, int producerRate) const
 }
 #endif
 
+std::unique_ptr<NnrFilter>
+AudioEngine::createNnrFilter(const QString& label, int producerRate) const
+{
+    auto filter = std::make_unique<NnrFilter>(producerRate);
+    if (!filter->isValid()) {
+        qCWarning(lcAudio).noquote()
+            << "AudioEngine: NNR create_nnr() failed for" << label;
+        return {};
+    }
+    filter->setStrength(m_nnrStrength.load());
+    // The persisted request, not m_nnrModel: that publishes the slot WDSP has
+    // live, which lags a pending switch by one audio block. Seeding from it
+    // made a sample-rate change rebuild on the superseded model (#5687).
+    filter->setModel(NnrSettings::model());
+    filter->setAlpha(NnrSettings::alpha());
+    filter->setAlphaKnee(NnrSettings::alphaKnee());
+    filter->setTau(NnrSettings::tau());
+    filter->setMaxGain(NnrSettings::maxGain());
+    filter->setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
+    return filter;
+}
+
+NnrFilter* AudioEngine::nnrForSource(
+    RxDspSource source,
+    ExternalRxAudioSourceState* externalSource) const
+{
+    if (externalSource) {
+        return externalSource->nnr.get();
+    }
+    return source == RxDspSource::KiwiSdr ? m_kiwiSdrNnr.get() : m_nnr.get();
+}
+
 #ifdef HAVE_DFNR
 std::unique_ptr<DeepFilterFilter>
 AudioEngine::createDfnrFilter(const QString& label, int producerRate) const
@@ -1159,6 +1195,7 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #ifdef HAVE_DFNR
     bool needDfnr = false;
 #endif
+    bool needNnr = false;
 #ifdef HAVE_NVIDIA_AFX
     bool needNvAfx = false;
 #endif
@@ -1183,6 +1220,8 @@ bool AudioEngine::ensureLegacyKiwiDspState()
         needDfnr = m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
             && !m_kiwiSdrDfnr;
 #endif
+        needNnr = m_nnrEnabled.load(std::memory_order_relaxed) && m_nnr
+            && !m_kiwiSdrNnr;
 #ifdef HAVE_NVIDIA_AFX
         needNvAfx = m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
             && !m_kiwiSdrNvAfx;
@@ -1197,6 +1236,7 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #ifdef HAVE_DFNR
             || needDfnr
 #endif
+            || needNnr
 #ifdef HAVE_NVIDIA_AFX
             || needNvAfx
 #endif
@@ -1219,6 +1259,7 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> dfnr;
 #endif
+    std::unique_ptr<NnrFilter> nnr;
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> nvAfx;
 #endif
@@ -1251,6 +1292,10 @@ bool AudioEngine::ensureLegacyKiwiDspState()
         ok = ok && static_cast<bool>(dfnr);
     }
 #endif
+    if (needNnr) {
+        nnr = createNnrFilter(QStringLiteral("legacy Kiwi"));
+        ok = ok && static_cast<bool>(nnr);
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (needNvAfx) {
         nvAfx = createNvAfxFilter(QStringLiteral("legacy Kiwi"));
@@ -1298,6 +1343,13 @@ bool AudioEngine::ensureLegacyKiwiDspState()
             m_kiwiSdrDfnr = std::move(dfnr);
         }
 #endif
+        // No settings copy: createNnrFilter() applies strength from the
+        // engine's atomic and the model from NnrSettings (the persisted
+        // request), so a fresh instance is already in sync. Previously read as
+        // the engine's own atomics, which are the source of truth for both.
+        if (needNnr && m_nnrEnabled && m_nnr && !m_kiwiSdrNnr) {
+            m_kiwiSdrNnr = std::move(nnr);
+        }
 #ifdef HAVE_NVIDIA_AFX
         if (needNvAfx && m_nvAfxEnabled && m_nvAfx && !m_kiwiSdrNvAfx) {
             if (nvAfx) {
@@ -1344,6 +1396,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #ifdef HAVE_DFNR
     bool needDfnr = false;
 #endif
+    bool needNnr = false;
 #ifdef HAVE_NVIDIA_AFX
     bool needNvAfx = false;
 #endif
@@ -1370,6 +1423,8 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
         needDfnr = m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
             && !source->dfnr;
 #endif
+        needNnr = m_nnrEnabled.load(std::memory_order_relaxed) && m_nnr
+            && !source->nnr;
 #ifdef HAVE_NVIDIA_AFX
         needNvAfx = m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
             && !source->nvAfx;
@@ -1384,6 +1439,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #ifdef HAVE_DFNR
             || needDfnr
 #endif
+            || needNnr
 #ifdef HAVE_NVIDIA_AFX
             || needNvAfx
 #endif
@@ -1406,6 +1462,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> dfnr;
 #endif
+    std::unique_ptr<NnrFilter> nnr;
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> nvAfx;
 #endif
@@ -1438,6 +1495,10 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
         ok = ok && static_cast<bool>(dfnr);
     }
 #endif
+    if (needNnr) {
+        nnr = createNnrFilter(QStringLiteral("external Kiwi %1").arg(id));
+        ok = ok && static_cast<bool>(nnr);
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (needNvAfx) {
         nvAfx = createNvAfxFilter(QStringLiteral("external Kiwi %1").arg(id));
@@ -1489,6 +1550,9 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
             source->dfnr = std::move(dfnr);
         }
 #endif
+        if (needNnr && m_nnrEnabled && m_nnr && !source->nnr) {
+            source->nnr = std::move(nnr);
+        }
 #ifdef HAVE_NVIDIA_AFX
         if (needNvAfx && m_nvAfxEnabled && m_nvAfx && !source->nvAfx) {
             if (nvAfx) {
@@ -1565,6 +1629,9 @@ void AudioEngine::resetLegacyKiwiDspState()
         m_kiwiSdrDfnr->reset();
     }
 #endif
+    if (m_nnrEnabled && m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->reset();
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (m_nvAfxEnabled && m_kiwiSdrNvAfx) {
         m_kiwiSdrNvAfx = createNvAfxFilter(QStringLiteral("Kiwi epoch"));
@@ -1594,6 +1661,7 @@ void AudioEngine::clearLegacyKiwiDspState()
 #ifdef HAVE_DFNR
     m_kiwiSdrDfnr.reset();
 #endif
+    m_kiwiSdrNnr.reset();
 #ifdef HAVE_NVIDIA_AFX
     m_kiwiSdrNvAfx.reset();
 #endif
@@ -1628,6 +1696,9 @@ void AudioEngine::resetExternalKiwiDspState(ExternalRxAudioSourceState& source)
         source.dfnr->reset();
     }
 #endif
+    if (m_nnrEnabled && source.nnr) {
+        source.nnr->reset();
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (m_nvAfxEnabled && source.nvAfx) {
         source.nvAfx = createNvAfxFilter(QStringLiteral("Kiwi epoch"));
@@ -1865,6 +1936,12 @@ AudioEngine::AudioEngine(QObject* parent)
     m_clientTubeRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientPuduRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientDeEssRx->prepare(DEFAULT_SAMPLE_RATE);
+    // txFinalMonitorPcmReady carries a TxAudioSource and this object lives on
+    // its own thread, so every connection to it is queued. A queued connection
+    // cannot marshal a type Qt has not been told about, and the failure is a
+    // runtime warning and a silently dropped signal — no transmit audio, no
+    // compile error to catch it.
+    qRegisterMetaType<AetherSDR::TxAudioSource>("AetherSDR::TxAudioSource");
     m_wsprBeacon->prepare(DEFAULT_SAMPLE_RATE);
 
     TxVoiceProcessor::Processors txProcessors;
@@ -3704,11 +3781,32 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
 #endif
         }
 
+        if (requestedMode == QLatin1String("NNR")) {
+            // No build guard, unlike its siblings: WDSP ships both trained
+            // models in-tree, so NNR is always compiled (CMakeLists CORE_SOURCES).
+            NnrFilter nnr;
+            if (!nnr.isValid()) {
+                return unavailableAutomationDspProbe(
+                    requestedMode, QStringLiteral("NNR/WDSP create_nnr() failed"));
+            }
+            nnr.setStrength(NnrSettings::strength());
+            nnr.setModel(NnrSettings::model());
+            nnr.setAlpha(NnrSettings::alpha());
+            nnr.setAlphaKnee(NnrSettings::alphaKnee());
+            nnr.setTau(NnrSettings::tau());
+            nnr.setMaxGain(NnrSettings::maxGain());
+            nnr.setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
+            const QByteArray output = processAutomationDspProbeBlocks(
+                input, [&nnr](const QByteArray& block) { return nnr.process(block); });
+            return completedAutomationDspProbe(requestedMode, input, output);
+        }
+
         return QJsonObject{
             {QStringLiteral("ok"), false},
             {QStringLiteral("mode"), requestedMode},
             {QStringLiteral("error"),
-             QStringLiteral("unknown DSP mode; use NR2, RN2, NR4, MNR, DFNR, BNR, or all")},
+             QStringLiteral(
+                 "unknown DSP mode; use NR2, RN2, NR4, MNR, DFNR, BNR, NNR, or all")},
         };
     };
 
@@ -3735,6 +3833,7 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
         QStringLiteral("MNR"),
         QStringLiteral("DFNR"),
         QStringLiteral("BNR"),
+        QStringLiteral("NNR"),
     };
     QJsonArray results;
     bool testedOk = true;
@@ -4196,21 +4295,41 @@ void AudioEngine::setMuted(bool muted)
         emit mutedChanged(muted);
 }
 
-// Pick the sidetone backend based on build flag + AppSettings override.
-// PortAudio when available (the callback path: lower latency on every
-// platform that builds it — Windows joined Linux/macOS in #5200, where the
-// shipped installer started providing it); QAudioSink fallback otherwise or
-// when explicitly requested by the user.
+// Pick the sidetone backend from the build flag, the platform and the
+// operator's AppSettings override. The rule — including why the default is
+// PortAudio on Linux/macOS but QAudioSink on Windows (#5713) — lives in
+// CwSidetoneBackendPolicy.h, where it is pinned by
+// tests/cw_sidetone_backend_policy_test.cpp.
 static std::unique_ptr<CwSidetoneSinkBackend> makeSidetoneBackend(QObject* qparent)
 {
-    const QString pref =
-        AppSettings::instance().value("CwSidetoneBackend", "PortAudio").toString();
+#ifdef HAVE_PORTAUDIO
+    constexpr bool kPortAudioBuilt = true;
+#else
+    constexpr bool kPortAudioBuilt = false;
+#endif
+#ifdef Q_OS_WIN
+    constexpr bool kPlatformIsWindows = true;
+#else
+    constexpr bool kPlatformIsWindows = false;
+#endif
+
+    // Held in a local: string_view does not own, and a temporary QByteArray
+    // would be gone before the policy read it.
+    const QByteArray saved =
+        AppSettings::instance().value("CwSidetoneBackend").toString().trimmed().toUtf8();
+    const SidetoneBackendChoice choice = sidetoneBackendChoice(
+        kPortAudioBuilt,
+        kPlatformIsWindows,
+        parseSidetoneBackendPreference(
+            std::string_view(saved.constData(), static_cast<std::size_t>(saved.size()))));
 
 #ifdef HAVE_PORTAUDIO
-    if (pref != "QAudioSink") {
+    if (choice == SidetoneBackendChoice::PortAudio) {
         return std::unique_ptr<CwSidetoneSinkBackend>(
             new CwSidetonePortAudioSink());
     }
+#else
+    Q_UNUSED(choice);
 #endif
     return std::unique_ptr<CwSidetoneSinkBackend>(
         new CwSidetoneQAudioSink(qparent));
@@ -4502,6 +4621,13 @@ bool AudioEngine::prepareMainPcmDsp()
         }
     }
 #endif
+    // NnrFilter is bound to its rate at construction (WDSP re-plans its FFTs
+    // and re-reads both models on a rate change), so rebuild rather than reset.
+    m_nnr.reset();
+    m_kiwiSdrNnr.reset();
+    if (m_nnrEnabled) {
+        m_nnr = createNnrFilter(QStringLiteral("main RX"), rate);
+    }
 #ifdef HAVE_DFNR
     m_dfnr.reset();
     if (m_dfnrEnabled) {
@@ -5210,6 +5336,14 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
         m_kiwiSdrDfnr->reset();
     }
 #endif
+    if (m_nnrEnabled && m_nnr) {
+        m_nnr->reset();
+    }
+    if (m_nnrEnabled && m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->reset();
+    }
+#ifdef HAVE_DFNR
+#endif
 #ifdef __APPLE__
     if (m_mnrEnabled && m_mnr) {
         m_mnr->reset();
@@ -5560,6 +5694,26 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             QByteArray processed = dfnr->process(pcm);
             writeAudioAndLevel(processed);
 #endif
+        } else if (m_nnrEnabled) {
+            NnrFilter* nnr = nnrForSource(source, externalSource);
+            if (!nnr || !nnr->isValid()) {
+                return; // enabled processor is still preparing or failed
+            }
+            QByteArray processed = nnr->process(pcm);
+            // process() applies a pending model switch on this thread, so this
+            // is the first point the selected slot is knowable. Republish it so
+            // nnrModel() converges instead of reporting whatever was live when
+            // setNnrModel() returned. Main RX only — the Kiwi and external
+            // filters are separate instances that do not own this property.
+            // Convergence is therefore bounded by RX audio actually flowing:
+            // with the radio disconnected, or no block reaching this filter,
+            // the previously published slot persists exactly as it used to.
+            // Nothing is emitted here either — a UI that samples nnrModel()
+            // only on nnrEnabledChanged still has to re-read to see the move.
+            if (!externalSource && source != RxDspSource::KiwiSdr) {
+                m_nnrModel.store(nnr->modelSlot(), std::memory_order_relaxed);
+            }
+            writeAudioAndLevel(processed);
 #ifdef HAVE_NVIDIA_AFX
         } else if (m_nvAfxEnabled) {
             NvidiaAfxFilter* nvAfx = nvAfxForSource(source, externalSource);
@@ -7134,6 +7288,11 @@ static void applyNr2Settings(SpectralNR& nr2)
     nr2.setGainMethod(config.gainMethod);
     nr2.setNpeMethod(config.npeMethod);
     nr2.setAeFilter(config.aeFilter);
+    nr2.setPost2Run(config.post2Run);
+    nr2.setPost2Factor(config.post2Factor);
+    nr2.setPost2Nlevel(config.post2Nlevel);
+    nr2.setPost2TaperHz(config.post2TaperHz);
+    nr2.setPost2DecaySeconds(config.post2DecaySeconds);
 }
 
 // RN2's only user-adjustable parameter. The TX (ProcessedMono) instance is
@@ -7153,6 +7312,11 @@ static void copyNr2Settings(const SpectralNR& source, SpectralNR& target)
     target.setGainMethod(source.gainMethod());
     target.setNpeMethod(source.npeMethod());
     target.setAeFilter(source.aeFilter());
+    target.setPost2Run(source.post2Run());
+    target.setPost2Factor(source.post2Factor());
+    target.setPost2Nlevel(source.post2Nlevel());
+    target.setPost2TaperHz(source.post2TaperHz());
+    target.setPost2DecaySeconds(source.post2DecaySeconds());
 }
 
 #ifdef HAVE_SPECBLEACH
@@ -7264,6 +7428,7 @@ void AudioEngine::setNr2Enabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         // Wisdom should already be generated by MainWindow::enableNr2WithWisdom().
         // Import only here: full wisdom generation can take minutes and must
@@ -7446,6 +7611,29 @@ void AudioEngine::setNr2AeFilter(bool on)
     }
 }
 
+void AudioEngine::applyNr2Post2Settings()
+{
+    const Nr2SettingsModel::Config config = Nr2SettingsModel::instance().config();
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    const auto push = [&config](SpectralNR* nr2) {
+        if (!nr2) {
+            return;
+        }
+        nr2->setPost2Run(config.post2Run);
+        nr2->setPost2Factor(config.post2Factor);
+        nr2->setPost2Nlevel(config.post2Nlevel);
+        nr2->setPost2TaperHz(config.post2TaperHz);
+        nr2->setPost2DecaySeconds(config.post2DecaySeconds);
+    };
+    push(m_nr2.get());
+    push(m_kiwiSdrNr2.get());
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nr2) {
+            push(source->nr2.get());
+        }
+    }
+}
+
 void AudioEngine::setMainSourceLegacyNr2(bool legacy)
 {
     const bool previous =
@@ -7476,6 +7664,7 @@ void AudioEngine::setNr4Enabled(bool on)
         if (m_rn2Enabled)  setRn2Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         m_nr4 = createNr4Filter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_nr4) {
@@ -7633,6 +7822,7 @@ void AudioEngine::setMnrEnabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         // Restore strength from settings (default 1.0 = full suppression)
         m_mnrStrength.store(std::clamp(
             AppSettings::instance().value("MnrStrength", "1.00").toFloat(), 0.0f, 1.0f));
@@ -7698,6 +7888,7 @@ void AudioEngine::setRn2Enabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         m_rn2 = createRn2Filter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_rn2) {
@@ -7722,6 +7913,122 @@ void AudioEngine::setRn2Enabled(bool on)
     }
     qCDebug(lcAudio) << "AudioEngine: RN2 (RNNoise)" << (on ? "enabled" : "disabled");
     emit rn2EnabledChanged(on);
+}
+
+// ─── NNR (WDSP 2.10 neural noise reduction) ──────────────────────────────────
+// Unconditional, unlike DFNR/MNR/BNR: both trained models are compiled into
+// the vendored WDSP, so there is no library to locate and no GPU to require.
+// It is a SPEECH model — a steady carrier is attenuated ~28 dB — so callers
+// must keep it away from CW, the digital modes and the data path.
+
+void AudioEngine::setNnrEnabled(bool on)
+{
+    if (m_nnrEnabled == on) return;
+    std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
+    ++m_dspConfigurationGeneration;
+    if (on) {
+        // Disable all other NR modes — they're mutually exclusive
+        if (m_nr2Enabled)  setNr2Enabled(false);
+        if (m_rn2Enabled)  setRn2Enabled(false);
+        if (m_nr4Enabled)  setNr4Enabled(false);
+        if (m_dfnrEnabled) setDfnrEnabled(false);
+        if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_mnrEnabled)  setMnrEnabled(false);
+        m_nnrStrength.store(NnrSettings::strength());
+        m_nnrModel.store(NnrSettings::model());
+        m_nnr = createNnrFilter(QStringLiteral("main RX"), m_rxProducerRate.load());
+        if (!m_nnr) {
+            m_nnr.reset();
+            emit nnrEnabledChanged(false);
+            return;
+        }
+        // WDSP reports the slot it actually selected, which differs from the
+        // request when a build has no model there.
+        m_nnrModel.store(m_nnr->modelSlot());
+        m_nnrEnabled = true;
+    } else {
+        m_nnrEnabled = false;
+        m_nnr.reset();
+        m_kiwiSdrNnr.reset();
+        for (const auto& source : m_externalKiwiSources) {
+            if (source) {
+                source->nnr.reset();
+            }
+        }
+    }
+    lock.unlock();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
+    qCDebug(lcAudio) << "AudioEngine: NNR" << (on ? "enabled" : "disabled");
+    emit nnrEnabledChanged(on);
+}
+
+void AudioEngine::setNnrStrength(int strength)
+{
+    const int clamped = std::clamp(strength, 0, 100);
+    m_nnrStrength.store(clamped);
+    NnrSettings::setStrength(clamped);
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (m_nnr) {
+        m_nnr->setStrength(clamped);
+    }
+    if (m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->setStrength(clamped);
+    }
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nnr) {
+            source->nnr->setStrength(clamped);
+        }
+    }
+}
+
+void AudioEngine::applyNnrTuning()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    const auto push = [](NnrFilter* f) {
+        if (!f) {
+            return;
+        }
+        f->setAlpha(NnrSettings::alpha());
+        f->setAlphaKnee(NnrSettings::alphaKnee());
+        f->setTau(NnrSettings::tau());
+        f->setMaxGain(NnrSettings::maxGain());
+        f->setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
+    };
+    push(m_nnr.get());
+    push(m_kiwiSdrNnr.get());
+    for (const auto& source : m_externalKiwiSources) {
+        if (source) {
+            push(source->nnr.get());
+        }
+    }
+}
+
+void AudioEngine::setNnrModel(int slot)
+{
+    const int requested = std::clamp(slot, 0, 1);
+    NnrSettings::setModel(requested);
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->setModel(requested);
+    }
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nnr) {
+            source->nnr->setModel(requested);
+        }
+    }
+    if (m_nnr) {
+        m_nnr->setModel(requested);
+        // nnrModel() reports the slot in use, not the one wanted: WDSP can
+        // refuse a slot this build has no model for. The switch lands on the
+        // audio thread, so this still reads the previous slot here — the RX
+        // path republishes it after the next processed block, which is what
+        // makes the value converge rather than stay stale.
+        m_nnrModel.store(m_nnr->modelSlot());
+    } else {
+        m_nnrModel.store(requested);
+    }
 }
 
 // ─── RN2 — TX path (mic pre-amp) ──────────────────────────────────────────────
@@ -7803,6 +8110,7 @@ void AudioEngine::setDfnrEnabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         m_dfnr = createDfnrFilter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_dfnr) {
             m_dfnr.reset();
@@ -7890,6 +8198,7 @@ void AudioEngine::setNvAfxEnabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         m_nvAfx = createNvAfxFilter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_nvAfx) {
@@ -9170,9 +9479,11 @@ void AudioEngine::onTxAudioReady()
     // Expose the post-limiter int16 stream so the QSO recorder captures voice TX
     // for Client-Side recording (#3556). Emitted unconditionally; the recorder
     // slot fast-returns when not recording / not transmitting, so this is cheap.
-    // Mic-chain audio: the level is ours to manage, so the backend's ALC stays
-    // in play.
-    emit txFinalMonitorPcmReady(data, /*clientLeveled=*/false);
+    // Mic-chain audio: the OPERATOR's level, set with the mic slider, with the
+    // operator present to hear the result. The backend's ALC stays in play as
+    // protection, and the slider applies — which is exactly what does NOT
+    // happen for the WSPR pump; see startWsprPump().
+    emit txFinalMonitorPcmReady(data, TxAudioSource::Microphone);
 
     // ── TX post-final-limiter scope tap ─────────────────────────
     // Sampled here, AFTER everything the strip can do to the audio
@@ -9487,8 +9798,23 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     // interlock status a host-modulating radio never sends, so testing it would
     // discard everything.
     if (m_hostModulation) {
+        // Microphone, NOT EngineGenerated, and the distinction is a transmit
+        // level rather than a label. The only generator that reaches this
+        // branch on a host-modulating radio is the AX.25 modem — RADE needs DAX
+        // audio and activateRADE() refuses any radio that cannot provide it, so
+        // it is Flex-only and a Flex modulates on its own side.
+        //
+        // The AFSK amplitude is a compile-time constant (kTxAfskAmplitude =
+        // 0.35, -9.12 dBFS in AetherAx25LibmodemShim.cpp) and the packet dialog
+        // has no level control at all, so the mic slider is the ONLY thing in
+        // the product that can move an AX.25 frame. Tagging it EngineGenerated
+        // bypasses that slider and pins HF packet 7.71 dB under the ALC target
+        // (0.85, -1.41 dBFS) with nothing able to raise it. The beacon argument
+        // does not reach this far: the WSPR pump is the unattended source, it
+        // feeds from its own call site below, and #5651 sets its default.
         feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
-                               /*forceRadioDaxRoute=*/true);
+                               /*forceRadioDaxRoute=*/true,
+                               TxAudioSource::Microphone);
         return;
     }
 
@@ -9653,12 +9979,13 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
     if (m_wsprBeacon && m_wsprBeacon->isActive()) {
         return;
     }
-    feedDaxTxAudioInternal(inPcm, true, false);
+    feedDaxTxAudioInternal(inPcm, true, false, TxAudioSource::ClientLeveled);
 }
 
 void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                                          bool markExternalSource,
-                                         bool forceRadioDaxRoute)
+                                         bool forceRadioDaxRoute,
+                                         TxAudioSource source)
 {
     if (inPcm.isEmpty()) return;
     // A host-modulating backend (HL2) has no Flex TX stream id and never will —
@@ -9742,14 +10069,23 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
             dst[i] = static_cast<qint16>(
                 std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
         }
-        // markExternalSource is the source split this tap needs (#4796): true
-        // for TCI/DAX client audio, whose sender owns its level and must not
-        // get ALC makeup gain; false for the engine's own pre-shaped audio
-        // (WSPR pump, AX.25 modem, RADE modem waveform — all reaching here
-        // via sendModemTxAudio or the WSPR pump with markExternalSource
-        // false), which the engine generates at a known level and which keeps
-        // the ALC so its on-air level does not change.
-        emit txFinalMonitorPcmReady(out, /*clientLeveled=*/markExternalSource);
+        // THE SPLIT THIS TAP NEEDS IS THREE-WAY, AND THE CALLER DECIDES IT.
+        //
+        // The tag used to be derived here, as `markExternalSource ?
+        // ClientLeveled : EngineGenerated`, which made "not a TCI client" mean
+        // "an unattended beacon" — and swept the AX.25 modem in with the WSPR
+        // pump. It is passed in now, so each entry point states its own origin
+        // and a reader does not have to reason backwards from a flag that
+        // means something else. See TxAudioSource.h.
+        //
+        // What rides on it: the HL2 backend bypasses the mic slider for
+        // EngineGenerated alone. That matters because the ALC's 40 dB of makeup
+        // is gone (#5646) — it used to normalise any generated level onto the
+        // modulator's target, so a beacon came out right whatever level it was
+        // generated at. Without it, a beacon generated at -20 dBFS transmits at
+        // -20 dBFS, and the mic slider was moving it by up to 40 dB. Measured:
+        // 18.58 dB down, a factor of 72 in power.
+        emit txFinalMonitorPcmReady(out, source);
         return;
     }
 
@@ -9939,7 +10275,10 @@ void AudioEngine::pumpWsprBeacon()
     m_wsprFloatScratch.fill('\0');
     m_wsprBeacon->process(
         reinterpret_cast<float*>(m_wsprFloatScratch.data()), frames, 2);
-    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true);
+    // The one EngineGenerated source in the tree: a WSPR frame keys for 111.6 s
+    // with nobody at the microphone, so the mic slider must not move it.
+    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true,
+                           TxAudioSource::EngineGenerated);
     m_wsprPumpedFrames += frames;
 }
 

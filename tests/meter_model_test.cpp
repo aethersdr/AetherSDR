@@ -616,9 +616,26 @@ void testAlcGainClearsOnEveryPathThatInvalidatesIt()
         report("a TX slice change clears the ALC gain and says so",
                nearlyEqual(model.alcGainDb(), 0.0f) && !model.hasAlcGainValue()
                    && emissions == 1);
-        model.setActiveTxSlice(1);
-        report("re-selecting the same TX slice does not emit another clear",
-               emissions == 1);
+        // THE NO-OP CONTRACT, PINNED WHERE IT CAN ACTUALLY FAIL.
+        //
+        // This used to re-select slice 1 and assert no second emission. That
+        // could not fail twice over: setActiveTxSlice() early-returns on an
+        // unchanged index so clearAlcGainState() is never reached, and there is
+        // no fresh sample by then so it would return false anyway
+        // (aethersdr-agent, #5636 review).
+        //
+        // Removing an inactive meter must bypass clearAlcGainState() even
+        // when the active meter has a live sample.
+        model.setActiveTxSlice(0);
+        model.updateValues({21}, {rawDb(12.0f)});
+        const int before = emissions;
+        report("the active ALC gain is live again before the removal",
+               model.hasAlcGainValue() && nearlyEqual(model.alcGainDb(), 12.0f));
+        model.removeMeter(41);   // the INACTIVE slice-9 ALCGAIN
+        report("removing an inactive ALCGAIN meter emits no clear",
+               emissions == before);
+        report("and leaves the active reading standing",
+               model.hasAlcGainValue() && nearlyEqual(model.alcGainDb(), 12.0f));
     }
 
     // Path 2 — disconnect.
@@ -644,7 +661,15 @@ void testAlcGainClearsOnEveryPathThatInvalidatesIt()
         int emissions = 0;
         QObject::connect(&model, &MeterModel::alcGainChanged,
                          [&](float) { ++emissions; });
+        int removals = 0;
+        QObject::connect(&model, &MeterModel::meterRemoved, [&](int index) {
+            ++removals;
+            report("meterRemoved subscribers see the withdrawn definition and routing gone",
+                   index == 21 && model.meterDef(index) == nullptr
+                       && !model.hasAlcGainMeter() && !model.hasAlcGainValue());
+        });
         model.removeMeter(21);
+        report("meter withdrawal notifies subscribers exactly once", removals == 1);
         report("removing the active ALCGAIN meter clears the gain and says so",
                nearlyEqual(model.alcGainDb(), 0.0f) && !model.hasAlcGainValue()
                    && emissions == 1);

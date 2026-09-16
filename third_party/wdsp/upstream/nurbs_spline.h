@@ -61,11 +61,18 @@ typedef struct {
 #  define NS_SAMPLES_PER_CTRL 8
 #endif
 
-NS_Spline *ns_build(const NF_Curve    *curve,
+typedef struct _ns_ws* NS_WS;
+
+NS_WS build_ns_ws(int n_ctrl_max);
+void  teardown_ns_ws(NS_WS ws);
+
+NS_Spline *ns_build(NS_WS               ws,
+                    const NF_Curve    *curve,
                     const NF_FitResult *result,
                     int                 n_pts);
 
-int ns_extend_left(NS_Spline *s,
+int ns_extend_left(NS_WS ws,
+                   NS_Spline *s,
                    double x_target,
                    double x_anchor,
                    double bound_frac,
@@ -78,10 +85,8 @@ double ns_eval_near(const NS_Spline *s, double x, double prev_y);
 
 double ns_eval_near_clamped(const NS_Spline *s, double x, double prev_y);
 
-// This function not called.
 double ns_eval_left_edge(const NS_Spline *s);
 
-// This function not called.
 int ns_eval_all(const NS_Spline *s, double x,
                 double *y_out, int max_out);
 
@@ -110,7 +115,6 @@ typedef struct _CurveEMA {
     int    warmup_cycles;
 } CurveEMA;
 
-// This function not called.
 void curve_ema_init(CurveEMA *e, double alpha);
 
 void curve_ema_init2(CurveEMA *e,
@@ -120,12 +124,10 @@ void curve_ema_init2(CurveEMA *e,
                      double y_clip_lo,
                      double y_clip_hi);
 
-// This function not called.
 double curve_ema_get_y(const CurveEMA *e, double x);
 
 void curve_ema_update(CurveEMA *e, const NS_Spline *s);
 
-// This function not called.
 void curve_ema_enforce_monotone(CurveEMA *e, double x_start);
 
 double get_mag_correction_ema(const CurveEMA *e, double x, double *prev_y);

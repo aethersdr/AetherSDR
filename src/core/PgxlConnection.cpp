@@ -119,6 +119,19 @@ void PgxlConnection::processLine(const QString& line)
         return;
     }
 
+    // Alert: M|<text>, or M| to clear. Its own frame type — the same one the
+    // tuner sends, on the same vendor's protocol. Unlike R and S it carries
+    // no sequence number, because there is no command to correlate it with:
+    // it is broadcast to every connected client rather than answering the one
+    // that acted. An empty body is the clear, not an alert whose text happens
+    // to be blank.
+    if (line.startsWith('M') && line.size() > 1 && line[1] == '|') {
+        const QString text = line.mid(2).trimmed();
+        qCDebug(lcTuner) << "PgxlConnection: alert" << (text.isEmpty() ? "(cleared)" : text);
+        emit alertChanged(text);
+        return;
+    }
+
     // Response: R<seq>|<code>|<body>
     if (line.startsWith('R')) {
         int pipe1 = line.indexOf('|');

@@ -181,11 +181,12 @@ private:
     QString messagesPath() const;
     QString callersPath() const;
     QString heardPath() const;
-    void ensureStorageDir() const;
+    bool ensureStorageDir() const;
     void loadAll();
-    void saveMessages() const;
-    void saveCallers() const;
-    void saveHeard() const;
+    bool saveMessages(const QVector<Message>& messages, int nextId);
+    bool saveCallers(const QVector<Caller>& callers);
+    bool saveHeard(const QVector<Heard>& heard);
+    void reportPersistenceFailure(const QString& store, const QString& detail);
 
     // Cap on unterminated inbound text. paclen tops out at 256 bytes and a
     // mailbox command is a few dozen characters, so anything approaching this

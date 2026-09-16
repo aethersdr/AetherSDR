@@ -56,6 +56,7 @@ typedef struct _iobf
 	HANDLE Sem_BuffReady;						// count = number of 'dsp_size' buffers queued for processing
 	volatile long exec_bypass;
 	volatile long flush_bypass;
+	volatile long flush_quiesced;				// AetherSDR patch 9: set once quiesce_flush() has performed the flushChannel exit handshake, so the second caller of a pre_main_destroy()/post_main_destroy() pair does not re-arm a bypass no thread is left to acknowledge
 	HANDLE Sem_Flush;
 	struct
 	{
@@ -83,6 +84,10 @@ extern void flush_slews (IOB a);
 extern void create_iobuffs (int channel);
 
 extern void destroy_iobuffs (int channel);
+
+// AetherSDR patch 9: run the flushChannel exit handshake. Idempotent, so both
+// pre_main_destroy() and destroy_iobuffs() may call it; only the first waits.
+extern void quiesce_flush (int channel);
 
 extern void flush_iobuffs (int channel);
 

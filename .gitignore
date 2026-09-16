@@ -5,6 +5,7 @@ build-*/
 # ninja logs written next to the source tree were slipping past it and three
 # of them (586 KB) reached main in #5146.
 *.log
+*.bak
 deploy/
 deploy-*/
 installer-runtime/

@@ -8,6 +8,7 @@
 #include "core/PanadapterStream.h"
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QEventLoop>
 #include <QTimer>
 #include <cstdio>
@@ -36,6 +37,65 @@ public:
         radio.m_pendingCallbacks.insert(1234, std::move(callback));
         radio.teardownBackend();
     }
+    static void insertPendingReply(RadioModel& radio, quint32 sequence,
+                                   RadioModel::ResponseCallback callback)
+    {
+        radio.m_pendingCallbacks.insert(sequence, std::move(callback));
+    }
+    static qsizetype pendingReplyCount(const RadioModel& radio)
+    {
+        return radio.m_pendingCallbacks.size();
+    }
+    static void disconnect(RadioModel& radio)
+    {
+        radio.onDisconnected();
+    }
+    static RadioConnection* connection(RadioModel& radio)
+    {
+        return radio.m_connection;
+    }
+    static quint32 firstPendingReplySequence(const RadioModel& radio)
+    {
+        return radio.m_pendingCallbacks.isEmpty() ? 0 : radio.m_pendingCallbacks.cbegin().key();
+    }
+    static void beginMultiFlexProbe(RadioModel& radio)
+    {
+        radio.peekForMultiFlexConflictThen([] {});
+    }
+    static bool hasMultiFlexContinuation(const RadioModel& radio)
+    {
+        return static_cast<bool>(radio.m_multiFlexContinuation);
+    }
+    static void disconnectClientsThen(RadioModel& radio, const QList<quint32>& handles,
+                                      std::function<void()> continuation)
+    {
+        radio.disconnectClientHandlesThen(handles, std::move(continuation));
+    }
+    static void primeGuiRegistration(RadioModel& radio, PanadapterStream& stream,
+                                     QStringList& commands)
+    {
+        radio.m_family = QStringLiteral("flex");
+        radio.m_panStream = &stream;
+        radio.m_connection->m_commandSinkForTest =
+            [&commands](quint32, const QString& c) { commands << c; };
+        radio.m_lastInfo.address = QHostAddress(QStringLiteral("192.168.1.100"));
+        radio.m_intentionalDisconnect = false;
+        radio.m_radioWakeActive = false;
+        radio.registerAsGuiClient(QStringLiteral("00000000-0000-0000-0000-0000000000AA"));
+        // onDisconnected() stops the stream with a BlockingQueuedConnection the
+        // harness cannot service; detach it once the command is registered.
+        radio.m_panStream = nullptr;
+    }
+    static void primeChainedStreamCommand(RadioModel& radio, QStringList& commands)
+    {
+        radio.m_family = QStringLiteral("flex");
+        radio.m_connection->m_commandSinkForTest =
+            [&commands](quint32, const QString& c) { commands << c; };
+        radio.m_rxAudio.streamId = 0x12345678;
+        radio.createAudioStream();   // `stream remove` whose callback chains more sendCmds
+    }
+    static bool intentionalDisconnect(const RadioModel& radio) { return radio.m_intentionalDisconnect; }
+    static bool reconnectArmed(const RadioModel& radio) { return radio.m_reconnectTimer.isActive(); }
     static void injectNetCwTransport(RadioModel& radio, PanadapterStream& stream,
                                     std::function<void(const QByteArray&)> sink)
     {
@@ -296,6 +356,152 @@ void teardownAdmission()
         check(!callbackOperation.permitsDispatch(std::numeric_limits<qint64>::max()),
               "teardown cannot leave a live operation after its backend dies");
     }
+}
+
+void pendingCallbackDisconnectExpiry()
+{
+    RadioModel radio;
+    RadioConnection* const connection = TxOperationIntegrationTestAccess::connection(radio);
+    check(connection != nullptr, "default Flex backend exposes its production response connection");
+    if (!connection) {
+        return;
+    }
+
+    const auto deliverResponse = [&](quint32 sequence, int code, const QString& body) {
+        const bool invoked = QMetaObject::invokeMethod(
+            connection, "commandResponse", Qt::BlockingQueuedConnection,
+            Q_ARG(quint32, sequence), Q_ARG(int, code), Q_ARG(QString, body));
+        QCoreApplication::sendPostedEvents(&radio, QEvent::MetaCall);
+        return invoked;
+    };
+
+    int expired = 0;
+    int staleCompletions = 0;
+    TxOperationIntegrationTestAccess::insertPendingReply(radio, 1234,
+        [&](int code, const QString&) {
+            if (code != 0) {
+                ++expired;
+            } else {
+                ++staleCompletions;
+            }
+        });
+    TxOperationIntegrationTestAccess::disconnect(radio);
+    check(expired == 1 && TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0,
+          "disconnect expires every pending callback before reconnect");
+
+    const bool staleResponseDelivered = deliverResponse(
+        1234, 0, QStringLiteral("late reply"));
+    check(staleResponseDelivered && expired == 1 && staleCompletions == 0,
+          "a late same-sequence response cannot complete a disconnected session callback");
+
+    TxOperationIntegrationTestAccess::disconnect(radio);
+    check(expired == 1,
+          "a repeated disconnect cannot expire the same callback twice");
+
+    int responseCompletions = 0;
+    TxOperationIntegrationTestAccess::insertPendingReply(radio, 1235,
+        [&](int, const QString&) {
+            ++responseCompletions;
+            TxOperationIntegrationTestAccess::disconnect(radio);
+        });
+    const bool responseDelivered = deliverResponse(
+        1235, 0, QStringLiteral("response triggers disconnect"));
+    check(responseDelivered && responseCompletions == 1
+              && TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0,
+          "response callback can disconnect without re-expiring itself");
+
+    TxOperationIntegrationTestAccess::beginMultiFlexProbe(radio);
+    const quint32 probeSequence = TxOperationIntegrationTestAccess::firstPendingReplySequence(radio);
+    check(probeSequence != 0, "MultiFlex probe registers its first subscription callback");
+    if (probeSequence != 0) {
+        TxOperationIntegrationTestAccess::disconnect(radio);
+        check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0,
+              "an expired MultiFlex subscription cannot enqueue its chained callback");
+    }
+
+    radio.setMultiFlexEnabled(true);
+    TxOperationIntegrationTestAccess::beginMultiFlexProbe(radio);
+    const quint32 radioSubscriptionSequence =
+        TxOperationIntegrationTestAccess::firstPendingReplySequence(radio);
+    check(radioSubscriptionSequence != 0,
+          "MultiFlex probe registers its radio subscription before the client subscription");
+    if (radioSubscriptionSequence != 0) {
+        const bool radioSubscriptionDelivered = deliverResponse(
+            radioSubscriptionSequence, 0, QStringLiteral("radio subscription accepted"));
+        const quint32 clientSubscriptionSequence =
+            TxOperationIntegrationTestAccess::firstPendingReplySequence(radio);
+        check(radioSubscriptionDelivered && clientSubscriptionSequence != 0,
+              "accepted radio subscription advances to the client subscription callback");
+        if (clientSubscriptionSequence != 0) {
+            TxOperationIntegrationTestAccess::disconnect(radio);
+            check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0
+                      && !TxOperationIntegrationTestAccess::hasMultiFlexContinuation(radio),
+                  "an expired client subscription drops the dead session's MultiFlex continuation");
+        }
+    }
+
+    bool clientDisconnectContinuationRan = false;
+    TxOperationIntegrationTestAccess::disconnectClientsThen(
+        radio, {0x10, 0x11}, [&] { clientDisconnectContinuationRan = true; });
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 1,
+          "client-disconnect sequence has one outstanding callback at a time");
+    TxOperationIntegrationTestAccess::disconnect(radio);
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0
+              && !clientDisconnectContinuationRan,
+          "disconnect expiration cannot advance the client-disconnect callback chain");
+}
+
+
+// A mid-handshake TCP drop is a network blip, not a radio rejection. Before
+// #5653's review the disconnect-edge expiry answered the in-flight `client gui`
+// callback with the terminal code, which that callback read as a refusal:
+// m_intentionalDisconnect latched, the reconnect timer stopped, and the operator
+// was told a GUI-client slot was taken. Auto-reconnect never fired again.
+void guiRegistrationDropIsNotARejection()
+{
+    RadioModel radio;
+    PanadapterStream stream;
+    QStringList commands;
+    int registrationFailed = 0;
+    int connectionErrors = 0;
+    QObject::connect(&radio, &RadioModel::guiClientRegistrationFailed,
+                     [&](const QString&) { ++registrationFailed; });
+    QObject::connect(&radio, &RadioModel::connectionError,
+                     [&](const QString&) { ++connectionErrors; });
+
+    TxOperationIntegrationTestAccess::primeGuiRegistration(radio, stream, commands);
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 1,
+          "client gui is in flight before the drop");
+
+    TxOperationIntegrationTestAccess::disconnect(radio);
+
+    check(registrationFailed == 0,
+          "a transport drop is not reported as a GUI-client registration failure");
+    check(connectionErrors == 0,
+          "a transport drop raises no registration connectionError");
+    check(!TxOperationIntegrationTestAccess::intentionalDisconnect(radio),
+          "a transport drop is not latched as an intentional disconnect");
+    check(TxOperationIntegrationTestAccess::reconnectArmed(radio),
+          "auto-reconnect stays armed after a drop during GUI registration");
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0,
+          "the expired client gui callback is not left in the map");
+}
+
+// expirePendingCallbacks() drains the map, but hasCommandPlane() is only a
+// pointer check -- so a drained callback that chains another sendCmd() used to
+// land a fresh entry in the map just cleared, re-creating the leak being closed.
+void expiringCallbackCannotRepopulateTheMap()
+{
+    RadioModel radio;
+    QStringList commands;
+    TxOperationIntegrationTestAccess::primeChainedStreamCommand(radio, commands);
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 1,
+          "the chaining stream command is in flight before the drop");
+
+    TxOperationIntegrationTestAccess::disconnect(radio);
+
+    check(TxOperationIntegrationTestAccess::pendingReplyCount(radio) == 0,
+          "a callback chained from an expiring callback cannot repopulate the map");
 }
 
 void disconnectAdmission()
@@ -698,6 +904,9 @@ int main(int argc, char** argv)
     delayedReleaseAndReplacement();
     flexEncoding();
     teardownAdmission();
+    pendingCallbackDisconnectExpiry();
+    guiRegistrationDropIsNotARejection();
+    expiringCallbackCannotRepopulateTheMap();
     disconnectAdmission();
     reentrantIntents();
     quindarNormalRelease();

@@ -638,6 +638,10 @@ private:
     // Backend-sourced radio health. Read-only; see the definition for why it is
     // deliberately not assembled from the models.
     QJsonObject doHealth();
+    // `telemetry target <ip>` — aim the offline health source without
+    // connecting. See the definition for why connecting is not an acceptable
+    // way to supply the address.
+    QJsonObject doTelemetry(const QString& action, const QString& value);
     QJsonObject doAtu(const QString& action);
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
@@ -667,6 +671,7 @@ private:
     // RadioCapabilities::hostFrequencyCalibration, so it refuses on a radio that
     // calibrates itself rather than silently storing a number nothing applies.
     QJsonObject doFreqCal(const QString& action, const QString& value);
+    QJsonObject doBandscope(const QString& action);
     QJsonObject doDroopCal(const QString& action, const QString& value);
     QJsonObject doTargetTune(const QString& value);
     QJsonObject doMemory(const QString& action, const QString& arg);

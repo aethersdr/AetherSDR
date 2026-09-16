@@ -236,6 +236,7 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
+#include "core/NnrSettings.h"
 #include "core/AutomationServer.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
@@ -1722,7 +1723,7 @@ MainWindow::MainWindow(QWidget* parent)
     // in the CW portion of the file (#4281). Context stays m_qsoRecorder so the
     // connection type and lifetime are unchanged.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            m_qsoRecorder, [this](const QByteArray& pcm, bool /*clientLeveled*/) {
+            m_qsoRecorder, [this](const QByteArray& pcm, TxAudioSource /*source*/) {
         // Evaluated at queued-delivery time on the recorder's thread, so blocks
         // already in flight when ownership flips are gated by the NEW owner —
         // bounded (tens of ms) leakage in both directions at over boundaries.
@@ -1737,9 +1738,9 @@ MainWindow::MainWindow(QWidget* parent)
     // agree with what actually goes on the air. A Flex radio modulates on the
     // radio side and ignores this.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            this, [this](const QByteArray& pcm, bool clientLeveled) {
+            this, [this](const QByteArray& pcm, TxAudioSource source) {
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
-                                   clientLeveled);
+                                   source);
     });
     wireModemAudioCompletion();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
@@ -4047,6 +4048,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
                persistedAetherDspMethod == QStringLiteral("DFNR") ? "True" : "False");
     s.setValue("ClientMnrEnabled",
                persistedAetherDspMethod == QStringLiteral("MNR") ? "True" : "False");
+    NnrSettings::setEnabled(persistedAetherDspMethod == QStringLiteral("NNR"));
     // BNR not persisted — requires manual enable each session
 
     s.save();
@@ -7355,6 +7357,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // is for controls that would look broken when greyed out with no radio
     // attached. A brand name is a fact about a connected radio, so it clears
     // with the rest of the identity block.
+    //
+    // NOTE (#5262 M3a): "hide rather than dim" is no longer the general rule —
+    // individual controls dim with a reason, and hiding survives only for a
+    // cohesive radio-specific cluster. This site is unaffected: it clears a
+    // TEXT VALUE that has no meaning without a radio, which is neither of those
+    // cases. See docs/style/theme-style-guide.md §"Three-state controls".
     m_radioManufacturer = connected ? caps.manufacturer : QString();
     refreshRadioIdentityLabels();
 
@@ -7551,6 +7559,15 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz);
         m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
             m_radioModel.hasAudioPeakingFilter());
+        // The ALC Gain gauge, on the meter EXISTING rather than on a
+        // capability flag: only the HL2 publishes TX:ALCGAIN, and the Phone
+        // panel is shared. `connected &&` rather than the permissive
+        // `!connected ||` used above — a disconnected panel must be the panel
+        // that shipped before this gauge, and the disconnect edge is what
+        // takes the row back down after an HL2 session so the next Flex
+        // connect does not inherit it.
+        m_appletPanel->phoneCwApplet()->setHasAlcGainMeter(
+            connected && m_radioModel.meterModel().hasAlcGainMeter());
     }
 
     // ── The 8-band graphic EQ ───────────────────────────────────────────────
@@ -7718,13 +7735,23 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         const bool cmdPlane = !connected || m_radioModel.hasCommandPlane();
         const QString why =
             cmdPlane ? QString() : tr("Not supported by this radio");
+        // The reason rides on the tooltip AND on an accessible channel. A
+        // tooltip is a mouse affordance that a screen reader never sees, so
+        // setEnabled + setToolTip alone leaves a blind operator with a dead
+        // menu entry and no stated cause — short of M0 item 3's own acceptance
+        // from the day it merged (#5262 M3a, #4896).
+        //
+        // QAction has no accessibleDescription; Qt exposes an action's status
+        // tip to accessibility clients, so that is where the reason goes.
         if (m_txBandAction) {
             m_txBandAction->setEnabled(cmdPlane);
             m_txBandAction->setToolTip(why);
+            m_txBandAction->setStatusTip(why);
         }
         if (m_tuneInhibitMenu) {
             m_tuneInhibitMenu->menuAction()->setEnabled(cmdPlane);
             m_tuneInhibitMenu->menuAction()->setToolTip(why);
+            m_tuneInhibitMenu->menuAction()->setStatusTip(why);
         }
     }
 

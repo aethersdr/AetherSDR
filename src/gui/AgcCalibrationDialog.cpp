@@ -307,7 +307,8 @@ bool AgcCalibrationDialog::nrSuppressesCalibration() const
 {
     if (m_audio && (m_audio->nr2Enabled() || m_audio->rn2Enabled()
                   || m_audio->nr4Enabled() || m_audio->dfnrEnabled()
-                  || m_audio->mnrEnabled() || m_audio->nvAfxEnabled())) {
+                  || m_audio->mnrEnabled() || m_audio->nvAfxEnabled()
+                  || m_audio->nnrEnabled())) {
         return true;
     }
     if (m_slice && m_slice->nrOn()) {
@@ -334,7 +335,7 @@ void AgcCalibrationDialog::updateModeUi()
     // start path also refuses to begin until NR is off.
     if (nrSuppressesCalibration() && m_hintLabel) {
         m_hintLabel->setText(QStringLiteral(
-            "⚠ Disable Noise Reduction (NR/NR2/RN2/NR4/DFNR/MNR/BNR) for accurate "
+            "⚠ Disable Noise Reduction (NR/NR2/RN2/NR4/DFNR/MNR/BNR/NNR) for accurate "
             "calibration — NR crushes the noise floor the knee detector is "
             "looking for."));
     } else if (m_hintLabel) {
@@ -401,7 +402,7 @@ void AgcCalibrationDialog::onStartStop()
             QStringLiteral(
                 "Noise Reduction is active and is crushing the audio noise "
                 "floor that the AGC knee detector measures. Turn off any of "
-                "NR / NR2 / RN2 / NR4 / DFNR / MNR / BNR, then try Auto Sweep "
+                "NR / NR2 / RN2 / NR4 / DFNR / MNR / BNR / NNR, then try Auto Sweep "
                 "again."), QMessageBox::Ok, this);
         boxOwner.get()->exec();
         return;

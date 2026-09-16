@@ -27,25 +27,33 @@ warren@pratt.one
 #ifndef _extrapolate_h
 #define _extrapolate_h
 
-typedef enum {
-	EXTRAP_CONFIDENT = 0,   
+typedef enum 
+{
+	EXTRAP_CONFIDENT      = 0,   
 	EXTRAP_LOW_CONFIDENCE = 1   
 } ExtrapolationConfidence;
 
-typedef struct {
-	double                 y_at_1;        
+typedef struct 
+{
+	double                  y_at_1;        
 	ExtrapolationConfidence confidence;   
-	double                 y_linear;      
-	double                 y_quadratic;   
-	double                 y_cubic;       
+	double                  y_linear;      
+	double                  y_quadratic;   
+	double                  y_cubic;       
 } ExtrapolationResult;
 
-extern ExtrapolationResult extrapolate_y_at_1(const double* x, const double* y, int n);
+// forward declarations
+typedef struct _extrap1* EXTRAP1;
+typedef struct _extrap0* EXTRAP0;
 
-extern ExtrapolationResult extrapolate_y_at_0(const double* x, const double* y,
-                                               int n,
-                                               double x_lo,
-                                               double x_head_max);
+extern ExtrapolationResult extrapolate_y_at_1(EXTRAP1 a, const double* x, const double* y, int n);
+
+extern ExtrapolationResult extrapolate_y_at_0(EXTRAP0 a, const double* x, const double* y,
+                                                 int n, double x_lo, double x_head_max);
+extern EXTRAP1 build_extrap1(int n);
+extern EXTRAP0 build_extrap0(int n);
+extern void teardown_extrap1(EXTRAP1 a);
+extern void teardown_extrap0(EXTRAP0 a);
 
 #endif
 
