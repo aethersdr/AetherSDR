@@ -4669,6 +4669,12 @@ add_executable(hl2_dsp_setup_policy_test
 )
 target_include_directories(hl2_dsp_setup_policy_test PRIVATE src)
 add_test(NAME hl2_dsp_setup_policy_test COMMAND hl2_dsp_setup_policy_test)
+add_executable(psk_beacon_level_policy_test
+    tests/psk_beacon_level_policy_test.cpp
+)
+target_include_directories(psk_beacon_level_policy_test PRIVATE src)
+add_test(NAME psk_beacon_level_policy_test COMMAND psk_beacon_level_policy_test)
+
 add_executable(hl2_tx_level_policy_test
     tests/hl2_tx_level_policy_test.cpp
 )
