@@ -326,6 +326,10 @@ void AppSettings::load()
                 "saved in this session. (%1)")
                                .arg(databaseError);
         }
+        // Defensive only: every failure return inside SettingsDatabase::open()
+        // already closes the handle or never installed one, so m_db is null
+        // here. Keep the call so a future open() that bails with a live handle
+        // cannot leak it past a failed load (#5639 review).
         m_db->close();
         return;  // Failed state — saves refused, retry next launch
     }

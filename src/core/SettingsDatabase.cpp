@@ -58,12 +58,21 @@ private:
     sqlite3_stmt* m_stmt = nullptr;
 };
 
+// preserveOwnerBits: keep whatever owner access the file already has and only
+// strip group/other. Correct for the DATABASE, whose mode is the operator's
+// choice — but NOT for the -wal/-shm sidecars. SQLite creates those with the
+// database's own mode, so a read-only database yields a read-only -shm, and a
+// -shm we cannot write makes every later connection read-only even after the
+// operator restores the database's permissions (#5639 review: this locked the
+// store out permanently). The sidecars are SQLite's scratch files, not
+// operator state, so they are always forced back to owner read/write.
 bool setOwnerOnlyPermissions(const QString& filePath, bool required,
-                             QString& error)
+                             bool preserveOwnerBits, QString& error)
 {
 #ifdef Q_OS_WIN
     Q_UNUSED(filePath);
     Q_UNUSED(required);
+    Q_UNUSED(preserveOwnerBits);
     Q_UNUSED(error);
     return true;
 #else
@@ -75,9 +84,29 @@ bool setOwnerOnlyPermissions(const QString& filePath, bool required,
         return false;
     }
 
-    const QFileDevice::Permissions ownerOnly =
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner;
-    if (!QFile::setPermissions(filePath, ownerOnly)) {
+    constexpr QFileDevice::Permissions ownerMask =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadUser
+        | QFileDevice::WriteUser;
+    const QFileDevice::Permissions current = QFile::permissions(filePath);
+    QFileDevice::Permissions hardened = ownerMask;
+    if (preserveOwnerBits) {
+        // Strip group/other access, but never ADD an owner bit: writing a fixed
+        // ReadOwner|WriteOwner mode also *grants* write on a store the operator
+        // deliberately left read-only, and because this runs before the write
+        // refusal is detected, a failed open silently made a 0400 database 0600
+        // while reporting it had been left in place (#5639 review).
+        hardened = current & ownerMask;
+        if (!hardened.testAnyFlags(QFileDevice::ReadOwner
+                                   | QFileDevice::ReadUser)) {
+            // Never produce a mode with no access at all on a file we just
+            // opened; keep a read floor rather than locking ourselves out.
+            hardened |= QFileDevice::ReadOwner | QFileDevice::ReadUser;
+        }
+    }
+    if (hardened == current) {
+        return true;  // already at the target mode — nothing to tighten or write
+    }
+    if (!QFile::setPermissions(filePath, hardened)) {
         error = QStringLiteral("cannot set owner-only permissions on %1")
                     .arg(filePath);
         return false;
@@ -88,11 +117,11 @@ bool setOwnerOnlyPermissions(const QString& filePath, bool required,
 
 bool hardenDatabaseFilePermissions(const QString& path, QString& error)
 {
-    return setOwnerOnlyPermissions(path, true, error)
+    return setOwnerOnlyPermissions(path, true, /*preserveOwnerBits=*/true, error)
            && setOwnerOnlyPermissions(path + QStringLiteral("-wal"), false,
-                                      error)
+                                      /*preserveOwnerBits=*/false, error)
            && setOwnerOnlyPermissions(path + QStringLiteral("-shm"), false,
-                                      error);
+                                      /*preserveOwnerBits=*/false, error);
 }
 
 } // namespace
@@ -157,6 +186,23 @@ bool SettingsDatabase::open(const QString& path)
     }
     m_db = db;
     m_path = path;
+
+    // Normalize any -wal/-shm a previous connection left behind, BEFORE SQLite
+    // maps them below. SQLite creates its sidecars with the DATABASE's mode, so
+    // merely READING a read-only store leaves read-only sidecars; the next
+    // connection then maps an unwritable -wal/-shm and every write fails with
+    // SQLITE_READONLY even after the operator has restored the database's
+    // permissions — the store stays locked out for good. This is the only point
+    // where widening them still takes effect: once SQLite has mapped a handle a
+    // later chmod rescues nothing, which is the same trap as #5635 itself.
+    // They are SQLite scratch files, never operator state (#5639 review).
+    {
+        QString sidecarError;
+        setOwnerOnlyPermissions(path + QStringLiteral("-wal"), false,
+                                /*preserveOwnerBits=*/false, sidecarError);
+        setOwnerOnlyPermissions(path + QStringLiteral("-shm"), false,
+                                /*preserveOwnerBits=*/false, sidecarError);
+    }
 
     // Re-establish, at runtime, the two aether_sqlite3 compile-time hardening
     // options that a -DUSE_SYSTEM_SQLITE=ON distro library does not carry.
@@ -268,7 +314,23 @@ bool SettingsDatabase::open(const QString& path)
         return true;
     }
 
-    if (!createSchema()) {
+    // Ask the engine whether this handle can write, rather than discovering it
+    // from a failed statement. sqlite3_open_v2(READWRITE|CREATE) silently falls
+    // back to a read-only connection when the FILE is unwritable (#5635), and
+    // the schema CREATEs are no-ops on an existing store — so without this
+    // probe an unwritable database would open "successfully" and only fail at
+    // the first real save. This is a query, not a write: it cannot dirty the
+    // store the way the old redundant user_version stamp did.
+    if (sqlite3_db_readonly(m_db, "main") == 1) {
+        m_lastError = QStringLiteral("attempt to write a readonly database");
+        recordSqliteFailure(SQLITE_READONLY);
+        qWarning() << "SettingsDatabase:" << path
+                   << "opened read-only — the file cannot be written";
+        close();
+        return false;
+    }
+
+    if (!createSchema(userVersion)) {
         close();
         return false;
     }
@@ -280,7 +342,7 @@ bool SettingsDatabase::open(const QString& path)
     return true;
 }
 
-bool SettingsDatabase::createSchema()
+bool SettingsDatabase::createSchema(int currentUserVersion)
 {
     if (!exec("BEGIN IMMEDIATE;")) {
         return false;
@@ -308,7 +370,14 @@ bool SettingsDatabase::createSchema()
                 "  value          TEXT NOT NULL,"
                 "  PRIMARY KEY (family, radio_id, feature)"
                 ") WITHOUT ROWID;")
-        && exec("PRAGMA user_version = 1;");
+        // Stamp the version only when it differs. The CREATE statements above
+        // are no-ops on an existing store and commit nothing, but a redundant
+        // "PRAGMA user_version = 1" is a real write: it commits a transaction
+        // and bumps the file change counter on EVERY launch, dirtying a
+        // database the caller may be about to promise it left untouched
+        // (#5639 review).
+        && (currentUserVersion == kSchemaVersion
+            || exec("PRAGMA user_version = 1;"));
     if (!ok) {
         // A rollback can itself fail after the operation that made the store
         // unusable. Keep that first error: AppSettings surfaces it and must
@@ -317,9 +386,13 @@ bool SettingsDatabase::createSchema()
         const bool originalBusy = m_lastOpenBusy;
         const bool originalCorrupt = m_lastOpenCorrupt;
         exec("ROLLBACK;");
+        // Restore all three by assignment, exactly like m_lastError: OR-ing the
+        // flags would let a ROLLBACK that itself reported SQLITE_CORRUPT
+        // escalate a mere permission failure to quarantine-eligible, while the
+        // error string still named the permission problem (#5639 review).
         m_lastError = originalError;
-        m_lastOpenBusy = m_lastOpenBusy || originalBusy;
-        m_lastOpenCorrupt = m_lastOpenCorrupt || originalCorrupt;
+        m_lastOpenBusy = originalBusy;
+        m_lastOpenCorrupt = originalCorrupt;
         return false;
     }
     return exec("COMMIT;");

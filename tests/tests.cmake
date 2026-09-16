@@ -1226,6 +1226,9 @@ foreach(APP_SETTINGS_SCENARIO
         readonly-db-with-backup-fails-closed
         unavailable-integrity-check
         filesystem-failure-fails-closed
+        integrity-report-restores-backup
+        preserve-keeps-bytes-and-mode
+        reopen-does-not-write
         newer-schema-readonly
         dirty-row-save
         display-slice-depth-default
@@ -1239,6 +1242,7 @@ endforeach()
 set_tests_properties(
     app_settings_safety_readonly-db-fails-closed
     app_settings_safety_readonly-db-with-backup-fails-closed
+    app_settings_safety_preserve-keeps-bytes-and-mode
     PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(nr2_settings_model_test

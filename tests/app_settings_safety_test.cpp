@@ -608,6 +608,10 @@ int testReadOnlyDbFailsClosed(bool hasOlderBackup)
     expect(readFile(xmlPath()) == frozenXml,
            "the frozen legacy XML is unchanged by the failed read-only session");
 
+    // The app must NOT have quietly restored owner-write for us; the retry
+    // below only works because the operator (here, the fixture) put it back.
+    expect(!QFileInfo(dbPath()).isWritable(),
+           "the failed load left the database read-only, as the operator set it");
     expect(QFile::setPermissions(dbPath(),
                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner),
            "database permissions are restored for the retry");
@@ -652,6 +656,157 @@ void testFilesystemFailureFailsClosed()
            "an ordinary filesystem failure keeps the session non-writable");
     expect(!settings.loadNotice().isEmpty(),
            "an ordinary filesystem failure is surfaced to the operator");
+    // Without this, the scenario would pass equally well if load() took the
+    // "no file, cannot create one" branch instead of the preserve branch:
+    // both leave the marker, both refuse saves, both set a notice. Only the
+    // empty quarantine distinguishes them. (The branch is reached because
+    // QFile::exists() is true for a DIRECTORY at the database path — it
+    // forwards to QFileInfo::exists — which is load-bearing here.)
+    const QDir fsQuarantine(SettingsPaths::quarantineDir());
+    expect(fsQuarantine.entryList(QDir::Files).isEmpty(),
+           "an ordinary filesystem failure is never quarantined");
+}
+
+// A structurally valid database with a damaged data page still opens and
+// passes the schema probe; only the integrity check reports the damage. That
+// report is corruption evidence and must still authorize quarantine + restore.
+// This is the OTHER half of the admission rule: without it, downgrading
+// runIntegrityCheck()'s report arm to Failed leaves every scenario green.
+void testIntegrityReportRestoresBackup()
+{
+    expect(writeFile(xmlPath(), settingsDocument(400, QStringLiteral("original"))),
+           "import fixture is written");
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    settings.setValue(QStringLiteral("Survivor"), QStringLiteral("via-backup"));
+    settings.save();
+    settings.reset();
+
+    // Scribble a middle page, leaving page 1 (header + schema) intact.
+    QFile database(dbPath());
+    expect(database.open(QIODevice::ReadWrite), "database fixture opens for damage");
+    const QByteArray header = database.read(100);
+    const int pageSize = (static_cast<unsigned char>(header[16]) << 8)
+                         | static_cast<unsigned char>(header[17]);
+    const qint64 pages = database.size() / (pageSize > 0 ? pageSize : 4096);
+    expect(pages >= 4, "fixture database spans enough pages to damage a middle one");
+    database.seek((pages / 2) * pageSize);
+    database.write(QByteArray(pageSize, '\xA5'));
+    database.close();
+
+    SettingsDatabase probe;
+    expect(probe.open(dbPath()),
+           "a damaged data page still OPENS — header and schema are intact");
+    expect(probe.quickCheck() == SettingsDatabase::IntegrityCheckResult::Corrupt,
+           "the integrity check returns a damage REPORT, not an execution failure");
+    expect(!probe.lastOpenWasCorrupt(),
+           "the open path saw no corruption — the report is the only evidence");
+    probe.close();
+
+    settings.load();
+    const QDir quarantine(SettingsPaths::quarantineDir());
+    expect(!quarantine.entryList(QDir::Files).isEmpty(),
+           "a damage report authorizes quarantine");
+    expect(settings.value(QStringLiteral("Key005")).toString()
+               == QStringLiteral("original-5"),
+           "a damage report restores the verified backup");
+    expect(settings.storeWritable(),
+           "recovery from a damage report leaves the session writable");
+}
+
+// The preserve promise is byte-for-byte AND mode-for-mode. Two writes used to
+// break it: createSchema()'s redundant user_version stamp, and the permission
+// hardening pass rewriting a deliberately read-only store to 0600.
+int testPreserveKeepsBytesAndMode()
+{
+#ifdef Q_OS_WIN
+    std::printf("[SKIP] POSIX owner-read-only fixture is not available on Windows\n");
+    return 77;
+#else
+    AppSettings& settings = AppSettings::instance();
+    expect(writeFile(xmlPath(), settingsDocument(10, QStringLiteral("legacy"))),
+           "frozen legacy XML fixture is written");
+    settings.load();
+    settings.setValue(QStringLiteral("Survivor"), QStringLiteral("current"));
+    settings.save();
+    settings.reset();
+
+    QDir backups(SettingsPaths::backupsDir());
+    const QStringList backupFiles = backups.entryList({QStringLiteral("*.db")},
+                                                      QDir::Files);
+    for (const QString& name : backupFiles) {
+        expect(backups.remove(name), "fixture backup is removed");
+    }
+    expect(QFile::setPermissions(dbPath(), QFileDevice::ReadOwner),
+           "healthy database is made owner-read-only");
+    if (g_failures != 0) {
+        return 1;
+    }
+    if (QFileInfo(dbPath()).isWritable()) {
+        QFile::setPermissions(dbPath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        std::printf("[SKIP] this process can bypass owner-read-only permissions\n");
+        return 77;
+    }
+
+    const QByteArray before = readFile(dbPath());
+    const QFileDevice::Permissions modeBefore = QFile::permissions(dbPath());
+    settings.load();
+
+    expect(readFile(dbPath()) == before,
+           "a preserved database is byte-for-byte identical after a failed load");
+    expect(QFile::permissions(dbPath()) == modeBefore,
+           "a preserved database keeps its original permissions");
+    expect(!settings.storeWritable(), "the preserved session refuses saves");
+    expect(!settings.loadNotice().isEmpty(), "the failure is surfaced");
+
+    // Reading an unwritable store makes SQLite create its -wal/-shm with the
+    // DATABASE's mode. Those scratch files must not be allowed to stay
+    // read-only: the next connection maps them before any hardening pass can
+    // widen them, so BEGIN IMMEDIATE would fail with SQLITE_READONLY and the
+    // store would stay locked out even now that permissions are restored.
+    // open() normalizes them on the way IN, which is the only point that
+    // works — a later chmod rescues nothing, exactly as in #5635 itself.
+    QFile::setPermissions(dbPath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    settings.reset();
+    settings.load();
+    expect(settings.storeWritable(),
+           "restoring permissions makes the store writable again — no lock-out");
+    expect(settings.value(QStringLiteral("Survivor")).toString()
+               == QStringLiteral("current"),
+           "the retry loads the preserved database, not a backup or the XML");
+    return g_failures == 0 ? 0 : 1;
+#endif
+}
+
+// Opening an already-current store must not write to it at all: the schema
+// CREATEs are no-ops, so the only write was the redundant user_version stamp.
+void testReopenDoesNotWrite()
+{
+    expect(writeFile(xmlPath(), settingsDocument(10, QStringLiteral("original"))),
+           "import fixture is written");
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    settings.setValue(QStringLiteral("Survivor"), QStringLiteral("current"));
+    settings.save();
+    settings.reset();
+
+    const QByteArray before = readFile(dbPath());
+    expect(!before.isEmpty(), "the store exists before the reopen");
+    SettingsDatabase database;
+    expect(database.open(dbPath()), "an up-to-date store reopens cleanly");
+    database.close();
+    expect(readFile(dbPath()) == before,
+           "reopening an up-to-date store leaves it byte-for-byte identical");
+
+    // The stamp must still be WRITTEN when it is genuinely absent.
+    expect(QFile::remove(dbPath()), "the store is removed for the fresh-create case");
+    SettingsDatabase fresh;
+    expect(fresh.open(dbPath()), "a fresh store is created");
+    fresh.close();
+    SettingsDatabase reread;
+    expect(reread.open(dbPath()) && !reread.isNewerSchema(),
+           "the fresh store carries the current schema version");
+    reread.close();
 }
 
 void testNewerSchemaOpensReadOnly()
@@ -1076,6 +1231,12 @@ int main(int argc, char** argv)
         testUnavailableIntegrityCheck();
     } else if (scenario == QStringLiteral("filesystem-failure-fails-closed")) {
         testFilesystemFailureFailsClosed();
+    } else if (scenario == QStringLiteral("integrity-report-restores-backup")) {
+        testIntegrityReportRestoresBackup();
+    } else if (scenario == QStringLiteral("preserve-keeps-bytes-and-mode")) {
+        return testPreserveKeepsBytesAndMode();
+    } else if (scenario == QStringLiteral("reopen-does-not-write")) {
+        testReopenDoesNotWrite();
     } else if (scenario == QStringLiteral("newer-schema-readonly")) {
         testNewerSchemaOpensReadOnly();
     } else if (scenario == QStringLiteral("dirty-row-save")) {

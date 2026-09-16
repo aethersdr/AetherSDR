@@ -141,7 +141,9 @@ public:
 
 private:
     bool exec(const char* sql);
-    bool createSchema();
+    // currentUserVersion: the value open() read, so the stamp is written only
+    // when it actually changes (a redundant write dirties the store).
+    bool createSchema(int currentUserVersion);
     void recordSqliteFailure(int resultCode);
     IntegrityCheckResult runIntegrityCheck(const char* pragma);
 

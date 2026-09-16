@@ -142,6 +142,17 @@ document value is redacted, not just secret-named rows.
   filesystem/I/O errors, or an integrity check that could not execute) do not
   authorize recovery. The database stays in place; the session reports the
   failure and refuses saves so a later launch can retry without rollback.
+  "In place" is literal — byte-for-byte, and at its original permissions.
+  Two writes used to contradict it: `createSchema()` re-stamped
+  `PRAGMA user_version` on every open (a committed transaction, so the file
+  change counter moved even when nothing else did), and the permission
+  hardening pass rewrote a deliberately read-only store to `0600`. Both are
+  now conditional — the stamp is written only when the version differs, and
+  hardening only ever removes group/other access, never grants an owner bit.
+- `open()` fails rather than guessing when it cannot read `PRAGMA
+  user_version`: a store whose schema version is unreadable is not one to
+  write a schema into. That failure is classified like any other, so a
+  permission or I/O error there preserves the store instead of quarantining it.
 - `Reset Settings` checkpoints and closes the connection first (Windows file
   locks), writes the pre-reset backup, then removes the DB, sidecars, frozen
   XML + its artifacts, rolling backups, and quarantine.
