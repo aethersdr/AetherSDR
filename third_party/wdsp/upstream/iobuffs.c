@@ -442,8 +442,11 @@ void create_iobuffs (int channel)
 // BOUNDED, where upstream's spin was not, for the reason patch 4 gives for
 // bounding its worker handshake: upstream ignores _beginthread() failure, and
 // an unbounded wait on a thread that was never created would hang CloseChannel()
-// forever. Falling through after the cap leaves exactly today's behaviour, which
-// is the bug this patch fixes and no worse than it.
+// forever. NOT free, though, and the registry entry is precise about it:
+// upstream's wait could not fall through, this one can, and on exhaustion the
+// CloseHandle() in destroy_iobuffs() runs under a possibly-parked flush thread
+// -- patch 4's own failure mode, inherited. The cap is deliberately generous
+// for that reason; do not shorten it without re-reading patch 9.
 //
 // IDEMPOTENT, because both ends of the pre/post pair call it. A second pass must
 // not re-arm flush_bypass — the thread that would acknowledge it is gone, and

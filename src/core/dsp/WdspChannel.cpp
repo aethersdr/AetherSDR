@@ -1022,9 +1022,10 @@ void WdspChannel::close() noexcept
     // thing. The flag it waits on is ch[channel].flushflag, and NOTHING ON THIS
     // THREAD can clear it. The chain is one hop longer than it looks:
     // fexchange0/fexchange2 run the down-slew and, when the slew completes,
-    // release a->Sem_Flush (iobuffs.c:502 and :561); WDSP's per-channel
-    // flushChannel thread wakes on that semaphore, flushes, and only then
-    // clears flushflag (channel.c:180). So the wait is satisfiable ONLY while
+    // release a->Sem_Flush (the ReleaseSemaphore calls at the tail of
+    // fexchange0/fexchange2); WDSP's per-channel flushChannel thread wakes on
+    // that semaphore, flushes, and only then clears flushflag (the tail of
+    // flushChannel, channel.c). So the wait is satisfiable ONLY while
     // the host keeps calling fexchange*, and close() runs behind the control
     // fence — the destructor has drained the callbacks, reconfigure() holds
     // beginControlOperation() — so by construction nothing will call it and the

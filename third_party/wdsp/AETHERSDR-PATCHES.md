@@ -192,6 +192,12 @@ accessor set, and two channel-state fixes:
    `channel.h`, `iobuffs.c` and `main.c` — so 2.10 neither fixes this nor moves
    the code it is stated against, and the patch carries over verbatim.
 
+   **Reported upstream as TAPR/OpenHPSDR-wdsp#6; drop this when a release
+   carries the fix.** It is an upstream defect rather than an AetherSDR
+   accommodation — any host that uses `SetChannelState` as its T/R verb, which
+   is what `channel.c`'s own contract says it is for, produces stop/start pairs
+   spaced by the keying turnaround and hits it.
+
    Found in review of #5628. Without it, `WdspChannel::setRunning(true)` on a
    channel whose stop has not been clocked out — the T/R edge `docs/HERMES.md`
    §13 row 9a contemplates — silently kills the channel while `isRunning()`
@@ -275,6 +281,11 @@ accessor set, and two channel-state fixes:
    `flushChannel`/`Sem_Flush`/`exec_bypass` machinery this is stated against
    lives in `channel.c`, `iobuffs.c` and `main.c`, all three byte-identical
    upstream between 2.00 and 2.10.
+
+   **Reported upstream as TAPR/OpenHPSDR-wdsp#7; drop this when a release
+   carries the fix.** Upstream for the same reason patch 7 is, and the blocking
+   variant is the one that will bite the next integrator hardest: it parks the
+   host in `fexchange2` forever rather than merely silencing it.
 
    Found by K5PTB in review of #5628, on the shape he suggested.
    `runRestartDuringRampTest`'s scenario table now straddles the ramp:
@@ -366,11 +377,24 @@ accessor set, and two channel-state fixes:
    **BOUNDED, where upstream's spin was not**, at 1000 x `Sleep(1)` to match
    patch 4's handshake and for the reason patch 4 gives: upstream ignores
    `_beginthread()` failure, and an unbounded wait on a thread that was never
-   created would hang `CloseChannel()` forever. Falling through after the cap
-   leaves exactly the pre-patch behaviour, which is the bug — no worse than
-   today, and a hang would be worse than both. This is the one respect in which
+   created would hang `CloseChannel()` forever. This is the one respect in which
    the moved code is not verbatim, and it is a deliberate trade rather than an
    oversight.
+
+   **BE PRECISE ABOUT WHAT THE CAP COSTS, because an earlier draft of this entry
+   said "no worse than today" and that is not exact** (review of #5628).
+   Upstream's wait was `while (InterlockedAnd (&a->flush_bypass, 0xffffffff))
+   Sleep(1);` — unbounded, so it could not fall through at all. This one can,
+   and on exhaustion `flush_quiesced` is set on the way out regardless, so
+   `destroy_iobuffs()`'s own call returns immediately and the `CloseHandle
+   (a->Sem_Flush)` five lines later runs under a flush thread that may still be
+   parked on it. That is the same `pthread_cond_destroy()`-under-a-live-waiter
+   shape patch 4's re-post exists to close, reached by a different door. The
+   trade is still right — a guaranteed hang on a thread that was never created
+   is worse than a 1 s wait that in practice never exhausts, and the flush
+   thread's bypass path is a wake, a flag read and an exit — but the bound
+   INHERITS patch 4's failure mode rather than being free of it, and that is
+   worth knowing before anyone shortens the cap.
 
    **IDEMPOTENT**, via a new `flush_quiesced` bit in `struct _iobuffs`, because
    both ends of the `pre_main_destroy()`/`post_main_destroy()` pair call it and
@@ -387,6 +411,11 @@ accessor set, and two channel-state fixes:
    **Unchanged by the 2.10 refresh**, for the same reason patches 7 and 8 are:
    `channel.c`, `iobuffs.c`, `iobuffs.h` and `main.c` are byte-identical
    upstream between `Release Version 2.00` and `Release Version 2.10`.
+
+   **Reported upstream as TAPR/OpenHPSDR-wdsp#8; drop this when a release
+   carries the fix.** Upstream, and the most serious of the three — it is a
+   use-after-free reachable by any host that stops a channel, keeps clocking it
+   and then closes, which is the natural shape for a T/R mute.
 
    Found by @ten9876 in review of #5628. Pinned by `wdsp_channel_test`'s
    `runCloseAfterStoppedClockingTest`, which drives the crashing shape 24 times

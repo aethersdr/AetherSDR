@@ -1112,29 +1112,50 @@ int main()
     invalid.inputSampleRate = 44100;
     invalid.dspSampleRate = 48000;
     std::string validationError;
-    if (!require(WdspChannel::create(invalid, &validationError) == nullptr,
-                 "invalid non-integral rate configuration was accepted") ||
-        !runLeakChecked("lifecycle test", runLifecycleTest) ||
-        !runLeakChecked("RX vector", [] {
-            return runVector(WdspChannel::Direction::Receive);
-        }) ||
-        !runLeakChecked("TX vector", [] {
-            return runVector(WdspChannel::Direction::Transmit);
-        }) ||
-        !runLeakChecked("underrun test", runUnderrunTest) ||
-        !runLeakChecked("reconfiguration test", runReconfigurationTest) ||
-        !runLeakChecked("start/stop test", runStartStopTest) ||
-        !runLeakChecked("restart-during-ramp test", runRestartDuringRampTest) ||
-        !runLeakChecked("close setup-lock test", runCloseSetupLockTest) ||
-        !runLeakChecked("stopped-close test", runStoppedCloseTest) ||
-        !runLeakChecked("notch index test", runNotchIndexTest) ||
-        !runLeakChecked("notch attenuation test", runNotchAttenuationTest) ||
-        // LAST, deliberately: its failure mode is a signal or a timeout, not a
-        // message, so everything that can still report has already reported.
-        !runLeakChecked("close-after-stopped-clocking test",
-                        runCloseAfterStoppedClockingTest) ||
-        !require(WdspChannel::outstandingAllocationsForTest() == allocationBaseline,
-                 "WDSP test suite left allocations outstanding")) {
+    // NOT SHORT-CIRCUITED, and that is the point. These cases are independent
+    // -- each builds and tears down its own channels -- but chaining them with
+    // `||` meant the FIRST failure silently skipped every case after it.
+    //
+    // That is not hypothetical. `runVector` diverges under CPU load (#5734,
+    // pre-existing and unrelated to anything here) and it runs THIRD, so while
+    // it was firing none of the five start/stop cases below ran at all. Those
+    // five are the regression pins for AetherSDR WDSP patches 7, 8 and 9; a
+    // regression in any of them would have been invisible behind an unrelated
+    // red, which is the exact failure a pin exists to prevent. Run everything,
+    // report everything, fail once at the end.
+    //
+    // The ORDER still matters even without the short circuit, and the
+    // close-after-stopped-clocking case is still LAST for the reason it always
+    // was: its failure mode is a signal or a timeout rather than a message, so
+    // everything that can still report has already reported when it runs. The
+    // difference is that this is now actually true rather than true only when
+    // nothing ahead of it failed.
+    bool ok = true;
+    const auto check = [&ok](bool passed) { ok = passed && ok; };
+
+    check(require(WdspChannel::create(invalid, &validationError) == nullptr,
+                  "invalid non-integral rate configuration was accepted"));
+    check(runLeakChecked("lifecycle test", runLifecycleTest));
+    check(runLeakChecked("RX vector", [] {
+        return runVector(WdspChannel::Direction::Receive);
+    }));
+    check(runLeakChecked("TX vector", [] {
+        return runVector(WdspChannel::Direction::Transmit);
+    }));
+    check(runLeakChecked("underrun test", runUnderrunTest));
+    check(runLeakChecked("reconfiguration test", runReconfigurationTest));
+    check(runLeakChecked("start/stop test", runStartStopTest));
+    check(runLeakChecked("restart-during-ramp test", runRestartDuringRampTest));
+    check(runLeakChecked("close setup-lock test", runCloseSetupLockTest));
+    check(runLeakChecked("stopped-close test", runStoppedCloseTest));
+    check(runLeakChecked("notch index test", runNotchIndexTest));
+    check(runLeakChecked("notch attenuation test", runNotchAttenuationTest));
+    check(runLeakChecked("close-after-stopped-clocking test",
+                         runCloseAfterStoppedClockingTest));
+    check(require(WdspChannel::outstandingAllocationsForTest() == allocationBaseline,
+                  "WDSP test suite left allocations outstanding"));
+
+    if (!ok) {
         return 1;
     }
 

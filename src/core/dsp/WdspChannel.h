@@ -162,9 +162,11 @@ public:
     // DMODE, and why a running stop cannot use the blocking form. WDSP's stop
     // sets a down-slew flag and a flush flag, and clearing them takes TWO hops,
     // not one: the next fexchange0/fexchange2 calls run the down-slew and
-    // release the channel's Sem_Flush when it completes (iobuffs.c:502, :561),
-    // and WDSP's per-channel flushChannel thread wakes on that semaphore,
-    // flushes, and clears the flush flag (channel.c:180). Either way the drain
+    // release the channel's Sem_Flush when it completes (the ReleaseSemaphore
+    // calls at the tail of fexchange0/fexchange2, iobuffs.c), and WDSP's
+    // per-channel flushChannel thread wakes on that semaphore, flushes, and
+    // clears the flush flag (the tail of flushChannel, channel.c). Either way
+    // the drain
     // starts on the thread that is feeding the channel, not inside
     // SetChannelState, and a channel nobody is feeding can never finish it.
     // The blocking form
