@@ -2070,6 +2070,15 @@ target_link_libraries(dvk_wav_transfer_generation_test PRIVATE aethercore Qt6::C
 add_test(NAME dvk_wav_transfer_generation_test COMMAND dvk_wav_transfer_generation_test)
 set_tests_properties(dvk_wav_transfer_generation_test PROPERTIES TIMEOUT 120)
 
+# #5662 — DVK exports stage into QSaveFile and atomically replace an existing
+# WAV only after the radio stream is complete. Socket-free injected coverage.
+add_executable(dvk_wav_transfer_test
+    tests/dvk_wav_transfer_test.cpp
+)
+target_include_directories(dvk_wav_transfer_test PRIVATE src)
+target_link_libraries(dvk_wav_transfer_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME dvk_wav_transfer_test COMMAND dvk_wav_transfer_test)
+
 # #5663 — socket-free DVK upload queue accounting. An injected QTcpSocket
 # writer accepts and drains partial spans without binding a radio-peer socket.
 add_executable(dvk_wav_upload_test
