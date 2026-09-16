@@ -7,6 +7,7 @@
 #include <limits>
 
 #include "core/backends/hl2/Hl2RxDsp.h"
+#include "core/dsp/WdspProcessTally.h"
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/Hl2AdcPairing.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
@@ -5301,11 +5302,6 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     //
     // And per IRadioBackend.h: "Purely for display — nothing in the app makes a
     // decision from it." Nothing reads these rows back.
-    // WITH the clip flag, not with the link counters. These are the AD9866's
-    // own scale and their entire justification is that they are commensurable
-    // with adcOverload, which sits under "Converter" — reporting them under
-    // "Link", where the last section marker left them, put the two at opposite
-    // ends of the dialog. (PR #5650 review round 3.)
     // ---- what WDSP did with the IQ, per receiver ----
     //
     // THE DSP-SIDE TWIN OF "Dropped EP6 packets" ABOVE. That row counts
@@ -5385,8 +5381,30 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
         put(QStringLiteral("dspProcessFaults%1").arg(ids.uiNumber).toUtf8().constData(),
             QStringLiteral("DSP processing faults") + suffix,
             seen ? QVariant(faults) : QVariant());
+        // THE SAME FACT AS A NUMBER, because the row above is the only form a
+        // SCRIPT can see and it is prose. healthSnapshot() feeds the automation
+        // bridge's `health` verb, which exists -- in its own documentation's
+        // words -- because these rows "until now reached nothing else and so
+        // were unavailable to a script or a regression test". Leaving the count
+        // only inside "3 - WDSP engine error 3" makes a soak test's best
+        // available assertion `!= "none"`, and makes that QString format a
+        // contract by accident. Hl2RxDsp::processTally() is the machine-readable
+        // form, but nothing on the bridge can reach it.
+        //
+        // ONE row, not four. The per-kind split stays prose for the reason
+        // given above -- three of the four kinds are zero on every radio that
+        // has ever worked. What a script actually needs is a threshold on the
+        // total, and that is what this is. Caught by aethersdr-agent on #5738.
+        put(QStringLiteral("dspFaultCount%1").arg(ids.uiNumber).toUtf8().constData(),
+            QStringLiteral("DSP processing faults (count)") + suffix,
+            seen ? QVariant(static_cast<qulonglong>(tally.faults())) : QVariant());
     }
 
+    // WITH the clip flag, not with the link counters. These are the AD9866's
+    // own scale and their entire justification is that they are commensurable
+    // with adcOverload, which sits under "Converter" — reporting them under
+    // "Link", where the last section marker left them, put the two at opposite
+    // ends of the dialog. (PR #5650 review round 3.)
     section("adcPeakDbfs", QStringLiteral("Converter"));
     const bool haveBlock = m_bandscopeBlock.samples > 0;
     const double peak = haveBlock ? m_bandscopeBlock.peakDbfs() : 0.0;

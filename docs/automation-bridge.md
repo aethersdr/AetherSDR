@@ -3423,6 +3423,22 @@ without it that divergence is invisible. Note the gateware decodes only the
 drive byte's top nibble, so the raw scale moves in steps of 16 — a percent
 alone does not tell you which of the 16 drives the radio actually got.
 
+**Assert on `dspFaultCountN`, not on `dspProcessFaultsN`.** The HL2 publishes
+both for each receiver. `dspProcessFaultsN` is PROSE meant for the dialog —
+`"none"`, or `"3 - WDSP engine error 3"` — and its format is a presentation
+choice that may change; a script matching on it is matching on wording.
+`dspFaultCountN` is the same fact as an integer, and is what a threshold or a
+soak test wants. Both are `null` until the receiver has processed a block, which
+is distinct from zero: "no faults" and "no DSP yet" are different answers.
+
+The companion rows are `dspBlocksN` (blocks WDSP turned into audio) and
+`dspUnderrunsN` (the pipeline had no input ready). **Underruns are not faults**
+and are counted separately on purpose — an underrun is the normal shape of a
+starved pipeline, while a fault is WDSP refusing data it was given. Summing them
+turns a healthy idle radio into a broken one. `N` is the zero-based receiver
+index, so a single-receiver radio publishes `dspBlocks0` and no suffix appears
+in the label.
+
 **This is deliberately not assembled from the models, and that is the whole
 point.** `get` already reports those, and a model reports what the operator
 **asked for** — so a control whose command was dropped on the way to the radio

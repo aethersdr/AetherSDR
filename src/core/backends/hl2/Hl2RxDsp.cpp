@@ -506,7 +506,7 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
                 qCWarning(lcHl2RxDsp)
                     << "WDSP processIq failed:" << WdspProcessTally::name(res)
                     << "- occurrence" << seen
-                    << "on WDSP channel" << m_channel->channelIdForTest()
+                    << "on WDSP channel" << m_channel->channelId()
                     << "- this block produces no audio";
             }
             continue;   // Underrun while the pipeline fills, etc. — no output yet

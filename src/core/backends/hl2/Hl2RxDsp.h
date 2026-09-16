@@ -329,7 +329,7 @@ public:
     // index-space map (Hl2Receivers.h) precisely so nothing has to derive it.
     [[nodiscard]] int wdspChannelId() const noexcept
     {
-        return m_channel ? m_channel->channelIdForTest() : -1;
+        return m_channel ? m_channel->channelId() : -1;
     }
 
     // Demodulated-audio DC blocker, one pole per channel.

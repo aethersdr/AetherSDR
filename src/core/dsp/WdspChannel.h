@@ -408,7 +408,19 @@ public:
 
     [[nodiscard]] const Config& config() const noexcept { return m_config; }
     [[nodiscard]] std::size_t outputBlockSize() const noexcept;
-    [[nodiscard]] int channelIdForTest() const noexcept { return m_channelId; }
+    // The WDSP channel number this object owns.
+    //
+    // A PRODUCTION ACCESSOR, despite the alias below. Two log lines read it --
+    // Hl2RxDsp::stop and AnanRxDsp's equivalent, both naming the channel in a
+    // warning an operator is expected to act on -- and a name ending in
+    // ForTest is precisely what a cleanup strips or wraps in an ifdef, which
+    // would take those log lines with it. Renamed on #5738 after
+    // aethersdr-agent noticed the two non-test callers.
+    [[nodiscard]] int channelId() const noexcept { return m_channelId; }
+
+    // Retained so the existing test call sites keep compiling. New code wants
+    // channelId(); this spelling says only "a test wrote it first".
+    [[nodiscard]] int channelIdForTest() const noexcept { return channelId(); }
 
     static uint64_t allocationSequenceForTest() noexcept;
     static uint64_t outstandingAllocationsForTest() noexcept;

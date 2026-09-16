@@ -439,7 +439,7 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
                 qCWarning(lcAnanRxDsp)
                     << "WDSP processIq failed:" << WdspProcessTally::name(res)
                     << "- occurrence" << seen
-                    << "on WDSP channel" << m_channel->channelIdForTest()
+                    << "on WDSP channel" << m_channel->channelId()
                     << "- this block produces no audio";
             }
             continue;   // underrun while the pipeline fills, etc. -- no output yet
