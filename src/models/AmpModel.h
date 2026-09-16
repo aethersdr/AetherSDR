@@ -91,7 +91,12 @@ public:
     // True once the whole `setup` write group is known, which is what a write
     // needs. Until then the control cannot be operated without risking the
     // four values it would have to send back.
-    bool canWriteSetup() const { return m_haveSetupGroup && hasMeffa(); }
+    // A write carries the fan mode too, so an unknown one would put `fanmode=`
+    // (empty) into the group that holds it.
+    bool canWriteSetup() const {
+        return m_haveSetupGroup && hasMeffa() && !m_fanMode.isEmpty();
+    }
+    QString fanMode() const { return m_fanMode; }
 
     // Enable or disable MEffA. The wire takes AUTO or OFF — NOT the ACTIVE /
     // STANDBY / OFF words that status reports back; those describe what the
@@ -113,6 +118,9 @@ private:
     // place, so a fan-mode change and a MEffA change cannot disagree about
     // what a write looks like.
     void writeSetupGroup(const QString& meffa, const QString& fanMode);
+    // The word a `setup` write may carry for MEffA — AUTO or OFF, never the
+    // ACTIVE / STANDBY the status frame reports. See the definition.
+    QString meffaWriteWord() const;
 
 public:
 
@@ -186,6 +194,9 @@ private:
     QString m_setupAuthCode;
     bool    m_haveSetupGroup{false};
     QString m_meffa;
+    // The settable word we last commanded (AUTO / OFF), empty once the
+    // amplifier's own report agrees with it. See meffaWriteWord().
+    QString m_meffaIntent;
     QString m_fanMode;
     bool        m_havePortInfo{false};
     QMap<QString, QString> m_antennaOutputs;   // "ANT1" -> "PORTA"

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QHash>
 #include <QString>
 #include <QWidget>
@@ -81,15 +82,14 @@ public:
     void setTxAntenna(const QString& antenna);
 
 public slots:
-    // Apply a forward-power (W) / SWR pair to the gauges immediately. Prefer
-    // the two source-aware entry points below; this one applies blind and is
-    // what both of them end at.
-    void updateMeters(float fwdPower, float swr);
-
     // The tuner reports forward power and SWR twice — as radio-relayed AMP
     // meters and on its own port-9010 status. Same measurement, different
     // rate, so these stamp their arrival and the relay wins while it is
     // fresh. See kRelayMeterFreshnessMs.
+    //
+    // Callers use these, never updateMeters(), which applies blind: a second
+    // unmediated writer is the defect this path exists to remove, and it is
+    // private for the same reason AmpApplet::setFwdPower is.
     void setRadioMeters(float fwdPower, float swr);
     void setDeviceMeters(float fwdPower, float swr);
 
@@ -104,6 +104,11 @@ protected:
     void resizeEvent(QResizeEvent* event) override;
 
 private:
+    // Applies a forward-power (W) / SWR pair to the gauges blind, without
+    // consulting the source rule. Private precisely so it cannot be reached
+    // from the wiring — both stamped entry points above end here.
+    void updateMeters(float fwdPower, float swr);
+
     void buildUI();
     void buildExpandedUI(QVBoxLayout* vbox);
     void syncFromModel();
@@ -260,7 +265,8 @@ private:
 
     // Meter values (updated by updateMeters)
     // When the radio relay last delivered a meter sample. See setDeviceMeters().
-    qint64 m_radioMetersMs{0};
+    // Monotonic: a wall-clock gate wedges shut across a backwards clock step.
+    QElapsedTimer m_radioMeters;
 
     float m_fwdPower{0.0f};
     float m_swr{1.0f};

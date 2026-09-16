@@ -143,7 +143,28 @@ void PgxlConnection::processLine(const QString& line)
         int pipe2 = (pipe1 >= 0) ? line.indexOf('|', pipe1 + 1) : -1;
         if (pipe2 >= 0) {
             const quint32 seq = line.mid(1, pipe1 - 1).toUInt();
+            const QString code = line.mid(pipe1 + 1, pipe2 - pipe1 - 1).trimmed();
             QString body = line.mid(pipe2 + 1).trimmed();
+
+            // A refusal. The amplifier answers a bad parameter with 50000013
+            // and an unknown command with 50000015, both carrying an EMPTY
+            // body — so a reply that is only an error code reads as "nothing
+            // to parse" unless the code itself is looked at. Not looking is
+            // how a `setup` write that changed nothing went unnoticed through
+            // a whole round of testing.
+            if (!code.isEmpty() && code != QLatin1String("0")) {
+                qCWarning(lcTuner)
+                    << "PgxlConnection: command" << seq << "refused, code" << code;
+                // Release an outstanding `setup read`. Left armed it would
+                // never be answered, canWriteSetup() would stay false forever,
+                // and both MEffA and fan mode would be silently inert for the
+                // life of the connection.
+                if (m_setupReadSeq != 0 && seq == m_setupReadSeq)
+                    m_setupReadSeq = 0;
+                emit commandRefused(seq, code);
+                return;
+            }
+
             if (!body.isEmpty()) {
                 QMap<QString, QString> kvs;
                 const auto parts = body.split(' ', Qt::SkipEmptyParts);

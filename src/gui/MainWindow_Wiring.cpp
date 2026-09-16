@@ -29,6 +29,7 @@
 #include "models/BandPlanManager.h"
 #include "DisplayStatusGate.h"       // #4261 adaptive-throttle echo gate
 #include "Ax25HfPacketDecodeDialog.h"
+#include "AccessoryPanelWidgets.h"   // kRelayMeterFreshnessMs
 #include "AppletPanel.h"
 #include "DbmRangeTransition.h"
 #include "MainWindowHelpers.h"
@@ -6145,6 +6146,40 @@ void MainWindow::wireModemAudioCompletion()
     });
 }
 
+// One owner for the amplifier's TX meters on the SHARED readouts — the
+// S-Meter, the cross-needle and the TMate2 — matching the rule the applet
+// gauges already follow.
+//
+// The radio-relayed AMP meters and the amplifier's own port-9008 status carry
+// the same forward power and SWR; on a steady carrier they agree to within
+// 0.05 dB. What differs is rate: the relay rides the radio's meter packets,
+// the socket is polled at 5 Hz. So the relay wins while its sample is fresh,
+// and the socket takes over about a second after the relay stops — which is
+// also what gives these readouts a value when no radio is relaying at all.
+//
+// Without this the two sources simply alternated, and the S-Meter jittered
+// between two slightly different numbers at the beat rate between them.
+void MainWindow::applyAmpTxMeters(float watts, float swr, bool fromRelay)
+{
+    if (fromRelay) {
+        m_ampRelayTxStamp.restart();
+    } else if (m_ampRelayTxStamp.isValid()
+                   && m_ampRelayTxStamp.elapsed() < kRelayMeterFreshnessMs) {
+        // Dropped, not applied-then-overwritten: applying it first is what
+        // made the needle visibly step back to the slower sample.
+        return;
+    }
+
+    m_appletPanel->setMeterTxValues(watts, swr);
+#ifdef HAVE_HIDAPI
+    m_tmate2TxWatts = watts;
+    if (m_radioModel.transmitModel().isTransmitting()) {
+        updateTMate2Display();
+        updateTMate2Indicators();
+    }
+#endif
+}
+
 void MainWindow::wireMeters()
 {
     // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
@@ -6351,12 +6386,23 @@ void MainWindow::wireMeters()
         // AmpModel::ampStateChanged on both paths.
         if (kvs.contains("fanmode"))
             amp->setFanMode(kvs["fanmode"]);
-        if (kvs.contains("meffa"))
-            amp->setMeff(kvs["meffa"]);
+        // MEffA is NOT set from here. On this path AmpModel owns it —
+        // AmpModel::meffaChanged carries the state AND whether the `setup`
+        // group is known well enough to write it, which the raw kv-set cannot
+        // say. setMeff() below is the relay-only path, where it is read-only.
         // Ensure the S-Meter is in TX mode when the PGXL reports transmitting.
         // The VALUES come from AmpModel::directMetersChanged below — this is
         // the state word, which only the raw kv-set carries.
-        if (kvs.contains("state")) {
+        //
+        // Gated on the amplifier being in circuit, for the same reason the
+        // value feed is. In STANDBY the state word is STANDBY and never
+        // TRANSMIT_*, so an ungated push would force the S-Meter and the
+        // cross-needle out of TX mode five times a second for the whole of a
+        // barefoot transmission — the authoritative edge comes from
+        // TransmitModel::moxChanged, and this must not fight it.
+        if (kvs.contains("state")
+                && m_radioModel.amplifier().present()
+                && m_radioModel.amplifier().operate()) {
             m_appletPanel->setMeterTransmitting(
                 kvs.value("state").startsWith("TRANSMIT"));
         }
@@ -6379,14 +6425,7 @@ void MainWindow::wireMeters()
             // Out of circuit: the barefoot exciter feed owns the scale.
             return;
         }
-        m_appletPanel->setMeterTxValues(watts, swr);
-#ifdef HAVE_HIDAPI
-        m_tmate2TxWatts = watts;
-        if (m_radioModel.transmitModel().isTransmitting()) {
-            updateTMate2Display();
-            updateTMate2Indicators();
-        }
-#endif
+        applyAmpTxMeters(watts, swr, /*fromRelay=*/false);
     });
     connect(&m_pgxlConn, &PgxlConnection::connected, this, [this]() {
         qDebug() << "PGXL direct connection established, version:" << m_pgxlConn.version();
@@ -6426,6 +6465,10 @@ void MainWindow::wireMeters()
             amp->setDrainVoltage(kvs["vdd"].toFloat());
         if (kvs.contains("vac"))
             amp->setMainsVoltage(kvs["vac"].toInt());
+        // The RELAYED MEffA state. This is the only place it appears on a
+        // station with no direct port-9008 socket, so it reads out — but it
+        // stays inert, because a write needs the rest of the `setup` group and
+        // only the socket can read that. See AmpApplet::setMeff.
         if (kvs.contains("meffa"))
             amp->setMeff(kvs["meffa"]);
     });
@@ -7001,7 +7044,11 @@ void MainWindow::wireMeters()
     connect(&m_radioModel.meterModel(), &MeterModel::ampMetersChanged,
             this, [this](float fwdPwr, float swr, float temp,
                          float drivePwr, bool driveValid) {
-        m_appletPanel->ampApplet()->setRadioMeters(fwdPwr, swr);
+        // hasAmpPower() says whether a forward-power or SWR sample has ever
+        // landed. ampMetersChanged also fires for TEMP and DRV, and the applet
+        // must not read those as the relay being the live source of power.
+        m_appletPanel->ampApplet()->setRadioMeters(
+            fwdPwr, swr, m_radioModel.meterModel().hasAmpPower());
         m_appletPanel->ampApplet()->setTemp(temp);
         // Exciter power at the amplifier's input — the amp's own DRV meter,
         // relayed by the radio. There is no second source for it: the PGXL's
@@ -7012,15 +7059,10 @@ void MainWindow::wireMeters()
         // S-Meter TX power follows the scale: amp output when PGXL is OPERATE,
         // exciter output when it's STANDBY (txMetersChanged already handles that
         // path, so we just stop overriding it here).
-        if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate()) {
-            m_appletPanel->setMeterTxValues(fwdPwr, swr);
-#ifdef HAVE_HIDAPI
-            m_tmate2TxWatts = fwdPwr;
-            if (m_radioModel.transmitModel().isTransmitting()) {
-                updateTMate2Display();
-                updateTMate2Indicators();
-            }
-#endif
+        if (m_radioModel.meterModel().hasAmpPower()
+                && m_radioModel.amplifier().present()
+                && m_radioModel.amplifier().operate()) {
+            applyAmpTxMeters(fwdPwr, swr, /*fromRelay=*/true);
             static int ampDbg = 0;
             if (++ampDbg % 50 == 1)
                 qCDebug(lcTuner) << "AMP→SMeter: fwd=" << fwdPwr << "W swr=" << swr;

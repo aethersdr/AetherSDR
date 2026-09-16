@@ -268,6 +268,16 @@ int main(int argc, char** argv)
         spin([&] { return false; }, 150);
         CHECK(!peerSaw(peer, "setup nickname="));
 
+        // Fan mode, however, still goes out — as the single key, which is what
+        // shipped before the group write existed. The group form's whole point
+        // is carrying the values we are not changing, and here we do not have
+        // them; refusing would make fan mode less available than it was, on
+        // any firmware that answers `setup read` with an error.
+        g_clientTraffic.clear();
+        model.setFanMode(QStringLiteral("contest"));
+        CHECK(spin([&] { return peerSaw(peer, "setup fanmode=CONTEST"); }));
+        CHECK(!g_clientTraffic.contains("nickname="));
+
         // The `setup read` reply, verbatim off the amplifier. Note that it
         // carries neither meffa nor fanmode — which is exactly why those two
         // are taken off the status frame instead.
@@ -314,9 +324,62 @@ int main(int argc, char** argv)
         // of a write to the group that holds them.
         model.setFanMode(QStringLiteral("broadcast"));
         CHECK(spin([&] {
-            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=OFF"
+            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=AUTO"
                                  " ledintens=141 fanmode=BROADCAST authcode=");
         }));
+
+        // ── And it carries a SETTABLE MEffA word, never a reported one ──
+        //
+        // This is the whole bug that the AUTO fix above closes, on the other
+        // write path. With MEffA enabled the status frame reports STANDBY or
+        // ACTIVE; substituting either into the group draws 50000013 and the
+        // amplifier keeps its old fan mode — silently, while the panel has
+        // already repainted with the new one. An operator on SSB (class AAB,
+        // so STANDBY) hit this on every fan change.
+        g_clientTraffic.clear();
+        peer->write("S0|state=IDLE fanmode=CONTEST meffa=STANDBY\n");
+        peer->flush();
+        CHECK(spin([&] { return model.meffa() == QLatin1String("STANDBY"); }));
+        model.setFanMode(QStringLiteral("standard"));
+        CHECK(spin([&] {
+            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=AUTO"
+                                 " ledintens=141 fanmode=STANDARD authcode=");
+        }));
+        CHECK(!g_clientTraffic.contains("meffa=STANDBY"));
+        CHECK(!g_clientTraffic.contains("meffa=ACTIVE"));
+
+        // ── The commanded bit outlives the poll that has not caught up ──
+        //
+        // Between our write and the amplifier's next status the reported word
+        // is still the OLD one. Deriving the write from it would send
+        // meffa=OFF one poll after the operator enabled MEffA and turn it
+        // straight back off.
+        g_clientTraffic.clear();
+        peer->write("S0|state=IDLE fanmode=CONTEST meffa=OFF\n");
+        peer->flush();
+        CHECK(spin([&] { return model.meffa() == QLatin1String("OFF"); }));
+        model.setMeffaEnabled(true);                 // commands AUTO
+        CHECK(spin([&] { return peerSaw(peer, "meffa=AUTO"); }));
+        g_clientTraffic.clear();
+        model.setFanMode(QStringLiteral("contest")); // device still says OFF
+        CHECK(spin([&] {
+            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=AUTO"
+                                 " ledintens=141 fanmode=CONTEST authcode=");
+        }));
+        CHECK(!g_clientTraffic.contains("meffa=OFF"));
+
+        // ── A refusal releases an outstanding `setup read` ──
+        //
+        // An error reply is `R<seq>|<code>|` with an EMPTY body, so it reads
+        // as "nothing to parse" unless the code is looked at. Left unread, a
+        // refused `setup read` would keep canWriteSetup() false for the life
+        // of the connection and both MEffA and fan mode would be inert.
+        QSignalSpy refused(&conn, &PgxlConnection::commandRefused);
+        CHECK(refused.isValid());
+        peer->write("R99|50000013|\n");
+        peer->flush();
+        CHECK(spin([&] { return refused.count() >= 1; }));
+        CHECK(refused.last().at(1).toString() == QLatin1String("50000013"));
     }
 
     // A state push with a prefix word before the first key parses the same

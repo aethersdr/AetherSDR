@@ -4,7 +4,7 @@
 #include "GuardedSlider.h"
 #include "core/AppSettings.h"
 #include "models/AmpModel.h"
-#include <QDateTime>
+#include <QElapsedTimer>
 
 #include <QAbstractItemView>
 #include <QAccessible>
@@ -116,22 +116,34 @@ constexpr const char* kOperateStyle =
 constexpr const char* kPanelKeyIdleStyle =
     "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
     "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
-    "QPushButton:hover { background: {{color.background.1}}; }";
+    "QPushButton:hover { background: {{color.background.1}}; }"
+    "QPushButton:disabled { color: {{color.text.secondary}}; }";
 // MEffA lit and optimising. The vendor's indicator turns red for this; red on
 // this panel already means a fault, so the amplifier's own "working" green is
 // used and the dimmed state below carries the distinction instead.
 constexpr const char* kPanelKeyMeffaActiveStyle =
-    "QPushButton { background: #006030; border: 1px solid #008040; "
-    "border-radius: 3px; color: {{color.text.primary}}; font-weight: bold; }"
-    "QPushButton:hover { background: #007040; }";
+    "QPushButton { background: {{color.accessory.key.meffa.active.background}}; "
+    "border: 1px solid {{color.accessory.key.meffa.active.border}}; "
+    "border-radius: 3px; color: {{color.accessory.key.meffa.active.foreground}}; "
+    "font-weight: bold; }"
+    "QPushButton:hover { background: {{color.accessory.key.meffa.active.hover}}; }"
+    // Inert until the `setup` group is known. Without an explicit :disabled
+    // rule a stylesheet that hard-sets background and colour wins over the
+    // disabled palette, and the key would look exactly as it does once live.
+    "QPushButton:disabled { background: {{color.background.2}}; "
+    "border: 1px solid {{color.background.2}}; color: {{color.text.secondary}}; }";
 // MEffA enabled but inapplicable — the PA is in class AAB, where the algorithm
 // does not apply (§4.3.1). The vendor dims its indicator for exactly this and
 // so does this: outlined, not filled, because the operator HAS enabled it and
 // nothing is wrong.
 constexpr const char* kPanelKeyMeffaStandbyStyle =
-    "QPushButton { background: transparent; border: 1px solid #008040; "
-    "border-radius: 3px; color: #008040; font-weight: bold; }"
-    "QPushButton:hover { background: {{color.background.1}}; }";
+    "QPushButton { background: transparent; "
+    "border: 1px solid {{color.accessory.key.meffa.standby.foreground}}; "
+    "border-radius: 3px; color: {{color.accessory.key.meffa.standby.foreground}}; "
+    "font-weight: bold; }"
+    "QPushButton:hover { background: {{color.background.1}}; }"
+    "QPushButton:disabled { border: 1px solid {{color.background.2}}; "
+    "color: {{color.text.secondary}}; }";
 constexpr const char* kPanelKeyStandbyStyle =
     "QPushButton { background: {{color.accessory.key.standby.background}}; "
     "border: 1px solid {{color.accessory.key.standby.foreground}}; border-radius: 3px; "
@@ -621,7 +633,12 @@ void AmpApplet::setAmpModel(AmpModel* model)
 {
     if (m_model == model) return;
     if (m_model) {
+        // BOTH directions. disconnect(m_model, …, this, …) only drops
+        // connections whose SENDER is the model; the command connections below
+        // have the applet as sender and would survive a reattach, leaving one
+        // press writing the setup group down two amplifiers' sockets.
         disconnect(m_model, nullptr, this, nullptr);
+        disconnect(this, nullptr, m_model, nullptr);
     }
     m_model = model;
     if (!m_model) return;
@@ -1046,9 +1063,16 @@ void AmpApplet::updateActivePort()
 
 // ── Telemetry ───────────────────────────────────────────────────────────────
 
-void AmpApplet::setRadioMeters(float watts, float swr)
+void AmpApplet::setRadioMeters(float watts, float swr, bool powerValid)
 {
-    m_radioMetersMs = QDateTime::currentMSecsSinceEpoch();
+    // A relay update that carried no forward power is NOT the relay being the
+    // live meter source. The radio's amplifier meters arrive as one signal for
+    // FWD, RL, TEMP and DRV alike, so a temperature update would otherwise
+    // stamp the relay fresh at 0 W and hold the amplifier's own socket off for
+    // as long as the radio kept reporting temperature — which is precisely the
+    // station where the socket is the only source of power and SWR (#4805).
+    if (!powerValid) return;
+    m_radioMeters.restart();
     applyMeters(watts, swr);
 }
 
@@ -1057,9 +1081,8 @@ void AmpApplet::setDeviceMeters(float watts, float swr)
     // Dropped on the floor while the relay is live, rather than applied and
     // then overwritten: two sources writing the same gauge at different rates
     // is what made the bar jitter between two slightly different numbers.
-    if (m_radioMetersMs > 0
-            && QDateTime::currentMSecsSinceEpoch() - m_radioMetersMs
-                   < kRelayMeterFreshnessMs) {
+    if (m_radioMeters.isValid()
+            && m_radioMeters.elapsed() < kRelayMeterFreshnessMs) {
         return;
     }
     applyMeters(watts, swr);
@@ -1083,6 +1106,12 @@ void AmpApplet::setDrivePower(float watts, bool valid)
     m_haveDrive = valid;
     m_drvWatts = valid ? watts : 0.0f;
     m_drvGauge->setValue(m_drvWatts);
+    // The whole ROW goes, not just the number. A bar parked at the left stop
+    // is what "no drive" looks like, and an amplifier that publishes no DRV
+    // meter is not being driven with nothing — it is not telling us. Leaving
+    // an empty gauge on screen would assert the first and mean the second.
+    m_drvLabel->setVisible(valid);
+    m_drvGauge->setVisible(valid);
     updateDriveLabel();
 }
 
@@ -1286,6 +1315,7 @@ void AmpApplet::applyFanControls()
     // presentation. Neither before the amplifier has reported a mode.
     m_fanCombo->setVisible(m_haveFanMode && !m_floating);
     m_fanKey->setVisible(m_haveFanMode && m_floating);
+
 }
 
 void AmpApplet::setMeffa(const QString& state, bool settable)
@@ -1340,17 +1370,24 @@ void AmpApplet::applyMeffaControls()
         // complete is worse than one that visibly cannot be pressed yet.
         w->setEnabled(m_meffaSettable);
     }
-    if (QAccessible::isActive()) {
-        QAccessibleEvent event(m_meffaKey, QAccessible::NameChanged);
-        QAccessible::updateAccessibility(&event);
-    }
-
     // Nothing before the amplifier has reported a state, on the same rule the
     // fan controls follow: a control that cannot say what it is set to is
     // worse than none.
     const bool known = !m_meffaState.isEmpty();
     m_meffaBtn->setVisible(known && !m_floating);
     m_meffaKey->setVisible(known && m_floating);
+
+    // Announce on whichever of the pair is actually up. MEffA is the one
+    // control here whose STATE lives in its accessible name — the visible text
+    // stays "MEffA" in all three — so announcing the hidden one tells a screen
+    // reader nothing, and the docked rail button is the one showing by
+    // default. (#4896)
+    if (QAccessible::isActive()) {
+        QWidget* shown = m_floating ? static_cast<QWidget*>(m_meffaKey)
+                                    : static_cast<QWidget*>(m_meffaBtn);
+        QAccessibleEvent event(shown, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
 }
 
 void AmpApplet::setState(const QString& state)
@@ -1441,13 +1478,20 @@ void AmpApplet::setDirectConnected(bool direct)
     updatePortRows();
 }
 
-void AmpApplet::setMeff(const QString& /*meff*/)
+void AmpApplet::setMeff(const QString& meff)
 {
-    // MEffA is deliberately not displayed. One capture is all there is of it,
-    // it has no FlexLib analogue to read a meaning off, and the single value
-    // seen ("STANDBY") contradicts the amplifier's own state word in the same
-    // frame (state=IDLE). Two different answers to "is the amplifier in
-    // standby?" on one panel is worse than one.
+    // The RELAYED MEffA state, off the radio's amplifier telemetry rather than
+    // the port-9008 socket. On a station with no direct socket this is the
+    // only place the state appears at all, so it reads out here — but it can
+    // never be WRITTEN from here: a `setup` write carries the whole
+    // configuration group and only the direct connection can read the rest of
+    // it. Hence settable=false; the control shows the state and stays inert.
+    //
+    // The socket path (AmpModel::meffaChanged) calls setMeffa directly with
+    // the real writability, and arrives on a connected station before this
+    // does, so it wins where both exist.
+    if (m_meffaSettable) return;   // the socket owns it; do not downgrade
+    setMeffa(meff, false);
 }
 
 } // namespace AetherSDR

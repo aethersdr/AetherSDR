@@ -4,7 +4,7 @@
 #include "models/TunerModel.h"
 #include "models/MeterModel.h"
 #include "models/BandSettings.h"
-#include <QDateTime>
+#include <QElapsedTimer>
 
 #include <QAccessible>
 #include <QPushButton>
@@ -1199,7 +1199,7 @@ void TunerApplet::cycleOperateState()
 
 void TunerApplet::setRadioMeters(float fwdPower, float swr)
 {
-    m_radioMetersMs = QDateTime::currentMSecsSinceEpoch();
+    m_radioMeters.restart();
     updateMeters(fwdPower, swr);
 }
 
@@ -1208,9 +1208,8 @@ void TunerApplet::setDeviceMeters(float fwdPower, float swr)
     // Discarded, not applied-then-overwritten, while the relay is live. Two
     // sources writing one gauge at different rates is last-writer-wins, and
     // the slower one kept dragging the bar back to a stale sample.
-    if (m_radioMetersMs > 0
-            && QDateTime::currentMSecsSinceEpoch() - m_radioMetersMs
-                   < kRelayMeterFreshnessMs) {
+    if (m_radioMeters.isValid()
+            && m_radioMeters.elapsed() < kRelayMeterFreshnessMs) {
         return;
     }
     updateMeters(fwdPower, swr);

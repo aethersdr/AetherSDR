@@ -584,14 +584,9 @@ int main(int argc, char** argv)
 
             // The heights are taken FROM the measured column rather than
             // written down. What is being pinned is where the pad gives way
-            // relative to what the contents cost — add a gauge row and every
-            // fixed number here would be testing the old row count instead.
-            // Slack above the contents is pad, and the pad gives way first.
-            // The panel stops being width-limited only once the column has
-            // less than kPanelBottomGap of room left over, so both of these
-            // are measured against the column rather than written down — add
-            // a gauge row and a fixed number here would silently start
-            // testing the old row count instead.
+            // relative to what the contents cost: slack above the contents is
+            // pad, and the pad gives way first. Add a gauge row and any fixed
+            // number here would silently start testing the old row count.
             settle(QSize(420, settledCost + 50));
             CHECK(key->size() == tall);
             settle(QSize(420, settledCost + kPanelBottomGap + 20));

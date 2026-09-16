@@ -65,6 +65,7 @@ void AmpModel::setDirectConnection(PgxlConnection* conn)
         // is only safe while the four values we would have to resend are
         // current. Both go with the connection.
         m_haveSetupGroup = false;
+        m_meffaIntent.clear();
         m_setupNickname.clear();
         m_setupLedIntens.clear();
         m_setupAuthCode.clear();
@@ -153,6 +154,14 @@ void AmpModel::applyDirectStatus(const QMap<QString, QString>& kvs)
     }
     if (kvs.contains(QStringLiteral("meffa"))) {
         const QString meffa = kvs.value(QStringLiteral("meffa")).trimmed().toUpper();
+        // Retire the commanded bit only once the amplifier's report AGREES
+        // with it. Clearing on any report would reopen the race it exists to
+        // close: the first poll after a write still carries the old state.
+        if (!m_meffaIntent.isEmpty()) {
+            const bool enabled = (meffa != QLatin1String("OFF"));
+            if (enabled == (m_meffaIntent == QLatin1String("AUTO")))
+                m_meffaIntent.clear();
+        }
         if (m_meffa != meffa) {
             m_meffa = meffa;
             emit meffaChanged(m_meffa);
@@ -245,14 +254,45 @@ void AmpModel::setMeffaEnabled(bool on)
     // AUTO is the amplifier's own word for the checkbox in §9.6.4, captured
     // off the vendor utility enabling it. What follows is the amplifier's
     // call: AUTO in class AB becomes ACTIVE, in class AAB it becomes STANDBY.
-    writeSetupGroup(on ? QStringLiteral("AUTO") : QStringLiteral("OFF"),
-                    m_fanMode);
+    m_meffaIntent = on ? QStringLiteral("AUTO") : QStringLiteral("OFF");
+    writeSetupGroup(m_meffaIntent, m_fanMode);
+}
+
+QString AmpModel::meffaWriteWord() const
+{
+    // NEVER the reported word. Status says OFF / STANDBY / ACTIVE — what the
+    // algorithm is doing — and a write takes AUTO or OFF, whether it may run.
+    // Sending a reported word back draws 50000013 and the whole group write is
+    // refused, silently, which is how a fan-mode change used to vanish while
+    // MEffA was on.
+    //
+    // The commanded bit wins while it is outstanding: between our write and the
+    // amplifier's next status the reported word is still the OLD state, so
+    // deriving from it would send meffa=OFF one poll after the operator
+    // enabled it and turn it straight back off.
+    if (!m_meffaIntent.isEmpty()) return m_meffaIntent;
+    return meffaEnabled() ? QStringLiteral("AUTO") : QStringLiteral("OFF");
 }
 
 void AmpModel::setFanMode(const QString& mode)
 {
-    if (!canWriteSetup()) return;
-    writeSetupGroup(m_meffa, mode.trimmed().toUpper());
+    const QString fan = mode.trimmed().toUpper();
+    if (canWriteSetup()) {
+        writeSetupGroup(meffaWriteWord(), fan);
+        return;
+    }
+    // The group is not known yet — `setup read` has not answered, or the
+    // amplifier has not reported a MEffA state. Send the single key rather
+    // than dropping the operator's choice on the floor.
+    //
+    // This is what shipped before the group write existed, and it is strictly
+    // better than the alternatives here: the group form's whole justification
+    // is that it carries the values we are NOT changing, and in this branch we
+    // do not have them to carry. Refusing instead would make fan mode less
+    // available than it was, on firmware that answers `setup read` with an
+    // error and on every station for the first moments after connect.
+    if (m_directConn && m_directConn->isConnected())
+        m_directConn->sendCommand(QStringLiteral("setup fanmode=%1").arg(fan));
 }
 
 void AmpModel::applyChanges(const AmpDelta& d)

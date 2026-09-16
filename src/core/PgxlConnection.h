@@ -47,6 +47,12 @@ signals:
     // utility sends `setup nickname=… meffa=… ledintens=… fanmode=… authcode=`
     // as one line — so changing any one of them means knowing the rest.
     void setupRead(const QMap<QString, QString>& kvs);
+    // The amplifier refused a command: `R<seq>|<code>|` with a non-zero code
+    // and an empty body. 50000013 is a bad parameter (a `setup` carrying a
+    // value the amplifier will not take), 50000015 an unknown command.
+    // Emitted so a refusal is visible rather than being read as an empty
+    // status frame and dropped.
+    void commandRefused(quint32 seq, const QString& code);
     // Operator-facing alert, empty text meaning the amplifier has cleared it.
     // Same `M|<text>` frame the tuner uses — the two devices share a protocol
     // and a vendor. Broadcast to every connected client, not only the one

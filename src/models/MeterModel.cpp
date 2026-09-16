@@ -89,6 +89,7 @@ void MeterModel::setTgxlHandle(quint32 handle)
     m_ampDrvIdx = -1;
     m_ampDrv = 0.0f;
     m_hasAmpDrvValue = false;
+    m_hasAmpPwrValue = false;
     m_ampTempIdx = -1;
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const auto& def = *it;
@@ -325,14 +326,39 @@ void MeterModel::removeMeter(int index)
         m_supplyIdx = -1;
         m_hasSupplyVoltsValue = false;   // the sample cannot outlive its meter
     }
-    if (index == m_ampFwdPwrIdx) m_ampFwdPwrIdx = -1;
-    if (index == m_ampSwrIdx)    m_ampSwrIdx = -1;
+    bool ampMeterWithdrawn = false;
+    if (index == m_ampFwdPwrIdx) {
+        m_ampFwdPwrIdx = -1;
+        m_ampFwdPwr = 0.0f;
+        ampMeterWithdrawn = true;
+    }
+    if (index == m_ampSwrIdx) {
+        m_ampSwrIdx = -1;
+        m_ampSwr = 1.0f;
+        ampMeterWithdrawn = true;
+    }
+    if (m_ampFwdPwrIdx < 0 && m_ampSwrIdx < 0) m_hasAmpPwrValue = false;
     if (index == m_ampDrvIdx) {
         m_ampDrvIdx = -1;
         m_ampDrv = 0.0f;
         m_hasAmpDrvValue = false;
+        ampMeterWithdrawn = true;
     }
-    if (index == m_ampTempIdx)   m_ampTempIdx = -1;
+    if (index == m_ampTempIdx) {
+        m_ampTempIdx = -1;
+        m_ampTemp = 0.0f;
+        ampMeterWithdrawn = true;
+    }
+    // Announce the withdrawal. Clearing the cache is not enough on its own:
+    // the amplifier panel only ever hears about these meters through this
+    // signal, so without it the row keeps rendering the last reading of a
+    // meter that no longer exists — a drive figure, at full scale, for an
+    // amplifier nobody is talking to any more.
+    if (ampMeterWithdrawn) {
+        emit ampMetersChanged(m_ampFwdPwr, m_ampSwr, m_ampTemp,
+                              m_hasAmpDrvValue ? m_ampDrv : 0.0f,
+                              m_hasAmpDrvValue);
+    }
     if (index == m_tgxlFwdIdx) {
         m_tgxlFwdIdx = -1;
         m_tgxlFwdPwr = 0.0f;
@@ -474,6 +500,7 @@ void MeterModel::clear()
     m_ampSwr = 1.0f;
     m_ampDrv = 0.0f;
     m_hasAmpDrvValue = false;
+    m_hasAmpPwrValue = false;
     m_ampTemp = 0.0f;
     emit metersCleared();
 }
@@ -978,10 +1005,12 @@ void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& 
             tgxlChanged = true;
         } else if (idx == m_ampFwdPwrIdx) {
             m_ampFwdPwr = std::pow(10.0f, v / 10.0f) / 1000.0f;  // dBm → watts
+            m_hasAmpPwrValue = true;
             ampChanged = true;
         } else if (idx == m_ampSwrIdx) {
             float rho = std::pow(10.0f, -v / 20.0f);
             m_ampSwr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+            m_hasAmpPwrValue = true;
             ampChanged = true;
         } else if (idx == m_ampDrvIdx) {
             m_ampDrv = std::pow(10.0f, v / 10.0f) / 1000.0f;  // dBm → watts

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QWidget>
 #include <QPushButton>
 #include <QComboBox>
@@ -55,7 +56,10 @@ public:
     // Two transports carry the same two readings. Both stamp their arrival and
     // defer to applyMeters(), which picks one — see the note there. Callers
     // must use these rather than setFwdPower/setSwr, which apply blind.
-    void setRadioMeters(float watts, float swr);   // radio-relayed AMP meters
+    // radio-relayed AMP meters. powerValid=false means this update carried no
+    // forward-power/SWR sample (a TEMP- or DRV-only change), and must neither
+    // move the gauges nor count as the relay being live — see the note there.
+    void setRadioMeters(float watts, float swr, bool powerValid = true);
     void setDeviceMeters(float watts, float swr);  // the amplifier's own socket
 
     // Exciter power measured at the amplifier's input (the PGXL "DRV" meter).
@@ -284,8 +288,10 @@ private:
     float    m_peakFwd{0.0f};
 
     // When the radio relay last delivered a power/SWR sample. See
-    // setDeviceMeters() for the rule it decides.
-    qint64   m_radioMetersMs{0};
+    // setDeviceMeters() for the rule it decides. Monotonic on purpose: an
+    // elapsed-time gate measured off the wall clock wedges shut for the length
+    // of any backwards clock step.
+    QElapsedTimer m_radioMeters;
 
     // Cached telemetry values — gauges update every call, labels update at 10 Hz
     float    m_fwdWatts{0.0f};

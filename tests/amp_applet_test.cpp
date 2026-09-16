@@ -362,8 +362,12 @@ void testMeffaShowsThreeStates()
     if (!btn) return;
 
     // Nothing before the amplifier has reported a state.
+    // isHidden(), NOT !isVisible(): the applet is never shown in this test, so
+    // isVisible() is false for every child whatever setVisible() was called
+    // with — the assertion passed with the whole visibility gate deleted.
+    // isHidden() reads the widget's own flag.
     report("MEffA control is hidden until the amplifier reports",
-           !btn->isVisible());
+           btn->isHidden());
 
     applet.setMeffa(QStringLiteral("OFF"), true);
     report("OFF reads as disabled",
@@ -427,6 +431,91 @@ void testMeffaIsInertUntilTheSetupGroupIsKnown()
 
     applet.setMeffa(QStringLiteral("STANDBY"), true);
     report("control becomes live once the group is known", btn->isEnabled());
+}
+
+// A relay update that carried no forward power must not lock out the
+// amplifier's own socket. ampMetersChanged also fires for TEMP and DRV, so on
+// a station whose relayed FWD/RL never arrive the handler would otherwise
+// stamp the relay "fresh" at 0 W forever and discard every socket sample —
+// the #4805 shape, and the fallback added for it would never engage.
+void testDeviceMetersSurviveARelayWithNoPower()
+{
+    resetSettings();
+    AmpApplet applet;
+
+    // What the wiring passes when only TEMP moved: no power sample has landed,
+    // so fwd is still at its default and powerValid is false.
+    applet.setRadioMeters(0.0f, 1.0f, /*powerValid=*/false);
+    applet.setDeviceMeters(1148.0f, 1.2f);
+    const float v = gaugeValue(applet, QStringLiteral("Forward power"));
+    report("a zero-power relay sample does not lock out the device feed",
+           qFuzzyCompare(v, 1148.0f), QString::number(v));
+}
+
+// Withdrawn drive blanks the ROW, not just the number. A bar parked at the
+// left stop is what "no drive" looks like; an amplifier that publishes no DRV
+// meter is not being driven with nothing, it is not saying.
+void testWithdrawnDriveHidesTheRow()
+{
+    resetSettings();
+    AmpApplet applet;
+
+    applet.setDrivePower(10.9f, true);
+    QWidget* gauge = nullptr;
+    for (QWidget* w : applet.findChildren<QWidget*>()) {
+        if (w->accessibleName() == QStringLiteral("Drive power")) gauge = w;
+    }
+    report("drive gauge exists", gauge != nullptr);
+    if (!gauge) return;
+    report("measured drive keeps the gauge", !gauge->isHidden());
+
+    applet.setDrivePower(0.0f, false);
+    report("unmeasured drive hides the gauge rather than parking it at zero",
+           gauge->isHidden());
+}
+
+// The relayed MEffA state reads out on a station with no direct socket, but
+// can never be written from there — a `setup` write carries the whole group
+// and only the socket can read the rest of it.
+void testRelayedMeffaReadsOutButStaysInert()
+{
+    resetSettings();
+    AmpApplet applet;
+    auto* btn = applet.findChild<QPushButton*>(QStringLiteral("ampMeffaButton"));
+    if (!btn) { report("relayed MEffA", false); return; }
+    QSignalSpy toggled(&applet, &AmpApplet::meffaToggled);
+
+    applet.setMeff(QStringLiteral("ACTIVE"));
+    report("relayed MEffA state reaches the control",
+           btn->accessibleName() == QStringLiteral("MEffA on — optimising"),
+           btn->accessibleName());
+    report("relayed MEffA is not writable", !btn->isEnabled());
+    btn->click();
+    report("a press on a relay-only MEffA commands nothing",
+           toggled.count() == 0);
+}
+
+// Fan mode must stay operable whether or not the `setup` group is known: the
+// model falls back to the single-key write, so disabling the control here
+// would make fan mode LESS available than it was before the group write
+// existed. MEffA is different — it is new, and has no single-key form.
+void testFanControlStaysOperableWithoutTheSetupGroup()
+{
+    resetSettings();
+    AmpApplet applet;
+    const auto combos = applet.findChildren<QComboBox*>();
+    report("fan combo exists", !combos.isEmpty());
+    if (combos.isEmpty()) return;
+    QComboBox* combo = combos.first();
+
+    applet.setFanMode(QStringLiteral("STANDARD"));
+    applet.setMeffa(QStringLiteral("STANDBY"), false);
+    report("fan control is operable even with the setup group unknown",
+           combo->isEnabled());
+
+    QSignalSpy fan(&applet, &AmpApplet::fanModeChanged);
+    combo->setCurrentIndex((combo->currentIndex() + 1) % combo->count());
+    report("and still commands a change", fan.count() >= 1);
 }
 
 void testReadoutWidthIsStable()
@@ -547,6 +636,10 @@ int main(int argc, char** argv)
     testMeffaShowsThreeStates();
     testMeffaToggleSendsTheOperatorsBit();
     testMeffaIsInertUntilTheSetupGroupIsKnown();
+    testDeviceMetersSurviveARelayWithNoPower();
+    testWithdrawnDriveHidesTheRow();
+    testFanControlStaysOperableWithoutTheSetupGroup();
+    testRelayedMeffaReadsOutButStaysInert();
 
     std::printf("\n%s\n",
                 g_failed == 0

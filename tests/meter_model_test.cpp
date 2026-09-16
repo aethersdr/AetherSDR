@@ -1542,6 +1542,56 @@ void testTunerHandleDriveDoesNotReachTheAmplifier()
     report("a tuner-handle drive meter never reaches the amplifier", !valid);
 }
 
+// The relay is only the live meter source when a POWER sample actually landed.
+// ampMetersChanged fires for TEMP and DRV too, and a consumer that treats
+// those as a power sample holds the relay "fresh" at 0 W — locking out the
+// amplifier's own socket on exactly the station that needs it (#4805).
+void testAmpPowerFlagTracksOnlyPowerMeters()
+{
+    MeterModel model;
+    model.setTgxlHandle(kTgxlHandle);
+    defineAmpManifest(model);
+
+    report("no amp power before any sample", !model.hasAmpPower());
+
+    // Temperature alone is not a power sample.
+    model.updateValues({16}, {rawDb(43.9f)});
+    report("a temperature sample is not a power sample", !model.hasAmpPower());
+
+    // Neither is drive.
+    model.updateValues({14}, {rawDb(40.4f)});
+    report("a drive sample is not a power sample", !model.hasAmpPower());
+
+    // Forward power is.
+    model.updateValues({12}, {rawDb(60.0f)});
+    report("forward power sets the amp power flag", model.hasAmpPower());
+}
+
+// Withdrawing an amplifier meter has to be ANNOUNCED, not just cached away:
+// the panel only ever hears about these meters through ampMetersChanged, so
+// without an emit it keeps rendering the last reading of a meter that is gone.
+void testWithdrawingAnAmpMeterAnnouncesItself()
+{
+    MeterModel model;
+    model.setTgxlHandle(kTgxlHandle);
+    defineAmpManifest(model);
+    model.updateValues({14}, {rawDb(40.4f)});
+
+    int emits = 0;
+    bool valid = true;
+    QObject::connect(&model, &MeterModel::ampMetersChanged,
+                     [&](float, float, float, float, bool v) { ++emits; valid = v; });
+
+    // No value packet afterwards — the removal alone must speak.
+    model.removeMeter(14);
+    report("removing the drive meter announces the loss on its own",
+           emits == 1 && !valid);
+
+    model.removeMeter(12);
+    report("removing forward power clears the amp power flag",
+           !model.hasAmpPower());
+}
+
 void testMeterObservationWindow()
 {
     MeterObservationWindow window;
@@ -1664,6 +1714,8 @@ int main(int argc, char** argv)
     testRemovingTheDriveMeterClearsTheReading();
     testAmpAndTunerMetersSplitByHandleAfterALateHandle();
     testTunerHandleDriveDoesNotReachTheAmplifier();
+    testAmpPowerFlagTracksOnlyPowerMeters();
+    testWithdrawingAnAmpMeterAnnouncesItself();
 
     return g_failed == 0 ? 0 : 1;
 }

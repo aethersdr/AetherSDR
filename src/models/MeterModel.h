@@ -264,6 +264,12 @@ public:
     float paCurrent() const { return m_paCurrent; }
     bool hasPaCurrentMeter() const { return m_paCurrentIdx >= 0; }
     bool hasPaCurrent() const { return m_hasPaCurrentValue; }
+    // True once a forward-power or SWR sample has arrived for the amplifier.
+    // ampMetersChanged also fires for TEMP and DRV, so a consumer choosing
+    // between the relayed meters and the amplifier's own socket must gate on
+    // this rather than on the signal alone — otherwise a temperature update
+    // reads as a live relay carrying 0 W and locks the socket out (#4805).
+    bool hasAmpPower() const { return m_hasAmpPwrValue; }
 
     // Convenience: supply voltage (Volts, from "+13.8A" meter — measurement point A, before fuse).
     float supplyVolts() const { return m_supplyVolts; }
@@ -515,6 +521,12 @@ private:
     float m_ampSwr{1.0f};
     float m_ampTemp{0.0f};
     float m_ampDrv{0.0f};
+    // Set when a FWD or RL value packet lands for the amplifier. ampMetersChanged
+    // also fires for TEMP and DRV, and a consumer that arbitrates between the
+    // relay and the amplifier's own socket has to know whether a POWER sample
+    // actually arrived — otherwise a temperature update reads as a live relay
+    // carrying 0 W. See hasAmpPower().
+    bool m_hasAmpPwrValue{false};
     // Set when a DRV value packet lands, cleared wherever m_ampDrvIdx is, so a
     // drive reading can never outlive the meter it describes.
     bool m_hasAmpDrvValue{false};
