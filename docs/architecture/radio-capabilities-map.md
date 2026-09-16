@@ -461,8 +461,22 @@ and conflating them would hide one of them.
 
 | Field | Flex | HL2 | Icom | ANAN | Question it answers |
 |---|:--:|:--:|:--:|:--:|---|
-| `radioOwnsDbmScale` | ✅ (default) | ❌ | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
+| `radioOwnsDbmScale` | ✅ (default) | ⚠️ **✅ (default)** | ❌ | ❌ | Will the radio adopt a dBm range sent to it and report it back? |
 | `dbmAxisIsCalibrated()` (`panAmplitude->calibratedDbm`) | ✅ (absent) | ❌ | ✅ (absent) | ❌ | Do the numbers on that axis mean absolute dBm at the antenna? |
+
+**THE HL2 KEEPS THE PERMISSIVE DEFAULT, and that is deliberate rather than an
+omission.** `Hl2Backend::capabilities()` never assigns the field and says why at
+the point where it would: the flag answers two questions, and on this radio the
+answers differ — it cannot be commanded a dBm range (so `false` is right), and
+its auto-floor loop's measurement does not depend on one either (so `false`
+would switch off a loop that bench run d101 measured working). The only two
+`c.radioOwnsDbmScale = false` sites in the tree are `IcomCivBackend` and
+`AnanBackend`. This PR's own test refuses to assert the HL2's value for the same
+reason.
+
+**So every gate in the table below is LIVE on an HL2**, not disarmed. An earlier
+version of this row read ❌ and the table then said the opposite of the code —
+caught by `aethersdr-agent` on #5725.
 
 **`radioOwnsDbmScale` is consumed**, and a backend declaring `false` changes
 behaviour at four gates plus two fan-out sites:

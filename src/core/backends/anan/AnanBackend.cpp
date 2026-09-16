@@ -349,6 +349,23 @@ RadioCapabilities AnanBackend::capabilities() const
     PanAmplitudeModel amplitude;
     amplitude.calibratedDbm = false;
     c.panAmplitude = amplitude;
+
+    // THE SPAN HALF, declared here too rather than left absent. AnanBackend.h
+    // states the same fact the HL2's followsSampleRate carries: the span snaps
+    // "to the nearest rate this radio actually offers (capabilities()
+    // .sampleRatesHz), by RATIO", mirroring Hl2Backend::nearestIqSampleRateHz(),
+    // and "there is no continuous zoom here — DDC0 runs at exactly one of six
+    // fixed rates". panBandwidthLimitsChanged clamps to that list's endpoints.
+    //
+    // radioWide is FALSE, and the difference from the HL2 is real rather than
+    // an oversight: the HL2 puts one DDC stream in front of every receiver, so
+    // they share one span. This radio has one receiver, so there is no shared
+    // budget to declare — absent would have read as "nobody looked", which is
+    // the ambiguity these optionals exist to remove (aethersdr-agent, #5725).
+    PanSpanModel span;
+    span.followsSampleRate = true;
+    span.radioWide = false;
+    c.panSpanModel = span;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");

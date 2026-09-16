@@ -78,7 +78,9 @@ int main(int argc, char** argv)
     // of RadioModel::setupBackend. FlexBackend::decodePanRange is the only
     // reader of min_dbm anywhere in the tree.
     //
-    // radioOwnsDbmScale IS NOT ASSERTED HERE. It is wrong for this radio and it
+    // THE HL2'S radioOwnsDbmScale IS NOT ASSERTED HERE. Its DEFAULT is, below,
+    // which is a different fact — the one that would change every silent
+    // backend's claim at once if it moved. It is wrong for this radio and it
     // is deliberately left undeclared: bench run d101 measured the auto-floor
     // loop SETTLING on this radio (0.307 dB in 74 s quiescent, 0.0000 dB/s over
     // the second half, re-settling within ~30 s after a 12 dB LNA step), and the
@@ -146,11 +148,28 @@ int main(int argc, char** argv)
           "absent-means-legacy branch");
     check(caps.panAmplitude
               && caps.panAmplitude->calibratedDbm == hl2::Hl2DbReference{}.isCalibrated(),
-          "the dBm axis declaration tracks Hl2DbReference::isCalibrated()");
+          "the dBm axis declaration matches Hl2DbReference on a fresh radio");
     check(caps.dbmAxisIsCalibrated() == hl2::Hl2DbReference{}.isCalibrated(),
           "and the accessor reports the declared field, not its absent default");
     check(!caps.dbmAxisIsCalibrated(),
           "and today that means UNCALIBRATED — no per-unit fullScaleDbm exists");
+
+    // WHAT THESE THREE CANNOT SEE, said plainly because this file's own thesis
+    // is that a test carrying its own copy of the truth cannot detect the
+    // declaration and the code diverging.
+    //
+    // Hl2DbReference{}.isCalibrated() is `m_fullScaleDbm != 0.0` on a
+    // default-constructed reference, so it is unconditionally false. Comparing
+    // the declaration against it therefore compares false with false: replace
+    // `amplitude.calibratedDbm = m_dbRef.isCalibrated()` in
+    // Hl2Backend::capabilities() with a literal `false` and every assertion
+    // above still passes. So "the day a per-unit fullScaleDbm is populated the
+    // declaration follows it" is NOT something this test observes — it is a
+    // property of the expression, checked by reading.
+    //
+    // Nothing better is reachable without a seam to set fullScaleDbm on a
+    // pre-connect backend, and inventing one for a test is a worse trade than
+    // stating the limit. Raised by aethersdr-agent on #5725.
 
     // The permissive defaults these fields carry are load-bearing, and a
     // regression that flipped either would make every silent backend change its

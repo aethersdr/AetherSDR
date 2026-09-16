@@ -112,10 +112,20 @@ struct PanSpanModel {
 // reach in here and pick a default for themselves.
 struct PanAmplitudeModel {
     // The numbers on the axis are ABSOLUTE dBm at the antenna. True for a radio
-    // that carries a per-unit factory calibration (a Flex reports true dBm; an
-    // Icom decodes its scope against ScopeCalibration), so an S-meter reading,
-    // a noise-floor readout and a recorded spot level all mean something off
-    // this radio.
+    // that carries a per-unit factory calibration — a Flex reports true dBm —
+    // so an S-meter reading, a noise-floor readout and a recorded spot level
+    // all mean something off this radio.
+    //
+    // THE ICOM IS NOT THAT EXAMPLE, and an earlier revision of this comment
+    // offered it as one. `IcomScope.h` opens "THE SCOPE IS NOT CALIBRATED …
+    // Anything that presents this as dBm is inventing a measurement. This
+    // struct is that invention", `ScopeCalibration`'s floor and span are
+    // labelled ESTIMATES with `measured` defaulting false, and
+    // `IcomCivBackend::capabilities()` says "The scope scale is OURS, not the
+    // radio's". Its record is absent here, so it reads as the legacy claim
+    // rather than as a considered `true` — which is the distinction the
+    // optional exists to carry, and citing it as a worked example of `true`
+    // undid that. Caught by aethersdr-agent on #5725.
     //
     // FALSE means the axis is dBFS wearing a dBm label: the numbers are
     // self-consistent — a 3 dB stronger signal still reads 3 dB higher — but
@@ -132,8 +142,11 @@ struct PanAmplitudeModel {
     // the operator can reach.
     //
     // It is what lets the noise-floor auto-adjust converge on a radio that
-    // echoes no range command back — see noiseFloorAutoAdjustAllowed() and
-    // RadioCapabilities::panBinsAbsolute(). Declared here rather than beside
+    // echoes no range command back. The gate that reads it is
+    // noiseFloorAutoAdjustAllowed(), which DOES NOT EXIST YET — it arrives with
+    // #5726, as does any backend that sets this field true. Forward-looking, in
+    // the same way the population note below is, and said so rather than
+    // reading as a pointer to shipped code (aethersdr-agent, #5725). Declared here rather than beside
     // radioOwnsDbmScale because it is a property of THIS axis, and because the
     // single flag that used to answer both questions is the bug being split.
     //
