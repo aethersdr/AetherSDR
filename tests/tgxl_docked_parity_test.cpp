@@ -166,10 +166,13 @@ int main(int argc, char** argv)
                     //
                     // The regression was "OPERATE" drawn as "OPERATI":
                     // fittedRailFontPx() left a size on the button that was too
-                    // large for it. The property that catches that is
-                    // MAXIMALITY — the chosen size is the largest in range that
-                    // fits — and maximality compares the SAME font at two
-                    // sizes, so it holds whatever fonts the machine has.
+                    // large for it. What catches that is the FIT half below,
+                    // qualified by the clamp. MAXIMALITY catches the opposite
+                    // defect — a caption shrunk further than it needed to be —
+                    // which the old assertion could not see at all. Both
+                    // re-evaluate the fitter's own predicate rather than an
+                    // absolute width, so they hold whatever fonts the machine
+                    // has.
                     //
                     // Asserting the caption fits OUTRIGHT does not hold
                     // everywhere, and asserting it turned main's full suite red
@@ -187,9 +190,16 @@ int main(int argc, char** argv)
                     // and a test that cannot tell them apart reports the wrong
                     // one.
                     //
-                    // Mirrors of TunerApplet.cpp's own constants; the padding
-                    // is the fitter's, not a looser number, so "fits" here and
-                    // "fits" there are the same predicate.
+                    // Mirrors of TunerApplet.cpp's own constants — they live
+                    // in an anonymous namespace there, so there is nothing to
+                    // include. The padding is the fitter's, not a looser
+                    // number, so "fits" here and "fits" there are the same
+                    // predicate. Drift is only loud in one direction: if
+                    // kRailCaptionPadding DECREASES without a matching edit
+                    // here, this copy is tighter than the fitter and the checks
+                    // below fail. An INCREASE goes the quiet way — this copy
+                    // becomes looser, and drift is then caught only if some
+                    // caption happens to land in the gap.
                     constexpr int kFitMinPx = 7;     // kRailCaptionMinPx
                     constexpr int kFitMaxPx = 10;    // kRailCaptionMaxPx
                     constexpr int kFitPadding = 8;   // kRailCaptionPadding
@@ -203,13 +213,26 @@ int main(int argc, char** argv)
                         QFontMetrics(drawn).horizontalAdvance(btn->text())
                         <= available;
 
+                    // Both checks re-derive the fitter's own arithmetic on the
+                    // same button at the same width, so what they pin is its
+                    // CONTRACT, not the rendered pixels. They catch a sheet
+                    // that disagrees with fittedRailFontPx() and a fitter that
+                    // stops honouring its own search; they are not an
+                    // independent "nothing clips on screen" check. That check
+                    // is exactly what is unavailable in a container without the
+                    // project's fonts — which is what made the outright-fit
+                    // assertion red.
+                    //
                     // Either it fits, or the fitter exhausted its range and
                     // clamped. Never a size it could still have shrunk.
                     CHECK(fits || pixels == kFitMinPx);
 
-                    // MAXIMALITY, which is the half that catches the clipping:
-                    // one size larger must NOT fit, or the fitter stopped
-                    // short and the caption is smaller than it needed to be.
+                    // MAXIMALITY, which catches the opposite defect: the
+                    // fitter shrinking the caption further than it needed to.
+                    // (The clipping regression this test exists for — a caption
+                    // too LARGE for its button — is caught above, by `fits`.)
+                    // One size larger must NOT fit, or the fitter stopped
+                    // short.
                     if (pixels < kFitMaxPx) {
                         QFont bigger = drawn;
                         bigger.setPixelSize(pixels + 1);

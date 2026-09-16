@@ -1105,16 +1105,14 @@ void TunerApplet::syncFromModel()
     m_c2Dial->setValue(m_relayC2);
 
     // Operate/Bypass/Standby button — 3-state display, captioned with the
-    // same abbreviations the expanded panel uses (OPR / BYP / STBY). Spelled
-    // out they do not fit the rail's button and were clipped mid-word
-    // ("OPERATI"), and a caption the operator has to guess at is worse than a
-    // short one they have already learned from the panel.
-    //
-    // The accessible name stays the full word: the abbreviation is a fit
-    // problem, and a screen reader has no width to run out of.
-    // operate=1, bypass=0 → OPR  (green)
-    // operate=1, bypass=1 → BYP  (orange)
-    // operate=0            → STBY (default)
+    // full word. Spelled out they overflow the rail's button at the default
+    // size and were once clipped mid-word ("OPERATI"); fittedRailFontPx()
+    // shrinks the caption to fit instead of abbreviating it, so the operator
+    // reads the same word here as on the expanded panel and the button's
+    // accessible name is that word too.
+    // operate=1, bypass=0 → OPERATE  (green)
+    // operate=1, bypass=1 → BYPASS   (orange)
+    // operate=0           → STANDBY  (default)
     auto& theme = AetherSDR::ThemeManager::instance();
     const bool operate = m_model->isOperate();
     const bool bypass = m_model->isBypass();
