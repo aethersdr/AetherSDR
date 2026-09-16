@@ -979,6 +979,13 @@ inline constexpr int         kEp4BlockSamples     = 2048;
 // NOT kFullScale: that is the EP6 24-bit DDC scale and applying it here would
 // read every bandscope block as ~66 dB quieter than it is.
 inline constexpr int         kEp4FullScale        = 2048;
+// hermeslite_core.v `parameter CLK_FREQ = 76800000`; clk_ad9866 is derived from
+// rffe_ad9866_clk76p8. First Nyquist zone DC..38.4 MHz.
+//
+// RESTORED IN REBASE: this constant was authored on this branch and carried by
+// the EP4 commits that #5650 superseded; the squash that landed #5650 did not
+// keep it, and Hl2Backend's wideband converter view is its consumer here.
+inline constexpr double      kAdcSampleRateHz     = 76.8e6;
 // `ep4_seq_no` is declared `logic [19:0]`: byte 4 of the header is a hardwired
 // 8'h00 and byte 5 masks to a nibble. It wraps at 1,048,576 — about 46 minutes
 // at the measured 381 packets/s — and a detector that assumes EP6's 32 bits
