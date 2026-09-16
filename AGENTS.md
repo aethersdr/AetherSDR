@@ -231,9 +231,9 @@ Drop `<feature>_test.cpp` into `tests/`, then declare its `add_executable` +
 `add_test` in **`tests/tests.cmake`**. There is no glob; every test is declared
 explicitly, so copy a neighbouring target's block.
 
-The root `CMakeLists.txt` held all 300+ of these until the split — over half its
-6,357 lines — so a stale doc, an old PR, or pattern-matching on the surrounding
-code will all point you at the wrong file. Two guards catch that: `tests.cmake`
+These all lived in the root `CMakeLists.txt` before the split, so a stale doc,
+an old PR, or pattern-matching on the surrounding code will all point you at
+the wrong file. Two guards catch that: `tests.cmake`
 aborts the CMake configure step, and `tools/check_test_registration.py --strict`
 fails the PR in CI.
 
@@ -304,9 +304,7 @@ not a socket, which is why it went unenumerated; #5405 review). Mining a retired
 *input data* for injected-transport tests is encouraged; running the fake as
 a live socket peer is not. Loopback mocks of documented HTTP APIs are a
 different trade — that contract is versioned and published; radio firmware
-behavior is not. (The example that used to sit here, `asr_remote_backend_test`,
-was one of eight removed for intermittency; see the note at the end of this
-section.)
+behavior is not.
 
 Socket tests where **our own server is the subject** (rigctld, CAT, the TCI
 server, the automation bridge's transport) remain legitimate: the code under
@@ -330,9 +328,7 @@ the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
 
 The version is stated in **five** places, and a release is not prepped until
-all five agree. This list is spelled out because it was previously described as
-"both `CMakeLists.txt` and `README.md`" — and v26.7.4.1 duly shipped with the
-other three stale:
+all five agree — check every row, not just the first two:
 
 | file | what to change |
 |---|---|
