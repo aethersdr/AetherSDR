@@ -93,9 +93,9 @@ namespace AetherSDR::hl2 {
 // slider-top case asserts it over the WHOLE run rather than the settled tail,
 // because the settled tail is precisely the half that cannot see this.
 //
-// This paragraph described the key-on seed until `37ecd25f` replaced it. The
-// seed is gone, `Config::alcAttackSec` with it, and Hl2TxDsp.cpp's own comment
-// records why it was rejected.
+// This paragraph described the key-on seed until `5607b565` (#5646) replaced
+// it. The seed is gone, `Config::alcAttackSec` with it, and Hl2TxDsp.cpp's own
+// comment records why it was rejected.
 //
 // IT DOES NOT REACH ENGINE-GENERATED AUDIO, SO 0 DOES NOT SILENCE A BEACON.
 // Hl2TxDsp::processAudioBlock substitutes 1.0 for this multiplier when the

@@ -282,7 +282,8 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     // property hl2_txdsp_test now asserts directly, as 20 dB in arriving as
     // 20 dB out. Above the target the loop takes the reduction IMMEDIATELY —
     // see the note at the assignment below for why the 5 ms attack constant
-    // this sentence used to name was deleted in 37ecd25f rather than shortened.
+    // this sentence used to name was deleted in 5607b565 (#5646) rather than
+    // shortened.
     //
     // THE MIC SLIDER IS A MICROPHONE CONTROL, so it does not reach the engine's
     // own unattended audio. See the note on the declaration in Hl2TxDsp.h.
