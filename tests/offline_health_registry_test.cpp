@@ -334,6 +334,18 @@ int main(int argc, char** argv)
               "and it rebuilt the aimed family's instrument, not the session's");
         check(!m.offlineHealthRows().order.contains(QStringLiteral("whoAmI")),
               "so the rows belong to the radio that was aimed at");
+
+        // AND THE SESSION TAKING THE WIRE RECLAIMS IT. An aim at another
+        // family's radio is legitimate while idle, and must not survive into a
+        // session with a different radio: `health` has to describe the radio it
+        // is talking to. rebuildBackendForTest() runs the same reclaim
+        // connectToRadio() does.
+        check(m.rebuildBackendForTest(QStringLiteral("flex")),
+              "connect a session of the OTHER declaring family");
+        check(m.offlineHealthFamily() == QStringLiteral("flex"),
+              "the instrument is rebuilt for the family taking the wire");
+        check(!m.offlineHealthRows().order.contains(QStringLiteral("telemetrySource")),
+              "so the aimed radio's rows do not follow into this session");
     }
 
     if (g_failures == 0)

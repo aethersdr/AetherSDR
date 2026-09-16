@@ -3836,6 +3836,25 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         }
     }
 
+    // THE SESSION TAKING THE WIRE RECLAIMS THE INSTRUMENT.
+    //
+    // `telemetry target` can aim the offline source at ANOTHER family's radio
+    // while this session is idle — that is the verb's whole purpose. Connecting
+    // ends that: a session's `health` must describe the radio it is talking to,
+    // so the instrument is rebuilt for the family being connected and the old
+    // aim is dropped rather than published under this radio's rows.
+    //
+    // HERE rather than only in setupBackend(), which the branch above skips
+    // whenever the family is unchanged and a backend already exists — the
+    // common case, since a backend is built in this class's constructor. Left
+    // to setupBackend() alone, aiming at an HL2 and then connecting to the Flex
+    // that was already selected would carry the HL2's attribution rows into the
+    // Flex session, which is the cross-family leak the declaration gate exists
+    // to stop. ensureOfflineHealth() hands the old borrow back through the seam
+    // before releasing, so nothing is left holding a destroyed source.
+    if (auto* offline = ensureOfflineHealth(m_family))
+        m_backend->setOfflineHealthSource(offline);
+
     // An attempt is in flight from here until it lands, fails, or is abandoned
     // (#4912). Set after the family switch above so a backend rebuild — which
     // tears the old backend down and can emit a disconnect — cannot clear the
