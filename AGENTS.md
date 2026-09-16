@@ -3,9 +3,10 @@
 This is the canonical project guide for any AI assistant working on
 AetherSDR — Claude Code, OpenAI Codex, Cursor, GitHub Copilot, Gemini
 Code Assist, Aider, AetherClaude (our orchestrator bot), or any other
-tool. Each tool has its own well-known file at a different path
-(`CLAUDE.md`, `.github/copilot-instructions.md`, `GEMINI.md`, etc.);
-those are thin pointers back here. Everything project-wide lives in
+tool. Several of those tools look for their own well-known file at a
+different path (`CLAUDE.md`, `.github/copilot-instructions.md`,
+`GEMINI.md`); those are thin pointers back here, and a tool without one
+reads this file directly. Everything project-wide lives in
 **this** file.
 
 If you are an AI assistant: read this file end-to-end before writing
@@ -806,10 +807,13 @@ document why.
 
 **IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
 settings are stored via `AppSettings` (`src/core/AppSettings.h`), which
-persists to a **SQLite database** named `AetherSDR.db` under Qt's
-`QStandardPaths::AppConfigLocation` — `~/.config/AetherSDR/` on Linux,
-`~/Library/Preferences/AetherSDR/` on macOS, `%LOCALAPPDATA%\AetherSDR\` on
-Windows (RFC #4603; design doc: `docs/settings-store-sqlite-design.md`).
+persists to a **SQLite database** named `AetherSDR.db` in
+`SettingsPaths::configDir()` — `QStandardPaths::GenericConfigLocation` +
+`/AetherSDR`, i.e. `~/.config/AetherSDR/` on Linux,
+`~/Library/Preferences/AetherSDR/` on macOS and `%LOCALAPPDATA%\AetherSDR\`
+on Windows. Always route store paths through `SettingsPaths`, never through
+`QStandardPaths` directly (RFC #4603; design doc:
+`docs/settings-store-sqlite-design.md`).
 Key names use PascalCase (e.g. `LastConnectedRadioSerial`,
 `DisplayFftFillColor`). Boolean values are stored as `"True"` / `"False"`
 strings.
