@@ -154,9 +154,23 @@ option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 #       advantage THERE is below the wire and unusable.
 # OFF — the in-tree phasing modulator, unchanged. The fallback, kept building
 #       and kept tested, for a machine or a report where TXA misbehaves.
+#
+# DEFAULT OFF, DELIBERATELY, AND NOT BECAUSE TXA IS DOUBTED. The approval on
+# #5678 was conditional: keep the phasing modulator behind a switch "until the
+# TXA path passes the extended suite AND HAS HAD HARDWARE TIME. The
+# silent-failure argument doesn't expire on merge." The extended suite passes.
+# The hardware time does not exist yet -- docs/hl2-txa-configuration-diff.md §7
+# opens "No hardware. No radio was keyed. No antenna port was observed," and
+# every figure in this branch is a unit test reading emitted IQ above the
+# 16-bit EP2 wire.
+#
+# Defaulting ON would have made the first person to key TXA on the air someone
+# who did not choose to. OFF costs the identical way back -- one cmake flag --
+# and makes that person a volunteer. Flip the default when an operator has keyed
+# it into a dummy load and then onto an antenna, and say in the commit who did.
 option(AETHER_HL2_TX_TXA
-       "Hermes-Lite 2 SSB transmit modulator: ON uses WDSP's TXA chain, OFF the in-tree phasing modulator"
-       ON)
+       "Hermes-Lite 2 SSB transmit modulator: ON uses WDSP's TXA chain, OFF (default) the in-tree phasing modulator"
+       OFF)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
