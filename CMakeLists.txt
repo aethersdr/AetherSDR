@@ -2751,6 +2751,27 @@ if(FFTW3_FOUND)
     endif()
 endif()
 
+target_sources(aethercore PRIVATE src/models/CwRxModel.cpp src/models/CwRxModel.h)
+
+option(ENABLE_DEEPFIST_EXPERIMENT "Build the local DeepFist CW prototype" OFF)
+set(DEEPFIST_MODEL_BASE_URL "" CACHE STRING "Published, versioned HTTPS DeepFist asset directory (empty before publication)")
+if(ENABLE_DEEPFIST_EXPERIMENT)
+    if(NOT ORT_FOUND)
+        message(FATAL_ERROR "The DeepFist prototype requires the packaged ONNX Runtime")
+    endif()
+    target_compile_definitions(aethercore PUBLIC HAVE_DEEPFIST)
+    target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${DEEPFIST_MODEL_BASE_URL}")
+    target_sources(aethercore PRIVATE
+        src/models/DeepFistCwModel.cpp src/models/DeepFistCwModel.h
+        src/core/deepfist/DeepFistStream.cpp
+        src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h
+        third_party/deepfist/DeepFistConditioner.cpp
+        third_party/deepfist/DeepFistSpectrogram.cpp
+        third_party/deepfist/DeepFistCtc.cpp
+        third_party/deepfist/DeepFistModel.cpp)
+    target_include_directories(aethercore PRIVATE "${CMAKE_SOURCE_DIR}/third_party/deepfist")
+endif()
+
 if(ORT_FOUND)
     target_compile_definitions(aethercore PUBLIC HAVE_ONNX)
     # PUBLIC include dir: core/SignalClassifier.h includes onnxruntime under

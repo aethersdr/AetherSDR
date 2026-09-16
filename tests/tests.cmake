@@ -5983,3 +5983,38 @@ add_executable(droop_calibration_seam_test tests/droop_calibration_seam_test.cpp
 target_include_directories(droop_calibration_seam_test PRIVATE src tests)
 target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
 add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)
+
+# Opt-in prototype: file/PCM tests only; no sockets or sound devices.
+if(ENABLE_DEEPFIST_EXPERIMENT)
+
+    add_executable(deepfist_committer_test tests/deepfist_committer_test.cpp)
+    target_include_directories(deepfist_committer_test PRIVATE src)
+    target_link_libraries(deepfist_committer_test PRIVATE Qt6::Core)
+    add_test(NAME deepfist_committer_test COMMAND deepfist_committer_test)
+    add_executable(deepfist_model_assets_test tests/deepfist_model_assets_test.cpp)
+    target_include_directories(deepfist_model_assets_test PRIVATE src tests)
+    target_link_libraries(deepfist_model_assets_test PRIVATE aethercore Qt6::Core Qt6::Network)
+    add_test(NAME deepfist_model_assets_test COMMAND deepfist_model_assets_test)
+    set_tests_properties(deepfist_model_assets_test PROPERTIES TIMEOUT 20)
+    add_executable(deepfist_cw_model_test tests/deepfist_cw_model_test.cpp)
+    target_include_directories(deepfist_cw_model_test PRIVATE src third_party/deepfist)
+    target_link_libraries(deepfist_cw_model_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME deepfist_cw_model_test COMMAND deepfist_cw_model_test)
+    add_test(NAME deepfist_carrier_regression_test COMMAND deepfist_cw_model_test --carrier)
+    add_test(NAME deepfist_cw_churn_test COMMAND deepfist_cw_model_test --churn)
+    set_tests_properties(deepfist_cw_churn_test deepfist_carrier_regression_test PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 120)
+    add_test(NAME deepfist_cw_model_inference_test COMMAND deepfist_cw_model_test --infer)
+    add_test(NAME deepfist_cw_model_download_inference_test COMMAND deepfist_cw_model_test --download-infer)
+    set_tests_properties(deepfist_cw_model_test PROPERTIES TIMEOUT 15)
+    set_tests_properties(deepfist_cw_model_inference_test deepfist_cw_model_download_inference_test PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 60)
+endif()
+
+
+# Socket-free production RX facade: selection and lifecycle without model downloads.
+add_executable(cw_rx_model_test tests/cw_rx_model_test.cpp)
+target_include_directories(cw_rx_model_test PRIVATE src)
+target_link_libraries(cw_rx_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME cw_rx_model_test COMMAND cw_rx_model_test)
+set_tests_properties(cw_rx_model_test PROPERTIES TIMEOUT 15)

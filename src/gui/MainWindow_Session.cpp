@@ -2382,9 +2382,7 @@ void MainWindow::wireRxDemodAudioSinks()
     // CW decoder RX feed — gated live on the toggle (#2417).
     connect(&m_radioModel, &RadioModel::rxDemodAudioReady,
             &m_cwDecoder, [this](const PcmFrame& frame) {
-                const QByteArray pcm = frame.legacyStereo24();
-                if (!pcm.isEmpty() && CwDecodeSettings::rxEnabled())
-                    m_cwDecoder.feedAudio(pcm);
+                if (CwDecodeSettings::rxEnabled()) { m_cwDecoder.feed(frame); }
             });
 
     // RTTY decoder RX feed — gated on the decoder being running.
