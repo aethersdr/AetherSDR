@@ -6184,12 +6184,37 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     if (panId.isEmpty() || average < 0 || average > 100) {
         return false;
     }
+
+    PanadapterModel* pan = panadapter(panId);
+
+    // THE BRANCH THE SIBLING TWENTY LINES BELOW ALREADY HAS. A backend that
+    // shapes its own spectra has no display engine to command and no echo to
+    // wait for, so the FlexLib text command below is not merely unnecessary --
+    // it FAILS, and the early return then skips the model update entirely.
+    //
+    // The symptom is subtle, which is why it survived: the operator's choice
+    // DOES take effect, because MainWindow_Wiring calls
+    // SpectrumWidget::setFftAverage() unconditionally beside this call. What
+    // never happens is the model write. So the setting works until the pan is
+    // rebuilt, at which point the widget is restored from pan->average() --
+    // which nothing ever set -- and the averaging silently reverts.
+    //
+    // Mechanism corrected by @ten9876 on #5678: m_fftAverage IS read, and the
+    // fault is this missing branch rather than an unused member.
+    if (shapesDisplayRatesLocally()) {
+        if (!pan) {
+            return false;
+        }
+        pan->setLocalAverage(average);
+        return true;
+    }
+
     // FlexLib Panadapter.Average updates locally on dispatch; later status
     // reconciles it. Preserve the existing ownership and profile-load gates.
     if (!sendCommand(QString("display pan set %1 average=%2").arg(panId).arg(average))) {
         return false;
     }
-    if (PanadapterModel* pan = panadapter(panId)) {
+    if (pan) {
         pan->setRequestedFftSettings(average, -1);
     }
     return true;
