@@ -5,6 +5,7 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "core/QsoRecorder.h"
+#include "core/QsoWavPlayback.h"
 
 #include <QAudioFormat>
 #include <QCoreApplication>
@@ -378,6 +379,200 @@ void testDestructionStopsBeforeBufferTeardown()
     CHECK(observation.releases == 1);
 }
 
+
+// The output budget must reject before sink creation, but never silently.
+QString writeOverBudgetFixture(const QString& directory, const QAudioFormat& format)
+{
+    const qint64 sourceFrames = kQsoPlaybackByteLimit / format.bytesPerFrame()
+        * 24000 / format.sampleRate() + 1;
+    const quint32 bytes = static_cast<quint32>(sourceFrames * 4);
+    const auto header = QsoRecordingFormat{}.wavHeader(bytes);
+    CHECK(header.has_value());
+    const QString path = directory + QStringLiteral("/over-budget.wav");
+    QFile file(path);
+    CHECK(file.open(QIODevice::WriteOnly));
+    CHECK(file.write(*header) == header->size());
+    CHECK(file.resize(44 + bytes)); // Sparse: no large allocation or PCM write.
+    return path;
+}
+
+void testPreparationRefusalReportsAndAllowsRetry()
+{
+    QTemporaryDir directory;
+    for (const QAudioFormat& format : {sinkFormat(24000, 2, QAudioFormat::Int16),
+                                      sinkFormat(48000, 2, QAudioFormat::Int16),
+                                      sinkFormat(48000, 2, QAudioFormat::Float)}) {
+        SinkObservation observation;
+        QsoRecorder recorder;
+        observePlayback(recorder, observation);
+        const QString path = writeOverBudgetFixture(directory.path(), format);
+        QsoRecorderPlaybackTestAccess::setPath(recorder, path);
+        QStringList errors;
+        QObject::connect(&recorder, &QsoRecorder::recordingError, &recorder,
+                         [&](const QString& error) {
+            CHECK(!recorder.isPlaying());
+            CHECK(!QsoRecorderPlaybackTestAccess::bufferIsOpen(recorder));
+            CHECK(recorder.hasLastRecording());
+            errors.append(error);
+            recorder.stopPlayback(); // Refusal notification is reentrant.
+        });
+        QsoRecorderPlaybackTestAccess::start(recorder, format);
+        CHECK(errors.size() == 1);
+        CHECK(!errors.isEmpty() && errors.first().contains(QStringLiteral("limit")));
+        CHECK(observation.events.isEmpty());
+        CHECK(observation.starts == 0);
+        QsoRecorderPlaybackTestAccess::setPath(recorder, writeFixture(directory.path()));
+        QsoRecorderPlaybackTestAccess::start(recorder, format);
+        CHECK(recorder.isPlaying());
+        recorder.stopPlayback();
+    }
+}
+
+void testErrorCallbackCanRetryOrDestroy()
+{
+    QTemporaryDir directory;
+    const QAudioFormat format = sinkFormat(48000, 2, QAudioFormat::Float);
+    const QString valid = writeFixture(directory.path());
+    const QString invalid = writeOverBudgetFixture(directory.path(), format);
+    for (const bool destroy : {false, true}) {
+        SinkObservation observation;
+        auto recorder = std::make_unique<QsoRecorder>();
+        observePlayback(*recorder, observation);
+        QsoRecorderPlaybackTestAccess::setPath(*recorder, invalid);
+        int errors = 0;
+        QObject context;
+        QObject::connect(recorder.get(), &QsoRecorder::recordingError, &context,
+                         [&](const QString&) {
+            ++errors;
+            if (destroy) {
+                recorder.reset();
+            } else {
+                QsoRecorderPlaybackTestAccess::setPath(*recorder, valid);
+                QsoRecorderPlaybackTestAccess::start(*recorder, format);
+            }
+        });
+        QsoRecorderPlaybackTestAccess::start(*recorder, format);
+        CHECK(errors == 1);
+        if (destroy) {
+            CHECK(!recorder);
+            CHECK(observation.events.isEmpty());
+        } else {
+            CHECK(recorder->isPlaying());
+            CHECK(observation.events == QStringList({"sink.start", "mute.on", "started"}));
+            recorder->stopPlayback();
+        }
+    }
+}
+
+// A direct mute observer may cancel/replace playback before the next signal.
+// The retired operation must not announce started/stopped for the replacement.
+void testMuteCallbackCanCancelOrReplace()
+{
+    QTemporaryDir directory;
+    const QString path = writeFixture(directory.path());
+    const QAudioFormat format = sinkFormat(24000, 2, QAudioFormat::Int16);
+    for (const bool replace : {false, true}) {
+        SinkObservation observation;
+        QsoRecorder recorder;
+        observePlayback(recorder, observation);
+        QsoRecorderPlaybackTestAccess::setPath(recorder, path);
+        bool acted = false;
+        QObject::connect(&recorder, &QsoRecorder::muteRxRequested, &recorder,
+                         [&](bool mute) {
+            if (!acted && mute != replace) {
+                acted = true;
+                if (replace) {
+                    QsoRecorderPlaybackTestAccess::start(recorder, format);
+                } else {
+                    recorder.stopPlayback();
+                }
+            }
+        });
+        QsoRecorderPlaybackTestAccess::start(recorder, format);
+        if (replace) {
+            observation.events.clear();
+            recorder.stopPlayback();
+            CHECK(recorder.isPlaying());
+            CHECK(observation.events == QStringList({"sink.stop", "mute.off",
+                                                     "sink.start", "mute.on", "started"}));
+            recorder.stopPlayback();
+        } else {
+            CHECK(!recorder.isPlaying());
+            CHECK(observation.events == QStringList({"sink.start", "mute.on",
+                                                     "sink.stop", "mute.off", "stopped"}));
+        }
+    }
+}
+
+void testMuteCallbackCanReturnToSameState()
+{
+    QTemporaryDir directory;
+    const QString path = writeFixture(directory.path());
+    const QAudioFormat format = sinkFormat(24000, 2, QAudioFormat::Int16);
+    for (const bool duringStart : {false, true}) {
+        SinkObservation observation;
+        QsoRecorder recorder;
+        observePlayback(recorder, observation);
+        QsoRecorderPlaybackTestAccess::setPath(recorder, path);
+        if (!duringStart) {
+            QsoRecorderPlaybackTestAccess::start(recorder, format);
+            observation.events.clear();
+        }
+        bool acted = false;
+        QObject::connect(&recorder, &QsoRecorder::muteRxRequested, &recorder,
+                         [&](bool mute) {
+            if (acted || mute != duringStart) {
+                return;
+            }
+            acted = true;
+            if (duringStart) {
+                recorder.stopPlayback();
+                QsoRecorderPlaybackTestAccess::start(recorder, format);
+            } else {
+                QsoRecorderPlaybackTestAccess::start(recorder, format);
+                recorder.stopPlayback();
+            }
+        });
+        if (duringStart) {
+            QsoRecorderPlaybackTestAccess::start(recorder, format);
+            CHECK(recorder.isPlaying());
+            CHECK(observation.events == QStringList({"sink.start", "mute.on", "sink.stop",
+                "mute.off", "stopped", "sink.start", "mute.on", "started"}));
+            recorder.stopPlayback();
+        } else {
+            recorder.stopPlayback();
+            CHECK(!recorder.isPlaying());
+            CHECK(observation.events == QStringList({"sink.stop", "mute.off", "sink.start",
+                "mute.on", "started", "sink.stop", "mute.off", "stopped"}));
+        }
+    }
+}
+
+void testMuteCallbackCanDestroy()
+{
+    QTemporaryDir directory;
+    const QString path = writeFixture(directory.path());
+    const QAudioFormat format = sinkFormat(24000, 2, QAudioFormat::Int16);
+    for (const bool duringStart : {false, true}) {
+        SinkObservation observation;
+        auto recorder = std::make_unique<QsoRecorder>();
+        observePlayback(*recorder, observation);
+        QsoRecorderPlaybackTestAccess::setPath(*recorder, path);
+        QObject context;
+        QObject::connect(recorder.get(), &QsoRecorder::muteRxRequested, &context,
+                         [&](bool mute) {
+            if (recorder && mute == duringStart) {
+                recorder.reset();
+            }
+        });
+        QsoRecorderPlaybackTestAccess::start(*recorder, format);
+        if (!duringStart) {
+            recorder->stopPlayback();
+        }
+        CHECK(!recorder);
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -390,12 +585,17 @@ int main(int argc, char** argv)
     AppSettings::instance().load();
     AppSettings::instance().setValue(QStringLiteral("RecordingMode"), QStringLiteral("Client"));
     AppSettings::instance().setValue(QStringLiteral("PcAudioEnabled"), QStringLiteral("True"));
+    testPreparationRefusalReportsAndAllowsRetry();
+    testErrorCallbackCanRetryOrDestroy();
+    testMuteCallbackCanCancelOrReplace();
+    testMuteCallbackCanReturnToSameState();
     testFileAndSinkFormatMatrix();
     testCompletionCancellationAndReplay();
     testStartFailureLeavesRxLiveAndAllowsRetry();
     testRejectedReplayCannotReuseOldPayload();
     testFailedRecordingRetiresPlayback();
     testDestructionStopsBeforeBufferTeardown();
+    testMuteCallbackCanDestroy();
     std::printf("qso_recorder_playback_lifecycle_test: %d failure(s)\n", g_failures);
     return g_failures == 0 ? 0 : 1;
 }

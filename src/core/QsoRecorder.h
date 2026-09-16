@@ -139,7 +139,8 @@ public:
 public slots:
     // Manual control
     void startRecording();
-    void stopRecording();
+    // Finalized PCM duration, including the finite conversion tail; zero if idle.
+    int stopRecording();
 
     // Playback of last recording
     void startPlayback();
@@ -205,7 +206,7 @@ private:
     std::optional<RecordStartDecision> m_lastAutoBlocked;
 
     void startFile();
-    void finalizeFile(FinalizeReport report = FinalizeReport::Diagnose);
+    int finalizeFile(FinalizeReport report = FinalizeReport::Diagnose);
     void finalizeWriteFailure(quint64 generation);
     QString buildFilename() const;
     static QString sanitizeForPath(const QString& s);
@@ -215,7 +216,7 @@ private:
     bool seekFile(qint64 position);
     bool flushFile();
     void queueWriteFailure(const QString& detail);
-    bool preparePlaybackPcm(const QAudioFormat& sinkFormat);
+    bool preparePlaybackPcm(const QAudioFormat& sinkFormat, QString& error);
     void startPlaybackWithFormat(const QAudioDevice& device, const QAudioFormat& format);
     QAudio::Error startPlaybackSink(const QAudioDevice& device, const QAudioFormat& format);
     void releasePlaybackSink(bool stop);
@@ -274,6 +275,7 @@ private:
 
     // Playback
     bool         m_playing{false};
+    quint64      m_playbackGeneration{0};
     QString      m_lastRecordingPath;
     QAudioSink*  m_playSink{nullptr};
     QBuffer      m_playBuffer;

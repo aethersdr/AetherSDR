@@ -141,6 +141,26 @@ void verifyIsolatedSegment(const QByteArray& wav, int firstFrame, int frames,
           "normal source transition retains the finite segment's last output frame");
 }
 
+
+void finalizedStopDuration()
+{
+    QTemporaryDir directory;
+    QsoRecorder recorder;
+    configure(recorder, directory.path());
+    PcmProducer producer;
+    check(producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo}),
+          "start 48k metadata source");
+    const auto frame = producer.produce({0.25f, -0.25f});
+    recorder.feedRxFrame(*frame);
+    recorder.startRecording();
+    recorder.onMoxChanged(true);
+    recorder.feedTxAudio(QByteArray(24000 * 4, '\0'));
+    const QString path = recorder.recordingFilePath();
+    check(recorder.stopRecording() == 1, "stop result includes the finite 24-to-48 tail");
+    verifyWav(readFile(path), 48000, 48000);
+    check(recorder.stopRecording() == 0, "stopping an inactive recorder returns zero");
+}
+
 void knownProducerRateAndDuration()
 {
     // Replacing typed ingress with legacyStereo24(), hardcoding the header rate,
@@ -638,6 +658,7 @@ int main(int argc, char** argv)
     AppSettings::instance().setValue(QStringLiteral("RecordingMode"), QStringLiteral("Client"));
     AppSettings::instance().setValue(QStringLiteral("PcAudioEnabled"), QStringLiteral("True"));
     AppSettings::instance().save();
+    finalizedStopDuration();
     knownProducerRateAndDuration();
     legacyAndMonoQuantization();
     earlyAndTxFirstRateSelection();

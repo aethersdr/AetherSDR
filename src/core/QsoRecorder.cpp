@@ -174,13 +174,13 @@ void QsoRecorder::beginRecording(StartTrigger trigger)
     startFile();
 }
 
-void QsoRecorder::stopRecording()
+int QsoRecorder::stopRecording()
 {
     if (!m_recording && !m_writeFailurePending) {
-        return;
+        return 0;
     }
     m_idleTimer->stop();
-    finalizeFile();
+    return finalizeFile();
 }
 
 // ── Audio feeds ─────────────────────────────────────────────────────────────
@@ -540,7 +540,7 @@ void QsoRecorder::startFile()
     emit recordingStarted(filePath);
 }
 
-void QsoRecorder::finalizeFile(FinalizeReport report)
+int QsoRecorder::finalizeFile(FinalizeReport report)
 {
     bool writeFailed = false;
     bool finalized = false;
@@ -558,7 +558,7 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
         writeFailure = m_pendingWriteError;
         m_pendingWriteError.clear();
         if (!m_file) {
-            return;
+            return 0;
         }
 
         finalized = patchWavHeader();
@@ -590,7 +590,11 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
 
     qCInfo(lcAudio) << "QsoRecorder: stopped recording," << durationSecs << "seconds,"
                      << dataBytes << "bytes" << (finalized && !writeFailed ? "" : "(write failed)");
+    const QPointer<QsoRecorder> guard(this);
     emit recordingStopped(filePath, durationSecs);
+    if (!guard) {
+        return durationSecs;
+    }
 
     if (!finalized || writeFailed) {
         if (report == FinalizeReport::Diagnose) {
@@ -601,7 +605,7 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
             emit recordingError(QStringLiteral("Recording write failed: %1\n\n%2")
                                     .arg(detail, filePath));
         }
-        return;
+        return durationSecs;
     }
 
     // A recording that captured NOTHING is the #4629 symptom, and until now it
@@ -626,6 +630,7 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
                            "started. Check that the radio is still connected and "
                            "that PC Audio is enabled.\n\n") + filePath);
     }
+    return durationSecs;
 }
 
 QString QsoRecorder::buildFilename() const
@@ -763,16 +768,16 @@ bool QsoRecorder::patchWavHeader()
 
 // ── Playback ───────────────────────────────────────────────────────────────
 
-bool QsoRecorder::preparePlaybackPcm(const QAudioFormat& sinkFormat)
+bool QsoRecorder::preparePlaybackPcm(const QAudioFormat& sinkFormat, QString& error)
 {
     m_playPcm.clear();
     QFile file(m_lastRecordingPath);
     if (!file.open(QIODevice::ReadOnly)) {
+        error = file.errorString();
         qCWarning(lcAudio) << "QsoRecorder: cannot open recording for playback:"
                            << file.errorString();
         return false;
     }
-    QString error;
     std::optional<QByteArray> pcm = prepareQsoWavPlayback(file, sinkFormat, &error);
     if (!pcm) {
         qCWarning(lcAudio) << "QsoRecorder: cannot prepare recording for playback:" << error;
@@ -799,7 +804,10 @@ void QsoRecorder::startPlayback()
             if (d.id() == m_outputDevice.id()) { dev = d; break; }
         }
     }
-    if (dev.isNull()) return;
+    if (dev.isNull()) {
+        emit recordingError(tr("Cannot play this recording: no audio output device is available."));
+        return;
+    }
 
     // Negotiate the playback format via the shared factory (#3306, Phase 6b).
     // The recording is Int16, so prefer Int16 (no conversion on a normal device)
@@ -835,6 +843,7 @@ void QsoRecorder::startPlayback()
         }
     }
     if (!haveFormat) {
+        emit recordingError(tr("Cannot play this recording: the audio output has no supported format."));
         return;
     }
     startPlaybackWithFormat(dev, fmt);
@@ -846,13 +855,17 @@ void QsoRecorder::startPlaybackWithFormat(const QAudioDevice& device,
     if (m_playing || m_lastRecordingPath.isEmpty()) {
         return;
     }
-    if (!preparePlaybackPcm(format)) {
+    QString preparationError;
+    if (!preparePlaybackPcm(format, preparationError)) {
+        // The local file has closed before observers may retry or destroy us.
+        emit recordingError(tr("Cannot play this recording: %1").arg(preparationError));
         return;
     }
 
     m_playBuffer.close();
     m_playBuffer.setBuffer(&m_playPcm);
     if (!m_playBuffer.open(QIODevice::ReadOnly)) {
+        emit recordingError(tr("Cannot open the recording playback buffer."));
         return;
     }
 
@@ -864,11 +877,19 @@ void QsoRecorder::startPlaybackWithFormat(const QAudioDevice& device,
                            << error << ") — aborting, RX left live";
         releasePlaybackSink(false);
         m_playBuffer.close();
+        emit recordingError(tr("Cannot start the recording audio output (error %1).")
+                                .arg(static_cast<int>(error)));
         return;
     }
 
     m_playing = true;
+    const quint64 generation = ++m_playbackGeneration;
+    const QPointer<QsoRecorder> guard(this);
     emit muteRxRequested(true);
+    // Direct signal observers may stop, replace, or destroy this playback.
+    if (!guard || !m_playing || m_playbackGeneration != generation) {
+        return;
+    }
     emit playbackStarted();
 }
 
@@ -913,11 +934,16 @@ void QsoRecorder::stopPlayback()
 {
     if (!m_playing) return;
     m_playing = false;
+    const quint64 generation = ++m_playbackGeneration;
 
     releasePlaybackSink(true);
     if (m_playBuffer.isOpen()) m_playBuffer.close();
 
+    const QPointer<QsoRecorder> guard(this);
     emit muteRxRequested(false);
+    if (!guard || m_playing || m_playbackGeneration != generation) {
+        return;
+    }
     emit playbackStopped();
 }
 

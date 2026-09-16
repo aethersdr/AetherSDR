@@ -6777,8 +6777,7 @@ QJsonObject AutomationServer::doRecord(const QString& action, const QString& val
         return reply;
     }
     if (a == QLatin1String("stop")) {
-        const int durationSecs = m_qsoRecorder->recordingDurationSecs();
-        m_qsoRecorder->stopRecording();
+        const int durationSecs = m_qsoRecorder->stopRecording();
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("record"), QStringLiteral("stop")},

@@ -35,6 +35,11 @@ integer number of seconds represented by accepted PCM bytes at the immutable
 rate. Wall time remains useful for the existing empty-capture diagnostic but
 cannot stand in for recorded duration. Exclusive file creation, partial-write
 accounting, finalization, cleanup and errors remain recorder responsibilities.
+`recordingDurationSecs()` reports written PCM progress while recording. The
+`stopRecording()` result and `recordingStopped` signal include the finite
+conversion tail; the automation stop reply uses that finalized result. Stopping
+an idle recorder returns zero. Live progress may lag the final duration until
+the converter drains.
 After a short write, the finalizer patches the exact accepted byte count even
 if it ends inside a stereo frame, and keeps that failed recording unavailable
 for playback. It does not round the count to make an incomplete file look valid.
@@ -100,6 +105,12 @@ duration before audio reads or allocation; callers may supply a smaller budget.
 Over-budget or unsupported files return a reason rather than over-allocating.
 Native Int16 and Float payloads require different memory, so the maximum playable
 duration depends on the negotiated format. Larger-file streaming is outside A3.
+This also caps equal-rate playback: stereo output fits approximately 46.60
+minutes at 24 kHz Int16, 23.30 minutes at 48 kHz Int16, or 11.65 minutes at
+48 kHz Float. A refusal emits the existing recorder error notice, leaves RX
+unmuted and the finalized file available, and reconciles Play with actual
+recorder state. Observers may retry, cancel, or destroy playback during signal
+delivery; a retired operation cannot announce a replacement's state.
 
 Device selection and negotiation stay with the current recorder: configured
 device if still present, then default device and the existing format ladder.
@@ -117,6 +128,10 @@ subscriber, while CW/RTTY stay on their existing compatibility routes until A5.
 Metadata observation and capture admission are separate: a stopped recorder can
 remember a current RX format without recording or replaying that observed block.
 No speaker-output tap or second producer feed is introduced.
+Typed RX therefore still observes metadata under the recorder lock while
+stopped; the inactive fast path for fixed24 voice/CW must not be copied onto
+typed ingress. Invalid fixed24 alignment or oversized blocks are rejected
+before conversion and cannot advance another source's history.
 
 Recorder ingress serializes the per-consumer replay gate, format selection,
 converter state and accepted file writes with its existing write lifecycle.
