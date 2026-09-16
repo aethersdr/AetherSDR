@@ -729,6 +729,13 @@ void Hl2Backend::updateTelemetryPollState()
     // pole belongs to the in-band session and linkDown() clears it, so blending
     // a 1 Hz out-of-band sample into it would re-seed the filter the next
     // stream is supposed to start clean. This is one poll, published as itself.
+    //
+    // WHAT THIS DOES NOT FIX, stated rather than implied: the meter seam carries
+    // a bare double and has no way to spell "unknown", so with NO stream-free
+    // reading either -- disconnected with nobody watching, which stops the
+    // polling by design -- the needle still holds its last value. The health row
+    // beside it says nothing, correctly, and that remains the surface that can
+    // tell the two apart.
     if (state == Hl2LinkState::Streaming)
         return;   // in-band owns the meter whenever it is live
     const std::optional<DiscoveryReply> reply = m_telemetryService->lastReply();
