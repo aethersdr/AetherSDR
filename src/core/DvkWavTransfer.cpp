@@ -77,6 +77,7 @@ quint64 DvkWavTransfer::begin(Direction direction, int slotId)
     m_slotId = slotId;
     m_bytesReceived = 0;
     m_bytesSent = 0;
+    m_bytesAccepted = 0;
     m_direction = direction;
     m_transferring = true;
     m_cancelled = false;
@@ -420,19 +421,51 @@ void DvkWavTransfer::handleUploadConnected(quint64 generation, QTcpSocket* socke
 
 void DvkWavTransfer::sendNextChunk(quint64 generation, QTcpSocket* socket)
 {
-    if (!isCurrentSocket(generation, socket)) return;
+    if (!isCurrentSocket(generation, socket)) {
+        return;
+    }
 
-    const qint64 remaining = m_uploadData.size() - m_bytesSent;
-    if (remaining <= 0) return;
+    // Keep one accepted span in flight. bytesWritten() reports drained bytes,
+    // while write() can have already accepted more data into QTcpSocket's
+    // buffer. Advancing from m_bytesSent here would requeue that accepted tail
+    // after a partial bytesWritten() notification.
+    if (m_bytesSent != m_bytesAccepted) {
+        return;
+    }
+
+    const qint64 remaining = m_uploadData.size() - m_bytesAccepted;
+    if (remaining <= 0) {
+        return;
+    }
 
     const qint64 toSend = qMin(static_cast<qint64>(UPLOAD_CHUNK_SIZE), remaining);
-    m_client->write(m_uploadData.constData() + m_bytesSent, toSend);
+    const qint64 accepted = socket->write(m_uploadData.constData() + m_bytesAccepted, toSend);
+    // A synchronous socket error can finish the transfer inside write().
+    if (!isCurrentSocket(generation, socket)) {
+        return;
+    }
+    if (accepted < 0) {
+        finish(false, "Upload write error: " + socket->errorString(), false);
+        return;
+    }
+    if (accepted == 0) {
+        finish(false, "Upload write made no progress", false);
+        return;
+    }
+
+    m_bytesAccepted += accepted;
 }
 
 void DvkWavTransfer::handleUploadBytesWritten(quint64 generation, QTcpSocket* socket,
                                               qint64 bytes)
 {
     if (!isCurrentSocket(generation, socket)) return;
+
+    const qint64 pending = m_bytesAccepted - m_bytesSent;
+    if (bytes <= 0 || bytes > pending) {
+        finish(false, "Upload write acknowledgement invalid", false);
+        return;
+    }
 
     m_bytesSent += bytes;
     const int percent = static_cast<int>(m_bytesSent * 100 / m_uploadData.size());
@@ -443,8 +476,8 @@ void DvkWavTransfer::handleUploadBytesWritten(quint64 generation, QTcpSocket* so
 
     if (m_bytesSent >= m_uploadData.size()) {
         qDebug() << "DvkWavTransfer: upload complete," << m_bytesSent << "bytes";
-        m_client->flush();
-        m_client->disconnectFromHost();
+        socket->flush();
+        socket->disconnectFromHost();
         finish(true, QString("Uploaded to slot %1 (%2 KB)")
                    .arg(m_slotId).arg(m_bytesSent / 1024), false);
         return;
@@ -597,6 +630,7 @@ void DvkWavTransfer::cleanup(bool removeFile)
     m_uploadData.clear();
     m_bytesReceived = 0;
     m_bytesSent = 0;
+    m_bytesAccepted = 0;
 
     m_cleaningUp = false;
 }
