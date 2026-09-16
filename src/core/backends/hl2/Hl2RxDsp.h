@@ -266,9 +266,16 @@ public:
     //
     // How many partial FFT frames were thrown away because EP6 packets went
     // missing part-way through building one. MONOTONIC for the life of this
-    // DSP stage; a reconfigure() builds a new Hl2Spectrum and this count starts
-    // again with it, which is honest -- the frames it counts belonged to a
-    // geometry that no longer exists.
+    // DSP stage, and a reconfigure() does NOT restart it: a sample-rate change
+    // reuses this object and only rebuilds the Hl2Spectrum underneath it --
+    // Hl2Backend calls configure() on the existing r.dsp, and nothing in
+    // configure() touches this atomic. Only a receiver torn down and rebuilt
+    // gets a fresh count, because that is a new stage.
+    //
+    // An earlier version of this comment claimed the opposite, and the claim
+    // was the only thing wrong -- the behaviour is defensible and unchanged.
+    // Caught by aethersdr-agent on #5744, who grepped for the writes: there is
+    // exactly one, the fetch_add below.
     //
     // THIS IS NOT "how lossy is the link". Hl2Backend's `droppedPackets` row is
     // that, and it comes from MetisClient's cumulative counter. This is the

@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QUdpSocket>
 
+#include <cstdint>
 #include <span>
 
 Q_LOGGING_CATEGORY(lcAnanP2, "aether.anan.p2")
@@ -289,7 +290,23 @@ void P2Client::onReadyRead()
             // below, so a consumer discards its pre-gap state ahead of the
             // post-gap samples rather than after them. See ddcSequenceGap's
             // note in the header.
-            emit ddcSequenceGap(*ddcIndex);
+            //
+            // FORWARD GAPS ONLY, matching MetisClient's `gap < 0x80000000u`
+            // rule. The condition above is a bare inequality and so also fires
+            // on a BACKWARD jump -- a radio restarting its DDC sequence
+            // counter. That is not loss, and on the HL2 the same event is
+            // correctly classified as not-loss, so emitting here would have
+            // made the two backends disagree about what the row the docs tell
+            // scripts to threshold actually counts.
+            //
+            // The drop counter above is deliberately left alone: its bare
+            // inequality is pre-existing ANAN behaviour and changing what
+            // `m_drops` means is not this commit's business. Only the new
+            // signal is guarded. Caught by aethersdr-agent on #5744.
+            const std::uint32_t step = frame->seq - *m_expectedSeq[slot];
+            if (step < 0x80000000u) {
+                emit ddcSequenceGap(*ddcIndex);
+            }
         }
         m_expectedSeq[slot] = frame->seq + 1;
 

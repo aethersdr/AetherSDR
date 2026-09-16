@@ -3418,10 +3418,14 @@ nothing here, while a single lost packet mid-frame costs a frame. A soak test
 that wants to know whether the spectrum it is about to measure is trustworthy
 must threshold this row — `droppedPackets` alone cannot answer it, and a
 non-zero `droppedPackets` with a zero `spectrumGapDiscards0` is a healthy,
-expected state on a lossy link. Both are monotonic within one DSP geometry:
-changing sample rate or receiver count rebuilds the receive chain and restarts
-`spectrumGapDiscards<n>` from zero, so compare a **delta** across a run rather
-than an absolute against a session. The row is `null` for a receiver between
+expected state on a lossy link. Both are monotonic, and `spectrumGapDiscards<n>`
+is monotonic for the life of one receiver's DSP stage — a sample-rate change
+reconfigures that stage **in place** and does **not** restart the count; only a
+receiver torn down and rebuilt gets a fresh one. Compare a **delta** across a
+run rather than an absolute against a session, and **do not use a geometry
+change as a way to zero the row** — a script that switches sample rate to clear
+the counter before its measurement window carries every earlier discard into
+that window and fails a healthy run. The row is `null` for a receiver between
 rebuilds, which is "not reported" and not "clean". **There is no equivalent row
 on the ANAN backend** — that backend publishes no health rows at all yet; the
 counter exists on its DSP stage and becomes readable here when it does.
