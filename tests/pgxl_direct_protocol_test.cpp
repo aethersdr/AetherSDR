@@ -290,17 +290,24 @@ int main(int argc, char** argv)
         // toggle must not rewrite the amplifier's stored configuration.
         CHECK(!peerSaw(peer, "|save"));
 
-        // Enabling asks for ACTIVE. There is no "ON": the amplifier answers
-        // with ACTIVE or STANDBY as the bias class dictates.
+        // Enabling asks for AUTO. The settable vocabulary is NOT the reported
+        // one: status says OFF / STANDBY / ACTIVE — what the algorithm is
+        // doing — while a write takes AUTO or OFF, whether it may run at all.
+        // Sending a reported word back is refused: `meffa=ACTIVE` draws
+        // 50000013, and the amplifier does not change. Captured off the vendor
+        // utility, which sends AUTO when its checkbox is ticked.
         peer->write("S0|state=IDLE fanmode=CONTEST meffa=OFF\n");
         peer->flush();
         CHECK(spin([&] { return model.meffa() == QLatin1String("OFF"); }));
         CHECK(!model.meffaEnabled());
         model.setMeffaEnabled(true);
         CHECK(spin([&] {
-            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=ACTIVE"
+            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=AUTO"
                                  " ledintens=141 fanmode=CONTEST authcode=");
         }));
+        // And never a reported word, which is what the amplifier refuses.
+        CHECK(!peerSaw(peer, "meffa=ACTIVE"));
+        CHECK(!peerSaw(peer, "meffa=STANDBY"));
 
         // A fan-mode change takes the same road, carrying MEffA with it. Sent
         // as a single key it would name fanmode and leave the other four out

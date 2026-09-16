@@ -93,7 +93,11 @@ public:
     // four values it would have to send back.
     bool canWriteSetup() const { return m_haveSetupGroup && hasMeffa(); }
 
-    // Enable or disable MEffA. Volatile by design, exactly like the vendor
+    // Enable or disable MEffA. The wire takes AUTO or OFF — NOT the ACTIVE /
+    // STANDBY / OFF words that status reports back; those describe what the
+    // algorithm is doing, not whether it may run. See setMeffaEnabled.
+    //
+    // Volatile by design, exactly like the vendor
     // utility's indicator: §9.4, "the change is not recorded in the
     // amplifier's configuration memory". Persisting it takes a separate
     // `save`, which this deliberately does not send — a panel toggle should

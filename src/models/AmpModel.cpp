@@ -235,11 +235,17 @@ void AmpModel::writeSetupGroup(const QString& meffa, const QString& fanMode)
 void AmpModel::setMeffaEnabled(bool on)
 {
     if (!canWriteSetup()) return;
-    // OFF is the disable value; ON is not a value the amplifier uses. Enabling
-    // asks for ACTIVE, and the amplifier answers with ACTIVE or STANDBY
-    // depending on the PA bias class — which is its call, not ours. See
-    // meffa().
-    writeSetupGroup(on ? QStringLiteral("ACTIVE") : QStringLiteral("OFF"),
+    // The SETTABLE vocabulary is not the REPORTED one, and assuming otherwise
+    // is how this first shipped broken. Status reports OFF, STANDBY or ACTIVE
+    // — what the algorithm is doing. A write accepts AUTO or OFF — whether it
+    // is allowed to run at all. `setup … meffa=ACTIVE …` is refused with
+    // 50000013, a bad-parameter code distinct from the 50000015 an unknown
+    // command gets, and the amplifier is left exactly as it was.
+    //
+    // AUTO is the amplifier's own word for the checkbox in §9.6.4, captured
+    // off the vendor utility enabling it. What follows is the amplifier's
+    // call: AUTO in class AB becomes ACTIVE, in class AAB it becomes STANDBY.
+    writeSetupGroup(on ? QStringLiteral("AUTO") : QStringLiteral("OFF"),
                     m_fanMode);
 }
 
