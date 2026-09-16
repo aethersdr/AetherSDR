@@ -26,6 +26,7 @@
 // Deliberately no radio was measured for this file. The d101 numbers above are
 // quoted from that run's record; nothing here talks to hardware.
 
+#include "TestSettingsProfile.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include "core/backends/RadioCapabilities.h"
 
@@ -58,6 +59,26 @@ static bool gateOpen(const RadioCapabilities& c)
 
 int main(int argc, char** argv)
 {
+    // TWO OF THE BACKENDS CONSTRUCTED BELOW TOUCH AppSettings BEFORE ANY
+    // ASSERTION RUNS. Hl2Backend's constructor calls
+    // AutomationBridgeSettings::txAllowed(); FlexBackend's starts the
+    // PanadapterStream thread, whose init() reads
+    // AppSettings::instance().value("AudioPacketLossConcealment", ...) and
+    // NetworkSettings::vitaReceiveBufferBytes() on that worker.
+    //
+    // So without this a run of the suite reads, and can write, the operator's
+    // live configuration. hl2_pan_limits_declaration_test -- added in the same
+    // PR as this file -- opens with exactly this guard and says so; this one
+    // was missed. Four of the five existing tests that construct Hl2Backend use
+    // the profile too. Reported by aethersdr-agent on #5726.
+    //
+    // Before QCoreApplication, deliberately: the redirect has to be in place
+    // before anything can resolve a settings path.
+    TestSettingsProfile settingsProfile(QStringLiteral("noise-floor-gate-test"));
+    if (!settingsProfile.isValid()) {
+        std::fprintf(stderr, "FAIL: could not create an isolated settings profile\n");
+        return 1;
+    }
     QCoreApplication app(argc, argv);
 
     // ── 1. The truth table, all four rows ────────────────────────────────────

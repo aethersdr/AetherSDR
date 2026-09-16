@@ -4084,8 +4084,17 @@ void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
     // owns nothing of the kind and its auto-floor still settles, because its
     // bins are computed on this host: bench run d101 measured 0.307 dB of drift
     // over 74 s quiescent and 0.0000 dB/s over the second half, and a re-settle
-    // within ~30 s after a 12 dB LNA step. Gating on the echo alone switched
-    // that working loop off.
+    // within ~30 s after a 12 dB LNA step.
+    //
+    // WHY A MEASUREMENT ON AN HL2 SPEAKS FOR THE ANAN, which is the radio whose
+    // behaviour this change actually alters. The HL2's gate was ALREADY open
+    // before this — it leaves radioOwnsDbmScale at the permissive default — so
+    // d101 did not measure this change. What it measured is a loop running
+    // echo-free against absolute bins: RadioModel::sendCmd drops the range at
+    // hasCommandPlane() for the HL2 too, so no echo has ever come back there.
+    // That is exactly the ANAN's configuration once this merges, and it is the
+    // only reason a bench run on one radio carries to another. Raised by
+    // aethersdr-agent on #5726; the analogy was load-bearing and unstated.
     if (!noiseFloorAutoAdjustAllowed(m_radioOwnsDbmScale, m_panBinsAbsolute)) {
         return;
     }
