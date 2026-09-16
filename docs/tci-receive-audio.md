@@ -15,11 +15,12 @@ slice input supports 24/48 kHz mono or stereo. Flex DAX retains its 24 kHz stere
 contract. A mono producer is duplicated into L/R; stereo channels have independent
 converter histories. Only a client explicitly requesting mono is downmixed.
 
-Each client keeps its own rate and per-source converter. Standard TCI rates
-8/12/24/48 kHz remain supported. **44.1 kHz RX negotiation is an AetherSDR
-extension**: the official [TCI 2.0 specification](https://github.com/ExpertSDR3/TCI/blob/main/TCI%20Protocol.pdf)
-lists only 8/12/24/48 kHz for `AUDIO_SAMPLERATE`. This extension does not qualify
-third-party clients or change TX authority/decoding.
+Each client keeps its own rate and per-source converter. Wire negotiation accepts
+only 8/12/24/48 kHz, as listed for `AUDIO_SAMPLERATE` in the official
+[TCI 2.0 specification](https://github.com/ExpertSDR3/TCI/blob/b081213ff97150fd29f669c633f060f93c81a286/TCI%20Protocol.pdf).
+Unsupported requests, including 44.1 kHz, retain and echo the prior accepted rate
+without discarding staged audio. The default remains 48 kHz. Internal converter
+tests also cover 44.1 kHz; this is not a negotiated wire rate or TX qualification.
 
 RX packets retain the standard 64-byte header, RX_AUDIO type 1 and explicit
 sample rate, format and channels. Header `length` counts scalar samples, so
@@ -45,10 +46,16 @@ transport in blocks of at most 1,024 stereo frames: at most 8,256 bytes includin
 the 64-byte header. There is no accumulating application output queue.
 
 Before each packet, the server checks the client's pending transport bytes.
-If the packet would exceed 256 KiB, it stops that client's audio, discards its
-converters and closes the slow connection. Other clients keep their histories.
-The sent-frame counter sums the actual frames accepted for each client;
-different negotiated rates do not share an estimated count.
+If the pending-byte count is negative or the packet would exceed 256 KiB, it
+stops that client's audio, discards its converters and requests graceful close
+of the shared audio/CAT/PTT connection. Existing control and PTT cleanup runs
+when disconnect is delivered. This bounds RX packet admission, not all socket
+writers, disconnect timing or real-radio unkey time. A short or failed send
+stops audio and discards converters without explicitly closing the connection.
+Both failures log their reason and byte counts once when audio stops. Other
+clients keep their histories. The sent-frame counter sums only full packets
+accepted for each client; different negotiated rates do not share an estimated
+count.
 
 Equal-rate conversion adds no filter or batching delay. Unequal-rate conversion
 adds up to 255 source frames of batching wait (10.625 ms at 24 kHz, 5.3125 ms at
@@ -57,10 +64,12 @@ the peak within one output frame of the declared filter delay. Output frame
 counts include startup delay; they follow processed input duration within one
 output frame of rounding. Filter delay is not extra retained output to flush.
 
-| Producer rate | Client rate | Filter delay, source frames |
+| Producer rate | Converter output rate | Filter delay, source frames |
 |---|---|---|
 | 24,000 | 8,000 / 12,000 / 24,000 / 44,100 / 48,000 | 7,129 / 3,388 / 0 / 1,700 / 1,694 |
 | 48,000 | 8,000 / 12,000 / 24,000 / 44,100 / 48,000 | 14,273 / 6,797 / 3,388 / 1,668 / 0 |
+
+The 44,100 Hz entries above describe internal converter coverage only.
 
 ## Lifetime and admission
 
@@ -89,6 +98,10 @@ Each client/route owns its own converter. Client rate/format changes, stop,
 disconnect and source retirement discard conversion and staged data together.
 An unrelated receiver or another client's stream keeps its history. Admission is
 checked again before handing each output packet to the transport.
+
+The shared text-command handler uses `QPointer` guards and refetches client state
+for each command in a batch. Reentrant callbacks can remove a client or grow the
+client list; subsequent commands must not reuse an invalidated client reference.
 
 ## Evidence boundary
 

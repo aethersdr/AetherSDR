@@ -1322,10 +1322,8 @@ void TciServer::onTextMessage(const QString& msg)
         if (trimmed.startsWith("audio_samplerate:")) {
             int colonIdx2 = trimmed.indexOf(':');
             int rate = trimmed.mid(colonIdx2 + 1).toInt();
-            if (rate == 8000 || rate == 12000 || rate == 24000 || rate == 44100 || rate == 48000) {
+            if (rate == 8000 || rate == 12000 || rate == 24000 || rate == 48000) {
                 client.audioSampleRate = rate;
-                // 44.1 kHz is an AetherSDR RX negotiation extension to the
-                // published TCI 8/12/24/48 kHz rates; default stays 48 kHz.
                 resetClientRx(client);
                 qCInfo(lcCat) << "TCI: audio sample rate set to" << rate
                               << "for" << ws->peerAddress().toString();
@@ -3112,8 +3110,14 @@ void TciServer::receivePcm(RxRouteKind kind, int id, SliceModel* slice,
                         current->audioEnabled = false;
                         self->resetClientRx(*current);
                     }
-                    socket->close(QWebSocketProtocol::CloseCodeTooMuchData,
-                                  QStringLiteral("RX audio backlog limit"));
+                    qCWarning(lcCat) << "TCI: RX audio stopped:"
+                        << (pending < 0 ? "invalid backlog" : "backlog limit")
+                        << "peer=" << socket->peerAddress().toString() << socket->peerPort()
+                        << "pending_bytes=" << pending << "packet_bytes=" << packet.size();
+                    if (socket) {
+                        socket->close(QWebSocketProtocol::CloseCodeTooMuchData,
+                                      QStringLiteral("RX audio backlog limit"));
+                    }
                     return false;
                 }
                 // Last epoch check is immediately before handing bytes to Qt.
@@ -3131,6 +3135,13 @@ void TciServer::receivePcm(RxRouteKind kind, int id, SliceModel* slice,
                         current->audioEnabled = false;
                         self->resetClientRx(*current);
                     }
+                    // The send callback may have destroyed the socket.
+                    qCWarning(lcCat) << "TCI: RX audio stopped:"
+                        << (sent < 0 ? "send failed" : "short send")
+                        << "peer=" << (socket ? socket->peerAddress().toString() : QStringLiteral("gone"))
+                        << (socket ? socket->peerPort() : 0)
+                        << "pending_bytes=" << pending << "packet_bytes=" << packet.size()
+                        << "sent_bytes=" << sent;
                     return false;
                 }
                 self->m_rxAudioFramesSent += stereo.size() / 2;
