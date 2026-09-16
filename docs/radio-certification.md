@@ -41,7 +41,7 @@ Hermes-Lite 2 can physically produce it.
 | `TX:REFPWR` | dBm | yes | ≪ forward into a load | key into a dummy load | ≥15 dB below forward |
 | `TX:ALC` | dBFS | **host-side** | post-ALC transmit peak | sweep the input 20 dB **below** the ALC target → reading **tracks the input 1:1** | **within ±0.25 dB of `TX:MICPEAK` at every level** |
 | `TX:ALC` at the limit | dBFS | **host-side** | the ALC's target | raise the input **above** the target → reading stops at `20·log10(alcTargetPeak)` | **−1.41 dBFS ±0.25 dB** |
-| `TX:ALCGAIN` | dB | **host-side** | gain the ALC is applying | sweep the MIC input 20 dB, between `alcHoldBelowDbfs` and the makeup ceiling → reading moves 20 dB the other way | **±1 dB inside that window only** — the gain is frozen below the hold threshold (`Hl2TxDsp.cpp`, `processAudioBlock`) and capped at unity for `clientLeveled` audio, so a TCI/DAX sweep moves it 0 dB by construction and a whole-range criterion would report a healthy meter as out of tolerance |
+| `TX:ALCGAIN` | dB | **host-side** | gain the ALC is applying | sweep the input from below the ALC target to above it → reading sits at **0 dB** until the target is crossed, then goes negative as the input rises | **0.00 dB ±0.25 below the target; strictly decreasing above it**, and never positive on any path |
 | `TX:COMPPEAK` | dB | host-side | compression applied | PROC on → rises above 0 | reads 0 with PROC off |
 | `TX:MIC` | dBFS | host-side | pre-gain mic level | — | not yet wired |
 | `TX:HWALC` | dBFS | **no** | — | Flex RCA jack; no HL2 equivalent | — |
@@ -67,6 +67,12 @@ Both of the changed stimulus cells above are measurements, not preferences —
 `TX:ALC`'s tracking sweep replaces a no-movement expectation that was the
 observable signature of the ALC's 40 dB of upward makeup — a stage since made
 reduction-only, so the old expectation would fail a correct meter by 28.6 dB.
+`TX:ALCGAIN`'s row moved for the same reason and in the same direction: its old
+stimulus swept "between `alcHoldBelowDbfs` and the makeup ceiling", and neither
+of those exists any more. With the ceiling at unity on every path the gain this
+meter reports can only be zero or negative, so the criterion is now a sign and a
+knee rather than a window — and the meter's own face was narrowed to -20..0 dB
+to match (`Hl2Backend.cpp`, `defineMeters`).
 The numbers are under *Certified by effect, 2026-08-10* and *2026-09-09* below;
 both are kept, because the 2026-08-10 figures are still correct for the build
 they were taken on and reproducing them there is what makes the newer block

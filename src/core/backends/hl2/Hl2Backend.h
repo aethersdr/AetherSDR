@@ -884,9 +884,11 @@ private:
     float m_txMicPeakMaxDbfs = -140.0f;
 
     // True once the current transmission has carried client-leveled (TCI/DAX)
-    // audio. Gates the unkey "raise mic gain" diagnostic, whose advice only
-    // applies to the microphone path — a TCI/DAX client's level is set in the
-    // client. Cleared on each key edge in setKeying().
+    // audio. WRITE-ONLY for now: the unkey "raise mic gain" diagnostic this
+    // used to gate went with the ALC's makeup half, and #5647 gives the flag a
+    // real job as part of TxAudioSource — so it is kept rather than deleted,
+    // to keep that change from reading as a revert. Set in submitTxAudio(),
+    // cleared on each key edge in setKeying().
     bool m_txAudioClientLeveled = false;
 
     // The passband to push at the modulator for `mode`: the operator's if they
@@ -1037,10 +1039,11 @@ private:
     double m_appliedMicGainLinear = std::numeric_limits<double>::quiet_NaN();
 
     // The ALC target peak the modulator was CONFIGURED with, captured from the
-    // Config that connectRadio() hands it. Read by healthSnapshot() and by
-    // setKeying()'s "raise mic gain" diagnostic, both of which would otherwise
-    // re-derive it from a default-constructed Config and so go on reporting
-    // 0.85 the day connectRadio() sets the field to anything else.
+    // Config that connectRadio() hands it. Read by healthSnapshot(), which
+    // would otherwise re-derive it from a default-constructed Config and so go
+    // on reporting 0.85 the day connectRadio() sets the field to anything
+    // else. It had a second reader — setKeying()'s "raise mic gain"
+    // diagnostic — until that went with the ALC's makeup half.
     //
     // This mirror used to hold alcHoldBelowDbfs. That field is gone with the
     // ALC's makeup half, and the target replaced it rather than the row being

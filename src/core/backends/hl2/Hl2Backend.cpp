@@ -3822,9 +3822,10 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
     // syllable.
     if (!m_txDsp || !m_keyed || int16Stereo.isEmpty())
         return;
-    // Remember whether THIS transmission carried client-leveled audio, so the
-    // unkey diagnostic knows a below-threshold peak was the client's own choice
-    // of level rather than a microphone the ALC declined to lift.
+    // Remember whether THIS transmission carried client-leveled audio. The
+    // unkey diagnostic that used to read it went with the ALC's makeup half,
+    // so the flag is carried rather than consumed here until #5647 gives it a
+    // job as part of TxAudioSource — see Hl2Backend.h.
     //
     // The sticky OR — and the per-block flag it forwards — lean on mic and
     // client audio never interleaving inside one transmission: AudioEngine
@@ -4085,10 +4086,10 @@ void Hl2Backend::setTxFilter(int lowHz, int highHz)
 // the modulator's hard clamp flat-top the signal, so the last stretch of travel
 // buys reduced headroom rather than more power.
 //
-// The one path-dependent thing left is setKeying()'s "raise mic gain"
-// diagnostic, which is gated off for client-leveled transmissions — not because
-// the DSP treats them differently any more, but because the remedy for a quiet
-// TCI/DAX client is that client's own level control.
+// NOTHING IS PATH-DEPENDENT HERE ANY MORE. The unkey "raise mic gain"
+// diagnostic was the last thing that distinguished the two paths, and it went
+// with the makeup half that motivated it — see setKeying(). #5647 reintroduces
+// it aimed at the audio's SOURCE rather than at the clientLeveled flag.
 //
 // Level 0 mutes outright rather than resolving to -20 dB. A slider at the bottom
 // of its travel means off. That used to need arguing — a mic merely 20 dB down
@@ -4198,9 +4199,16 @@ namespace {
 [[nodiscard]] int migrateRestoredMicLevel(int level, const QJsonObject& txSetpoints)
 {
     const QJsonValue curve = txSetpoints.value(QStringLiteral("micLevelCurve"));
-    if (curve.isDouble() && curve.toInt() != 1)
+    const int storedCurve = curve.toInt(0);
+    if (curve.isDouble() && storedCurve > 1)
         return level;
-    if (!curve.isUndefined() && !curve.isDouble()) {
+    // Zero and negatives are not curve numbers from the future, they are a
+    // damaged or hand-edited document — so they take the malformed branch and
+    // SAY SO rather than silently suppressing the migration. The sibling
+    // micLevel is range-validated by the caller for the same reason
+    // (Principle VII); a curve that is merely unreadable must not be the one
+    // field that fails quietly.
+    if (!curve.isUndefined() && (!curve.isDouble() || storedCurve < 1)) {
         qCInfo(lcHl2) << "HL2: restored mic level carries a malformed curve"
                       << curve.toVariant() << "- reading it as written";
         return level;
@@ -5572,23 +5580,27 @@ void Hl2Backend::defineMeters()
     // whatever the operator does; this is how hard the stage is working to put
     // it there, and it is the half that moves when a mic is too quiet.
     //
-    // The range is the modulator's own, not a display preference. The top is
-    // Hl2TxDsp::Config::alcMaxGainDb (40 dB of makeup on the mic path), so a
-    // reading at the ceiling means the ALC has run out of gain rather than that
-    // the meter has run out of scale. The bottom is reduction, which has no
-    // configured limit — the loop reduces toward alcTargetPeak/blockPeak — so
-    // -20 is a PRESENTATION floor rather than a measured one, wide enough for
-    // the reductions this chain produces on real audio. The largest figure
-    // recorded anywhere in the tree is the -21.41 dB in processAudioBlock's
-    // own comment, which is a full-scale client-leveled block and not speech;
-    // that lands just off the bottom of the face and reads "hard down", which
-    // is the right answer for it.
+    // The range is the modulator's own, not a display preference. The TOP is
+    // 0 dB because that is the stage's ceiling: the ALC may only reduce, so
+    // alcGainDb() cannot report a positive number and anything above zero
+    // would be face the needle can never reach. It read +40 until the makeup
+    // half was removed, where the top was Hl2TxDsp::Config::alcMaxGainDb;
+    // deleting that field without moving this would have left #5636 inheriting
+    // a meter pinned in the bottom third of its own scale.
+    //
+    // The bottom is reduction, which has no configured limit — the loop
+    // reduces toward alcTargetPeak/blockPeak — so -20 is a PRESENTATION floor
+    // rather than a measured one, wide enough for the reductions this chain
+    // produces on real audio. The largest figure recorded anywhere in the tree
+    // is the -21.41 dB in processAudioBlock's own comment, which is a
+    // full-scale client-leveled block and not speech; that lands just off the
+    // bottom of the face and reads "hard down", which is the right answer.
     //
     // sourceIndex stays at its default 0 for the same reason COMPPEAK's does:
     // one transmitter, so it lands in MeterModel's by-slice map under the
     // implicit slice rather than the explicit TX-waveform map.
     def(9, QStringLiteral("TX"),  QStringLiteral("ALCGAIN"), QStringLiteral("dB"),
-        -20.0, 40.0,   QStringLiteral("Gain the ALC is applying"));
+        -20.0, 0.0,    QStringLiteral("Gain the ALC is applying"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
