@@ -173,6 +173,42 @@ int main(int argc, char** argv)
               "and it is certainly never TRUE about our own stream");
     }
 
+    // ---- 7. the stream-free path answers the PA temperature IN DEGREES ----
+    //
+    // Hl2Backend gates its own `temperatureC` on the in-band path actually
+    // delivering, which is right. But nothing took the row over, so the three
+    // states this class exists for rendered "PA temperature (°C): —" beside a
+    // four-digit raw count, and "what is its PA temperature while somebody else
+    // has the stream" -- one of the three questions the feature opens with --
+    // went unanswered (#5642 review).
+    //
+    // ONE FORMULA, shared: Hl2Backend::temperatureCelsius() forwards to the
+    // same hl2TemperatureCelsius() this row uses, so the two paths cannot
+    // report different degrees for the same count.
+    {
+        DiscoveryReply r;
+        r.temperatureRaw = 2100;
+
+        Hl2TelemetryService svc;
+        Hl2TelemetryServiceTestAccess::placeReply(svc, r);
+        const auto rows = svc.healthRows();
+
+        check(rowValue(rows, "temperatureRaw").toInt() == 2100,
+              "the raw count is still reported for anyone comparing paths");
+        const QVariant degrees = rowValue(rows, "temperatureC");
+        check(degrees.isValid(),
+              "and the stream-free path fills PA temperature (°C) too");
+        check(qFuzzyCompare(degrees.toDouble() + 1.0,
+                            hl2TemperatureCelsius(2100) + 1.0),
+              "with the SAME conversion the in-band path uses, not a re-typed one");
+
+        // No reply at all must stay ABSENT rather than becoming 0 °C, which is
+        // a real temperature and would read as a measurement.
+        Hl2TelemetryService cold;
+        check(!rowValue(cold.healthRows(), "temperatureC").isValid(),
+              "with nothing received, the degrees row is absent — not 0 °C");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_service_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

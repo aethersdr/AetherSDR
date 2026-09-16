@@ -920,7 +920,8 @@ public:
     // NOT AN OWNERSHIP TRANSFER. The source outlives every backend — that is
     // its whole purpose — and nothing tells a backend the source has gone, so
     // the owner must not destroy it while a backend could still be holding it.
-    // See `RadioModel::releaseOfflineHealthIfUnused()`.
+    // See `RadioModel::releaseOfflineHealth()`, which hands the borrow back
+    // through this same setter before destroying what was lent.
     //
     // Declared here rather than on a family interface because the borrow is a
     // seam event: it happens in `setupBackend()`, for whatever backend was just

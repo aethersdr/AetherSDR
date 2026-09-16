@@ -345,13 +345,16 @@ public:
     // rather than as an empty table.
     IRadioBackend::HealthSnapshot backendHealthSnapshot() const;
 
-    // ---- health that survives disconnection (roadmap #15) ----
+    // ---- health that survives disconnection ----
     //
     // SEPARATE FROM backendHealthSnapshot() ON PURPOSE. That one is
-    // `m_backend ? … : {}` and m_backend is built inside connectToRadio(), so
-    // routing these through it would make them absent in exactly the states
-    // they exist for: another client holding the radio, or nothing connected
-    // yet. That was the original defect; this seam is the fix.
+    // `m_backend ? … : {}`, and while a backend does outlive a disconnect — it
+    // is built in setupBackend(), which runs from this class's constructor and
+    // from rebuildBackendForFamily(), not from connectToRadio() — what it
+    // reports does not: every family blanks its rows when it is not talking to
+    // the radio, so `health` on a disconnected app answers with nothing. That
+    // is the state another client holding the radio puts you in, and it is
+    // exactly when the questions below are worth asking. This seam is the fix.
     //
     // NO FAMILY IS NAMED ANYWHERE BELOW. A family declares an offline source
     // from its own directory (OfflineHealthRegistry::declare), and this model
@@ -371,14 +374,35 @@ public:
         return m_offlineHealth != nullptr;
     }
 
-    // Aim the offline source at a radio WITHOUT connecting. A null address
-    // stops it AND releases the source, so the rows go away again.
+    // Which family's instrument is currently held, or empty when none is. The
+    // caller needs it for `telemetry target off`, which names no radio and so
+    // has no address to resolve a family from.
+    [[nodiscard]] QString offlineHealthFamily() const
+    {
+        return m_offlineHealthFamily;
+    }
+
+    // Why an aim was refused. TWO reasons, because a caller that cannot tell
+    // them apart retries the one it cannot fix: "you are connected" is worth a
+    // retry after disconnecting and "this family has no such instrument" never
+    // is.
+    enum class OfflineAimResult { Ok, FamilyDeclaresNone, SessionConnected };
+
+    // Aim the offline source at a radio WITHOUT connecting.
     //
-    // Returns false when the selected family declared no offline source — the
-    // honest answer rather than a silent success, and the reason a `telemetry
-    // target` on a Flex, Icom or Sim session can no longer construct an HL2
-    // poller and grow HL2 attribution rows on that family's `health`.
-    bool setOfflineHealthTarget(const QHostAddress& addr);
+    // `family` is the family of the RADIO BEING AIMED AT — resolved by the
+    // caller from discovery — not the family this session is connected to. That
+    // distinction is the whole verb: the radio worth probing is usually one
+    // this process has never taken a session on, and gating on the session's
+    // own family made it unreachable until you connected first.
+    //
+    // A null address stops the poller and releases the source, so the rows go
+    // away again and `health` returns to the snapshot the session started with.
+    //
+    // Never connects, never writes to the radio, and never changes this
+    // session's family.
+    OfflineAimResult setOfflineHealthTarget(const QString& family,
+                                            const QHostAddress& addr);
 
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
@@ -1632,16 +1656,18 @@ private:
     void handRestoredStateToBackend();  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
-    // Build the offline health source for the CURRENT family on first need, or
-    // return null when that family declared none. The only place
-    // m_offlineHealth is created, so "which sessions pay for it" has one answer
-    // and it is visible at its two call sites.
-    IOfflineHealthSource* ensureOfflineHealth();
-    // Destroy it when nothing can still be using it, so its rows stop
-    // appearing. Without this the source was built once and never released:
-    // `telemetry target off` left the rows standing for the life of the
-    // process, and a family switch carried them across.
-    void releaseOfflineHealthIfUnused();
+    // Build the offline health source for `family` on first need, or return
+    // null when that family declared none. Rebuilds when the source it is
+    // holding was built for a DIFFERENT family — without that, a second
+    // declaring family is handed the first one's instrument and publishes its
+    // rows. The only place m_offlineHealth is created, so "which sessions pay
+    // for it" has one answer and it is visible at its call sites.
+    IOfflineHealthSource* ensureOfflineHealth(const QString& family);
+    // Take the backend's borrow back through the seam, then destroy it, so its
+    // rows stop appearing. Without this the source was built once and never
+    // released: `telemetry target off` left the rows standing for the life of
+    // the process, and a family switch carried them across.
+    void releaseOfflineHealth();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
     void restoreClientOwnedCwState(const RestoredRadioState& state);
 
@@ -1676,9 +1702,10 @@ private:
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
     std::unique_ptr<AprsDigipeaterModel> m_aprsDigipeater;
-    // Health that survives disconnection (roadmap #15). Its lifetime is this
-    // model's and not a connection's — it must answer when m_backend above is
-    // null, which is the whole reason it does not live inside the backend.
+    // Health that survives disconnection. Its lifetime is this model's and not
+    // a connection's — it must keep answering when the backend above has
+    // stopped talking to a radio, which is the whole reason it does not live
+    // inside the backend.
     //
     // A POINTER, NOT A VALUE MEMBER, and null unless the selected family
     // declared one. As a value member every RadioModel constructed it and
@@ -1690,6 +1717,12 @@ private:
     // no family's header, which is the structural difference between this and
     // the version that failed docs/HERMES.md's pre-PR grep.
     std::unique_ptr<IOfflineHealthSource> m_offlineHealth;
+    // Which family's factory built m_offlineHealth. The interface carries no
+    // family and must not — it would be a wire concept in a header whose point
+    // is not having one — so the owner remembers instead. Empty when nothing is
+    // held. Without it, `if (!m_offlineHealth)` answers "we have one" for a
+    // source belonging to a different family.
+    QString m_offlineHealthFamily;
     QVector<TxPowerBand> m_txPowerBands;
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;

@@ -150,7 +150,7 @@ public:
                                         Hl2TxDsp* txDsp);
     LinkStats linkStats() const override;
 
-    // Point the stream-free telemetry poller at a radio (roadmap #15).
+    // Point the stream-free telemetry poller at a radio.
     //
     // Separate from connectRadio() ON PURPOSE: the case this feature exists for
     // is a radio we are NOT connected to, because somebody else has the stream.
@@ -298,7 +298,7 @@ private:
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
 
-    // ---- stream-free telemetry (roadmap #15) ----
+    // ---- stream-free telemetry ----
     //
     // Drive the poller's LinkState from what the IQ path is actually doing, so
     // the cadence rule in Hl2TelemetryCadence.h is CONNECTED rather than merely
@@ -325,7 +325,7 @@ private:
     Hl2TxDsp* m_txDsp = nullptr;
     bool m_connected = false;
 
-    // ---- stream-free telemetry (roadmap #15) ----
+    // ---- stream-free telemetry ----
     //
     // Reads the radio over the alternate control port while the in-band EP6
     // path cannot: another client holds the radio, our stream has stalled, or

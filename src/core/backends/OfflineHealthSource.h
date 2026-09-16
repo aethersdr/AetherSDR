@@ -3,15 +3,21 @@
 // Health that survives disconnection — the seam verb `IRadioBackend` cannot
 // provide, and why it is a seam question rather than a family one.
 //
-// THE HOLE. `RadioModel::backendHealthSnapshot()` is
-// `m_backend ? m_backend->healthSnapshot() : HealthSnapshot{}`, and `m_backend`
-// is constructed inside `connectToRadio()`. So every health reading this
-// application can take is conditional on a connection existing. For most
-// questions that is correct — a radio you are not talking to has nothing to
-// say. For some it is exactly backwards: "is anyone else using this radio",
-// "is it powered and reachable", "what is its PA temperature while somebody
-// else holds the stream" are questions whose whole point is that we are NOT
-// connected.
+// THE HOLE. Every health reading this application can take is conditional on a
+// LIVE SESSION. `RadioModel::backendHealthSnapshot()` is
+// `m_backend ? m_backend->healthSnapshot() : HealthSnapshot{}`, and while that
+// backend does outlive a disconnect — it is built in `setupBackend()`, which
+// runs from the `RadioModel` constructor and from `rebuildBackendForFamily()`,
+// not from `connectToRadio()` — what it REPORTS does not: each family blanks
+// its rows when the link is not delivering, precisely so a stale figure cannot
+// masquerade as a current one. So a disconnected app answers `health` with
+// nothing.
+//
+// For most questions that is correct — a radio you are not talking to has
+// nothing to say. For some it is exactly backwards: "is anyone else using this
+// radio", "is it powered and reachable", "what is its PA temperature while
+// somebody else holds the stream" are questions whose whole point is that we
+// are NOT connected.
 //
 // WHY A CAPABILITY FLAG CANNOT ANSWER IT. `RadioCapabilities` is produced by a
 // connected backend. In the two states this interface exists for — nothing

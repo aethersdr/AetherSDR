@@ -20,6 +20,9 @@
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
 #include "core/backends/HealthSnapshotMerge.h"   // mergeHealthSnapshots — family-neutral
 #include <QHostAddress>                          // telemetry target <ip>
+#include <QNetworkInterface>                      // directed-broadcast refusal
+#include "core/backends/OfflineHealthSource.h"    // OfflineHealthRegistry (family-neutral)
+#include <algorithm>
 #include "core/backends/hl2/Hl2FreqCal.h"  // freqcal() verb — manual frequency calibration
 #include "core/MeterSurfaces.h"
 #include "models/AetherClockModel.h"  // AetherClockModel (get clock)
@@ -3695,8 +3698,8 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doHealth(); });
 
-        add("telemetry", {}, "telemetry target <ip> — aim the offline health source "
-                             "WITHOUT connecting (read-only; `telemetry target off` stops it)",
+        add("telemetry", {}, "telemetry target <ip|off> — aim a discovered radio's "
+                             "offline health source WITHOUT connecting (read-only)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doTelemetry(a.action, a.value);
@@ -6851,21 +6854,27 @@ void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wai
 //
 // Read-only and TX-safe: it keys nothing and changes nothing.
 namespace {
-// One wording per reason, so the "off" and "aim" paths cannot drift -- and TWO
-// reasons, because the model now refuses for two different things and a caller
-// that cannot tell them apart will retry the one it cannot fix.
-QString offlineHealthRefusal(const QString& family, bool connected)
+// One wording per reason, so the "off" and "aim" paths cannot drift -- and the
+// reason comes FROM THE MODEL rather than being re-derived here.
+//
+// It used to be re-derived, by testing `connected` first. The model refuses on
+// the declaration first and on the connection second, so a connected session of
+// a family with no offline instrument was told to disconnect and retry -- the
+// one retry that can never work, which is precisely the confusion two reasons
+// exist to prevent (#5642 review). Taking the model's own verdict makes the two
+// unable to disagree.
+QString offlineHealthRefusal(RadioModel::OfflineAimResult why, const QString& family)
 {
-    if (connected)
+    if (why == RadioModel::OfflineAimResult::SessionConnected)
         return QStringLiteral(
             "telemetry: this session is connected, and there is ONE poller — "
             "aiming it would repoint the instrument the live session is "
             "reading, so its health would merge another radio's rows as its "
             "own. A connected session is already aimed at its own radio; "
             "disconnect first, or just read `health`");
-    return QStringLiteral("telemetry: this session's family ('%1') declares no "
-                          "offline health source, so there is nothing to aim")
-        .arg(family.isEmpty() ? QStringLiteral("none") : family);
+    return QStringLiteral("telemetry: '%1' declares no offline health source, "
+                          "so there is nothing to aim")
+        .arg(family.isEmpty() ? QStringLiteral("this radio's family") : family);
 }
 }  // namespace
 
@@ -6900,14 +6909,21 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
     //
     // FAMILY-NEUTRAL AND GATED BY DECLARATION, not by name. This verb is
     // registered globally because the registry is; RadioModel refuses when the
-    // selected family declared no offline source, and that refusal is reported
-    // here rather than silently succeeding. Without it, driving the poller from
-    // a `sim` session put real datagrams on the wire and grew another family's
-    // attribution rows on that session's `health` that nothing could remove.
+    // family being aimed at declared no offline source, and that refusal is
+    // reported here rather than silently succeeding. Without it, driving the
+    // poller from a `sim` session put real datagrams on the wire and grew
+    // another family's attribution rows on that session's `health` that nothing
+    // could remove.
     if (value.compare(QStringLiteral("off"), Qt::CaseInsensitive) == 0) {
-        if (!m_radioModel->setOfflineHealthTarget(QHostAddress()))
-            return err(offlineHealthRefusal(m_radioModel->family(),
-                                            m_radioModel->isConnected()));
+        // "off" names no radio, so there is no address to resolve a family
+        // from: it stops whatever this model currently holds, which is what the
+        // caller means. offlineHealthFamily() is empty when nothing is held,
+        // and the model then treats it as the no-op it is.
+        const QString held = m_radioModel->offlineHealthFamily();
+        const auto why =
+            m_radioModel->setOfflineHealthTarget(held, QHostAddress());
+        if (why != RadioModel::OfflineAimResult::Ok)
+            return err(offlineHealthRefusal(why, held));
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("telemetry"), QStringLiteral("target")},
                            {QStringLiteral("target"), QJsonValue::Null}};
@@ -6931,13 +6947,11 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
     // 192.168.36.0/24, so a same-subnet rule would refuse the one radio the
     // feature exists for.
     //
-    // WHAT PROTECTS THE WRONG-UNICAST CASE, stated accurately. An earlier
-    // version of this comment said the poller checks the MAC in the answer so
-    // "a stranger who replies is discarded rather than believed". That was
-    // false: setExpectedMac() had no production caller, so the MAC filter was
-    // never armed on this path (ten9876, #5642). The filters actually applied
-    // to a reply are sender-address equality, isHermesLite2(), and -- added
-    // with that report -- a latch on the first answering MAC.
+    // WHAT PROTECTS THE WRONG-UNICAST CASE, stated accurately. The filters
+    // applied to a reply are sender-address equality, isHermesLite2(), and a
+    // latch on the first answering MAC. (A caller-supplied MAC filter used to
+    // be listed here too; it had no production caller and has been removed --
+    // an aim names an IP and the MAC is unknowable until something replies.)
     //
     // So the honest statement is narrower. A mistyped address that happens to
     // host an HPSDR-speaking device gets its FIRST reading believed and
@@ -6957,7 +6971,31 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
                        "datagrams that never left")
                        .arg(value));
     }
-    if (addr == QHostAddress::Broadcast || addr.isMulticast()
+    // A DIRECTED BROADCAST IS NOT QHostAddress::Broadcast, and that is the hole
+    // the list below used to leave open. 255.255.255.255 is caught by the
+    // compare and 224.0.0.0/4 by isMulticast(), but 192.168.50.255 is neither —
+    // and applyCadence() sets SO_BROADCAST on every socket it binds, so the
+    // datagram really does leave and really does reach every host on that
+    // segment, once a second, for as long as anything reads `health`. That is
+    // the exact property §2.1a objected to when the broadcast fallback was
+    // removed, arrived at by typing an address instead (#5642 review).
+    //
+    // Only a LOCAL segment's broadcast is identifiable: a remote one
+    // (10.255.255.255 from a 192.168 host) is indistinguishable from a unicast
+    // without that segment's prefix, which no local API can supply. Said here
+    // rather than implying the list is complete.
+    bool directedBroadcast = false;
+    for (const QNetworkInterface& iface : QNetworkInterface::allInterfaces()) {
+        const auto entries = iface.addressEntries();
+        if (std::any_of(entries.cbegin(), entries.cend(),
+                        [&addr](const QNetworkAddressEntry& e) {
+                            return !e.broadcast().isNull() && e.broadcast() == addr;
+                        })) {
+            directedBroadcast = true;
+            break;
+        }
+    }
+    if (addr == QHostAddress::Broadcast || addr.isMulticast() || directedBroadcast
         || addr == QHostAddress::AnyIPv4 || addr == QHostAddress::Any
         || addr == QHostAddress::AnyIPv6) {
         return err(QStringLiteral(
@@ -6967,12 +7005,50 @@ QJsonObject AutomationServer::doTelemetry(const QString& action, const QString& 
                        .arg(value));
     }
 
-    if (!m_radioModel->setOfflineHealthTarget(addr))
-        return err(offlineHealthRefusal(m_radioModel->family(),
-                                            m_radioModel->isConnected()));
+    // WHICH FAMILY'S INSTRUMENT TO BUILD, answered by the radio at the address
+    // rather than by the session.
+    //
+    // Gating on this session's family made the verb unreachable in the state it
+    // exists for: m_family is set only by connectToRadio(), so on a fresh app
+    // it is the default and every aim was refused — and the only cure was to
+    // connect to the radio first, the write into somebody else's session this
+    // verb exists to avoid (#5642 review).
+    //
+    // Discovery already knows. `connect list` reads the same table, so an
+    // address the operator can see in the picker is an address that can be
+    // aimed at, and one that is not discovered is refused rather than probed on
+    // a guess. Falling back to the SESSION's family when the address is not in
+    // the table would quietly reintroduce the cross-family leak, so it does not.
+    QString family;
+    if (IConnectionAutomation* conn = connection()) {
+        const QList<RadioInfo> radios = conn->automationLocalRadios();
+        const auto it = std::find_if(radios.cbegin(), radios.cend(),
+                                     [&addr](const RadioInfo& r) {
+                                         return r.address == addr;
+                                     });
+        if (it != radios.cend())
+            family = it->family;
+    }
+    // A radio this session is CONNECTED to is known even when discovery has
+    // aged out, and refusing it there would be a worse answer than the model's
+    // own "you are connected" refusal below.
+    if (family.isEmpty() && m_radioModel->isConnected())
+        family = m_radioModel->family();
+    if (family.isEmpty()) {
+        return err(QStringLiteral(
+                       "telemetry target: no discovered radio at '%1' — this "
+                       "aims a family's own instrument, so the radio has to be "
+                       "one `connect list` can see")
+                       .arg(value));
+    }
+
+    const auto why = m_radioModel->setOfflineHealthTarget(family, addr);
+    if (why != RadioModel::OfflineAimResult::Ok)
+        return err(offlineHealthRefusal(why, family));
     return QJsonObject{{QStringLiteral("ok"), true},
                        {QStringLiteral("telemetry"), QStringLiteral("target")},
                        {QStringLiteral("target"), addr.toString()},
+                       {QStringLiteral("family"), family},
                        // Say plainly that nothing was connected, because the
                        // caller's next question is always "did that grab the
                        // radio?" and the answer must not require reading source.
@@ -6987,12 +7063,13 @@ QJsonObject AutomationServer::doHealth()
 
     // TWO SOURCES, merged when — and only when — both are in play.
     //
-    // The backend answers only while one exists — it is constructed inside
-    // connectToRadio() — so on a disconnected app it contributes nothing. An
-    // offline health source outlives every backend, because its lifetime is the
-    // model's rather than a connection's. Reading `health` on an app that is
-    // not connected used to return zero rows for exactly that reason, in the
-    // state the offline source exists to serve.
+    // The backend reports only while it is talking to a radio: every family
+    // blanks its rows when the link is not delivering, so on a disconnected app
+    // it contributes nothing even though the object itself is still there. An
+    // offline health source keeps answering, because what it reads does not
+    // depend on a session. Reading `health` on an app that is not connected
+    // used to return zero rows for exactly that reason, in the state the
+    // offline source exists to serve.
     //
     // GATED, because `health` is family-agnostic. Merging unconditionally gave
     // a connected Flex or Icom snapshot another family's attribution rows, so a

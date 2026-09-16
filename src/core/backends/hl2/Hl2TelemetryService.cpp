@@ -109,11 +109,6 @@ void Hl2TelemetryService::setTarget(const QHostAddress& addr)
     d->poller->setTarget(addr);
 }
 
-void Hl2TelemetryService::setExpectedMac(const std::array<std::uint8_t, 6>& mac)
-{
-    d->poller->setExpectedMac(mac);
-}
-
 void Hl2TelemetryService::setAllowBroadcastFallback(bool allow)
 {
     d->poller->setAllowBroadcastFallback(allow);
@@ -266,6 +261,22 @@ IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
         pendingSection = QStringLiteral("Stream-free readings");
         const DiscoveryReply& r = *d->reply;
         reading("temperatureRaw",  QStringLiteral("Temperature (raw counts)"), r.temperatureRaw);
+        // THE ROW A HUMAN READS, and until now the stream-free path could not
+        // fill it. Hl2Backend gates its own `temperatureC` on the in-band path
+        // actually delivering, which is right -- a smoothed figure with no age
+        // of its own must not outlive the stream that fed it. But nothing took
+        // the row over, so the three states this class exists for rendered
+        // "PA temperature (°C): —" next to a four-digit raw count, and the
+        // feature's own headline question went unanswered (#5642 review).
+        //
+        // NOT SMOOTHED, unlike the in-band row: each poll is one reading and
+        // there is no cadence to average over. It is the same conversion the
+        // in-band path uses (MetisProtocol.h), so the two cannot disagree about
+        // what a count means, and the in-band row still WINS the merge whenever
+        // the stream is live.
+        put("temperatureC", QStringLiteral("PA temperature (°C)"),
+            r.temperatureRaw ? QVariant(hl2TemperatureCelsius(*r.temperatureRaw))
+                             : QVariant());
         reading("forwardPowerRaw", QStringLiteral("Forward (raw counts)"),     r.forwardPowerRaw);
         reading("reversePowerRaw", QStringLiteral("Reverse (raw counts)"),     r.reversePowerRaw);
         reading("biasCurrentRaw",  QStringLiteral("PA bias (raw counts)"),     r.biasCurrentRaw);

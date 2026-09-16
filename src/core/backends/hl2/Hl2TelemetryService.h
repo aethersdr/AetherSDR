@@ -1,6 +1,6 @@
 #pragma once
 
-// Stream-free HL2 telemetry, owned ABOVE the backend (roadmap #15).
+// Stream-free HL2 telemetry, owned ABOVE the backend.
 //
 // THE RULE THIS EXISTS TO OBEY: an instrument for the no-connection case must
 // not be owned by the connection.
@@ -61,7 +61,6 @@ public:
     // rows is the frozen-reading failure this feature exists to expose, wearing
     // a different address.
     void setTarget(const QHostAddress& addr);
-    void setExpectedMac(const std::array<std::uint8_t, 6>& mac);
     // Opt in to broadcasting when no target is set. OFF by default -- a
     // broadcast reaches the local segment, which on this bench is not where
     // the radio is and is where the station receiver is.

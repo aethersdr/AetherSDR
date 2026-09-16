@@ -60,11 +60,6 @@ void Hl2TelemetryPoller::setAllowBroadcastFallback(bool allow)
     applyCadence();
 }
 
-void Hl2TelemetryPoller::setExpectedMac(const std::array<std::uint8_t, 6>& mac)
-{
-    m_expectedMac = mac;
-}
-
 void Hl2TelemetryPoller::setTarget(const QHostAddress& addr)
 {
     if (m_target == addr)
@@ -242,15 +237,15 @@ void Hl2TelemetryPoller::onReadyRead()
         // THE RULE IS IN Hl2TelemetryCadence.h, acceptReply(), so it can be
         // tested without a socket. What stays here is the transport.
         //
-        // setExpectedMac() has no production caller -- an aim names an IP and
-        // the MAC is not knowable until something replies -- so m_expectedMac
-        // was always nullopt and the MAC filter was dead on every live path
-        // (ten9876, #5642). The latch is what can actually be armed, and it is
-        // narrower than the old comment claimed: the first HL2-speaking answer
-        // from the named address is still believed, whoever it is. What it
-        // stops is the responder CHANGING underneath a live aim.
+        // The latch is the only MAC filter, and it is narrower than the
+        // caller-supplied one it replaced: the first HL2-speaking answer from
+        // the named address is believed, whoever it is. What it stops is the
+        // responder CHANGING underneath a live aim. The supplied-MAC path was
+        // removed with setExpectedMac() -- nothing could ever call it, because
+        // an aim names an IP and the MAC is unknowable until something replies
+        // (#5642 review).
         const auto verdict = acceptReply(reply->isHermesLite2(), reply->mac,
-                                         m_expectedMac, m_latchedMac);
+                                         m_latchedMac);
         if (verdict.latch)
             m_latchedMac = verdict.latch;
         if (!verdict.accept)

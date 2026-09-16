@@ -894,4 +894,25 @@ int ep6Samples(std::span<const std::uint8_t> pkt,
 int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
                     std::span<std::vector<std::complex<float>>> out) noexcept;
 
+// The AD9866 on-die temperature, in degrees C, from the instrumentation ADC's
+// raw count -- the `temperatureRaw` field decoded above, whichever path carried
+// it.
+//
+// HERE, next to the decode, because BOTH paths need it and they have no other
+// header in common. Hl2Backend has it from EP6 and Hl2TelemetryService has it
+// from a port-1025 discovery reply; before this the conversion lived only in
+// Hl2Backend, so the stream-free path could publish a raw count and nothing
+// else, and "what is the PA temperature while somebody else holds the stream"
+// -- one of the three questions this feature exists for -- rendered as an em
+// dash beside a four-digit count (#5642 review). Hl2Backend::temperatureCelsius()
+// now forwards here, so the two paths cannot report different degrees for the
+// same count.
+//
+// The scaling is the Hermes-Lite 2 wiki's published formula. It is NOT verified
+// against a reference thermometer, so treat it as indicative.
+[[nodiscard]] constexpr double hl2TemperatureCelsius(int raw) noexcept
+{
+    return (3.26 * (static_cast<double>(raw) / 4096.0) - 0.5) / 0.01;
+}
+
 }  // namespace AetherSDR::hl2

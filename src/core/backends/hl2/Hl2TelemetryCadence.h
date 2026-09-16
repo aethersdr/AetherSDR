@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>   // std::uint8_t -- libstdc++ does not get it via <array>
 
 #include <optional>
 
@@ -142,10 +143,13 @@ inline constexpr long long kStreamStallDeclareMs = 2500;
 // beside the cadence rule, for the same reason: both are policy that a test
 // must be able to reach directly rather than by putting datagrams on a wire.
 //
-// `expected` is a MAC a caller supplied (setExpectedMac); `latched` is the one
-// remembered from the first accepted answer. The distinction matters because
-// only the second can be armed on the live path -- an aim names an IP and the
-// MAC is not knowable until something replies.
+// `latched` is the MAC remembered from the first accepted answer, and it is the
+// ONLY MAC concept here. An earlier version also took a caller-supplied
+// `expected` MAC, but nothing could supply one: an aim names an IP and the MAC
+// is not knowable until something replies, so `setExpectedMac()` never had a
+// production caller and the branch existed only for its own test. Two MAC
+// concepts where one can be armed is how the address policy came to rest on a
+// filter that was never on (#5642 review).
 struct ReplyAcceptance {
     bool accept = false;
     // The MAC to remember for next time. Unset means "leave the latch alone".
@@ -156,18 +160,10 @@ struct ReplyAcceptance {
 [[nodiscard]] inline ReplyAcceptance
 acceptReply(bool isHermesLite2,
             const std::array<std::uint8_t, 6>& replyMac,
-            const std::optional<std::array<std::uint8_t, 6>>& expected,
             const std::optional<std::array<std::uint8_t, 6>>& latched)
 {
     if (!isHermesLite2)
         return {false, std::nullopt, "not a Hermes-Lite 2"};
-    // An explicitly supplied MAC wins outright and never latches: a caller that
-    // named a radio is not asking to have its choice replaced by whoever
-    // answered first.
-    if (expected)
-        return {replyMac == *expected, std::nullopt,
-                replyMac == *expected ? "matches the supplied MAC"
-                                      : "a different radio answered"};
     if (!latched)
         return {true, replyMac, "first answer at this target — latched"};
     return {replyMac == *latched, std::nullopt,
