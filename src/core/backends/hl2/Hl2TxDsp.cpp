@@ -139,20 +139,7 @@ void Hl2TxDsp::setFilter(double lowHz, double highHz)
 
 void Hl2TxDsp::setMicGain(double linear)
 {
-    const double clamped = linear < 0.0 ? 0.0 : linear;
-    // AN UPWARD MOVE RE-ARMS THE SEED, for the same reason key-on needs one:
-    // the loop's history describes the old gain, and the ALC cannot attack
-    // across this slider's +40 dB inside one block. Measured before this
-    // existed: a 50 -> 100 move during an over on a full-scale source
-    // flat-topped the modulator for 17.1 ms (|IQ| 1.4952, 816 samples at the
-    // clamp), while the same move to the old +20 dB maximum did not.
-    //
-    // ONLY upward, and the seed itself only ever reduces, so this cannot step
-    // the operator's level up mid-word: a decrease cannot reach the clamp and
-    // keeps the normal release. hl2_txdsp_test's mid-over case pins it.
-    if (clamped > m_micGain)
-        m_alcSeedPending = true;
-    m_micGain = clamped;
+    m_micGain = linear < 0.0 ? 0.0 : linear;
     // Echo what was actually stored, not the argument — the clamp above is
     // exactly the sort of thing a readout needs to see rather than assume.
     emit micGainChanged(m_micGain);
@@ -165,12 +152,10 @@ double Hl2TxDsp::alcGainDb() const noexcept
 
 void Hl2TxDsp::reset()
 {
-    // A new transmission starts from unity, not mid-ramp — but it does not
-    // TRANSMIT at unity: the first block that carries signal seeds the loop at
-    // its own target rather than ramping down to it. Unity is the value the
-    // gain reports until then, and the value a silent key-up keeps.
+    // A new transmission starts from unity. It does not TRANSMIT at unity: the
+    // first block that needs reduction takes it straight there, because
+    // reduction in this stage is instantaneous.
     m_alcGain = 1.0;
-    m_alcSeedPending = true;
     m_inBuffer.clear();
     std::fill(m_hist.begin(), m_hist.end(), 0.0f);
     m_histPos = 0;
@@ -278,51 +263,43 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
             const double target = std::min(wanted, 1.0);
             const double blockSec = static_cast<double>(consumed)
                                   / static_cast<double>(m_config.inputSampleRateHz);
+            // REDUCTION IS INSTANTANEOUS. Only the release is smoothed.
+            //
+            // This is the shape a splatter guard has to have, and the shape a
+            // smoothed attack cannot deliver at this block size. The attack
+            // constant was 5 ms against a 512-sample block on 24 kHz — 21.3 ms
+            // — so `1 - exp(-21.3/5)` already closed 98.6% of the error in a
+            // single block. It was not buying smoothing. It was leaving 1.4%
+            // of whatever step had just arrived sitting above the modulator's
+            // hard clamp, and 1.4% of 40 dB is not small.
+            //
+            // A one-shot key-on seed was tried first and covers only the FIRST
+            // reduction of an over. Measured on this class: a source that
+            // crosses the ALC target gently — an ordinary quiet word — spends
+            // the seed on a fraction of a dB, and the next loud syllable is
+            // then unprotected. A -38 dBFS word followed by a -12 dBFS
+            // syllable at slider 100 reached |IQ| 1.0768 with 223 samples
+            // clipped; a quiet passage, one loud burst and quiet again reached
+            // 1.5045 with 727 (15.2 ms). Both are speech, not corner cases.
+            // With reduction instantaneous every one of those shapes settles
+            // at 0.859 with nothing at the clamp.
+            //
+            // A short enough attack constant would also keep the clamp
+            // clear at TODAY'S block size — 0.5 ms does. That is the argument
+            // for instantaneous rather than against it: whether a constant is
+            // short enough depends on dspBlockSize and inputSampleRateHz, so
+            // it is a guarantee that expires silently the day either moves.
+            // Reduction that simply takes the target has no such dependency.
+            //
+            // The release keeps its slow constant, which is the half that
+            // actually needs smoothing: a limiter that releases as fast as it
+            // attacks pumps between words.
             const bool reducing = target < m_alcGain;
-            if (m_alcSeedPending && reducing) {
-                // THE SEED: the first REDUCTION since the loop last lost its
-                // history jumps straight to target instead of ramping to it.
-                //
-                // reset() leaves the gain at unity, so without this the loop
-                // has to attack DOWN from 1.0 at the start of every over, and
-                // one block on a 5 ms attack does not close 40 dB. While the
-                // mic slider stopped at +20 dB that cost nothing measurable —
-                // the old maximum of 10x on a full-scale source still peaked
-                // inside the clamp. At +40 dB it stops being free: the hard
-                // limit below is reached long before the loop arrives, so the
-                // opening ~17 ms of the over leaves the modulator flat-topped,
-                // which is splatter rather than our own audio clipping.
-                //
-                // Jumping is not a shortcut around the time constants; it is
-                // what having no history means. `target` is ceilinged at 1.0
-                // above and this branch needs `reducing`, so it can only ever
-                // seed DOWNWARD — it cannot step the level up.
-                //
-                // GATED ON `reducing`, NOT ON "the first block with signal".
-                // blockPeak is measured AFTER m_micGain, so at 100x the
-                // `> 1e-6` test above corresponds to an input of 1e-8
-                // (-160 dBFS) — in practice "not bit-exactly zero" rather than
-                // "carries signal". An earlier revision disarmed there, and a
-                // microphone's room floor, a TCI client's ramp-in, or any
-                // lead-in at all therefore spent the seed on a block that
-                // wanted unity — the value reset() had already set — and
-                // handed the next loud block the full ramp anyway. Measured:
-                // 100 ms of -60 dBFS room ahead of a full-scale source put
-                // |IQ| at 1.5391 with 239 samples clipped, the same figure as
-                // having no seed at all. A quiet lead-in now simply stays
-                // armed, because a block that wants unity is not the block
-                // this exists for. hl2_txdsp_test's lead-in case pins it.
+            if (reducing) {
                 m_alcGain = target;
-                m_alcSeedPending = false;
             } else {
-                // Per-block time constants. Attack when we need LESS gain (the
-                // signal got louder) so overshoot is corrected immediately;
-                // release, slowly, back toward unity when it does not. The
-                // split survives the ceiling — a limiter that releases as fast
-                // as it attacks pumps, and one that never releases latches.
-                const double tau = reducing ? m_config.alcAttackSec
-                                            : m_config.alcReleaseSec;
-                const double a = 1.0 - std::exp(-blockSec / std::max(1e-6, tau));
+                const double a = 1.0 - std::exp(-blockSec
+                                    / std::max(1e-6, m_config.alcReleaseSec));
                 m_alcGain += a * (target - m_alcGain);
             }
         }

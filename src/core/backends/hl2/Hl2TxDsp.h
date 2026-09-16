@@ -76,7 +76,12 @@ public:
         // that cannot pull down on a transient is a splatter generator.
         bool alcEnabled = true;
         double alcTargetPeak = 0.85;   // leave headroom below clipping
-        double alcAttackSec = 0.005;   // catch a syllable's onset
+        // NO ATTACK CONSTANT. Reduction is instantaneous — see
+        // processAudioBlock. A configurable attack was in this struct until it
+        // was measured to be the mechanism by which the stage overshot: at a
+        // 512-sample block on 24 kHz the 5 ms constant already closed 98.6% of
+        // the error in one block, so it was not buying smoothing, it was
+        // leaving 1.4% of a 40 dB step above the clamp.
         double alcReleaseSec = 0.500;  // slow enough not to pump between words
     };
 
@@ -176,20 +181,6 @@ private:
     double m_micGain = 1.0;
     int m_upsample = 2;
     double m_alcGain = 1.0;      // current ALC gain, carried across blocks
-    // Set by reset() and by an upward setMicGain(); cleared by the first block
-    // that actually wants REDUCTION. The ALC jumps straight to its target on
-    // that block instead of ramping to it — see the seeding note in
-    // processAudioBlock.
-    //
-    // The flag exists because the loop sometimes has no history worth
-    // smoothing from, and since the mic slider reaches +40 dB the distance it
-    // would otherwise have to travel is larger than the modulator's headroom.
-    // Two occasions qualify: the first block of an over, and the block after
-    // the operator raises the gain mid-over. Staying armed through quiet
-    // blocks is the point — a lead-in below the ALC's target wants unity,
-    // which is where reset() already left the gain, so disarming there would
-    // hand the next loud block an unprotected ramp.
-    bool m_alcSeedPending = true;
 
     std::vector<float> m_bandpass;      // real bandpass
     std::vector<float> m_hilbert;       // quadrature half of the analytic bandpass

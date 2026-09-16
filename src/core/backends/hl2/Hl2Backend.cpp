@@ -4321,7 +4321,6 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
         e[QStringLiteral("filterHighHz")] = t.filterHighHz;
         e[QStringLiteral("alcEnabled")] = t.alcEnabled;
         e[QStringLiteral("alcTargetPeak")] = t.alcTargetPeak;
-        e[QStringLiteral("alcAttackSec")] = t.alcAttackSec;
         e[QStringLiteral("alcReleaseSec")] = t.alcReleaseSec;
         e[QStringLiteral("micGainLinear")] = txDsp->micGain();
         chains.append(e);

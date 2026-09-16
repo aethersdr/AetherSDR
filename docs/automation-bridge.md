@@ -1393,7 +1393,7 @@ inside AetherSDR on the host, not in radio firmware (#5401).
         "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":512,
         "filterLowHz":300,"filterHighHz":2700,
         "alcEnabled":true,"alcTargetPeak":0.9,
-        "alcAttackSec":0.005,"alcReleaseSec":0.25,
+        "alcReleaseSec":0.25,
         "micGainLinear":1}]}}}
 ```
 

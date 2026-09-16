@@ -800,6 +800,93 @@ int main(int argc, char** argv)
                       "and the transmission is still on the air (case is real)");
             }
         }
+
+        // ── A QUIET WORD, THEN A LOUD ONE, which is what speech is and what
+        //    a one-shot key-on seed cannot survive.
+        //
+        //    An earlier revision protected the opening of the over only: the
+        //    first block needing ANY reduction took the jump, and every block
+        //    after it got the smoothed attack. A source that crosses the ALC
+        //    target gently spends that on a fraction of a dB — and at a 512
+        //    sample block on 24 kHz the smoothed attack left 1.4% of whatever
+        //    step came next above the modulator's clamp. Measured on this
+        //    class at slider 100: a -38 dBFS word then a -12 dBFS syllable
+        //    reached |IQ| 1.0768 with 223 samples clipped, and a quiet passage
+        //    with one loud burst in it reached 1.5045 with 727 (15.2 ms).
+        //
+        //    Reduction is instantaneous now, so the shape does not matter,
+        //    and this is the case that says so — the three legs above cannot,
+        //    because each of them steps only once.
+        //
+        //    WHAT THIS PINS IS THE OBSERVABLE PROPERTY, not the mechanism: a
+        //    smoothed attack fast enough to close the step inside one block
+        //    passes it too (0.5 ms does; 5 ms does not). That is the honest
+        //    reading and it is also the argument for instantaneous — whether a
+        //    given time constant is "fast enough" is a function of dspBlockSize
+        //    and inputSampleRateHz, so it is a guarantee that quietly expires
+        //    the day either changes. Instantaneous has no such dependency.
+        {
+            const int fs = 24000;
+            const double quiet = std::pow(10.0, -38.0 / 20.0);   // just over target
+            const double loud  = std::pow(10.0, -12.0 / 20.0);   // an ordinary syllable
+            std::vector<float> audio;
+            auto push = [&](double amp, double seconds) {
+                const int n0 = static_cast<int>(audio.size());
+                for (int n = 0; n < static_cast<int>(seconds * fs); ++n)
+                    audio.push_back(static_cast<float>(
+                        amp * std::sin(2.0 * M_PI * kHarmTone * (n0 + n) / fs)));
+            };
+            push(quiet, 0.40);        // the quiet word spends a one-shot seed
+            push(loud,  0.60);        // the loud one arrives with no protection
+            push(quiet, 0.20);        // and it must release again afterwards
+
+            Hl2TxDsp tx;
+            Hl2TxDsp::Config cfg;
+            cfg.mode = WdspChannel::Mode::Usb;
+            cfg.alcEnabled = true;
+            std::string err;
+            if (!tx.configure(cfg, &err)) {
+                std::fprintf(stderr, "FAIL: crescendo configure: %s\n", err.c_str());
+                ++g_failures;
+            } else {
+                tx.reset();
+                tx.setMicGain(kSliderTopGain);
+                std::vector<std::complex<float>> out;
+                QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                                 [&out](const std::vector<std::complex<float>>& iq) {
+                    out.insert(out.end(), iq.begin(), iq.end());
+                });
+                constexpr std::size_t kChunk = 240;
+                for (std::size_t off = 0; off < audio.size(); off += kChunk) {
+                    const std::size_t n = std::min(kChunk, audio.size() - off);
+                    tx.processAudioBlock(
+                        std::vector<float>(
+                            audio.begin() + static_cast<std::ptrdiff_t>(off),
+                            audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
+                        /*clientLeveled=*/false);
+                }
+                double mx = 0.0;
+                std::size_t atClamp = 0;
+                for (const auto& v : out) {
+                    const double m = std::abs(v);
+                    mx = std::max(mx, m);
+                    if (m >= 0.999)
+                        ++atClamp;
+                }
+                std::fprintf(stderr,
+                             "quiet-then-loud: -38 dBFS word then -12 dBFS syllable "
+                             "at %.0fx, whole-run |IQ| peak %.4f, %zu at the clamp\n",
+                             kSliderTopGain, mx, atClamp);
+                check(mx < 0.999,
+                      "a loud syllable after a quiet one is caught before the "
+                      "clamp — reduction does not depend on where in the over "
+                      "the step arrives");
+                check(atClamp == 0,
+                      "and no sample of that over reaches the clamp");
+                check(mx > 0.5,
+                      "and the transmission is still on the air (case is real)");
+            }
+        }
     }
 
     // ── #4796 review: the reduction half must RELEASE — it may not latch ────
