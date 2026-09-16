@@ -346,6 +346,11 @@ void MainWindow::refreshRttyDecodeState()
     const bool isRtty = s && s->mode() == "RTTY";
     const bool wanted = isRtty && RttyDecodeSettings::enabled();
 
+    if (m_rttyAudio) {
+        m_rttyAudio->setSlice(s);
+        m_rttyAudio->setEnabled(wanted && m_rttyDecoderApplet);
+    }
+
     setDecoderPanelVisibleOnly(m_rttyDecoderApplet, wanted,
                                &PanadapterApplet::setRttyPanelVisible);
 
