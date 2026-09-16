@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 Q_LOGGING_CATEGORY(lcAnanRxDsp, "aether.anan.rxdsp")
 
@@ -417,8 +418,32 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         consumed += block;
 
         const auto res = m_channel->processIq(m_i, m_q, m_left, m_right);
-        if (res != WdspChannel::ProcessResult::Ok)
+        // Count every outcome, Ok included -- the Ok count is the denominator
+        // a fault total has to be read against. Same rule, same words and the
+        // same bounded log schedule as Hl2RxDsp::processIqBlock: these two
+        // stages are copies of each other and the counting rule is the part
+        // that must not drift, which is why it lives in WdspProcessTally.h
+        // rather than twice here.
+        const std::uint64_t seen = m_processTally.record(res);
+        if (res != WdspChannel::ProcessResult::Ok) {
+            // Underrun excluded from the log and NOT from the count: it is
+            // normal while the asynchronous output side fills, and logging it
+            // would drown the four outcomes that are not normal.
+            //
+            // After processIq() returns, never inside it -- qCWarning
+            // allocates, and allocating between WdspChannel's two reads of
+            // wdspPortAllocationSequence() would manufacture the very
+            // AllocationViolation being reported.
+            if (res != WdspChannel::ProcessResult::Underrun
+                && WdspProcessTally::shouldLog(seen)) {
+                qCWarning(lcAnanRxDsp)
+                    << "WDSP processIq failed:" << WdspProcessTally::name(res)
+                    << "- occurrence" << seen
+                    << "on WDSP channel" << m_channel->channelIdForTest()
+                    << "- this block produces no audio";
+            }
             continue;   // underrun while the pipeline fills, etc. -- no output yet
+        }
 
         const std::size_t outN = m_left.size();
         for (std::size_t k = 0; k < outN; ++k) {

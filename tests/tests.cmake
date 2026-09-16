@@ -972,6 +972,18 @@ target_include_directories(hl2_am_dcblock_test PRIVATE src)
 target_link_libraries(hl2_am_dcblock_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_am_dcblock_test COMMAND hl2_am_dcblock_test)
 
+# Every non-`Ok` WdspChannel::ProcessResult used to be one unannotated
+# `continue` in BOTH raw-IQ RX stages -- no log line, no counter, no signal --
+# so a chain silent because WDSP was returning EngineError on every block was
+# indistinguishable from one whose pipeline was still filling. Pins the
+# classification of all six outcomes, that Underrun is counted apart from the
+# four faults, and that the HL2 and ANAN call sites both reach the counter on
+# every block. Drives real WDSP chains, hence aethercore.
+add_executable(wdsp_process_tally_test tests/wdsp_process_tally_test.cpp)
+target_include_directories(wdsp_process_tally_test PRIVATE src)
+target_link_libraries(wdsp_process_tally_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME wdsp_process_tally_test COMMAND wdsp_process_tally_test)
+
 # The RX DSP must demodulate at every IQ rate the operator can select by zooming.
 add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
 target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
