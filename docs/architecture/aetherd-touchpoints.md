@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 224 touchpoint headers (190 core, 34 models) — 224/224 tagged, 0/224 converted.
+**Totals:** 226 touchpoint headers (190 core, 36 models) — 226/226 tagged, 0/226 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -15,7 +15,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/AetherClockSettings.h` | 1 | ui-support — AetherClock persistence — one nested JSON blob under a single AppSettings key (Principle V). Client-side config plumbing; radio-authoritative state (slice frequency, mode, AGC) is deliberately never persisted here. | unconverted |
 | `core/AetherDspModePolicy.h` | 2 | universal — Pure policy deciding when AetherDSP must disable for a given mode or slice audio mix. Operates on canonical mode/mute/gain state only; no vendor ties. | unconverted |
 | `core/AgcTCalibrator.h` | 1 | universal — Engine algo sweeping slice AGC threshold vs audio RMS/S-meter to recommend a value; only canonical state. | unconverted |
-| `core/AppSettings.h` | 103 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
+| `core/AppSettings.h` | 102 | ui-support — Client-side XML settings store (SSDR.settings-style key/value persistence); app plumbing, not radio state. | unconverted |
 | `core/AudioEngine.h` | 46 | mixed(flex) — Client audio I/O + full RX/TX DSP chain (universal) fused with Flex VITA-49/DAX/Opus TX and Kiwi buffering | unconverted |
 | `core/AudioOutputRouter.h` | 1 | ui-support — Registry fanning the user-selected QAudioDevice to local playback sinks; OS device plumbing, no radio state | unconverted |
 | `core/AutomationBridgeSettings.h` | 3 | ui-support — Owned configuration for the agent automation bridge (enabled / txAllowed / txAck / readOnly) under one nested key; the secret token lives in the OS keychain, not here. Dev and test tooling — same home decision as core/AutomationServer.h. NOTE for RFC §6: txAllowed() is read as a TX-guard input by BOTH AutomationServer and Hl2Backend, so this header is a step-4 consolidation target. | unconverted |
@@ -205,6 +205,8 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/BandDefs.h` | 5 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 9 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 6 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |
+| `models/CwDecodeSettings.h` | 7 | ui-support — CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state. | unconverted |
+| `models/CwRxModel.h` | 2 | universal — Receive CW backend catalog and lifecycle over typed PCM; decoder workers remain private and TX is separate. | unconverted |
 | `models/CwxModel.h` | 1 | universal — CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name. | unconverted |
 | `models/DStarModel.h` | 1 | universal — D-STAR configuration and session state (callsigns, RPT1/RPT2 routing, modem/serial paths). Digital-voice state any backend carrying DV would present. | unconverted |
 | `models/DaxIqModel.h` | 1 | vendor(flex) — Flex DAX IQ streams: dax_iq stream create/rate cmds, 4-ch DAX model, pipes to SDR apps — DAX is Flex-only | unconverted |

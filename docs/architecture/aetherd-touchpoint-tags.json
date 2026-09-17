@@ -1378,5 +1378,17 @@
   "note": "Bounded OPERA CIRRUS byte decoder placed in aethercore with existing zlib under RFC #5630 condition B; no radio state or widget dependency.",
   "split": "",
   "confidence": "high"
+ },
+ "models/CwDecodeSettings.h": {
+  "tag": "ui-support",
+  "note": "CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/CwRxModel.h": {
+  "tag": "universal",
+  "note": "Receive CW backend catalog and lifecycle over typed PCM; decoder workers remain private and TX is separate.",
+  "split": "",
+  "confidence": "high"
  }
 }

@@ -2014,6 +2014,9 @@ add_test(NAME tx_capture_health_test COMMAND tx_capture_health_test)
 add_executable(qso_recorder_write_error_test
     tests/qso_recorder_write_error_test.cpp
     src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
@@ -2036,6 +2039,9 @@ add_test(NAME qso_recorder_write_error_test COMMAND qso_recorder_write_error_tes
 add_executable(qso_recorder_slice_lifetime_test
     tests/qso_recorder_slice_lifetime_test.cpp
     src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
@@ -2052,6 +2058,92 @@ target_include_directories(qso_recorder_slice_lifetime_test PRIVATE
 target_link_libraries(qso_recorder_slice_lifetime_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME qso_recorder_slice_lifetime_test COMMAND qso_recorder_slice_lifetime_test)
 
+# RFC #5468 A3: real recorder files and concurrent feeds; injected sink only,
+# no sockets, audio devices, or radio. Separate targets keep sanitizer scope small.
+add_executable(qso_recorder_rates_test
+    tests/qso_recorder_rates_test.cpp
+    src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(qso_recorder_rates_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_rates_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_rates_test COMMAND qso_recorder_rates_test)
+set_tests_properties(qso_recorder_rates_test PROPERTIES TIMEOUT 120)
+
+add_executable(qso_recorder_playback_lifecycle_test
+    tests/qso_recorder_playback_lifecycle_test.cpp
+    src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+    src/core/DigitalVoiceModeRegistry.cpp
+)
+target_include_directories(qso_recorder_playback_lifecycle_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_playback_lifecycle_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_playback_lifecycle_test COMMAND qso_recorder_playback_lifecycle_test)
+set_tests_properties(qso_recorder_playback_lifecycle_test PROPERTIES TIMEOUT 120)
+
+# RFC #5468 A3 format/parser/converter helpers: no sockets or audio devices.
+add_executable(qso_recording_format_test
+    tests/qso_recording_format_test.cpp
+)
+target_include_directories(qso_recording_format_test PRIVATE src)
+target_link_libraries(qso_recording_format_test PRIVATE Qt6::Core)
+add_test(NAME qso_recording_format_test COMMAND qso_recording_format_test)
+
+add_executable(qso_recorder_wav_format_test
+    tests/qso_recorder_wav_format_test.cpp
+    src/core/QsoWavFormat.cpp
+)
+target_include_directories(qso_recorder_wav_format_test PRIVATE src)
+target_link_libraries(qso_recorder_wav_format_test PRIVATE Qt6::Core)
+add_test(NAME qso_recorder_wav_format_test COMMAND qso_recorder_wav_format_test)
+
+add_executable(qso_recorder_conversion_test
+    tests/qso_recorder_conversion_test.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/Resampler.cpp
+)
+target_include_directories(qso_recorder_conversion_test PRIVATE
+    src ${CMAKE_SOURCE_DIR}/third_party/r8brain)
+target_link_libraries(qso_recorder_conversion_test PRIVATE Qt6::Core)
+add_test(NAME qso_recorder_conversion_test COMMAND qso_recorder_conversion_test)
+
+add_executable(qso_recorder_playback_format_test
+    tests/qso_recorder_playback_format_test.cpp
+    src/core/QsoWavPlayback.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/Resampler.cpp
+)
+target_include_directories(qso_recorder_playback_format_test PRIVATE
+    src ${CMAKE_SOURCE_DIR}/third_party/r8brain)
+target_link_libraries(qso_recorder_playback_format_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_playback_format_test COMMAND qso_recorder_playback_format_test)
+
 # #4629 — the start policy alone. Pure/constexpr, no Qt at all: the radio-side
 # case (which must NEVER be blocked) is also asserted at compile time.
 add_executable(qso_record_start_policy_test
@@ -2066,6 +2158,9 @@ add_test(NAME qso_record_start_policy_test COMMAND qso_record_start_policy_test)
 add_executable(qso_recorder_pc_audio_guard_test
     tests/qso_recorder_pc_audio_guard_test.cpp
     src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
@@ -2126,6 +2221,9 @@ add_test(NAME dvk_wav_upload_test COMMAND dvk_wav_upload_test)
 add_executable(qso_recorder_filename_collision_test
     tests/qso_recorder_filename_collision_test.cpp
     src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
     ${AETHER_SETTINGS_SOURCES}
     src/core/AudioDeviceNegotiator.cpp
     src/core/AudioFormatNegotiator.cpp
@@ -4116,7 +4214,24 @@ target_link_libraries(aetherd_pan_decode_test PRIVATE aethercore Qt6::Core Qt6::
 set_target_properties(aetherd_pan_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_pan_decode_test COMMAND aetherd_pan_decode_test)
 
+# Socket-free continuous rate/stereo conversion, independent of WebSockets.
+add_executable(tci_rx_converter_test
+    tests/tci_rx_converter_test.cpp
+    src/core/TciRxConverter.cpp
+    src/core/Resampler.cpp)
+target_include_directories(tci_rx_converter_test PRIVATE src third_party/r8brain)
+target_link_libraries(tci_rx_converter_test PRIVATE Qt6::Core)
+add_test(NAME tci_rx_converter_test COMMAND tci_rx_converter_test)
+
 if(Qt6WebSockets_FOUND)
+
+    # Socket-free production TCI RX routing/encoding. The binary transport is
+    # injected; QWebSocket objects remain unopened and no radio is connected.
+    add_executable(tci_rx_audio_test tests/tci_rx_audio_test.cpp)
+    target_include_directories(tci_rx_audio_test PRIVATE src tests)
+    target_link_libraries(tci_rx_audio_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_rx_audio_test COMMAND tci_rx_audio_test)
 
     add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
     target_include_directories(tci_trxmap_test PRIVATE src)
@@ -5802,8 +5917,11 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    tci_rx_audio_test
     bandscope_trace_render_test
     noise_floor_auto_adjust_gate_test
+    qso_recorder_rates_test
+    qso_recorder_playback_lifecycle_test
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
@@ -6206,3 +6324,43 @@ target_include_directories(opera_radar_corpus_test PRIVATE src tests)
 target_link_libraries(opera_radar_corpus_test PRIVATE aethercore Qt6::Core Qt6::Gui)
 add_test(NAME opera_radar_corpus_test COMMAND opera_radar_corpus_test)
 set_tests_properties(opera_radar_corpus_test PROPERTIES TIMEOUT 30)
+
+# Model-free algorithms and injected HTTP replies: no sockets, weights or ORT.
+add_executable(deepfist_committer_test tests/deepfist_committer_test.cpp)
+target_include_directories(deepfist_committer_test PRIVATE src)
+target_link_libraries(deepfist_committer_test PRIVATE Qt6::Core)
+add_test(NAME deepfist_committer_test COMMAND deepfist_committer_test)
+set_tests_properties(deepfist_committer_test PROPERTIES TIMEOUT 20)
+add_executable(deepfist_model_assets_test
+    tests/deepfist_model_assets_test.cpp
+    src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h)
+target_include_directories(deepfist_model_assets_test PRIVATE src tests)
+target_compile_definitions(deepfist_model_assets_test PRIVATE DEEPFIST_MODEL_BASE_URL="")
+target_link_libraries(deepfist_model_assets_test PRIVATE Qt6::Core Qt6::Network Qt6::Concurrent)
+add_test(NAME deepfist_model_assets_test COMMAND deepfist_model_assets_test)
+set_tests_properties(deepfist_model_assets_test PROPERTIES TIMEOUT 20)
+
+# Opt-in real backend: file/PCM tests only; no sockets or sound devices.
+if(ENABLE_DEEPFIST_EXPERIMENT)
+    add_executable(deepfist_cw_model_test tests/deepfist_cw_model_test.cpp)
+    target_include_directories(deepfist_cw_model_test PRIVATE src third_party/deepfist)
+    target_link_libraries(deepfist_cw_model_test PRIVATE aethercore Qt6::Core)
+    add_test(NAME deepfist_cw_model_test COMMAND deepfist_cw_model_test)
+    add_test(NAME deepfist_carrier_regression_test COMMAND deepfist_cw_model_test --carrier)
+    add_test(NAME deepfist_cw_churn_test COMMAND deepfist_cw_model_test --churn)
+    set_tests_properties(deepfist_cw_churn_test deepfist_carrier_regression_test PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 120)
+    add_test(NAME deepfist_cw_model_inference_test COMMAND deepfist_cw_model_test --infer)
+    add_test(NAME deepfist_cw_model_download_inference_test COMMAND deepfist_cw_model_test --download-infer)
+    set_tests_properties(deepfist_cw_model_test PROPERTIES TIMEOUT 15)
+    set_tests_properties(deepfist_cw_model_inference_test deepfist_cw_model_download_inference_test PROPERTIES
+        SKIP_RETURN_CODE 77 TIMEOUT 60)
+endif()
+
+
+# Socket-free production RX facade: selection and lifecycle without model downloads.
+add_executable(cw_rx_model_test tests/cw_rx_model_test.cpp)
+target_include_directories(cw_rx_model_test PRIVATE src)
+target_link_libraries(cw_rx_model_test PRIVATE aethercore Qt6::Core)
+add_test(NAME cw_rx_model_test COMMAND cw_rx_model_test)
+set_tests_properties(cw_rx_model_test PROPERTIES TIMEOUT 15)

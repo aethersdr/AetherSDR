@@ -13,7 +13,7 @@
 #include "MainWindowHelpers.h"
 #include "WindowGeometryRestore.h"
 
-#include "CwDecodeSettings.h"
+#include "models/CwDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
@@ -1758,7 +1758,7 @@ MainWindow::MainWindow(QWidget* parent)
     // cwRecordingActiveChanged opens the recorder's TX gate for our CW — driven
     // by our own keyer, so another client's TX never gates our recorder.
     connect(m_audio, &AudioEngine::cwSidetoneRecordPcmReady,
-            m_qsoRecorder, &QsoRecorder::feedTxAudio);
+            m_qsoRecorder, &QsoRecorder::feedCwAudio);
     connect(m_audio, &AudioEngine::cwRecordingActiveChanged,
             m_qsoRecorder, &QsoRecorder::setCwOverActive);
     // Queued, unlike the two direct connections below: setCwOverActive reaches
@@ -2730,6 +2730,9 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+#ifdef HAVE_DEEPFIST
+    m_cwDecoder.stop();
+#endif
     ShutdownTrace destructorTrace("main_window.destructor_body");
     qApp->removeEventFilter(this);
 
@@ -8911,6 +8914,9 @@ void MainWindow::setActivePanApplet(PanadapterApplet* applet)
 // so decoded text appears in the correct pan's CW widget (#864).
 void MainWindow::routeCwDecoderOutput()
 {
+#ifdef HAVE_DEEPFIST
+    refreshCwRxContext();
+#endif
     // Determine which applet should receive CW decoder output:
     // the pan that owns the active audio slice (whose audio feeds the decoder).
     PanadapterApplet* target = nullptr;
@@ -8930,24 +8936,32 @@ void MainWindow::routeCwDecoderOutput()
         // decoder target. Hide it before dropping ownership so a later refresh
         // cannot leave an orphaned CW dock on the old pan (#4409).
         m_cwDecoderApplet->setCwPanelVisible(false);
-        disconnect(&m_cwDecoder, &CwDecoder::textDecoded,
+#ifdef HAVE_DEEPFIST
+        disconnect(m_cwDecoderApplet, &PanadapterApplet::cwEngineChanged,
+                   this, &MainWindow::selectCwRxBackend);
+        disconnect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
+                   this, &MainWindow::cwRxModelAction);
+        disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
+                   &m_cwDecoder, &CwRxModel::stop);
+#endif
+        disconnect(&m_cwDecoder, &CwRxModel::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         disconnect(&m_cwDecoderTx, &CwDecoder::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwTextTx);
-        disconnect(&m_cwDecoder, &CwDecoder::statsUpdated,
+        disconnect(&m_cwDecoder, &CwRxModel::statsUpdated,
                    m_cwDecoderApplet, &PanadapterApplet::setCwStats);
         if (auto* pb = m_cwDecoderApplet->lockPitchButton())
             disconnect(pb, &QPushButton::toggled,
-                       &m_cwDecoder, &CwDecoder::lockPitch);
+                       &m_cwDecoder, &CwRxModel::lockPitch);
         if (auto* sb = m_cwDecoderApplet->lockSpeedButton())
             disconnect(sb, &QPushButton::toggled,
-                       &m_cwDecoder, &CwDecoder::lockSpeed);
+                       &m_cwDecoder, &CwRxModel::lockSpeed);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
-                   &m_cwDecoder, &CwDecoder::setPitchRange);
+                   &m_cwDecoder, &CwRxModel::setPitchRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
-                   &m_cwDecoder, &CwDecoder::setSpeedRange);
+                   &m_cwDecoder, &CwRxModel::setSpeedRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                   &m_cwDecoder, &CwDecoder::stop);
+                   &m_cwDecoder, &CwRxModel::stop);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                    &m_cwDecoderTx, &CwDecoder::stop);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
@@ -8962,35 +8976,35 @@ void MainWindow::routeCwDecoderOutput()
 
     // Connect to new applet
     if (m_cwDecoderApplet) {
-        connect(&m_cwDecoder, &CwDecoder::textDecoded,
+        connect(&m_cwDecoder, &CwRxModel::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         // TX-side decoded text routes to a separate slot so the panel
         // can render it with a [TX] prefix and distinct color (#2417).
         connect(&m_cwDecoderTx, &CwDecoder::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwTextTx);
-        connect(&m_cwDecoder, &CwDecoder::statsUpdated,
+        connect(&m_cwDecoder, &CwRxModel::statsUpdated,
                 m_cwDecoderApplet, &PanadapterApplet::setCwStats);
 #ifdef HAVE_MQTT
-        m_cwStatsConn = connect(&m_cwDecoder, &CwDecoder::statsUpdated,
+        m_cwStatsConn = connect(&m_cwDecoder, &CwRxModel::statsUpdated,
                 this, [this](float pitchHz, float speedWpm) {
             m_cwLastPitchHz   = pitchHz;
             m_cwLastSpeedWpm  = speedWpm;
         });
 #endif
         connect(m_cwDecoderApplet->lockPitchButton(), &QPushButton::toggled,
-                &m_cwDecoder, &CwDecoder::lockPitch);
+                &m_cwDecoder, &CwRxModel::lockPitch);
         connect(m_cwDecoderApplet->lockSpeedButton(), &QPushButton::toggled,
-                &m_cwDecoder, &CwDecoder::lockSpeed);
+                &m_cwDecoder, &CwRxModel::lockSpeed);
         connect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
-                &m_cwDecoder, &CwDecoder::setPitchRange);
+                &m_cwDecoder, &CwRxModel::setPitchRange);
         m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(),
                                   m_cwDecoderApplet->pitchRangeHigh());
         connect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
-                &m_cwDecoder, &CwDecoder::setSpeedRange);
+                &m_cwDecoder, &CwRxModel::setSpeedRange);
         m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(),
                                   m_cwDecoderApplet->speedRangeHigh());
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                &m_cwDecoder, &CwDecoder::stop);
+                &m_cwDecoder, &CwRxModel::stop);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                 &m_cwDecoderTx, &CwDecoder::stop);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
@@ -9039,6 +9053,9 @@ void MainWindow::refreshCwDecodeState()
     // RX decoder runs only when RX-decode is on and the operator is
     // listening to a CW slice.  Non-CW slices feed unrelated audio,
     // and the panel is hidden anyway.
+#ifdef HAVE_DEEPFIST
+    refreshCwRxBackend();
+#endif
     const bool shouldRunRx = isCw && rxOn;
     if (shouldRunRx && !m_cwDecoder.isRunning())
         m_cwDecoder.start();

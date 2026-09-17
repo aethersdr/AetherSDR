@@ -2667,7 +2667,7 @@ on:
 Every consumer is hard-wired to exactly one bus at `connect()` time. Speaker
 audio and TCI were each ported to bus C individually, as separate patches
 (`MainWindow_Session.cpp`, the `wireDiscovery` relay and the
-`backendAudioFrameReady → onDaxAudioReady(1, …)` bridge). Nothing else was, so
+`backendSliceAudioFrameReady → onSlicePcmReady(...)` bridge). Nothing else was, so
 everything else on bus A or B binds to a null stream and silently does nothing.
 
 **This is gap-class 15 in §6's terms, and it is the single largest one left.**

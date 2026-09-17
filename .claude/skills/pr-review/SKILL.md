@@ -154,8 +154,26 @@ the shape the bullet above routes a simulator closed loop to — see
   check the branch out in a **new scratch worktree** if you need to build.
 - CI: note failing/passing checks and whether CI ran against a stale merge
   base. Check the workflow trigger before drawing conclusions: a
-  `pull_request` trigger tests the *merge* result, so a green check already
-  includes current main; a `push`-triggered check on the branch does not.
+  `pull_request` trigger tests the *merge* result — `main` + this PR **as
+  `main` stood when that run was created**, which is not the same as current
+  `main`; a `push`-triggered check on the branch never included `main` at all.
+  Creation, not job start: `github.sha` is frozen when the run is created
+  (`static-checks.yml:297`) and no checkout overrides it, so a job that sat in
+  the queue still built the older tree. Compare the **earliest run creation**
+  on the head against `main`'s tip:
+
+  ```sh
+  gh api --paginate \
+    "repos/aethersdr/AetherSDR/actions/runs?head_sha=<headOid>" \
+    --jq '.workflow_runs[] | "\(.created_at)\t\(.name)"' | sort | head -1
+  gh api repos/aethersdr/AetherSDR/commits/main --jq .commit.committer.date
+  ```
+
+  If `main` is newer, the green describes a merge that no longer exists, and
+  any conclusion you draw from it inherits that. `main` has `strict: false`, so
+  nothing forces a rerun to close the gap — say so in the report rather than
+  reporting the checks as green without qualification. /pr-land turns the same
+  comparison into a gate before it arms auto-merge.
 
 ## 2. Linked issue → does the PR actually solve it?
 

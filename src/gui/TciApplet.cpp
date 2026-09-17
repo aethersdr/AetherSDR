@@ -324,7 +324,7 @@ void TciApplet::setRadioModel(RadioModel* model)
     // fans out to both DaxBridge and TciServer), so reuse the DAX channel
     // assignments for the slice letters here. The TCI receiver (trx) index is
     // NOT capped at 4: trx is a positional slice index bounded by
-    // slices.size() (up to 8 on a 6700), and TciServer::onDaxAudioReady /
+    // slices.size() (up to 8 on a 6700), and TciServer::onDaxPcmReady /
     // setRxChannelGain already span channels 1-8 — so DAX 5-8 do have TCI
     // representation. (The old "RX1-4" was stale from the 4-DAX era.)
     auto updateRxLabels = [this]() {
