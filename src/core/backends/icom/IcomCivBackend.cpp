@@ -2476,7 +2476,27 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
         }
         case func::kAgc: {
             // 01 FAST, 02 MID, 03 SLOW.
+            //
+            // DROPPED, BUT NOT IN SILENCE. Unlike the 1C 00 PTT readback --
+            // where an unparseable payload still has to reach the publish path,
+            // because "we do not understand this" and "not keyed" are different
+            // answers and only one of them is safe to swallow -- there is no
+            // honest agcMode to publish here. The decode below collapses every
+            // value that is not 01 or 03 to "med", so publishing an off-shape
+            // payload would invent a setting the radio never reported, and
+            // capabilities().agcModes has no representation for anything else
+            // anyway. So: drop the value, log the payload, and record no
+            // confirmation (#5516 review).
+            //
+            // civ.22.18 gates trackedStateReady, so a radio that answered this
+            // way persistently would hold readiness false. No profiled model
+            // does; if one turns up, the fix is a decode for whatever it means,
+            // not a fabricated default.
             if (frame.data.size() != 1 || v < 1 || v > 3) {
+                qCWarning(lcIcomScheduler)
+                    << "AGC readback has an unexpected payload; not publishing"
+                    << "and not recording a confirmation. bytes ="
+                    << frame.data.size() << "first =" << int(v);
                 return;
             }
             confirmState(QStringLiteral("civ.22.18"), v);
@@ -3139,7 +3159,7 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // this hot: it is indistinguishable, to every consumer, from the
             // state having just changed.
             if (wellFormed) {
-                confirmState(QStringLiteral("ptt"), keyed);
+                confirmState(QStringLiteral("ptt"), keyed, acceptedReadback);
             }
             if (keyed == m_keyed && !republishContradiction) {
                 if (acceptedReadback) {
@@ -3743,13 +3763,22 @@ void IcomCivBackend::pumpCiv(qint64 nowMs)
     serviceSchedulerWaiters(nowMs);
 }
 
-void IcomCivBackend::confirmState(const QString& key, const QVariant& value)
+void IcomCivBackend::confirmState(const QString& key, const QVariant& value,
+                                  bool accepted)
 {
     // Called after decode, and after the stale-generation and PTT-intent
     // rejections in onCivFrame — with one structural exception: a stale frame
     // that ARRIVES WHILE A PTT INTENT IS PENDING and agrees with that intent
     // reaches here, because the Stale check is an `else if` on the intent
     // branch. ACKs, setters and control-map "seen" counters never confirm.
+    //
+    // `accepted` is what separates the two. Everything reached through the
+    // ordinary decode path is an Accepted (or unsolicited-but-current)
+    // observation; only that one PTT case can arrive Stale. It is recorded
+    // rather than filtered because the publication is still radio truth and
+    // Constitution VI will not have it suppressed — but a consumer citing this
+    // as PROOF of an unkey needs to know which it got, so `stateFreshness`
+    // exports it and the TX harness requires it (#5516 review).
     //
     // `pending` has no timer, and does not need one only because every tracked
     // key is reconciled by something: sendUserCommand() queues confirmationFor()
@@ -3763,7 +3792,8 @@ void IcomCivBackend::confirmState(const QString& key, const QVariant& value)
         && previous != m_confirmedState.cend() && previous->value != value) {
         ++m_stateContext;
     }
-    m_confirmedState[key] = {value, nowMs(), m_sessionGeneration, m_stateContext, false};
+    m_confirmedState[key] = {value, nowMs(), m_sessionGeneration, m_stateContext,
+                             false, accepted};
 }
 
 QVariantMap IcomCivBackend::stateFreshness() const
@@ -3778,16 +3808,31 @@ QVariantMap IcomCivBackend::stateFreshness() const
         const qint64 age = known ? std::max<qint64>(0, nowMs() - it->atMs) : -1;
         const bool current = known && m_connected && it->session == m_sessionGeneration
             && it->context == m_stateContext;
-        const QString status = it != m_confirmedState.cend() && it->pending ? QStringLiteral("pending")
-            : !known ? QStringLiteral("never-confirmed")
+        // `pending` IS ITS OWN AXIS, not the top of the ladder. Ranking it above
+        // every other branch meant an outstanding write hid the real state:
+        // squelch is the one tracked key nothing re-polls outside the MK2
+        // profile, so a `civ.20.3` write whose confirmation read was lost to a
+        // timeout or a scheduler reset reported `pending` for the rest of the
+        // session and never aged to `stale` — the opposite of what
+        // docs/automation-bridge.md promises (#5516 review).
+        const bool pending = it != m_confirmedState.cend() && it->pending;
+        const QString status = !known ? QStringLiteral("never-confirmed")
             : !current ? QStringLiteral("previous-context")
             : age > kFreshMs ? QStringLiteral("stale") : QStringLiteral("confirmed");
         if (tracked.gatesReadiness) {
-            ready = ready && status == QLatin1String("confirmed");
+            // A write in flight still withholds readiness: intent is not
+            // evidence. That part of the old ladder was right.
+            ready = ready && !pending && status == QLatin1String("confirmed");
         }
         fields.insert(QString::fromLatin1(tracked.label), QVariantMap{
             {QStringLiteral("status"), status}, {QStringLiteral("ageMs"), age},
             {QStringLiteral("value"), known ? it->value : QVariant()},
+            {QStringLiteral("pending"), pending},
+            // Whether the confirming frame was an ACCEPTED observation. Always
+            // true except on the one PTT path that can record a Stale frame;
+            // an unkey proof must require it.
+            {QStringLiteral("accepted"),
+             it != m_confirmedState.cend() && it->accepted},
             // Say which fields the roll-up actually depends on, so a reader
             // never has to infer it from a table that may change.
             {QStringLiteral("gatesReadiness"), tracked.gatesReadiness},
@@ -3813,15 +3858,25 @@ QVariantMap IcomCivBackend::schedulerDiagnostics(std::size_t traceLimit) const
     QVariantMap out;
     out.insert(QStringLiteral("backendInstanceId"), m_diagnosticInstanceId);
     out.insert(QStringLiteral("stateFreshness"), stateFreshness());
-    const auto& history = m_civScheduler.recentTransactions();
     // Callers that already publish their own trace (incidentSnapshot) or that
     // only need the freshness block pass a shallow limit. Only the explicit
     // `civ scheduler` verb asks for the full ring.
-    out.insert(QStringLiteral("transactions"), schedulerTransactionTrace(traceLimit));
+    const QVariantList trace = schedulerTransactionTrace(traceLimit);
+    out.insert(QStringLiteral("transactions"), trace);
+    // THE ENDPOINTS DESCRIBE THE ROWS RETURNED, not the whole ring. Taking them
+    // from the ring instead meant a truncated reply — `freshness`, which the TX
+    // harness polls on its unkey loop, and incidentSnapshot, both of which pass
+    // 0 — still advertised all 128 event IDs. A collector following the rule
+    // this repo documents (dedupe on backendInstanceId+eventId; read a jump as
+    // an evidence gap) would then mark events covered on the strength of a
+    // reply that deliberately omitted them (#5516 review).
+    const auto endpointId = [](const QVariant& row) {
+        return row.toMap().value(QStringLiteral("eventId")).toULongLong();
+    };
     out.insert(QStringLiteral("firstRetainedEventId"),
-        QVariant::fromValue<qulonglong>(history.empty() ? 0 : history.front().eventId));
+        QVariant::fromValue<qulonglong>(trace.isEmpty() ? 0 : endpointId(trace.front())));
     out.insert(QStringLiteral("lastRetainedEventId"),
-        QVariant::fromValue<qulonglong>(history.empty() ? 0 : history.back().eventId));
+        QVariant::fromValue<qulonglong>(trace.isEmpty() ? 0 : endpointId(trace.back())));
     out.insert(QStringLiteral("idle"), m_civScheduler.idle());
     out.insert(QStringLiteral("slotMs"), IcomCivScheduler::kSlotMs);
     out.insert(QStringLiteral("readTimeoutMs"), IcomCivScheduler::kReadTimeoutMs);

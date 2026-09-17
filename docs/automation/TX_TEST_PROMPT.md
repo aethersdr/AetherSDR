@@ -125,7 +125,11 @@ is confirmed before restoring power; unknown TX flags never count as unkeyed.
 Where the backend answers `civ scheduler freshness` with a `stateFreshness`
 block, model flags alone are insufficient: the harness additionally requires
 `stateFreshness.fields.ptt` to report a confirmed false value received during
-that unkey observation window and younger than 500 ms. The gate is keyed on the
+that unkey observation window and younger than 500 ms, carrying
+`accepted: true` and `pending: false`. `accepted` is what separates a real
+readback from a stale frame that merely agreed with the pending unkey intent;
+the backend publishes both, and only the first is proof. An app build that does
+not report the field fails closed. The gate is keyed on the
 backend answering, not on a radio name. A backend without CI-V diagnostics — or
 an older app build — takes the flags-only path.
 

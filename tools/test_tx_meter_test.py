@@ -219,18 +219,52 @@ def test_icom_unkey_requires_new_confirmed_ptt_off():
             if request.get("cmd") == "get":
                 return {"ok": True, "value": False}
             return {"ok": False, "error": "sim backend: unknown namespace 'icom'"}
+    fresh_off = {"status": "confirmed", "value": False, "ageMs": 0, "accepted": True}
     with patch.object(subject.time, "sleep"):
-        for state in ({}, {"status": "pending", "value": False, "ageMs": 0},
-                      {"status": "confirmed", "value": True, "ageMs": 0},
-                      {"status": "confirmed", "value": False, "ageMs": 400}):
+        for state in ({},
+                      {"status": "pending", "value": False, "ageMs": 0, "accepted": True},
+                      {"status": "confirmed", "value": True, "ageMs": 0, "accepted": True},
+                      {"status": "confirmed", "value": False, "ageMs": 400, "accepted": True},
+                      # A STALE frame that merely agreed with the pending unkey
+                      # intent. The backend publishes it -- Constitution VI will
+                      # not have an "still keyed" report suppressed -- but it is
+                      # not proof, and the gate must not open on it.
+                      {"status": "confirmed", "value": False, "ageMs": 0, "accepted": False},
+                      # An older app that never reports the field fails closed.
+                      {"status": "confirmed", "value": False, "ageMs": 0},
+                      # A write is still in flight: intent is not evidence.
+                      {**fresh_off, "pending": True}):
             check(not subject.Tx(CivBridge(state)).ensure_unkeyed(), state)
-        bridge = CivBridge({"status": "confirmed", "value": False, "ageMs": 0})
+        bridge = CivBridge(dict(fresh_off))
         check(subject.Tx(bridge).ensure_unkeyed(), "new confirmed PTT-off was rejected")
         # The gate is keyed on the backend answering, not on a display string,
         # and it asks for the freshness block rather than the transaction ring.
         check(all(r.get("value") == "freshness" for r in bridge.asked), bridge.asked)
         check(subject.Tx(PlainBridge()).ensure_unkeyed(),
               "a backend without CI-V diagnostics must not be held by the Icom gate")
+
+
+def test_wait_for_keyed_is_bounded_and_does_not_extend_the_window():
+    from unittest.mock import patch
+
+    class Keyer:
+        """Reports keyed on the Nth poll; never, if n_until is None."""
+        def __init__(self, n_until): self.n_until = n_until; self.polls = 0
+        def request(self, request):
+            self.polls += 1
+            keyed = self.n_until is not None and self.polls >= self.n_until
+            return {"ok": True, "value": keyed}
+
+    with patch.object(subject.time, "sleep"):
+        tx = subject.Tx(Keyer(3))
+        check(subject.wait_for_keyed(tx, subject.time.monotonic()),
+              "the keyed edge was not observed")
+        # Bounded: a radio that never keys falls through to the window's own
+        # deadlines, which are what produce the stop reason. It must not hang.
+        started = subject.time.monotonic()
+        check(not subject.wait_for_keyed(tx := subject.Tx(Keyer(None)), started, limit=0.2),
+              "a radio that never keys must not hold the harness")
+        check(subject.time.monotonic() - started < 1.0, "wait_for_keyed overran its limit")
 
 
 def test_alarming_sample_still_aborts_outside_the_post_key_window():
@@ -289,6 +323,7 @@ def test_old_swr_cannot_qualify_a_later_carrier_gap():
 if __name__ == "__main__":
     test_cw_swr_gap_requires_fresh_zero_carrier_and_prior_ratio()
     test_icom_unkey_requires_new_confirmed_ptt_off()
+    test_wait_for_keyed_is_bounded_and_does_not_extend_the_window()
     test_alarming_sample_still_aborts_outside_the_post_key_window()
     test_native_meter_reporting()
     test_previous_burst_sample_cannot_satisfy_safety()

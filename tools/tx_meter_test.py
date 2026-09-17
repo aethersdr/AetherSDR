@@ -93,7 +93,13 @@ class Tx:
                 # idle baseline. Polling/ACKs alone cannot release the guard.
                 ptt = freshness.get("fields", {}).get("ptt", {})
                 age = ptt.get("ageMs")
+                # `accepted` separates a real readback from a stale frame that
+                # merely agreed with the pending unkey intent -- the backend
+                # publishes both (Constitution VI forbids suppressing the
+                # second), but only the first is proof (#5516 review). An older
+                # app that does not report the field fails closed here.
                 if (ptt.get("status") == "confirmed" and ptt.get("value") is False
+                        and ptt.get("accepted") is True and not ptt.get("pending")
                         and type(age) in (int, float) and 0 <= age < SAFETY_FRESH_MS
                         and age <= (time.monotonic() - started) * 1000):
                     return True
@@ -167,6 +173,20 @@ def swr_gap_is_observed(meters, elapsed_ms, had_qualified_swr):
                     and age <= elapsed_ms for age in (power_age, swr_age)))
 
 
+def wait_for_keyed(tx, keyed_at, limit=1.5):
+    """Block until the radio reports keyed, or `limit` seconds from the command.
+
+    Bounded on purpose: a radio that never keys must fall through to the
+    window's own deadlines rather than hang here, and those deadlines are what
+    produce the stop reason. Returns whether the keyed edge was observed.
+    """
+    while time.monotonic() - keyed_at < limit:
+        if tx.tuning() or tx.txing():
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=None,
                   keyed_at=None):
     """Key-down meter sampling. Collect fresh fwd/swr/temp/volts and the freshest
@@ -227,7 +247,13 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
                 stop_reason = f"SWR {swr_val:.2f} exceeds {max_swr:.2f} ceiling"
             for name, values in (("PATEMP", temp), ("+13.8A", volts), ("ALC", alc)):
                 report = reported_meter(m, name, max_age_ms=min(FRESH_MS, elapsed * 1000))
-                meter_reports[name] = report
+                # The report that PRODUCED the aggregate, not whichever sample
+                # happened to be last. Overwriting every pass meant a meter that
+                # read fresh mid-burst and stale at the final sample returned a
+                # real `alc` beside meterReports["ALC"] = stale/None -- one JSON
+                # document retracting its own aggregate (#5516 review).
+                if report["value"] is not None or name not in meter_reports:
+                    meter_reports[name] = report
                 if report["value"] is not None:
                     if name == "ALC":
                         if alc_unit is not None and alc_unit != report["unit"]:
@@ -394,7 +420,8 @@ def main():
 
     # --- tune-power sweep ---
     print("\n=== TUNE-POWER SWEEP (windowed, freshness-gated) ===")
-    print(f"{'set%':>5} {'fwdW':>6} {'swr':>5} {'PAcur':>7} {'paTemp':>7} {'V':>6} {'ALC':>7} {'n':>3}")
+    print(f"{'set%':>5} {'fwdW':>6} {'swr':>5} {'PAcur':>7} {'paTemp':>7} {'V':>6} {'ALC':>7} "
+          f"{'unit':>7} {'n':>3}")
     rows = []
     abort = False
     try:
@@ -413,6 +440,13 @@ def main():
             response = tx.inv("Tune", "click")
             if response.get("ok") is not True:
                 raise RuntimeError("Tune command failed")
+            # TWO CLOCKS, ONE COMMAND. keyed_at is the FRESHNESS epoch: a sample
+            # older than the key command describes the previous burst and may
+            # not enter an aggregate. But the sampling WINDOW still starts at
+            # the keyed edge -- charging bridge round trip and radio key-up to
+            # the 0.9 s FWDPWR deadline would abort a healthy radio on a slow
+            # link and record it as guarded-stop evidence (#5516 review).
+            wait_for_keyed(tx, keyed_at)
             agg = sample_window(tx, max_watts=args.max_watts, max_swr=args.max_swr,
                                 guard=guard, keyed_at=keyed_at)
             tx.cmd(cmd="txtest", action="off")
@@ -447,6 +481,7 @@ def main():
             keyed_at = time.monotonic()
             r = tx.cmd(cmd="txtest", action="twotone")
             if r.get("ok"):
+                wait_for_keyed(tx, keyed_at)
                 agg = sample_window(tx, dur=1.2, max_watts=args.max_watts,
                                     max_swr=args.max_swr, guard=guard, keyed_at=keyed_at)
                 tx.cmd(cmd="txtest", action="off"); ok = tx.ensure_unkeyed()

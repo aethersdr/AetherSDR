@@ -104,9 +104,35 @@ int main(int argc, char** argv) {
     check(radioPaTemp().isDouble() && radioPaTemp().toDouble() == 0,
         "radioSnapshot reports a real zero-degree sample as zero");
     radio.meterModel().removeMeter(1);
+    // RE-READ the persist snapshot: the one captured above was built before
+    // PATEMP was ever declared, so asserting against it could not fail and
+    // pinned nothing about `radiocert persist` (#5516 review).
     check(radioPaTemp().isNull() && meters().value("paTemp").isNull()
-        && persist.value("radio").toObject().value("paTemp").isNull(),
+        && request("radiocert persist").value("radio").toObject()
+               .value("paTemp").isNull(),
         "an undeclared sensor is null in radioSnapshot exactly as in get meters");
+
+    // THE SUPPORT-BUNDLE SURFACE ANSWERS THE SAME WAY. troubleshootingSnapshot()
+    // is what an operator pastes into a support thread, and it read the scalar
+    // directly -- so a radio with no temperature meter at all (every Icom)
+    // reported "PA 0.00 C" as a measurement while `get meters` next door said
+    // `unsupported` (#5516 review).
+    const auto troubleshooting = [&]() {
+        return radio.troubleshootingSnapshot().value("radio").toObject()
+            .value("telemetry").toObject();
+    };
+    check(troubleshooting().value("pa_temp_c").isNull()
+        && troubleshooting().value("supply_volts").isNull(),
+        "an undeclared sensor is null in the troubleshooting snapshot too");
+    MeterDef again;
+    again.index = 2; again.source = "RAD"; again.name = "PATEMP"; again.unit = "degC";
+    radio.meterModel().defineMeter(again);
+    check(troubleshooting().value("pa_temp_c").isNull(),
+        "a declared but never-fed sensor is still null there");
+    radio.meterModel().updateValueByName("RAD", "PATEMP", 41.5f);
+    check(troubleshooting().value("pa_temp_c").toDouble() == 41.5,
+        "a real reading is reported as itself");
+    radio.meterModel().removeMeter(2);
 
     // CAPABILITY-SHAPED, NOT FAMILY-SHAPED. The refusal must follow "this
     // backend has no two-tone generator", which is what makes it cover HL2 and
@@ -124,7 +150,22 @@ int main(int argc, char** argv) {
         && !radio.transmitModel().isTuning(),
         "a non-Icom family without a two-tone route is refused just the same");
     radio.setBackendForTest(std::make_unique<StubBackend>(QVariantList{}, /*twoTone=*/true), "icom");
-    check(!request("txtest twotone").value("error").toString().contains("not implemented"),
-        "and a backend that DOES declare the generator is not refused by family");
+    // ASSERT THE ORDERING, not merely the absence of one refusal string: the
+    // previous form was satisfied by ANY other error, so it could pass without
+    // the capability branch ever being taken. A declared generator must clear
+    // the capability gate and stop at the NEXT one instead -- which pins both
+    // halves of the claim, that the check is capability-shaped and that it sits
+    // in front of the TX gate (#5516 review).
+    //
+    // m_txAllowed is read in AutomationServer::start(), which this harness
+    // never calls, so the TX gate is closed here regardless of the environment
+    // and nothing in this file can key anything (Principle VI).
+    const auto allowed = request("txtest twotone");
+    check(!allowed.value("ok").toBool()
+        && !allowed.value("error").toString().contains("not implemented")
+        && allowed.value("error").toString().contains("AETHER_AUTOMATION_ALLOW_TX"),
+        "a declared generator clears the capability gate and stops at the TX gate");
+    check(!radio.transmitModel().isTuning() && !radio.transmitModel().isMox(),
+        "and nothing along that path keyed the transmitter");
     return failures ? 1 : 0;
 }

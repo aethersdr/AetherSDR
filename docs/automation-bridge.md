@@ -1088,11 +1088,25 @@ payload. Its `stateFreshness` separates `transportConnected`, CI-V `identified`,
 and `trackedStateReady`. The six tracked fields are selected-VFO frequency,
 mode/DATA/filter tuple (decimal wire codes), squelch percent, AGC code, RF power
 percent, and PTT. Each has a last decoded value, age, semantic key and status:
-`never-confirmed`, `pending`, `previous-context`, `stale`, or `confirmed`.
+`never-confirmed`, `previous-context`, `stale`, or `confirmed`, plus two
+independent booleans. **`pending`** means a write is in flight — it withholds
+`trackedStateReady` but does not mask `status`, which keeps describing the last
+confirmed value's age. **`accepted`** says the confirming frame was an accepted
+observation; it is true everywhere except the one PTT case where a stale reply
+agreeing with a pending unkey intent still publishes (Constitution VI forbids
+suppressing a "still keyed" report) without being proof. A consumer citing PTT
+as evidence of an unkey must require `accepted` and reject `pending`.
 Only validated receive publications refresh these fields, including unchanged
 replies. A setter or generic ACK cannot confirm them. Frequency/mode/filter
 changes and outgoing VFO select/exchange invalidate the prior context; session
-changes invalidate old observations. The diagnostic age budget is 5000 ms and
+changes invalidate old observations. **Context invalidation is deliberately
+coarser than the physical coupling:** a frequency change also sends `agcCode`,
+`rfPowerPercent` and `ptt` to `previous-context`, which a frequency change
+cannot actually affect. That is conservative rather than wrong — those fields
+were last observed under a context that no longer holds — but it means
+`trackedStateReady` flaps while an operator is tuning, and recovers only as
+`onLinkTick` re-polls each field. Any readiness timing quoted from a **no-action
+window does not describe a station in use.** The diagnostic age budget is 5000 ms and
 does not change polling or authorize TX.
 
 `trackedStateReady` is the conjunction of the fields whose per-field
@@ -3831,8 +3845,10 @@ producer in isolation:
 
 The scheduler also returns up to 128 `transactions`, `firstRetainedEventId`,
 `lastRetainedEventId`, and `stateFreshness` (see Persist above). `civ scheduler
-freshness` returns the same reply with an empty `transactions` list, for callers
-that only need the confirmation block — the TX harness polls it that way on its
+freshness` returns the same reply with an empty `transactions` list — and with
+`firstRetainedEventId`/`lastRetainedEventId` describing **the rows actually
+returned**, so a truncated reply never advertises coverage of events it omitted
+— for callers that only need the confirmation block — the TX harness polls it that way on its
 unkey path rather than pulling the whole ring to read one field. Deduplicate
 completion events by `backendInstanceId` plus `eventId`, never by semantic
 `key`/`generation`/`completion`: periodic polls reuse those three fields.

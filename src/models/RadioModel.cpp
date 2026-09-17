@@ -12872,8 +12872,16 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     radio["network"] = network;
 
     QJsonObject telemetry;
-    telemetry["pa_temp_c"] = m_meterModel.paTemp();
-    telemetry["supply_volts"] = m_meterModel.supplyVolts();
+    // AN ABSENT SENSOR IS NOT 0 C, and this snapshot is what an operator pastes
+    // into a support thread. A radio that declares no PATEMP/"+13.8A" meter --
+    // every Icom, for temperature -- left the scalar at its 0.0f initialiser
+    // and this line printed it as a measurement. Same rule the TX group below
+    // already follows for SWR, and the one RadioCertification::meterSnapshot()
+    // applies by omitting a meter it has no index for (#5516).
+    telemetry["pa_temp_c"] = m_meterModel.hasPaTemp()
+        ? QJsonValue(m_meterModel.paTemp()) : QJsonValue();
+    telemetry["supply_volts"] = m_meterModel.hasSupplyVoltage()
+        ? QJsonValue(m_meterModel.supplyVolts()) : QJsonValue();
     telemetry["tx_forward_power_w"] = m_meterModel.fwdPower();
     // Null rather than a leftover ratio when the TX meters are stale — this
     // snapshot feeds support bundles, and a stale SWR reads as a live antenna

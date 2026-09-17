@@ -419,11 +419,16 @@ struct RadioCapabilities {
     bool hasCwTune = true;
 
     // The radio can generate a genuine TWO-TONE test signal, not merely a tune
-    // carrier. A RECORD rather than a bool, per #5262 M2: the interesting part
-    // is not the yes/no but the route, and the all-defaults-false trap is
-    // exactly the failure mode here — a backend that forgets to declare would
-    // otherwise report a confident "no two-tone" that nobody had considered.
-    // Absent means "not declared", which is also the correct refusal.
+    // carrier. A RECORD rather than a bool, per #5262 M2, for the FIRST of that
+    // milestone's two reasons only: the interesting part is not the yes/no but
+    // the route, and `selectionCommand` carries it. Absent refuses the verb.
+    //
+    // It does NOT buy the second reason. An engaged-or-not optional has no
+    // tri-state, so an explicit `= std::nullopt` and a backend that never
+    // mentions the field are byte-identical: a seventh backend added later
+    // would be indistinguishable from the five that declare absence
+    // deliberately. The ADDING A FIELD rule above is what actually covers that
+    // — set it explicitly in every backend, which all six do (#5516 review).
     //
     // This is a capability and not a family check because the question is about
     // the tune generator behind the verb, not the vendor: a Flex takes

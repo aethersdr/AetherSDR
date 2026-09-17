@@ -292,7 +292,8 @@ private:
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] QVariantMap schedulerDiagnostics(std::size_t traceLimit = 128) const;
-    void confirmState(const QString& key, const QVariant& value);
+    void confirmState(const QString& key, const QVariant& value,
+                      bool accepted = true);
     [[nodiscard]] QVariantMap stateFreshness() const;
     [[nodiscard]] QVariantList schedulerTransactionTrace(
         std::size_t limit = 32) const;
@@ -348,6 +349,11 @@ private:
         std::uint64_t session = 0;   // cleared with the session generation
         std::uint64_t context = 0;   // bumped by frequency/mode/VFO changes
         bool pending = false;        // a write is out; intent is not evidence
+        // Whether the frame that set this was an ACCEPTED observation. Only the
+        // PTT path can record a Stale one (a stale frame agreeing with a
+        // pending intent falls through the intent branch), and an unkey proof
+        // must be able to tell the two apart. See confirmState().
+        bool accepted = false;
     };
     // A fresh UUID per backend instance, so a reader can tell a reconnect in the
     // same process from a continuation of the same observation stream.

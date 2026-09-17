@@ -472,11 +472,21 @@ int main(int argc, char** argv)
     check(field("squelchPercent").value("status") == "confirmed",
           "unchanged valid replies refresh their own field");
     IcomCivBackendTestAccess::intent(freshBackend, cmdSetLevel(ic705->civAddress, level::kSquelch, 60));
-    check(field("squelchPercent").value("status") == "pending",
+    // PENDING IS ITS OWN AXIS. The write is in flight, so `pending` is true and
+    // readiness is withheld -- but `status` keeps telling the truth about the
+    // last confirmed value's age instead of being masked. Ranking `pending`
+    // above every other branch let squelch, the one tracked key nothing
+    // re-polls off the MK2 profile, latch `pending` for a whole session.
+    check(field("squelchPercent").value("pending").toBool()
+              && field("squelchPercent").value("status") == "confirmed",
           "write intent cannot masquerade as radio confirmation");
     deliver(0xFB, false, 0, {});
-    check(field("squelchPercent").value("status") == "pending",
+    check(field("squelchPercent").value("pending").toBool(),
           "generic ACK cannot confirm a state value");
+    IcomCivBackendTestAccess::age(freshBackend, QStringLiteral("civ.20.3"));
+    check(field("squelchPercent").value("pending").toBool()
+              && field("squelchPercent").value("status") == "stale",
+          "an unanswered write does not stop its field ageing out");
     deliver(0x14, true, 0x03, {0x00, 0x60});
     deliver(0x03, false, 0, {0x00, 0x00, 0x20, 0x07, 0x00});
     deliver(0x26, true, 0, {0x01, 0x00, 0x01});
@@ -501,7 +511,9 @@ int main(int argc, char** argv)
         cmdSetLevel(ic705->civAddress, level::kSquelch, 60));
     const QVariantMap unknownSql = IcomCivBackendTestAccess::freshness(neverConfirmed)
         .value("fields").toMap().value("squelchPercent").toMap();
-    check(unknownSql.value("status") == "pending" && !unknownSql.value("value").isValid(),
+    check(unknownSql.value("pending").toBool()
+              && unknownSql.value("status") == "never-confirmed"
+              && !unknownSql.value("value").isValid(),
           "a first write records pending intent without inventing a confirmed value");
     check(!snapshot().value("backendInstanceId").toString().isEmpty()
         && snapshot().value("backendInstanceId") != IcomCivBackendTestAccess::freshness(neverConfirmed).value("backendInstanceId"),
@@ -604,5 +616,14 @@ int main(int argc, char** argv)
     check(pttField().value("status") == "confirmed"
               && pttField().value("value").toBool() == false,
           "a well-formed PTT-off readback does confirm");
+    // ...and says it was an ACCEPTED observation, which is what the TX harness
+    // requires before it will call a radio unkeyed. The one frame that can land
+    // here Stale -- a stale reply agreeing with a pending unkey intent -- still
+    // publishes (Constitution VI) but reports accepted:false, and
+    // tools/test_tx_meter_test.py pins that the gate refuses it.
+    check(pttField().value("accepted").toBool(),
+          "an accepted PTT readback is labelled as one");
+    check(!pttField().value("pending").toBool(),
+          "a confirmed PTT field carries no outstanding write");
     return failures == 0 ? 0 : 1;
 }

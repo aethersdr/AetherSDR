@@ -2245,6 +2245,14 @@ QJsonObject meterObservation(const QJsonArray& meters, const QString& name)
 {
     QJsonObject selected;
     bool supported = false;
+    // ANY flagged row, not merely the freshest one. metersSnapshot's own
+    // contract says duplicate-named meters are routine ("one live, one
+    // floored"), so testing `reliable` on `selected` alone let a name whose
+    // flagged row was not the freshest come back `fresh` here while
+    // reported_meter() — which tests every row, before it picks one — answered
+    // `unreliable`. That is the bridge/harness disagreement this pair exists to
+    // prevent (#5516 review).
+    bool trusted = true;
     for (const QJsonValue& item : meters) {
         const QJsonObject row = item.toObject();
         if (row.value(QStringLiteral("name")).toString() != name
@@ -2252,6 +2260,9 @@ QJsonObject meterObservation(const QJsonArray& meters, const QString& name)
             continue;
         }
         supported = true;
+        if (row.value(QStringLiteral("reliable")) == QJsonValue(false)) {
+            trusted = false;
+        }
         if (selected.isEmpty() || (row.value(QStringLiteral("has_value")).toBool()
             && (!selected.value(QStringLiteral("has_value")).toBool()
                 || row.value(QStringLiteral("age_ms")).toDouble()
@@ -2265,8 +2276,12 @@ QJsonObject meterObservation(const QJsonArray& meters, const QString& name)
     // come back as a qualified reading: `reported_meter()` in
     // tools/tx_meter_test.py rejects those first, and the two halves of one
     // idea have to agree or the harness and the bridge disagree about one row.
-    // Today only PACURRENT on a FLEX-8xxx is ever flagged.
-    const bool trusted = selected.value(QStringLiteral("reliable")) != QJsonValue(false);
+    // Today only PACURRENT on a FLEX-8xxx is ever flagged. `trusted` is
+    // accumulated across every matching row above, exactly as the twin does.
+    //
+    // `unit` and `ageMs` deliberately keep a placeholder ("" and -1) where the
+    // Python twin carries None: this is the bridge contract documented in
+    // docs/automation-bridge.md, where a key holds one type for every status.
     const bool fresh = fed && trusted && age < kVitalsFreshMs;
     // An undefined QJsonValue is DROPPED on insert rather than stored as null,
     // so default the unit: otherwise an unsupported vital omits the key while
@@ -8942,6 +8957,13 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             return err(QStringLiteral("radiocert persist takes no arguments; use tools/radiocert_persist.py"));
         }
         const RadioCapabilities caps = m_radioModel->backendCapabilities();
+        // ASK THE BACKEND, DO NOT SNIFF THE FAMILY -- the same rule this change
+        // applied to tools/tx_meter_test.py's unkey gate. doCiv() already
+        // reports an unimplemented verb rather than answering, so a backend
+        // with no CI-V diagnostics yields {} without a hardcoded family string,
+        // and a future CI-V backend under another family name still gets its
+        // diagnostics into the certification snapshot (#5516 review).
+        const QJsonObject civDiagnostics = doCiv(QStringLiteral("scheduler"), {});
         return QJsonObject{
             {QStringLiteral("ok"), true},
             {QStringLiteral("phase"), QStringLiteral("persist")},
@@ -8955,8 +8977,9 @@ QJsonObject AutomationServer::doRadioCert(const QString& phaseArg, const QString
             {QStringLiteral("settingsDirectory"), SettingsPaths::configDir()},
             {QStringLiteral("family"), m_radioModel->family()},
             {QStringLiteral("clientSettingsDomains"), static_cast<int>(caps.clientSettingsDomains)},
-            {QStringLiteral("backendDiagnostics"), m_radioModel->family() == QLatin1String("icom")
-                ? doCiv(QStringLiteral("scheduler"), {}) : QJsonObject{}},
+            {QStringLiteral("backendDiagnostics"),
+             civDiagnostics.value(QStringLiteral("ok")).toBool() ? civDiagnostics
+                                                                 : QJsonObject{}},
             {QStringLiteral("radio"), radioSnapshot(m_radioModel)},
             {QStringLiteral("slices"), doGet(QStringLiteral("slices"), {}, {}).value(QStringLiteral("slices"))},
             {QStringLiteral("pans"), doGet(QStringLiteral("pans"), {}, {}).value(QStringLiteral("pans"))},
