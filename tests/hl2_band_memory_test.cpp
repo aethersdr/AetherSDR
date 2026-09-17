@@ -27,6 +27,8 @@
 
 using AetherSDR::hl2::bandMemoryWriteback;
 using AetherSDR::hl2::connectLna;
+using AetherSDR::hl2::ConnectLna;
+using AetherSDR::hl2::migrateStoredLnaDb;
 
 namespace {
 
@@ -40,10 +42,17 @@ void check(bool ok, const char* what)
     }
 }
 
-// This station's clamp, from Hl2Backend's kLnaGainMinDb/kLnaGainMaxDb.
-constexpr int kMin = -12;
-constexpr int kMax = 48;
-constexpr int kDefault = 20;
+// THE REAL CONSTANTS, not a hand-typed copy of them. This file used to carry
+// `kMax = 48` and `kDefault = 20` as its own literals and went on passing when
+// the backend's ceiling moved to +19 -- exercising a range the hardware no
+// longer has, and agreeing with itself while the clamp under test was never
+// reached. That is the failure Hl2BandMemoryPolicy.h's opening paragraph names,
+// committed by the test written to prevent it. (#5752 review, aethersdr-agent.)
+using AetherSDR::hl2::kLnaGainMaxDb;
+using AetherSDR::hl2::kLnaGainMinDb;
+constexpr int kMin = kLnaGainMinDb;
+constexpr int kMax = kLnaGainMaxDb;
+constexpr int kDefault = AetherSDR::hl2::kLnaDefaultGainDb;
 
 }  // namespace
 
@@ -73,11 +82,13 @@ int main()
     // What it does is mark the divergence, because the divergence is what the
     // band memory must not swallow.
     {
+        // 18, not 20: the param has to name a gain the radio can apply, or this
+        // case asserts the clamp rather than the precedence it is about.
         const auto seed = connectLna(/*haveRestoredState=*/true,
                                      /*hasStoredEntry=*/true, /*storedDb=*/-12,
-                                     /*paramPresent=*/true, /*paramDb=*/20,
+                                     /*paramPresent=*/true, /*paramDb=*/18,
                                      kDefault, kMin, kMax);
-        check(seed.liveDb == 20,
+        check(seed.liveDb == 18,
               "an explicit lnaGainDb param still wins the live value");
         check(seed.sessionPin,
               "and is marked a session pin, because the band stored -12");
@@ -150,14 +161,18 @@ int main()
     // These cases cover the shared policy. hl2_gain_restore_test separately
     // exercises the actual backend snapshot writer and its caller state.
     {
-        // The reviewer's exact scenario: 20 m stored at -12, connect pins 20,
-        // then a same-band tune triggers a capture. The capture must record -12.
+        // The reviewer's exact scenario: 20 m stored at -12, connect pins a
+        // gain, then a same-band tune triggers a capture. The capture must
+        // record -12. The pin was written as 20 when the ceiling was +48; at
+        // +19 that value no longer survives the clamp, so the scenario is
+        // carried by +18 -- the pin has to be a gain the radio can actually
+        // apply, or the case is testing the clamp instead of the pin.
         const auto seed = connectLna(/*haveRestoredState=*/true,
                                      /*hasStoredEntry=*/true, /*storedDb=*/-12,
-                                     /*paramPresent=*/true, /*paramDb=*/20,
+                                     /*paramPresent=*/true, /*paramDb=*/18,
                                      kDefault, kMin, kMax);
-        check(seed.liveDb == 20 && seed.sessionPin,
-              "snapshot: the pin is live at 20 and marked");
+        check(seed.liveDb == 18 && seed.sessionPin,
+              "snapshot: the pin is live at 18 and marked");
         check(bandMemoryWriteback(seed.liveDb, seed.sessionPin,
                                   /*hasStoredEntry=*/true, /*storedDb=*/-12) == -12,
               "snapshot: a capture during a pinned session records the stored -12");
@@ -176,6 +191,71 @@ int main()
         check(bandMemoryWriteback(/*liveDb=*/6, /*sessionPin=*/false,
                                   /*hasStoredEntry=*/false, /*storedDb=*/0) == 6,
               "snapshot: an uncalibrated band still records through a capture");
+    }
+
+    // ── the connect param is CLAMPED to the range, and this is what proves it ──
+    //
+    // With the stale kMax = 48 this case read paramDb = 20 -> liveDb == 20 and
+    // passed identically with and without the clamp. Against the real ceiling
+    // it discriminates: delete clampDb from connectLna's param branch and this
+    // goes red.
+    {
+        const ConnectLna out = connectLna(/*haveRestoredState=*/false,
+                                          /*hasStoredEntry=*/false, /*storedDb=*/0,
+                                          /*paramPresent=*/true, /*paramDb=*/20,
+                                          /*defaultDb=*/kDefault, kMin, kMax);
+        check(out.liveDb == kLnaGainMaxDb,
+              "param: a connect asking for +20 comes up at the +19 ceiling");
+    }
+    {
+        const ConnectLna out = connectLna(/*haveRestoredState=*/false,
+                                          /*hasStoredEntry=*/false, /*storedDb=*/0,
+                                          /*paramPresent=*/true, /*paramDb=*/-40,
+                                          /*defaultDb=*/kDefault, kMin, kMax);
+        check(out.liveDb == kLnaGainMinDb,
+              "param: a connect asking below the floor comes up at the floor");
+    }
+    {
+        // The pin comparison uses the CLAMPED value, so a param of 20 against a
+        // stored 19 is not a pin -- they are the same setting once the hardware
+        // has had its say.
+        const ConnectLna out = connectLna(/*haveRestoredState=*/true,
+                                          /*hasStoredEntry=*/true, /*storedDb=*/19,
+                                          /*paramPresent=*/true, /*paramDb=*/20,
+                                          /*defaultDb=*/kDefault, kMin, kMax);
+        check(out.liveDb == 19 && !out.sessionPin,
+              "param: +20 against a stored +19 is not a session pin");
+    }
+
+    // ── a stored gain from before the ceiling moved is MIGRATED, not clamped ──
+    //
+    // Every value here is what the radio was ACTUALLY applying for that stored
+    // number, through the old ccRxGain (code clamped at 60) and the gateware's
+    // five-bit decode. Clamping instead would hand a stored 20 a +31 dB jump on
+    // the first connect after an update.
+    {
+        check(migrateStoredLnaDb(20) == -12,
+              "migrate: a stored +20 was being applied as -12 dB, and still is");
+        check(migrateStoredLnaDb(24) == -8,  "migrate: stored +24 -> -8 dB");
+        check(migrateStoredLnaDb(32) == 0,   "migrate: stored +32 -> 0 dB");
+        check(migrateStoredLnaDb(48) == 16,  "migrate: stored +48 -> +16 dB");
+        // In range: untouched, including both ends.
+        check(migrateStoredLnaDb(19) == 19,  "migrate: +19 is in range and unchanged");
+        check(migrateStoredLnaDb(-12) == -12, "migrate: the floor is unchanged");
+        check(migrateStoredLnaDb(0) == 0,    "migrate: the new default is unchanged");
+        // Below the floor is unreachable through the old encode -- codes clamp
+        // at 0 -- so there is nothing to reconstruct.
+        check(migrateStoredLnaDb(-40) == -12,
+              "migrate: below the floor clamps, because no fold produced it");
+        // WHATEVER it is handed, the result is a value this radio can apply.
+        for (int stored = -200; stored <= 200; ++stored) {
+            const int out = migrateStoredLnaDb(stored);
+            if (out < kLnaGainMinDb || out > kLnaGainMaxDb) {
+                check(false, "migrate: every result is inside the AD9866 range");
+                break;
+            }
+        }
+        check(true, "migrate: every result over -200..200 is inside the range");
     }
 
     if (g_failures == 0) {

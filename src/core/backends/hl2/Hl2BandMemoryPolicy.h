@@ -35,6 +35,62 @@ constexpr int clampDb(int minDb, int v, int maxDb)
     return v < minDb ? minDb : (v > maxDb ? maxDb : v);
 }
 
+// ── THE AD9866's RANGE, DECLARED HERE AND NOWHERE ELSE ────────────────────
+//
+// Hl2Backend::kLnaGainMinDb/kLnaGainMaxDb/kLnaDefaultGainDb alias these rather
+// than restating them, and the suite reads THESE rather than a hand-typed copy.
+// That is not tidiness: hl2_band_memory_test carried its own `kMax = 48` and
+// went on passing when the backend's ceiling moved to 19, asserting a range the
+// hardware no longer has -- the exact failure this header's opening paragraph
+// names. Caught by aethersdr-agent on #5752.
+//
+// +19 is where the register stops meaning what it says. ccRxGain encodes dB as
+// `code = db + 12` and the gateware decodes five bits, so code 32 (which is
+// +20 dB asked for) is read as code 0 and delivers -12 dB. 31 is the last code
+// that survives the decode, and 31 - 12 = 19.
+constexpr int kLnaGainMinDb     = -12;
+constexpr int kLnaGainMaxDb     = 19;
+constexpr int kLnaGainStepDb    = 1;
+constexpr int kLnaDefaultGainDb = 0;
+
+// WHAT A STORED GAIN ABOVE THE CEILING MEANT WHEN IT WAS WRITTEN.
+//
+// Lowering the ceiling from 48 to 19 re-points every value an operator already
+// has on disk in 20..48, and CLAMPING them is the one option that changes what
+// the hardware does without telling anyone: a stored 20 was being applied as
+// -12 dB (code 32 folds to code 0), and clamping it to 19 would hand that
+// operator +31 dB on the first connect after an update -- precisely the "loud
+// audio and a plausible ADC overload, for operators who changed nothing" that
+// Hl2Backend.h gives as its reason for NOT restoring +19 as the fresh default.
+//
+// So a legacy value is MIGRATED to what the radio was actually doing with it,
+// through the old path exactly: clamp the code at 60 the way the old ccRxGain
+// did, fold it the way the gateware does, and read it back as dB. The result
+// is always inside [-12, 19] because `(code & 0x1F) - 12` is.
+//
+//   stored 20 -> code 32 -> 0  -> -12 dB      stored 32 -> code 44 -> 12 -> 0 dB
+//   stored 24 -> code 36 -> 4  ->  -8 dB      stored 48 -> code 60 -> 28 -> +16 dB
+//
+// The operator hears exactly what they heard before the update, and the slider
+// finally agrees with it. That is the migrate idiom the restore loader already
+// uses for the pre-#4914 CW passband, rather than the drop idiom it uses for an
+// out-of-range mic level -- dropping would be right if the stored value were
+// meaningless, and it is not: it is a faithful record of a number the radio
+// folded.
+constexpr int migrateStoredLnaDb(int storedDb)
+{
+    if (storedDb >= kLnaGainMinDb && storedDb <= kLnaGainMaxDb) {
+        return storedDb;
+    }
+    if (storedDb < kLnaGainMinDb) {
+        // Never reachable through the old encode -- codes are clamped at 0 --
+        // so there is nothing to reconstruct and the floor is the honest answer.
+        return kLnaGainMinDb;
+    }
+    const int oldCode = clampDb(0, storedDb + 12, 60);
+    return (oldCode & 0x1F) - 12;
+}
+
 // What a session comes up on for the start band.
 struct ConnectLna {
     int liveDb = 0;

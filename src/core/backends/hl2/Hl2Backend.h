@@ -9,6 +9,7 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2AdcPairing.h"
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"  // the AD9866 gain range
 #include "core/backends/hl2/Hl2CapabilityAnnouncer.h"
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
@@ -1212,9 +1213,13 @@ private:
     // single-board measurement would be a policy choice dressed as a limit.
     // The fold is the hardware's line; the flatness is a caveat for whoever
     // sizes an AGC against it.
-    static constexpr int kLnaGainMinDb  = -12;
-    static constexpr int kLnaGainMaxDb  = 19;
-    static constexpr int kLnaGainStepDb = 1;
+    // ALIASES, not a second declaration. Hl2BandMemoryPolicy.h owns these so
+    // the suite can read the real values from a Qt-free header instead of
+    // re-typing them -- which is how hl2_band_memory_test went on exercising a
+    // ceiling of 48 after this one moved to 19 (#5752 review).
+    static constexpr int kLnaGainMinDb  = hl2::kLnaGainMinDb;
+    static constexpr int kLnaGainMaxDb  = hl2::kLnaGainMaxDb;
+    static constexpr int kLnaGainStepDb = hl2::kLnaGainStepDb;
 
     // The TX passband's ceiling: Nyquist of the TX AUDIO rate, which is
     // AudioEngine's 24 kHz — NOT of the 48 kHz EP2 rate. The modulator
