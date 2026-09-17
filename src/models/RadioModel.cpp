@@ -6279,12 +6279,46 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     if (panId.isEmpty() || average < 0 || average > 100) {
         return false;
     }
+
+    PanadapterModel* pan = panadapter(panId);
+
+    // THE BRANCH THE SIBLING TWENTY LINES BELOW ALREADY HAS. A backend that
+    // shapes its own spectra has no display engine to command and no echo to
+    // wait for, so the FlexLib text command below is not merely unnecessary --
+    // it FAILS, and the early return then skips the model update entirely.
+    //
+    // WHAT THIS RESTORES, STATED NARROWLY. The operator's choice reaches the
+    // widget and the overlay slider today, because MainWindow_Wiring calls
+    // SpectrumWidget::setFftAverage() unconditionally beside this call. What
+    // never happens is the MODEL write -- so the slider goes back to the widget
+    // default the moment the pan is rebuilt and is restored from pan->average(),
+    // which nothing ever set. The model write is also what the automation
+    // readback and RadioResourceAdapter's snapshot read.
+    //
+    // IT DOES NOT MAKE AVERAGING HAPPEN, and no comment here should be read as
+    // saying it does. On a raw-spectrum backend nothing consumes m_fftAverage
+    // in a render path: onBackendSpectrumFrame is a pass-through, and ANAN's
+    // smoothSpectrumBins uses a fixed kSpectrumSmoothAlpha rather than this
+    // value. Client-side averaging for these backends is #5678 row 2.1's other
+    // half -- "port + new" -- and is not written yet.
+    //
+    // Mechanism corrected by @ten9876 on #5678: m_fftAverage IS read (by the
+    // persistence snapshot and the overlay menu), so the fault is this missing
+    // branch rather than an unused member.
+    if (shapesDisplayRatesLocally()) {
+        if (!pan) {
+            return false;
+        }
+        pan->setLocalAverage(average);
+        return true;
+    }
+
     // FlexLib Panadapter.Average updates locally on dispatch; later status
     // reconciles it. Preserve the existing ownership and profile-load gates.
     if (!sendCommand(QString("display pan set %1 average=%2").arg(panId).arg(average))) {
         return false;
     }
-    if (PanadapterModel* pan = panadapter(panId)) {
+    if (pan) {
         pan->setRequestedFftSettings(average, -1);
     }
     return true;
