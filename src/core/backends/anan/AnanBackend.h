@@ -44,6 +44,14 @@ class AnanBackend : public IRadioBackend {
     Q_OBJECT
 
 public:
+    // Public for testing. The seeded defaults are reported here alongside a
+    // sweep's measured tables, so the one invariant worth pinning is that a
+    // rate claims NO correction until connectRadio() has actually seeded one
+    // -- reporting a default as live on a disconnected radio would be the
+    // same lie in the other direction as the "nothing measured" this replaced.
+    // See anan_backend_test.
+    [[nodiscard]] QVariantMap droopStatus() const;
+
     explicit AnanBackend(QObject* parent = nullptr);
     ~AnanBackend() override;
 
@@ -314,7 +322,6 @@ private:
     AnanDroopCalibrator m_droopCalibrator;
     QString m_droopMessage;
     int m_droopPercent = 0;
-    QVariantMap droopStatus() const;
     void publishDroopStatus();
     QString applyDroopTables(const QMap<int, DroopCorrectionTable>& tables);
 

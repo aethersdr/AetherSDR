@@ -16,6 +16,8 @@
 #include "core/backends/anan/AnanBackend.h"
 
 #include <QCoreApplication>
+#include <QVariantList>
+#include <QVariantMap>
 
 #include <cstdio>
 #include <optional>
@@ -204,6 +206,27 @@ int main(int argc, char** argv)
                              c.requestedKsps, c.expectKsps, got);
             }
         }
+    }
+
+    {
+        // droopStatus() reports the SEEDED DEFAULTS alongside a sweep's
+        // measured tables, so the page stops saying "nothing measured" while a
+        // shipped curve is live. The invariant worth pinning is the other
+        // direction: a rate must claim NO correction until connectRadio() has
+        // actually seeded one. A disconnected backend reporting six live
+        // defaults would be the same lie the change set out to fix.
+        AnanBackend backend;
+        const QVariantMap status = backend.droopStatus();
+        const QVariantList corrections =
+            status.value(QStringLiteral("corrections")).toList();
+        check(corrections.isEmpty(),
+              "a disconnected backend claims no droop correction for any rate");
+        if (!corrections.isEmpty()) {
+            std::fprintf(stderr, "  expected no corrections, got %lld\n",
+                         static_cast<long long>(corrections.size()));
+        }
+        check(!status.value(QStringLiteral("hasResult")).toBool(),
+              "a disconnected backend stages no sweep result");
     }
 
     if (g_failures == 0)
