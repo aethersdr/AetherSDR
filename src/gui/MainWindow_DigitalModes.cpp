@@ -63,27 +63,53 @@
 
 namespace AetherSDR {
 
-#ifdef HAVE_DEEPFIST
-void MainWindow::refreshCwRxContext()
+namespace {
+struct DecoderInputHint {
+    QString text;
+    QString reason;
+};
+
+DecoderInputHint decoderInputHint(DecoderAudioModel::RouteStatus status)
 {
-    SliceModel* slice = activeSlice();
-    if (slice == m_cwRxSlice) { return; }
-    disconnect(m_cwRxFrequencyConnection);
-    disconnect(m_cwRxModeConnection);
-    m_cwRxSlice = slice;
-    m_cwDecoder.reset();
-    m_cwCallsignSpotter.clear();
-    if (slice) {
-        m_cwRxFrequencyConnection = connect(slice, &SliceModel::frequencyChanged,
-            this, [this] {
-                m_cwDecoder.reset();
-            });
-        m_cwRxModeConnection = connect(slice, &SliceModel::modeChanged,
-            this, [this] {
-                m_cwDecoder.reset();
-            });
+    using Status = DecoderAudioModel::RouteStatus;
+    if (status == Status::DaxChannelRequired) {
+        return {QCoreApplication::translate("MainWindow", "RX: assign DAX"),
+                QCoreApplication::translate("MainWindow",
+                    "No receive audio: assign a DAX RX channel (1-8) to the selected slice.")};
+    }
+    if (status == Status::DaxTransportUnavailable) {
+        return {QCoreApplication::translate("MainWindow", "RX: unavailable"),
+                QCoreApplication::translate("MainWindow",
+                    "No receive audio: the selected slice's DAX transport is unavailable.")};
+    }
+    return {};
+}
+} // namespace
+
+void MainWindow::refreshCwInputStatus()
+{
+    if (m_cwDecoderApplet && m_cwAudio) {
+        const DecoderInputHint hint = decoderInputHint(m_cwAudio->routeStatus());
+        m_cwDecoderApplet->setCwInputHint(hint.text, hint.reason);
     }
 }
+
+void MainWindow::refreshRttyInputStatus()
+{
+    if (m_rttyDecoderApplet && m_rttyAudio) {
+        const DecoderInputHint hint = decoderInputHint(m_rttyAudio->routeStatus());
+        m_rttyDecoderApplet->setRttyInputHint(hint.text, hint.reason);
+    }
+}
+
+void MainWindow::stopCwRx()
+{
+    if (m_cwAudio) { m_cwAudio->setEnabled(false); }
+    m_cwDecoder.stop();
+}
+
+
+#ifdef HAVE_DEEPFIST
 void MainWindow::selectCwRxBackend(const QString& backend)
 {
     if (!m_cwDecoder.selectBackend(backend)) { return; }
@@ -137,7 +163,7 @@ void MainWindow::refreshCwRxBackend()
         connect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
             this, &MainWindow::cwRxModelAction, Qt::UniqueConnection);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-            &m_cwDecoder, &CwRxModel::stop, Qt::UniqueConnection);
+            this, &MainWindow::stopCwRx, Qt::UniqueConnection);
     }
     refreshCwRxStatus();
 }
@@ -313,6 +339,7 @@ void MainWindow::routeRttyDecoderOutput()
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
                 &m_rttyDecoder, &RttyDecoder::setReversePolarity);
     }
+    refreshRttyInputStatus();
 }
 
 void MainWindow::onRttyPanelCloseRequested()
@@ -343,6 +370,11 @@ void MainWindow::refreshRttyDecodeState()
     // behaves as before.
     const bool isRtty = s && s->mode() == "RTTY";
     const bool wanted = isRtty && RttyDecodeSettings::enabled();
+
+    if (m_rttyAudio) {
+        m_rttyAudio->setSlice(s);
+        m_rttyAudio->setEnabled(wanted && m_rttyDecoderApplet);
+    }
 
     setDecoderPanelVisibleOnly(m_rttyDecoderApplet, wanted,
                                &PanadapterApplet::setRttyPanelVisible);

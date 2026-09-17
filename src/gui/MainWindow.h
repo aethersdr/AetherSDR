@@ -39,6 +39,7 @@
 #include "models/CwRxModel.h"
 #include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
+#include "models/DecoderAudioModel.h"
 #include "core/QsoRecorder.h"
 #include "core/ClientPuduMonitor.h"
 #include "core/AudioOutputRouter.h"
@@ -763,6 +764,8 @@ private:
     void setDecoderPanelVisibleOnly(PanadapterApplet* target, bool shouldShow,
                                     void (PanadapterApplet::*setter)(bool));
     void refreshCwDecodeState();
+    void refreshCwInputStatus();
+    void stopCwRx();
     // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
     // service → contact card on the CW decode panel + lookup dialog.
     void wireCallsignLookup();
@@ -771,6 +774,7 @@ private:
     void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
+    void refreshRttyInputStatus();
     // The RTTY pane's ✕: persist "operator does not want this window" and
     // re-run the refresh, which stops the decoder (#5353).
     void onRttyPanelCloseRequested();
@@ -1143,10 +1147,6 @@ private:
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
 #ifdef HAVE_DEEPFIST
-    QPointer<SliceModel> m_cwRxSlice;
-    QMetaObject::Connection m_cwRxFrequencyConnection;
-    QMetaObject::Connection m_cwRxModeConnection;
-    void refreshCwRxContext();
     void selectCwRxBackend(const QString& backend);
     void cwRxModelAction();
     void refreshCwRxStatus();
@@ -1154,11 +1154,13 @@ private:
     void refreshCwRxBackend();
 #endif
     CwRxModel         m_cwDecoder;
+    std::unique_ptr<DecoderAudioModel> m_cwAudio;
     float             m_cwLastPitchHz{0.0f};
     float             m_cwLastSpeedWpm{0.0f};
     CwDecoder         m_cwDecoderTx;
     CwCallsignSpotter m_cwCallsignSpotter;
     RttyDecoder       m_rttyDecoder;
+    std::unique_ptr<DecoderAudioModel> m_rttyAudio;
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
 #ifdef HAVE_MQTT
