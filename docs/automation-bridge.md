@@ -1493,7 +1493,7 @@ inside AetherSDR on the host, not in radio firmware (#5401).
 - `backend.chains[].modulator` — **which transmit modulator this binary was
   built with**, on an `hl2-tx` entry: `phasing` (the in-tree phasing modulator,
   which is what a STOCK build ships) or `wdsp-txa` (WDSP's TXA chain, built with
-  `-DAETHER_HL2_TX_TXA=ON`). It is decided by the
+  `-DAETHER_HL2_TX_TXA=OFF` for the phasing fallback; TXA is the default since #5779). It is decided by the
   `AETHER_HL2_TX_TXA` compile flag and there is **no runtime switch** — the
   other chain is not in the process, so an operator cannot select the wrong
   one. It is reported because they can be running the wrong **build**, and a

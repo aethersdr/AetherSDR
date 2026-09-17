@@ -843,7 +843,7 @@ sub-actions, so action-level drift is invisible to CI.
    optionally a WDSP TXA channel on transmit whose config is a different struct;
    `modulator` on that entry names the transmit modulator the binary was built
    with, `phasing` in a stock build or `wdsp-txa` under
-   `-DAETHER_HL2_TX_TXA=ON`, and there is no runtime switch between them) and its `level`, because "read-back" is used loosely
+   `-DAETHER_HL2_TX_TXA=OFF` selects the phasing fallback since #5779 made TXA the default, and there is no runtime switch between them) and its `level`, because "read-back" is used loosely
    and the
    difference decides what a mismatch proves: `channel-config` is what
    `WdspChannel` was OPENED with after clamping or refusal, `dsp-config` is the

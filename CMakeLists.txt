@@ -152,8 +152,24 @@ option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 #       At 1 kHz the incumbent already reads 87 dB against EP2's ~96 dB
 #       signed-16-bit wire (MetisProtocol.cpp, ep2WriteTxIq), so TXA's
 #       advantage THERE is below the wire and unusable.
-# OFF — the in-tree phasing modulator, unchanged. The fallback, kept building
-#       and kept tested, for a machine or a report where TXA misbehaves.
+# OFF — the in-tree phasing modulator, unchanged. The fallback for a machine or
+#       a report where TXA misbehaves.
+#
+#       THIS LINE USED TO SAY "kept building and kept tested" AND THE FLIP
+#       BELOW MAKES THAT FALSE. `grep AETHER_HL2_TX_TXA .github/workflows/*.yml`
+#       returns nothing: no job sets the flag either way, so the DEFAULT is the
+#       only thing CI compiles. While the default was OFF that sentence was
+#       true for free. Flipping it means nothing in the tree builds OFF —
+#       hl2_txdsp_test's `#if !AETHER_HL2_TX_TXA` block stops compiling, its
+#       `#else` crest-factor assertion with it, and the phasing translation
+#       unit stops being syntax-checked at all.
+#
+#       THE WAY BACK EXISTS ONLY WHILE IT STILL COMPILES, AND NOTHING WOULD
+#       NOTICE WHEN IT STOPPED. That is this project's third instance of one
+#       failure class in a week: #5706 was aethercore not compiling with
+#       ENABLE_DFNR=OFF, #5767 is main not compiling without hidapi, and both
+#       are the same shape — an optional path that no job exercises. Naming it
+#       here rather than repeating it. Raised by aethersdr-agent on #5779.
 #
 # DEFAULT OFF, DELIBERATELY, AND NOT BECAUSE TXA IS DOUBTED. The approval on
 # #5678 was conditional: keep the phasing modulator behind a switch "until the

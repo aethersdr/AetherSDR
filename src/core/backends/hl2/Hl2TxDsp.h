@@ -36,8 +36,10 @@ namespace AetherSDR::hl2 {
 // client-leveled ceiling, the hard clamp, and all three meters) is shared, is
 // identical in both builds, and is not part of the choice.
 //
-//   AETHER_HL2_TX_TXA=1 (opt-in) — a WDSP TXA channel at the live geometry.
-//   AETHER_HL2_TX_TXA=0 (default)  — the in-tree phasing modulator, the way back.
+//   AETHER_HL2_TX_TXA=1 (default) — a WDSP TXA channel at the live geometry.
+//   AETHER_HL2_TX_TXA=0 (opt-out)   — the in-tree phasing modulator, the way
+//                                     back. NOT BUILT BY ANY CI JOB; see
+//                                     CMakeLists.txt beside the option.
 //
 // THE TWO MODULATORS HAVE OPPOSITE HANDEDNESS CONVENTIONS and this is the one
 // place that is easy to get catastrophically wrong, because it is invisible
