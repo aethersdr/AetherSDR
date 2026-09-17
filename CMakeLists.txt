@@ -767,6 +767,7 @@ set(CORE_SOURCES
     src/core/backends/anan/AnanRxDsp.cpp     # aetherd ANAN P2 Phase 1b (IQ -> WdspChannel demod + spectrum)
     src/core/backends/anan/AnanDroopCorrection.cpp # ANAN DDC0 droop compensation (pure apply math)
     src/core/backends/anan/AnanDroopCalibrator.cpp # live, in-app DDC0 droop calibration sweep
+    src/core/backends/anan/AnanDroopDefaults.cpp   # derived per-gateware droop defaults (generated data)
     src/core/backends/anan/AnanBackend.cpp   # aetherd ANAN P2 Phase 1b (IRadioBackend impl)
     src/core/backends/anan/AnanSettings.cpp  # owned config object, "Anan" root key (Principle V)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
@@ -897,6 +898,7 @@ set(CORE_SOURCES
     src/core/DigitalVoiceWaveformTelemetry.cpp
     src/core/DigitalVoiceWaveformProcess.cpp
     src/core/DvkWavTransfer.cpp
+    src/core/weather/OperaRadarImage.cpp
     src/core/ZipArchive.cpp
     src/core/ProfileTransfer.cpp
     src/core/QsoRecorder.cpp
@@ -1052,6 +1054,11 @@ set(GUI_SOURCES
     src/gui/MainWindow_KiwiSdr.cpp
     src/gui/map/CityLightsItem.cpp
     src/gui/map/CityLightsSource.cpp
+    src/gui/map/OperaRadarNetwork.cpp
+    src/gui/map/LibreRadarNetwork.cpp
+    src/gui/map/RegionalRadarComposite.cpp
+    src/gui/map/WeatherRadarController.cpp
+    src/gui/map/WeatherRadarLegend.cpp
     src/gui/map/MapDisplayWidget.cpp
     src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/GlobeMapView.cpp
@@ -1436,7 +1443,7 @@ if(ENABLE_DFNR AND AETHER_EMBED_DFNR_MODEL)
     endif()
 endif()
 
-qt_add_resources(RESOURCES resources/resources.qrc)
+qt_add_resources(RESOURCES resources/resources.qrc resources/radar.qrc)
 
 # WDSP 2.00 is an engine-only dependency for raw-IQ radio backends. Its C API,
 # platform shims, and FFTW dependency remain private to aethercore.

@@ -23,7 +23,11 @@ struct WeatherRadarObservation {
 class WeatherRadarSource final {
 public:
     enum class Provider {
-        NoaaMrms
+        NoaaMrms,
+        Eccc,
+        Opera,
+        Composite,
+        LibreWxr
     };
 
     enum class FrameMode {
@@ -38,6 +42,17 @@ public:
         const QDateTime& sampleTime = {});
 
     static WeatherRadarSource currentNoaaFrame();
+    static WeatherRadarSource composite(int enabledProviders);
+    int enabledProviders() const { return m_enabledProviders; }
+    WeatherRadarSource latestFrame() const;
+    WeatherRadarSource historicalFrame(const QDateTime& time,
+        const QDateTime& sample = {}, const QVector<qint64>& ids = {}) const;
+    QUrl timelineUrl() const;
+    WeatherRadarSource playbackSourceForTimeline(const QByteArray& bytes) const;
+    QVector<WeatherRadarObservation> parseTimeline(const QByteArray& bytes, int hours) const;
+    QString productDescription() const;
+    static QUrl operaTimelineUrl();
+    static QUrl operaFrameUrl(const QDateTime& time);
     static WeatherRadarSource historicalNoaaFrame(
         const QDateTime& frameTime,
         const QDateTime& sampleTime = {},
@@ -63,12 +78,14 @@ public:
     QString attribution() const;
     int minimumZoom() const { return 0; }
     int maximumZoom() const { return 12; }
+    int tilePixelSize() const;
     QUrl tileUrl(int zoom, int x, int y) const;
     QUrl imageUrl(const QRectF& webMercatorBounds,
                   const QSize& pixelSize) const;
 
 private:
     Provider m_provider{Provider::NoaaMrms};
+    int m_enabledProviders{7};
     QDateTime m_frameTime;
     QDateTime m_sampleTime;
     QVector<qint64> m_rasterIds;

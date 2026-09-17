@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 221 touchpoint headers (188 core, 33 models) — 221/221 tagged, 0/221 converted.
+**Totals:** 222 touchpoint headers (189 core, 33 models) — 222/222 tagged, 0/222 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -144,7 +144,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/SystemInventory.h` | 1 | ui-support — Startup and support-bundle inventory of host CPU, SIMD and RAM capabilities. Process diagnostics, not radio state. | unconverted |
 | `core/TciServer.h` | 3 | mixed(flex) — TCI WebSocket server for WSJT-X et al: protocol surface is canonical radio state, but audio/IQ rides Flex DAX | unconverted |
 | `core/TgxlConnection.h` | 2 | peripheral(4o3a) — Direct TCP client for the 4O3A Tuner Genius XL (port 9010, relay/autotune), reverse-engineered from the 4O3A management app — a standalone accessory transport, not SmartSDR. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |
-| `core/ThemeManager.h` | 149 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
+| `core/ThemeManager.h` | 151 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
 | `core/TxKeyingMarker.h` | 8 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
@@ -196,6 +196,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/tnc/HeardList.h` | 1 | universal — Heard-station list for the packet monitor; radio-agnostic. | unconverted |
 | `core/tnc/KissTncServer.h` | 1 | ui-support — KISS-over-TCP server exposing the TNC to external apps; external integration, needs a home (cf CatPort/TciServer). | unconverted |
 | `core/tnc/TncTerminal.h` | 1 | universal — Packet terminal session model (command/monitor); radio-agnostic operating feature. | unconverted |
+| `core/weather/OperaRadarImage.h` | 2 | ui-support — Bounded OPERA CIRRUS byte decoder placed in aethercore with existing zlib under RFC #5630 condition B; no radio state or widget dependency. | unconverted |
 | `models/AetherClockModel.h` | 2 | universal — Thin first-class AetherClock model with full Q_PROPERTY coverage (protocol-serializable, QML-ready), mirroring engine state over queued connections. Owns no DSP and has no vendor ties — one of only three models already shaped the way the protocol will want them. | unconverted |
 | `models/AmpModel.h` | 1 | mixed(flex) — Power-amplifier state model (PGXL / any non-TGXL amp the radio proxies), extracted from RadioModel (#4094). Like TunerModel: universal amp state (presence/operate/telemetry) fused with a Flex relay — the radio-proxied 'amplifier set … operate=' command (the only path that works remote/SmartLink; the direct PgxlConnection is telemetry-only). | unconverted |
 | `models/AntennaGeniusModel.h` | 4 | peripheral(4o3a) — 4O3A Antenna Genius switch client — standalone accessory with its own UDP-broadcast discovery (port 9007) + direct TCP; connects by device IP/port independent of the radio, works with any radio. Not radio-family wire; a peripheral accessory, NOT behind the IRadioBackend radio seam (reclassified from vendor(flex), #4087 follow-up). | unconverted |

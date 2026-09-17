@@ -16,6 +16,9 @@
 // about WHY each is shaped this way; this header is the arithmetic only.
 
 #include <cmath>
+#include <cstddef>
+#include <string_view>
+#include <utility>
 
 namespace AetherSDR::hl2 {
 
@@ -197,6 +200,54 @@ inline constexpr int kMicLevelCurve = 2;
     if (instantW >= previousPeakW)
         return instantW;
     return previousPeakW + releaseAlpha * (instantW - previousPeakW);
+}
+
+// ---- Transmit passband -----------------------------------------------------
+
+// The default TX audio passband for a mode, in hertz.
+//
+// HERE RATHER THAN IN Hl2Backend.cpp'S ANONYMOUS NAMESPACE for the reason this
+// whole header exists, stated at the top of it: a test against a re-typed copy
+// of a mapping proves only that two copies agree. hl2_txdsp_test's
+// characterisation sweep mirrored these pairs by hand, so widening DIGU's
+// window would have left the sweep quietly characterising the OLD passband
+// while its comment went on claiming it described what WSJT-X transmits
+// through. The sweep's central claim decays silently; that is the failure mode
+// worth a move. Caught by aethersdr-agent on #5741, and the same remedy #5725
+// applied to kIqSampleRatesHz.
+//
+// ASCII-UPPERCASING ITS OWN INPUT so the policy owes nothing to Qt and the
+// header stays includable by a test that links neither. Hl2Backend keeps a
+// QString adapter over this. The two agree for every mode string that exists:
+// the literals compared against are ASCII, so a QString::toUpper() beforehand
+// can only change characters that could never have matched anyway.
+//
+// NOT THE WHOLE STORY, and the caller must not treat it as such. The operator
+// can override the pair through Hl2Backend::setTxFilter, and
+// Hl2Backend::effectiveTxPassband -- which is the function the modulator is
+// actually driven from -- returns that override verbatim for USB and LSB. This
+// gives the DEFAULT, which is what a mode selects, not what the radio is
+// necessarily transmitting through.
+[[nodiscard]] constexpr std::pair<int, int>
+defaultTxPassbandForModeName(std::string_view mode) noexcept
+{
+    constexpr auto eq = [](std::string_view a, std::string_view b) {
+        if (a.size() != b.size())
+            return false;
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            char c = a[i];
+            if (c >= 'a' && c <= 'z')
+                c = static_cast<char>(c - 'a' + 'A');
+            if (c != b[i])
+                return false;
+        }
+        return true;
+    };
+    if (eq(mode, "DIGU") || eq(mode, "DIGL")) return {150, 3000};
+    if (eq(mode, "CWU") || eq(mode, "CW") || eq(mode, "CWL")) return {300, 900};
+    if (eq(mode, "AM") || eq(mode, "SAM") || eq(mode, "DSB")) return {100, 3000};
+    if (eq(mode, "FM") || eq(mode, "NFM")) return {100, 3000};
+    return {300, 2700};   // USB/LSB and anything else: the voice default
 }
 
 }  // namespace AetherSDR::hl2

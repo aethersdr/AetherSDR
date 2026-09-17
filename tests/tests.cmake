@@ -1510,11 +1510,18 @@ set_tests_properties(weather_radar_wrap_render_test PROPERTIES
 
 # Production playback controller + injected QNetworkReply delivery (NO sockets).
 # Proves delayed/out-of-order downloads, view cache reuse, and retained geometry.
+qt_add_resources(RADAR_TEST_RESOURCES resources/radar.qrc)
 add_executable(weather_radar_loading_test
+    ${RADAR_TEST_RESOURCES}
     tests/weather_radar_loading_test.cpp
     src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/CityLightsItem.cpp
     src/gui/map/CityLightsSource.cpp
+    src/gui/map/OperaRadarNetwork.cpp
+    src/gui/map/LibreRadarNetwork.cpp
+    src/gui/map/RegionalRadarComposite.cpp
+    src/gui/map/WeatherRadarController.cpp
+    src/gui/map/WeatherRadarLegend.cpp
     src/gui/map/MapDisplayWidget.cpp src/gui/map/MapView.cpp src/gui/map/GlobeMapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp src/gui/map/MapTerminatorItem.cpp
@@ -2464,6 +2471,28 @@ add_executable(anan_droop_correction_test
 )
 target_include_directories(anan_droop_correction_test PRIVATE src)
 add_test(NAME anan_droop_correction_test COMMAND anan_droop_correction_test)
+
+add_executable(anan_droop_defaults_test
+    tests/anan_droop_defaults_test.cpp
+    src/core/backends/anan/AnanDroopDefaults.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_defaults_test PRIVATE src)
+add_test(NAME anan_droop_defaults_test COMMAND anan_droop_defaults_test)
+
+# What the shipped droop defaults do to the NOISE-FLOOR AUTO-ADJUST -- a
+# different consumer from the panadapter trace, and the one #5726 opened for
+# this radio. Drives the real applyDroopCorrectionDb/applyEdgeFade and the real
+# estimateNoiseFloorDbm (NoiseFloorEstimator.h, header-only and Qt-free for
+# exactly this reason), so it cannot drift from what the widget runs.
+# No socket, no Qt, no radio.
+add_executable(anan_droop_noise_floor_test
+    tests/anan_droop_noise_floor_test.cpp
+    src/core/backends/anan/AnanDroopDefaults.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_noise_floor_test PRIVATE src)
+add_test(NAME anan_droop_noise_floor_test COMMAND anan_droop_noise_floor_test)
 
 # AnanDroopCalibrator's pure math (median-in-power averaging, central-window
 # reference, clamp) -- no live radio needed. Ported from this feature's
@@ -6058,3 +6087,39 @@ add_executable(droop_calibration_seam_test tests/droop_calibration_seam_test.cpp
 target_include_directories(droop_calibration_seam_test PRIVATE src tests)
 target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
 add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)
+
+
+# Public metadata and geodesic math only; no sockets.
+add_executable(radar_coverage_test tests/radar_coverage_test.cpp ${RADAR_TEST_RESOURCES})
+target_include_directories(radar_coverage_test PRIVATE src)
+target_link_libraries(radar_coverage_test PRIVATE Qt6::Core)
+add_test(NAME radar_coverage_test COMMAND radar_coverage_test)
+
+# Bounded native COG reader; optional positional local TIFF enables live-sample proof.
+add_executable(opera_radar_image_test tests/opera_radar_image_test.cpp)
+target_include_directories(opera_radar_image_test PRIVATE src)
+target_link_libraries(opera_radar_image_test PRIVATE aethercore Qt6::Core Qt6::Gui)
+add_test(NAME opera_radar_image_test COMMAND opera_radar_image_test)
+
+add_executable(regional_radar_source_test tests/regional_radar_source_test.cpp src/gui/map/WeatherRadarSource.cpp)
+target_include_directories(regional_radar_source_test PRIVATE src)
+target_link_libraries(regional_radar_source_test PRIVATE Qt6::Core)
+add_test(NAME regional_radar_source_test COMMAND regional_radar_source_test)
+
+set_tests_properties(radar_coverage_test opera_radar_image_test regional_radar_source_test PROPERTIES TIMEOUT 30)
+
+# Production tile adapter and primary/fallback controller; injected replies, no sockets.
+add_executable(libre_radar_test tests/libre_radar_test.cpp
+    src/gui/map/LibreRadarNetwork.cpp src/gui/map/RegionalRadarComposite.cpp
+    src/gui/map/WeatherRadarSource.cpp src/gui/map/MapProviderNetworkAccessManager.cpp)
+target_include_directories(libre_radar_test PRIVATE src)
+target_link_libraries(libre_radar_test PRIVATE Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent Qt6::Test)
+add_test(NAME libre_radar_test COMMAND libre_radar_test)
+set_tests_properties(libre_radar_test PROPERTIES TIMEOUT 30)
+
+# Network-byte decoder corpus; generated bounded fixtures, no sockets.
+add_executable(opera_radar_corpus_test tests/opera_radar_corpus_test.cpp)
+target_include_directories(opera_radar_corpus_test PRIVATE src tests)
+target_link_libraries(opera_radar_corpus_test PRIVATE aethercore Qt6::Core Qt6::Gui)
+add_test(NAME opera_radar_corpus_test COMMAND opera_radar_corpus_test)
+set_tests_properties(opera_radar_corpus_test PROPERTIES TIMEOUT 30)

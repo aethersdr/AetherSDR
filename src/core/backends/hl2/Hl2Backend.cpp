@@ -29,9 +29,11 @@
 #include <QPointer>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <tuple>
 #include <utility>
 
@@ -329,16 +331,18 @@ double cwBfoOffsetHz(const QString& mode, int pitchHz) noexcept
 // window — that width is deliberate (see Hl2TxDsp::Config), and widening every
 // SSB transmission is not part of making WSJT-X work. The digital modes get the
 // full window because that is the one the decoder occupies.
+// A QString adapter over hl2::defaultTxPassbandForModeName, which is where the
+// mapping itself now lives. It moved because hl2_txdsp_test's characterisation
+// sweep was mirroring these pairs by hand and had no way to notice if they
+// changed; see the note on the policy function for the argument. Behaviour is
+// unchanged -- the policy ASCII-uppercases its own input, and every literal it
+// compares against is ASCII, so the toUpper() this used to do could only ever
+// have altered characters that could not match either way.
 std::pair<int, int> defaultTxPassbandForMode(const QString& mode) noexcept
 {
-    const QString u = mode.toUpper();
-    if (u == QLatin1String("DIGU") || u == QLatin1String("DIGL")) return {150, 3000};
-    if (u == QLatin1String("CWU") || u == QLatin1String("CW")
-        || u == QLatin1String("CWL")) return {300, 900};
-    if (u == QLatin1String("AM") || u == QLatin1String("SAM")
-        || u == QLatin1String("DSB")) return {100, 3000};
-    if (u == QLatin1String("FM") || u == QLatin1String("NFM")) return {100, 3000};
-    return {300, 2700};   // USB/LSB and anything else: the voice default
+    const QByteArray utf8 = mode.toUtf8();
+    return AetherSDR::hl2::defaultTxPassbandForModeName(
+        std::string_view(utf8.constData(), static_cast<std::size_t>(utf8.size())));
 }
 
 // Phase-1 data-plane payload: a raw little-endian float32 array. RadioModel's
