@@ -3642,110 +3642,148 @@ void Hl2Backend::applyPanBandwidth(double hz)
         QMetaObject::invokeMethod(m_metis, "setSampleRate", Qt::QueuedConnection,
             Q_ARG(AetherSDR::hl2::SampleRate, sampleRateEnum(rate)));
 
-    // FOLLOW-UP: this loop still BLOCKS THE GUI THREAD, which is the same defect
-    // connectRadio() had before it was split into beginDspSetup()/
-    // finishDspSetup(). Each receiver costs an open (40-175 ms) plus a close
-    // that flushes under WDSP's 100 ms timeout, and it runs for every receiver
-    // because the rate register is radio-wide — roughly 0.6-1.1 s of frozen UI
-    // per rate-boundary crossing with four panadapters open. That is the
-    // "chunky zoom" operators report. docs/HERMES.md §22.4 has the measurements.
+    // OFF THE GUI THREAD, and the reason this was left is worth stating because
+    // it dissolves rather than gets solved.
     //
-    // Not fixed here on purpose: unlike the connect, this has ordering
-    // constraints that survive a partial failure — the DSP must expect the new
-    // rate BEFORE EP6 delivers at it, and a receiver that fails to reconfigure
-    // has to put the ones already rebuilt back, or the set is split across two
-    // rates with nothing reporting it. The phase split is reusable; the
-    // roll-back is what needs designing.
+    // This loop used to run on the GUI thread through
+    // Qt::BlockingQueuedConnection: the WORK was already on the I/O thread, the
+    // GUI thread merely waited for it. Each receiver costs an open (40-175 ms)
+    // plus a close that flushes under WDSP's 100 ms timeout, and it runs for
+    // EVERY receiver because the rate register is radio-wide -- roughly
+    // 0.6-1.1 s of frozen UI per rate-boundary crossing with four panadapters
+    // open. That is the "chunky zoom" operators report, and
+    // docs/HERMES.md §22.4 has the measurements.
     //
-    // Rebuild the receive chain at the new input rate. WDSP's channel is opened
-    // with a fixed input rate, so a rate change is a reconfigure, not a setter —
-    // Hl2RxDsp::Config carries the operator's live mode/filter/AGC/shift so the
-    // rebuild comes back up where they left it rather than on construction
-    // defaults.
+    // The earlier note said "the phase split is reusable; the ROLL-BACK is what
+    // needs designing", and that was right about the danger: a roll-back
+    // spanning event-loop turns has to cope with the receiver set changing
+    // underneath it. What removes the problem is not designing that roll-back
+    // but never needing one -- THE WHOLE SEQUENCE, INCLUDING ITS EXISTING
+    // ROLL-BACK, IS ONE TASK ON THE I/O THREAD. Nothing spans a turn, so the
+    // roll-back below is the same code it always was.
     //
-    // Blocking, and in this order: the DSP must already expect the new rate
-    // before EP6 starts delivering at it. Reconfiguring afterwards would feed
-    // 384 kHz IQ into a chain still decimating for 48 kHz, which is not an error
-    // anything reports — it is simply the wrong audio and a mis-scaled spectrum.
-    // EVERY receiver, because the rate register is radio-wide: one receiver left
-    // decimating for the old rate would produce wrong audio and a mis-scaled
-    // spectrum, with nothing reporting an error.
+    // SNAPSHOTTED ON THE GUI THREAD, executed on the I/O thread. m_rx belongs to
+    // the GUI thread; the Hl2RxDsp objects belong to the I/O thread. So every
+    // per-receiver decision -- the Config, the roll-back Config -- is computed
+    // HERE and copied, and the task touches nothing but the DSP pointers. A
+    // receiver removed while the task runs cannot be read by it.
+    struct RebuildStep {
+        Hl2RxDsp* dsp;
+        Hl2RxDsp::Config next;
+        Hl2RxDsp::Config back;
+        std::size_t index;
+    };
+    std::vector<RebuildStep> steps;
+    steps.reserve(m_rx.size());
     for (std::size_t i = 0; i < m_rx.size(); ++i) {
         Receiver& r = m_rx[i];
         if (!r.dsp)
             continue;
-        Hl2RxDsp::Config dc;
-        dc.inputSampleRateHz = m_sampleRateHz;
-        dc.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
-        dc.mode = modeFromString(r.mode);
-        std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
+        RebuildStep st;
+        st.dsp = r.dsp;
+        st.index = i;
+        st.next.inputSampleRateHz = m_sampleRateHz;
+        st.next.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
+        st.next.mode = modeFromString(r.mode);
+        std::tie(st.next.filterLowHz, st.next.filterHighHz) = dspFilterHz(r);
         // Carried through the rebuild rather than reapplied afterwards. A
-        // reconfigured channel opens on Config's defaults, so an operator who had
-        // moved their AGC would have had it silently snap back to medium/39 dB
-        // every time they zoomed.
-        dc.agcMode = wdspAgcMode(r.agcMode);
-        dc.maximumAgcGainDb = m_dbRef.agcCeilingDb(r.agcThresholdDb);
+        // reconfigured channel opens on Config's defaults, so an operator who
+        // had moved their AGC would have had it silently snap back to
+        // medium/39 dB every time they zoomed.
+        st.next.agcMode = wdspAgcMode(r.agcMode);
+        st.next.maximumAgcGainDb = m_dbRef.agcCeilingDb(r.agcThresholdDb);
+        // The same receiver at the OLD rate -- computed now, while m_rx is
+        // safe to read, so the roll-back needs nothing from the GUI thread.
+        st.back = st.next;
+        st.back.inputSampleRateHz = previousRate;
+        steps.push_back(st);
+    }
+
+    // A SECOND CROSSING WHILE ONE IS IN FLIGHT. An operator dragging a zoom
+    // produces these back to back, and two tasks reconfiguring the same chains
+    // would interleave. The generation is read again when the task finishes;
+    // a superseded one publishes nothing.
+    const quint64 generation = ++m_rateChangeGeneration;
+    const int targetRate = m_sampleRateHz;
+
+    if (steps.empty()) {
+        // Nothing to rebuild -- still publish, for the same reason the
+        // unchanged-rate path above does.
+        Hl2Settings::setSpanMhz(static_cast<double>(m_sampleRateHz) / 1.0e6);
+        announceReceiverCeilingRevision();
+        emitAllPanState();
+        notifyOperatingStateChanged();
+        return;
+    }
+
+    QMetaObject::invokeMethod(steps.front().dsp, [this, steps, generation,
+                                                  targetRate, previousRate] {
+        // ON THE I/O THREAD. Serial, in order, exactly as before -- the DSP
+        // must expect the new rate BEFORE EP6 delivers at it, and feeding
+        // 384 kHz IQ to a chain still decimating for 48 kHz is not an error
+        // anything reports, it is simply wrong audio and a mis-scaled spectrum.
+        bool ok = true;
+        std::size_t failedAt = 0;
         std::string err;
-        bool ok = false;
-        Hl2RxDsp* dsp = r.dsp;
-        QMetaObject::invokeMethod(dsp, [dsp, &dc, &err, &ok] {
-            ok = dsp->configure(dc, &err);
-        }, Qt::BlockingQueuedConnection);
+        for (std::size_t n = 0; n < steps.size(); ++n) {
+            std::string e;
+            if (steps[n].dsp->configure(steps[n].next, &e))
+                continue;
+            ok = false;
+            failedAt = n;
+            err = e;
+            break;
+        }
         if (!ok) {
-            // Failing back to the old rate keeps the wire and the DSP agreeing.
-            // The alternative — leaving the register commanded to a rate the DSP
-            // cannot process — is silent: audio would be wrong with nothing in
-            // the UI to say why.
-            //
-            // The receivers already rebuilt are put BACK, so a partial failure
-            // does not leave the set split across two rates. That is the failure
-            // mode multi-receiver adds: with one receiver there was nothing to
-            // be inconsistent with.
-            qWarning() << "Hl2Backend: could not reconfigure RX DSP" << i << "for"
-                       << m_sampleRateHz << "Hz —"
-                       << QString::fromStdString(err)
-                       << "— staying at" << previousRate << "Hz";
-            m_sampleRateHz = previousRate;
-            for (std::size_t k = 0; k < i; ++k) {
-                Hl2RxDsp* back = m_rx[k].dsp;
-                if (!back)
-                    continue;
-                Hl2RxDsp::Config rc = dc;
-                rc.inputSampleRateHz = previousRate;
-                rc.mode = modeFromString(m_rx[k].mode);
-                std::tie(rc.filterLowHz, rc.filterHighHz) = dspFilterHz(m_rx[k]);
-                rc.agcMode = wdspAgcMode(m_rx[k].agcMode);
-                rc.maximumAgcGainDb = m_dbRef.agcCeilingDb(m_rx[k].agcThresholdDb);
+            // THE ROLL-BACK, unchanged and still on this thread. Only the
+            // receivers already moved are put back; the one that failed never
+            // left the old rate.
+            for (std::size_t k = 0; k < failedAt; ++k) {
                 std::string backErr;
-                bool backOk = false;
-                QMetaObject::invokeMethod(back, [back, &rc, &backErr, &backOk] {
-                    backOk = back->configure(rc, &backErr);
-                }, Qt::BlockingQueuedConnection);
-                if (!backOk) {
-                    qCCritical(lcHl2) << "HL2: receiver" << k
+                if (!steps[k].dsp->configure(steps[k].back, &backErr)) {
+                    qCCritical(lcHl2) << "HL2: receiver" << steps[k].index
                                       << "could not be restored to" << previousRate
                                       << "Hz —" << QString::fromStdString(backErr);
                 }
             }
-            if (m_metis)
-                QMetaObject::invokeMethod(m_metis, "setSampleRate",
-                    Qt::QueuedConnection,
-                    Q_ARG(AetherSDR::hl2::SampleRate,
-                          sampleRateEnum(previousRate)));
-            // #5594 (M1): the rate went back, so the ceiling may have gone back
-            // with it. Guarded, so a rollback to the rate we already announced
-            // says nothing.
-            announceReceiverCeilingRevision();
-            emitAllPanState();
-            return;
         }
+        const std::size_t failedIndex = ok ? 0 : steps[failedAt].index;
+        QMetaObject::invokeMethod(this, [this, ok, generation, targetRate,
+                                         previousRate, failedIndex, err] {
+            finishRateChange(ok, generation, targetRate, previousRate,
+                             failedIndex, err);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
+// The GUI-thread half of a rate change. Everything here used to run inline in
+// applyPanBandwidth(); it is separated only so the reconfigure between them can
+// happen without the GUI thread waiting.
+void Hl2Backend::finishRateChange(bool ok, quint64 generation, int targetRate,
+                                  int previousRate, std::size_t failedIndex,
+                                  const std::string& error)
+{
+    // SUPERSEDED. A newer crossing has already snapshotted its own steps from
+    // this receiver set and is running or has run; publishing this one's
+    // outcome would report a rate that is no longer being asked for.
+    if (generation != m_rateChangeGeneration)
+        return;
+
+    if (!ok) {
+        qWarning() << "Hl2Backend: could not reconfigure RX DSP" << failedIndex
+                   << "for" << targetRate << "Hz —"
+                   << QString::fromStdString(error)
+                   << "— staying at" << previousRate << "Hz";
+        m_sampleRateHz = previousRate;
+        if (m_metis)
+            QMetaObject::invokeMethod(m_metis, "setSampleRate",
+                Qt::QueuedConnection,
+                Q_ARG(AetherSDR::hl2::SampleRate, sampleRateEnum(previousRate)));
+        announceReceiverCeilingRevision();
+        emitAllPanState();
+        return;
     }
 
-    // Remember it. The span is the operator's deliberate choice about how much
-    // network and CPU this radio may consume, so it survives the session rather
-    // than snapping back to the conservative default on the next launch.
-    // Written only after the reconfigure SUCCEEDED — persisting a rate the DSP
-    // just refused would make the failure permanent across restarts.
     Hl2Settings::setSpanMhz(static_cast<double>(m_sampleRateHz) / 1.0e6);
 
     // #5594 (M1): the rate is committed, so the receiver ceiling this radio can

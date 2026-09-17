@@ -298,6 +298,17 @@ private:
     // configured before MetisClient::start(), because EP2 must not stop (see
     // the note above buildReceivers() and docs/HERMES.md §20.8). The sequence stays
     // serial on the I/O thread; only the GUI thread stopped waiting for it.
+    // The GUI-thread half of a rate change, resumed once the I/O thread has
+    // reconfigured every receiver. See applyPanBandwidth() for why the two are
+    // split and why the roll-back did not need redesigning.
+    void finishRateChange(bool ok, quint64 generation, int targetRate,
+                          int previousRate, std::size_t failedIndex,
+                          const std::string& error);
+    // Which rate change is current. An operator dragging a zoom produces
+    // crossings back to back; a task that finishes after a newer one has
+    // started publishes nothing rather than reporting a superseded rate.
+    quint64 m_rateChangeGeneration = 0;
+
     void beginDspSetup();
     void armDspSetupWatchdog();
     void onDspSetupWatchdog();
