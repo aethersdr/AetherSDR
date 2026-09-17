@@ -5512,8 +5512,8 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_haveRestoredState = false;
     m_lnaDbByBand.clear();
     m_driveByBand.clear();
-    m_lnaDefaultDb = 0;           // Hl2Backend.h: m_lnaGainDb's constructed default
-    m_lnaGainDb = 0;
+    m_lnaDefaultDb = AetherSDR::hl2::kLnaDefaultGainDb;
+    m_lnaGainDb    = AetherSDR::hl2::kLnaDefaultGainDb;
     m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default

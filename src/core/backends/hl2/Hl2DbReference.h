@@ -34,8 +34,19 @@ namespace AetherSDR::hl2 {
 // Upstream softerhardware/Hermes-Lite2 #177 confirms it as design intent (P1
 // compatibility, 5 bits of gain), not a bug. Measured on ON8ST's board,
 // gateware 74.2, codes 28..31 also lie within 0.07 dB of each other, so the
-// usable span is about -12..+16 dB, not the -12..+48 the protocol advertises
-// and Hl2Backend::kLnaGainMaxDb still publishes.
+// usable span is about -12..+16 dB, not the -12..+48 the protocol advertises.
+// Hl2Backend::kLnaGainMaxDb no longer publishes +48; it is +19, the last code
+// that survives the decode (Hl2BandMemoryPolicy.h owns the range).
+//
+// WHAT IS MEASURED HERE AND WHAT IS NOT, because #5752's review turned on
+// exactly this. The 0.07 dB flatness across codes 28..31 IS a measurement on
+// this board at gateware 74.2. The FOLD ITSELF -- that code 32 replays as code
+// 0 -- is not: it rests on softerhardware/Hermes-Lite2 #177 and on reading RTL
+// this tree does not vendor, and @rfoust reads the same source as a
+// bit-6-selected six-bit path instead. A plateau at the top of the range is
+// consistent with both a fold and a saturation, so the flatness measurement
+// does not settle it. What would: the emitted gain-command bytes and the
+// measured response across codes 31/32 on a known board and gateware.
 //
 // NO CORRECTION IS APPLIED HERE, deliberately. This object is handed a
 // commanded gain and has no way to know what the board did with it; the fold

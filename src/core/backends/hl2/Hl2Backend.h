@@ -821,7 +821,7 @@ private:
     // operators who changed nothing. 0 dB is chosen instead: a neutral start
     // that is inside the range, means what it says, and leaves the loud
     // direction to the operator or to an auto-gain loop.
-    int m_lnaGainDb = 0;
+    int m_lnaGainDb = hl2::kLnaDefaultGainDb;
     // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
     // rather than a real selection — kOcNone (0x00) is a legitimate value
     // meaning "every relay released", so it cannot double as the sentinel.
@@ -944,7 +944,7 @@ private:
     RestoredRadioState m_restoredState;
     QMap<QString, int> m_lnaDbByBand;
     QMap<QString, int> m_driveByBand;
-    int m_lnaDefaultDb = 0;          // matches m_lnaGainDb's own default
+    int m_lnaDefaultDb = hl2::kLnaDefaultGainDb;  // the same one constant
     // The connect param pinned a gain that the start band did not have stored.
     // Live value honoured, persistence refused: see Hl2BandMemoryPolicy.h.
     // Cleared when the operator changes gain or leaves the start band.

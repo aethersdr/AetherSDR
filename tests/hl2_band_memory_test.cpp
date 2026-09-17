@@ -256,6 +256,16 @@ int main()
             }
         }
         check(true, "migrate: every result over -200..200 is inside the range");
+        // TOTAL ON AN int, including the ends. `storedDb + 12` used to be
+        // evaluated before the clamp, so INT_MAX was signed overflow -- UB, not
+        // wraparound, which means the clamp that looks like it bounds the input
+        // ran on a value the standard says does not exist. Reproduced under
+        // UBSan by aethersdr-agent on #5752.
+        check(migrateStoredLnaDb(2147483647) >= kLnaGainMinDb
+                  && migrateStoredLnaDb(2147483647) <= kLnaGainMaxDb,
+              "migrate: INT_MAX is in range and does not overflow");
+        check(migrateStoredLnaDb(-2147483647 - 1) == kLnaGainMinDb,
+              "migrate: INT_MIN clamps to the floor");
     }
 
     if (g_failures == 0) {

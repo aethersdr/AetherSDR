@@ -87,7 +87,17 @@ constexpr int migrateStoredLnaDb(int storedDb)
         // so there is nothing to reconstruct and the floor is the honest answer.
         return kLnaGainMinDb;
     }
-    const int oldCode = clampDb(0, storedDb + 12, 60);
+    // WIDENED BEFORE THE ADD, not clamped after it. `storedDb + 12` overflows
+    // for storedDb near INT_MAX, and signed overflow is undefined rather than
+    // wrapping -- so the clamp that looks like it bounds the input runs on a
+    // value the standard says does not exist. Reproduced under UBSan by
+    // aethersdr-agent on #5752 with migrateStoredLnaDb(INT_MAX).
+    //
+    // No stored document can hold INT_MAX; that is not the point. A pure
+    // function on an int should be total on an int, because the next caller is
+    // the one that will not have checked.
+    const long long raw = static_cast<long long>(storedDb) + 12;
+    const int oldCode = static_cast<int>(raw < 0 ? 0 : (raw > 60 ? 60 : raw));
     return (oldCode & 0x1F) - 12;
 }
 

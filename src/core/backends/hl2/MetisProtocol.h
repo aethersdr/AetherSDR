@@ -340,7 +340,9 @@ Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone)
 Cc ccRxFreq(int rxIndex, std::uint32_t hz) noexcept;
 // RX1 NCO frequency in Hz. Equivalent to ccRxFreq(0, hz).
 Cc ccRx1Freq(std::uint32_t hz) noexcept;
-// AD9866 LNA gain in dB, clamped to [-12, +48]; C4 = 0x40 | (dB + 12).
+// AD9866 LNA gain in dB, clamped to [-12, +19]; C4 = 0x40 | (dB + 12).
+// +19 rather than +48 because 31 is the last code that survives the
+// gateware decode -- see Hl2BandMemoryPolicy.h, which owns the range.
 Cc ccRxGain(int db) noexcept;
 // Per-receiver ADC assignment (see kC0AdcAssignOrTxGain). Phase 1 runs one receiver on
 // ADC0, so every field is zero; the bank still has to be SENT for a conforming
