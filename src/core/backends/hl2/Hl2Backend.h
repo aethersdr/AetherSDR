@@ -19,6 +19,7 @@
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
+#include <atomic>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -298,16 +299,22 @@ private:
     // configured before MetisClient::start(), because EP2 must not stop (see
     // the note above buildReceivers() and docs/HERMES.md §20.8). The sequence stays
     // serial on the I/O thread; only the GUI thread stopped waiting for it.
-    // The GUI-thread half of a rate change, resumed once the I/O thread has
-    // reconfigured every receiver. See applyPanBandwidth() for why the two are
-    // split and why the roll-back did not need redesigning.
+    // The GUI-thread half of a rate change, resumed once the DEDICATED BUILD
+    // THREAD has produced a complete new set of chains and the I/O thread has
+    // swapped them in. See applyPanBandwidth() for the three-thread split and
+    // for why there is no roll-back to design.
     void finishRateChange(bool ok, quint64 generation, int targetRate,
                           int previousRate, std::size_t failedIndex,
                           const std::string& error);
     // Which rate change is current. An operator dragging a zoom produces
     // crossings back to back; a task that finishes after a newer one has
-    // started publishes nothing rather than reporting a superseded rate.
-    quint64 m_rateChangeGeneration = 0;
+    // started installs nothing and publishes nothing rather than putting a
+    // superseded rate on the radio.
+    //
+    // ATOMIC because the I/O thread reads it too: the install step runs there
+    // and must decide, at the last possible moment before it touches anything
+    // live, whether this rebuild is still the one being asked for.
+    std::atomic<quint64> m_rateChangeGeneration {0};
 
     void beginDspSetup();
     void armDspSetupWatchdog();
@@ -845,6 +852,26 @@ private:
     // header for why the EP2 pacer in particular must not share a thread with
     // the UI. Owned by this object; joined in the destructor.
     QThread* m_ioThread = nullptr;
+
+    // ── The rate-change build thread ──────────────────────────────────────
+    //
+    // A THIRD thread, and the reason it must exist is that m_ioThread is not
+    // one receiver's thread but ALL of them AND the wire: MetisClient paces EP2
+    // from a 2 ms timer on it and drains EP6 on it, and the EP6 sample path is
+    // a DirectConnection straight into every Hl2RxDsp::processIqBlock(). One
+    // queued task holding that thread for the length of a rebuild therefore
+    // starves every receiver's audio AND stops EP2 — which docs/HERMES.md §20.8
+    // says the gateware watchdog answers by halting the stream. Putting the
+    // rebuild on m_ioThread keeps the WINDOW alive and kills the AUDIO; this is
+    // where the build actually goes.
+    //
+    // Same shape as AnanBackend::m_dspBuildThread/m_dspBuildContext, which
+    // shipped first. m_dspBuildContext owns no state — it exists only because
+    // QMetaObject::invokeMethod needs a QObject living on the target thread to
+    // post to, and a QThread has the affinity of the thread that CREATED it.
+    // Parentless for the same reason: moveToThread() refuses a parented object.
+    QThread* m_dspBuildThread = nullptr;
+    QObject* m_dspBuildContext = nullptr;
 
     // Process-wide transmit availability, decided once at construction:
     // interactive runs may transmit; automation runs defer to the bridge's

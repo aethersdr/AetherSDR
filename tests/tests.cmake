@@ -1016,6 +1016,14 @@ target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_rate_test COMMAND hl2_rxdsp_rate_test)
 
+# A rate-change rebuild runs off the owning thread now; what it CARRIES across
+# the swap -- notches, noise blanker, shift, and any control verb that arrived
+# mid-build -- is silent when it is lost.
+add_executable(hl2_rxdsp_async_rebuild_test tests/hl2_rxdsp_async_rebuild_test.cpp)
+target_include_directories(hl2_rxdsp_async_rebuild_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_async_rebuild_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_async_rebuild_test COMMAND hl2_rxdsp_async_rebuild_test)
+
 # The panadapter frame rate must follow the operator's slider, not the span
 # (#4470). Wall-clock paced, so it lives in its own target.
 

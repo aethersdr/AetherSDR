@@ -82,9 +82,114 @@ public:
         bool blockForOutput = false;
     };
 
-    // (Re)build the WdspChannel + Hl2Spectrum for this config. Returns false (and
-    // sets error, if given) when the WDSP channel cannot be created.
+    // (Re)build the WdspChannel + Hl2Spectrum for this config, SYNCHRONOUSLY on
+    // this object's own thread. Returns false (and sets error, if given) when the
+    // WDSP channel cannot be created.
+    //
+    // STILL THE CONNECT PATH'S ENTRY POINT (Hl2Backend::beginDspSetup) and the
+    // add-a-panadapter path's (createPanadapter), where nothing is streaming yet
+    // and blocking the I/O thread costs nothing. A LIVE rate change must NOT use
+    // it — see buildChannel()/installRebuiltChannel() below and
+    // Hl2Backend::applyPanBandwidth().
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
+
+    // ── The asynchronous rebuild: build off-thread, swap on-thread ─────────
+    //
+    // WHY THIS EXISTS. Hl2Backend runs MetisClient AND every Hl2RxDsp on ONE
+    // I/O thread. MetisClient paces EP2 from a 2 ms timer on it and drains EP6
+    // on it, and the EP6 sample path is a DirectConnection straight into
+    // processIqBlock(). So a configure() on that thread does not merely stall
+    // ONE receiver's audio: it stalls EVERY receiver and it stops EP2, which
+    // docs/HERMES.md §20.8 says the gateware watchdog answers by halting the
+    // stream. Splitting the build off the I/O thread is what keeps the audio
+    // alive across a rate change; splitting it off the GUI thread only kept the
+    // WINDOW alive.
+    //
+    // The precedent is AnanRxDsp's identical trio (buildChannel /
+    // beginRebuild / installRebuiltChannel) and its comment states the
+    // principle this copies: build first, disturb the session second. Moving
+    // the build to another thread alone would do nothing if the old
+    // stop-before-build ordering were kept.
+
+    // What buildChannel() produced. Move-only (owns two unique_ptrs) and free
+    // of any reference to the Hl2RxDsp it will be installed into, which is what
+    // makes it safe to carry between threads.
+    struct RebuildResult {
+        std::unique_ptr<WdspChannel> channel;
+        std::unique_ptr<Hl2Spectrum> spectrum;
+        std::size_t outputBlockSize = 0;
+        // The Config this was actually built for. installRebuiltChannel() takes
+        // the GEOMETRY from here (rate, block size, FFT size) because that is
+        // what the new channel physically is, and leaves the operator-facing
+        // fields to m_config, which may have moved while the build ran.
+        Config built;
+        // The noise-blanker request the channel was OPENED with, so
+        // installRebuiltChannel() can tell whether the operator moved it
+        // mid-build and needs a live push after the swap.
+        bool builtNbOn = false;
+        int builtNbLevel = 50;
+        std::string error;   // set iff channel == nullptr
+    };
+
+    // The slow half of configure() — WdspChannel::create()'s OpenChannel and
+    // FFTW planning — with nothing of `this` in it. Static on purpose: the whole
+    // point is that it may run on a thread that is not this object's while the
+    // CURRENTLY installed channel keeps producing audio on the one that is.
+    //
+    // `noiseBlankerEnabled`/`noiseBlankerLevel` are passed in rather than read
+    // from members because the channel is OPENED with the blanker (see
+    // configure()'s own note): a chain that had to be re-armed after the swap
+    // would be briefly deaf to impulses. The caller snapshots them on this
+    // object's thread inside beginRebuild()'s turn.
+    [[nodiscard]] static RebuildResult buildChannel(const Config& config,
+                                                   bool noiseBlankerEnabled,
+                                                   int noiseBlankerLevel);
+
+    // Marks a rebuild in flight, and seeds the operator-facing half of m_config
+    // from the snapshot the build is about to run with. Must be called on this
+    // object's own thread BEFORE the build starts.
+    //
+    // WHAT IT BUYS. Every control verb below that would otherwise reach WDSP
+    // takes WDSP's PROCESS-WIDE setup mutex (WdspChannel.cpp's g_setupMutex),
+    // which the background build holds for the whole of OpenChannel. Pushing
+    // through during a build would therefore block THIS thread — the I/O thread
+    // — for however long the build has left, reproducing the exact starvation
+    // this mechanism exists to remove. While a rebuild is in flight those verbs
+    // update this object's own mirrors ONLY, and installRebuiltChannel()
+    // re-applies every one of them to the new channel at the swap, so nothing
+    // the operator asked for is lost.
+    //
+    // DELIBERATELY NOT TOUCHING THE GEOMETRY FIELDS of m_config
+    // (inputSampleRateHz, dspBlockSize, fftSize, audioSampleRateHz) — unlike
+    // AnanRxDsp::beginInitialBuild(), which assigns the whole Config. Those
+    // describe the channel that is STILL RUNNING until the swap actually
+    // happens, and a build that fails must leave this object describing the
+    // chain it really has.
+    //
+    // COUNTED, not a flag: an operator dragging a zoom can have two rebuilds
+    // outstanding at once, and a flag cleared by the first would un-defer the
+    // control verbs while the second build still held the mutex.
+    Q_INVOKABLE void beginRebuild(const Config& config);
+
+    // Give up on a rebuild that will never be installed — it failed, or a newer
+    // one superseded it. Balances beginRebuild(); touches nothing else, so the
+    // running channel and every mirror are exactly as they were.
+    Q_INVOKABLE void abandonRebuild();
+
+    // Swap an already-built RebuildResult in as the active channel. Must run on
+    // this object's own thread; it is the only step that touches live state, and
+    // it is pointer writes plus the re-application below, not a build.
+    //
+    // NOT Q_INVOKABLE, for the same reason AnanRxDsp::installRebuiltChannel()
+    // is not: RebuildResult is move-only, and moc's generated dispatch
+    // copy-constructs by-value arguments out of a void** array, which does not
+    // compile for a move-only type. Every call site reaches it directly from a
+    // lambda already running on this object's thread.
+    //
+    // Returns false — leaving the current channel untouched — if result.channel
+    // is null. Always balances beginRebuild().
+    bool installRebuiltChannel(RebuildResult result);
+
     Q_INVOKABLE void setMode(WdspChannel::Mode mode);
     Q_INVOKABLE void setFilter(double lowHz, double highHz);
     // Runtime AGC change. agcMode is the WDSP RXA AGC mode; maximumGainDb is
@@ -468,6 +573,31 @@ private:
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
 
+    // The shared install step: resize the scratch buffers, recompute the DC
+    // blocker, re-apply everything Config does not carry (shift, the notch set,
+    // the noise blanker, the blanker hold) and take ownership of the new
+    // channel/spectrum. configure() and installRebuiltChannel() both end here so
+    // their results cannot drift apart — this class re-applies SIX things across
+    // a rebuild and a second copy of that list would lose one of them.
+    void installChannel(RebuildResult result);
+
+    // May a control verb push at m_channel right now? False while a background
+    // rebuild is outstanding — see beginRebuild() for why pushing then would
+    // block this object's thread on WDSP's process-wide setup mutex.
+    //
+    // TRUE AGAIN INSIDE installChannel(), even with a further rebuild still
+    // outstanding, because the install IS the re-application: the notch replay
+    // and the mode/filter/AGC push below go through these same verbs, and a
+    // gate that swallowed them would swap in a channel with the operator's
+    // notches silently missing. Unreachable from Hl2Backend, whose generation
+    // guard abandons a superseded build rather than installing it, so this is
+    // the contract being honest rather than a case that occurs.
+    [[nodiscard]] bool canPushToChannel() const noexcept
+    {
+        return m_channel && (m_installing || m_rebuildsInFlight == 0);
+    }
+    int m_rebuildsInFlight = 0;
+    bool m_installing = false;
 
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
