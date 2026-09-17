@@ -10,6 +10,7 @@
 #include <QSerialPort>
 #endif
 
+#include "SpeLcdScheduler.h"
 #include "SpeProtocol.h"
 
 namespace AetherSDR {
@@ -75,8 +76,9 @@ public:
     void switchOff() { sendKey(Spe::Key::SwitchOff); }
 
     // Remote LCD mirroring: while enabled (and connected) the amplifier's
-    // display is polled with the 0x80 request at kLcdPollIntervalMs and
-    // every decoded refresh arrives via lcdFrameReceived. Driven by the
+    // display is polled with the 0x80 request — each reply schedules the
+    // next request kLcdPollIntervalMs later — and every decoded refresh
+    // arrives via lcdFrameReceived. Driven by the
     // applet's floating state — the docked rail has no room for the LCD,
     // so polling it there would be pure link noise.
     void setLcdPolling(bool on);
@@ -108,9 +110,10 @@ signals:
     void connectionFailed(const QString& errorString);
     void statusUpdated(const AetherSDR::Spe::Status& status);
     void lcdFrameReceived(const AetherSDR::Spe::Lcd::Frame& frame);
-    // True only after a checksum-valid LCD reply, and false again after two
-    // missed 600 ms refreshes or whenever LCD polling/transport stops. The
-    // floating menu keys use this independently of Status liveness.
+    // True only after a checksum-valid LCD reply, and false again after
+    // kLcdStaleTimeoutMs without one, or whenever LCD polling/transport
+    // stops. The floating menu keys use this independently of Status
+    // liveness.
     void lcdFreshChanged(bool fresh);
     // Fires on the first Status reply of a connection and again if the
     // reported ID ever changes (in practice: never mid-session). The GUI
@@ -138,7 +141,9 @@ private:
     void pollTick();
     void powerOnStep();
     void setControlLines(bool dtr, bool rts);  // transport-appropriate DTR/RTS
-    void requestLcdFrame();
+    // Executes a scheduler decision: send the 0x80 request and/or re-arm
+    // m_lcdTimer with the interval for the role the scheduler assigned it.
+    void applyLcdEffect(const Spe::LcdScheduler::Effect& effect);
     void setLcdFresh(bool fresh);
 
     QIODevice*    m_device{nullptr};
@@ -168,15 +173,75 @@ private:
     QTimer m_pollTimer;
     static constexpr int kPollIntervalMs = 100;
 
-    // LCD refresh poll — the field-proven application's cadence. Slower
-    // than the status poll on purpose: a display frame is 371 bytes
-    // against Status's ~76, and the panel is for eyes, not telemetry.
+    // Display-request pacing is decided entirely by the I/O-free
+    // Spe::LcdScheduler (see SpeLcdScheduler.h): requests are single-file
+    // — at most one in flight, at most one timer armed — with every
+    // trigger path (idle cadence, keystroke ACK, corrupted-frame retry,
+    // lost-reply fallback) flowing through the same gate. m_lcdTimer is
+    // that ONE timer; applyLcdEffect() arms it with the interval for
+    // whichever role the scheduler assigned. The no-overlap property is
+    // unit-tested in spe_protocol_test.
+    Spe::LcdScheduler m_lcdScheduler;
     QTimer m_lcdTimer;
     QTimer m_lcdStaleTimer;
     bool   m_lcdWanted{false};
     bool   m_lcdFresh{false};
-    static constexpr int kLcdPollIntervalMs = 600;
-    static constexpr int kLcdStaleTimeoutMs = kLcdPollIntervalMs * 2;
+    // The IDLE GAP between a display reply and the next request, not a
+    // free-running period — the effective cadence is gap + round trip +
+    // the link's serialization time for the 371-byte frame (~32 ms at
+    // 115200, ~193 ms at 19200), so a slow link stretches the cadence
+    // instead of piling requests up, and the amp is never asked to
+    // interleave display blocks. (At ≤9600 the 100 ms Status poll alone
+    // nearly saturates the wire — see the design note §11's proxy baud
+    // recommendation.)
+    static constexpr int kLcdPollIntervalMs = 250;
+    // Lost-reply fallback, armed while a request is in flight. Sized so
+    // far above the worst plausible round trip (a 9600 baud proxy serial
+    // side spends ~390 ms serializing the frame alone) that a reply
+    // arriving AFTER it is implausible rather than merely unlikely.
+    //
+    // That margin is load-bearing, and it is the only mitigation the
+    // protocol permits: there is no request id — buildRequest() is a
+    // fixed packet and the reply carries no sequence field — so a reply
+    // that does arrive after the fallback CANNOT be told from the
+    // retry's own reply. The scheduler then credits it to the wrong
+    // request and two requests stay on the wire until the next reset().
+    // Bookkeeping cannot fix that: a counter that swallows the late
+    // reply swallows a genuinely-retried one just as often, freezing the
+    // mirror instead. Widening the window is the fix.
+    //
+    // Also deliberately NOT a multiple of kPollIntervalMs: when replies
+    // stop entirely this timer is the only thing pacing requests and it
+    // free-runs, which is exactly the evenly-dividing-period condition
+    // that phase-locked the original 600 ms cadence to the Status poll.
+    //
+    // Interacts with kLcdStaleTimeoutMs (2400 ms): a retry at 2000 ms
+    // has ~400 ms to land a frame before the FRONT PANEL keys gate, so a
+    // single VANISHED reply can now brush the gate where 1000 ms did
+    // not. Corrupted replies — the field case — take the 80 ms
+    // kLcdRetryGapMs path instead and are unaffected. Keep this below
+    // kLcdStaleTimeoutMs if either constant moves.
+    static constexpr int kLcdLostReplyMs = 2000;
+    // Retry pause after a display frame arrives complete but fails
+    // validation. Short enough that a mostly-corrupted mid-transmit
+    // stream still lands a clean frame within the staleness window
+    // whenever one gets through at all; long enough that the retry stream
+    // (each retry provoked by a full received frame) stays well under the
+    // wire's capacity even at 115200 with Status polling. Deliberately
+    // NOT bounded below by kLcdPollIntervalMs: a corrupted stream is
+    // answered FASTER than a healthy one, because the mirror needs only
+    // one clean frame to stay live and the retry cannot run away — each
+    // one costs a full received frame's serialization time. The trade is
+    // wire share on a slow link, which is what the design note's ≥57600
+    // proxy recommendation covers.
+    static constexpr int kLcdRetryGapMs = 80;
+    // Absolute, deliberately decoupled from the poll gap: it must cover a
+    // full lost frame plus a retry on the slowest plausible link (a 9600
+    // baud proxy serial side spends ~390 ms per display frame) AND the
+    // amplifier's own quiet spells — it stops serving the display for a
+    // moment around OPERATE/STANDBY relay transitions — so routine events
+    // never flap the gate. On a fast link the margin only calms things.
+    static constexpr int kLcdStaleTimeoutMs = 2400;
 
     QString m_currentModelId;
 

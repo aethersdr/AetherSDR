@@ -2458,6 +2458,28 @@ add_executable(anan_droop_correction_test
 target_include_directories(anan_droop_correction_test PRIVATE src)
 add_test(NAME anan_droop_correction_test COMMAND anan_droop_correction_test)
 
+add_executable(anan_droop_defaults_test
+    tests/anan_droop_defaults_test.cpp
+    src/core/backends/anan/AnanDroopDefaults.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_defaults_test PRIVATE src)
+add_test(NAME anan_droop_defaults_test COMMAND anan_droop_defaults_test)
+
+# What the shipped droop defaults do to the NOISE-FLOOR AUTO-ADJUST -- a
+# different consumer from the panadapter trace, and the one #5726 opened for
+# this radio. Drives the real applyDroopCorrectionDb/applyEdgeFade and the real
+# estimateNoiseFloorDbm (NoiseFloorEstimator.h, header-only and Qt-free for
+# exactly this reason), so it cannot drift from what the widget runs.
+# No socket, no Qt, no radio.
+add_executable(anan_droop_noise_floor_test
+    tests/anan_droop_noise_floor_test.cpp
+    src/core/backends/anan/AnanDroopDefaults.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_noise_floor_test PRIVATE src)
+add_test(NAME anan_droop_noise_floor_test COMMAND anan_droop_noise_floor_test)
+
 # AnanDroopCalibrator's pure math (median-in-power averaging, central-window
 # reference, clamp) -- no live radio needed. Ported from this feature's
 # original offline prototype (formerly tools/test_anan_droop_calibration.py,
