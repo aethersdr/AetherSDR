@@ -264,32 +264,14 @@ public:
 
     // ── Panadapter integrity across a transport gap ───────────────────────
     //
-    // How many partial FFT frames were thrown away because EP6 packets went
-    // missing part-way through building one. MONOTONIC for the life of this
-    // DSP stage, and a reconfigure() does NOT restart it: a sample-rate change
-    // reuses this object and only rebuilds the Hl2Spectrum underneath it --
-    // Hl2Backend calls configure() on the existing r.dsp, and nothing in
-    // configure() touches this atomic. Only a receiver torn down and rebuilt
-    // gets a fresh count, because that is a new stage.
-    //
-    // An earlier version of this comment claimed the opposite, and the claim
-    // was the only thing wrong -- the behaviour is defensible and unchanged.
-    // Caught by aethersdr-agent on #5744, who grepped for the writes: there is
-    // exactly one, the fetch_add below.
-    //
-    // THIS IS NOT "how lossy is the link". Hl2Backend's `droppedPackets` row is
-    // that, and it comes from MetisClient's cumulative counter. This is the
-    // narrower and more actionable question: did the loss reach the SPECTRUM.
-    // The two diverge in both directions -- a gap that lands exactly on a frame
-    // boundary costs nothing and is not counted here, and one lost packet
-    // mid-frame costs a whole frame -- so a script that wants to know whether
-    // the panadapter it is about to measure is trustworthy must assert on this
-    // one. See docs/automation-bridge.md under `health`.
-    //
-    // Relaxed, like the ADC peak above and for the same reason: this is written
-    // on the I/O thread and read by healthSnapshot() on the GUI thread, it
-    // orders nothing else, and a reader that sees the previous value for one
-    // poll interval has read a 500 ms old diagnostic count.
+    // Partial FFT windows discarded at a transport discontinuity, including
+    // accepted rewinds and duplicates. Empty windows do not increment it.
+    // Monotonic for this DSP object's lifetime: configure() replaces the
+    // spectrum but does not reset this counter. Read a delta across a run.
+    // Independent of droppedPackets: a rewind can discard without loss, and
+    // loss at an empty window can occur without a discard.
+    // Written on the I/O thread, polled on the GUI thread; this diagnostic
+    // orders no other state, so relaxed atomic access is sufficient.
     [[nodiscard]] quint64 spectrumGapDiscards() const noexcept
     {
         return m_spectrumGapDiscards.load(std::memory_order_relaxed);

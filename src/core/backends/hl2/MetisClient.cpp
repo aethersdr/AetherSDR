@@ -1267,13 +1267,11 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
             m_drops += gap;
             m_link.drops = m_drops;
             emit dropsUpdated(m_drops);
-            // The DSP-facing half of the same fact. HERE, in the sequence
-            // accounting and well above the ep6SamplesMulti() decode, so every
-            // consumer has discarded its pre-gap state before this datagram's
-            // samples reach it -- see rxSequenceGap's note in the header for
-            // why that order is the contract and not an accident of layout.
-            emit rxSequenceGap(gap);
         }
+        // Loss accounting excludes rewinds and duplicates, but their samples
+        // are still delivered below. Every discontinuity must invalidate the
+        // partial FFT before that delivery. Zero means no forward loss.
+        emit rxSequenceGap(gap < 0x80000000u ? gap : 0);
     }
     m_expectedRxSeq = *seq + 1;
     m_haveRxSeq = true;

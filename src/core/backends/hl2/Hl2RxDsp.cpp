@@ -384,8 +384,9 @@ bool Hl2RxDsp::spectrumFrameDue()
 
 void Hl2RxDsp::onSequenceGap()
 {
-    if (!m_spectrum)
-        return;   // between rebuilds; the new Hl2Spectrum starts empty anyway
+    if (!m_spectrum) {
+        return;   // between rebuilds; the new spectrum starts empty
+    }
     // Counted only when something was actually in flight. A gap that lands on a
     // frame boundary discards nothing and has corrupted nothing, and counting
     // it here would make this row a second, worse copy of `droppedPackets`

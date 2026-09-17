@@ -11,6 +11,7 @@
 #include <complex>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 class QTimer;
@@ -166,22 +167,10 @@ signals:
     // connecting per-DDC signals.
     void ddcIqReady(int ddcIndex, const std::vector<std::complex<float>>& block);
     void dropsUpdated(quint64 totalDrops);
-    // THE SAME LOSS, delivered to the DSP instead of to a counter. See
-    // MetisClient::rxSequenceGap, which this mirrors exactly: dropsUpdated is a
-    // session-wide total for a health readout -- and on this backend it is
-    // currently connected to an empty lambda in AnanBackend -- while this says
-    // "the block you are about to be handed does not continue the last one",
-    // which is the only form AnanSpectrum's cross-block FFT accumulator can act
-    // on.
-    //
-    // Carries the DDC index because gap detection is per DDC (see
-    // m_expectedSeq) and only DDC0 feeds AnanRxDsp today; a consumer filters
-    // rather than being handed a gap that belongs to a receiver it does not
-    // own.
-    //
-    // EMITTED BEFORE ddcIqReady/ddc0IqReady for the SAME datagram, from the
-    // same onReadyRead() iteration -- the ordering is the contract, for the
-    // reason spelled out on MetisClient::rxSequenceGap.
+    // This DDC's next IQ block is discontinuous, including accepted rewinds
+    // and duplicates. Emitted before ddcIqReady/ddc0IqReady in the same
+    // handleDatagram() call so direct consumers can clear partial FFTs first.
+    // Other DDCs have independent sequence counters and are unaffected.
     void ddcSequenceGap(int ddcIndex);
     // This session's own Discovery reply -- the SAME radio start() already
     // sent a Discovery packet to, on this socket, per the class comment.
@@ -198,6 +187,9 @@ private slots:
     void onConnectTimeout();
 
 private:
+    friend struct P2ClientTestAccess;
+    void handleDatagram(std::span<const std::uint8_t> bytes, quint16 senderPort);
+
     // p.8: "a Command & Control packet must be sent at least every second
     // (every 100 mS is recommended). Should a C&C packet not be received,
     // and the hardware is in the RUN state, then the hardware will switch

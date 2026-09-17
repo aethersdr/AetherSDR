@@ -54,10 +54,15 @@
 // convention does not matter, because every assertion is an equality between two
 // runs of the same code over the same samples.
 //
+// Additional cases feed both ingest handlers through the DSP, covering forward
+// loss, rewinds, duplicates, wraparound, DDC isolation and rejected datagrams.
+// Backend constructor wiring remains outside this test.
+//
 // NO RADIO, NO SOCKET, NO KEYING. Section 5 feeds MetisClient recorded-shape
 // datagrams through the MetisClientTestAccess friend seam; nothing binds and
 // nothing transmits.
 
+#include "core/backends/anan/P2Client.h"
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanSpectrum.h"
 #include "core/backends/hl2/Hl2RxDsp.h"
@@ -87,6 +92,16 @@ struct MetisClientTestAccess {
     }
 };
 }  // namespace AetherSDR::hl2
+
+namespace AetherSDR::anan {
+struct P2ClientTestAccess {
+    static void enableDdcs(P2Client& client, int count) { client.m_activeDdcCount = count; }
+    static void feedDatagram(P2Client& client, std::span<const std::uint8_t> bytes, quint16 port)
+    {
+        client.handleDatagram(bytes, port);
+    }
+};
+} // namespace AetherSDR::anan
 
 using namespace AetherSDR;
 
@@ -139,6 +154,93 @@ static bool binsEqual(const std::vector<float>& a, const std::vector<float>& b)
             return false;
     }
     return true;
+}
+
+// Full-sized wire blocks, injected into the production ingest handlers.
+static std::vector<std::uint8_t> makeEp6(std::uint32_t seq, bool postGap = false)
+{
+    using namespace AetherSDR::hl2;
+    std::vector<std::uint8_t> packet(kUsbPacketSize, 0);
+    packet[0] = 0xEF; packet[1] = 0xFE; packet[2] = 0x01; packet[3] = 0x06;
+    for (int i = 0; i < 4; ++i) {
+        packet[4 + i] = static_cast<std::uint8_t>(seq >> (24 - 8 * i));
+    }
+    for (const std::size_t fs : {std::size_t{8}, std::size_t{8 + kFrameSize}}) {
+        packet[fs] = packet[fs + 1] = packet[fs + 2] = 0x7F;
+        for (std::size_t i = 0; i < 63; ++i) {
+            packet[fs + 8 + i * 8] = postGap ? 0x20 : 0; // I = 0.25 or 0
+        }
+    }
+    return packet;
+}
+
+static std::vector<std::uint8_t> makeDdc(std::uint32_t seq, bool postGap = false)
+{
+    using namespace AetherSDR::anan;
+    constexpr int samples = 126;
+    std::vector<std::uint8_t> packet(kDdcHeaderLen + samples * kDdcSampleBytes, 0);
+    for (int i = 0; i < 4; ++i) {
+        packet[i] = static_cast<std::uint8_t>(seq >> (24 - 8 * i));
+    }
+    packet[13] = 24;
+    packet[15] = samples;
+    for (int i = 0; i < samples; ++i) {
+        packet[kDdcHeaderLen + i * kDdcSampleBytes] = postGap ? 0x20 : 0;
+    }
+    return packet;
+}
+
+template<class Dsp, class Client, class Wire, class Feed>
+static void verifyContinuity(const char* name, std::uint32_t first, std::uint32_t next,
+                             bool discontinuous, quint64 expectedDrops, Wire wire, Feed feed)
+{
+    std::fprintf(stderr, "Continuity case: %s\n", name);
+    Dsp dsp;
+    Client client;
+    typename Dsp::Config cfg;
+    cfg.fftSize = 1024;
+    cfg.inputSampleRateHz = 48000;
+    cfg.audioSampleRateHz = 24000;
+    cfg.dspBlockSize = 1024;
+    cfg.blockForOutput = true;
+    std::string error;
+    if (!dsp.configure(cfg, &error)) {
+        check(false, error.c_str());
+        return;
+    }
+    std::string order;
+    int frames = 0;
+    std::vector<float> bins;
+    QObject::connect(&dsp, &Dsp::spectrumReady, &dsp,
+                     [&](const std::vector<float>& frame) { bins = frame; ++frames; });
+    wire(client, dsp, order);
+    for (std::uint32_t i = 0; i < 8; ++i) {
+        feed(client, first + i, false);
+    }
+    check(frames == 0, "eight 126-sample blocks leave a partial 1024-point FFT");
+    check(dsp.spectrumGapDiscards() == 0, "initial contiguous run discards nothing");
+    order.clear();
+    feed(client, next, true);
+    check(order == (discontinuous ? "GB" : "B"), "discontinuity precedes sample delivery");
+    check(client.droppedPackets() == expectedDrops, "legacy packet-loss accounting is unchanged");
+    check(frames == (discontinuous ? 0 : 1), "only contiguous samples may complete the pending FFT");
+    check(dsp.spectrumGapDiscards() == (discontinuous ? 1u : 0u), "only discontinuities discard the pending window");
+    if (discontinuous) {
+        for (std::uint32_t i = 1; i < 9; ++i) {
+            feed(client, next + i, true);
+        }
+        check(frames == 1, "a complete post-discontinuity window resumes the spectrum");
+        Dsp clean;
+        if (!clean.configure(cfg, &error)) {
+            check(false, error.c_str());
+            return;
+        }
+        std::vector<float> cleanBins;
+        QObject::connect(&clean, &Dsp::spectrumReady, &clean,
+                         [&](const std::vector<float>& frame) { cleanBins = frame; });
+        clean.processIqBlock(std::vector<std::complex<float>>(1024, {0.25f, 0.0f}));
+        check(binsEqual(bins, cleanBins), "resumed frame contains only post-discontinuity samples");
+    }
 }
 
 int main(int argc, char** argv)
@@ -398,18 +500,6 @@ int main(int argc, char** argv)
     {
         using namespace AetherSDR::hl2;
 
-        auto makeEp6 = [](std::uint32_t seq) {
-            std::vector<std::uint8_t> pkt(kUsbPacketSize, 0);
-            pkt[0] = 0xEF; pkt[1] = 0xFE; pkt[2] = 0x01; pkt[3] = 0x06;
-            pkt[4] = static_cast<std::uint8_t>((seq >> 24) & 0xFF);
-            pkt[5] = static_cast<std::uint8_t>((seq >> 16) & 0xFF);
-            pkt[6] = static_cast<std::uint8_t>((seq >> 8) & 0xFF);
-            pkt[7] = static_cast<std::uint8_t>(seq & 0xFF);
-            for (const std::size_t fs : {std::size_t{8}, std::size_t{8 + kFrameSize}})
-                pkt[fs] = pkt[fs + 1] = pkt[fs + 2] = 0x7F;   // SYNC
-            return pkt;
-        };
-
         MetisClient c;
         MetisClientTestAccess::setStreaming(c);
 
@@ -441,11 +531,111 @@ int main(int argc, char** argv)
         check(order == "BBBGB",
               "the gap is emitted BEFORE the IQ block of the datagram that revealed it");
 
-        // A BACKWARD jump is the radio restarting its counter, not loss --
-        // MetisClient's existing `gap < 0x80000000u` rule. It must not reach the
-        // DSP either, or every stream restart would throw away a good frame.
+        // A rewind does not count as forward loss, but its accepted samples
+        // must still invalidate the partial spectrum before delivery.
+        order.clear();
         MetisClientTestAccess::feedDatagram(c, makeEp6(2));
-        check(gaps.size() == 1, "a backward sequence jump is not a gap");
+        check(gaps.size() == 2 && gaps.back() == 0, "rewind notifies continuity without claiming loss");
+        check(c.droppedPackets() == 3 && order == "GB", "rewind preserves loss total and precedes samples");
+    }
+
+    // ---- 6 · Wire -> DSP continuity, with both production ingest paths ----
+    {
+        const auto hl2Wire = [](hl2::MetisClient& client, hl2::Hl2RxDsp& dsp, std::string& order) {
+            QObject::connect(&client, &hl2::MetisClient::rxSequenceGap, &dsp,
+                [&dsp, &order](quint32) { order += 'G'; dsp.onSequenceGap(); });
+            QObject::connect(&client, &hl2::MetisClient::iqBlockReady, &dsp,
+                [&dsp, &order](const std::vector<std::complex<float>>& block) {
+                    order += 'B'; dsp.processIqBlock(block);
+                });
+        };
+        const auto hl2Feed = [](hl2::MetisClient& client, std::uint32_t seq, bool post) {
+            hl2::MetisClientTestAccess::feedDatagram(client, makeEp6(seq, post));
+        };
+        const auto ananWire = [](anan::P2Client& client, anan::AnanRxDsp& dsp, std::string& order) {
+            QObject::connect(&client, &anan::P2Client::ddcSequenceGap, &dsp,
+                [&dsp, &order](int ddc) {
+                    if (ddc == 0) { order += 'G'; dsp.onSequenceGap(); }
+                });
+            QObject::connect(&client, &anan::P2Client::ddc0IqReady, &dsp,
+                [&dsp, &order](const std::vector<std::complex<float>>& block) {
+                    order += 'B'; dsp.processIqBlock(block);
+                });
+        };
+        const auto ananFeed = [](anan::P2Client& client, std::uint32_t seq, bool post) {
+            anan::P2ClientTestAccess::feedDatagram(client, makeDdc(seq, post), anan::kDdc0DefaultPort);
+        };
+        struct Case {
+            const char* name;
+            std::uint32_t first;
+            std::uint32_t next;
+            bool discontinuous;
+            quint64 hl2Drops;
+        };
+        const Case cases[] = {
+            {"forward loss", 0, 11, true, 3},
+            {"rewind", 0, 0, true, 0},
+            {"duplicate", 0, 7, true, 0},
+            {"in order", 0, 8, false, 0},
+            {"uint32 wrap", 0xfffffff8u, 0, false, 0},
+            {"loss across wrap", 0xfffffff8u, 2, true, 2},
+            {"ambiguous half-range jump", 0, 0x80000008u, true, 0},
+        };
+        for (const Case& c : cases) {
+            verifyContinuity<hl2::Hl2RxDsp, hl2::MetisClient>(
+                c.name, c.first, c.next, c.discontinuous, c.hl2Drops, hl2Wire, hl2Feed);
+            verifyContinuity<anan::AnanRxDsp, anan::P2Client>(
+                c.name, c.first, c.next, c.discontinuous, c.discontinuous ? 1 : 0, ananWire, ananFeed);
+        }
+    }
+
+    // ---- 7 · P2 extraction preserves rejection and per-DDC ownership ----
+    {
+        using namespace AetherSDR::anan;
+        P2Client client;
+        P2ClientTestAccess::enableDdcs(client, 2);
+        std::vector<int> gaps;
+        std::vector<int> blocks;
+        int ddc0Blocks = 0;
+        int links = 0;
+        QObject::connect(&client, &P2Client::ddcSequenceGap, &client,
+                         [&](int ddc) { gaps.push_back(ddc); });
+        QObject::connect(&client, &P2Client::ddcIqReady, &client,
+                         [&](int ddc, const std::vector<std::complex<float>>&) { blocks.push_back(ddc); });
+        QObject::connect(&client, &P2Client::ddc0IqReady, &client,
+                         [&](const std::vector<std::complex<float>>&) { ++ddc0Blocks; });
+        QObject::connect(&client, &P2Client::linkUp, &client, [&] { ++links; });
+        P2ClientTestAccess::feedDatagram(client, makeDdc(0), kDdc0DefaultPort + 1);
+        P2ClientTestAccess::feedDatagram(client, makeDdc(4), kDdc0DefaultPort + 1);
+        check(gaps == std::vector<int>{1}, "DDC1 gap is attributed only to DDC1");
+        check(links == 0 && ddc0Blocks == 0, "DDC1 cannot connect or feed DDC0");
+        P2ClientTestAccess::feedDatagram(client, makeDdc(99), kDdc0DefaultPort);
+        P2ClientTestAccess::feedDatagram(client, makeDdc(100), kDdc0DefaultPort);
+        check(gaps.size() == 1 && links == 1 && ddc0Blocks == 2, "DDC0 has its own first/next sequence");
+        const auto before = blocks.size();
+        P2ClientTestAccess::feedDatagram(client, makeDdc(110), kDdc0DefaultPort + 2);
+        std::vector<std::uint8_t> malformed{0, 0, 0};
+        P2ClientTestAccess::feedDatagram(client, malformed, kDdc0DefaultPort);
+        check(blocks.size() == before && gaps.size() == 1, "invalid port and malformed payload deliver nothing");
+        P2ClientTestAccess::feedDatagram(client, makeDdc(101), kDdc0DefaultPort);
+        check(gaps.size() == 1 && client.droppedPackets() == 1, "rejected datagrams do not advance sequence state");
+    }
+
+    // ---- 8 · Reset also clears the display-rate rolling window ----
+    {
+        const auto pre = tone(128, 10, 0.5f);
+        const auto post = tone(64, 21, 0.5f);
+        hl2::Hl2Spectrum h(64), hc(64);
+        anan::AnanSpectrum a(64), ac(64);
+        std::vector<float> hb, hcb, ab, acb;
+        h.accumulate(pre);
+        a.accumulate(pre);
+        check(h.reset() == 63, "HL2 reset discards capped rolling window");
+        check(a.reset() == 63, "ANAN reset discards capped rolling window");
+        h.process(post, hb); hc.process(post, hcb);
+        a.process(post, ab); ac.process(post, acb);
+        check(binsEqual(hb, hcb), "HL2 accumulated pre-gap data is absent");
+        check(binsEqual(ab, acb), "ANAN accumulated pre-gap data is absent");
     }
 
     if (g_failures == 0)

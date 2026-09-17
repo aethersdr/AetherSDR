@@ -3406,29 +3406,24 @@ other side has.
       "label":"Forward (W, approx — peak HOLD, display only)","value":4.56}]}
 ```
 
-**Assert on `spectrumGapDiscards<n>` for panadapter integrity, and on
-`droppedPackets` for link loss — they are different questions.** On the HL2,
-`droppedPackets` is the cumulative count of EP6 sequence gaps: the link's own
-health. `spectrumGapDiscards0` (and `…1`, `…2`, … one per active receiver) is
-how many times such a gap landed part-way through building an FFT frame and
-cost the whole frame. The panadapter accumulates one frame out of roughly 8
-EP6 blocks at the 1024-point FFT the backend runs, so the two diverge in
-**both** directions: a gap that falls on a frame boundary adds to `droppedPackets` and
-nothing here, while a single lost packet mid-frame costs a frame. A soak test
-that wants to know whether the spectrum it is about to measure is trustworthy
-must threshold this row — `droppedPackets` alone cannot answer it, and a
-non-zero `droppedPackets` with a zero `spectrumGapDiscards0` is a healthy,
-expected state on a lossy link. Both are monotonic, and `spectrumGapDiscards<n>`
-is monotonic for the life of one receiver's DSP stage — a sample-rate change
-reconfigures that stage **in place** and does **not** restart the count; only a
-receiver torn down and rebuilt gets a fresh one. Compare a **delta** across a
-run rather than an absolute against a session, and **do not use a geometry
-change as a way to zero the row** — a script that switches sample rate to clear
-the counter before its measurement window carries every earlier discard into
-that window and fails a healthy run. The row is `null` for a receiver between
-rebuilds, which is "not reported" and not "clean". **There is no equivalent row
-on the ANAN backend** — that backend publishes no health rows at all yet; the
-counter exists on its DSP stage and becomes readable here when it does.
+**`spectrumGapDiscards<n>` counts discarded FFT windows, not packet loss.**
+On HL2 there is one row per active receiver. It increments when a transport
+sequence discontinuity discards a nonempty spectrum accumulator, including
+accepted rewinds and duplicate packets. `droppedPackets` counts forward packet
+loss only. The two can differ in either direction: a discontinuity at an empty
+accumulator costs no window, while a rewind can discard a window without
+increasing the loss count. The reset prevents a transform across discontinuous
+samples; the counter records that prevention, not a corrupted frame rendered.
+Repeated discontinuities can prevent a full FFT window from forming and leave
+the last trace displayed, so use frame liveness as well as counter deltas when
+assessing a measurement run.
+
+`spectrumGapDiscards<n>` is monotonic for the receiver DSP object's lifetime.
+A sample-rate change reconfigures that object in place and does not reset the
+count. Only destroying and rebuilding the receiver DSP starts it at zero.
+Compare deltas across a run; do not switch geometry to zero the counter. A
+receiver without a DSP reports `null`, meaning unavailable rather than clean.
+ANAN has the same DSP counter but does not publish health rows yet.
 
 **Assert on `forwardPowerW`, never on `forwardPowerPeakW`.** The peak row is a
 meter's display hold: a single key-edge ADC sample decays over seconds, so a

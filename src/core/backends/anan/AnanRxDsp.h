@@ -292,16 +292,10 @@ public:
 
     // ── Panadapter integrity across a transport gap ───────────────────────
     //
-    // How many partial FFT frames were thrown away because DDC0 packets went
-    // missing part-way through building one. The exact twin of
-    // Hl2RxDsp::spectrumGapDiscards(), which carries the full note: this is NOT
-    // "how lossy is the link" (P2Client's dropsUpdated is that), it is "did the
-    // loss reach the spectrum".
-    //
-    // NOT SURFACED THROUGH A HEALTH ROW ON THIS BACKEND, because AnanBackend
-    // has no healthSnapshot() override at all -- see the note at the
-    // ddcSequenceGap connection in AnanBackend.cpp. Reachable from a test, and
-    // from the bridge only once this backend publishes health rows.
+    // Partial FFT windows discarded at DDC0 discontinuities, including
+    // accepted rewinds and duplicates. Same lifetime/empty-window semantics
+    // as Hl2RxDsp::spectrumGapDiscards(). AnanBackend does not expose health
+    // rows yet; this counter is currently available only at the DSP stage.
     [[nodiscard]] quint64 spectrumGapDiscards() const noexcept
     {
         return m_spectrumGapDiscards.load(std::memory_order_relaxed);

@@ -961,14 +961,10 @@ target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
 target_link_libraries(hl2_spectrum_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
 add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
 
-# A transport sequence gap must not be transformed across. Both spectrum
-# classes accumulate one FFT frame out of many transport blocks, so a lost
-# packet mid-frame used to be stitched over and the result presented as a
-# measurement; reset() existed for exactly that and had no caller anywhere.
-# Spans four layers on purpose -- the two spectrum classes, both RX DSP stages,
-# and MetisClient's wire edge -- because the fix is only real if the gap
-# actually travels from the datagram to the accumulator. Qt6::Network is for
-# MetisClient, which is constructed but never bound: no socket, no radio.
+# Transport discontinuities must invalidate partial FFTs before IQ delivery.
+# Covers both spectrum classes, both DSP stages, and both production ingest
+# handlers through socket-free friend seams. Qt6::Network is needed by the
+# clients, but neither client is started and no socket is created or bound.
 add_executable(spectrum_sequence_gap_test tests/spectrum_sequence_gap_test.cpp)
 target_include_directories(spectrum_sequence_gap_test PRIVATE src tests)
 target_link_libraries(spectrum_sequence_gap_test

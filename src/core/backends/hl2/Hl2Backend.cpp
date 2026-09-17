@@ -442,30 +442,15 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         }
     }, Qt::DirectConnection);
 
-    // AN EP6 SEQUENCE GAP, DELIVERED TO THE DSP. Until now a gap reached a
-    // counter and stopped there: MetisClient accumulated it into m_drops,
-    // dropsUpdated mirrored the total onto this thread for the health rows, and
-    // nothing on the sample path was ever told. Hl2Spectrum builds one FFT
-    // frame out of ~8 EP6 blocks -- this backend never overrides
-    // Hl2RxDsp::Config's 1024-point default -- so a gap mid-frame left it
-    // stitching pre-gap samples to post-gap ones and transforming across the
-    // seam: a phase-coherent measurement of an instant that never existed.
-    //
-    // EVERY receiver, not just the one that lost something: one EP6 datagram
-    // carries every active DDC interleaved, so a missing datagram is missing
-    // samples for all of them.
-    //
-    // Same shape as the iqBlocksReady fan-out above, and deliberately so. This
-    // is a DirectConnection from a signal emitted by m_metis, so the body runs
-    // on the I/O thread, where m_ioDsps live -- a plain call into an object of
-    // this thread, not a cross-thread hop. m_ioDsps, NOT m_rx: see
-    // publishIoDsps(). And because MetisClient emits this BEFORE the decode
-    // that produces the block, the discard always precedes the post-gap samples
-    // rather than following them.
+    // EP6 interleaves every active DDC. Invalidate each partial FFT before
+    // the discontinuous datagram's samples arrive, including rewinds and
+    // duplicates. Like iqBlocksReady above, this runs on the I/O thread and
+    // uses its published DSP list (not the GUI thread's m_rx).
     connect(m_metis, &MetisClient::rxSequenceGap, this, [this](quint32) {
         for (auto* dsp : m_ioDsps) {
-            if (dsp)
+            if (dsp) {
                 dsp->onSequenceGap();
+            }
         }
     }, Qt::DirectConnection);
 
@@ -5436,22 +5421,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // this is the first number to look at when it does.
     put("droppedPackets", QStringLiteral("Dropped EP6 packets"),
         static_cast<qulonglong>(m_drops));
-    // WHAT THAT LOSS DID TO THE PANADAPTER, per receiver. The row above says
-    // the link dropped packets; this one says how many times a drop landed
-    // part-way through an FFT frame and cost the whole frame. They are
-    // different questions and they diverge in both directions: a gap on a frame
-    // boundary adds to droppedPackets and nothing here, while a single lost
-    // packet mid-frame costs a frame.
-    //
-    // MACHINE-READABLE ON PURPOSE. A prose row cannot be asserted on -- a soak
-    // test's best available assertion becomes a substring match on a sentence,
-    // and that sentence then becomes a contract by accident. An integer that a
-    // script thresholds is the whole point of the row; see
-    // docs/automation-bridge.md under `health` for the two assertion rules.
-    //
-    // Read straight off the DSP stage's atomic, the same way the ADC peak rows
-    // above are: no mirror, because there is nothing to coalesce and a poll
-    // reads a monotonic scalar safely from another thread.
+    // Partial FFT windows discarded at discontinuities, including accepted
+    // rewinds and duplicates. Poll each DSP's atomic like the ADC peak rows;
+    // its lifetime is protected by the GUI-owned receiver list.
     for (const auto& ids : m_ids.all()) {
         const Receiver* r = rx(ids.ddcIndex);
         // Guarded on `!r` alone, like the sibling loops: a receiver with no DSP
