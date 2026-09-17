@@ -38,15 +38,16 @@ namespace AetherSDR::hl2 {
 // Hl2Backend::kLnaGainMaxDb no longer publishes +48; it is +19, the last code
 // that survives the decode (Hl2BandMemoryPolicy.h owns the range).
 //
-// WHAT IS MEASURED HERE AND WHAT IS NOT, because #5752's review turned on
-// exactly this. The 0.07 dB flatness across codes 28..31 IS a measurement on
-// this board at gateware 74.2. The FOLD ITSELF -- that code 32 replays as code
-// 0 -- is not: it rests on softerhardware/Hermes-Lite2 #177 and on reading RTL
-// this tree does not vendor, and @rfoust reads the same source as a
-// bit-6-selected six-bit path instead. A plateau at the top of the range is
-// consistent with both a fold and a saturation, so the flatness measurement
-// does not settle it. What would: the emitted gain-command bytes and the
-// measured response across codes 31/32 on a known board and gateware.
+// MEASURED, on this board at gateware 74, after @rfoust rightly refused the
+// earlier evidence. The 0.07 dB flatness across codes 28..31 does NOT establish
+// a fold -- a flat top is equally consistent with a saturation, and this header
+// used to cite it as though it settled the question. A gain sweep does settle
+// it: code 31 reads -53.20 dBFS and code 32 reads -97.75 dBFS, a 44.55 dB step,
+// and all seven wrapped codes 32..38 land on their mod-32 twins within 0.52 dB.
+// Reproduced in a second run at -43.95 dB. Receive only, bracketed against band
+// drift at +0.15 dB.
+//
+// ONE UNIT, ONE GATEWARE. Nothing here is evidence about other boards.
 //
 // NO CORRECTION IS APPLIED HERE, deliberately. This object is handed a
 // commanded gain and has no way to know what the board did with it; the fold
@@ -136,7 +137,17 @@ namespace AetherSDR::hl2 {
 class Hl2DbReference {
 public:
     // Matches Hl2Backend/MetisClient's default LNA setting.
-    static constexpr double kDefaultLnaGainDb = 20.0;
+    // MUST TRACK Hl2Backend's own default, and this PR is what moves it.
+    //
+    // It seeds both m_lnaGainDb and m_referenceLnaGainDb, and
+    // setReferenceLnaGainDb() has no caller in src/. So leaving it at 20 while
+    // the backend's constructed default becomes 0 puts lnaOffsetDb() = 20 - 0
+    // = +20 on EVERY FRESH CONNECT and moves agcCeilingDb(65) from the 39 dB
+    // measured clean on hardware to 59 dB -- for every operator, not only the
+    // migrated ones. Raised by aethersdr-agent as #5752 blocker 2; it lived in
+    // the stacked #5753 for a day, which is precisely the incoherence the
+    // review named.
+    static constexpr double kDefaultLnaGainDb = 0.0;
 
     // Operator AGC-T units (0..100) -> WDSP maximum-gain ceiling in dB. 0.6
     // spans 0..60 dB, which puts the default of 65 at 39 dB -- measured clean
