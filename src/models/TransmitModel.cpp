@@ -131,11 +131,6 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
         provenanceMoved = true;
     }
     if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
-    // Emitted even when rfPowerChanged already fired. Both ends of the only
-    // consumer feed one coalescing timer, so the duplicate costs nothing, and
-    // suppressing it here would make the guarantee ("provenance moves are always
-    // announced") conditional on a value comparison three lines away.
-    if (provenanceMoved) emit powerProvenanceChanged();
     if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
     // Backend MOX is observed radio state, not this client's transmit intent.
@@ -207,6 +202,17 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
 
     // ── Misc TX (max_power_level / tx_slice_mode emit inline, like the old code) ──
     if (assign(d.maxPowerLevel, m_maxPowerLevel)) { changed = true; emit maxPowerLevelChanged(m_maxPowerLevel); }
+    // AFTER both power assigns, not beside the rfPower one (#5733 review).
+    // m_haveMaxPowerLevel latches at the top of this function but m_maxPowerLevel
+    // is not written until the line above, so emitting earlier handed a
+    // synchronous consumer haveMaxPowerLevel()==true with the ceiling still at
+    // the compiled-in 100 — the exact phantom the latch exists to prevent.
+    //
+    // Emitted even when rfPowerChanged/maxPowerLevelChanged already fired. Both
+    // ends of the only consumer feed one coalescing timer, so the duplicate costs
+    // nothing, and suppressing it would make the guarantee ("provenance moves are
+    // always announced") conditional on a value comparison.
+    if (provenanceMoved) emit powerProvenanceChanged();
     changed |= assign(d.tuneMode, m_tuneMode);
     changed |= assign(d.showTxInWaterfall, m_showTxInWaterfall);
     if (assign(d.txSliceMode, m_txSliceMode)) { changed = true; emit txSliceModeChanged(m_txSliceMode); }
@@ -380,11 +386,13 @@ void TransmitModel::setRfPower(int power)
         m_rfPower = power;
         emit rfPowerChanged(power);
         emit stateChanged();
-    } else if (wasFromRadio) {
-        // Re-asking for the value the radio already confirmed still demotes it
-        // to unconfirmed, and no value moved to say so.
-        emit powerProvenanceChanged();
     }
+    // UNCONDITIONAL on the value moving (#5733 review). A confirmed->request
+    // demotion is a provenance move whether or not the number changed, and
+    // powerProvenanceChanged is documented as THE provenance edge; gating it on
+    // the comparison meant an operator dragging 60->40 on a Flex demoted the
+    // value while a consumer subscribed to this signal alone never heard.
+    if (wasFromRadio) emit powerProvenanceChanged();
     emit commandReady(QString("transmit set rfpower=%1").arg(power));
     emit rfPowerCommandIssued(power);
 }

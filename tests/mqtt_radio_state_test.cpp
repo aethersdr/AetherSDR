@@ -159,6 +159,31 @@ int main(int argc, char** argv)
                      "disconnected payload retires the power fields");
     }
 
+    // ── Disconnect with the latches STILL SET, which is the real wire order.
+    //    RadioModel::onDisconnected() emits radioTransmittingChanged(false) ten
+    //    lines before it calls TransmitModel::resetState(), and that signal is
+    //    wired to a direct, uncoalesced publish -- so the payload is built while
+    //    haveTransmitStatus/driveIsReadback are still true. The case above uses
+    //    default inputs and therefore never exercised this (#5733 review).
+    {
+        MqttRadioStateInputs in = liveInputs();
+        in.connected          = false;   // isConnected() already reads false here
+        in.haveTransmitStatus = true;    // resetState() has NOT run yet
+        in.drive              = 100;
+        in.driveIsReadback    = true;
+        in.haveMaxPowerLevel  = true;
+        in.maxPowerLevel      = 500;
+        const QJsonObject obj = buildMqttRadioStatePayload(in);
+        ok &= expect(!obj.contains(QStringLiteral("drive")),
+                     "a dead radio's drive is retired even with the latch still set");
+        ok &= expect(!obj.contains(QStringLiteral("max_power_level")),
+                     "a dead radio's ceiling is retired even with the latch still set");
+        ok &= expect(!obj.contains(QStringLiteral("drive_confirmed")),
+                     "no drive_confirmed:true on a connected:false payload");
+        ok &= expect(obj.value(QStringLiteral("connected")).toBool() == false,
+                     "the disconnect payload still says connected:false");
+    }
+
     // ── An intent-only backend (HL2) must say so: drive present, but flagged.
     {
         MqttRadioStateInputs in = liveInputs();
@@ -365,6 +390,51 @@ int main(int argc, char** argv)
                      "a value-identical radio report still reaches the mirror");
         ok &= expect(tm.rfPowerIsFromRadio(),
                      "and the echo re-confirms the drive it did not change");
+    }
+
+    // ── The provenance signal is THE provenance edge, in both directions and
+    //    at the moment it fires (#5733 review).
+    {
+        TransmitModel tm;
+
+        // F3: a synchronous consumer must see the ceiling the latch announces.
+        // m_haveMaxPowerLevel latches at the top of applyChanges() but
+        // m_maxPowerLevel is assigned much later, so emitting in between handed
+        // a slot haveMaxPowerLevel()==true with the compiled-in default still in
+        // place -- the phantom the latch exists to prevent.
+        int ceilingSeenBySlot = -1;
+        bool latchSeenBySlot = false;
+        QObject::connect(&tm, &TransmitModel::powerProvenanceChanged, &tm, [&] {
+            latchSeenBySlot   = tm.haveMaxPowerLevel();
+            ceilingSeenBySlot = tm.maxPowerLevel();
+        });
+        TransmitDelta first;
+        first.maxPowerLevel = 500;            // first report, unlike the 100 default
+        tm.applyChanges(first);
+        ok &= expect(latchSeenBySlot,
+                     "the provenance slot sees the max-power latch set");
+        ok &= expect(ceilingSeenBySlot == 500,
+                     "the provenance slot sees the REPORTED ceiling, not the default");
+    }
+    {
+        // F4: a demotion is announced whether or not the value moved. The
+        // value-identical case is covered above; this is the one an operator
+        // actually performs -- dragging the slider to a different number on a
+        // backend that had confirmed the old one.
+        TransmitModel tm;
+        TransmitDelta confirm;
+        confirm.rfPower = 60;
+        tm.applyChanges(confirm);             // radio confirms 60
+        ok &= expect(tm.rfPowerIsFromRadio(), "the radio report confirms the drive");
+
+        int provenanceEdges = 0;
+        QObject::connect(&tm, &TransmitModel::powerProvenanceChanged,
+                         &tm, [&] { ++provenanceEdges; });
+        tm.setRfPower(40);                    // operator drags 60 -> 40
+        ok &= expect(!tm.rfPowerIsFromRadio(),
+                     "a local set demotes the drive to a request");
+        ok &= expect(provenanceEdges == 1,
+                     "the demotion is announced even though the value moved too");
     }
 
     return ok ? 0 : 1;

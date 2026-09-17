@@ -133,8 +133,13 @@ void MainWindow::wireSpotSubsystem()
     // A family switch rebuilds the backend without a disconnect edge, so the
     // cached authority has to follow it or the next radio publishes under the
     // previous one's answer (#5733 review).
+    // …and publish, not merely re-cache. teardownBackend() clears the latches
+    // through the deliberately signal-free resetPowerProvenance(), so without a
+    // publish here nothing retires the OUTGOING radio's drive from the topic: a
+    // switch whose following connect stalls leaves a last-known-value subscriber
+    // holding the previous radio's 100% indefinitely (#5733 review).
     connect(&m_radioModel, &RadioModel::backendRebuilt,
-            this, [this] { refreshRadioStateDriveAuthority(); });
+            this, [this] { refreshRadioStateDriveAuthority(); publishRadioStateMqtt(); });
     // Debounce timer for end-of-CWX detection (queueEmpty unreliable with sync_cwx=0).
     // Fires 1 s after the last tx:false with no intervening tx:true = transmission done.
     m_cwxTxEndTimer.setSingleShot(true);

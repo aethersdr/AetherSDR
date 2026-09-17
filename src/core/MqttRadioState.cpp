@@ -25,7 +25,13 @@ QJsonObject buildMqttRadioStatePayload(const MqttRadioStateInputs& in)
     // byte-identical to a radio genuinely running full drive; publishing it would
     // hand an interlock a phantom. Omission makes a consumer that requires the
     // field fail loudly instead.
-    if (in.haveTransmitStatus) {
+    // AND `connected`, for the same reason the slice fields are gated: the
+    // disconnect publish runs from radioTransmittingChanged(false), which
+    // RadioModel::onDisconnected() emits TEN LINES BEFORE it calls
+    // TransmitModel::resetState() — so the latches are still set and the dead
+    // radio's drive would go out carrying drive_confirmed:true, which is the one
+    // message an amplifier interlock must never see (#5733 review).
+    if (in.connected && in.haveTransmitStatus) {
         obj[QStringLiteral("drive")] = in.drive;
         // Whether `drive` IN THIS MESSAGE is what the RADIO reports or what the
         // OPERATOR asked for. Published alongside the value, not as separate
@@ -38,7 +44,7 @@ QJsonObject buildMqttRadioStatePayload(const MqttRadioStateInputs& in)
     // Gated apart from `drive` on purpose: only Flex reports a ceiling in
     // transmit status, so tying this to the drive latch published the model's
     // compiled-in 100 as firmware truth on every other family (#5733 review).
-    if (in.haveMaxPowerLevel) {
+    if (in.connected && in.haveMaxPowerLevel) {
         obj[QStringLiteral("max_power_level")] = in.maxPowerLevel;
     }
 
