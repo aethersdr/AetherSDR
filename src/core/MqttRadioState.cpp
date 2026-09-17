@@ -26,12 +26,20 @@ QJsonObject buildMqttRadioStatePayload(const MqttRadioStateInputs& in)
     // hand an interlock a phantom. Omission makes a consumer that requires the
     // field fail loudly instead.
     if (in.haveTransmitStatus) {
-        obj[QStringLiteral("drive")]           = in.drive;
-        obj[QStringLiteral("max_power_level")] = in.maxPowerLevel;
-        // Whether `drive` is what the RADIO reports or what the OPERATOR asked
-        // for. Published alongside the value, not as separate knowledge a
-        // subscriber has to look up per radio family.
+        obj[QStringLiteral("drive")] = in.drive;
+        // Whether `drive` IN THIS MESSAGE is what the RADIO reports or what the
+        // OPERATOR asked for. Published alongside the value, not as separate
+        // knowledge a subscriber has to look up per radio family — and per
+        // value, so a local drive change reads as unconfirmed until the radio
+        // echoes it rather than being vouched for on the backend's reputation.
         obj[QStringLiteral("drive_confirmed")] = in.driveIsReadback;
+    }
+
+    // Gated apart from `drive` on purpose: only Flex reports a ceiling in
+    // transmit status, so tying this to the drive latch published the model's
+    // compiled-in 100 as firmware truth on every other family (#5733 review).
+    if (in.haveMaxPowerLevel) {
+        obj[QStringLiteral("max_power_level")] = in.maxPowerLevel;
     }
 
     return obj;

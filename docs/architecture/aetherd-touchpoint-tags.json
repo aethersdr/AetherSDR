@@ -383,6 +383,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/MqttRadioState.h": {
+  "tag": "ui-support",
+  "note": "Pure payload builder for the MQTT aethersdr/radio/state topic; external integration plumbing, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
  "core/MqttSettings.h": {
   "tag": "ui-support",
   "note": "Settings store for the MQTT broker bridge (conn config, topics, buttons, keychain); external integration plumbing",

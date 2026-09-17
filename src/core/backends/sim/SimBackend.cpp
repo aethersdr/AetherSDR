@@ -303,9 +303,11 @@ RadioCapabilities SimBackend::capabilities() const
     caps.txPowerMaxWatts = 0.0;
     // Explicitly absent: the RX-only simulator publishes no forward power.
     caps.forwardPowerRequiresSmoothing = false;
-    // No drive to read back on a backend that cannot key (#5518). It never
-    // populates TransmitDelta::rfPower either, so nothing publishes drive at all.
-    caps.driveIsReadback = false;
+    // transmitDriveControl stays ABSENT (#5518): the RX-only simulator has no
+    // transmitter, so there is no drive for anyone to own. Distinct from an
+    // Engine-authority backend that owns a register — this one has none, and an
+    // absent record is what keeps `drive_confirmed` off the wire entirely.
+
     // Moot on a backend that cannot key at all — canTransmit=false refuses every
     // mode already. Empty, not "all of them", because this field means "the
     // exceptions", and a simulator has none.

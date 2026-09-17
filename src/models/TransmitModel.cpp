@@ -30,7 +30,11 @@ void TransmitModel::resetState()
     // connect. Deliberately NOT emitting rfPowerChanged here — that signal drives
     // a TCI `drive:` broadcast and the TX power-meter scale, and neither should be
     // told the radio moved its power to 100 as it went away.
-    m_haveTransmitStatus = false;
+    //
+    // Delegated so the disconnect path and RadioModel::teardownBackend()'s
+    // family-switch path can never disagree about what "nobody has reported this"
+    // means (#5733 review).
+    resetPowerProvenance();
     m_tunePower = 10;
     m_tune = false;
     m_mox = false;
@@ -113,9 +117,24 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     // Latch on PRESENCE, not on change (#5518): a radio that reports 100% into a
     // model already sitting at the 100 default makes assign() return false, and a
     // latch keyed on that would never fire for exactly the value it most needs to
-    // confirm.
-    if (d.rfPower) m_haveTransmitStatus = true;
+    // confirm. The same case is why provenance gets its own signal below — the
+    // latch flipping IS the edge a mirror needs, and no value changed to carry it.
+    bool provenanceMoved = false;
+    if (d.rfPower) {
+        if (!m_haveTransmitStatus || !m_rfPowerFromRadio) provenanceMoved = true;
+        m_haveTransmitStatus = true;
+        m_rfPowerFromRadio = true;   // the radio said it, so it is confirmed now
+    }
+    if (d.maxPowerLevel && !m_haveMaxPowerLevel) {
+        m_haveMaxPowerLevel = true;
+        provenanceMoved = true;
+    }
     if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
+    // Emitted even when rfPowerChanged already fired. Both ends of the only
+    // consumer feed one coalescing timer, so the duplicate costs nothing, and
+    // suppressing it here would make the guarantee ("provenance moves are always
+    // announced") conditional on a value comparison three lines away.
+    if (provenanceMoved) emit powerProvenanceChanged();
     if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
     // Backend MOX is observed radio state, not this client's transmit intent.
@@ -351,10 +370,19 @@ void TransmitModel::setHasTunerMemories(bool present)
 void TransmitModel::setRfPower(int power)
 {
     power = qBound(0, power, 100);
+    // This is a REQUEST until the radio echoes it back (#5733 review). Recorded
+    // before the emit so any listener that reads rfPowerIsFromRadio() off
+    // rfPowerChanged sees the request, not the previous confirmed answer.
+    const bool wasFromRadio = m_rfPowerFromRadio;
+    m_rfPowerFromRadio = false;
     if (m_rfPower != power) {
         m_rfPower = power;
         emit rfPowerChanged(power);
         emit stateChanged();
+    } else if (wasFromRadio) {
+        // Re-asking for the value the radio already confirmed still demotes it
+        // to unconfirmed, and no value moved to say so.
+        emit powerProvenanceChanged();
     }
     emit commandReady(QString("transmit set rfpower=%1").arg(power));
     emit rfPowerCommandIssued(power);

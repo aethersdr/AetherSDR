@@ -360,10 +360,12 @@ RadioCapabilities AnanBackend::capabilities() const
     c.txPowerMaxWatts = 0.0;
     c.hostModulates = true;        // client-side WDSP, like the HL2
     c.takesTxAudioOverSeam = true; // moot while canTransmit is false
-    // Host-modulated like the HL2, so if this backend ever gains a drive path it
-    // will own the register and report intent, not a readback (#5518). It
-    // populates no TransmitDelta::rfPower today, so nothing publishes drive.
-    c.driveIsReadback = false;
+    // Host-modulated like the HL2, so when this backend gains a drive path it
+    // will own the register and report intent, not a readback (#5518). Declared
+    // rather than left absent because the ownership answer is already known; it
+    // populates no TransmitDelta::rfPower today, so nothing publishes drive yet.
+    c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
+        SliceFrequencyControl::Authority::Engine};
     c.hasRadioPttReadback = false; // no PTT at all, so no readback either
     c.hasTuner = false;            // G2 has no internal ATU (Apache Labs spec)
     c.hasTunerMemories = false;    // no internal ATU, so no tuner-memory surface

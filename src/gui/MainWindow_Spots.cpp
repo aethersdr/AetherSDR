@@ -18,6 +18,7 @@
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
 #include "core/N1MMSpotClient.h"
+#include "models/TransmitModel.h"
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #ifdef HAVE_MQTT
@@ -111,6 +112,14 @@ void MainWindow::wireSpotSubsystem()
             this, [this](int) { m_radioStateCoalesceTimer.start(); });
     connect(&m_radioModel.transmitModel(), &TransmitModel::maxPowerLevelChanged,
             this, [this](int) { m_radioStateCoalesceTimer.start(); });
+    // The provenance edge, which no value-change signal can carry (#5733 review).
+    // A radio reporting its drive as 100 into a model already holding the 100
+    // default emits nothing — assign() returns false — so without this the very
+    // first status of a session went unpublished and an operator running full
+    // drive never saw `drive` on the topic at all. Also covers drive crossing
+    // between radio-confirmed and operator-requested at an unchanged value.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::powerProvenanceChanged,
+            this, [this] { m_radioStateCoalesceTimer.start(); });
     // Connect/disconnect edges. On disconnect this is the message that retires the
     // session's power: TransmitModel::resetState() has already cleared its
     // have-status latch by the time this fires (RadioModel::onDisconnected calls
@@ -120,7 +129,12 @@ void MainWindow::wireSpotSubsystem()
     // not coalesced — an interlock should not wait 150 ms to learn the radio is
     // gone.
     connect(&m_radioModel, &RadioModel::connectionStateChanged,
-            this, [this](bool) { publishRadioStateMqtt(); });
+            this, [this](bool) { refreshRadioStateDriveAuthority(); publishRadioStateMqtt(); });
+    // A family switch rebuilds the backend without a disconnect edge, so the
+    // cached authority has to follow it or the next radio publishes under the
+    // previous one's answer (#5733 review).
+    connect(&m_radioModel, &RadioModel::backendRebuilt,
+            this, [this] { refreshRadioStateDriveAuthority(); });
     // Debounce timer for end-of-CWX detection (queueEmpty unreliable with sync_cwx=0).
     // Fires 1 s after the last tx:false with no intervening tx:true = transmission done.
     m_cwxTxEndTimer.setSingleShot(true);

@@ -42,6 +42,7 @@ MqttRadioStateInputs liveInputs()
     in.sliceMode           = QStringLiteral("DIGU");
     in.haveTransmitStatus  = true;
     in.drive               = 10;
+    in.haveMaxPowerLevel   = true;
     in.maxPowerLevel       = 100;
     in.driveIsReadback     = true;
     return in;
@@ -130,6 +131,7 @@ int main(int argc, char** argv)
         MqttRadioStateInputs in = liveInputs();
         in.haveTransmitStatus = false;
         in.drive              = 100;   // the TransmitModel class default
+        in.haveMaxPowerLevel  = false;
         in.maxPowerLevel      = 100;
         const QJsonObject obj = buildMqttRadioStatePayload(in);
         ok &= expect(!obj.contains(QStringLiteral("drive")),
@@ -183,6 +185,40 @@ int main(int argc, char** argv)
                      "a reported drive of 0 publishes as 0, not as absent");
     }
 
+    // ── The ceiling gates INDEPENDENTLY of drive (#5733). Only FlexBackend
+    //    populates TransmitDelta::maxPowerLevel; on an Icom the drive latch says
+    //    nothing about the ceiling, and publishing the class default as a
+    //    firmware answer turns a 10 W IC-705 into a 50 W one for a subscriber
+    //    computing watts.
+    {
+        MqttRadioStateInputs in = liveInputs();
+        in.drive              = 50;
+        in.haveMaxPowerLevel  = false;
+        in.maxPowerLevel      = 100;   // the class default, never reported
+        const QJsonObject obj = buildMqttRadioStatePayload(in);
+        ok &= expect(obj.value(QStringLiteral("drive")).toInt() == 50,
+                     "reported drive publishes without a reported ceiling");
+        ok &= expect(!obj.contains(QStringLiteral("max_power_level")),
+                     "an unreported ceiling is absent, never the class default");
+        ok &= expect(obj.contains(QStringLiteral("drive_confirmed")),
+                     "drive_confirmed still qualifies the drive that IS reported");
+    }
+
+    // ── drive_confirmed describes THIS VALUE, not the backend (#5733). A Flex
+    //    reads drive back, but an operator-set value is a REQUEST until the
+    //    radio echoes it — publishing it as confirmed is the Principle II
+    //    violation the flag exists to prevent.
+    {
+        MqttRadioStateInputs in = liveInputs();
+        in.driveIsReadback = false;   // readback backend, but this value is ours
+        in.drive           = 75;
+        const QJsonObject obj = buildMqttRadioStatePayload(in);
+        ok &= expect(obj.value(QStringLiteral("drive_confirmed")).toBool() == false,
+                     "an unacknowledged local set is not confirmed on a readback radio");
+        ok &= expect(obj.value(QStringLiteral("drive")).toInt() == 75,
+                     "the requested drive still publishes while unconfirmed");
+    }
+
     // ── The have-status latch on the real model ─────────────────────────────
     {
         TransmitModel tm;
@@ -194,11 +230,34 @@ int main(int argc, char** argv)
         // The value-identical case: a radio reporting 100 into a model already at
         // 100 changes nothing, so a latch keyed on the change would never fire for
         // the exact value it most needs to confirm.
+        ok &= expect(!tm.rfPowerIsFromRadio(),
+                     "fresh model's drive is not radio-confirmed");
+        ok &= expect(!tm.haveMaxPowerLevel(),
+                     "fresh model has not seen a ceiling either");
+
+        // The value-identical case: a radio reporting 100 into a model already at
+        // 100 changes nothing, so a latch keyed on the change would never fire for
+        // the exact value it most needs to confirm — and neither would any
+        // value-change SIGNAL, which is why powerProvenanceChanged exists.
+        int provenance = 0;
+        QObject::connect(&tm, &TransmitModel::powerProvenanceChanged,
+                         &tm, [&provenance] { ++provenance; });
         TransmitDelta same;
         same.rfPower = 100;
         tm.applyChanges(same);
         ok &= expect(tm.haveTransmitStatus(),
                      "status equal to the default still latches have-status");
+        ok &= expect(provenance == 1,
+                     "the latch flip announces itself when no value moved");
+        ok &= expect(tm.rfPowerIsFromRadio(),
+                     "a reported drive is radio-confirmed");
+
+        // An operator set demotes it to a request, again with no value change.
+        tm.setRfPower(100);
+        ok &= expect(!tm.rfPowerIsFromRadio(),
+                     "a local set makes drive unconfirmed until the radio echoes");
+        ok &= expect(provenance == 2,
+                     "the demotion announces itself when no value moved");
 
         TransmitDelta moved;
         moved.rfPower = 27;
@@ -209,8 +268,27 @@ int main(int argc, char** argv)
         tm.resetState();
         ok &= expect(!tm.haveTransmitStatus(),
                      "disconnect clears have-status so 100 is a default again");
+        ok &= expect(!tm.rfPowerIsFromRadio() && !tm.haveMaxPowerLevel(),
+                     "disconnect clears the provenance and ceiling latches too");
         ok &= expect(tm.rfPower() == 100,
                      "disconnect restores the drive default");
+
+        // The narrow teardown-path reset clears exactly the same three latches.
+        // resetState() delegates to it, so this pins them together: a family
+        // switch and a disconnect must agree on what "nobody has reported" means.
+        TransmitDelta again2;
+        again2.rfPower = 55;
+        again2.maxPowerLevel = 500;
+        tm.applyChanges(again2);
+        ok &= expect(tm.haveTransmitStatus() && tm.haveMaxPowerLevel()
+                         && tm.rfPowerIsFromRadio(),
+                     "a fresh report re-latches all three");
+        tm.resetPowerProvenance();
+        ok &= expect(!tm.haveTransmitStatus() && !tm.haveMaxPowerLevel()
+                         && !tm.rfPowerIsFromRadio(),
+                     "resetPowerProvenance clears exactly what resetState clears");
+        ok &= expect(tm.rfPower() == 55 && tm.maxPowerLevel() == 500,
+                     "and leaves the values alone - it emits nothing, so it must");
 
         // resetState must NOT emit rfPowerChanged: that signal drives a TCI
         // `drive:` broadcast and the TX meter scale, and a departing radio did not
@@ -242,13 +320,21 @@ int main(int argc, char** argv)
             in.connected          = true;
             in.haveTransmitStatus = tm.haveTransmitStatus();
             in.drive              = tm.rfPower();
+            in.haveMaxPowerLevel  = tm.haveMaxPowerLevel();
+            in.maxPowerLevel      = tm.maxPowerLevel();
             const QJsonObject obj = buildMqttRadioStatePayload(in);
             lastDrive = obj.contains(QStringLiteral("drive"))
                             ? obj.value(QStringLiteral("drive")).toInt()
                             : -1;
         });
+        // BOTH production edges, because either alone is a different test:
+        // rfPowerChanged cannot fire for a value-identical report, and that case
+        // is the one that left an operator running full drive with no `drive` on
+        // the topic at all (#5733).
         QObject::connect(&tm, &TransmitModel::rfPowerChanged,
                          &coalesce, [&](int) { coalesce.start(); });
+        QObject::connect(&tm, &TransmitModel::powerProvenanceChanged,
+                         &coalesce, [&] { coalesce.start(); });
 
         for (int step : {20, 30, 40, 50, 60}) {   // the drag
             TransmitDelta d;
@@ -262,6 +348,23 @@ int main(int argc, char** argv)
         ok &= expect(lastDrive == 60,
                      "the coalesced publish carries the final drive, not an "
                      "intermediate step");
+
+        // The step the original drag could never take: a report EQUAL to what the
+        // model already holds. assign() returns false and rfPowerChanged stays
+        // silent, so only the provenance edge can carry this — and a mirror that
+        // misses it never learns the radio confirmed the value.
+        tm.setRfPower(60);                       // demote to a local request
+        ok &= expect(pumpUntil([&] { return publishes > 1; }, 2000),
+                     "a local set at the same value still reaches the mirror");
+        const int afterSet = publishes;
+
+        TransmitDelta echo;
+        echo.rfPower = 60;                       // the radio echoes it back
+        tm.applyChanges(echo);
+        ok &= expect(pumpUntil([&] { return publishes > afterSet; }, 2000),
+                     "a value-identical radio report still reaches the mirror");
+        ok &= expect(tm.rfPowerIsFromRadio(),
+                     "and the echo re-confirms the drive it did not change");
     }
 
     return ok ? 0 : 1;

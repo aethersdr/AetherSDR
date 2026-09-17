@@ -14,7 +14,10 @@
 // Subscribers key off FIELD PRESENCE, not sentinel values: an absent `drive` is
 // "this radio has not told us its drive", never "drive is 0". That distinction is
 // the whole point for the amplifier-interlock consumer the topic was asked for —
-// a sentinel reads as a number and arms on it.
+// a sentinel reads as a number and arms on it. `drive` and `max_power_level`
+// appear and disappear independently: a radio can report its drive without ever
+// reporting a ceiling, and computing watts from a missing ceiling is exactly the
+// arithmetic this presence rule exists to refuse.
 
 #include <QJsonObject>
 #include <QString>
@@ -39,12 +42,22 @@ struct MqttRadioStateInputs {
     double sliceFrequencyMhz = 0.0;
     QString sliceMode;
 
-    // Power, radio-level. `haveTransmitStatus` gates both fields: false means the
-    // model still holds its class default and there is nothing honest to publish.
-    bool haveTransmitStatus = false;
-    int drive = 0;                 // raw 0..100 RF-power setting, NOT watts
-    int maxPowerLevel = 0;         // firmware max_power_level; watts = drive/100*this
-    bool driveIsReadback = true;   // RadioCapabilities::driveIsReadback
+    // Power, radio-level. The two fields gate INDEPENDENTLY (#5733 review): only
+    // FlexBackend populates TransmitDelta::maxPowerLevel, so on an Icom or an HL2
+    // the drive latch says nothing about whether the ceiling has been reported,
+    // and one gate published a compiled-in 100 W default as a firmware answer.
+    bool haveTransmitStatus = false;   // gates `drive` and `drive_confirmed`
+    int drive = 0;                     // raw 0..100 RF-power setting, NOT watts
+    bool haveMaxPowerLevel = false;    // gates `max_power_level` on its own
+    int maxPowerLevel = 0;             // firmware ceiling; watts = drive/100*this
+
+    // Whether `drive` in THIS message is confirmed radio state: the backend
+    // reads drive back (RadioCapabilities::transmitDriveControl authority Radio)
+    // AND the current value arrived from the radio rather than from a local set
+    // (TransmitModel::rfPowerIsFromRadio). Defaults false — the conservative
+    // reading, and the one a safety consumer should get when nobody has said
+    // otherwise.
+    bool driveIsReadback = false;
 };
 
 // Build the `aethersdr/radio/state` JSON payload.

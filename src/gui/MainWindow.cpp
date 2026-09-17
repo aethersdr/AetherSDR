@@ -3365,10 +3365,33 @@ void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
                           QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 
+// Re-read whether this backend reports drive back off the wire, and cache it for
+// publishRadioStateMqtt(). Called on the connect edge and on backendRebuilt(),
+// which between them cover every way the answer can change — a family switch
+// takes the second path and never emits the first (#5733 review).
+void MainWindow::refreshRadioStateDriveAuthority()
+{
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    m_radioStateDriveIsReadback =
+        caps.transmitDriveControl
+        && caps.transmitDriveControl->authority == SliceFrequencyControl::Authority::Radio;
+}
+
 void MainWindow::publishRadioStateMqtt()
 {
     if (!m_mqttClient) return;
     if (!isMqttTopicEnabled(QString::fromLatin1(kRadioStateTopic))) return;
+    // A vanished radio ends the CWX send by definition, so do not make an
+    // interlock sit out the 1 s end-of-send debounce to learn the link dropped
+    // (#5733 review). Without this the disconnect publish below — deliberately
+    // direct rather than coalesced, because 150 ms was judged too long — was
+    // swallowed for a full second, and queueEmpty could not rescue it either
+    // since the radio is gone.
+    if (m_cwxTransmitting && !m_radioModel.isConnected()) {
+        m_cwxTxEndTimer.stop();
+        m_cwxTransmitting = false;
+        m_cwxPublishedTxTrue = false;
+    }
     if (m_cwxTransmitting) {
         if (!m_radioModel.isRadioTransmitting()) {
             m_cwxTxEndTimer.start(1000);  // might be done; confirm after 1 s silence
@@ -3386,17 +3409,28 @@ void MainWindow::publishRadioStateMqtt()
     MqttRadioStateInputs in;
     in.connected     = m_radioModel.isConnected();
     in.transmitting  = m_radioModel.isRadioTransmitting();
-    if (auto* s = activeSlice()) {
-        in.haveSlice          = true;
-        in.sliceLetter        = s->letter();
-        in.sliceFrequencyMhz  = s->frequency();
-        in.sliceMode          = s->mode();
+    // Slice fields only while the radio is up. They are retired on the same edge
+    // as the power fields, so a disconnect message does not hand the next
+    // session the dead radio's frequency alongside connected:false (#5733).
+    if (in.connected) {
+        if (auto* s = activeSlice()) {
+            in.haveSlice          = true;
+            in.sliceLetter        = s->letter();
+            in.sliceFrequencyMhz  = s->frequency();
+            in.sliceMode          = s->mode();
+        }
     }
     const auto& tm = m_radioModel.transmitModel();
     in.haveTransmitStatus = tm.haveTransmitStatus();
     in.drive              = tm.rfPower();
+    in.haveMaxPowerLevel  = tm.haveMaxPowerLevel();
     in.maxPowerLevel      = tm.maxPowerLevel();
-    in.driveIsReadback    = m_radioModel.backendCapabilities().driveIsReadback;
+    // Per-message, not per-backend: the capability says drive CAN be confirmed
+    // on this radio, rfPowerIsFromRadio() says this VALUE has been (Principle II).
+    // m_radioStateDriveIsReadback caches the capability half at the connect edge
+    // — backendCapabilities() returns by value and this path runs on every PTT
+    // transition, which in CW break-in is every element.
+    in.driveIsReadback    = m_radioStateDriveIsReadback && tm.rfPowerIsFromRadio();
     m_mqttClient->publish(QString::fromLatin1(kRadioStateTopic),
                           QJsonDocument(buildMqttRadioStatePayload(in))
                               .toJson(QJsonDocument::Compact));

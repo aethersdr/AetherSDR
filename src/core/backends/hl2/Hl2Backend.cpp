@@ -1618,7 +1618,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // drive register at 0 while !m_txAllowed, so TransmitModel::rfPower() can read
     // 100 with no RF leaving the radio. Consumers that act on drive must see that
     // distinction rather than infer applied power from a request.
-    c.driveIsReadback = false;
+    c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
+        SliceFrequencyControl::Authority::Engine};
     c.hasRadioDialLock = false;
     c.hasTuner = false;
     c.hasTunerMemories = false;
