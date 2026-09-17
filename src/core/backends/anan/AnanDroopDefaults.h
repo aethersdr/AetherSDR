@@ -49,6 +49,36 @@ namespace AetherSDR::anan {
 // meaningless -- and applyDroopCorrectionDb() adds without clamping, so an
 // uncapped table would be a latent spike if applyEdgeFade()'s tail ever
 // shrank.
+
+// HOW FAR IN THIS CURVE IS ACTUALLY TRUSTWORTHY: from about bin 14 inward,
+// and NOT before it. The .coe carries full-precision fractional taps, but the
+// gateware builds that FIR with 18-bit coefficients (Coefficient_Width 18,
+// Coefficient_Fractional_Bits 20, Quantize_Only -- DDC_Block_fir_compiler_0_0
+// .xci). Quantizing the taps to that format and re-deriving shows where the
+// two part company:
+//
+//     bin    ideal      real 18-bit     error this table makes
+//       0   -209.11 dB   -114.32 dB          +94.78 dB
+//      11    -87.63 dB    -89.79 dB           -2.15 dB
+//      14      --           --                 <1 dB from here inward
+//      25    -42.05 dB    -42.05 dB           +0.01 dB
+//      30    -31.56 dB    -31.56 dB           +0.00 dB
+//      41    -15.16 dB    -15.16 dB           -0.00 dB
+//
+// The real filter floors out around 125 dB; this derivation runs to 209 dB.
+// So bins 0-13 are an artifact of deriving from unquantized coefficients --
+// they are not filter response and no radio will ever match them. Everything
+// from bin 25 inward is exact, which is why the four hardware reference
+// points in anan_droop_defaults_test (bins 41-56) agree so closely and why no
+// bench point is needed further out.
+//
+// THAT IS SAFE TODAY ONLY BECAUSE applyEdgeFade() OVERWRITES BINS 0-29.
+// Its tailFraction is 0.03 and kDroopCorrectionFftSize is 1024, so the fade
+// covers every bin this curve gets wrong, with 16 bins to spare. Those two
+// constants live in different files and neither references the other. If the
+// fade's tail ever shrinks below ~0.014, the untrustworthy bins reach the
+// display and this table needs re-deriving against quantized taps -- or
+// clamping nearer the real 125 dB floor -- rather than merely re-cropping.
 //
 // The gateware caveat is real: a future FPGA release could re-tune those
 // filters. Defaults are applied regardless of the connected radio's reported

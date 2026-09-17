@@ -44,6 +44,7 @@ import hashlib
 import math
 import re
 import sys
+from pathlib import PurePosixPath
 
 import numpy as np
 
@@ -115,6 +116,10 @@ def cic_response_db(R):
 # applyEdgeFade()'s tail shrank.
 DEFAULT_CAP_DB = 90.0
 
+# Hard ceiling on how far the six rates' curves may diverge before a single
+# shipped table stops being defensible. See the check in main().
+MAX_RATE_SPREAD_DB = 0.05
+
 
 def correction_table(taps, R, cap_db=DEFAULT_CAP_DB):
     """Per-bin dB to ADD to the measured spectrum -- the inverse of the
@@ -145,7 +150,7 @@ def parse_measured_inc(path):
     return tables
 
 
-def emit_inc(table, digest, out, gateware):
+def emit_inc(table, digest, out, gateware, coe_path):
     out.write("// GENERATED FILE -- do not edit by hand.\n")
     out.write("// Regenerate with derive_droop_from_gateware.py.\n//\n")
     out.write("// DERIVED, not measured: the Saturn DDC's own FIR coefficients\n")
@@ -153,7 +158,11 @@ def emit_inc(table, digest, out, gateware):
     out.write("// 1024-bin grid. One table covers all six DDC0 rates -- the FIR\n")
     out.write("// sees the same normalised frequency at every rate, and the CIC\n")
     out.write("// term varies by 0.003 dB across the whole range.\n//\n")
-    out.write(f"// Source coefficients sha256 {digest}\n")
+    # Name the file as well as its hash. The .inc is what a future reader
+    # opens first and the only artifact that travels with the data -- a bare
+    # hash makes provenance depend on finding this script.
+    out.write(f"// Source coefficients {coe_path}\n")
+    out.write(f"//   sha256 {digest}\n")
     out.write(f"// Saturn gateware {gateware}. Clamped to [0, 90] dB, matching\n")
     out.write("// AnanDroopCalibrator::computeCorrection()'s own cap.\n\n")
     out.write(f"inline constexpr std::array<float, 1024> "
@@ -198,6 +207,17 @@ def main():
                  for R in RATE_TO_R.values())
     print(f"rate spread  : {spread:.4f} dB across all six DDC0 rates "
           f"-- one table covers them all")
+    # Shipping ONE table for six rates is the whole reason this emits 1024
+    # floats instead of 6x1024, so enforce it rather than printing a number a
+    # regenerator can skim past. Measured spread is 0.003 dB; 0.05 dB is two
+    # orders of margin and still far below anything visible on a panadapter.
+    # NOTE this compares the CLIPPED curves, so it cannot see divergence
+    # inside the clamped region (bins 0-10) -- those bins are derivation
+    # artifacts anyway, see MAX_TRUSTWORTHY_BIN below.
+    if spread > MAX_RATE_SPREAD_DB:
+        sys.exit(f"rate spread {spread:.4f} dB exceeds {MAX_RATE_SPREAD_DB} dB "
+                 "-- these coefficients are NOT rate-independent, so a single "
+                 "shipped table is no longer correct; emit one table per rate")
 
     k0 = int(NBINS * args.crop)
     shown = table[k0:NBINS - k0]
@@ -218,7 +238,11 @@ def main():
         # The band the correction actually works in: from the crop boundary
         # out to where the curve reaches zero (~8% in from each edge).
         lo, hi = int(NBINS * 0.04), int(NBINS * 0.08)
-        idx = np.r_[lo:hi + 1, NBINS - hi - 1:NBINS - lo]
+        # The curve is symmetric as t[i] == t[NBINS-i] (DC sits at NBINS/2),
+        # so the mirror of bins lo..hi is NBINS-hi..NBINS-lo -- not
+        # NBINS-1-hi..NBINS-1-lo, which would score a window one bin further
+        # out on the right than on the left.
+        idx = np.r_[lo:hi + 1, NBINS - hi:NBINS - lo + 1]
         mid = np.r_[NBINS // 8:NBINS - NBINS // 8]
         print("\nderived vs measured, roll-off region (bins "
               f"{lo}-{hi} and mirror):")
@@ -237,7 +261,7 @@ def main():
 
     if args.emit_inc:
         out = sys.stdout if args.emit_inc == "-" else open(args.emit_inc, "w")
-        emit_inc(table, digest, out, args.gateware)
+        emit_inc(table, digest, out, args.gateware, PurePosixPath(args.coe).name)
         if out is not sys.stdout:
             out.close()
             print(f"\nwrote {args.emit_inc}")

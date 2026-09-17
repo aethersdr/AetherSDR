@@ -7,7 +7,8 @@
 // sees the same normalised frequency at every rate, and the CIC
 // term varies by 0.003 dB across the whole range.
 //
-// Source coefficients sha256 6ba2026d33ddbeb80684f6da71ff459742dd840c6cd7fbc036238ce1584ce027
+// Source coefficients tx1024cfirImpulse.coe
+//   sha256 6ba2026d33ddbeb80684f6da71ff459742dd840c6cd7fbc036238ce1584ce027
 // Saturn gateware 27. Clamped to [0, 90] dB, matching
 // AnanDroopCalibrator::computeCorrection()'s own cap.
 

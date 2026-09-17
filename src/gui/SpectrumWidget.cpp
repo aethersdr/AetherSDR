@@ -23,6 +23,7 @@
 #include "SliceLabel.h"
 #include "core/EibiClient.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
+#include "NoiseFloorEstimator.h"
 #include <QVariant>
 #include <QVariantAnimation>
 
@@ -3508,26 +3509,12 @@ void SpectrumWidget::publishPerfDragState() const {
 
 float SpectrumWidget::estimateNoiseFloorDbm(const QVector<float>& bins) const
 {
-    if (bins.isEmpty()) return -1000.0f;
-
-    // Stride-sample to cap work at ~512 reads even on very wide pans.
-    const int stride = std::max(1, static_cast<int>(bins.size() / 512));
-    float sum = 0.0f;
-    int count = 0;
-    for (int i = 0; i < bins.size(); i += stride) {
-        const float v = bins[i];
-        if (std::isfinite(v)) { sum += v; ++count; }
-    }
-    if (count <= 0) return -1000.0f;
-
-    const float mean = sum / static_cast<float>(count);
-    float baselineSum = 0.0f;
-    int baselineCount = 0;
-    for (int i = 0; i < bins.size(); i += stride) {
-        const float v = bins[i];
-        if (std::isfinite(v) && v <= mean) { baselineSum += v; ++baselineCount; }
-    }
-    return (baselineCount > 0) ? baselineSum / static_cast<float>(baselineCount) : mean;
+    // The estimator itself lives in NoiseFloorEstimator.h so a test can drive
+    // it without a QApplication -- same reason the gate it feeds lives in
+    // NoiseFloorAutoAdjustGate.h. This stays as the QVector-shaped seam every
+    // call site here already uses.
+    return AetherSDR::estimateNoiseFloorDbm(
+        std::span<const float>(bins.constData(), static_cast<std::size_t>(bins.size())));
 }
 
 float SpectrumWidget::estimateKiwiSdrVisualNoiseFloorDbm(

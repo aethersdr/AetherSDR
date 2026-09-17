@@ -292,6 +292,10 @@ AnanBackend::AnanBackend(QObject* parent)
         // the shipped curve comes from SATURN filter coefficients
         // specifically, so a non-Saturn board reporting this same build
         // number is the one mismatch this warning cannot see.
+        // Fires for an OLDER build as readily as a newer one, and says the
+        // same thing either way: this is "the curve was derived somewhere
+        // else", not "your gateware is wrong". It is informational only --
+        // the seeding above has already run by the time this arrives.
         if (firmwareVer != kDefaultsGatewareVersion) {
             qCWarning(lcAnanDefaults).nospace()
                 << "ANAN: radio reports gateware " << firmwareVer
@@ -510,6 +514,11 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         // rates -- it is derived from the DDC's own filter coefficients rather
         // than measured, so it is a property of the gateware, not of a unit.
         // See AnanDroopDefaults.h.
+        // The null test never fires today -- both sides key off
+        // P2Protocol.h's kDdc0RatesKsps, so every rate this iterates has a
+        // table. It is kept as a structural guard, not live logic: if the two
+        // lists ever diverge, that rate ships with no default rather than
+        // dereferencing a null here.
         for (const int rateKsps : defaultDroopRatesKsps()) {
             if (const DroopCorrectionTable* t = defaultDroopTableForRate(rateKsps))
                 pushTable(rateKsps, *t);
@@ -1157,13 +1166,34 @@ QString AnanBackend::persistDroopTables(const QMap<int, anan::DroopCorrectionTab
 
 QVariantMap AnanBackend::droopStatus() const
 {
+    // EVERY DDC0 rate, tagged with where its correction came from -- not just
+    // the swept ones. Reporting only measuredTables() told the operator
+    // "nothing measured" while the defaults connectRadio() seeds were live on
+    // the display, so a panadapter that looked wrong had no surface anywhere
+    // connecting it to a correction that was in fact being applied. The tag
+    // is what keeps "derived from the gateware" and "measured on this radio"
+    // distinguishable rather than collapsing them into one list.
     QVariantList corrections;
-    const auto& tables = m_droopCalibrator.measuredTables();
-    for (auto it = tables.constBegin(); it != tables.constEnd(); ++it) {
-        const auto [lo, hi] = std::minmax_element(it.value().begin(), it.value().end());
-        corrections.append(QVariantMap{{QStringLiteral("rateKsps"), it.key()},
-                                      {QStringLiteral("minDb"), *lo},
-                                      {QStringLiteral("maxDb"), *hi}});
+    const auto& measured = m_droopCalibrator.measuredTables();
+    for (const int rateKsps : defaultDroopRatesKsps()) {
+        const auto it = measured.constFind(rateKsps);
+        const bool isMeasured = it != measured.constEnd();
+        // A default is only live once connectRadio() has actually seeded it.
+        // Before that the rate genuinely carries no correction and must not
+        // claim one -- measured results, by contrast, outlive the connection
+        // because the calibrator holds them for the session.
+        const DroopCorrectionTable* table =
+            isMeasured ? &it.value()
+                       : (m_connected ? defaultDroopTableForRate(rateKsps) : nullptr);
+        if (!table)
+            continue;
+        const auto [lo, hi] = std::minmax_element(table->begin(), table->end());
+        corrections.append(QVariantMap{
+            {QStringLiteral("rateKsps"), rateKsps},
+            {QStringLiteral("minDb"), *lo},
+            {QStringLiteral("maxDb"), *hi},
+            {QStringLiteral("source"), isMeasured ? QStringLiteral("measured")
+                                                  : QStringLiteral("default")}});
     }
     return {{QStringLiteral("running"), m_droopCalibrator.isRunning()},
             {QStringLiteral("rateIndex"), m_droopCalibrator.rateIndex()},
