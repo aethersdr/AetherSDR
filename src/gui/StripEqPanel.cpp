@@ -328,6 +328,16 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     m_iconRow->setAudioEngine(m_audio);
     eqColumn->addWidget(m_iconRow);
 
+    // The graph takes 85 of the column's 100 stretch rather than all of it.
+    // The icon row and the param row below are fixed height, so the canvas is
+    // the only thing that grows: without this it swallows every pixel the
+    // window has, and 15% of a tall graph buys nothing a shorter one does not
+    // already show. The slack sits above the canvas, so the band plan along
+    // its bottom edge stays against the readouts it belongs to.
+    constexpr int kCanvasStretch = 85;
+    constexpr int kSlackStretch = 100 - kCanvasStretch;
+    eqColumn->addStretch(kSlackStretch);
+
     m_canvas = new ClientEqEditorCanvas;
     m_canvas->setObjectName(QStringLiteral("stripEqCanvas"));
     m_canvas->setAudioEngine(m_audio);
@@ -336,7 +346,7 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     // but the canvas needed to be constructed before this push could land.
     m_canvas->setSmoothingOctaveFraction(m_savedSmoothingFraction);
     m_canvas->setReferenceCurvePreset(m_savedReferenceCurvePreset);
-    eqColumn->addWidget(m_canvas, 1);
+    eqColumn->addWidget(m_canvas, kCanvasStretch);
     // Forward cutoff-line drag events as a path-tagged signal so MainWindow
     // can dispatch to TransmitModel (TX) or the active SliceModel (RX).
     connect(m_canvas, &ClientEqEditorCanvas::cutoffsDragged,
