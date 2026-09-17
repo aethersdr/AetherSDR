@@ -21,6 +21,7 @@ public:
     virtual void setPitchRange(int, int) {}
     virtual void setSpeedRange(int, int) {}
     virtual float estimatedPitch() const { return 0; }
+    virtual float estimatedSpeed() const { return 0; }
     virtual QString status() const { return {}; }
     virtual QString detail() const { return {}; }
     virtual bool preparing() const { return false; }
@@ -54,6 +55,7 @@ public:
     void setPitchRange(int low, int high) { m_backend->setPitchRange(low, high); }
     void setSpeedRange(int low, int high) { m_backend->setSpeedRange(low, high); }
     float estimatedPitch() const { return m_backend->estimatedPitch(); }
+    float estimatedSpeed() const { return m_backend->estimatedSpeed(); }
     QString status() const { return m_backend->status(); }
     QString detail() const { return m_backend->detail(); }
     bool preparing() const { return m_backend->preparing(); }
@@ -67,7 +69,11 @@ signals:
     void statusChanged();
 private:
     void bind();
-    std::unique_ptr<CwRxBackend> m_backend;
+    void queueState();
+    // Keep the inactive DSP backend's operator locks/ranges, with its worker
+    // stopped. A backend selection must not turn a checked lock into auto mode.
+    std::shared_ptr<CwRxBackend> m_ggmorse;
+    std::shared_ptr<CwRxBackend> m_backend;
     QString m_key = QStringLiteral("ggmorse");
     quint64 m_generation = 0;
 };

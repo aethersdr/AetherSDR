@@ -34,6 +34,39 @@ bool waitFor(const std::function<bool()>& predicate, int limitMs = 5000)
     while (!predicate() && timer.elapsed() < limitMs) { pump(10); }
     return predicate();
 }
+bool reentrantLifecycle()
+{
+    QTemporaryDir cache;
+    DeepFistTestNetwork network;
+    DeepFistCwModel model(cache.path(), QStringLiteral("https://fixture.invalid/v1"), &network);
+    // A direct owner callback may cancel or stop before ensure() begins.
+    const auto cancel = QObject::connect(&model, &DeepFistCwModel::statusChanged,
+        &model, [&](const QString& status) {
+            if (status.contains("Checking")) { model.cancelPreparation(); }
+        });
+    model.start();
+    pump(30);
+    if (model.preparing() || !model.canRetry() || !model.status().contains("canceled")
+        || network.requests != 0) { return false; }
+    QObject::disconnect(cancel);
+    model.stop();
+    const auto stop = QObject::connect(&model, &DeepFistCwModel::statusChanged,
+        &model, [&](const QString& status) {
+            if (status.contains("Checking")) { model.stop(); }
+        });
+    model.start();
+    pump(30);
+    if (model.isRunning() || model.preparing() || !model.status().isEmpty()
+        || network.requests != 0) { return false; }
+    QObject::disconnect(stop);
+    // Destruction from a status observer is allowed by QObject signal delivery.
+    auto disposable = std::make_unique<DeepFistCwModel>(cache.path(), QString{}, &network);
+    QObject::connect(disposable.get(), &DeepFistCwModel::statusChanged,
+        &model, [&](const QString&) { disposable.reset(); });
+    disposable->start();
+    pump(20);
+    return !disposable && network.requests == 0;
+}
 bool contract(const QByteArray& validDirectory)
 {
     // Completed marks need a falling edge. Padding + carrier onset is not CW.
@@ -329,5 +362,5 @@ int main(int argc, char** argv)
         return decode(24000, PcmLayout::Mono) && decode(24000, PcmLayout::Stereo)
             && decode(48000, PcmLayout::Mono) && decode(48000, PcmLayout::Stereo) ? 0 : 1;
     }
-    return contract(directory) ? 0 : 1;
+    return reentrantLifecycle() && contract(directory) ? 0 : 1;
 }

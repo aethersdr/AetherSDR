@@ -6033,18 +6033,23 @@ target_include_directories(droop_calibration_seam_test PRIVATE src tests)
 target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
 add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)
 
-# Opt-in prototype: file/PCM tests only; no sockets or sound devices.
-if(ENABLE_DEEPFIST_EXPERIMENT)
+# Model-free algorithms and injected HTTP replies: no sockets, weights or ORT.
+add_executable(deepfist_committer_test tests/deepfist_committer_test.cpp)
+target_include_directories(deepfist_committer_test PRIVATE src)
+target_link_libraries(deepfist_committer_test PRIVATE Qt6::Core)
+add_test(NAME deepfist_committer_test COMMAND deepfist_committer_test)
+set_tests_properties(deepfist_committer_test PROPERTIES TIMEOUT 20)
+add_executable(deepfist_model_assets_test
+    tests/deepfist_model_assets_test.cpp
+    src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h)
+target_include_directories(deepfist_model_assets_test PRIVATE src tests)
+target_compile_definitions(deepfist_model_assets_test PRIVATE DEEPFIST_MODEL_BASE_URL="")
+target_link_libraries(deepfist_model_assets_test PRIVATE Qt6::Core Qt6::Network Qt6::Concurrent)
+add_test(NAME deepfist_model_assets_test COMMAND deepfist_model_assets_test)
+set_tests_properties(deepfist_model_assets_test PROPERTIES TIMEOUT 20)
 
-    add_executable(deepfist_committer_test tests/deepfist_committer_test.cpp)
-    target_include_directories(deepfist_committer_test PRIVATE src)
-    target_link_libraries(deepfist_committer_test PRIVATE Qt6::Core)
-    add_test(NAME deepfist_committer_test COMMAND deepfist_committer_test)
-    add_executable(deepfist_model_assets_test tests/deepfist_model_assets_test.cpp)
-    target_include_directories(deepfist_model_assets_test PRIVATE src tests)
-    target_link_libraries(deepfist_model_assets_test PRIVATE aethercore Qt6::Core Qt6::Network)
-    add_test(NAME deepfist_model_assets_test COMMAND deepfist_model_assets_test)
-    set_tests_properties(deepfist_model_assets_test PROPERTIES TIMEOUT 20)
+# Opt-in real backend: file/PCM tests only; no sockets or sound devices.
+if(ENABLE_DEEPFIST_EXPERIMENT)
     add_executable(deepfist_cw_model_test tests/deepfist_cw_model_test.cpp)
     target_include_directories(deepfist_cw_model_test PRIVATE src third_party/deepfist)
     target_link_libraries(deepfist_cw_model_test PRIVATE aethercore Qt6::Core)

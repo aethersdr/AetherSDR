@@ -11,6 +11,7 @@ struct DeepFistReplySpec {
     QByteArray bytes;
     int status = 200;
     QNetworkReply::NetworkError error = QNetworkReply::NoError;
+    bool notifyReadyRead = true;
 };
 class DeepFistTestReply final : public QNetworkReply {
 public:
@@ -26,7 +27,7 @@ public:
             if (isFinished()) { return; }
             m_available = true;
             if (m_spec.error != NoError) { setError(m_spec.error, "Test transport failure"); }
-            emit readyRead();
+            if (m_spec.notifyReadyRead) { emit readyRead(); }
             if (!isFinished()) { setFinished(true); emit finished(); }
         });
     }

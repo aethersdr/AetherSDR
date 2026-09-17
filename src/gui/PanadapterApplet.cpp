@@ -831,8 +831,12 @@ void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const 
     const QSignalBlocker blocker(m_cwEngineCombo);
     m_cwEngineCombo->setCurrentIndex(m_cwEngineCombo->findData(key));
     const bool selected = !tuning;
+    const QString unavailableReason = tuning ? QString{}
+        : tr("%1 does not support manual decoder tuning.")
+              .arg(m_cwEngineCombo->currentText());
     for (QWidget* control : std::array<QWidget*, 5>{m_cwSensSlider, m_lockPitchBtn,
             m_lockSpeedBtn, m_pitchRangeSlider, m_speedRangeSlider}) {
+        control->setAccessibleDescription(unavailableReason);
         control->setEnabled(tuning);
     }
     m_cwModelAction->setVisible(selected && (preparing || canRetry));

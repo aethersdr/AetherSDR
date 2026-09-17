@@ -8,6 +8,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPointer>
 #include <QSaveFile>
 #include <QTimer>
 #include <QUrl>
@@ -151,6 +152,7 @@ void DeepFistModelAssets::download()
 void DeepFistModelAssets::readAvailable()
 {
     if (!m_reply || !m_file) { return; }
+    const QPointer<DeepFistModelAssets> guard(this);
     const quint64 generation = m_generation;
     while (m_reply && m_reply->bytesAvailable() > 0) {
         const QByteArray bytes = m_reply->read(64 * 1024);
@@ -162,19 +164,21 @@ void DeepFistModelAssets::readAvailable()
         m_hash->addData(bytes);
         m_received += bytes.size();
         emit progress(m_completed + m_received, m_total);
-        if (!m_busy || generation != m_generation) { return; }
+        // A status observer can replace the backend and destroy this manager.
+        if (!guard || !m_busy || generation != m_generation) { return; }
     }
 }
 void DeepFistModelAssets::finishDownload()
 {
     if (!m_reply) { return; }
+    const QPointer<DeepFistModelAssets> guard(this);
     const quint64 generation = m_generation;
     if (m_reply->error() != QNetworkReply::NoError
         || m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() != 200) {
         fail(tr("Model download failed. Check your connection and retry.")); return;
     }
     readAvailable();
-    if (!m_reply || generation != m_generation) { return; }
+    if (!guard || !m_reply || generation != m_generation) { return; }
     const Asset& asset = m_assets[m_index];
     if (m_received != asset.bytes || m_hash->result().toHex() != asset.sha256) {
         fail(tr("Model verification failed. Retry the download.")); return;

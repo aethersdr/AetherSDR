@@ -92,8 +92,6 @@ void MainWindow::selectCwRxBackend(const QString& backend)
     if (m_cwDecoderApplet && m_cwDecoder.supportsTuning()) {
         m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(), m_cwDecoderApplet->pitchRangeHigh());
         m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(), m_cwDecoderApplet->speedRangeHigh());
-        m_cwDecoder.lockPitch(m_cwDecoderApplet->lockPitchButton()->isChecked());
-        m_cwDecoder.lockSpeed(m_cwDecoderApplet->lockSpeedButton()->isChecked());
     }
     if (m_panStack) {
         for (PanadapterApplet* applet : m_panStack->allApplets()) {
