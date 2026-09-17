@@ -91,7 +91,7 @@ static constexpr int kFeedPaceUs = 0;
 // feeds nothing.
 static void feed(Hl2TxDsp& tx, const std::vector<float>& chunk,
                  TxAudioSource source,
-                 const TxCoordinator::Context& context)
+                 const AetherSDR::TxCoordinator::Context& context)
 {
     tx.processAudioBlock(chunk, source, context);
     if (kFeedPaceUs > 0) {
@@ -493,7 +493,7 @@ int main(int argc, char** argv)
                         chunk[n] = static_cast<float>(
                             amp * std::sin(2.0 * M_PI * hz
                                            * (off + static_cast<int>(n)) / fs));
-                    feed(tx, chunk, TxAudioSource::Microphone);
+                    feed(tx, chunk, TxAudioSource::Microphone, authority.context);
                 }
             };
 
@@ -642,7 +642,7 @@ int main(int argc, char** argv)
                         chunk[n] = static_cast<float>(
                             0.5 * std::sin(2.0 * M_PI * kTone
                                            * (off + static_cast<int>(n)) / fs));
-                    feed(tx, chunk, TxAudioSource::Microphone);
+                    feed(tx, chunk, TxAudioSource::Microphone, authority.context);
                 }
             };
             auto sidebandDb = [&]() {
@@ -1448,10 +1448,10 @@ int main(int argc, char** argv)
         // client-leveled. 20 dB apart in, 20 dB apart out.
         const auto quiet = modulate(WdspChannel::Mode::Usb, kTone, 0.00316, 1.0,
                                     1.0, nullptr, true, nullptr,
-                                    TxAudioSource::ClientLeveled, authority.context);
+                                    TxAudioSource::ClientLeveled);
         const auto loud  = modulate(WdspChannel::Mode::Usb, kTone, 0.0316, 1.0,
                                     1.0, nullptr, true, nullptr,
-                                    TxAudioSource::ClientLeveled, authority.context);
+                                    TxAudioSource::ClientLeveled);
         if (!quiet.empty() && !loud.empty()) {
             // The WANTED bin. See the passband case above.
             const double a = binPower(quiet, -kTone, kFsOut);
@@ -1599,12 +1599,12 @@ int main(int argc, char** argv)
 
         const auto hot = modulate(WdspChannel::Mode::Usb, kHarmTone, 1.0,
                                   kHotMicGain, 1.5, nullptr, true, nullptr,
-                                  TxAudioSource::ClientLeveled, authority.context);
+                                  TxAudioSource::ClientLeveled);
         // 24 dB below the ALC target at unity mic gain: the limiter cannot
         // engage, so this is what "undistorted" reads on this instrument.
         const auto clean = modulate(WdspChannel::Mode::Usb, kHarmTone, 0.05,
                                     1.0, 1.5, nullptr, true, nullptr,
-                                    TxAudioSource::ClientLeveled, authority.context);
+                                    TxAudioSource::ClientLeveled);
         if (!hot.empty() && !clean.empty()) {
             const auto tail  = settledTail(hot);     // skips the 5 ms attack
             const auto ctail = settledTail(clean);
@@ -1650,7 +1650,7 @@ int main(int argc, char** argv)
         const double kSliderTopGain = micSliderToLinear(100);   // 100x, +40 dB
         const auto slam = modulate(WdspChannel::Mode::Usb, kHarmTone, 1.0,
                                    kSliderTopGain, 1.5, nullptr, true, nullptr,
-                                   TxAudioSource::ClientLeveled, authority.context);
+                                   TxAudioSource::ClientLeveled);
         if (!slam.empty()) {
             double mx = 0.0;
             std::size_t atClamp = 0;
@@ -2011,7 +2011,7 @@ int main(int argc, char** argv)
         constexpr double kHotMicGain = 10.0;
         const auto fresh = modulate(WdspChannel::Mode::Usb, kTone, 0.000316,
                                     kHotMicGain, 1.5, nullptr, true, nullptr,
-                                    TxAudioSource::ClientLeveled, authority.context);
+                                    TxAudioSource::ClientLeveled);
 
         struct RelRun {
             double swept = 0.0, lastGainDb = 0.0;
