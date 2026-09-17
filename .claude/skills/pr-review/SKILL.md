@@ -303,6 +303,29 @@ Read the diff against each of these; cite the specific rule when flagging:
 - **CMake contract** — any target compiling `AppSettings.cpp` uses
   `${AETHER_SETTINGS_SOURCES}` and joins `AETHER_SETTINGS_CONSUMERS`; tests
   isolate via `TestSettingsProfile.h` (`AETHER_SETTINGS_DIR`).
+- **AGENTS.md § "In-flight: aetherd engine/UI decoupling"** — the migration
+  ratchets, which the settings and capability rules above do not reach:
+  EB1/EB2/EB3 (`tools/check_engine_boundary.py`), the capability-record and
+  command-plane freezes, the build-target link rules (`aethercore` never
+  `gui/` or QtWidgets, `aetherd` never QtWidgets), the routing table for
+  radio-facing code, and the THREADING AND LIFETIME CONTRACT at the top of
+  `IRadioBackend.h`. Read the whole section on the PR's head; it moves as the
+  RFC's staged order advances. **A green `Static checks` is not this audit** —
+  findings against tracked EB2/EB3 baselines only warn (about a hundred ride
+  on a green run), EB2 is a per-file count so a lateral swap passes flat, and
+  a new `gui/`→engine include fails nothing at all: it silently grows the
+  burndown by a row. Run the gates on the merge base and on the head and diff
+  the per-file findings. A PR that instead edits a baseline, raises
+  `FROZEN_BOOL_COUNT`, or retags a header in
+  `docs/architecture/aetherd-touchpoint-tags.json` is weakening the
+  enforcement rather than passing it — EB3 derives its vendor vocabulary from
+  that file at runtime — and that is a blocker unless it is canon's documented
+  reclassification carveout, with merge-base proof and a maintainer's review.
+  Also walk the #5554 notice at the top of § "AI Agent Guidelines" when the PR
+  touches `src/core/backends/`, `RadioModel`, `RadioSession`, `TransmitModel`,
+  `ConnectionPanel`, discovery or `RadioCapabilities`; most of its items — a
+  new family-string branch, a `dynamic_cast` to a concrete backend, a
+  capability with no verb behind it — are invisible to every checker.
 - **docs/style/dialog-patterns.md** — new dialogs ride `PersistentDialog`
   (#2605); geometry base64; frameless propagation.
 - **docs/a11y.md** — accessible names on interactive widgets, throttled

@@ -688,6 +688,42 @@ subsystem-by-subsystem. Converting a touchpoint still follows the claim
 protocol + before/after `tools/verify_slice0_rx.py` recipe; a converted
 file drops its vendor include and lowers its EB3 baseline.
 
+**Before you merge — the aetherd conformance checklist.** Every item below has
+a green CI run behind it, so a passing `Static checks` answers none of them.
+Whoever lands a PR in this territory — agent or human, author or reviewer —
+walks the list:
+
+1. **Run the four gates on the merge base *and* on the head, and diff the
+   findings per file** — not the exit codes. `check_engine_boundary.py
+   --strict`, `gen_touchpoint_manifest.py --check`,
+   `check_capability_records.py --strict`, `check_command_plane.py --strict`,
+   all stdlib Python and seconds each. Findings against tracked EB2/EB3
+   baselines *warn*; only a new violation or a grown baseline errors. EB2 is a
+   per-file **count**, so a lateral swap inside a tracked file — one QtWidgets
+   usage out, another in — passes flat.
+2. **A new `gui/`→engine include is a regression that fails nothing.** The
+   manifest regenerates one row longer and the burndown moves backwards. A new
+   row needs a justification in the PR body, or it is a finding.
+3. **Regenerate the manifest; never hand-edit it.** A red `--check` means run
+   `python tools/gen_touchpoint_manifest.py` and commit the result. Editing the
+   generated table, or adding a tag so the table matches, falsifies the
+   burndown instead of fixing it.
+4. **A baseline edit is never how a check goes green.** The vendor-include
+   baseline and the EB2 counts, `FROZEN_BOOL_COUNT`, the command-plane
+   baseline and the tags in `aetherd-touchpoint-tags.json` are the enforcement
+   itself — retagging a `vendor(...)` header un-gates it for every file above
+   the seam, since EB3 derives its vocabulary from that file at runtime.
+   Restructure the change. The two carveouts above (an EB3 vocabulary
+   reclassification with merge-base proof and explicit maintainer review; a
+   `FROZEN_BOOL_COUNT` raise on a maintainer ruling) are maintainer rulings
+   carrying that evidence, not a route to a passing check.
+5. **Touching a backend?** Read the THREADING AND LIFETIME CONTRACT in
+   `IRadioBackend.h` against the diff — live seam emission for flex, anan,
+   icom and rtl is a survey result, not a pinned test, so nothing else catches
+   a violation — carry `tests/SeamThreadAffinityProbe.h` into any test that
+   drives a backend, and re-read the #5554 notice at the top of "AI Agent
+   Guidelines".
+
 ---
 
 ## SmartSDR Protocol (v1.4.0.0)
