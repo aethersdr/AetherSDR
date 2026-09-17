@@ -186,6 +186,7 @@
 #include <QIcon>
 #include <QCursor>
 #include <QKeyEvent>
+#include <QWindowStateChangeEvent>
 #include <QMouseEvent>
 #include <QHelpEvent>
 #include <QWindow>
@@ -3872,6 +3873,45 @@ void MainWindow::changeEvent(QEvent* event)
     // app-backgrounded case lives in eventFilter via ApplicationStateChange.)
     if (event->type() == QEvent::ActivationChange && !isActiveWindow())
         failSafeMomentaryKeyingToRx("window-deactivate");
+
+    // A DIALOG DOES NOT FOLLOW ITS PARENT INTO A FULL-SCREEN SPACE (#5788).
+    //
+    // Qt already does everything that looks like the fix:
+    // QCocoaWindow::recreateWindowIfNeeded makes any Qt::Dialog an NSPanel, and
+    // createNSWindow gives it NSWindowCollectionBehaviorFullScreenAuxiliary |
+    // NSWindowCollectionBehaviorMoveToActiveSpace. ConnectionPanel is parented
+    // to this window and showConnectionDialog() already calls show(), raise()
+    // and activateWindow().
+    //
+    // But MoveToActiveSpace is a move-ON-ORDER-FRONT behaviour, not a
+    // follow-the-parent one: the panel lands on whatever Space is active when
+    // it is ordered front, and nothing ever ordered it front again. Entering
+    // full screen with it open therefore leaves it behind on the desktop.
+    //
+    // One order-front on the now-active Space is all it needs, and
+    // showConnectionDialog() already re-fits, re-clamps, shows, raises and
+    // activates. Qt delivers WindowStateChange from windowDidEnterFullScreen,
+    // i.e. AFTER the transition completes, which is also why this closes the
+    // launch race without a magic delay.
+    //
+    // Deliberately NOT switching ConnectionPanel to Qt::Tool: it gets the same
+    // collection behaviour, needs Qt::WA_MacAlwaysShowToolWindow to avoid
+    // hidesOnDeactivate, changes taskbar behaviour on Windows and Linux, and
+    // #5052's own fix comment warns that a non-activating tool window is not
+    // guaranteed to sit above a parented Qt::Dialog like this one.
+    // NOT platform-guarded on purpose, and the cost is one re-show. The Spaces
+    // behaviour is macOS-only, but a re-assert on a full-screen crossing is
+    // harmless everywhere -- showConnectionDialog() re-fits, re-clamps and
+    // raises a panel that is already visible. A Q_OS_MAC guard would make the
+    // behaviour differ by platform for no benefit and would hide the hook from
+    // anyone reading this on Linux and wondering why their dialog is fine.
+    if (event->type() == QEvent::WindowStateChange) {
+        const auto* wse = static_cast<QWindowStateChangeEvent*>(event);
+        const bool wasFull = wse->oldState().testFlag(Qt::WindowFullScreen);
+        const bool nowFull = windowState().testFlag(Qt::WindowFullScreen);
+        if (wasFull != nowFull && m_connPanel && m_connPanel->isVisible())
+            showConnectionDialog();
+    }
 
     if (event->type() != QEvent::WindowStateChange
         || !m_minimalMode
