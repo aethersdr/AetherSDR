@@ -265,6 +265,14 @@ AnanBackend::AnanBackend(QObject* parent)
         // a receiver rather than going nowhere; a future commit can surface
         // it through IRadioBackend::linkStats().
     });
+    // Only DDC0 feeds this DSP. Like ddc0IqReady above, notification and
+    // processing run directly on the I/O thread, with the DSP as context.
+    // Invalidate its partial FFT before the discontinuous block arrives.
+    connect(m_client, &P2Client::ddcSequenceGap, m_dsp, [dsp = m_dsp](int ddcIndex) {
+        if (ddcIndex == 0) {
+            dsp->onSequenceGap();
+        }
+    }, Qt::DirectConnection);
     connect(m_client, &P2Client::discoveryInfoReceived, this,
             [this](quint8 boardId, quint8 firmwareVer, quint8 numDdc) {
         // See capabilities()'s own comment for where these surface. Reported

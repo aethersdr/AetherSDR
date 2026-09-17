@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QUdpSocket>
 
+#include <cstdint>
 #include <span>
 
 Q_LOGGING_CATEGORY(lcAnanP2, "aether.anan.p2")
@@ -227,83 +228,94 @@ void P2Client::onReadyRead()
 {
     while (m_socket && m_socket->hasPendingDatagrams()) {
         const QNetworkDatagram dg = m_socket->receiveDatagram();
-        const auto frame = parseDdcFrame(asBytes(dg.data()));
-        if (!frame) {
-            // Not DDC0-shaped -- Mic Data or High Priority Status sharing
-            // this port, exactly as measured in Phase 1a, OR the reply to
-            // THIS session's own Discovery send (class comment). Try that
-            // second, cheap parse before giving up on the datagram; neither
-            // outcome is a drop or a connection attempt.
-            if (!m_discoveryInfoSent) {
-                if (const auto reply = parseDiscoveryReply(asBytes(dg.data()))) {
-                    m_discoveryInfoSent = true;
-                    emit discoveryInfoReceived(reply->boardId, reply->firmwareVer,
-                                               reply->numDdc);
-                }
-            }
-            continue;
-        }
-
-        // Which DDC sent this. The IQ packet carries no DDC index of its
-        // own, so the sender port is the only discriminator -- see
-        // ddcIndexForSenderPort()'s comment for how that is verified.
-        const auto ddcIndex = ddcIndexForSenderPort(
-            static_cast<std::uint16_t>(dg.senderPort()), m_activeDdcCount);
-        if (!ddcIndex) {
-            // DDC-shaped, but from a port this session did not enable --
-            // another client's stream to this host, or a DDC left running by
-            // a previous session. Dropping it is right: attributing it to a
-            // DDC would corrupt that receiver's audio and its sequence
-            // tracking, and counting it as a drop would blame this session
-            // for someone else's traffic.
-            //
-            // "Not a drop" must not mean "not observable", though. If the
-            // radio's source port ever differs from basePort + n -- other
-            // firmware, a NAT or relay in the path, a future negotiated-port
-            // session -- then EVERY datagram lands here and the operator sees
-            // a dead receiver whose only diagnostic is onConnectTimeout()'s
-            // "no DDC0 IQ from the radio", which reads as a radio fault. One
-            // line naming the port turns that into a diagnosis. Logged once
-            // per distinct port per session: this is in the hot receive path
-            // and a mismatch is by nature every packet.
-            if (!m_warnedUnexpectedPorts.contains(dg.senderPort())) {
-                m_warnedUnexpectedPorts.insert(dg.senderPort());
-                qCWarning(lcAnanP2).nospace()
-                    << "ANAN: dropping DDC-shaped datagram from unexpected "
-                       "sender port " << dg.senderPort() << " (expected "
-                    << kDdc0DefaultPort << ".."
-                    << (kDdc0DefaultPort + m_activeDdcCount - 1)
-                    << " for " << m_activeDdcCount
-                    << " active DDC(s)) -- not counted as a drop";
-            }
-            continue;
-        }
-        const std::size_t slot = static_cast<std::size_t>(*ddcIndex);
-
-        // Per-DDC gap detection; see m_expectedSeq's own comment for why a
-        // shared counter would manufacture drops once a second DDC streams.
-        if (m_expectedSeq[slot] && frame->seq != *m_expectedSeq[slot]) {
-            ++m_drops;
-            emit dropsUpdated(m_drops);
-        }
-        m_expectedSeq[slot] = frame->seq + 1;
-
-        // linkUp stays keyed on DDC0: it is the receiver every session has,
-        // and the connect timeout's message says "no DDC0 IQ". A session
-        // whose DDC1 streamed but whose DDC0 never did is a real failure,
-        // not a connected session.
-        if (!m_linkUp && *ddcIndex == 0) {
-            m_linkUp = true;
-            m_connectTimeoutTimer->stop();
-            emit linkUp();
-        }
-
-        m_decodeScratch.clear();
-        decodeIq(*frame, m_decodeScratch);
-        emit ddcIqReady(*ddcIndex, m_decodeScratch);
-        if (*ddcIndex == 0)
-            emit ddc0IqReady(m_decodeScratch);
+        handleDatagram(asBytes(dg.data()), static_cast<quint16>(dg.senderPort()));
     }
+}
+
+// Socket-free ingest seam: production and regression tests share validation,
+// per-DDC sequence tracking, notification ordering and sample delivery.
+void P2Client::handleDatagram(std::span<const std::uint8_t> bytes, quint16 senderPort)
+{
+    const auto frame = parseDdcFrame(bytes);
+    if (!frame) {
+        // Not DDC0-shaped -- Mic Data or High Priority Status sharing
+        // this port, exactly as measured in Phase 1a, OR the reply to
+        // THIS session's own Discovery send (class comment). Try that
+        // second, cheap parse before giving up on the datagram; neither
+        // outcome is a drop or a connection attempt.
+        if (!m_discoveryInfoSent) {
+            if (const auto reply = parseDiscoveryReply(bytes)) {
+                m_discoveryInfoSent = true;
+                emit discoveryInfoReceived(reply->boardId, reply->firmwareVer,
+                                           reply->numDdc);
+            }
+        }
+        return;
+    }
+
+    // Which DDC sent this. The IQ packet carries no DDC index of its
+    // own, so the sender port is the only discriminator -- see
+    // ddcIndexForSenderPort()'s comment for how that is verified.
+    const auto ddcIndex = ddcIndexForSenderPort(
+        static_cast<std::uint16_t>(senderPort), m_activeDdcCount);
+    if (!ddcIndex) {
+        // DDC-shaped, but from a port this session did not enable --
+        // another client's stream to this host, or a DDC left running by
+        // a previous session. Dropping it is right: attributing it to a
+        // DDC would corrupt that receiver's audio and its sequence
+        // tracking, and counting it as a drop would blame this session
+        // for someone else's traffic.
+        //
+        // "Not a drop" must not mean "not observable", though. If the
+        // radio's source port ever differs from basePort + n -- other
+        // firmware, a NAT or relay in the path, a future negotiated-port
+        // session -- then EVERY datagram lands here and the operator sees
+        // a dead receiver whose only diagnostic is onConnectTimeout()'s
+        // "no DDC0 IQ from the radio", which reads as a radio fault. One
+        // line naming the port turns that into a diagnosis. Logged once
+        // per distinct port per session: this is in the hot receive path
+        // and a mismatch is by nature every packet.
+        if (!m_warnedUnexpectedPorts.contains(senderPort)) {
+            m_warnedUnexpectedPorts.insert(senderPort);
+            qCWarning(lcAnanP2).nospace()
+                << "ANAN: dropping DDC-shaped datagram from unexpected "
+                   "sender port " << senderPort << " (expected "
+                << kDdc0DefaultPort << ".."
+                << (kDdc0DefaultPort + m_activeDdcCount - 1)
+                << " for " << m_activeDdcCount
+                << " active DDC(s)) -- not counted as a drop";
+        }
+        return;
+    }
+    const std::size_t slot = static_cast<std::size_t>(*ddcIndex);
+
+    // Per-DDC gap detection; see m_expectedSeq's own comment for why a
+    // shared counter would manufacture drops once a second DDC streams.
+    if (m_expectedSeq[slot] && frame->seq != *m_expectedSeq[slot]) {
+        ++m_drops;
+        emit dropsUpdated(m_drops);
+        // A rewind or duplicate is not forward loss, but its samples still
+        // break continuity. Notify before delivery, independently of the legacy
+        // drop counter (which counts each mismatch, not each missing packet).
+        emit ddcSequenceGap(*ddcIndex);
+    }
+    m_expectedSeq[slot] = frame->seq + 1;
+
+    // linkUp stays keyed on DDC0: it is the receiver every session has,
+    // and the connect timeout's message says "no DDC0 IQ". A session
+    // whose DDC1 streamed but whose DDC0 never did is a real failure,
+    // not a connected session.
+    if (!m_linkUp && *ddcIndex == 0) {
+        m_linkUp = true;
+        m_connectTimeoutTimer->stop();
+        emit linkUp();
+    }
+
+    m_decodeScratch.clear();
+    decodeIq(*frame, m_decodeScratch);
+    emit ddcIqReady(*ddcIndex, m_decodeScratch);
+    if (*ddcIndex == 0)
+        emit ddc0IqReady(m_decodeScratch);
 }
 
 }  // namespace AetherSDR::anan

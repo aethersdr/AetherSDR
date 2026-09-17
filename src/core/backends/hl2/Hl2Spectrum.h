@@ -49,9 +49,37 @@ public:
     // emit another frame).
     void accumulate(std::span<const std::complex<float>> iq);
 
-    // Drop whatever partial frame has accumulated. Used on a geometry change,
-    // where the samples either side genuinely describe different windows.
-    void reset() noexcept { m_acc.clear(); }
+    // Drop whatever partial frame has accumulated, returning how many samples
+    // went with it (0 = nothing was in flight, so nothing was salvaged).
+    //
+    // The caller is a TRANSPORT SEQUENCE GAP, not the geometry change this was
+    // originally written for. A geometry change RECONSTRUCTS this object --
+    // Hl2RxDsp::configure() does `m_spectrum = std::make_unique<Hl2Spectrum>(...)`
+    // -- so the accumulator is already empty on the far side of one, and that is
+    // why this function sat with no caller in the tree at all. The case that
+    // genuinely needs it is the one nobody wired: lost EP6 packets.
+    //
+    // WHY A GAP MATTERS HERE and not merely to a packet counter. process()
+    // carries a partial frame ACROSS calls and transforms only on
+    // `m_acc.size() == m_fftSize`. An EP6 block is 126 IQ samples and a frame is
+    // fftSize, so ~8 blocks build one frame at the 1024 points every backend
+    // here actually runs. When packets are lost mid-frame the accumulator keeps
+    // the pre-gap samples and fills the rest from post-gap ones: the FFT then
+    // spans a time discontinuity, and the phase relationship across the seam is
+    // not a measurement of anything. Discarding is the right answer rather than
+    // zero-filling the hole -- there is no sample to interpolate, the radio
+    // never sent it, and a zero run is a broadband transient this window would
+    // faithfully render as signal.
+    //
+    // The RETURN VALUE is what makes "a gap arrived" distinguishable from "a gap
+    // cost us a frame". A gap landing exactly on a frame boundary discards
+    // nothing and corrupts nothing; see Hl2RxDsp::spectrumGapDiscards().
+    std::size_t reset() noexcept
+    {
+        const std::size_t discarded = m_acc.size();
+        m_acc.clear();
+        return discarded;
+    }
 
 private:
     void computeFrame(std::vector<float>& binsDbfs);

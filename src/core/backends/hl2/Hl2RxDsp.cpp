@@ -382,6 +382,25 @@ bool Hl2RxDsp::spectrumFrameDue()
     return (m_spectrumClock.elapsed() - m_lastSpectrumMs) >= m_spectrumIntervalMs;
 }
 
+void Hl2RxDsp::onSequenceGap()
+{
+    if (!m_spectrum) {
+        return;   // between rebuilds; the new spectrum starts empty
+    }
+    // Counted only when something was actually in flight. A gap that lands on a
+    // frame boundary discards nothing and has corrupted nothing, and counting
+    // it here would make this row a second, worse copy of `droppedPackets`
+    // instead of the narrower statement it exists to make.
+    if (m_spectrum->reset() > 0) {
+        m_spectrumGapDiscards.fetch_add(1, std::memory_order_relaxed);
+    }
+    // The frame-rate clock is NOT touched. spectrumFrameDue() measures the
+    // operator's requested display interval, and a gap is not a frame having
+    // been shown -- resetting m_lastSpectrumMs here would hand the shaper a
+    // fresh interval it did not earn and drop the achieved rate by one frame
+    // per gap on top of the frame already lost.
+}
+
 void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
 {
     if (!m_channel)

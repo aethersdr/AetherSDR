@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <memory>
@@ -289,10 +290,34 @@ public:
             std::exp(-2.0 * std::numbers::pi * cornerHz / sampleRateHz));
     }
 
+    // ── Panadapter integrity across a transport gap ───────────────────────
+    //
+    // Partial FFT windows discarded at DDC0 discontinuities, including
+    // accepted rewinds and duplicates. Same lifetime/empty-window semantics
+    // as Hl2RxDsp::spectrumGapDiscards(). AnanBackend does not expose health
+    // rows yet; this counter is currently available only at the DSP stage.
+    [[nodiscard]] quint64 spectrumGapDiscards() const noexcept
+    {
+        return m_spectrumGapDiscards.load(std::memory_order_relaxed);
+    }
+
 public slots:
     // Feed one IQ block (normalized complex<float>). Emits spectrumReady per
     // FFT frame and audioReady/meterUpdate per completed WdspChannel block.
     void processIqBlock(const std::vector<std::complex<float>>& iq);
+
+    // A DDC0 sequence gap preceded the NEXT block this stage will be handed.
+    // AnanBackend routes P2Client::ddcSequenceGap here by DirectConnection on
+    // the I/O thread this object already lives on -- the same thread and the
+    // same call chain that then delivers the block, so this is a plain call and
+    // introduces no cross-thread edge.
+    //
+    // Discards the partial panadapter frame; see Hl2RxDsp::onSequenceGap() for
+    // the full reasoning, including why the AUDIO path is deliberately left
+    // alone, and why the per-bin smoother below is too -- smoothSpectrumBins()
+    // blends MAGNITUDES between frames and stays meaningful across a gap, while
+    // the FFT the gap corrupts is phase-coherent within one frame.
+    void onSequenceGap();
 
 signals:
     void pcmReady(const AetherSDR::PcmFrame& frame);
@@ -330,6 +355,9 @@ private:
     // the client-side one.
     void smoothSpectrumBins(std::vector<float>& binsDbfs);
     std::vector<float> m_smoothedBins;   // persists across frames; see smoothSpectrumBins()
+    // See spectrumGapDiscards(). Written on the I/O thread by onSequenceGap(),
+    // read by whatever polls it; relaxed for the same reasons Hl2RxDsp gives.
+    std::atomic<quint64> m_spectrumGapDiscards {0};
     // Weight on the NEW frame each call (1 - this on the running average).
     // Lighter than SpectrumWidget's client-side SMOOTH_ALPHA (0.35): the
     // trace already gets THAT smoothing on top of this one, so a second,

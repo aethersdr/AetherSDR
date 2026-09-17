@@ -3472,6 +3472,25 @@ other side has.
       "label":"Forward (W, approx — peak HOLD, display only)","value":4.56}]}
 ```
 
+**`spectrumGapDiscards<n>` counts discarded FFT windows, not packet loss.**
+On HL2 there is one row per active receiver. It increments when a transport
+sequence discontinuity discards a nonempty spectrum accumulator, including
+accepted rewinds and duplicate packets. `droppedPackets` counts forward packet
+loss only. The two can differ in either direction: a discontinuity at an empty
+accumulator costs no window, while a rewind can discard a window without
+increasing the loss count. The reset prevents a transform across discontinuous
+samples; the counter records that prevention, not a corrupted frame rendered.
+Repeated discontinuities can prevent a full FFT window from forming and leave
+the last trace displayed, so use frame liveness as well as counter deltas when
+assessing a measurement run.
+
+`spectrumGapDiscards<n>` is monotonic for the receiver DSP object's lifetime.
+A sample-rate change reconfigures that object in place and does not reset the
+count. Only destroying and rebuilding the receiver DSP starts it at zero.
+Compare deltas across a run; do not switch geometry to zero the counter. A
+receiver without a DSP reports `null`, meaning unavailable rather than clean.
+ANAN has the same DSP counter but does not publish health rows yet.
+
 **Assert on `forwardPowerW`, never on `forwardPowerPeakW`.** The peak row is a
 meter's display hold: a single key-edge ADC sample decays over seconds, so a
 script that asserts on it reads a transient from the start of the over as
