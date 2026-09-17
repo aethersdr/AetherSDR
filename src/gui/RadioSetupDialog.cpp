@@ -3860,19 +3860,31 @@ namespace {
 // (#1114) — so an unblocked repopulate would restart the audio device on every
 // PipeWire hiccup. A device merely ARRIVING must not re-point the engine; that
 // is platform churn, not an actionable change (#2864). A device VANISHING is
-// MainWindow::handleAudioDeviceListChanged's call, not this combo's, which is
-// why `engineDevice` — what the engine is actually on — is the fallback: when
-// the previous selection is gone the combo follows the engine rather than
-// inventing a switch of its own.
+// MainWindow::handleAudioDeviceListChanged's call, not this combo's. This
+// combo's job is to DISPLAY what the engine is on, which is why `engineDevice`
+// is the target and the combo's own selection is only the fallback -- see the
+// precedence note in the body.
 void repopulateAudioDeviceCombo(QComboBox* combo,
                                 const QList<QAudioDevice>& devices,
                                 const QAudioDevice& engineDevice)
 {
     if (!combo)
         return;
-    QByteArray wantedId = combo->currentData().toByteArray();
+    // ENGINE FIRST. The combo's own currentData() is only a better answer
+    // during the queued-dispatch window between a user's click and
+    // setInputDevice/setOutputDevice landing on the audio thread (#1114);
+    // outside that window the engine is the only thing that knows what audio
+    // is actually on. Preferring the combo here defeated the *DeviceChanged
+    // reseeds below: applyAudioDeviceSelection calls BOTH setters on every
+    // accepted AudioDeviceChangeDialog and neither setter guards its emit, so
+    // an output that was never unplugged still re-points the engine -- and a
+    // combo-first lookup would keep displaying the old device, which is still
+    // enumerable, while audio ran somewhere else. A refill under
+    // QSignalBlocker leaves no signal to reconcile that, so the pane would
+    // have lied with no way back.
+    QByteArray wantedId = engineDevice.id();
     if (wantedId.isEmpty())
-        wantedId = engineDevice.id();
+        wantedId = combo->currentData().toByteArray();
 
     QSignalBlocker blocker(combo);
     combo->clear();
@@ -3881,7 +3893,7 @@ void repopulateAudioDeviceCombo(QComboBox* combo,
 
     int idx = combo->findData(wantedId);
     if (idx < 0)
-        idx = combo->findData(engineDevice.id());
+        idx = combo->findData(combo->currentData().toByteArray());
     if (idx >= 0)
         combo->setCurrentIndex(idx);
 }
@@ -4189,8 +4201,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
             // churn device IDs continuously (#2864); a combo that rebuilds
             // while the user is reading it is worse than one that waits.
             const bool popupOpen =
-                (inCombo->view() && inCombo->view()->isVisible())
-                || (outCombo->view() && outCombo->view()->isVisible());
+                inCombo->view()->isVisible() || outCombo->view()->isVisible();
             if (popupOpen) {
                 settle->start();
                 return;
@@ -4239,6 +4250,12 @@ QWidget* RadioSetupDialog::buildAudioTab()
                 }, Qt::QueuedConnection);
                 return;
             }
+            // The device vanished between the reseed that offered it and the
+            // click that chose it. Nothing to do but say so: without this the
+            // symptom is "I picked it and nothing happened", with no trace.
+            qCWarning(lcAudio)
+                << "RadioSetupDialog: chosen" << (input ? "input" : "output")
+                << "device" << id << "is no longer enumerable; selection dropped";
         };
         connect(inCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [inCombo, applyChoice](int idx) {
