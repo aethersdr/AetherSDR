@@ -2,6 +2,7 @@
 #include "AetherDspWidget.h"
 #include "ClientEqApplet.h"   // ClientEqApplet::Path
 #include "EditorFramelessTitleBar.h"
+#include "CompactMetrics.h"
 #include "ModemChrome.h"
 #include "StripCompPanel.h"
 #include "StripEqPanel.h"
@@ -13,10 +14,6 @@
 
 #include <QButtonGroup>
 #include <QFrame>
-#include <QGraphicsProxyWidget>
-#include <QGraphicsScene>
-#include <QGraphicsView>
-#include <QPainter>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QHBoxLayout>
@@ -61,6 +58,7 @@ void tidyEmbeddedPanel(QWidget* panel)
         }
     };
     recolour(panel);
+
     for (QObject* child : panel->children()) {
         // dynamic_cast rather than findChild: EditorFramelessTitleBar has no
         // Q_OBJECT macro.
@@ -72,127 +70,76 @@ void tidyEmbeddedPanel(QWidget* panel)
     }
 }
 
-// Holds one stage panel and scales it down to whatever room the window gives.
+// Holds one stage panel and shrinks its graphics until it fits the page.
 //
-// The panels were written as floating editors and carry the natural size that
-// implies: the EQ alone wants about 900x520, because ten bands of icons and
-// per-band frequency/gain/Q readouts do not compress -- squeezing its columns
-// turns "1.50 kHz" into "50 kHz", which is worse than not showing it. Scaling
-// keeps the whole panel laid out as designed, just smaller, and because the
-// scene draws the widget through QPainter rather than blitting a pixmap, the
-// text and curves stay sharp at any factor.
+// These panels were drawn for a window twice the size of this one, and they
+// spend that space on knobs, curves and meters rather than on text. So the
+// page keeps every label at the size it was meant to be read at and takes the
+// graphics down instead (CompactMetrics), rather than scaling the panel whole
+// and shrinking the type with it.
 //
-// Never scales up: a panel that already fits is left at its natural size, so
-// this costs nothing on the pages that do not need it.
-class FitToViewHost final : public QGraphicsView {
+// Nothing scrolls: whatever is on this page is all of it.
+class StagePage final : public QWidget {
 public:
-    explicit FitToViewHost(QWidget* panel, QWidget* parent = nullptr)
-        : QGraphicsView(parent)
+    explicit StagePage(QWidget* panel, QWidget* parent = nullptr)
+        : QWidget(parent)
         , m_panel(panel)
+        , m_metrics(panel)
+        , m_designed(panel->size().expandedTo(panel->minimumSizeHint()))
     {
-        setFrameShape(QFrame::NoFrame);
-        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing
-                       | QPainter::SmoothPixmapTransform);
-        setAlignment(Qt::AlignLeft | Qt::AlignTop);
-        setBackgroundBrush(Qt::NoBrush);
-        setStyleSheet(QStringLiteral("QGraphicsView { background: transparent; }"));
-        auto* scene = new QGraphicsScene(this);
-        setScene(scene);
-        // The panel must arrive parentless: QGraphicsScene::addWidget only
-        // adopts a top-level widget, and one that is already someone's child
-        // is left exactly where it was -- which draws every stage panel on top
-        // of every other one, with no error anywhere.
-        Q_ASSERT(panel->parentWidget() == nullptr);
-        // The size the panel was designed at, taken before anything here has
-        // touched it: every one of these panels resizes itself to its own
-        // kDefaultWidth/kDefaultHeight in its constructor, which is the size
-        // its layout was drawn for. Captured once and never re-measured --
-        // asking the panel again after scaling it makes the answer a function
-        // of the last answer, and the two chase each other a few pixels at a
-        // time without ever settling.
-        m_natural = panel->size()
-                        .expandedTo(panel->minimumSizeHint())
-                        .expandedTo(QSize(1, 1));
-        m_proxy = scene->addWidget(panel);
-        // A panel's minimum size can grow after construction -- the gate's
-        // curve view and the EQ's band rows size themselves once the engine
-        // hands them something to draw. Nothing resizes this host when that
-        // happens, so without watching for it the page keeps the scale it was
-        // measured at and the panel grows off the bottom of it.
-        panel->installEventFilter(this);
-    }
-
-    bool eventFilter(QObject* watched, QEvent* event) override
-    {
-        // Resize as well as LayoutRequest: these panels restore their own
-        // saved geometry in showForRx(), after this host has already sized
-        // them, and a panel that makes itself taller than the scene rect is
-        // simply clipped by it -- knobs vanish off the bottom with no
-        // scrollbar and nothing in the log.
-        if (watched == m_panel && !m_inRescale
-            && (event->type() == QEvent::LayoutRequest
-                || event->type() == QEvent::Resize)) {
-            rescale();
-        }
-        return QGraphicsView::eventFilter(watched, event);
+        auto* col = new QVBoxLayout(this);
+        col->setContentsMargins(0, 0, 0, 0);
+        col->setSpacing(0);
+        col->addWidget(panel);
     }
 
 protected:
     void resizeEvent(QResizeEvent* event) override
     {
-        QGraphicsView::resizeEvent(event);
-        rescale();
+        QWidget::resizeEvent(event);
+        refit();
     }
 
     void showEvent(QShowEvent* event) override
     {
-        QGraphicsView::showEvent(event);
-        // Panels size themselves in showForRx(), which runs after this host is
-        // built, so the first honest measurement is here.
-        rescale();
+        QWidget::showEvent(event);
+        // Panels finish sizing themselves in showForRx(), which runs after
+        // this page is built, so the first honest measurement is here.
+        refit();
     }
 
 private:
-    void rescale()
+    void refit()
     {
-        if (!m_proxy || !scene() || m_inRescale) return;
-        // Resizing the proxy lays the panel out again, which posts another
-        // LayoutRequest straight back at the filter above.
-        m_inRescale = true;
-        const QSize natural = m_natural;
-        const QSize view = viewport()->size();
-        if (view.isEmpty()) {
-            m_inRescale = false;
-            return;
+        if (!m_panel || m_metrics.isEmpty() || m_refitting) return;
+        const QSize room = size();
+        if (room.isEmpty() || m_designed.isEmpty()) return;
+
+        m_refitting = true;
+        // Start from what the designed size asks for, then walk down until the
+        // panel's own minimum fits the page. A couple of passes settles it:
+        // the graphics do not shrink linearly, because the text between them
+        // does not shrink at all.
+        qreal factor = std::min({qreal(1.0),
+                                 qreal(room.width()) / m_designed.width(),
+                                 qreal(room.height()) / m_designed.height()});
+        for (int pass = 0; pass < 4; ++pass) {
+            m_metrics.apply(factor);
+            m_panel->ensurePolished();
+            const QSize needs = m_panel->minimumSizeHint();
+            if ((needs.width() <= room.width() && needs.height() <= room.height())
+                || factor <= CompactMetrics::kMinFactor) {
+                break;
+            }
+            factor *= 0.9;
         }
-
-        // Scale only as far as the tighter of the two axes demands, and never
-        // past 1: a panel that fits is shown at its own size.
-        const qreal scale = std::min({qreal(1.0),
-                                      qreal(view.width()) / natural.width(),
-                                      qreal(view.height()) / natural.height()});
-
-        // Lay the panel out at exactly the size it was designed for and scale
-        // that. Stretching it to fill the page instead looks tidier on the EQ,
-        // but these panels do not all survive a size they were not drawn at:
-        // the gate reports a 285 px minimum height and then needs 700, and
-        // Qt neither clips nor complains -- the knob row simply ends up past
-        // the bottom edge. The designed size is the one size every panel is
-        // known to render correctly.
-        const QSize laidOut = natural;
-        m_proxy->resize(laidOut);
-
-        scene()->setSceneRect(0, 0, laidOut.width(), laidOut.height());
-        setTransform(QTransform::fromScale(scale, scale));
-        m_inRescale = false;
+        m_refitting = false;
     }
 
-    QWidget*              m_panel{nullptr};
-    QSize                 m_natural;
-    QGraphicsProxyWidget* m_proxy{nullptr};
-    bool                  m_inRescale{false};
+    QWidget*       m_panel{nullptr};
+    CompactMetrics m_metrics;
+    QSize          m_designed;
+    bool           m_refitting{false};
 };
 
 } // namespace
@@ -202,7 +149,6 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
 {
     theme::setContainer(this, QStringLiteral("dialog/aetherRx"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");
-    setStyleSheet(ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
     // Opens at a size that sits on the desktop rather than filling it. The EQ
     // and waveform pages are wider than this at their natural size and scroll
     // to fit; that is the trade for a window you can put somewhere. The
@@ -220,6 +166,13 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     m_tabsFrame = new QFrame(this);
     m_tabsFrame->setObjectName(QStringLiteral("TabsFrame"));
     m_tabsFrame->setAttribute(Qt::WA_StyledBackground, true);
+    // The chrome sheet lives on the tab column rather than on the window. A
+    // Qt stylesheet cascades to every descendant, and its 14 px base font
+    // reaches inside the stage panels, which were drawn against the
+    // application font: three points more is enough to push the minus sign
+    // out of a knob's 76 px value editor. The AetherNR body applies the same
+    // sheet to itself, so the only thing that loses by this is nothing.
+    m_tabsFrame->setStyleSheet(ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
     m_tabsFrame->setFixedWidth(132);
     auto* tabsBox = new QVBoxLayout(m_tabsFrame);
     tabsBox->setContentsMargins(6, 6, 6, 6);
@@ -241,19 +194,19 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     addStage(Nr, QStringLiteral("AetherNR"), m_widget);
 
     // -- The RX chain, in the order the signal meets it ------------------
-    m_gate = new StripGatePanel(audio, nullptr);
+    m_gate = new StripGatePanel(audio, this);
     addStage(Gate, QStringLiteral("AGC-G"), buildStagePage(m_gate));
 
-    m_eq = new StripEqPanel(audio, nullptr);
+    m_eq = new StripEqPanel(audio, this);
     addStage(Eq, QStringLiteral("EQ"), buildStagePage(m_eq));
 
-    m_comp = new StripCompPanel(audio, nullptr);
+    m_comp = new StripCompPanel(audio, this);
     addStage(Comp, QStringLiteral("AGC-C"), buildStagePage(m_comp));
 
-    m_tube = new StripTubePanel(audio, nullptr);
+    m_tube = new StripTubePanel(audio, this);
     addStage(Tube, QStringLiteral("Tube"), buildStagePage(m_tube));
 
-    m_voice = new StripPuduPanel(audio, nullptr);
+    m_voice = new StripPuduPanel(audio, this);
     addStage(Voice, QStringLiteral("AetherVoice"), buildStagePage(m_voice));
 
     // Output and waveform share the last tab: the meter is what you read and
@@ -341,12 +294,12 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
             this,    &AetherRxDialog::nr4SuppressionChanged);
 }
 
-// A stage panel that always fits: scaled down when the window is smaller than
-// the panel's natural size, left alone when it is not. No scrollbars, so a
-// control is never half a drag off the edge of the page.
+// A stage panel that always fits, by shrinking its knobs and curves rather
+// than its labels. No scrollbars, so a control is never half a drag off the
+// edge of the page.
 QWidget* AetherRxDialog::buildStagePage(QWidget* panel)
 {
-    return new FitToViewHost(panel);
+    return new StagePage(panel);
 }
 
 void AetherRxDialog::addStage(Stage stage, const QString& label, QWidget* page)

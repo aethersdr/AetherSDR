@@ -1213,6 +1213,16 @@ add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.
 qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc)
+add_executable(compact_metrics_test
+    tests/compact_metrics_test.cpp
+    src/gui/CompactMetrics.cpp
+)
+target_include_directories(compact_metrics_test PRIVATE src)
+target_link_libraries(compact_metrics_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME compact_metrics_test COMMAND compact_metrics_test)
+set_tests_properties(compact_metrics_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(modem_chrome_test
     tests/modem_chrome_test.cpp
     src/gui/ModemChrome.cpp
@@ -5970,6 +5980,7 @@ set(AETHER_SETTINGS_CONSUMERS
     automation_bridge_start_outcome_test
     slice_label_test
     ulanzi_mapping_migration_test
+    compact_metrics_test
     modem_chrome_test
     theme_manager_test
     theme_seed_test
