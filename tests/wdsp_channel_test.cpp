@@ -1070,6 +1070,119 @@ bool runCloseAfterStoppedClockingTest()
     return true;
 }
 
+// The minimum-phase path, which nothing else in this tree exercises:
+// WdspChannel::Config::minimumPhase is false everywhere, so RXASetMP() always
+// passes 0 and WDSP's mp == 1 branch is never entered by any other test.
+//
+// Two things are pinned here, and the second is why the first matters.
+//
+// 1. Turning minimum phase ON must still produce audio. The AetherSDR patch
+//    that builds the minimum-phase workspace lazily
+//    (third_party/wdsp/AETHERSDR-PATCHES.md) makes plan_fircore() build the
+//    minimum-phase workspace only when the core's mp flag is set, and
+//    calc_fircore() build it on first use. WdspChannel::open() calls RXASetNC()
+//    BEFORE RXASetMP(), so with minimumPhase = true the six cores RXASetNC()
+//    re-plans are planned at mp == 0 and only then flipped on: this test is the
+//    one that walks the lazy-construction path. Before the patch the workspace
+//    was always there; after it, getting the laziness wrong is a null
+//    dereference inside mp_imp_exec() on the very first mask build.
+//
+// 2. Minimum phase must COST something. If the workspace were still built
+//    unconditionally, a minimum-phase channel and a linear-phase one would hold
+//    the same number of live WDSP allocations, and (1) could pass on a patch
+//    that achieved nothing. The comparison is stated as a relation rather than
+//    a count so it does not re-hardcode WDSP's internal fircore inventory.
+bool runMinimumPhaseWorkspaceTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.inputSampleRate = 48000;
+    config.dspSampleRate = 48000;
+    config.outputSampleRate = 48000;
+    config.mode = WdspChannel::Mode::Usb;
+    config.filterLowHz = 150.0;
+    config.filterHighHz = 3000.0;
+    config.agcMode = 0;
+    config.agcFixedGainDb = 0.0;
+    config.blockForOutput = true;
+    // The tap count the HL2 runs (Hl2RxDsp::kRxFilterTaps), so the workspace
+    // under test is the large one.
+    config.filterTaps = 8192;
+
+    // Live WDSP allocations held by one open channel, and the audio it makes.
+    // Both are taken while the channel is alive; it is destroyed before return,
+    // so runLeakChecked() still sees a clean balance.
+    const auto openAndMeasure = [&](bool minimumPhase,
+                                    uint64_t* liveAllocations,
+                                    double* toneRms) -> bool {
+        WdspChannel::Config channelConfig = config;
+        channelConfig.minimumPhase = minimumPhase;
+        const uint64_t before = WdspChannel::outstandingAllocationsForTest();
+        std::string error;
+        std::unique_ptr<WdspChannel> channel =
+            WdspChannel::create(channelConfig, &error);
+        if (!channel) {
+            std::cerr << "FAIL: could not open a channel with minimumPhase="
+                      << minimumPhase << ": " << error << '\n';
+            return false;
+        }
+        *liveAllocations = WdspChannel::outstandingAllocationsForTest() - before;
+
+        std::vector<float> inputI(config.inputBlockSize);
+        std::vector<float> inputQ(config.inputBlockSize);
+        std::vector<float> outputLeft(channel->outputBlockSize());
+        std::vector<float> outputRight(channel->outputBlockSize());
+        // Same geometry as runNotchAttenuationTest: RXA passes the opposite
+        // sign to its passband bounds, so an in-passband tone is negative.
+        constexpr double kToneHz = -1500.0;
+        constexpr std::size_t kSettleBlocks = 40;
+        constexpr std::size_t kTotalBlocks = 80;
+        double energy = 0.0;
+        for (std::size_t block = 0; block < kTotalBlocks; ++block) {
+            fillComplexTone(inputI, inputQ, config.inputSampleRate, kToneHz,
+                            block * config.inputBlockSize);
+            if (channel->processIq(inputI, inputQ, outputLeft, outputRight) !=
+                WdspChannel::ProcessResult::Ok) {
+                std::cerr << "FAIL: processIq failed with minimumPhase="
+                          << minimumPhase << '\n';
+                return false;
+            }
+            if (block >= kSettleBlocks) {
+                energy += rms(outputLeft);
+            }
+        }
+        *toneRms = energy;
+        return true;
+    };
+
+    uint64_t linearAllocations = 0;
+    uint64_t minimumAllocations = 0;
+    double linearTone = 0.0;
+    double minimumTone = 0.0;
+    if (!openAndMeasure(false, &linearAllocations, &linearTone) ||
+        !openAndMeasure(true, &minimumAllocations, &minimumTone)) {
+        return false;
+    }
+
+    if (!require(linearTone > 1.0e-4,
+                 "the linear-phase channel produced no audio") ||
+        !require(minimumTone > 1.0e-4,
+                 "the minimum-phase channel produced no audio - the lazily "
+                 "built minimum-phase workspace is wrong or absent")) {
+        return false;
+    }
+    if (minimumAllocations <= linearAllocations) {
+        std::cerr << "FAIL: minimum phase cost no extra WDSP allocations "
+                     "(linear=" << linearAllocations
+                  << " minimum=" << minimumAllocations
+                  << ") - the minimum-phase workspace is still being built "
+                     "for cores that do not use it\n";
+        return false;
+    }
+    return true;
+}
+
 bool runLifecycleTest()
 {
     const uint64_t baseline = WdspChannel::outstandingAllocationsForTest();
@@ -1150,6 +1263,10 @@ int main()
     check(runLeakChecked("stopped-close test", runStoppedCloseTest));
     check(runLeakChecked("notch index test", runNotchIndexTest));
     check(runLeakChecked("notch attenuation test", runNotchAttenuationTest));
+    check(runLeakChecked("minimum-phase workspace test",
+                         runMinimumPhaseWorkspaceTest));
+    // LAST, and deliberately so: see the ordering note above. Anything added
+    // later belongs ABOVE this line, not below it.
     check(runLeakChecked("close-after-stopped-clocking test",
                          runCloseAfterStoppedClockingTest));
     check(require(WdspChannel::outstandingAllocationsForTest() == allocationBaseline,

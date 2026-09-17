@@ -155,6 +155,7 @@ bool MidiControlManager::openPortByName(const QString& portName)
 
 void MidiControlManager::closePort()
 {
+    if (m_discardTxInputs) { m_discardTxInputs(); }
     m_hotplugTimer->stop();
     if (m_midiIn) {
         try {
@@ -302,6 +303,8 @@ void MidiControlManager::rtmidiCallback(double deltatime,
     int data2 = message->size() > 2 ? (*message)[2] : 0;
     const quint64 traceId = nextCwTraceId();
     const quint64 callbackMs = cwTraceNowMs();
+    const TxCoordinator::Request input = self->m_captureTxInput ? self->m_captureTxInput()
+                                                              : TxCoordinator::Request{};
 
     if (lcCw().isDebugEnabled()) {
         qCDebug(lcCw).noquote().nospace()
@@ -315,14 +318,14 @@ void MidiControlManager::rtmidiCallback(double deltatime,
 
     // Bridge to Qt main thread
     QMetaObject::invokeMethod(self, [self, status, data1, data2,
-                                     traceId, callbackMs, deltatime]() {
-        self->onMidiMessage(status, data1, data2, traceId, callbackMs, deltatime);
+                                     traceId, callbackMs, deltatime, input]() {
+        self->onMidiMessage(status, data1, data2, traceId, callbackMs, deltatime, input);
     }, Qt::QueuedConnection);
 }
 
 void MidiControlManager::onMidiMessage(int status, int data1, int data2,
                                        quint64 traceId, quint64 midiCallbackMs,
-                                       double rtDeltaSeconds)
+                                       double rtDeltaSeconds, const TxCoordinator::Request& input)
 {
     const quint64 dispatchMs = cwTraceNowMs();
     int channel = status & 0x0F;
@@ -521,7 +524,7 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2,
 
         // Don't call setter directly — may be on a worker thread while
         // setters access main-thread objects. Emit signal instead. (#502)
-        emit paramActionTrace(binding.paramId, scaled, traceId, midiCallbackMs, dispatchMs);
+        emit paramActionTrace(binding.paramId, scaled, traceId, midiCallbackMs, dispatchMs, input);
     }
 
     emit paramValueChanged(binding.paramId, value);

@@ -432,8 +432,10 @@ ruling things out quickly.
 
 ### Sideband selection — the mode does NOT choose it
 
-Two facts that took a full session to establish, and that no amount of reading
-WDSP's headers would have given us. Both measured against WWV on live hardware.
+Facts that took a full session to establish, and that no amount of reading
+WDSP's headers would have given us. The first two bullets were measured against
+WWV on live hardware; the last two are read off the vendored WDSP 2.10 sources
+in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
 
 - **RX: the passband edges select the sideband, not the mode.** `SetRXAMode`
   rebuilds the NBP stage from its own per-mode notion of the passband, so any
@@ -445,16 +447,46 @@ WDSP's headers would have given us. Both measured against WWV on live hardware.
   independently by `hl2_rxdsp_test` and `hl2_shift_test`. This is the single
   least intuitive fact in the whole backend and everything in §15 follows from
   it.
-- **TX is the mirror image: the MODE selects the sideband and the bandpass is an
-  audio-domain magnitude.** `SetTXABandpassFreqs` wants **positive** edges for
-  every mode. Handing TX the RX table's signed pairs put LSB and DIGL on the
-  upper sideband — caught by `hl2_txdsp_test` before it shipped, which is why
-  `Hl2Backend` keeps two separate tables (`defaultPassbandForMode` signed for RX,
+- **TX — in `Hl2TxDsp` — is the mirror image: the MODE selects the sideband and
+  the bandpass is an audio-domain magnitude.** `Hl2TxDsp` filters with one real
+  bandpass plus a Hilbert pair built from **positive** edges, and chooses the
+  sideband in `isLowerSideband()`, which negates Q. Handing it the RX table's
+  signed pairs put LSB and DIGL on the upper sideband — caught by
+  `hl2_txdsp_test` before it shipped, which is why `Hl2Backend` keeps two
+  separate tables (`defaultPassbandForMode` signed for RX,
   `defaultTxPassbandForMode` positive for TX).
+- **That positive-edges rule is `Hl2TxDsp`'s and NOT WDSP's —
+  `SetTXABandpassFreqs` is signed, exactly like RXA.** `TXA.c`'s
+  `TXASetupBPFilters` handles `TXA_LSB` and `TXA_USB` in the *same* fall-through
+  case, with one identical `CalcBandpassFilter (…, f_low, f_high, 2.0)`; no
+  per-mode sideband branch exists outside `TXA_AM_LSB` / `TXA_AM_USB`, which
+  themselves only pick a *sign* for `f_high`. And `create_txa` defaults to
+  `TXA_LSB` with `f_low = -5000.0`, `f_high = -100.0` — negative, which would be
+  meaningless if the mode chose the sideband. So `SetTXABandpassFreqs(ch, +300,
+  +2700)` builds the same filter for LSB as for USB: **feeding TXA this table's
+  positive pairs transmits LSB on the upper sideband.**
+- **Why the signed rule is counter-intuitive: `fir_bandpass` is inverted.**
+  `fir.c` builds the complex prototype as `+coef * cos (pos * w_osc)` for I and
+  **`-coef * sin (pos * w_osc)`** for Q — that is `exp(-j·w_osc·pos)` — so a
+  **positive** signed band selects the **negative** baseband half. RXA's NBP and
+  TXA's bandpass both reach it through `CalcBandpassFilter`/`fir_bandpass` with
+  `rtype = 1`, so this one function is the mechanism behind both the RX bullet
+  above and the TX correction here.
 
-The trap: RX and TX use **opposite conventions**, and both look plausible. A
-table written for one and reused for the other is silently wrong on exactly half
-the modes.
+The trap: RXA and `Hl2TxDsp` use **opposite conventions**, and both look
+plausible. A table written for one and reused for the other is silently wrong on
+exactly half the modes. The second trap is assuming the first one describes
+WDSP's transmit path: it does not.
+
+> **Forward note — not an instruction, and nothing here changes behaviour.**
+> Whether transmit should move from `Hl2TxDsp` onto a real TXA channel is the
+> open question in **#5678**; nothing has been decided. An **unfiled** analysis
+> behind that issue argues such a migration should drop `Hl2TxDsp`'s wire
+> conjugation and feed TXA *signed* RX-style edges rather than
+> `defaultTxPassbandForMode`. It is unfiled deliberately — there is no artifact
+> to cite and no number to follow, so treat the arrangement as unestablished. It
+> is a code change for a migration PR to settle and measure, not a claim this
+> section makes.
 
 ### CW has no BFO unless you build one
 

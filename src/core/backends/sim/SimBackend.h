@@ -69,7 +69,7 @@ public:
     // with — so there is one path that creates a demo pane, not two.
     bool createPanadapter() override;
     bool removePanadapter(const QString& panId) override;
-    void setKeying(bool key) override;
+    void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
 

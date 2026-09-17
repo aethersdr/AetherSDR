@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 Q_LOGGING_CATEGORY(lcHl2RxDsp, "aether.hl2.rxdsp")
 
@@ -381,6 +382,25 @@ bool Hl2RxDsp::spectrumFrameDue()
     return (m_spectrumClock.elapsed() - m_lastSpectrumMs) >= m_spectrumIntervalMs;
 }
 
+void Hl2RxDsp::onSequenceGap()
+{
+    if (!m_spectrum) {
+        return;   // between rebuilds; the new spectrum starts empty
+    }
+    // Counted only when something was actually in flight. A gap that lands on a
+    // frame boundary discards nothing and has corrupted nothing, and counting
+    // it here would make this row a second, worse copy of `droppedPackets`
+    // instead of the narrower statement it exists to make.
+    if (m_spectrum->reset() > 0) {
+        m_spectrumGapDiscards.fetch_add(1, std::memory_order_relaxed);
+    }
+    // The frame-rate clock is NOT touched. spectrumFrameDue() measures the
+    // operator's requested display interval, and a gap is not a frame having
+    // been shown -- resetting m_lastSpectrumMs here would hand the shaper a
+    // fresh interval it did not earn and drop the achieved rate by one frame
+    // per gap on top of the frame already lost.
+}
+
 void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
 {
     if (!m_channel)
@@ -479,8 +499,37 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         consumed += block;
 
         const auto res = m_channel->processIq(m_i, m_q, m_left, m_right);
-        if (res != WdspChannel::ProcessResult::Ok)
+        // COUNT EVERY OUTCOME, including Ok — the Ok count is the denominator,
+        // and "4 engine errors" against "4 engine errors in 5 blocks" are
+        // different reports. See WdspProcessTally.h for why Underrun is not
+        // summed with the four faults.
+        const std::uint64_t seen = m_processTally.record(res);
+        if (res != WdspChannel::ProcessResult::Ok) {
+            // A FAULT ALSO GETS A LINE, on a bounded schedule. The counter
+            // says how many; only a log line says WHEN, and when is what ties
+            // a fault to the rate change or the panadapter open that caused
+            // it. Powers of two so a fault recurring at the block rate cannot
+            // put 47 warnings a second on the thread that also paces EP2 —
+            // the first occurrence of each kind is always logged, and the
+            // hundredth is not.
+            //
+            // Underrun is excluded: it is normal, it is frequent, and logging
+            // it would drown the four that are not. It is still counted.
+            //
+            // AFTER processIq() RETURNS, not inside it. qCWarning formats and
+            // allocates, and doing that between the two reads of
+            // wdspPortAllocationSequence() would manufacture the very
+            // AllocationViolation this line is reporting.
+            if (res != WdspChannel::ProcessResult::Underrun
+                && WdspProcessTally::shouldLog(seen)) {
+                qCWarning(lcHl2RxDsp)
+                    << "WDSP processIq failed:" << WdspProcessTally::name(res)
+                    << "- occurrence" << seen
+                    << "on WDSP channel" << m_channel->channelId()
+                    << "- this block produces no audio";
+            }
             continue;   // Underrun while the pipeline fills, etc. — no output yet
+        }
 
         const std::size_t outN = m_left.size();
         for (std::size_t k = 0; k < outN; ++k) {

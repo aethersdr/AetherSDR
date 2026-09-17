@@ -261,6 +261,20 @@ public:
     // Convenience: PA heatsink temperature (°C).
     float paTemp() const { return m_paTemp; }
     bool hasPaTemp() const { return m_hasPaTempValue; }
+    // Age of the low-rate vitals, -1 when the meter is undeclared. "Ever fed"
+    // is not "current": a radio that reported PA temperature once and stopped
+    // would otherwise keep that reading alive forever on every surface that
+    // gated on hasPaTemp() alone (#5516).
+    qint64 paTempAgeMs() const
+    { return m_paTempIdx >= 0 ? valueAgeMs(m_paTempIdx) : -1; }
+    qint64 supplyVoltsAgeMs() const
+    { return m_supplyIdx >= 0 ? valueAgeMs(m_supplyIdx) : -1; }
+    // The freshness window for those vitals, shared by every consumer so they
+    // cannot answer differently about one sensor. Matches FRESH_MS in
+    // tools/tx_meter_test.py; see AutomationServer's meterObservation().
+    static constexpr qint64 kVitalsFreshMs = 1500;
+    static bool vitalIsFresh(bool declaredAndFed, qint64 ageMs)
+    { return declaredAndFed && ageMs >= 0 && ageMs < kVitalsFreshMs; }
     float paCurrent() const { return m_paCurrent; }
     bool hasPaCurrentMeter() const { return m_paCurrentIdx >= 0; }
     bool hasPaCurrent() const { return m_hasPaCurrentValue; }

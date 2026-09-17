@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 Q_LOGGING_CATEGORY(lcAnanRxDsp, "aether.anan.rxdsp")
 
@@ -334,6 +335,20 @@ void AnanRxDsp::smoothSpectrumBins(std::vector<float>& binsDbfs)
     binsDbfs = m_smoothedBins;
 }
 
+void AnanRxDsp::onSequenceGap()
+{
+    if (!m_spectrum) {
+        return;   // between rebuilds; the new spectrum starts empty
+    }
+    // Counted only when something was actually in flight -- see
+    // Hl2RxDsp::onSequenceGap() for why a boundary-aligned gap must not be
+    // counted, and why neither the frame-rate clock nor the audio path is
+    // touched here.
+    if (m_spectrum->reset() > 0) {
+        m_spectrumGapDiscards.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
 {
     if (!m_channel)
@@ -378,18 +393,32 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     // displayed frame.
     if (spectrumFrameDue()) {
         if (m_spectrum->process(m_conjugated, m_bins) > 0) {
-            // Real DDC0 CIC/decimation droop, corrected on the actual FFT
-            // magnitude BEFORE the EMA below so the smoothed/emitted trace
+            // Real DDC0 roll-off -- the anti-alias FIR's transition band,
+            // not CIC sin(x)/x (see AnanDroopCorrection.h). Corrected on the
+            // actual FFT magnitude BEFORE the EMA below so the emitted trace
             // reflects the corrected value at every step -- see
             // AnanDroopCorrection.h. inputSampleRateHz is always an exact
             // multiple of 1000 for the six valid DDC0 rates.
             const DroopCorrectionTable& droopTable =
                 droopTableForRate(m_config.inputSampleRateHz / 1000);
             applyDroopCorrectionDb(m_bins, droopTable);
-            // Cosmetic fade for the true edge -- only once a real
-            // calibration exists for this rate (the zero fallback has
-            // nothing meaningful to fade FROM). See applyEdgeFade()'s own
+            // Cosmetic fade for the true edge. See applyEdgeFade()'s own
             // comment for why this exists instead of a larger capDb.
+            //
+            // This identity test is NOT live logic on a G2 any more, and the
+            // comment that used to claim otherwise was wrong. connectRadio()
+            // seeds the derived defaults for all six DDC0 rates, so
+            // droopTableForRate() never hands back kDroopCorrectionZero for a
+            // rate this backend can actually run -- the fade is effectively
+            // unconditional, by design: there is always a real correction to
+            // fade FROM, and the outermost bins are clamped at +90 dB, which
+            // only stays off screen because this overwrites them.
+            //
+            // What the test still does is suppress the fade while the
+            // calibrator's bypass is on, which is the one case that must not
+            // see a synthetic edge -- setDroopCorrectionBypassed() returns the
+            // kDroopCorrectionZero OBJECT for exactly this identity check, so
+            // a sweep measures the radio and not our own raised cosine.
             if (&droopTable != &kDroopCorrectionZero)
                 applyEdgeFade(m_bins);
             smoothSpectrumBins(m_bins);
@@ -417,8 +446,32 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         consumed += block;
 
         const auto res = m_channel->processIq(m_i, m_q, m_left, m_right);
-        if (res != WdspChannel::ProcessResult::Ok)
+        // Count every outcome, Ok included -- the Ok count is the denominator
+        // a fault total has to be read against. Same rule, same words and the
+        // same bounded log schedule as Hl2RxDsp::processIqBlock: these two
+        // stages are copies of each other and the counting rule is the part
+        // that must not drift, which is why it lives in WdspProcessTally.h
+        // rather than twice here.
+        const std::uint64_t seen = m_processTally.record(res);
+        if (res != WdspChannel::ProcessResult::Ok) {
+            // Underrun excluded from the log and NOT from the count: it is
+            // normal while the asynchronous output side fills, and logging it
+            // would drown the four outcomes that are not normal.
+            //
+            // After processIq() returns, never inside it -- qCWarning
+            // allocates, and allocating between WdspChannel's two reads of
+            // wdspPortAllocationSequence() would manufacture the very
+            // AllocationViolation being reported.
+            if (res != WdspChannel::ProcessResult::Underrun
+                && WdspProcessTally::shouldLog(seen)) {
+                qCWarning(lcAnanRxDsp)
+                    << "WDSP processIq failed:" << WdspProcessTally::name(res)
+                    << "- occurrence" << seen
+                    << "on WDSP channel" << m_channel->channelId()
+                    << "- this block produces no audio";
+            }
             continue;   // underrun while the pipeline fills, etc. -- no output yet
+        }
 
         const std::size_t outN = m_left.size();
         for (std::size_t k = 0; k < outN; ++k) {

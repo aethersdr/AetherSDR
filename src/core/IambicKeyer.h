@@ -1,5 +1,7 @@
 #pragma once
 
+#include "TxCoordinator.h"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -31,7 +33,7 @@ namespace AetherSDR {
 //
 // Output
 // ──────
-// Two callbacks set at construction:
+// Callbacks set before start():
 //   - onKeyDownChange(bool down, when) — flips the sidetone gate.
 //     `when` is the edge's SCHEDULED instant on the element grid, not
 //     the emission wall-clock: the callback itself runs when the worker
@@ -45,6 +47,9 @@ namespace AetherSDR {
 //   - onPaddleEvent(bool dit, bool dah) — reports raw paddle transitions for
 //     diagnostics and any backend-specific observer. Timed RF key edges come
 //     from onKeyDownChange.
+//   - onRoutedKeyDownChange(down, when, request) — carries an element derived
+//     from the original raw input to the engine queue. It is separate from
+//     monitor/recorder timing and never supplies a fresh producer/session.
 class IambicKeyer {
 public:
     enum class Mode : int {
@@ -55,6 +60,8 @@ public:
     using KeyDownCallback    = std::function<void(bool down,
                                    std::chrono::steady_clock::time_point when)>;
     using PaddleEventCallback = std::function<void(bool dit, bool dah)>;
+    using RoutedKeyDownCallback = std::function<void(bool, std::chrono::steady_clock::time_point,
+                                                     const TxCoordinator::Request&)>;
 
     IambicKeyer();
     ~IambicKeyer();
@@ -66,6 +73,7 @@ public:
     // worker thread; receivers must hop to their own thread if needed.
     void setOnKeyDownChange(KeyDownCallback cb);
     void setOnPaddleEvent(PaddleEventCallback cb);
+    void setOnRoutedKeyDownChange(RoutedKeyDownCallback cb);
 
     // Spawn the worker thread.  Idempotent.
     void start();
@@ -89,6 +97,7 @@ public:
     // typically from PaddleReader on its own thread.  Both arguments
     // are absolute states (true = pressed), not edges.
     void setPaddleState(bool dit, bool dah) noexcept;
+    void setPaddleState(bool dit, bool dah, const TxCoordinator::Request& input) noexcept;
 
     // Hard reset: stop the current element, key up, clear memory bits.
     // Used when WPM/mode changes invalidate the current element timing.
@@ -98,6 +107,7 @@ private:
     enum class Element : int { Dit = 1, Dah = 2 };
 
     void workerLoop();
+    void setPaddleInput(bool dit, bool dah, const TxCoordinator::Request* input) noexcept;
     std::chrono::nanoseconds unitNs() const noexcept;  // 1.2e9 ns / WPM, clamped
     Element nextElementChoice(bool ditWanted, bool dahWanted, Element justSent) const noexcept;
     void emitKeyDown(bool down, std::chrono::steady_clock::time_point when);
@@ -117,6 +127,8 @@ private:
     bool                    m_ditPressed{false};
     bool                    m_dahPressed{false};
     bool                    m_paddleStateDirty{false};
+    TxCoordinator::Request  m_input; // original raw input, under m_mu
+    TxCoordinator::Request  m_elementInput; // worker-owned through matching key-up
 
     // Iambic mode B "memory" bits — set when the opposite paddle is
     // pressed mid-element, cleared when consumed.  Atomic because the
@@ -131,6 +143,7 @@ private:
 
     KeyDownCallback         m_onKeyDownChange;
     PaddleEventCallback     m_onPaddleEvent;
+    RoutedKeyDownCallback   m_onRoutedKeyDownChange;
     bool                    m_lastEmittedKeyDown{false};
     bool                    m_lastEmittedDit{false};
     bool                    m_lastEmittedDah{false};

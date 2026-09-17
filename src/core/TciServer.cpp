@@ -57,22 +57,6 @@ constexpr int    kMaxClients        = 8;
 constexpr int    kDaxReleaseGraceMs = 10000;
 }
 
-// ── TCI binary audio frame header (per ExpertSDR3 TCI spec v2.0) ────────
-// 9 × uint32 = 36 bytes, followed by sample payload
-// TCI audio header: 16 × uint32 = 64 bytes
-// Per ExpertSDR3 TCI spec v2.0 Stream struct
-struct TciAudioHeader {
-    quint32 receiver;     // receiver/TRX number
-    quint32 sampleRate;   // Hz
-    quint32 format;       // 0=int16, 1=int24, 2=int32, 3=float32
-    quint32 codec;        // 0 (uncompressed)
-    quint32 crc;          // 0 (unused)
-    quint32 length;       // number of real samples in data
-    quint32 type;         // 0=IQ, 1=RX_AUDIO, 2=TX_AUDIO, 3=TX_CHRONO
-    quint32 channels;     // 1 or 2
-    quint32 reserved[8];  // zero-filled
-};
-static_assert(sizeof(TciAudioHeader) == 64, "TCI audio header must be 64 bytes");
 
 namespace {
 
@@ -829,6 +813,7 @@ void TciServer::onNewConnection()
         protocol->setIqSampleRate(m_iqSampleRate);
 
         ClientState cs;
+        cs.txProducer = m_model->registerTxProducer(ws);
         cs.socket = ws;
         cs.protocol = protocol;
         cs.connectedAtMs = m_tciPttTelemetryClock.elapsed();
@@ -913,6 +898,9 @@ void TciServer::onClientDisconnected()
 
     for (int i = 0; i < m_clients.size(); ++i) {
         if (m_clients[i].socket == ws) {
+            // Invalidate at disconnect, before cleanup can reenter and before
+            // deleteLater destroys the socket; queued media must stop now.
+            m_clients[i].txProducer.invalidate();
             m_lastDisconnect = disconnectSnapshot(m_clients[i], ws);
             m_lastDisconnectAtMs = m_tciPttTelemetryClock.elapsed();
             if (m_pendingTrxRequest && m_pendingTrxRequest->client == ws) {
@@ -2307,11 +2295,29 @@ void TciServer::drainDeferredRoutingAndPtt()
     const PendingTrxRequest pending = *m_pendingTrxRequest;
     m_pendingTrxRequest.reset();
     if (pending.client) {
-        handleTrxRequest(pending.client, pending.request);
+        handleTrxRequest(pending.client, pending.request, pending.txRequest);
     }
 }
 
 void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxRequest& request)
+{
+    ClientState* state = clientStateFor(client);
+    TxCoordinator::Request txRequest;
+    if (state) {
+        if (request.transmitting && !state->pttRequest.valid()) {
+            state->pttRequest = state->txProducer.request();
+        }
+        txRequest = state->pttRequest;
+        if (!request.transmitting) {
+            state->pttRequest = {};
+        }
+    }
+    // Capture the accepted session before route selection can queue work.
+    handleTrxRequest(client, request, txRequest);
+}
+
+void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxRequest& request,
+                                const TxCoordinator::Request& txRequest)
 {
     if (!client || !m_model) {
         return;
@@ -2326,7 +2332,7 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
     if (request.transmitting
         && (m_routeTransitionInFlight || m_tciPttCancelPending
             || m_icomUnkeySettle.isSettling())) {
-        m_pendingTrxRequest = PendingTrxRequest { client, request };
+        m_pendingTrxRequest = PendingTrxRequest { client, request, txRequest };
         return;
     }
     if (!request.transmitting) {
@@ -2341,6 +2347,9 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         // A client may only release a transmit session it owns. In particular,
         // never let a TCI "trx:false" unkey an operator, VOX, or another client.
         if (!m_tciPttClient || m_tciPttClient != client) {
+            // Close even an unbound request: a pending promote callback must
+            // not key after this release merely because the socket survives.
+            m_model->setProducerTransmit(txRequest, false, TransmitModel::PttSource::TciHardware);
             replyText(client,
                 QStringLiteral("trx:%1,%2;")
                     .arg(request.trx)
@@ -2513,11 +2522,11 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
     QPointer<TciServer> self(this);
     QPointer<QWebSocket> socket(client);
     promoteTxSliceAndContinue(txSliceId,
-        [self, socket, request, wantsAudio, transitionGeneration](bool selected) {
+        [self, socket, request, txRequest, wantsAudio, transitionGeneration](bool selected) {
         if (!self) {
             return;
         }
-        if (!socket || !selected || !self->m_model) {
+        if (!socket || !selected || !self->m_model || !txRequest.valid()) {
             // A refused promote used to be near-unreachable: resolvePttSlice()
             // returned the slice that already held TX, so promoteTxSlice took
             // its isTxSlice() early return. Honouring the requested slice
@@ -2534,6 +2543,7 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
             return;
         }
         self->m_tciPttClient = socket;
+        self->m_tciPttRequest = txRequest;
         self->m_tciPttTrx = request.trx;
         self->m_tciPttWantsAudio = wantsAudio;
         self->m_tciPttRequestedOn = true;
@@ -2543,15 +2553,28 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         self->notePttOutcome(QStringLiteral("key-on-pending"));
         const quint64 generation = ++self->m_tciPttGeneration;
 
+        bool admitted = false;
         if (wantsAudio) {
             self->prepareTxAudio();
-            self->m_model->setTransmit(true, TransmitModel::PttSource::Dax);
+            admitted = self->m_model->setProducerTransmit(txRequest, true, TransmitModel::PttSource::Dax);
         } else {
             // Hardware-style TCI PTT shares the same preflight and Quindar
             // coordinator as local controls. This remains a single xmit path:
             // TciProtocol no longer keys independently.
-            self->m_model->transmitModel().requestPttOn(
-                TransmitModel::PttSource::TciHardware);
+            admitted = self->m_model->requestProducerPttOn(txRequest, TransmitModel::PttSource::TciHardware);
+        }
+        if (!admitted) {
+            self->abortTciPtt();
+            if (socket) {
+                self->replyText(socket, QStringLiteral("trx:%1,false;").arg(request.trx));
+            }
+            self->finishRouteTransition(transitionGeneration);
+            return;
+        }
+        self->m_tciTxContext = self->m_model->captureTxMedia(txRequest);
+        // Do not carry a previous client's resampling residue into this over.
+        if (self->m_txResampler) {
+            self->m_txResampler->reset();
         }
 
         QTimer::singleShot(1250, self, [self, socket, generation, request]() {
@@ -2643,6 +2666,19 @@ void TciServer::finishIcomUnkeySettle(quint64 generation)
 void TciServer::onBinaryMessage(const QByteArray& data)
 {
     if (!m_audio) return;
+    const TxCoordinator::Context context = m_tciTxContext;
+    // Keyed means REQUESTED-or-CONFIRMED, not requested alone.
+    // onRadioTransmittingChanged() moves the session from requested to
+    // confirmed the moment the radio reports it is transmitting
+    // (m_tciPttConfirmedOn = true; m_tciPttRequestedOn = false), which is a
+    // few tens of ms into an over that then runs for seconds. Testing only
+    // m_tciPttRequestedOn here would refuse the client's own TX audio for
+    // effectively the whole transmission. (#5659 review)
+    const bool keyedSession = m_tciPttRequestedOn || m_tciPttConfirmedOn;
+    if (sender() != m_tciPttClient || !keyedSession || !m_tciPttWantsAudio
+        || !context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     if (data.size() < static_cast<int>(sizeof(TciAudioHeader))) return;
 
     // Parse header
@@ -2816,9 +2852,9 @@ void TciServer::onBinaryMessage(const QByteArray& data)
     if ((m_txAudioBlocks % kTxSummaryEveryBlocks) == 0)
         logTxAudioSummary("running");
 
-    QMetaObject::invokeMethod(m_audio, "feedDaxTxAudio",
-                              Qt::QueuedConnection,
-                              Q_ARG(QByteArray, pcm));
+    QMetaObject::invokeMethod(m_audio, [audio = m_audio, pcm, context] {
+        audio->feedDaxTxAudio(pcm, context);
+    }, Qt::QueuedConnection);
 }
 
 // ── RX audio from DAX pipeline → TCI binary frames ─────────────────────
@@ -3547,10 +3583,9 @@ void TciServer::requestTciPttOff()
         return;
     }
     if (m_tciPttWantsAudio) {
-        m_model->setTransmit(false, TransmitModel::PttSource::Dax);
+        m_model->setProducerTransmit(m_tciPttRequest, false, TransmitModel::PttSource::Dax);
     } else {
-        m_model->transmitModel().requestPttOff(
-            TransmitModel::PttSource::TciHardware);
+        m_model->requestProducerPttOff(m_tciPttRequest, TransmitModel::PttSource::TciHardware);
     }
 }
 
@@ -3567,7 +3602,7 @@ void TciServer::abortTciPtt()
 
     // Teardown paths fail closed and bypass optional PTT outro delays.
     if (m_model && hadSession) {
-        m_model->setTransmit(false,
+        m_model->abortProducerPtt(m_tciPttRequest,
             m_tciPttWantsAudio ? TransmitModel::PttSource::Dax
                                : TransmitModel::PttSource::TciHardware);
     }
@@ -3738,7 +3773,7 @@ void TciServer::onRadioTransmittingChanged(bool transmitting)
             // transient trx:true that clients could interpret as a new owner.
             // Force the radio back to RX and wait for that authoritative edge.
             if (m_model) {
-                m_model->setTransmit(false, TransmitModel::PttSource::TciHardware);
+                m_model->abortProducerPtt(m_tciPttRequest, TransmitModel::PttSource::TciHardware);
             }
             return;
         }

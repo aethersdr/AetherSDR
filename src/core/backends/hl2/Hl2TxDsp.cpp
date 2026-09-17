@@ -176,8 +176,16 @@ bool Hl2TxDsp::isLowerSideband() const
 }
 
 void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
-                                 TxAudioSource source)
+                                 TxAudioSource source,
+                                 const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_txContext.sameContext(context)) {
+        reset();
+        m_txContext = context;
+    }
     if (m_bandpass.empty() || mono.empty())
         return;
 
@@ -280,8 +288,10 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     // Below alcTargetPeak the ceiling binds, the gain sits at exactly 1.0, and
     // output is proportional to input over the whole reported range — the
     // property hl2_txdsp_test now asserts directly, as 20 dB in arriving as
-    // 20 dB out. Above the target the loop reduces on its 5 ms attack, so the
-    // response degrades to smooth limiting instead of clipping.
+    // 20 dB out. Above the target the loop takes the reduction IMMEDIATELY —
+    // see the note at the assignment below for why the 5 ms attack constant
+    // this sentence used to name was deleted in 5607b565 (#5646) rather than
+    // shortened.
     //
     // THE MIC SLIDER IS A MICROPHONE CONTROL, so it does not reach the engine's
     // own unattended audio. See the note on the declaration in Hl2TxDsp.h.
@@ -425,7 +435,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
                      m_inBuffer.begin() + static_cast<std::ptrdiff_t>(consumed));
 
     if (!m_iq.empty())
-        emit iqReady(m_iq);
+        emit iqReady(m_iq, context);
     // PRE-modulation level: this is what a mic-gain control acts on, so it is
     // the number that tells an operator whether they are overdriving.
     emit micPeak(peak > 0.0f ? 20.0f * std::log10(peak) : -140.0f);

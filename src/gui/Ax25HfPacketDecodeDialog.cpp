@@ -1,4 +1,7 @@
 #include "Ax25HfPacketDecodeDialog.h"
+#include "ModemReceiveAction.h"
+#include <QScopeGuard>
+#include <utility>
 
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
@@ -847,6 +850,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(&m_shimThread, &QThread::finished, m_shim, &QObject::deleteLater);
     m_shimThread.start();
     m_kissServer = new KissTncServer(this);
+    configureTncAuthority(true);
     m_heard = new HeardList(this);
     m_terminal = new TncTerminal(this);
     m_pms = new PmsMailbox(this);
@@ -859,6 +863,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(m_digi, &AprsDigipeaterModel::queued, this,
             &Ax25HfPacketDecodeDialog::maybeStartNextKissTx, Qt::QueuedConnection);
     connect(m_digi, &AprsDigipeaterModel::disarmed, this, [this] {
+        (void)setTxProgram(TxProgram::Digi, false);
         if (m_digiEnable) {
             const QSignalBlocker blocker(m_digiEnable);
             m_digiEnable->setChecked(false);
@@ -1016,6 +1021,16 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     txLayout->addWidget(m_txText, 1);
     m_txButton = new QPushButton(QStringLiteral("Transmit"), txFrame);
     markTxKeying(m_txButton);   // transmits an AX.25 packet → keys TX (#3646)
+    registerTxKeyingAction(m_txButton, [this](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (action != QLatin1String("click") || !controller->belongsTo(m_radio) || !m_txText) {
+            return {};
+        }
+        const QString text = m_txText->text();
+        const TxCoordinator::Request input =
+            controller->captureProgram(TxController::Activity::Mox).request();
+        return [this, text, input] { startTransmit(text, input); };
+    });
     m_txButton->setMinimumHeight(42);
     txLayout->addWidget(m_txButton);
 
@@ -1229,6 +1244,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(m_kissServer, &KissTncServer::clientCountChanged,
             this, [this](int) { refreshTncStatus(); });
     connect(m_tncEnable, &QCheckBox::toggled, this, [this](bool on) {
+        if (on) { configureTncAuthority(true); }
         setTncEnabled(on, true);
     });
     connect(m_tncStartOnStartup, &QCheckBox::toggled, this, [](bool on) {
@@ -1245,10 +1261,10 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     });
 
     // Mailbox (PMS) wiring.
-    connect(m_pms, &PmsMailbox::transmitFrame, this, [this](const QByteArray& raw) {
-        if (raw.isEmpty() || !m_audio || !m_radio)
+    connect(m_pms, &PmsMailbox::transmitFrame, this, [this](const QByteArray& raw, const TxCoordinator::Request& input) {
+        if (raw.isEmpty() || !input.valid() || !m_audio || !m_radio)
             return;
-        m_digi->enqueue(raw); // shares the one-at-a-time keying/pacing path
+        m_digi->enqueue(raw, false, input);
     });
     connect(m_pms, &PmsMailbox::activity, this, &Ax25HfPacketDecodeDialog::appendSystemLine);
     connect(m_pms, &PmsMailbox::stateChanged, this, [this] { refreshPmsStatus(); });
@@ -1275,14 +1291,28 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     // APRS client wiring: beacon + messenger share the one-at-a-time modem
     // keying/pacing path with the KISS server, PMS, and terminal.
-    auto enqueueAprsTx = [this](const QByteArray& raw) {
-        if (raw.isEmpty() || !m_audio || !m_radio)
+    auto enqueueAprsTx = [this](const QByteArray& raw, const TxCoordinator::Request& input) {
+        if (raw.isEmpty() || !input.valid() || !m_audio || !m_radio)
             return;
         if (m_enableDecode && !m_enableDecode->isChecked()) {
             appendSystemLine(QStringLiteral("Enabling the modem for APRS transmit."));
-            m_enableDecode->setChecked(true);
+            const ProgramInput& beacon = m_txPrograms[static_cast<std::size_t>(TxProgram::Beacon)];
+            if (input.derivedFrom(beacon.root.request())) {
+                enableDecodeForProgram(TxProgram::Beacon);
+            }
+            const ProgramInput& receiver = m_txPrograms[static_cast<std::size_t>(TxProgram::Receive)];
+            if (input.derivedFrom(receiver.root.request())) {
+                enableDecodeForProgram(TxProgram::Receive);
+            }
+            // The producing UI/program has already supplied authority. This
+            // callback may be a retry; it must never capture native TX input.
+            if (!m_enableDecode->isChecked()) {
+                const QSignalBlocker blocker(m_enableDecode);
+                m_enableDecode->setChecked(true);
+                applyDecodeEnabled(true);
+            }
         }
-        m_digi->enqueue(raw);
+        m_digi->enqueue(raw, false, input);
     };
     connect(m_aprsBeacon, &AprsBeacon::transmitFrame, this, enqueueAprsTx);
     connect(m_aprsMessenger, &AprsMessenger::transmitFrame, this, enqueueAprsTx);
@@ -1305,10 +1335,10 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     }
 
     // TNC Terminal wiring.
-    connect(m_terminal, &TncTerminal::transmitFrame, this, [this](const QByteArray& raw) {
-        if (raw.isEmpty() || !m_audio || !m_radio)
+    connect(m_terminal, &TncTerminal::transmitFrame, this, [this](const QByteArray& raw, const TxCoordinator::Request& input) {
+        if (raw.isEmpty() || !input.valid() || !m_audio || !m_radio)
             return;
-        m_digi->enqueue(raw); // shares the one-at-a-time keying/pacing path
+        m_digi->enqueue(raw, false, input);
     });
     connect(m_terminal, &TncTerminal::output, this, [this](const QString& text) {
         if (!m_terminalView)
@@ -1333,11 +1363,12 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         if (m_enableDecode && !m_enableDecode->isChecked()) {
             appendSystemLine(
                 QStringLiteral("Enabling the modem for the terminal connection to %1.").arg(peer));
-            m_enableDecode->setChecked(true);
+            enableDecodeForProgram(TxProgram::Terminal);
         }
     });
 
     appendSystemLine(QStringLiteral("AetherModem initialized."));
+    configureTxActions();
     appendSystemLine(QStringLiteral("Enable Modem to start the RX audio tap."));
     appendSystemLine(QStringLiteral("TX accepts raw payload text or full SRC>DST,path:payload syntax."));
     setAttachedSlice(initialSlice);
@@ -1415,6 +1446,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
 {
+    for (std::size_t i = 0; i < m_txPrograms.size(); ++i) {
+        (void)setTxProgram(static_cast<TxProgram>(i), false);
+    }
     m_digi->setEnabled(false);
     m_digi->clear();
     if (m_txActive || m_txPendingStream)
@@ -1641,7 +1675,9 @@ QJsonObject linkSnapshot(const Ax25Connection& link)
 
 QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
                                                         const QString& action,
-                                                        const QString& value)
+                                                        const QString& value,
+                                                        const std::shared_ptr<TxController>& controller,
+                                                        const TxController::Input& input)
 {
     const bool isLink = (verb == QLatin1String("link"));
 
@@ -1671,7 +1707,7 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
                 return automationError(QStringLiteral("modem enable control is unavailable"));
             const bool on = (action == QLatin1String("on")
                              || action == QLatin1String("enable"));
-            m_enableDecode->setChecked(on);
+            setDecodeEnabledForAutomation(on, controller, input);
             // Verify rather than assume: the modem can refuse to start (no
             // audio engine, no attached slice). Reporting ok for work that did
             // not happen is worse than reporting the failure.
@@ -1690,18 +1726,28 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
                     return automationError(QStringLiteral(
                         "set a digi callsign first (Digi tab, or APRS MY CALLSIGN)"));
                 }
-                m_digiEnable->setChecked(true);
+                if (!controller || !input.valid()) {
+                    return automationError(QStringLiteral("original transmit authorization is unavailable"));
+                }
+                setDigiEnabled(true, controller, input);
                 if (!m_digi->isEnabled()) {
                     return automationError(QStringLiteral(
                         "fill-in digipeater refused to turn on — see the AetherModem system log"));
                 }
             } else if (sub == QLatin1String("off") || sub == QLatin1String("disable")) {
-                m_digiEnable->setChecked(false);
+                if (!controller || !setTxProgram(TxProgram::Digi, false, controller, input)) {
+                    return automationError(QStringLiteral("digipeater belongs to another controller"));
+                }
+                setDigiEnabled(false, controller, input);
                 if (m_digi->isEnabled()) {
                     return automationError(QStringLiteral(
                         "fill-in digipeater refused to turn off — see the AetherModem system log"));
                 }
             } else if (sub == QLatin1String("beacon")) {
+                const ProgramInput& program = m_txPrograms[static_cast<std::size_t>(TxProgram::Digi)];
+                if (!controller || !controller->sameController(program.controller) || !program.root.valid()) {
+                    return automationError(QStringLiteral("digipeater belongs to another controller"));
+                }
                 applyDigiConfigFromUi(false);
                 if (!m_digi) {
                     return automationError(QStringLiteral("digi beacon is unavailable"));
@@ -1811,6 +1857,9 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
         // validation. Make sure we are at the command prompt first, or the line
         // would be sent to a peer as data instead of being interpreted.
         m_terminal->enterCommandMode();
+        if (!controller || !input.valid() || !setTxProgram(TxProgram::Terminal, true, controller, input)) {
+            return automationError(QStringLiteral("terminal transmit authorization is unavailable"));
+        }
         m_terminal->submitLine(QStringLiteral("CONNECT %1").arg(value));
         if (!m_terminal->isConnected() && !m_terminal->isConnecting()) {
             // The parser rejected it (bad callsign / bad digipeater); it has
@@ -1819,6 +1868,10 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
                 "connect to '%1' was rejected — see the terminal transcript").arg(value));
         }
     } else if (action == QLatin1String("disconnect")) {
+        const ProgramInput& program = m_txPrograms[static_cast<std::size_t>(TxProgram::Terminal)];
+        if (!controller || !controller->sameController(program.controller) || !program.root.valid()) {
+            return automationError(QStringLiteral("terminal belongs to another controller"));
+        }
         if (!m_terminal->isConnected() && !m_terminal->isConnecting())
             return automationError(QStringLiteral("not connected"));
         m_terminal->disconnectLink();
@@ -1855,7 +1908,14 @@ QJsonObject Ax25HfPacketDecodeDialog::automationCommand(const QString& verb,
         if (!m_pmsEnable || !m_pms)
             return automationError(QStringLiteral("mailbox control is unavailable"));
         const bool on = (state == QLatin1String("on"));
-        m_pmsEnable->setChecked(on);
+        if (!controller || (on && !input.valid())) {
+            return automationError(QStringLiteral("mailbox transmit authorization is unavailable"));
+        }
+        {
+            const QSignalBlocker blocker(m_pmsEnable);
+            m_pmsEnable->setChecked(on);
+        }
+        setPmsEnabled(on, true, controller, input);
         // The mailbox refuses to come up without a valid listen callsign and
         // silently unchecks itself. Verify the state actually took, so the verb
         // cannot report success for a mailbox that is not listening.
@@ -1989,6 +2049,45 @@ void Ax25HfPacketDecodeDialog::overrideImpossibleT1ForProfile()
 
 void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
 {
+    (void)setTxProgram(TxProgram::Receive, enabled);
+    applyDecodeEnabled(enabled);
+}
+
+void Ax25HfPacketDecodeDialog::setDecodeEnabledForAutomation(bool enabled,
+    const std::shared_ptr<TxController>& controller, const TxController::Input& input)
+{
+    if (!m_enableDecode || m_enableDecode->isChecked() == enabled) { return; }
+    if (enabled && controller && input.valid()) {
+        (void)setTxProgram(TxProgram::Receive, true, controller, input);
+    }
+    {
+        const QSignalBlocker blocker(m_enableDecode);
+        m_enableDecode->setChecked(enabled);
+    }
+    applyDecodeEnabled(enabled);
+}
+
+void Ax25HfPacketDecodeDialog::enableDecodeForProgram(TxProgram kind)
+{
+    if (!m_enableDecode || m_enableDecode->isChecked()) { return; }
+    const ProgramInput program = m_txPrograms[static_cast<std::size_t>(kind)];
+    if (!program.root.valid()) { return; }
+    (void)setTxProgram(TxProgram::Receive, true, program.controller, program.root);
+    {
+        const QSignalBlocker blocker(m_enableDecode);
+        m_enableDecode->setChecked(true);
+    }
+    applyDecodeEnabled(true);
+}
+
+void Ax25HfPacketDecodeDialog::applyDecodeEnabled(bool enabled)
+{
+    if (!enabled) {
+        for (std::size_t i = 0; i < m_txPrograms.size(); ++i) {
+            (void)setTxProgram(static_cast<TxProgram>(i), false);
+        }
+        m_aprsMessenger->cancelPendingTransmissions();
+    }
     if (!enabled && m_digi) { m_digi->setEnabled(false); }
     if (enabled) {
         QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
@@ -2210,8 +2309,246 @@ void Ax25HfPacketDecodeDialog::startTransmitFromUi()
     startTransmit(m_txText->text());
 }
 
+bool Ax25HfPacketDecodeDialog::setTxProgram(TxProgram program, bool enabled,
+    const std::shared_ptr<TxController>& controller, const TxController::Input& input)
+{
+    ProgramInput& stored = m_txPrograms[static_cast<std::size_t>(program)];
+    if (enabled && program == TxProgram::Terminal && !m_terminal->isConnected()
+        && !m_terminal->isConnecting() && m_terminal->link()->state() == Ax25Connection::State::Disconnected) {
+        // A completed link cannot monopolize the next explicit connect. Any
+        // final queued frame retains its previous root; do not re-authorize it
+        // with the next program or cancel its normal protocol tail here.
+        stored = {};
+    }
+    if (controller && stored.root.valid() && !controller->sameController(stored.controller)) {
+        return false;
+    }
+    if (enabled) {
+        const std::shared_ptr<TxController> owner = controller ? controller
+            : m_radio ? m_radio->localTxController() : nullptr;
+        if (!owner || !owner->valid() || !owner->belongsTo(m_radio)) {
+            return false;
+        }
+        if (stored.root.valid()) {
+            return owner->sameController(stored.controller);
+        }
+        const TxController::Input root = controller ? input
+            : owner->captureProgram(TxController::Activity::Mox);
+        if (!root.valid() || !root.belongsTo(m_radio)) {
+            return false;
+        }
+        stored = {owner, root};
+    } else {
+        const ProgramInput previous = std::exchange(stored, {});
+        const QPointer<Ax25HfPacketDecodeDialog> self(this);
+        previous.root.stop();
+        if (!self) { return false; }
+        if (m_txRequest.derivedFrom(previous.root.request())) {
+            finishTransmit(true, QStringLiteral("original modem program was cancelled"), true);
+        }
+        if (!self) { return false; }
+    }
+    const TxCoordinator::Request request = stored.root.request();
+    switch (program) {
+    case TxProgram::Receive: m_aprsMessenger->setReceiveProgram(request); break;
+    case TxProgram::Beacon: m_aprsBeacon->setTransmitProgram(request); break;
+    case TxProgram::Digi: m_digi->setTransmitProgram(request); break;
+    case TxProgram::Pms: m_pms->setTransmitProgram(request); break;
+    case TxProgram::Terminal: m_terminal->setTransmitProgram(request); break;
+    case TxProgram::Count: return false;
+    }
+    return true;
+}
+
+void Ax25HfPacketDecodeDialog::setDigiEnabled(bool enabled,
+    const std::shared_ptr<TxController>& controller, const TxController::Input& input)
+{
+    if (!setTxProgram(TxProgram::Digi, enabled, controller, input)) {
+        const QSignalBlocker blocker(m_digiEnable);
+        m_digiEnable->setChecked(m_digi->isEnabled());
+        return;
+    }
+    {
+        const QSignalBlocker blocker(m_digiEnable);
+        m_digiEnable->setChecked(enabled);
+    }
+    applyDigiConfigFromUi(true);
+    if (m_digiEnable->isChecked() && m_enableDecode && !m_enableDecode->isChecked()) {
+        appendSystemLine(QStringLiteral("Enabling the modem for the fill-in digipeater."));
+        enableDecodeForProgram(TxProgram::Digi);
+    }
+    refreshDigiStatus();
+}
+
+void Ax25HfPacketDecodeDialog::configureTxActions()
+{
+    registerModemReceiveAction(m_enableDecode, [this](bool enabled,
+        const std::shared_ptr<TxController>& controller, const TxController::Input& input) {
+        setDecodeEnabledForAutomation(enabled, controller, input);
+    });
+    registerModemReceiveAction(m_tncEnable, [this](bool enabled,
+        const std::shared_ptr<TxController>& controller, const TxController::Input& input) {
+        if (m_tncEnable->isChecked() == enabled) { return; }
+        if (enabled) {
+            setDecodeEnabledForAutomation(true, controller, input);
+            configureTncAuthority(false, controller, input);
+        }
+        {
+            const QSignalBlocker blocker(m_tncEnable);
+            m_tncEnable->setChecked(enabled);
+        }
+        setTncEnabled(enabled, true);
+    });
+    auto checkedValue = [](QCheckBox* box, const QString& action, const QString& value) {
+        const QString normalized = value.trimmed().toLower();
+        return action == QLatin1String("setChecked")
+            ? normalized == QLatin1String("true") || normalized == QLatin1String("1")
+                || normalized == QLatin1String("on") || normalized == QLatin1String("yes")
+            : !box->isChecked();
+    };
+    for (const auto& entry : {std::pair{m_aprsBeaconEnable, TxProgram::Beacon},
+                             std::pair{m_pmsEnable, TxProgram::Pms}}) {
+        QCheckBox* box = entry.first;
+        const TxProgram kind = entry.second;
+        registerTxKeyingAction(box, [this, box, kind, checkedValue](const std::shared_ptr<TxController>& controller,
+                const QString& action, const QString& value) -> TxKeyingAction::Prepared {
+            const ProgramInput& program = m_txPrograms[static_cast<std::size_t>(kind)];
+            if (!controller->belongsTo(m_radio) || (program.root.valid() && !controller->sameController(program.controller))
+                || (action != QLatin1String("click") && action != QLatin1String("toggle")
+                    && action != QLatin1String("setChecked"))) {
+                return {};
+            }
+            const bool on = checkedValue(box, action, value);
+            const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+            return [this, box, kind, controller, input, on] {
+                if (!setTxProgram(kind, on, controller, input)) { return; }
+                {
+                    const QSignalBlocker blocker(box);
+                    box->setChecked(on);
+                }
+                if (kind == TxProgram::Pms) {
+                    setPmsEnabled(on, true, controller, input);
+                } else {
+                    applyAprsConfigFromUi(true);
+                }
+            };
+        });
+    }
+    registerTxKeyingAction(m_terminalSendButton, [this](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) {
+            return {};
+        }
+        const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        const QString line = m_terminalInput->text();
+        return [this, controller, input, line] {
+            if (setTxProgram(TxProgram::Terminal, true, controller, input)) {
+                submitTerminalLine(line);
+            }
+        };
+    });
+    registerTxKeyingAction(m_terminalConnectButton, [this](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) { return {}; }
+        const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        const QString target = m_terminalTarget->text().trimmed();
+        return [this, controller, input, target] {
+            if (!target.isEmpty() && setTxProgram(TxProgram::Terminal, true, controller, input)) {
+                m_terminal->submitLine(QStringLiteral("CONNECT %1").arg(target));
+            }
+        };
+    });
+    registerTxKeyingAction(m_aprsMsgSend, [this](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) { return {}; }
+        const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        const QString to = m_aprsMsgTo->text().trimmed().toUpper();
+        const QString text = m_aprsMsgText->text().trimmed();
+        return [this, controller, input, to, text] {
+            if (!m_enableDecode->isChecked()) {
+                (void)setTxProgram(TxProgram::Receive, true, controller, input);
+            }
+            applyAprsConfigFromUi(false);
+            if (input.valid() && m_aprsMessenger->sendMessage(to, text, input.request())
+                && m_aprsMsgText->text().trimmed() == text) {
+                m_aprsMsgText->clear();
+            }
+        };
+    });
+    registerTxKeyingAction(m_digiBeaconEnable, [this, checkedValue](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString& value) -> TxKeyingAction::Prepared {
+        const ProgramInput& program = m_txPrograms[static_cast<std::size_t>(TxProgram::Digi)];
+        if (!controller->sameController(program.controller) || !program.root.valid()
+            || (action != QLatin1String("click") && action != QLatin1String("toggle")
+                && action != QLatin1String("setChecked"))) { return {}; }
+        const TxCoordinator::Request input = program.root.request();
+        const bool on = checkedValue(m_digiBeaconEnable, action, value);
+        return [this, input, on] {
+            if (input.valid()) {
+                const QSignalBlocker blocker(m_digiBeaconEnable);
+                m_digiBeaconEnable->setChecked(on);
+                applyDigiConfigFromUi(true);
+            }
+        };
+    });
+    registerTxKeyingAction(m_digiEnable, [this](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString& value) -> TxKeyingAction::Prepared {
+        if (!controller->belongsTo(m_radio)
+            || (action != QLatin1String("click") && action != QLatin1String("toggle")
+                && action != QLatin1String("setChecked"))) {
+            return {};
+        }
+        const bool on = action == QLatin1String("setChecked")
+            ? value == QLatin1String("true") || value == QLatin1String("1")
+                || value == QLatin1String("on") || value == QLatin1String("yes")
+            : !m_digiEnable->isChecked();
+        const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        return [this, controller, input, on] { setDigiEnabled(on, controller, input); };
+    });
+    registerTxKeyingAction(m_digiBeaconNow, [this](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        const ProgramInput& program = m_txPrograms[static_cast<std::size_t>(TxProgram::Digi)];
+        if (action != QLatin1String("click") || !controller->sameController(program.controller) || !program.root.valid()) {
+            return {};
+        }
+        const TxCoordinator::Request input = program.root.request();
+        return [this, input] {
+            if (input.valid()) {
+                applyDigiConfigFromUi(false);
+                m_digi->sendBeaconNow();
+            }
+        };
+    });
+    registerTxKeyingAction(m_aprsBeaconNow, [this](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (action != QLatin1String("click") || !controller->belongsTo(m_radio)) {
+            return {};
+        }
+        const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        return [this, controller, input] {
+            if (!m_enableDecode->isChecked()) {
+                (void)setTxProgram(TxProgram::Receive, true, controller, input);
+            }
+            applyAprsConfigFromUi(false);
+            m_aprsBeacon->sendNow(input.request());
+        };
+    });
+}
+
 void Ax25HfPacketDecodeDialog::startTransmit(const QString& text)
 {
+    if (m_radio && !m_txProducer.valid()) {
+        m_txProducer = m_radio->registerTxProducer(this);
+    }
+    startTransmit(text, m_txProducer.request());
+}
+
+void Ax25HfPacketDecodeDialog::startTransmit(const QString& text, TxCoordinator::Request input)
+{
+    if (!input.valid()) {
+        appendSystemLine(QStringLiteral("TX unavailable: original input authorization ended."));
+        return;
+    }
     if (m_txActive || m_txPendingStream) {
         appendSystemLine(QStringLiteral("TX already in progress."));
         return;
@@ -2231,14 +2568,20 @@ void Ax25HfPacketDecodeDialog::startTransmit(const QString& text)
         qCWarning(lcAx25).noquote() << "AX.25 TX packetization failed:" << tx.error;
         return;
     }
-    beginTransmission(tx, false);
+    beginTransmission(tx, false, input);
 }
 
-void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, bool fromKiss)
+void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, bool fromKiss,
+                                                TxCoordinator::Request input)
 {
     // Identifies this transmission to any deferred work armed on its behalf
     // (see armTxStreamWaitTimeout).
     ++m_txGeneration;
+    m_txRequest = input;
+    if (!m_txRequest.valid()) {
+        finishTransmit(true, QStringLiteral("transmit producer is unavailable"));
+        return;
+    }
     m_txFromKiss = fromKiss;
     if (!fromKiss) { m_txFromDigi = false; }
     m_pendingTx = tx;
@@ -2401,6 +2744,10 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         finishTransmit(true, QStringLiteral("audio engine or radio model disappeared before TX"));
         return;
     }
+    if (!m_txRequest.valid()) {
+        finishTransmit(true, QStringLiteral("original TX request is no longer valid"));
+        return;
+    }
     const bool bypassesDax = txAudioBypassesDax();
     if (!bypassesDax && m_audio->txStreamId() == 0) {
         m_txPendingStream = true;
@@ -2449,9 +2796,10 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
             .arg(m_txTailMs);
 
     refreshTransmitControls();
-    QTimer::singleShot(kTxDaxSettleMs, this, [this] {
-        if (!m_txActive)
+    QTimer::singleShot(kTxDaxSettleMs, this, [this, request = m_txRequest] {
+        if (!m_txActive || !request.sameRequest(m_txRequest)) {
             return;
+        }
         if (!m_radio) {
             finishTransmit(true, QStringLiteral("radio model disappeared before PTT"));
             return;
@@ -2490,7 +2838,11 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
         }
 
         m_txPttClock.restart();
-        txModel.requestPttOn(TransmitModel::PttSource::Dax);
+        if (!m_radio->requestProducerPttOn(request, TransmitModel::PttSource::Dax)) {
+            finishTransmit(true, QStringLiteral("PTT request was refused"));
+            return;
+        }
+        m_txContext = m_radio->captureTxMedia(request);
         if (!m_txActive)
             return;
         if (waitsForRadioPtt) {
@@ -2616,9 +2968,9 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
         const quint64 generation = m_txGeneration;
         QPointer<AudioEngine> audio = m_audio;
         const bool queued = QMetaObject::invokeMethod(
-            m_audio, [audio, generation] {
+            m_audio, [audio, generation, context = m_txContext] {
                 if (audio) {
-                    audio->finishModemTxAudio(generation);
+                    audio->finishModemTxAudio(generation, context);
                 }
             }, Qt::QueuedConnection);
         if (!queued) {
@@ -2649,9 +3001,9 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
     ++m_txChunkIndex;
 
     QPointer<AudioEngine> audio = m_audio;
-    QMetaObject::invokeMethod(m_audio, [audio, chunk]() {
+    QMetaObject::invokeMethod(m_audio, [audio, chunk, context = m_txContext]() {
         if (audio)
-            audio->sendModemTxAudio(chunk);
+            audio->sendModemTxAudio(chunk, context);
     }, Qt::QueuedConnection);
 
     if (m_diagnosticsDebugEnabled
@@ -2724,15 +3076,19 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
 
     if (m_radio) {
         auto& txModel = m_radio->transmitModel();
-        if (txModel.isTransmitting())
-            txModel.requestPttOff(TransmitModel::PttSource::Dax);
+        if (aborted) {
+            m_radio->abortProducerPtt(m_txRequest, TransmitModel::PttSource::Dax);
+        } else {
+            m_radio->requestProducerPttOff(m_txRequest, TransmitModel::PttSource::Dax);
+        }
         if (m_txRestoreTransmitDax)
             txModel.setDax(m_txPreviousTransmitDax);
     }
+    m_txRequest = {};
     if (m_audio) {
         if (m_txRestoreAudioDaxMode)
             m_audio->setDaxTxMode(m_txPreviousAudioDaxMode);
-        m_audio->clearTxAccumulators();  // self-marshals
+        m_audio->discardTxMedia(m_txContext);  // self-marshals with the original producer
     }
 
     if (hadTx) {
@@ -3226,6 +3582,24 @@ QWidget* Ax25HfPacketDecodeDialog::buildKissTncPage()
     return page;
 }
 
+void Ax25HfPacketDecodeDialog::configureTncAuthority(bool native,
+    const std::shared_ptr<TxController>& controller, const TxController::Input& input)
+{
+    m_tncNativeAuthority = native;
+    m_tncAuthority = {controller, input};
+    m_kissServer->setTxControllerFactory([radio = QPointer<RadioModel>(m_radio), native] {
+        if (native) {
+            return radio ? std::make_shared<TxController>(radio, TransmitModel::PttSource::Dax)
+                         : std::shared_ptr<TxController>{};
+        }
+        // A bridge grant authorizes that bridge, not arbitrary later KISS
+        // peers. Automation may start the RX service; KISS TX delegation is
+        // not implemented. A native operator's enable retains the native
+        // per-client producers above.
+        return std::shared_ptr<TxController>{};
+    });
+}
+
 void Ax25HfPacketDecodeDialog::setTncEnabled(bool enabled, bool persist)
 {
     if (persist) {
@@ -3236,7 +3610,11 @@ void Ax25HfPacketDecodeDialog::setTncEnabled(bool enabled, bool persist)
         // The TNC needs the modem RX tap running to forward decodes to clients.
         if (m_enableDecode && !m_enableDecode->isChecked()) {
             appendSystemLine(QStringLiteral("Enabling the modem for the KISS TNC."));
-            m_enableDecode->setChecked(true);
+            if (m_tncNativeAuthority) {
+                m_enableDecode->setChecked(true);
+            } else {
+                setDecodeEnabledForAutomation(true, m_tncAuthority.controller, m_tncAuthority.root);
+            }
         }
         const quint16 port = static_cast<quint16>(
             m_tncPort ? m_tncPort->value() : TncSettings::kDefaultPort);
@@ -3258,9 +3636,10 @@ void Ax25HfPacketDecodeDialog::applyTncStartOnStartup()
     }
 }
 
-void Ax25HfPacketDecodeDialog::handleKissFrameFromClient(const QByteArray& ax25NoFcs)
+void Ax25HfPacketDecodeDialog::handleKissFrameFromClient(const QByteArray& ax25NoFcs,
+                                                      const TxCoordinator::Request& input)
 {
-    if (ax25NoFcs.isEmpty())
+    if (ax25NoFcs.isEmpty() || !input.valid())
         return;
     if (!m_audio || !m_radio) {
         appendSystemLine(QStringLiteral("KISS TX dropped: audio engine or radio not ready."));
@@ -3269,7 +3648,7 @@ void Ax25HfPacketDecodeDialog::handleKissFrameFromClient(const QByteArray& ax25N
             << m_digi->size() << ").";
         return;
     }
-    m_digi->enqueue(ax25NoFcs);
+    m_digi->enqueue(ax25NoFcs, false, input);
     ++m_kissTxCount;
     refreshTncStatus();
 }
@@ -3318,6 +3697,10 @@ void Ax25HfPacketDecodeDialog::maybeStartNextKissTx()
     }
 
     const auto pending = m_digi->dequeue();
+    if (!pending.input.valid()) {
+        QTimer::singleShot(0, this, [this] { maybeStartNextKissTx(); });
+        return;
+    }
     const QByteArray frame = pending.raw;
     m_kissTxBusyRetries = 0;
     Ax25TransmitResult tx = ax25BuildTransmitAudioFromFrame(m_shimConfig, frame);
@@ -3328,7 +3711,7 @@ void Ax25HfPacketDecodeDialog::maybeStartNextKissTx()
         return;
     }
     m_txFromDigi = pending.digi;
-    beginTransmission(tx, true);
+    beginTransmission(tx, true, pending.input);
 }
 
 void Ax25HfPacketDecodeDialog::refreshTncStatus()
@@ -3556,7 +3939,9 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
             m_terminalInput->setFocus();
             return;
         }
-        m_terminal->submitLine(QStringLiteral("CONNECT %1").arg(target));
+        if (setTxProgram(TxProgram::Terminal, true)) {
+            m_terminal->submitLine(QStringLiteral("CONNECT %1").arg(target));
+        }
         m_terminalInput->setFocus();
     });
     connect(m_terminalCmdButton, &QPushButton::clicked, this, [this] {
@@ -3613,7 +3998,17 @@ void Ax25HfPacketDecodeDialog::submitTerminalInput()
     if (!m_terminalInput || !m_terminal)
         return;
     const QString line = m_terminalInput->text();
-    m_terminalInput->clear();
+    if (!setTxProgram(TxProgram::Terminal, true)) {
+        return;
+    }
+    submitTerminalLine(line);
+}
+
+void Ax25HfPacketDecodeDialog::submitTerminalLine(const QString& line)
+{
+    if (m_terminalInput->text() == line) {
+        m_terminalInput->clear();
+    }
     if (!line.trimmed().isEmpty()
         && (m_terminalHistory.isEmpty() || m_terminalHistory.last() != line)) {
         m_terminalHistory.append(line);
@@ -4155,7 +4550,10 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
     connect(m_aprsPath, &QLineEdit::editingFinished,
             this, [this] { applyAprsConfigFromUi(true); });
     connect(m_aprsBeaconEnable, &QCheckBox::toggled,
-            this, [this](bool) { applyAprsConfigFromUi(true); });
+            this, [this](bool enabled) {
+        (void)setTxProgram(TxProgram::Beacon, enabled);
+        applyAprsConfigFromUi(true);
+    });
     connect(m_aprsBeaconInterval, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int) { applyAprsConfigFromUi(true); });
     connect(m_aprsBeaconText, &QLineEdit::editingFinished,
@@ -4181,8 +4579,14 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
     connect(m_aprsManualLon, &QLineEdit::editingFinished,
             this, [this] { applyAprsConfigFromUi(true); });
     connect(m_aprsBeaconNow, &QPushButton::clicked, this, [this] {
+        const std::shared_ptr<TxController> controller = m_radio ? m_radio->localTxController() : nullptr;
+        if (!controller) { return; }
+        const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+        if (!m_enableDecode->isChecked()) {
+            (void)setTxProgram(TxProgram::Receive, true, controller, input);
+        }
         applyAprsConfigFromUi(false); // pick up anything typed but not committed
-        m_aprsBeacon->sendNow();
+        m_aprsBeacon->sendNow(input.request());
     });
     connect(m_aprsMsgSend, &QPushButton::clicked,
             this, &Ax25HfPacketDecodeDialog::sendAprsMessageFromUi);
@@ -4537,6 +4941,12 @@ void Ax25HfPacketDecodeDialog::openAprsMessagesDialog()
 
 void Ax25HfPacketDecodeDialog::sendAprsMessageFromUi()
 {
+    const std::shared_ptr<TxController> controller = m_radio ? m_radio->localTxController() : nullptr;
+    if (!controller) { return; }
+    const TxController::Input input = controller->captureProgram(TxController::Activity::Mox);
+    if (!m_enableDecode->isChecked()) {
+        (void)setTxProgram(TxProgram::Receive, true, controller, input);
+    }
     applyAprsConfigFromUi(false); // pick up a freshly typed MY CALLSIGN
     if (!m_aprsMessenger->myAddress().isValid()) {
         appendSystemLine(QStringLiteral(
@@ -4547,7 +4957,7 @@ void Ax25HfPacketDecodeDialog::sendAprsMessageFromUi()
     const QString text = m_aprsMsgText->text().trimmed();
     if (to.isEmpty() || text.isEmpty())
         return;
-    if (!m_aprsMessenger->sendMessage(to, text)) {
+    if (!m_aprsMessenger->sendMessage(to, text, input.request())) {
         appendSystemLine(QStringLiteral(
             "APRS message not sent: \"%1\" is not a valid callsign.").arg(to));
         return;
@@ -4783,14 +5193,8 @@ QWidget* Ax25HfPacketDecodeDialog::buildDigiPage()
     }
 
     auto persist = [this] { applyDigiConfigFromUi(true); };
-    connect(m_digiEnable, &QCheckBox::toggled, this, [this](bool) {
-        applyDigiConfigFromUi(true);
-        if (m_digiEnable->isChecked() && m_enableDecode && !m_enableDecode->isChecked()) {
-            appendSystemLine(QStringLiteral("Enabling the modem for the fill-in digipeater."));
-            m_enableDecode->setChecked(true);
-        }
-        refreshDigiStatus();
-    });
+    connect(m_digiEnable, &QCheckBox::toggled, this,
+            [this](bool enabled) { setDigiEnabled(enabled); });
     connect(m_digiCall, &QLineEdit::editingFinished, this, persist);
     connect(m_digiAlias, &QLineEdit::editingFinished, this, persist);
     connect(m_digiAlsoMyCall, &QCheckBox::toggled, this, persist);
@@ -5158,8 +5562,14 @@ void Ax25HfPacketDecodeDialog::applyPmsConfigFromUi(bool persist)
     }
 }
 
-void Ax25HfPacketDecodeDialog::setPmsEnabled(bool enabled, bool persist)
+void Ax25HfPacketDecodeDialog::setPmsEnabled(bool enabled, bool persist,
+    const std::shared_ptr<TxController>& controller, const TxController::Input& input)
 {
+    if (!setTxProgram(TxProgram::Pms, enabled, controller, input)) {
+        const QSignalBlocker blocker(m_pmsEnable);
+        m_pmsEnable->setChecked(m_pms->isEnabled());
+        return;
+    }
     if (persist) {
         AppSettings::instance().setValue(kPmsEnabledSetting,
             enabled ? QStringLiteral("True") : QStringLiteral("False"));
@@ -5170,7 +5580,7 @@ void Ax25HfPacketDecodeDialog::setPmsEnabled(bool enabled, bool persist)
         // The mailbox needs the modem RX tap running to receive callers.
         if (m_enableDecode && !m_enableDecode->isChecked()) {
             appendSystemLine(QStringLiteral("Enabling the modem for the mailbox (PMS)."));
-            m_enableDecode->setChecked(true);
+            enableDecodeForProgram(TxProgram::Pms);
         }
         applyPmsConfigFromUi(false);
         if (!m_pms->hasValidAddress()) {

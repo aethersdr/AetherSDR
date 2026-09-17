@@ -7,6 +7,7 @@
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "TestSettingsProfile.h"
+#include "TxTestAuthority.h"
 
 #include <QCoreApplication>
 #include <algorithm>
@@ -139,6 +140,14 @@ struct IcomCivBackendTestAccess {
         return backend.m_lastOutboundCiv;
     }
 
+    static void dispatchReady(IcomCivBackend& backend)
+    {
+        // sendUserCommand samples its pump time before enqueue samples its own
+        // deadline. Crossing a millisecond leaves the write for the next tick.
+        // Drive that tick explicitly; this fixture never runs the event loop.
+        backend.pumpCiv(backend.nowMs());
+    }
+
     static std::size_t queuedRequestCount(const IcomCivBackend& backend)
     {
         return backend.m_civScheduler.m_queue.size();
@@ -203,6 +212,8 @@ int main(int argc, char** argv)
             check(!caps.hasModeIndependentSquelch, "IC-705 SQL policy remains unchanged");
             check(caps.hasFmRepeaterOffset, "IC-705 retains native repeater offsets");
             check(caps.hasCwTune, "IC-705 CW Tune policy remains unchanged");
+            check(!caps.twoToneGenerator,
+                  "no Icom declares a two-tone generator it does not have");
         }
 
         const IcomModel* ic7300Mk2 = modelForName("IC-7300MK2");
@@ -229,6 +240,8 @@ int main(int argc, char** argv)
                   "IC-7300MK2 allows its native squelch in data and CW modes");
             check(!caps.hasFmRepeaterOffset, "MK2 does not advertise absent duplex commands");
             check(!caps.hasCwTune, "MK2 does not advertise an unimplemented CW tune carrier");
+            check(!caps.twoToneGenerator,
+                  "MK2 setTune() is one sine wave and must not claim otherwise");
             {
                 IcomCivBackend polled;
                 IcomCivBackendTestAccess::prepareSession(polled, *ic7300Mk2);
@@ -236,11 +249,13 @@ int main(int argc, char** argv)
                       "MK2 periodic polling includes CW, squelch and active data TBW");
             }
             for (const bool reverse : {false, true}) {
+                TxTestAuthority authority;
                 IcomCivBackend cwBackend;
+                cwBackend.setTransmitContext(authority.context);
                 IcomCivBackendTestAccess::prepareSession(cwBackend, *ic7300Mk2);
                 IcomCivBackendTestAccess::selectCwMode(cwBackend, reverse);
                 const int power = IcomCivBackendTestAccess::power(cwBackend);
-                cwBackend.setTune(true, 3);
+                cwBackend.setTune(true, 3, authority.operation);
                 check(!IcomCivBackendTestAccess::tuning(cwBackend)
                           && IcomCivBackendTestAccess::power(cwBackend) == power
                           && IcomCivBackendTestAccess::lastOutboundCiv(cwBackend).isEmpty(),
@@ -306,6 +321,7 @@ int main(int argc, char** argv)
                     IcomCivBackendTestAccess::prepareSession(writer, *model);
                     IcomCivBackendTestAccess::deliverDataBandwidth(writer, profile->dataItem, 0x30);
                     writer.setTxFilter(profile->lowEdgesHz[l], profile->highEdgesHz[h]);
+                    IcomCivBackendTestAccess::dispatchReady(writer);
                     const QString expected = QStringLiteral("1a 05 00 %1 %2")
                         .arg((profile->dataItem / 10) * 16 + profile->dataItem % 10,
                              2, 16, QLatin1Char('0'))

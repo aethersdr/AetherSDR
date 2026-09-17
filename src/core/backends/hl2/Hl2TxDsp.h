@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/dsp/WdspChannel.h"
+#include "core/TxCoordinator.h"
 
 #include <QObject>
 
@@ -172,13 +173,15 @@ public slots:
     // hl2_txdsp_test's #4796 cases still pass unchanged, which is the evidence
     // that none of this moved the TCI/DAX path.
     void processAudioBlock(const std::vector<float>& mono,
-                           TxAudioSource source);
+                           TxAudioSource source,
+                           const TxCoordinator::Context& context);
     // Drop anything buffered — on unkey, so the next transmission does not
     // start with the tail of the previous one.
     void reset();
 
 signals:
-    void iqReady(const std::vector<std::complex<float>>& iq);   // at outputSampleRateHz
+    void iqReady(const std::vector<std::complex<float>>& iq,
+                  const AetherSDR::TxCoordinator::Context& context); // at outputSampleRateHz
     void micPeak(float dbfs);                                   // post-gain, pre-modulation
     void alcGain(float db);                                     // ALC gain applied
     // Post-ALC, post-limit peak in dBFS — the level actually handed to the
@@ -207,6 +210,7 @@ private:
     static constexpr std::size_t kTaps = 255;
 
     Config m_config;
+    TxCoordinator::Context m_txContext;
     bool m_configured = false;
     double m_micGain = 1.0;
     // The source of the last block processed, so carried m_inBuffer residue is

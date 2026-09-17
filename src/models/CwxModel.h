@@ -3,7 +3,9 @@
 #include <QObject>
 #include <QString>
 #include <QVector>
+#include <atomic>
 #include <functional>
+#include <memory>
 
 namespace AetherSDR {
 
@@ -11,6 +13,7 @@ class CwxModel : public QObject {
     Q_OBJECT
 public:
     explicit CwxModel(QObject* parent = nullptr);
+    ~CwxModel() override;
 
     // A contiguous run of text to be keyed at a single WPM.
     // expandSpeedModifiers() returns a sequence of these.
@@ -53,17 +56,33 @@ public:
     // Actual-send operation fence, separate from a UI's read-only can-send
     // predicate. Checking whether a button is enabled must never acquire TX.
     using TransmissionPermit = std::function<bool()>;
+    // Capture on the model thread; the returned cancellation check may be
+    // read at a transport writer. It conveys batch validity, not TX authority,
+    // and never dereferences this QObject from a worker thread.
+    TransmissionPermit queuedTransmissionPermit() const;
     using TransmissionAdmission = std::function<TransmissionPermit()>;
     void setTransmissionAdmission(TransmissionAdmission admission) { m_transmissionAdmission = std::move(admission); }
     // Optional neutral backend dispatch. False rejects the batch before the
     // sidetone notification; the radio-specific command path stays separate.
     using TextSender = std::function<bool(const QString&, int)>;
     void setTextSender(TextSender sender) { m_textSender = std::move(sender); }
+    // Explicit synchronous route for an engine producer. Every command keeps
+    // the request captured by that controller; no temporary ambient identity
+    // is installed around UI signals or a nested event loop.
+    struct TransmissionRoute {
+        TransmissionAdmission admit;
+        TextSender text;
+        std::function<void(const QString&, int, int)> command; // nChars < 0: no reply
+        std::function<void(int, bool)> dispatched;
+    };
 
     // Actions
     void send(const QString& text);      // Send mode: full string
+    void send(const QString& text, const TransmissionRoute& route);
     void sendChar(const QString& ch);    // Live mode: single char
+    void sendChar(const QString& ch, const TransmissionRoute& route);
     void sendMacro(int idx);             // 1-based (1=F1, 12=F12)
+    void sendMacro(int idx, const TransmissionRoute& route);
     void saveMacro(int idx, const QString& text); // 0-based
     void erase(int numChars);
     void clearBuffer();
@@ -72,6 +91,9 @@ public:
     // (via RadioModel::onDisconnected) so a stale m_cwxEndIndex can't wedge the
     // monotonic guard across a reconnect. (#3949)
     void resetDrainWatch();
+    // An unknown-length macro appended to a batch invalidates its end index,
+    // but must not cancel text that is still queued for transport delivery.
+    void abandonDrainWatch();
     void setSpeed(int wpm);
     // Adopt a radio-authoritative speed without emitting a command back to the
     // radio. Used by non-Flex keyers after their connect-time readback.
@@ -138,12 +160,18 @@ signals:
     void queueEmpty();                   // radio CWX buffer drained — TX teardown required
 
 private:
-    TransmissionPermit admitTransmission();
-    void emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit);
-    bool notifyTransmission(const QString& text, int wpm, const TransmissionPermit& permit);
+    TransmissionPermit admitTransmission(const TransmissionRoute& route = {});
+    void emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit,
+                          const TransmissionRoute& route = {});
+    bool notifyTransmission(const QString& text, int wpm, const TransmissionPermit& permit,
+                            const TransmissionRoute& route = {});
+    void dispatchCommand(const QString& command, int epoch, int nChars,
+                         const TransmissionRoute& route);
     SendAvailability m_sendAvailability;
     TransmissionAdmission m_transmissionAdmission;
     TextSender m_textSender;
+    bool m_clearing{false}; // synchronous abort notifications cannot replace the queue being cleared
+    std::shared_ptr<std::atomic<bool>> m_queueValid{std::make_shared<std::atomic<bool>>(true)};
 
     int     m_speed{20};
     int     m_delay{5};

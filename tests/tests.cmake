@@ -749,9 +749,11 @@ add_test(NAME icom_memory_test COMMAND icom_memory_test)
 
 add_executable(icom_civ_scheduler_test
     tests/icom_civ_scheduler_test.cpp
+    src/core/TxCoordinator.cpp
     src/core/backends/icom/IcomCivScheduler.cpp
     src/core/backends/icom/CivCodec.cpp)
 target_include_directories(icom_civ_scheduler_test PRIVATE src)
+target_link_libraries(icom_civ_scheduler_test PRIVATE Qt6::Core)
 add_test(NAME icom_civ_scheduler_test COMMAND icom_civ_scheduler_test)
 
 # Socket-free PR #5436 coverage recovered from the retired capability fixture.
@@ -877,6 +879,7 @@ add_test(NAME icom_backend_test COMMAND icom_backend_test)
 #   ./build/icom_live_probe ic-705.local <user> <password>
 add_executable(icom_live_probe EXCLUDE_FROM_ALL
     tests/icom_live_probe.cpp
+    src/core/TxCoordinator.cpp
     src/core/backends/icom/IcomSession.cpp
     src/core/backends/icom/IcomStream.cpp
     src/core/backends/icom/IcomProtocol.cpp
@@ -961,6 +964,16 @@ target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
 target_link_libraries(hl2_spectrum_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
 add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
 
+# Transport discontinuities must invalidate partial FFTs before IQ delivery.
+# Covers both spectrum classes, both DSP stages, and both production ingest
+# handlers through socket-free friend seams. Qt6::Network is needed by the
+# clients, but neither client is started and no socket is created or bound.
+add_executable(spectrum_sequence_gap_test tests/spectrum_sequence_gap_test.cpp)
+target_include_directories(spectrum_sequence_gap_test PRIVATE src tests)
+target_link_libraries(spectrum_sequence_gap_test
+    PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME spectrum_sequence_gap_test COMMAND spectrum_sequence_gap_test)
+
 # HL2 RX DSP — IQ -> WdspChannel demod + Hl2Spectrum. Links aethercore (WDSP+FFTW).
 add_executable(hl2_rxdsp_test tests/hl2_rxdsp_test.cpp)
 target_include_directories(hl2_rxdsp_test PRIVATE src)
@@ -984,6 +997,18 @@ add_executable(hl2_am_dcblock_test tests/hl2_am_dcblock_test.cpp)
 target_include_directories(hl2_am_dcblock_test PRIVATE src)
 target_link_libraries(hl2_am_dcblock_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_am_dcblock_test COMMAND hl2_am_dcblock_test)
+
+# Every non-`Ok` WdspChannel::ProcessResult used to be one unannotated
+# `continue` in BOTH raw-IQ RX stages -- no log line, no counter, no signal --
+# so a chain silent because WDSP was returning EngineError on every block was
+# indistinguishable from one whose pipeline was still filling. Pins the
+# classification of all six outcomes, that Underrun is counted apart from the
+# four faults, and that the HL2 and ANAN call sites both reach the counter on
+# every block. Drives real WDSP chains, hence aethercore.
+add_executable(wdsp_process_tally_test tests/wdsp_process_tally_test.cpp)
+target_include_directories(wdsp_process_tally_test PRIVATE src)
+target_link_libraries(wdsp_process_tally_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME wdsp_process_tally_test COMMAND wdsp_process_tally_test)
 
 # The RX DSP must demodulate at every IQ rate the operator can select by zooming.
 add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
@@ -1484,11 +1509,18 @@ set_tests_properties(weather_radar_wrap_render_test PROPERTIES
 
 # Production playback controller + injected QNetworkReply delivery (NO sockets).
 # Proves delayed/out-of-order downloads, view cache reuse, and retained geometry.
+qt_add_resources(RADAR_TEST_RESOURCES resources/radar.qrc)
 add_executable(weather_radar_loading_test
+    ${RADAR_TEST_RESOURCES}
     tests/weather_radar_loading_test.cpp
     src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/CityLightsItem.cpp
     src/gui/map/CityLightsSource.cpp
+    src/gui/map/OperaRadarNetwork.cpp
+    src/gui/map/LibreRadarNetwork.cpp
+    src/gui/map/RegionalRadarComposite.cpp
+    src/gui/map/WeatherRadarController.cpp
+    src/gui/map/WeatherRadarLegend.cpp
     src/gui/map/MapDisplayWidget.cpp src/gui/map/MapView.cpp src/gui/map/GlobeMapView.cpp
     src/gui/map/MapMarkerBatchItem.cpp src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathBatchItem.cpp src/gui/map/MapTerminatorItem.cpp
@@ -1844,6 +1876,7 @@ add_test(NAME radio_discovery_test COMMAND radio_discovery_test)
 
 # Agent automation bridge phaseful-gesture lifecycle (#4353). Uses two real
 # QLocalSocket clients so the regression proves an independent request can run
+# The server binds a unique current-user QLocalServer name; exit 77 if unavailable.
 # while a QSlider remains genuinely down, plus auth/read-only/TX cleanup rails.
 # Retained until its refusal and TX-cleanup assertions have a socket-free
 # injected replacement; live automation cannot prove that a non-event occurred.
@@ -1857,7 +1890,7 @@ target_link_libraries(automation_server_gesture_test PRIVATE
 set_target_properties(automation_server_gesture_test PROPERTIES AUTOMOC ON)
 add_test(NAME automation_server_gesture_test COMMAND automation_server_gesture_test)
 set_tests_properties(automation_server_gesture_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" SKIP_RETURN_CODE 77)
 
 add_executable(client_quindar_test
     tests/client_quindar_test.cpp
@@ -2291,6 +2324,7 @@ add_test(NAME rnnoise_filter_test COMMAND rnnoise_filter_test)
 add_executable(opus_tx_pacer_test
     tests/opus_tx_pacer_test.cpp
     src/core/OpusTxPacer.cpp
+    src/core/TxCoordinator.cpp
 )
 target_include_directories(opus_tx_pacer_test PRIVATE src)
 target_link_libraries(opus_tx_pacer_test PRIVATE Qt6::Core)
@@ -2383,6 +2417,15 @@ target_include_directories(kiwi_sdr_waterfall_setup_test PRIVATE src)
 target_link_libraries(kiwi_sdr_waterfall_setup_test PRIVATE aethercore Qt6::Core)
 add_test(NAME kiwi_sdr_waterfall_setup_test COMMAND kiwi_sdr_waterfall_setup_test)
 
+# Socket-free regression: KiwiSDR zoom_cap (request ceiling) must not replace
+# zoom_max (start fixed-point scale); v1.900 shared waterfalls send both.
+add_executable(kiwi_sdr_waterfall_zoom_cap_test
+    tests/kiwi_sdr_waterfall_zoom_cap_test.cpp
+)
+target_include_directories(kiwi_sdr_waterfall_zoom_cap_test PRIVATE src)
+target_link_libraries(kiwi_sdr_waterfall_zoom_cap_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kiwi_sdr_waterfall_zoom_cap_test COMMAND kiwi_sdr_waterfall_zoom_cap_test)
+
 add_executable(kiwi_sdr_trace_math_test
     tests/kiwi_sdr_trace_math_test.cpp
 )
@@ -2438,6 +2481,28 @@ add_executable(anan_droop_correction_test
 )
 target_include_directories(anan_droop_correction_test PRIVATE src)
 add_test(NAME anan_droop_correction_test COMMAND anan_droop_correction_test)
+
+add_executable(anan_droop_defaults_test
+    tests/anan_droop_defaults_test.cpp
+    src/core/backends/anan/AnanDroopDefaults.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_defaults_test PRIVATE src)
+add_test(NAME anan_droop_defaults_test COMMAND anan_droop_defaults_test)
+
+# What the shipped droop defaults do to the NOISE-FLOOR AUTO-ADJUST -- a
+# different consumer from the panadapter trace, and the one #5726 opened for
+# this radio. Drives the real applyDroopCorrectionDb/applyEdgeFade and the real
+# estimateNoiseFloorDbm (NoiseFloorEstimator.h, header-only and Qt-free for
+# exactly this reason), so it cannot drift from what the widget runs.
+# No socket, no Qt, no radio.
+add_executable(anan_droop_noise_floor_test
+    tests/anan_droop_noise_floor_test.cpp
+    src/core/backends/anan/AnanDroopDefaults.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_noise_floor_test PRIVATE src)
+add_test(NAME anan_droop_noise_floor_test COMMAND anan_droop_noise_floor_test)
 
 # AnanDroopCalibrator's pure math (median-in-power averaging, central-window
 # reference, clamp) -- no live radio needed. Ported from this feature's
@@ -2575,9 +2640,11 @@ target_include_directories(client_reverb_test PRIVATE src)
 add_executable(iambic_keyer_test
     tests/iambic_keyer_test.cpp
     src/core/IambicKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/core/ThreadName.cpp
 )
 target_include_directories(iambic_keyer_test PRIVATE src)
+target_link_libraries(iambic_keyer_test PRIVATE Qt6::Core)
 if(UNIX)
     target_link_libraries(iambic_keyer_test PRIVATE pthread)
 endif()
@@ -3669,6 +3736,7 @@ target_link_libraries(ax25_link_timing_test PRIVATE Qt6::Core)
 add_test(NAME ax25_link_timing_test COMMAND ax25_link_timing_test)
 
 add_executable(pms_mailbox_test
+    src/core/TxCoordinator.cpp
     tests/pms_mailbox_test.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
@@ -3697,6 +3765,7 @@ add_test(NAME aprs_packet_test COMMAND aprs_packet_test)
 # (the qCWarning category used by the persistence paths); it drags in
 # AsyncLogWriter + AppSettings, same as ax25_libmodem_shim_test.
 add_executable(aprs_messenger_test
+    src/core/TxCoordinator.cpp
     tests/aprs_messenger_test.cpp
     src/core/aprs/AprsPacket.cpp
     src/core/aprs/AprsMessenger.cpp
@@ -3721,6 +3790,7 @@ add_test(NAME aprs_fill_in_digipeater_test COMMAND aprs_fill_in_digipeater_test)
 
 # Socket-free injected APRS frames, producer cancellation and queue admission.
 add_executable(aprs_digipeater_model_test
+    src/core/TxCoordinator.cpp
     tests/aprs_digipeater_model_test.cpp
     src/models/AprsDigipeaterModel.cpp
     src/core/aprs/AprsFillInDigipeater.cpp
@@ -3733,6 +3803,7 @@ target_link_libraries(aprs_digipeater_model_test PRIVATE Qt6::Core)
 add_test(NAME aprs_digipeater_model_test COMMAND aprs_digipeater_model_test)
 
 add_executable(tnc_terminal_test
+    src/core/TxCoordinator.cpp
     tests/tnc_terminal_test.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
@@ -3781,19 +3852,10 @@ add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp
     src/gui/CwxPanel.h
-    src/models/CwxModel.cpp
-    src/models/CwxModel.h
-    # CwxPanel.cpp calls ThemeManager::resolve() post-Phase-2 migration;
-    # pull in the manager + its logging deps so the test links.
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
 )
 target_include_directories(cwx_panel_test PRIVATE src)
 target_link_libraries(cwx_panel_test PRIVATE
-    Qt6::Core Qt6::Widgets
+    aetherdesktop_support Qt6::Core Qt6::Widgets
 )
 add_test(NAME cwx_panel_test COMMAND cwx_panel_test)
 set_tests_properties(cwx_panel_test PROPERTIES
@@ -4133,7 +4195,7 @@ add_test(NAME hl2_rqst_ack_test COMMAND hl2_rqst_ack_test)
 # RQST/ACK where it meets the wire — socket-free, on MetisClient's own packet
 # builder and its EP6 response path.
 add_executable(hl2_rqst_ack_client_test tests/hl2_rqst_ack_client_test.cpp)
-target_include_directories(hl2_rqst_ack_client_test PRIVATE src)
+target_include_directories(hl2_rqst_ack_client_test PRIVATE src tests)
 target_link_libraries(hl2_rqst_ack_client_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rqst_ack_client_test COMMAND hl2_rqst_ack_client_test)
 
@@ -4168,6 +4230,46 @@ add_executable(hl2_ep4_gate_test tests/hl2_ep4_gate_test.cpp)
 target_include_directories(hl2_ep4_gate_test PRIVATE src tests)
 target_link_libraries(hl2_ep4_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_ep4_gate_test COMMAND hl2_ep4_gate_test)
+
+# The two contracts BandscopeDialog borrows from ClientEqFftAnalyzer: reset()
+# followed by update() reports the transform unsmoothed, and the absolute dB
+# scale is what the window thinks it is (the analyzer's own bins are 6.02 dB
+# low; coherentGainCorrectionDb() is the inverse the window applies). Same
+# shape as the parser targets above — compiles the analyzer directly, no Qt,
+# no aethercore, no widget, no radio.
+add_executable(bandscope_analyzer_test
+    tests/bandscope_analyzer_test.cpp
+    src/gui/ClientEqFftAnalyzer.cpp)
+target_include_directories(bandscope_analyzer_test PRIVATE src)
+add_test(NAME bandscope_analyzer_test COMMAND bandscope_analyzer_test)
+
+# BandscopeTrace's paint path and the dialog's production frame conversion,
+# executed offscreen with isolated settings. Links the dialog's TU (which holds
+# both classes) plus PersistentDialog and the analyzer; no radio, no sockets.
+add_executable(bandscope_trace_render_test
+    tests/bandscope_trace_render_test.cpp
+    src/gui/BandscopeDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/ClientEqFftAnalyzer.cpp
+)
+target_include_directories(bandscope_trace_render_test PRIVATE src tests)
+target_link_libraries(bandscope_trace_render_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test)
+set_target_properties(bandscope_trace_render_test PROPERTIES AUTOMOC ON)
+add_test(NAME bandscope_trace_render_test COMMAND bandscope_trace_render_test)
+set_tests_properties(bandscope_trace_render_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The wideband converter view capability, and the verb its record names.
+# Socket-free: constructs an Hl2Backend, never connects it, and asserts that
+# the advertised verb reaches the branch that implements it rather than the
+# unknown-verb fallthrough. Needs aethercore and Qt because Hl2Backend does.
+add_executable(wideband_converter_view_test tests/wideband_converter_view_test.cpp)
+target_include_directories(wideband_converter_view_test PRIVATE src)
+target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
 
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
@@ -4744,6 +4846,12 @@ target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tx_operation_integration_test COMMAND tx_operation_integration_test)
 
+# Socket-free: inject PCM into AudioEngine, collect its output signals only.
+add_executable(tx_audio_context_test tests/tx_audio_context_test.cpp)
+target_include_directories(tx_audio_context_test PRIVATE src)
+target_link_libraries(tx_audio_context_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_audio_context_test COMMAND tx_audio_context_test)
+
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp
     src/models/TransmitModel.cpp
@@ -5194,6 +5302,11 @@ target_link_libraries(backend_slice_lifecycle_test PRIVATE
     aethercore Qt6::Core Qt6::Test
 )
 add_test(NAME backend_slice_lifecycle_test COMMAND backend_slice_lifecycle_test)
+# Socket-free bridge diagnostics: injected backend and meter model, no server/peer.
+add_executable(automation_persist_diagnostics_test tests/automation_persist_diagnostics_test.cpp)
+target_include_directories(automation_persist_diagnostics_test PRIVATE src tests)
+target_link_libraries(automation_persist_diagnostics_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME automation_persist_diagnostics_test COMMAND automation_persist_diagnostics_test)
 # Socket-free HL2 gain persistence: boardMaxRx bypasses discovery; the test
 # never pumps events and cancels DSP setup before it can start Metis UDP.
 add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
@@ -5670,6 +5783,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    bandscope_trace_render_test
     noise_floor_auto_adjust_gate_test
     vfo_display_defaults_test
     audio_engine_rates_test
@@ -5686,6 +5800,7 @@ set(AETHER_SETTINGS_CONSUMERS
     control_availability_registry_test
     offline_health_registry_test
     tx_operation_integration_test
+    tx_audio_context_test
     backend_slice_lifecycle_test
     waterfall_time_marker_settings_test
     extended_tnf_settings_test
@@ -5693,8 +5808,10 @@ set(AETHER_SETTINGS_CONSUMERS
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
+    automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test
+    hl2_tx_gate_test
     hl2_pan_limits_declaration_test
     icom_identity_test
     icom_control_profile_test
@@ -5785,6 +5902,7 @@ endforeach()
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
     automation_cell_test
+    automation_persist_diagnostics_test
     automation_server_gesture_test
     automation_device_diagnostics_test
     automation_json_id_test
@@ -6032,6 +6150,42 @@ add_executable(droop_calibration_seam_test tests/droop_calibration_seam_test.cpp
 target_include_directories(droop_calibration_seam_test PRIVATE src tests)
 target_link_libraries(droop_calibration_seam_test PRIVATE aetherdesktop_support Qt6::Core)
 add_test(NAME droop_calibration_seam_test COMMAND droop_calibration_seam_test)
+
+
+# Public metadata and geodesic math only; no sockets.
+add_executable(radar_coverage_test tests/radar_coverage_test.cpp ${RADAR_TEST_RESOURCES})
+target_include_directories(radar_coverage_test PRIVATE src)
+target_link_libraries(radar_coverage_test PRIVATE Qt6::Core)
+add_test(NAME radar_coverage_test COMMAND radar_coverage_test)
+
+# Bounded native COG reader; optional positional local TIFF enables live-sample proof.
+add_executable(opera_radar_image_test tests/opera_radar_image_test.cpp)
+target_include_directories(opera_radar_image_test PRIVATE src)
+target_link_libraries(opera_radar_image_test PRIVATE aethercore Qt6::Core Qt6::Gui)
+add_test(NAME opera_radar_image_test COMMAND opera_radar_image_test)
+
+add_executable(regional_radar_source_test tests/regional_radar_source_test.cpp src/gui/map/WeatherRadarSource.cpp)
+target_include_directories(regional_radar_source_test PRIVATE src)
+target_link_libraries(regional_radar_source_test PRIVATE Qt6::Core)
+add_test(NAME regional_radar_source_test COMMAND regional_radar_source_test)
+
+set_tests_properties(radar_coverage_test opera_radar_image_test regional_radar_source_test PROPERTIES TIMEOUT 30)
+
+# Production tile adapter and primary/fallback controller; injected replies, no sockets.
+add_executable(libre_radar_test tests/libre_radar_test.cpp
+    src/gui/map/LibreRadarNetwork.cpp src/gui/map/RegionalRadarComposite.cpp
+    src/gui/map/WeatherRadarSource.cpp src/gui/map/MapProviderNetworkAccessManager.cpp)
+target_include_directories(libre_radar_test PRIVATE src)
+target_link_libraries(libre_radar_test PRIVATE Qt6::Core Qt6::Gui Qt6::Network Qt6::Concurrent Qt6::Test)
+add_test(NAME libre_radar_test COMMAND libre_radar_test)
+set_tests_properties(libre_radar_test PROPERTIES TIMEOUT 30)
+
+# Network-byte decoder corpus; generated bounded fixtures, no sockets.
+add_executable(opera_radar_corpus_test tests/opera_radar_corpus_test.cpp)
+target_include_directories(opera_radar_corpus_test PRIVATE src tests)
+target_link_libraries(opera_radar_corpus_test PRIVATE aethercore Qt6::Core Qt6::Gui)
+add_test(NAME opera_radar_corpus_test COMMAND opera_radar_corpus_test)
+set_tests_properties(opera_radar_corpus_test PROPERTIES TIMEOUT 30)
 
 # Model-free algorithms and injected HTTP replies: no sockets, weights or ORT.
 add_executable(deepfist_committer_test tests/deepfist_committer_test.cpp)

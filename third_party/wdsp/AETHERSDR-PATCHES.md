@@ -2,9 +2,9 @@
 
 The source snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
 `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (`Release Version 2.10`).
-AetherSDR carries nine local changes in the otherwise exact `Source/*.[ch]`
+AetherSDR carries ten local changes in the otherwise exact `Source/*.[ch]`
 snapshot — four teardown corrections, two null/lifetime fixes, one added
-accessor set, and two channel-state fixes:
+accessor set, two channel-state fixes, and one performance change:
 
 1. `upstream/nbp.c`: `destroy_notchdb()` now frees the `notchdb` object after
    its member allocations.
@@ -426,6 +426,101 @@ accessor set, and two channel-state fixes:
    NOT MEASURED ON HARDWARE. The probe is synthetic; no radio has run any of
    this.
 
+10. `upstream/firmin.c`: `plan_fircore()` builds the minimum-phase workspace
+    only when `a->mp` is set, and `calc_fircore()` builds it on first use
+    (`ensure_minphase()`) so `setMp_fircore()` can still turn minimum phase on at
+    any time. `deplan_fircore()` tolerates the absent object.
+
+    ONE NEW PROPERTY THIS GIVES `setMp_fircore()`: it can now build FFTW plans,
+    which it never could before, because `ensure_minphase()` reaches
+    `create_minphase()`'s four `FFTW_PATIENT` plans. FFTW planning is not
+    thread-safe. Today that is harmless — the only caller of `RXASetMP()` is
+    `WdspChannel::open()`, which holds the setup mutex, and `setNc_fircore()`
+    already planned from that same place. **If anything ever starts toggling
+    minimum phase at runtime, outside that mutex, this is the line to revisit.**
+    Raised by the reviewer on #5697 and recorded here rather than left in a
+    review thread.
+
+    Upstream ends `plan_fircore()` with an unconditional
+    `a->pminphase = create_minphase (a->nc, a->pfactor)`, with no reference to
+    `a->mp`. The only consumer is the `if (a->mp)` branch of `calc_fircore()`.
+    `WdspChannel::Config::minimumPhase` is `false` and nothing in this tree sets
+    it, so `RXASetMP()` passes 0 and **every** minimum-phase workspace an RX
+    channel builds is dead on arrival.
+
+    `create_minphase()` (`fir.c`) allocates six `complex` buffers and one
+    `double` buffer at `N * pfactor` elements -- 104 bytes per element in total --
+    and creates **four `FFTW_PATIENT` plans** of that length.
+
+    **The standing cost is the resident workspace, not the planning.** An earlier
+    draft of this note led with plan-construction time; that overstated it.
+    `WdspChannel::open()` calls `loadWisdomOnce()` before the first plan and
+    exports afterwards, and FFTW wisdom is keyed on the (transform kind, size)
+    pair, so on a warm cache `FFTW_PATIENT` imports instead of re-measuring and
+    the planner cost is already largely amortised. What is NOT amortised is the
+    memory: the buffers are allocated on every open, held for the life of the
+    channel, and never read. Plan time is the **cold-cache** case -- a first run,
+    a cleared cache, a CI container, a session whose export never ran -- and
+    there it does bite, because these are among the largest geometries the
+    channel plans. Treat it as the cold-start half of the argument, not the
+    headline.
+
+    Counted, not assumed, by instrumenting `create_fircore()` and
+    `create_minphase()` and opening one channel: **an RX channel builds 13
+    fircores, 12 of them `mp == 0`.** The one that is not is `rxa[].eqp`
+    (`nc = 16384`, `pfactor` 4), which upstream creates with the minimum-phase
+    flag set; its workspace is real and this patch keeps it. `RXASetNC()`
+    re-plans six of the twelve, so a single RX open at
+    `Hl2RxDsp::kRxFilterTaps` = 8192 makes **19 `create_minphase()` calls, 18 of
+    them for `mp == 0` cores -- 72 dead `FFTW_PATIENT` plans**, at lengths
+    131072 (x3), 65536, 32768 (x8), 8192 (x5) and 4096.
+    A TX channel builds 7 fircores, 6 of them `mp == 0`.
+
+    Measured against `wdspPortOutstandingAllocations()` /
+    `wdspPortAllocationSequence()` (macOS arm64, one RX open at 8192 taps,
+    `mp == 0`): live WDSP allocations while the channel is open fall from 1300 to
+    1204, and allocations made during the open from 1518 to 1374. `create_minphase()`
+    makes 8 allocations, so that is exactly 12 fewer objects held and 18 fewer
+    built -- the counted inventory, independently. Before the patch, `mp == 1`
+    and `mp == 0` hold the identical 1300; after it, `mp == 1` holds 1252, the
+    48 allocations of the six cores `RXASetMP()` reaches.
+
+    **Two different totals come out of those counts, and they must not be
+    confused.** `RXASetNC()` reaches its six cores through `setNc_fircore()`,
+    which calls `deplan_fircore()` BEFORE `plan_fircore()` -- so those six
+    workspaces are built at `nc = 2048`, freed, and built again at 8192. They
+    appear twice in the built list and once in the resident one. Showing the
+    working, in `N * pfactor` elements at 104 bytes each:
+
+    | quantity | elements | bytes |
+    |---|---|---|
+    | Built, dead, across one RX open (18 calls: 131072 x3, 65536, 32768 x8, 8192 x5, 4096) | 765,952 | **~79.7 MB** |
+    | less the six pre-`RXASetNC` workspaces `setNc_fircore()` frees (32768 x3 + 8192 x3) | -122,880 | -~12.8 MB |
+    | **Resident, dead, once the channel is open** (12 cores: 131072 x3, 65536, 32768 x5, 8192 x2, 4096) | **643,072** | **~66.9 MB** |
+
+    The figure this note quotes is the **resident** one. Because the frees
+    precede the allocations and every core only grows, resident is also the peak
+    concurrent figure: **~66.9 MB of never-executed workspace per RX channel at
+    8192 taps**. The ~79.7 MB is allocation churn across the open, not memory
+    ever held at once. At WDSP's own `max(2048, dsp_size)` default the two
+    coincide at ~28.5 MB, because `RXASetNC(2048)` changes no `nc` and re-plans
+    nothing; likewise ~16.2 MB per TX channel.
+
+    Every byte figure above is arithmetic on the counted inventory and
+    `create_minphase()`'s own allocation sizes. **No memory was measured**, here
+    or on hardware, and nothing in this work ran a radio.
+
+    This is shared DSP -- **every backend that opens a `WdspChannel` pays it**,
+    not only the HL2, and the HL2's tap count only sets how much.
+
+    **Drop condition.** This is the one entry here that is a performance change
+    rather than a correctness fix, so it is also the one a maintainer may simply
+    decline to carry. Drop it if upstream makes the construction conditional
+    itself; drop it if this tree ever sets `Config::minimumPhase` true on every
+    path, since the workspace would then be wanted everywhere and the laziness
+    would buy nothing. **Not reported upstream yet** -- unlike patch 3, which is
+    TAPR/OpenHPSDR-wdsp#2, this one has no upstream issue behind it.
+
 Without the first two, opening and closing one RX channel leaks one `notchdb`
 object and two NURBS objects. `wdsp_channel_test` detects that deterministically.
 Without the third, every channel open reads and writes freed memory; ASan fails
@@ -447,13 +542,55 @@ thing by a different route, and in the blocking form hangs the host outright;
 Without the ninth, closing a channel that was stopped and then clocked frees the
 RXA chain under a live `flushChannel` thread; `wdsp_channel_test` crashes.
 
+The tenth changes no filter output: at `mp == 0` the removed object was never
+read, and at `mp == 1` the same workspace is built, one call later. It is the
+only one of the ten that makes a pointer legitimately null, so the risk it
+carries is a null dereference in `mp_imp_exec()` or a double teardown in
+`deplan_fircore()`, not a leak. `wdsp_channel_test`'s new
+`runMinimumPhaseWorkspaceTest` is the cover: it is the first test in this tree
+to set `Config::minimumPhase`, and because `WdspChannel::open()` calls
+`RXASetNC()` before `RXASetMP()` it is the case that walks the lazy build. An
+ASan build of the vendored library alone, cycling `open` / `RXASetNC` /
+`RXASetMP(1)` / `RXASetNC` / `RXASetMP(0)` / `close` twice plus a TX open,
+reported nothing on macOS arm64.
+
 **Marking convention.** Patches 4, 7, 8 and 9 carry `// AetherSDR patch N:` comments
 at every edited site, so `grep -rn "AetherSDR patch" third_party/wdsp/` finds
 them all. Patches 1-3 carry no marker — 1 and 2 are single added `_aligned_free`
 lines and 3 is a single added assignment — and are findable only from this file.
 New patches use the marker.
+ Patch 10 is the exception: its sites are marked `// AetherSDR:` with no
+number, so the grep above does not find them; it is findable from this file
+and from `ensure_minphase` in `upstream/firmin.c`.
 
-When refreshing WDSP, first check whether upstream contains equivalent frees.
-If it does, drop the corresponding local patch. Otherwise reapply only these
-minimal fixes and run the lifecycle test under AddressSanitizer on every supported
+When refreshing WDSP, first check whether upstream has made each change
+itself. The ten are different shapes, so grep for the shape, not for a free:
+
+- **patches 1-2** -- a trailing `_aligned_free()` of the object itself at the
+  end of `destroy_notchdb()` / `destroy_nurbs()`.
+- **patch 3** -- the `a->pfcimp = build_fcimp (...)` **assignment** in
+  `SetRXAFMNCde()` and `SetTXAFMEmphNC()` (TAPR/OpenHPSDR-wdsp#2). This one is
+  a use-after-free fixed by capturing a return value, **not a free**: looking
+  for an added free will report the fix absent when it has landed, or have you
+  reapply a patch upstream already carries.
+- **patch 4** -- the `mainGen` / `mainRunGen` / `mainExited` exit handshake
+  between the DSP worker and `pre_main_destroy()`.
+- **patch 5** -- standalone `set*_nnr()` accessors alongside the `SetRXANNR*`
+  properties.
+- **patch 6** -- an `n->df` guard in `setAlpha_nnet()` and `setKnee_nnet()`
+  (TAPR/OpenHPSDR-wdsp#4, fix in TAPR/OpenHPSDR-wdsp#5).
+- **patch 7** -- `SetChannelState()` case 1 clearing a still-pending
+  `slew.downflag` / `iob.ch_upslew` down-ramp before it arms the up-ramp
+  (TAPR/OpenHPSDR-wdsp#6).
+- **patch 8** -- `SetChannelState()` case 1 waiting, outside `csEXCH` and under
+  case 0's existing bound, for `exchange` clear **and** `flushflag` set
+  (TAPR/OpenHPSDR-wdsp#7).
+- **patch 9** -- a `quiesce_flush()` holding the `flush_bypass` / `Sem_Flush`
+  handshake, called from `pre_main_destroy()` rather than only from
+  `destroy_iobuffs()` (TAPR/OpenHPSDR-wdsp#8).
+- **patch 10** -- an `a->mp` guard on the `create_minphase()` call at the end of
+  `plan_fircore()`, and a build-on-first-use in `calc_fircore()`.
+
+Drop any local patch upstream now carries. Otherwise reapply only these minimal
+changes and run the lifecycle test under AddressSanitizer on every supported
 platform.

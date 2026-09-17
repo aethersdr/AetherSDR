@@ -1,4 +1,5 @@
 #pragma once
+#include "core/TxCoordinator.h"
 
 #include <QElapsedTimer>
 #include <QHostAddress>
@@ -10,6 +11,7 @@
 #include <span>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <vector>
 
 #include "core/backends/hl2/Hl2ControlRequest.h"
@@ -330,6 +332,26 @@ public:
     // the stream is already running: the run byte is only meaningful to a radio
     // that has been started, and metisStop() clears both bits anyway.
     Q_INVOKABLE void setBandscopeEnabled(bool on);
+    // ONE bandscope block, on demand, with its 2048 samples kept.
+    //
+    // A SEPARATE THING FROM THE GATE ABOVE, and deliberately so. The gate is a
+    // standing 1 Hz sampler for the headroom rows and keeps only statistics;
+    // this raises wide_spectrum for the length of exactly one arming cycle —
+    // ~13 ms measured, two block intervals — decodes that block's samples and
+    // lowers it again. It does not start the period timer, does not touch
+    // m_params.bandscope, and leaves nothing running behind it.
+    //
+    // WHY ON DEMAND AND NOT A SECOND STREAM: a continuous consumer would put a
+    // second permanent load on this thread, which already carries EP2 pacing,
+    // EP6 ingest, WDSP and the panadapter FFT. That cost has never been
+    // measured — the plan's open question §3.4, which bench runs d94 and d95
+    // did NOT answer because neither drove the radio with this code. A request
+    // per frame avoids the question rather than guessing the answer to it.
+    //
+    // Answered exactly once, by bandscopeFrameReady or bandscopeFrameFailed.
+    // A second request while one is outstanding is ignored: the caller already
+    // has an answer coming.
+    Q_INVOKABLE void requestBandscopeFrame();
     // Whether the GATE is running — the operator's standing intent, which is the
     // only bandscope state that is stable long enough to report. The run byte
     // itself is up for only ~29 ms in every kBandscopeSampleMs — the 11 packets
@@ -395,7 +417,10 @@ public:
     [[nodiscard]] bool transmitEnabled() const noexcept { return m_txAllowed; }
 
     // Key / unkey. Ignored unless enableTransmit(true) was called.
-    Q_INVOKABLE void setMox(bool keyed);
+    void setMox(bool keyed, const TxCoordinator::Operation& operation);
+    // Only the backend's explicit CW break-in path uses CW holds to sustain
+    // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.
+    void setCwMox(bool keyed, const TxCoordinator::Operation& operation);
     [[nodiscard]] bool isKeyed() const noexcept { return m_mox; }
     Q_INVOKABLE void setTxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setTxDriveLevel(int level);
@@ -404,7 +429,7 @@ public:
     // packet builder so its envelope is sample-paced by the radio's fixed
     // 48 kHz transmit stream rather than by GUI or producer-thread timing.
     // It still requires MOX; Hl2Backend owns break-in and manual-PTT policy.
-    Q_INVOKABLE void setCwKeyDown(bool down);
+    void setCwKeyDown(bool down, const TxCoordinator::Operation& operation);
     Q_INVOKABLE void clearCwKeying();
     [[nodiscard]] bool cwModeActive() const noexcept { return m_cwMode; }
     [[nodiscard]] bool cwKeyDown() const noexcept { return m_cwKeyDown; }
@@ -421,7 +446,7 @@ public:
     // periodic artefact on the air, and blocking would starve the radio's
     // watchdog. Overflow drops the oldest, because on transmit the freshest
     // audio is the one that matters.
-    void queueTxIq(std::span<const std::complex<float>> iq);
+    void queueTxIq(std::span<const std::complex<float>> iq, const TxCoordinator::Context& context);
     // Discard pending transmit audio. Call on unkey: whatever is still queued
     // belongs to the transmission that just ended.
     Q_INVOKABLE void flushTxIq();
@@ -437,7 +462,7 @@ public:
     //
     // NEVER enabled implicitly. A radio that emits a carrier because a default
     // said so is an unintended transmission, so this is opt-in only.
-    Q_INVOKABLE void setTxTestTone(double offsetHz, double amplitude);
+    void setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation);
     [[nodiscard]] bool txTestToneEnabled() const noexcept { return m_toneAmp > 0.0; }
 
 signals:
@@ -452,6 +477,12 @@ signals:
     // this object reuses, so a receiver must copy anything it keeps.
     void iqBlocksReady(const std::vector<std::vector<std::complex<float>>>& blocks);
     void dropsUpdated(quint64 drops);                             // cumulative EP6 gaps
+    // The next IQ block is discontinuous with the previous one. Emitted
+    // before iqBlockReady/iqBlocksReady in the same handleDatagram() call,
+    // including accepted rewinds and duplicates. Direct consumers can clear
+    // partial FFTs before accepting the new samples. `lost` is the forward
+    // packet gap, or zero for a rewind/duplicate; dropsUpdated stays loss-only.
+    void rxSequenceGap(quint32 lost);
     // Transport counters, published about once a second from the receive path.
     // Rate-limited for the same reason telemetryUpdated is: this would otherwise
     // cross to the GUI thread thousands of times a second to move a byte count.
@@ -479,6 +510,23 @@ signals:
     // downstream may treat these as absolute — and per IRadioBackend.h's own
     // rule for the rows they feed, nothing may make a DECISION from them at all.
     void bandscopeBlockReady(const AetherSDR::hl2::Ep4Stats& block);
+    // The block requestBandscopeFrame() asked for: kEp4BlockSamples converter
+    // codes, contiguous in converter time (26.67 us of the 76.8 MSPS ADC),
+    // normalised to [-1, 1) by kEp4FullScale.
+    //
+    // A QList because it crosses the I/O thread to the GUI thread queued and a
+    // std::vector has no metatype; 8 KB per frame, and there is one frame per
+    // request. Carried SEPARATELY from bandscopeBlockReady rather than folded
+    // into Ep4Stats, because the statistics are emitted on every gated cycle
+    // and the samples are not: decoding 2048 codes costs this thread real work
+    // (an arithmetic shift per sample plus the copy) and nothing should pay it
+    // unless something asked for a picture.
+    //
+    // UNCALIBRATED AND PRE-DDC, exactly as bandscopeBlockReady's are.
+    void bandscopeFrameReady(const QList<float>& samples);
+    // The request could not be answered, with the reason in the operator's
+    // words. Emitted once per failed request, never alongside a Ready.
+    void bandscopeFrameFailed(const QString& reason);
     // No EP6 arrived within kConnectTimeoutMs of start() — the radio is off,
     // unreachable, or already streaming to a different client.
     void connectFailed(const QString& reason);
@@ -552,6 +600,10 @@ private:
     // setBandscopeEnabled() and again after setReceiverCount()'s restart, which
     // is what carries the sensor across a panadapter being added.
     void applyBandscopeGate();
+    // Answer an outstanding on-demand frame request with a failure, if there is
+    // one. Separate from resetBandscopeGate() — which is noexcept and must stay
+    // so — because this EMITS, and a queued emit allocates.
+    void failPendingBandscopeFrame(const QString& reason);
     // Drop every piece of in-flight cycle state and stop both timers, leaving
     // m_params.bandscope alone. The counters are cumulative and survive.
     void resetBandscopeGate() noexcept;
@@ -662,6 +714,7 @@ private:
 
     bool m_txAllowed = false;   // gate; see enableTransmit()
     std::deque<std::complex<float>> m_txIq;   // pending transmit samples
+    TxCoordinator::Context m_txIqContext;
     // Roughly a quarter second at 48 kHz. Past this the operator is hearing
     // latency, so dropping is better than growing the backlog.
     static constexpr std::size_t kTxQueueMax = 12000;
@@ -672,6 +725,10 @@ private:
     bool m_cwKeyDown = false;
     double m_cwEnvelope = 0.0;  // 0..1 raised-cosine ramp position
     bool m_mox = false;         // requested key state, only honoured if m_txAllowed
+    TxCoordinator::Operation m_moxOperation;
+    TxCoordinator::Operation m_cwOperation;
+    TxCoordinator::Operation m_toneOperation;
+    void setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);
 
     std::uint32_t m_txSeq = 0;           // outgoing EP2 sequence
     unsigned m_roundRobin = 0;
@@ -680,6 +737,7 @@ private:
     // radio in that order, and neither should wait up to three frames for the
     // rotation to come back around.
     friend struct MetisClientTestAccess; // socket-free transport-state injection
+    std::function<qint64(const std::array<std::uint8_t, kUsbPacketSize>&)> m_packetSinkForTest;
     std::deque<Cc> m_oneShot;           // which register pair to send next
     // The single RQST slot. Drained AFTER m_oneShot, never before: a one-shot is
     // a write the operator asked for, and letting a read-back overtake it would
@@ -740,6 +798,22 @@ private:
     // the phase (seq % 4) the next packet of that run must carry.
     int m_bsPhase = 0;
     Ep4Stats m_bsBlock;                   // the block being accumulated
+    // ---- the on-demand frame (see requestBandscopeFrame) ----
+    //
+    // A request is outstanding. Cleared by whichever of the two answers goes
+    // out, so the two flags below can never both be live for one request.
+    bool m_bsFrameRequested = false;
+    // THIS cycle is decoding samples, latched when Capturing is entered and not
+    // read from m_bsFrameRequested per packet. The latch is what makes the
+    // partial-block case finite: a request that arrives after a cycle has
+    // already begun capturing finds this false, so that block's samples were
+    // never decoded and the request is served by ONE further cycle — at which
+    // point the latch is necessarily true, because the flag was set before it
+    // was taken.
+    bool m_bsCaptureSamples = false;
+    // The samples of the cycle being captured. Reserved once; cleared, never
+    // reallocated, at each Capturing entry.
+    std::vector<float> m_bsSamples;
     // EXACTLY ONE EP4 PACKET ARRIVES AFTER THE DISABLE, 24-61 us later, in four
     // of four measured cycles: the packet already inside usopenhpsdr1.v's WIDE
     // states, which START cannot interrupt. It belongs to the block we have

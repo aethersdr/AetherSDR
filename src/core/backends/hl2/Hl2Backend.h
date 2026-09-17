@@ -45,6 +45,17 @@ class Hl2TxDsp;
 // specific way a capability rots.
 inline constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
 
+// The wideband converter view this backend declares when it is connected, as a
+// value rather than as four lines inside capabilities().
+//
+// A FREE FUNCTION SO THE DECLARATION CAN BE TESTED WITHOUT A RADIO. The record
+// names the extension verb that delivers a frame, so a consumer never has to
+// test the family — which means a typo in either string would advertise a verb
+// that answers "no extension verbs implemented", a failure that only appears at
+// the moment an operator opens the window. Exposed here, that drift is a
+// socket-free assertion instead.
+[[nodiscard]] AetherSDR::WidebandConverterView widebandConverterViewRecord() noexcept;
+
 // IRadioBackend implementation for the Hermes-Lite 2 (HPSDR Protocol 1, raw IQ).
 // Owns a MetisClient (UDP wire) and an Hl2RxDsp (demod + panadapter) and maps the
 // neutral seam verbs/signals onto them. This is the first backend that owns an
@@ -121,23 +132,24 @@ public:
     void setNotch(int notchId, const AetherSDR::NotchDelta& delta) override;
     void removeNotch(int notchId) override;
     void setNotchesEnabled(bool on) override;
-    void setKeying(bool key) override;
-    void setCwKeying(bool down, bool breakIn, int breakInDelayMs) override;
+    void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
+    void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                       TxAudioSource source) override;
+                       TxAudioSource source,
+                       const TxCoordinator::Context& context) override;
     void setTxPower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
     void setMicGain(int level) override;
     // No default argument here on purpose: defaults on virtuals bind statically,
     // so repeating the base's is how the two quietly diverge later. The sole
     // call site passes it explicitly.
-    void setTune(bool on, int tunePowerPercent) override;
+    void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
     // Opt-in only — never enabled by a default.
-    void setTxTestTone(double offsetHz, double amplitude);
+    void setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation);
 
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg) override;
@@ -220,6 +232,9 @@ signals:
 private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PcmTestAccess;
+    friend struct Hl2TxGateTestAccess;
+    void applyKeying(bool key, const TxCoordinator::Operation& operation,
+                     const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
     // Publish linkStats() on the fixed cadence the seam promises. Driven by a
     // timer here rather than by MetisClient's receive path so the tick survives
@@ -844,6 +859,10 @@ private:
     // never this backend's own request. Mirrored so healthSnapshot() need not
     // reach across the I/O thread to read it.
     bool m_bandscopeEnabled = false;
+    // The requestId of the outstanding `bandscope.frame` call, or 0. One at a
+    // time: the reply is 2048 samples taken at one instant, and two callers
+    // sharing one frame would each be told it was theirs.
+    quint64 m_bandscopeFrameRequest = 0;
     // THE MOST RECENT ACCEPTED BANDSCOPE BLOCK, mirrored onto this thread from
     // MetisClient::bandscopeBlockReady for exactly the reason m_drops is: that
     // object lives on the I/O thread and healthSnapshot() is read from the GUI
@@ -901,6 +920,9 @@ private:
     bool m_tuning = false;
     bool m_cwAutoKeyed = false;
     QTimer* m_cwHangTimer = nullptr;
+    TxCoordinator::Operation m_cwHangOperation;
+    TxCoordinator::Operation m_lastTxOperation;
+    TxCoordinator::Completion m_cwHangCompletion;
     bool m_txMonitor = false;
     // Both flags above are set SYNCHRONOUSLY while the setAudioMuted they imply
     // rides a queued connection to the DSP thread, so at key-up they say
