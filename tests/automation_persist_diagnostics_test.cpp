@@ -45,7 +45,7 @@ public:
     // Deliberately inert. This test never calls it, and there is no wire behind
     // it if it did.
     void setKeying(bool, const TxCoordinator::Operation&,
-                   const TxCoordinator::Completion&) override {}
+                   const TxCoordinator::Completion& = {}) override {}
     void invokeExtension(const QString&, const QString&, quint64 id,
                          const QVariant&) override {
         emit extensionResult(id, QVariantMap{{"stateFreshness", QVariantMap{{"trackedStateReady", false}}}});

@@ -45,6 +45,17 @@ class Hl2TxDsp;
 // specific way a capability rots.
 inline constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
 
+// The wideband converter view this backend declares when it is connected, as a
+// value rather than as four lines inside capabilities().
+//
+// A FREE FUNCTION SO THE DECLARATION CAN BE TESTED WITHOUT A RADIO. The record
+// names the extension verb that delivers a frame, so a consumer never has to
+// test the family — which means a typo in either string would advertise a verb
+// that answers "no extension verbs implemented", a failure that only appears at
+// the moment an operator opens the window. Exposed here, that drift is a
+// socket-free assertion instead.
+[[nodiscard]] AetherSDR::WidebandConverterView widebandConverterViewRecord() noexcept;
+
 // IRadioBackend implementation for the Hermes-Lite 2 (HPSDR Protocol 1, raw IQ).
 // Owns a MetisClient (UDP wire) and an Hl2RxDsp (demod + panadapter) and maps the
 // neutral seam verbs/signals onto them. This is the first backend that owns an
@@ -848,6 +859,10 @@ private:
     // never this backend's own request. Mirrored so healthSnapshot() need not
     // reach across the I/O thread to read it.
     bool m_bandscopeEnabled = false;
+    // The requestId of the outstanding `bandscope.frame` call, or 0. One at a
+    // time: the reply is 2048 samples taken at one instant, and two callers
+    // sharing one frame would each be told it was theirs.
+    quint64 m_bandscopeFrameRequest = 0;
     // THE MOST RECENT ACCEPTED BANDSCOPE BLOCK, mirrored onto this thread from
     // MetisClient::bandscopeBlockReady for exactly the reason m_drops is: that
     // object lives on the I/O thread and healthSnapshot() is read from the GUI

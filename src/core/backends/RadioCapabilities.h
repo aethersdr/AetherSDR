@@ -180,6 +180,45 @@ struct PanAmplitudeModel {
     bool binsAbsolute = false;
 };
 
+// THE WIDEBAND CONVERTER VIEW: the radio delivers the raw output of its
+// analogue-to-digital converter, before the DDC, spanning the converter's whole
+// first Nyquist zone rather than a tuned slice.
+//
+// Absence is the honest default and is what every backend in this tree but one
+// reports today. It is NOT "this is the Hermes-Lite": it is a property of the
+// wire protocol, and the reason it reads as HL2-only here is that the HL2 is
+// the only openHPSDR protocol 1 radio we implement.
+//
+//   * The ANAN backend speaks openHPSDR protocol 2. Protocol 2 is BELIEVED to
+//     carry a wideband stream in its specification and the hardware shares the
+//     HL2's lineage, but our P2Protocol.h defines no such endpoint and nobody
+//     here has measured one. So ANAN declares nothing — "not implemented",
+//     which is what absence means, and not "cannot".
+//   * A Flex delivers a panadapter the RADIO has already computed. There is no
+//     raw converter stream on the host to build a wideband view from at all, so
+//     for that family absence is structural rather than unfinished.
+//
+// A consumer must therefore ask for this record and never for a family name.
+struct WidebandConverterView {
+    // The converter's own sample rate, in Hz. The view spans DC to half of it.
+    double sampleRateHz{0.0};
+    // Samples in one delivered record. Contiguous in CONVERTER time, which is
+    // the only continuity that matters: a record's samples may be assembled
+    // from several datagrams that arrived milliseconds apart.
+    int blockSamples{0};
+    // The extension verb that delivers ONE record, named here so the consumer
+    // does not have to know which family answered. Invoked with a non-zero
+    // requestId; the record comes back on extensionResult as a map with a
+    // `samples` QList<float> normalised to [-1, 1), a `sampleRateHz`, and a
+    // `calibrated` flag. A failure comes back on extensionError with a reason.
+    //
+    // ON DEMAND BY CONSTRUCTION. There is deliberately no "subscribe" here: a
+    // continuous consumer of a converter-rate stream is a cost that has to be
+    // measured on the family that would pay it, and no such measurement exists.
+    QString frameNamespace;
+    QString frameVerb;
+};
+
 // A stable, radio-owned receive-filter preset. `id` is the identity used on
 // the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
 // that preset and must never be used as its identity.
@@ -327,6 +366,9 @@ struct RadioCapabilities {
     std::optional<ReceiveAudioControl> receiveAudioControl;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
+    // Engaged when the radio can deliver a wideband converter view; see the
+    // struct above for why absence is the right default and what it means.
+    std::optional<WidebandConverterView> widebandConverterView;
 
     // Optional per-band native coverage. Empty means "not reported" and keeps
     // canonical band labels. This is distinct from txPowerBands: receive-only

@@ -44,6 +44,28 @@ public:
         return static_cast<float>(bin * sampleRate / kFftSize);
     }
 
+    // The dB to ADD to magnitudesDb() before reading a bin as an absolute
+    // level. +6.02 dB for the Hann window this class builds.
+    //
+    // WHY A CALLER HAS TO DO THIS. update() normalises by 2/N, which is the
+    // single-sided normalisation for an UNWINDOWED transform. It does not
+    // remove the analysis window's coherent gain — the window's mean, 1/2 for
+    // Hann — so a full-scale sine peaks at -6.02 dBFS and not at 0. That is
+    // invisible to the EQ editor, which draws a spectrum's shape against a
+    // response curve and never names an absolute number, and it is why the
+    // error survived here; it is NOT invisible to a caller that puts a dBFS
+    // figure on screen beside a converter's clip threshold.
+    //
+    // Offered as a correction for the caller to apply rather than folded into
+    // `norm`, because folding it in would move the EQ editor's displayed
+    // spectrum 6 dB for every existing user of that window, which is a
+    // separate decision from getting one new readout right.
+    //
+    // Computed from the window this instance actually built, so a change to
+    // buildWindow() carries the constant with it instead of stranding a 6.02
+    // somewhere else in the tree.
+    float coherentGainCorrectionDb() const noexcept;
+
     static constexpr float kFloorDb = -100.0f;
 
 private:

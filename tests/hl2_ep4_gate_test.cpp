@@ -31,6 +31,7 @@
 #include <QSignalSpy>
 #include <QThread>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <span>
@@ -153,6 +154,32 @@ static void feed(MetisClient& c, std::uint32_t seq)
 static int expectedPeak(std::uint32_t first)
 {
     return codeForSeq(first + 3);
+}
+
+// The four codes a delivered frame's 2048 samples carry, one per 512-sample
+// run. A frame is only a record of ONE hardware block if those are four
+// CONSECUTIVE codes, which is the property makeEp4 was built to make visible.
+static std::vector<int> frameCodes(const QList<float>& samples)
+{
+    std::vector<int> codes;
+    if (samples.size() != kEp4BlockSamples)
+        return codes;
+    for (int run = 0; run < kEp4PacketsPerBlock; ++run) {
+        const float v = samples.at(run * static_cast<int>(kEp4SamplesPerPacket));
+        codes.push_back(static_cast<int>(std::lround(v * kEp4FullScale)));
+    }
+    return codes;
+}
+
+static bool consecutive(const std::vector<int>& codes)
+{
+    if (codes.size() != static_cast<std::size_t>(kEp4PacketsPerBlock))
+        return false;
+    for (std::size_t i = 1; i < codes.size(); ++i) {
+        if (codes[i] != codes[i - 1] + 1)
+            return false;
+    }
+    return true;
 }
 
 // Feed packets from `from` until the gate has emitted one block, or `limit`
@@ -626,9 +653,11 @@ int main(int argc, char** argv)
     {
         MetisClient c;
         QSignalSpy down(&c, &MetisClient::linkDown);
+        QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
         MetisClientTestAccess::setStreaming(c);
         MetisClientTestAccess::setLinkUp(c);
         c.setBandscopeEnabled(true);
+        c.requestBandscopeFrame();   // and something is waiting on a picture
         check(c.bandscopeEnabled(), "the gate is running on a live link");
         check(!MetisClientTestAccess::idle(c), "and armed");
 
@@ -652,6 +681,143 @@ int main(int argc, char** argv)
         // link back, the gate is not still running behind it.
         MetisClientTestAccess::tick(c);
         check(MetisClientTestAccess::idle(c), "and nothing re-arms on the dead link");
+
+        // The on-demand request is answered by this path too. resetBandscopeGate()
+        // is noexcept and clears only the per-cycle latch, so without an explicit
+        // failure here the caller waits for a frame that can never arrive.
+        check(fails.count() == 1, "the outstanding frame request was ANSWERED, not dropped");
+        check(!fails.at(0).at(0).toString().isEmpty(), "with a reason, not an empty string");
+    }
+
+    // ---- 15 · THE ON-DEMAND FRAME: one request, one record, nothing left running ----
+    //
+    // This is the display's whole cost model. The gate above is a standing 1 Hz
+    // sampler for the headroom rows; a frame request is not that. It raises
+    // wide_spectrum for the length of exactly one arming cycle and puts the
+    // gate back where it found it, so a window left open costs nothing after
+    // its frame has been drawn.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
+        QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
+        QSignalSpy blocks(&c, &MetisClient::bandscopeBlockReady);
+
+        check(!c.bandscopeEnabled(), "the standing gate is OFF, which is the point");
+        c.requestBandscopeFrame();
+        for (std::uint32_t s = 0; s < 8; ++s)
+            feed(c, s);
+
+        check(frames.count() == 1, "one request yields exactly one frame");
+        check(fails.count() == 0, "and no failure alongside it");
+        const QList<float> samples = frames.at(0).at(0).value<QList<float>>();
+        check(samples.size() == kEp4BlockSamples,
+              "a frame is a whole 2048-sample block, never a packet");
+        const std::vector<int> codes = frameCodes(samples);
+        check(consecutive(codes),
+              "and its four packets are consecutive: one hardware block, not a splice");
+        check(!codes.empty() && codes.front() == 4,
+              "the FLUSHED block (0..3) is not what was delivered — 4..7 is");
+        check(blocks.count() == 1,
+              "the statistics for that same block go out as usual");
+        check(blocks.at(0).at(0).value<Ep4Stats>().peakAbs == expectedPeak(4),
+              "and they describe the block the frame carries, not another one");
+
+        check(MetisClientTestAccess::idle(c), "the gate is idle again");
+        check(!c.bandscopeEnabled(), "and the standing gate was never turned on");
+        MetisClientTestAccess::tick(c);
+        check(MetisClientTestAccess::idle(c),
+              "a period tick arms nothing: one request is one frame, not a subscription");
+    }
+
+    // ---- 16 · a second request while one is outstanding is not a second frame ----
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
+        QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
+        c.requestBandscopeFrame();
+        c.requestBandscopeFrame();
+        c.requestBandscopeFrame();
+        for (std::uint32_t s = 0; s < 8; ++s)
+            feed(c, s);
+        check(frames.count() == 1, "three requests, one arming cycle, one frame");
+        check(fails.count() == 0, "the extra requests are absorbed, not refused");
+    }
+
+    // ---- 17 · a request that cannot be served is ANSWERED, never dropped ----
+    //
+    // The gated sampler skips a cycle silently and resumes on the next tick. A
+    // request has no next tick: something is waiting on a reply, and silence
+    // there is a window that says "Waiting for a frame" forever.
+    {
+        MetisClient c;
+        QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
+        c.requestBandscopeFrame();
+        check(fails.count() == 1, "a request at a client that is not streaming fails at once");
+        check(!fails.at(0).at(0).toString().isEmpty(), "with a reason, not an empty string");
+    }
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
+        QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
+        c.requestBandscopeFrame();
+        feed(c, 0);   // the cycle starts, and then nothing more arrives
+        MetisClientTestAccess::fireGuard(c);
+        check(frames.count() == 0, "a cycle that never completed delivers no frame");
+        check(fails.count() == 1, "the guard answers the request instead of leaving it open");
+        check(c.bandscopeTimeouts() == 1, "and the timeout is counted where it always was");
+        check(MetisClientTestAccess::idle(c), "the gate is not left armed");
+    }
+
+    // ---- 18 · a request landing MID-CAPTURE is served by one further cycle ----
+    //
+    // The samples of a block already being captured were never decoded — the
+    // decision is latched when Capturing is entered — so serving the request
+    // from what is left would deliver a record short by a packet. The retry is
+    // bounded at exactly one, because the latch is taken from a flag that is by
+    // then already set.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
+        QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
+        QSignalSpy blocks(&c, &MetisClient::bandscopeBlockReady);
+        c.setBandscopeEnabled(true);          // the standing sampler is running
+        for (std::uint32_t s = 0; s < 5; ++s) // 0..3 flushed, 4 is capturing
+            feed(c, s);
+        check(blocks.count() == 0, "the first block is still being captured");
+        c.requestBandscopeFrame();            // too late for THIS block
+
+        for (std::uint32_t s = 5; s < 8; ++s)
+            feed(c, s);
+        check(blocks.count() == 1, "that block completes as statistics");
+        check(frames.count() == 0, "but it carries no samples, so it is not the frame");
+
+        for (std::uint32_t s = 8; s < 20; ++s)
+            feed(c, s);
+        check(frames.count() == 1, "the next cycle serves the request");
+        check(fails.count() == 0, "without a spurious failure in between");
+        check(consecutive(frameCodes(frames.at(0).at(0).value<QList<float>>())),
+              "and delivers one contiguous block, not the remains of two");
+    }
+
+    // ---- 19 · the standing sampler alone decodes NO samples ----
+    //
+    // The headroom rows need statistics and not a picture, and decoding 2048
+    // codes per block is work on the I/O thread. Nothing pays for it unless
+    // something asked.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
+        QSignalSpy blocks(&c, &MetisClient::bandscopeBlockReady);
+        c.setBandscopeEnabled(true);
+        for (std::uint32_t s = 0; s < 8; ++s)
+            feed(c, s);
+        check(blocks.count() == 1, "the sampler takes its block");
+        check(frames.count() == 0, "and emits no frame, because nothing requested one");
     }
 
     // ---- 15 · A HOLE OF A MULTIPLE OF FOUR IS STILL A HOLE ----
@@ -810,6 +976,70 @@ int main(int argc, char** argv)
         check(spy.count() == 1
                   && spy.at(0).at(0).value<Ep4Stats>().peakAbs == expectedPeak(4),
               "...on its own four packets, not a set the re-arm would have begun");
+    }
+
+    // Abandoning a one-shot capture must answer it and admit the next request.
+    // Exercise all three gate phases and both PTT sources without a socket.
+    for (const int packetsBeforeInterrupt : {0, 1, 5}) {
+        for (const int edge : {0, 1, 2}) {
+            MetisClient c;
+            MetisClientTestAccess::setStreaming(c);
+            QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
+            QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
+            if (edge == 1) {
+                c.enableTransmit(true);
+            } else if (edge == 2) {
+                c.setBandscopeEnabled(true);
+            }
+            c.requestBandscopeFrame();
+            for (int s = 0; s < packetsBeforeInterrupt; ++s) {
+                feed(c, static_cast<std::uint32_t>(s));
+            }
+            if (edge == 0) {
+                MetisClientTestAccess::setRadioPtt(c, true);
+                MetisClientTestAccess::setRadioPtt(c, false);
+            } else if (edge == 1) {
+                c.setMox(true, authority.operation);
+                c.setMox(false, authority.operation);
+            } else {
+                c.setBandscopeEnabled(false);
+                c.setBandscopeEnabled(false); // repeated cancellation is idempotent
+            }
+            MetisClientTestAccess::expireUnkeyHoldoff(c);
+            MetisClientTestAccess::fireGuard(c);
+            check(fails.count() == 1, "an abandoned frame is answered exactly once");
+            if (!fails.isEmpty()) {
+                check(!fails.first().first().toString().isEmpty(),
+                      "cancellation carries an operator-visible reason");
+            }
+            check(frames.count() == 0, "an interrupted capture delivers no frame");
+            check(MetisClientTestAccess::idle(c), "cancellation disarms the gate");
+            check(!c.bandscopeEnabled(), "recovery does not require a standing sampler");
+
+            c.requestBandscopeFrame();
+            check(MetisClientTestAccess::arming(c), "the next request can arm normally");
+            // Include any trailing packet plus a flush and a whole fresh block.
+            for (std::uint32_t s = 8; s < 24; ++s) {
+                feed(c, s);
+            }
+            check(frames.count() == 1, "the next request delivers one complete frame");
+            check(fails.count() == 1, "successful recovery does not fail another request");
+        }
+    }
+
+    // A refused host PTT must not cancel a valid frame request.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
+        QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
+        c.requestBandscopeFrame();
+        c.setMox(true, authority.operation); // transmit was never enabled; no wire or peer exists
+        for (std::uint32_t s = 0; s < 8; ++s) {
+            feed(c, s);
+        }
+        check(frames.count() == 1 && fails.count() == 0,
+              "a refused key leaves the frame request intact");
     }
 
     if (g_failures == 0)

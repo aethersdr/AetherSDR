@@ -332,6 +332,26 @@ public:
     // the stream is already running: the run byte is only meaningful to a radio
     // that has been started, and metisStop() clears both bits anyway.
     Q_INVOKABLE void setBandscopeEnabled(bool on);
+    // ONE bandscope block, on demand, with its 2048 samples kept.
+    //
+    // A SEPARATE THING FROM THE GATE ABOVE, and deliberately so. The gate is a
+    // standing 1 Hz sampler for the headroom rows and keeps only statistics;
+    // this raises wide_spectrum for the length of exactly one arming cycle —
+    // ~13 ms measured, two block intervals — decodes that block's samples and
+    // lowers it again. It does not start the period timer, does not touch
+    // m_params.bandscope, and leaves nothing running behind it.
+    //
+    // WHY ON DEMAND AND NOT A SECOND STREAM: a continuous consumer would put a
+    // second permanent load on this thread, which already carries EP2 pacing,
+    // EP6 ingest, WDSP and the panadapter FFT. That cost has never been
+    // measured — the plan's open question §3.4, which bench runs d94 and d95
+    // did NOT answer because neither drove the radio with this code. A request
+    // per frame avoids the question rather than guessing the answer to it.
+    //
+    // Answered exactly once, by bandscopeFrameReady or bandscopeFrameFailed.
+    // A second request while one is outstanding is ignored: the caller already
+    // has an answer coming.
+    Q_INVOKABLE void requestBandscopeFrame();
     // Whether the GATE is running — the operator's standing intent, which is the
     // only bandscope state that is stable long enough to report. The run byte
     // itself is up for only ~29 ms in every kBandscopeSampleMs — the 11 packets
@@ -490,6 +510,23 @@ signals:
     // downstream may treat these as absolute — and per IRadioBackend.h's own
     // rule for the rows they feed, nothing may make a DECISION from them at all.
     void bandscopeBlockReady(const AetherSDR::hl2::Ep4Stats& block);
+    // The block requestBandscopeFrame() asked for: kEp4BlockSamples converter
+    // codes, contiguous in converter time (26.67 us of the 76.8 MSPS ADC),
+    // normalised to [-1, 1) by kEp4FullScale.
+    //
+    // A QList because it crosses the I/O thread to the GUI thread queued and a
+    // std::vector has no metatype; 8 KB per frame, and there is one frame per
+    // request. Carried SEPARATELY from bandscopeBlockReady rather than folded
+    // into Ep4Stats, because the statistics are emitted on every gated cycle
+    // and the samples are not: decoding 2048 codes costs this thread real work
+    // (an arithmetic shift per sample plus the copy) and nothing should pay it
+    // unless something asked for a picture.
+    //
+    // UNCALIBRATED AND PRE-DDC, exactly as bandscopeBlockReady's are.
+    void bandscopeFrameReady(const QList<float>& samples);
+    // The request could not be answered, with the reason in the operator's
+    // words. Emitted once per failed request, never alongside a Ready.
+    void bandscopeFrameFailed(const QString& reason);
     // No EP6 arrived within kConnectTimeoutMs of start() — the radio is off,
     // unreachable, or already streaming to a different client.
     void connectFailed(const QString& reason);
@@ -563,6 +600,10 @@ private:
     // setBandscopeEnabled() and again after setReceiverCount()'s restart, which
     // is what carries the sensor across a panadapter being added.
     void applyBandscopeGate();
+    // Answer an outstanding on-demand frame request with a failure, if there is
+    // one. Separate from resetBandscopeGate() — which is noexcept and must stay
+    // so — because this EMITS, and a queued emit allocates.
+    void failPendingBandscopeFrame(const QString& reason);
     // Drop every piece of in-flight cycle state and stop both timers, leaving
     // m_params.bandscope alone. The counters are cumulative and survive.
     void resetBandscopeGate() noexcept;
@@ -757,6 +798,22 @@ private:
     // the phase (seq % 4) the next packet of that run must carry.
     int m_bsPhase = 0;
     Ep4Stats m_bsBlock;                   // the block being accumulated
+    // ---- the on-demand frame (see requestBandscopeFrame) ----
+    //
+    // A request is outstanding. Cleared by whichever of the two answers goes
+    // out, so the two flags below can never both be live for one request.
+    bool m_bsFrameRequested = false;
+    // THIS cycle is decoding samples, latched when Capturing is entered and not
+    // read from m_bsFrameRequested per packet. The latch is what makes the
+    // partial-block case finite: a request that arrives after a cycle has
+    // already begun capturing finds this false, so that block's samples were
+    // never decoded and the request is served by ONE further cycle — at which
+    // point the latch is necessarily true, because the flag was set before it
+    // was taken.
+    bool m_bsCaptureSamples = false;
+    // The samples of the cycle being captured. Reserved once; cleared, never
+    // reallocated, at each Capturing entry.
+    std::vector<float> m_bsSamples;
     // EXACTLY ONE EP4 PACKET ARRIVES AFTER THE DISABLE, 24-61 us later, in four
     // of four measured cycles: the packet already inside usopenhpsdr1.v's WIDE
     // states, which START cannot interrupt. It belongs to the block we have

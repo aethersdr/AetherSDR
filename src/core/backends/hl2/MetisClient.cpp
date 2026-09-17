@@ -77,6 +77,11 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     qRegisterMetaType<AetherSDR::hl2::MetisClient::LinkCounters>(
         "AetherSDR::hl2::MetisClient::LinkCounters");
     qRegisterMetaType<AetherSDR::hl2::Ep4Stats>("AetherSDR::hl2::Ep4Stats");
+    // The on-demand frame's payload. Registered explicitly rather than relying
+    // on moc's automatic registration, because this one crosses the I/O thread
+    // to the GUI thread QUEUED, and a queued emit of an unregistered type is a
+    // runtime warning and a dropped signal rather than a compile error.
+    qRegisterMetaType<QList<float>>("QList<float>");
 
     // The duty-cycle gate's two timers, built here rather than in start() for
     // the same reason the EP2 pacer is: this object outlives a connect, and a
@@ -89,6 +94,7 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     m_bandscopeTimer->setInterval(kBandscopeSampleMs);
     m_bandscopeTimer->setTimerType(Qt::CoarseTimer);
     connect(m_bandscopeTimer, &QTimer::timeout, this, &MetisClient::onBandscopeTick);
+    m_bsSamples.reserve(static_cast<std::size_t>(kEp4BlockSamples));
     m_bandscopeGuard = new QTimer(this);
     m_bandscopeGuard->setSingleShot(true);
     connect(m_bandscopeGuard, &QTimer::timeout, this, &MetisClient::onBandscopeGuardTimeout);
@@ -282,6 +288,7 @@ bool MetisClient::start(const Params& params)
     // above, so a caller cannot open a session with the sensor already
     // running — it is a diagnostic an operator asks for, per session.
     resetBandscopeGate();
+    failPendingBandscopeFrame(QStringLiteral("the session restarted"));
     m_params.bandscope = false;
     m_linkUp = false;
     // This object OUTLIVES a connect: Hl2Backend builds it in its constructor
@@ -425,6 +432,11 @@ void MetisClient::onWatchdogTick()
         if (m_bsState != BandscopeState::Idle)
             bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
         resetBandscopeGate();
+        // resetBandscopeGate() is noexcept and cannot emit, so the answer owed
+        // to an outstanding requestBandscopeFrame() is still owed here, as it
+        // is at stop() and at setReceiverCount(). Without this the window that
+        // asked reads "Waiting for a frame" for the rest of the session.
+        failPendingBandscopeFrame(QStringLiteral("the link went down"));
         m_params.bandscope = false;
         emit linkDown();
     }
@@ -471,6 +483,7 @@ void MetisClient::stop()
     // metisStop() is 0x00, which clears wide_spectrum as well as run. The gate
     // has nothing left to sample and its intent ends with the session.
     resetBandscopeGate();
+    failPendingBandscopeFrame(QStringLiteral("the radio stopped streaming"));
     m_params.bandscope = false;
     // An interrupted five-bank write must not finish in the next session.
     // Preserve unrelated one-shot setup; only this board's writes are stale.
@@ -627,6 +640,9 @@ void MetisClient::setReceiverCount(int count)
     // fragment of a stream that no longer exists. Its INTENT does survive, in
     // m_params.bandscope, which is re-applied below once the stream is up.
     resetBandscopeGate();
+    // The stream this request would have been answered from is being torn down
+    // and rebuilt. A frame taken across that boundary would be half of each.
+    failPendingBandscopeFrame(QStringLiteral("the receiver count changed"));
     m_sinceLastEp6.restart();
 
     countTx(sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port));
@@ -941,6 +957,9 @@ void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operati
         // Keying up inside the arming window is exactly when that happens.
         if (m_bsState != BandscopeState::Idle)
             bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
+        // A one-shot caller has no period tick to resume this capture. Answer
+        // before leaving its guard stopped and its request latched forever.
+        failPendingBandscopeFrame(QStringLiteral("the radio started transmitting"));
     } else {
         // Start the post-unkey hold-off. d83's measured transient runs
         // 178-285 ms past the falling edge; kBandscopeUnkeyHoldoffMs clears it.
@@ -1546,6 +1565,12 @@ void MetisClient::bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
             m_bsState = BandscopeState::Capturing;
             m_bsPhase = 0;
             m_bsBlock = Ep4Stats{};
+            // Latched HERE and nowhere else: a request that arrives mid-block
+            // must not produce a record made of the packets that happened to
+            // be left, and a vector that is short by a packet is exactly the
+            // half-record the phase check above exists to refuse.
+            m_bsCaptureSamples = m_bsFrameRequested;
+            m_bsSamples.clear();
         }
         return;
 
@@ -1565,6 +1590,11 @@ void MetisClient::bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
         }
         if (const auto s = ep4Stats(bytes))
             m_bsBlock.merge(*s);
+        // Only for a cycle somebody asked a picture of. ep4Samples decodes 512
+        // codes; the gated sampler that feeds the headroom rows needs none of
+        // them and must not pay for them.
+        if (m_bsCaptureSamples)
+            ep4Samples(bytes, m_bsSamples);
         if (++m_bsPhase < kEp4PacketsPerBlock)
             return;
 
@@ -1575,11 +1605,35 @@ void MetisClient::bandscopeOnPacket(std::uint32_t seq, std::uint32_t drops,
         m_bsConsecutiveTimeouts = 0;
         m_link.bandscopeBlocks = m_bsBlocks;
         emit bandscopeBlockReady(m_bsBlock);
+        const bool deliverFrame = m_bsFrameRequested && m_bsCaptureSamples
+                                  && m_bsSamples.size()
+                                         == static_cast<std::size_t>(kEp4BlockSamples);
+        const bool retryFrame = m_bsFrameRequested && !deliverFrame;
         // Down again immediately. The duty cycle is the whole point: one block
         // per kBandscopeSampleMs is TWELVE datagrams a second against 381 —
         // 3 discarded in Arming, 4 flushed, 4 kept, 1 trailing. See the count's
         // derivation at setBandscopeEnabled's header in MetisClient.h.
         bandscopeDisarm(/*expectTrailing=*/true);
+        if (deliverFrame) {
+            m_bsFrameRequested = false;
+            m_bsCaptureSamples = false;
+            emit bandscopeFrameReady(
+                QList<float>(m_bsSamples.begin(), m_bsSamples.end()));
+        } else if (retryFrame) {
+            // The request landed after this cycle had already started
+            // capturing, so its samples were never decoded. One more cycle
+            // serves it, and only one: m_bsCaptureSamples is latched from
+            // m_bsFrameRequested at Capturing entry, which is now necessarily
+            // true. bandscopeArm() can still refuse on the transmit interlock,
+            // and a refusal leaves the state Idle — which is the request's
+            // answer, not a wedge.
+            bandscopeArm();
+            if (m_bsState == BandscopeState::Idle) {
+                m_bsFrameRequested = false;
+                emit bandscopeFrameFailed(
+                    QStringLiteral("the radio is transmitting"));
+            }
+        }
         return;
     }
 }
@@ -1613,6 +1667,7 @@ void MetisClient::onRadioPttEdge(bool keyed)
     if (keyed) {
         if (m_bsState != BandscopeState::Idle)
             bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
+        failPendingBandscopeFrame(QStringLiteral("the radio started transmitting"));
         return;
     }
     // d83's measured post-unkey transient runs 178-285 ms past the falling
@@ -1727,11 +1782,20 @@ void MetisClient::onBandscopeGuardTimeout()
             << "Stopping the gate; re-enable it to try again.";
         m_params.bandscope = false;
         applyBandscopeGate();   // takes the !bandscope branch: stops both timers
+        // AND THE REQUESTER IS STILL OWED AN ANSWER. applyBandscopeGate()
+        // reaches resetBandscopeGate(), which is noexcept and deliberately
+        // leaves the request flag alone; giving up on the endpoint is the one
+        // abandoning path that never retries, so a frame request left pending
+        // here would never be answered by anything.
+        failPendingBandscopeFrame(
+            QStringLiteral("this gateware does not answer endpoint 0x04"));
         return;
     }
     qCWarning(lcHl2) << "HL2: bandscope block did not complete within"
                      << bandscopeGuardIntervalMs() << "ms; abandoning this cycle";
-}
+    failPendingBandscopeFrame(
+        QStringLiteral("no bandscope block arrived within %1 ms")
+            .arg(bandscopeGuardIntervalMs()));}
 
 void MetisClient::resetBandscopeGate() noexcept
 {
@@ -1742,6 +1806,11 @@ void MetisClient::resetBandscopeGate() noexcept
     m_bsState = BandscopeState::Idle;
     m_bsPhase = 0;
     m_bsBlock = Ep4Stats{};
+    // The request flag itself is NOT cleared here — this is noexcept and cannot
+    // emit, so the answer is owed by failPendingBandscopeFrame() at each of the
+    // callers below. Only the per-cycle latch and its buffer go.
+    m_bsCaptureSamples = false;
+    m_bsSamples.clear();
     // The stream this belonged to is gone; nothing is still in the WIDE states.
     m_bsTrailingPending = false;
 }
@@ -1758,6 +1827,42 @@ void MetisClient::applyBandscopeGate()
     // path taken straight after setReceiverCount()'s restart, where the run
     // byte has just been through 0x00 — the case bandscopeGuardMs()'s
     // EP6-packet term exists for.
+    if (m_bsState == BandscopeState::Idle)
+        bandscopeArm();
+}
+
+void MetisClient::failPendingBandscopeFrame(const QString& reason)
+{
+    if (!m_bsFrameRequested)
+        return;
+    m_bsFrameRequested = false;
+    m_bsCaptureSamples = false;
+    emit bandscopeFrameFailed(reason);
+}
+
+void MetisClient::requestBandscopeFrame()
+{
+    if (!m_running) {
+        // Same reason setBandscopeEnabled() refuses: the run byte means nothing
+        // to a radio that was never started. Answered rather than dropped, so a
+        // caller waiting on a reply is not left waiting for the session.
+        emit bandscopeFrameFailed(QStringLiteral("the radio is not streaming"));
+        return;
+    }
+    if (m_bsFrameRequested)
+        return;   // an answer is already on its way to whoever asked first
+    if (bandscopeInterlocked()) {
+        // The HL2 receives while it transmits and hears its own PA at enormous
+        // strength, so a block taken now is a picture of us. Refused with a
+        // reason, unlike the gated sampler's silent skip: that one resumes by
+        // itself on the next tick, and a request has no next tick.
+        emit bandscopeFrameFailed(QStringLiteral("the radio is transmitting"));
+        return;
+    }
+    m_bsFrameRequested = true;
+    // A cycle already in flight is left alone and will serve this request on
+    // the retry the completion path takes; arming a second one on top of it
+    // would put two wide_spectrum edges on the wire for one picture.
     if (m_bsState == BandscopeState::Idle)
         bandscopeArm();
 }
@@ -1784,6 +1889,9 @@ void MetisClient::setBandscopeEnabled(bool on)
     if (!on)
         bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Idle);
     applyBandscopeGate();
+    if (!on) {
+        failPendingBandscopeFrame(QStringLiteral("the bandscope sampler was disabled"));
+    }
     qCInfo(lcHl2) << "HL2: wideband bandscope gate (EP4)"
                   << (on ? "running" : "stopped") << "— one block per"
                   << kBandscopeSampleMs << "ms";

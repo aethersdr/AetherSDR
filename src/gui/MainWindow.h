@@ -159,6 +159,7 @@ struct MemoryEntry;
 class PropDashboardDialog;
 class UpdateChecker;
 class TxBandDialog;
+class BandscopeDialog;
 class AetherDspDialog;
 class MqttSettingsDialog;
 class WaveformsDialog;
@@ -1495,6 +1496,10 @@ private:
     QPointer<AgcCalibrationDialog> m_agcCalibrationDialog;
     QPointer<PropDashboardDialog> m_propDashboardDialog;
     QPointer<TxBandDialog> m_txBandDialog;
+    // The wideband converter view (View menu). Gated on a CAPABILITY, never on
+    // a family: the window asks RadioCapabilities::widebandConverterView and
+    // invokes the verb that record names.
+    QPointer<BandscopeDialog> m_bandscopeDialog;
     QPointer<MemoryDialog> m_memoryDialog;
     QPointer<NetSchedulerDialog> m_netSchedulerDialog;
     NetScheduler* m_netScheduler{nullptr};

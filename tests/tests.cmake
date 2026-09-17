@@ -4231,6 +4231,46 @@ target_include_directories(hl2_ep4_gate_test PRIVATE src tests)
 target_link_libraries(hl2_ep4_gate_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
 add_test(NAME hl2_ep4_gate_test COMMAND hl2_ep4_gate_test)
 
+# The two contracts BandscopeDialog borrows from ClientEqFftAnalyzer: reset()
+# followed by update() reports the transform unsmoothed, and the absolute dB
+# scale is what the window thinks it is (the analyzer's own bins are 6.02 dB
+# low; coherentGainCorrectionDb() is the inverse the window applies). Same
+# shape as the parser targets above — compiles the analyzer directly, no Qt,
+# no aethercore, no widget, no radio.
+add_executable(bandscope_analyzer_test
+    tests/bandscope_analyzer_test.cpp
+    src/gui/ClientEqFftAnalyzer.cpp)
+target_include_directories(bandscope_analyzer_test PRIVATE src)
+add_test(NAME bandscope_analyzer_test COMMAND bandscope_analyzer_test)
+
+# BandscopeTrace's paint path and the dialog's production frame conversion,
+# executed offscreen with isolated settings. Links the dialog's TU (which holds
+# both classes) plus PersistentDialog and the analyzer; no radio, no sockets.
+add_executable(bandscope_trace_render_test
+    tests/bandscope_trace_render_test.cpp
+    src/gui/BandscopeDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/ClientEqFftAnalyzer.cpp
+)
+target_include_directories(bandscope_trace_render_test PRIVATE src tests)
+target_link_libraries(bandscope_trace_render_test PRIVATE
+    aethercore Qt6::Core Qt6::Widgets Qt6::Test)
+set_target_properties(bandscope_trace_render_test PROPERTIES AUTOMOC ON)
+add_test(NAME bandscope_trace_render_test COMMAND bandscope_trace_render_test)
+set_tests_properties(bandscope_trace_render_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# The wideband converter view capability, and the verb its record names.
+# Socket-free: constructs an Hl2Backend, never connects it, and asserts that
+# the advertised verb reaches the branch that implements it rather than the
+# unknown-verb fallthrough. Needs aethercore and Qt because Hl2Backend does.
+add_executable(wideband_converter_view_test tests/wideband_converter_view_test.cpp)
+target_include_directories(wideband_converter_view_test PRIVATE src)
+target_link_libraries(wideband_converter_view_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME wideband_converter_view_test COMMAND wideband_converter_view_test)
+
 add_executable(hl2_dbref_test tests/hl2_dbref_test.cpp)
 target_include_directories(hl2_dbref_test PRIVATE src)
 add_test(NAME hl2_dbref_test COMMAND hl2_dbref_test)
@@ -5743,6 +5783,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    bandscope_trace_render_test
     noise_floor_auto_adjust_gate_test
     vfo_display_defaults_test
     audio_engine_rates_test
