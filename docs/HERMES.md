@@ -839,9 +839,12 @@ sub-actions, so action-level drift is invisible to CI.
 1. ~~**Read back what the DSP was actually configured with.**~~ **DONE.**
    `get_state model=dsp` now carries a `backend` object alongside the
    client-side chain: `family`, and a `chains` list. Each entry names its
-   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive and a
-   hand-written phasing modulator on transmit, whose config is a different
-   struct) and its `level`, because "read-back" is used loosely and the
+   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive, and
+   optionally a WDSP TXA channel on transmit whose config is a different struct;
+   `modulator` on that entry names the transmit modulator the binary was built
+   with, `phasing` in a stock build or `wdsp-txa` under
+   `-DAETHER_HL2_TX_TXA=ON`, and there is no runtime switch between them) and its `level`, because "read-back" is used loosely
+   and the
    difference decides what a mismatch proves: `channel-config` is what
    `WdspChannel` was OPENED with after clamping or refusal, `dsp-config` is the
    DSP's own state, and `not-configured` marks an unavailable configuration.
@@ -2664,7 +2667,7 @@ on:
 Every consumer is hard-wired to exactly one bus at `connect()` time. Speaker
 audio and TCI were each ported to bus C individually, as separate patches
 (`MainWindow_Session.cpp`, the `wireDiscovery` relay and the
-`backendAudioFrameReady → onDaxAudioReady(1, …)` bridge). Nothing else was, so
+`backendSliceAudioFrameReady → onSlicePcmReady(...)` bridge). Nothing else was, so
 everything else on bus A or B binds to a null stream and silently does nothing.
 
 **This is gap-class 15 in §6's terms, and it is the single largest one left.**
@@ -4114,3 +4117,6 @@ has ordering constraints the connect does not: the DSP must expect the new rate
 before EP6 starts delivering at it, and a partial failure has to roll every
 receiver back to a single rate. Left as a follow-up rather than bolted onto the
 connect fix.
+
+The opt-in TXA modulator and its offline evidence are described in
+[HL2 TXA configuration and lifecycle](hl2-txa-configuration-diff.md).

@@ -594,3 +594,26 @@ itself. The ten are different shapes, so grep for the shape, not for a free:
 Drop any local patch upstream now carries. Otherwise reapply only these minimal
 changes and run the lifecycle test under AddressSanitizer on every supported
 platform.
+
+## Patch 11 — explicit transmit-buffer discard (#5747)
+
+`upstream/channel.c::DiscardTXAChannelData`, declared in the host-facing
+`include/aether_wdsp.h`, serves hosts that stop clocking audio on unkey.
+`SetChannelState(0, 0)` cannot flush such a channel: its down-ramp needs further
+`fexchange` calls and restart cancels the pending ramp. This previously carried
+85 ms of old TX audio into the next transmission.
+
+The caller excludes concurrent exchange/control operations. The discard takes
+`csDSP` then `csEXCH`, matching `flushChannel`, disables exchange and processing,
+flushes the rings and TX chain, and leaves the channel stopped with plans and
+configuration retained. `flush_iobuffs` refreshes its output semaphore; this is
+not an allocation-free audio operation. No planner lock, thread, sleep/retry
+loop or FFTW planning is added. RX channels and an outstanding asynchronous
+flush request are refused, so its worker cannot race a later restart.
+
+Coverage: `hl2_txdsp_test` checks every post-reset sample after immediate and
+500 ms restarts, repeated reset, and subsequent tone recovery. The assertion
+must fail when discard is removed. `wdsp_channel_test` checks the stopped state,
+channel retention, repeated discard, RX/pending-flush refusal, and leaks.
+When updating WDSP, retain this local entry point unless upstream supplies an
+equivalent synchronous discard with the same locking and refusal contract.

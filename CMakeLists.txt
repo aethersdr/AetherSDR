@@ -140,6 +140,37 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none")
     unset(_aether_san_list)
 endif()
 option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
+# Which SSB modulator the Hermes-Lite 2 transmit path is BUILT with. There is
+# no runtime switch and there must not be one: two silent transmit paths are
+# worse than one, and Hl2TxDsp.cpp records that the prior TXA attempt failed
+# SILENTLY. A compile flag gives a way back without giving an operator a way to
+# be on the wrong one (#5678).
+#
+# ON  — WDSP's TXA chain. The migration's payoff is the LOW EDGE: measured
+#       opposite-sideband suppression on the {150, 3000} DIGU/DIGL passband
+#       goes from 22 dB at 150 Hz to past this instrument's numerical floor.
+#       At 1 kHz the incumbent already reads 87 dB against EP2's ~96 dB
+#       signed-16-bit wire (MetisProtocol.cpp, ep2WriteTxIq), so TXA's
+#       advantage THERE is below the wire and unusable.
+# OFF — the in-tree phasing modulator, unchanged. The fallback, kept building
+#       and kept tested, for a machine or a report where TXA misbehaves.
+#
+# DEFAULT OFF, DELIBERATELY, AND NOT BECAUSE TXA IS DOUBTED. The approval on
+# #5678 was conditional: keep the phasing modulator behind a switch "until the
+# TXA path passes the extended suite AND HAS HAD HARDWARE TIME. The
+# silent-failure argument doesn't expire on merge." The extended suite passes.
+# The hardware time does not exist yet -- docs/hl2-txa-configuration-diff.md §7
+# opens "No hardware. No radio was keyed. No antenna port was observed," and
+# every figure in this branch is a unit test reading emitted IQ above the
+# 16-bit EP2 wire.
+#
+# Defaulting ON would have made the first person to key TXA on the air someone
+# who did not choose to. OFF costs the identical way back -- one cmake flag --
+# and makes that person a volunteer. Flip the default when an operator has keyed
+# it into a dummy load and then onto an antenna, and say in the commit who did.
+option(AETHER_HL2_TX_TXA
+       "Hermes-Lite 2 SSB transmit modulator: ON uses WDSP's TXA chain, OFF (default) the in-tree phasing modulator"
+       OFF)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -870,11 +901,13 @@ set(CORE_SOURCES
     src/core/PskReporterClient.cpp
     src/core/LocationAddressResolver.cpp
     src/core/MqttAntennaAlias.cpp
+    src/core/MqttRadioState.cpp
     src/core/MqttSettings.cpp
     src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
     src/core/TciServer.cpp
+    src/core/TciRxConverter.cpp
     src/core/TciPeerProcess.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
@@ -902,6 +935,9 @@ set(CORE_SOURCES
     src/core/ZipArchive.cpp
     src/core/ProfileTransfer.cpp
     src/core/QsoRecorder.cpp
+    src/core/QsoPcmConverter.cpp
+    src/core/QsoWavFormat.cpp
+    src/core/QsoWavPlayback.cpp
     src/core/FirmwareStager.cpp
     src/core/UpdateChecker.cpp
     src/core/OleCompoundFile.cpp
@@ -2219,6 +2255,19 @@ target_link_libraries(AetherSDR PRIVATE
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
 
+# PUBLIC, not PRIVATE: tests/hl2_txdsp_test.cpp asserts a different
+# opposite-sideband floor for each modulator and has to know which one it
+# linked, and tests link aethercore. Defined in BOTH directions rather than
+# only when ON, so a source that reads it can be compiled with -Wundef and so
+# that "the flag was never plumbed" cannot look like "the flag is off".
+if(AETHER_HL2_TX_TXA)
+    target_compile_definitions(aethercore PUBLIC AETHER_HL2_TX_TXA=1)
+    message(STATUS "HL2 transmit modulator ... WDSP TXA (AETHER_HL2_TX_TXA=ON)")
+else()
+    target_compile_definitions(aethercore PUBLIC AETHER_HL2_TX_TXA=0)
+    message(STATUS "HL2 transmit modulator ... in-tree phasing modulator (AETHER_HL2_TX_TXA=OFF)")
+endif()
+
 if(Qt6SerialPort_FOUND)
     # PUBLIC: gui (MainWindow.cpp, RadioSetupDialog.cpp) uses QSerialPort and
     # #ifdef HAVE_SERIALPORT directly.
@@ -2759,6 +2808,27 @@ if(FFTW3_FOUND)
             COMMENT "Copying libfftw3-3.dll to build directory"
         )
     endif()
+endif()
+
+target_sources(aethercore PRIVATE src/models/CwRxModel.cpp src/models/CwRxModel.h)
+
+option(ENABLE_DEEPFIST_EXPERIMENT "Build the local DeepFist CW prototype" OFF)
+set(DEEPFIST_MODEL_BASE_URL "" CACHE STRING "Published, versioned HTTPS DeepFist asset directory (empty before publication)")
+if(ENABLE_DEEPFIST_EXPERIMENT)
+    if(NOT ORT_FOUND)
+        message(FATAL_ERROR "The DeepFist prototype requires the packaged ONNX Runtime")
+    endif()
+    target_compile_definitions(aethercore PUBLIC HAVE_DEEPFIST)
+    target_compile_definitions(aethercore PRIVATE DEEPFIST_MODEL_BASE_URL="${DEEPFIST_MODEL_BASE_URL}")
+    target_sources(aethercore PRIVATE
+        src/models/DeepFistCwModel.cpp src/models/DeepFistCwModel.h
+        src/core/deepfist/DeepFistStream.cpp
+        src/core/deepfist/DeepFistModelAssets.cpp src/core/deepfist/DeepFistModelAssets.h
+        third_party/deepfist/DeepFistConditioner.cpp
+        third_party/deepfist/DeepFistSpectrogram.cpp
+        third_party/deepfist/DeepFistCtc.cpp
+        third_party/deepfist/DeepFistModel.cpp)
+    target_include_directories(aethercore PRIVATE "${CMAKE_SOURCE_DIR}/third_party/deepfist")
 endif()
 
 if(ORT_FOUND)

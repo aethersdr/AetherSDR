@@ -1399,7 +1399,7 @@ public:
     // #4744: switching from resampled TCI RX to native rate carries staged
     // samples into the native frame source. Releasing that buffer before
     // gain conversion or sendBinaryMessage() left the payload pointer dangling.
-    static bool native24kAudioRetainsAccumulatedPayload()
+    static bool native24kAudioDiscardsPriorRatePayload()
     {
         RadioModel model;
         TciServer server(&model);
@@ -1458,9 +1458,18 @@ public:
 
         // Seed a sub-threshold 48 kHz resampler accumulation, then switch to
         // native 24 kHz.  The old implementation retained this staging buffer
-        // across the rate change and released it before the native-rate gain
-        // loop read it.
-        server.onDaxAudioReady(1, pcm);
+        // across the rate change. A4 discards that prior-rate staging; the
+        // native gain loop reads only the new owning frame.
+        PcmProducer producer;
+        producer.start(PcmPurpose::Slice, 0);
+        QString error;
+        model.automationApplySliceFixture(0, QString(), &error);
+        const auto framedPcm = producer.legacyStereo24(pcm);
+        if (!framedPcm) {
+            std::fprintf(stderr, "FAIL: producer did not frame the pcm payload\n");
+            return false;
+        }
+        server.onSlicePcmReady(0, *framedPcm);
         spin(20);
         if (!receivedFrame.isEmpty()) {
             std::printf("      48 kHz staging unexpectedly emitted a frame\n");
@@ -1483,12 +1492,17 @@ public:
         for (int i = 0; i < kFrames * 2; ++i) {
             nextSamples[i] = -samples[i];
         }
-        QByteArray expectedPcm = pcm + nextPcm;
+        QByteArray expectedPcm = nextPcm;
         float* expectedSamples = reinterpret_cast<float*>(expectedPcm.data());
-        for (int i = 0; i < kFrames * 4; ++i) {
+        for (int i = 0; i < kFrames * 2; ++i) {
             expectedSamples[i] *= kGain;
         }
-        server.onDaxAudioReady(1, nextPcm);
+        const auto framedNextpcm = producer.legacyStereo24(nextPcm);
+        if (!framedNextpcm) {
+            std::fprintf(stderr, "FAIL: producer did not frame the nextPcm payload\n");
+            return false;
+        }
+        server.onSlicePcmReady(0, *framedNextpcm);
 
         for (int i = 0; i < 100 && receivedFrame.isEmpty(); ++i) {
             spin(10);
@@ -2004,7 +2018,7 @@ int main(int argc, char** argv)
     const bool routeLogSanitizes
         = AetherSDR::TciServerReviewTest::pttRouteLogSanitizesClientSource();
     const bool native24kPayload
-        = AetherSDR::TciServerReviewTest::native24kAudioRetainsAccumulatedPayload();
+        = AetherSDR::TciServerReviewTest::native24kAudioDiscardsPriorRatePayload();
     const bool fourIqStreams
         = AetherSDR::TciServerReviewTest::fourPansGiveFourIqStreams();
     const bool sharedPanChannel
@@ -2073,7 +2087,7 @@ int main(int argc, char** argv)
     std::printf("%s  PTT route log neutralises a client-supplied source "
                 "(#4547)\n",
                 routeLogSanitizes ? "PASS" : "FAIL");
-    std::printf("%s  native 24 kHz TCI RX retains accumulated payload (#4744)\n",
+    std::printf("%s  native 24 kHz TCI RX drops prior-rate staging (#4744, A4)\n",
                 native24kPayload ? "PASS" : "FAIL");
     std::printf("%s  four pans give one TCI client four independent IQ streams\n",
                 fourIqStreams ? "PASS" : "FAIL");

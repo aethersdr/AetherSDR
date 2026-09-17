@@ -383,6 +383,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/MqttRadioState.h": {
+  "tag": "ui-support",
+  "note": "Pure payload builder for the MQTT aethersdr/radio/state topic; external integration plumbing, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
  "core/MqttSettings.h": {
   "tag": "ui-support",
   "note": "Settings store for the MQTT broker bridge (conn config, topics, buttons, keychain); external integration plumbing",
@@ -1370,6 +1376,18 @@
  "core/weather/OperaRadarImage.h": {
   "tag": "ui-support",
   "note": "Bounded OPERA CIRRUS byte decoder placed in aethercore with existing zlib under RFC #5630 condition B; no radio state or widget dependency.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/CwDecodeSettings.h": {
+  "tag": "ui-support",
+  "note": "CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/CwRxModel.h": {
+  "tag": "universal",
+  "note": "Receive CW backend catalog and lifecycle over typed PCM; decoder workers remain private and TX is separate.",
   "split": "",
   "confidence": "high"
  }

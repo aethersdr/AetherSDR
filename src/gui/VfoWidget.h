@@ -54,6 +54,9 @@ class VfoWidget : public QWidget {
 public:
     explicit VfoWidget(QWidget* parent = nullptr);
     ~VfoWidget() override;
+#ifdef HAVE_DEEPFIST
+    void refreshCwDecoderControls();
+#endif
 
     void setSlice(SliceModel* slice);
     void setAntennaList(const QStringList& ants);

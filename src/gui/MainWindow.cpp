@@ -13,12 +13,13 @@
 #include "MainWindowHelpers.h"
 #include "WindowGeometryRestore.h"
 
-#include "CwDecodeSettings.h"
+#include "models/CwDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
 #include "MqttSettingsDialog.h"
 #include "core/MqttAntennaAlias.h"
+#include "core/MqttRadioState.h"
 #include "core/MqttSettings.h"
 #endif
 #include "ConnectionPanel.h"
@@ -1757,7 +1758,7 @@ MainWindow::MainWindow(QWidget* parent)
     // cwRecordingActiveChanged opens the recorder's TX gate for our CW — driven
     // by our own keyer, so another client's TX never gates our recorder.
     connect(m_audio, &AudioEngine::cwSidetoneRecordPcmReady,
-            m_qsoRecorder, &QsoRecorder::feedTxAudio);
+            m_qsoRecorder, &QsoRecorder::feedCwAudio);
     connect(m_audio, &AudioEngine::cwRecordingActiveChanged,
             m_qsoRecorder, &QsoRecorder::setCwOverActive);
     // Queued, unlike the two direct connections below: setCwOverActive reaches
@@ -2729,6 +2730,9 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+#ifdef HAVE_DEEPFIST
+    m_cwDecoder.stop();
+#endif
     ShutdownTrace destructorTrace("main_window.destructor_body");
     qApp->removeEventFilter(this);
 
@@ -3370,11 +3374,42 @@ void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
                           QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 
+// Re-read whether this backend reports drive back off the wire, and cache it for
+// publishRadioStateMqtt(). Called on the connect edge and on backendRebuilt(),
+// which between them cover every way the answer can change — a family switch
+// takes the second path and never emits the first (#5733 review).
+void MainWindow::refreshRadioStateDriveAuthority()
+{
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    m_radioStateDriveIsReadback =
+        caps.transmitDriveControl
+        && caps.transmitDriveControl->authority == SliceFrequencyControl::Authority::Radio;
+}
+
 void MainWindow::publishRadioStateMqtt()
 {
     if (!m_mqttClient) return;
     if (!isMqttTopicEnabled(QString::fromLatin1(kRadioStateTopic))) return;
-    if (m_cwxTransmitting) {
+    // A vanished radio ends the CWX send by definition, so do not make an
+    // interlock sit out the 1 s end-of-send debounce to learn the link dropped
+    // (#5733 review). Without this the disconnect publish below — deliberately
+    // direct rather than coalesced, because 150 ms was judged too long — was
+    // swallowed for a full second, and queueEmpty could not rescue it either
+    // since the radio is gone.
+    //
+    // The CWX state machine is deliberately NOT torn down here. m_cwxTxEndTimer's
+    // handler is the ONLY thing that restores the operator's CWX WPM and CW pitch
+    // after a send, and m_cwxSavedWpm is re-captured only while !m_cwxTransmitting
+    // — so cancelling that timer, or clearing the flag it keys on, discards the
+    // operator's settings rather than deferring them. Arm it instead and publish
+    // without waiting: isConnected() already reads false at the top of
+    // onDisconnected(), so the gate below can no longer arm it itself, and a drop
+    // during a key-down would otherwise leave it unarmed entirely.
+    const bool radioGone = !m_radioModel.isConnected();
+    if (m_cwxTransmitting && radioGone && !m_cwxTxEndTimer.isActive()) {
+        m_cwxTxEndTimer.start(1000);
+    }
+    if (m_cwxTransmitting && !radioGone) {
         if (!m_radioModel.isRadioTransmitting()) {
             m_cwxTxEndTimer.start(1000);  // might be done; confirm after 1 s silence
             return;
@@ -3383,15 +3418,39 @@ void MainWindow::publishRadioStateMqtt()
         if (m_cwxPublishedTxTrue) return;
         m_cwxPublishedTxTrue = true;
     }
-    auto* s = activeSlice();
-    if (!s) return;
-    QJsonObject obj;
-    obj[QStringLiteral("slice")] = s->letter();
-    obj[QStringLiteral("freq")]  = s->frequency();
-    obj[QStringLiteral("mode")]  = s->mode();
-    obj[QStringLiteral("tx")]    = m_radioModel.isRadioTransmitting();
+    // No early return on a missing slice (#5518). `drive`/`max_power_level` are
+    // RADIO-level properties, and the consumer this topic grew them for is an
+    // amplifier interlock that must be able to read power on a freshly connected
+    // radio before any slice exists. The slice fields simply go absent; the
+    // builder owns that conditionality and the test drives it directly.
+    MqttRadioStateInputs in;
+    in.connected     = m_radioModel.isConnected();
+    in.transmitting  = m_radioModel.isRadioTransmitting();
+    // Slice fields only while the radio is up. They are retired on the same edge
+    // as the power fields, so a disconnect message does not hand the next
+    // session the dead radio's frequency alongside connected:false (#5733).
+    if (in.connected) {
+        if (auto* s = activeSlice()) {
+            in.haveSlice          = true;
+            in.sliceLetter        = s->letter();
+            in.sliceFrequencyMhz  = s->frequency();
+            in.sliceMode          = s->mode();
+        }
+    }
+    const auto& tm = m_radioModel.transmitModel();
+    in.haveTransmitStatus = tm.haveTransmitStatus();
+    in.drive              = tm.rfPower();
+    in.haveMaxPowerLevel  = tm.haveMaxPowerLevel();
+    in.maxPowerLevel      = tm.maxPowerLevel();
+    // Per-message, not per-backend: the capability says drive CAN be confirmed
+    // on this radio, rfPowerIsFromRadio() says this VALUE has been (Principle II).
+    // m_radioStateDriveIsReadback caches the capability half at the connect edge
+    // — backendCapabilities() returns by value and this path runs on every PTT
+    // transition, which in CW break-in is every element.
+    in.driveIsReadback    = m_radioStateDriveIsReadback && tm.rfPowerIsFromRadio();
     m_mqttClient->publish(QString::fromLatin1(kRadioStateTopic),
-                          QJsonDocument(obj).toJson(QJsonDocument::Compact));
+                          QJsonDocument(buildMqttRadioStatePayload(in))
+                              .toJson(QJsonDocument::Compact));
 }
 #endif
 
@@ -8863,6 +8922,9 @@ void MainWindow::setActivePanApplet(PanadapterApplet* applet)
 // so decoded text appears in the correct pan's CW widget (#864).
 void MainWindow::routeCwDecoderOutput()
 {
+#ifdef HAVE_DEEPFIST
+    refreshCwRxContext();
+#endif
     // Determine which applet should receive CW decoder output:
     // the pan that owns the active audio slice (whose audio feeds the decoder).
     PanadapterApplet* target = nullptr;
@@ -8882,24 +8944,32 @@ void MainWindow::routeCwDecoderOutput()
         // decoder target. Hide it before dropping ownership so a later refresh
         // cannot leave an orphaned CW dock on the old pan (#4409).
         m_cwDecoderApplet->setCwPanelVisible(false);
-        disconnect(&m_cwDecoder, &CwDecoder::textDecoded,
+#ifdef HAVE_DEEPFIST
+        disconnect(m_cwDecoderApplet, &PanadapterApplet::cwEngineChanged,
+                   this, &MainWindow::selectCwRxBackend);
+        disconnect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
+                   this, &MainWindow::cwRxModelAction);
+        disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
+                   &m_cwDecoder, &CwRxModel::stop);
+#endif
+        disconnect(&m_cwDecoder, &CwRxModel::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         disconnect(&m_cwDecoderTx, &CwDecoder::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwTextTx);
-        disconnect(&m_cwDecoder, &CwDecoder::statsUpdated,
+        disconnect(&m_cwDecoder, &CwRxModel::statsUpdated,
                    m_cwDecoderApplet, &PanadapterApplet::setCwStats);
         if (auto* pb = m_cwDecoderApplet->lockPitchButton())
             disconnect(pb, &QPushButton::toggled,
-                       &m_cwDecoder, &CwDecoder::lockPitch);
+                       &m_cwDecoder, &CwRxModel::lockPitch);
         if (auto* sb = m_cwDecoderApplet->lockSpeedButton())
             disconnect(sb, &QPushButton::toggled,
-                       &m_cwDecoder, &CwDecoder::lockSpeed);
+                       &m_cwDecoder, &CwRxModel::lockSpeed);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
-                   &m_cwDecoder, &CwDecoder::setPitchRange);
+                   &m_cwDecoder, &CwRxModel::setPitchRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
-                   &m_cwDecoder, &CwDecoder::setSpeedRange);
+                   &m_cwDecoder, &CwRxModel::setSpeedRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                   &m_cwDecoder, &CwDecoder::stop);
+                   &m_cwDecoder, &CwRxModel::stop);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                    &m_cwDecoderTx, &CwDecoder::stop);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
@@ -8914,35 +8984,35 @@ void MainWindow::routeCwDecoderOutput()
 
     // Connect to new applet
     if (m_cwDecoderApplet) {
-        connect(&m_cwDecoder, &CwDecoder::textDecoded,
+        connect(&m_cwDecoder, &CwRxModel::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwText);
         // TX-side decoded text routes to a separate slot so the panel
         // can render it with a [TX] prefix and distinct color (#2417).
         connect(&m_cwDecoderTx, &CwDecoder::textDecoded,
                 m_cwDecoderApplet, &PanadapterApplet::appendCwTextTx);
-        connect(&m_cwDecoder, &CwDecoder::statsUpdated,
+        connect(&m_cwDecoder, &CwRxModel::statsUpdated,
                 m_cwDecoderApplet, &PanadapterApplet::setCwStats);
 #ifdef HAVE_MQTT
-        m_cwStatsConn = connect(&m_cwDecoder, &CwDecoder::statsUpdated,
+        m_cwStatsConn = connect(&m_cwDecoder, &CwRxModel::statsUpdated,
                 this, [this](float pitchHz, float speedWpm) {
             m_cwLastPitchHz   = pitchHz;
             m_cwLastSpeedWpm  = speedWpm;
         });
 #endif
         connect(m_cwDecoderApplet->lockPitchButton(), &QPushButton::toggled,
-                &m_cwDecoder, &CwDecoder::lockPitch);
+                &m_cwDecoder, &CwRxModel::lockPitch);
         connect(m_cwDecoderApplet->lockSpeedButton(), &QPushButton::toggled,
-                &m_cwDecoder, &CwDecoder::lockSpeed);
+                &m_cwDecoder, &CwRxModel::lockSpeed);
         connect(m_cwDecoderApplet, &PanadapterApplet::pitchRangeChanged,
-                &m_cwDecoder, &CwDecoder::setPitchRange);
+                &m_cwDecoder, &CwRxModel::setPitchRange);
         m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(),
                                   m_cwDecoderApplet->pitchRangeHigh());
         connect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
-                &m_cwDecoder, &CwDecoder::setSpeedRange);
+                &m_cwDecoder, &CwRxModel::setSpeedRange);
         m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(),
                                   m_cwDecoderApplet->speedRangeHigh());
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                &m_cwDecoder, &CwDecoder::stop);
+                &m_cwDecoder, &CwRxModel::stop);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                 &m_cwDecoderTx, &CwDecoder::stop);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
@@ -8991,6 +9061,9 @@ void MainWindow::refreshCwDecodeState()
     // RX decoder runs only when RX-decode is on and the operator is
     // listening to a CW slice.  Non-CW slices feed unrelated audio,
     // and the panel is hidden anyway.
+#ifdef HAVE_DEEPFIST
+    refreshCwRxBackend();
+#endif
     const bool shouldRunRx = isCw && rxOn;
     if (shouldRunRx && !m_cwDecoder.isRunning())
         m_cwDecoder.start();
@@ -10033,6 +10106,22 @@ void MainWindow::updateToolsMenuState()
     if (m_gpsDashboardAction) {
         m_gpsDashboardAction->setVisible(!connected
             || (caps.hasGpsLocation && m_radioModel.hasGpsHardware()));
+    }
+
+    if (m_agcTCalibrationMenuAction) {
+        SliceModel* active = activeSlice();
+        const bool externalRx = active
+            && active->externalReceiveReplacementActive();
+        m_agcTCalibrationMenuAction->setEnabled(connected && active && !externalRx);
+        m_agcTCalibrationMenuAction->setToolTip(
+            !connected
+                ? tr("Connect to a radio first")
+            : !active
+                ? tr("No active receiver to calibrate")
+            : externalRx
+                ? tr("Not available while an external receive source "
+                     "replaces this slice's RX")
+            : QString());
     }
 }
 

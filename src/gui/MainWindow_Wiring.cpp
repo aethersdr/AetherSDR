@@ -18,6 +18,7 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include "models/CwDecodeSettings.h"
 #include "core/ClientDisplaySettings.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include <QHBoxLayout>
@@ -5863,6 +5864,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         // Initial-header failures never emit recordingStopped.
         w->setRecordOn(m_qsoRecorder->isRecording());
         w->setPlayEnabled(m_qsoRecorder->hasLastRecording());
+        w->setPlayOn(m_qsoRecorder->isPlaying());
     });
     // Client-side playback
     connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
@@ -5877,8 +5879,11 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 sl->setPlayOn(on);
         }
     });
-    connect(m_qsoRecorder, &QsoRecorder::playbackStopped, w, [w]() {
-        w->setPlayOn(false);
+    connect(m_qsoRecorder, &QsoRecorder::playbackStarted, w, [this, w]() {
+        w->setPlayOn(m_qsoRecorder->isPlaying());
+    });
+    connect(m_qsoRecorder, &QsoRecorder::playbackStopped, w, [this, w]() {
+        w->setPlayOn(m_qsoRecorder->isPlaying());
     });
     connect(s, &SliceModel::recordOnChanged, w, &VfoWidget::setRecordOn);
     connect(s, &SliceModel::playOnChanged, w, &VfoWidget::setPlayOn);
@@ -5892,6 +5897,9 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
             m_radioModel.cwAutoTuneOnce(sliceId);
     });
     connect(w, &VfoWidget::zeroBeatRequested, this, [this, sliceId]() {
+#ifdef HAVE_DEEPFIST
+        if (CwDecodeSettings::deepFistSelected()) { return; }
+#endif
         // #2516: act on the slice that owns the clicked VfoWidget, NOT the
         // active slice — otherwise pressing Zero Beat on slice A while slice
         // B is active would tune B.

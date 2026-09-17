@@ -36,6 +36,7 @@
 #include "core/SmartLinkClient.h"
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
+#include "models/CwRxModel.h"
 #include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
@@ -924,6 +925,7 @@ private:
     void showMqttSettingsDialog();
     void publishCwDecodeMqtt(const QString& text, float cost, bool rx);
     void publishRadioStateMqtt();
+    void refreshRadioStateDriveAuthority();
 #endif
     void applyPanLayout(const QString& layoutId);
     void startCanvasPanLayoutSettle(const QString& layoutId, int expectedPanCount);
@@ -1157,7 +1159,18 @@ private:
     SpeConnection     m_speConn;         // SPE Expert amplifier, serial or ser2net
     VkampConnection   m_vkampConn;       // VK3AMP amplifier, TCP control/status + UDP telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
-    CwDecoder         m_cwDecoder;
+#ifdef HAVE_DEEPFIST
+    QPointer<SliceModel> m_cwRxSlice;
+    QMetaObject::Connection m_cwRxFrequencyConnection;
+    QMetaObject::Connection m_cwRxModeConnection;
+    void refreshCwRxContext();
+    void selectCwRxBackend(const QString& backend);
+    void cwRxModelAction();
+    void refreshCwRxStatus();
+    void appendUnscoredCwText(const QString& text);
+    void refreshCwRxBackend();
+#endif
+    CwRxModel         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};
     float             m_cwLastSpeedWpm{0.0f};
     CwDecoder         m_cwDecoderTx;
@@ -1170,6 +1183,11 @@ private:
     QMetaObject::Connection m_radioStateFreqConn;
     QMetaObject::Connection m_radioStateModeConn;
     QTimer                  m_radioStateCoalesceTimer;
+    // Cached RadioCapabilities::transmitDriveControl authority == Radio, refreshed
+    // on the connect and backend-rebuild edges. publishRadioStateMqtt() runs on
+    // every PTT transition and backendCapabilities() builds the whole struct by
+    // value, so reading it per publish allocated a band table per CW element.
+    bool                    m_radioStateDriveIsReadback = false;
     QMetaObject::Connection m_cwStatsConn;
     QMetaObject::Connection m_cwxSpeedRestoreConn;
     int               m_cwxSavedWpm{0};
@@ -1560,6 +1578,7 @@ private:
     QAction*         m_cwKeyerAction{nullptr};
     QAction*         m_copyAssistAction{nullptr};
     QAction*         m_gpsDashboardAction{nullptr};
+    QAction*         m_agcTCalibrationMenuAction{nullptr};
     // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from
     // applyCapabilitiesToUi() *and* the menu's aboutToShow, because the
     // automation bridge reaches menu-bar actions without popping the menu

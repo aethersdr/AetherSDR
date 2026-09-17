@@ -588,7 +588,7 @@ non-code-owner identity nothing here makes an approval valid: finish the
 remediation, resolve the threads, and hand the approval off (step 11's
 `BLOCKED` fourth cause).
 
-Two protection settings decide the order here, and both fail silently:
+Three things decide the order here, and all three fail silently:
 
 - **`dismiss_stale_reviews: true`** — any push dismisses an existing
   approval. Approve **after** the final push, and re-approve after any later
@@ -600,6 +600,93 @@ Two protection settings decide the order here, and both fail silently:
   time** — a mid-pass push by the author makes your review describe a tree you
   never read. If it moved, diff `proved..current`, re-verify which findings
   survive, and work the real head before approving.
+- **`main` may have moved since the head's checks ran** — the one below.
+
+### Is the green still current? (check every time, before approving)
+
+**A green check proves the merge result was sound WHEN IT RAN, not now.** The
+required checks are `pull_request`-triggered, so each one built `main +
+this PR` as `main` stood at that moment. If `main` has moved since, every one of
+them is describing a merge that is not the merge you are about to make.
+
+`main` has `strict: false` deliberately, and `ci.yml`'s header says why:
+requiring branches to be up to date forced a rerun on every open PR whenever
+`main` moved, and the accepted trade-off is that a semantic conflict surfaces
+on `main` post-merge instead. **That trade-off is priced for the fleet of open
+PRs. It is not priced for the one PR you are about to merge**, where the
+conflict becomes a red `main` that step 13 makes yours.
+
+The measure is when the **run was created**, not when any job started. For a
+`pull_request` event GitHub computes the merge commit and freezes `github.sha`
+at run creation; no `actions/checkout` in `ci.yml` or `static-checks.yml`
+overrides `ref`, so every required job builds that frozen tree no matter how
+long it waited to start. `static-checks.yml:297` states this in the repo's own
+words, and cites #4895 — a run whose pinned tree was 22 hours older than the
+job that scanned it.
+
+So a job's `started_at` is later than the tree it built, by the queue delay,
+and using it re-opens the same optimistic bound in a narrower form: `main`
+moves at T, a run created a minute before that builds the pre-move tree,
+`build` starts three minutes after it, and "earliest required start is newer
+than the tip" waves through exactly the merge that went red. Fork PRs held
+for workflow approval widen that gap arbitrarily.
+
+Taking the creation time also removes the need to single out the required
+checks: all of one push's `pull_request` runs share the event that created
+them, so there is no split to filter for, and a run from another event only
+ever moves the bound *earlier* — toward re-running, which is the safe
+direction. A hand re-run keeps its original `created_at` and only advances
+`run_started_at`, which is correct: a re-run still builds the frozen tree.
+
+```sh
+HEAD=$(gh pr view <PR> --json headRefOid -q .headRefOid)
+
+# When the merge base was frozen: the earliest run creation on that exact head.
+# --paginate: a busy SHA truncates at one page. The per-page --jq streams, so
+# the global minimum comes from `sort | head -1`, not from jq's `min`.
+gh api --paginate "repos/aethersdr/AetherSDR/actions/runs?head_sha=$HEAD" \
+  --jq '.workflow_runs[] | "\(.created_at)\t\(.name)"' \
+  | sort | head -1
+
+# main's tip, right now
+gh api repos/aethersdr/AetherSDR/commits/main \
+  --jq '.sha[0:12] + "  " + .commit.committer.date'
+```
+
+**Empty output is not a pass.** No run for this head means nothing has been
+built against any `main`, which is strictly worse than a stale green — treat it
+as stale and wait for the run. That the required contexts exist and are green
+is a separate question, answered at step 0 and again at step 11; this bound
+says only how old their tree is.
+
+If `main`'s tip is **newer** than that creation time, the green is stale.
+Nothing in `gh pr view` says so: `mergeStateStatus` reports `BEHIND` only
+for the branch's own position, and a PR sits at `CLEAN` on a green that predates
+`main`'s newest commit. The window does not have to be large — nine minutes
+was enough to land #5516 on a green that never saw #5659's changed
+`IRadioBackend::setKeying` signature, and `main` went red at the Build step.
+
+**Default: update the branch, then wait for the fresh run.**
+
+```sh
+gh api -X PUT repos/aethersdr/AetherSDR/pulls/<PR>/update-branch
+```
+
+That appends a merge commit — harmless, since the repo squash-merges and it
+never reaches `main` — and triggers CI against current `main`. One cycle, spent
+on the one PR that is actually landing, which is exactly the cost the
+fleet-wide setting was rejected to avoid and the only place it buys anything.
+It is a push, so it dismisses an approval: update **before** you approve, never
+after.
+
+The single exemption: every intervening commit touches nothing under `src/`,
+`tests/`, `tools/`, `.github/workflows/` or any CMake file. Workflows belong in
+that list for the same reason as the rest — a `ci.yml` change on `main` reds
+the lander without going near a source tree. Then say so in the report **with
+the commit list**, so "I checked" and "I did not check" do not read alike.
+Anything else is a re-run, not a judgment call — a changed signature on a
+shared seam is the canonical case, and it is invisible to three-way merge
+because no line of it conflicts.
 
 Then post one approving review — body only, no new inline comments; anything
 worth an inline comment at this point is a finding, and a finding means you
@@ -647,8 +734,12 @@ Arming is a request, not an outcome. Read `mergeStateStatus` after:
   and put the route to the maintainer: admin-merge (`enforce_admins: false`
   allows it), request a review from a core dev, or leave it armed and blocked
   pending that review.
-- `BEHIND` — `strict: false`, so being behind does not block; do not merge
-  main in reflexively.
+- `BEHIND` — `strict: false`, so being behind does not block the merge, and
+  being behind is not by itself a reason to update. **It is also not the
+  question.** `BEHIND` describes the branch's position; what decides whether
+  this PR is safe to arm is whether `main` moved since the head's checks ran,
+  which a `CLEAN` PR hides completely. Step 10's green-still-current check is
+  the one that answers it, and it runs whatever `mergeStateStatus` says here.
 - `DIRTY` — conflicts. Resolving them is a decision (gate): ask.
 - `DRAFT` — mark ready first.
 - `UNKNOWN` — GitHub is still computing; re-query before concluding anything.
@@ -696,6 +787,12 @@ are indistinguishable. Name anything unverified and why.
 `reviewDecision`, `mergeStateStatus`, required checks, whether auto-merge is
 armed and confirmed able to fire — plus the one thing still standing between
 the PR and `main`, if there is one.
+
+State the green-freshness answer here explicitly: the creation time of the
+head's earliest CI run, `main`'s tip at arming time, and which way the
+comparison went. If you
+took the docs-only exemption, list the intervening commits. A reader cannot
+otherwise tell a checked-and-current green from an unchecked one.
 
 ### Post-merge (Principle XI)
 The squash commit's SHA and the verdict of `main`'s CI on it — the check that

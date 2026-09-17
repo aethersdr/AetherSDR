@@ -1455,8 +1455,9 @@ inside AetherSDR on the host, not in radio firmware (#5401).
         "agcMode":"fast","agcMaxGainDb":90,"agcSlopeDb":0,"agcFixedGainDb":10,
         "wdspNotchCount":0,"appliedNoiseBlanker":false},
        {"chain":"rx-wdsp","receiver":1,"level":"not-configured"},
-       {"chain":"hl2-tx","level":"dsp-config",
-        "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":512,
+       {"chain":"hl2-tx","level":"channel-config","modulator":"wdsp-txa",
+        "wdspChannelId":2,"modulatorBlocks":18432,"modulatorFaultBlocks":0,
+        "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":1024,"inputBlockSize":512,"dspRateHz":48000,
         "filterLowHz":300,"filterHighHz":2700,
         "alcEnabled":true,"alcTargetPeak":0.9,
         "alcReleaseSec":0.25,
@@ -1484,11 +1485,32 @@ inside AetherSDR on the host, not in radio firmware (#5401).
   cannot prove that they reached the DSP; backend read-backs such as this object
   and `get hostnb` expose that distinction.
 - `backend.chains[].chain` — **which** chain the entry describes: on a
-  Hermes-Lite 2, `rx-wdsp` (WDSP on receive) or `hl2-tx` (a hand-written phasing
-  modulator on transmit, whose config is a different struct entirely). A backend
-  may run more than one chain and they need not share a vocabulary, so key off
-  `chain` rather than guessing from which fields are present. `rx-wdsp` entries
-  also carry `receiver` — the **DDC index**, not a slice id.
+  Hermes-Lite 2, `rx-wdsp` (WDSP on receive) or `hl2-tx` (the SSB transmit
+  modulator, whose config is a different struct entirely). A backend may run
+  more than one chain and they need not share a vocabulary, so key off `chain`
+  rather than guessing from which fields are present. `rx-wdsp` entries also
+  carry `receiver` — the **DDC index**, not a slice id.
+- `backend.chains[].modulator` — **which transmit modulator this binary was
+  built with**, on an `hl2-tx` entry: `phasing` (the in-tree phasing modulator,
+  which is what a STOCK build ships) or `wdsp-txa` (WDSP's TXA chain, built with
+  `-DAETHER_HL2_TX_TXA=ON`). It is decided by the
+  `AETHER_HL2_TX_TXA` compile flag and there is **no runtime switch** — the
+  other chain is not in the process, so an operator cannot select the wrong
+  one. It is reported because they can be running the wrong **build**, and a
+  transmit report that does not say which modulator produced the signal is not
+  actionable.
+- On TXA entries, `level` is `channel-config` and `filterLowHz` / `filterHighHz`
+  are the signed passband last accepted by the channel (negative for LSB/DIGL).
+  `dspBlockSize` is the channel's DSP-rate size; `inputBlockSize` is its audio-rate
+  size, and `dspRateHz` names the DSP rate. Refused requests leave applied values unchanged. Phasing entries retain
+  `dsp-config` and audio-domain positive passband magnitudes.
+- `wdspChannelId`, `modulatorBlocks`, `modulatorFaultBlocks` — present only
+  when the modulator has a WDSP channel behind it (so, `wdsp-txa` only).
+  `modulatorFaultBlocks` counts blocks the modulator could not place on the
+  wire, and is present **even at zero**: "no blocks were dropped" and "nobody
+  counted" must not look the same. Non-zero means the modulator is being fed
+  faster than it can drain, or has stalled; it is logged on `aether.hl2.tx`
+  at the same moment.
 - `backend.chains[].level` — **how close to the DSP the values came from**.
   "Read-back" is used loosely, and the difference decides what a mismatch
   proves:

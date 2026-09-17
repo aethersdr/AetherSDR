@@ -29,6 +29,7 @@
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "RttyDecodeSettings.h"
+#include "models/CwDecodeSettings.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "WfmDeviceDialog.h"
@@ -61,6 +62,100 @@
 #include <cmath>
 
 namespace AetherSDR {
+
+#ifdef HAVE_DEEPFIST
+void MainWindow::refreshCwRxContext()
+{
+    SliceModel* slice = activeSlice();
+    if (slice == m_cwRxSlice) { return; }
+    disconnect(m_cwRxFrequencyConnection);
+    disconnect(m_cwRxModeConnection);
+    m_cwRxSlice = slice;
+    m_cwDecoder.reset();
+    m_cwCallsignSpotter.clear();
+    if (slice) {
+        // Stream continuity across a retune is a DeepFist concern. ggmorse's
+        // reset() is a worker-thread join plus restart (CwDecoder::stop() is
+        // "A JOIN, never a timeout"), which is far too costly to run on every
+        // frequencyChanged emission while the operator spins the tuning knob.
+        m_cwRxFrequencyConnection = connect(slice, &SliceModel::frequencyChanged,
+            this, [this] {
+                if (CwDecodeSettings::deepFistSelected()) { m_cwDecoder.reset(); }
+            });
+        m_cwRxModeConnection = connect(slice, &SliceModel::modeChanged,
+            this, [this] {
+                if (CwDecodeSettings::deepFistSelected()) { m_cwDecoder.reset(); }
+            });
+    }
+}
+void MainWindow::selectCwRxBackend(const QString& backend)
+{
+    if (!m_cwDecoder.selectBackend(backend)) { return; }
+    m_cwCallsignSpotter.clear();
+    CwDecodeSettings::setBackend(backend);
+    if (m_cwDecoderApplet && m_cwDecoder.supportsTuning()) {
+        m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(), m_cwDecoderApplet->pitchRangeHigh());
+        m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(), m_cwDecoderApplet->speedRangeHigh());
+    }
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            for (VfoWidget* vfo : applet->findChildren<VfoWidget*>()) {
+                vfo->refreshCwDecoderControls();
+            }
+        }
+    }
+    if (m_cwDecoderApplet) {
+        m_cwDecoderApplet->clearCwText();
+        m_cwDecoderApplet->setCwStats(0, 0);
+    }
+    refreshCwDecodeState();
+}
+void MainWindow::refreshCwRxStatus()
+{
+    // Every pan builds its own engine combo and tuning controls, so stating
+    // only the targeted applet leaves the others advertising the wrong backend
+    // and, worse, leaves a previously-targeted pan's controls disabled for good.
+    // Same broadcast selectCwRxBackend() already does for the Zero Beat button.
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            applet->setCwBackendState(m_cwDecoder.backendKey(), m_cwDecoder.supportsTuning(),
+                m_cwDecoder.status(), m_cwDecoder.preparing(), m_cwDecoder.canRetry(),
+                m_cwDecoder.detail());
+        }
+    } else if (m_cwDecoderApplet) {
+        m_cwDecoderApplet->setCwBackendState(m_cwDecoder.backendKey(), m_cwDecoder.supportsTuning(),
+            m_cwDecoder.status(), m_cwDecoder.preparing(), m_cwDecoder.canRetry(), m_cwDecoder.detail());
+    }
+}
+void MainWindow::cwRxModelAction()
+{
+    if (m_cwDecoder.preparing()) { m_cwDecoder.cancelPreparation(); }
+    else { m_cwDecoder.retry(); }
+}
+void MainWindow::appendUnscoredCwText(const QString& text)
+{
+    if (m_cwDecoderApplet && m_cwDecoder.isRunning()) {
+        m_cwDecoderApplet->appendUnscoredCwText(text);
+    }
+}
+void MainWindow::refreshCwRxBackend()
+{
+    m_cwDecoder.selectBackend(CwDecodeSettings::backend());
+    connect(&m_cwDecoder, &CwRxModel::unscoredTextDecoded,
+        this, &MainWindow::appendUnscoredCwText, Qt::UniqueConnection);
+    connect(&m_cwDecoder, &CwRxModel::statusChanged,
+        this, &MainWindow::refreshCwRxStatus, Qt::UniqueConnection);
+    if (m_cwDecoderApplet) {
+        connect(m_cwDecoderApplet, &PanadapterApplet::cwEngineChanged,
+            this, &MainWindow::selectCwRxBackend, Qt::UniqueConnection);
+        connect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
+            this, &MainWindow::cwRxModelAction, Qt::UniqueConnection);
+        connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
+            &m_cwDecoder, &CwRxModel::stop, Qt::UniqueConnection);
+    }
+    refreshCwRxStatus();
+}
+#endif
 
 void MainWindow::scheduleDigitalVoiceAutoStart()
 {

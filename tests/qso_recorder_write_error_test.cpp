@@ -7,6 +7,7 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
+#include "core/PcmFrame.h"
 #include "core/QsoRecorder.h"
 
 #include <QCoreApplication>
@@ -20,6 +21,7 @@
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <thread>
 
 #ifdef Q_OS_WIN
@@ -471,6 +473,217 @@ void testFinalizationFailures()
     }
 }
 
+enum class TailBoundary { Mox, Cw, Stop };
+constexpr qint64 kDelayedTailBytes = 7 * 2 * 4; // 7 frames at 24k -> 14 stereo PCM16 frames at 48k
+
+QByteArray delayedPcm()
+{
+    const qint16 samples[] = {
+        8192, -16384, 8192, -16384, 8192, -16384, 8192, -16384,
+        8192, -16384, 8192, -16384, 8192, -16384};
+    return QByteArray(reinterpret_cast<const char*>(samples), sizeof(samples));
+}
+
+// Select 48k from live RX metadata, then feed a short fixed24 voice/CW segment
+// on a joined audio thread. No data reaches QFile until the finite tail drains.
+QString startWithDelayedTail(QsoRecorder& recorder, PcmProducer& producer,
+                             TailBoundary boundary)
+{
+    EXPECT_TRUE(producer.start(PcmPurpose::Speaker, -1, {48000, PcmLayout::Stereo}));
+    const std::optional<PcmFrame> observed = producer.produce({0.0f, 0.0f});
+    EXPECT_TRUE(observed.has_value());
+    if (!observed) {
+        return {};
+    }
+    recorder.feedRxFrame(*observed);
+    recorder.startRecording();
+    EXPECT_TRUE(recorder.isRecording());
+    const QString path = recorder.recordingFilePath();
+    if (boundary == TailBoundary::Cw) {
+        recorder.setCwOverActive(true);
+    } else {
+        recorder.onMoxChanged(true);
+    }
+    std::thread feeder([&recorder, boundary]() {
+        if (boundary == TailBoundary::Cw) {
+            recorder.feedCwAudio(delayedPcm());
+        } else {
+            recorder.feedTxAudio(delayedPcm());
+        }
+    });
+    feeder.join();
+    EXPECT_TRUE(recorder.isRecording());
+    EXPECT_EQ(QFile(path).size(), 44);
+    QFile file(path);
+    EXPECT_TRUE(file.open(QIODevice::ReadOnly));
+    const QByteArray header = file.read(44);
+    EXPECT_EQ(header.size(), 44);
+    if (header.size() == 44) {
+        EXPECT_EQ(qFromLittleEndian<quint32>(header.constData() + 24), 48000);
+    }
+    return path;
+}
+
+void drainAtBoundary(QsoRecorder& recorder, TailBoundary boundary)
+{
+    if (boundary == TailBoundary::Mox) {
+        recorder.onMoxChanged(false);
+    } else if (boundary == TailBoundary::Cw) {
+        recorder.setCwOverActive(false);
+    } else {
+        recorder.stopRecording();
+    }
+}
+
+void testUnequalRateTailWriteFailure(TailBoundary boundary, qint64 result)
+{
+    QTemporaryDir tmp;
+    EXPECT_TRUE(tmp.isValid());
+    Events events;
+    PcmProducer producer;
+    int tailWrites = 0;
+    qint64 requestedTailBytes = 0;
+    qint64 acceptedTailBytes = 0;
+    QThread* writeThread = nullptr;
+    QsoRecorder recorder;
+    configure(recorder, tmp.path());
+    connectEvents(recorder, events);
+    const QString path = startWithDelayedTail(recorder, producer, boundary);
+    QsoRecorderWriteErrorTestAccess::setWriteHook(
+        recorder, [&](QFile& file, const char* data, qint64 size) {
+            if (file.pos() < 44) {
+                return file.write(data, size); // Preserve the real final size patches.
+            }
+            ++tailWrites;
+            requestedTailBytes = size;
+            writeThread = QThread::currentThread();
+            if (result > 0) {
+                acceptedTailBytes = file.write(data, std::min(result, size));
+                return acceptedTailBytes;
+            }
+            return result;
+        });
+
+    drainAtBoundary(recorder, boundary);
+    EXPECT_EQ(tailWrites, 1);
+    EXPECT_EQ(requestedTailBytes, kDelayedTailBytes);
+    EXPECT_EQ(acceptedTailBytes, std::max(result, qint64{0}));
+    EXPECT_TRUE(writeThread == recorder.thread());
+    EXPECT_TRUE(!recorder.isRecording());
+    if (boundary != TailBoundary::Stop) {
+        // A transition failure queues finalization, just like a feed failure.
+        EXPECT_EQ(events.stopped, 0);
+        EXPECT_EQ(events.errors, 0);
+        recorder.startRecording();
+        EXPECT_TRUE(!recorder.isRecording());
+    }
+    recorder.feedTxAudio(delayedPcm());
+    recorder.feedCwAudio(delayedPcm());
+    EXPECT_EQ(tailWrites, 1);
+    deliverQueuedCalls();
+    EXPECT_EQ(events.started, 1);
+    EXPECT_EQ(events.stopped, 1);
+    EXPECT_EQ(events.errors, 1);
+    EXPECT_TRUE(events.stoppedPath == path);
+    EXPECT_TRUE(!recorder.hasLastRecording());
+    EXPECT_TRUE(recorder.recordingFilePath().isEmpty());
+    // A two-byte partial tail remains two accepted bytes in a failed file;
+    // do not silently round it to a frame or advertise it for playback.
+    EXPECT_EQ(wavDataSize(path), acceptedTailBytes);
+    EXPECT_EQ(wavRiffSize(path), acceptedTailBytes + 36);
+    EXPECT_EQ(QFile(path).size(), acceptedTailBytes + 44);
+    recorder.stopRecording();
+    deliverQueuedCalls();
+    EXPECT_EQ(events.stopped, 1);
+    EXPECT_EQ(events.errors, 1);
+}
+
+void testFlushFailureAfterUnequalRateTail(TailBoundary boundary)
+{
+    QTemporaryDir tmp;
+    EXPECT_TRUE(tmp.isValid());
+    Events events;
+    PcmProducer producer;
+    qint64 acceptedTailBytes = 0;
+    int finalFlushes = 0;
+    bool tailWrittenBeforeFlush = false;
+    QsoRecorder recorder;
+    configure(recorder, tmp.path());
+    connectEvents(recorder, events);
+    const QString path = startWithDelayedTail(recorder, producer, boundary);
+    QsoRecorderWriteErrorTestAccess::setWriteHook(
+        recorder, [&acceptedTailBytes](QFile& file, const char* data, qint64 size) {
+            const bool tail = file.pos() >= 44;
+            const qint64 accepted = file.write(data, size);
+            if (tail) {
+                acceptedTailBytes += std::max(accepted, qint64{0});
+            }
+            return accepted;
+        });
+    QsoRecorderWriteErrorTestAccess::setFlushHook(
+        recorder, [&](QFile&) {
+            ++finalFlushes;
+            tailWrittenBeforeFlush = acceptedTailBytes == kDelayedTailBytes;
+            return false;
+        });
+    drainAtBoundary(recorder, boundary);
+    EXPECT_EQ(acceptedTailBytes, kDelayedTailBytes);
+    if (boundary != TailBoundary::Stop) {
+        // MOX/CW drain the segment; only finalization flushes the WAV file.
+        EXPECT_TRUE(recorder.isRecording());
+        EXPECT_EQ(finalFlushes, 0);
+        EXPECT_EQ(events.stopped, 0);
+        EXPECT_EQ(events.errors, 0);
+        recorder.stopRecording();
+    }
+    EXPECT_TRUE(tailWrittenBeforeFlush);
+    EXPECT_EQ(finalFlushes, 1);
+    EXPECT_TRUE(!recorder.isRecording());
+    EXPECT_EQ(events.stopped, 1);
+    EXPECT_EQ(events.errors, 1);
+    EXPECT_TRUE(!recorder.hasLastRecording());
+    EXPECT_TRUE(recorder.recordingFilePath().isEmpty());
+    EXPECT_EQ(wavDataSize(path), kDelayedTailBytes);
+    EXPECT_EQ(wavRiffSize(path), kDelayedTailBytes + 36);
+    EXPECT_EQ(QFile(path).size(), kDelayedTailBytes + 44);
+    recorder.stopRecording();
+    deliverQueuedCalls();
+    EXPECT_EQ(events.stopped, 1);
+    EXPECT_EQ(events.errors, 1);
+}
+
+void testDestructionDrainsAfterFeedJoin(bool failTail)
+{
+    QTemporaryDir tmp;
+    EXPECT_TRUE(tmp.isValid());
+    Events events;
+    PcmProducer producer;
+    qint64 acceptedTailBytes = 0;
+    auto recorder = std::make_unique<QsoRecorder>();
+    configure(*recorder, tmp.path());
+    connectEvents(*recorder, events);
+    const QString path = startWithDelayedTail(*recorder, producer, TailBoundary::Stop);
+    QsoRecorderWriteErrorTestAccess::setWriteHook(
+        *recorder, [&](QFile& file, const char* data, qint64 size) {
+            if (file.pos() < 44) {
+                return file.write(data, size);
+            }
+            acceptedTailBytes = file.write(data, failTail ? std::min(qint64{2}, size) : size);
+            return acceptedTailBytes;
+        });
+    // The only feeder was joined by startWithDelayedTail. Destruction is on
+    // the owner thread, never concurrent with a caller using the recorder.
+    recorder.reset();
+    deliverQueuedCalls();
+    EXPECT_EQ(acceptedTailBytes, failTail ? qint64{2} : kDelayedTailBytes);
+    EXPECT_EQ(events.stopped, 1);
+    EXPECT_EQ(events.errors, 0); // Tail failure remains silent during teardown.
+    EXPECT_TRUE(events.stoppedPath == path);
+    EXPECT_EQ(wavDataSize(path), acceptedTailBytes);
+    EXPECT_EQ(wavRiffSize(path), acceptedTailBytes + 36);
+    EXPECT_EQ(QFile(path).size(), acceptedTailBytes + 44);
+}
+
 void testCloseFailureAfterSuccessfulFlush()
 {
     QTemporaryDir tmp;
@@ -594,6 +807,14 @@ int main(int argc, char** argv)
     testActualReadOnlyFileFailure();
     testFailedRunClearsPriorPlaybackPath();
     testFinalizationFailures();
+    for (const TailBoundary boundary : {TailBoundary::Mox, TailBoundary::Cw, TailBoundary::Stop}) {
+        for (const qint64 result : {qint64{2}, qint64{0}, qint64{-1}}) {
+            testUnequalRateTailWriteFailure(boundary, result);
+        }
+        testFlushFailureAfterUnequalRateTail(boundary);
+    }
+    testDestructionDrainsAfterFeedJoin(false);
+    testDestructionDrainsAfterFeedJoin(true);
     testCloseFailureAfterSuccessfulFlush();
     testStaleQueuedFailureCannotTouchRestart();
     testDestructionCancelsQueuedFailure();

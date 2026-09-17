@@ -500,6 +500,19 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
     return ProcessResult::Ok;
 }
 
+bool WdspChannel::discardTransmitData() noexcept
+{
+    if (m_config.direction != Direction::Transmit || !beginControlOperation()) {
+        return false;
+    }
+    const bool discarded = DiscardTXAChannelData(m_channelId) != 0;
+    if (discarded) {
+        m_running.store(false, std::memory_order_relaxed);
+    }
+    endControlOperation();
+    return discarded;
+}
+
 bool WdspChannel::setRunning(bool running) noexcept
 {
     // Idempotent, and deliberately BEFORE the handshake: WDSP's own

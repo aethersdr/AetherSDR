@@ -17,6 +17,15 @@ namespace AetherSDR {
 // initial value of the rx toggle.
 class CwDecodeSettings {
 public:
+    static QString backend() { return readObj().value("backend").toString("ggmorse"); }
+    static bool deepFistSelected() { return backend() == "deepfist"; }
+    static void setBackend(const QString& backend)
+    {
+        QJsonObject o = readObj();
+        o["backend"] = backend;
+        ensureToggles(o);
+        write(o);
+    }
     static bool rxEnabled() { return readObj().value("rx").toString("True") == "True"; }
     static bool txEnabled() { return readObj().value("tx").toString("False") == "True"; }
 
