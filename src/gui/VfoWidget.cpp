@@ -1962,24 +1962,24 @@ void VfoWidget::buildTabContent()
         // Client-side AetherDSP launcher — same kDspToggle styling and
         // single-cell width as the radio-side toggles, but non-checkable.
         // Placed by relayoutDspGrid() at the end of the radio-side toggle list.
-        m_aetherDspBtn = new QPushButton("ADSP");
+        m_aetherDspBtn = new QPushButton("AetherRX");
         m_aetherDspBtn->setObjectName("aetherDspBtn");
         m_aetherDspBtn->setCheckable(false);
         m_aetherDspBtn->setFixedHeight(26);
         m_aetherDspBtn->setStyleSheet(kDspToggle);
-        m_aetherDspBtn->setAccessibleName("AetherDSP Settings");
-        m_aetherDspBtn->setToolTip("Open AetherDSP Settings (client-side NR2 / NR4 / DFNR / RN2 / BNR / MNR / NNR)");
+        m_aetherDspBtn->setAccessibleName("AetherRX");
+        m_aetherDspBtn->setToolTip("Open AetherRX — the receive chain: noise reduction, gate, EQ, compressor, tube, voice processor, output");
         connect(m_aetherDspBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherDspRequested);
 
-        // AetherVoice launcher — opens the Aetherial Audio Channel Strip.
-        // 2 columns wide (cols 2-3 of the same row that hosts ADSP).
-        m_aetherVoiceBtn = new QPushButton("AetherVoice");
+        // AetherTX launcher — opens the transmit chain window.
+        // 2 columns wide (cols 2-3 of the same row that hosts AetherRX).
+        m_aetherVoiceBtn = new QPushButton("AetherTX");
         m_aetherVoiceBtn->setCheckable(false);
         m_aetherVoiceBtn->setFixedHeight(26);
         m_aetherVoiceBtn->setStyleSheet(kDspToggle);
-        m_aetherVoiceBtn->setAccessibleName("Aetherial Audio Channel Strip");
-        m_aetherVoiceBtn->setToolTip("Open Aetherial Audio Channel Strip — unified TX DSP suite");
+        m_aetherVoiceBtn->setAccessibleName("AetherTX");
+        m_aetherVoiceBtn->setToolTip("Open AetherTX — the transmit chain: gate, EQ, compressor, de-esser, tube, voice processor, reverb, output");
         connect(m_aetherVoiceBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherVoiceRequested);
 
@@ -3442,8 +3442,8 @@ void VfoWidget::setAetherDspActive(bool active)
     if (!m_aetherDspBtn)
         return;
     m_aetherDspBtn->setStyleSheet(active ? kDspToggleActive : kDspToggle);
-    m_aetherDspBtn->setAccessibleName(active ? QStringLiteral("AetherDSP Settings (NR active)")
-                                             : QStringLiteral("AetherDSP Settings"));
+    m_aetherDspBtn->setAccessibleName(active ? QStringLiteral("AetherRX (NR active)")
+                                             : QStringLiteral("AetherRX"));
     updateDspTabAccent();
 }
 

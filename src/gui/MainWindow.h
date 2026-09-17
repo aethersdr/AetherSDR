@@ -161,7 +161,7 @@ class PropDashboardDialog;
 class UpdateChecker;
 class TxBandDialog;
 class BandscopeDialog;
-class AetherDspDialog;
+class AetherRxDialog;
 class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
@@ -844,16 +844,16 @@ private:
     // duplicating; on first construction wires them once, on subsequent calls
     // just raises the existing instance.  Returns nullptr only if construction
     // failed (e.g. allocation failure).
-    AetherDspDialog* ensureAetherDspDialog();
+    AetherRxDialog* ensureAetherRxDialog();
 
     // Toggle helper for the AetherDSP Settings dialog: open it when hidden,
     // close it when visible.  Gives the per-slice DSP-tab ADSP button the same
     // press-to-open / press-again-to-close semantics as its sibling AetherVoice
     // button (#3877).  close() deletes the WA_DeleteOnClose dialog and clears
     // the QPointer, so the next press re-creates and re-wires via
-    // ensureAetherDspDialog()'s wasFresh path.  Only the DSP-tab button toggles;
+    // ensureAetherRxDialog()'s wasFresh path.  Only the DSP-tab button toggles;
     // the menu action and chain/strip launchers keep pure open semantics.
-    void toggleAetherDspDialog();
+    void toggleAetherRxDialog();
 
     // Wire the txBandSettingsRequested, serialSettingsChanged (HAVE_SERIALPORT),
     // sliceLetterDisplayModeChanged, and QDialog::finished handlers on a freshly-
@@ -1534,7 +1534,7 @@ private:
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<ContributeDialog> m_contributeDialog;
-    QPointer<AetherDspDialog> m_dspDialog;
+    QPointer<AetherRxDialog> m_rxDialog;
     QPointer<QDialog> m_nr2WisdomDialog;
 #ifdef HAVE_MQTT
     QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
@@ -1738,7 +1738,7 @@ private:
     class ClientPuduEditor* ensureClientPuduEditor();
 
     // Wire AetherDspWidget parameter signals to AudioEngine setters.  Used
-    // by both the modeless AetherDspDialog and the docked ClientRxDspApplet
+    // by both the modeless AetherRxDialog and the docked ClientRxDspApplet
     // so they push every change into the engine identically.
     void wireAetherDspWidget(class AetherDspWidget* widget);
     void updateAetherDspModePolicy();

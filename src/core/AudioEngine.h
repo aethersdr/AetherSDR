@@ -431,7 +431,6 @@ public:
     // broadband attenuation (capped at amountDb) is applied when
     // sibilant energy crosses threshold.
     ClientDeEss* clientDeEssTx() { return m_clientDeEssTx.get(); }
-    ClientDeEss* clientDeEssRx() { return m_clientDeEssRx.get(); }
 
     // Client-side TX dynamic tube saturator (#1661 Phase 4).  Three
     // selectable curves, bipolar envelope-driven drive, tilt tone
@@ -514,7 +513,10 @@ public:
         Comp  = 3,
         Tube  = 4,
         Pudu  = 5,
-        DeEss = 6,
+        // 6 was DeEss. Sibilance is a transmit problem; the RX stage only
+        // existed because this chain was built by mirroring the TX one, and
+        // the value is left unused rather than reassigned because chain order
+        // persists by number.
     };
     static constexpr int kMaxRxChainStages = 8;  // packs into uint64_t
 
@@ -578,8 +580,6 @@ public:
     void loadClientDeEssSettings();
     void saveClientDeEssSettings() const;
     // RX-side counterpart (#2425).
-    void loadClientDeEssRxSettings();
-    void saveClientDeEssRxSettings() const;
 
     // Client-side TX dynamic tube — persistence.
     void loadClientTubeSettings();
@@ -1032,7 +1032,6 @@ private:
     // RX gate operates on the post-EQ float32 stereo buffer.
     void applyClientGateRxFloat32(QByteArray& float32);
     // RX de-esser operates on the post-Comp float32 stereo buffer (#2425).
-    void applyClientDeEssRxFloat32(QByteArray& float32);
     // RX tube operates on the post-Comp float32 stereo buffer.
     void applyClientTubeRxFloat32(QByteArray& float32);
     // RX pudu operates on the post-Tube float32 stereo buffer.
@@ -1394,7 +1393,6 @@ private:
     std::unique_ptr<ClientGate> m_clientGateRx;
     // Client-side TX de-esser.
     std::unique_ptr<ClientDeEss> m_clientDeEssTx;
-    std::unique_ptr<ClientDeEss> m_clientDeEssRx;
     // Client-side TX tube saturator.
     std::unique_ptr<ClientTube> m_clientTubeTx;
     std::unique_ptr<ClientTube> m_clientTubeRx;
@@ -1455,7 +1453,6 @@ private:
     QByteArray m_clientEqRxScratch;
     QByteArray m_clientCompRxScratch;
     QByteArray m_clientGateRxScratch;
-    QByteArray m_clientDeEssRxScratch;
     QByteArray m_clientTubeRxScratch;
     QByteArray m_clientPuduRxScratch;
     // Post-EQ analyzer tap. One ring per path, mono (L+R averaged).

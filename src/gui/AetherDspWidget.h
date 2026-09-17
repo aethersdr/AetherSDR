@@ -27,7 +27,7 @@ class AudioEngine;
 class NvidiaAfxPack;
 
 // AetherDSP settings body — the QTabWidget + per-tab controls shared by the
-// modeless AetherDspDialog (Settings menu)
+// modeless AetherRxDialog (Settings menu)
 // and the docked ClientRxDspApplet (PooDoo Audio RX side).
 //
 // Signals fire on every parameter change (after the new value lands in the
@@ -63,7 +63,7 @@ public:
 
     // Scale every child QPushButton / QLabel font to 13 px to match the
     // VFO DSP toggle row.  The applet path leaves this off; only the
-    // Settings-menu AetherDspDialog calls it.
+    // Settings-menu AetherRxDialog calls it.
     void setDialogMode(bool on);
 
     // Disable the NR2 selector button when compressed (Opus / SmartLink)

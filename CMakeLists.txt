@@ -1149,7 +1149,7 @@ set(GUI_SOURCES
     src/gui/NetSchedulerDialog.cpp
     src/gui/NetReminderBanner.cpp
     src/gui/SpotSettingsDialog.cpp
-    src/gui/AetherDspDialog.cpp
+    src/gui/AetherRxDialog.cpp
     src/gui/AetherDspWidget.cpp
     src/gui/ModemChrome.cpp
     src/gui/NrGainStrip.cpp
@@ -1232,7 +1232,6 @@ set(GUI_SOURCES
     src/gui/ClientChainApplet.cpp
     src/gui/ClientChainWidget.cpp
     src/gui/StripChainWidget.cpp
-    src/gui/StripRxChainWidget.cpp
     src/gui/StripRxOutputPanel.cpp
     src/gui/ClientRxChainWidget.cpp
     src/gui/EditorFramelessTitleBar.cpp

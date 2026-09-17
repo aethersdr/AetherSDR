@@ -6057,12 +6057,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     // setup beside daxIqChannelChanged), not the flag — no connect here. (#3853)
 
     // AetherDSP button on the per-slice DSP tab — toggles the modeless
-    // m_dspDialog (press to open, press again to close) so it matches its
+    // m_rxDialog (press to open, press again to close) so it matches its
     // sibling AetherVoice button instead of being a one-way launcher (#3877).
     // The Settings menu action and the RX chain double-click keep pure open
-    // semantics by calling ensureAetherDspDialog() directly.
+    // semantics by calling ensureAetherRxDialog() directly.
     connect(w, &VfoWidget::aetherDspRequested, this, [this] {
-        toggleAetherDspDialog();
+        toggleAetherRxDialog();
     });
 
     // Accent the ADSP launcher whenever any client-side NR module is active, so

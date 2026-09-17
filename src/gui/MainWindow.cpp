@@ -158,7 +158,7 @@
 #endif
 #include "core/UlanziDialBackend.h"
 #include "UlanziDialMapperDialog.h"
-#include "AetherDspDialog.h"
+#include "AetherRxDialog.h"
 #include "AetherDspWidget.h"
 #include "WaveformsDialog.h"
 #include "ClientRxDspApplet.h"
@@ -3303,26 +3303,26 @@ ClientPuduEditor* MainWindow::ensureClientPuduEditor()
     return m_clientPuduEditor;
 }
 
-AetherDspDialog* MainWindow::ensureAetherDspDialog()
+AetherRxDialog* MainWindow::ensureAetherRxDialog()
 {
-    const bool wasFresh = !m_dspDialog;
-    showOrRaisePersistent(m_dspDialog, m_audio);
-    if (wasFresh && m_dspDialog) {
-        if (auto* w = m_dspDialog->widget()) wireAetherDspWidget(w);
+    const bool wasFresh = !m_rxDialog;
+    showOrRaisePersistent(m_rxDialog, m_audio);
+    if (wasFresh && m_rxDialog) {
+        if (auto* w = m_rxDialog->widget()) wireAetherDspWidget(w);
     }
-    return m_dspDialog.data();
+    return m_rxDialog.data();
 }
 
-void MainWindow::toggleAetherDspDialog()
+void MainWindow::toggleAetherRxDialog()
 {
     // Sibling of toggleAetherialStrip(): the per-slice DSP-tab ADSP button is a
     // toggle, not a one-way launcher (#3877).  When the dialog is already up,
     // close() deletes it (WA_DeleteOnClose) and clears the QPointer; the next
-    // press re-creates and re-wires through ensureAetherDspDialog().
-    if (m_dspDialog && m_dspDialog->isVisible())
-        m_dspDialog->close();
+    // press re-creates and re-wires through ensureAetherRxDialog().
+    if (m_rxDialog && m_rxDialog->isVisible())
+        m_rxDialog->close();
     else
-        ensureAetherDspDialog();
+        ensureAetherRxDialog();
 }
 
 #ifdef HAVE_MQTT
@@ -9121,7 +9121,7 @@ void MainWindow::updateNr2Availability()
 
     // Update the NR2 selector in the AetherDSP applet — the only
     // remaining surface for client-side NR controls.  The modeless
-    // AetherDspDialog is created on demand and owns its own enable
+    // AetherRxDialog is created on demand and owns its own enable
     // sync via nr2EnabledChanged + setEnabled-on-show.
     if (auto* a = m_appletPanel ? m_appletPanel->clientRxDspApplet() : nullptr) {
         if (auto* w = a->widget())
@@ -9384,8 +9384,8 @@ void MainWindow::enableNr2WithWisdom()
                         w->syncFromEngine();
                     }
                 }
-                if (m_dspDialog) {
-                    m_dspDialog->syncFromEngine();
+                if (m_rxDialog) {
+                    m_rxDialog->syncFromEngine();
                 }
                 statusBar()->showMessage("NR2 was not enabled; audio is unchanged", 4000);
                 QTimer::singleShot(800, this, [dlg, thread]() {
@@ -9685,82 +9685,12 @@ void MainWindow::toggleAetherialStrip()
         // writes the same TX filter command to the radio.
         connect(m_aetherialStrip, &AetherialAudioStrip::cutoffsDragRequested,
                 this, &MainWindow::onEqCutoffsDragRequested);
-        // Wire the strip's RX ADSP widget through the same parameter-
-        // change handlers the Settings dialog and docked applet use.
-        // Without this, NR2/NR4/DFNR/BNR/MNR controls in the strip
-        // emit signals that nothing receives.
-        if (auto* adsp = m_aetherialStrip->adspWidget())
-            wireAetherDspWidget(adsp);
         // Stage bypass via the strip's chain tiles → same handler the
         // docked Chain applet's signal connects to, so both chain
         // widgets repaint and the matching applet refreshes.
         connect(m_aetherialStrip, &AetherialAudioStrip::stageEnabledChanged,
                 this, &MainWindow::onTxChainStageEnabledChanged);
 
-        // RX chain wiring — sibling of the TX hookups above (#2425).
-        // Stage bypass on an RX tile fans out to: docked chain applet
-        // (so its painted tile repaints), and per-stage RX applets so
-        // their Enable toggles stay aligned with the engine state.
-        connect(m_aetherialStrip, &AetherialAudioStrip::rxStageEnabledChanged,
-                this, [this](AudioEngine::RxChainStage stage, bool /*enabled*/) {
-            if (auto* dockedChain = m_appletPanel
-                    ? m_appletPanel->clientChainApplet() : nullptr) {
-                dockedChain->refreshFromEngine();
-            }
-            if (!m_appletPanel) return;
-            switch (stage) {
-                case AudioEngine::RxChainStage::Eq:
-                    if (m_appletPanel->clientEqRxApplet())
-                        m_appletPanel->clientEqRxApplet()->refreshEnableFromEngine();
-                    break;
-                case AudioEngine::RxChainStage::Gate:
-                    if (m_appletPanel->clientGateRxApplet())
-                        m_appletPanel->clientGateRxApplet()->refreshEnableFromEngine();
-                    break;
-                case AudioEngine::RxChainStage::Comp:
-                    if (m_appletPanel->clientCompRxApplet())
-                        m_appletPanel->clientCompRxApplet()->refreshEnableFromEngine();
-                    break;
-                case AudioEngine::RxChainStage::Tube:
-                    if (m_appletPanel->clientTubeRxApplet())
-                        m_appletPanel->clientTubeRxApplet()->refreshEnableFromEngine();
-                    break;
-                case AudioEngine::RxChainStage::Pudu:
-                    if (m_appletPanel->clientPuduRxApplet())
-                        m_appletPanel->clientPuduRxApplet()->refreshEnableFromEngine();
-                    break;
-                default:
-                    break;
-            }
-        });
-        // RX stage double-click → open the RX-side floating editor for
-        // that stage.  Mirrors the docked applet's rxEditRequested hook.
-        connect(m_aetherialStrip, &AetherialAudioStrip::rxStageEditRequested,
-                this, [this](AudioEngine::RxChainStage stage) {
-            switch (stage) {
-                case AudioEngine::RxChainStage::Eq:
-                    ensureClientEqEditor()->showForPath(ClientEqApplet::Path::Rx);
-                    break;
-                case AudioEngine::RxChainStage::Gate:
-                    ensureClientGateEditor()->showForRx();
-                    break;
-                case AudioEngine::RxChainStage::Comp:
-                    ensureClientCompEditor()->showForRx();
-                    break;
-                case AudioEngine::RxChainStage::Tube:
-                    ensureClientTubeEditor()->showForRx();
-                    break;
-                case AudioEngine::RxChainStage::Pudu:
-                    ensureClientPuduEditor()->showForRx();
-                    break;
-                default:
-                    break;
-            }
-        });
-        // ADSP launcher tile → open / focus the AetherDsp Settings
-        // dialog, same as the Settings menu action.
-        connect(m_aetherialStrip, &AetherialAudioStrip::rxDspEditRequested,
-                this, [this]() { ensureAetherDspDialog(); });
         // PUDU monitor record / play — same toggle logic as the docked
         // ClientChainApplet.
         connect(m_aetherialStrip, &AetherialAudioStrip::monitorRecordClicked,
@@ -10493,7 +10423,7 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
     });
 
     popup->finalize(
-        [this]() { ensureAetherDspDialog(); },
+        [this]() { ensureAetherRxDialog(); },
         nullptr  // Reset handled by individual control resetters
     );
 
@@ -10558,7 +10488,7 @@ void MainWindow::showNr4ParamPopup(const QPoint& globalPos)
         });
 
     popup->finalize(
-        [this]() { ensureAetherDspDialog(); },
+        [this]() { ensureAetherRxDialog(); },
         nullptr  // Reset handled by individual control resetters
     );
 
@@ -10593,7 +10523,7 @@ void MainWindow::showDfnrParamPopup(const QPoint& globalPos)
         });
 
     popup->finalize(
-        [this]() { ensureAetherDspDialog(); },
+        [this]() { ensureAetherRxDialog(); },
         nullptr
     );
 
@@ -10602,7 +10532,7 @@ void MainWindow::showDfnrParamPopup(const QPoint& globalPos)
 
 void MainWindow::showMnrSettings()
 {
-    if (auto* dlg = ensureAetherDspDialog()) {
+    if (auto* dlg = ensureAetherRxDialog()) {
         dlg->selectTab("MNR");
     }
 }

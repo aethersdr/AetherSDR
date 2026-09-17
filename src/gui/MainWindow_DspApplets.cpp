@@ -162,7 +162,6 @@ void MainWindow::wirePooDooTiles()
         connect(m_titleBar, &TitleBar::pcAudioToggled, this,
                 [this, chain](bool on) {
             chain->setRxPcAudioEnabled(on);
-            if (m_aetherialStrip) m_aetherialStrip->setRxPcAudioEnabled(on);
         });
 
         // DSP — aggregate of every client-side NR module.  These are
@@ -193,8 +192,6 @@ void MainWindow::wirePooDooTiles()
             else if (dspState->nr2)  label = "NR2";
             const bool anyOn = !label.isEmpty();
             chain->setRxClientDspActive(anyOn, label);
-            if (m_aetherialStrip)
-                m_aetherialStrip->setRxClientDspActive(anyOn, label);
         };
         connect(m_audio, &AudioEngine::nr2EnabledChanged, chain,
                 [dspState, pushDsp](bool on) { dspState->nr2 = on; pushDsp(); });
@@ -215,7 +212,6 @@ void MainWindow::wirePooDooTiles()
         connect(m_audio, &AudioEngine::mutedChanged, this,
                 [this, chain](bool muted) {
             chain->setRxOutputUnmuted(!muted);
-            if (m_aetherialStrip) m_aetherialStrip->setRxOutputUnmuted(!muted);
         });
 
         // Seed initial state — settings and engine values are already
@@ -225,7 +221,6 @@ void MainWindow::wirePooDooTiles()
         const bool pcOn = AppSettings::instance()
             .value("PcAudioEnabled", "True").toString() == "True";
         chain->setRxPcAudioEnabled(pcOn);
-        if (m_aetherialStrip) m_aetherialStrip->setRxPcAudioEnabled(pcOn);
         dspState->nr2  = m_audio->nr2Enabled();
         dspState->rn2  = m_audio->rn2Enabled();
         dspState->nr4  = m_audio->nr4Enabled();
@@ -235,8 +230,6 @@ void MainWindow::wirePooDooTiles()
         dspState->nnr  = m_audio->nnrEnabled();
         pushDsp();
         chain->setRxOutputUnmuted(!m_audio->isMuted());
-        if (m_aetherialStrip)
-            m_aetherialStrip->setRxOutputUnmuted(!m_audio->isMuted());
     }
 }
 

@@ -704,10 +704,10 @@ void MainWindow::buildMenuBar()
         });
     }
 
-    auto* dspAction = settingsMenu->addAction("AetherDSP Settings...");
+    auto* dspAction = settingsMenu->addAction("AetherRX...");
     dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
     connect(dspAction, &QAction::triggered, this, [this] {
-        ensureAetherDspDialog();
+        ensureAetherRxDialog();
     });
 
     auto* settingsBrowserAction = settingsMenu->addAction("Settings Browser...");
@@ -1261,7 +1261,7 @@ void MainWindow::buildMenuBar()
     // every one of these handlers can legitimately decline (no active pan, keyer
     // indicator disabled), which would otherwise leave the menu asserting a
     // panel is open when it is not.
-    auto* aetherialAction = toolsMenu->addAction("Aetherial Audio");
+    auto* aetherialAction = toolsMenu->addAction("AetherTX...");
     m_aetherialAction = aetherialAction;
     aetherialAction->setCheckable(true);
     connect(aetherialAction, &QAction::triggered, this, [this] {

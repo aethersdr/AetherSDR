@@ -65,7 +65,6 @@ QString rxStageEnumToName(AudioEngine::RxChainStage s)
     switch (s) {
         case AudioEngine::RxChainStage::Gate:  return "Gate";
         case AudioEngine::RxChainStage::Eq:    return "Eq";
-        case AudioEngine::RxChainStage::DeEss: return "DeEss";
         case AudioEngine::RxChainStage::Comp:  return "Comp";
         case AudioEngine::RxChainStage::Tube:  return "Tube";
         case AudioEngine::RxChainStage::Pudu:  return "Pudu";
@@ -78,7 +77,6 @@ AudioEngine::RxChainStage rxStageNameToEnum(const QString& n)
 {
     if (n == "Gate")  return AudioEngine::RxChainStage::Gate;
     if (n == "Eq")    return AudioEngine::RxChainStage::Eq;
-    if (n == "DeEss") return AudioEngine::RxChainStage::DeEss;
     if (n == "Comp")  return AudioEngine::RxChainStage::Comp;
     if (n == "Tube")  return AudioEngine::RxChainStage::Tube;
     if (n == "Pudu")  return AudioEngine::RxChainStage::Pudu;
@@ -619,17 +617,6 @@ QJsonObject ChannelStripPresets::capturePresetJson() const
             o["limiterCeilingDb"] = c->limiterCeilingDb();
             rx["comp"] = o;
         }
-        if (auto* d = m_engine->clientDeEssRx()) {
-            QJsonObject o;
-            o["enabled"]     = d->isEnabled();
-            o["frequencyHz"] = d->frequencyHz();
-            o["q"]           = d->q();
-            o["thresholdDb"] = d->thresholdDb();
-            o["amountDb"]    = d->amountDb();
-            o["attackMs"]    = d->attackMs();
-            o["releaseMs"]   = d->releaseMs();
-            rx["deess"] = o;
-        }
         if (auto* t = m_engine->clientTubeRx()) {
             QJsonObject o;
             o["enabled"]        = t->isEnabled();
@@ -897,17 +884,6 @@ void ChannelStripPresets::applyPresetJson(const QJsonObject& preset)
                                         c->limiterCeilingDb()));
         }
 
-        if (auto* d = m_engine->clientDeEssRx();
-            d && rx.contains("deess") && rx.value("deess").isObject()) {
-            const auto o = rx.value("deess").toObject();
-            d->setEnabled(jbool(o, "enabled", d->isEnabled()));
-            d->setFrequencyHz(jnum(o, "frequencyHz", d->frequencyHz()));
-            d->setQ(jnum(o, "q", d->q()));
-            d->setThresholdDb(jnum(o, "thresholdDb", d->thresholdDb()));
-            d->setAmountDb(jnum(o, "amountDb", d->amountDb()));
-            d->setAttackMs(jnum(o, "attackMs", d->attackMs()));
-            d->setReleaseMs(jnum(o, "releaseMs", d->releaseMs()));
-        }
 
         if (auto* t = m_engine->clientTubeRx();
             t && rx.contains("tube") && rx.value("tube").isObject()) {
@@ -964,7 +940,6 @@ void ChannelStripPresets::applyPresetJson(const QJsonObject& preset)
     // handles both Rx and Tx EQ; the rest are independent.
     m_engine->saveClientGateRxSettings();
     m_engine->saveClientCompRxSettings();
-    m_engine->saveClientDeEssRxSettings();
     m_engine->saveClientTubeRxSettings();
     m_engine->saveClientPuduRxSettings();
     m_engine->saveClientRxChainOrder();

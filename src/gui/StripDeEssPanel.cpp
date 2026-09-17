@@ -319,24 +319,7 @@ StripDeEssPanel::~StripDeEssPanel() = default;
 
 void StripDeEssPanel::showForTx()
 {
-    m_side = Side::Tx;
     const QString title = QString::fromUtf8("Aetherial De-Esser \xe2\x80\x94 TX");
-    setWindowTitle(title);
-    if (m_titleBar)
-        static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
-    if (m_curve && deEss()) m_curve->setDeEss(deEss());
-    syncControlsFromEngine();
-    restoreGeometryFromSettings();
-    show();
-    raise();
-    activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
-}
-
-void StripDeEssPanel::showForRx()
-{
-    m_side = Side::Rx;
-    const QString title = QString::fromUtf8("Aetherial De-Esser \xe2\x80\x94 RX");
     setWindowTitle(title);
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
@@ -351,16 +334,14 @@ void StripDeEssPanel::showForRx()
 
 ClientDeEss* StripDeEssPanel::deEss() const
 {
-    if (!m_audio) return nullptr;
-    return m_side == Side::Rx ? m_audio->clientDeEssRx()
-                              : m_audio->clientDeEssTx();
+    // TX only: the receive side has no de-esser.
+    return m_audio ? m_audio->clientDeEssTx() : nullptr;
 }
 
 void StripDeEssPanel::saveDeEssSettings() const
 {
     if (!m_audio) return;
-    if (m_side == Side::Rx) m_audio->saveClientDeEssRxSettings();
-    else                    m_audio->saveClientDeEssSettings();
+    m_audio->saveClientDeEssSettings();
 }
 
 void StripDeEssPanel::syncControlsFromEngine()
