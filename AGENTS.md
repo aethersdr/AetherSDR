@@ -570,14 +570,32 @@ retries. Producer identity still does not confer an independent actor grant.
 
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
-`AudioEngine::feedAudioData` — the `RadioModel::backendAudioFrameReady`
+`AudioEngine::feedPcmFrame` — the `RadioModel::backendAudioFrameReady`
 relay, and a direct connect in `wireBackendSeam()`. `FlexBackend` is
 structurally immune because it never emits `audioFrameReady` at all (audio
 rides `PanadapterStream`/VITA-49), so the "no double-feed" reasoning that
-holds for Flex stops holding for any in-process backend. Gate the relay on
-`backendOwnsRxAudio()`. `Qt::UniqueConnection` does **not** protect you here
-— they are two different signals arriving at the same slot, so nothing looks
-duplicate to Qt. The same shape exists on the spectrum side.
+holds for Flex stops holding for any in-process backend.
+
+**The two gates have opposite senses and are deliberately named apart — do
+not merge them.** The relay's gate is `MainWindow::backendFeedsEngineDirectly()`
+(`dynamic_cast<SimBackend*>`, `MainWindow_Session.cpp`): sim feeds the engine
+itself, so the relay returns early for sim and for nobody else. The direct
+connect in `wireBackendSeam()` is sim-only for the same reason, and *that* is
+the site whose gate belongs on "does this backend own its RX audio"
+(`MainWindow.cpp`). An HL2 is `ownsRxAudio() == true` **and** needs the relay,
+so delegating the relay to `backend()->ownsRxAudio()` swallows every HL2 frame
+and silences the speaker — the code says so at the function, citing the #4537
+review. `Qt::UniqueConnection` does **not** protect you at either site: at the
+relay they are two different signals arriving at the same slot, so nothing
+looks duplicate to Qt, and at `wireBackendSeam()` it cannot catch a lambda
+connect at all.
+
+The spectrum side had the same shape and was resolved differently — not with a
+gate but with one producer and one path: `spectrumFrameReady` is consumed by
+`RadioModel::onBackendSpectrumFrame` and re-emitted on the neutral `panFeed`
+path every backend already renders (`MainWindow.cpp`, "One producer, one
+path"). Drawing it a second time at the seam is what that comment exists to
+prevent.
 
 **Build targets (post-RFC step 1):**
 
@@ -673,11 +691,18 @@ you:
   **derived at runtime from the touchpoint audit**
   (`docs/architecture/aetherd-touchpoint-tags.json`, the single source of
   truth), so a header newly tagged `vendor` there is enforced without
-  editing the checker. The only permitted rebaseline is an intentional
+  editing the checker. **De-classification is pinned, and only that
+  direction.** `VENDOR_STEMS_PINNED` freezes today's 33 vendor stems: a stem
+  the audit no longer tags `vendor(...)` is a blocking `EB3-load` error naming
+  it, because that single edit would otherwise un-gate the header for every
+  file above the seam on a green run. Tagging a *new* header `vendor(...)`
+  arms more enforcement and needs no checker edit — arming must never cost a
+  second diff. The only permitted rebaseline is an intentional
   vocabulary-classification change: every newly tracked include must be proven
   to predate that classification against the merge base, the evidence must be
-  documented, and a maintainer must explicitly review the rebaseline. The
-  expanded set is shrink-only after classification.
+  documented, and a maintainer must explicitly review the rebaseline — and the
+  same evidence is what releases a stem from `VENDOR_STEMS_PINNED`, dropped in
+  that same commit. The expanded set is shrink-only after classification.
 - **Adding a radio feature?** Don't include the vendor class above the
   seam. Put the wire code in the family backend
   (`src/core/backends/<family>/`) and surface it through `IRadioBackend`
@@ -719,6 +744,55 @@ freezes today's above-seam vendor coupling and lets it be decoupled
 subsystem-by-subsystem. Converting a touchpoint still follows the claim
 protocol + before/after `tools/verify_slice0_rx.py` recipe; a converted
 file drops its vendor include and lowers its EB3 baseline.
+
+**Before you merge — the aetherd conformance checklist.** Every item below has
+a green CI run behind it, so a passing `Static checks` answers none of them.
+Whoever lands a PR in this territory — agent or human, author or reviewer —
+walks the list:
+
+1. **Run the four gates on the merge base *and* on the head, and diff the
+   findings per file** — not the exit codes. `check_engine_boundary.py
+   --strict`, `gen_touchpoint_manifest.py --check`,
+   `check_capability_records.py --strict`, `check_command_plane.py --strict`,
+   all stdlib Python and seconds each. Findings against tracked EB2/EB3
+   baselines *warn*; only a new violation or a grown baseline errors. EB2 is a
+   per-file **count**, so a lateral swap inside a tracked file — one QtWidgets
+   usage out, another in — passes flat.
+2. **A new `gui/`→engine include stops at "regenerate", not at "justify".**
+   `gen_touchpoint_manifest.py --check` *does* go red — the manifest records
+   per-header includer counts, so the table goes stale and the required
+   context fails. But regenerating clears it: commit the regenerated table and
+   the grown burndown is green, with nothing anywhere flagging that a
+   touchpoint was added. Diff the manifest between merge base and head. A new
+   row, or a row whose includer count went up, needs a justification in the PR
+   body, or it is a finding.
+3. **Regenerate the manifest; never hand-edit it.** Run
+   `python tools/gen_touchpoint_manifest.py` and commit the result. Editing the
+   generated table, or adding a tag so the table matches, falsifies the
+   burndown instead of fixing it.
+4. **A baseline edit is never how a check goes green — but a reduction is
+   required maintenance, not a finding.** Dropping a stem whose coupling the
+   PR actually removed (and deleting the row when it empties), lowering
+   `FROZEN_BOOL_COUNT` when a bool became a record, lowering a converted
+   file's command-plane count: all of those are demanded above, and a
+   conversion PR that does them is conforming, not weakening. What is
+   forbidden is the other direction — growing a baseline, adding a stem or a
+   row, or retagging a `vendor(...)` header. That last one un-gates the header
+   for every file above the seam, since EB3 derives its vocabulary from
+   `aetherd-touchpoint-tags.json` at runtime; it now fails as a blocking
+   `EB3-load` naming the stem rather than passing quietly, and the failure is
+   a design conversation, not a `VENDOR_STEMS_PINNED` edit. There, restructure
+   the change.
+   The two carveouts above (an EB3 vocabulary reclassification with merge-base
+   proof and explicit maintainer review; a `FROZEN_BOOL_COUNT` raise on a
+   maintainer ruling) are maintainer rulings carrying that evidence, never a
+   route to a passing check.
+5. **Touching a backend?** Read the THREADING AND LIFETIME CONTRACT in
+   `IRadioBackend.h` against the diff, and re-read the #5554 notice at the top
+   of "AI Agent Guidelines". What is pinned versus surveyed, and the probe to
+   carry into a test that drives a backend, are stated at the head of this
+   section — the point here is only that a survey result means reading is the
+   check, because no test will fail.
 
 ---
 

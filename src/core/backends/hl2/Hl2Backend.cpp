@@ -1616,6 +1616,9 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {};
     c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
+    // setTune() is the built-in test tone at ZERO offset — a single carrier
+    // exactly on the TX NCO. Nothing here can produce a second tone.
+    c.twoToneGenerator = std::nullopt;
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
     c.fmTonePresentation = FmTonePresentation::Legacy;

@@ -366,6 +366,8 @@ RadioCapabilities AnanBackend::capabilities() const
 {
     RadioCapabilities c;
     c.family = QStringLiteral("anan");
+    // No setTune() implementation, so no tune generator to select a mode on.
+    c.twoToneGenerator = std::nullopt;
     // THE dBm AXIS IS dBFS WEARING A dBm LABEL, and this file says so in its own
     // words twice over. kUncalibratedDbfsToDbmOffset is 0.0f, carrying a TODO
     // that calls it "an unexplained 1:1 dBFS/dBm mapping", and the spectrum path

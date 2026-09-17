@@ -12981,8 +12981,19 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     radio["network"] = network;
 
     QJsonObject telemetry;
-    telemetry["pa_temp_c"] = m_meterModel.paTemp();
-    telemetry["supply_volts"] = m_meterModel.supplyVolts();
+    // AN ABSENT SENSOR IS NOT 0 C, AND A MINUTES-OLD ONE IS NOT A MEASUREMENT.
+    // This snapshot is what an operator pastes into a support thread. A radio
+    // that declares no PATEMP/"+13.8A" meter -- every Icom, for temperature --
+    // left the scalar at its 0.0f initialiser and this line printed it as a
+    // reading; gating on hasPaTemp() alone would have fixed that case and still
+    // reported a sensor that went quiet an hour ago. Both go through the same
+    // window `get meters` uses, so one snapshot gives one answer (#5516).
+    telemetry["pa_temp_c"] =
+        MeterModel::vitalIsFresh(m_meterModel.hasPaTemp(), m_meterModel.paTempAgeMs())
+            ? QJsonValue(m_meterModel.paTemp()) : QJsonValue();
+    telemetry["supply_volts"] =
+        MeterModel::vitalIsFresh(m_meterModel.hasSupplyVoltage(), m_meterModel.supplyVoltsAgeMs())
+            ? QJsonValue(m_meterModel.supplyVolts()) : QJsonValue();
     telemetry["tx_forward_power_w"] = m_meterModel.fwdPower();
     // Null rather than a leftover ratio when the TX meters are stale — this
     // snapshot feeds support bundles, and a stale SWR reads as a live antenna

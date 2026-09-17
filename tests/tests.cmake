@@ -5252,6 +5252,11 @@ target_link_libraries(backend_slice_lifecycle_test PRIVATE
     aethercore Qt6::Core Qt6::Test
 )
 add_test(NAME backend_slice_lifecycle_test COMMAND backend_slice_lifecycle_test)
+# Socket-free bridge diagnostics: injected backend and meter model, no server/peer.
+add_executable(automation_persist_diagnostics_test tests/automation_persist_diagnostics_test.cpp)
+target_include_directories(automation_persist_diagnostics_test PRIVATE src tests)
+target_link_libraries(automation_persist_diagnostics_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME automation_persist_diagnostics_test COMMAND automation_persist_diagnostics_test)
 # Socket-free HL2 gain persistence: boardMaxRx bypasses discovery; the test
 # never pumps events and cancels DSP setup before it can start Metis UDP.
 add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
@@ -5752,6 +5757,7 @@ set(AETHER_SETTINGS_CONSUMERS
     gui_nested_lifetime_test
     rx_applet_squelch_reconciliation_test
     rtl_slice_settings_test
+    automation_persist_diagnostics_test
     weather_radar_loading_test
     hl2_gain_restore_test
     hl2_tx_gate_test
@@ -5845,6 +5851,7 @@ endforeach()
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
     automation_cell_test
+    automation_persist_diagnostics_test
     automation_server_gesture_test
     automation_device_diagnostics_test
     automation_json_id_test

@@ -417,6 +417,36 @@ struct RadioCapabilities {
     bool hasFmRepeaterOffset = true;
     // Some audio-tone tune implementations cannot key a CW carrier.
     bool hasCwTune = true;
+
+    // The radio can generate a genuine TWO-TONE test signal, not merely a tune
+    // carrier. A RECORD rather than a bool, per #5262 M2, for the FIRST of that
+    // milestone's two reasons only: the interesting part is not the yes/no but
+    // the route, and `selectionCommand` carries it. Absent refuses the verb.
+    //
+    // It does NOT buy the second reason. An engaged-or-not optional has no
+    // tri-state, so an explicit `= std::nullopt` and a backend that never
+    // mentions the field are byte-identical: a seventh backend added later
+    // would be indistinguishable from the five that declare absence
+    // deliberately. The ADDING A FIELD rule above is what actually covers that
+    // — set it explicitly in every backend, which all six do (#5516 review).
+    //
+    // This is a capability and not a family check because the question is about
+    // the tune generator behind the verb, not the vendor: a Flex takes
+    // `transmit set tune_mode=two_tone` and synthesises two tones on-radio,
+    // while every other backend today drives the same button into a single
+    // carrier — the HL2's built-in test tone at zero offset, Icom's setTune().
+    //
+    // Absent makes `txtest twotone` REFUSE rather than key. That refusal exists
+    // for evidence integrity, not RF safety: a single carrier recorded as a
+    // two-tone run is an IMD/ALC measurement of a waveform that was never on
+    // the air, and it outlives the run in whatever report cites it (#5516).
+    struct TwoToneGenerator {
+        // The command that SELECTS the waveform, recorded because that route —
+        // not the act of keying — is what separates a real two-tone from a tune
+        // carrier. Diagnostic: nothing branches on the string.
+        QString selectionCommand;
+    };
+    std::optional<TwoToneGenerator> twoToneGenerator;
     FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
     QStringList fmToneModes;
     QList<int> fmDtcsCodes;
