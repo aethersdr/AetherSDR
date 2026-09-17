@@ -154,8 +154,18 @@ the shape the bullet above routes a simulator closed loop to — see
   check the branch out in a **new scratch worktree** if you need to build.
 - CI: note failing/passing checks and whether CI ran against a stale merge
   base. Check the workflow trigger before drawing conclusions: a
-  `pull_request` trigger tests the *merge* result, so a green check already
-  includes current main; a `push`-triggered check on the branch does not.
+  `pull_request` trigger tests the *merge* result — `main` + this PR **as
+  `main` stood when that run started**, which is not the same as current
+  `main`; a `push`-triggered check on the branch never included `main` at all.
+  So compare the newest check-run start on the head against `main`'s tip
+  (`gh api repos/aethersdr/AetherSDR/commits/<headOid>/check-runs --jq
+  '[.check_runs[].started_at] | max'` against `gh api
+  repos/aethersdr/AetherSDR/commits/main --jq .commit.committer.date`). If
+  `main` is newer, the green describes a merge that no longer exists, and any
+  conclusion you draw from it inherits that. `main` has `strict: false`, so
+  nothing forces a rerun to close the gap — say so in the report rather than
+  reporting the checks as green without qualification. /pr-land turns the same
+  comparison into a gate before it arms auto-merge.
 
 ## 2. Linked issue → does the PR actually solve it?
 
