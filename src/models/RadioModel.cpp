@@ -6192,15 +6192,24 @@ bool RadioModel::requestPanAverage(const QString& panId, int average)
     // wait for, so the FlexLib text command below is not merely unnecessary --
     // it FAILS, and the early return then skips the model update entirely.
     //
-    // The symptom is subtle, which is why it survived: the operator's choice
-    // DOES take effect, because MainWindow_Wiring calls
+    // WHAT THIS RESTORES, STATED NARROWLY. The operator's choice reaches the
+    // widget and the overlay slider today, because MainWindow_Wiring calls
     // SpectrumWidget::setFftAverage() unconditionally beside this call. What
-    // never happens is the model write. So the setting works until the pan is
-    // rebuilt, at which point the widget is restored from pan->average() --
-    // which nothing ever set -- and the averaging silently reverts.
+    // never happens is the MODEL write -- so the slider goes back to the widget
+    // default the moment the pan is rebuilt and is restored from pan->average(),
+    // which nothing ever set. The model write is also what the automation
+    // readback and RadioResourceAdapter's snapshot read.
     //
-    // Mechanism corrected by @ten9876 on #5678: m_fftAverage IS read, and the
-    // fault is this missing branch rather than an unused member.
+    // IT DOES NOT MAKE AVERAGING HAPPEN, and no comment here should be read as
+    // saying it does. On a raw-spectrum backend nothing consumes m_fftAverage
+    // in a render path: onBackendSpectrumFrame is a pass-through, and ANAN's
+    // smoothSpectrumBins uses a fixed kSpectrumSmoothAlpha rather than this
+    // value. Client-side averaging for these backends is #5678 row 2.1's other
+    // half -- "port + new" -- and is not written yet.
+    //
+    // Mechanism corrected by @ten9876 on #5678: m_fftAverage IS read (by the
+    // persistence snapshot and the overlay menu), so the fault is this missing
+    // branch rather than an unused member.
     if (shapesDisplayRatesLocally()) {
         if (!pan) {
             return false;
