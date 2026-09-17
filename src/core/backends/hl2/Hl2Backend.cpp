@@ -2466,13 +2466,21 @@ void Hl2Backend::beginDspSetup()
         return;
 
     const int actualNumRx = m_pendingConnect->actualNumRx;
-    // The RECEIVERS, and only them. The transmit chain is not a step:
-    // Hl2TxDsp::configure() designs two FIR kernels and returns — it opens no
-    // WDSP channel and measures no FFTW plan (the class includes WdspChannel.h
-    // for the Mode enum alone). Counting it inflated the denominator with a step
-    // that completes in microseconds and put a "Preparing the transmit chain…"
-    // label on screen for work that was already over.
-    const int total = actualNumRx;
+    // WHETHER THE TRANSMIT CHAIN IS A STEP DEPENDS ON THE BUILD, because what
+    // Hl2TxDsp::configure() does depends on the build.
+    //
+    // In the PHASING build it designs two FIR kernels and returns — it opens no
+    // WDSP channel and measures no FFTW plan. Counting it inflated the
+    // denominator with a step that completes in microseconds and put a
+    // "Preparing the transmit chain…" label on screen for work that was
+    // already over.
+    //
+    // In the TXA build it opens a WDSP TRANSMIT CHANNEL, which is FFTW
+    // planning and is the most expensive single thing in the connect on a cold
+    // cache. Leaving it uncounted there is the opposite error: the receive
+    // label would sit at "2 of 2" for a second or more with the dialog
+    // apparently finished and the radio not yet ready.
+    const int total = actualNumRx + (AETHER_HL2_TX_TXA ? 1 : 0);
 
     // The chains to open, snapshotted on THIS thread. m_rx is GUI-thread-only
     // (see its declaration), so the I/O thread gets a plain vector of the
@@ -2558,9 +2566,18 @@ void Hl2Backend::beginDspSetup()
             else
                 break;   // the GUI thread trims from here; opening past it is waste
         }
-        // No progress emit for the transmit chain: it designs two FIR kernels
-        // and returns. Announcing a step that is over before the label repaints
-        // is worse than saying nothing.
+        // Announced only in the build where it is a real step -- see `total`
+        // above. In the phasing build this stays silent, because announcing a
+        // step that is over before the label repaints is worse than saying
+        // nothing.
+        if (AETHER_HL2_TX_TXA && self) {
+            const QString stage = tr("Preparing the transmit chain…");
+            const int done = static_cast<int>(chains.size());
+            QMetaObject::invokeMethod(self, [self, stage, done, total] {
+                if (self)
+                    emit self->dspSetupProgress(stage, done, total);
+            }, Qt::QueuedConnection);
+        }
         if (txDsp)
             result.txOk = txDsp->configure(tc, &result.txErr);
 
@@ -4837,15 +4854,42 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
             return chains;
         }
         const Hl2TxDsp::Config& t = txDsp->config();
-        // Level 4 by construction: there is no WDSP channel on transmit,
-        // so this struct is the modulator's state rather than a record of
-        // what it was asked for.
-        e[QStringLiteral("level")] = QStringLiteral("dsp-config");
+        // WHICH MODULATOR THIS BINARY CARRIES. There is no runtime switch --
+        // AETHER_HL2_TX_TXA decides it at compile time and the other chain is
+        // not in the process -- so an operator cannot be on the wrong one. They
+        // can be on the wrong BUILD, though, and a transmit report that does
+        // not say which modulator produced the signal is not actionable. This
+        // is what makes the build visible without making it switchable.
+        e[QStringLiteral("modulator")] =
+            QString::fromLatin1(Hl2TxDsp::modulatorName());
+        // TXA reports the configuration accepted by WdspChannel; the phasing
+        // implementation reports its local DSP configuration. Neither is RF
+        // readback from the radio.
+        const int txChannelId = txDsp->wdspChannelId();
+        const WdspChannel::Config* channel = txDsp->channelConfig();
+        e[QStringLiteral("level")] = channel ? QStringLiteral("channel-config")
+                                             : QStringLiteral("dsp-config");
+        if (txChannelId >= 0) {
+            e[QStringLiteral("wdspChannelId")] = txChannelId;
+            // Blocks the modulator could not place on the wire. NOT omitted
+            // when it is zero: "no faults" and "nobody counted" must not look
+            // the same, which is the whole lesson of the silent TXA failure
+            // this build flag exists for.
+            e[QStringLiteral("modulatorFaultBlocks")] =
+                static_cast<qulonglong>(txDsp->modulatorFaultBlocks());
+            e[QStringLiteral("modulatorBlocks")] =
+                static_cast<qulonglong>(txDsp->modulatorBlocks());
+        }
         e[QStringLiteral("inputRateHz")] = t.inputSampleRateHz;
         e[QStringLiteral("outputRateHz")] = t.outputSampleRateHz;
-        e[QStringLiteral("dspBlockSize")] = t.dspBlockSize;
-        e[QStringLiteral("filterLowHz")] = t.filterLowHz;
-        e[QStringLiteral("filterHighHz")] = t.filterHighHz;
+        e[QStringLiteral("dspBlockSize")] = channel
+            ? static_cast<int>(channel->dspBlockSize) : t.dspBlockSize;
+        if (channel) {
+            e[QStringLiteral("inputBlockSize")] = static_cast<int>(channel->inputBlockSize);
+            e[QStringLiteral("dspRateHz")] = channel->dspSampleRate;
+        }
+        e[QStringLiteral("filterLowHz")] = channel ? channel->filterLowHz : t.filterLowHz;
+        e[QStringLiteral("filterHighHz")] = channel ? channel->filterHighHz : t.filterHighHz;
         e[QStringLiteral("alcEnabled")] = t.alcEnabled;
         e[QStringLiteral("alcTargetPeak")] = t.alcTargetPeak;
         e[QStringLiteral("alcReleaseSec")] = t.alcReleaseSec;

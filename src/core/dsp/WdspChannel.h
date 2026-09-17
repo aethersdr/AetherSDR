@@ -259,6 +259,11 @@ public:
     // today it cannot fail — the attribute is there to make it a compile error
     // rather than a mystery if that ownership ever moves off that thread.
     [[nodiscard]] bool setRunning(bool running) noexcept;
+    // TX only: discard queued samples and filter history without clocking a fade.
+    // Leaves the channel stopped, retaining its plans/configuration. Control-path
+    // operation: uses existing channel locks and refreshes the output semaphore.
+    // Refuses while a callback or an asynchronous fade/flush is outstanding.
+    [[nodiscard]] bool discardTransmitData() noexcept;
     [[nodiscard]] bool isRunning() const noexcept
     {
         return m_running.load(std::memory_order_relaxed);

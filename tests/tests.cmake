@@ -4097,7 +4097,24 @@ target_link_libraries(aetherd_pan_decode_test PRIVATE aethercore Qt6::Core Qt6::
 set_target_properties(aetherd_pan_decode_test PROPERTIES AUTOMOC ON)
 add_test(NAME aetherd_pan_decode_test COMMAND aetherd_pan_decode_test)
 
+# Socket-free continuous rate/stereo conversion, independent of WebSockets.
+add_executable(tci_rx_converter_test
+    tests/tci_rx_converter_test.cpp
+    src/core/TciRxConverter.cpp
+    src/core/Resampler.cpp)
+target_include_directories(tci_rx_converter_test PRIVATE src third_party/r8brain)
+target_link_libraries(tci_rx_converter_test PRIVATE Qt6::Core)
+add_test(NAME tci_rx_converter_test COMMAND tci_rx_converter_test)
+
 if(Qt6WebSockets_FOUND)
+
+    # Socket-free production TCI RX routing/encoding. The binary transport is
+    # injected; QWebSocket objects remain unopened and no radio is connected.
+    add_executable(tci_rx_audio_test tests/tci_rx_audio_test.cpp)
+    target_include_directories(tci_rx_audio_test PRIVATE src tests)
+    target_link_libraries(tci_rx_audio_test PRIVATE
+        aethercore Qt6::Core Qt6::Network Qt6::WebSockets)
+    add_test(NAME tci_rx_audio_test COMMAND tci_rx_audio_test)
 
     add_executable(tci_trxmap_test tests/tci_trxmap_test.cpp)
     target_include_directories(tci_trxmap_test PRIVATE src)
@@ -5783,6 +5800,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    tci_rx_audio_test
     bandscope_trace_render_test
     noise_floor_auto_adjust_gate_test
     vfo_display_defaults_test

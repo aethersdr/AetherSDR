@@ -33,6 +33,10 @@ void CloseChannel(int channel);
 // which is what makes it safe to tear down or reconfigure behind it; dmode 0
 // returns immediately. Returns the prior state, so callers can restore it.
 int SetChannelState(int channel, int state, int dmode);
+// Local patch: synchronously discard TX rings/filter history and leave stopped.
+// Caller excludes exchange/control calls. Returns 0 for RX or a pending fade/flush.
+// Retains FFTW plans; flush_iobuffs refreshes its output semaphore.
+int DiscardTXAChannelData(int channel);
 void fexchange2(int channel, float* inputI, float* inputQ,
                 float* outputLeft, float* outputRight, int* error);
 void SetRXAMode(int channel, int mode);
