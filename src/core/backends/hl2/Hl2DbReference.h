@@ -39,24 +39,30 @@ namespace AetherSDR::hl2 {
 // Any future hardware-specific correction needs a qualified mapping shared
 // with the reported gain and separate validation of the display and AGC paths.
 //
-// The absolute term (fullScaleDbm -- what 0 dBFS corresponds to at the antenna
-// with 0 dB of LNA gain) is NOT calibrated here. It is a per-unit property of
-// the board, the ADC reference and the front end, and none of the HL2 oracles
-// state a figure for it; Quisk and SparkSDR both build per-unit calibration
-// tables for the analogous TX power question rather than quoting a constant.
+// THE ABSOLUTE TERM IS NOW DERIVED, AND THIS PARAGRAPH USED TO ARGUE THE
+// OPPOSITE. It said fullScaleDbm "is NOT calibrated here ... so it defaults to
+// 0.0 and the gain term is measured RELATIVE to a reference gain, not
+// absolutely", and then explained why the relative form mattered. Every word of
+// that was true of the tree that carried it and none of it is true now. Left
+// standing it would have been the strongest argument against the change it sits
+// inside -- flagged in review, and a header arguing against its own class is
+// worse than one that says nothing.
 //
-// So it defaults to 0.0 and the gain term is measured RELATIVE to a reference
-// gain, not absolutely. At the default LNA setting the offset is exactly zero
-// and this backend reports precisely what it reported before this type existed:
-// dBFS on a dBm-labelled axis. That is still wrong, but it is the SAME wrong,
-// in one labelled place with a setter, instead of being invisible.
+// WHAT CHANGED IS THE OBJECTION, NOT THE STANDARD. The old reasoning turned on
+// "neither number is calibrated, so an absolute form buys nothing and only
+// moves the floor" -- and it was right, because the alternative on offer was a
+// per-unit calibration nobody had. It is not the alternative here.
+// fullScaleDbm is DERIVED from the AD9866 datasheet and the HL2's own input
+// network (see kFullScaleDbmAtZeroGain below), and a derived figure is not a
+// per-unit one. Quisk and SparkSDR build per-unit tables for the analogous TX
+// power question; this is a different kind of number and the comparison does
+// not carry.
 //
-// The relative form matters. Subtracting the gain ABSOLUTELY would have been
-// just as defensible in theory and was what the first version of this did --
-// and it silently moved the whole displayed noise floor by 20 dB, from about
-// -120 to about -140, because the default LNA gain is 20 dB. Neither number is
-// calibrated, so that shift bought nothing and would have looked to the
-// operator exactly like the regression this class exists to prevent.
+// The concrete objection the old form raised is also answered rather than
+// waved through: yes, the absolute form moves the displayed noise floor, and
+// that is the point -- it moves it ONTO a figure that can be checked, from one
+// that could not. What it must never do is move without saying so, which is
+// why the step is asserted in hl2_dbref_test rather than left to arrive.
 //
 // THE THIRD TERM: THE AGC CEILING, WHICH THE OPERATOR HEARS
 //
@@ -202,13 +208,20 @@ public:
     // back with a slider in front of it. +-3 dB says: the base is right, this
     // is adjustment. Anyone who needs more than 3 dB has found a fault in the
     // derivation and should report it rather than dial around it.
-    static constexpr double kTrimLimitDb = 3.0;
-    void setTrimDb(double db) noexcept
-    {
-        m_trimDb = db < -kTrimLimitDb ? -kTrimLimitDb
-                 : (db > kTrimLimitDb ? kTrimLimitDb : db);
-    }
-    double trimDb() const noexcept { return m_trimDb; }
+    // THE OPERATOR TRIM IS NOT HERE, AND THAT IS A DELIBERATE SUBTRACTION.
+    //
+    // #5740 proposed three things and this class shipped all three: the derived
+    // constant, the absolute form, and a bounded +/-3 dB operator trim. Review
+    // pointed out that `setTrimDb` had NO CALLER anywhere in src/ -- no UI, no
+    // settings key, no automation verb reached it. That is dead public surface,
+    // and Principle IX is "Surface Only What Survives".
+    //
+    // So it is removed rather than justified. It lands with the control that
+    // sets it, in the change that gives an operator a way to reach it, and that
+    // change can carry its own persistence question -- a trim that does not
+    // survive a restart is a worse affordance than none. Until then
+    // offsetDb() is fullScaleDbm - lnaGainDb exactly, with nothing in it that
+    // nothing can move.
     double fullScaleDbm() const noexcept { return m_fullScaleDbm; }
     bool isCalibrated() const noexcept { return m_fullScaleDbm != 0.0; }
 
@@ -246,7 +259,7 @@ public:
     // adjustment as two terms.
     double offsetDb() const noexcept
     {
-        return m_fullScaleDbm - m_lnaGainDb + m_trimDb;
+        return m_fullScaleDbm - m_lnaGainDb;
     }
 
     // The LNA term alone, RELATIVE to the reference gain -- what has to be
@@ -280,7 +293,6 @@ private:
     double m_lnaGainDb = kDefaultLnaGainDb;
     double m_referenceLnaGainDb = kDefaultLnaGainDb;
     double m_fullScaleDbm = kFullScaleDbmAtZeroGain;
-    double m_trimDb = 0.0;
 };
 
 }  // namespace AetherSDR::hl2

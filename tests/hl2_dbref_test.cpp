@@ -72,17 +72,12 @@ int main()
     check(near(ref.toDbm(0.0), 3.0),
           "full scale at 0 dB gain reads exactly the derived +3 dBm");
 
-    // The trim: bounded, and the bound is a feature. An operator who needs more
-    // than 3 dB has found a fault in the derivation, not a setting.
-    ref.setTrimDb(2.0);
-    check(near(ref.toDbm(0.0), 5.0), "a +2 dB trim moves the reading by 2 dB");
-    ref.setTrimDb(99.0);
-    check(near(ref.trimDb(), Hl2DbReference::kTrimLimitDb),
-          "a trim beyond the limit clamps rather than being accepted");
-    ref.setTrimDb(-99.0);
-    check(near(ref.trimDb(), -Hl2DbReference::kTrimLimitDb),
-          "and clamps symmetrically below");
-    ref.setTrimDb(0.0);
+    // THE TRIM'S CASES ARE GONE WITH THE TRIM. setTrimDb() had no caller in
+    // src/ -- no UI, no settings key, no automation verb -- so it was dead
+    // public surface and Principle IX took it out. These four assertions went
+    // with it rather than being kept alive to exercise something nothing can
+    // reach: a test is the last place a retired affordance should survive,
+    // because it makes the surface look load-bearing to the next reader.
     ref.setLnaGainDb(Hl2DbReference::kDefaultLnaGainDb);
 
     // A fixed antenna signal. Raising the LNA by 20 dB raises the digitised
