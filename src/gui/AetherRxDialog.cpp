@@ -82,7 +82,7 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     // needs beside the tab column, and geometry persists, so a window resized
     // once reopens where it was left.
     setMinimumSize(600, 400);
-    resize(710, 450);
+    resize(720, 480);
 
     auto* body = new QHBoxLayout(bodyWidget());
     body->setContentsMargins(8, 8, 8, 8);
