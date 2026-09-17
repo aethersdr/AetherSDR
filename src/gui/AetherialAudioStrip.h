@@ -140,6 +140,9 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
+    // One verb for the title bar's full-screen toggle, so the button and the
+    // double-click cannot drift apart.
+    void toggleFullScreen();
     void saveGeometryToSettings();
     void restoreGeometryFromSettings();
 
