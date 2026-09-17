@@ -3396,12 +3396,20 @@ void MainWindow::publishRadioStateMqtt()
     // direct rather than coalesced, because 150 ms was judged too long — was
     // swallowed for a full second, and queueEmpty could not rescue it either
     // since the radio is gone.
-    if (m_cwxTransmitting && !m_radioModel.isConnected()) {
-        m_cwxTxEndTimer.stop();
-        m_cwxTransmitting = false;
-        m_cwxPublishedTxTrue = false;
+    //
+    // The CWX state machine is deliberately NOT torn down here. m_cwxTxEndTimer's
+    // handler is the ONLY thing that restores the operator's CWX WPM and CW pitch
+    // after a send, and m_cwxSavedWpm is re-captured only while !m_cwxTransmitting
+    // — so cancelling that timer, or clearing the flag it keys on, discards the
+    // operator's settings rather than deferring them. Arm it instead and publish
+    // without waiting: isConnected() already reads false at the top of
+    // onDisconnected(), so the gate below can no longer arm it itself, and a drop
+    // during a key-down would otherwise leave it unarmed entirely.
+    const bool radioGone = !m_radioModel.isConnected();
+    if (m_cwxTransmitting && radioGone && !m_cwxTxEndTimer.isActive()) {
+        m_cwxTxEndTimer.start(1000);
     }
-    if (m_cwxTransmitting) {
+    if (m_cwxTransmitting && !radioGone) {
         if (!m_radioModel.isRadioTransmitting()) {
             m_cwxTxEndTimer.start(1000);  // might be done; confirm after 1 s silence
             return;

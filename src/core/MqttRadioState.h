@@ -48,8 +48,21 @@ struct MqttRadioStateInputs {
     // and one gate published a compiled-in 100 W default as a firmware answer.
     bool haveTransmitStatus = false;   // gates `drive` and `drive_confirmed`
     int drive = 0;                     // raw 0..100 RF-power setting, NOT watts
+    // WHAT max_power_level MEANS, precisely (#5733 review): the best ceiling the
+    // CLIENT has, which is not always a firmware answer.
+    //   Flex — radio status `max_power_level=`, and the 500 W Aurora/PGXL ceiling
+    //          from slice status `max_internal_pa_power` (#484). Firmware.
+    //   Icom — the per-model rated output in IcomModels.cpp, via txPowerBands.
+    //   HL2  — kHl2RatedOutputWatts, compiled in, via txPowerBands.
+    // So presence means "we have a ceiling we stand behind", NOT "the radio
+    // reported one". `watts = drive/100 * max_power_level` is the right
+    // arithmetic in every case; only the provenance differs, and a per-model
+    // rating is real data rather than the compiled-in 100 default this latch
+    // exists to keep off the wire. There is deliberately no
+    // `max_power_level_confirmed`: the value is trustworthy on every family, so a
+    // second flag would suggest a doubt that does not exist.
     bool haveMaxPowerLevel = false;    // gates `max_power_level` on its own
-    int maxPowerLevel = 0;             // firmware ceiling; watts = drive/100*this
+    int maxPowerLevel = 0;             // watts = drive/100 * this
 
     // Whether `drive` in THIS message is confirmed radio state: the backend
     // reads drive back (RadioCapabilities::transmitDriveControl authority Radio)
