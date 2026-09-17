@@ -288,19 +288,45 @@ int main(int argc, char** argv)
         check(!s.backend.autoRfGainEnabled(),
               "and it is OFF on a fresh session, with no setting to say otherwise");
 
-        // ---- THE REFUSAL. Above +19 dB this radio's gain axis is not
+        // ---- THE REFUSAL, and whether the region it guards is REACHABLE.
+        //
+        // Above kAutoRfGainMaxBaselineDb this radio's gain axis is not
         // trustworthy: #5354 measured +48 dB reading identically to +18 dB, and
         // nothing in the gateware decode or the AD9866's stated geometry
         // accounts for it. The control declines and says why; it does NOT
         // quietly move the operator's number to somewhere it would work.
-        s.backend.setPanRfGain(s.panId, 20);
+        //
+        // WRITTEN AGAINST BOTH CONSTANTS RATHER THAN THE LITERAL 20, because
+        // #5752 moves the axis ceiling to +19 -- the SAME hardware fact,
+        // reached independently -- and once the ceiling equals the control's
+        // own threshold, no baseline in the untrusted region can be set at all.
+        // The case then flips from "refuses" to "there is nothing to refuse",
+        // and a hand-typed 20 would report that as a failure. Found by building
+        // the integration branch, where this PR and #5752 sit together; neither
+        // branch can see it alone.
+        const int untrusted = hl2::Hl2Backend::kAutoRfGainMaxBaselineDb + 1;
+        s.backend.setPanRfGain(s.panId, untrusted);
+        const bool reachable = s.backend.lnaBaselineDb() > 
+                               hl2::Hl2Backend::kAutoRfGainMaxBaselineDb;
         s.backend.setAutoRfGain(true);
-        check(!s.backend.autoRfGainEnabled(),
-              "arming is REFUSED from a baseline of +20 dB, in the fold region");
-        check(s.backend.lnaBaselineDb() == 20,
-              "and the operator's +20 is not moved to make the feature work");
-        check(s.healthLive() == 20,
-              "nor is the wire quietly attenuated in its place");
+        if (reachable) {
+            check(!s.backend.autoRfGainEnabled(),
+                  "arming is REFUSED from a baseline in the fold region");
+            check(s.backend.lnaBaselineDb() == untrusted,
+                  "and the operator's number is not moved to make the feature work");
+            check(s.healthLive() == untrusted,
+                  "nor is the wire quietly attenuated in its place");
+        } else {
+            // The axis ceiling has been brought down onto the threshold, so the
+            // setter clamped and the baseline is trustworthy by construction.
+            check(s.backend.autoRfGainEnabled(),
+                  "with the axis clamped AT the threshold, no untrusted baseline "
+                  "is reachable and arming succeeds");
+            check(s.backend.lnaBaselineDb()
+                      == hl2::Hl2Backend::kAutoRfGainMaxBaselineDb,
+                  "and the request came up at the ceiling rather than past it");
+            s.backend.setAutoRfGain(false);
+        }
 
         // At the boundary it arms: the limit is where the measurement puts it.
         s.backend.setPanRfGain(s.panId, 19);
