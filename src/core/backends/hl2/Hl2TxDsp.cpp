@@ -190,20 +190,55 @@ void Hl2TxDsp::applyModeAndFilter()
 
 void Hl2TxDsp::resetModulatorState()
 {
-    // The channel is deliberately NOT rebuilt and NOT reconfigured here.
-    // reset() runs on unkey, on the I/O thread, and rebuilding a TXA channel
-    // means FFTW planning -- a second or more on a cold cache, on the thread
-    // that has to be ready for the next key-down. WDSP's own mute slews
-    // (create_slews) are the T/R envelope and they are inside the channel
-    // already.
+    if (!m_channel) {
+        return;
+    }
+    // THE T/R CALL, not a rebuild. WdspChannel::setRunning(false) runs the mute
+    // envelope DOWN and FLUSHES THE CHAIN, and allocates and frees nothing --
+    // allocationSequenceForTest() does not move across a stop/start. The
+    // channel keeps its FFTW plans, its filter masks and its notch database, so
+    // the next key-down pays no planning cost.
     //
-    // WHAT THIS MEANS, SAID PLAINLY: the channel keeps its filter state across
-    // an unkey, so the ~48.7 ms priming stretch measured at the head of a fresh
-    // channel is paid at configure() and not at every key-down. WHAT IS NOT
-    // KNOWN is how it behaves after a LONG idle gap between overs -- nothing
-    // clocks this channel while the operator is receiving, and no measurement
-    // in this branch covers a second over. If that turns out to cost a burst of
-    // underruns at key-down, modulatorFaultBlocks() is where it will show.
+    // THIS FUNCTION WAS EMPTY AND THE HEADER PROMISED OTHERWISE, which is the
+    // defect. Hl2TxDsp.h says reset() "drops anything buffered -- on unkey, so
+    // the next transmission does not start with the tail of the previous one",
+    // and in the TXA build nothing did.
+    //
+    // WHAT THE MEASUREMENT ACTUALLY SAYS, after an earlier version of this
+    // comment got it wrong twice. The first draft quoted "TXA over-2 peak 0.52,
+    // leak 85.1 ms" against "phasing 0.0 / 0.0 ms" and read that as the previous
+    // over going out at the head of the next one. It is not: the 85 ms is
+    // PIPELINE LATENCY -- a TXA channel's priming stretch, which the phasing
+    // modulator does not have -- and the discriminator that was supposed to
+    // separate the two was itself broken (its lambda took `hz` while the body
+    // used `kTone`, so it measured the wrong bin). Fixed, the honest figure is
+    // the one the test prints now: over 1's tone, measured in the SETTLED part
+    // of over 2, lands at
+    //
+    //   phasing   -312.3 dB      TXA   -311.7 dB
+    //
+    // i.e. at the arithmetic floor in BOTH builds. The unkey does not carry
+    // audio across in either, and no measurement here establishes that it ever
+    // did.
+    //
+    // THE FIX IS STILL RIGHT, on the argument rather than on that number: the
+    // header states a contract -- reset() drops what is buffered -- and in this
+    // build nothing implemented it, so the chain's state survived an unkey by
+    // accident rather than by design. What the corrected measurement removes is
+    // the claim that the accident was AUDIBLE, not the reason to stop relying
+    // on it.
+    //
+    // The old comment here justified doing nothing on two grounds and both were
+    // wrong. "Rebuilding means FFTW planning" -- true, and not what is needed;
+    // this is a stop, not a close. "WDSP's own mute slews are the T/R envelope
+    // and they are inside the channel already" -- they are, and they are armed
+    // by SetChannelState, which the transmit path never called. The ramps
+    // existed; nothing fired them. Caught by aethersdr-agent on #5747.
+    if (!m_channel->setRunning(false)) {
+        qCWarning(lcTxMod) << "HL2 TXA modulator: stop refused on unkey; the "
+                              "next over may carry this one's tail";
+    }
+    m_modulatorRunning = false;
 }
 
 void Hl2TxDsp::modulate(std::span<const float> audio)
@@ -215,6 +250,19 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
     const std::size_t outBlock = m_outI.size();
     if (block == 0 || outBlock == 0) {
         return;
+    }
+
+    // Started HERE rather than on a key-down signal, because this stage has no
+    // key-down edge of its own -- reset() is the only transition it is told
+    // about. The first block of an over starts the channel and runs the mute
+    // envelope UP, which is the T/R shaping WDSP already owns.
+    if (!m_modulatorRunning) {
+        if (!m_channel->setRunning(true)) {
+            qCWarning(lcTxMod) << "HL2 TXA modulator: start refused; this over "
+                                  "will not reach the wire";
+            return;
+        }
+        m_modulatorRunning = true;
     }
 
     for (std::size_t off = 0; off + block <= audio.size(); off += block) {
