@@ -192,6 +192,11 @@ bool validFixedPcm(const QByteArray& pcm, bool floating)
     const qsizetype frameBytes = sampleBytes * 2;
     if (pcm.isEmpty() || pcm.size() % frameBytes != 0
         || pcm.size() / frameBytes > QsoPcmConverter::kMaxInputFrames) {
+        // #5648: a recording must not lose audio quietly. No producer wired
+        // today can emit either shape, so this is the "impossible" case
+        // reporting itself rather than a block disappearing without a trace.
+        qCWarning(lcAudio) << "QsoRecorder: dropped a malformed fixed-rate block —"
+                           << pcm.size() << "bytes, frame size" << frameBytes;
         return false;
     }
     if (floating) {
@@ -215,12 +220,30 @@ void QsoRecorder::feedRxFrame(const PcmFrame& frame)
     std::lock_guard<std::mutex> lock(m_writeMutex);
     // Select one normalized speaker source before touching its replay cursor.
     // A different current producer is not an implicit source-switch request.
-    if (!frame.current()
-        || (m_rxObservation.current() && m_rxObservation.stream() != frame.stream())
-        || !m_rxGate.accept(frame)) {
+    if (!frame.current()) {
         return;
     }
+    if (m_rxObservation.current() && m_rxObservation.stream() != frame.stream()) {
+        // One file, one source, deliberately -- a different current producer is
+        // not an implicit switch request. Say it once, though: if the selected
+        // epoch is ever live but no longer producing, this silently locks out
+        // the replacement and RX recording just stops with nothing logged.
+        if (!m_foreignSourceWarned) {
+            m_foreignSourceWarned = true;
+            qCWarning(lcAudio)
+                << "QsoRecorder: ignoring a second speaker producer; recording "
+                   "stays on the first while its epoch is live";
+        }
+        return;
+    }
+    if (!m_rxGate.accept(frame)) {
+        return;
+    }
+    const bool sourceChanged = m_rxObservation.stream() != frame.stream();
     m_rxObservation = frame;
+    if (sourceChanged) {
+        m_foreignSourceWarned = false;
+    }
     if (!m_recording || !m_file || m_transmitting || m_cwOverActive) {
         return;
     }
@@ -925,6 +948,17 @@ void QsoRecorder::releasePlaybackSink(bool stop)
             m_playSink->stop();
         }
         m_playSink->disconnect(this);
+        // deleteLater(), NOT a direct delete, and it must stay that way:
+        // onPlaybackSinkState() is a DIRECT connection from
+        // QAudioSink::stateChanged, so a natural end-of-file arrives here with
+        // the sink's own emission still on the stack. Destroying it there frees
+        // the sender mid-emit; disconnect(this) severs the connection but does
+        // not unwind that frame.
+        //
+        // The cost is that ~QsoRecorder cannot run the deferred delete, so the
+        // sink falls to ~QObject instead -- after m_playBuffer and m_playPcm
+        // have gone as members. That is safe because stop() above has already
+        // halted the pull, and it stays safe only while this order holds.
         m_playSink->deleteLater();
         m_playSink = nullptr;
     }

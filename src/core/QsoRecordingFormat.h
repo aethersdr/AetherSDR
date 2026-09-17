@@ -17,10 +17,24 @@ namespace AetherSDR {
 class QsoRecordingFormat final {
 public:
     explicit QsoRecordingFormat(const PcmFrame& observedRx = {})
-        : m_sampleRateHz(observedRx.current()
-              && observedRx.stream().purpose == PcmPurpose::Speaker
-              ? observedRx.stream().format.sampleRateHz : 24000)
+        : m_sampleRateHz(selectRate(observedRx))
     {
+    }
+
+    // The rate a file may be STAMPED with is bounded by what this app can read
+    // back, not merely by what a producer may emit. PcmFormat::valid() and
+    // parseQsoWav()'s accepted set are separate literals that happen to agree
+    // today; RFC #5468 is about adding rates, so widening one without the other
+    // would publish a WAV AetherSDR then refuses to play. Fail to the legacy
+    // rate instead of writing a file we cannot open.
+    static int selectRate(const PcmFrame& observedRx)
+    {
+        if (!observedRx.current()
+            || observedRx.stream().purpose != PcmPurpose::Speaker) {
+            return 24000;
+        }
+        const int hz = observedRx.stream().format.sampleRateHz;
+        return (hz == 24000 || hz == 48000) ? hz : 24000;
     }
 
     int sampleRateHz() const { return m_sampleRateHz; }

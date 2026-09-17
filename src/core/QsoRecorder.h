@@ -148,6 +148,10 @@ public slots:
 
     // Serialized audio feeds. Fixed-format compatibility RX is float32 stereo
     // 24 kHz; TX/CW are native int16 stereo 24 kHz with separate histories.
+    // feedRxAudio has NO production caller since typed RX landed — MainWindow
+    // wires rxDemodAudioReady straight to feedRxFrame. It is retained as the
+    // fixed-rate compatibility seam and is exercised by the recorder tests;
+    // the legacy-RX guard in feedFixedPcm is correct but no longer live.
     void feedRxAudio(const QByteArray& pcm);
     void feedTxAudio(const QByteArray& pcm);
     // Observes current speaker metadata even while stopped or TX-gated. The
@@ -233,6 +237,9 @@ private:
     // persists across files so stop/start cannot admit replayed queued blocks.
     PcmFrameGate m_rxGate;
     PcmFrame m_rxObservation;
+    // Latches the 'ignoring a second speaker producer' warning to once per
+    // selected source, since RX frames arrive continuously.
+    bool     m_foreignSourceWarned{false};
     std::optional<QsoRecordingFormat> m_fileFormat;
     PcmSource m_pcmSource{PcmSource::None};
     PcmFrame m_pcmEpoch;

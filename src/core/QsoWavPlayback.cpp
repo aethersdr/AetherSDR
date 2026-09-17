@@ -12,7 +12,7 @@ namespace AetherSDR {
 
 std::optional<QByteArray> prepareQsoWavPlayback(
     QIODevice& source, const QAudioFormat& sinkFormat, QString* error,
-    qint64 maxOutputBytes)
+    qint64 maxOutputFrames)
 {
     const auto fail = [error](const QString& reason) -> std::optional<QByteArray> {
         if (error) {
@@ -25,7 +25,7 @@ std::optional<QByteArray> prepareQsoWavPlayback(
         || (sinkFormat.channelCount() != 1 && sinkFormat.channelCount() != 2)
         || (sinkFormat.sampleFormat() != QAudioFormat::Int16
             && sinkFormat.sampleFormat() != QAudioFormat::Float)
-        || maxOutputBytes <= 0 || maxOutputBytes > kQsoPlaybackByteLimit) {
+        || maxOutputFrames <= 0 || maxOutputFrames > kQsoPlaybackMaxFrames) {
         return fail(QStringLiteral("Unsupported QSO playback sink format or buffer budget"));
     }
 
@@ -39,7 +39,7 @@ std::optional<QByteArray> prepareQsoWavPlayback(
                                  + file->sampleRate / 2) / file->sampleRate;
     const int bytesPerFrame = sinkFormat.channelCount()
         * (sinkFormat.sampleFormat() == QAudioFormat::Float ? 4 : 2);
-    if (outputFrames <= 0 || outputFrames > maxOutputBytes / bytesPerFrame
+    if (outputFrames <= 0 || outputFrames > maxOutputFrames
         || outputFrames > std::numeric_limits<qsizetype>::max() / bytesPerFrame) {
         return fail(QStringLiteral("QSO recording exceeds the playback buffer limit"));
     }

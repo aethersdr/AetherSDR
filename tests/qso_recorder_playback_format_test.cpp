@@ -192,11 +192,20 @@ int main(int argc, char** argv)
     check(same && peak > 0.2f, "short-file tail contains real audio with mono duplicated");
 
     QString error;
-    check(!prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Float), &error, 1935)
+    // The budget counts converted FRAMES, so the same ceiling holds whatever
+    // sample format the sink negotiated. 1936 output bytes at Float stereo
+    // (8 B/frame) is 242 frames; one frame short must still refuse.
+    check(!prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Float), &error, 241)
               && !error.isEmpty(), "output budget rejects before payload conversion");
     check(source.pos() == 44, "over-budget file stops at parsed data start");
-    check(prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Float), &error, 1936).has_value()
+    check(prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Float), &error, 242).has_value()
               && error.isEmpty(), "exact output budget succeeds");
+    // The point of counting frames: an Int16 sink at the same rate gets the
+    // same duration, where a byte budget would have given it twice as much.
+    check(!prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Int16), &error, 241)
+              && !error.isEmpty(), "frame budget is independent of sample format");
+    check(prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Int16), &error, 242).has_value()
+              && error.isEmpty(), "Int16 sink gets the same frame ceiling as Float");
     check(!prepareQsoWavPlayback(source, sink(48000, 2, QAudioFormat::Int32)),
           "unsupported negotiated encoding is not misinterpreted");
     check(!prepareQsoWavPlayback(source, sink(192001, 2, QAudioFormat::Int16)),

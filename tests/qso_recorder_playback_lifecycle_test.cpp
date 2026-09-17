@@ -383,7 +383,7 @@ void testDestructionStopsBeforeBufferTeardown()
 // The output budget must reject before sink creation, but never silently.
 QString writeOverBudgetFixture(const QString& directory, const QAudioFormat& format)
 {
-    const qint64 sourceFrames = kQsoPlaybackByteLimit / format.bytesPerFrame()
+    const qint64 sourceFrames = kQsoPlaybackMaxFrames
         * 24000 / format.sampleRate() + 1;
     const quint32 bytes = static_cast<quint32>(sourceFrames * 4);
     const auto header = QsoRecordingFormat{}.wavHeader(bytes);
