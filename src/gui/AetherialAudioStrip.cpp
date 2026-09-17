@@ -174,7 +174,13 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         // strip is trying to read it across the room, and the furniture is what
         // they are trying to be rid of.
         maxBtn->setAccessibleName(QStringLiteral("Full screen"));
-        maxBtn->setToolTip("Enter full screen");
+        // "Toggle", not "Enter": the button is a toggle and the tooltip used
+        // to say "Enter full screen" while the window already WAS full screen
+        // and the next click would leave it. @rfoust observed both through the
+        // bridge at once -- windowState fullscreen beside toolTip "Enter full
+        // screen". A state-dependent label would also work; neutral wording is
+        // the smaller change and cannot go stale.
+        maxBtn->setToolTip(tr("Toggle full screen"));
         connect(maxBtn, &QPushButton::clicked, this,
                 &AetherialAudioStrip::toggleFullScreen);
         row->addWidget(maxBtn);
@@ -890,11 +896,8 @@ bool AetherialAudioStrip::eventFilter(QObject* obj, QEvent* ev)
         return FramelessMoveHelper::start(m_titleBar, me);
     }
     if (obj == m_titleBar && ev->type() == QEvent::MouseButtonDblClick) {
-        // THE SAME VERB AS THE BUTTON TWO PIXELS AWAY. They used to disagree:
-        // the button toggled full screen while this toggled maximize, so a
-        // double-click taken from full screen read isMaximized() == false and
-        // called showMaximized() -- dropping the window out of full screen into
-        // maximized and desyncing the button's toggle from outside itself.
+        // Keep title-bar double-click behaviour consistent with the button.
+        // One verb, so the two cannot drift apart again.
         toggleFullScreen();
         ev->accept();
         return true;
