@@ -26,6 +26,7 @@
 #include <QObject>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstddef>
@@ -34,6 +35,7 @@
 #include <random>
 #include <string>
 #include <utility>
+#include <thread>
 #include <vector>
 
 using namespace AetherSDR::hl2;
@@ -45,18 +47,29 @@ static void check(bool ok, const char* what)
     if (!ok) { std::fprintf(stderr, "FAIL: %s\n", what); ++g_failures; }
 }
 
-// Goertzel-style complex bin: correlate the IQ against exp(-j*2*pi*f*n/fs).
-// Positive f probes the upper sideband, negative the lower.
-static double binPower(const std::vector<std::complex<float>>& iq, double hz, double fs)
+// ── The caller's cadence, which the TXA build depends on and the phasing ──
+//    build does not.
+//
+// Hl2TxDsp's TXA channel is opened with blockForOutput = false, so
+// WdspChannel::processIq RETURNS Underrun rather than waiting when the output
+// side is not ready. A test that pushes a second of audio through in a tight
+// loop is not driving the modulator, it is STARVING it: run unpaced, this file
+// emitted 1024 IQ samples where it expected 23552, on exact zeros, with every
+// sideband assertion reading 0.0 dB. The live caller does not do that --
+// AudioEngine hands this stage audio as the sound card produces it.
+//
+// Pace TXA at the configured audio rate. Feeding five times faster can exhaust
+// scheduling headroom under sanitizers and invalidate otherwise correct captures.
+// The synchronous phasing implementation does not need a wall-clock delay.
+// Carry the engine-issued context through every feed: a missing grant is dropped.
+static void feed(Hl2TxDsp& tx, const std::vector<float>& chunk,
+                 TxAudioSource source, const AetherSDR::TxCoordinator::Context& context)
 {
-    std::complex<double> acc{0.0, 0.0};
-    const double w = -2.0 * M_PI * hz / fs;
-    for (std::size_t n = 0; n < iq.size(); ++n) {
-        const double ph = w * static_cast<double>(n);
-        acc += std::complex<double>(iq[n].real(), iq[n].imag())
-             * std::complex<double>(std::cos(ph), std::sin(ph));
+    tx.processAudioBlock(chunk, source, context);
+    if (AETHER_HL2_TX_TXA) {
+        std::this_thread::sleep_for(std::chrono::duration<double>(
+            static_cast<double>(chunk.size()) / tx.config().inputSampleRateHz));
     }
-    return std::abs(acc) / static_cast<double>(iq.size());
 }
 
 // Trim an IQ capture to a WHOLE number of cycles of `hz`, after dropping `skip`
@@ -95,15 +108,139 @@ static std::vector<std::complex<float>> wholeCycles(
             iq.begin() + static_cast<std::ptrdiff_t>(skip + n)};
 }
 
+// Output samples dropped from the FRONT of every capture before it is
+// analysed.
+//
+// Both modulators have a priming stretch and neither one's is a filter
+// response. The phasing modulator's is its 255-tap delay line filling, about
+// 5 ms. A TXA channel's is create_slews' mute ramp (ndelup + ntup = 840 input
+// samples = 35 ms) plus the rest of the fill, measured as bounded at output
+// sample 2336 -- 48.7 ms -- after which the output never returns to zero. A
+// ramp is amplitude modulation, and amplitude modulation puts energy in the
+// image bin, so including it would report the envelope rather than the filter.
+//
+// 12288 samples is 12 output blocks, 256 ms. 4096 was tried first and is NOT
+// enough, which the instrument said rather than the arithmetic: the census's
+// per-block RMS walks 0, 0, 7.8e-14, 2.2e-04, 4.3e-02 and only reaches its
+// settled 7.07e-02 at block 5, so a 4096-sample skip lands inside the ramp and
+// the residual amplitude modulation held the image bin at 4.4e-05 -- an 81 dB
+// figure that is the ENVELOPE, not the filter. 12288 clears block 5 by a
+// factor of 2.4.
+//
+// Applied in BOTH builds, because the point of this instrument is that the two
+// chains are read by one of it.
+static constexpr std::size_t kSettleSamples = 12288;
+
+// Longest prefix that is a WHOLE number of cycles of `hz`.
+//
+// THIS IS NOT TIDINESS, and without it the assertions below measure their own
+// analysis window rather than the modulator.
+//
+// binPower correlates against a RECTANGULAR window, so a strong component at
+// -f leaks into the bin at +f through the Dirichlet kernel -- about
+// wanted * fs / (pi * 2f * N) for a capture of N samples. This file's captures
+// are NOT whole-cycle by accident: 1.0 s of 24 kHz audio is 46 modulator
+// blocks, 23552 samples consumed, 47104 out, and 47104 is not a whole number
+// of 1 kHz periods. The leakage floor there is about 76 dB, which is why this
+// file could only ever assert 30 dB and why the 87 dB the phasing modulator
+// actually reaches at 1 kHz was invisible to it.
+//
+// Truncating to a whole number of cycles puts the image bin exactly on a null
+// of the kernel. The period is fs/gcd(f, fs) samples, which is why every tone
+// asserted here is an integer number of hertz. The capture's start offset does
+// not matter: an offset only rotates the leakage term's phase, it does not
+// stop it summing to zero -- which is what licenses kSettleSamples above.
+//
+// This is the same correction wdsp_channel_test's wholeCycleCount() makes.
+// Both chains have to be measured through the same instrument or the
+// comparison between them is not one.
+static std::size_t wholeCycles(std::size_t have, double hz, double fs)
+{
+    const long f = std::lround(hz);
+    const long r = std::lround(fs);
+    if (f <= 0 || r <= 0) {
+        return 0;
+    }
+    const std::size_t period = static_cast<std::size_t>(r / std::gcd(f, r));
+    return (have / period) * period;
+}
+
+// Goertzel-style complex bin: correlate the IQ against exp(-j*2*pi*f*n/fs).
+// Positive f probes the upper sideband, negative the lower.
+//
+// `trimmed` drops the priming stretch and truncates to whole cycles. Left OFF
+// for the diagnostic prints that only want a level, and ON everywhere a
+// suppression figure is asserted.
+static double binPower(const std::vector<std::complex<float>>& iq, double hz,
+                       double fs, bool trimmed = false)
+{
+    std::size_t from = 0;
+    std::size_t count = iq.size();
+    if (trimmed) {
+        if (iq.size() <= kSettleSamples) {
+            return 0.0;
+        }
+        from = kSettleSamples;
+        count = wholeCycles(iq.size() - kSettleSamples, hz < 0.0 ? -hz : hz, fs);
+        if (count == 0) {
+            return 0.0;
+        }
+    }
+    std::complex<double> acc{0.0, 0.0};
+    const double w = -2.0 * M_PI * hz / fs;
+    for (std::size_t n = 0; n < count; ++n) {
+        const double ph = w * static_cast<double>(n);
+        acc += std::complex<double>(iq[from + n].real(), iq[from + n].imag())
+             * std::complex<double>(std::cos(ph), std::sin(ph));
+    }
+    return std::abs(acc) / static_cast<double>(count);
+}
+
+// ── The opposite-sideband floor this build is held to ────────────────────
+//
+// THE ONE NUMBER THE MIGRATION WAS MADE ON, so it is stated here once and
+// asserted rather than printed.
+//
+// The phasing modulator measures 22 dB at 150 Hz on the {150, 3000} DIGU/DIGL
+// passband and 87 dB at 1 kHz on {300, 2700}. TXA measures past this
+// instrument's numerical floor at both. The migration's whole return is the
+// LOW EDGE: at 1 kHz the incumbent is already against EP2's signed-16-bit
+// wire, which quantises at about 96 dB (MetisProtocol.cpp, ep2WriteTxIq), so
+// TXA's advantage there is below the wire and unusable. At 150 Hz, in the
+// modes WSJT-X transmits in, there are seventy decibels the wire could carry
+// and 255 taps do not fill.
+//
+// kMinSuppDb is set ABOVE THE PHASING MODULATOR'S BEST MEASURED POINT in the
+// TXA build, on wdsp_channel_test's reasoning: the assertion then reads "TXA's
+// worst asserted point still beats the incumbent's best one". If a future
+// change brings TXA near the chain it replaced, the migration has lost the
+// argument it was made on, and this is the line that says so.
+//
+// kMinLowEdgeSuppDb is the SAME floor in the TXA build and a characterisation
+// bound in the phasing build -- the 22.06 dB #5741 measured, rounded down. It
+// is deliberately not "30 dB like the others": 255 taps cannot do 30 dB at
+// 150 Hz and never could, and a floor the incumbent cannot meet would be a
+// failing test rather than a record of why it was replaced.
+#if AETHER_HL2_TX_TXA
+static constexpr double kMinSuppDb = 100.0;
+static constexpr double kMinLowEdgeSuppDb = 100.0;
+static constexpr const char* kModulator = "wdsp-txa";
+#else
+static constexpr double kMinSuppDb = 30.0;
+static constexpr double kMinLowEdgeSuppDb = 20.0;
+static constexpr const char* kModulator = "phasing";
+#endif
+
 // Run `seconds` of a pure audio tone through the modulator and collect the IQ.
-static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
+// `faults` reports blocks the modulator could not place on the wire.
+static std::vector<std::complex<float>> modulateOnce(WdspChannel::Mode mode,
                                                  double toneHz, double amplitude,
                                                  double micGain, double seconds,
-                                                 float* lastMicPeak = nullptr,
-                                                 bool alc = false,
-                                                 const double* passband = nullptr,
-                                                 TxAudioSource source =
-                                                     TxAudioSource::Microphone)
+                                                 float* lastMicPeak,
+                                                 bool alc,
+                                                 const double* passband,
+                                                 TxAudioSource source,
+                                                 unsigned long long* faults)
 {
     Hl2TxDsp tx;
     TxTestAuthority authority;
@@ -145,15 +282,108 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
         audio[static_cast<std::size_t>(n)] =
             static_cast<float>(amplitude * std::sin(2.0 * M_PI * toneHz * n / fs));
 
-    // Feed in realistic chunks rather than one giant block.
+    // Feed in realistic chunks rather than one giant block, at the cadence the
+    // live caller feeds them (see feed()).
     constexpr std::size_t kChunk = 240;
     for (std::size_t off = 0; off < audio.size(); off += kChunk) {
         const std::size_t n = std::min(kChunk, audio.size() - off);
-        tx.processAudioBlock(std::vector<float>(audio.begin() + static_cast<std::ptrdiff_t>(off),
-                                                audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                             source, authority.context);
+        feed(tx, std::vector<float>(audio.begin() + static_cast<std::ptrdiff_t>(off),
+                                    audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
+             source, authority.context);
     }
+    *faults = tx.modulatorFaultBlocks();
     return out;
+}
+
+// ── The same run, retried if the modulator was STARVED ──────────────────────
+//
+// EVERY block must reach the wire or the capture is not phase-continuous and
+// nothing measured from it means anything: a dropped block does not merely lose
+// samples, fexchange2 slips the output stream by a whole DSP buffer
+// permanently, so a correlation across the seam averages two time origins.
+//
+// Zero faults is guaranteed in the phasing build -- arithmetic cannot starve --
+// and is a real risk in the TXA build on a SHARED machine. It is not
+// hypothetical: measured under a load average of 252, this file and
+// wdsp_channel_test both starved, and the sideband assertions then failed
+// saying the chain had regressed when what had happened was that eight other
+// compiler jobs were running.
+//
+// Retrying belongs HERE and would be wrong inside Hl2TxDsp: pacing is the
+// caller's responsibility, and a sleep-and-retry on the audio I/O thread would
+// hide a timing fault behind a spin -- the same class of mistake as the silent
+// failure this whole build flag exists to avoid. The runtime path counts and
+// logs the fault instead. A test is free to try again; a transmitter is not.
+//
+// Three attempts, and the retry is PRINTED, because a run that needs retrying
+// on an idle machine is evidence about the chain rather than about the machine.
+static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
+                                                 double toneHz, double amplitude,
+                                                 double micGain, double seconds,
+                                                 float* lastMicPeak = nullptr,
+                                                 bool alc = false,
+                                                 const double* passband = nullptr,
+                                                 TxAudioSource source =
+                                                     TxAudioSource::Microphone)
+{
+    std::vector<std::complex<float>> out;
+    unsigned long long faults = 0;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        out = modulateOnce(mode, toneHz, amplitude, micGain, seconds,
+                           lastMicPeak, alc, passband, source, &faults);
+        if (faults == 0) {
+            return out;
+        }
+        if (attempt < 2) {
+            std::fprintf(stderr,
+                     "starved at %.0f Hz: %llu blocks did not reach the wire "
+                     "-- retrying (attempt %d of 3)\n",
+                     toneHz, faults, attempt + 2);
+        }
+    }
+    if (faults != 0) {
+        std::fprintf(stderr, "STARVATION: modulatorFaultBlocks=%llu; capture is invalid for spectral assertions\n", faults);
+    }
+    check(faults == 0,
+          "every modulator block reached the wire (capture is contiguous)");
+    return out;
+}
+
+// ── The same retry, for the cases that build their own modulator ────────────
+//
+// modulate() above covers the spectral cases. The three level cases below feed
+// a hand-built Hl2TxDsp on their own schedule -- a swept level, a held pause --
+// so they cannot go through it, and they starve in exactly the same way. It is
+// not theoretical: run in-suite under `ctest -j4`, the limiter-release case
+// dropped 1 of 132 blocks and its swept tail read 1.02 dB against a 1.00 dB
+// tolerance. That is a missing block of audio, not a latching limiter, and
+// reading it as the second is the whole failure mode this file exists to catch.
+//
+// `body` returns the modulator's fault count and its measurements; the checks
+// stay OUTSIDE, so a starved attempt is retried rather than recorded as a
+// failure. Three attempts, printed.
+template <typename Run, typename F>
+static Run retryIfStarved(const char* what, F&& body)
+{
+    Run run{};
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        run = body();
+        if (run.faults == 0) {
+            return run;
+        }
+        if (attempt < 2) {
+            std::fprintf(stderr,
+                     "starved in %s: %llu blocks did not reach the wire "
+                     "-- retrying (attempt %d of 3)\n",
+                     what, run.faults, attempt + 2);
+        }
+    }
+    if (run.faults != 0) {
+        std::fprintf(stderr, "STARVATION: modulatorFaultBlocks=%llu in %s; capture is invalid\n", run.faults, what);
+    }
+    check(run.faults == 0,
+          "every modulator block reached the wire in this level case");
+    return run;
 }
 
 int main(int argc, char** argv)
@@ -166,6 +396,31 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     constexpr double kFsOut = 48000.0;
     constexpr double kTone = 1000.0;
+
+    // ---- the build flag is plumbed, and says so ----
+    //
+    // A flag that is only ever compiled one way is not a flag. This is the
+    // check that the CMake option reached the code rather than defaulting
+    // silently, and it is why AETHER_HL2_TX_TXA is defined in BOTH directions
+    // (0 or 1) instead of only when it is on: "never plumbed" and "off" would
+    // otherwise be the same state.
+    {
+        std::fprintf(stderr, "modulator: %s (AETHER_HL2_TX_TXA=%d)\n",
+                     Hl2TxDsp::modulatorName(), AETHER_HL2_TX_TXA);
+        check(std::string(Hl2TxDsp::modulatorName()) == kModulator,
+              "the compiled modulator is the one the build asked for");
+        Hl2TxDsp probe;
+        std::string err;
+        check(probe.configure(Hl2TxDsp::Config{}, &err),
+              "the modulator configures at the shipped defaults");
+        // -1 in the phasing build and a real WDSP id in the TXA build. The
+        // health snapshot reports this, which is what lets a transmit bug
+        // report say which chain produced the signal.
+        const int id = probe.wdspChannelId();
+        std::fprintf(stderr, "modulator wdsp channel id: %d\n", id);
+        check(AETHER_HL2_TX_TXA ? (id >= 0) : (id < 0),
+              "wdspChannelId() reports a channel only where one exists");
+    }
 
     // ---- rate conversion ----
     {
@@ -180,18 +435,165 @@ int main(int argc, char** argv)
               "24 kHz audio in -> ~48 kHz IQ out (2:1 rate conversion)");
     }
 
+    // Reset must discard the BEGINNING of the next over, including after a
+    // receive interval with no processing calls. No settling prefix is omitted.
+    {
+        Hl2TxDsp tx;
+        Hl2TxDsp::Config cfg;
+        cfg.alcEnabled = false;
+        std::string err;
+        const bool configured = tx.configure(cfg, &err);
+        check(configured, "reset regression configures");
+        if (configured) {
+            tx.setMicGain(1.0);
+            std::vector<std::complex<float>> captured;
+            QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                             [&captured](const auto& iq) {
+                captured.insert(captured.end(), iq.begin(), iq.end());
+            });
+            const int channelId = tx.wdspChannelId();
+            std::vector<float> audio(512);
+            auto clockBlock = [&] {
+                tx.processAudioBlock(audio, TxAudioSource::Microphone, authority.context);
+                if (AETHER_HL2_TX_TXA) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(22));
+                }
+            };
+            for (const int gapMs : {0, 500, 0}) {
+                captured.clear();
+                for (int block = 0; block < 32; ++block) {
+                    for (int n = 0; n < 512; ++n) {
+                        audio[static_cast<std::size_t>(n)] = static_cast<float>(
+                            0.5 * std::sin(2.0 * M_PI * kTone * (block * 512 + n)
+                                           / cfg.inputSampleRateHz));
+                    }
+                    clockBlock();
+                }
+                double tonePeak = 0.0;
+                for (const auto& sample : captured) {
+                    tonePeak = std::max(tonePeak, static_cast<double>(std::abs(sample)));
+                }
+                check(tonePeak > 0.1, "each over resumes producing tone after reset");
+                tx.reset();
+                tx.reset(); // Repeated unkey is harmless.
+                check(tx.isConfigured() && tx.wdspChannelId() == channelId,
+                      "reset preserves configuration and the allocated channel");
+                std::this_thread::sleep_for(std::chrono::milliseconds(gapMs));
+                captured.clear();
+                std::fill(audio.begin(), audio.end(), 0.0f);
+                for (int block = 0; block < 16; ++block) {
+                    clockBlock();
+                }
+                double stalePeak = 0.0;
+                for (const auto& sample : captured) {
+                    stalePeak = std::max(stalePeak, static_cast<double>(std::abs(sample)));
+                }
+                std::fprintf(stderr, "reset [%s] gap=%d ms: head-inclusive peak %.9g, faults %llu\n",
+                             tx.modulatorName(), gapMs, stalePeak, tx.modulatorFaultBlocks());
+                check(captured.size() == 16 * 1024,
+                      "post-reset silence preserves the complete output stream");
+                check(stalePeak < 1e-6, "reset drops the previous over from the FIRST output sample");
+                check(tx.modulatorFaultBlocks() == 0, "reset regression has no underruns");
+            }
+        }
+    }
+
+    // ---- A MODE CHANGE ON A RUNNING MODULATOR MOVES THE SIDEBAND ----
+    //
+    // THE ONE PATH EVERY OTHER CASE IN THIS FILE MISSES. Each case above
+    // constructs a fresh Hl2TxDsp already in the mode it measures, so the
+    // signed passband is baked in by buildModulator() at open time and
+    // applyModeAndFilter() is never reached. Its two callers are setMode() and
+    // setFilter() on an ALREADY OPEN channel, which nothing exercised.
+    //
+    // That is exactly the path Hl2TxDsp::applyModeAndFilter warns about in its
+    // own comment: in the TXA build SetTXAMode does NOT choose a sideband --
+    // TXASetupBPFilters gives TXA_LSB and TXA_USB the identical
+    // CalcBandpassFilter call, so the sideband rides entirely on the SIGN of
+    // the passband. A mode change pushing only the mode leaves the transmitter
+    // on the previous sideband with the readout saying otherwise, and it is
+    // invisible from inside this application because the panadapter reads the
+    // same wire order.
+    //
+    // Found by mutation, not by inspection: deleting the setFilter() call from
+    // applyModeAndFilter() left this whole file green.
+    {
+        Hl2TxDsp tx;
+        Hl2TxDsp::Config cfg;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.alcEnabled = false;
+        std::string err;
+        if (tx.configure(cfg, &err)) {
+            tx.setMicGain(1.0);
+            std::vector<std::complex<float>> cap;
+            QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                             [&cap](const std::vector<std::complex<float>>& iq) {
+                cap.insert(cap.end(), iq.begin(), iq.end());
+            });
+            const int fs = cfg.inputSampleRateHz;
+            constexpr std::size_t kChunk = 240;
+            auto run = [&](double seconds) {
+                const int total = static_cast<int>(fs * seconds);
+                std::vector<float> chunk(kChunk);
+                for (int off = 0; off + static_cast<int>(kChunk) <= total;
+                     off += static_cast<int>(kChunk)) {
+                    for (std::size_t n = 0; n < kChunk; ++n)
+                        chunk[n] = static_cast<float>(
+                            0.5 * std::sin(2.0 * M_PI * kTone
+                                           * (off + static_cast<int>(n)) / fs));
+                    feed(tx, chunk, TxAudioSource::Microphone, authority.context);
+                }
+            };
+            auto sidebandDb = [&]() {
+                const double up = binPower(cap, +kTone, kFsOut, true);
+                const double lo = binPower(cap, -kTone, kFsOut, true);
+                return 20.0 * std::log10((lo + 1e-12) / (up + 1e-12));
+            };
+
+            run(1.0);
+            const double usbDb = sidebandDb();     // + means energy on the LOWER wire bin
+            std::fprintf(stderr, "mode change: as USB %.1f dB (lower-over-upper)\n", usbDb);
+            check(usbDb > 0.0,
+                  "mode change: a fresh USB modulator puts energy on the LOWER wire bin");
+
+            // THE CHANGE ITSELF, on the open channel.
+            tx.setMode(WdspChannel::Mode::Lsb);
+            cap.clear();
+            run(1.0);
+            const double lsbDb = sidebandDb();
+            std::fprintf(stderr, "mode change: after setMode(Lsb) %.1f dB "
+                                 "(lower-over-upper)\n", lsbDb);
+            check(lsbDb < 0.0,
+                  "mode change: setMode(Lsb) on a RUNNING modulator moves the "
+                  "sideband to the UPPER wire bin");
+            check(std::fabs(lsbDb - usbDb) > 20.0,
+                  "mode change: and it actually moves -- the two sidebands are "
+                  "not the same measurement");
+        } else {
+            std::fprintf(stderr, "FAIL: mode-change case configure: %s\n", err.c_str());
+            ++g_failures;
+        }
+    }
+
     // ---- USB puts the tone ABOVE the carrier ----
     {
         const auto iq = modulate(WdspChannel::Mode::Usb, kTone, 0.5, 1.0, 1.0);
         if (!iq.empty()) {
-            const double upper = binPower(iq, +kTone, kFsOut);
-            const double lower = binPower(iq, -kTone, kFsOut);
+            const double upper = binPower(iq, +kTone, kFsOut, true);
+            const double lower = binPower(iq, -kTone, kFsOut, true);
             const double ratioDb = 20.0 * std::log10((upper + 1e-12) / (lower + 1e-12));
             std::fprintf(stderr, "USB: +1kHz %.6f, -1kHz %.6f, suppression %.1f dB\n",
                          upper, lower, ratioDb);
+            // The WIRE-FACING sign, and it is the same assertion in both
+            // builds although the two modulators reach it by opposite routes:
+            // the phasing modulator emits the analytic signal and CONJUGATES
+            // it, a TXA channel is handed a signed passband and must NOT be
+            // conjugated. Either one alone, or both, puts the transmitter on
+            // the wrong sideband -- invisible from inside this application,
+            // because the panadapter reads the same wire order.
             check(lower > upper,
                   "USB: wire-facing IQ puts energy on the LOWER side (conjugated)");
-            check(-ratioDb > 30.0, "USB: opposite sideband suppressed by >30 dB");
+            check(-ratioDb > kMinSuppDb, "USB: opposite sideband suppressed");
         }
     }
 
@@ -199,14 +601,61 @@ int main(int argc, char** argv)
     {
         const auto iq = modulate(WdspChannel::Mode::Lsb, kTone, 0.5, 1.0, 1.0);
         if (!iq.empty()) {
-            const double upper = binPower(iq, +kTone, kFsOut);
-            const double lower = binPower(iq, -kTone, kFsOut);
+            const double upper = binPower(iq, +kTone, kFsOut, true);
+            const double lower = binPower(iq, -kTone, kFsOut, true);
             const double ratioDb = 20.0 * std::log10((lower + 1e-12) / (upper + 1e-12));
             std::fprintf(stderr, "LSB: +1kHz %.6f, -1kHz %.6f, suppression %.1f dB\n",
                          upper, lower, ratioDb);
             check(upper > lower,
                   "LSB: wire-facing IQ puts energy on the UPPER side (conjugated)");
-            check(-ratioDb > 30.0, "LSB: opposite sideband suppressed by >30 dB");
+            check(-ratioDb > kMinSuppDb, "LSB: opposite sideband suppressed");
+        }
+    }
+
+    // ── Opposite-sideband suppression at the DIGU/DIGL LOW EDGE ────────────
+    //
+    // THIS IS THE ASSERTION THE WHOLE TXA MIGRATION WAS MADE ON, and it used
+    // to be a diagnostic print with no assertion at all.
+    //
+    // It measures the {150, 3000} passband Hl2Backend pushes for DIGU and
+    // DIGL, at the frequencies where 255 taps run out of transition room. The
+    // phasing modulator reads 22 dB at 150 Hz there; a TXA channel reads past
+    // this instrument's numerical floor. No other row in this file separates
+    // the two chains by anything that survives EP2's signed-16-bit wire: at
+    // 1 kHz the incumbent already measures 87 dB against a wire that quantises
+    // near 96 dB, so the mid-band rows above cannot carry the argument even
+    // though the numbers there are larger.
+    //
+    // It is DIGU and DIGL and nothing else. That is the modes WSJT-X transmits
+    // in, and the reason the case for this migration is narrower than the
+    // study that proposed it claimed.
+    //
+    // The floor differs per build on purpose -- see kMinLowEdgeSuppDb. In the
+    // phasing build this is #5741's characterisation bound and records why the
+    // chain was replaced; in the TXA build it is the same 100 dB the mid-band
+    // rows are held to, which sits above the phasing modulator's BEST measured
+    // point anywhere.
+    {
+        const double diguBand[2] = {150.0, 3000.0};
+        for (const double toneHz : {150.0, 200.0, 300.0, 1000.0}) {
+            const auto iq = modulate(WdspChannel::Mode::Digu, toneHz, 0.5, 1.0, 1.0,
+                                     nullptr, false, diguBand);
+            if (iq.empty()) {
+                check(false, "DIGU low-edge sweep produced IQ");
+                continue;
+            }
+            const double wanted = binPower(iq, -toneHz, kFsOut, true);
+            const double image  = binPower(iq, +toneHz, kFsOut, true);
+            const double suppDb =
+                20.0 * std::log10((wanted + 1e-30) / (image + 1e-30));
+            std::fprintf(stderr,
+                         "%s DIGU {150,3000} tone %.0f Hz: "
+                         "wanted %.9f  image %.9e  suppression %.2f dB\n",
+                         kModulator, toneHz, wanted, image, suppDb);
+            check(wanted > image,
+                  "DIGU low edge: the sideband is on the expected wire bin");
+            check(suppDb > kMinLowEdgeSuppDb,
+                  "DIGU low edge: opposite sideband suppressed");
         }
     }
 
@@ -256,20 +705,47 @@ int main(int argc, char** argv)
                 check(false, "modulation produced IQ for this mode");
                 continue;
             }
-            const double upper = binPower(iq, +kTone, kFsOut);
-            const double lower = binPower(iq, -kTone, kFsOut);
+            const double upper = binPower(iq, +kTone, kFsOut, true);
+            const double lower = binPower(iq, -kTone, kFsOut, true);
             const double wanted = c.wireUpper ? upper : lower;
             const double other  = c.wireUpper ? lower : upper;
-            const double suppDb = 20.0 * std::log10((wanted + 1e-12) / (other + 1e-12));
+            const double suppDb =
+                20.0 * std::log10((wanted + 1e-30) / (other + 1e-30));
             std::fprintf(stderr,
-                         "%-4s (passband %.0f..%.0f): +1kHz %.6f, -1kHz %.6f, "
-                         "suppression %.1f dB\n",
+                         "%-4s (passband %.0f..%.0f): +1kHz %.9f, -1kHz %.9f, "
+                         "suppression %.2f dB\n",
                          c.name, c.band[0], c.band[1], upper, lower, suppDb);
             check(wanted > other, "sideband is correct for this mode");
-            check(suppDb > 30.0, "opposite sideband suppressed by >30 dB");
+            check(suppDb > kMinSuppDb, "opposite sideband suppressed");
         }
     }
 
+#if !AETHER_HL2_TX_TXA
+    // ---- PHASING BUILD ONLY, and the reason is the block's own ----
+    //
+    // The evidence below is "these modes are BIT-IDENTICAL to USB", which is
+    // true because Hl2TxDsp::setMode()'s only reader is isLowerSideband(). A
+    // TXA channel does not work that way: it implements AM, SAM, FM and DSB as
+    // real WDSP transmit modes, and refuses WBFM outright ("WDSP TX does not
+    // define a WBFM mode"). So in the TXA build every assertion here fails --
+    // seven of them -- while nothing is wrong.
+    //
+    // The block says what to do about that in its own words: "If someone later
+    // teaches this chain a real AM or FM modulator, this block FAILS, which is
+    // the point: the failure is the reminder to take that mode back off the
+    // receive-only list." That reminder is hereby taken, and it is NOT this
+    // PR's to act on. Whether TXA makes AM and FM genuinely transmittable on a
+    // Hermes-Lite 2 is a CAPABILITY decision -- it changes what
+    // Hl2Backend::capabilities() declares and what
+    // RadioModel::refuseKeyInReceiveOnlyMode() will let an operator key -- and
+    // it belongs with the TXA migration rows (#5678 1.2, 6.2, 6.3), behind a
+    // flag that is not yet on by default and a modulator nobody has keyed on
+    // the air.
+    //
+    // Guarding rather than deleting, because the phasing build is what ships
+    // today and this is its evidence. Found by building the integration branch:
+    // #5680 landed this block on main after this branch was cut, so neither
+    // change could see the collision alone.
     // ---- THE MODES Hl2Backend DECLARES RECEIVE-ONLY ARE BIT-IDENTICAL TO USB ----
     //
     // This is the evidence behind `Hl2Backend::capabilities`'s
@@ -332,6 +808,7 @@ int main(int argc, char** argv)
                   "Hl2Backend declares it receive-only");
         }
     }
+#endif  // !AETHER_HL2_TX_TXA
 
     // ---- CHARACTERISATION SWEEP: opposite-sideband suppression vs audio frequency ----
     //
@@ -622,8 +1099,16 @@ int main(int argc, char** argv)
         const auto iq = modulate(WdspChannel::Mode::Usb, 5000.0, 0.5, 1.0, 1.0);
         const auto ref = modulate(WdspChannel::Mode::Usb, kTone, 0.5, 1.0, 1.0);
         if (!iq.empty() && !ref.empty()) {
-            const double out = binPower(iq, 5000.0, kFsOut);
-            const double in  = binPower(ref, kTone, kFsOut);
+            // The NEGATIVE bins, because these are USB and the wire order is
+            // conjugated -- so the wanted sideband is the lower one, as the
+            // assertions at the top of this file establish. Correlating +f here
+            // read the SUPPRESSED bin of both captures and compared two
+            // leakage figures. It survived on the phasing modulator because its
+            // image is proportional to its wanted, so the ratio came out right
+            // for the wrong reason; against TXA's image, which is at the
+            // numerical floor, that is measuring noise against noise.
+            const double out = binPower(iq, -5000.0, kFsOut);
+            const double in  = binPower(ref, -kTone, kFsOut);
             const double rejDb = 20.0 * std::log10((in + 1e-12) / (out + 1e-12));
             double mxOut = 0.0, mxRef = 0.0;
             for (const auto& v : iq)  mxOut = std::max(mxOut, static_cast<double>(std::abs(v)));
@@ -646,8 +1131,10 @@ int main(int argc, char** argv)
         const auto loud  = modulate(WdspChannel::Mode::Usb, kTone, 0.5, 1.0, 0.5, &peakUnity);
         const auto quiet = modulate(WdspChannel::Mode::Usb, kTone, 0.5, 0.5, 0.5, &peakHalf);
         if (!loud.empty() && !quiet.empty()) {
-            const double a = binPower(loud, kTone, kFsOut);
-            const double b = binPower(quiet, kTone, kFsOut);
+            // The WANTED bin. See the passband case above for why +kTone was
+            // wrong here and why it nevertheless passed.
+            const double a = binPower(loud, -kTone, kFsOut);
+            const double b = binPower(quiet, -kTone, kFsOut);
             const double dropDb = 20.0 * std::log10((a + 1e-12) / (b + 1e-12));
             std::fprintf(stderr, "mic gain: unity %.6f, half %.6f, drop %.1f dB; "
                                  "peak %.1f -> %.1f dBFS\n",
@@ -746,8 +1233,10 @@ int main(int argc, char** argv)
     // no gain at either level, and the DIFFERENCE between them survives the
     // stage intact. 20 dB in, 20 dB out.
     {
-        struct Settled { double gainDb; double outPeak; };
-        auto settled = [](double amplitude) -> Settled {
+        struct HoldRun { double gainDb = 0.0; double outPeak = 0.0;
+                         unsigned long long faults = 0; };
+        auto settledOnce = [](double amplitude) -> HoldRun {
+            HoldRun out;
             Hl2TxDsp tx;
             TxTestAuthority authority;
             Hl2TxDsp::Config cfg;
@@ -758,15 +1247,16 @@ int main(int argc, char** argv)
                 std::fprintf(stderr, "FAIL: ALC separation configure: %s\n",
                              err.c_str());
                 ++g_failures;
-                return {0.0, 0.0};
+                return out;
             }
             double lastGainDb = 0.0;
             QObject::connect(&tx, &Hl2TxDsp::alcGain, &tx,
                              [&lastGainDb](float db) { lastGainDb = db; });
-            std::vector<std::complex<float>> out;
+            // `captured`, not `out`: `out` is the HoldRun this lambda returns.
+            std::vector<std::complex<float>> captured;
             QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
-                             [&out](const std::vector<std::complex<float>>& iq) {
-                out.insert(out.end(), iq.begin(), iq.end());
+                             [&captured](const std::vector<std::complex<float>>& iq) {
+                captured.insert(captured.end(), iq.begin(), iq.end());
             });
 
             const int fs = cfg.inputSampleRateHz;
@@ -779,22 +1269,30 @@ int main(int argc, char** argv)
                         amplitude * std::sin(2.0 * M_PI * 1000.0
                                              * (off + static_cast<int>(n)) / fs));
                 }
-                tx.processAudioBlock(chunk, TxAudioSource::Microphone, authority.context);
+                feed(tx, chunk, TxAudioSource::Microphone, authority.context);
             }
             // Settled tail only, so the opening blocks are not representative.
             double mx = 0.0;
-            for (std::size_t i = out.size() / 2; i < out.size(); ++i)
-                mx = std::max(mx, static_cast<double>(std::abs(out[i])));
-            return {lastGainDb, mx};
+            for (std::size_t i = captured.size() / 2; i < captured.size(); ++i)
+                mx = std::max(mx, static_cast<double>(std::abs(captured[i])));
+            out.gainDb = lastGainDb;
+            out.outPeak = mx;
+            out.faults = tx.modulatorFaultBlocks();
+            return out;
+        };
+        auto settled = [&](double amplitude) {
+            return retryIfStarved<HoldRun>(
+                "the ALC hold case",
+                [&] { return settledOnce(amplitude); });
         };
 
         // -54 dBFS: this is "the room" — the fan, the hiss, the pause between
         // words. It sat below the old -45 dBFS hold threshold on purpose, and
         // still sits below it in spirit: it is the leg that used to be hauled up.
-        const Settled room = settled(0.002);
+        const HoldRun room = settled(0.002);
         // -34 dBFS: about where real speech sits, per the measurements quoted in
         // Hl2TxDsp::Config. Exactly 20 dB above the room leg.
-        const Settled speech = settled(0.02);
+        const HoldRun speech = settled(0.02);
 
         const double outSeparationDb =
             20.0 * std::log10((speech.outPeak + 1e-12) / (room.outPeak + 1e-12));
@@ -822,8 +1320,8 @@ int main(int argc, char** argv)
         // 0.33 dB of output separation from 24.65 dB of input. Asserting the
         // issue's numbers rather than a tidied version of them is what makes
         // this the regression test for the report rather than for the rewrite.
-        const Settled reported  = settled(0.01405);   // -37.05 dBFS
-        const Settled reportedSpeech = settled(0.2399);   // -12.4 dBFS
+        const HoldRun reported  = settled(0.01405);   // -37.05 dBFS
+        const HoldRun reportedSpeech = settled(0.2399);   // -12.4 dBFS
         const double reportedSeparationDb =
             20.0 * std::log10((reportedSpeech.outPeak + 1e-12)
                               / (reported.outPeak + 1e-12));
@@ -854,8 +1352,9 @@ int main(int argc, char** argv)
                                     1.0, nullptr, true, nullptr,
                                     TxAudioSource::ClientLeveled);
         if (!quiet.empty() && !loud.empty()) {
-            const double a = binPower(quiet, kTone, kFsOut);
-            const double b = binPower(loud, kTone, kFsOut);
+            // The WANTED bin. See the passband case above.
+            const double a = binPower(quiet, -kTone, kFsOut);
+            const double b = binPower(loud, -kTone, kFsOut);
             const double ratioDb = 20.0 * std::log10((b + 1e-12) / (a + 1e-12));
             std::fprintf(stderr,
                          "client-leveled: -50 dBFS %.6f, -30 dBFS %.6f, ratio %.1f dB\n",
@@ -881,6 +1380,13 @@ int main(int argc, char** argv)
     // must be path-independent: equal inputs, equal outputs, whatever came
     // between.
     {
+        struct HystRun {
+            double firstQuiet = 0.0, loud = 0.0, lastQuiet = 0.0;
+            unsigned long long faults = 0;
+            bool ran = false;
+        };
+        auto once = [&]() -> HystRun {
+        HystRun result;
         Hl2TxDsp tx;
         TxTestAuthority authority;
         Hl2TxDsp::Config cfg;
@@ -910,7 +1416,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    tx.processAudioBlock(chunk, TxAudioSource::ClientLeveled, authority.context);
+                    feed(tx, chunk, TxAudioSource::ClientLeveled, authority.context);
                 }
                 marks[stage + 1] = out.size();
             }
@@ -922,19 +1428,27 @@ int main(int argc, char** argv)
                     mx = std::max(mx, static_cast<double>(std::abs(out[i])));
                 return mx;
             };
-            const double firstQuiet = tailPeak(marks[0], marks[1]);
-            const double loud       = tailPeak(marks[1], marks[2]);
-            const double lastQuiet  = tailPeak(marks[2], marks[3]);
+            result.firstQuiet = tailPeak(marks[0], marks[1]);
+            result.loud       = tailPeak(marks[1], marks[2]);
+            result.lastQuiet  = tailPeak(marks[2], marks[3]);
+            result.faults = tx.modulatorFaultBlocks();
+            result.ran = true;
+        }
+        return result;
+        };
+
+        const HystRun r = retryIfStarved<HystRun>("the ALC hysteresis case", once);
+        if (r.ran) {
             const double reGainDb =
-                20.0 * std::log10((lastQuiet + 1e-12) / (firstQuiet + 1e-12));
+                20.0 * std::log10((r.lastQuiet + 1e-12) / (r.firstQuiet + 1e-12));
             std::fprintf(stderr,
                          "hysteresis: quiet %.6f -> loud %.6f -> quiet %.6f "
                          "(re-gain %.2f dB)\n",
-                         firstQuiet, loud, lastQuiet, reGainDb);
+                         r.firstQuiet, r.loud, r.lastQuiet, reGainDb);
             check(std::fabs(reGainDb) < 1.0,
                   "equal client levels produce equal output before and after a "
                   "loud excursion (no ALC hysteresis)");
-            check(loud > firstQuiet * 5.0,
+            check(r.loud > r.firstQuiet * 5.0,
                   "the loud segment is genuinely louder (sweep is real)");
         }
     }
@@ -1057,9 +1571,41 @@ int main(int argc, char** argv)
             check(mx < 0.999,
                   "the slider at 100 on a full-scale source never reaches the "
                   "modulator's clamp, key-on window included");
+            std::fprintf(stderr, "slider top: whole-run crest %.4f, "
+                                 "settled-tail crest %.4f\n",
+                         crest(slam), crest(settledTail(slam)));
+            // THE WINDOW DIFFERS BY BUILD, and the reason is not a tolerance.
+            //
+            // Crest here is peak over mean |IQ|, so anything that makes the
+            // envelope non-constant raises it. In the phasing build the only
+            // such thing IS the fault this leg guards -- a key-on window of
+            // flat-topped modulator input -- so the window is the whole run,
+            // deliberately, and that is what makes this a guard rather than a
+            // restatement of the settled case.
+            //
+            // A TXA channel has a second, LEGITIMATE source of envelope:
+            // create_slews' mute ramp, 840 input samples of deliberate T/R
+            // shaping at the head of every over. Measured here: whole run
+            // 1.0684, settled tail 1.0000 -- with ZERO samples at the clamp
+            // over the whole run, which the check above asserts separately.
+            // So a whole-run crest test in the TXA build reports the
+            // transmitter's intended envelope as distortion, and would fail on
+            // a modulator that is in fact cleaner than the one it replaces.
+            //
+            // The key-on fault cannot occur in the TXA build for the same
+            // reason: the ramp starts the modulator's input at zero, so there
+            // is no full-scale block before the ALC has converged. The
+            // clamp-count assertion above is what pins that, and it runs on the
+            // whole run in BOTH builds.
+#if AETHER_HL2_TX_TXA
+            check(crest(settledTail(slam)) < 1.05,
+                  "and puts no clipping distortion on the wire once the T/R "
+                  "mute ramp has run");
+#else
             check(crest(slam) < 1.05,
                   "and puts no clipping distortion on the wire at any point in "
                   "the over");
+#endif
             check(mx > 0.5,
                   "the transmission is still on the air (case is real)");
         }
@@ -1112,11 +1658,20 @@ int main(int argc, char** argv)
                 constexpr std::size_t kChunk = 240;
                 for (std::size_t off = 0; off < audio.size(); off += kChunk) {
                     const std::size_t n = std::min(kChunk, audio.size() - off);
-                    tx.processAudioBlock(
-                        std::vector<float>(
-                            audio.begin() + static_cast<std::ptrdiff_t>(off),
-                            audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        TxAudioSource::Microphone, authority.context);
+                    // PACED, like every other feed in this file. These three
+                    // clipping cases arrived on main after this branch forked,
+                    // so they were the only sites still calling the modulator
+                    // directly. In the TXA build that starves it -- 64 of 66
+                    // blocks underran and the whole-run IQ peak read 0.0000,
+                    // which the case then reported as "the transmission is not
+                    // on the air". It was on the air; the test was feeding five
+                    // times faster than the channel drains. feed() is a no-op
+                    // in the phasing build.
+                    feed(tx,
+                         std::vector<float>(
+                             audio.begin() + static_cast<std::ptrdiff_t>(off),
+                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
+                         TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1180,11 +1735,20 @@ int main(int argc, char** argv)
                         moved = true;
                     }
                     const std::size_t n = std::min(kChunk, audio.size() - off);
-                    tx.processAudioBlock(
-                        std::vector<float>(
-                            audio.begin() + static_cast<std::ptrdiff_t>(off),
-                            audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        TxAudioSource::Microphone, authority.context);
+                    // PACED, like every other feed in this file. These three
+                    // clipping cases arrived on main after this branch forked,
+                    // so they were the only sites still calling the modulator
+                    // directly. In the TXA build that starves it -- 64 of 66
+                    // blocks underran and the whole-run IQ peak read 0.0000,
+                    // which the case then reported as "the transmission is not
+                    // on the air". It was on the air; the test was feeding five
+                    // times faster than the channel drains. feed() is a no-op
+                    // in the phasing build.
+                    feed(tx,
+                         std::vector<float>(
+                             audio.begin() + static_cast<std::ptrdiff_t>(off),
+                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
+                         TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1264,11 +1828,20 @@ int main(int argc, char** argv)
                 constexpr std::size_t kChunk = 240;
                 for (std::size_t off = 0; off < audio.size(); off += kChunk) {
                     const std::size_t n = std::min(kChunk, audio.size() - off);
-                    tx.processAudioBlock(
-                        std::vector<float>(
-                            audio.begin() + static_cast<std::ptrdiff_t>(off),
-                            audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        TxAudioSource::Microphone, authority.context);
+                    // PACED, like every other feed in this file. These three
+                    // clipping cases arrived on main after this branch forked,
+                    // so they were the only sites still calling the modulator
+                    // directly. In the TXA build that starves it -- 64 of 66
+                    // blocks underran and the whole-run IQ peak read 0.0000,
+                    // which the case then reported as "the transmission is not
+                    // on the air". It was on the air; the test was feeding five
+                    // times faster than the channel drains. feed() is a no-op
+                    // in the phasing build.
+                    feed(tx,
+                         std::vector<float>(
+                             audio.begin() + static_cast<std::ptrdiff_t>(off),
+                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
+                         TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1339,6 +1912,13 @@ int main(int argc, char** argv)
                                     kHotMicGain, 1.5, nullptr, true, nullptr,
                                     TxAudioSource::ClientLeveled);
 
+        struct RelRun {
+            double swept = 0.0, lastGainDb = 0.0;
+            unsigned long long faults = 0;
+            bool ran = false;
+        };
+        auto once = [&]() -> RelRun {
+        RelRun result;
         Hl2TxDsp tx;
         TxTestAuthority authority;
         Hl2TxDsp::Config cfg;
@@ -1375,7 +1955,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    tx.processAudioBlock(chunk, TxAudioSource::ClientLeveled, authority.context);
+                    feed(tx, chunk, TxAudioSource::ClientLeveled, authority.context);
                 }
                 if (stage == 0)
                     afterLoud = out.size();
@@ -1385,19 +1965,29 @@ int main(int argc, char** argv)
             for (std::size_t i = afterLoud + (out.size() - afterLoud) / 2;
                  i < out.size(); ++i)
                 swept = std::max(swept, static_cast<double>(std::abs(out[i])));
+            result.swept = swept;
+            result.lastGainDb = lastGainDb;
+            result.faults = tx.modulatorFaultBlocks();
+            result.ran = true;
+        }
+        return result;
+        };
+
+        const RelRun r = retryIfStarved<RelRun>("the limiter release case", once);
+        if (r.ran) {
             double ref = 0.0;
             for (std::size_t i = fresh.size() / 2; i < fresh.size(); ++i)
                 ref = std::max(ref, static_cast<double>(std::abs(fresh[i])));
             const double deltaDb =
-                20.0 * std::log10((swept + 1e-12) / (ref + 1e-12));
+                20.0 * std::log10((r.swept + 1e-12) / (ref + 1e-12));
             std::fprintf(stderr,
                          "limiter release: swept %.6f vs fresh-key %.6f "
                          "(delta %.2f dB, settled ALC %.2f dB)\n",
-                         swept, ref, deltaDb, lastGainDb);
+                         r.swept, ref, deltaDb, r.lastGainDb);
             check(std::fabs(deltaDb) < 1.0,
                   "the limiter releases to unity after an over-level excursion "
                   "(reduction does not latch)");
-            check(std::fabs(lastGainDb) < 1.0,
+            check(std::fabs(r.lastGainDb) < 1.0,
                   "ALC gain is back at 0 dB once the client is quiet again");
         }
     }
