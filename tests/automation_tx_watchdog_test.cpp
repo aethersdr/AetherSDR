@@ -86,6 +86,13 @@ public:
         caps.canTransmit = canTransmit;
         caps.hasRadioSideCwKeyer = true;
         caps.hasTuner = true;
+        // This fixture drives `txtest twotone` to establish an operation for
+        // the watchdog to expire, so it has to declare the generator the verb
+        // now requires (#5516) — otherwise the request is refused at the
+        // capability gate and there is no operation to clean up. The subject
+        // here is the watchdog, not two-tone gating.
+        caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{
+            QStringLiteral("recording backend two-tone route")};
         return caps;
     }
     bool isConnected() const override { return connected; }
