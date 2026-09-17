@@ -887,12 +887,6 @@
   "split": "",
   "confidence": "high"
  },
- "models/DecoderAudioModel.h": {
-  "tag": "mixed(flex)",
-  "note": "Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry.",
-  "split": "Core: receiver selection, epochs, bounded backlog, rate conversion and decoder resets. Flex compatibility: DAX channel selection and central consumer holds; no wire commands are generated here.",
-  "confidence": "high"
- },
  "models/RadioModel.h": {
   "tag": "mixed(flex)",
   "note": "Central radio aggregate: core slice/pan/TX/meter/memory state fused with Flex protocol, DAX, SmartLink, Multi-Flex",
@@ -1361,6 +1355,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/NoiseFloorAutoAdjustGate.h": {
+  "tag": "universal",
+  "note": "The ONE predicate deciding whether the noise-floor auto-adjust may move the display reference level, as an OR over two backend-neutral properties (a real dBm-range echo, or absolute spectrum bins). Deliberately free of Qt and of RadioCapabilities so the widget and its test read the same function rather than two copies; the UI reaching it is the seam working, not coupling. Family backends populate the capability it is called with.",
+  "split": "",
+  "confidence": "high"
+ },
  "models/CwDecodeSettings.h": {
   "tag": "ui-support",
   "note": "CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state.",
@@ -1373,10 +1373,10 @@
   "split": "",
   "confidence": "high"
  },
- "core/backends/NoiseFloorAutoAdjustGate.h": {
-  "tag": "universal",
-  "note": "The ONE predicate deciding whether the noise-floor auto-adjust may move the display reference level, as an OR over two backend-neutral properties (a real dBm-range echo, or absolute spectrum bins). Deliberately free of Qt and of RadioCapabilities so the widget and its test read the same function rather than two copies; the UI reaching it is the seam working, not coupling. Family backends populate the capability it is called with.",
-  "split": "",
+ "models/DecoderAudioModel.h": {
+  "tag": "mixed(flex)",
+  "note": "Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry.",
+  "split": "Core: receiver selection, epochs, bounded backlog, rate conversion and decoder resets. Flex compatibility: DAX channel selection and central consumer holds; no wire commands are generated here.",
   "confidence": "high"
  }
 }
