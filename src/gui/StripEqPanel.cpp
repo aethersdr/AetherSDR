@@ -56,6 +56,49 @@ const QString kBypassStyle = QStringLiteral(
     "}"
     "QPushButton:checked:hover { background: #4a3a1e; }");
 
+
+// The interaction hint is prose, and at 460 px it is the widest single thing
+// in this panel -- 45% of a header row whose 1021 px minimum is what stops the
+// panel fitting a small window. It elides instead of forcing that width; the
+// full sentence stays one hover away, and the icons it describes say the same
+// thing in their own tooltips.
+class ElidingLabel final : public QLabel {
+public:
+    explicit ElidingLabel(const QString& text, QWidget* parent = nullptr)
+        : QLabel(parent)
+        , m_full(text)
+    {
+        setToolTip(text);
+        setAccessibleDescription(text);
+        // Ignored, so the row may take the width back; without it a QLabel's
+        // size hint is its whole text and the elision never gets a chance.
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        setMinimumWidth(0);
+        applyElision();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override
+    {
+        QLabel::resizeEvent(event);
+        applyElision();
+    }
+
+private:
+    void applyElision()
+    {
+        const QString shown =
+            fontMetrics().elidedText(m_full, Qt::ElideRight, width());
+        // Only when it changed: setText() inside a resize otherwise posts a
+        // layout request that resizes it again.
+        if (shown != text()) {
+            setText(shown);
+        }
+    }
+
+    QString m_full;
+};
+
 } // namespace
 
 StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
@@ -86,10 +129,10 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(8);
-        auto* hint = new QLabel(
+        auto* hint = new ElidingLabel(QStringLiteral(
             "Drag peak/shelf = freq + gain · "
             "drag HP/LP = freq + Q · Shift + drag for Q · "
-            "click icon to cycle type");
+            "click icon to cycle type"));
         AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "QLabel { color: {{color.background.3}}; font-size: 10px; }");
         row->addWidget(hint, 1);
 
