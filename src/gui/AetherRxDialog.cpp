@@ -13,9 +13,14 @@
 
 #include <QButtonGroup>
 #include <QFrame>
+#include <QGraphicsProxyWidget>
+#include <QGraphicsScene>
+#include <QGraphicsView>
+#include <QPainter>
+#include <QResizeEvent>
+#include <QShowEvent>
 #include <QHBoxLayout>
 #include <QPushButton>
-#include <QScrollArea>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include "core/ThemeManager.h"
@@ -67,6 +72,129 @@ void tidyEmbeddedPanel(QWidget* panel)
     }
 }
 
+// Holds one stage panel and scales it down to whatever room the window gives.
+//
+// The panels were written as floating editors and carry the natural size that
+// implies: the EQ alone wants about 900x520, because ten bands of icons and
+// per-band frequency/gain/Q readouts do not compress -- squeezing its columns
+// turns "1.50 kHz" into "50 kHz", which is worse than not showing it. Scaling
+// keeps the whole panel laid out as designed, just smaller, and because the
+// scene draws the widget through QPainter rather than blitting a pixmap, the
+// text and curves stay sharp at any factor.
+//
+// Never scales up: a panel that already fits is left at its natural size, so
+// this costs nothing on the pages that do not need it.
+class FitToViewHost final : public QGraphicsView {
+public:
+    explicit FitToViewHost(QWidget* panel, QWidget* parent = nullptr)
+        : QGraphicsView(parent)
+        , m_panel(panel)
+    {
+        setFrameShape(QFrame::NoFrame);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing
+                       | QPainter::SmoothPixmapTransform);
+        setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        setBackgroundBrush(Qt::NoBrush);
+        setStyleSheet(QStringLiteral("QGraphicsView { background: transparent; }"));
+        auto* scene = new QGraphicsScene(this);
+        setScene(scene);
+        // The panel must arrive parentless: QGraphicsScene::addWidget only
+        // adopts a top-level widget, and one that is already someone's child
+        // is left exactly where it was -- which draws every stage panel on top
+        // of every other one, with no error anywhere.
+        Q_ASSERT(panel->parentWidget() == nullptr);
+        // The size the panel was designed at, taken before anything here has
+        // touched it: every one of these panels resizes itself to its own
+        // kDefaultWidth/kDefaultHeight in its constructor, which is the size
+        // its layout was drawn for. Captured once and never re-measured --
+        // asking the panel again after scaling it makes the answer a function
+        // of the last answer, and the two chase each other a few pixels at a
+        // time without ever settling.
+        m_natural = panel->size()
+                        .expandedTo(panel->minimumSizeHint())
+                        .expandedTo(QSize(1, 1));
+        m_proxy = scene->addWidget(panel);
+        // A panel's minimum size can grow after construction -- the gate's
+        // curve view and the EQ's band rows size themselves once the engine
+        // hands them something to draw. Nothing resizes this host when that
+        // happens, so without watching for it the page keeps the scale it was
+        // measured at and the panel grows off the bottom of it.
+        panel->installEventFilter(this);
+    }
+
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        // Resize as well as LayoutRequest: these panels restore their own
+        // saved geometry in showForRx(), after this host has already sized
+        // them, and a panel that makes itself taller than the scene rect is
+        // simply clipped by it -- knobs vanish off the bottom with no
+        // scrollbar and nothing in the log.
+        if (watched == m_panel && !m_inRescale
+            && (event->type() == QEvent::LayoutRequest
+                || event->type() == QEvent::Resize)) {
+            rescale();
+        }
+        return QGraphicsView::eventFilter(watched, event);
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override
+    {
+        QGraphicsView::resizeEvent(event);
+        rescale();
+    }
+
+    void showEvent(QShowEvent* event) override
+    {
+        QGraphicsView::showEvent(event);
+        // Panels size themselves in showForRx(), which runs after this host is
+        // built, so the first honest measurement is here.
+        rescale();
+    }
+
+private:
+    void rescale()
+    {
+        if (!m_proxy || !scene() || m_inRescale) return;
+        // Resizing the proxy lays the panel out again, which posts another
+        // LayoutRequest straight back at the filter above.
+        m_inRescale = true;
+        const QSize natural = m_natural;
+        const QSize view = viewport()->size();
+        if (view.isEmpty()) {
+            m_inRescale = false;
+            return;
+        }
+
+        // Scale only as far as the tighter of the two axes demands, and never
+        // past 1: a panel that fits is shown at its own size.
+        const qreal scale = std::min({qreal(1.0),
+                                      qreal(view.width()) / natural.width(),
+                                      qreal(view.height()) / natural.height()});
+
+        // Lay the panel out at exactly the size it was designed for and scale
+        // that. Stretching it to fill the page instead looks tidier on the EQ,
+        // but these panels do not all survive a size they were not drawn at:
+        // the gate reports a 285 px minimum height and then needs 700, and
+        // Qt neither clips nor complains -- the knob row simply ends up past
+        // the bottom edge. The designed size is the one size every panel is
+        // known to render correctly.
+        const QSize laidOut = natural;
+        m_proxy->resize(laidOut);
+
+        scene()->setSceneRect(0, 0, laidOut.width(), laidOut.height());
+        setTransform(QTransform::fromScale(scale, scale));
+        m_inRescale = false;
+    }
+
+    QWidget*              m_panel{nullptr};
+    QSize                 m_natural;
+    QGraphicsProxyWidget* m_proxy{nullptr};
+    bool                  m_inRescale{false};
+};
+
 } // namespace
 
 AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
@@ -113,19 +241,19 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     addStage(Nr, QStringLiteral("AetherNR"), m_widget);
 
     // -- The RX chain, in the order the signal meets it ------------------
-    m_gate = new StripGatePanel(audio, this);
+    m_gate = new StripGatePanel(audio, nullptr);
     addStage(Gate, QStringLiteral("AGC-G"), buildStagePage(m_gate));
 
-    m_eq = new StripEqPanel(audio, this);
+    m_eq = new StripEqPanel(audio, nullptr);
     addStage(Eq, QStringLiteral("EQ"), buildStagePage(m_eq));
 
-    m_comp = new StripCompPanel(audio, this);
+    m_comp = new StripCompPanel(audio, nullptr);
     addStage(Comp, QStringLiteral("AGC-C"), buildStagePage(m_comp));
 
-    m_tube = new StripTubePanel(audio, this);
+    m_tube = new StripTubePanel(audio, nullptr);
     addStage(Tube, QStringLiteral("Tube"), buildStagePage(m_tube));
 
-    m_voice = new StripPuduPanel(audio, this);
+    m_voice = new StripPuduPanel(audio, nullptr);
     addStage(Voice, QStringLiteral("AetherVoice"), buildStagePage(m_voice));
 
     // Output and waveform share the last tab: the meter is what you read and
@@ -213,26 +341,12 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
             this,    &AetherRxDialog::nr4SuppressionChanged);
 }
 
-// A stage panel sized to its own content, pinned to the top of the page and
-// scrollable when the window is shorter than the panel wants to be. The panels
-// were written as floating editors with fixed natural heights, so without the
-// scroller a short window clips the bottom of one with no way to reach it.
+// A stage panel that always fits: scaled down when the window is smaller than
+// the panel's natural size, left alone when it is not. No scrollbars, so a
+// control is never half a drag off the edge of the page.
 QWidget* AetherRxDialog::buildStagePage(QWidget* panel)
 {
-    auto* host = new QWidget;
-    auto* col = new QVBoxLayout(host);
-    col->setContentsMargins(0, 0, 0, 0);
-    col->setSpacing(0);
-    col->addWidget(panel, 0, Qt::AlignTop);
-    col->addStretch(1);
-
-    auto* scroll = new QScrollArea;
-    scroll->setWidget(host);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    return scroll;
+    return new FitToViewHost(panel);
 }
 
 void AetherRxDialog::addStage(Stage stage, const QString& label, QWidget* page)
