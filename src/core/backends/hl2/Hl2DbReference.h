@@ -196,18 +196,22 @@ public:
     void setLnaGainDb(double db) noexcept { m_lnaGainDb = db; }
     double lnaGainDb() const noexcept { return m_lnaGainDb; }
 
-    // What 0 dBFS means at the antenna with 0 dB LNA gain. Needs per-unit
-    // calibration to be meaningful; 0.0 means "uncalibrated, reporting dBFS".
-    void setFullScaleDbm(double dbm) noexcept { m_fullScaleDbm = dbm; }
-
-    // The operator's trim, BOUNDED AT +-3 dB, and the bound is the point.
+    // APPLY A MEASURED full-scale figure, replacing the derived default.
     //
-    // There is no user offset at all today, so an operator with a signal
-    // generator has nowhere to put what they measure. An UNBOUNDED one would
-    // invite the calibration itself to be typed in -- which puts the old lie
-    // back with a slider in front of it. +-3 dB says: the base is right, this
-    // is adjustment. Anyone who needs more than 3 dB has found a fault in the
-    // derivation and should report it rather than dial around it.
+    // This setter is the ONLY thing that makes isCalibrated() true, and that
+    // is now its whole contract rather than a side effect of the value it
+    // happens to write. Calling it says "somebody measured this radio"; it is
+    // not the way to nudge the derived figure.
+    //
+    // The derived default is still what the object starts with, so calibrating
+    // is a REPLACEMENT, not an addition -- there is no trim term to combine
+    // with (see below).
+    void setFullScaleDbm(double dbm) noexcept
+    {
+        m_fullScaleDbm = dbm;
+        m_fullScaleMeasured = true;
+    }
+
     // THE OPERATOR TRIM IS NOT HERE, AND THAT IS A DELIBERATE SUBTRACTION.
     //
     // #5740 proposed three things and this class shipped all three: the derived
@@ -223,7 +227,39 @@ public:
     // offsetDb() is fullScaleDbm - lnaGainDb exactly, with nothing in it that
     // nothing can move.
     double fullScaleDbm() const noexcept { return m_fullScaleDbm; }
-    bool isCalibrated() const noexcept { return m_fullScaleDbm != 0.0; }
+
+    // CALIBRATED MEANS A MEASUREMENT WAS APPLIED. It does not mean "a number
+    // is present", and the difference is the whole of this predicate.
+    //
+    // IT USED TO BE `m_fullScaleDbm != 0.0`, and that worked only for as long
+    // as the field started at zero. The derived default above is +3.0, so the
+    // same test answered TRUE on a radio nobody has ever measured -- and
+    // Hl2Backend::capabilities() publishes this straight into
+    // PanAmplitudeModel::calibratedDbm, whose documented meaning
+    // (RadioCapabilities.h) is that a level from this radio MAY be compared
+    // with another station's, published as a spot, or used as an absolute
+    // threshold. A derivation from a datasheet does not earn that; only a
+    // measurement against a reference source does. The derived figure is a
+    // much better ZERO POINT than 0.0 was, and it is still not a calibration.
+    //
+    // SNIFFING THE VALUE CANNOT WORK, which is why this holds a flag instead.
+    // `m_fullScaleDbm != kFullScaleDbmAtZeroGain` would be the smaller edit and
+    // repeats the original bug one constant along: a genuine measurement that
+    // lands on +3.0 dBm would read UNCALIBRATED, exactly as a genuine
+    // measurement of 0.0 dBm did before. Provenance is not recoverable from a
+    // double, so it is carried rather than inferred.
+    //
+    // AND NOT AN isDerived()/isCalibrated() PAIR. The reference is derived
+    // whenever it is not measured, so the second accessor is the negation of
+    // the first with nothing to call it -- the same dead public surface
+    // Principle IX took setTrimDb out for, two paragraphs above. If a UI ever
+    // has to say "derived" rather than "uncalibrated", it lands with that UI.
+    //
+    // NOTHING IN src/ CALLS setFullScaleDbm TODAY, so this is false in
+    // production and every comment that says the HL2 axis is dBFS wearing a
+    // dBm label stays true. That is the honest answer until the bench
+    // measurement named beside kFullScaleDbmAtZeroGain is made.
+    bool isCalibrated() const noexcept { return m_fullScaleMeasured; }
 
     // The gain the uncalibrated scale is referred to. At this gain the offset
     // is zero, so the reported number is raw dBFS. Defaults to the backend's
@@ -250,13 +286,15 @@ public:
     //
     // That objection was correct and it is what kFullScaleDbmAtZeroGain
     // removes. The floor still moves, but it moves to a figure derived from the
-    // AD9866 datasheet and confirmed independently, instead of from one
+    // AD9866 datasheet and the HL2's own input network, instead of from one
     // arbitrary number to another. The two halves cannot be separated: this
     // form filed without the constant fails on exactly the old grounds.
     //
-    // The trim rides here rather than inside the constant so that a reader --
-    // and a bug report -- can always see the derived base and the operator's
-    // adjustment as two terms.
+    // NOT "CONFIRMED INDEPENDENTLY", which this sentence used to claim. The
+    // only cross-check ever offered was DL1YCF's, and it is WITHDRAWN for the
+    // reasons set out beside kFullScaleDbmAtZeroGain. The derivation stands on
+    // the datasheet alone, and isCalibrated() is false until a bench
+    // measurement says otherwise.
     double offsetDb() const noexcept
     {
         return m_fullScaleDbm - m_lnaGainDb;
@@ -293,6 +331,10 @@ private:
     double m_lnaGainDb = kDefaultLnaGainDb;
     double m_referenceLnaGainDb = kDefaultLnaGainDb;
     double m_fullScaleDbm = kFullScaleDbmAtZeroGain;
+
+    // DERIVED UNTIL SOMEBODY MEASURES IT. Only setFullScaleDbm sets this, and
+    // nothing clears it: a radio does not become uncalibrated again.
+    bool m_fullScaleMeasured = false;
 };
 
 }  // namespace AetherSDR::hl2

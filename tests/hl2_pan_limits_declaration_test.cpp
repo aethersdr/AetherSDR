@@ -161,22 +161,26 @@ int main(int argc, char** argv)
           "the dBm axis declaration matches Hl2DbReference on a fresh radio");
     check(caps.dbmAxisIsCalibrated() == hl2::Hl2DbReference{}.isCalibrated(),
           "and the accessor reports the declared field, not its absent default");
-    // WAS `!caps.dbmAxisIsCalibrated()` WITH THE COMMENT "no per-unit
-    // fullScaleDbm exists". That was true when #5725 wrote it and this PR is
-    // what stops it being true: the reference is DERIVED rather than per-unit,
-    // which is the objection the revert of the absolute form rested on and the
-    // thing that removes it. The three checks above read Hl2DbReference itself
-    // and so needed no change; this one carried a literal expectation and did.
-    check(caps.dbmAxisIsCalibrated(),
-          "and today that means CALIBRATED — the reference is derived, not "
-          "per-unit, so there is a real figure to declare");
+    // STILL UNCALIBRATED, AND THIS PR BRIEFLY SAID OTHERWISE. A draft of this
+    // change flipped the expectation to `caps.dbmAxisIsCalibrated()` on the
+    // grounds that the reference is now DERIVED rather than per-unit. The
+    // derivation is real and the absolute offset it produces is the point of
+    // the PR — but `calibratedDbm` is not "a figure exists", it is
+    // RadioCapabilities.h's licence to compare this radio's levels with
+    // another station's, and only a measurement earns that. Hl2DbReference::
+    // isCalibrated() now reports whether setFullScaleDbm has been called, and
+    // nothing in src/ calls it, so the honest declaration is unchanged.
+    check(!caps.dbmAxisIsCalibrated(),
+          "the axis is still dBFS wearing a dBm label — the reference is "
+          "DERIVED, and derived is not measured");
 
     // WHAT THESE THREE CANNOT SEE, said plainly because this file's own thesis
     // is that a test carrying its own copy of the truth cannot detect the
     // declaration and the code diverging.
     //
-    // Hl2DbReference{}.isCalibrated() is `m_fullScaleDbm != 0.0` on a
-    // default-constructed reference, so it is unconditionally false. Comparing
+    // Hl2DbReference{}.isCalibrated() is false on a default-constructed
+    // reference by construction -- the measured flag starts clear and only
+    // setFullScaleDbm sets it -- so it is unconditionally false. Comparing
     // the declaration against it therefore compares false with false: replace
     // `amplitude.calibratedDbm = m_dbRef.isCalibrated()` in
     // Hl2Backend::capabilities() with a literal `false` and every assertion

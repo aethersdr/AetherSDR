@@ -984,10 +984,17 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
             [this, ui](const std::vector<float>& bins) {
         if (!m_ids.byUi(ui))
             return;
-        // dBFS -> dBm through the one object that owns the reference. With
-        // an uncalibrated fullScaleDbm this is a pure -lnaGain shift, which
-        // is the part that is exactly right: it holds the trace still across
-        // a gain change instead of letting the whole display jump.
+        // dBFS -> dBm through the one object that owns the reference. Two
+        // terms now: the DERIVED full-scale figure, and -lnaGain. The second
+        // is the part that is exactly right whatever the first is worth --
+        // it holds the trace still across a gain change instead of letting
+        // the whole display jump. The first moves the floor once, to a
+        // figure that can be checked, and never again.
+        //
+        // WHICH IS WHY THE off == 0.0 FAST PATH NOW RARELY FIRES: at the
+        // default 0 dB of gain the offset is the constant +3, not zero. The
+        // branch stays because an operator at +3 dB of LNA gain still hits
+        // it, and because it is the same test either way.
         //
         // The reference is SHARED because the LNA it describes is shared —
         // one AD9866 behind every DDC — so a gain change moves all four
@@ -1751,8 +1758,15 @@ RadioCapabilities Hl2Backend::capabilities() const
     // reports what 0 dBFS is worth at the antenna, and no HL2 oracle states a
     // figure for it. It is a per-unit property of the board, the ADC reference
     // and the front end, so it can only come from a measurement against a
-    // reference source that has never been made on this station. Until it is,
-    // Hl2DbReference::fullScaleDbm stays 0.0 and isCalibrated() is false.
+    // reference source that has never been made on this station.
+    //
+    // AND A DERIVED FIGURE IS NOT THAT MEASUREMENT. Hl2DbReference::
+    // fullScaleDbm is no longer 0.0 -- it carries +3 dBm derived from the
+    // AD9866 datasheet and the HL2's own input network -- which makes the
+    // zero point far better than arbitrary and still not measured.
+    // isCalibrated() reports whether setFullScaleDbm has been called, and
+    // nothing in src/ calls it, so this stays false and this paragraph stays
+    // true.
     //
     // Read from that object rather than hardcoded false: the day a per-unit
     // fullScaleDbm is populated, the declaration follows it instead of having
@@ -5190,8 +5204,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // NEITHER IS CALIBRATED, and they do not even share a scale: the slice
     // figure is dB relative to WIRE full scale, the DDC between the two
     // measurement points carries an unquantified processing gain, and
-    // Hl2DbReference::fullScaleDbm is 0.0 with isCalibrated() false, so nothing
-    // here is antenna-referred. The labels say "uncalibrated" because that is
+    // Hl2DbReference::isCalibrated() is false -- its fullScaleDbm is DERIVED
+    // rather than measured, and it refers the DISPLAY path in any case, not
+    // these two readings -- so nothing here is antenna-referred. The labels say "uncalibrated" because that is
     // the whole of what can be claimed. What survives the missing calibration
     // is the PAIRING itself — the pairing row below states a relationship, and
     // a relationship needs no absolute reference.

@@ -52,9 +52,39 @@ int main()
     // If this block ever fails again, the question to ask is not "has the
     // arithmetic drifted" but "has the DERIVATION been falsified" -- and the
     // answer belongs beside kFullScaleDbmAtZeroGain, not here.
-    check(ref.isCalibrated(), "calibrated by default: full scale is a real figure");
     check(near(Hl2DbReference::kFullScaleDbmAtZeroGain, 3.0),
           "full scale at 0 dB LNA gain is the derived +3 dBm");
+    check(near(ref.fullScaleDbm(), Hl2DbReference::kFullScaleDbmAtZeroGain),
+          "a fresh reference carries the derived figure, not 0.0");
+
+    // DERIVED IS NOT CALIBRATED, and this pair is the assertion that keeps the
+    // two apart. An earlier draft of this PR moved the default off 0.0 while
+    // isCalibrated() was still `m_fullScaleDbm != 0.0`, so the predicate
+    // flipped TRUE for a radio nobody has ever measured -- and
+    // Hl2Backend::capabilities() publishes it as PanAmplitudeModel::
+    // calibratedDbm, which licenses comparing this radio's levels with another
+    // station's. The derivation does not license that; a measurement does.
+    check(!ref.isCalibrated(),
+          "a derived default is NOT a calibration -- nothing has measured this "
+          "radio");
+
+    // ...and the setter is what changes the answer. This is the only thing in
+    // the class that does, which is what makes the predicate mean provenance
+    // rather than "some number is present".
+    {
+        Hl2DbReference measured;
+        measured.setFullScaleDbm(Hl2DbReference::kFullScaleDbmAtZeroGain);
+        check(measured.isCalibrated(),
+              "applying a measurement calibrates it -- EVEN WHEN THE MEASURED "
+              "FIGURE EQUALS THE DERIVED ONE, which is why this is a flag and "
+              "not a comparison against the constant");
+
+        Hl2DbReference elsewhere;
+        elsewhere.setFullScaleDbm(0.0);
+        check(elsewhere.isCalibrated(),
+              "and a measurement of 0.0 dBm calibrates it too -- the old "
+              "`!= 0.0` predicate got this one wrong in the other direction");
+    }
 
     // P(dBm) = dBFS + fullScale - Glna, absolutely. At the class's own default
     // gain of 0 dB that is dBFS + 3.
@@ -72,6 +102,10 @@ int main()
     check(near(ref.toDbm(0.0), 3.0),
           "full scale at 0 dB gain reads exactly the derived +3 dBm");
 
+    // From here the reference is deliberately driven to figures that are NOT
+    // the derived default; isCalibrated() is true for all of it and is not
+    // re-read, because what these cases pin is the arithmetic.
+    //
     // THE TRIM'S CASES ARE GONE WITH THE TRIM. setTrimDb() had no caller in
     // src/ -- no UI, no settings key, no automation verb -- so it was dead
     // public surface and Principle IX took it out. These four assertions went
