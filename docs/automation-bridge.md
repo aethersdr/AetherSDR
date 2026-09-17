@@ -1052,7 +1052,10 @@ used by the stacked trace renderer.
 null value, and a fresh zero is still a real reading. `unreliable` is the same
 known-bad annotation `all[].reliable` carries, rejected here rather than
 reported as a qualified reading. The freshness budget is 1500 ms, matching
-`FRESH_MS` in `tools/tx_meter_test.py`. The legacy `paTemp` and `supplyVolts`
+`FRESH_MS` in `tools/tx_meter_test.py` (`MeterModel::kVitalsFreshMs`).
+**The legacy `paTemp` and `supplyVolts` scalars are now nullable** — previously
+they always carried a number, falling back to a `0.0f` initialiser for a sensor
+the radio never reported. A consumer doing arithmetic on them must handle null. The legacy `paTemp` and `supplyVolts`
 scalars carry those same qualified values, **and so does `paTemp` in
 `get radio`, in the `connect wait` reply and in `radiocert persist`'s `radio`
 block** — one snapshot gives one answer about one sensor. `alc` retains the
@@ -3848,7 +3851,9 @@ The scheduler also returns up to 128 `transactions`, `firstRetainedEventId`,
 freshness` returns the same reply with an empty `transactions` list — and with
 `firstRetainedEventId`/`lastRetainedEventId` describing **the rows actually
 returned**, so a truncated reply never advertises coverage of events it omitted
-— for callers that only need the confirmation block — the TX harness polls it that way on its
+(both are **0 when `transactions` is empty**, meaning "this reply describes no
+events" — not a backward jump, and never something to compare against a
+previously collected ID) — for callers that only need the confirmation block — the TX harness polls it that way on its
 unkey path rather than pulling the whole ring to read one field. Deduplicate
 completion events by `backendInstanceId` plus `eventId`, never by semantic
 `key`/`generation`/`completion`: periodic polls reuse those three fields.

@@ -1849,12 +1849,6 @@ QJsonObject vfoFlagSnapshot(QWidget* vfo, RadioModel* radio)
     return flag;
 }
 
-// Defined below beside the meter snapshot. radioSnapshot's legacy `paTemp`
-// scalar has to give the SAME answer as `get meters`, or `radiocert persist`
-// ships both truths about one sensor in a single document (#5516 review).
-QJsonArray  annotatedMeters(const MeterModel& m, const QString& radioModel);
-QJsonObject meterObservation(const QJsonArray& meters, const QString& name);
-
 QJsonObject radioSnapshot(const RadioModel* r)
 {
     // Multi-Flex slot occupancy across the radio's whole slice capacity: each
@@ -1891,10 +1885,19 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("txPower"),      r->txPower()},
         // Qualified, not the scalar: an absent or stale sensor reads null here
         // exactly as it does in `get meters`.
+        //
+        // Resolved through MeterModel's cached index rather than by building
+        // the whole annotated array for one scalar. `get radio` is polled in a
+        // loop while the transmitter may be keyed -- the TX harness reads
+        // `transmitting` every 50 ms waiting for the keyed edge -- and
+        // serialising every declared meter to answer that is the wrong cost on
+        // that path. Both routes share MeterModel::kVitalsFreshMs and the same
+        // declared/fed predicate, and automation_persist_diagnostics_test pins
+        // that they agree across unsupported, never-fed and fresh.
         {QStringLiteral("paTemp"),
-         meterObservation(annotatedMeters(r->meterModel(), r->model()),
-                          QStringLiteral("PATEMP"))
-             .value(QStringLiteral("value"))},
+         MeterModel::vitalIsFresh(r->meterModel().hasPaTemp(),
+                                  r->meterModel().paTempAgeMs())
+             ? QJsonValue(r->meterModel().paTemp()) : QJsonValue()},
         {QStringLiteral("sliceCount"),   r->slices().size()},
         {QStringLiteral("maxSlices"),    maxSlices},
         {QStringLiteral("slots"),        slotArr},
@@ -2239,7 +2242,7 @@ QString unreliableMeterNote(const QString& meterName, const QString& radioModel)
 // (IcomMeters.cpp), so this leaves roughly half a poll interval of slack before
 // an ordinary scheduler delay reads as stale. Shorten it and a healthy radio
 // starts reporting `stale` between polls.
-constexpr qint64 kVitalsFreshMs = 1500;
+constexpr qint64 kVitalsFreshMs = MeterModel::kVitalsFreshMs;
 
 QJsonObject meterObservation(const QJsonArray& meters, const QString& name)
 {
@@ -2271,7 +2274,14 @@ QJsonObject meterObservation(const QJsonArray& meters, const QString& name)
         }
     }
     const qint64 age = selected.value(QStringLiteral("age_ms")).toInteger(-1);
-    const bool fed = selected.value(QStringLiteral("has_value")).toBool() && age >= 0;
+    // A FINITE NUMBER, not merely a flag. reported_meter() validates the value
+    // too, so a row carrying has_value with a NaN would have come back `fresh`
+    // here and `never-fed` there -- and a NaN serialises to JSON null, so the
+    // reply would have claimed a fresh reading whose value was null (#5516).
+    const QJsonValue reading = selected.value(QStringLiteral("value"));
+    const bool numeric = reading.isDouble() && std::isfinite(reading.toDouble());
+    const bool fed = selected.value(QStringLiteral("has_value")).toBool()
+        && age >= 0 && numeric;
     // A meter this snapshot has itself just annotated `reliable:false` must not
     // come back as a qualified reading: `reported_meter()` in
     // tools/tx_meter_test.py rejects those first, and the two halves of one

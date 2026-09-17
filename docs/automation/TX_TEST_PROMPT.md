@@ -86,6 +86,10 @@ subscription path.
   data that the radio actually supports. Mark unsupported meters as such.
 - Reject stale ages and rail-pinned values. Do not substitute scalar defaults
   for unsupported temperature or voltage. Report ALC in its declared native unit.
+- The forward-power median now aggregates only samples that also carry a finite
+  `fwdPowerInstant` within the 500 ms safety window, rather than any smoothed
+  reading under 1500 ms. A backend that publishes `fwdPower` but no instant peak
+  reports no median at all — that is a reporting-surface gap, not a radio fault.
 - Start the freshness deadline at the key command, including command latency.
   A sample predating that command cannot qualify as this burst's telemetry.
   That rule governs what may be RECORDED, not what may stop the run: an SWR or

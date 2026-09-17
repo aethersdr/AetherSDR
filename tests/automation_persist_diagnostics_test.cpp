@@ -61,7 +61,11 @@ private:
 int main(int argc, char** argv) {
     TestSettingsProfile profile(QStringLiteral("automation-persist-diagnostics"));
     qputenv("AETHER_AUTOMATION", "1");
-    qputenv("AETHER_AUTOMATION_ALLOW_TX", "1");
+    // DELIBERATELY NOT SET. The capability-before-TX-gate ordering below is
+    // pinned by which refusal comes back, so nothing here needs TX armed -- and
+    // a keying test whose safety rests on AutomationServer::start() never being
+    // called is one refactor away from arming a real tune (Principle VI).
+    qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
     QCoreApplication app(argc, argv);
     if (!profile.isValid()) { return 1; }
     RadioModel radio;
@@ -132,7 +136,22 @@ int main(int argc, char** argv) {
     radio.meterModel().updateValueByName("RAD", "PATEMP", 41.5f);
     check(troubleshooting().value("pa_temp_c").toDouble() == 41.5,
         "a real reading is reported as itself");
+    // EVER-FED IS NOT CURRENT. hasPaTemp() stays true once a sample lands and
+    // is only cleared when the meter definition goes, so gating on it alone
+    // would keep reporting a sensor that stopped an hour ago -- while
+    // `get meters` next door called it stale. Both surfaces now run the same
+    // predicate over the same window, so pin the predicate and the age source
+    // rather than adding a production hook to backdate a sample (#5516 review).
+    check(MeterModel::vitalIsFresh(true, 0)
+        && !MeterModel::vitalIsFresh(true, MeterModel::kVitalsFreshMs)
+        && !MeterModel::vitalIsFresh(true, -1)
+        && !MeterModel::vitalIsFresh(false, 0),
+        "the vitals window rejects stale, never-fed and undeclared alike");
+    check(radio.meterModel().paTempAgeMs() >= 0,
+        "a fed sensor reports a real age");
     radio.meterModel().removeMeter(2);
+    check(radio.meterModel().paTempAgeMs() == -1,
+        "and an undeclared one reports no age at all");
 
     // CAPABILITY-SHAPED, NOT FAMILY-SHAPED. The refusal must follow "this
     // backend has no two-tone generator", which is what makes it cover HL2 and
@@ -157,9 +176,8 @@ int main(int argc, char** argv) {
     // halves of the claim, that the check is capability-shaped and that it sits
     // in front of the TX gate (#5516 review).
     //
-    // m_txAllowed is read in AutomationServer::start(), which this harness
-    // never calls, so the TX gate is closed here regardless of the environment
-    // and nothing in this file can key anything (Principle VI).
+    // The TX gate is closed because this test never arms it -- see the
+    // qunsetenv above -- not because start() happens not to run.
     const auto allowed = request("txtest twotone");
     check(!allowed.value("ok").toBool()
         && !allowed.value("error").toString().contains("not implemented")

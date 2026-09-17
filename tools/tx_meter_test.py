@@ -196,11 +196,26 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
     pacur_reliable = True
     stop_reason = None
     peaks, samples = [], []
-    t0 = time.monotonic() if keyed_at is None else keyed_at
+    # TWO CLOCKS, AND THEY ARE NOT THE SAME CLOCK.
+    #
+    # t0 is the WINDOW: settle, dur and the safety deadline are positions in the
+    # burst, and they must start when the radio actually keyed. `epoch` is the
+    # FRESHNESS horizon: a sample older than the key command describes the
+    # previous burst and may not enter an aggregate, and that command is earlier
+    # than the keyed edge by the bridge round trip.
+    #
+    # Running both off keyed_at charged key-up latency to the 0.9 s
+    # forward-power deadline and skipped the settle period outright, so a slow
+    # link aborted a healthy radio and recorded it as guarded-stop evidence
+    # (#5516 review).
+    t0 = time.monotonic()
+    epoch = t0 if keyed_at is None else keyed_at
     meter_reports = {}
     alc_unit = None
     while time.monotonic() - t0 < dur:
-        elapsed = time.monotonic() - t0
+        now = time.monotonic()
+        elapsed = now - t0              # position in the burst
+        since_key = (now - epoch) * 1000  # ms since the key command
         if elapsed > settle:
             m = tx.meters()
             link_alive = tx.liveness().get("connected")
@@ -226,7 +241,7 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
                         and type(instant) in (int, float) and math.isfinite(instant))
             fresh_peak = (type(instant) in (int, float) and math.isfinite(instant)
                           and type(fwd_age) in (int, float) and 0 <= fwd_age < SAFETY_FRESH_MS
-                          and fwd_age <= elapsed * 1000)
+                          and fwd_age <= since_key)
             if fresh_peak:
                 peaks.append(instant)
             if fresh_peak and fwd_val > 0.3:
@@ -239,14 +254,17 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
             # and -1 must not pass a < FRESH_MS check (#4536).
             swr_age = m.get("swrAgeMs", 1e9)
             swr_val = m.get("swr")
-            if 0 <= swr_age < min(SAFETY_FRESH_MS, elapsed * 1000) and swr_val is not None:
+            # Bound once: the deadline check and the recorded sample must not be
+            # able to disagree about the same question (#5516 review).
+            carrier_gap = swr_gap_is_observed(m, since_key, bool(swr))
+            if 0 <= swr_age < min(SAFETY_FRESH_MS, since_key) and swr_val is not None:
                 swr.append(swr_val)
             # Ceiling check on the wide window, for the reason above: only
             # aggregation is restricted to samples that postdate the key.
             if 0 <= swr_age < FRESH_MS and swr_val is not None and swr_val > max_swr:
                 stop_reason = f"SWR {swr_val:.2f} exceeds {max_swr:.2f} ceiling"
             for name, values in (("PATEMP", temp), ("+13.8A", volts), ("ALC", alc)):
-                report = reported_meter(m, name, max_age_ms=min(FRESH_MS, elapsed * 1000))
+                report = reported_meter(m, name, max_age_ms=min(FRESH_MS, since_key))
                 # The report that PRODUCED the aggregate, not whichever sample
                 # happened to be last. Overwriting every pass meant a meter that
                 # read fresh mid-burst and stale at the final sample returned a
@@ -263,12 +281,12 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
             pv, pa, prel = Tx.meter_from_all(m, "PACURRENT")
             if not prel:
                 pacur_reliable = False
-            if pv is not None and pa is not None and pa < min(FRESH_MS, elapsed * 1000):
+            if pv is not None and pa is not None and pa < min(FRESH_MS, since_key):
                 if pacur is None or pv > pacur[0]:
                     pacur = (pv, pa)
 
             if elapsed >= POWER_SAMPLE_DEADLINE_S and (not fresh_peak or not any(
-                    0 <= x.get("age_ms", -1) < min(SAFETY_FRESH_MS, elapsed * 1000)
+                    0 <= x.get("age_ms", -1) < min(SAFETY_FRESH_MS, since_key)
                     and x.get("name") == "FWDPWR" and x.get("has_value")
                     and str(x.get("unit", "")).lower() in ("dbm", "w", "watts")
                     and x.get("reliable") is not False
@@ -278,13 +296,13 @@ def sample_window(tx, dur=1.4, settle=0.2, max_watts=None, max_swr=2.5, guard=No
                 # with the generic deadline message loses that.
                 stop_reason = stop_reason or "no fresh calibrated FWDPWR sample before safety deadline"
             if (elapsed >= POWER_SAMPLE_DEADLINE_S
-                    and (swr_val is None or not 0 <= swr_age < min(SAFETY_FRESH_MS, elapsed * 1000))
-                    and not swr_gap_is_observed(m, elapsed * 1000, bool(swr))):
+                    and (swr_val is None or not 0 <= swr_age < min(SAFETY_FRESH_MS, since_key))
+                    and not carrier_gap):
                 stop_reason = stop_reason or "no fresh SWR sample before safety deadline"
             if not stop_reason and guard:
                 stop_reason = guard()
             samples.append({"elapsed": elapsed, "meters": m, "connected": link_alive,
-                            "swrCarrierGap": swr_val is None and swr_gap_is_observed(m, elapsed * 1000, bool(swr))})
+                            "swrCarrierGap": swr_val is None and carrier_gap})
             if stop_reason:
                 tx.cmd(cmd="txtest", action="off")
                 tx.ensure_unkeyed()
@@ -446,7 +464,15 @@ def main():
             # the keyed edge -- charging bridge round trip and radio key-up to
             # the 0.9 s FWDPWR deadline would abort a healthy radio on a slow
             # link and record it as guarded-stop evidence (#5516 review).
-            wait_for_keyed(tx, keyed_at)
+            if not wait_for_keyed(tx, keyed_at):
+                # NOT a fall-through. Entering the window unkeyed yields an
+                # all-None row with no stopReason, which every guard below
+                # passes -- so the sweep would step to the NEXT, HIGHER tune
+                # power having measured nothing at all (#5516 review).
+                tx.cmd(cmd="txtest", action="off")
+                tx.ensure_unkeyed()
+                raise RuntimeError("radio did not report keyed within 1.5 s of the Tune "
+                                   "command; refusing to sample or escalate")
             agg = sample_window(tx, max_watts=args.max_watts, max_swr=args.max_swr,
                                 guard=guard, keyed_at=keyed_at)
             tx.cmd(cmd="txtest", action="off")
@@ -481,7 +507,11 @@ def main():
             keyed_at = time.monotonic()
             r = tx.cmd(cmd="txtest", action="twotone")
             if r.get("ok"):
-                wait_for_keyed(tx, keyed_at)
+                if not wait_for_keyed(tx, keyed_at):
+                    tx.cmd(cmd="txtest", action="off")
+                    tx.ensure_unkeyed()
+                    raise RuntimeError("radio did not report keyed within 1.5 s of the "
+                                       "two-tone request; refusing to sample")
                 agg = sample_window(tx, dur=1.2, max_watts=args.max_watts,
                                     max_swr=args.max_swr, guard=guard, keyed_at=keyed_at)
                 tx.cmd(cmd="txtest", action="off"); ok = tx.ensure_unkeyed()

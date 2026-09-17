@@ -40,9 +40,9 @@ struct IcomCivBackendTestAccess {
         backend.onCivFrame(frame, generation);
     }
 
-    static QVariantMap freshness(const IcomCivBackend& backend)
+    static QVariantMap freshness(const IcomCivBackend& backend, bool withValues = true)
     {
-        return backend.stateFreshness();
+        return backend.stateFreshness(withValues);
     }
     static void age(IcomCivBackend& backend, const QString& key)
     {
@@ -112,6 +112,17 @@ struct IcomCivBackendTestAccess {
     static std::string lastCompletedKey(const IcomCivBackend& backend)
     {
         return backend.m_civScheduler.stats().lastCompletedKey;
+    }
+
+    // Connected and identified, with NOTHING in flight -- so a frame arriving
+    // here is Observation::Unmatched rather than Accepted.
+    static void prepareIdleSession(IcomCivBackend& backend,
+                                   const IcomModel& model,
+                                   std::uint64_t sessionGeneration)
+    {
+        backend.m_model = &model;
+        backend.m_connected = true;
+        backend.m_sessionGeneration = sessionGeneration;
     }
 
     static void prepareAcceptedPttRead(IcomCivBackend& backend,
@@ -625,5 +636,38 @@ int main(int argc, char** argv)
           "an accepted PTT readback is labelled as one");
     check(!pttField().value("pending").toBool(),
           "a confirmed PTT field carries no outstanding write");
+
+    // UNMATCHED IS STILL AUTHORITATIVE. An unsolicited front-panel PTT frame,
+    // and a reply slower than the scheduler's read wait, both arrive as
+    // Observation::Unmatched -- this file says so at the CI-V recovery gate:
+    // "Unmatched but still authoritative; Stale is the sole outcome that proves
+    // a newer semantic generation replaced it." Labelling those accepted:false
+    // would make the TX harness reject a real unkey on a loaded bus.
+    IcomCivBackend unsolicited;
+    IcomCivBackendTestAccess::prepareIdleSession(unsolicited, *ic705, kGeneration);
+    IcomCivBackendTestAccess::identify(unsolicited);
+    IcomCivBackendTestAccess::deliver(unsolicited,
+        CivFrame{kControllerAddress, ic705->civAddress, cmd::kControl, true,
+                 control::kPtt, {0x00}}, kGeneration);
+    const QVariantMap unsolicitedPtt = IcomCivBackendTestAccess::freshness(unsolicited)
+        .value("fields").toMap().value("ptt").toMap();
+    check(unsolicitedPtt.value("status") == "confirmed"
+              && unsolicitedPtt.value("accepted").toBool(),
+          "an unmatched but authoritative PTT readback still counts as accepted");
+
+    // THE INCIDENT SNAPSHOT REACHES THE DEFAULT LOG, so it carries statuses and
+    // ages but not the operator's dial frequency. recordIncident() qCWarnings
+    // this whole structure, and IcomCivScheduler's payload-free rule is about
+    // that log, not only about the transaction ring.
+    const QVariantMap redacted = IcomCivBackendTestAccess::freshness(freshBackend, false);
+    const QVariantMap openFreq = snapshot().value("fields").toMap()
+        .value("frequencyHz").toMap();
+    const QVariantMap hiddenFreq = redacted.value("fields").toMap()
+        .value("frequencyHz").toMap();
+    check(openFreq.value("value").isValid() && !hiddenFreq.value("value").isValid()
+              && hiddenFreq.value("valuesRedacted").toBool()
+              && hiddenFreq.value("status") == openFreq.value("status")
+              && hiddenFreq.value("semanticKey") == openFreq.value("semanticKey"),
+          "a redacted snapshot keeps the diagnostic and drops the dial frequency");
     return failures == 0 ? 0 : 1;
 }

@@ -3159,7 +3159,16 @@ void IcomCivBackend::onCivFrame(const CivFrame& frame,
             // this hot: it is indistinguishable, to every consumer, from the
             // state having just changed.
             if (wellFormed) {
-                confirmState(QStringLiteral("ptt"), keyed, acceptedReadback);
+                // NOT `acceptedReadback`. Observation::Unmatched covers an
+                // unsolicited front-panel publication and a reply slower than
+                // the scheduler's 350 ms wait, both of which are authoritative
+                // -- this file already says so at the recovery gate above:
+                // "Unmatched but still authoritative; Stale is the sole outcome
+                // that proves a newer semantic generation replaced it." Gating
+                // the harness on `== Accepted` would have failed a real unkey
+                // on a loaded CI-V bus.
+                confirmState(QStringLiteral("ptt"), keyed,
+                             observation != IcomCivScheduler::Observation::Stale);
             }
             if (keyed == m_keyed && !republishContradiction) {
                 if (acceptedReadback) {
@@ -3772,13 +3781,17 @@ void IcomCivBackend::confirmState(const QString& key, const QVariant& value,
     // reaches here, because the Stale check is an `else if` on the intent
     // branch. ACKs, setters and control-map "seen" counters never confirm.
     //
-    // `accepted` is what separates the two. Everything reached through the
-    // ordinary decode path is an Accepted (or unsolicited-but-current)
-    // observation; only that one PTT case can arrive Stale. It is recorded
-    // rather than filtered because the publication is still radio truth and
-    // Constitution VI will not have it suppressed — but a consumer citing this
-    // as PROOF of an unkey needs to know which it got, so `stateFreshness`
-    // exports it and the TX harness requires it (#5516 review).
+    // `accepted` is what separates the two, and it means NOT SUPERSEDED rather
+    // than "matched an in-flight read": an unsolicited publication and a reply
+    // slower than the scheduler's wait are both Unmatched and both
+    // authoritative, while Stale is the one outcome that proves a newer
+    // semantic generation replaced this frame. Everything reaching here by the
+    // ordinary decode path is non-stale already (the filter above drops stale
+    // non-PTT frames outright); only that one PTT case can arrive Stale. It is
+    // recorded rather than filtered because the publication is still radio
+    // truth and Constitution VI will not have it suppressed — but a consumer
+    // citing this as PROOF of an unkey needs to know which it got, so
+    // `stateFreshness` exports it and the TX harness requires it (#5516).
     //
     // `pending` has no timer, and does not need one only because every tracked
     // key is reconciled by something: sendUserCommand() queues confirmationFor()
@@ -3796,7 +3809,7 @@ void IcomCivBackend::confirmState(const QString& key, const QVariant& value,
                              false, accepted};
 }
 
-QVariantMap IcomCivBackend::stateFreshness() const
+QVariantMap IcomCivBackend::stateFreshness(bool withValues) const
 {
     // Diagnostic budget, not a change to polling or a transmit permission.
     constexpr qint64 kFreshMs = 5000;
@@ -3826,7 +3839,11 @@ QVariantMap IcomCivBackend::stateFreshness() const
         }
         fields.insert(QString::fromLatin1(tracked.label), QVariantMap{
             {QStringLiteral("status"), status}, {QStringLiteral("ageMs"), age},
-            {QStringLiteral("value"), known ? it->value : QVariant()},
+            // Omitted, not nulled, when values are suppressed: a null would be
+            // indistinguishable from a field that has no confirmed value.
+            {QStringLiteral("value"),
+             withValues && known ? it->value : QVariant()},
+            {QStringLiteral("valuesRedacted"), !withValues},
             {QStringLiteral("pending"), pending},
             // Whether the confirming frame was an ACCEPTED observation. Always
             // true except on the one PTT path that can record a Stale frame;
@@ -3852,12 +3869,13 @@ QVariantMap IcomCivBackend::stateFreshness() const
             "Readiness is diagnostic, not TX authorization.")}};
 }
 
-QVariantMap IcomCivBackend::schedulerDiagnostics(std::size_t traceLimit) const
+QVariantMap IcomCivBackend::schedulerDiagnostics(std::size_t traceLimit,
+                                                bool withValues) const
 {
     const IcomCivScheduler::Stats stats = m_civScheduler.stats();
     QVariantMap out;
     out.insert(QStringLiteral("backendInstanceId"), m_diagnosticInstanceId);
-    out.insert(QStringLiteral("stateFreshness"), stateFreshness());
+    out.insert(QStringLiteral("stateFreshness"), stateFreshness(withValues));
     // Callers that already publish their own trace (incidentSnapshot) or that
     // only need the freshness block pass a shallow limit. Only the explicit
     // `civ scheduler` verb asks for the full ring.
@@ -3986,7 +4004,13 @@ QVariantMap IcomCivBackend::incidentSnapshot(const QString& kind,
     // schedulerDiagnostics() for a deep one too would ship the same events
     // twice, at two different truncations, with nothing saying which is
     // authoritative (#5516 review).
-    commandPlane.insert(QStringLiteral("scheduler"), schedulerDiagnostics(0));
+    //
+    // AND WITHOUT FIELD VALUES: recordIncident() qCWarning-logs this snapshot
+    // into the default application log, which is the file operators paste into
+    // public support threads. Statuses and ages are the diagnostic; the
+    // operator's dial frequency is not.
+    commandPlane.insert(QStringLiteral("scheduler"),
+                        schedulerDiagnostics(0, /*withValues=*/false));
     commandPlane.insert(QStringLiteral("transactions"), schedulerTransactionTrace());
     out.insert(QStringLiteral("commandPlane"), commandPlane);
 

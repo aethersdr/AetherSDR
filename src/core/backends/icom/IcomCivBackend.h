@@ -291,10 +291,18 @@ private:
     [[nodiscard]] std::string semanticKey(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
-    [[nodiscard]] QVariantMap schedulerDiagnostics(std::size_t traceLimit = 128) const;
+    [[nodiscard]] QVariantMap schedulerDiagnostics(std::size_t traceLimit = 128,
+                                                   bool withValues = true) const;
     void confirmState(const QString& key, const QVariant& value,
                       bool accepted = true);
-    [[nodiscard]] QVariantMap stateFreshness() const;
+    // `withValues` false omits the decoded field VALUES -- the operator's dial
+    // frequency, mode, squelch, AGC and RF power -- keeping only status, age,
+    // gatesReadiness and the semantic key. Anything that reaches the default
+    // application log takes that form: IcomCivScheduler's payload-free rule
+    // ("avoids placing frequencies, memories, or text payloads into the default
+    // support log") is about the log, not only about the transaction ring, and
+    // recordIncident() qCWarning-logs this whole snapshot (#5516 review).
+    [[nodiscard]] QVariantMap stateFreshness(bool withValues = true) const;
     [[nodiscard]] QVariantList schedulerTransactionTrace(
         std::size_t limit = 32) const;
     [[nodiscard]] QVariantMap incidentSnapshot(const QString& kind,
@@ -349,9 +357,11 @@ private:
         std::uint64_t session = 0;   // cleared with the session generation
         std::uint64_t context = 0;   // bumped by frequency/mode/VFO changes
         bool pending = false;        // a write is out; intent is not evidence
-        // Whether the frame that set this was an ACCEPTED observation. Only the
-        // PTT path can record a Stale one (a stale frame agreeing with a
-        // pending intent falls through the intent branch), and an unkey proof
+        // Whether the frame that set this was NOT SUPERSEDED by a newer
+        // semantic generation. Unmatched (unsolicited, or a reply slower than
+        // the scheduler's wait) counts as accepted; only Stale does not. Only
+        // the PTT path can record a Stale one -- a stale frame agreeing with a
+        // pending intent falls through the intent branch -- and an unkey proof
         // must be able to tell the two apart. See confirmState().
         bool accepted = false;
     };

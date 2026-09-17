@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
 """Safety regressions for tools/tx_meter_test.py; never connects or keys."""
 
+import itertools
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tx_meter_test as subject  # noqa: E402
+
+
+def fake_clock(*values):
+    """A `time.monotonic` stand-in: yields `values`, then holds the last one.
+
+    A test says WHEN things happen; it should not also have to pin how many
+    times the code reads the clock. A fixed side_effect list did, so separating
+    the sampling window from the freshness epoch -- one extra read -- surfaced
+    as StopIteration rather than as the behaviour change it was. The final value
+    must lie past the window so the sampling loop still terminates.
+    """
+    return itertools.chain(values, itertools.repeat(values[-1]))
 
 
 def check(condition, message):
@@ -244,6 +257,23 @@ def test_icom_unkey_requires_new_confirmed_ptt_off():
               "a backend without CI-V diagnostics must not be held by the Icom gate")
 
 
+def test_window_deadlines_start_at_the_keyed_edge_not_the_key_command():
+    from unittest.mock import patch
+    # Key command at t=0, radio keyed at t=1.0 -- a second of bridge round trip
+    # plus key-up. The 0.9 s safety deadline is a position in the BURST, so it
+    # is measured from 1.0; measuring it from the command aborted a healthy
+    # radio 0.2 s into its first sample and filed that as guarded-stop evidence.
+    no_power = meter_snapshot(fwd_age=-1)   # no FWDPWR row at all
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.2, 99)):
+        result = subject.sample_window(FakeTx(no_power), dur=1.5, settle=-1, keyed_at=0)
+    check(result["stopReason"] is None,
+          f"the deadline was charged key-up latency: {result['stopReason']}")
+    # ...and it still fires once the WINDOW itself reaches 0.9 s.
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.95, 99)):
+        result = subject.sample_window(FakeTx(no_power), dur=1.5, settle=-1, keyed_at=0)
+    check("no fresh calibrated FWDPWR" in str(result["stopReason"]), result)
+
+
 def test_wait_for_keyed_is_bounded_and_does_not_extend_the_window():
     from unittest.mock import patch
 
@@ -271,12 +301,15 @@ def test_alarming_sample_still_aborts_outside_the_post_key_window():
     from unittest.mock import patch
     # 600 ms old: too old to be THIS burst's evidence, plenty alarming enough
     # to stop transmitting. Aggregates must stay empty; the run must stop.
-    with patch.object(subject.time, "monotonic", side_effect=[1, 1, 1.1, 1.1, 1.1, 2]):
+    # Window opens at t=1.0 (the keyed edge); the key command was at t=0, so the
+    # freshness horizon is 1000 ms and a 600 ms sample is still inside it -- yet
+    # outside the 500 ms safety window, so it may alarm but not aggregate.
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.0, 99)):
         result = subject.sample_window(FakeTx(meter_snapshot(swr=4.0, swr_age=600)),
                                        dur=1.5, settle=-1, keyed_at=0, max_swr=2.5)
     check("SWR 4.00 exceeds" in str(result["stopReason"]), result)
     check(result["swr"] is None, "a pre-key SWR leaked into the aggregate")
-    with patch.object(subject.time, "monotonic", side_effect=[1, 1, 1.1, 1.1, 1.1, 2]):
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.0, 99)):
         result = subject.sample_window(FakeTx(meter_snapshot(fwd=99, fwd_age=600)),
                                        dur=1.5, settle=-1, keyed_at=0, max_watts=10)
     check("exceeds 10.0 W ceiling" in str(result["stopReason"]), result)
@@ -314,7 +347,10 @@ def test_previous_burst_sample_cannot_satisfy_safety():
 
 def test_old_swr_cannot_qualify_a_later_carrier_gap():
     from unittest.mock import patch
-    with patch.object(subject.time, "monotonic", side_effect=[1, 1, 1.1, 2]):
+    # Reach the 0.9 s safety deadline inside the window (t0=1.0, sample at 1.95)
+    # while the only SWR on offer is 600 ms old -- older than the 500 ms safety
+    # window, so it can neither aggregate nor satisfy the deadline.
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.95, 99)):
         result = subject.sample_window(FakeTx(meter_snapshot(swr_age=600)), dur=1.5, settle=-1, keyed_at=0)
     check(result["swr"] is None and result["peakSwr"] is None, result)
     check(result["stopReason"] == "no fresh SWR sample before safety deadline", result)
@@ -323,6 +359,7 @@ def test_old_swr_cannot_qualify_a_later_carrier_gap():
 if __name__ == "__main__":
     test_cw_swr_gap_requires_fresh_zero_carrier_and_prior_ratio()
     test_icom_unkey_requires_new_confirmed_ptt_off()
+    test_window_deadlines_start_at_the_keyed_edge_not_the_key_command()
     test_wait_for_keyed_is_bounded_and_does_not_extend_the_window()
     test_alarming_sample_still_aborts_outside_the_post_key_window()
     test_native_meter_reporting()
