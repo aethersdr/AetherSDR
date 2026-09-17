@@ -332,11 +332,9 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     // The icon row and the param row below are fixed height, so the canvas is
     // the only thing that grows: without this it swallows every pixel the
     // window has, and 15% of a tall graph buys nothing a shorter one does not
-    // already show. The slack sits above the canvas, so the band plan along
-    // its bottom edge stays against the readouts it belongs to.
+    // already show. The other 15 goes to a spacer at the foot of the column.
     constexpr int kCanvasStretch = 85;
     constexpr int kSlackStretch = 100 - kCanvasStretch;
-    eqColumn->addStretch(kSlackStretch);
 
     m_canvas = new ClientEqEditorCanvas;
     m_canvas->setObjectName(QStringLiteral("stripEqCanvas"));
@@ -356,6 +354,7 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
 
     m_paramRow = new ClientEqParamRow;
     eqColumn->addWidget(m_paramRow);
+    eqColumn->addStretch(kSlackStretch);
 
     body->addLayout(eqColumn, 1);
 
