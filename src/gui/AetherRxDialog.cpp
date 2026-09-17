@@ -75,12 +75,14 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     theme::setContainer(this, QStringLiteral("dialog/aetherRx"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");
     setStyleSheet(ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
-    // Wide enough for the widest page beside the tab column: the EQ panel's
-    // icon row and header are its natural width, and anything narrower puts a
-    // horizontal scrollbar under a control people drag on. Height opens short
-    // of 1080p's usable space so the bottom edge stays grabbable.
-    setMinimumSize(980, 620);
-    resize(1420, 900);
+    // Opens at a size that sits on the desktop rather than filling it. The EQ
+    // and waveform pages are wider than this at their natural size and scroll
+    // to fit; that is the trade for a window you can put somewhere. The
+    // minimum is what the narrowest page (AetherNR's two-column radio row)
+    // needs beside the tab column, and geometry persists, so a window resized
+    // once reopens where it was left.
+    setMinimumSize(600, 400);
+    resize(710, 450);
 
     auto* body = new QHBoxLayout(bodyWidget());
     body->setContentsMargins(8, 8, 8, 8);

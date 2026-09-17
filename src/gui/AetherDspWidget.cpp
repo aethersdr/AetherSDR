@@ -823,9 +823,13 @@ QWidget* AetherDspWidget::buildNr2Page()
         cellBox->addWidget(
             sectionLabel(QStringLiteral("NOISE ESTIMATION"), npeCell));
 
-        auto* row = new QHBoxLayout;
+        // Two columns, like GAIN METHOD beside it and for the same reason: a
+        // QRadioButton clips its text, and three on one line lost the "T" off
+        // NSTAT as soon as the window came down to its opening size.
+        auto* row = new QGridLayout;
         row->setContentsMargins(0, 0, 0, 0);
-        row->setSpacing(14);
+        row->setHorizontalSpacing(14);
+        row->setVerticalSpacing(6);
         m_nr2NpeGroup = new QButtonGroup(this);
         m_nr2NpeGroup->setExclusive(true);
         const char* npeLabels[] = {"OSMS", "MMSE", "NSTAT"};
@@ -843,9 +847,9 @@ QWidget* AetherDspWidget::buildNr2Page()
             b->setToolTip(npeTips[i]);
             b->setAccessibleDescription(QString::fromLatin1(npeTips[i]));
             m_nr2NpeGroup->addButton(b, i);
-            row->addWidget(b);
+            row->addWidget(b, i / 2, i % 2);
         }
-        row->addStretch(1);
+        row->setColumnStretch(2, 1);
         m_nr2NpeGroup->button(0)->setChecked(true);  // OSMS default
         connect(m_nr2NpeGroup, &QButtonGroup::idClicked, this, [this](int id) {
             Nr2SettingsModel::instance().setNpeMethod(id);
