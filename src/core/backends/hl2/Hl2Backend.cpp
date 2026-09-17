@@ -4785,11 +4785,9 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
         // is what makes the build visible without making it switchable.
         e[QStringLiteral("modulator")] =
             QString::fromLatin1(Hl2TxDsp::modulatorName());
-        // The LEVEL claim is build-dependent and so is stated per build rather
-        // than asserted once for both. With no WDSP channel behind it the
-        // Config IS the modulator's state, which makes reading it level 4; with
-        // one, the Config is what the channel was ASKED for and the level-4
-        // reads are the two fields below it.
+        // TXA reports the configuration accepted by WdspChannel; the phasing
+        // implementation reports its local DSP configuration. Neither is RF
+        // readback from the radio.
         const int txChannelId = txDsp->wdspChannelId();
         const WdspChannel::Config* channel = txDsp->channelConfig();
         e[QStringLiteral("level")] = channel ? QStringLiteral("channel-config")

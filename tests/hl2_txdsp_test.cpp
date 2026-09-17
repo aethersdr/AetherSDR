@@ -283,7 +283,7 @@ static std::vector<std::complex<float>> modulateOnce(WdspChannel::Mode mode,
             static_cast<float>(amplitude * std::sin(2.0 * M_PI * toneHz * n / fs));
 
     // Feed in realistic chunks rather than one giant block, at the cadence the
-    // live caller feeds them (see kFeedPaceUs).
+    // live caller feeds them (see feed()).
     constexpr std::size_t kChunk = 240;
     for (std::size_t off = 0; off < audio.size(); off += kChunk) {
         const std::size_t n = std::min(kChunk, audio.size() - off);
@@ -335,7 +335,7 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
             return out;
         }
         if (attempt < 2) {
-        std::fprintf(stderr,
+            std::fprintf(stderr,
                      "starved at %.0f Hz: %llu blocks did not reach the wire "
                      "-- retrying (attempt %d of 3)\n",
                      toneHz, faults, attempt + 2);
@@ -372,7 +372,7 @@ static Run retryIfStarved(const char* what, F&& body)
             return run;
         }
         if (attempt < 2) {
-        std::fprintf(stderr,
+            std::fprintf(stderr,
                      "starved in %s: %llu blocks did not reach the wire "
                      "-- retrying (attempt %d of 3)\n",
                      what, run.faults, attempt + 2);

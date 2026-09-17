@@ -403,8 +403,9 @@ it deliberate sleeping.
   Repeated reset and subsequent tone recovery are covered. This replaces the
   earlier settled-only measurement, which discarded the defect's first 85 ms.
 
-- **Control calls during transmit.** `setMode` / `setFilter` were never called on a running
-  transmit channel, so row 11's `Busy` consequence is read, not observed.
+- **Control calls during transmit.** The later running-mode-change regression
+  exercises USB → LSB after feeding audio. Concurrent control admission
+  remains governed by the WdspChannel operation fence.
 - **Memory and FFTW planning cost.** Not measured. S6 §12's ≈23 MB of minimum-phase
   workspace is arithmetic from 2.00 and has **not** been re-derived against 2.10, which
   introduced an impulse cache in `fir_bandpass` that 2.00 did not have. The NNR stages 2.10
@@ -416,7 +417,7 @@ it deliberate sleeping.
 
 ---
 
-## 8. ctest
+## 8. Contributor ctest results before review repairs
 
 Rebased onto `origin/main` at `8f4b4dc1`, which is the tip carrying #5646 and
 #5647 — the two @ten9876 asked to land before TXA work touched `Hl2TxDsp`. That
@@ -447,10 +448,9 @@ precondition is now met rather than worked around.
   `src/core/VkampConnection.cpp`, `src/core/VkampProtocol.cpp`, the settings sources and
   the log writer, and links Qt6 Core/Network/Test — again no shared translation unit.
 
-Both changed files are single-source executables of their own
-(`add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)` and
-`add_executable(hl2_txdsp_test tests/hl2_txdsp_test.cpp)`), so neither can reach another
-target.
+These historical full-suite results are contributor evidence from that revision,
+not a full-suite run of the final review repairs. The PR records final focused
+validation separately.
 
 ## Reset correction in PR #5747
 
