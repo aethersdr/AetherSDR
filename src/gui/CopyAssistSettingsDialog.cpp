@@ -44,6 +44,28 @@ CopyAssistSettingsDialog::CopyAssistSettingsDialog(QWidget* parent)
             [this](int) { emit gpuChanged(currentGpu()); });
     m_gpuLabel = new QLabel(tr("Compute:"), this);
     form->addRow(m_gpuLabel, m_gpu);
+
+    // Fault stand-down row (#5190): hidden unless a previous session died inside
+    // the speech engine and something is being kept out because of it. A false
+    // positive (power loss, an unrelated crash in that window) must be one click
+    // to undo, so the undo lives right under the device it affects.
+    m_faultRow = new QWidget(this);
+    auto* faultLayout = new QVBoxLayout(m_faultRow);
+    faultLayout->setContentsMargins(0, 0, 0, 0);
+    m_faultReason = new QLabel(m_faultRow);
+    m_faultReason->setObjectName(QStringLiteral("CopyAssistFaultReason"));
+    m_faultReason->setWordWrap(true);
+    m_faultRetry = new QPushButton(tr("Try again next launch"), m_faultRow);
+    m_faultRetry->setObjectName(QStringLiteral("CopyAssistFaultRetryButton"));
+    m_faultRetry->setAccessibleName(tr("Try the speech engine again next launch"));
+    m_faultRetry->setToolTip(tr("Forget the recorded failure. The device is tried again "
+                                "the next time AetherSDR starts."));
+    connect(m_faultRetry, &QPushButton::clicked, this,
+            [this] { emit retryAfterFaultRequested(); });
+    faultLayout->addWidget(m_faultReason);
+    faultLayout->addWidget(m_faultRetry, 0, Qt::AlignLeft);
+    form->addRow(QString(), m_faultRow);
+    m_faultRow->setVisible(false);
     // Device discovery can initialize Metal and compile its embedded shader
     // library. Keep the row visible but inactive while that work runs off the
     // GUI thread; CPU-only hosts hide it once discovery finishes.
@@ -255,6 +277,38 @@ void CopyAssistSettingsDialog::setGpuSelectorEnabled(bool on)
 {
     m_gpuLabel->setEnabled(on);
     m_gpu->setEnabled(on);
+}
+
+void CopyAssistSettingsDialog::setFaultStandDown(const QString& reason)
+{
+    m_faultReason->setText(reason);
+    m_faultRetry->setEnabled(true);
+    // A tooltip is never announced and the reason lives in a sibling label, so
+    // put the reason where a screen reader meets it on the button (docs/a11y.md).
+    m_faultRetry->setAccessibleDescription(reason);
+    m_faultRow->setVisible(true);
+}
+
+void CopyAssistSettingsDialog::setFaultRetryPending()
+{
+    const QString pending = tr("It will be tried again the next time AetherSDR starts.");
+    m_faultReason->setText(pending);
+    m_faultRetry->setEnabled(false);
+    m_faultRetry->setAccessibleDescription(pending);
+    m_faultRow->setVisible(true);
+}
+
+void CopyAssistSettingsDialog::clearFaultStandDown()
+{
+    m_faultRow->setVisible(false);
+    m_faultReason->clear();
+}
+
+bool CopyAssistSettingsDialog::faultStandDownVisible() const
+{
+    // isHidden(), not isVisible(): the latter is false for every child of a
+    // dialog that has not been shown yet.
+    return !m_faultRow->isHidden();
 }
 
 void CopyAssistSettingsDialog::addLanguage(const QString& code, const QString& name)

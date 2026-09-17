@@ -1,5 +1,7 @@
 #pragma once
 
+#include "asr/AsrCrashMarker.h"
+
 #include <QObject>
 #include <QString>
 
@@ -102,6 +104,16 @@ private slots:
 
 private:
     void startGpuDiscovery();
+    // Surviving an uncatchable ASR fault (#5190) — see asr/AsrCrashMarker.h.
+    // All settings writes here happen on the GUI thread: CopyAssistSettings'
+    // setValue() is a whole-document read-modify-write.
+    void adoptSurvivingFault();      // ctor: a marker still set = the last run died there
+    void armFaultMarker(const char* stage); // persist "attempt in flight" before a risky stage
+    void clearFaultMarker(const char* stage); // that stage's marker is no longer in flight
+    void loadSettled();              // one queued model load reported ready or failed
+    void applyLastFaultToDevices();  // after discovery: retire the GPU a fault record names
+    void forgetLastFault();          // stale record, or the operator asked for another attempt
+    void standLocalEngineDown(const QString& reason);
     // By value: reconcileAfterGpuFallback() passes m_gpuDevices back in, and
     // the first thing this function does is reassign that member — a
     // reference parameter would alias it.
@@ -168,6 +180,13 @@ private:
     bool m_gpuDiscoveryPending = true;
     bool m_enableAfterGpuDiscovery = false;
     bool m_gpuDeviceExplicit = false; // the operator picked this device themselves
+    AsrAttempt m_lastFault;          // the persisted fault record, if any (AsrLastFault)
+    AsrMarkerState m_markers;        // which markers are persisted, and when each may clear
+    // ggml could not run on this machine last time (a death in discovery, or in
+    // a load already on CPU): the local whisper engine stays off this session.
+    // Remote and sherpa-onnx do not touch ggml and are unaffected.
+    bool m_localEngineStoodDown = false;
+    QString m_standDownReason;
     int m_gpuDevice = 0; // resolved default or explicit setting; -1 forces CPU
     // Last device list from discovery, kept so a runtime GPU failure can be
     // reconciled into the selectors without re-running (and re-probing) it.

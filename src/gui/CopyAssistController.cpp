@@ -17,6 +17,7 @@
 
 #include <QPushButton>
 
+#include <QCoreApplication>
 #include <QDate>
 #include <QDateTime>
 #include <QDialog>
@@ -37,6 +38,23 @@
 
 #include <algorithm>
 #include <exception>
+#include <optional>
+
+namespace {
+// What a fault record is stamped with, so an upgrade — a new whisper/ggml build
+// — gets the attempt made again instead of inheriting the old verdict. The SHA
+// is part of it so a development build of another commit counts as new too (it
+// is captured at configure time, so an incremental rebuild keeps the old one).
+QString asrAppVersionStamp()
+{
+#ifdef AETHER_GIT_SHA
+    return QCoreApplication::applicationVersion() + QLatin1Char('+')
+        + QStringLiteral(AETHER_GIT_SHA);
+#else
+    return QCoreApplication::applicationVersion();
+#endif
+}
+} // namespace
 
 namespace {
 
@@ -416,12 +434,17 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     });
     connect(m_models, &AsrModelManager::verifying, this,
             [this] { m_panel->setStatus(tr("Verifying model…")); });
+    // The fault marker is armed HERE, at the load itself, not at beginEnable():
+    // a catalog tier may sit in a multi-minute download first, and a quit during
+    // that would otherwise read as "the GPU killed us" (#5190 triage).
     connect(m_models, &AsrModelManager::alreadyPresent, this, [this](const QString& path) {
         m_panel->setStatus(tr("Loading model…"));
+        armFaultMarker(kAsrStageLoad);
         m_asr->setModelPath(path);
     });
     connect(m_models, &AsrModelManager::finished, this, [this](const QString& path) {
         m_panel->setStatus(tr("Loading model…"));
+        armFaultMarker(kAsrStageLoad);
         m_asr->setModelPath(path);
     });
     connect(m_models, &AsrModelManager::failed, this, [this](const QString& err) {
@@ -469,12 +492,244 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // support bundle carries.
     asrInstallLogRouting();
 
+    connect(m_settings, &CopyAssistSettingsDialog::retryAfterFaultRequested, this, [this] {
+        forgetLastFault();
+        m_panel->setStatus(tr("Recorded failure cleared — it is tried again the next time "
+                              "AetherSDR starts."));
+    });
+
+    // Before discovery or a model load can run: did the last session die inside
+    // one? (#5190) (The language table and the log callback above are whisper
+    // calls too, but neither initialises a ggml backend.)
+    adoptSurvivingFault();
+
     buildEngine();
     m_constructed = true; // subsequent VAD toggles may download/rebuild
-    startGpuDiscovery();
+    if (m_localEngineStoodDown) {
+        // Discovery is the stage that may have killed the last run; do not walk
+        // back into it. An empty device list resolves to CPU and hides the
+        // selector, exactly as a failed or timed-out probe does.
+        applyGpuDevices({});
+        m_panel->setStatus(m_standDownReason);
+    } else {
+        startGpuDiscovery();
+    }
 }
 
-CopyAssistController::~CopyAssistController() = default;
+CopyAssistController::~CopyAssistController()
+{
+    // Join the ASR worker BEFORE clearing the marker, so a load that dies during
+    // teardown is still recorded; then clear, so an ordinary close with the
+    // marker armed (a load or discovery still running) never reads as a fault.
+    delete m_tap;
+    m_tap = nullptr;
+    delete m_asr;
+    m_asr = nullptr;
+    if (m_markers.engineTornDown()) {
+        clearFaultMarker(kAsrStageLoad);
+    }
+    if (m_markers.discoveryFinished()) {
+        clearFaultMarker(kAsrStageDiscovery);
+    }
+}
+
+void CopyAssistController::adoptSurvivingFault()
+{
+    // Two slots (see AsrMarkerState). When both survived, the load is the one
+    // to believe: it was armed later, and a timed-out discovery was merely still
+    // running beside it.
+    const QString loadInFlight =
+        CopyAssistSettings::value(QStringLiteral("AsrInFlight"), QString()).toString();
+    const QString discoveryInFlight =
+        CopyAssistSettings::value(QStringLiteral("AsrInFlightDiscovery"), QString()).toString();
+    AsrAttempt died = asrAttemptFromJson(loadInFlight);
+    if (!died.isValid()) {
+        died = asrAttemptFromJson(discoveryInFlight);
+    }
+    if (!loadInFlight.isEmpty()) {
+        CopyAssistSettings::setValue(QStringLiteral("AsrInFlight"), QString());
+    }
+    if (!discoveryInFlight.isEmpty()) {
+        CopyAssistSettings::setValue(QStringLiteral("AsrInFlightDiscovery"), QString());
+    }
+
+    const AsrAttempt previous = asrAttemptFromJson(
+        CopyAssistSettings::value(QStringLiteral("AsrLastFault"), QString()).toString());
+    if (died.isValid()) {
+        // Still set at startup: the previous run never reached the clear.
+        // Merged, not replaced — a GPU an earlier fault condemned stays out.
+        m_lastFault = asrMergeFault(previous, died);
+        CopyAssistSettings::setValue(QStringLiteral("AsrLastFault"), asrAttemptToJson(m_lastFault));
+        qCWarning(lcGui).noquote()
+            << "Copy Assist: the previous session ended inside ASR stage" << died.stage
+            << "- device" << (died.device < 0 ? QStringLiteral("cpu") : died.deviceName)
+            << "tier" << died.tier << "version" << died.appVersion
+            << "- devices already retired:" << m_lastFault.retired.size();
+    } else {
+        m_lastFault = previous;
+    }
+
+    switch (asrFaultAction(m_lastFault, asrAppVersionStamp(), std::nullopt)) {
+    case AsrFaultAction::Forget:
+        forgetLastFault();
+        break;
+    case AsrFaultAction::DisableAsr:
+        standLocalEngineDown(
+            m_lastFault.stage == QLatin1String(kAsrStageDiscovery)
+                ? tr("The speech engine stopped AetherSDR while starting up last time, so "
+                     "local Copy Assist is off for this session. A remote server still works.")
+                : tr("The speech engine stopped AetherSDR while loading a model on the CPU last "
+                     "time, so local Copy Assist is off for this session. A remote server still "
+                     "works."));
+        break;
+    case AsrFaultAction::AwaitDevices: // decided in applyGpuDevices(), once names exist
+    case AsrFaultAction::RetireGpu:
+    case AsrFaultAction::None:
+        break;
+    }
+}
+
+void CopyAssistController::armFaultMarker(const char* stage)
+{
+    const bool isLoad = QLatin1String(stage) == QLatin1String(kAsrStageLoad);
+    if (isLoad && m_backend != AsrBackendKind::Whisper) {
+        return; // remote and sherpa-onnx loads do not enter ggml
+    }
+    // Discovery is armed whatever the backend: it runs for every controller and
+    // is what first initialises ggml's backends.
+    if (isLoad) {
+        m_markers.armLoad();
+    } else {
+        m_markers.armDiscovery();
+    }
+    AsrAttempt a;
+    a.stage = QString::fromLatin1(stage);
+    a.appVersion = asrAppVersionStamp();
+    a.startedUtc = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    if (a.stage == QLatin1String(kAsrStageLoad)) {
+        a.device = m_gpuDevice;
+        a.tier = m_tierId;
+        for (const AsrGpuDevice& d : m_gpuDevices) {
+            if (d.index == m_gpuDevice) {
+                a.deviceName = d.name;
+                a.vramFreeMb = d.vramFreeBytes / (1024 * 1024);
+                a.vramTotalMb = d.vramTotalBytes / (1024 * 1024);
+            }
+        }
+    }
+    // setValue() commits before returning (AppSettings::save() is a sqlite
+    // transaction on this thread), which is what lets the marker outlive a
+    // signal that kills the process a moment later. The store runs WAL with
+    // synchronous=NORMAL, so this is a guarantee against the PROCESS dying, not
+    // against power loss.
+    CopyAssistSettings::setValue(isLoad ? QStringLiteral("AsrInFlight")
+                                        : QStringLiteral("AsrInFlightDiscovery"),
+                                 asrAttemptToJson(a));
+}
+
+void CopyAssistController::loadSettled()
+{
+    // Only the last outstanding load clears (AsrMarkerState::loadSettled).
+    if (m_markers.loadSettled()) {
+        clearFaultMarker(kAsrStageLoad);
+    }
+}
+
+void CopyAssistController::clearFaultMarker(const char* stage)
+{
+    CopyAssistSettings::setValue(QLatin1String(stage) == QLatin1String(kAsrStageLoad)
+                                     ? QStringLiteral("AsrInFlight")
+                                     : QStringLiteral("AsrInFlightDiscovery"),
+                                 QString());
+}
+
+void CopyAssistController::forgetLastFault()
+{
+    if (m_lastFault.isValid()) {
+        CopyAssistSettings::setValue(QStringLiteral("AsrLastFault"), QString());
+    }
+    const bool wasShown = m_settings->faultStandDownVisible();
+    m_lastFault = AsrAttempt();
+    // m_localEngineStoodDown and the session GPU latch stay as they are: both are
+    // one-way for the life of the process (#4502). The next launch starts clean —
+    // so keep saying so while this session is still stood down, rather than
+    // hiding the row and leaving "(unavailable)" unexplained.
+    if (wasShown) {
+        m_settings->setFaultRetryPending();
+    } else {
+        m_settings->clearFaultStandDown();
+    }
+}
+
+void CopyAssistController::standLocalEngineDown(const QString& reason)
+{
+    m_localEngineStoodDown = true;
+    m_standDownReason = reason;
+    m_settings->setFaultStandDown(reason);
+    qCWarning(lcGui).noquote() << "Copy Assist:" << reason;
+}
+
+void CopyAssistController::applyLastFaultToDevices()
+{
+    if (!m_lastFault.isValid() || m_lastFault.stage != QLatin1String(kAsrStageLoad)
+        || m_lastFault.device < 0 || m_gpuDevices.empty()) {
+        return; // no GPU fault on record, or no device list to check it against
+    }
+    const auto nameAt = [this](int index) {
+        for (const AsrGpuDevice& d : m_gpuDevices) {
+            if (d.index == index) {
+                return d.name;
+            }
+        }
+        return QString(); // nothing sits at that index any more
+    };
+    switch (asrFaultAction(m_lastFault, asrAppVersionStamp(), nameAt(m_lastFault.device))) {
+    case AsrFaultAction::RetireGpu: {
+        // Same session latch a caught load failure uses, so load() never enters
+        // the device even if it is the saved explicit choice, and the existing
+        // resolution + tier walk-back below move the decode off it. Unlike a
+        // caught failure this verdict outlives the session: it is re-applied on
+        // every launch until the record is forgotten.
+        QStringList names;
+        const auto retire = [&](int index, const QString& name) {
+            if (nameAt(index) != name) {
+                return; // other hardware there now: that entry no longer applies
+            }
+            asrMarkGpuDeviceFailed(index);
+            for (AsrGpuDevice& d : m_gpuDevices) {
+                if (d.index == index) {
+                    d.usable = false;
+                }
+            }
+            names << name;
+        };
+        retire(m_lastFault.device, m_lastFault.deviceName);
+        for (const AsrRetiredDevice& r : m_lastFault.retired) {
+            retire(r.device, r.name); // every GPU an earlier fault condemned stays out
+        }
+        const QString reason =
+            tr("%1 stopped AetherSDR during a model load, so it is not being used.")
+                .arg(names.join(tr(" and ")));
+        if (!m_settings->faultStandDownVisible()) {
+            m_settings->setFaultStandDown(reason);
+            if (m_backend == AsrBackendKind::Whisper) {
+                // The panel only says so when this backend is the one affected;
+                // a remote or sherpa session is not running on any of them.
+                m_panel->setStatus(reason);
+                m_gpuFallbackNotice = reason; // keep it on screen through the next load
+            }
+        }
+        break;
+    }
+    case AsrFaultAction::Forget:
+        forgetLastFault(); // other hardware at that index now
+        break;
+    case AsrFaultAction::DisableAsr:
+    case AsrFaultAction::AwaitDevices:
+    case AsrFaultAction::None:
+        break;
+    }
+}
 
 PersistentDialog* CopyAssistController::settingsDialog() const
 {
@@ -511,6 +766,11 @@ void CopyAssistController::startGpuDiscovery()
     auto* watcher = new QFutureWatcher<std::vector<AsrGpuDevice>>(this);
     connect(watcher, &QFutureWatcher<std::vector<AsrGpuDevice>>::finished,
             this, [this, watcher] {
+                // Cleared here, not by the timeout below: a probe that timed out
+                // is still running, and may yet take the process down.
+                if (m_markers.discoveryFinished()) {
+                    clearFaultMarker(kAsrStageDiscovery);
+                }
                 std::vector<AsrGpuDevice> devices;
                 try {
                     devices = watcher->result();
@@ -525,6 +785,7 @@ void CopyAssistController::startGpuDiscovery()
                 }
                 watcher->deleteLater();
             });
+    armFaultMarker(kAsrStageDiscovery);
     watcher->setFuture(QtConcurrent::run([] { return asrGpuDevices(); }));
 
     QTimer::singleShot(kGpuDiscoveryTimeoutMs, this, [this] {
@@ -598,6 +859,7 @@ void CopyAssistController::reconcileAfterGpuFallback()
 void CopyAssistController::applyGpuDevices(std::vector<AsrGpuDevice> gpus)
 {
     m_gpuDevices = std::move(gpus);
+    applyLastFaultToDevices(); // may mark one device unusable before resolution (#5190)
     const int previousDevice = m_gpuDevice;
     int resolvedDevice = previousDevice;
 
@@ -701,6 +963,11 @@ void CopyAssistController::buildEngine()
     delete m_tap;
     m_tap = nullptr;
     delete m_asr;
+    // ~AsrEngine joined the worker, so every load that was queued has finished
+    // (or taken the process down, in which case the marker is still set).
+    if (m_markers.engineTornDown()) {
+        clearFaultMarker(kAsrStageLoad);
+    }
 
     const QString language =
         CopyAssistSettings::value(QStringLiteral("AsrLanguage"), QStringLiteral("en"))
@@ -734,6 +1001,7 @@ void CopyAssistController::buildEngine()
     m_tap = new AsrAudioTap(m_audio, m_asr, this);
 
     connect(m_asr, &AsrEngine::ready, this, [this] {
+        loadSettled();
         m_panel->setBusy(false);
         if (m_enabled && !m_speakerLoad.isPending()) {
             m_tap->setEnabled(true);
@@ -767,6 +1035,7 @@ void CopyAssistController::buildEngine()
         }
     });
     connect(m_asr, &AsrEngine::loadFailed, this, [this](const QString& err) {
+        loadSettled(); // a failure that reports is not a fault
         m_panel->setBusy(false);
         m_gpuFallbackNotice.clear(); // failed reload: this message wins instead
         m_panel->setStatus(tr("Model load failed: %1").arg(err));
@@ -940,6 +1209,15 @@ void CopyAssistController::setBackend(AsrBackendKind kind, const QString& tierId
 
 void CopyAssistController::requestEnable()
 {
+    if (m_localEngineStoodDown && m_backend == AsrBackendKind::Whisper) {
+        // ggml could not run here last time (#5190); entering it again would
+        // only repeat the death. Remote/sherpa tiers remain selectable.
+        m_enableAfterGpuDiscovery = false;
+        m_panel->setBusy(false);
+        m_panel->setStatus(m_standDownReason);
+        m_panel->setAsrEnabled(false);
+        return;
+    }
     if (m_backend == AsrBackendKind::Whisper && m_gpuDiscoveryPending) {
         // Preserve the original compute device and model even if the operator
         // clicks Enable immediately. Discovery continues off the GUI thread
@@ -983,6 +1261,7 @@ void CopyAssistController::beginEnable()
             return;
         }
         m_panel->setStatus(tr("Loading model…"));
+        armFaultMarker(kAsrStageLoad);
         m_asr->setModelPath(m_customModelPath);
     } else if (m_backend == AsrBackendKind::SherpaOnnx) {
         // sherpa-onnx model: load the picked directory directly (the backend
