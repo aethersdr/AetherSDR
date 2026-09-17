@@ -1,5 +1,6 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Bands.h"
+#include "core/backends/hl2/Hl2ModeVocabulary.h"
 
 #include <QJsonObject>
 
@@ -203,34 +204,6 @@ WdspChannel::Mode modeFromString(const QString& mode) noexcept
     if (u == QLatin1String("DRM"))  return WdspChannel::Mode::Drm;
     if (u == QLatin1String("WBFM") || u == QLatin1String("WFM")) return WdspChannel::Mode::Wbfm;
     return WdspChannel::Mode::Usb;
-}
-
-// Is `mode` a name modeFromString() genuinely maps (rather than falling back
-// to USB)? The restore boundary uses this so a corrupt document's mode string
-// is dropped instead of reaching Receiver::mode, the UI, and — via capture —
-// re-persisting itself (PR #4619 review, Ozy311).
-// The modes modeFromString() genuinely maps, as ONE list.
-//
-// Hoisted out of isKnownModeString() so the capability published to the UI and
-// the restore boundary's guard cannot drift apart. They are the same question
-// -- "does this backend really do this mode" -- and a second copy would answer
-// it twice, which is how a UI comes to offer a mode the backend silently turns
-// into USB.
-const QStringList& knownModeStrings() noexcept
-{
-    static const QStringList kKnown = {
-        QStringLiteral("LSB"), QStringLiteral("USB"), QStringLiteral("DSB"),
-        QStringLiteral("CWL"), QStringLiteral("CWU"), QStringLiteral("CW"),
-        QStringLiteral("FM"),  QStringLiteral("NFM"), QStringLiteral("AM"),
-        QStringLiteral("DIGU"), QStringLiteral("DIGL"), QStringLiteral("SAM"),
-        QStringLiteral("DRM"), QStringLiteral("WBFM"), QStringLiteral("WFM"),
-    };
-    return kKnown;
-}
-
-bool isKnownModeString(const QString& mode) noexcept
-{
-    return knownModeStrings().contains(mode.toUpper());
 }
 
 // The same question for the AGC vocabulary, and it needs asking for the same
@@ -7135,11 +7108,12 @@ void Hl2Backend::emitSliceState(int ddc)
     // given. The operator sees a mode they chose and hears a mode they did not,
     // and nothing in the path disagrees with them.
     //
-    // The same list the restore boundary already guards with, not a second copy
-    // of it: isKnownModeString() and this now read knownModeStrings(). A UI
-    // offering a mode the restore boundary would REJECT is the same fault seen
-    // from the other end.
-    d.modeList = knownModeStrings();
+    // publishedModeStrings(), not knownModeStrings(): a subset of the same
+    // source, so the menu can never offer a mode the restore boundary would
+    // REJECT, while the boundary stays free to accept spellings the menu has no
+    // business showing. See publishedModeStrings() for which three groups those
+    // are and why.
+    d.modeList = publishedModeStrings();
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;

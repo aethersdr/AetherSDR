@@ -5489,6 +5489,14 @@ add_executable(hl2_pan_limits_declaration_test tests/hl2_pan_limits_declaration_
 target_include_directories(hl2_pan_limits_declaration_test PRIVATE src tests)
 target_link_libraries(hl2_pan_limits_declaration_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_pan_limits_declaration_test COMMAND hl2_pan_limits_declaration_test)
+# The two HL2 mode vocabularies and the containment between them. Separate
+# target for the same reason as the one above: the fake-radio fixture that would
+# have carried a seam assertion is retired, and a declaration must not be pinned
+# only inside something that does not build.
+add_executable(hl2_mode_vocabulary_test tests/hl2_mode_vocabulary_test.cpp)
+target_include_directories(hl2_mode_vocabulary_test PRIVATE src tests)
+target_link_libraries(hl2_mode_vocabulary_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_mode_vocabulary_test COMMAND hl2_mode_vocabulary_test)
 add_executable(hl2_band_memory_test
     tests/hl2_band_memory_test.cpp
 )
