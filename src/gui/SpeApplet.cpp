@@ -667,7 +667,15 @@ void SpeApplet::updateCommandsEnabled()
 
 void SpeApplet::clearTelemetry()
 {
-    m_lcdFresh = false;
+    // Deliberately does NOT touch m_lcdFresh. Both callers —
+    // setConnected(false) and setResponding(false) — have already forced
+    // m_connected && m_responding false, which shuts the FRONT PANEL gate
+    // in updateCommandsEnabled() on its own, so writing the flag here
+    // bought nothing. What it cost: SpeConnection::setLcdFresh() returns
+    // early when the value is unchanged, so zeroing the applet's copy
+    // behind the connection's back meant lcdFreshChanged(true) never
+    // fired again and the menu keys stayed dead beside a live mirror.
+    // Freshness now has exactly one writer on this side: setLcdFresh().
     m_lcd->clear();
     setFaultText(QString());
     m_bandLabel->hide();

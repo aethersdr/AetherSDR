@@ -17,8 +17,12 @@ SpeConnection::SpeConnection(QObject* parent)
     m_parser.setDisplayCallback([this](const QByteArray& raw) {
         // LCD freshness and Status liveness are deliberately independent:
         // a moving display must not keep stale telemetry/buttons looking live.
-        // The guard covers the emit too — a reply from before a
-        // dock⇄float transition must not repaint the restarted mirror.
+        // The guard covers the emit too, so nothing is delivered while
+        // polling is off. It does NOT correlate: a reply already in the
+        // buffer when the presentation flips back can still repaint once
+        // polling resumes — setLcdPolling() deliberately leaves m_parser
+        // alone, since resetting it mid-connection would also discard a
+        // partially-received Status frame.
         if (const auto frame = Spe::Lcd::decode(raw)) {
             if (m_lcdWanted && m_connected) {
                 emit lcdFrameReceived(*frame);

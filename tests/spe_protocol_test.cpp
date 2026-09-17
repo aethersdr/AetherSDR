@@ -431,6 +431,33 @@ int main()
         report("a clean display frame after a reject is still handed out",
                afterReject.size() == 1 && afterReject.at(0) == raw && rejects == 1);
 
+        // A corrupted frame carrying an adjacent 0xFF 0xFF pair — two
+        // fully-inverse attribute columns, i.e. an ordinary highlighted
+        // menu screen — is Incomplete in the TELNET reading, because
+        // collapsing the pair leaves 370 of the 371 bytes it needs, so
+        // the reject is DEFERRED until a byte lands behind the frame
+        // rather than firing with it. That is deliberate: rejecting on
+        // the raw reading alone would break genuinely telnet-escaped
+        // frames, which are Incomplete at 371 raw bytes and valid at
+        // 372. In service the 100 ms Status poll supplies the trailing
+        // byte, so the 80 ms retry slips by at most one poll instead of
+        // waiting out kLcdLostReplyMs. Pinned because the PR that added
+        // the reject hook claimed one fire per corrupted frame without
+        // covering this shape.
+        QByteArray doubledFF = raw;
+        doubledFF[11] = '\0';                          // drop the lone IAC
+        doubledFF[100] = static_cast<char>(0xFF);
+        doubledFF[101] = static_cast<char>(0xFF);       // breaks the checksum too
+        int ffRejects = 0;
+        FrameParser ffParser;
+        ffParser.setDisplayRejectCallback([&]() { ++ffRejects; });
+        ffParser.feed(doubledFF);
+        report("a corrupted frame with a doubled 0xFF defers its reject",
+               ffRejects == 0);
+        ffParser.feed(QByteArray::fromHex("aaaaaa010909"));
+        report("a deferred reject fires exactly once when a byte lands behind it",
+               ffRejects == 1);
+
         QByteArray telnet;
         for (char byte : raw) {
             telnet.append(byte);
@@ -495,6 +522,17 @@ int main()
                    && !sched.requestOutstanding());
         fx = sched.timerFired();
         report("scheduler: the retry pause firing sends exactly one request",
+               fx.sendRequest && fx.arm == SchedTimer::LostReply);
+
+        // A stray or duplicate corrupted frame with nothing outstanding
+        // must not collapse an armed idle gap to the 80 ms retry pause.
+        fx = sched.replyValid();                       // -> idle gap armed
+        const auto strayReject = sched.replyRejected();
+        report("scheduler: a rejected frame with nothing in flight is ignored",
+               !strayReject.sendRequest && strayReject.arm == SchedTimer::None
+                   && !sched.requestOutstanding());
+        fx = sched.timerFired();
+        report("scheduler: the idle gap survives a stray rejected frame",
                fx.sendRequest && fx.arm == SchedTimer::LostReply);
 
         // A genuinely lost reply: the fallback fires, classifies it lost,

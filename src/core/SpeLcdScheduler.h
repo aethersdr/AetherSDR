@@ -14,6 +14,15 @@ namespace Spe {
 // amplifier: each event returns the complete effect (send or not, which
 // timer to arm) as a value.
 //
+// ONE documented exception, and it cannot be closed here. If the
+// lost-reply fallback fires on a request that was merely still arriving,
+// this class credits that late reply to the retry that replaced it, and
+// two requests stay on the wire until the next reset(). The protocol
+// carries no request id, so no amount of state in this class can tell
+// the two replies apart — see kLcdLostReplyMs in SpeConnection.h, whose
+// width is what makes the case implausible. Treat "at most one in
+// flight" as holding up to that misclassification, not past it.
+//
 // An Effect with arm == Timer::None leaves the currently armed timer
 // running — it never means "stop"; the owner stops its timer when it
 // calls reset() (polling disabled, or transport down).
@@ -67,6 +76,16 @@ public:
     Effect replyRejected()
     {
         if (!m_enabled) {
+            return {};
+        }
+        if (!m_outstanding) {
+            // Nothing was asked for, so nothing is owed: a duplicate or
+            // stray display-shaped frame arriving during an idle gap must
+            // not collapse that gap to the 80 ms retry pause and pull the
+            // next request forward. (A corrupted frame belonging to a
+            // request the lost-reply fallback already replaced still
+            // passes this guard — see the class comment; the protocol
+            // gives nothing to correlate on.)
             return {};
         }
         m_outstanding = false;

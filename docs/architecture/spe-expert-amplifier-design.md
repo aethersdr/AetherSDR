@@ -323,7 +323,7 @@ MIT-licensed expert-amp-server project) — is:
   corrupted-frame retry, the lost-reply fallback — flowing through the
   same gate. Its invariant is unit-tested in `spe_protocol_test`,
   including an exhaustive event-sequence sweep, rather than asserted in
-  prose. Concretely: a request arms a 1 s lost-reply fallback; a decoded
+  prose. Concretely: a request arms a 2 s lost-reply fallback; a decoded
   reply arms the 250 ms idle gap (or immediately services a refresh an
   ACK asked for while the request was in flight — pending work, never a
   second in-flight request); a rejected frame supersedes the fallback
@@ -332,11 +332,27 @@ MIT-licensed expert-amp-server project) — is:
   frame (~285 ms total at 115200; a 19200 proxy serial side stretches it
   to ~450 ms on its own): the amplifier is never asked to interleave
   display blocks, and a slow link stretches the cadence instead of
-  accumulating a request backlog. Only a round trip beyond the 1 s
-  fallback — which covers the slowest plausible link, a 9600 baud serial
-  side spending ~390 ms on the frame alone — is misclassified as a lost
-  reply and retried, accepting the overlap risk on a link that
-  degenerate. At a 9600 baud proxy serial side the 100 ms Status poll
+  accumulating a request backlog.
+
+  The single-file property has exactly one documented exception, and the
+  protocol is why it cannot be closed. A round trip beyond the 2 s
+  fallback — five times the ~390 ms a 9600 baud serial side spends on
+  the frame alone — is misclassified as a lost reply and retried; when
+  the original reply then arrives, nothing can attribute it, because the
+  request is a fixed packet and the reply carries no sequence field. The
+  scheduler credits it to the retry, and **two requests stay on the wire
+  until the next `reset()`** (a disconnect, or a docked⇄floating
+  switch) rather than for one exchange. Counting orphans instead does
+  not help: a counter that swallows the late reply swallows a genuinely
+  retried one just as often, which freezes the mirror — strictly worse
+  than the overlap. The mitigation is the width of `kLcdLostReplyMs`,
+  which is why it is 2 s and not the round-trip-plus-margin it looks
+  like. Note the interaction with the 2.4 s freshness window below: a
+  retry at 2 s has ~400 ms to land a frame before the FRONT PANEL keys
+  gate, so a wholly VANISHED reply can brush the gate. Corrupted
+  replies — the field case — take the 80 ms retry path instead.
+
+  At a 9600 baud proxy serial side the 100 ms Status poll
   alone consumes ~80% of the wire, so ser2net serial sides should be
   configured at 57600 or above.
 - **Reply**: `AA AA AA | 6A 01` (16-bit payload length, 362) `| 95 FE |
@@ -367,10 +383,17 @@ until the first checksum-valid display arrives and are disabled again after
 2.4 s without one — an absolute window sized to cover a lost frame plus a
 retry even on a 9600 baud proxy serial side AND the amplifier's own quiet
 spells around OPERATE/STANDBY relay transitions, because routine events
-must read as a hiccup, not flap the gate. A display frame that arrives
+must read as a hiccup, not flap the gate. Each staleness transition is
+logged with its window so field reports can measure real gap lengths —
+but `lcTuner` is registered at `QtWarningMsg` and `LogManager` applies a
+blanket `aether.*.debug=false`, so those lines only appear once the
+reporter enables the **Tuner/AGM** category. Ask for that explicitly when
+requesting a log; a default capture will not contain them. A display frame that arrives
 complete but fails validation triggers a prompt re-request (80 ms pause;
 each retry is itself provoked by a full received-and-rejected frame, so
-the retry stream is self-limited by the link's serialization time): the
+the retry stream is self-limited by the link's serialization time, and is
+deliberately faster than the healthy cadence because the mirror needs
+only one clean frame to stay live): the
 field case is strong RF near the serial run mid-transmit, where the
 371-byte display reply dies to bit errors far more often than the 76-byte
 Status reply, and one clean frame every second or two is all the mirror
@@ -384,8 +407,19 @@ off — display gaps of one to several seconds are ROUTINE on a
 best-effort link, in plain standby on a quiet band, so any visible
 staleness treatment fires constantly and punishes the operator without
 adding safety the key gate doesn't already provide.) The mirror only
-returns to the idle glass when the image is truly obsolete (disconnect,
-or a docked⇄floating switch). Every
+returns to the idle glass when the image is truly obsolete: the
+connection dropped, a docked⇄floating switch restarted the mirror, or
+the amplifier stopped answering Status polls altogether for ~3 s
+(`kSilentPollLimit`), which routes through `SpeApplet::clearTelemetry()`
+along with the rest of the readings. That last path is the one a ser2net
+operator meets when the amplifier is switched off under a live socket.
+Note what `clearTelemetry()` deliberately does NOT do: it never writes
+`m_lcdFresh`. Both of its callers have already forced the connected or
+responding flag false, which closes the FRONT PANEL gate on its own, and
+zeroing the applet's copy behind `SpeConnection`'s back would desync the
+two — `setLcdFresh()` returns early when the value is unchanged, so the
+keys would never be re-enabled beside a mirror that had stayed live
+throughout. Freshness has exactly one writer on the applet side. Every
 acknowledged keystroke requests a display refresh — immediately when the
 line is free, otherwise as pending work the scheduler services the moment
 the in-flight request resolves — and the cadence re-arms from each

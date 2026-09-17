@@ -195,17 +195,45 @@ private:
     // nearly saturates the wire — see the design note §11's proxy baud
     // recommendation.)
     static constexpr int kLcdPollIntervalMs = 250;
-    // Lost-reply fallback, armed while a request is in flight. Sized
-    // above the worst plausible round trip (a 9600 baud proxy serial side
-    // spends ~390 ms serializing the frame alone), so when it fires the
-    // request is genuinely lost — never merely still arriving.
-    static constexpr int kLcdLostReplyMs = 1000;
+    // Lost-reply fallback, armed while a request is in flight. Sized so
+    // far above the worst plausible round trip (a 9600 baud proxy serial
+    // side spends ~390 ms serializing the frame alone) that a reply
+    // arriving AFTER it is implausible rather than merely unlikely.
+    //
+    // That margin is load-bearing, and it is the only mitigation the
+    // protocol permits: there is no request id — buildRequest() is a
+    // fixed packet and the reply carries no sequence field — so a reply
+    // that does arrive after the fallback CANNOT be told from the
+    // retry's own reply. The scheduler then credits it to the wrong
+    // request and two requests stay on the wire until the next reset().
+    // Bookkeeping cannot fix that: a counter that swallows the late
+    // reply swallows a genuinely-retried one just as often, freezing the
+    // mirror instead. Widening the window is the fix.
+    //
+    // Also deliberately NOT a multiple of kPollIntervalMs: when replies
+    // stop entirely this timer is the only thing pacing requests and it
+    // free-runs, which is exactly the evenly-dividing-period condition
+    // that phase-locked the original 600 ms cadence to the Status poll.
+    //
+    // Interacts with kLcdStaleTimeoutMs (2400 ms): a retry at 2000 ms
+    // has ~400 ms to land a frame before the FRONT PANEL keys gate, so a
+    // single VANISHED reply can now brush the gate where 1000 ms did
+    // not. Corrupted replies — the field case — take the 80 ms
+    // kLcdRetryGapMs path instead and are unaffected. Keep this below
+    // kLcdStaleTimeoutMs if either constant moves.
+    static constexpr int kLcdLostReplyMs = 2000;
     // Retry pause after a display frame arrives complete but fails
     // validation. Short enough that a mostly-corrupted mid-transmit
     // stream still lands a clean frame within the staleness window
     // whenever one gets through at all; long enough that the retry stream
     // (each retry provoked by a full received frame) stays well under the
-    // wire's capacity even at 115200 with Status polling.
+    // wire's capacity even at 115200 with Status polling. Deliberately
+    // NOT bounded below by kLcdPollIntervalMs: a corrupted stream is
+    // answered FASTER than a healthy one, because the mirror needs only
+    // one clean frame to stay live and the retry cannot run away — each
+    // one costs a full received frame's serialization time. The trade is
+    // wire share on a slow link, which is what the design note's ≥57600
+    // proxy recommendation covers.
     static constexpr int kLcdRetryGapMs = 80;
     // Absolute, deliberately decoupled from the poll gap: it must cover a
     // full lost frame plus a retry on the slowest plausible link (a 9600
