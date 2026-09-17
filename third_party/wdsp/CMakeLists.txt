@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 if(NOT FFTW3_FOUND)
-    message(FATAL_ERROR "WDSP 2.00 requires FFTW3")
+    message(FATAL_ERROR "WDSP 2.10 requires FFTW3")
 endif()
 
 find_package(Threads REQUIRED)
@@ -52,6 +52,20 @@ if(WIN32)
             -include "${CMAKE_CURRENT_SOURCE_DIR}/port/include/wdsp_alloc_guard.h")
     endif()
     target_link_libraries(aether_wdsp PRIVATE avrt)
+else()
+    # WDSP 2.10 introduced three TUs -- extrapolate.c, nurbs_fit.c and
+    # nurbs_spline.c -- that call _aligned_malloc()/_aligned_free() without
+    # including comm.h. On MSVC those resolve to the CRT and the omission is
+    # invisible; everywhere else they are macros in the port header, which
+    # those TUs never reach, and the build fails with implicit declarations.
+    #
+    # Force-include the port header for the same reason Windows force-includes
+    # its allocation guard above: the portability surface is the build's job,
+    # not a patch to the pristine snapshot. The header is #pragma once and its
+    # whole body is #ifndef _WIN32, so this is idempotent for the TUs that
+    # already reach it through comm.h -> Windows.h.
+    target_compile_options(aether_wdsp PRIVATE
+        -include "${CMAKE_CURRENT_SOURCE_DIR}/port/include/wdsp_port.h")
 endif()
 
 if(MSVC)

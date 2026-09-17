@@ -466,8 +466,13 @@ AETHER_SETTINGS_DIR="$SCRATCH/settings" \
 AETHER_AUTOMATION_IDENTITY=pr-<PR>-review \
 AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR> \
 AETHER_AUTOMATION_NO_TX=1 \
-setsid nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
+nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
 ```
+
+Detach so a shell exit cannot `SIGHUP` the instance — prefix `setsid` on Linux,
+where it exists. On macOS the binary is inside the bundle,
+`./build/AetherSDR.app/Contents/MacOS/AetherSDR`; `docs/automation-bridge.md`
+gives both paths.
 
 Then, before anything else, confirm where you are pointed and attach the demo:
 
@@ -530,9 +535,11 @@ from being confirmed or refuted.
 
 Non-negotiable operating rules:
 
-- **`pgrep -a AetherSDR` first.** Instances that are not yours — especially
+- **`pgrep -lf AetherSDR` first.** Instances that are not yours — especially
   any launched from the shared checkout — are the operator's session. Never
-  drive, close, or kill one.
+  drive, close, or kill one. `-lf` is the portable spelling: BSD and macOS
+  read a bare `-a` as "include ancestors" and print no command line to judge
+  by.
 - **Always pass an explicit socket.** The discovery file
   `<temp>/aethersdr-automation.json` is last-writer-wins and will happily
   point you at another agent's instance.

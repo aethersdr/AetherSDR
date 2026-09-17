@@ -63,6 +63,10 @@
             "label":     "{color.gray.300}",
             "disabled":  "{color.gray.500}"
           },
+          "control": {
+            "inactive":    "{color.gray.400}",
+            "unavailable": "{color.gray.600}"
+          },
           "border": {
             "subtle": "{color.gray.700}",
             "strong": "{color.gray.400}",
@@ -105,6 +109,30 @@
             "foreground": "#d6f5d6",
             "dim":        "#3a553a",
             "bezel":      "#222822"
+          },
+          "accessory": {
+            "dial.face":   "{color.blue.500}",
+            "dial.needle": "{color.gray.950}",
+            "dial.rim":    "{color.gray.300}",
+            "key.standby.background": "#f7e3bb",
+            "key.standby.foreground": "#8a5a00",
+            "key.bypass.background":  "#f2cea0",
+            "key.bypass.foreground":  "#6a3f00",
+            "key.meffa.active.background": "#0b6b3a",
+            "key.meffa.active.border":     "#0e8a4b",
+            "key.meffa.active.hover":      "#0e7a44",
+            "key.meffa.active.foreground": "#ffffff",
+            "key.meffa.standby.foreground": "#0b6b3a",
+            "swrScale": {
+              "type": "linear-gradient",
+              "angle": 90,
+              "stops": [
+                { "at": 0.00, "color": "#bfe3cb" },
+                { "at": 0.35, "color": "#e4e3b6" },
+                { "at": 0.65, "color": "#f0d5ad" },
+                { "at": 1.00, "color": "#f0bcbc" }
+              ]
+            }
           },
           "waterfall.colormap": {
             "default": {

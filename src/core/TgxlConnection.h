@@ -16,6 +16,7 @@ namespace AetherSDR {
 //   C<seq>|<command>\n          — client command
 //   R<seq>|<code>|<body>\n      — TGXL response
 //   S0|state key=val ...\n      — unsolicited state push
+//   M|<text>\n                  — alert text; empty body clears it
 //   V<version>\n                — version line on connect
 //
 // Reverse-engineered from 4O3A TGXL management app pcap (#469).
@@ -53,6 +54,11 @@ signals:
     void connectionFailed(const QString& errorString);
     void stateUpdated(const QMap<QString, QString>& kvs);
     void statusUpdated(const QMap<QString, QString>& kvs);
+    // Operator-facing alert from the tuner ("LOW RF POWER" when a tune is
+    // asked for with too little drive to measure). Empty text means the
+    // tuner has cleared it, which it does on its own a few seconds later.
+    // Broadcast to every connected client, not just the one that acted.
+    void alertChanged(const QString& text);
 
 private slots:
     void onConnected();

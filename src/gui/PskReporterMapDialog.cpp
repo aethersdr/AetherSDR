@@ -1,5 +1,6 @@
 #include "PskReporterMapDialog.h"
 #include "GuardedSlider.h"
+#include "PskBeaconLevelPolicy.h"
 #include "ComboStyle.h"
 
 #include "core/AppSettings.h"
@@ -9,6 +10,7 @@
 #include "core/MaidenheadLocator.h"
 #include "core/PropForecastClient.h"
 #include "core/PskReporterClient.h"
+#include "core/RadioSettingsScope.h"
 #include "core/TxKeyingMarker.h"
 #include "core/WsprBeacon.h"
 #include "map/CityLightsShading.h"
@@ -53,6 +55,7 @@
 #include <QVBoxLayout>
 
 #include <limits>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -97,7 +100,21 @@ private:
 
 // PSK Reporter map settings live in one nested-JSON AppSettings blob under a
 // single root key (Constitution Principle V) rather than separate flat keys.
+//
+// Map and reporting preferences are properties of the INSTALLATION and belong
+// here. The WSPR beacon's generated level is not: it is a property of the
+// transmit chain the audio is about to enter, so it lives in the radio-scoped
+// document below instead.
 constexpr const char* kSettingsKey = "PskReporter";
+
+// The WSPR beacon's radio-scoped feature document (AGENTS.md, "Radio-Scoped
+// Feature Documents"). One versioned JSON document per radio, keyed by
+// RadioModel::settingsScope().
+const QString kBeaconFeature = QStringLiteral("WsprBeacon");
+constexpr int kBeaconSchemaVersion = 1;
+
+using psk::beaconLevelToApplyDbFs;
+using psk::legacyBeaconLevelAppliesTo;
 
 QJsonObject pskSettings()
 {
@@ -393,19 +410,59 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_cityLightsCheck->setToolTip(m_cityLightsCheck->accessibleDescription());
     m_cityLightsCheck->setChecked(pskSettings().value("showCityLights").toBool(false));
 
-    m_weatherRadarCheck = new QCheckBox(tr("Weather radar"), reportsBox);
+    m_weatherRadarCheck = new QCheckBox(tr("Weather overlay"), reportsBox);
     m_weatherRadarCheck->setObjectName(
         QStringLiteral("pskReporterWeatherRadar"));
     m_weatherRadarCheck->setAccessibleName(
-        tr("Show NOAA weather radar overlay"));
+        tr("Show weather precipitation overlay"));
     m_weatherRadarCheck->setAccessibleDescription(tr(
-        "Shows near-real-time NOAA radar over the map. Coverage is primarily "
-        "the United States and nearby regions."));
+        "Shows LibreWXR radar and satellite/model precipitation estimates, "
+        "with enabled regional radar backups when unavailable."));
     m_weatherRadarCheck->setToolTip(tr(
-        "Overlay near-real-time NOAA/NWS composite reflectivity; disabled "
+        "Overlay near-real-time weather radar; disabled "
         "when this checkbox is off"));
     m_weatherRadarCheck->setChecked(
         pskSettings().value("showWeatherRadar").toBool(false));
+
+    const QStringList regionNames{tr("US backup · NOAA"), tr("Canada backup · ECCC"), tr("Europe backup · OPERA"), tr("Global primary · LibreWXR")};
+    const QStringList regionIds{QStringLiteral("pskReporterRadarUS"), QStringLiteral("pskReporterRadarCanada"), QStringLiteral("pskReporterRadarEurope"), QStringLiteral("pskReporterRadarGlobal")};
+    const int savedRegions = pskSettings().value("weatherRadarRegions").toInt(7) & 7;
+    for (int i = 0; i < 4; ++i) {
+        m_radarRegionChecks[i] = new QCheckBox(regionNames[i], reportsBox);
+        m_radarRegionChecks[i]->setObjectName(regionIds[i]);
+        m_radarRegionChecks[i]->setAccessibleName(regionNames[i]);
+        m_radarRegionChecks[i]->setChecked(i == 3 ? pskSettings().value("useLibreWxr").toBool(true) : (savedRegions & (1 << i)) != 0);
+        m_radarRegionChecks[i]->setToolTip(i == 3
+            ? tr("Free global precipitation from LibreWXR. Includes radar, satellite estimates and model data. Disable to use the regional radar feeds directly.")
+            : tr("Use this regional radar feed when LibreWXR is disabled or unavailable."));
+    }
+    m_radarProductLabel = new QLabel(reportsBox);
+    m_radarProductLabel->setObjectName(QStringLiteral("pskReporterRadarProduct"));
+    m_radarProductLabel->setAccessibleName(tr("Radar product and units"));
+    m_radarProductLabel->setWordWrap(true);
+    m_radarCoverageCheck = new QCheckBox(tr("Radar coverage"), reportsBox);
+    m_radarCoverageCheck->setObjectName(QStringLiteral("pskReporterRadarCoverage"));
+    m_radarCoverageCheck->setAccessibleName(tr("Show radar sites and nominal coverage"));
+    m_radarCoverageCheck->setAccessibleDescription(tr(
+        "Faint nominal coverage shading for sites with published ranges. "
+        "Terrain, outages and scanning conditions reduce actual coverage."));
+    m_radarCoverageCheck->setToolTip(m_radarCoverageCheck->accessibleDescription());
+    m_radarCoverageCheck->setChecked(pskSettings().value("showRadarCoverage").toBool(false));
+
+    m_radarLegendCheck = new QCheckBox(tr("Intensity legend"), reportsBox);
+    m_radarLegendCheck->setObjectName(QStringLiteral("pskReporterRadarLegendVisible"));
+    m_radarLegendCheck->setAccessibleName(tr("Show weather intensity legend"));
+    m_radarLegendCheck->setAccessibleDescription(tr(
+        "Show a separate intensity scale and units for each displayed weather source."));
+    m_radarLegendCheck->setToolTip(m_radarLegendCheck->accessibleDescription());
+    m_radarLegendCheck->setChecked(pskSettings().value("showRadarLegend").toBool(true));
+    m_radarLegendTopCheck = new QCheckBox(tr("Position at top"), reportsBox);
+    m_radarLegendTopCheck->setObjectName(QStringLiteral("pskReporterRadarLegendAtTop"));
+    m_radarLegendTopCheck->setAccessibleName(tr("Position weather legend at top"));
+    m_radarLegendTopCheck->setAccessibleDescription(tr(
+        "Checked: top left. Unchecked: bottom left. Applies when the intensity legend is shown."));
+    m_radarLegendTopCheck->setToolTip(m_radarLegendTopCheck->accessibleDescription());
+    m_radarLegendTopCheck->setChecked(pskSettings().value("radarLegendAtTop").toBool(false));
 
     m_weatherRadarPlayButton = new QToolButton(reportsBox);
     m_weatherRadarPlayButton->setObjectName(
@@ -415,7 +472,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_weatherRadarPlayButton->setAccessibleName(
         tr("Play historical weather radar"));
     m_weatherRadarPlayButton->setToolTip(
-        tr("Loop through original NOAA radar images; no generated transitions"));
+        tr("Loop through published radar images; no generated transitions"));
     m_weatherRadarPlayButton->setEnabled(
         m_weatherRadarCheck->isChecked());
 
@@ -442,7 +499,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_weatherRadarSpeedSlider->setAccessibleName(tr("Weather radar playback speed"));
     m_weatherRadarSpeedSlider->setAccessibleDescription(tr(
         "25 to 500 percent of normal speed (0.25 to 5 times). "
-        "Changes how quickly original NOAA images loop without reloading them. "
+        "Changes how quickly original radar images loop without reloading them. "
         "The final image always holds for one second."));
     m_weatherRadarSpeedSlider->setToolTip(m_weatherRadarSpeedSlider->accessibleDescription());
     m_weatherRadarSpeedSlider->setRange(25, 500);
@@ -627,11 +684,60 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     // the equivalent knob here had no UI at all, so an operator who came out
     // underdriven had nothing to reach for. Ceiling of -3 rather than 0 keeps a
     // little headroom ahead of the radio's own TX chain.
+    //
+    // THE DEFAULT IS BACKEND-DEPENDENT, AND SO IS THE STORED VALUE. Both
+    // decisions live in PskBeaconLevelPolicy.h, evaluated rather than copied,
+    // so psk_beacon_level_policy_test pins the expressions this runs.
+    //
+    // While Hl2TxDsp's ALC still has its makeup half, this spinbox is very
+    // nearly inert on the HL2: processAudioBlock() normalises anything from
+    // roughly -45 dBFS up to alcTargetPeak (0.85, -1.412 dBFS) onto that
+    // target, for any audio submitted with clientLeveled=false -- which the
+    // WSPR pump is, since AudioEngine::startWsprPump() reaches
+    // feedDaxTxAudioInternal() with markExternalSource=false. So -20 and -3
+    // go out at the SAME level today, and the knob added for the underdriven
+    // operator cannot help them. Measured: -1.412 dBFS on air from a
+    // -20.000 dBFS stimulus.
+    //
+    // Once the makeup half goes and the ALC becomes reduction-only, the
+    // setting is real -- the level set here is the level transmitted -- and
+    // -20 dBFS becomes 18.577 dB of unattended shortfall, measured against
+    // two binaries differing by that one change with the same stimulus and a
+    // txraw control at 0.000 dB.
+    //
+    // THE LEVEL IS PER RADIO, not per installation. It is a property of the
+    // transmit chain the audio is about to enter, so a station with an HL2 and
+    // a Flex needs two answers and gets them: the value lives in the
+    // radio-scoped WsprBeacon feature document (AGENTS.md, "Radio-Scoped
+    // Feature Documents"), keyed by RadioModel::settingsScope(). It used to be
+    // one app-global key, which meant a level chosen on the Flex silently
+    // became the HL2's unattended beacon level and nothing could correct it.
+    //
+    // RE-EVALUATED ON EVERY CAPABILITY CHANGE, not once at construction. The
+    // dialog is built on first open and cached for the session
+    // (MainWindow_DigitalModes.cpp, a QPointer with no WA_DeleteOnClose), so an
+    // operator who opens PSK Reporter BEFORE connecting would otherwise keep
+    // the disconnected answer for the whole session with nothing on screen to
+    // say so. applyBeaconLevel() therefore rides
+    // RadioModel::connectionStateChanged -- which carries the identity change,
+    // so it re-reads the new radio's stored level -- and
+    // TransmitModel::hostModulationChanged for a capability republish inside a
+    // live session. The second is not enough on its own: it is a change signal,
+    // and connecting a Flex leaves hostModulation() false either side, so it
+    // emits nothing. Caught by driving the demo radio, not by reading it.
+    //
+    // It deliberately does NOT ride RadioModel::callsignChanged, which is what
+    // updateBeaconDefaults() runs on: that signal is emitted only by the
+    // operator editing their own callsign, by the Flex `info` reply, and by a
+    // RadioDelta carrying a callsign. No HL2, sim or ANAN backend ever supplies
+    // one, so connecting an HL2 with this window open fired nothing at all --
+    // reproduced offscreen against the demo radio, where the beacon callsign
+    // field stayed empty on connect while a connect-then-open run filled it
+    // (PR #5651 review).
     m_beaconLevel->setRange(-60, -3);
     m_beaconLevel->setSingleStep(1);
     m_beaconLevel->setSuffix(tr(" dBFS"));
-    m_beaconLevel->setValue(
-        pskSettings().value("beaconLevelDbFs").toInt(-20));
+    applyBeaconLevel();
     m_beaconLevel->setAccessibleName(tr("WSPR transmit audio level"));
     m_beaconLevel->setAccessibleDescription(
         tr("Generated audio level in decibels full scale, from -60 to -3"));
@@ -756,9 +862,90 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     lightsForm->addRow(warmthLabel, sliderRow(m_cityLightsWarmth, warmthValue));
     sections->addWidget(lightsBox);
 
-    auto* radarBox = new QGroupBox(tr("Weather radar"), controls);
+    auto* radarBox = new QGroupBox(tr("Weather precipitation"), controls);
     QFormLayout* radarForm = formFor(radarBox);
     radarForm->addRow(m_weatherRadarCheck);
+    radarForm->addRow(m_radarRegionChecks[3]);
+    for (int i = 0; i < 3; ++i) { radarForm->addRow(m_radarRegionChecks[i]); }
+    auto* radarInfoButton = new QToolButton(radarBox);
+    radarInfoButton->setObjectName(QStringLiteral("pskReporterRadarInfo"));
+    radarInfoButton->setText(tr("Sources && licenses"));
+    radarInfoButton->setAccessibleName(tr("Weather sources, licenses and product details"));
+    radarInfoButton->setCheckable(true);
+    radarInfoButton->setAutoRaise(true);
+    radarInfoButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    radarInfoButton->setArrowType(Qt::RightArrow);
+    auto* radarInfo = new QWidget(radarBox);
+    radarInfo->setObjectName(QStringLiteral("pskReporterRadarInfoPanel"));
+    auto* radarInfoLayout = new QVBoxLayout(radarInfo);
+    radarInfoLayout->setContentsMargins(0, 0, 0, 0);
+    radarInfoLayout->setSpacing(4);
+    auto* radarCredits = new QLabel(tr("Weather data: <a href=\"https://librewxr.net/\">LibreWXR</a> · "
+        "<a href=\"https://creativecommons.org/licenses/by/4.0/\">CC BY 4.0</a>. "
+        "Italian Radar-DPC imagery: <a href=\"https://creativecommons.org/licenses/by-sa/4.0/\">CC BY-SA 4.0</a>. "
+        "Images are reprojected, resized and composited for this map."), radarInfo);
+    radarCredits->setObjectName(QStringLiteral("pskReporterRadarCredits"));
+    radarCredits->setAccessibleName(tr("LibreWXR sources and licenses"));
+    radarCredits->setOpenExternalLinks(true);
+    radarCredits->setWordWrap(true);
+    radarCredits->setToolTip(tr("Weather data via LibreWXR (librewxr.net). Sources: NOAA/NCEP/NESDIS, IEM, "
+        "ECCC, EUMETNET OPERA, Radar-DPC, MARN/SNET, CWA, JMA, MET Malaysia and PAGASA. "
+        "Models: NOAA, ECCC, DMI, DWD, Météo-France, SMN, JMA and ECMWF via Open-Meteo. "
+        "CC BY 4.0; tiles containing Radar-DPC data are CC BY-SA 4.0. See the linked source list."));
+    radarInfoLayout->addWidget(radarCredits);
+    auto* globalCredits = new QLabel(tr(
+        "LibreWXR contributors: NOAA/NCEP/NESDIS; Iowa Environmental Mesonet; ECCC/MSC; "
+        "EUMETNET OPERA; Radar-DPC; MARN/SNET; Central Weather Administration, Taiwan; "
+        "Japan Meteorological Agency; © Jabatan Meteorologi Malaysia / METMalaysia; PAGASA / DOST. "
+        "Precipitation data from NOAA Enterprise Rain Rate (RRQPE). "
+        "Models: NOAA, ECCC, DMI, DWD, Météo-France, SMN Argentina, JMA and ECMWF via Open-Meteo. "
+        "<a href=\"https://librewxr.net/#data-sources\">Full source list and provider licenses</a>."), radarInfo);
+    globalCredits->setObjectName(QStringLiteral("pskReporterGlobalCredits"));
+    globalCredits->setOpenExternalLinks(true);
+    globalCredits->setWordWrap(true);
+    radarInfoLayout->addWidget(globalCredits);
+    auto* regionalCredits = new QLabel(tr(
+        "Regional backups: NOAA/NWS (public domain); "
+        "<a href=\"https://open.canada.ca/en/open-government-licence-canada\">ECCC/MSC (Open Government Licence – Canada)</a>; "
+        "EUMETNET OPERA (<a href=\"https://creativecommons.org/licenses/by/4.0/\">CC BY 4.0</a>)."), radarInfo);
+    regionalCredits->setObjectName(QStringLiteral("pskReporterRegionalCredits"));
+    regionalCredits->setOpenExternalLinks(true);
+    regionalCredits->setWordWrap(true);
+    radarInfoLayout->addWidget(regionalCredits);
+    auto* mapCredits = new QLabel(tr(
+        "Map: © <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap contributors (ODbL)</a>. "
+        "City lights: NASA/GSFC, 2016. Radar sites: NOAA/NWS and EUMETNET OPERA; "
+        "shading shows nominal range, not current availability."), radarInfo);
+    mapCredits->setObjectName(QStringLiteral("pskReporterMapCredits"));
+    mapCredits->setOpenExternalLinks(true);
+    mapCredits->setWordWrap(true);
+    radarInfoLayout->addWidget(mapCredits);
+    radarInfoLayout->addWidget(m_radarProductLabel);
+    radarInfo->hide();
+    connect(radarInfoButton, &QToolButton::toggled, radarInfo,
+        [radarInfoButton, radarInfo](bool expanded) {
+            radarInfoButton->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
+            radarInfo->setVisible(expanded);
+        });
+    radarForm->addRow(radarInfoButton);
+    radarForm->addRow(radarInfo);
+    auto* radarStatus = new QLabel(radarBox);
+    radarStatus->setObjectName(QStringLiteral("pskReporterRadarProviderStatus"));
+    radarStatus->setAccessibleName(tr("Weather provider availability"));
+    radarStatus->setWordWrap(true);
+    radarStatus->hide();
+    radarForm->addRow(radarStatus);
+    radarForm->addRow(m_radarCoverageCheck);
+    auto* coverageStatus = new QLabel(radarBox);
+    coverageStatus->setObjectName(QStringLiteral("pskReporterRadarCoverageStatus"));
+    coverageStatus->setAccessibleName(tr("Radar coverage status"));
+    coverageStatus->setWordWrap(true);
+    radarForm->addRow(coverageStatus);
+    auto* legendRow = new QHBoxLayout();
+    legendRow->setSpacing(8);
+    legendRow->addWidget(m_radarLegendCheck);
+    legendRow->addWidget(m_radarLegendTopCheck);
+    radarForm->addRow(legendRow);
     auto* playbackRow = new QHBoxLayout();
     playbackRow->setSpacing(4);
     playbackRow->addWidget(m_weatherRadarPlayButton);
@@ -790,7 +977,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         m_bandCombo, m_modeCombo, m_lookbackCombo, m_allCallsignsCheck,
         m_activeMonitorsCheck, m_globeCheck, m_pathsCheck, m_terminatorCheck, basemapDarkTint, basemapBrightness,
         m_cityLightsCheck, m_cityLightsBrightness, m_cityLightsFaintLights,
-        m_cityLightsWarmth, m_weatherRadarCheck, m_weatherRadarPlayButton,
+        m_cityLightsWarmth, m_weatherRadarCheck, m_radarRegionChecks[3], m_radarRegionChecks[0], m_radarRegionChecks[1], m_radarRegionChecks[2], m_radarCoverageCheck, m_radarLegendCheck, m_radarLegendTopCheck, m_weatherRadarPlayButton,
         m_weatherRadarHistoryCombo, m_weatherRadarSpeedSlider};
     for (int i = 1; i < tabOrder.size(); ++i) {
         QWidget::setTabOrder(tabOrder[i - 1], tabOrder[i]);
@@ -809,6 +996,8 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     root->addWidget(splitter, 1);
 
     m_mapView = new MapDisplayWidget(bodyWidget());
+    m_mapView->setDetailedAttributionVisible(false);
+    connect(m_mapView, &MapDisplayWidget::radarCoverageStatusChanged, coverageStatus, &QLabel::setText);
     m_mapView->setBasemapDarkEnabled(basemapDarkTint->isChecked());
     connect(basemapDarkTint, &QCheckBox::toggled, this, [this](bool enabled) {
         m_mapView->setBasemapDarkEnabled(enabled);
@@ -866,10 +1055,42 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         writePskSetting("showPaths", on);
         m_mapView->setPathsVisible(on);
     });
+    auto updateRadarRegions = [this] {
+        int mask = 0;
+        for (int i = 0; i < 4; ++i) { if (m_radarRegionChecks[i]->isChecked()) { mask |= 1 << i; } }
+        m_mapView->setWeatherRadarRegions(mask);
+        m_radarProductLabel->setText(WeatherRadarSource::composite(mask).productDescription());
+        m_weatherRadarPlayButton->setEnabled(mask != 0 && m_weatherRadarCheck->isChecked());
+        writePskSetting("weatherRadarRegions", mask & 7);
+        writePskSetting("useLibreWxr", (mask & 8) != 0);
+    };
+    for (QCheckBox* region : m_radarRegionChecks) {
+        connect(region, &QCheckBox::toggled, this, updateRadarRegions);
+    }
+    updateRadarRegions();
+    connect(m_mapView, &MapDisplayWidget::radarProviderStatusChanged, radarStatus, [radarStatus](const QString& status) {
+        radarStatus->setText(status);
+        radarStatus->setVisible(!status.isEmpty());
+    });
+    m_mapView->setRadarLegendVisible(m_radarLegendCheck->isChecked());
+    m_mapView->setRadarLegendAtTop(m_radarLegendTopCheck->isChecked());
+    connect(m_radarLegendCheck, &QCheckBox::toggled, this, [this](bool on) {
+        writePskSetting("showRadarLegend", on);
+        m_mapView->setRadarLegendVisible(on);
+    });
+    connect(m_radarLegendTopCheck, &QCheckBox::toggled, this, [this](bool atTop) {
+        writePskSetting("radarLegendAtTop", atTop);
+        m_mapView->setRadarLegendAtTop(atTop);
+    });
+    connect(m_radarCoverageCheck, &QCheckBox::toggled, this, [this](bool on) {
+        writePskSetting("showRadarCoverage", on);
+        m_mapView->setRadarCoverageVisible(on && isVisible());
+    });
     connect(m_weatherRadarCheck, &QCheckBox::toggled, this,
             [this](bool on) {
                 writePskSetting("showWeatherRadar", on);
-                m_weatherRadarPlayButton->setEnabled(on);
+                m_weatherRadarPlayButton->setEnabled(on && (m_radarRegionChecks[0]->isChecked()
+                    || m_radarRegionChecks[1]->isChecked() || m_radarRegionChecks[2]->isChecked() || m_radarRegionChecks[3]->isChecked()));
                 m_weatherRadarHistoryCombo->setEnabled(on);
                 m_weatherRadarSpeedSlider->setEnabled(on);
                 m_weatherRadarFrameLabel->setEnabled(on);
@@ -996,7 +1217,8 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                 const WeatherRadarFramePresentation presentation =
                     weatherRadarFramePresentation(frameTime, live);
                 m_weatherRadarFrameLabel->setText(presentation.text);
-                m_weatherRadarFrameLabel->setToolTip(presentation.tooltip);
+                m_weatherRadarFrameLabel->setToolTip(presentation.tooltip + (live ? QString{} : tr(
+                    "\nRegional playback uses original observations at or before this clock, up to 10 minutes earlier; missing regions stay transparent.")));
             });
     connect(m_mapView, &MapDisplayWidget::weatherRadarAnimationError,
             this, [this](const QString& message) {
@@ -1265,8 +1487,8 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         }
         slice->tuneAndRecenter(dialMhz);
     });
-    connect(m_beaconLevel, &QSpinBox::valueChanged, this, [](int dbfs) {
-        writePskSetting("beaconLevelDbFs", dbfs);
+    connect(m_beaconLevel, &QSpinBox::valueChanged, this, [this](int dbfs) {
+        writeBeaconLevelDbFs(dbfs);
     });
     connect(m_beaconTone, &QDoubleSpinBox::valueChanged, this, [](double hz) {
         writePskSetting("beaconToneHz", hz);
@@ -1304,8 +1526,141 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                 stopBeacon(tr("Stopped: transmitter unkeyed"));
             }
         });
+        // BOTH signals, and neither is redundant.
+        //
+        // connectionStateChanged is the one that carries the radio IDENTITY
+        // change, so it is what re-reads the newly connected radio's stored
+        // level. RadioModel installs publishCapabilities() on this same signal
+        // in its constructor, before any dialog exists, so capabilities are
+        // already published by the time this runs.
+        //
+        // hostModulationChanged is a CHANGE signal and fires only when the
+        // answer flips, which is not every connect: TransmitModel returns early
+        // when the value is unchanged, so connecting a Flex (false -> false)
+        // emits nothing at all. It is here for the case connectionStateChanged
+        // cannot see -- a capability republish within a live session, which
+        // RadioModel also drives from a backend capability update.
+        //
+        // applyBeaconLevel() is a pure recomputation, so being called twice on
+        // one edge costs a settings read and changes nothing.
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+                [this] { applyBeaconLevel(); });
+        connect(&m_radioModel->transmitModel(),
+                &TransmitModel::hostModulationChanged, this, [this] {
+            applyBeaconLevel();
+        });
     }
     updateBeaconDefaults();
+}
+
+// The beacon level's stored value for the CONNECTED radio, if it has one.
+//
+// Returns nothing when this radio has never had one set -- which is the
+// condition for a default to apply, and is not the same as "the store is
+// empty". A present document with no levelDbFs field is a radio whose level
+// was never chosen; a present document WITH one is a deliberate choice.
+//
+// Claim-and-freeze, per scope, on first access (AGENTS.md, "Settings
+// Migration"): the first time a given radio is seen, the legacy app-global
+// PskReporter.beaconLevelDbFs is imported into that radio's document if the
+// policy says it described an on-air level there. The document's existence is
+// the migration marker, so an operator who cleared their level does not have it
+// resurrected, and the legacy key is never rewritten -- it stays frozen as the
+// downgrade snapshot.
+std::optional<int> PskReporterMapDialog::storedBeaconLevelDbFs(bool hostModulates)
+{
+    if (m_radioModel == nullptr) {
+        return std::nullopt;
+    }
+    const RadioSettingsScope scope = m_radioModel->settingsScope();
+    // No identity yet means the family-wide row, and writing one of those by
+    // accident is how a per-radio setting becomes everyone's (BandStackSettings
+    // guards the same way). With nothing to key a level to there is also
+    // nothing stored, so the capability default answers.
+    if (!scope.isValid() || !scope.hasRadioIdentity()) {
+        return std::nullopt;
+    }
+
+    AppSettings::FeatureReadStatus status = AppSettings::FeatureReadStatus::Missing;
+    const QJsonObject doc = scope.featureExact(kBeaconFeature, nullptr, &status);
+    if (status == AppSettings::FeatureReadStatus::Present) {
+        const QJsonValue level = doc.value(QStringLiteral("levelDbFs"));
+        // isDouble() rather than toInt(): a field that is null, a string from a
+        // hand-edited store, or anything a future schema leaves in an
+        // unexpected shape must fall through to the default rather than resolve
+        // to 0 and clamp to -3, which is the LOUDEST value this control can
+        // express, on an unattended 111.6 s transmission.
+        return level.isDouble() ? std::optional<int>(level.toInt())
+                                : std::nullopt;
+    }
+    if (status != AppSettings::FeatureReadStatus::Missing) {
+        // Corrupt or unavailable: retryable, so do not claim over it and do not
+        // memoize anything. The default answers for this session.
+        return std::nullopt;
+    }
+
+    // Missing: this radio has never been claimed.
+    if (!legacyBeaconLevelAppliesTo(hostModulates)) {
+        return std::nullopt;
+    }
+    const QJsonValue legacy = pskSettings().value(QStringLiteral("beaconLevelDbFs"));
+    if (!legacy.isDouble()) {
+        return std::nullopt;
+    }
+    const int claimed = legacy.toInt();
+    if (!scope.setFeature(kBeaconFeature, kBeaconSchemaVersion,
+                          QJsonObject{{QStringLiteral("levelDbFs"), claimed}})) {
+        // A refused write that the UI repaints over is the worst failure shape.
+        // The value is still correct for this session; it just will not persist.
+        qWarning() << "PskReporter: WSPR beacon level claim did not persist for"
+                   << scope.family() << scope.radioId();
+    }
+    return claimed;
+}
+
+// Persist a deliberate level for the connected radio.
+void PskReporterMapDialog::writeBeaconLevelDbFs(int dbfs)
+{
+    if (m_radioModel == nullptr) {
+        return;
+    }
+    const RadioSettingsScope scope = m_radioModel->settingsScope();
+    if (!scope.isValid() || !scope.hasRadioIdentity()) {
+        // Setting a level with no radio attached is a session-only value: there
+        // is no radio to key it to, and the beacon cannot key without one
+        // anyway. Refusing beats writing the family-wide row.
+        return;
+    }
+    QJsonObject doc = scope.featureExact(kBeaconFeature);
+    doc.insert(QStringLiteral("levelDbFs"), dbfs);
+    if (!scope.setFeature(kBeaconFeature, kBeaconSchemaVersion, doc)) {
+        qWarning() << "PskReporter: WSPR beacon level write did not persist for"
+                   << scope.family() << scope.radioId();
+    }
+}
+
+// The level this radio should show, applied whenever that answer can change.
+//
+// ONLY WHEN THE OPERATOR HAS NOT SET ONE FOR THIS RADIO. A stored value is a
+// deliberate choice and is never overridden here -- that is the difference
+// between a default and a policy.
+void PskReporterMapDialog::applyBeaconLevel()
+{
+    if (m_beaconLevel == nullptr) {
+        return;
+    }
+    const bool hostModulates =
+        m_radioModel && m_radioModel->transmitModel().hostModulation();
+    const std::optional<int> wanted = beaconLevelToApplyDbFs(
+        m_beaconArmed, storedBeaconLevelDbFs(hostModulates), hostModulates);
+    if (!wanted.has_value()) {
+        return;
+    }
+    // Blocked, because setValue() would otherwise fire valueChanged and write
+    // the very setting whose absence is the condition for being here -- one
+    // connect would turn a default into a stored choice the operator never made.
+    const QSignalBlocker blocker(m_beaconLevel);
+    m_beaconLevel->setValue(*wanted);
 }
 
 void PskReporterMapDialog::updateBeaconDefaults()
@@ -2386,6 +2741,7 @@ void PskReporterMapDialog::showEvent(QShowEvent* event)
 {
     PersistentDialog::showEvent(event);
     m_mapView->setWeatherRadarVisible(m_weatherRadarCheck->isChecked());
+    m_mapView->setRadarCoverageVisible(m_radarCoverageCheck->isChecked());
     m_mapView->setWeatherRadarPlaybackSpeed(
         m_weatherRadarSpeedSlider->value());
     updateHomeFromRadio();
@@ -2410,6 +2766,7 @@ void PskReporterMapDialog::closeEvent(QCloseEvent* event)
     m_client->stop();
     m_globalClient->stop();
     m_mapView->setWeatherRadarVisible(false);
+    m_mapView->setRadarCoverageVisible(false);
     m_started = false;
     PersistentDialog::closeEvent(event);
 }

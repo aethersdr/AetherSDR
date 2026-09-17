@@ -1686,6 +1686,67 @@ QStringList ThemeManager::extractReferencedTokens(const QString& stylesheetTempl
     return tokens;
 }
 
+QString ThemeManager::TrackedWidget::effectiveTemplate(const QWidget* widget) const
+{
+    if (foregroundToken.isEmpty()) {
+        return stylesheetTemplate;
+    }
+    QString base = stylesheetTemplate;
+    static const QRegularExpression tokenPlaceholder(QStringLiteral("\\{\\{[^{}]*\\}\\}"));
+    QString structure = base;
+    structure.replace(tokenPlaceholder, QStringLiteral("token"));
+    // Token placeholders are not rule braces in declaration-only sheets.
+    if (!base.isEmpty() && !structure.contains(QLatin1Char('{'))) {
+        base = QStringLiteral("* { %1 }").arg(base);
+    }
+    const QString self = QStringLiteral("[aetherForegroundOwner=\"%1\"]")
+        .arg(widget->property("aetherForegroundOwner").toString());
+    QStringList selectors{QStringLiteral("*") + self};
+    // Preserve specificity, including object IDs and checked/hover states.
+    // Each overriding selector is restricted to this widget, not descendants;
+    // subcontrols (arrows, indicators) keep their own token families.
+    static const QRegularExpression rule(QStringLiteral("(?:^|})\\s*([^{}]+)\\{"));
+    QString selectorSource = base;
+    static const QRegularExpression comment(QStringLiteral("/\\*.*?\\*/"),
+                                             QRegularExpression::DotMatchesEverythingOption);
+    selectorSource.remove(comment);
+    selectorSource.replace(tokenPlaceholder, QStringLiteral("token"));
+    auto matches = rule.globalMatch(selectorSource);
+    while (matches.hasNext()) {
+        const QStringList originals = matches.next().captured(1).split(QLatin1Char(','));
+        for (const QString& original : originals) {
+            if (!original.contains(QStringLiteral("::"))) {
+                selectors.append(original.trimmed() + self);
+            }
+        }
+    }
+    return base + QStringLiteral("\n%1 { color: {{%2}}; }")
+        .arg(selectors.join(QStringLiteral(", ")), foregroundToken);
+}
+
+void ThemeManager::setWidgetForegroundToken(QWidget* widget, const QString& token)
+{
+    if (!widget) {
+        return;
+    }
+    auto it = m_trackedWidgets.find(widget);
+    if (it == m_trackedWidgets.end()) {
+        if (token.isEmpty()) {
+            return;  // Do not take ownership of an untouched active widget.
+        }
+        applyStyleSheet(widget, widget->styleSheet());
+        it = m_trackedWidgets.find(widget);
+    }
+    if (it->foregroundToken == token) {
+        return;
+    }
+    widget->setProperty("aetherForegroundOwner",
+                        QString::number(reinterpret_cast<quintptr>(widget), 16));
+    it->foregroundToken = token;
+    const QString base = it->stylesheetTemplate;
+    applyStyleSheet(widget, base);
+}
+
 void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTemplate)
 {
     if (!widget) return;
@@ -1696,8 +1757,10 @@ void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTem
     // Scope-aware resolve — the widget's container chain decides which
     // overrides apply.  Widgets with no declared ancestor fall through
     // to root scope, matching the historical flat behaviour.
-    const QString resolved = resolveFor(widget, stylesheetTemplate);
-    widget->setStyleSheet(resolved);
+    TrackedWidget ctx = m_trackedWidgets.value(widget);
+    ctx.stylesheetTemplate = stylesheetTemplate;
+    const QString combined = ctx.effectiveTemplate(widget);
+    const QString resolved = resolveFor(widget, combined);
 
     // First-time registration: connect to destroyed() so the entry
     // disappears when the widget does, AND install ourselves as an
@@ -1722,13 +1785,14 @@ void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTem
         // those are the only ones that NEED the post-reparent fix.
         widget->installEventFilter(this);
     }
-    TrackedWidget ctx;
-    ctx.stylesheetTemplate = stylesheetTemplate;
     // Remember what we actually pushed so eventFilter can tell "still ours"
     // from "somebody set their own sheet afterwards".
     ctx.appliedStylesheet  = resolved;
-    ctx.tokens = extractReferencedTokens(stylesheetTemplate);
+    ctx.tokens = extractReferencedTokens(combined);
     m_trackedWidgets.insert(widget, ctx);
+    if (widget->styleSheet() != resolved) {
+        widget->setStyleSheet(resolved);
+    }
 }
 
 bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
@@ -1780,7 +1844,7 @@ bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
         if (w) {
             const auto it = m_trackedWidgets.constFind(w);
             if (it != m_trackedWidgets.constEnd()
-                && !it.value().stylesheetTemplate.isEmpty()
+                && !it.value().effectiveTemplate(w).isEmpty()
                 // Registration through applyStyleSheet() does NOT mean the
                 // widget is still wearing what we gave it.  The house pattern
                 // "register a generic themed look, then overwrite it directly
@@ -1792,7 +1856,7 @@ bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
                 // the widget still carries exactly the QSS we last applied.
                 && w->styleSheet() == it.value().appliedStylesheet) {
                 const QString resolved =
-                    resolveFor(w, it.value().stylesheetTemplate);
+                    resolveFor(w, it.value().effectiveTemplate(w));
                 // No-op guard: Show + ShowToParent fire as a pair on every
                 // show, so without this each toggle costs two full repolishes
                 // per tracked widget for an identical result.
@@ -1925,7 +1989,7 @@ void ThemeManager::reapplyAllTrackedStyleSheets()
         // may have inherited from a parent / Theme.h helper.  They handle
         // theme changes by connecting to themeChanged themselves.
         const auto& ctx = it.value();
-        if (ctx.stylesheetTemplate.isEmpty()) continue;
+        if (ctx.effectiveTemplate(w).isEmpty()) continue;
         if (targeted && !ctx.tokens.contains(m_currentEditToken)) continue;
         // Scope-aware re-apply — same path as applyStyleSheet() so an
         // edit at a non-root scope visibly takes effect for every
@@ -1938,7 +2002,7 @@ void ThemeManager::reapplyAllTrackedStyleSheets()
         // this and the guard would latch off permanently after the first
         // theme change.  Record before setStyleSheet(), which can re-enter
         // widget code that mutates m_trackedWidgets.
-        const QString resolved = resolveFor(w, ctx.stylesheetTemplate);
+        const QString resolved = resolveFor(w, ctx.effectiveTemplate(w));
         m_trackedWidgets[w].appliedStylesheet = resolved;
         w->setStyleSheet(resolved);
     }

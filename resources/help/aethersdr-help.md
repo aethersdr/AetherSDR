@@ -39,25 +39,31 @@ This is the best place to look when you want to answer, "Is this a station probl
 
 ### `File`
 
+- `Connect to Radio...` opens the radio connection dialog.
+- `Disconnect` ends the current radio session without closing AetherSDR.
 - `Quit` closes the application.
 
 ### `Settings`
 
-This is the operational configuration menu. It contains most dialogs that affect station behavior, radio setup, control surfaces, and external integrations.
+This menu contains configuration that changes station behavior, control surfaces, and external integrations.
 
-- `Radio Setup...`: the main multi-tab radio configuration dialog.
-- `Connect to Radio...`: opens the radio connection dialog.
-- `FlexControl...`: jumps directly into the serial and FlexControl setup area when serial support is available.
-- `Network...`: opens network diagnostics.
-- `Memory...`: opens the memory channel manager.
-- `USB Cables...`: opens cable definitions and USB cable behavior.
+- `Radio Setup...` opens the main multi-page radio configuration dialog on Windows and Linux. On macOS, the same action appears as `AetherSDR -> Preferences...` in the application menu.
+- `AetherControl...` opens the controller window.
+- `FlexControl Knob & Buttons...` jumps directly to FlexControl setup when serial support is available.
+- `Receive Sync` configures timing alignment between Flex and KiwiSDR presentation.
+- `MQTT...` configures MQTT integration when it is available in the build.
 - `MIDI Mapping...`: opens controller mapping when MIDI support is available.
-- `StreamDeck...`: opens Stream Deck integration when HID support is available.
+- `USB Cables...` jumps to cable definitions and USB cable behavior in Radio Setup.
+- Encoder mapping entries configure supported HID and Ulanzi controllers when available.
 - `SpotHub...`: opens the unified spots and spotting workflow dialog.
 - `multiFLEX...`: opens the multi-operator dashboard.
 - `TX Band Settings...`: opens band-specific transmit settings such as RF power, tune power, and inhibit or interlock choices.
-- Autostart items for rigctld, CAT, TCI, and DAX let you decide which services should come up automatically.
-- `Low-Latency DAX (FreeDV)` affects digital voice and low-latency routing behavior.
+- `Inhibit during TUNE` selects which integrations are held while the radio is tuning.
+- `AetherDSP Settings...` opens full noise-reduction and DSP configuration.
+- `Settings Browser...` exposes the stored application settings.
+- Autostart items for CAT, TCI, and DAX let you decide which services should come up automatically.
+- `Keyboard Shortcuts` enables or disables shortcut handling, and `Configure Shortcuts...` opens the shortcut editor.
+- `Reset Settings...` restores application settings after confirmation.
 
 ### `Profiles`
 
@@ -69,18 +75,34 @@ This menu manages operating profiles.
 - Profile database transfer requires a direct LAN connection in this build; SmartLink/WAN import/export is disabled with an explanatory message.
 - Below the separator, global profiles are listed dynamically and can be loaded directly.
 
+### `Tools`
+
+This is the everyday operations menu. Items appear or enable themselves according to the connected radio and features included in the build.
+
+- `Add Panadapter` creates another display when the connected radio has capacity.
+- `Aetherial Audio`, `CW Keyer`, and `Copy Assist` show their operating panels when available.
+- `AetherModem...` opens the packet-decoder workspace, while `Configure KiwiSDR...` jumps to KiwiSDR configuration.
+- `Start SWR Scan...`, `Pre-tune ATU Bands...`, and `Clear ATU Memories...` provide guarded tuner operations on supported radios.
+- `Callsign Lookup...`, `PSK Reporter...`, and `FreeDV Reporter...` open lookup and reporting tools.
+- `Net Scheduler...`, `Memory...`, and `Waveforms...` open their operating managers.
+- `Radio Health...`, `GPS Dashboard...`, `Network Diagnostics...`, and `Runtime Monitor...` expose live station and application diagnostics.
+
 ### `View`
 
 This menu changes how the operator workspace is presented.
 
-- `Applet Panel` shows or hides the right-side panel.
+- `Workspace Canvas` controls the optional canvas layout and additional canvas windows.
 - `Band Plan` controls band-plan overlays and region selection.
+- `Theme` and `Theme Editor...` select or customize the application theme.
+- `VFO Marker Size` and `VFO Filter Edge` set the defaults used by VFO markers.
 - `Single-Click to Tune` changes tuning behavior on the spectrum.
+- `Pan Follows VFO` keeps the active slice visible while tuning.
 - `UI Scale` changes the overall application scale and requires a restart.
 - `Reset Applet Order` restores the default applet arrangement.
 - `Minimal Mode` removes visual clutter for a compact operating view.
-- `Keyboard Shortcuts` enables or disables shortcut handling.
-- `Configure Shortcuts...` opens the shortcut editor.
+- `Frameless Window` controls custom window chrome.
+- `Propagation Conditions`, `Smart Spot Filtering`, and `FPS Meters` control optional display overlays.
+- `Blink Status Indicator` controls the discovery heartbeat animation.
 
 ### `Help`
 
@@ -88,14 +110,18 @@ This menu gives you both offline guidance and troubleshooting tools.
 
 - `Getting Started...`
 - `AetherSDR Help...`
+- `What's New...`
 - `Understanding Noise Cancellation...`
 - `Configuring AetherSDR Controls...`
 - `Configuring Data Modes...`
+- `AetherSDR Website`
+- `Donate to AetherSDR`
+- `Submit your Idea...`
+- `File an Issue...`
 - `Contributing to AetherSDR...`
-- `Support...`
-- `Runtime Monitor...`
+- `Support & Diagnostics...`
 - `Slice Troubleshooting...`
-- `What's New...`
+- `Check for Updates...`
 - `About AetherSDR`
 
 The bundled help guides are intentionally separate windows so you can keep one open while continuing to operate.
@@ -190,9 +216,31 @@ The RX applet is the slice-centric receive control surface. It repeats the most 
 
 This applet appears when tuner hardware or tuner support is relevant. Use it to manage tuning state, watch SWR and power behavior, and confirm that the RF path is behaving as expected before staying on the air.
 
+While a tune is running, `TUNE` becomes `STOP`, and pressing it stops that tune. The tuner stays in operate — stopping a tune does not put it into bypass or standby, so you are left where you started.
+
+Messages from the tuner appear across the applet for as long as the tuner shows them: a successful tune reports the SWR it settled on, and a tune that could not run reports why — `LOW RF POWER` means there was too little drive for the tuner to measure against, so raise drive and tune again.
+
+Popped out into its own window, or placed on the workspace canvas, the applet lays itself out the way the tuner's own front panel does: the two meters, a status strip for each RF port showing what is feeding it and where it is tuned, the C1/L/C2 relay positions as dials, and separate `STBY`, `BYP` and `TUNE` keys. Docked in the rail it stays the compact tile — the same tuner, fewer things on screen.
+
+Port detail needs the direct connection to the tuner (Radio Setup, peripherals), which is also what makes the relay positions adjustable by scrolling over them. Without it the applet still works from what the radio relays.
+
 ### `AMP`
 
 This applet is for amplifier integration when available. It is part of the station-status side of the app rather than the slice side, so always confirm whether you are making a station-wide change or a single-slice change.
+
+Docked in the rail it is the compact tile: forward power, SWR and drain current as bargraphs, with the PA temperatures, drain voltage and mains voltage beside the fan-speed pull-down and the operate/standby button.
+
+Popped out into its own window, or placed on the workspace canvas, it lays itself out the way the amplifier's own front panel does: the same three meters, larger, and a status strip for each RF port showing the band it is on, the bias profile it is set to, and the radio feeding it, with the fan and standby keys beside them and the temperatures, drain and mains voltages along the bottom. The port carrying transmit is outlined. In standby a single banner replaces both strips — with the amplifier out of circuit there is no per-port reading left to show — and the `STBY` key lights to say so; pressing it there puts the amplifier back into operate.
+
+`Vdd` reads `0.0 V` most of the time the amplifier is switched on. That is the amplifier, not a missing reading — it keeps its drain rail down while idle and brings it up when it enters operate. A dash there means there is no direct connection at all.
+
+A port strip names a state only when there is one to act on. Operating is the normal condition and keying is already on the `PTT` lamp, so neither puts a word on the strip; `FAULT` does.
+
+A port with no band reads `N/A`. That is the amplifier saying nothing is driving it, not a reading that failed to arrive — the radio name beside it describes how the port is wired, not that RF is flowing through it.
+
+Fan speed is a key on the panel and a pull-down on the rail — the same three modes either way. The key shows the mode's initial: `S` standard, `C` contest, `B` broadcast, cycling on each press; the full name is on its tooltip.
+
+Port detail needs the direct connection to the amplifier (Radio Setup, peripherals), which is also what supplies the fan-speed control and the drain and mains voltages. Without it the applet still works from what the radio relays, and the source indicator at the end of the readout row says which path it is on.
 
 ### `TX`
 
@@ -420,7 +468,7 @@ SpotHub brings spot sources together in one place so you can compare cluster inf
 
 ## `Radio Setup...` Tab Guide
 
-`Settings -> Radio Setup...` is the main radio-configuration dialog. It currently contains these tabs:
+On Windows and Linux, `Settings -> Radio Setup...` opens the main radio-configuration dialog. On macOS, use `AetherSDR -> Preferences...`; it opens the same dialog. It currently contains these pages:
 
 - `Radio`: radio information, identification, firmware update, remote-on, multiFLEX, and station identity
 - `Network`: network parameters, advanced options, and IP configuration
@@ -465,7 +513,7 @@ Work outward from the slice:
 Use:
 
 - `View -> Minimal Mode`
-- `View -> Applet Panel`
+- the Applet Panel dock control in the title bar
 - reordered applets
 - fewer panadapters
 - the spectrum overlay instead of opening larger dialogs
@@ -481,7 +529,7 @@ Focus on:
 
 ## Keyboard and External Controls
 
-Keyboard shortcuts exist for tuning, mode changes, TX actions, filter control, display work, and more. Enable them from `View -> Keyboard Shortcuts`, then use `Configure Shortcuts...` to tailor the bindings.
+Keyboard shortcuts exist for tuning, mode changes, TX actions, filter control, display work, and more. Enable them from `Settings -> Keyboard Shortcuts`, then use `Settings -> Configure Shortcuts...` to tailor the bindings.
 
 External control surfaces are also supported:
 

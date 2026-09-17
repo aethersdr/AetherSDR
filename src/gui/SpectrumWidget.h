@@ -352,6 +352,14 @@ public:
     // persist to the next radio. See RadioCapabilities::radioOwnsDbmScale.
     void setRadioOwnsDbmScale(bool on) { m_radioOwnsDbmScale = on; }
     bool radioOwnsDbmScale() const { return m_radioOwnsDbmScale; }
+    // The connected backend's spectrum bins carry ABSOLUTE levels — they do not
+    // move when m_refLevel moves. Pushed in alongside the flag above rather
+    // than read from capabilities here, because the widget has no backend: both
+    // are set from applyCapabilitiesToUi and again when a pane is added after
+    // connect. Together they form the auto-floor gate, an OR — see
+    // noiseFloorAutoAdjustAllowed() and RadioCapabilities::panBinsAbsolute().
+    void setPanBinsAbsolute(bool on) { m_panBinsAbsolute = on; }
+    bool panBinsAbsolute() const { return m_panBinsAbsolute; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Width of the frequency canvas, in logical pixels: the widget width minus
@@ -525,6 +533,16 @@ public:
     bool extendedFrequencyLine() const { return m_extendedFrequencyLine; }
     void setExtendedPassband(bool on);
     bool extendedPassband() const { return m_extendedPassband; }
+    void setExtendedTnf(bool on);
+    bool extendedTnf() const { return m_extendedTnf; }
+    // Push a global pan-display flag onto every other open panadapter,
+    // floating ones included. See the definition for why the walk is over
+    // topLevelWidgets() rather than window()'s children.
+    // `onApplied` runs on each sibling that actually changed, for toggles that
+    // own more than a flag (e.g. stopping that pan's tune-guide timer).
+    void propagateGlobalDisplayToggle(
+        bool SpectrumWidget::*flag, bool on, const char* cause,
+        const std::function<void(SpectrumWidget*)>& onApplied = {});
     void setThreeDSliceDepth(bool on);
     bool threeDSliceDepth() const { return m_threeDSliceDepth; }
     void setFloating(bool on) { m_isFloating = on; }
@@ -979,7 +997,11 @@ private:
     void drawSmartMtrValueLabels(QPainter& p);
     void drawOffScreenSlices(QPainter& p, const QRect& specRect);
     void drawBandPlan(QPainter& p, const QRect& specRect);
-    void drawTnfMarkers(QPainter& p, const QRect& specRect);
+    // wfRect is the waterfall band the notch is optionally extended into; pass
+    // an empty rect (or leave it defaulted) where there is no waterfall to
+    // paint, e.g. a pan rendered without one.
+    void drawTnfMarkers(QPainter& p, const QRect& specRect,
+                        const QRect& wfRect = QRect());
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
@@ -1468,6 +1490,10 @@ private:
     // Defaults true so every existing backend is unaffected; only a backend
     // that opts out (RadioCapabilities::radioOwnsDbmScale=false) disarms.
     bool  m_radioOwnsDbmScale{true};
+    // Mirrors RadioCapabilities::panBinsAbsolute(), and defaults FALSE for the
+    // same reason it does there: the gate is an OR and m_radioOwnsDbmScale
+    // above already defaults true, so this default changes nothing on its own.
+    bool  m_panBinsAbsolute{false};
     int   m_noiseFloorPosition{75};  // 1=top, 99=bottom
     int   m_flexNoiseFloorPosition{75};
     int   m_kiwiNoiseFloorPosition{75};
@@ -1876,6 +1902,7 @@ private:
     bool    m_showTuneGuides{false};
     bool    m_extendedFrequencyLine{false};
     bool    m_extendedPassband{false};
+    bool    m_extendedTnf{false};
     bool    m_threeDSliceDepth{false};
     bool    m_isFloating{false};
     bool    m_tuneGuideVisible{false};

@@ -25,7 +25,8 @@ int main()
     for (const QString& mode :
          {QStringLiteral("DIGU"), QStringLiteral("DIGL"),
           QStringLiteral("RTTY"), QStringLiteral("CW"),
-          QStringLiteral("CWL"), QStringLiteral("NT")}) {
+          QStringLiteral("CWU"), QStringLiteral("CWL"),
+          QStringLiteral("NT")}) {
         expect(qPrintable(mode + QStringLiteral(" disables AetherDSP")),
                aetherDspModeRequiresDisable(mode));
     }
@@ -53,6 +54,31 @@ int main()
                {QStringLiteral("USB"), false, 50.0f},
                {QStringLiteral("DIGU"), false, 0.0f},
            }));
+
+    // An Icom and an HL2 spell upper-side CW "CWU". The suite must come off
+    // there exactly as it does for "CW" — NNR most of all, since it attenuates
+    // a steady carrier by ~28 dB.
+    expect("audible CWU slice restricts mixed stream",
+           aetherDspMixRequiresDisable({
+               {QStringLiteral("USB"), false, 50.0f},
+               {QStringLiteral("CWU"), false, 50.0f},
+           }));
+
+    // The policy is method-agnostic, so NNR rides the same path as the six
+    // older methods: auto-disabled when an audible slice turns to CW or a
+    // digital mode, and restored when every slice is back on voice.
+    {
+        AetherDspModePolicy nnrPolicy;
+        AetherDspModePolicy::Action a =
+            nnrPolicy.update(true, QStringLiteral("NNR"));
+        expect("CW disables NNR",
+               a.kind == AetherDspModePolicy::ActionKind::Disable
+                   && a.method == QStringLiteral("NNR"));
+        a = nnrPolicy.update(false, QString());
+        expect("returning to voice restores NNR",
+               a.kind == AetherDspModePolicy::ActionKind::Enable
+                   && a.method == QStringLiteral("NNR"));
+    }
 
     AetherDspModePolicy policy;
     AetherDspModePolicy::Action action =

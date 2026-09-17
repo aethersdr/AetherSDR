@@ -78,6 +78,23 @@ public:
     // Reset all internal state (call when toggling on or stream restarts).
     void reset();
 
+    // Flush only the transient state — overlap-add rings, gain masks, the
+    // AGC common-mode references, and the dry→wet startup ramp — while
+    // retaining the converged OSMS/MMSE/NSTAT noise estimates. For the
+    // TX→RX edge, where the stream resumes on the same band and the stale
+    // overlap-add ring is the hazard (#3340): a full reset() there re-seeds
+    // the noise floor and costs a fresh estimator convergence on every
+    // over, heard as un-suppressed band noise after unkey (#3821). Not a
+    // substitute for reset() on enable or source switches, where the old
+    // noise profile does not describe the new stream.
+    void resetTransient();
+
+    // Monotonic diagnostics used by the bridge and the socket-free TX->RX
+    // integration test. A full reset increments both counters; the warm
+    // TX->RX path increments only transientResetCount().
+    std::uint64_t transientResetCount() const { return m_transientResetCount; }
+    std::uint64_t noiseEstimateResetCount() const { return m_noiseEstimateResetCount; }
+
     // User-adjustable parameters (thread-safe, called from main thread)
     void setGainMax(float v);
     void setGainFloor(float v);
@@ -99,7 +116,43 @@ public:
     void setAeFilter(bool on)   { m_aeFilter.store(on); }
     bool aeFilter() const       { return m_aeFilter.load(); }
 
+    // ── Psychoacoustic post-processing (WDSP emnr.c's post2 stage) ─────────
+    //
+    // Spectral NR leaves the gaps between syllables completely silent, which
+    // operators hear as the receiver going dead rather than quiet, and its
+    // residual has the processed character that gives spectral NR its
+    // reputation. WDSP's answer is to mix a controlled amount of noise back in
+    // over a tapered low band: partly the GENUINE residual this reduction just
+    // removed, partly synthetic white, with the level following the signal's
+    // own peak. Off by default, exactly as WDSP ships it.
+    void setPost2Run(bool on)        { m_post2Run.store(on); }
+    bool post2Run() const            { return m_post2Run.load(); }
+
+    // Blend between the removed residual (0.0) and synthetic white (1.0).
+    void setPost2Factor(float v);
+    float post2Factor() const        { return m_post2Factor.load(); }
+
+    // How much of that blend is mixed back in. 0.0 injects nothing.
+    void setPost2Nlevel(float v);
+    float post2Nlevel() const        { return m_post2Nlevel.load(); }
+
+    // Top of the band the stage covers, in Hz. NOT WDSP's `taper` fraction:
+    // that constant is calibrated to WDSP's own 48 kHz/4096 geometry and means
+    // a different frequency at ours, so the control is specified where it is
+    // meaningful and converted to a bin count from the live geometry. Bins
+    // above it are zeroed, so this doubles as a lowpass on the NR output.
+    void setPost2TaperHz(float hz);
+    float post2TaperHz() const       { return m_post2TaperHz.load(); }
+
+    // Decay time constant of the peak follower that sets the injected level.
+    void setPost2DecaySeconds(float seconds);
+    float post2DecaySeconds() const  { return m_post2Decay.load(); }
+
     int fftSize() const { return m_fftSize; }
+
+    // Highest bin the post-processing stage touches, for the current geometry.
+    // Exposed so a test can pin the Hz-to-bin conversion the port turns on.
+    int post2BinLimit() const;
     bool usesLegacyGainMethods() const { return m_useLegacyGainMethods; }
 #ifdef HAVE_FFTW3
     bool hasPlanFailed() const { return m_planFailed; }
@@ -279,6 +332,8 @@ private:
     // Startup ramp
     int m_frameCount{0};                // frames processed since reset
     int m_rampFrames{1};                // one second at the configured hop rate
+    std::uint64_t m_transientResetCount{0};
+    std::uint64_t m_noiseEstimateResetCount{0};
 
     // ── Algorithm constants (fixed) ─────────────────────────────────────
     static constexpr double GammaMax   = 40.0;    // linear a-posteriori SNR cap
@@ -301,6 +356,7 @@ private:
 
     // ── Internal methods ───────────────────────────────────────────────
     void initWindow();
+    void resetNoiseEstimate();
     void processFrame();
     bool updateMaskFromCurrentFrame();
     void synthesizeCurrentFrequencyBinsWithMask();
@@ -313,6 +369,29 @@ private:
     void estimateNoiseNstat();  // method 2: Non-stationary noise estimator
     void detectCommonModeScale();
     bool isCommonWantedLike(int bin) const;
+
+    // Runs on m_gainRe/m_gainIm after the mask is applied and before the
+    // inverse transform, which is where WDSP runs it (emnr.c: post2()).
+    void applyPsychoacousticPostProcessing();
+    unsigned int post2NextRandom();
+
+    std::atomic<bool>  m_post2Run{false};
+    std::atomic<float> m_post2Factor{0.15f};
+    std::atomic<float> m_post2Nlevel{0.15f};
+    std::atomic<float> m_post2TaperHz{2871.0f};
+    std::atomic<float> m_post2Decay{5.0f};
+    // Seeded per instance, as upstream does from its own pointer: every
+    // receiver seeded identically would inject correlated noise across them.
+    unsigned int m_post2RngState{0};
+    double m_post2PeakHold{0.0};
+    // The peak follower must advance ONCE per hop. The stereo shared-mask path
+    // calls synthesizeCurrentFrameWithMask() twice per hop, once per channel,
+    // which decayed it twice and halved the effective time constant.
+    bool m_post2FollowerAdvanced{false};
+    // Raised-cosine taper, rebuilt only when the band limit moves, rather than
+    // a std::cos per bin per hop on the audio thread (upstream: post2_calc_w).
+    std::vector<double> m_post2Window;
+    int m_post2WindowBins{-1};
     void applyCommonModeNoiseEstimate();
     void scalePowerHistory(double ratio,
                            const std::vector<std::uint8_t>* binMask = nullptr);

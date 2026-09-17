@@ -78,10 +78,10 @@ SwrSweepLicenseDialog::SwrSweepLicenseDialog(QWidget* parent)
     root->addLayout(btnRow);
 }
 
-bool SwrSweepLicenseDialog::confirm(QWidget* parent)
+bool SwrSweepLicenseDialog::confirm(QWidget* parent, bool force)
 {
     auto& s = AppSettings::instance();
-    if (s.value(kSettingsKey, "False").toString() == "True") {
+    if (!force && s.value(kSettingsKey, "False").toString() == "True") {
         return true;
     }
 

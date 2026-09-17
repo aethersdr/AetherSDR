@@ -179,6 +179,95 @@ int main(int argc, char** argv)
         CHECK(!amp.present() && amp.handle().isEmpty() && !amp.operate());
     }
 
+    // ---- and everything else the radio told us about it ----
+    //
+    // reset() is the bulk clear on radio disconnect. A state word or an
+    // antenna map left standing outlives the radio that relayed it — the same
+    // reason the direct connection's own disconnect handler clears them.
+    {
+        AmpModel amp;
+        QSignalSpy words(&amp, &AmpModel::ampStateChanged);
+        QSignalSpy antennas(&amp, &AmpModel::antennaMapChanged);
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "10.0.0.5", true,
+                                  {{"state", "TRANSMIT_A"},
+                                   {"ant", "ANT1:PORTA,ANT2:PORTB"}}));
+        CHECK(amp.stateText() == QStringLiteral("TRANSMIT_A"));
+        CHECK(amp.outputForAntenna("ANT1") == QStringLiteral("PORTA"));
+
+        amp.reset();
+        CHECK(amp.stateText().isEmpty());
+        CHECK(amp.outputForAntenna("ANT1").isEmpty());
+        // And it says so, rather than clearing quietly and leaving the panel
+        // drawing what it last heard.
+        CHECK(words.count() == 2);
+        CHECK(antennas.count() == 2);
+
+        // Idempotent: a second reset has nothing to announce.
+        amp.reset();
+        CHECK(words.count() == 2);
+        CHECK(antennas.count() == 2);
+    }
+
+    // ---- the antenna → output map, off the radio-relayed status ----
+    //
+    // "ANT1:PORTA,ANT2:PORTB" — verbatim from the radio's amplifier object.
+    // It is the only thing that says which amplifier port a given radio
+    // antenna is wired to, and so the only thing that can say where transmit
+    // is about to go: `state` distinguishes the two ports only once RF is
+    // already flowing.
+    //
+    // Split exactly as FlexLib's Amplifier.ParseAntennaSettings does — a pair
+    // with no colon, or with more than two fields, is skipped rather than
+    // treated as an error, so one malformed pair cannot lose the good ones.
+    {
+        AmpModel amp;
+        QSignalSpy antennas(&amp, &AmpModel::antennaMapChanged);
+        CHECK(amp.outputForAntenna("ANT1").isEmpty());   // nothing reported yet
+
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "10.0.0.5", true,
+                                  {{"ant", "ANT1:PORTA,ANT2:PORTB"}}));
+        CHECK(antennas.count() == 1);
+        CHECK(amp.outputForAntenna("ANT1") == QStringLiteral("PORTA"));
+        CHECK(amp.outputForAntenna("ANT2") == QStringLiteral("PORTB"));
+        // An antenna the amplifier does not name is not a port — outlining
+        // one would claim RF passes through an amplifier it bypasses.
+        CHECK(amp.outputForAntenna("XVTR").isEmpty());
+
+        // Unchanged map → no re-announce; the status repeats on every poll.
+        amp.applyChanges(update("0x1000", true, {{"ant", "ANT1:PORTA,ANT2:PORTB"}}));
+        CHECK(antennas.count() == 1);
+
+        // Malformed pairs are skipped, not fatal.
+        amp.applyChanges(update("0x1000", true, {{"ant", "ANT1,ANT2:PORTB:EXTRA,ANT3:PORTA"}}));
+        CHECK(antennas.count() == 2);
+        CHECK(amp.outputForAntenna("ANT3") == QStringLiteral("PORTA"));
+        CHECK(amp.outputForAntenna("ANT1").isEmpty());
+        CHECK(amp.outputForAntenna("ANT2").isEmpty());
+    }
+
+    // ---- the state word reaches the model on the relayed path too ----
+    //
+    // The keying lamps are derived from it, and operate() cannot stand in:
+    // it is a boolean derived FROM the word, so it cannot say TRANSMIT_A.
+    {
+        AmpModel amp;
+        QSignalSpy words(&amp, &AmpModel::ampStateChanged);
+        amp.applyChanges(detected("0x1000", "PowerGeniusXL", "10.0.0.5", true,
+                                  {{"state", "IDLE"}}));
+        CHECK(words.count() == 1);
+        CHECK(amp.stateText() == QStringLiteral("IDLE"));
+        amp.applyChanges(update("0x1000", true, {{"state", "TRANSMIT_A"}}));
+        CHECK(amp.stateText() == QStringLiteral("TRANSMIT_A"));
+        CHECK(words.count() == 2);
+        // Repeated on every poll — announced once.
+        amp.applyChanges(update("0x1000", true, {{"state", "TRANSMIT_A"}}));
+        CHECK(words.count() == 2);
+        // A bare "state=" must not blank it: applyChanges gates operate on a
+        // non-empty value, and the word follows the same rule.
+        amp.applyChanges(update("0x1000", std::nullopt, {{"state", ""}}));
+        CHECK(amp.stateText() == QStringLiteral("TRANSMIT_A"));
+    }
+
     if (g_failures == 0) {
         std::printf("amp_model_test: all checks passed\n");
         return 0;

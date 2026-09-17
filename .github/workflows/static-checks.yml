@@ -11,18 +11,35 @@ name: Static Checks
 # #4585's colour ratchet was folded in below per #4657, and colour-ratchet.yml
 # deleted, rather than left as a fourth near-identical workflow.
 #
-# `Static checks` is NOT yet a required status check. The required contexts
-# are build / check-windows / check-macos; adding this one is the LAST action
-# of the #5405 rollout, after that PR merges, and until it happens the frozen
-# per-PR test gate below (tools/check_ci_test_gate.py) is advisory — a red run
-# here does not block a merge. Do not describe it as enforced before the flip
-# is made and verified.
+# `Static checks` IS a required status check (flipped 2026-09-12). The required
+# contexts are build / check-windows / check-macos / Static checks, so a red run
+# here blocks a merge — the frozen per-PR test gate
+# (tools/check_ci_test_gate.py) included, which is what the #5405 rollout was
+# for.
+#
+# WHAT THAT DOES AND DOES NOT MAKE ENFORCING. A step only blocks if it can fail
+# the job, so "required" promotes the --strict steps and nothing else. Still
+# advisory by design, and unchanged by the flip:
+#   * the accessibility step below — warnings only, never fails the job
+#     (docs/a11y.md);
+#   * EB2/EB3 findings against TRACKED baselines — those warn; only a new
+#     violation or a grown baseline errors. 102 warnings currently ride on a
+#     green run.
+#
+# This was the LAST action of the #5405 rollout and it sat undone from
+# 2026-09-04 to 2026-09-12: for eight days the gate that PR existed to enforce
+# was itself unenforced. The lesson for the next rollout ending in a manual
+# step is the durable part — nothing in CI can tell you the step was skipped,
+# and this file asserted "NOT yet required" throughout with nothing checking
+# whether that was still true.
 #
 # The `paths:` filter is gone, and that ordering is deliberate: a required
 # check a PR never triggers blocks that PR forever, so the filter has to go
 # BEFORE the flip, not with it. (Making it required first is what briefly
 # blocked eleven open PRs.) Every step is stdlib Python in seconds, so running
-# on every pull request costs less than one blocked docs-only PR.
+# on every pull request costs less than one blocked docs-only PR. That ordering
+# held: at the flip every open PR had already run this workflow, so none was
+# stranded on a check it could not trigger.
 
 on:
   pull_request:

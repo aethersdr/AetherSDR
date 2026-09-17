@@ -1,0 +1,2916 @@
+{
+  "features": [
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -94.36188,
+          35.29041
+        ]
+      },
+      "properties": {
+        "id": "KSRX",
+        "name": "Western Arkansas",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -86.662,
+          35.98
+        ]
+      },
+      "properties": {
+        "id": "TBNA",
+        "name": "Nashville",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.90972,
+          26.30194
+        ]
+      },
+      "properties": {
+        "id": "RODN",
+        "name": "Kadena AB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -76.63,
+          39.09
+        ]
+      },
+      "properties": {
+        "id": "TBWI",
+        "name": "Baltimore/Wash",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -85.7,
+          41.3586
+        ]
+      },
+      "properties": {
+        "id": "KIWX",
+        "name": "Northern Indiana",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -80.486,
+          40.501
+        ]
+      },
+      "properties": {
+        "id": "TPIT",
+        "name": "Pittsburgh",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -80.41305,
+          25.61055
+        ]
+      },
+      "properties": {
+        "id": "KAMX",
+        "name": "Miami",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -74.06408,
+          42.58655
+        ]
+      },
+      "properties": {
+        "id": "KENX",
+        "name": "Albany",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -89.98444,
+          32.27999
+        ]
+      },
+      "properties": {
+        "id": "KDGX",
+        "name": "Jackson/Brandon,MS",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -155.56887,
+          19.095
+        ]
+      },
+      "properties": {
+        "id": "PHWA",
+        "name": "South Shore",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -88.1111,
+          44.49862
+        ]
+      },
+      "properties": {
+        "id": "KGRB",
+        "name": "Green Bay",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -124.10663,
+          47.11689
+        ]
+      },
+      "properties": {
+        "id": "KLGX",
+        "name": "Langley Hill",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -93.21588,
+          30.1253
+        ]
+      },
+      "properties": {
+        "id": "KLCH",
+        "name": "Lake Charles",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -76.845,
+          38.695
+        ]
+      },
+      "properties": {
+        "id": "TADW",
+        "name": "Andrews Air Force Base",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -92.26194,
+          34.83638
+        ]
+      },
+      "properties": {
+        "id": "KLZK",
+        "name": "Little Rock",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -84.58,
+          38.898
+        ]
+      },
+      "properties": {
+        "id": "TCVG",
+        "name": "Covington",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -101.70027,
+          39.36694
+        ]
+      },
+      "properties": {
+        "id": "KGLD",
+        "name": "Goodland",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -106.69799,
+          31.87305
+        ]
+      },
+      "properties": {
+        "id": "KEPZ",
+        "name": "El Paso",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -88.046,
+          42.819
+        ]
+      },
+      "properties": {
+        "id": "TMKE",
+        "name": "Milwaukee",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -80.344,
+          26.143
+        ]
+      },
+      "properties": {
+        "id": "TFLL",
+        "name": "Fort Lauderdale",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -104.8061,
+          41.15194
+        ]
+      },
+      "properties": {
+        "id": "KCYS",
+        "name": "Cheyenne",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -83.31305,
+          37.59083
+        ]
+      },
+      "properties": {
+        "id": "KJKL",
+        "name": "Jackson,KY",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -102.82999,
+          44.12471
+        ]
+      },
+      "properties": {
+        "id": "KUDX",
+        "name": "Rapid City",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -110.63027,
+          31.89361
+        ]
+      },
+      "properties": {
+        "id": "KEMX",
+        "name": "Tucson",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -76.87639,
+          34.77583
+        ]
+      },
+      "properties": {
+        "id": "KMHX",
+        "name": "Morehead City",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -84.71953,
+          44.90634
+        ]
+      },
+      "properties": {
+        "id": "KAPX",
+        "name": "NCL Michigan",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -114.65668,
+          32.49527
+        ]
+      },
+      "properties": {
+        "id": "KYUX",
+        "name": "Yuma",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -98.12749,
+          36.74083
+        ]
+      },
+      "properties": {
+        "id": "KVNX",
+        "name": "Vance AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -95.827,
+          36.071
+        ]
+      },
+      "properties": {
+        "id": "TTUL",
+        "name": "Tulsa",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -96.918,
+          33.065
+        ]
+      },
+      "properties": {
+        "id": "TDFW",
+        "name": "Dallas/Ft. Worth",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -95.07888,
+          29.47194
+        ]
+      },
+      "properties": {
+        "id": "KHGX",
+        "name": "Houston",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -165.29498,
+          64.51139
+        ]
+      },
+      "properties": {
+        "id": "PAEC",
+        "name": "Nome",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          127.28556,
+          37.20757
+        ]
+      },
+      "properties": {
+        "id": "RKSG",
+        "name": "Camp Humphreys",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -157.18026,
+          21.13277
+        ]
+      },
+      "properties": {
+        "id": "PHMO",
+        "name": "Molokai",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -93.84124,
+          32.45083
+        ]
+      },
+      "properties": {
+        "id": "KSHV",
+        "name": "Shreveport",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -85.92166,
+          30.56503
+        ]
+      },
+      "properties": {
+        "id": "KEVX",
+        "name": "Eglin Afb",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -98.0286,
+          29.70405
+        ]
+      },
+      "properties": {
+        "id": "KEWX",
+        "name": "Austin/San Antonio",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -155.77776,
+          20.12527
+        ]
+      },
+      "properties": {
+        "id": "PHKM",
+        "name": "Kamuela/Kohala Apt",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -106.82388,
+          35.14972
+        ]
+      },
+      "properties": {
+        "id": "KABX",
+        "name": "Albuquerque",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -83.0018,
+          30.89027
+        ]
+      },
+      "properties": {
+        "id": "KVAX",
+        "name": "Moody AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.96499,
+          45.71499
+        ]
+      },
+      "properties": {
+        "id": "KRTX",
+        "name": "Portland,OR",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -111.19843,
+          34.57433
+        ]
+      },
+      "properties": {
+        "id": "KFSX",
+        "name": "Flagstaff",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -80.27416,
+          37.02416
+        ]
+      },
+      "properties": {
+        "id": "KFCX",
+        "name": "Roanoke",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -83.82166,
+          39.42027
+        ]
+      },
+      "properties": {
+        "id": "KILN",
+        "name": "Cincinnati",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -150.42,
+          62.31
+        ]
+      },
+      "properties": {
+        "id": "TLKA2",
+        "name": "Talkeetna",
+        "stationType": "Profiler"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -84.32889,
+          30.39749
+        ]
+      },
+      "properties": {
+        "id": "KTLH",
+        "name": "Tallahassee",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -89.87333,
+          35.34472
+        ]
+      },
+      "properties": {
+        "id": "KNQA",
+        "name": "Memphis",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -108.47729,
+          43.0661
+        ]
+      },
+      "properties": {
+        "id": "KRIW",
+        "name": "Riverton/Lander",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -108.60679,
+          45.85377
+        ]
+      },
+      "properties": {
+        "id": "KBLX",
+        "name": "Billings",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -104.18138,
+          38.45944
+        ]
+      },
+      "properties": {
+        "id": "KPUX",
+        "name": "Pueblo",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -98.97666,
+          34.36219
+        ]
+      },
+      "properties": {
+        "id": "KFDR",
+        "name": "Altus AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -87.54833,
+          46.5311
+        ]
+      },
+      "properties": {
+        "id": "KMQT",
+        "name": "Marquette",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -70.25636,
+          43.8913
+        ]
+      },
+      "properties": {
+        "id": "KGYX",
+        "name": "Portland,ME",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -90.68277,
+          38.69888
+        ]
+      },
+      "properties": {
+        "id": "KLSX",
+        "name": "St Louis",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.71735,
+          42.08111
+        ]
+      },
+      "properties": {
+        "id": "KMAX",
+        "name": "Medford",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -81.86,
+          41.41305
+        ]
+      },
+      "properties": {
+        "id": "KCLE",
+        "name": "Cleveland",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -111.66999,
+          33.28916
+        ]
+      },
+      "properties": {
+        "id": "KIWA",
+        "name": "Phoenix",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -83.35111,
+          32.67499
+        ]
+      },
+      "properties": {
+        "id": "KJGX",
+        "name": "Robins AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -88.32919,
+          33.89691
+        ]
+      },
+      "properties": {
+        "id": "KGWX",
+        "name": "Columbus AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -98.41305,
+          45.45583
+        ]
+      },
+      "properties": {
+        "id": "KABR",
+        "name": "Aberdeen",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          126.62222,
+          35.92417
+        ]
+      },
+      "properties": {
+        "id": "RKJK",
+        "name": "Kunsan AB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -119.1786,
+          34.41166
+        ]
+      },
+      "properties": {
+        "id": "KVTX",
+        "name": "Los Angeles",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -84.123,
+          40.022
+        ]
+      },
+      "properties": {
+        "id": "TDAY",
+        "name": "Dayton",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -99.25416,
+          32.53833
+        ]
+      },
+      "properties": {
+        "id": "KDYX",
+        "name": "Dyess AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -117.04193,
+          32.91888
+        ]
+      },
+      "properties": {
+        "id": "KNKX",
+        "name": "San Diego",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.51,
+          35.276
+        ]
+      },
+      "properties": {
+        "id": "TOKC",
+        "name": "Oklahoma City",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -78.73694,
+          42.9486
+        ]
+      },
+      "properties": {
+        "id": "KBUF",
+        "name": "Buffalo",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -111.38527,
+          47.45972
+        ]
+      },
+      "properties": {
+        "id": "KTFX",
+        "name": "Great Falls",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -159.55249,
+          21.89389
+        ]
+      },
+      "properties": {
+        "id": "PHKI",
+        "name": "South Kauai",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -83.40194,
+          36.16833
+        ]
+      },
+      "properties": {
+        "id": "KMRX",
+        "name": "Knoxville",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -101.81416,
+          33.65413
+        ]
+      },
+      "properties": {
+        "id": "KLBB",
+        "name": "Lubbock",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -96.72888,
+          43.58777
+        ]
+      },
+      "properties": {
+        "id": "KFSD",
+        "name": "Sioux Falls",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -85.45938,
+          31.46055
+        ]
+      },
+      "properties": {
+        "id": "KEOX",
+        "name": "Ft Rucker",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -119.46202,
+          39.75405
+        ]
+      },
+      "properties": {
+        "id": "KRGX",
+        "name": "Reno",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -72.86392,
+          40.86552
+        ]
+      },
+      "properties": {
+        "id": "KOKX",
+        "name": "Brookhaven",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -93.40027,
+          37.23527
+        ]
+      },
+      "properties": {
+        "id": "KSGF",
+        "name": "Springfield",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -106.62468,
+          48.20635
+        ]
+      },
+      "properties": {
+        "id": "KGGW",
+        "name": "Glasgow",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -82.40194,
+          27.70527
+        ]
+      },
+      "properties": {
+        "id": "KTBW",
+        "name": "Tampa",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -96.23249,
+          38.99694
+        ]
+      },
+      "properties": {
+        "id": "KTWX",
+        "name": "Topeka",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -85.61,
+          38.046
+        ]
+      },
+      "properties": {
+        "id": "TSDF",
+        "name": "Louisville,KY",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -80.21794,
+          40.53166
+        ]
+      },
+      "properties": {
+        "id": "KPBZ",
+        "name": "Pittsburgh",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -86.436,
+          39.637
+        ]
+      },
+      "properties": {
+        "id": "TIDS",
+        "name": "Indianapolis",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -84.56583,
+          33.36333
+        ]
+      },
+      "properties": {
+        "id": "KFFC",
+        "name": "Atlanta",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -93.72285,
+          41.7311
+        ]
+      },
+      "properties": {
+        "id": "KDMX",
+        "name": "Des Moines",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -151.35144,
+          60.72591
+        ]
+      },
+      "properties": {
+        "id": "PAHG",
+        "name": "Kenai",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -80.885,
+          35.337
+        ]
+      },
+      "properties": {
+        "id": "TCLT",
+        "name": "Charlotte",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -77.4875,
+          38.9761
+        ]
+      },
+      "properties": {
+        "id": "KLWX",
+        "name": "Sterling",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -90.489,
+          38.805
+        ]
+      },
+      "properties": {
+        "id": "TSTL",
+        "name": "St. Louis",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -88.55055,
+          42.96777
+        ]
+      },
+      "properties": {
+        "id": "KMKX",
+        "name": "Milwaukee",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -78.49,
+          35.66527
+        ]
+      },
+      "properties": {
+        "id": "KRAX",
+        "name": "Raleigh/Durham",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.38277,
+          30.72166
+        ]
+      },
+      "properties": {
+        "id": "KGRK",
+        "name": "Ft Hood",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -112.86221,
+          37.59104
+        ]
+      },
+      "properties": {
+        "id": "KICX",
+        "name": "Cedar City",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -95.56413,
+          36.17499
+        ]
+      },
+      "properties": {
+        "id": "KINX",
+        "name": "Tulsa",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -77.0075,
+          36.98388
+        ]
+      },
+      "properties": {
+        "id": "KAKQ",
+        "name": "Norfolk",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -135.52915,
+          56.85277
+        ]
+      },
+      "properties": {
+        "id": "PACG",
+        "name": "Sitka",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.45,
+          35.23
+        ]
+      },
+      "properties": {
+        "id": "ROCO2",
+        "name": "Norman",
+        "stationType": "Profiler"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -81.04219,
+          32.65552
+        ]
+      },
+      "properties": {
+        "id": "KCLX",
+        "name": "Charleston,SC",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -80.273,
+          26.688
+        ]
+      },
+      "properties": {
+        "id": "TDJT",
+        "name": "Trump International",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -111.93,
+          40.967
+        ]
+      },
+      "properties": {
+        "id": "TSLC",
+        "name": "Salt Lake City",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -112.163,
+          33.421
+        ]
+      },
+      "properties": {
+        "id": "TPHX",
+        "name": "Phoenix",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -104.526,
+          39.728
+        ]
+      },
+      "properties": {
+        "id": "TDEN",
+        "name": "Denver",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -115.007,
+          36.144
+        ]
+      },
+      "properties": {
+        "id": "TLAS",
+        "name": "Las Vegas",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -78.697,
+          36.002
+        ]
+      },
+      "properties": {
+        "id": "TRDU",
+        "name": "Raleigh Durham",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.27775,
+          35.33305
+        ]
+      },
+      "properties": {
+        "id": "KTLX",
+        "name": "Norman",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -89.33679,
+          40.15049
+        ]
+      },
+      "properties": {
+        "id": "KILX",
+        "name": "Lincoln",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -76.962,
+          38.759
+        ]
+      },
+      "properties": {
+        "id": "TDCA",
+        "name": "Washington National",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -87.72452,
+          38.26024
+        ]
+      },
+      "properties": {
+        "id": "KVWX",
+        "name": "Evansville,IN",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -98.44194,
+          40.32083
+        ]
+      },
+      "properties": {
+        "id": "KUEX",
+        "name": "Grand Island",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -119.63213,
+          36.31416
+        ]
+      },
+      "properties": {
+        "id": "KHNX",
+        "name": "San Joaquin Valley",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -161.87637,
+          60.79194
+        ]
+      },
+      "properties": {
+        "id": "PABC",
+        "name": "Bethel",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -113.9861,
+          47.0411
+        ]
+      },
+      "properties": {
+        "id": "KMSX",
+        "name": "Missoula",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -82.715,
+          40.006
+        ]
+      },
+      "properties": {
+        "id": "TCMH",
+        "name": "Columbus,OH",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -95.567,
+          30.065
+        ]
+      },
+      "properties": {
+        "id": "TIAH",
+        "name": "Houston International",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -124.29215,
+          40.49833
+        ]
+      },
+      "properties": {
+        "id": "KBHX",
+        "name": "Eureka (Bunker Hill)",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -82.008,
+          41.29
+        ]
+      },
+      "properties": {
+        "id": "TLVE",
+        "name": "Cleveland,OH",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -66.179,
+          18.474
+        ]
+      },
+      "properties": {
+        "id": "TSJU",
+        "name": "San Juan",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -85.94388,
+          37.97527
+        ]
+      },
+      "properties": {
+        "id": "KLVX",
+        "name": "Louisville",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -81.7019,
+          30.48463
+        ]
+      },
+      "properties": {
+        "id": "KJAX",
+        "name": "Jacksonville",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -84.262,
+          33.647
+        ]
+      },
+      "properties": {
+        "id": "TATL",
+        "name": "Atlanta",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -96.968,
+          32.926
+        ]
+      },
+      "properties": {
+        "id": "TDAL",
+        "name": "Dallas Love Field",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -81.70333,
+          24.59694
+        ]
+      },
+      "properties": {
+        "id": "KBYX",
+        "name": "Key West",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -75.069,
+          39.949
+        ]
+      },
+      "properties": {
+        "id": "TPHL",
+        "name": "Philadelphia",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -112.68612,
+          43.10559
+        ]
+      },
+      "properties": {
+        "id": "KSFX",
+        "name": "Pocatello",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -81.72277,
+          38.3111
+        ]
+      },
+      "properties": {
+        "id": "KRLX",
+        "name": "Charleston,WV",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -116.23602,
+          43.49021
+        ]
+      },
+      "properties": {
+        "id": "KCBX",
+        "name": "Boise",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -89.993,
+          34.896
+        ]
+      },
+      "properties": {
+        "id": "TMEM",
+        "name": "Memphis",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -92.933,
+          44.871
+        ]
+      },
+      "properties": {
+        "id": "TMSP",
+        "name": "Minneapolis",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -121.63165,
+          39.49611
+        ]
+      },
+      "properties": {
+        "id": "KBBX",
+        "name": "Beale AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -100.57621,
+          41.95794
+        ]
+      },
+      "properties": {
+        "id": "KLNX",
+        "name": "North Platte",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -92.97583,
+          31.15527
+        ]
+      },
+      "properties": {
+        "id": "KPOE",
+        "name": "Ft Polk",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -92.20971,
+          46.83694
+        ]
+      },
+      "properties": {
+        "id": "KDLH",
+        "name": "Duluth",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -82.518,
+          27.86
+        ]
+      },
+      "properties": {
+        "id": "TTPA",
+        "name": "Tampa Bay",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -90.403,
+          30.022
+        ]
+      },
+      "properties": {
+        "id": "TMSY",
+        "name": "New Orleans",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.51083,
+          27.78388
+        ]
+      },
+      "properties": {
+        "id": "KCRP",
+        "name": "Corpus Christi",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -70.933,
+          42.158
+        ]
+      },
+      "properties": {
+        "id": "TBOS",
+        "name": "Boston",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -83.515,
+          42.111
+        ]
+      },
+      "properties": {
+        "id": "TDTW",
+        "name": "Detroit",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -67.80642,
+          46.03916
+        ]
+      },
+      "properties": {
+        "id": "KCBW",
+        "name": "Caribou",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -149.78,
+          61.15
+        ]
+      },
+      "properties": {
+        "id": "AWPA2",
+        "name": "Anchorage",
+        "stationType": "Profiler"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -75.68,
+          43.75582
+        ]
+      },
+      "properties": {
+        "id": "KTYX",
+        "name": "Ft Drum",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -147.5014,
+          65.03511
+        ]
+      },
+      "properties": {
+        "id": "PAPD",
+        "name": "Fairbanks Faa",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -73.881,
+          40.589
+        ]
+      },
+      "properties": {
+        "id": "TJFK",
+        "name": "New York City",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -118.8529,
+          45.69055
+        ]
+      },
+      "properties": {
+        "id": "KPDT",
+        "name": "Pendleton",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -117.62582,
+          47.68055
+        ]
+      },
+      "properties": {
+        "id": "KOTX",
+        "name": "Spokane",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -82.21983,
+          34.8833
+        ]
+      },
+      "properties": {
+        "id": "KGSP",
+        "name": "Greer",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -87.28499,
+          36.73666
+        ]
+      },
+      "properties": {
+        "id": "KHPX",
+        "name": "Ft Campbell",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -88.08444,
+          41.60444
+        ]
+      },
+      "properties": {
+        "id": "KLOT",
+        "name": "Chicago",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -121.89843,
+          37.15522
+        ]
+      },
+      "properties": {
+        "id": "KMUX",
+        "name": "San Francisco",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -86.08361,
+          34.93055
+        ]
+      },
+      "properties": {
+        "id": "KHTX",
+        "name": "Northeast Alabama",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -114.89138,
+          35.70111
+        ]
+      },
+      "properties": {
+        "id": "KESX",
+        "name": "Las Vegas",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -117.56074,
+          35.09777
+        ]
+      },
+      "properties": {
+        "id": "KEYX",
+        "name": "Edwards AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.44305,
+          37.65444
+        ]
+      },
+      "properties": {
+        "id": "KICT",
+        "name": "Wichita",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -96.3668,
+          41.32027
+        ]
+      },
+      "properties": {
+        "id": "KOAX",
+        "name": "Omaha",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -90.4074,
+          30.5196
+        ]
+      },
+      "properties": {
+        "id": "KHDC",
+        "name": "Hammond",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -100.86443,
+          48.39249
+        ]
+      },
+      "properties": {
+        "id": "KMBX",
+        "name": "Minot AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -99.96888,
+          37.76083
+        ]
+      },
+      "properties": {
+        "id": "KDDC",
+        "name": "Dodge City",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -156.62942,
+          58.67944
+        ]
+      },
+      "properties": {
+        "id": "PAKC",
+        "name": "King Salmon",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -146.30109,
+          59.46194
+        ]
+      },
+      "properties": {
+        "id": "PAIH",
+        "name": "Middleton Island",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -86.76972,
+          33.17194
+        ]
+      },
+      "properties": {
+        "id": "KBMX",
+        "name": "Birmingham",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -75.44,
+          38.82555
+        ]
+      },
+      "properties": {
+        "id": "KDOX",
+        "name": "Dover AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -80.491,
+          25.758
+        ]
+      },
+      "properties": {
+        "id": "TMIA",
+        "name": "Miami",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -86.5625,
+          36.24722
+        ]
+      },
+      "properties": {
+        "id": "KOHX",
+        "name": "Nashville",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -78.42916,
+          33.98916
+        ]
+      },
+      "properties": {
+        "id": "KLTX",
+        "name": "Wilmington",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -91.1911,
+          43.82277
+        ]
+      },
+      "properties": {
+        "id": "KARX",
+        "name": "La Crosse",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -116.80277,
+          40.73972
+        ]
+      },
+      "properties": {
+        "id": "KLRX",
+        "name": "Elko",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -104.5458,
+          39.78663
+        ]
+      },
+      "properties": {
+        "id": "KFTG",
+        "name": "Denver",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -100.76027,
+          46.77083
+        ]
+      },
+      "properties": {
+        "id": "KBIS",
+        "name": "Bismarck",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -120.3979,
+          34.83855
+        ]
+      },
+      "properties": {
+        "id": "KVBX",
+        "name": "Vandenberg AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -88.23972,
+          30.67944
+        ]
+      },
+      "properties": {
+        "id": "KMOB",
+        "name": "Mobile",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -100.28027,
+          29.2725
+        ]
+      },
+      "properties": {
+        "id": "KDFX",
+        "name": "Laughlin AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -94.742,
+          39.498
+        ]
+      },
+      "properties": {
+        "id": "TMCI",
+        "name": "Kansas City",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -95.242,
+          29.516
+        ]
+      },
+      "properties": {
+        "id": "THOU",
+        "name": "Houston Hobby",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -78.00389,
+          40.92305
+        ]
+      },
+      "properties": {
+        "id": "KCCX",
+        "name": "State College",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -74.27,
+          40.593
+        ]
+      },
+      "properties": {
+        "id": "TEWR",
+        "name": "Newark",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -151.46,
+          59.65
+        ]
+      },
+      "properties": {
+        "id": "HWPA2",
+        "name": "Homer",
+        "stationType": "Profiler"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.32499,
+          47.52805
+        ]
+      },
+      "properties": {
+        "id": "KMVX",
+        "name": "Fargo/Grand Forks",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -102.18924,
+          31.94346
+        ]
+      },
+      "properties": {
+        "id": "KMAF",
+        "name": "Midland/Odessa",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -94.26446,
+          38.81024
+        ]
+      },
+      "properties": {
+        "id": "KEAX",
+        "name": "Pleasant Hill",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -85.54488,
+          42.89388
+        ]
+      },
+      "properties": {
+        "id": "KGRR",
+        "name": "Grand Rapids",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -87.73,
+          41.651
+        ]
+      },
+      "properties": {
+        "id": "TMDW",
+        "name": "Chicago Midway",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -103.61888,
+          34.63416
+        ]
+      },
+      "properties": {
+        "id": "KFDX",
+        "name": "Cannon AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -117.63599,
+          33.81773
+        ]
+      },
+      "properties": {
+        "id": "KSOX",
+        "name": "Santa Ana Mts",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -106.12002,
+          33.07699
+        ]
+      },
+      "properties": {
+        "id": "KHDX",
+        "name": "Holloman AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.4186,
+          25.91555
+        ]
+      },
+      "properties": {
+        "id": "KBRO",
+        "name": "Brownsville",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -77.529,
+          39.084
+        ]
+      },
+      "properties": {
+        "id": "TIAD",
+        "name": "Dulles",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.30313,
+          32.57277
+        ]
+      },
+      "properties": {
+        "id": "KFWS",
+        "name": "Dallas/Ft Worth",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.49568,
+          48.19461
+        ]
+      },
+      "properties": {
+        "id": "KATX",
+        "name": "Seattle",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -97.437,
+          37.507
+        ]
+      },
+      "properties": {
+        "id": "TICH",
+        "name": "Witchita",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -80.65444,
+          28.11305
+        ]
+      },
+      "properties": {
+        "id": "KMLB",
+        "name": "Melbourne",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -121.67782,
+          38.50111
+        ]
+      },
+      "properties": {
+        "id": "KDAX",
+        "name": "Sacramento",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -73.16639,
+          44.5111
+        ]
+      },
+      "properties": {
+        "id": "KCXX",
+        "name": "Burlington",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -85.78975,
+          32.53664
+        ]
+      },
+      "properties": {
+        "id": "KMXX",
+        "name": "Maxwell AFB",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -88.77194,
+          37.06833
+        ]
+      },
+      "properties": {
+        "id": "KPAH",
+        "name": "Paducah",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -81.326,
+          28.344
+        ]
+      },
+      "properties": {
+        "id": "TMCO",
+        "name": "Orlando International",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -75.98472,
+          42.19969
+        ]
+      },
+      "properties": {
+        "id": "KBGM",
+        "name": "Binghamton",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -71.13686,
+          41.95577
+        ]
+      },
+      "properties": {
+        "id": "KBOX",
+        "name": "Boston",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -81.11861,
+          33.9486
+        ]
+      },
+      "properties": {
+        "id": "KCAE",
+        "name": "Columbia",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -74.41072,
+          39.94694
+        ]
+      },
+      "properties": {
+        "id": "KDIX",
+        "name": "Philadelphia",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -87.858,
+          41.797
+        ]
+      },
+      "properties": {
+        "id": "TORD",
+        "name": "Chicago O'Hare",
+        "stationType": "TDWR"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -90.58083,
+          41.61166
+        ]
+      },
+      "properties": {
+        "id": "KDVN",
+        "name": "Quad Cities",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -66.07817,
+          18.11566
+        ]
+      },
+      "properties": {
+        "id": "TJUA",
+        "name": "San Juan",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -86.28027,
+          39.70749
+        ]
+      },
+      "properties": {
+        "id": "KIND",
+        "name": "Indianapolis",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -112.44777,
+          41.26277
+        ]
+      },
+      "properties": {
+        "id": "KMTX",
+        "name": "Salt Lake City",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -108.21375,
+          39.06222
+        ]
+      },
+      "properties": {
+        "id": "KGJX",
+        "name": "Grand Junction",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -83.47166,
+          42.69999
+        ]
+      },
+      "properties": {
+        "id": "KDTX",
+        "name": "Detroit",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -93.56552,
+          44.84888
+        ]
+      },
+      "properties": {
+        "id": "KMPX",
+        "name": "Minneapolis",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -100.49221,
+          31.37111
+        ]
+      },
+      "properties": {
+        "id": "KSJT",
+        "name": "San Angelo",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -101.70927,
+          35.23333
+        ]
+      },
+      "properties": {
+        "id": "KAMA",
+        "name": "Amarillo",
+        "stationType": "WSR-88D"
+      }
+    },
+    {
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          144.81112,
+          13.45583
+        ]
+      },
+      "properties": {
+        "id": "PGUA",
+        "name": "Andersen AFB",
+        "stationType": "WSR-88D"
+      }
+    }
+  ]
+}

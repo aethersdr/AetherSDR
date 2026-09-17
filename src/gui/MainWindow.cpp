@@ -236,6 +236,7 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
+#include "core/NnrSettings.h"
 #include "core/AutomationServer.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
@@ -1722,7 +1723,7 @@ MainWindow::MainWindow(QWidget* parent)
     // in the CW portion of the file (#4281). Context stays m_qsoRecorder so the
     // connection type and lifetime are unchanged.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            m_qsoRecorder, [this](const QByteArray& pcm, bool /*clientLeveled*/) {
+            m_qsoRecorder, [this](const QByteArray& pcm, TxAudioSource /*source*/) {
         // Evaluated at queued-delivery time on the recorder's thread, so blocks
         // already in flight when ownership flips are gated by the NEW owner —
         // bounded (tens of ms) leakage in both directions at over boundaries.
@@ -1737,9 +1738,9 @@ MainWindow::MainWindow(QWidget* parent)
     // agree with what actually goes on the air. A Flex radio modulates on the
     // radio side and ignores this.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            this, [this](const QByteArray& pcm, bool clientLeveled) {
+            this, [this](const QByteArray& pcm, TxAudioSource source) {
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
-                                   clientLeveled);
+                                   source);
     });
     wireModemAudioCompletion();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
@@ -4047,6 +4048,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
                persistedAetherDspMethod == QStringLiteral("DFNR") ? "True" : "False");
     s.setValue("ClientMnrEnabled",
                persistedAetherDspMethod == QStringLiteral("MNR") ? "True" : "False");
+    NnrSettings::setEnabled(persistedAetherDspMethod == QStringLiteral("NNR"));
     // BNR not persisted — requires manual enable each session
 
     s.save();
@@ -7355,6 +7357,12 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     // is for controls that would look broken when greyed out with no radio
     // attached. A brand name is a fact about a connected radio, so it clears
     // with the rest of the identity block.
+    //
+    // NOTE (#5262 M3a): "hide rather than dim" is no longer the general rule —
+    // individual controls dim with a reason, and hiding survives only for a
+    // cohesive radio-specific cluster. This site is unaffected: it clears a
+    // TEXT VALUE that has no meaning without a radio, which is neither of those
+    // cases. See docs/style/theme-style-guide.md §"Three-state controls".
     m_radioManufacturer = connected ? caps.manufacturer : QString();
     refreshRadioIdentityLabels();
 
@@ -7406,17 +7414,25 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             m_radioModel.meterModel().hasMicPeakMeter());
     }
 
-    // ── Display dBm scale: who owns it ─────────────────────────────────────
-    // A backend that decodes its scope at a fixed calibration (Icom CI-V) has
-    // no range command and never echoes one back, so the noise-floor auto-
-    // adjust must not try to move a reference level the radio will not confirm.
-    // `!connected ||` restores the permissive default on disconnect so the
+    // ── Display dBm scale: who owns it, and whether the bins hold still ────
+    // Two INDEPENDENT properties, pushed together because the auto-floor gate
+    // is the OR of them (noiseFloorAutoAdjustAllowed). A backend that decodes
+    // its scope at a fixed calibration (Icom CI-V) has no range command and
+    // never echoes one back; a backend whose bins are computed on this host
+    // (HL2, ANAN, RTL-SDR) gives the loop a fixed target instead, which
+    // terminates it just as well.
+    //
+    // `!connected ||` restores the permissive default for the echo so the
     // setting cannot leak from an Icom into the next radio connected.
+    // panBinsAbsolute() uses `connected &&` instead — its permissive default
+    // is FALSE, and disconnected the first term of the OR is already true.
     {
         const bool radioOwnsScale = !connected || caps.radioOwnsDbmScale;
+        const bool binsAbsolute = connected && caps.panBinsAbsolute();
         const QList<SpectrumWidget*> spectra = findChildren<SpectrumWidget*>();
         for (SpectrumWidget* spectrum : spectra) {
             spectrum->setRadioOwnsDbmScale(radioOwnsScale);
+            spectrum->setPanBinsAbsolute(binsAbsolute);
         }
     }
 
@@ -7551,6 +7567,15 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             cwCaps.cwPitchMinHz, cwCaps.cwPitchMaxHz, cwCaps.cwPitchStepHz);
         m_appletPanel->phoneCwApplet()->setHasAudioPeakingFilter(
             m_radioModel.hasAudioPeakingFilter());
+        // The ALC Gain gauge, on the meter EXISTING rather than on a
+        // capability flag: only the HL2 publishes TX:ALCGAIN, and the Phone
+        // panel is shared. `connected &&` rather than the permissive
+        // `!connected ||` used above — a disconnected panel must be the panel
+        // that shipped before this gauge, and the disconnect edge is what
+        // takes the row back down after an HL2 session so the next Flex
+        // connect does not inherit it.
+        m_appletPanel->phoneCwApplet()->setHasAlcGainMeter(
+            connected && m_radioModel.meterModel().hasAlcGainMeter());
     }
 
     // ── The 8-band graphic EQ ───────────────────────────────────────────────
@@ -7686,6 +7711,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     if (m_multiFlexAction) {
         m_multiFlexAction->setVisible(!connected || caps.hasMultiClientSessions);
     }
+    updateToolsMenuState();
     if (m_aetherControlAction) {
         m_aetherControlAction->setVisible(!connected || caps.hasFlexControlIntegration);
     }
@@ -7717,13 +7743,23 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
         const bool cmdPlane = !connected || m_radioModel.hasCommandPlane();
         const QString why =
             cmdPlane ? QString() : tr("Not supported by this radio");
+        // The reason rides on the tooltip AND on an accessible channel. A
+        // tooltip is a mouse affordance that a screen reader never sees, so
+        // setEnabled + setToolTip alone leaves a blind operator with a dead
+        // menu entry and no stated cause — short of M0 item 3's own acceptance
+        // from the day it merged (#5262 M3a, #4896).
+        //
+        // QAction has no accessibleDescription; Qt exposes an action's status
+        // tip to accessibility clients, so that is where the reason goes.
         if (m_txBandAction) {
             m_txBandAction->setEnabled(cmdPlane);
             m_txBandAction->setToolTip(why);
+            m_txBandAction->setStatusTip(why);
         }
         if (m_tuneInhibitMenu) {
             m_tuneInhibitMenu->menuAction()->setEnabled(cmdPlane);
             m_tuneInhibitMenu->menuAction()->setToolTip(why);
+            m_tuneInhibitMenu->menuAction()->setStatusTip(why);
         }
     }
 
@@ -9878,6 +9914,107 @@ void MainWindow::showPanadapterInterlockNotification(const QString& message,
 // ─── Pan layout application ───────────────────────────────────────────────────
 
 // ─── Keyboard Shortcuts ───────────────────────────────────────────────────────
+
+// Single owner of the Tools menu's enable/visible/tooltip state.
+//
+// This runs from two places on purpose. QMenu::aboutToShow covers the operator
+// popping the menu; applyCapabilitiesToUi() covers everyone who never pops it —
+// above all the automation bridge, which resolves menu-bar actions in a CLOSED
+// menu bar (AutomationServer::doInvoke) and gates purely on isEnabled(). Gating
+// only in aboutToShow left every Tools action at its construction-time value for
+// that caller, which is how a disconnected radio could still reach the ATU
+// memory-clear confirm. Keeping one function means the two passes cannot drift
+// into different formulas for the same action.
+void MainWindow::updateToolsMenuState()
+{
+    const bool connected = m_radioModel.isConnected();
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    const auto& tx = m_radioModel.transmitModel();
+    const auto& tuner = m_radioModel.tunerModel();
+    const bool idle = !tx.isTuning() && !tx.isMox() && !tx.isTransmitting();
+    const bool txReady = connected && caps.canTransmit
+        && m_radioModel.txOwnedByUs() && idle;
+    const bool hasTxApplet = m_appletPanel && m_appletPanel->txApplet();
+
+    // An external TunerGenius XL in OPERATE puts the internal ATU out of the
+    // line, and TxApplet::updateAtuAvailability() greys the ATU and MEM buttons
+    // for exactly that reason (#443). The ATU right-click menu rides the
+    // disabled ATU button, so before Tools existed that gate was also the only
+    // route to these two actions — lifting them to the menu bar without the same
+    // condition would make Tools the one way left to pre-tune through a tuner
+    // that is in OPERATE.
+    const bool tgxlOperate = tuner.isPresent() && tuner.isOperate()
+        && !tuner.isBypass();
+    const bool memories = caps.hasTunerMemories && !tgxlOperate;
+
+    if (m_addPanAction) {
+        m_addPanAction->setEnabled(connected && m_panStack
+            && m_panStack->count() < m_radioModel.maxPanadapters());
+    }
+    if (m_aetherialAction) {
+        m_aetherialAction->setChecked(m_aetherialStrip
+            && m_aetherialStrip->isVisible());
+    }
+    if (m_cwKeyerAction) {
+        m_cwKeyerAction->setVisible(!connected || caps.hasRadioSideCwKeyer);
+        m_cwKeyerAction->setEnabled(m_cwxIndicator && m_cwxIndicator->isEnabled());
+        m_cwKeyerAction->setChecked(m_cwxPanel && m_cwxPanel->isVisible());
+    }
+#ifdef AETHER_ASR_ENABLED
+    if (m_copyAssistAction) {
+        const bool copyVisible = m_copyAssistApplet
+            && m_copyAssistApplet->isCopyAssistVisible();
+        m_copyAssistAction->setEnabled(
+            m_asrIndicator && (m_asrIndicator->isEnabled() || copyVisible));
+        m_copyAssistAction->setChecked(copyVisible);
+    }
+#endif
+
+    if (m_swrScanAction) {
+        m_swrScanAction->setEnabled(txReady);
+        m_swrScanAction->setToolTip(txReady ? QString()
+            : tr("Requires an idle, TX-capable radio with this client holding "
+                 "the interlock"));
+    }
+
+    // Every disabling condition names itself. A greyed control with no stated
+    // reason reads as broken (#5510), and Pre-tune now has five of them.
+    if (m_preTuneAction) {
+        m_preTuneAction->setEnabled(txReady && memories && tx.memoriesEnabled()
+            && hasTxApplet);
+        m_preTuneAction->setToolTip(
+            !caps.hasTunerMemories
+                ? tr("ATU memory controls are unavailable for this radio")
+            : tgxlOperate
+                ? tr("Disabled — TGXL is in OPERATE mode")
+            : !hasTxApplet
+                ? tr("The transmit applet is unavailable in this build")
+            : !tx.memoriesEnabled()
+                ? tr("Enable MEM before running the pre-tune sweep")
+            : !txReady
+                ? tr("Requires an idle, TX-capable radio with this client "
+                     "holding the interlock")
+            : QString());
+    }
+    if (m_clearAtuAction) {
+        m_clearAtuAction->setEnabled(connected && memories && hasTxApplet);
+        m_clearAtuAction->setToolTip(
+            !caps.hasTunerMemories
+                ? tr("ATU memory controls are unavailable for this radio")
+            : tgxlOperate
+                ? tr("Disabled — TGXL is in OPERATE mode")
+            : !hasTxApplet
+                ? tr("The transmit applet is unavailable in this build")
+            : !connected
+                ? tr("Connect to a radio first")
+            : QString());
+    }
+
+    if (m_gpsDashboardAction) {
+        m_gpsDashboardAction->setVisible(!connected
+            || (caps.hasGpsLocation && m_radioModel.hasGpsHardware()));
+    }
+}
 
 void MainWindow::updateKeyerAvailability()
 {

@@ -37,7 +37,7 @@ inline WeatherRadarFramePresentation weatherRadarFramePresentation(
         // Its five-minute cache key is NOT the age of the displayed weather.
         return {QCoreApplication::translate("PskReporterMapDialog", "Age unknown"),
             QCoreApplication::translate("PskReporterMapDialog",
-                "NOAA live imagery: observation time is unavailable. Retained imagery "
+                "Live radar imagery: observation time is unavailable. Retained imagery "
                 "may be old while a refresh is pending or has failed.")};
     }
     const qint64 ageMinutes = qMax<qint64>(0, observation.secsTo(now) / 60);
@@ -45,7 +45,7 @@ inline WeatherRadarFramePresentation weatherRadarFramePresentation(
     return {QCoreApplication::translate("PskReporterMapDialog", "%1 (%2m old)")
                 .arg(local.clock).arg(ageMinutes),
         QCoreApplication::translate("PskReporterMapDialog",
-            "NOAA radar frame: %1 (local time). %2 minutes old. "
+            "Radar frame: %1 (local time). %2 minutes old. "
             "New observations are checked every minute during playback.")
                 .arg(local.details).arg(ageMinutes)};
 }

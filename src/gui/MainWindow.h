@@ -345,6 +345,11 @@ private slots:
     void onRadioMessage(const QString& text, MessageSeverity severity);
     void onSliceAdded(SliceModel* slice);
     void onSliceRemoved(int id);
+    // Push the transmit slice's frequency into TunerApplet's expanded port-A
+    // strip. Re-derived from scratch on every call rather than cached against
+    // a slice pointer: band recall DROPS and RE-CREATES the slice (keeping its
+    // id), so anything bound to the old object goes quietly stale.
+    void refreshTunerPortFrequency();
     // Ordinary RX close from the VFO ✕ / "Close Slice" menu (RFC #5468 P01).
     void requestSliceClose(int sliceId);
 
@@ -517,6 +522,10 @@ private:
     void syncTxWaterfallSliceToSpectrums();
     void updateSplitState();
     void disableSplit();
+    // One status-bar notice per connect session for a control this radio
+    // cannot honor. Shared by the commandDropped path and by the
+    // capability gates that refuse BEFORE the send (M0, #5263).
+    void showUnsupportedControlNotice();
     // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
     // from the constructor, in original order, defined in its subject TU.
     void wireModemAudioCompletion(); // MainWindow_Wiring.cpp
@@ -788,6 +797,13 @@ private:
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
     // and persists visibility via AppSettings("AetherialStripVisible").
     void toggleAetherialStrip();
+    // Shared by the status-bar affordance and Tools menu so both keep the
+    // keyer panels mutually exclusive and restore the splitter identically.
+    void toggleCwKeyerPanel();
+    void toggleVoiceKeyerPanel();
+    // Shared by the status-bar +PAN affordance and Tools ▸ Add Panadapter… so
+    // both route through PanLayoutDialog and the layout machinery.
+    void showAddPanadapterDialog();
     // Cutoff-line drag handler shared between the floating ClientEqEditor
     // and the embedded EQ panel inside AetherialAudioStrip.  Writes TX
     // filter cutoffs to TransmitModel, or RX filter offsets to the
@@ -849,6 +865,9 @@ private:
     // review). Returns the dialog so a caller needing a page-specific reveal
     // (e.g. revealFlexControlSettings()) can act on it further.
     RadioSetupDialog* openRadioSetupPage(const QString& page = {});
+    // Explicit operator disconnect: suppress reconnect, clear remembered
+    // routing, and tear down the current radio session.
+    void disconnectFromRadioByUser();
 
     // Reorder the main splitter so the applet panel sits on the left or
     // right of the panadapter stack.  Wired from the dock-side icons in
@@ -988,7 +1007,8 @@ private:
     BandSnapshot captureCurrentBandState() const;
     void restoreBandState(const BandSnapshot& snap);
     void startSwrSweep(int requestedSliceId = -1, int sweepPowerWatts = 1,
-                       double customLowMhz = 0.0, double customHighMhz = 0.0);
+                       double customLowMhz = 0.0, double customHighMhz = 0.0,
+                       bool forceLicenseConfirm = false);
     void clearSwrSweepPlot();
     void saveSwrSweepCsv();
     void advanceSwrSweep();
@@ -1283,6 +1303,15 @@ private:
     // cached so updateTMate2Display/Indicators() can re-send without signal args.
     float   m_tmate2SmeterDbm{-140.0f};
     float   m_tmate2TxWatts{0.0f};
+
+    // The amplifier's forward power and SWR reach the S-Meter, the cross-needle
+    // and the TMate2 from TWO sources — the radio-relayed AMP meters and the
+    // amplifier's own port-9008 status. They are the same measurement, so the
+    // choice is rate, not truth, and the rule has to be the same one the
+    // applet gauges use or the shared meters go back to last-writer-wins.
+    // See applyAmpTxMeters() and kRelayMeterFreshnessMs.
+    QElapsedTimer m_ampRelayTxStamp;
+    void applyAmpTxMeters(float watts, float swr, bool fromRelay);
     bool tmate2OverlayActive() const;
     QString tmate2OverlayName() const;
     int tmate2IdleTimeoutMs() const;
@@ -1494,11 +1523,25 @@ private:
     // applyCapabilitiesToUi() can hide it on a radio with no DAX streams.
     // Null on platforms without a DAX bridge, where the entry is never created.
     QAction*         m_autoDaxAction{nullptr};
-    // File ▸ Waveforms... and Settings ▸ multiFLEX... — held so
+    // Tools ▸ Waveforms... and Settings ▸ multiFLEX... — held so
     // applyCapabilitiesToUi() can hide them on a radio with no installable
     // waveforms / no multi-client sessions.
     QAction*         m_waveformsAction{nullptr};
     QAction*         m_multiFlexAction{nullptr};
+    QAction*         m_swrScanAction{nullptr};
+    QAction*         m_preTuneAction{nullptr};
+    QAction*         m_clearAtuAction{nullptr};
+    QAction*         m_addPanAction{nullptr};
+    QAction*         m_aetherialAction{nullptr};
+    QAction*         m_cwKeyerAction{nullptr};
+    QAction*         m_copyAssistAction{nullptr};
+    QAction*         m_gpsDashboardAction{nullptr};
+    // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from
+    // applyCapabilitiesToUi() *and* the menu's aboutToShow, because the
+    // automation bridge reaches menu-bar actions without popping the menu
+    // (AutomationServer.cpp doInvoke) and would otherwise only ever see the
+    // construction-time state. One function so the two passes cannot drift.
+    void updateToolsMenuState();
     QAction*         m_aetherControlAction{nullptr};
     QAction*         m_flexControlKnobAction{nullptr};
 
@@ -1704,7 +1747,7 @@ private:
     std::atomic<quint64> m_lastCwPaddleTraceId{0};
     std::atomic<quint64> m_lastCwPaddleSourceMs{0};
     qint64 m_bsConnectGraceUntilMs{0};   // suppress auto-save right after connect
-    bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (View menu)
+    bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (Settings menu)
     bool m_pttHoldActive{false};           // true while the PTT-hold key is held (#3879)
     bool m_cwStraightKeyActive{false};
     bool m_cwLeftPaddleActive{false};

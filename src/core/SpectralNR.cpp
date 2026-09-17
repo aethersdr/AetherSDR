@@ -36,6 +36,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <numbers>
 #include <numeric>
 
@@ -523,6 +524,27 @@ void SpectralNR::setNpeMethod(int method)
 
 void SpectralNR::reset()
 {
+    resetTransient();
+    resetNoiseEstimate();
+}
+
+void SpectralNR::resetTransient()
+{
+    ++m_transientResetCount;
+    // Upstream zeroes olddmag in its flush path (emnr.c). Without this a peak
+    // captured before a transmit pass keeps inflating the injected level for
+    // seconds after receive resumes, since the follower decays over 5 s.
+    m_post2PeakHold = 0.0;
+    m_post2FollowerAdvanced = false;
+    if (m_post2RngState == 0) {
+        // Upstream seeds from the instance pointer for the same reason.
+        m_post2RngState = 2463534242u
+            + 2654435761u * static_cast<unsigned int>(
+                  reinterpret_cast<std::uintptr_t>(this));
+        if (m_post2RngState == 0) {
+            m_post2RngState = 2463534242u;
+        }
+    }
     std::fill(m_inAccum.begin(), m_inAccum.end(), 0.0);
     std::fill(m_outAccum.begin(), m_outAccum.end(), 0.0);
     std::fill(m_stereoInAccumL.begin(), m_stereoInAccumL.end(), 0.0);
@@ -542,6 +564,61 @@ void SpectralNR::reset()
     m_outReadPos = 0;
     m_outputAvailable = m_fftSize;
 
+    // The AGC common-mode references flush with the transients rather than
+    // surviving alongside the noise estimate: their calibration re-runs
+    // inside the re-armed ramp window (m_frameCount < m_rampFrames), and its
+    // first frame overwrites the level reference with weight 1/(0+1) anyway,
+    // so a retained value could only live for one frame. Flushing keeps the
+    // recalibration deterministic — and post-TX the receiver AGC state that
+    // these references describe is exactly what may have changed.
+    //
+    // What this cannot preserve is a level step that straddles the gap. NR2
+    // sees post-AGC audio on every path (the radio's AGC for a Flex, WDSP's
+    // inside Hl2RxDsp for an HL2), and the first post-TX frame re-seeds
+    // m_commonReferencePsd from the post-TX spectrum (detectCommonModeScale),
+    // so the scale corrector never observes the step and scalePowerHistory()
+    // will not rescale the retained noise estimate for it. The fallout is
+    // bounded rather than corrected: minimum statistics re-levels a floor that
+    // is now too high within a few frames, and one that is too low over the
+    // following windows — still climbing at 1.6 s (−15.5 dB against a
+    // −27.4 dB settled depth on the +6 dB row) and settled by 2.5 s, no
+    // slower than the full reset() this path replaced. Pinned by the
+    // ±6 dB step rows in nr2_tx_rx_reset_test, which measure both windows.
+    std::fill(m_commonWantedProtected.begin(),
+              m_commonWantedProtected.end(), 0);
+    std::fill(m_commonReferencePsd.begin(),
+              m_commonReferencePsd.end(), 0.0);
+    std::fill(m_residualReferencePsd.begin(),
+              m_residualReferencePsd.end(), 0.0);
+    std::fill(m_residualReferenceGainRatio.begin(),
+              m_residualReferenceGainRatio.end(), 1.0);
+    std::fill(m_residualReferenceValid.begin(),
+              m_residualReferenceValid.end(), 0);
+    std::fill(m_commonNoiseLike.begin(), m_commonNoiseLike.end(), 0);
+
+    std::fill(m_prevMask.begin(), m_prevMask.end(), 1.0);
+    std::fill(m_prevGamma.begin(), m_prevGamma.end(), 1.0);
+    std::fill(m_mask.begin(), m_mask.end(), 1.0);
+    std::fill(m_smoothMask.begin(), m_smoothMask.end(), 1.0);
+    std::fill(m_aeMask.begin(), m_aeMask.end(), 1.0);
+    std::fill(m_aePrefix.begin(), m_aePrefix.end(), 0.0);
+
+    m_commonReferenceInitialized = false;
+    m_commonReferenceReacquiring = false;
+    m_commonSilenceRecoveryContext = false;
+    m_commonLevelReferenceInitialized = false;
+    m_commonLevelReferencePower = 0.0;
+    m_commonScaleLog = 0.0;
+    m_commonAppliedScale = 1.0;
+    m_commonReturnScale = 1.0;
+    m_commonDetectedScale = 1.0;
+    m_frameCount = 0;
+    m_currentWet = 0.0;
+}
+
+void SpectralNR::resetNoiseEstimate()
+{
+    ++m_noiseEstimateResetCount;
     // Start with a HIGH noise estimate — gains will be < 1 during convergence,
     // producing gentle suppression rather than amplification spikes.
     // The OSMS tracker will converge downward to the true noise floor in ~2s.
@@ -568,45 +645,16 @@ void SpectralNR::reset()
               m_nstatTonalProbability.end(), 0.0);
     std::fill(m_nstatTonalIndicator.begin(),
               m_nstatTonalIndicator.end(), 0);
-    std::fill(m_commonWantedProtected.begin(),
-              m_commonWantedProtected.end(), 0);
     std::fill(m_nstatNoisePsd.begin(), m_nstatNoisePsd.end(), 0.0);
-    std::fill(m_commonReferencePsd.begin(),
-              m_commonReferencePsd.end(), 0.0);
-    std::fill(m_residualReferencePsd.begin(),
-              m_residualReferencePsd.end(), 0.0);
-    std::fill(m_residualReferenceGainRatio.begin(),
-              m_residualReferenceGainRatio.end(), 1.0);
-    std::fill(m_residualReferenceValid.begin(),
-              m_residualReferenceValid.end(), 0);
-    std::fill(m_commonNoiseLike.begin(), m_commonNoiseLike.end(), 0);
 
     for (auto& v : m_actMinBuf)
         std::fill(v.begin(), v.end(), 1e30);
-
-    std::fill(m_prevMask.begin(), m_prevMask.end(), 1.0);
-    std::fill(m_prevGamma.begin(), m_prevGamma.end(), 1.0);
-    std::fill(m_mask.begin(), m_mask.end(), 1.0);
-    std::fill(m_smoothMask.begin(), m_smoothMask.end(), 1.0);
-    std::fill(m_aeMask.begin(), m_aeMask.end(), 1.0);
-    std::fill(m_aePrefix.begin(), m_aePrefix.end(), 0.0);
 
     m_alphaC = 1.0;
     // WDSP rotates on the first complete frame so the estimator starts from
     // observed audio rather than waiting a full sub-window on its seed value.
     m_subwc = m_V;
     m_ambIdx = 0;
-    m_commonReferenceInitialized = false;
-    m_commonReferenceReacquiring = false;
-    m_commonSilenceRecoveryContext = false;
-    m_commonLevelReferenceInitialized = false;
-    m_commonLevelReferencePower = 0.0;
-    m_commonScaleLog = 0.0;
-    m_commonAppliedScale = 1.0;
-    m_commonReturnScale = 1.0;
-    m_commonDetectedScale = 1.0;
-    m_frameCount = 0;
-    m_currentWet = 0.0;
 }
 
 void SpectralNR::initWindow()
@@ -955,6 +1003,11 @@ void SpectralNR::processStereoSharedMask(const float* input, float* output, int 
 
 bool SpectralNR::updateMaskFromCurrentFrame()
 {
+    // One hop begins here, whichever path called us. The post-processing peak
+    // follower advances on the first channel of this hop and is only read by
+    // the second, which is what keeps its time constant right in stereo.
+    m_post2FollowerAdvanced = false;
+
     // This is per-frame estimator state, not FFTW state. Clear it for both the
     // FFTW and built-in FFT paths so the fallback cannot reuse stale minima.
     std::fill(m_kMod.begin(), m_kMod.end(), 0);
@@ -1093,6 +1146,205 @@ void SpectralNR::synthesizeCurrentFrameWithMask()
     synthesizeCurrentFrequencyBinsWithMask();
 }
 
+// ─── Psychoacoustic post-processing — WDSP emnr.c's post2 stage ──────────────
+//
+// Ported from third_party/wdsp/upstream/emnr.c (post2(), post2_calc_w(),
+// post2_init_table()). The arithmetic is WDSP's; two things are deliberately
+// not copied verbatim:
+//
+//  * `taper` is a FREQUENCY here, not WDSP's fraction of the bin count. 0.12
+//    of WDSP's 2048 bins over 24 kHz is 2871 Hz; 0.12 of our 513 bins over
+//    12 kHz would be 1435 Hz, which lowpasses voice to telephone quality. The
+//    default below is WDSP's value expressed in Hz, so the two implementations
+//    cover the same band and the control stays correct if the FFT geometry is
+//    retuned again (it has been once already: 256/2 -> 1024/4).
+//
+//  * the decay is a time constant in seconds rather than a precomputed
+//    per-frame coefficient, derived here from the live hop size, which is the
+//    same quantity WDSP computes as exp(-fsize / (tc * rate * ovrlp)).
+//
+// Everything else — the peak follower, the residual/white blend, the raised
+// cosine taper, zeroing DC and everything above the band — is as upstream.
+
+namespace {
+constexpr int kPost2TableSize = 1024;
+
+// How loud the synthetic white term is, as a fraction of the band peak the
+// residual term is measured against.
+//
+// This is WDSP's `dmult = dmag * 4.0 * a->gain` with `POST2_NOISE_MAG =
+// 113.98` folded in -- but it CANNOT be copied as those two constants, which
+// was the first version of this port and was 16384x too loud. `a->gain` is
+// `ogain / fsize / ovrlp` (emnr.c:310), so upstream's white-to-residual ratio
+// is `4 * gain * 113.98`, which at WDSP's own 4096/4 geometry is 0.0278 --
+// about 3% of the in-band peak, sitting sensibly beside a residual term that
+// is at most 1.0 of it. Our bins carry no such gain factor (the 1/fftSize
+// lands after the inverse transform), so `4 * 113.98` bare made the white
+// term 456x the residual rather than 0.028x.
+//
+// Expressed as the ratio rather than as WDSP's two constants, the stage
+// behaves the same at any FFT size -- the same reasoning as the taper being a
+// frequency rather than a bin fraction.
+constexpr double kPost2WhiteFraction = 4.0 * 113.98 / (4096.0 * 4.0);
+
+struct Post2PhasorTable {
+    double cs[kPost2TableSize];
+    double sn[kPost2TableSize];
+    Post2PhasorTable()
+    {
+        for (int i = 0; i < kPost2TableSize; ++i) {
+            const double th = 2.0 * std::numbers::pi * static_cast<double>(i) / kPost2TableSize;
+            cs[i] = std::cos(th);
+            sn[i] = std::sin(th);
+        }
+    }
+};
+const Post2PhasorTable& post2Table()
+{
+    static const Post2PhasorTable table;
+    return table;
+}
+}  // namespace
+
+void SpectralNR::setPost2Factor(float v)
+{
+    m_post2Factor.store(std::clamp(v, 0.0f, 1.0f));
+}
+
+void SpectralNR::setPost2Nlevel(float v)
+{
+    m_post2Nlevel.store(std::clamp(v, 0.0f, 1.0f));
+}
+
+void SpectralNR::setPost2TaperHz(float hz)
+{
+    m_post2TaperHz.store(std::clamp(hz, 300.0f, 6000.0f));
+}
+
+void SpectralNR::setPost2DecaySeconds(float seconds)
+{
+    m_post2Decay.store(std::clamp(seconds, 0.1f, 30.0f));
+}
+
+int SpectralNR::post2BinLimit() const
+{
+    if (m_fftSize <= 0 || m_sampleRate <= 0) {
+        return 0;
+    }
+    const double binHz = static_cast<double>(m_sampleRate) / m_fftSize;
+    const int bins = static_cast<int>(m_post2TaperHz.load() / binHz);
+    return std::clamp(bins, 1, m_msize);
+}
+
+// xorshift32, as upstream: cheap, and the sequence only has to be white.
+unsigned int SpectralNR::post2NextRandom()
+{
+    unsigned int x = m_post2RngState;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    m_post2RngState = x;
+    return x;
+}
+
+void SpectralNR::applyPsychoacousticPostProcessing()
+{
+    if (!m_post2Run.load()) {
+        return;
+    }
+
+    const int ilim = post2BinLimit();
+    if (ilim <= 1) {
+        return;
+    }
+
+    const double factor = m_post2Factor.load();
+    const double nlevel = m_post2Nlevel.load();
+
+    // Per-frame decay of the peak follower, from the hop this instance runs at.
+    const double secondsPerFrame =
+        static_cast<double>(m_hopSize) / static_cast<double>(m_sampleRate);
+    const double rateDecay = std::exp(-secondsPerFrame / m_post2Decay.load());
+
+    // Peak magnitude in the band, held and decayed so the injected level
+    // follows the signal rather than jumping frame to frame.
+    //
+    // Advanced ONCE per hop. processStereoSharedMask() calls into here twice,
+    // once per channel against a shared mask, and decaying on both halved the
+    // 5 s time constant to 2.5 s in stereo.
+    double peak = 0.0;
+    for (int k = 1; k < ilim; ++k) {
+        const double mag = std::sqrt(m_freqRe[k] * m_freqRe[k]
+                                   + m_freqIm[k] * m_freqIm[k]);
+        if (mag > peak) {
+            peak = mag;
+        }
+    }
+    if (!m_post2FollowerAdvanced) {
+        if (peak > m_post2PeakHold) {
+            m_post2PeakHold = peak;
+        } else {
+            m_post2PeakHold *= rateDecay;
+        }
+        m_post2FollowerAdvanced = true;
+    }
+    peak = std::max(peak, m_post2PeakHold);
+    const double whiteScale = peak * kPost2WhiteFraction;
+
+    // Raised-cosine taper over the band, rebuilt only when the band moves --
+    // upstream builds it in post2_calc_w() for the same reason, and a
+    // std::cos per bin per hop is up to 40k calls a second in stereo.
+    if (m_post2WindowBins != ilim) {
+        m_post2Window.assign(static_cast<std::size_t>(ilim), 0.75);
+        for (int k = 1; k < ilim; ++k) {
+            m_post2Window[k] = (ilim > 1)
+                ? 0.75 - 0.25 * std::cos(std::numbers::pi * (ilim - 1 - k) / (ilim - 1))
+                : 0.75;
+        }
+        m_post2WindowBins = ilim;
+    }
+
+    // The startup dry/wet ramp applies here too. Without this the stage would
+    // zero the band above ilim and inject noise while the rest of the filter
+    // is still 100% dry, which is audible as a lowpass snapping in ahead of
+    // the noise reduction it belongs to.
+    const double wet = m_currentWet;
+    if (wet <= 0.0) {
+        return;
+    }
+
+    const auto& table = post2Table();
+    for (int k = 1; k < ilim; ++k) {
+        const double w = m_post2Window[k];
+
+        const unsigned int phase = post2NextRandom() & (kPost2TableSize - 1);
+
+        // What this reduction just removed, per bin.
+        const double residualRe = m_freqRe[k] - m_gainRe[k];
+        const double residualIm = m_freqIm[k] - m_gainIm[k];
+
+        const double whiteRe = whiteScale * table.cs[phase];
+        const double whiteIm = whiteScale * table.sn[phase];
+
+        const double noiseRe = (1.0 - factor) * residualRe + factor * whiteRe;
+        const double noiseIm = (1.0 - factor) * residualIm + factor * whiteIm;
+
+        const double filledRe = w * (m_gainRe[k] + nlevel * noiseRe);
+        const double filledIm = w * (m_gainIm[k] + nlevel * noiseIm);
+        m_gainRe[k] = wet * filledRe + (1.0 - wet) * m_gainRe[k];
+        m_gainIm[k] = wet * filledIm + (1.0 - wet) * m_gainIm[k];
+    }
+
+    // DC and everything above the band, as upstream -- crossfaded by the same
+    // ramp so the band limit arrives with the rest of the effect.
+    m_gainRe[0] *= (1.0 - wet);
+    m_gainIm[0] *= (1.0 - wet);
+    for (int k = ilim; k < m_msize; ++k) {
+        m_gainRe[k] *= (1.0 - wet);
+        m_gainIm[k] *= (1.0 - wet);
+    }
+}
+
 void SpectralNR::synthesizeCurrentFrequencyBinsWithMask()
 {
     // Apply smoothed gain to frequency bins (with dry/wet blend during startup)
@@ -1101,6 +1353,8 @@ void SpectralNR::synthesizeCurrentFrequencyBinsWithMask()
         m_gainRe[k] = g * m_freqRe[k];
         m_gainIm[k] = g * m_freqIm[k];
     }
+
+    applyPsychoacousticPostProcessing();
 
 #ifdef HAVE_FFTW3
     // Pack into FFTW complex input for inverse FFT

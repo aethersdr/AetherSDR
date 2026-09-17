@@ -21,6 +21,33 @@ inline bool isEp6Header(std::span<const std::uint8_t> pkt) noexcept
         && pkt[2] == 0x01 && pkt[3] == 0x06;
 }
 
+// The wideband bandscope's header, `EF FE 01 04`. Same shape as isEp6Header
+// and the same length: the bandscope datagram is also 1032 bytes (usopenhpsdr1.v
+// `START` sets `udp_tx_length_next = 'd1032` before entering `WIDE1`), it just
+// spends all 1024 payload bytes on raw ADC codes instead of framed IQ rounds.
+inline bool isEp4Header(std::span<const std::uint8_t> pkt) noexcept
+{
+    return pkt.size() >= kUsbPacketSize && pkt[0] == 0xEF && pkt[1] == 0xFE
+        && pkt[2] == 0x01 && pkt[3] == 0x04;
+}
+
+// One 12-bit ADC code out of a little-endian 16-bit wire word holding it
+// shifted left by four.
+//
+// Written as a logical shift of a NON-NEGATIVE value followed by an explicit
+// 12-bit sign extension, rather than `int16_t(w) >> 4`. Both the narrowing
+// conversion and the right shift of a negative integer were only fully pinned
+// down in C++20; this form is portable to every standard and reads the same.
+inline int decodeEp4Code(const std::uint8_t* p) noexcept
+{
+    const unsigned w = static_cast<unsigned>(p[0])
+                     | (static_cast<unsigned>(p[1]) << 8);
+    int code = static_cast<int>((w >> 4) & 0x0FFFu);
+    if (code & 0x800)
+        code -= 0x1000;                                  // sign-extend 12 -> 32
+    return code;
+}
+
 inline std::uint32_t readBe32(const std::uint8_t* p) noexcept
 {
     return (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16)
@@ -127,6 +154,21 @@ Cc ccAdcAssign() noexcept
     // RX1..RX7 -> ADC0, TX attenuation 0. All-zero payload is the correct value
     // for a single-ADC Phase-1 receiver; what matters is that the bank is sent.
     return {kC0AdcAssignOrTxGain, 0x00, 0x00, 0x00, 0x00};
+}
+
+Cc ccRegister(int addr, std::uint32_t data) noexcept
+{
+    // Masked, not clamped: an out-of-range address is a caller bug, and the
+    // callers that matter (Hl2ControlRequest::arm) refuse it outright before
+    // reaching here. Masking is the belt to that brace — what it must never do
+    // is let bit 6 of an address spill into the RQST flag at C0[7], or bit 0 of
+    // the shifted byte become MOX.
+    const auto c0 = static_cast<std::uint8_t>((addr & kMaxRegisterAddress) << 1);
+    return {c0,
+            static_cast<std::uint8_t>((data >> 24) & 0xFF),
+            static_cast<std::uint8_t>((data >> 16) & 0xFF),
+            static_cast<std::uint8_t>((data >> 8) & 0xFF),
+            static_cast<std::uint8_t>(data & 0xFF)};
 }
 
 Cc ccPipelineReset() noexcept
@@ -243,7 +285,22 @@ std::optional<Ep6Response> parseEp6Response(const std::uint8_t* frame) noexcept
 
 void Hl2Telemetry::apply(const Ep6Response& r) noexcept
 {
+    // PTT first: C0[0] is ptt_resp in BOTH branches of control.v's iresp
+    // composition, so it is the one field an ACK still carries honestly.
+    //
+    // NOT a belt-and-braces PTT path for MetisClient, and the comment used to
+    // imply it was: that client routes every ACK to ingestControlResponse and
+    // never here, so on that wiring this line only ever runs for free-running
+    // telemetry — where every one of control.v's four RADDR slots carries
+    // ptt_resp anyway, so nothing is lost. It is kept
+    // because apply() is a public decoder with other callers and tests, and
+    // because dropping a field an ACK genuinely carries would be the wrong
+    // default for them.
     ptt = r.ptt;
+    // Everything below reads `raddr` as a free-running telemetry slot. In an ACK
+    // it is a command address and `data` is our own echo — see the header.
+    if (r.ack)
+        return;
     switch (r.raddr) {
     case 0x00:
         firmwareVersion = static_cast<int>(r.data & 0xFF);
@@ -473,7 +530,22 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
     if (pkt.size() < 11 || pkt[0] != 0xEF || pkt[1] != 0xFE)
         return std::nullopt;
     DiscoveryReply r;
-    r.streaming = (pkt[2] == 0x03);                      // 0x02 idle, 0x03 already sending
+    // 0x02 idle, 0x03 already sending. NOT only that: on the HL2 gateware at
+    // 883a338 this byte is
+    //
+    //   usopenhpsdr1.v:266
+    //   discover_data_next = usethasmi_erase_done ? 8'h03
+    //                      : (usethasmi_send_more ? 8'h04
+    //                      : (run ? 8'h03 : 8'h02));
+    //
+    // so 0x03 means "streaming" OR "a gateware flash erase just completed", and
+    // 0x04 — which nothing here decodes — means a flash write is in progress.
+    // Reading 0x03 as `streaming` is therefore a judgement, not what the byte
+    // says: an application that discovers while someone is flashing the radio
+    // will be told the radio is busy sending IQ. Harmless while nobody flashes
+    // over Ethernet, wrong the moment anybody does, and named here so the next
+    // reader does not have to re-derive it from the RTL.
+    r.streaming = (pkt[2] == 0x03);
     for (std::size_t i = 0; i < 6; ++i)
         r.mac[i] = pkt[3 + i];
     r.gatewareVersion = pkt[9];
@@ -504,6 +576,95 @@ std::optional<DiscoveryReply> parseDiscoveryReply(std::span<const std::uint8_t> 
     // Short replies omit it; leave 0 so callers apply their own default.
     if (pkt.size() > 19)
         r.numRx = pkt[19];
+
+    // ---- Telemetry, offsets 0x17-0x29 ----
+    //
+    // The radio has been sending all of this at every discovery and we have
+    // been discarding it since the parser was written. It is the same set the
+    // EP6 response cycle carries, in the same raw units — but obtainable
+    // WITHOUT a stream, which is the only way to read the radio while another
+    // client holds it or while our own stream is broken. Roadmap item #15; it
+    // needs nothing from item #13's RQST/ACK machinery, because none of these
+    // are command responses. resp_control is a combinational assign
+    // (control.v:899) and the discovery path has no `run` gate
+    // (dsopenhpsdr1.v:185-207).
+    //
+    // Offsets come from usopenhpsdr1.v:261-307, which emits the reply from a
+    // DOWN-counting state: offset = 0x3B - dbyte_no. Anchored on the two bytes
+    // parsed above — 6'h32 (VERSION_MAJOR) at 9 and 6'h31 (board) at 10 — with
+    // the same arithmetic putting 6'h28 (NR) at 0x13. hermeslite.py decodes the
+    // same packet identically and is the cross-check, not the source.
+    //
+    // Everything here stays absent unless the reply is long enough to have
+    // carried it. A gateware built without EXTENDED_RESP (control.v:826) sends
+    // hard zeros in these bytes rather than readings, and we cannot tell that
+    // apart from a genuine zero at this layer — a caller that needs to must
+    // compare across polls, and this comment is the warning that it is not
+    // free. Our board sets EXTENDED_RESP(1)
+    // (gateware/variants/hl2b5up_main/hermeslite.v:110).
+    const auto be16 = [](std::span<const std::uint8_t> p, std::size_t at) {
+        return static_cast<int>((std::uint32_t(p[at]) << 8) | std::uint32_t(p[at + 1]));
+    };
+
+    if (pkt.size() > 0x1a) {
+        r.responseData = (std::uint32_t(pkt[0x17]) << 24) | (std::uint32_t(pkt[0x18]) << 16)
+                       | (std::uint32_t(pkt[0x19]) << 8)  |  std::uint32_t(pkt[0x1a]);
+    }
+    if (pkt.size() > 0x1b) {
+        // control.v:899:
+        //   resp_control = {ext_cwkey, ptt_resp, pa_exttr, pa_inttr,
+        //                   tx_on, cw_on, clip_cnt}
+        const std::uint8_t c = pkt[0x1b];
+        r.extCwKey = (c & 0x80) != 0;
+        r.ptt      = (c & 0x40) != 0;          // ptt_resp = cw_on | ext_ptt (control.v:456)
+        r.paExtTr  = (c & 0x20) != 0;
+        r.paIntTr  = (c & 0x10) != 0;
+        r.txOn     = (c & 0x08) != 0;
+        r.cwOn     = (c & 0x04) != 0;
+        // TWO MEANINGS, and which one applies depends on whether the radio is
+        // streaming. `clip_cnt` is cleared on every EP6 packet (control.v:465)
+        // and by NOTHING else, so:
+        //   streaming  -> clip windows in the last EP6 interval (~2.6 ms), 0-3
+        //   idle       -> "clipped at least once since the last stream ended",
+        //                 saturated at 3 and unclearable by a discovery poller
+        // It is also not a count: rxclip is a sticky rail latch added as a
+        // LEVEL (control.v:479, ad9866.v:232-241), so three clock edges
+        // saturate it. Treat this as a flag with a range, never as a rate — the
+        // window length in wall-clock terms is not established. A caller must
+        // pair it with `streaming` above before showing it to anyone.
+        r.adcClipCount = static_cast<int>(c & 0x03);
+    }
+    // The four slow-ADC readings, each 12 bits in a big-endian pair with a zero
+    // top nibble. Same converter and same scaling as the EP6 cycle's
+    // temperatureRaw / forwardPowerRaw / reversePowerRaw / biasCurrentRaw, so
+    // the stream-free reading and the in-band reading are directly comparable
+    // with no conversion — which is what makes the two a cross-check on each
+    // other rather than two unrelated numbers.
+    if (pkt.size() > 0x23) {
+        r.temperatureRaw  = be16(pkt, 0x1c);
+        r.forwardPowerRaw = be16(pkt, 0x1e);
+        r.reversePowerRaw = be16(pkt, 0x20);
+        r.biasCurrentRaw  = be16(pkt, 0x22);
+    }
+    if (pkt.size() > 0x24) {
+        // dsiq_status, identical to the byte the EP6 path decodes at DATA[15:8]
+        // — one recovery flag covering underrun AND blocked writes, then the
+        // top 7 bits of the fill level. See Hl2Telemetry::apply().
+        r.txFifoRecovery = (pkt[0x24] & 0x80) != 0;
+        r.txFifoFillMsbs = static_cast<int>(pkt[0x24] & 0x7F);
+    }
+    if (pkt.size() > 0x26)
+        r.txBufferLatencyMs = static_cast<int>(pkt[0x26] & 0x7F);   // 6'h15: {1'b0, [6:0]}
+    if (pkt.size() > 0x28) {
+        // 6'h13: {cw_hang_time[9:8], 1'b0, ptt_hang_time[4:0]}. The mask is
+        // 0x1F and not a byte, and that is load-bearing rather than tidy: 31 in
+        // this field does not mean "the longest hang time", it DISABLES the
+        // gateware's PTT auto-unkey altogether (softerhardware/Hermes-Lite2
+        // issue #178). A decode that let cw_hang_time's two high bits bleed in
+        // would report a disabled dead-man's switch as some other number, or
+        // some other number as disabled.
+        r.pttHangTimeMs = static_cast<int>(pkt[0x28] & 0x1F);
+    }
     return r;
 }
 
@@ -587,6 +748,80 @@ int ep6SamplesMulti(std::span<const std::uint8_t> pkt,
     return ep6DecodeRounds(pkt, numRx, [&out](int rx, float i, float q) {
         out[static_cast<std::size_t>(rx)].emplace_back(i, q);
     });
+}
+
+double Ep4Stats::peakDbfs() const noexcept
+{
+    if (samples <= 0 || peakAbs <= 0)
+        return kEp4FloorDbfs;
+    return 20.0 * std::log10(static_cast<double>(peakAbs)
+                             / static_cast<double>(kEp4FullScale));
+}
+
+double Ep4Stats::rmsDbfs() const noexcept
+{
+    if (samples <= 0 || sumSquares <= 0.0)
+        return kEp4FloorDbfs;
+    const double rms = std::sqrt(sumSquares / static_cast<double>(samples));
+    if (rms <= 0.0)
+        return kEp4FloorDbfs;
+    return 20.0 * std::log10(rms / static_cast<double>(kEp4FullScale));
+}
+
+void Ep4Stats::merge(const Ep4Stats& other) noexcept
+{
+    samples += other.samples;
+    // Peak is the MAX and not a sum, which is what lets a block's stats and a
+    // packet's stats be the same type: merging four packets of a block gives
+    // the peak of the 2048-sample record, not four times one packet's.
+    if (other.peakAbs > peakAbs)
+        peakAbs = other.peakAbs;
+    sumSquares += other.sumSquares;
+    clippedSamples += other.clippedSamples;
+}
+
+std::optional<std::uint32_t> ep4Seq(std::span<const std::uint8_t> pkt) noexcept
+{
+    if (!isEp4Header(pkt))
+        return std::nullopt;
+    // Byte 4 is a hardwired 8'h00 and byte 5 carries only ep4_seq_no[19:16], so
+    // a well-formed header needs no mask. It is applied anyway: this value
+    // seeds the gap arithmetic, which assumes everything it sees is inside
+    // kEp4SeqModulus, and a header that is not well-formed must not be able to
+    // walk that state outside the modulus (Principle VII).
+    return readBe32(pkt.data() + 4) & (kEp4SeqModulus - 1);
+}
+
+int ep4Samples(std::span<const std::uint8_t> pkt, std::vector<float>& out) noexcept
+{
+    if (!isEp4Header(pkt))
+        return -1;
+    constexpr float kInvFullScale = 1.0f / static_cast<float>(kEp4FullScale);
+    const std::uint8_t* p = pkt.data() + 8;
+    for (std::size_t i = 0; i < kEp4SamplesPerPacket; ++i)
+        out.push_back(static_cast<float>(decodeEp4Code(p + 2 * i)) * kInvFullScale);
+    return static_cast<int>(kEp4SamplesPerPacket);
+}
+
+std::optional<Ep4Stats> ep4Stats(std::span<const std::uint8_t> pkt) noexcept
+{
+    if (!isEp4Header(pkt))
+        return std::nullopt;
+    Ep4Stats s;
+    const std::uint8_t* p = pkt.data() + 8;
+    for (std::size_t i = 0; i < kEp4SamplesPerPacket; ++i) {
+        const int code = decodeEp4Code(p + 2 * i);
+        const int mag = code < 0 ? -code : code;
+        if (mag > s.peakAbs)
+            s.peakAbs = mag;
+        s.sumSquares += static_cast<double>(code) * static_cast<double>(code);
+        // The gateware's own rails, not a symmetric threshold. See
+        // Ep4Stats::clippedSamples in the header.
+        if (code >= kEp4FullScale - 1 || code <= -kEp4FullScale)
+            ++s.clippedSamples;
+    }
+    s.samples = static_cast<int>(kEp4SamplesPerPacket);
+    return s;
 }
 
 }  // namespace AetherSDR::hl2
