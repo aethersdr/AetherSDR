@@ -497,6 +497,33 @@ int SetChannelState (int channel, int state, int dmode)
 	return prior_state;
 }
 
+// AetherSDR patch 11: discard TX history when the host stops clocking on unkey.
+// Caller excludes fexchange/control calls. A pending clocked flush must finish
+// through its normal path; do not race its worker or hide an unfinished stop.
+PORT
+int DiscardTXAChannelData (int channel)
+{
+    IOB a = ch[channel].iob.pc;
+    int discarded = 0;
+    if (ch[channel].type != 1) {
+        return 0;
+    }
+    EnterCriticalSection (&ch[channel].csDSP);
+    EnterCriticalSection (&ch[channel].csEXCH);
+    if (!_InterlockedAnd (&ch[channel].flushflag, 1))
+    {
+        InterlockedBitTestAndReset (&ch[channel].exchange, 0);
+        InterlockedBitTestAndSet (&a->exec_bypass, 0);
+        ch[channel].state = 0;
+        flush_iobuffs (channel);
+        flush_main (channel);
+        discarded = 1;
+    }
+    LeaveCriticalSection (&ch[channel].csEXCH);
+    LeaveCriticalSection (&ch[channel].csDSP);
+    return discarded;
+}
+
 PORT
 void SetChannelTDelayUp (int channel, double time)
 {

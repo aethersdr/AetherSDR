@@ -19,6 +19,7 @@
 // show up as "my audio is quiet" or "my signal is 2 kHz wide".
 
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "TxTestAuthority.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
 #include <QCoreApplication>
@@ -30,7 +31,6 @@
 #include <complex>
 #include <cstddef>
 #include <cstdio>
-#include <algorithm>
 #include <numeric>
 #include <random>
 #include <string>
@@ -58,29 +58,17 @@ static void check(bool ok, const char* what)
 // sideband assertion reading 0.0 dB. The live caller does not do that --
 // AudioEngine hands this stage audio as the sound card produces it.
 //
-// 2000 us per 240-sample chunk is FIVE TIMES FASTER than real time (240
-// samples at 24 kHz is 10 ms) and puts a 512-sample modulator block every
-// ~4.3 ms. 1000 us was tried first and is not enough: it produced an occasional
-// single underrun, a few blocks into a run, in perhaps one case per pass --
-// which is not a flake to be tolerated but the instrument saying the margin is
-// too thin. The census has 0 of 64 underruns at 5000 us and at the live
-// 21333 us; this sits between.
-//
-// Deliberately NOT compiled into the phasing build: that modulator is a
-// convolution, N samples in gives 2N out whenever they arrive, and paying a
-// millisecond a chunk there would buy nothing.
-#if AETHER_HL2_TX_TXA
-static constexpr int kFeedPaceUs = 2000;
-#else
-static constexpr int kFeedPaceUs = 0;
-#endif
-
+// Pace TXA at the configured audio rate. Feeding five times faster can exhaust
+// scheduling headroom under sanitizers and invalidate otherwise correct captures.
+// The synchronous phasing implementation does not need a wall-clock delay.
+// Carry the engine-issued context through every feed: a missing grant is dropped.
 static void feed(Hl2TxDsp& tx, const std::vector<float>& chunk,
-                 TxAudioSource source)
+                 TxAudioSource source, const AetherSDR::TxCoordinator::Context& context)
 {
-    tx.processAudioBlock(chunk, source);
-    if (kFeedPaceUs > 0) {
-        std::this_thread::sleep_for(std::chrono::microseconds(kFeedPaceUs));
+    tx.processAudioBlock(chunk, source, context);
+    if (AETHER_HL2_TX_TXA) {
+        std::this_thread::sleep_for(std::chrono::duration<double>(
+            static_cast<double>(chunk.size()) / tx.config().inputSampleRateHz));
     }
 }
 
@@ -255,6 +243,7 @@ static std::vector<std::complex<float>> modulateOnce(WdspChannel::Mode mode,
                                                  unsigned long long* faults)
 {
     Hl2TxDsp tx;
+    TxTestAuthority authority;
     Hl2TxDsp::Config cfg;
     cfg.mode = mode;
     // Optional explicit passband. Hl2Backend pushes a sign-correct, mode-derived
@@ -300,7 +289,7 @@ static std::vector<std::complex<float>> modulateOnce(WdspChannel::Mode mode,
         const std::size_t n = std::min(kChunk, audio.size() - off);
         feed(tx, std::vector<float>(audio.begin() + static_cast<std::ptrdiff_t>(off),
                                     audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-             source);
+             source, authority.context);
     }
     *faults = tx.modulatorFaultBlocks();
     return out;
@@ -345,10 +334,15 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
         if (faults == 0) {
             return out;
         }
+        if (attempt < 2) {
         std::fprintf(stderr,
                      "starved at %.0f Hz: %llu blocks did not reach the wire "
                      "-- retrying (attempt %d of 3)\n",
                      toneHz, faults, attempt + 2);
+        }
+    }
+    if (faults != 0) {
+        std::fprintf(stderr, "STARVATION: modulatorFaultBlocks=%llu; capture is invalid for spectral assertions\n", faults);
     }
     check(faults == 0,
           "every modulator block reached the wire (capture is contiguous)");
@@ -377,10 +371,15 @@ static Run retryIfStarved(const char* what, F&& body)
         if (run.faults == 0) {
             return run;
         }
+        if (attempt < 2) {
         std::fprintf(stderr,
                      "starved in %s: %llu blocks did not reach the wire "
                      "-- retrying (attempt %d of 3)\n",
                      what, run.faults, attempt + 2);
+        }
+    }
+    if (run.faults != 0) {
+        std::fprintf(stderr, "STARVATION: modulatorFaultBlocks=%llu in %s; capture is invalid\n", run.faults, what);
     }
     check(run.faults == 0,
           "every modulator block reached the wire in this level case");
@@ -389,6 +388,11 @@ static Run retryIfStarved(const char* what, F&& body)
 
 int main(int argc, char** argv)
 {
+    // Hl2TxDsp::processAudioBlock carries its admitting context; these cases
+    // are about levelling, so a permanently-valid authority is the inert
+    // constant that leaves the source tag as the only variable. Inner scopes
+    // that need their own lifetime shadow this one.
+    TxTestAuthority authority;
     QCoreApplication app(argc, argv);
     constexpr double kFsOut = 48000.0;
     constexpr double kTone = 1000.0;
@@ -431,150 +435,66 @@ int main(int argc, char** argv)
               "24 kHz audio in -> ~48 kHz IQ out (2:1 rate conversion)");
     }
 
-    // ---- WHAT SURVIVES AN UNKEY (d102 tier 1a) ----
-    //
-    // THE DEFECT THIS MEASURES. reset() is the unkey hook and Hl2TxDsp.h says
-    // it "drops anything buffered -- on unkey, so the next transmission does
-    // not start with the tail of the previous one." In the TXA build
-    // resetModulatorState() is EMPTY, so the channel keeps bp0's 2048-tap
-    // history and whatever r2 has not delivered. If that is audible, over N's
-    // tail is transmitted at the head of over N+1.
-    //
-    // THE EXPERIMENT. Over 1 is a loud tone. Then reset(), the unkey. Over 2 is
-    // DIGITAL SILENCE -- exactly zero, so every sample of output during over 2
-    // is state that survived, and there is nothing to subtract or assume.
-    // Energy in over 2 at over 1's tone frequency is the leak.
-    //
-    // Reported as a ratio so it is comparable between the two builds, and
-    // PRINTED rather than only asserted, because the number is the point: this
-    // block exists to put a figure on an open question, not merely to pass.
+    // Reset must discard the BEGINNING of the next over, including after a
+    // receive interval with no processing calls. No settling prefix is omitted.
     {
         Hl2TxDsp tx;
         Hl2TxDsp::Config cfg;
-        cfg.mode = WdspChannel::Mode::Usb;
         cfg.alcEnabled = false;
         std::string err;
-        if (tx.configure(cfg, &err)) {
+        const bool configured = tx.configure(cfg, &err);
+        check(configured, "reset regression configures");
+        if (configured) {
             tx.setMicGain(1.0);
-            std::vector<std::complex<float>> cap;
+            std::vector<std::complex<float>> captured;
             QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
-                             [&cap](const std::vector<std::complex<float>>& iq) {
-                cap.insert(cap.end(), iq.begin(), iq.end());
+                             [&captured](const auto& iq) {
+                captured.insert(captured.end(), iq.begin(), iq.end());
             });
-            const int fs = cfg.inputSampleRateHz;
-            constexpr std::size_t kChunk = 240;
-            auto feedTone = [&](double seconds, double amp, double hz) {
-                const int total = static_cast<int>(fs * seconds);
-                std::vector<float> chunk(kChunk);
-                for (int off = 0; off + static_cast<int>(kChunk) <= total;
-                     off += static_cast<int>(kChunk)) {
-                    for (std::size_t n = 0; n < kChunk; ++n)
-                        chunk[n] = static_cast<float>(
-                            amp * std::sin(2.0 * M_PI * hz
-                                           * (off + static_cast<int>(n)) / fs));
-                    feed(tx, chunk, TxAudioSource::Microphone);
+            const int channelId = tx.wdspChannelId();
+            std::vector<float> audio(512);
+            auto clockBlock = [&] {
+                tx.processAudioBlock(audio, TxAudioSource::Microphone, authority.context);
+                if (AETHER_HL2_TX_TXA) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(22));
                 }
             };
-
-            // A DIFFERENT TONE IN EACH OVER, which is what discriminates.
-            //
-            // The first version of this case fed over 1 a tone and over 2
-            // SILENCE, and found 85 ms of energy at over 1's frequency in over
-            // 2. That does NOT distinguish the two explanations, and I reported
-            // it as a defect before noticing:
-            //
-            //   STATE CARRY -- the channel kept filter history across reset()
-            //   LATENCY     -- audio fed at the END of over 1 legitimately
-            //                  emerges during over 2, because a TXA channel has
-            //                  real delay and the phasing convolution has
-            //                  almost none
-            //
-            // Both predict over 1's tone appearing in over 2. The fix that
-            // should have removed state carry changed the numbers not at all,
-            // which is what exposed the ambiguity.
-            //
-            // Feeding over 2 its OWN tone separates them. Energy at over 1's
-            // frequency during over 2's SETTLED portion is carried state;
-            // energy only in over 2's first few blocks is the pipeline
-            // draining, which is not a defect and is expected to differ
-            // between the two modulators.
-            constexpr double kToneB = 1500.0;
-            feedTone(1.0, 0.5, kTone);                // over 1: tone A
-            const double loudPk = binPower(cap, -kTone, kFsOut, true);
-
-            tx.reset();                               // THE UNKEY
-            cap.clear();
-            feedTone(0.5, 0.5, kToneB);               // over 2: tone B, not silence
-
-            // MEASURED UNTRIMMED, AND THAT IS THE WHOLE POINT. binPower's
-            // trimmed form skips kSettleSamples (12288 = 256 ms) before it
-            // analyses, which is exactly where an unkey leak lives -- the first
-            // revision of this block used it and reported a tone bin of
-            // EXACTLY 0.0 beside a peak |IQ| of 0.52, i.e. it discarded the
-            // signal it existed to find and would have concluded "no leak".
-            // Measure the head, not the tail.
-            double leakPk = 0.0;
-            for (const auto& v : cap)
-                leakPk = std::max(leakPk, static_cast<double>(std::abs(v)));
-
-            // How long the leak lasts, in output samples, to the point where it
-            // falls below -80 dB of over 1 and stays there.
-            const double floorAbs = loudPk * 1e-4;   // -80 dB
-            std::size_t lastAbove = 0;
-            for (std::size_t i = 0; i < cap.size(); ++i)
-                if (std::abs(cap[i]) > floorAbs) lastAbove = i;
-            const double leakMs = 1000.0 * double(lastAbove) / kFsOut;
-
-            // Energy at over 1's tone, in the LEAK WINDOW only.
-            std::vector<std::complex<float>> head(
-                cap.begin(),
-                cap.begin() + static_cast<std::ptrdiff_t>(
-                    std::min(cap.size(), lastAbove + 1)));
-            const double leakTone = head.empty() ? 0.0
-                                  : binPower(head, -kTone, kFsOut, false);
-            // THE DISCRIMINATOR: over 1's tone in over 2's SETTLED portion.
-            // binPower's trimmed form skips 12288 samples (256 ms), which is
-            // far past any plausible pipeline drain, so what it sees is state.
-            const double carriedA = binPower(cap, -kTone, kFsOut, true);
-            const double ownB     = binPower(cap, -kToneB, kFsOut, true);
-            std::fprintf(stderr,
-                         "unkey DISCRIMINATOR [%s]: settled over-2 has tone A "
-                         "%.6e and its own tone B %.6e -> A is %.1f dB relative to B\n",
-                         Hl2TxDsp::modulatorName(), carriedA, ownB,
-                         20.0 * std::log10((carriedA + 1e-30) / (ownB + 1e-30)));
-            const double leakDb = 20.0 * std::log10((leakPk + 1e-30)
-                                                    / (loudPk + 1e-30));
-            std::fprintf(stderr,
-                         "unkey carry [%s]: over-1 tone %.6e | over-2 peak "
-                         "%.6e (%.1f dB re over 1), tone-in-leak %.6e, "
-                         "leak lasts %.1f ms (%zu of %zu samples)\n",
-                         Hl2TxDsp::modulatorName(), loudPk, leakPk, leakDb,
-                         leakTone, leakMs, lastAbove, cap.size());
-
-            // NOT ASSERTED TIGHTLY, and deliberately. This is a
-            // characterisation of an open defect (#5747) on the build that has
-            // it -- asserting a bound here would freeze today's behaviour into
-            // the test and the fix would have to be bug-compatible with it. The
-            // loose bound below only catches a leak so large it is the whole
-            // previous over.
-            // THE ASSERTION THAT MATTERS, and it is about the SETTLED
-            // portion. Over 2 is now a full-amplitude tone of its own, so its
-            // PEAK is meant to match over 1's -- an earlier revision asserted
-            // on the peak and failed for that reason, which is the assertion
-            // being wrong rather than the modulator.
-            //
-            // 60 dB is loose on purpose. Both builds measure ~312 dB, so this
-            // is not a bound anyone is near; it exists to catch a modulator
-            // that genuinely replays the previous over, which is what the
-            // header promises cannot happen.
-            const double carriedDb =
-                20.0 * std::log10((carriedA + 1e-30) / (ownB + 1e-30));
-            check(carriedDb < -60.0,
-                  "unkey: over 1's tone is absent from over 2's settled output");
-        } else {
-            std::fprintf(stderr, "FAIL: unkey-carry case configure: %s\n",
-                         err.c_str());
-            ++g_failures;
+            for (const int gapMs : {0, 500, 0}) {
+                captured.clear();
+                for (int block = 0; block < 32; ++block) {
+                    for (int n = 0; n < 512; ++n) {
+                        audio[static_cast<std::size_t>(n)] = static_cast<float>(
+                            0.5 * std::sin(2.0 * M_PI * kTone * (block * 512 + n)
+                                           / cfg.inputSampleRateHz));
+                    }
+                    clockBlock();
+                }
+                double tonePeak = 0.0;
+                for (const auto& sample : captured) {
+                    tonePeak = std::max(tonePeak, static_cast<double>(std::abs(sample)));
+                }
+                check(tonePeak > 0.1, "each over resumes producing tone after reset");
+                tx.reset();
+                tx.reset(); // Repeated unkey is harmless.
+                check(tx.isConfigured() && tx.wdspChannelId() == channelId,
+                      "reset preserves configuration and the allocated channel");
+                std::this_thread::sleep_for(std::chrono::milliseconds(gapMs));
+                captured.clear();
+                std::fill(audio.begin(), audio.end(), 0.0f);
+                for (int block = 0; block < 16; ++block) {
+                    clockBlock();
+                }
+                double stalePeak = 0.0;
+                for (const auto& sample : captured) {
+                    stalePeak = std::max(stalePeak, static_cast<double>(std::abs(sample)));
+                }
+                std::fprintf(stderr, "reset [%s] gap=%d ms: head-inclusive peak %.9g, faults %llu\n",
+                             tx.modulatorName(), gapMs, stalePeak, tx.modulatorFaultBlocks());
+                check(captured.size() == 16 * 1024,
+                      "post-reset silence preserves the complete output stream");
+                check(stalePeak < 1e-6, "reset drops the previous over from the FIRST output sample");
+                check(tx.modulatorFaultBlocks() == 0, "reset regression has no underruns");
+            }
         }
     }
 
@@ -621,7 +541,7 @@ int main(int argc, char** argv)
                         chunk[n] = static_cast<float>(
                             0.5 * std::sin(2.0 * M_PI * kTone
                                            * (off + static_cast<int>(n)) / fs));
-                    feed(tx, chunk, TxAudioSource::Microphone);
+                    feed(tx, chunk, TxAudioSource::Microphone, authority.context);
                 }
             };
             auto sidebandDb = [&]() {
@@ -1318,6 +1238,7 @@ int main(int argc, char** argv)
         auto settledOnce = [](double amplitude) -> HoldRun {
             HoldRun out;
             Hl2TxDsp tx;
+            TxTestAuthority authority;
             Hl2TxDsp::Config cfg;
             cfg.mode = WdspChannel::Mode::Usb;
             cfg.alcEnabled = true;
@@ -1348,7 +1269,7 @@ int main(int argc, char** argv)
                         amplitude * std::sin(2.0 * M_PI * 1000.0
                                              * (off + static_cast<int>(n)) / fs));
                 }
-                feed(tx, chunk, TxAudioSource::Microphone);
+                feed(tx, chunk, TxAudioSource::Microphone, authority.context);
             }
             // Settled tail only, so the opening blocks are not representative.
             double mx = 0.0;
@@ -1467,6 +1388,7 @@ int main(int argc, char** argv)
         auto once = [&]() -> HystRun {
         HystRun result;
         Hl2TxDsp tx;
+        TxTestAuthority authority;
         Hl2TxDsp::Config cfg;
         cfg.mode = WdspChannel::Mode::Usb;
         cfg.alcEnabled = true;   // configured ON — the bypass is per-block
@@ -1494,7 +1416,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    feed(tx, chunk, TxAudioSource::ClientLeveled);
+                    feed(tx, chunk, TxAudioSource::ClientLeveled, authority.context);
                 }
                 marks[stage + 1] = out.size();
             }
@@ -1749,7 +1671,7 @@ int main(int argc, char** argv)
                          std::vector<float>(
                              audio.begin() + static_cast<std::ptrdiff_t>(off),
                              audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                         TxAudioSource::Microphone);
+                         TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1826,7 +1748,7 @@ int main(int argc, char** argv)
                          std::vector<float>(
                              audio.begin() + static_cast<std::ptrdiff_t>(off),
                              audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                         TxAudioSource::Microphone);
+                         TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1919,7 +1841,7 @@ int main(int argc, char** argv)
                          std::vector<float>(
                              audio.begin() + static_cast<std::ptrdiff_t>(off),
                              audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                         TxAudioSource::Microphone);
+                         TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1998,6 +1920,7 @@ int main(int argc, char** argv)
         auto once = [&]() -> RelRun {
         RelRun result;
         Hl2TxDsp tx;
+        TxTestAuthority authority;
         Hl2TxDsp::Config cfg;
         cfg.mode = WdspChannel::Mode::Usb;
         cfg.alcEnabled = true;
@@ -2032,7 +1955,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    feed(tx, chunk, TxAudioSource::ClientLeveled);
+                    feed(tx, chunk, TxAudioSource::ClientLeveled, authority.context);
                 }
                 if (stage == 0)
                     afterLoud = out.size();
@@ -2200,7 +2123,7 @@ int main(int argc, char** argv)
                     0.1 * std::sin(2.0 * M_PI * 1000.0 * static_cast<double>(n)
                                    / cfg.inputSampleRateHz));
             }
-            tx.processAudioBlock(tone, TxAudioSource::EngineGenerated);
+            tx.processAudioBlock(tone, TxAudioSource::EngineGenerated, authority.context);
             check(out.empty() && micPeakDb < -998.0f,
                   "a partial block emits nothing and is carried");
 
@@ -2210,7 +2133,7 @@ int main(int argc, char** argv)
             // scale. With the guard they are dropped, the buffer holds only
             // silence, and it is under a block again: nothing is emitted.
             const std::vector<float> silence(half, 0.0f);
-            tx.processAudioBlock(silence, TxAudioSource::Microphone);
+            tx.processAudioBlock(silence, TxAudioSource::Microphone, authority.context);
             std::fprintf(stderr,
                 "residue guard: after a source change, emitted %zu IQ samples,"
                 " mic peak %.1f dBFS\n", out.size(), micPeakDb);

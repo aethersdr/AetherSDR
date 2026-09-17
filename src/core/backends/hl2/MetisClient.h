@@ -1,4 +1,5 @@
 #pragma once
+#include "core/TxCoordinator.h"
 
 #include <QElapsedTimer>
 #include <QHostAddress>
@@ -10,6 +11,7 @@
 #include <span>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <vector>
 
 #include "core/backends/hl2/Hl2ControlRequest.h"
@@ -395,7 +397,10 @@ public:
     [[nodiscard]] bool transmitEnabled() const noexcept { return m_txAllowed; }
 
     // Key / unkey. Ignored unless enableTransmit(true) was called.
-    Q_INVOKABLE void setMox(bool keyed);
+    void setMox(bool keyed, const TxCoordinator::Operation& operation);
+    // Only the backend's explicit CW break-in path uses CW holds to sustain
+    // MOX. Ordinary manual PTT must not borrow a still-held bare CW element.
+    void setCwMox(bool keyed, const TxCoordinator::Operation& operation);
     [[nodiscard]] bool isKeyed() const noexcept { return m_mox; }
     Q_INVOKABLE void setTxFrequencyHz(std::uint32_t hz);
     Q_INVOKABLE void setTxDriveLevel(int level);
@@ -404,7 +409,7 @@ public:
     // packet builder so its envelope is sample-paced by the radio's fixed
     // 48 kHz transmit stream rather than by GUI or producer-thread timing.
     // It still requires MOX; Hl2Backend owns break-in and manual-PTT policy.
-    Q_INVOKABLE void setCwKeyDown(bool down);
+    void setCwKeyDown(bool down, const TxCoordinator::Operation& operation);
     Q_INVOKABLE void clearCwKeying();
     [[nodiscard]] bool cwModeActive() const noexcept { return m_cwMode; }
     [[nodiscard]] bool cwKeyDown() const noexcept { return m_cwKeyDown; }
@@ -421,7 +426,7 @@ public:
     // periodic artefact on the air, and blocking would starve the radio's
     // watchdog. Overflow drops the oldest, because on transmit the freshest
     // audio is the one that matters.
-    void queueTxIq(std::span<const std::complex<float>> iq);
+    void queueTxIq(std::span<const std::complex<float>> iq, const TxCoordinator::Context& context);
     // Discard pending transmit audio. Call on unkey: whatever is still queued
     // belongs to the transmission that just ended.
     Q_INVOKABLE void flushTxIq();
@@ -437,7 +442,7 @@ public:
     //
     // NEVER enabled implicitly. A radio that emits a carrier because a default
     // said so is an unintended transmission, so this is opt-in only.
-    Q_INVOKABLE void setTxTestTone(double offsetHz, double amplitude);
+    void setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation);
     [[nodiscard]] bool txTestToneEnabled() const noexcept { return m_toneAmp > 0.0; }
 
 signals:
@@ -662,6 +667,7 @@ private:
 
     bool m_txAllowed = false;   // gate; see enableTransmit()
     std::deque<std::complex<float>> m_txIq;   // pending transmit samples
+    TxCoordinator::Context m_txIqContext;
     // Roughly a quarter second at 48 kHz. Past this the operator is hearing
     // latency, so dropping is better than growing the backlog.
     static constexpr std::size_t kTxQueueMax = 12000;
@@ -672,6 +678,10 @@ private:
     bool m_cwKeyDown = false;
     double m_cwEnvelope = 0.0;  // 0..1 raised-cosine ramp position
     bool m_mox = false;         // requested key state, only honoured if m_txAllowed
+    TxCoordinator::Operation m_moxOperation;
+    TxCoordinator::Operation m_cwOperation;
+    TxCoordinator::Operation m_toneOperation;
+    void setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn);
 
     std::uint32_t m_txSeq = 0;           // outgoing EP2 sequence
     unsigned m_roundRobin = 0;
@@ -680,6 +690,7 @@ private:
     // radio in that order, and neither should wait up to three frames for the
     // rotation to come back around.
     friend struct MetisClientTestAccess; // socket-free transport-state injection
+    std::function<qint64(const std::array<std::uint8_t, kUsbPacketSize>&)> m_packetSinkForTest;
     std::deque<Cc> m_oneShot;           // which register pair to send next
     // The single RQST slot. Drained AFTER m_oneShot, never before: a one-shot is
     // a write the operator asked for, and letting a read-back overtake it would

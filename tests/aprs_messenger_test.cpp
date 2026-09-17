@@ -13,10 +13,24 @@
 
 #include <cstdio>
 #include <optional>
+#include <memory>
 
 using namespace AetherSDR;
 using AetherSDR::ax25::Address;
 using AetherSDR::ax25::Frame;
+
+namespace AetherSDR {
+class AprsMessengerTestAccess {
+public:
+    static void retryNow(AprsMessenger& messenger)
+    {
+        for (auto& message : messenger.m_messages) {
+            message.nextTryUtc = QDateTime::currentDateTimeUtc().addSecs(-1);
+        }
+        messenger.serviceRetries();
+    }
+};
+}
 
 static int g_failures = 0;
 
@@ -167,12 +181,98 @@ static void testStationListDedupe()
     CHECK(s2 && s2->hasPosition, "status did not clobber the position");
 }
 
+static void testOriginalInputSurvivesRetries()
+{
+    TxCoordinator coordinator({});
+    const auto producer = coordinator.registerProducer();
+    const auto original = producer.request();
+    AprsMessenger messenger;
+    messenger.setMyAddress(*Address::parse(QStringLiteral("N0CALL-9")));
+    QVector<TxCoordinator::Request> frames;
+    QObject::connect(&messenger, &AprsMessenger::transmitFrame,
+        [&](const QByteArray&, const TxCoordinator::Request& input) { frames.append(input); });
+    CHECK(messenger.sendMessage("W1AW", "Original queue", original), "scoped message accepted");
+    CHECK(frames.size() == 1 && frames.first().valid() && frames.first().derivedFrom(original),
+          "first message frame derives from its explicit program");
+    AprsMessengerTestAccess::retryNow(messenger);
+    CHECK(frames.size() == 2 && frames.last().valid() && frames.last().derivedFrom(original),
+          "retry retains the initial send program");
+    producer.discardInputs();
+    const auto replacement = producer.request();
+    messenger.setReceiveProgram(replacement);
+    AprsMessengerTestAccess::retryNow(messenger);
+    CHECK(frames.size() == 3 && !frames.last().valid(),
+          "old message retry never adopts newly armed receive authority");
+    messenger.cancelPendingTransmissions();
+    const int count = frames.size();
+    AprsMessengerTestAccess::retryNow(messenger);
+    CHECK(frames.size() == count && messenger.messages().first().state == AprsMessenger::State::Failed,
+          "modem cancellation retains history but stops its retries");
+}
+
+static void testRetryReentrancy()
+{
+    AprsMessenger messenger;
+    messenger.setMyAddress(*Address::parse(QStringLiteral("N0CALL-9")));
+    messenger.sendMessage("W1AW", "first");
+    messenger.sendMessage("W1AW", "second");
+    int retries = 0;
+    QObject::connect(&messenger, &AprsMessenger::transmitFrame, [&] {
+        ++retries;
+        messenger.clear();
+        AprsMessengerTestAccess::retryNow(messenger);
+    });
+    AprsMessengerTestAccess::retryNow(messenger);
+    CHECK(retries == 1 && messenger.messages().isEmpty(),
+          "reentrant clear stops remaining snapshot retries without invalidating iteration");
+
+    auto destroyed = std::make_unique<AprsMessenger>();
+    destroyed->setMyAddress(*Address::parse(QStringLiteral("N0CALL-9")));
+    destroyed->sendMessage("W1AW", "destroy on retry");
+    QObject::connect(destroyed.get(), &AprsMessenger::transmitFrame, [&] { destroyed.reset(); });
+    AprsMessengerTestAccess::retryNow(*destroyed);
+    CHECK(!destroyed, "retry callback can tear down the messenger safely");
+}
+
+static void testCompletedHistoryReleasesRequests()
+{
+    TxCoordinator coordinator({});
+    const auto producer = coordinator.registerProducer();
+    AprsMessenger messenger;
+    messenger.setMyAddress(*Address::parse(QStringLiteral("N0CALL-9")));
+    // More historical messages than the shared request budget: completed
+    // records must retain text/status, not scarce live-input handles.
+    for (int i = 0; i < TxCoordinator::kMaximumRequests + 8; ++i) {
+        const auto input = producer.request();
+        CHECK(input.valid(), "completed APRS history leaves capacity for fresh operator input");
+        if (!input.valid()) { return; }
+        messenger.sendMessage("W1AW", "history", input);
+        const QString number = messenger.messages().last().msgNo;
+        if (i % 3 == 2) {
+            for (int retry = 0; retry < 4; ++retry) {
+                AprsMessengerTestAccess::retryNow(messenger);
+            }
+        } else {
+            messenger.onPacket(parseInfo(QStringLiteral("W1AW"),
+                QStringLiteral(":N0CALL-9 :%1%2")
+                    .arg(i % 3 == 0 ? QStringLiteral("ack") : QStringLiteral("rej"), number).toLatin1()));
+        }
+        CHECK(!messenger.messages().last().input.valid(),
+              "acknowledged, rejected and exhausted messages retire stored input authority");
+    }
+    CHECK(messenger.messages().size() == TxCoordinator::kMaximumRequests + 8,
+          "retiring request handles preserves completed message history");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     testOutgoingAckFlow();
     testIncomingAutoAckAndDedupe();
     testStationListDedupe();
+    testOriginalInputSurvivesRetries();
+    testRetryReentrancy();
+    testCompletedHistoryReleasesRequests();
     if (g_failures) {
         std::fprintf(stderr, "%d failure(s)\n", g_failures);
         return 1;

@@ -2625,6 +2625,31 @@ bool runTransmitZerosCensusTest()
 
 } // namespace
 
+bool runTransmitDiscardTest()
+{
+    WdspChannel::Config config = liveTransmitConfig(WdspChannel::Mode::Usb, 300.0, 2700.0);
+    std::string error;
+    auto channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, "discard test opens TXA")) {
+        return false;
+    }
+    const int id = channel->channelId();
+    if (!require(channel->discardTransmitData() && !channel->isRunning(),
+                 "discard leaves TXA stopped") ||
+        !require(channel->discardTransmitData(), "discard is repeatable") ||
+        !require(channel->setRunning(true), "discarded TXA restarts") ||
+        !require(channel->channelId() == id, "discard retains channel allocation") ||
+        !require(channel->setRunning(false), "clocked stop is accepted") ||
+        !require(!channel->discardTransmitData(), "discard refuses a pending asynchronous flush") ||
+        !require(channel->setRunning(true), "pending fade can be cancelled")) {
+        return false;
+    }
+    config.direction = WdspChannel::Direction::Receive;
+    auto receiver = WdspChannel::create(config, &error);
+    return require(receiver && !receiver->discardTransmitData(),
+                   "TX discard cannot modify a receive channel");
+}
+
 int main()
 {
     const uint64_t allocationBaseline = WdspChannel::outstandingAllocationsForTest();
@@ -2662,6 +2687,7 @@ int main()
     check(runLeakChecked("TX vector", [] {
         return runVector(WdspChannel::Direction::Transmit);
     }));
+    check(runLeakChecked("TX discard", runTransmitDiscardTest));
     check(runLeakChecked("TX live geometry", runTransmitLiveGeometryTest));
     check(runLeakChecked("TX suppression sweep", runTransmitSuppressionSweepTest));
     check(runLeakChecked("TX zeros census", runTransmitZerosCensusTest));

@@ -190,6 +190,13 @@ void IcomCivScheduler::dropStaleExpired(std::int64_t nowMs)
 
 std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_t nowMs)
 {
+    // Scheduling uses a session-relative clock; authority deadlines use the
+    // engine's steady clock. A cancelled command never occupies a reply slot.
+    const qint64 authorityNow = TxCoordinator::monotonicMs();
+    std::erase_if(m_queue, [authorityNow](const Queued& queued) {
+        return queued.request.txCommand
+            && !queued.request.txCommand->permitsDispatch(authorityNow);
+    });
     expireRead(nowMs);
     if (m_queue.empty()) {
         return std::nullopt;
@@ -295,7 +302,7 @@ std::optional<IcomCivScheduler::Dispatch> IcomCivScheduler::takeNext(std::int64_
 
     return Dispatch{std::move(selected.request.frame), std::move(selected.request.key),
                     selected.request.priority, selected.generation,
-                    selected.request.supersedes};
+                    selected.request.supersedes, selected.request.txCommand};
 }
 
 IcomCivScheduler::Priority

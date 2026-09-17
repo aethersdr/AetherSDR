@@ -1737,12 +1737,18 @@ MainWindow::MainWindow(QWidget* parent)
     // EQ. One path means the TONE button, the microphone and the recording all
     // agree with what actually goes on the air. A Flex radio modulates on the
     // radio side and ignores this.
-    connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            this, [this](const QByteArray& pcm, TxAudioSource source) {
+    //
+    // Transport rides txTransportPcmReady rather than the recorder tap: same
+    // samples, but carrying immutable producer provenance across this queued
+    // hop. Recorder/monitor consumers stay on the unguarded tap.
+    connect(m_audio, &AudioEngine::txTransportPcmReady,
+            this, [this](const QByteArray& pcm, TxAudioSource source,
+                         const TxCoordinator::Context& context) {
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
-                                   source);
+                                   source, context);
     });
     wireModemAudioCompletion();
+    wireTxAudioAuthority();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
     // CW/CWX path (#2539): break-in keys the radio without a local MOX edge and
@@ -4227,6 +4233,8 @@ void MainWindow::cancelTransmitFromIndicator()
     m_cwStraightKeyActive = false;
     m_cwLeftPaddleActive = false;
     m_cwRightPaddleActive = false;
+    m_cwPaddleInputHeld = false;
+    m_serialCwPaddleHeld = false;
     m_radioModel.setCwPaddleHeld(false);   // bypasses pushCwPaddleState, so reset here too (#5422)
     m_lastCwPaddleTraceId.store(0, std::memory_order_relaxed);
     m_lastCwPaddleSourceMs.store(0, std::memory_order_relaxed);
@@ -4238,13 +4246,8 @@ void MainWindow::cancelTransmitFromIndicator()
     if (m_audio)
         m_audio->setCwKeyDown(false);   // clear audible + recorder sidetone
 
-    const quint64 sourceMs = cwTraceNowMs();
-    const quint64 traceId = nextCwTraceId();
-    const QString source = QStringLiteral("tx-indicator:cancel");
-    m_radioModel.sendCwKey(false, source, traceId, sourceMs);
-    m_radioModel.sendCwPtt(false, source, traceId, sourceMs);
-    m_radioModel.transmitModel().stopTune();
-    m_radioModel.setTransmit(false);
+    m_pttHoldInput = {};
+    m_radioModel.cancelLocalTransmit();
 
     statusBar()->showMessage("TX cancel requested", 2000);
 }
@@ -4270,7 +4273,11 @@ void MainWindow::setCwStraightKeyState(bool down, const QString& source,
             << " down=" << down;
     }
 
-    m_radioModel.sendCwKey(down, actionSource, traceId, sourceMs);
+    if (down) {
+        m_cwStraightKeyInput = m_radioModel.localTxController()->capture(TxController::Activity::CwKey);
+    }
+    (void)m_radioModel.requestProducerCw(m_cwStraightKeyInput.request(), down, false, true, {},
+                                        actionSource, traceId, sourceMs);
 }
 
 void MainWindow::setCwLeftPaddleState(bool down, const QString& source,
@@ -4298,6 +4305,7 @@ void MainWindow::setCwRightPaddleState(bool down, const QString& source,
 void MainWindow::pushCwPaddleState(const QString& source,
                                    quint64 traceId, quint64 sourceMs)
 {
+    captureLocalCwPaddleInput(m_cwLeftPaddleActive || m_cwRightPaddleActive);
     const QString actionSource = source.isEmpty()
         ? QStringLiteral("cw:paddle")
         : source;
@@ -4321,7 +4329,7 @@ void MainWindow::pushCwPaddleState(const QString& source,
     // local keyer is never started against a tune carrier; a release (both
     // paddles up) still flows so nothing is left keyed. sendCwKey and
     // sendCwKeyEdge carry the same rule as the backstop for every caller.
-    m_radioModel.setCwPaddleHeld(m_cwLeftPaddleActive || m_cwRightPaddleActive);
+    m_radioModel.setCwPaddleHeld(m_cwLeftPaddleActive || m_cwRightPaddleActive || m_serialCwPaddleHeld);
     if ((m_cwLeftPaddleActive || m_cwRightPaddleActive)
         && !m_radioModel.transmitModel().admitsCwKeyEdge(true)) {
         qCWarning(lcCw).noquote() << "CW paddle press refused: TUNE is active (#5422) source="
@@ -4330,11 +4338,22 @@ void MainWindow::pushCwPaddleState(const QString& source,
     }
 
     if (m_iambicKeyer && m_iambicKeyer->isRunning()) {
-        m_iambicKeyer->setPaddleState(m_cwLeftPaddleActive, m_cwRightPaddleActive);
+        m_iambicKeyer->setPaddleState(m_cwLeftPaddleActive, m_cwRightPaddleActive, m_cwPaddleInput);
     } else {
         m_radioModel.sendCwPaddle(m_cwLeftPaddleActive, m_cwRightPaddleActive,
                                   actionSource, traceId, sourceMs);
     }
+}
+
+void MainWindow::captureLocalCwPaddleInput(bool held)
+{
+    if (held && !m_cwPaddleInputHeld) {
+        if (!m_cwPaddleController || !m_cwPaddleController->valid()) {
+            m_cwPaddleController = std::make_shared<TxController>(&m_radioModel);
+        }
+        m_cwPaddleInput = m_cwPaddleController->capture(TxController::Activity::CwKey).request();
+    }
+    m_cwPaddleInputHeld = held;
 }
 
 // handleCwMomentaryShortcut() lives in MainWindow_Shortcuts.cpp (#3351 Phase 1c).
@@ -5025,6 +5044,7 @@ void MainWindow::buildUI()
 
     // CWX panel — left of spectrum, hidden by default
     m_cwxPanel = new CwxPanel(&m_radioModel.cwxModel(), splitter);
+    m_cwxPanel->setTxControllerProvider([this] { return m_radioModel.localTxController(); });
     // Provide state probes so CWX can guard its F1-F12 / ESC app-wide
     // shortcuts on the TX slice's mode + transmit state.  CWX keys the TX
     // slice, so the mode guard follows it, not the selected RX slice — matching

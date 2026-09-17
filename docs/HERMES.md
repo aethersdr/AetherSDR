@@ -4117,3 +4117,6 @@ has ordering constraints the connect does not: the DSP must expect the new rate
 before EP6 starts delivering at it, and a partial failure has to roll every
 receiver back to a single rate. Left as a follow-up rather than bolted onto the
 connect fix.
+
+The opt-in TXA modulator and its offline evidence are described in
+[HL2 TXA configuration and lifecycle](hl2-txa-configuration-diff.md).

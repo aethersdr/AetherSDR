@@ -749,9 +749,11 @@ add_test(NAME icom_memory_test COMMAND icom_memory_test)
 
 add_executable(icom_civ_scheduler_test
     tests/icom_civ_scheduler_test.cpp
+    src/core/TxCoordinator.cpp
     src/core/backends/icom/IcomCivScheduler.cpp
     src/core/backends/icom/CivCodec.cpp)
 target_include_directories(icom_civ_scheduler_test PRIVATE src)
+target_link_libraries(icom_civ_scheduler_test PRIVATE Qt6::Core)
 add_test(NAME icom_civ_scheduler_test COMMAND icom_civ_scheduler_test)
 
 # Socket-free PR #5436 coverage recovered from the retired capability fixture.
@@ -877,6 +879,7 @@ add_test(NAME icom_backend_test COMMAND icom_backend_test)
 #   ./build/icom_live_probe ic-705.local <user> <password>
 add_executable(icom_live_probe EXCLUDE_FROM_ALL
     tests/icom_live_probe.cpp
+    src/core/TxCoordinator.cpp
     src/core/backends/icom/IcomSession.cpp
     src/core/backends/icom/IcomStream.cpp
     src/core/backends/icom/IcomProtocol.cpp
@@ -1863,6 +1866,7 @@ add_test(NAME radio_discovery_test COMMAND radio_discovery_test)
 
 # Agent automation bridge phaseful-gesture lifecycle (#4353). Uses two real
 # QLocalSocket clients so the regression proves an independent request can run
+# The server binds a unique current-user QLocalServer name; exit 77 if unavailable.
 # while a QSlider remains genuinely down, plus auth/read-only/TX cleanup rails.
 # Retained until its refusal and TX-cleanup assertions have a socket-free
 # injected replacement; live automation cannot prove that a non-event occurred.
@@ -1876,7 +1880,7 @@ target_link_libraries(automation_server_gesture_test PRIVATE
 set_target_properties(automation_server_gesture_test PROPERTIES AUTOMOC ON)
 add_test(NAME automation_server_gesture_test COMMAND automation_server_gesture_test)
 set_tests_properties(automation_server_gesture_test PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" SKIP_RETURN_CODE 77)
 
 add_executable(client_quindar_test
     tests/client_quindar_test.cpp
@@ -2310,6 +2314,7 @@ add_test(NAME rnnoise_filter_test COMMAND rnnoise_filter_test)
 add_executable(opus_tx_pacer_test
     tests/opus_tx_pacer_test.cpp
     src/core/OpusTxPacer.cpp
+    src/core/TxCoordinator.cpp
 )
 target_include_directories(opus_tx_pacer_test PRIVATE src)
 target_link_libraries(opus_tx_pacer_test PRIVATE Qt6::Core)
@@ -2402,6 +2407,15 @@ target_include_directories(kiwi_sdr_waterfall_setup_test PRIVATE src)
 target_link_libraries(kiwi_sdr_waterfall_setup_test PRIVATE aethercore Qt6::Core)
 add_test(NAME kiwi_sdr_waterfall_setup_test COMMAND kiwi_sdr_waterfall_setup_test)
 
+# Socket-free regression: KiwiSDR zoom_cap (request ceiling) must not replace
+# zoom_max (start fixed-point scale); v1.900 shared waterfalls send both.
+add_executable(kiwi_sdr_waterfall_zoom_cap_test
+    tests/kiwi_sdr_waterfall_zoom_cap_test.cpp
+)
+target_include_directories(kiwi_sdr_waterfall_zoom_cap_test PRIVATE src)
+target_link_libraries(kiwi_sdr_waterfall_zoom_cap_test PRIVATE aethercore Qt6::Core)
+add_test(NAME kiwi_sdr_waterfall_zoom_cap_test COMMAND kiwi_sdr_waterfall_zoom_cap_test)
+
 add_executable(kiwi_sdr_trace_math_test
     tests/kiwi_sdr_trace_math_test.cpp
 )
@@ -2457,6 +2471,28 @@ add_executable(anan_droop_correction_test
 )
 target_include_directories(anan_droop_correction_test PRIVATE src)
 add_test(NAME anan_droop_correction_test COMMAND anan_droop_correction_test)
+
+add_executable(anan_droop_defaults_test
+    tests/anan_droop_defaults_test.cpp
+    src/core/backends/anan/AnanDroopDefaults.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_defaults_test PRIVATE src)
+add_test(NAME anan_droop_defaults_test COMMAND anan_droop_defaults_test)
+
+# What the shipped droop defaults do to the NOISE-FLOOR AUTO-ADJUST -- a
+# different consumer from the panadapter trace, and the one #5726 opened for
+# this radio. Drives the real applyDroopCorrectionDb/applyEdgeFade and the real
+# estimateNoiseFloorDbm (NoiseFloorEstimator.h, header-only and Qt-free for
+# exactly this reason), so it cannot drift from what the widget runs.
+# No socket, no Qt, no radio.
+add_executable(anan_droop_noise_floor_test
+    tests/anan_droop_noise_floor_test.cpp
+    src/core/backends/anan/AnanDroopDefaults.cpp
+    src/core/backends/anan/AnanDroopCorrection.cpp
+)
+target_include_directories(anan_droop_noise_floor_test PRIVATE src)
+add_test(NAME anan_droop_noise_floor_test COMMAND anan_droop_noise_floor_test)
 
 # AnanDroopCalibrator's pure math (median-in-power averaging, central-window
 # reference, clamp) -- no live radio needed. Ported from this feature's
@@ -2594,9 +2630,11 @@ target_include_directories(client_reverb_test PRIVATE src)
 add_executable(iambic_keyer_test
     tests/iambic_keyer_test.cpp
     src/core/IambicKeyer.cpp
+    src/core/TxCoordinator.cpp
     src/core/ThreadName.cpp
 )
 target_include_directories(iambic_keyer_test PRIVATE src)
+target_link_libraries(iambic_keyer_test PRIVATE Qt6::Core)
 if(UNIX)
     target_link_libraries(iambic_keyer_test PRIVATE pthread)
 endif()
@@ -3688,6 +3726,7 @@ target_link_libraries(ax25_link_timing_test PRIVATE Qt6::Core)
 add_test(NAME ax25_link_timing_test COMMAND ax25_link_timing_test)
 
 add_executable(pms_mailbox_test
+    src/core/TxCoordinator.cpp
     tests/pms_mailbox_test.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
@@ -3716,6 +3755,7 @@ add_test(NAME aprs_packet_test COMMAND aprs_packet_test)
 # (the qCWarning category used by the persistence paths); it drags in
 # AsyncLogWriter + AppSettings, same as ax25_libmodem_shim_test.
 add_executable(aprs_messenger_test
+    src/core/TxCoordinator.cpp
     tests/aprs_messenger_test.cpp
     src/core/aprs/AprsPacket.cpp
     src/core/aprs/AprsMessenger.cpp
@@ -3740,6 +3780,7 @@ add_test(NAME aprs_fill_in_digipeater_test COMMAND aprs_fill_in_digipeater_test)
 
 # Socket-free injected APRS frames, producer cancellation and queue admission.
 add_executable(aprs_digipeater_model_test
+    src/core/TxCoordinator.cpp
     tests/aprs_digipeater_model_test.cpp
     src/models/AprsDigipeaterModel.cpp
     src/core/aprs/AprsFillInDigipeater.cpp
@@ -3752,6 +3793,7 @@ target_link_libraries(aprs_digipeater_model_test PRIVATE Qt6::Core)
 add_test(NAME aprs_digipeater_model_test COMMAND aprs_digipeater_model_test)
 
 add_executable(tnc_terminal_test
+    src/core/TxCoordinator.cpp
     tests/tnc_terminal_test.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
@@ -3800,19 +3842,10 @@ add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp
     src/gui/CwxPanel.h
-    src/models/CwxModel.cpp
-    src/models/CwxModel.h
-    # CwxPanel.cpp calls ThemeManager::resolve() post-Phase-2 migration;
-    # pull in the manager + its logging deps so the test links.
-    src/core/ThemeManager.cpp
-    src/core/ThemeSeedGenerated.cpp
-    ${AETHER_SETTINGS_SOURCES}
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
 )
 target_include_directories(cwx_panel_test PRIVATE src)
 target_link_libraries(cwx_panel_test PRIVATE
-    Qt6::Core Qt6::Widgets
+    aetherdesktop_support Qt6::Core Qt6::Widgets
 )
 add_test(NAME cwx_panel_test COMMAND cwx_panel_test)
 set_tests_properties(cwx_panel_test PROPERTIES
@@ -4152,7 +4185,7 @@ add_test(NAME hl2_rqst_ack_test COMMAND hl2_rqst_ack_test)
 # RQST/ACK where it meets the wire — socket-free, on MetisClient's own packet
 # builder and its EP6 response path.
 add_executable(hl2_rqst_ack_client_test tests/hl2_rqst_ack_client_test.cpp)
-target_include_directories(hl2_rqst_ack_client_test PRIVATE src)
+target_include_directories(hl2_rqst_ack_client_test PRIVATE src tests)
 target_link_libraries(hl2_rqst_ack_client_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rqst_ack_client_test COMMAND hl2_rqst_ack_client_test)
 
@@ -4762,6 +4795,12 @@ add_executable(tx_operation_integration_test tests/tx_operation_integration_test
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
 target_link_libraries(tx_operation_integration_test PRIVATE aethercore Qt6::Core)
 add_test(NAME tx_operation_integration_test COMMAND tx_operation_integration_test)
+
+# Socket-free: inject PCM into AudioEngine, collect its output signals only.
+add_executable(tx_audio_context_test tests/tx_audio_context_test.cpp)
+target_include_directories(tx_audio_context_test PRIVATE src)
+target_link_libraries(tx_audio_context_test PRIVATE aethercore Qt6::Core)
+add_test(NAME tx_audio_context_test COMMAND tx_audio_context_test)
 
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp
@@ -5705,6 +5744,7 @@ set(AETHER_SETTINGS_CONSUMERS
     control_availability_registry_test
     offline_health_registry_test
     tx_operation_integration_test
+    tx_audio_context_test
     backend_slice_lifecycle_test
     waterfall_time_marker_settings_test
     extended_tnf_settings_test
@@ -5714,6 +5754,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rtl_slice_settings_test
     weather_radar_loading_test
     hl2_gain_restore_test
+    hl2_tx_gate_test
     hl2_pan_limits_declaration_test
     icom_identity_test
     icom_control_profile_test

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/dsp/WdspChannel.h"
+#include "core/TxCoordinator.h"
 
 #include <QObject>
 
@@ -35,8 +36,8 @@ namespace AetherSDR::hl2 {
 // client-leveled ceiling, the hard clamp, and all three meters) is shared, is
 // identical in both builds, and is not part of the choice.
 //
-//   AETHER_HL2_TX_TXA=1 (default) — a WDSP TXA channel at the live geometry.
-//   AETHER_HL2_TX_TXA=0            — the in-tree phasing modulator, the way back.
+//   AETHER_HL2_TX_TXA=1 (opt-in) — a WDSP TXA channel at the live geometry.
+//   AETHER_HL2_TX_TXA=0 (default)  — the in-tree phasing modulator, the way back.
 //
 // THE TWO MODULATORS HAVE OPPOSITE HANDEDNESS CONVENTIONS and this is the one
 // place that is easy to get catastrophically wrong, because it is invisible
@@ -154,6 +155,7 @@ public:
     // Level 4 in the read-back sense where it is not -1: it is the id WDSP
     // actually allocated, not a number this class chose.
     [[nodiscard]] int wdspChannelId() const noexcept;
+    [[nodiscard]] const WdspChannel::Config* channelConfig() const noexcept;
 
     // Blocks the modulator could not place on the wire, since configure().
     //
@@ -258,13 +260,15 @@ public slots:
     // property of which MODULATOR was compiled in; the source argument is about
     // which LEVEL policy applies. Neither reads the other.
     void processAudioBlock(const std::vector<float>& mono,
-                           TxAudioSource source);
+                           TxAudioSource source,
+                           const TxCoordinator::Context& context);
     // Drop anything buffered — on unkey, so the next transmission does not
     // start with the tail of the previous one.
     void reset();
 
 signals:
-    void iqReady(const std::vector<std::complex<float>>& iq);   // at outputSampleRateHz
+    void iqReady(const std::vector<std::complex<float>>& iq,
+                  const AetherSDR::TxCoordinator::Context& context); // at outputSampleRateHz
     void micPeak(float dbfs);                                   // post-gain, pre-modulation
     void alcGain(float db);                                     // ALC gain applied
     // Post-ALC, post-limit peak in dBFS — the level actually handed to the
@@ -300,6 +304,7 @@ private:
     bool isLowerSideband() const;
 
     Config m_config;
+    TxCoordinator::Context m_txContext;
     bool m_configured = false;
     double m_micGain = 1.0;
     // The source of the last block processed, so carried m_inBuffer residue is
@@ -319,8 +324,8 @@ private:
 #if AETHER_HL2_TX_TXA
     // ── WDSP TXA ──────────────────────────────────────────────
     std::unique_ptr<WdspChannel> m_channel;
-    // Whether the TXA channel is STARTED. reset() stops it (the T/R envelope
-    // down, chain flushed) and the next over's first block starts it again.
+    // Whether the TXA channel is started. reset() discards its buffered data
+    // and stops it; the next over's first block starts it again.
     // Tracked rather than queried because setRunning() is [[nodiscard]] and a
     // redundant start on every block would be a control call per 21 ms.
     bool m_modulatorRunning = false;
@@ -342,7 +347,7 @@ private:
     // 300 Hz low edge and, with a Blackman window, opposite-sideband
     // suppression well past what a VOICE transmitter needs -- and NOT enough at
     // the 150 Hz low edge the digital modes use, which is the whole reason the
-    // default build is now TXA. Measured: 22.06 dB at 150 Hz on {150, 3000}.
+    // opt-in build uses TXA. Measured: 22.06 dB at 150 Hz on {150, 3000}.
     static constexpr std::size_t kTaps = 255;
 
     std::vector<float> m_bandpass;      // real bandpass

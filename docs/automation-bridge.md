@@ -1389,9 +1389,9 @@ inside AetherSDR on the host, not in radio firmware (#5401).
         "agcMode":"fast","agcMaxGainDb":90,"agcSlopeDb":0,"agcFixedGainDb":10,
         "wdspNotchCount":0,"appliedNoiseBlanker":false},
        {"chain":"rx-wdsp","receiver":1,"level":"not-configured"},
-       {"chain":"hl2-tx","level":"dsp-config","modulator":"wdsp-txa",
+       {"chain":"hl2-tx","level":"channel-config","modulator":"wdsp-txa",
         "wdspChannelId":2,"modulatorBlocks":18432,"modulatorFaultBlocks":0,
-        "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":512,
+        "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":1024,"inputBlockSize":512,"dspRateHz":48000,
         "filterLowHz":300,"filterHighHz":2700,
         "alcEnabled":true,"alcTargetPeak":0.9,
         "alcReleaseSec":0.25,
@@ -1433,6 +1433,11 @@ inside AetherSDR on the host, not in radio firmware (#5401).
   one. It is reported because they can be running the wrong **build**, and a
   transmit report that does not say which modulator produced the signal is not
   actionable.
+- On TXA entries, `level` is `channel-config` and `filterLowHz` / `filterHighHz`
+  are the signed passband last accepted by the channel (negative for LSB/DIGL).
+  `dspBlockSize` is the channel's DSP-rate size; `inputBlockSize` is its audio-rate
+  size, and `dspRateHz` names the DSP rate. Refused requests leave applied values unchanged. Phasing entries retain
+  `dsp-config` and audio-domain positive passband magnitudes.
 - `wdspChannelId`, `modulatorBlocks`, `modulatorFaultBlocks` — present only
   when the modulator has a WDSP channel behind it (so, `wdsp-txa` only).
   `modulatorFaultBlocks` counts blocks the modulator could not place on the

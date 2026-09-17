@@ -145,7 +145,7 @@ consequence was measured or read.
 | 10 | mode coverage | `Usb` only | any of 13 | `WdspChannel::Mode` is index-identical to `rxaMode` *and* to `txaMode` for 0..11, but **`txaMode` has no `TXA_WBFM`**: 12 is `TXA_AM_LSB` and 13 is `TXA_AM_USB`. `validateConfig`'s refusal of `Mode::Wbfm` on transmit is load-bearing, not cosmetic — without it a WBFM transmit channel would silently become AM-lower-sideband. | source |
 | 11 | control calls while running | none | `setMode` / `setFilter` arrive queued, possibly **while keyed** | Both take `beginControlOperation()`, which makes concurrent `processIq` return `ProcessResult::Busy`. `Hl2TxDsp` has no such state today — a mode change mid-over is free. A TXA path drops a transmit block per control call unless the caller re-feeds. | source |
 | 12 | consumer | discarded | `MetisClient::queueTxIq`, a deque drained 126 samples per 2.625 ms EP2 frame, `kTxQueueMax = 12000` | Underflow is silence, overflow drops the oldest. Unchanged by the modulator. | source |
-| 13 | unkey | none | `Hl2Backend::setKeying(false)` → `Hl2TxDsp::reset()` + `MetisClient::flushTxIq()` | `reset()` is free and synchronous. A TXA channel's equivalent is `SetChannelState(0,1)` then `SetChannelState(1,0)` — bounded by WDSP's own 100 ms timeout and running `flushChannel` on the detached, unhandshaked worker `third_party/wdsp/AETHERSDR-PATCHES.md` patch 4 explicitly leaves alone. **`WdspChannel` has no `flush()`.** | source |
+| 13 | unkey | none | `Hl2Backend::setKeying(false)` → `Hl2TxDsp::reset()` + `MetisClient::flushTxIq()` | TXA uses `WdspChannel::discardTransmitData()` to synchronously discard rings and filter history. A fade-only `setRunning(false)` requires continued clocking, which HL2 does not supply while receiving. | source + head-inclusive reset regression |
 
 ---
 
@@ -363,13 +363,11 @@ amplitude A into an analytic signal of magnitude A.
 | §4 item 2 "TXA should beat 22 dB at 150 Hz by a wide margin" | **measured: 67.8 dB vs 22.0 dB.** The prediction holds, by 45.8 dB |
 | §9 "the gate costs about twenty lines" | it cost about 260, mostly because pacing, absolute sample indices and the plane asymmetry all had to be in it |
 
-Unchanged and still required before any production code: `WdspChannel::flush()`, the
-transmit `Meter` enum and `GetTXAMeter` routing, the `aether_wdsp.h` prototypes, and the
-decision about where the HL2's 40 dB of mic makeup lives (S6 §5.2 — TXA's `alc` is
-reduction-only with `max_gain = 1.0` and structurally cannot provide it. S6 §7's reading of
-the leveler holds unchanged on 2.10: `run = 0`, `max_gain = 1.778` (+5.0 dB), decay 0.5 s —
-and `out_targ = 1.05`, which S6 does not quote and which is a second reason it is not a
-makeup stage).
+The lifecycle prerequisite is implemented by `WdspChannel::discardTransmitData()`.
+It retains the channel and FFTW plans, clears TX rings and DSP history under the
+existing control fence and channel locks, and leaves the channel stopped. The
+next authorized audio block starts it. A pending asynchronous fade/flush is
+refused; HL2 disables the modulator on refusal until reconfigured.
 
 ---
 
@@ -400,8 +398,11 @@ it deliberate sleeping.
   not measure its *value* — a single frequency fixes delay only modulo one period.
 - **Any mode but SSB.** No AM, DSB, SAM, FM or CW channel was opened. §4.2 flags the
   specific open question for the AM/FM family.
-- **The unkey path.** No `SetChannelState` cycle was exercised on a running transmit
-  channel; `WdspChannel::flush()` still does not exist.
+- **Unkey is now covered offline.** A tone followed by reset, no clocking for
+  0 or 500 ms, and silence must emit silence from the first output sample.
+  Repeated reset and subsequent tone recovery are covered. This replaces the
+  earlier settled-only measurement, which discarded the defect's first 85 ms.
+
 - **Control calls during transmit.** `setMode` / `setFilter` were never called on a running
   transmit channel, so row 11's `Busy` consequence is read, not observed.
 - **Memory and FFTW planning cost.** Not measured. S6 §12's ≈23 MB of minimum-phase
@@ -425,7 +426,7 @@ precondition is now met rather than worked around.
 
 | build | result | failures |
 |---|---|---|
-| `AETHER_HL2_TX_TXA=ON` (default) | **461 / 463** | `tgxl_docked_parity_test`, `vkamp_connection_test` |
+| `AETHER_HL2_TX_TXA=ON` (opt-in) | **461 / 463** | `tgxl_docked_parity_test`, `vkamp_connection_test` |
 | `AETHER_HL2_TX_TXA=OFF` (phasing) | **462 / 463** | `tgxl_docked_parity_test` |
 
 `wdsp_channel_test` and `hl2_txdsp_test` pass in both.
@@ -450,3 +451,19 @@ Both changed files are single-source executables of their own
 (`add_executable(wdsp_channel_test tests/wdsp_channel_test.cpp)` and
 `add_executable(hl2_txdsp_test tests/hl2_txdsp_test.cpp)`), so neither can reach another
 target.
+
+## Reset correction in PR #5747
+
+A nonblocking `setRunning(false)` only schedules WDSP's fade/flush. Restarting
+without clocking that fade cancels it, retaining the previous transmission's
+queued audio. Independent review measured a 0.5335 peak over 85.4 ms after reset
+and a 500 ms receive interval, with no underruns; the phasing control emitted
+exact silence. Calling this only pipeline latency did not satisfy the reset
+contract. The former assertion skipped 256 ms and passed with reset deleted.
+
+The explicit TX-only discard is documented as WDSP patch 11. It uses existing
+locks, retains DSP allocation/plans, and refreshes the output semaphore through
+WDSP's existing ring flush. It is a control-path operation, not an audio callback
+or a fade to be emitted on air. RX and a pending asynchronous flush are refused.
+The regression measures all post-reset samples and keeps real-time pacing so
+starvation cannot masquerade as success. No hardware or RF behavior is claimed.

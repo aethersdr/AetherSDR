@@ -83,6 +83,13 @@ public:
     void start(const Symbols& symbols, double toneZeroHz, float levelDb,
                int preRollFrames = kPreRollFrames, int messageSkipFrames = 0);
     void stop() noexcept;
+    // Called by the same control thread as start(); the audio reader remains
+    // lock-free. An old dialog's cleanup cannot stop a replacement frame.
+    uint64_t generation() const noexcept { return m_version.load(std::memory_order_acquire); }
+    void stopIfCurrent(uint64_t generation) noexcept
+    {
+        if (generation != 0 && generation == m_version.load(std::memory_order_acquire)) { stop(); }
+    }
 
     bool isActive() const noexcept;
     bool isComplete() const noexcept;

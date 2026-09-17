@@ -1,6 +1,9 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "models/RadioModel.h"
+#include "models/TxController.h"
+#include <array>
 #include "core/tnc/AetherAx25LibmodemShim.h"
 
 #include <QByteArray>
@@ -147,7 +150,9 @@ public:
     // the shipping path rather than a parallel one. `verb` is "modem" or "link";
     // `action` is already lowercased and trimmed by the server.
     QJsonObject automationCommand(const QString& verb, const QString& action,
-                                  const QString& value);
+                                  const QString& value,
+                                  const std::shared_ptr<TxController>& controller,
+                                  const TxController::Input& input);
 
     // D-STAR in AetherModem is a SmartSDR waveform surface (ThumbDV helper +
     // radio-side D-STAR waveform). Hide the tab when the connected radio
@@ -162,9 +167,27 @@ protected:
 
 private:
     void setModemProfile(Ax25ModemProfile profile, bool persist);
+    enum class TxProgram { Receive, Beacon, Digi, Pms, Terminal, Count };
+    struct ProgramInput {
+        std::shared_ptr<TxController> controller;
+        TxController::Input root;
+    };
+    bool m_tncNativeAuthority{true};
+    ProgramInput m_tncAuthority;
+    std::array<ProgramInput, static_cast<std::size_t>(TxProgram::Count)> m_txPrograms;
+    bool setTxProgram(TxProgram program, bool enabled,
+                      const std::shared_ptr<TxController>& controller = {},
+                      const TxController::Input& input = {});
+    void configureTxActions();
+    void setDigiEnabled(bool enabled, const std::shared_ptr<TxController>& controller = {},
+                        const TxController::Input& input = {});
     void syncBaudRadios(Ax25ModemProfile profile);
     QJsonObject digiAutomationStatus() const;
     void setDecodeEnabled(bool enabled);
+    void setDecodeEnabledForAutomation(bool enabled,
+        const std::shared_ptr<TxController>& controller, const TxController::Input& input);
+    void applyDecodeEnabled(bool enabled);
+    void enableDecodeForProgram(TxProgram program);
     // True when the backend runs the modulator on this host (HL2) rather than
     // taking modulator input from a Flex DAX stream. Such a radio has no DAX
     // TX stream to wait for and no `transmit dax` setting to change.
@@ -184,7 +207,9 @@ private:
     void finishIcomPostResampleCapture();
     void startTransmitFromUi();
     void startTransmit(const QString& text);
-    void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss);
+    void startTransmit(const QString& text, TxCoordinator::Request input);
+    void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss,
+                           TxCoordinator::Request input);
     void beginTransmitWhenReady();
     void startTransmitAudioAfterPtt();
     void paceTransmitAudio();
@@ -218,13 +243,16 @@ private:
 
     // Personal Mailbox System (PMS) tab + service wiring.
     QWidget* buildMailboxPage();
-    void setPmsEnabled(bool enabled, bool persist);
+    void setPmsEnabled(bool enabled, bool persist,
+                       const std::shared_ptr<TxController>& controller = {},
+                       const TxController::Input& input = {});
     void applyPmsConfigFromUi(bool persist);
     void refreshPmsStatus();
 
     // TNC Terminal tab: connected-mode AX.25 client (call out to a packet BBS).
     QWidget* buildTerminalPage();
     void submitTerminalInput();
+    void submitTerminalLine(const QString& line);
     void refreshTerminalStatus();
     void applyTerminalConfigFromUi(bool persist);
     // Push the active modem profile's air-interface timing into the terminal and
@@ -244,8 +272,11 @@ private:
     // KISS TNC tab + TCP server wiring.
     QWidget* buildKissTncPage();
     void setTncEnabled(bool enabled, bool persist);
+    void configureTncAuthority(bool native,
+        const std::shared_ptr<TxController>& controller = {}, const TxController::Input& input = {});
     void applyTncStartOnStartup();
-    void handleKissFrameFromClient(const QByteArray& ax25NoFcs);
+    void handleKissFrameFromClient(const QByteArray& ax25NoFcs,
+                                  const TxCoordinator::Request& input);
     void maybeStartNextKissTx();
     void refreshTncStatus();
     void appendFrame(const Ax25DecodedFrame& frame);
@@ -346,6 +377,9 @@ private:
     // Identifies the current transmission so deferred work armed on its behalf
     // (the DAX stream-wait timeout) cannot act on a later one.
     quint64 m_txGeneration{0};
+    TxCoordinator::Producer m_txProducer;
+    TxCoordinator::Request m_txRequest;
+    TxCoordinator::Context m_txContext;
     QMetaObject::Connection m_txPttConfirmConnection;
     QMetaObject::Connection m_txPttConfirmedConnection;
 

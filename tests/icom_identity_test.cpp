@@ -54,6 +54,13 @@ struct IcomCivBackendTestAccess {
     // right — is the unkey INTENT and the address it was sent to.
     static bool unkeyIntended(const IcomCivBackend& b)
     { return b.m_pendingPttIntent && !*b.m_pendingPttIntent; }
+    static void dispatchReady(IcomCivBackend& b)
+    {
+        // A command's enqueue time can cross the millisecond sampled by its
+        // immediate pump. Advance the existing socket-free dispatch seam,
+        // without assuming the whole identity callback fits in one tick.
+        b.pumpCiv(b.nowMs());
+    }
     static void advertise(IcomCivBackend& b, std::uint8_t address)
     { b.m_session->m_advertisedCivAddress = address; }
     static void enableWake(IcomCivBackend& b, uint modelId)
@@ -120,6 +127,9 @@ int main(int argc, char** argv)
     check(IcomSettings::wakeOnConnect(), "wake policy round-trips through the Icom document");
     IcomSettings::setWakeOnConnect(false);
     AudioEngine audio;
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const auto operation = coordinator.acquire(coordinator.registerActor({true, 0}), TxCoordinator::monotonicMs()).operation;
+    const auto context = coordinator.mediaContext(coordinator.registerProducer(), operation);
     IcomCivBackend backend;
     QString nickname;
     QStringList antennas;
@@ -156,7 +166,7 @@ int main(int argc, char** argv)
         lastSource = source;
         ++audioFrames;
         // The real Icom submission gate must drop this while unkeyed.
-        backend.submitTxAudio(pcm, 24000, source);
+        backend.submitTxAudio(pcm, 24000, source, context);
     });
     const QByteArray pcm(960 * sizeof(float), '\0');
     for (const QString& name : {QStringLiteral("Shack portable"), QStringLiteral("IC-7300MK2"),
@@ -167,7 +177,7 @@ int main(int argc, char** argv)
         check(nickname == (name.isEmpty() ? QStringLiteral("Unknown Icom") : name),
               "the network name remains presentation text");
         const int before = audioFrames;
-        audio.feedDaxTxAudio(pcm);
+        audio.feedDaxTxAudio(pcm, context);
         check(audioFrames == before, "unidentified backend cannot receive TCI PCM");
         // IC-705 model ID A4 at customized bus address 94 (IC-7300's default).
         IcomCivBackendTestAccess::inject(backend, "fefee0941900a4fd");
@@ -179,7 +189,7 @@ int main(int argc, char** argv)
         check(nickname == (name.isEmpty() ? QStringLiteral("IC-705") : name),
               "identification preserves the nickname or supplies the empty-name fallback");
         check(!preamps.isEmpty(), "late identity publishes the front-end controls");
-        audio.feedDaxTxAudio(pcm);
+        audio.feedDaxTxAudio(pcm, context);
         check(audioFrames == before + 1, "late identification enables actual TCI PCM delivery");
         // #4796: the client owns its level, so the seam must say ClientLeveled.
         check(lastSource == TxAudioSource::ClientLeveled,
@@ -204,7 +214,7 @@ int main(int argc, char** argv)
     {
         const int before = audioFrames;
         lastSource.reset();
-        audio.sendModemTxAudio(pcm);
+        audio.sendModemTxAudio(pcm, context);
         check(audioFrames == before + 1,
               "sendModemTxAudio reaches the seam on a host-modulating backend");
         check(lastSource == TxAudioSource::Microphone,
@@ -254,6 +264,7 @@ int main(int argc, char** argv)
     IcomCivBackendTestAccess::inject(backend, "fefee0501900a4fd");
     IcomCivBackendTestAccess::markKeyed(backend);
     IcomCivBackendTestAccess::inject(backend, "fefee0511900a4fd");
+    IcomCivBackendTestAccess::dispatchReady(backend);
     // The unkey must LEAVE, and it must leave for the destination this session
     // already selected — not the conflicting responder that just arrived.
     // m_keyed itself stays radio-authoritative until the 1C 00 readback (#5311).
@@ -266,7 +277,7 @@ int main(int argc, char** argv)
               && !backend.capabilities().canTransmit && !audio.hostModulation(),
           "two responders with the SAME model ID revoke identity and the audio route");
     const int before = audioFrames;
-    audio.feedDaxTxAudio(pcm);
+    audio.feedDaxTxAudio(pcm, context);
     check(audioFrames == before, "capability withdrawal stops TCI PCM delivery");
     IcomCivBackendTestAccess::inject(backend, "fefee0501900a4fd");
     check(!backend.capabilities().canTransmit, "late duplicate cannot undo ambiguous-bus rejection");

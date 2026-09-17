@@ -97,6 +97,7 @@ Hl2TxDsp::~Hl2TxDsp() = default;
 bool Hl2TxDsp::buildModulator(std::string* error)
 {
     m_channel.reset();
+    m_modulatorRunning = false;
     m_txBlocks = 0;
     m_txFaultBlocks = 0;
 
@@ -193,50 +194,13 @@ void Hl2TxDsp::resetModulatorState()
     if (!m_channel) {
         return;
     }
-    // THE T/R CALL, not a rebuild. WdspChannel::setRunning(false) runs the mute
-    // envelope DOWN and FLUSHES THE CHAIN, and allocates and frees nothing --
-    // allocationSequenceForTest() does not move across a stop/start. The
-    // channel keeps its FFTW plans, its filter masks and its notch database, so
-    // the next key-down pays no planning cost.
-    //
-    // THIS FUNCTION WAS EMPTY AND THE HEADER PROMISED OTHERWISE, which is the
-    // defect. Hl2TxDsp.h says reset() "drops anything buffered -- on unkey, so
-    // the next transmission does not start with the tail of the previous one",
-    // and in the TXA build nothing did.
-    //
-    // WHAT THE MEASUREMENT ACTUALLY SAYS, after an earlier version of this
-    // comment got it wrong twice. The first draft quoted "TXA over-2 peak 0.52,
-    // leak 85.1 ms" against "phasing 0.0 / 0.0 ms" and read that as the previous
-    // over going out at the head of the next one. It is not: the 85 ms is
-    // PIPELINE LATENCY -- a TXA channel's priming stretch, which the phasing
-    // modulator does not have -- and the discriminator that was supposed to
-    // separate the two was itself broken (its lambda took `hz` while the body
-    // used `kTone`, so it measured the wrong bin). Fixed, the honest figure is
-    // the one the test prints now: over 1's tone, measured in the SETTLED part
-    // of over 2, lands at
-    //
-    //   phasing   -312.3 dB      TXA   -311.7 dB
-    //
-    // i.e. at the arithmetic floor in BOTH builds. The unkey does not carry
-    // audio across in either, and no measurement here establishes that it ever
-    // did.
-    //
-    // THE FIX IS STILL RIGHT, on the argument rather than on that number: the
-    // header states a contract -- reset() drops what is buffered -- and in this
-    // build nothing implemented it, so the chain's state survived an unkey by
-    // accident rather than by design. What the corrected measurement removes is
-    // the claim that the accident was AUDIBLE, not the reason to stop relying
-    // on it.
-    //
-    // The old comment here justified doing nothing on two grounds and both were
-    // wrong. "Rebuilding means FFTW planning" -- true, and not what is needed;
-    // this is a stop, not a close. "WDSP's own mute slews are the T/R envelope
-    // and they are inside the channel already" -- they are, and they are armed
-    // by SetChannelState, which the transmit path never called. The ramps
-    // existed; nothing fired them. Caught by aethersdr-agent on #5747.
-    if (!m_channel->setRunning(false)) {
-        qCWarning(lcTxMod) << "HL2 TXA modulator: stop refused on unkey; the "
-                              "next over may carry this one's tail";
+    // HL2 stops supplying audio on unkey. setRunning(false) only schedules a
+    // fade/flush, which cannot complete without further processIq calls. A
+    // restart cancels that pending fade and would replay the previous over.
+    // Discard under the channel's control fence before another context can emit.
+    if (!m_channel->discardTransmitData()) {
+        m_configured = false;
+        qCWarning(lcTxMod) << "HL2 TXA modulator: discard refused; transmit disabled until reconfigured";
     }
     m_modulatorRunning = false;
 }
@@ -316,6 +280,11 @@ const char* Hl2TxDsp::modulatorName() noexcept { return "wdsp-txa"; }
 int Hl2TxDsp::wdspChannelId() const noexcept
 {
     return m_channel ? m_channel->channelIdForTest() : -1;
+}
+
+const WdspChannel::Config* Hl2TxDsp::channelConfig() const noexcept
+{
+    return m_channel ? &m_channel->config() : nullptr;
 }
 
 unsigned long long Hl2TxDsp::modulatorFaultBlocks() const noexcept
@@ -458,6 +427,7 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
 
 const char* Hl2TxDsp::modulatorName() noexcept { return "phasing"; }
 int Hl2TxDsp::wdspChannelId() const noexcept { return -1; }
+const WdspChannel::Config* Hl2TxDsp::channelConfig() const noexcept { return nullptr; }
 // Arithmetic cannot starve. Always zero, so a health snapshot reports the same
 // field in both builds rather than omitting it in one.
 unsigned long long Hl2TxDsp::modulatorFaultBlocks() const noexcept { return 0; }
@@ -559,8 +529,17 @@ bool Hl2TxDsp::isLowerSideband() const
 }
 
 void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
-                                 TxAudioSource source)
+                                 TxAudioSource source,
+                                 const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_txContext.sameContext(context)) {
+        reset();
+        m_txContext = context;
+    }
+    // Readiness is independent of the selected modulator.
     if (!m_configured || mono.empty())
         return;
 
@@ -786,7 +765,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
                      m_inBuffer.begin() + static_cast<std::ptrdiff_t>(consumed));
 
     if (!m_iq.empty())
-        emit iqReady(m_iq);
+        emit iqReady(m_iq, context);
     // PRE-modulation level: this is what a mic-gain control acts on, so it is
     // the number that tells an operator whether they are overdriving.
     emit micPeak(peak > 0.0f ? 20.0f * std::log10(peak) : -140.0f);

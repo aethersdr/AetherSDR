@@ -121,23 +121,24 @@ public:
     void setNotch(int notchId, const AetherSDR::NotchDelta& delta) override;
     void removeNotch(int notchId) override;
     void setNotchesEnabled(bool on) override;
-    void setKeying(bool key) override;
-    void setCwKeying(bool down, bool breakIn, int breakInDelayMs) override;
+    void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
+    void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                       TxAudioSource source) override;
+                       TxAudioSource source,
+                       const TxCoordinator::Context& context) override;
     void setTxPower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
     void setMicGain(int level) override;
     // No default argument here on purpose: defaults on virtuals bind statically,
     // so repeating the base's is how the two quietly diverge later. The sole
     // call site passes it explicitly.
-    void setTune(bool on, int tunePowerPercent) override;
+    void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
     // Opt-in only — never enabled by a default.
-    void setTxTestTone(double offsetHz, double amplitude);
+    void setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation);
 
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg) override;
@@ -220,6 +221,9 @@ signals:
 private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PcmTestAccess;
+    friend struct Hl2TxGateTestAccess;
+    void applyKeying(bool key, const TxCoordinator::Operation& operation,
+                     const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
     // Publish linkStats() on the fixed cadence the seam promises. Driven by a
     // timer here rather than by MetisClient's receive path so the tick survives
@@ -901,6 +905,9 @@ private:
     bool m_tuning = false;
     bool m_cwAutoKeyed = false;
     QTimer* m_cwHangTimer = nullptr;
+    TxCoordinator::Operation m_cwHangOperation;
+    TxCoordinator::Operation m_lastTxOperation;
+    TxCoordinator::Completion m_cwHangCompletion;
     bool m_txMonitor = false;
     // Both flags above are set SYNCHRONOUSLY while the setAudioMuted they imply
     // rides a queued connection to the DSP thread, so at key-up they say

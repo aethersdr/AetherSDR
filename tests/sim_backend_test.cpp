@@ -144,8 +144,8 @@ void testKeyingIsAlwaysInert()
     // No transmit-related signal exists to fire; the contract is simply that
     // setKeying never drives a transmit path. This asserts it does not crash or
     // change connection state — the real TX guard lives above the seam.
-    sim.setKeying(true);
-    sim.setKeying(false);
+    sim.setKeying(true, {});
+    sim.setKeying(false, {});
     report("setKeying is a safe no-op on an RX-only sim", sim.isConnected());
 }
 
@@ -184,7 +184,7 @@ void testKeyingMutesAudio()
     SimBackend sim;
     sim.connectRadio({});
     QSignalSpy audioSpy(&sim, &SimBackend::audioFrameReady);
-    sim.setKeying(true);                     // muted while "keyed" (Principle VI)
+    sim.setKeying(true, {});                  // muted while "keyed" (Principle VI)
     pumpFrames(audioSpy, 60);
     // Frames still FLOW (stream stays alive) but are all-zero when keyed.
     bool allSilent = audioSpy.count() > 0;

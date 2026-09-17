@@ -536,6 +536,38 @@ remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.
 
+Step 4 has an engine-owned `TxCoordinator` and a transitional desktop actor;
+this is not yet per-client TX authorization. Flex primary keying and CWX text
+carry operation/batch fences to the original TCP writer. A queue-consumed
+callback ends local handoff only, never proves radio idle. Preserve normal
+operator reengagement, but use `finishLocalIntent()` rather than asserting a
+qualified stop: the coordinator retains that actor until matching stop evidence
+arrives. Uncorrelated RX status must not clear this handoff barrier. Preserve
+short key-down/key-up sequences, Quindar/RADE release tails, and held MOX when
+cancelling a CWX batch. Do not enable independent-client handoff or daemon TX
+until independent trusted grants and the qualified stop/recovery contract
+are complete. See `docs/aetherd-stage4-tx-coordinator.md`. This work does not
+widen `welcome`/capability serialization or replace #5598's RX PCM seam work.
+The bridge watchdog tracks its authorization-lifetime producer's original
+contributions with a monotonic, non-renewable deadline. A boolean keyed sample alone cannot establish ownership
+(CWX has QSK gaps); repeated commands must not renew that deadline. Deferred
+TX widget invocations retain the original input before queueing and
+claim only after admission. These are producer-isolation safeguards, not
+per-socket actor grants or qualified radio-idle evidence.
+
+Local producer contributions now use opaque `TxCoordinator::Intent` handles,
+not activity bits as ownership. Repeat admission reuses a producer's live
+handle. Mark release before callbacks/queueing, retain the captured handle
+until its normal tail is consumed, and end that handle only. Reengagement gets
+a distinct handle so an earlier completion cannot release it. The coordinator
+refuses local operation completion while any contribution remains. The six
+legacy desktop entry points retain compatibility slots, while `TxController`
+binds converted UI, device and bridge inputs to their actual producer. Capture
+before the first queued hop; derive scheduled elements from the original root,
+never from callback-time authority. Device close, authorization changes and
+reconnect fence stale work. Keep TX audio context through backend queues and
+retries. Producer identity still does not confer an independent actor grant.
+
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
 `AudioEngine::feedAudioData` — the `RadioModel::backendAudioFrameReady`
