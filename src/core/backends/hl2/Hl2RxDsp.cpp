@@ -546,8 +546,25 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         // what the AGC does, so an audio-RMS meter barely moves with signal
         // strength — it deflects, which is why it looked like it worked, but it
         // tracks the AGC's output target rather than the signal.
+        // AVERAGE, NOT PEAK. WDSP's xmeter keeps both from the same
+        // smag = I*I + Q*Q: `avg` is an EMA of power, `peak` is a peak-hold
+        // that DECAYS across blocks rather than resetting per block. Both take
+        // the log after averaging, so the domain is right either way -- the tap
+        // is the whole difference.
+        //
+        // On a steady carrier the two agree exactly, because I*I + Q*Q is
+        // constant for a complex exponential. They diverge only on noise and on
+        // modulation, so every check against a test tone passes and the error
+        // appears precisely where an operator judges a receiver: the band noise
+        // floor, which a peak-hold reads roughly 11-14 dB high.
+        //
+        // That also makes the peak tap wrong for a dBm-labelled axis. S9 is
+        // defined as -73 dBm of sine, i.e. an RMS quantity, and `avg` is the
+        // mean-square -- so the average tap is what the calibration means.
+        // Meter ballistics are not lost: the backend already applies its own
+        // attack/decay EMA to the dBm value before publishing.
         emit meterUpdate(static_cast<float>(
-            m_channel->meter(WdspChannel::Meter::SignalPeak)));
+            m_channel->meter(WdspChannel::Meter::SignalAverage)));
         // The POST-DDC half of §13 item 16's ADC pairing, sampled here because
         // this is the one instant it means something: a block has just gone
         // through, and RXA.c's adcmeter has just run on its input. Stored, not
