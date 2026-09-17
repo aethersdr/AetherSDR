@@ -278,6 +278,16 @@ jobs:
             exit 1
           }
           Select-String -Path configure.log -Pattern 'PortAudio \(third_party\) found'
+          # The line above proves CMake found a lib, not that the lib carries
+          # the #5713 patch set - and CMake's detection is EXISTS-only, so a
+          # stale or partially-restored tree passes it. The stamp records the
+          # patch signature setup-portaudio.ps1 built with, so check it too.
+          if (-not (Test-Path third_party\portaudio\.patched-5713)) {
+            Write-Host "ERROR: third_party/portaudio has no #5713 patch stamp."
+            Write-Host "The PortAudio in this build may still free a stack address in Pa_Initialize."
+            exit 1
+          }
+          Write-Host "PortAudio patch stamp: $(Get-Content -Raw third_party\portaudio\.patched-5713)"
 
       - name: Build Opus (RADE dependency)
         # ExternalProject dependency ordering via BUILD_BYPRODUCTS is correct,

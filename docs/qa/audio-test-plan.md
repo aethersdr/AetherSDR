@@ -452,7 +452,7 @@ PanadapterStream
   ├──▶ audioDataReady ──▶ CwDecoder::feedAudio() (pre-DSP tap)
   ├──▶ audioDataReady ──▶ QsoRecorder::feedRxAudio() (pre-DSP tap)
   │
-  └──▶ daxAudioReady ──▶ TciServer::onDaxAudioReady()
+  └──▶ daxAudioReady ──▶ TciServer::onDaxPcmReady()
                            ├─ Per-client resample
                            ├─ Format conversion (float32/int16 × stereo/mono)
                            └─ WebSocket → TCI clients

@@ -906,6 +906,7 @@ set(CORE_SOURCES
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
     src/core/TciServer.cpp
+    src/core/TciRxConverter.cpp
     src/core/TciPeerProcess.cpp
     src/core/TciProtocol.cpp
     src/core/TciRoutingState.cpp
