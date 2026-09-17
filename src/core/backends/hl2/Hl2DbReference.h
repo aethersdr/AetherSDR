@@ -127,6 +127,56 @@ public:
     // belongs here because the ceiling it produces is referred to this object.
     static constexpr double kAgcCeilingDbPerUnit = 0.6;
 
+    // WHAT 0 dBFS IS AT THE ANTENNA, with 0 dB of LNA gain: +3 dBm.
+    //
+    // DERIVED, NOT AVERAGED, and that distinction is the whole reason this is a
+    // constant rather than a per-unit calibration. Every step is from the
+    // AD9866 datasheet and the HL2's own input network:
+    //
+    //   full scale at RxPGA = 48 dB (datasheet)          8.0 mVpp
+    //   referred to 0 dB -- 48 dB is x251.2              2.01 Vpp differential
+    //   as RMS                                           0.707 Vrms
+    //   into the 400 ohm secondary, V^2/R = 0.5/400      1.25 mW
+    //   in dBm, AT THE CONVERTER                         +0.97 dBm
+    //   the 50->400 ohm input transformer (5:14) preserves power
+    //   transformer + N2ADR filter board insertion loss  about 2 dB
+    //   ...which sits BETWEEN the antenna and the converter,
+    //   so the antenna must deliver that much MORE        +2 dB
+    //   -------------------------------------------------------------
+    //   full scale at the antenna, 0 dB LNA gain         about +3 dBm
+    //
+    // THE SIGN OF THE LAST TERM WAS WRONG IN THE FIRST DRAFT, which subtracted
+    // the insertion loss and arrived at -1 dBm. Loss ahead of the converter
+    // makes the antenna-referred full-scale point HIGHER, not lower: P_adc =
+    // P_ant - 2 dB, so P_ant = P_adc + 2 dB. The old figure read every signal
+    // 4 dB weak. Caught by aethersdr-agent on #5753.
+    //
+    // NO INDEPENDENT CONFIRMATION, and the one this file used to cite is
+    // WITHDRAWN. DL1YCF's "-34 dBm clipping at +33 dB of gain" arithmetically
+    // gives -1 dBm and was quoted here as agreeing "to the digit" -- with a
+    // figure now known to be 4 dB out, which is the tell. It also assumes +33
+    // dB was DELIVERED; on this radio a commanded +33 is code 45, and the
+    // gateware's `code & 0x1F` makes that code 13, i.e. +1 dB applied (#5752).
+    // On that reading the same measurement gives -33 dBm. Commanded or applied
+    // cannot be established from the published figure, so it confirms nothing
+    // in either direction and is recorded here only so nobody re-derives it.
+    //
+    // WHAT WOULD SETTLE IT is a bench measurement on this radio: a known level
+    // into the antenna port at a known APPLIED gain, read against the ADC clip
+    // counter. That is receive-only and wants a calibrated source.
+    //
+    // NOT THE openHPSDR FIGURE. piHPSDR and deskHPSDR carry +14 dB, and their
+    // own notes describe it as "average, varies per unit". This is not that,
+    // and a reader comparing the two should know they are different KINDS of
+    // number rather than two estimates of one.
+    //
+    // WHAT IT DOES NOT COVER. The input transformer runs away above ~20 MHz --
+    // IN3OTD measured return loss falling to -12.5 dB at 30 MHz -- so on 10 m a
+    // band-dependent residual sits on top of the ~1 dB this buys. A per-band
+    // table could take that later; it is not a reason to leave the reference at
+    // zero, which is what "uncalibrated" actually meant here.
+    static constexpr double kFullScaleDbmAtZeroGain = 3.0;
+
     // WDSP's own default maximum gain, used here only as the bound on what
     // referring the ceiling may produce. Referring can push the ceiling ABOVE
     // the slider's nominal 60 dB top -- an operator who cut the LNA 12 dB is
@@ -143,6 +193,22 @@ public:
     // What 0 dBFS means at the antenna with 0 dB LNA gain. Needs per-unit
     // calibration to be meaningful; 0.0 means "uncalibrated, reporting dBFS".
     void setFullScaleDbm(double dbm) noexcept { m_fullScaleDbm = dbm; }
+
+    // The operator's trim, BOUNDED AT +-3 dB, and the bound is the point.
+    //
+    // There is no user offset at all today, so an operator with a signal
+    // generator has nowhere to put what they measure. An UNBOUNDED one would
+    // invite the calibration itself to be typed in -- which puts the old lie
+    // back with a slider in front of it. +-3 dB says: the base is right, this
+    // is adjustment. Anyone who needs more than 3 dB has found a fault in the
+    // derivation and should report it rather than dial around it.
+    static constexpr double kTrimLimitDb = 3.0;
+    void setTrimDb(double db) noexcept
+    {
+        m_trimDb = db < -kTrimLimitDb ? -kTrimLimitDb
+                 : (db > kTrimLimitDb ? kTrimLimitDb : db);
+    }
+    double trimDb() const noexcept { return m_trimDb; }
     double fullScaleDbm() const noexcept { return m_fullScaleDbm; }
     bool isCalibrated() const noexcept { return m_fullScaleDbm != 0.0; }
 
@@ -161,13 +227,38 @@ public:
     }
 
     // Offset form, for applying to a whole spectrum frame without a call per bin.
+    // ABSOLUTE, not referred to a nominal gain: P(dBm) = dBFS + fullScale - Glna.
+    //
+    // The first version of this class subtracted the gain absolutely, and it
+    // was REVERTED for a reason its own comment records: it "silently moved the
+    // whole displayed noise floor by 20 dB, from about -120 to about -140,
+    // because the default LNA gain is 20 dB. Neither number is calibrated, so
+    // that shift bought nothing."
+    //
+    // That objection was correct and it is what kFullScaleDbmAtZeroGain
+    // removes. The floor still moves, but it moves to a figure derived from the
+    // AD9866 datasheet and confirmed independently, instead of from one
+    // arbitrary number to another. The two halves cannot be separated: this
+    // form filed without the constant fails on exactly the old grounds.
+    //
+    // The trim rides here rather than inside the constant so that a reader --
+    // and a bug report -- can always see the derived base and the operator's
+    // adjustment as two terms.
     double offsetDb() const noexcept
     {
-        return m_fullScaleDbm + lnaOffsetDb();
+        return m_fullScaleDbm - m_lnaGainDb + m_trimDb;
     }
 
-    // The LNA term alone -- what has to be undone, wherever it is undone. The
-    // display adds the calibration term on top of it; the AGC does not.
+    // The LNA term alone, RELATIVE to the reference gain -- what has to be
+    // undone, wherever it is undone.
+    //
+    // STILL RELATIVE, DELIBERATELY, AND ONLY THE AGC USES IT NOW. The display
+    // path moved to an absolute form when fullScaleDbm became a real figure
+    // (see offsetDb), but the AGC's invariant is a DIFFERENCE: a constant
+    // antenna signal must stay at a constant heard level across a gain change,
+    // and at the reference gain the operator must see exactly the 0.6-per-unit
+    // map they saw before this term existed. An absolute form here would move
+    // every operator's AGC-T the moment they connected.
     double lnaOffsetDb() const noexcept
     {
         return m_referenceLnaGainDb - m_lnaGainDb;
@@ -188,7 +279,8 @@ public:
 private:
     double m_lnaGainDb = kDefaultLnaGainDb;
     double m_referenceLnaGainDb = kDefaultLnaGainDb;
-    double m_fullScaleDbm = 0.0;
+    double m_fullScaleDbm = kFullScaleDbmAtZeroGain;
+    double m_trimDb = 0.0;
 };
 
 }  // namespace AetherSDR::hl2
