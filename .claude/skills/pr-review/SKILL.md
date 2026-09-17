@@ -155,19 +155,17 @@ the shape the bullet above routes a simulator closed loop to — see
 - CI: note failing/passing checks and whether CI ran against a stale merge
   base. Check the workflow trigger before drawing conclusions: a
   `pull_request` trigger tests the *merge* result — `main` + this PR **as
-  `main` stood when that run started**, which is not the same as current
+  `main` stood when that run was created**, which is not the same as current
   `main`; a `push`-triggered check on the branch never included `main` at all.
-  So compare the **earliest start among the required checks** against `main`'s
-  tip — earliest because one late or re-run job hides a stale `build`, and
-  required because the unrequired jobs (CodeQL, the sanitizer configure) often
-  start first and would fail a current PR:
+  Creation, not job start: `github.sha` is frozen when the run is created
+  (`static-checks.yml:297`) and no checkout overrides it, so a job that sat in
+  the queue still built the older tree. Compare the **earliest run creation**
+  on the head against `main`'s tip:
 
   ```sh
-  REQUIRED=$(gh api repos/aethersdr/AetherSDR/branches/main/protection \
-    --jq '[.required_status_checks.contexts[]] | join("|")')
-  gh api --paginate "repos/aethersdr/AetherSDR/commits/<headOid>/check-runs" \
-    --jq '.check_runs[] | "\(.started_at)\t\(.name)"' \
-    | awk -F'\t' -v re="^($REQUIRED)$" '$2 ~ re' | sort | head -1
+  gh api --paginate \
+    "repos/aethersdr/AetherSDR/actions/runs?head_sha=<headOid>" \
+    --jq '.workflow_runs[] | "\(.created_at)\t\(.name)"' | sort | head -1
   gh api repos/aethersdr/AetherSDR/commits/main --jq .commit.committer.date
   ```
 

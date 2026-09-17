@@ -616,44 +616,52 @@ on `main` post-merge instead. **That trade-off is priced for the fleet of open
 PRs. It is not priced for the one PR you are about to merge**, where the
 conflict becomes a red `main` that step 13 makes yours.
 
-The measure is the **earliest start among the REQUIRED checks** — not the
-newest, and not the earliest overall.
+The measure is when the **run was created**, not when any job started. For a
+`pull_request` event GitHub computes the merge commit and freezes `github.sha`
+at run creation; no `actions/checkout` in `ci.yml` or `static-checks.yml`
+overrides `ref`, so every required job builds that frozen tree no matter how
+long it waited to start. `static-checks.yml:297` states this in the repo's own
+words, and cites #4895 — a run whose pinned tree was 22 hours older than the
+job that scanned it.
 
-- **Not the newest.** `max` is the optimistic bound. A job that starts later,
-  or one job re-run by hand, drags `max` past `main`'s tip while the check
-  that matters still describes the pre-move merge. `build` is what went red
-  in #5516; a fresh `Static checks` next to a stale `build` is still a stale
-  merge.
-- **Not the earliest overall.** CodeQL and the sanitizer configure are not
-  required contexts, and on a busy SHA they routinely start first. Letting
-  them set the bound fails the check on PRs that are perfectly current.
+So a job's `started_at` is later than the tree it built, by the queue delay,
+and using it re-opens the same optimistic bound in a narrower form: `main`
+moves at T, a run created a minute before that builds the pre-move tree,
+`build` starts three minutes after it, and "earliest required start is newer
+than the tip" waves through exactly the merge that went red. Fork PRs held
+for workflow approval widen that gap arbitrarily.
 
-Take the required names from branch protection rather than hardcoding them,
-so this cannot drift from the list step 0 already read:
+Taking the creation time also removes the need to single out the required
+checks: all of one push's `pull_request` runs share the event that created
+them, so there is no split to filter for, and a run from another event only
+ever moves the bound *earlier* — toward re-running, which is the safe
+direction. A hand re-run keeps its original `created_at` and only advances
+`run_started_at`, which is correct: a re-run still builds the frozen tree.
 
 ```sh
 HEAD=$(gh pr view <PR> --json headRefOid -q .headRefOid)
-REQUIRED=$(gh api repos/aethersdr/AetherSDR/branches/main/protection \
-  --jq '[.required_status_checks.contexts[]] | join("|")')
 
-# Earliest start among the required checks on that exact head.
-# --paginate: a busy SHA truncates at one page. The per-page --jq streams,
-# so the global minimum comes from `sort | head -1`, not from jq's `min`.
-gh api --paginate "repos/aethersdr/AetherSDR/commits/$HEAD/check-runs" \
-  --jq '.check_runs[] | "\(.started_at)\t\(.name)"' \
-  | awk -F'\t' -v re="^($REQUIRED)$" '$2 ~ re' | sort | head -1
+# When the merge base was frozen: the earliest run creation on that exact head.
+# --paginate: a busy SHA truncates at one page. The per-page --jq streams, so
+# the global minimum comes from `sort | head -1`, not from jq's `min`.
+gh api --paginate "repos/aethersdr/AetherSDR/actions/runs?head_sha=$HEAD" \
+  --jq '.workflow_runs[] | "\(.created_at)\t\(.name)"' \
+  | sort | head -1
 
 # main's tip, right now
 gh api repos/aethersdr/AetherSDR/commits/main \
   --jq '.sha[0:12] + "  " + .commit.committer.date'
 ```
 
-The `awk` anchors are load-bearing: an unanchored match on `build` also hits
-any future context whose name merely contains it.
+**Empty output is not a pass.** No run for this head means nothing has been
+built against any `main`, which is strictly worse than a stale green — treat it
+as stale and wait for the run. That the required contexts exist and are green
+is a separate question, answered at step 0 and again at step 11; this bound
+says only how old their tree is.
 
-If `main`'s tip is **newer** than that start time, the green is stale. Nothing
-in `gh pr view` says so: `mergeStateStatus` reports `BEHIND` only for the
-branch's own position, and a PR sits at `CLEAN` on a green that predates
+If `main`'s tip is **newer** than that creation time, the green is stale.
+Nothing in `gh pr view` says so: `mergeStateStatus` reports `BEHIND` only
+for the branch's own position, and a PR sits at `CLEAN` on a green that predates
 `main`'s newest commit. The window does not have to be large — nine minutes
 was enough to land #5516 on a green that never saw #5659's changed
 `IRadioBackend::setKeying` signature, and `main` went red at the Build step.
@@ -780,8 +788,9 @@ are indistinguishable. Name anything unverified and why.
 armed and confirmed able to fire — plus the one thing still standing between
 the PR and `main`, if there is one.
 
-State the green-freshness answer here explicitly: the head's newest check-run
-start, `main`'s tip at arming time, and which way the comparison went. If you
+State the green-freshness answer here explicitly: the creation time of the
+head's earliest CI run, `main`'s tip at arming time, and which way the
+comparison went. If you
 took the docs-only exemption, list the intervening commits. A reader cannot
 otherwise tell a checked-and-current green from an unchecked one.
 
