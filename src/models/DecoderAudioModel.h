@@ -19,11 +19,14 @@ class DecoderAudioModel final : public QObject {
     Q_OBJECT
 public:
     enum class Consumer { Cw, Rtty };
+    // Bound means an input subscription exists, not that PCM has arrived.
+    enum class RouteStatus { Inactive, DaxChannelRequired, DaxTransportUnavailable, Bound };
     DecoderAudioModel(RadioModel& radio, Consumer consumer, QObject* parent = nullptr);
     ~DecoderAudioModel() override;
 
     void setSlice(SliceModel* slice);
     void setEnabled(bool enabled);
+    RouteStatus routeStatus() const;
 
 signals:
     // The same admitted source, before fixed-rate conversion. Native-rate
@@ -31,6 +34,7 @@ signals:
     void nativePcmReady(const AetherSDR::PcmFrame& frame);
     void pcmReady(const AetherSDR::DecoderPcmBlock& block);
     void sourceReset();
+    void routeStatusChanged();
 
 private:
     struct Impl;

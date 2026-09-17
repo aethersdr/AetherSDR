@@ -1,6 +1,7 @@
 #include "DecoderAudioModel.h"
 #include "RadioModel.h"
 #include "SliceModel.h"
+#include "core/LogManager.h"
 
 #include <QMutex>
 #include <QMutexLocker>
@@ -30,6 +31,7 @@ struct DecoderAudioModel::Impl {
     QPointer<SliceModel> slice;
     Consumer consumer;
     bool enabled = false;
+    RouteStatus routeStatus = RouteStatus::Inactive;
     // Acquisition emits an external create request. Keep old and new holds
     // visible together until it returns, including during nested rebinding.
     std::array<bool, 8> heldChannels{};
@@ -38,6 +40,29 @@ struct DecoderAudioModel::Impl {
     QList<QMetaObject::Connection> sliceConnections;
     std::shared_ptr<Inbox> inbox;
     DecoderPcmAdapter adapter;
+
+    void setRouteStatus(RouteStatus status)
+    {
+        if (routeStatus == status) {
+            return;
+        }
+        routeStatus = status;
+        const QPointer<DecoderAudioModel> guard(owner);
+        const quint64 revision = bindingRevision;
+        emit owner->routeStatusChanged();
+        // A status listener can repair the route, disable it or destroy us.
+        // Do not publish a warning for a binding superseded by that callback.
+        if (!guard || revision != bindingRevision) {
+            return;
+        }
+        if (status == RouteStatus::DaxChannelRequired) {
+            qCWarning(lcDsp) << (consumer == Consumer::Cw ? "CW" : "RTTY")
+                            << "receive decoder: assign DAX RX channel 1-8 to the selected slice; no input route";
+        } else if (status == RouteStatus::DaxTransportUnavailable) {
+            qCWarning(lcDsp) << (consumer == Consumer::Cw ? "CW" : "RTTY")
+                            << "receive decoder: selected DAX transport unavailable; no input route";
+        }
+    }
 
     PanadapterStream::DaxConsumer daxConsumer() const
     {
@@ -186,7 +211,13 @@ struct DecoderAudioModel::Impl {
                 }
             }
         }
-        if (!live || (dax && (!wantedHold || !acquired))) {
+        if (!live) {
+            setRouteStatus(RouteStatus::Inactive);
+            return;
+        }
+        if (dax && (!wantedHold || !acquired)) {
+            setRouteStatus(!wantedHold ? RouteStatus::DaxChannelRequired
+                                      : RouteStatus::DaxTransportUnavailable);
             return;
         }
         inbox = std::make_shared<Inbox>();
@@ -214,6 +245,7 @@ struct DecoderAudioModel::Impl {
                     }
                 }, Qt::DirectConnection);
         }
+        setRouteStatus(RouteStatus::Bound);
     }
 };
 
@@ -279,5 +311,10 @@ void DecoderAudioModel::setEnabled(bool enabled)
     }
     m_impl->enabled = enabled;
     m_impl->rebind();
+}
+
+DecoderAudioModel::RouteStatus DecoderAudioModel::routeStatus() const
+{
+    return m_impl->routeStatus;
 }
 } // namespace AetherSDR

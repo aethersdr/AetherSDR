@@ -33,12 +33,32 @@
 #include <QWindow>
 #include <QGuiApplication>
 #include <QClipboard>
+#include <QAccessible>
 #include "core/ThemeManager.h"
 
 #include <algorithm>
 #include <array>
 
 namespace AetherSDR {
+
+namespace {
+void setDecoderInputHint(QLabel* label, const QString& hint, const QString& reason,
+                         const QString& accessibleName)
+{
+    if (label->text() == hint && label->accessibleDescription() == reason) {
+        return;
+    }
+    label->setText(hint);
+    label->setToolTip(reason);
+    label->setAccessibleName(accessibleName);
+    label->setAccessibleDescription(reason);
+    ThemeManager::instance().applyStyleSheet(label, reason.isEmpty()
+        ? "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; background: transparent; }"
+        : "QLabel { color: {{color.accent.warning}}; font-size: 9px; background: transparent; }");
+    QAccessibleEvent event(label, QAccessible::NameChanged);
+    QAccessible::updateAccessibility(&event);
+}
+} // namespace
 
 PanadapterApplet::PanadapterApplet(QWidget* parent)
     : QWidget(parent)
@@ -165,9 +185,10 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     auto* cwTitle = new QLabel("CW");
     AetherSDR::ThemeManager::instance().applyStyleSheet(cwTitle, "QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold; background: transparent; }");
     cwBar->addWidget(cwTitle);
-    auto* cwHint = new QLabel(tr("(selected slice)"));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(cwHint, "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; background: transparent; }");
-    cwBar->addWidget(cwHint);
+    m_cwInputHint = new QLabel;
+    m_cwInputHint->setObjectName(QStringLiteral("cwInputHint"));
+    setCwInputHint({}, {});
+    cwBar->addWidget(m_cwInputHint);
 
     m_cwStatsLabel = new QLabel;
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_cwStatsLabel, "QLabel { color: {{color.text.label}}; font-size: 10px; background: transparent; }");
@@ -382,6 +403,10 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     AetherSDR::ThemeManager::instance().applyStyleSheet(rttyTitle,
         "QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold; background: transparent; }");
     rttyBar->addWidget(rttyTitle);
+    m_rttyInputHint = new QLabel;
+    m_rttyInputHint->setObjectName(QStringLiteral("rttyInputHint"));
+    setRttyInputHint({}, {});
+    rttyBar->addWidget(m_rttyInputHint);
 
     const QString comboStyle =
         "QComboBox { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050;"
@@ -888,6 +913,12 @@ void PanadapterApplet::appendCwTextTx(const QString& text, float cost)
     m_cwText->moveCursor(QTextCursor::End);
 }
 
+void PanadapterApplet::setCwInputHint(const QString& hint, const QString& reason)
+{
+    const QString text = hint.isEmpty() ? tr("(selected slice)") : hint;
+    setDecoderInputHint(m_cwInputHint, text, reason, tr("CW receive input: %1").arg(text));
+}
+
 void PanadapterApplet::setCwStats(float pitchHz, float speedWpm)
 {
 #ifdef HAVE_DEEPFIST
@@ -1093,6 +1124,12 @@ void PanadapterApplet::appendRttyText(const QString& text, float confidence)
     m_rttyText->insertHtml(QString("<span style=\"color:%1\">%2</span>")
         .arg(color, escaped));
     m_rttyText->moveCursor(QTextCursor::End);
+}
+
+void PanadapterApplet::setRttyInputHint(const QString& hint, const QString& reason)
+{
+    const QString text = hint.isEmpty() ? tr("(selected slice)") : hint;
+    setDecoderInputHint(m_rttyInputHint, text, reason, tr("RTTY receive input: %1").arg(text));
 }
 
 void PanadapterApplet::setRttyStats(float markLevel, float /* spaceLevel */, float snrDb, bool locked)

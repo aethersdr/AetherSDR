@@ -242,6 +242,105 @@ void daxHoldsAndAbsentRoute(QCoreApplication& app)
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     check(fixture.radio.panStream() == nullptr && delivered == 0,
           "missing DAX transport fails closed without falling back to native or speaker audio");
+    check(route.routeStatus() == DecoderAudioModel::RouteStatus::DaxTransportUnavailable,
+          "missing DAX transport has an explicit status distinct from channel assignment");
+}
+
+void daxAvailabilityStatus(QCoreApplication& app)
+{
+    using Status = DecoderAudioModel::RouteStatus;
+    for (const DecoderAudioModel::Consumer consumer :
+         {DecoderAudioModel::Consumer::Cw, DecoderAudioModel::Consumer::Rtty}) {
+        Fixture fixture(true);
+        PanadapterStream* stream = fixture.source->stream.get();
+        const auto holder = consumer == DecoderAudioModel::Consumer::Cw
+            ? PanadapterStream::DaxConsumer::CwDecoder
+            : PanadapterStream::DaxConsumer::RttyDecoder;
+        DecoderAudioModel route(fixture.radio, consumer);
+        QVector<Status> statuses;
+        QObject::connect(&route, &DecoderAudioModel::routeStatusChanged, &app,
+                         [&] { statuses.append(route.routeStatus()); });
+        int delivered = 0;
+        QObject::connect(&route, &DecoderAudioModel::pcmReady, &app,
+                         [&](const DecoderPcmBlock&) { ++delivered; });
+        route.setSlice(fixture.a);
+        check(fixture.a->daxChannel() == 0 && route.routeStatus() == Status::Inactive
+              && statuses.isEmpty(), "disabled decoder does not claim a missing DAX route");
+        route.setEnabled(true);
+        check(route.routeStatus() == Status::DaxChannelRequired
+              && statuses == QVector<Status>{Status::DaxChannelRequired},
+              "enabled CW and RTTY disclose the default unassigned DAX channel");
+
+        PcmProducer native;
+        PcmProducer speaker;
+        native.start(PcmPurpose::Slice, 3);
+        speaker.start();
+        emit fixture.source->sliceAudioFrameReady(3, *native.produce({0.2f, 0.2f}));
+        emit fixture.source->audioFrameReady(*speaker.produce({0.2f, 0.2f}));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        fixture.a->setFrequency(14.2);
+        check(delivered == 0 && statuses.size() == 1,
+              "missing assignment never falls back and repeated tuning does not repeat status");
+
+        fixture.a->setDaxChannel(1);
+        check(route.routeStatus() == Status::Bound && stream->daxChannelHeldBy(1, holder)
+              && statuses.size() == 2,
+              "assignment recovers the route and clears the unavailable status");
+        PcmProducer dax;
+        dax.start(PcmPurpose::Auxiliary, -1, {24000, PcmLayout::Mono});
+        emit stream->daxPcmReady(1, *dax.produce({0.5f}));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(delivered == 1, "recovered DAX route delivers real adapter PCM");
+
+        emit stream->daxPcmReady(1, *dax.produce({0.25f}));
+        fixture.a->setDaxChannel(0);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(delivered == 1 && route.routeStatus() == Status::DaxChannelRequired
+              && !stream->daxChannelHeldBy(1, holder) && statuses.size() == 3,
+              "unassignment retires queued PCM, releases the hold and restores the hint");
+        route.setEnabled(false);
+        check(route.routeStatus() == Status::Inactive && statuses.size() == 4,
+              "disabling the decoder clears the route warning state");
+    }
+}
+
+void statusNotificationReentrancy(QCoreApplication& app)
+{
+    using Status = DecoderAudioModel::RouteStatus;
+    using Holder = PanadapterStream::DaxConsumer;
+    Fixture fixture(true);
+    auto route = std::make_unique<DecoderAudioModel>(fixture.radio,
+                                                   DecoderAudioModel::Consumer::Cw);
+    route->setSlice(fixture.a);
+    QMetaObject::Connection repair = QObject::connect(
+        route.get(), &DecoderAudioModel::routeStatusChanged, &app, [&] {
+            if (route->routeStatus() == Status::DaxChannelRequired) {
+                fixture.a->setDaxChannel(1);
+            }
+        });
+    route->setEnabled(true);
+    check(route->routeStatus() == Status::Bound
+          && fixture.source->stream->daxChannelHeldBy(1, Holder::CwDecoder),
+          "a status listener can repair the route without an outer stale continuation");
+    QObject::disconnect(repair);
+    QMetaObject::Connection disable = QObject::connect(
+        route.get(), &DecoderAudioModel::routeStatusChanged, &app, [&] {
+            if (route->routeStatus() == Status::DaxChannelRequired) {
+                route->setEnabled(false);
+            }
+        });
+    fixture.a->setDaxChannel(0);
+    check(route->routeStatus() == Status::Inactive
+          && !fixture.source->stream->daxChannelHeldBy(1, Holder::CwDecoder),
+          "a status listener can disable input without an outer stale warning state");
+    QObject::disconnect(disable);
+    fixture.a->setDaxChannel(1);
+    QPointer<DecoderAudioModel> guard(route.get());
+    QObject::connect(route.get(), &DecoderAudioModel::routeStatusChanged, &app,
+                     [&] { route.reset(); });
+    route->setEnabled(true);
+    check(!guard && !fixture.source->stream->daxChannelHeldBy(1, Holder::CwDecoder),
+          "a status listener can destroy the route and release its acquired hold");
 }
 
 void concurrentProducerRetirement(QCoreApplication& app)
@@ -354,6 +453,9 @@ int main(int argc, char** argv)
             nestedRebind(app);
         } else if (scenario == QStringLiteral("dax-lifecycle")) {
             daxAcquisitionLifecycle(app);
+        } else if (scenario == QStringLiteral("dax-status")) {
+            daxAvailabilityStatus(app);
+            statusNotificationReentrancy(app);
         } else {
             deletionDuringNotifications(app, scenario);
         }
@@ -449,6 +551,8 @@ int main(int argc, char** argv)
     deletionDuringNotifications(app, QStringLiteral("delete-on-pcm"));
     boundedInboxAndIndependentConsumers(app);
     daxHoldsAndAbsentRoute(app);
+    daxAvailabilityStatus(app);
+    statusNotificationReentrancy(app);
     concurrentProducerRetirement(app);
     daxAcquisitionLifecycle(app);
 

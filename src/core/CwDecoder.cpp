@@ -231,7 +231,7 @@ void CwDecoder::appendMono(const QByteArray& mono, const PcmEpochLease& source,
     }
     if (discontinuity || typed != m_typedSource
         || (typed && source.stream() != m_source.stream())
-        || m_ringBuf.size() + mono.size() > RING_CAPACITY) {
+        || (typed && m_ringBuf.size() + mono.size() > RING_CAPACITY)) {
         ++m_inputGeneration;
         m_ringBuf.clear();
         queueResetStats(m_inputGeneration.load());
@@ -239,6 +239,11 @@ void CwDecoder::appendMono(const QByteArray& mono, const PcmEpochLease& source,
     m_source = source;
     m_typedSource = typed;
     m_ringBuf.append(mono);
+    // Preserve the TX sidetone byte API's trim-oldest backlog policy. Typed RX
+    // overflow is a source discontinuity and retires its detector above.
+    if (!typed && m_ringBuf.size() > RING_CAPACITY) {
+        m_ringBuf.remove(0, m_ringBuf.size() - RING_CAPACITY);
+    }
 }
 
 void CwDecoder::resetInput()

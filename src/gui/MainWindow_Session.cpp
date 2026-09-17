@@ -2383,6 +2383,8 @@ void MainWindow::wireRxDemodAudioSinks()
     // dispatches native PCM to DeepFist and converted mono24 to GGMorse.
     m_cwAudio = std::make_unique<DecoderAudioModel>(
         m_radioModel, DecoderAudioModel::Consumer::Cw);
+    connect(m_cwAudio.get(), &DecoderAudioModel::routeStatusChanged,
+            this, &MainWindow::refreshCwInputStatus);
     connect(m_cwAudio.get(), &DecoderAudioModel::nativePcmReady,
             &m_cwDecoder, &CwRxModel::feed);
     connect(m_cwAudio.get(), &DecoderAudioModel::pcmReady,
@@ -2395,6 +2397,8 @@ void MainWindow::wireRxDemodAudioSinks()
     // RFC #5468 A5: selected receiver/DAX tap, before speaker gain/mute/mix.
     m_rttyAudio = std::make_unique<DecoderAudioModel>(
         m_radioModel, DecoderAudioModel::Consumer::Rtty);
+    connect(m_rttyAudio.get(), &DecoderAudioModel::routeStatusChanged,
+            this, &MainWindow::refreshRttyInputStatus);
     connect(m_rttyAudio.get(), &DecoderAudioModel::pcmReady,
             &m_rttyDecoder, &RttyDecoder::feedPcmBlock);
     connect(m_rttyAudio.get(), &DecoderAudioModel::sourceReset,

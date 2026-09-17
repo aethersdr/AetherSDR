@@ -839,7 +839,6 @@ set(CORE_SOURCES
     src/core/WwvbDecoder.cpp
     src/core/AetherClockEngine.cpp
     src/core/DecoderPcmAdapter.cpp
-    src/models/DecoderAudioModel.cpp
     src/core/AetherClockSettings.cpp
     src/core/MiniPanSettings.cpp
     src/core/GreenHeronProtocol.cpp
@@ -991,6 +990,7 @@ elseif(UNIX)
 endif()
 
 set(MODEL_SOURCES
+    src/models/DecoderAudioModel.cpp
     src/models/AprsDigipeaterModel.cpp
     src/models/Nr2SettingsModel.cpp
     src/models/Rn2SettingsModel.cpp

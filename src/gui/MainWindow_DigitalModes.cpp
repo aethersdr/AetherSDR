@@ -63,6 +63,45 @@
 
 namespace AetherSDR {
 
+namespace {
+struct DecoderInputHint {
+    QString text;
+    QString reason;
+};
+
+DecoderInputHint decoderInputHint(DecoderAudioModel::RouteStatus status)
+{
+    using Status = DecoderAudioModel::RouteStatus;
+    if (status == Status::DaxChannelRequired) {
+        return {QCoreApplication::translate("MainWindow", "RX: assign DAX"),
+                QCoreApplication::translate("MainWindow",
+                    "No receive audio: assign a DAX RX channel (1-8) to the selected slice.")};
+    }
+    if (status == Status::DaxTransportUnavailable) {
+        return {QCoreApplication::translate("MainWindow", "RX: unavailable"),
+                QCoreApplication::translate("MainWindow",
+                    "No receive audio: the selected slice's DAX transport is unavailable.")};
+    }
+    return {};
+}
+} // namespace
+
+void MainWindow::refreshCwInputStatus()
+{
+    if (m_cwDecoderApplet && m_cwAudio) {
+        const DecoderInputHint hint = decoderInputHint(m_cwAudio->routeStatus());
+        m_cwDecoderApplet->setCwInputHint(hint.text, hint.reason);
+    }
+}
+
+void MainWindow::refreshRttyInputStatus()
+{
+    if (m_rttyDecoderApplet && m_rttyAudio) {
+        const DecoderInputHint hint = decoderInputHint(m_rttyAudio->routeStatus());
+        m_rttyDecoderApplet->setRttyInputHint(hint.text, hint.reason);
+    }
+}
+
 void MainWindow::stopCwRx()
 {
     if (m_cwAudio) { m_cwAudio->setEnabled(false); }
@@ -300,6 +339,7 @@ void MainWindow::routeRttyDecoderOutput()
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
                 &m_rttyDecoder, &RttyDecoder::setReversePolarity);
     }
+    refreshRttyInputStatus();
 }
 
 void MainWindow::onRttyPanelCloseRequested()

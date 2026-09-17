@@ -8940,6 +8940,7 @@ void MainWindow::routeCwDecoderOutput()
         connect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
                 &m_cwCallsignSpotter, &CwCallsignSpotter::feedText);
     }
+    refreshCwInputStatus();
 }
 
 // Recompute the CW decoder run state, panel visibility, and the

@@ -8,6 +8,9 @@ speaker-device rates remain independent; no producer configuration changes here.
 
 - Mono24 passes through exactly. Stereo becomes `L / 2 + R / 2`, including at
   24 kHz; this avoids overflowing the addition of two finite floats.
+- Non-finite samples are rejected before decoder input; converter-created
+  non-finite output produces an immediate discontinuity instead of poisoning
+  detector history.
 - Input at 48 kHz uses the existing continuous `Resampler`, staged in fixed
   256-frame input batches. There is no finite-tail flush, padding or reuse of
   recording state.
@@ -33,6 +36,14 @@ channel, removal and connection changes retire pending input and detector contex
 The model has at most 65,536 pending frames in 256 blocks and one scheduled drain.
 Overflow discards the backlog and resets the decoder before remaining audio.
 
+On Flex, CW (both GGMorse and DeepFist) and RTTY require a DAX RX channel (1–8)
+assigned to the selected slice. The central hold requests the radio stream; it
+does not require the operating-system DAX audio bridge or PC-audio monitoring.
+Missing assignment or transport leaves input closed, with a panel hint and a
+warning on the unavailable-state transition. Successful binding clears that
+hint. A bound route reports a subscription, not proof that PCM is arriving.
+There is no speaker-audio fallback or automatic DAX assignment.
+
 RTTY uses this model and keeps its existing decoder worker. Its ring, filters,
 bit timing and Baudot shift state reset together. Generation and epoch checks
 prevent old queued text or statistics from publishing after reset, stop or source
@@ -42,6 +53,7 @@ AetherClock binds an operator-selected slice through its existing engine and DAX
 hold provider. Its production callbacks carry a selection generation; disconnecting
 a Qt signal alone would leave previously posted calls deliverable. Converter,
 detector, frame/vote/lock and diagnostics history reset together.
+Stopped Clock diagnostics return an empty snapshot.
 
 CW receive uses the same selected-source model. After route/epoch/replay admission,
 `nativePcmReady` publishes the original `PcmFrame` and `pcmReady` publishes the
@@ -53,12 +65,14 @@ path; its converted samples are unused by DeepFist. No new producer relabels
 converted samples, and both paths retain the original revocation witness.
 
 GGMorse owns its engine on the worker and replaces its detector state on input
-reset, discontinuity, source change or ring overflow. The ring and each queued
-result carry an input generation; publication and estimate getters reject retired
-sources. Existing parameter snapshots and locked values survive worker resets.
+reset, discontinuity, source change or typed RX ring overflow. The ring and each
+queued result carry an input generation; publication and estimate getters reject
+retired sources. Existing parameter snapshots and locked values survive worker resets.
 A stopped GGMorse backend retains its operator locks across neural selection;
 only the selected backend runs. Closing the panel releases the CW DAX hold.
-TX sidetone remains a separate fixed24 GGMorse instance.
+TX sidetone remains a separate fixed24 GGMorse instance. Its legacy byte input
+retains the existing trim-oldest backlog behavior on overflow; typed RX overflow
+retires detector state instead.
 
 ## Clock time mapping
 

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <numbers>
 
 using namespace AetherSDR;
@@ -190,6 +191,26 @@ int main(int argc, char** argv)
     check(decoded == QStringLiteral("R"),
           "stop from first owner-thread text callback joins and suppresses remaining queued text");
     QObject::disconnect(stopOnText);
+
+    // A stopped worker must remain inert even when a live producer supplies
+    // malformed PCM. In particular, it must not publish a new reset statistic.
+    {
+        RttyDecoder stopped;
+        int notifications = 0;
+        QObject::connect(&stopped, &RttyDecoder::statsUpdated, &app,
+                         [&](float, float, float, bool) { ++notifications; });
+        DecoderPcmBlock invalid;
+        producer.start(PcmPurpose::Slice, 3, {24000, PcmLayout::Mono});
+        const std::optional<PcmFrame> frame = producer.produce({0.0f});
+        check(frame.has_value(), "stopped-input probe has a live producer lease");
+        if (frame) {
+            invalid.source = frame->epochLease();
+            invalid.samples = {std::numeric_limits<float>::quiet_NaN()};
+            stopped.feedPcmBlock(invalid);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+            check(notifications == 0, "stopped RTTY decoder ignores non-finite typed input");
+        }
+    }
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

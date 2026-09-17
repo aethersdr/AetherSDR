@@ -126,7 +126,7 @@ void RttyDecoder::appendMono(const QByteArray& mono, const PcmEpochLease& source
 
 void RttyDecoder::feedPcmBlock(const DecoderPcmBlock& block)
 {
-    if (!block.current() || block.samples.size() > PcmFrame::kMaxFrames) {
+    if (!m_running || !block.current() || block.samples.size() > PcmFrame::kMaxFrames) {
         return;
     }
     for (float sample : block.samples) {

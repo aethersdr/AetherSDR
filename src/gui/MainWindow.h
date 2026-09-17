@@ -764,6 +764,7 @@ private:
     void setDecoderPanelVisibleOnly(PanadapterApplet* target, bool shouldShow,
                                     void (PanadapterApplet::*setter)(bool));
     void refreshCwDecodeState();
+    void refreshCwInputStatus();
     void stopCwRx();
     // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
     // service → contact card on the CW decode panel + lookup dialog.
@@ -773,6 +774,7 @@ private:
     void showGpsLocationDialog();
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
+    void refreshRttyInputStatus();
     // The RTTY pane's ✕: persist "operator does not want this window" and
     // re-run the refresh, which stops the decoder (#5353).
     void onRttyPanelCloseRequested();

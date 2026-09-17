@@ -99,12 +99,26 @@ struct Fixture {
         decoder.feedPcmBlock(block);
     }
 
-    bool feedWithoutDelivery(const QVector<float>& samples)
+    void feedLegacy(const QVector<float>& samples)
+    {
+        QByteArray stereo(samples.size() * 2 * sizeof(float), Qt::Uninitialized);
+        for (qsizetype i = 0; i < samples.size(); ++i) {
+            const float pair[] = {samples[i], samples[i]};
+            std::memcpy(stereo.data() + i * sizeof(pair), pair, sizeof(pair));
+        }
+        decoder.feedAudio(stereo);
+    }
+
+    bool feedWithoutDelivery(const QVector<float>& samples, bool typed = true)
     {
         // Do not run the owner event loop: both the first typed-feed neutral
         // callback and any worker results remain queued until the test acts.
         for (qsizetype offset = 0; offset < samples.size(); offset += 2400) {
-            feed(samples.mid(offset, 2400));
+            if (typed) {
+                feed(samples.mid(offset, 2400));
+            } else {
+                feedLegacy(samples.mid(offset, 2400));
+            }
             QThread::msleep(20);
         }
         QElapsedTimer timer;
@@ -234,6 +248,21 @@ void preserveLocksAndNumericBoundary()
           "locked setpoints survive typed lifecycle changes");
     check(fixture.text.isEmpty(), "empty and invalid typed input produces no Morse text");
 }
+
+void preserveLegacyOverflow(const QVector<float>& samples)
+{
+    Fixture fixture;
+    if (!fixture.feedWithoutDelivery(samples, false)) { return; }
+    // TX sidetone's byte API historically trims old buffered audio. A backlog
+    // must not retire the detector or decoded results already queued for the UI.
+    const QVector<float> silence(PcmFrame::kMaxFrames, 0.0f);
+    for (int i = 0; i < 32; ++i) {
+        fixture.feedLegacy(silence);
+    }
+    pump(200);
+    check(fixture.text.count('V') >= 3,
+          "legacy sidetone overflow preserves queued decoded Morse results");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -250,6 +279,7 @@ int main(int argc, char** argv)
     }
     stopRestart(samples);
     preserveLocksAndNumericBoundary();
+    preserveLegacyOverflow(samples);
     std::printf("cw_decoder_pcm_lifecycle_test: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
