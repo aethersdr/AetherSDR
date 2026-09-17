@@ -431,6 +431,153 @@ int main(int argc, char** argv)
               "24 kHz audio in -> ~48 kHz IQ out (2:1 rate conversion)");
     }
 
+    // ---- WHAT SURVIVES AN UNKEY (d102 tier 1a) ----
+    //
+    // THE DEFECT THIS MEASURES. reset() is the unkey hook and Hl2TxDsp.h says
+    // it "drops anything buffered -- on unkey, so the next transmission does
+    // not start with the tail of the previous one." In the TXA build
+    // resetModulatorState() is EMPTY, so the channel keeps bp0's 2048-tap
+    // history and whatever r2 has not delivered. If that is audible, over N's
+    // tail is transmitted at the head of over N+1.
+    //
+    // THE EXPERIMENT. Over 1 is a loud tone. Then reset(), the unkey. Over 2 is
+    // DIGITAL SILENCE -- exactly zero, so every sample of output during over 2
+    // is state that survived, and there is nothing to subtract or assume.
+    // Energy in over 2 at over 1's tone frequency is the leak.
+    //
+    // Reported as a ratio so it is comparable between the two builds, and
+    // PRINTED rather than only asserted, because the number is the point: this
+    // block exists to put a figure on an open question, not merely to pass.
+    {
+        Hl2TxDsp tx;
+        Hl2TxDsp::Config cfg;
+        cfg.mode = WdspChannel::Mode::Usb;
+        cfg.alcEnabled = false;
+        std::string err;
+        if (tx.configure(cfg, &err)) {
+            tx.setMicGain(1.0);
+            std::vector<std::complex<float>> cap;
+            QObject::connect(&tx, &Hl2TxDsp::iqReady, &tx,
+                             [&cap](const std::vector<std::complex<float>>& iq) {
+                cap.insert(cap.end(), iq.begin(), iq.end());
+            });
+            const int fs = cfg.inputSampleRateHz;
+            constexpr std::size_t kChunk = 240;
+            auto feedTone = [&](double seconds, double amp, double hz) {
+                const int total = static_cast<int>(fs * seconds);
+                std::vector<float> chunk(kChunk);
+                for (int off = 0; off + static_cast<int>(kChunk) <= total;
+                     off += static_cast<int>(kChunk)) {
+                    for (std::size_t n = 0; n < kChunk; ++n)
+                        chunk[n] = static_cast<float>(
+                            amp * std::sin(2.0 * M_PI * hz
+                                           * (off + static_cast<int>(n)) / fs));
+                    feed(tx, chunk, TxAudioSource::Microphone);
+                }
+            };
+
+            // A DIFFERENT TONE IN EACH OVER, which is what discriminates.
+            //
+            // The first version of this case fed over 1 a tone and over 2
+            // SILENCE, and found 85 ms of energy at over 1's frequency in over
+            // 2. That does NOT distinguish the two explanations, and I reported
+            // it as a defect before noticing:
+            //
+            //   STATE CARRY -- the channel kept filter history across reset()
+            //   LATENCY     -- audio fed at the END of over 1 legitimately
+            //                  emerges during over 2, because a TXA channel has
+            //                  real delay and the phasing convolution has
+            //                  almost none
+            //
+            // Both predict over 1's tone appearing in over 2. The fix that
+            // should have removed state carry changed the numbers not at all,
+            // which is what exposed the ambiguity.
+            //
+            // Feeding over 2 its OWN tone separates them. Energy at over 1's
+            // frequency during over 2's SETTLED portion is carried state;
+            // energy only in over 2's first few blocks is the pipeline
+            // draining, which is not a defect and is expected to differ
+            // between the two modulators.
+            constexpr double kToneB = 1500.0;
+            feedTone(1.0, 0.5, kTone);                // over 1: tone A
+            const double loudPk = binPower(cap, -kTone, kFsOut, true);
+
+            tx.reset();                               // THE UNKEY
+            cap.clear();
+            feedTone(0.5, 0.5, kToneB);               // over 2: tone B, not silence
+
+            // MEASURED UNTRIMMED, AND THAT IS THE WHOLE POINT. binPower's
+            // trimmed form skips kSettleSamples (12288 = 256 ms) before it
+            // analyses, which is exactly where an unkey leak lives -- the first
+            // revision of this block used it and reported a tone bin of
+            // EXACTLY 0.0 beside a peak |IQ| of 0.52, i.e. it discarded the
+            // signal it existed to find and would have concluded "no leak".
+            // Measure the head, not the tail.
+            double leakPk = 0.0;
+            for (const auto& v : cap)
+                leakPk = std::max(leakPk, static_cast<double>(std::abs(v)));
+
+            // How long the leak lasts, in output samples, to the point where it
+            // falls below -80 dB of over 1 and stays there.
+            const double floorAbs = loudPk * 1e-4;   // -80 dB
+            std::size_t lastAbove = 0;
+            for (std::size_t i = 0; i < cap.size(); ++i)
+                if (std::abs(cap[i]) > floorAbs) lastAbove = i;
+            const double leakMs = 1000.0 * double(lastAbove) / kFsOut;
+
+            // Energy at over 1's tone, in the LEAK WINDOW only.
+            std::vector<std::complex<float>> head(
+                cap.begin(),
+                cap.begin() + static_cast<std::ptrdiff_t>(
+                    std::min(cap.size(), lastAbove + 1)));
+            const double leakTone = head.empty() ? 0.0
+                                  : binPower(head, -kTone, kFsOut, false);
+            // THE DISCRIMINATOR: over 1's tone in over 2's SETTLED portion.
+            // binPower's trimmed form skips 12288 samples (256 ms), which is
+            // far past any plausible pipeline drain, so what it sees is state.
+            const double carriedA = binPower(cap, -kTone, kFsOut, true);
+            const double ownB     = binPower(cap, -kToneB, kFsOut, true);
+            std::fprintf(stderr,
+                         "unkey DISCRIMINATOR [%s]: settled over-2 has tone A "
+                         "%.6e and its own tone B %.6e -> A is %.1f dB relative to B\n",
+                         Hl2TxDsp::modulatorName(), carriedA, ownB,
+                         20.0 * std::log10((carriedA + 1e-30) / (ownB + 1e-30)));
+            const double leakDb = 20.0 * std::log10((leakPk + 1e-30)
+                                                    / (loudPk + 1e-30));
+            std::fprintf(stderr,
+                         "unkey carry [%s]: over-1 tone %.6e | over-2 peak "
+                         "%.6e (%.1f dB re over 1), tone-in-leak %.6e, "
+                         "leak lasts %.1f ms (%zu of %zu samples)\n",
+                         Hl2TxDsp::modulatorName(), loudPk, leakPk, leakDb,
+                         leakTone, leakMs, lastAbove, cap.size());
+
+            // NOT ASSERTED TIGHTLY, and deliberately. This is a
+            // characterisation of an open defect (#5747) on the build that has
+            // it -- asserting a bound here would freeze today's behaviour into
+            // the test and the fix would have to be bug-compatible with it. The
+            // loose bound below only catches a leak so large it is the whole
+            // previous over.
+            // THE ASSERTION THAT MATTERS, and it is about the SETTLED
+            // portion. Over 2 is now a full-amplitude tone of its own, so its
+            // PEAK is meant to match over 1's -- an earlier revision asserted
+            // on the peak and failed for that reason, which is the assertion
+            // being wrong rather than the modulator.
+            //
+            // 60 dB is loose on purpose. Both builds measure ~312 dB, so this
+            // is not a bound anyone is near; it exists to catch a modulator
+            // that genuinely replays the previous over, which is what the
+            // header promises cannot happen.
+            const double carriedDb =
+                20.0 * std::log10((carriedA + 1e-30) / (ownB + 1e-30));
+            check(carriedDb < -60.0,
+                  "unkey: over 1's tone is absent from over 2's settled output");
+        } else {
+            std::fprintf(stderr, "FAIL: unkey-carry case configure: %s\n",
+                         err.c_str());
+            ++g_failures;
+        }
+    }
+
     // ---- A MODE CHANGE ON A RUNNING MODULATOR MOVES THE SIDEBAND ----
     //
     // THE ONE PATH EVERY OTHER CASE IN THIS FILE MISSES. Each case above

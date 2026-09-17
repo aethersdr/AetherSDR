@@ -319,6 +319,11 @@ private:
 #if AETHER_HL2_TX_TXA
     // ── WDSP TXA ──────────────────────────────────────────────
     std::unique_ptr<WdspChannel> m_channel;
+    // Whether the TXA channel is STARTED. reset() stops it (the T/R envelope
+    // down, chain flushed) and the next over's first block starts it again.
+    // Tracked rather than queried because setRunning() is [[nodiscard]] and a
+    // redundant start on every block would be a control call per 21 ms.
+    bool m_modulatorRunning = false;
     // A permanently zero Q plane. The backend feeds MONO audio, and xpanel runs
     // with inselect = 2 (create_panel's ninth argument in create_txa) so a TXA
     // channel multiplies Q by zero regardless -- measured, not read: a tone fed
