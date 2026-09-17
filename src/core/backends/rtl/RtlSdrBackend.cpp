@@ -107,6 +107,29 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     // a direct-sampling range that depends on the IC), it becomes revisable and
     // this comment stops being true.
     RadioCapabilities c;
+    // THE dBm AXIS IS UNCALIBRATED, and on this backend that is not a nuance:
+    // RtlSdrDdc's FFT path computes `20 * log10(mag / kFftSize)` on raw ADC
+    // magnitudes and emits that straight out as the spectrum frame. There is no
+    // reference object, no offset and no per-unit figure anywhere in this
+    // family -- the axis is dBFS relative to the converter's own full scale.
+    //
+    // A relative reading is still useful; an absolute one is not available, so
+    // a level from this radio may not be published as a spot, held against
+    // another station's report, or used as an absolute threshold.
+    PanAmplitudeModel amplitude;
+    amplitude.calibratedDbm = false;
+    // The spectrum bins are computed on THIS host from raw ADC magnitudes and
+    // carry no reference level: RtlSdrDdc::processSpectrum takes the FFT output,
+    // forms `mag = sqrt(re*re + im*im) / kFftSize` and emits
+    // `20 * log10(max(mag, 1e-6))` straight into the frame. Nothing in that
+    // expression can move when the display reference level moves, so the
+    // noise-floor auto-adjust has a fixed target and terminates — see
+    // PanAmplitudeModel::binsAbsolute. radioOwnsDbmScale is deliberately
+    // left at its permissive default here and NOT flipped in the same change:
+    // this radio has no range command, but correcting that declaration is a
+    // separate question from this one and belongs with its own reasoning.
+    amplitude.binsAbsolute = true;
+    c.panAmplitude = amplitude;
     c.family = QStringLiteral("rtl");
     c.model  = m_modelName;
     c.manufacturer = m_vendor.isEmpty() ? QStringLiteral("Realtek") : m_vendor;

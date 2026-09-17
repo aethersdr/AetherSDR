@@ -11,6 +11,7 @@
 #include <QFocusEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QGradient>
 #include <QPainter>
 #include <QPoint>
 #include <QStringList>
@@ -170,6 +171,32 @@ public:
     // in the natural direction.
     void setFillFromRight(bool on) { m_fillFromRight = on; update(); }
 
+    // Paint the empty track as a left-to-right gradient instead of a flat
+    // ground, so the bar carries its own scale colouring even at rest — how
+    // the Tuner Genius XL's front panel draws its SWR scale, which
+    // TunerApplet reproduces in its expanded presentation.
+    //
+    // Stops are passed in rather than resolved here: this header is included
+    // by ~20 applets, and a themed default would couple every one of them to
+    // ThemeManager for a mode only one of them turns on. Empty restores the
+    // flat track.
+    void setTrackGradient(const QGradientStops& stops) {
+        m_trackStops = stops;
+        update();
+    }
+
+    // Scale the gauge's internal metrics — the tick strip above the bar and
+    // both font sizes — so a gauge given more height grows its lettering
+    // instead of just a taller bar. Opt-in, defaulting to 1.0, which
+    // reproduces the original fixed metrics exactly: every other applet's
+    // gauges are unaffected.
+    void setMetricScale(qreal scale) {
+        const qreal clamped = qBound(0.5, scale, 4.0);
+        if (qFuzzyCompare(m_metricScale, clamped)) return;
+        m_metricScale = clamped;
+        update();
+    }
+
     void setBallistics(const MeterSmoother::Ballistics& b) {
         m_smooth.setBallistics(b);
     }
@@ -293,13 +320,19 @@ protected:
 
         const int w = width();
         const int h = height();
-        const int barY = 12;
+        const int barY = qRound(12 * m_metricScale);
         const int barH = h - barY - 2;
         const int barX = 0;
         const int barW = w;
 
         // Background
-        p.fillRect(barX, barY, barW, barH, QColor(0x0a, 0x0a, 0x18));
+        if (m_trackStops.isEmpty()) {
+            p.fillRect(barX, barY, barW, barH, QColor(0x0a, 0x0a, 0x18));
+        } else {
+            QLinearGradient track(barX, 0, barX + barW, 0);
+            track.setStops(m_trackStops);
+            p.fillRect(barX, barY, barW, barH, track);
+        }
         p.setPen(QColor(0x20, 0x30, 0x40));
         p.drawRect(barX, barY, barW - 1, barH - 1);
 
@@ -366,7 +399,7 @@ protected:
 
         // Tick labels along the top
         QFont tickFont = font();
-        tickFont.setPixelSize(9);
+        tickFont.setPixelSize(qMax(6, qRound(9 * m_metricScale)));
         p.setFont(tickFont);
 
         for (const auto& tick : m_ticks) {
@@ -381,12 +414,12 @@ protected:
             // Center label on tick position, clamp to widget bounds
             // Leave a small right margin so the last tick isn't flush to the edge
             int lx = qBound(2, tx - tw / 2, w - tw - 4);
-            p.drawText(lx, 10, tick.label);
+            p.drawText(lx, qRound(10 * m_metricScale), tick.label);
         }
 
         // Label in center of bar
         QFont lblFont = font();
-        lblFont.setPixelSize(10);
+        lblFont.setPixelSize(qMax(6, qRound(10 * m_metricScale)));
         lblFont.setBold(true);
         p.setFont(lblFont);
         p.setPen(QColor(0xff, 0xff, 0xff));
@@ -571,6 +604,8 @@ private:
     bool  m_peakEnabled{false};
     bool  m_reversed{false};
     bool  m_fillFromRight{false};
+    QGradientStops m_trackStops;   // empty = flat track (the default)
+    qreal m_metricScale{1.0};      // 1.0 = the original fixed metrics
     QString m_label, m_unit;
     QVector<Tick> m_ticks;
 

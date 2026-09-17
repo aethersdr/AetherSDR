@@ -9,6 +9,11 @@ struct TciSliceEndpoint
 {
     int sliceId { -1 };
     bool isTx { false };
+    // Another connected TCI client is operating this slice as its own receiver
+    // (it declared `audio_start:<n>` on the trx bound to this slice). Such a
+    // slice is never adopted as a different receiver's VFO B (#5193). Callers
+    // that do not know the requester leave it false.
+    bool operatedByAnotherClient { false };
 };
 
 // Shared TCI-to-Flex routing state. Wire TRX indexes are intentionally absent:
@@ -28,6 +33,10 @@ public:
         UseExisting,
         PromoteExisting,
         Create,
+        // This receiver has no VFO B of its own right now: the only TX slice
+        // is another client's receiver and no split was requested. Answer the
+        // request with the RX slice's frequency and touch nothing (#5193).
+        EchoOnly,
         Unavailable,
     };
 
@@ -77,6 +86,8 @@ public:
 
 private:
     static bool contains(const QVector<TciSliceEndpoint>& endpoints, int sliceId);
+    static bool operatedByAnotherClient(
+        const QVector<TciSliceEndpoint>& endpoints, int sliceId);
 
     bool m_splitRequested { false };
     int m_rxSliceId { -1 };

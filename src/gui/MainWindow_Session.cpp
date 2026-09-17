@@ -384,17 +384,7 @@ void MainWindow::wireDiscovery()
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
             this, &MainWindow::maybeAutoConnectToDiscoveredRadio);
     connect(m_connPanel, &ConnectionPanel::disconnectRequested,
-            this, [this]{
-        m_userDisconnected = true;
-        m_wanReconnectTimer.stop();
-        m_wanReconnectAttemptInProgress = false;
-        setPanadapterConnectionAnimation(false);
-        auto& s = AppSettings::instance();
-        s.remove("LastConnectedRadioSerial");
-        s.remove("LastRoutedRadioIp");
-        s.save();
-        m_radioModel.disconnectFromRadio();
-    });
+            this, &MainWindow::disconnectFromRadioByUser);
 
     // ── SmartLink ──────────────────────────────────────────────────────────
     m_connPanel->setSmartLinkClient(&m_smartLink);
@@ -507,6 +497,19 @@ void MainWindow::wireDiscovery()
             setPanadapterConnectionAnimation(false);
     });
 
+}
+
+void MainWindow::disconnectFromRadioByUser()
+{
+    m_userDisconnected = true;
+    m_wanReconnectTimer.stop();
+    m_wanReconnectAttemptInProgress = false;
+    setPanadapterConnectionAnimation(false);
+    auto& s = AppSettings::instance();
+    s.remove("LastConnectedRadioSerial");
+    s.remove("LastRoutedRadioIp");
+    s.save();
+    m_radioModel.disconnectFromRadio();
 }
 
 void MainWindow::maybeAutoConnectToDiscoveredRadio(const RadioInfo& info)
@@ -734,15 +737,7 @@ void MainWindow::wireRadioModel()
         }
     });
     connect(&m_radioModel, &RadioModel::commandDropped,
-            this, [this](const QString&) {
-        if (m_commandDroppedNoticeShown)
-            return;
-        m_commandDroppedNoticeShown = true;
-        statusBar()->showMessage(
-            tr("This radio doesn't support that control — nothing was sent to "
-               "the radio. Further unsupported controls are logged."),
-            8000);
-    });
+            this, [this](const QString&) { showUnsupportedControlNotice(); });
     // Slice Link: disconnect teardown never emits sliceRemoved (stale slices
     // are staged for reconnect reclaim), so dissolve the link explicitly.
     // Both transitions dissolve — a link never crosses a session boundary
@@ -1080,8 +1075,9 @@ void MainWindow::wireRadioModel()
     // operator's gain TWICE, in series, which is not what a slider labelled once
     // can mean. The modulator's is the one to keep: setPcMicGain only ever
     // attenuates (0..100 maps to 0.0..1.0, and AudioEngine skips it entirely at
-    // unity), while the ALC behind the modulator needs the mic pushed UP past
-    // its hold threshold — see Hl2Backend::setMicGain.
+    // unity), while the modulator's slider reaches +40 dB and is now the only
+    // thing that lifts a quiet mic at all — the ALC behind it only reduces.
+    // See Hl2Backend::setMicGain.
     //
     // This gate is also why the control was dead rather than doubled before now:
     // micSelection() is "MIC" until a radio reports otherwise, and an HL2 has no
@@ -1382,6 +1378,10 @@ void MainWindow::wireRadioModel()
         if (!tx) {
             m_appletPanel->phoneCwApplet()->updateCompression(0.0f);
             m_appletPanel->phoneCwApplet()->resetAlc();
+            // Same reason as resetAlc: the last gain the ALC applied describes
+            // a transmission that has ended, and left on the face it reads as
+            // the gain being applied now.
+            m_appletPanel->phoneCwApplet()->resetAlcGain();
         }
         if (tx) {
             AetherSDR::ThemeManager::instance().applyStyleSheet(m_txIndicator, "QLabel { color: white; background: {{color.accent.danger}}; font-weight: bold; "
@@ -2962,6 +2962,36 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
         // Observation only: never restore a client setting into DATA OFF MOD.
         m_radioModel.notePcAudioEnabled(pcAudioEnabled);
     }
+}
+
+// One notice per connect session, latch reset on the connect edge (M0, #5263).
+//
+// Held here rather than inline in the commandDropped lambda because a
+// capability gate REFUSES BEFORE THE SEND: `sendCmd` is never reached, so
+// `commandDropped` never fires, and a control converted from "drops silently"
+// to "refuses" would otherwise have taken the operator's only feedback away
+// with it. #5266 landed its four gates on 2026-08-26 and #5265 made the drop
+// loud on 2026-08-27, so that trade was invisible at the time; it is not
+// invisible now. A gate calls this so a refused control says exactly what a
+// dropped one says.
+//
+// The latch is now SHARED between two producers: this helper's gate callers and
+// the commandDropped path. One refusal per connect session therefore consumes
+// the notice for both, so an operator who trips a capability gate first sees
+// nothing for a genuinely dropped command later in the same session. That is
+// the pre-existing one-shot semantics extended to a second producer rather than
+// a new rule, and the message is deliberately generic enough to stand for
+// either cause — but it is a real consequence and is recorded here rather than
+// left to be rediscovered.
+void MainWindow::showUnsupportedControlNotice()
+{
+    if (m_commandDroppedNoticeShown)
+        return;
+    m_commandDroppedNoticeShown = true;
+    statusBar()->showMessage(
+        tr("This radio doesn't support that control — nothing was sent to "
+           "the radio. Further unsupported controls are logged."),
+        8000);
 }
 
 } // namespace AetherSDR

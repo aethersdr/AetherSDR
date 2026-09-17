@@ -4,6 +4,8 @@
 #include "models/RadioModel.h"
 #include "models/TxController.h"
 
+#include <optional>
+
 #include <QTimer>
 
 class QCheckBox;
@@ -25,7 +27,7 @@ class PskReporterClient;
 class RadioModel;
 class TransmitModel;
 
-// PSK Reporter reception map (View menu). Shows who is hearing our
+// PSK Reporter reception map (Tools menu). Shows who is hearing our
 // callsign, centered on the radio's GPS fix (falling back to the reported
 // grid locator). Update cadence is fixed-interval only — PSK Reporter asks
 // clients not to poll more than once per five minutes, so there is no
@@ -68,6 +70,13 @@ private:
     // boundary was missed, or when the DAX TX stream is still being created.
     void deferBeaconToNextSlot(const QString& reason);
     void updateBeaconDefaults();
+    // The WSPR beacon's generated level, per radio. applyBeaconLevel() rides
+    // TransmitModel::hostModulationChanged so the answer follows the connected
+    // radio's transmit chain; the other two are its store side. Decisions live
+    // in PskBeaconLevelPolicy.h.
+    void applyBeaconLevel();
+    std::optional<int> storedBeaconLevelDbFs(bool hostModulates);
+    void writeBeaconLevelDbFs(int dbfs);
     void setBeaconControlsEnabled(bool enabled);
     bool applyBeaconBand();
     // Re-sends mode and both passbands immediately before the key, and reports
@@ -108,6 +117,11 @@ private:
     GuardedSlider*      m_cityLightsFaintLights{nullptr};
     GuardedSlider*      m_cityLightsWarmth{nullptr};
     QCheckBox*          m_weatherRadarCheck{nullptr};
+    QCheckBox*         m_radarRegionChecks[4]{};
+    QCheckBox*          m_radarCoverageCheck{nullptr};
+    QCheckBox*          m_radarLegendCheck{nullptr};
+    QCheckBox*          m_radarLegendTopCheck{nullptr};
+    QLabel*            m_radarProductLabel{nullptr};
     QToolButton*        m_weatherRadarPlayButton{nullptr};
     QComboBox*          m_weatherRadarHistoryCombo{nullptr};
     GuardedSlider*      m_weatherRadarSpeedSlider{nullptr};

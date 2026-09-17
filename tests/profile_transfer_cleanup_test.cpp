@@ -19,8 +19,10 @@ public:
         transfer.m_bytesDone = 0;
         transfer.m_bytesTotal = 1;
         transfer.m_socket = socket;
-        QObject::connect(socket, &QTcpSocket::disconnected,
-                         &transfer, &ProfileTransfer::onUploadDisconnected);
+        QObject::connect(socket, &QTcpSocket::disconnected, &transfer, [&transfer, socket] {
+            transfer.handleUploadDisconnected(transfer.m_operationGeneration,
+                                              transfer.m_phase, socket);
+        });
     }
 
     static void prepareCompleteUpload(ProfileTransfer& transfer, QTcpSocket* socket)
@@ -52,8 +54,10 @@ public:
         transfer.m_phase = ProfileTransfer::Phase::DownloadPackage;
         transfer.m_operation = ProfileTransfer::Operation::ExportDatabase;
         transfer.m_server = server;
-        QObject::connect(server, &QTcpServer::newConnection,
-                         &transfer, &ProfileTransfer::onDownloadConnection);
+        QObject::connect(server, &QTcpServer::newConnection, &transfer, [&transfer, server] {
+            transfer.handleDownloadConnection(transfer.m_operationGeneration,
+                                              transfer.m_phase, server);
+        });
     }
 
     static QTcpServer* server(const ProfileTransfer& transfer)

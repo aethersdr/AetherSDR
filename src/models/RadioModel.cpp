@@ -68,6 +68,18 @@ constexpr quint32 kNeutralPanStreamIdBase = 0xE1000000u;
 // plane. Not a SmartSDR protocol response code; numbered alongside
 // kProfileLoadSuppressedCommandCode (0x50000061), the other such drop.
 constexpr int kNoCommandPlaneCode = 0x50000063;
+
+// True when sendCmd() answered without the command ever reaching a radio: this
+// backend has no command plane, or the session ended while the command was in
+// flight and expirePendingCallbacks() drained it. It is NOT a radio rejection.
+//
+// Any callback that treats a non-zero result as "the radio refused" MUST check
+// this first. Skipping it is not cosmetic: the `client gui` callback below
+// routes a refusal into handleGuiClientRegistrationFailure(), which latches
+// m_intentionalDisconnect and stops the reconnect timer -- so a plain network
+// blip during registration ended the session permanently and told the operator
+// a GUI-client slot was taken. (#5653 review)
+constexpr bool commandNeverReachedRadio(int code) { return code == kNoCommandPlaneCode; }
 // Waterfall ids must be distinct from pan ids: the UI routes waterfall rows by
 // PanadapterModel::wfStreamId() and spectrum frames by panStreamId().
 constexpr quint32 kNeutralWfStreamIdBase  = 0xE2000000u;
@@ -826,6 +838,26 @@ void RadioModel::setupBackend(const QString& family)
     // RadioModel: `this`, or a value member such as m_transmitModel.
     m_radioDialLocked.reset();
     m_family = family.isEmpty() ? QStringLiteral("flex") : family.toLower();
+    // A switch to a family that declares no offline health source takes the old
+    // one with it. NO FAMILY IS NAMED: the registry answers whether the newly
+    // selected family declared anything, and a family that never registered one
+    // answers no — the same gate the old family-string comparison performed,
+    // without the construct docs/HERMES.md forbids above the seam. (Written
+    // without quoting that construct on purpose: tools/check_localization.py
+    // greps added lines and cannot tell a comment from code, and a checker
+    // that cries wolf over its own documentation stops being read.)
+    //
+    // The switch BETWEEN two declaring families is handled by
+    // ensureOfflineHealth() below, which rebuilds when the family it is asked
+    // for is not the one that built the source it is holding.
+    //
+    // Here rather than in teardownBackend(), which also runs on a plain
+    // disconnect — and answering a DISCONNECTED radio is the entire point of an
+    // offline source, so releasing it there would delete the instrument in the
+    // state it exists for. rebuildBackendForFamily() tears the old backend down
+    // before calling this, so nothing is holding the borrowed pointer by now.
+    if (!OfflineHealthRegistry::declaredFor(m_family))
+        releaseOfflineHealth();
     // IRadioBackend contract rule 5. teardownBackend() bumps this before the
     // old backend dies, and every handler below that INTERPRETS a delivery from
     // a backend-owned object captures it and returns early once it no longer
@@ -858,6 +890,25 @@ void RadioModel::setupBackend(const QString& family)
                    "was unavailable when AetherSDR was compiled."));
             return;
         }
+        // Hand the backend the offline health source this model owns, if the
+        // family declared one. A BORROW, not a transfer: the source must
+        // outlive every backend, because its job is answering when there is no
+        // backend at all.
+        //
+        // Through the seam, with no cast and no family name. This replaces a
+        // `dynamic_cast<hl2::Hl2Backend*>` — the shape #5554 §2.8 lists as a
+        // seam leak to be retired. IRadioBackend::setOfflineHealthSource()
+        // defaults to a no-op, so a family with no use for one ignores it and
+        // a family that wants it recognises its own type on its own side of
+        // the seam.
+        // The family just built RECLAIMS the instrument. If a `telemetry target`
+        // aimed it at another family's radio while this session was idle, the
+        // session taking the wire wins: ensureOfflineHealth() rebuilds for
+        // m_family and the old aim is dropped rather than published under this
+        // radio's rows.
+        if (auto* offline = ensureOfflineHealth(m_family))
+            m_backend->setOfflineHealthSource(offline);
+
         if (auto* flex = dynamic_cast<FlexBackend*>(m_backend.get())) {
             flex->setCommandSink([this](const QString& cmd){ sendCommand(cmd); });
             flex->setTxCommandSink([this](const QString& cmd, const TxCoordinator::Command& fence) {
@@ -1407,8 +1458,11 @@ void RadioModel::setupBackend(const QString& family)
         if (generation != m_backendReceiverGeneration) return;
         auto it = m_pendingCallbacks.find(seq);
         if (it != m_pendingCallbacks.end()) {
-            it.value()(code, body);
+            ResponseCallback callback = std::move(it.value());
             m_pendingCallbacks.erase(it);
+            if (callback) {
+                callback(code, body);
+            }
         }
     });
 
@@ -1485,10 +1539,38 @@ void RadioModel::setupBackend(const QString& family)
     // healthSnapshot() honestly.
     //
     // Free on the constructor's own call, where TransmitModel is at its 50 and
-    // 50 maps to the 1.0 the modulator already holds. Same Flex gate as the
-    // seam: on a Flex the slider's `transmit set miclevel=` reaches the radio's
-    // own preamp and this must not double it.
-    if (m_backend && !usesFlexCommandPlane())
+    // 50 maps to the 1.0 the modulator already holds.
+    //
+    // GATED ON hostModulates, NOT on the family predicate the operator-intent
+    // seam uses — the two sites ask different questions and the gate was copied
+    // between them.
+    //
+    // The seam's gate is DE-DUPLICATION: setMicLevel() emits
+    // `transmit set miclevel=` beside micLevelCommandIssued, so on a Flex the
+    // seam would issue a second copy of a command the wire text already carried.
+    // Nothing is in flight here. setupBackend() emits no wire text, so "did the
+    // Flex text path already carry this" is not a question this site has.
+    //
+    // The question this site has is whether the fresh backend HAS a host
+    // modulator standing at its own default, waiting to be told where the
+    // operator left the slider. That is precisely what hostModulates answers.
+    // A backend that does not host-modulate has no such object: it either has
+    // nothing to seed (Flex, RTL, the sim) or it owns the value INSIDE the radio
+    // and will report it on connect — Icom, where IRadioBackend::setMicGain is
+    // implemented as a live CI-V 14 0B write (or, on an IC-9700 with LAN as the
+    // modulation input, a SET 0114 LAN MOD write). Handing either one a
+    // client-held number at construction is a silent write of state the radio
+    // never asked for, and it marks the backend's own mirror as reported —
+    // healthSnapshot() then prints our number where the radio's belongs, before
+    // a single 14 0B reply has arrived. The operator's own slider move still
+    // reaches an Icom through micLevelCommandIssued; only this construction-time
+    // push stops.
+    //
+    // See the hostModulates declaration in RadioCapabilities.h, which carries
+    // the warning that conflating it with takesTxAudioOverSeam cost a working
+    // transmitter. This is that same flag, read for the question it was written
+    // to answer: does the HOST run the modulator.
+    if (m_backend && backendCapabilities().hostModulates)
         m_backend->setMicGain(m_transmitModel.micLevel());
 }
 
@@ -1856,21 +1938,7 @@ void RadioModel::teardownBackend()
     if (m_backend) {
         m_backend->retirePcmStreams();
     }
-    // Answer, then drop, every command still waiting on the backend that is
-    // about to die. The generation guard on commandResponse means a reply
-    // arriving after this point is discarded, so without this the callback —
-    // a std::function capturing this and whatever the caller held — would sit
-    // in the map for the life of the process, and the caller would wait for a
-    // reply that can no longer be delivered. kNoCommandPlaneCode is the same
-    // answer sendCmd() gives when there is no command plane to write to.
-    if (!m_pendingCallbacks.isEmpty()) {
-        const QMap<quint32, ResponseCallback> pending = std::move(m_pendingCallbacks);
-        m_pendingCallbacks.clear();
-        for (const ResponseCallback& cb : pending) {
-            if (cb)
-                cb(kNoCommandPlaneCode, QStringLiteral("the radio connection was replaced"));
-        }
-    }
+    expirePendingCallbacks(QStringLiteral("the radio connection was replaced"));
     m_sliceLifecycleCommandSinkForTest = {};
     m_memoryRefreshActive = false;
     m_memoryImportFailures = 0;
@@ -1909,6 +1977,35 @@ void RadioModel::teardownBackend()
     // died, not about the app. A Flex arriving after an HL2 must not inherit
     // "this wire has no round trip to time".
     m_backendLinkShape = {};
+}
+
+void RadioModel::expirePendingCallbacks(const QString& reason)
+{
+    // Clear before invoking arbitrary callbacks. A callback may synchronously
+    // issue another command, which must not invalidate this detached iteration.
+    if (m_pendingCallbacks.isEmpty()) {
+        return;
+    }
+
+    const QMap<quint32, ResponseCallback> pending = std::move(m_pendingCallbacks);
+    m_pendingCallbacks.clear();
+
+    // Refuse new commands for the duration of the drain. hasCommandPlane() is
+    // only a pointer check (m_connection outlives the socket), so without this
+    // a callback that chains another sendCmd() -- createAudioStream()'s
+    // `stream remove` -> createRxAudioStream() is the live one -- lands a fresh
+    // entry in the map we just cleared and queues a write to a dead socket,
+    // re-creating the exact leak this drain exists to close. Saved and restored
+    // rather than set/cleared, so a nested disconnect can't lift the refusal
+    // while an outer drain is still iterating. (#5653 review)
+    const bool wasExpiring = m_expiringPendingCallbacks;
+    m_expiringPendingCallbacks = true;
+    for (const ResponseCallback& callback : pending) {
+        if (callback) {
+            callback(kNoCommandPlaneCode, reason);
+        }
+    }
+    m_expiringPendingCallbacks = wasExpiring;
 }
 
 namespace {
@@ -3704,6 +3801,25 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         }
     }
 
+    // THE SESSION TAKING THE WIRE RECLAIMS THE INSTRUMENT.
+    //
+    // `telemetry target` can aim the offline source at ANOTHER family's radio
+    // while this session is idle — that is the verb's whole purpose. Connecting
+    // ends that: a session's `health` must describe the radio it is talking to,
+    // so the instrument is rebuilt for the family being connected and the old
+    // aim is dropped rather than published under this radio's rows.
+    //
+    // HERE rather than only in setupBackend(), which the branch above skips
+    // whenever the family is unchanged and a backend already exists — the
+    // common case, since a backend is built in this class's constructor. Left
+    // to setupBackend() alone, aiming at an HL2 and then connecting to the Flex
+    // that was already selected would carry the HL2's attribution rows into the
+    // Flex session, which is the cross-family leak the declaration gate exists
+    // to stop. ensureOfflineHealth() hands the old borrow back through the seam
+    // before releasing, so nothing is left holding a destroyed source.
+    if (auto* offline = ensureOfflineHealth(m_family))
+        m_backend->setOfflineHealthSource(offline);
+
     // An attempt is in flight from here until it lands, fails, or is abandoned
     // (#4912). Set after the family switch above so a backend rebuild — which
     // tears the old backend down and can emit a disconnect — cannot clear the
@@ -4503,6 +4619,163 @@ IRadioBackend::HealthSnapshot RadioModel::backendHealthSnapshot() const
 {
     return m_backend ? m_backend->healthSnapshot()
                      : IRadioBackend::HealthSnapshot{};
+}
+
+IOfflineHealthSource* RadioModel::ensureOfflineHealth(const QString& family)
+{
+    // THE FAMILY IS AN ARGUMENT, not m_family, for two different callers.
+    // setupBackend() passes the family it just built, and setOfflineHealthTarget()
+    // passes the family of the radio being AIMED AT, which need not be the one
+    // this session is connected to — that is the whole point of aiming at a
+    // radio you are not talking to.
+    //
+    // AND THE HELD SOURCE CARRIES WHICH FAMILY BUILT IT. Without that, the
+    // `if (!m_offlineHealth)` below answers "yes, we have one" for a source
+    // that belongs to somebody else, and a second declaring family is served
+    // the FIRST family's instrument — the same cross-family attribution leak
+    // the declaration gate closes for families that declare nothing. The
+    // interface deliberately carries no family (it must not: it would be a wire
+    // concept), so the model remembers it (#5642 review).
+    const QString want = family.toLower();
+    if (m_offlineHealth && m_offlineHealthFamily != want)
+        releaseOfflineHealth();
+    if (!m_offlineHealth) {
+        // Parented to this model, so its lifetime is the model's — the whole
+        // point — while its EXISTENCE is conditional on the named family having
+        // declared one. A family that declared nothing reaches here, gets null,
+        // and constructs nothing.
+        m_offlineHealth = OfflineHealthRegistry::create(want, this);
+        m_offlineHealthFamily = m_offlineHealth ? want : QString();
+    }
+    return m_offlineHealth.get();
+}
+
+IRadioBackend::HealthSnapshot RadioModel::offlineHealthRows()
+{
+    // Deliberately does NOT consult m_backend. See the header.
+    //
+    // And deliberately does NOT construct the source: a family-agnostic health
+    // read must not bring a poller into existence, so "no source" answers with
+    // no rows rather than with an armed one.
+    if (!m_offlineHealth) {
+        return IRadioBackend::HealthSnapshot{};
+    }
+    m_offlineHealth->noteOfflineDemand();
+    return m_offlineHealth->offlineHealthRows();
+}
+
+void RadioModel::releaseOfflineHealth()
+{
+    if (!m_offlineHealth)
+        return;
+    // TAKE THE BORROW BACK BEFORE DESTROYING WHAT WAS BORROWED.
+    //
+    // setupBackend() lends this pointer to the live backend and the backend
+    // keeps it raw, so destroying the source underneath it would leave a
+    // dangling read on the next health snapshot. The seam verb that handed it
+    // over is the same one that takes it back: setOfflineHealthSource(nullptr)
+    // is a no-op for every family that ignored the loan, and Hl2Backend's
+    // dynamic_cast of a null pointer is a null service, which it already guards
+    // on everywhere.
+    //
+    // An earlier version returned early whenever a backend existed instead.
+    // That made the release unreachable in a real session — teardownBackend()
+    // runs only from ~RadioModel(), setBackendForTest() and
+    // rebuildBackendForFamily(), so a plain disconnect leaves m_backend alive —
+    // and the documented "stop AND let go" contract was never delivered
+    // (#5642 review).
+    if (m_backend)
+        m_backend->setOfflineHealthSource(nullptr);
+    m_offlineHealth.reset();
+    m_offlineHealthFamily.clear();
+}
+
+RadioModel::OfflineAimResult
+RadioModel::setOfflineHealthTarget(const QString& family, const QHostAddress& addr)
+{
+    // THE FAMILY OF THE RADIO BEING AIMED AT, not the one this session is
+    // connected to.
+    //
+    // An earlier version gated on m_family, which is set only by
+    // connectToRadio(). On a fresh app that is "flex", so the verb was refused
+    // outright and the only way to make it work was to connect to the radio
+    // first — the write into somebody else's session that this whole feature
+    // exists to avoid. The caller resolves an address to a discovered radio's
+    // family and passes it here; aiming still never connects and never touches
+    // m_family (#5642 review).
+    //
+    // STILL NO FAMILY NAME IN THIS FILE. The registry answers whether the named
+    // family declared anything, exactly as before — the difference is only
+    // WHICH family is asked about, and the answer still comes from a
+    // declaration rather than from a hard-coded list of who is expected to have
+    // made one.
+    //
+    // "Stop what was never started" answers OK before any of that. It names no
+    // radio, so there is no family to resolve and nothing for a gate to have an
+    // opinion about; refusing it would make an idempotent stop report a failure.
+    if (addr.isNull() && !m_offlineHealth)
+        return OfflineAimResult::Ok;
+
+    //
+    // Refusing matters rather than being tidy: without this gate, aiming the
+    // poller from a Flex, Icom or Sim session constructed the source, which
+    // made hasOfflineHealth() true and grew another family's attribution rows
+    // on that session's `health` — reproduced live against the demo simulator,
+    // with real datagrams leaving a sim session.
+    const QString want = family.toLower();
+    if (!OfflineHealthRegistry::declaredFor(want))
+        return OfflineAimResult::FamilyDeclaresNone;
+
+    // AND IT IS REFUSED WHILE A SESSION HOLDS THE INSTRUMENT.
+    //
+    // There is ONE source, and setupBackend() lends the same pointer to the
+    // live backend. So aiming it while connected does not open a second probe:
+    // it REPOINTS the one the connected session is reading, and that session's
+    // health then merges another radio's temperature, forward power, PTT and
+    // in-use rows as its own. `setOfflineTarget()`'s own comment calls that the
+    // "frozen reading wearing a different address" the design exists to stop --
+    // and repointing produces the same defect live rather than stale.
+    //
+    // `off` is refused for the same reason from the other side: it would disarm
+    // the connected session's stall diagnostic, which is the one thing this
+    // feature exists to keep running when the stream stops.
+    //
+    // Nothing is lost for the headline case. A connected session is ALREADY
+    // aimed -- connectRadio() sets the poll target at connect -- so an operator
+    // who is connected and stalled has the readings without asking. The verb is
+    // for the radio you are NOT talking to, and refusing it here is the same
+    // separation the function's tail comment makes between aiming and
+    // connecting. Reported by ten9876 on #5642.
+    if (m_backend && isConnected())
+        return OfflineAimResult::SessionConnected;
+
+    if (addr.isNull()) {
+        // Stop, then LET GO. Clearing the target alone left hasOfflineHealth()
+        // true, so `health` went on merging rows that described a poller with
+        // no radio, and there was no way back to the snapshot the session
+        // started with. releaseOfflineHealth() takes the backend's borrow back
+        // through the seam first, so "let go" is now actually reachable.
+        m_offlineHealth->setOfflineTarget(addr);
+        releaseOfflineHealth();
+        return OfflineAimResult::Ok;
+    }
+
+    IOfflineHealthSource* source = ensureOfflineHealth(want);
+    if (!source)
+        return OfflineAimResult::FamilyDeclaresNone;
+    // A backend built for a DIFFERENT family is still holding whatever was
+    // lent to it before this aim replaced the source. Re-lend through the seam
+    // so the loan matches what the model owns; a family that cannot use this
+    // source recognises that on its own side and ignores it.
+    if (m_backend)
+        m_backend->setOfflineHealthSource(source);
+    source->setOfflineTarget(addr);
+    // Deliberately does NOT touch m_backend, does not set m_family, and does
+    // not begin a connection. Aiming a read-only probe at a radio and
+    // connecting to it are different acts, and conflating them is what made
+    // this impossible to do safely against a radio somebody else was holding.
+    source->noteOfflineDemand();
+    return OfflineAimResult::Ok;
 }
 
 // Shared key-on guard for the paths that do NOT go through setTransmit().
@@ -6984,6 +7257,9 @@ void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHand
         const QString command = QString("client disconnect 0x%1").arg(handle, 0, 16);
         qCDebug(lcProtocol) << "RadioModel: disconnecting occupied client" << Qt::hex << handle;
         sendCmd(command, [handle, step](int code, const QString& body) {
+            if (commandNeverReachedRadio(code)) {
+                return;
+            }
             if (code != 0) {
                 qCWarning(lcProtocol) << "RadioModel: client disconnect failed for"
                                       << Qt::hex << handle
@@ -7017,8 +7293,14 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
     // Subscribe to radio and client topics early — before client gui — to get
     // mf_enable and the live connected-client list directly from the radio.
     // 400 ms is enough for the radio's status burst to arrive on a LAN path.
-    sendCmd("sub radio all", [this](int, const QString&) {
-        sendCmd("sub client all", [this](int, const QString&) {
+    sendCmd("sub radio all", [this](int code, const QString&) {
+        if (commandNeverReachedRadio(code)) {
+            return;
+        }
+        sendCmd("sub client all", [this](int clientCode, const QString&) {
+            if (commandNeverReachedRadio(clientCode)) {
+                return;
+            }
             resolveLiveGuiClientIdCollision();
             // Fast path: when multiFLEX is enabled the radio explicitly allows
             // multiple GUI clients, so the conflict check below
@@ -7036,7 +7318,14 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
                 }
                 return;
             }
-            QTimer::singleShot(400, this, [this] {
+            QTimer::singleShot(400, this, [this, generation = m_sessionGeneration] {
+                // The link can drop inside this window. Everything below reads
+                // live session state and can re-drive the handshake, so a timer
+                // from a dead session must not run. (#5653 review)
+                if (generation != m_sessionGeneration) {
+                    qCDebug(lcProtocol) << "RadioModel: multiFLEX peek window belonged to a closed session — dropping";
+                    return;
+                }
                 // On the non-fast path, client status may arrive during the
                 // collection window rather than before the subscription reply.
                 resolveLiveGuiClientIdCollision();
@@ -7260,6 +7549,14 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
     emit sliceConnectEnumerationStarted();
     sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
         armClientConnectionNoticeSuppression();
+        if (commandNeverReachedRadio(code)) {
+            // The session died before the radio answered -- a mid-handshake TCP
+            // drop, which is exactly the recovery path #5649 protects. This is
+            // not a rejection: fall through to onDisconnected()'s auto-reconnect
+            // rather than latching a terminal registration failure. (#5653 review)
+            qCDebug(lcProtocol) << "RadioModel: client gui unanswered — session ended, not a rejection";
+            return;
+        }
         if (code != 0) {
             // Commit the rejection before a prompt TCP close can reset the
             // registration state and re-arm automatic reconnect (#4560).
@@ -7729,8 +8026,18 @@ void RadioModel::onDisconnected()
 {
     resetTxOperations();
     acknowledgeTxTransportTeardown(m_txOperation);
+    expirePendingCallbacks(QStringLiteral("the radio connection was disconnected"));
     qCDebug(lcProtocol) << "RadioModel: disconnected";
     m_guiClientRegistrationState.reset();
+
+    // End the session for anything still holding a generation. The multiFLEX
+    // peek arms a 400 ms singleShot that can outlive the link: fired after a
+    // drop it would consume a continuation belonging to the dead session and
+    // re-drive `client gui` into the next one. Bumping here invalidates it, and
+    // dropping the continuation makes sure a reconnect starts from a fresh
+    // peek rather than resuming a half-finished one. (#5653 review)
+    ++m_sessionGeneration;
+    m_multiFlexContinuation = nullptr;
 
     // #4142 — void any pan centers deferred during a profile load. The session
     // they belonged to is gone: the radio rebuilds its topology on reconnect, so
@@ -9178,11 +9485,12 @@ void RadioModel::setTxAudioMonitor(bool on)
 }
 
 void RadioModel::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                               bool clientLeveled, const TxCoordinator::Context& context)
+                               TxAudioSource source,
+                               const TxCoordinator::Context& context)
 {
     const TxCoordinator::Dispatch dispatch = context.beginDispatch(txMonotonicMs());
     if (dispatch && m_backend) {
-        m_backend->submitTxAudio(int16Stereo, sampleRateHz, clientLeveled, context);
+        m_backend->submitTxAudio(int16Stereo, sampleRateHz, source, context);
     }
 }
 
@@ -9598,6 +9906,18 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
 
     if (m_wanConn)
         return m_wanConn->sendCommand(command, std::move(cb));
+
+    // A callback being expired at the session boundary tried to chain another
+    // command. There is no session left to write to, and registering it would
+    // repopulate the map expirePendingCallbacks() is draining. Drop it without
+    // invoking the callback: the chain terminates here instead of stranding an
+    // entry nothing will ever answer. Sequence 0 means "not dispatched", the
+    // same contract sendCmd()'s other drops use. (#5653 review)
+    if (m_expiringPendingCallbacks) {
+        qCDebug(lcProtocol).noquote()
+            << "RadioModel: dropping command issued from an expiring callback" << command;
+        return 0;
+    }
 
     // A backend that is not Flex or Sim owns no RadioConnection, so there is
     // nothing to write to — invokeMethod() below would dereference null. This

@@ -8,6 +8,138 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.9.3] — 2026-09-13
+
+### A Tools-first menu bar, live map overlays and APRS digipeating · a vendor-neutral backend seam underneath
+
+86 merged changes from 16 human contributors, AetherClaude and one Dependabot update within that total. The menu bar is reorganized around what operators actually reach for, and the rest of the operator-facing half adds weather and night-lights overlays to PSK Reporter, a WIDE1-1 fill-in digipeater, clock-aligned waterfall markers and the Runtime Monitor Overview. The structural half routes slice, capability and transmit paths through the `IRadioBackend` seam and continues the headless-engine and audio rate-domain work.
+
+### Menu bar and VFO defaults
+
+- **A Tools-first menu bar (#5595).** The top level becomes
+  `File · Settings · Profiles · Tools · View · Help`. Operating tools that were
+  scattered across File, Settings, View and Help — PSK Reporter, Memory,
+  Waveforms, Radio Health, the modem and KiwiSDR setup, guarded tuner
+  operations — collect under **Tools**, which sits ahead of **View** because
+  operators reach for them more often than for display settings. Existing
+  actions and handlers are reused, so shortcuts and lifecycle behavior are
+  unchanged; what changes is where things are found. Radio-sensitive entries
+  start disabled and track connection and capability changes, `Start SWR Scan…`
+  and `Pre-tune ATU Bands…` are marked as TX-keying, and Radio Setup keeps its
+  Qt Preferences role so macOS still presents it under the application menu.
+  The obsolete Settings placeholder loop that reported "not yet implemented"
+  for actions that in fact worked is removed.
+- **Global VFO appearance defaults (#5595).** View gains **VFO Marker Size**
+  (Off, 1 px, 3 px) and **VFO Filter Edge** (Show, Hide), stored atomically as
+  one feature-owned `VfoDisplayDefaults` document. Changing either updates live
+  VFOs without overwriting per-slice overrides, and an absent or malformed value
+  falls back to the historical 3 px marker with visible filter edges.
+
+### Maps and reporting
+
+- **NOAA weather radar with playback** overlays current and recent radar on PSK Reporter maps (#5477).
+- **NASA city lights** adds a night-lights basemap layer (#5479).
+- A dark map style with brightness controls joins the existing styles (#5495).
+- Map controls move into a left sidebar instead of competing with the map itself (#5493).
+- NASA and NWS tile requests retry on transient failures rather than leaving the layer blank (#5485).
+- The GPU spectrum path no longer takes the PSK map with it on macOS; the map stays on a raster viewport (#5623).
+
+### Waterfall, spectrum and monitoring
+
+- **Clock-aligned waterfall time markers** draw thin UTC-labelled lines at Off, 15 s, 30 s, 1, 5, 10 or 15 minute intervals, aligned to clock boundaries and pinned to their captured rows through scrolling, pause and resize. Off remains the default and the choice persists per panadapter slot (#5538).
+- **Runtime Monitor Overview** adds CPU Total, Max Thread, resident memory and GUI Tick Lag cards over 1 min / 5 min / 15 min / 1 h ranges, with charts for CPU, memory, the top five threads and tick lag (#5427). One timeframe selector is now shared across the Runtime Monitor tabs (#5531).
+- The GPU FFT trace reports an honest width — 1.0 px by default, with a 0.5 px WAVE scope floor (#5557).
+- NR2 keeps its noise estimate across the TX→RX edge instead of re-converging after every transmission (#5364).
+
+### Digital modes
+
+- **APRS WIDE1-1 fill-in digipeater** arrives as an AetherModem tab. It substitutes MYCALL with the H bit on the first matching unused hop, requires the shared 1200-baud profile, a valid callsign and explicit per-session arming, and never restores arming from settings. Wide-area WIDEn-N hop decrementing is not included (#5562).
+- HF 300 decoding is corrected — the correlator lowpass was narrower than the tone shift — and `HdlcCodec` handles back-to-back frames (#5494).
+- WSJT-X UDP spot decodes land on the reporting instance's band rather than another instance's (#5564).
+- A FreeDV Reporter double-click tunes and forces RADE (#5512).
+- The D-STAR tab is hidden on radios without waveform support (#5556), and the RTTY decoder pane stays closed once dismissed (#5379).
+
+### Receivers
+
+- **Web-888 joins the KiwiSDR receive path as its own receiver family.** Saved receivers keep their family across restarts, legacy entries default to KiwiSDR, and CSV import accepts an optional `RECEIVER_TYPE` field (#5530). Waterfall start scale now derives from the server's `zoom_max` (#5529).
+- ANAN-G2 gains live DDC rate changes — a zoom notch no longer rebuilds the whole Protocol 2 session — plus multi-DDC encoding and per-port demultiplexing on the wire. The codec is multi-DDC capable; the backend still drives one DDC (#5547). DDC0 edge droop is compensated from an in-app calibration (#5357).
+- RTL-SDR gains a bounded receiver lifecycle foundation (#5590) and preserves device identity in preparation for slice persistence (#5473).
+- A shared-capture RF admission policy requires every receiver's guarded passband to fit the shared capture before a tune, filter, mode or rate change is accepted. The helper is not yet wired to a live backend (#5472).
+
+### CW, ATU and transmit
+
+- Break-in delay holds against the radio's QSK-floor walk when the speed changes (#5288), and CW keying and TUNE now interlock in both directions (#5513).
+- The Phone/CW mic level persists across launches (#5505).
+- ATU tune failures appear in the status bar (#5239), a disabled Pre-tune explains why (#5539), and ATU starts are gated on the backend seam like every other keying intent (#5560).
+- The PortAudio CW sidetone sink compiles on Windows (#5201).
+
+### Hermes-Lite 2
+
+- **Stream-free telemetry** reads the radio's own telemetry when the IQ stream cannot supply it (#5414), and TX:ALCGAIN publishes the gain the HL2 ALC is applying (#5506).
+- An RQST/ACK state machine keeps one request outstanding, echo-matched and quarantined (#5627).
+- The AGC ceiling is referred to the dB reference (#5625), and WDSP's `RXA_ADC_PK` is paired with the pre-DDC clip flag (#5626).
+- The SWR detector is linearized and its noise gate re-derived (#5521); `setBandFilter()`'s stale CONFIG one-shot is dropped (#5511).
+- An operator write ends the pin and records the band even when the value has not moved (#5466).
+- Documentation catches up: the backend DSP read-back is documented (#5465), Hermes §13 Tier 1 is closed (#5621), and two stale claims — clip count at idle and the TCI audio path — are corrected (#5533).
+
+### Flex and Icom
+
+- Panadapter and slice capacity come from the radio rather than a compiled-in assumption (#5603), and manual squelch reconciles correctly after a band recall (#5508).
+- The primary Split paths are gated on a command plane (#5523).
+- Icom retains squelch intent and waterfall speed across restarts (#5514), and a refused tune no longer reads as a successful one (#5373).
+
+### Stability
+
+- Spectrum and VFO menu shutdown crashes are fixed (#5567), nested dialog lifetimes are guarded and safe menu owners audited (#5596), and ProfileTransfer no longer crashes on cleanup re-entry (#5617).
+- The Aetherial strip reopens after minimize (#5366), and the connection dialog reopens when startup auto-connect gives up (#5368).
+- The diversity master flag moves to the right (#5470).
+
+### Firmware and Radio Setup
+
+- Firmware upload byte accounting is corrected and unconfirmed outcomes are reported as such (#5597).
+- Closing Radio Setup mid-upload now asks for confirmation (#5606).
+
+### Backend seam
+
+- **The `IRadioBackend` threading and lifetime contract is pinned by tests**, closing the rule-5 gap those tests found (#5573).
+- Ordinary RX slice lifecycle routes through the backend seam (#5471).
+- Backends announce capability revisions — Flex, HL2 and RTL (#5602) — family verbs are gated on the declared namespace (#5618), and the capability-bool population and raw command plane are frozen in CI (#5619).
+- `AGENTS.md` carries a temporary pointer to the backend-review meta-issue (#5555).
+
+### Headless engine (aetherd)
+
+- Opt-in local connection control arrives behind an explicit grant (#5458), followed by guarded local slice frequency control (#5550).
+- Stage 3 adds capability-qualified local receive controls — mode, filter, audio gain and mute, panadapter center and bandwidth — with bounded read-only telemetry. The daemon stays observe-only unless `--allow-local-control` is passed, and no transmit methods or grants are added (#5563).
+- Stage 4 begins with an engine-local `TxCoordinator` routing primary desktop transmit intent. The multi-client arbiter and daemon transmission are not part of this release (#5591).
+
+### Audio rate domains
+
+- A typed producer PCM contract and compatibility adapters land as A1 of RFC #5468 (#5598).
+- Optional NR rate domains are preserved as its A2 prerequisite (#5604), and AudioEngine queueing, processing and output become rate-aware (#5605).
+
+### Automation and bridge
+
+- The bridge can read and force-show item-view cell tooltips (#5534).
+- The bridge token is minted from the CSPRNG and the async start reconciled (#5105).
+- Owned Windows apps stop without SIGKILL (#5592), and local TCI clients are logged with the process behind them (#5130).
+- Radio certification gains Persist diagnostics and FFT readback provenance (#5500).
+- `ulanzi-start`/`ulanzi-stop` work on Windows and Linux, and a query that cannot be answered says so (#5305).
+
+### Project and packaging
+
+- CI: dependency caches save on main, Windows Qt installs via aqt, and tags are swept (#5552); one compiler cache is kept per prefix with Linux ccache capped at 1500 MB (#5551); py7zr is pinned for the aqt venvs and CodeQL TRAP caching is off (#5553); Actions caches belonging to closed PRs are swept (#5009); Qt is reinstalled when a cache hit restores an incomplete tree (#5632); Static checks is documented as required (#5633); the Aether-gate mirror workflow is removed (#5631).
+- MSIX packaging preserves production release versions (#5467).
+- The in-tree control-surface plugins are removed (#5600), and `redactPii()` coverage and tests are brought up to date with current log sites (#5481).
+- `actions/download-artifact` moves to 8.0.1 (#5609).
+
+### Contributors
+
+Thanks to **@ten9876** (17 commits — maintainer; backend seam, capability gating, CI and FFT trace), **@rfoust** (14 commits — PSK Reporter maps, aetherd Stage 3/4, firmware and crash fixes), **@on8st** (13 commits — HL2 telemetry, meters, SWR and documentation), **@jensenpat** (9 commits — the Tools-first menu bar, APRS digipeater, Icom, map retries and packaging), **@Ozy311** (8 commits — audio rate domains, RTL lifecycle and shared-capture policy), **@skerker** (5 commits — CW/TUNE interlock, Runtime Monitor and bridge tooltips), **@nigelfenton** (3 commits — Windows CW sidetone, Icom tune and Ulanzi devices), **@crypticpy** (3 commits — NR2 and window restore), **@tropo1234** (2 commits — ANAN-G2 wire layer and droop calibration), **@kgbvax** (2 commits — Web-888 receiver family), **@chibondking** (2 commits — CW break-in and diversity flag), **@aethersdr-agent** (2 commits — AetherClaude orchestrator; bridge token and RTTY pane), **@nonoo** (1 commit — ATU status), **@NF0T** (1 commit — FreeDV Reporter), **@K5PTB** (1 commit — Qt cache repair), **@WA8PAM** (1 commit — WSJT-X spot placement), **@Chipensaw** (1 commit — HF 300 and HDLC). Dependabot contributed one dependency update. Counts cover primary commit authors; co-author credit remains in the commit history.
+
+Welcome to first-time contributors **@crypticpy**, **@kgbvax**, **@WA8PAM**, **@Chipensaw**!
+
+73, Jeremy KK7GWY & Claude (AI dev partner)
+
 ## [v26.9.2] — 2026-09-06
 
 ### New receivers, multi-band skimming and station control

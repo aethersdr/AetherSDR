@@ -27,6 +27,7 @@
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
+#include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR {
 
@@ -175,6 +176,9 @@ struct MemoryRecallDetails {
 // burndown (docs/architecture/aetherd-touchpoints.md) converts each gui→engine
 // touchpoint into a protocol/backend verb. Do NOT dump all 140 touchpoints
 // here at once.
+// Owned by the model, borrowed by a backend. See backends/OfflineHealthSource.h.
+class IOfflineHealthSource;
+
 class IRadioBackend : public QObject {
     Q_OBJECT
 
@@ -857,18 +861,24 @@ public:
     // the microphone and any future source all reach the air through ONE path,
     // so what the operator monitors is what gets transmitted.
     //
-    // `clientLeveled` is true when the audio came from an external TCI/DAX
-    // client rather than the mic chain or the engine's own generators. The
-    // sender of such audio has already applied its own level control, so a
-    // host-modulating backend must not run makeup gain (ALC) over it (#4796).
+    // `source` says WHERE THE AUDIO CAME FROM, which decides whose level it is.
+    // TxAudioSource.h carries the full contract for the three states and why it
+    // is not the bool it replaced; the short version is that the mic slider
+    // applies to Microphone and ClientLeveled and not to EngineGenerated.
+    //
+    // ORIGIN, NOT TREATMENT. What a backend does with the tag is the backend's
+    // business, and most do nothing: Hl2TxDsp is the only consumer in the tree,
+    // and a radio that modulates on its own side ignores it entirely.
+    //
     // No default argument — defaults on virtuals bind statically, and the
     // override a caller actually reaches would quietly diverge from it.
     virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                               bool clientLeveled, const TxCoordinator::Context& context)
+                               TxAudioSource source,
+                               const TxCoordinator::Context& context)
     {
         Q_UNUSED(int16Stereo);
         Q_UNUSED(sampleRateHz);
-        Q_UNUSED(clientLeveled);
+        Q_UNUSED(source);
         Q_UNUSED(context);
     }
 
@@ -914,6 +924,29 @@ public:
         [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }
+
+    // Take a BORROWED pointer to the model's offline health source, if this
+    // backend has any use for one. Default no-op, and that default is the
+    // point: a family with no offline instrument never learns the concept
+    // exists, and the model does not have to know which families do.
+    //
+    // REPLACES A CONCRETE-BACKEND CAST. The model used to reach for
+    // `dynamic_cast<hl2::Hl2Backend*>` to hand the HL2 its telemetry service.
+    // #5554 §2.8 already lists that cast shape as a seam leak to be retired
+    // (`Hl2Backend`'s off-seam `dspSetupProgress` forcing one in `MainWindow`),
+    // and `docs/HERMES.md`'s coding-agent section forbids adding new ones. A
+    // virtual with a no-op default is what the seam is for.
+    //
+    // NOT AN OWNERSHIP TRANSFER. The source outlives every backend — that is
+    // its whole purpose — and nothing tells a backend the source has gone, so
+    // the owner must not destroy it while a backend could still be holding it.
+    // See `RadioModel::releaseOfflineHealth()`, which hands the borrow back
+    // through this same setter before destroying what was lent.
+    //
+    // Declared here rather than on a family interface because the borrow is a
+    // seam event: it happens in `setupBackend()`, for whatever backend was just
+    // built, with no family name in sight.
+    virtual void setOfflineHealthSource(IOfflineHealthSource*) {}
 
     // WHAT THE DSP IS ACTUALLY CONFIGURED WITH, as opposed to what the model
     // says it asked for.

@@ -9,11 +9,14 @@
 #include "core/AppSettings.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Bands.h"
+#include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
 #include "core/backends/SliceDelta.h"
 
 #include <QCoreApplication>
+#include <QJsonArray>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QEventLoop>
 #include <QObject>
 #include <QTimer>
@@ -831,6 +834,123 @@ int main(int argc, char** argv)
         check(watch.mode(1) == QStringLiteral("fast") && watch.threshold(1) == 30,
               "an auto-reconnect leaves RX2's live AGC alone");
         backend.disconnectRadio();
+    }
+
+    // ---- the mic level is captured into this radio's own document ---------
+    // The half of the mic-level memory that a test without a link can reach,
+    // and the half that regresses: the operator moves the slider, and the
+    // capture snapshot RadioModel persists carries the position.
+    //
+    // It rides the txSetpoints sub-object of THIS BACKEND'S extension
+    // document, not a shared RestoredRadioState field and not a flat
+    // AppSettings key, so a family that persists mic gain in the radio (Flex,
+    // Icom — neither declares ClientSettingsDomain::TxSetpoints) cannot be
+    // written from or restored over. FLAT, not per-band: the right mic level is
+    // a property of the operator's voice, not of the band.
+    {
+        hl2::Hl2Backend backend;
+        auto micLevelIn = [](const RestoredRadioState& s) {
+            const QJsonObject tx =
+                s.extension.value(QStringLiteral("txSetpoints")).toObject();
+            return tx.contains(QStringLiteral("micLevel"))
+                       ? tx.value(QStringLiteral("micLevel")).toInt(-1)
+                       : -1;
+        };
+
+        check(micLevelIn(backend.currentOperatingState()) == 50,
+              "a radio with nothing stored captures the unity 50");
+
+        backend.setMicGain(70);
+        check(micLevelIn(backend.currentOperatingState()) == 70,
+              "the operator's mic level reaches the capture snapshot");
+
+        // ZERO IS A REAL POSITION, not "absent". 0 is the MUTE on this control
+        // (hl2::micSliderToLinear), so an operator who parked the slider there
+        // must find it there — a capture that filtered 0 out as a default would
+        // silently restore them to unity.
+        backend.setMicGain(0);
+        check(micLevelIn(backend.currentOperatingState()) == 0,
+              "a deliberate mic mute is captured, not treated as absent");
+
+        // Out of range at the SETTER is clamped, as it always was — this pins
+        // that the capture cannot write a value outside the slider's travel.
+        backend.setMicGain(150);
+        check(micLevelIn(backend.currentOperatingState()) == 100,
+              "an out-of-range level is clamped before it can be captured");
+
+        // THE CURVE IS STAMPED BESIDE THE LEVEL, and that is what makes the
+        // curve-1 migration one-shot rather than a ratchet. The arithmetic is
+        // deliberately NOT idempotent — hl2_tx_level_policy_test pins
+        // micLevelFromCurve1(micLevelFromCurve1(100)) == 63 — so a document
+        // that went back to disk without its stamp would be re-migrated on the
+        // next connect and again on the one after: 80 -> 65 -> 58 -> 54 -> 52
+        // -> 51, an operator's +12 dB walking down to +0.8 dB over five
+        // launches with nothing on the panel to say why. Nothing else in the
+        // suite notices if this key stops being written.
+        const QJsonObject stamped = backend.currentOperatingState()
+                                        .extension.value(QStringLiteral("txSetpoints"))
+                                        .toObject();
+        check(stamped.value(QStringLiteral("micLevelCurve")).toInt(-1)
+                  == hl2::kMicLevelCurve,
+              "the capture stamps the mic curve beside the level");
+    }
+
+    // ---- a restore does not fake the modulator's mirror --------------------
+    // applyRestoredState() STAGES the level rather than adopting it, because it
+    // runs before connectRadio() builds m_txDsp. Until pushInitialState()
+    // applies it there is no modulator holding the restored value, and the
+    // capture must go on reporting what the modulator actually has. Reporting
+    // the staged value here would be the readback-agrees-with-the-failure shape
+    // in miniature: a snapshot claiming 70 over a chain sitting at 50.
+    //
+    // NOT COVERED HERE: the connect-time application itself. pushInitialState()
+    // runs on link-up, after the first EP6 frame, and this harness connects to
+    // TEST-NET-1 with no link — so the setMicGain() + transmitChanged() echo
+    // that moves the modulator and the slider is exercised only on hardware.
+    {
+        hl2::Hl2Backend backend;
+        backend.setMicGain(50);
+
+        RestoredRadioState remembered;
+        remembered.extensionSchemaVersion = 1;
+        remembered.extension = QJsonObject{
+            {QStringLiteral("txSetpoints"),
+             QJsonObject{{QStringLiteral("micLevel"), 70}}}};
+        backend.applyRestoredState(remembered);
+
+        const QJsonObject tx = backend.currentOperatingState()
+                                   .extension.value(QStringLiteral("txSetpoints"))
+                                   .toObject();
+        check(tx.value(QStringLiteral("micLevel")).toInt(-1) == 50,
+              "a staged restore does not claim a gain the modulator lacks");
+    }
+
+    // ---- an unreadable stored level is DROPPED, never clamped -------------
+    // The same rule as the AGC threshold, on a sharper case. This control's
+    // floor is the MUTE, so clamping a hand-edited -10 would put the operator
+    // silently off the air on a slider reading 0. Dropping leaves the live
+    // position standing.
+    //
+    // Verified through the mirror: a dropped restore leaves the staged sentinel
+    // at -1, so the level the operator set before the restore survives it.
+    {
+        const QJsonArray bogus{-10, 250, QStringLiteral("banana"), QJsonValue()};
+        for (const QJsonValue& value : bogus) {
+            hl2::Hl2Backend backend;
+            backend.setMicGain(70);
+            RestoredRadioState remembered;
+            remembered.extensionSchemaVersion = 1;
+            remembered.extension = QJsonObject{
+                {QStringLiteral("txSetpoints"),
+                 QJsonObject{{QStringLiteral("micLevel"), value}}}};
+            backend.applyRestoredState(remembered);
+            const QJsonObject tx =
+                backend.currentOperatingState()
+                    .extension.value(QStringLiteral("txSetpoints"))
+                    .toObject();
+            check(tx.value(QStringLiteral("micLevel")).toInt(-1) == 70,
+                  "an unreadable stored mic level leaves the live one alone");
+        }
     }
 
     return g_failures == 0 ? 0 : 1;

@@ -123,7 +123,8 @@ public:
     void setXitEnabled(bool on) override;
     void setRitOffset(int hz) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                       bool clientLeveled, const TxCoordinator::Context& context) override;
+                       TxAudioSource source,
+                       const TxCoordinator::Context& context) override;
     int finishTxAudio(const TxCoordinator::Context& context) override;
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg = {}) override;

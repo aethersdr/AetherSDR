@@ -1,4 +1,6 @@
 #include "WeatherRadarTileLayer.h"
+#include "WeatherRadarProvenance.h"
+#include <QGeoView/Raster/QGVImage.h>
 #include "WeatherRadarStyle.h"
 
 #include <algorithm>
@@ -56,6 +58,31 @@ void WeatherRadarTileLayer::checkReadiness(qint64 elapsedMs, qint64 retryElapsed
         retryUnfinishedTiles();
         return;
     }
+}
+
+WeatherRadarTileLayer::~WeatherRadarTileLayer()
+{
+    // Base-layer teardown destroys tiles after our member storage has gone.
+    for (QObject* item : m_imageProviders.keys()) { disconnect(item, nullptr, this, nullptr); }
+}
+
+int WeatherRadarTileLayer::displayedProviders() const
+{
+    int providers = 0;
+    for (int mask : m_imageProviders) { providers |= mask; }
+    return providers;
+}
+
+QGVImage* WeatherRadarTileLayer::createTileImage(const QGV::GeoTilePos& pos, const QImage& image)
+{
+    QGVImage* item = QGVLayerTilesOnline::createTileImage(pos, image);
+    m_imageProviders.insert(item, radarImageProviders(image, m_source));
+    connect(item, &QObject::destroyed, this, [this, item] {
+        m_imageProviders.remove(item);
+        emit providersChanged(displayedProviders());
+    });
+    emit providersChanged(displayedProviders());
+    return item;
 }
 
 void WeatherRadarTileLayer::setSource(const WeatherRadarSource& source)

@@ -137,6 +137,28 @@ WanConnection::~WanConnection()
 
 // ─── Connection ──────────────────────────────────────────────────────────────
 
+void WanConnection::resetSessionState()
+{
+    // The SmartLink twin of #5649. This object is a by-value member of
+    // MainWindow (m_wanConnection), so it outlives every TLS session: without
+    // an explicit reset, bytes the radio wrote without a trailing '\n' when the
+    // link died become the prefix of the NEXT session's first line, and the
+    // handle/sequence/callback state of a dead session answers into a live one.
+    // Same fix and same reason as RadioConnection::resetSessionState(); FlexLib
+    // clears its own line buffer in TcpCommandCommunication.Disconnect()
+    // (reference/FlexLib_API_v4.1.5.39794/FlexLib/TcpCommandCommunication.cs:249).
+    //
+    // Callbacks are dropped rather than answered, which is what
+    // disconnectFromRadio() already did before this helper existed; changing
+    // WAN callback semantics is deliberately out of scope here. (#5653 review)
+    m_readBuffer.clear();
+    m_pendingCallbacks.clear();
+    m_seqCounter = 1;
+    m_handle     = 0;
+    m_connected  = false;
+    m_validated  = false;
+}
+
 void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
                                     const QString& wanHandle)
 {
@@ -145,9 +167,8 @@ void WanConnection::connectToRadio(const QString& host, quint16 tlsPort,
         return;
     }
 
+    resetSessionState();
     m_wanHandle = wanHandle;
-    m_validated = false;
-    m_handle    = 0;
     m_host      = host;
     m_expectedFingerprintHex = loadStoredFingerprint(host);
 
@@ -174,11 +195,7 @@ void WanConnection::disconnectFromRadio()
         m_socket.write("\x04");
         m_socket.disconnectFromHost();
     }
-    m_pendingCallbacks.clear();
-    m_seqCounter = 1;
-    m_handle     = 0;
-    m_connected  = false;
-    m_validated  = false;
+    resetSessionState();
     m_awaitingCertDecision   = false;
     m_presentedFingerprintHex.clear();
 }
@@ -309,7 +326,10 @@ void WanConnection::onTlsDisconnected()
 {
     qCDebug(lcSmartLink) << "WanConnection: TLS disconnected";
     m_heartbeat.stop();
-    m_connected = false;
+    // Radio-initiated drop. This path previously cleared only m_connected, so a
+    // truncated line, the dead handle and any in-flight callbacks all survived
+    // into the next SmartLink session. (#5653 review)
+    resetSessionState();
     emit disconnected();
 }
 

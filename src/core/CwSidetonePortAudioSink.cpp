@@ -238,6 +238,62 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device,
     return paNoDevice;
 }
 
+// Record what PortAudio actually enumerated, before anything opens a stream.
+//
+// #5713: a Windows box died with STATUS_HEAP_CORRUPTION (0xc0000374) inside
+// this startup, and the support bundle could not say where — the log jumps
+// straight from "RX stream started" to nothing, because the process was killed
+// by the OS. Every Windows install runs this path on every connect
+// (startSidetoneStream() is unconditional at the tail of startRxStream()), so
+// the thing that distinguishes the one machine that crashes from the ones that
+// do not is its device set. That is precisely what was missing, and it costs
+// one pass over data PortAudio has already built.
+//
+// lcAudioSummary, not lcAudio: lcAudio is declared at QtWarningMsg
+// (LogManager.cpp), so a qCInfo on it never reaches a DEFAULT support bundle —
+// which is the only kind a crashing user can produce.
+void logPortAudioInventory()
+{
+    const PaHostApiIndex apiCount = Pa_GetHostApiCount();
+    const PaDeviceIndex  devCount = Pa_GetDeviceCount();
+
+    qCInfo(lcAudioSummary) << "CwSidetonePortAudioSink: PortAudio inventory —"
+                           << Pa_GetVersionText()
+                           << "hostApis=" << apiCount
+                           << "devices=" << devCount;
+
+    // Both counts are signed and go negative to report an error; iterating on
+    // one without checking would walk backwards off the front of the list.
+    if (apiCount < 0 || devCount < 0) {
+        qCWarning(lcAudio) << "CwSidetonePortAudioSink: PortAudio enumeration failed —"
+                           << "hostApiCount=" << apiCount << "deviceCount=" << devCount;
+        return;
+    }
+
+    for (PaHostApiIndex i = 0; i < apiCount; ++i) {
+        const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
+        if (!api) continue;
+        qCInfo(lcAudioSummary) << "  hostApi" << i
+                               << "name=" << (api->name ? api->name : "?")
+                               << "devices=" << api->deviceCount
+                               << "defaultOut=" << api->defaultOutputDevice;
+    }
+
+    // Output-capable devices only: the sidetone never opens an input, and a
+    // full dump on a box with a multichannel interface is mostly capture rows.
+    for (PaDeviceIndex i = 0; i < devCount; ++i) {
+        const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
+        if (!info || info->maxOutputChannels <= 0) continue;
+        const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi);
+        qCInfo(lcAudioSummary) << "  out" << i
+                               << "name=" << (info->name ? info->name : "?")
+                               << "api=" << (api && api->name ? api->name : "?")
+                               << "maxOutCh=" << info->maxOutputChannels
+                               << "defaultRate=" << info->defaultSampleRate
+                               << "lowOutLatency=" << info->defaultLowOutputLatency;
+    }
+}
+
 PaDeviceIndex defaultPortAudioOutputDevice()
 {
     // No JACK preference here: a default selection must land on the same
@@ -313,6 +369,15 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
                                << "(node keeps its default name)";
         }
 #endif
+        // Flush before and after: AsyncLogWriter writes on a 250 ms timer and
+        // flushes synchronously only on QtFatalMsg (LogManager.cpp:320), so an
+        // OS-level kill discards the queued tail. Without these markers a crash
+        // inside Pa_Initialize() and a crash inside Pa_OpenStream() leave an
+        // identical log — which is exactly why #5713 needed two rounds of
+        // questions before anyone could say where it died.
+        qCInfo(lcAudioSummary) << "CwSidetonePortAudioSink: calling Pa_Initialize";
+        LogManager::instance().flushLog();
+
         const PaError err = Pa_Initialize();
         if (err != paNoError) {
             qCWarning(lcAudio) << "CwSidetonePortAudioSink: Pa_Initialize failed —"
@@ -320,6 +385,8 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
             return false;
         }
         m_paInitialized = true;
+        logPortAudioInventory();
+        LogManager::instance().flushLog();
     }
 
     QString partialMatchName;
@@ -412,6 +479,19 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
     m_generator.store(generator, std::memory_order_release);
     generator->setSampleRateHz(static_cast<int>(sampleRate));
 
+    // The exact parameters handed to PortAudio, flushed, so a crash inside the
+    // open names the device and the format it was opened with rather than
+    // leaving them to be guessed from the settings file. (#5713)
+    qCInfo(lcAudioSummary) << "CwSidetonePortAudioSink: calling Pa_OpenStream"
+                           << "device=" << devIdx
+                           << "name=" << (devInfo->name ? devInfo->name : "?")
+                           << "maxOutCh=" << devInfo->maxOutputChannels
+                           << "requestCh=" << outParams.channelCount
+                           << "rate=" << sampleRate
+                           << "suggestedLatency=" << outParams.suggestedLatency
+                           << "framesPerBuffer=" << kFramesPerBuffer;
+    LogManager::instance().flushLog();
+
     PaError err = Pa_OpenStream(&m_stream,
                                 /*input*/  nullptr,
                                 /*output*/ &outParams,
@@ -426,6 +506,17 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
         m_generator.store(nullptr, std::memory_order_release);
         return false;
     }
+
+    // Everything from here to the "started" line below sits inside one
+    // unflushed window otherwise, so a hard kill anywhere in it leaves the
+    // same "calling Pa_OpenStream" tail as a kill INSIDE the open — the exact
+    // ambiguity that made #5713's log stop at "RX stream started", one stage
+    // up. Pa_StartStream can have the WASAPI callback running within
+    // microseconds (see below), which is at least as plausible a place for a
+    // heap fault as the open, so the two must not look alike in a bundle.
+    qCInfo(lcAudioSummary) << "CwSidetonePortAudioSink: Pa_OpenStream succeeded;"
+                           << "calling Pa_StartStream";
+    LogManager::instance().flushLog();
 
     // Zero the diagnostics BEFORE the stream starts: Pa_StartStream can have
     // the callback running within microseconds on WASAPI, and zeroing after it
@@ -460,6 +551,10 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
                     << "rate=" << m_actualRate << "Hz"
                     << "outputLatency=" << (streamInfo ? streamInfo->outputLatency * 1000.0 : 0.0)
                     << "ms";
+    // The last flush of the sequence, so "the sidetone came up clean and the
+    // crash is downstream of it" is a fact the next bundle STATES rather than
+    // one the maintainer infers from an absence. (#5713)
+    LogManager::instance().flushLog();
     return true;
 }
 

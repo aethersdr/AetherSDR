@@ -1,4 +1,4 @@
-# WDSP 2.00 integration boundary
+# WDSP 2.10 integration boundary
 
 **Status:** Foundation implemented; Hermes-Lite 2 backend integration remains a
 separate phase. This boundary is engine-only and introduces no radio behavior.
@@ -29,19 +29,27 @@ header. `src/core/dsp/WdspChannel` is the only C++ entry point, and the C API in
 ## Reproducible source and build
 
 The snapshot is pinned to TAPR/OpenHPSDR-wdsp commit
-`584e8aca5ba1c4c6bc66fc0cc164ce567c8ba1e3`, whose subject is
-`Release Version 2.00`. `third_party/wdsp/COMMIT` is the machine-readable pin.
+`b02d5bac675dd2f33ec2bab2b339f79a597c47dd`, whose subject is
+`Release Version 2.10`. `third_party/wdsp/COMMIT` is the machine-readable pin.
 The upstream PDF and binary calculus lookup table are not vendored. The latter
 is optional in WDSP and its source fallback remains active.
 
 `third_party/wdsp/CMakeLists.txt` produces the position-independent static
 target `aether::wdsp`. Only `aethercore` links it, privately. WDSP's FFTW and
 thread dependencies, source include directory, warning policy, and platform
-definitions do not become public AetherSDR usage requirements.
+definitions do not become public AetherSDR usage requirements. On non-Windows
+targets it force-includes `port/include/wdsp_port.h`, because some upstream TUs
+call the Win32 aligned-allocation functions without including `comm.h` and would
+otherwise never see the port's definitions of them.
 
-The source snapshot has three documented teardown corrections. See
-`third_party/wdsp/AETHERSDR-PATCHES.md`; refreshes must either find the fixes
-upstream or reapply and retest them explicitly.
+`WdspChannel::create()` refuses to build a channel unless `GetWDSPVersion()`
+reports exactly this snapshot's version. A refresh therefore fails loudly at the
+first channel open rather than drifting, and updating that constant is part of
+the refresh.
+
+The source snapshot has ten documented changes. See
+`third_party/wdsp/AETHERSDR-PATCHES.md`; refreshes must either find the
+changes upstream or reapply and retest them explicitly.
 
 ## Portability layer
 

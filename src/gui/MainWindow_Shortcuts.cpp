@@ -638,52 +638,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 #endif
     if (obj == m_cwxIndicator && event->type() == QEvent::MouseButtonPress) {
         if (!m_cwxIndicator->isEnabled()) return true;
-        bool show = !m_cwxPanel->isVisible();
-        // Close DVK (mutual exclusion)
-        if (show && m_dvkPanel->isVisible()) {
-            m_dvkPanel->hide();
-            updateKeyerAvailability();
-        }
-        m_cwxPanel->setVisible(show);
-        m_cwxIndicator->setStyleSheet(show
-            ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
-            : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
-        if (show) {
-            auto sizes = m_splitter->sizes();
-            if (sizes.size() >= 4) {
-                int cwxW = 250;
-                int total = sizes[0] + sizes[1] + sizes[2];
-                sizes[0] = cwxW;
-                sizes[1] = 0;
-                sizes[2] = total - cwxW;
-                m_splitter->setSizes(sizes);
-            }
-        }
-        return true;
-    }
-    if (obj == m_dvkIndicator && event->type() == QEvent::MouseButtonPress) {
-        if (!m_dvkIndicator->isEnabled()) return true;
-        bool show = !m_dvkPanel->isVisible();
-        // Close CWX (mutual exclusion)
-        if (show && m_cwxPanel->isVisible()) {
-            m_cwxPanel->hide();
-            updateKeyerAvailability();
-        }
-        m_dvkPanel->setVisible(show);
-        m_dvkIndicator->setStyleSheet(show
-            ? "QLabel { color: #00b4d8; font-weight: bold; font-size: 24px; }"
-            : "QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
-        if (show) {
-            auto sizes = m_splitter->sizes();
-            if (sizes.size() >= 4) {
-                int dvkW = 250;
-                int total = sizes[0] + sizes[1] + sizes[2];
-                sizes[0] = 0;
-                sizes[1] = dvkW;
-                sizes[2] = total - dvkW;
-                m_splitter->setSizes(sizes);
-            }
-        }
+        toggleCwKeyerPanel();
         return true;
     }
     if (obj == m_tnfIndicator && event->type() == QEvent::MouseButtonPress) {
@@ -737,37 +692,110 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         return true;
     }
     if (obj == m_addPanLabel && event->type() == QEvent::MouseButtonPress) {
-        if (!m_radioModel.isConnected()) return true;
-        int maxPans = m_radioModel.maxPanadapters();
-        // Determine current layout from actual pan count, not saved setting
-        const bool canvasEnabled = m_workspaceController
-            && m_workspaceController->isEnabled();
-        int activePanCount = canvasEnabled
-            ? m_workspaceController->activeMainPanIdsForLayout().size()
-            : (m_panStack ? m_panStack->count() : 1);
-        QString currentLayout = "1";
-        if (activePanCount >= 2)
-            currentLayout = AppSettings::instance()
-                .value("PanadapterLayout", "1").toString();
-        PanLayoutDialog dlg(maxPans, currentLayout, this);
-        if (dlg.exec() == QDialog::Accepted && !dlg.selectedLayout().isEmpty()) {
-            const QString layoutId = dlg.selectedLayout();
-            const int requestedPanCount = panCountForLayoutId(layoutId);
-            const int additionalPans = qMax(0, requestedPanCount - activePanCount);
-            const int globalPanCount = m_panStack ? m_panStack->count() : 0;
-            if (globalPanCount + additionalPans > m_radioModel.maxPanadapters()) {
-                showPanadapterSliceCapacityMessage();
-                return true;
-            }
-            m_suppressStartupPanLayoutRearrange = true;
-            auto& s = AppSettings::instance();
-            s.setValue("PanadapterLayout", layoutId);
-            s.save();
-            applyPanLayout(layoutId);
-        }
+        showAddPanadapterDialog();
+        return true;
+    }
+    if (obj == m_dvkIndicator && event->type() == QEvent::MouseButtonPress) {
+        if (!m_dvkIndicator->isEnabled()) return true;
+        toggleVoiceKeyerPanel();
         return true;
     }
     return QMainWindow::eventFilter(obj, event);
+}
+
+// Shared by the status-bar +PAN affordance and Tools ▸ Add Panadapter… so both
+// go through the layout machinery. A bare createPanadapter() would make the pan
+// on the radio without ever updating PanadapterLayout or placing it, and the
+// next launch would re-apply the stale layout. Layout ids are not 1:1 with pan
+// counts (two pans is "2v" or "2h"), so the arrangement is the operator's pick.
+void MainWindow::showAddPanadapterDialog()
+{
+    if (!m_radioModel.isConnected()) return;
+    const int maxPans = m_radioModel.maxPanadapters();
+    // Determine current layout from actual pan count, not saved setting
+    const bool canvasEnabled = m_workspaceController
+        && m_workspaceController->isEnabled();
+    const int activePanCount = canvasEnabled
+        ? m_workspaceController->activeMainPanIdsForLayout().size()
+        : (m_panStack ? m_panStack->count() : 1);
+    QString currentLayout = "1";
+    if (activePanCount >= 2)
+        currentLayout = AppSettings::instance()
+            .value("PanadapterLayout", "1").toString();
+    PanLayoutDialog dlg(maxPans, currentLayout, this);
+    if (dlg.exec() != QDialog::Accepted || dlg.selectedLayout().isEmpty())
+        return;
+    const QString layoutId = dlg.selectedLayout();
+    const int requestedPanCount = panCountForLayoutId(layoutId);
+    const int additionalPans = qMax(0, requestedPanCount - activePanCount);
+    const int globalPanCount = m_panStack ? m_panStack->count() : 0;
+    if (globalPanCount + additionalPans > m_radioModel.maxPanadapters()) {
+        showPanadapterSliceCapacityMessage();
+        return;
+    }
+    m_suppressStartupPanLayoutRearrange = true;
+    auto& s = AppSettings::instance();
+    s.setValue("PanadapterLayout", layoutId);
+    s.save();
+    applyPanLayout(layoutId);
+}
+
+// Voice-keyer twin of toggleCwKeyerPanel(). Extracted for the same reason: the
+// two panels share one splitter slot and one mutual-exclusion rule, so keeping
+// a second inline copy on the status-bar indicator is how they drift apart.
+// Indicator styling belongs to updateKeyerAvailability(), which knows the
+// disabled state too — the old inline copy could only express two of three.
+void MainWindow::toggleVoiceKeyerPanel()
+{
+    if (!m_dvkPanel || !m_dvkIndicator || !m_dvkIndicator->isEnabled()) {
+        return;
+    }
+
+    const bool show = !m_dvkPanel->isVisible();
+    if (show && m_cwxPanel && m_cwxPanel->isVisible()) {
+        m_cwxPanel->hide();
+    }
+
+    m_dvkPanel->setVisible(show);
+    updateKeyerAvailability();
+    if (show && m_splitter) {
+        auto sizes = m_splitter->sizes();
+        if (sizes.size() >= 4) {
+            constexpr int kKeyerWidth = 250;
+            const int total = sizes[0] + sizes[1] + sizes[2];
+            sizes[0] = 0;
+            sizes[1] = kKeyerWidth;
+            sizes[2] = qMax(0, total - kKeyerWidth);
+            m_splitter->setSizes(sizes);
+        }
+    }
+}
+
+void MainWindow::toggleCwKeyerPanel()
+{
+    if (!m_cwxPanel || !m_cwxIndicator || !m_cwxIndicator->isEnabled()) {
+        return;
+    }
+
+    const bool show = !m_cwxPanel->isVisible();
+    // CW and voice keyer panels share the left splitter slot.
+    if (show && m_dvkPanel && m_dvkPanel->isVisible()) {
+        m_dvkPanel->hide();
+    }
+
+    m_cwxPanel->setVisible(show);
+    updateKeyerAvailability();
+    if (show && m_splitter) {
+        auto sizes = m_splitter->sizes();
+        if (sizes.size() >= 4) {
+            constexpr int kKeyerWidth = 250;
+            const int total = sizes[0] + sizes[1] + sizes[2];
+            sizes[0] = kKeyerWidth;
+            sizes[1] = 0;
+            sizes[2] = qMax(0, total - kKeyerWidth);
+            m_splitter->setSizes(sizes);
+        }
+    }
 }
 
 
@@ -1057,6 +1085,19 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("split_toggle", "Split Toggle", "Slice",
         QKeySequence(), [this]() {
             if (!m_splitActive) {
+                // Same gate, same reasons, as the VfoWidget::splitToggled
+                // lambda in MainWindow_Wiring.cpp — see the comment there for
+                // why this returns ahead of the m_splitActive write rather
+                // than only skipping the send (issue 5277) — and for why it
+                // is deliberately not permissive on disconnect, and which
+                // families the predicate refuses.
+                if (!m_radioModel.hasCommandPlane()) {
+                    qCWarning(lcDevices)
+                        << "split_toggle ignored: this backend takes no Flex"
+                        << "slice-create command";
+                    showUnsupportedControlNotice();
+                    return;
+                }
                 if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
                 auto* s = activeSlice();
                 if (!s) return;

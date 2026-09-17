@@ -417,7 +417,8 @@ int main(int argc, char** argv)
                 out[2 * n] = v;
                 out[2 * n + 1] = v;      // AudioEngine duplicates across channels
             }
-            backend.submitTxAudio(pcm, kRate, /*clientLeveled=*/false, authority.context);
+            backend.submitTxAudio(pcm, kRate, TxAudioSource::Microphone,
+                                  authority.context);
             spin(20);
             // Capture WHILE transmitting. Sampling after the loop would read
             // silence: the queue drains in well under a second once audio stops,

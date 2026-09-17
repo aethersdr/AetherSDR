@@ -13,6 +13,8 @@
 #include <QUdpSocket>
 #include <QTimer>
 #include <QVector>
+#include "NnrControls.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -40,6 +42,7 @@ class QMediaDevices;
 #include <deque>
 #include <vector>
 #include <cstdint>
+#include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR {
 
@@ -48,6 +51,7 @@ struct RadioCapabilities;
 class SpecbleachFilter;
 class RNNoiseFilter;
 class DeepFilterFilter;
+class NnrFilter;
 class NvidiaAfxFilter;
 class Resampler;
 class TxVoiceProcessor;
@@ -327,6 +331,11 @@ public:
     void setNr2GainMethod(int method);
     void setNr2NpeMethod(int method);
     void setNr2AeFilter(bool on);
+    // Push the post-processing controls from Nr2SettingsModel to every live
+    // NR2 instance. One entry point rather than four setters: the model is
+    // already where the UI writes, so this is the only direction that needs
+    // plumbing (#5702).
+    Q_INVOKABLE void applyNr2Post2Settings();
     QJsonObject nr2RuntimeDiagnostics() const;
     QJsonObject opusTxPacingDiagnostics() const;
     // Tell the engine the main RX source is (or is not) the demo, so the main NR2
@@ -371,6 +380,23 @@ public:
     void setDfnrAttenLimit(float db);
     float dfnrAttenLimit() const;
     void setDfnrPostFilterBeta(float beta);
+
+    // Client-side NNR (WDSP 2.10 neural noise reduction, trained on HF).
+    // Unconditional, unlike DFNR/MNR/BNR: the models are compiled into the
+    // vendored WDSP, so there is no library to find and no GPU to require.
+    Q_INVOKABLE void setNnrEnabled(bool on);
+    bool nnrEnabled() const { return m_nnrEnabled.load(); }
+    // 0..100, mapped to WDSP's mask floor (-10..-50 dB). Higher is more
+    // suppression; see src/core/NnrControls.h.
+    void setNnrStrength(int strength);
+    int nnrStrength() const { return m_nnrStrength.load(); }
+    // 0 = Standard, 1 = Premium. Reports the slot WDSP actually selected.
+    void setNnrModel(int slot);
+    // Push the six undocumented tuning controls from NnrSettings to every live
+    // instance. One entry point rather than six setters: NnrSettings is the
+    // source of truth, so the UI writes there and calls this to make it live.
+    Q_INVOKABLE void applyNnrTuning();
+    int nnrModel() const { return m_nnrModel.load(); }
 
     // Optional NVIDIA Maxine AFX GPU denoiser (runtime-loaded; NVIDIA RTX/GeForce).
     Q_INVOKABLE void setNvAfxEnabled(bool on);
@@ -720,6 +746,7 @@ signals:
     void rn2EnabledChanged(bool on);
     void rn2TxEnabledChanged(bool on);   // RN2 on the TX mic pre-amp (#2813)
     void dfnrEnabledChanged(bool on);
+    void nnrEnabledChanged(bool on);
     void nvAfxEnabledChanged(bool on);
     void txRawPcmReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
     // Post-final-limiter TX monitor PCM (24 kHz stereo int16) — the exact stream
@@ -728,17 +755,30 @@ signals:
     // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
     // receivers connect via Qt::AutoConnection (queued across threads).
     //
-    // `clientLeveled` is true when the frames came from an external TCI/DAX
-    // client (feedDaxTxAudio's markExternalSource) rather than the mic chain or
-    // the engine's own tone generators. Such a client owns its level — WSJT-X's
-    // Pwr slider attenuates the audio it streams — and a host-modulating
-    // backend must not run makeup gain over it (#4796). Slots that only record
-    // or meter the stream can ignore the flag (Qt permits connecting to a slot
-    // with fewer arguments).
-    void txFinalMonitorPcmReady(const QByteArray& int16Stereo, bool clientLeveled);
+    // `source` says WHERE the frames came from — TxAudioSource.h carries the
+    // contract. Which emitter sets what:
+    //
+    //   onTxAudioReady            → Microphone (the capture chain, through the
+    //                               full voice TX DSP)
+    //   feedDaxTxAudio            → ClientLeveled (external TCI/DAX; the client
+    //                               owns its level, #4796)
+    //   sendModemTxAudio          → Microphone (the AX.25 modem — its AFSK
+    //                               amplitude is a fixed constant and the packet
+    //                               dialog has no level control, so the mic
+    //                               slider is the only thing that can move it)
+    //   startWsprPump             → EngineGenerated (111.6 s unattended; the mic
+    //                               slider must not reach it)
+    //
+    // The tag is a claim about ORIGIN, not about treatment. Slots that only
+    // record or meter the stream can ignore it (Qt permits connecting to a slot
+    // with fewer arguments) — but a slot that ASSERTS on it must compare against
+    // the enum: QVariant::toBool() on this type reads both ClientLeveled and
+    // EngineGenerated as true, which silently retired a guard once already.
+    void txFinalMonitorPcmReady(const QByteArray& int16Stereo,
+                                TxAudioSource source);
     // Same samples, separate transport authority. Recorder/monitor consumers
     // remain on the unguarded local tap above.
-    void txTransportPcmReady(const QByteArray& int16Stereo, bool clientLeveled,
+    void txTransportPcmReady(const QByteArray& int16Stereo, TxAudioSource source,
                              const AetherSDR::TxCoordinator::Context& context);
     void modemTxAudioFinished(quint64 token, const AetherSDR::TxCoordinator::Context& context);
     // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
@@ -850,6 +890,7 @@ private:
 #ifdef HAVE_DFNR
         std::unique_ptr<DeepFilterFilter> dfnr;
 #endif
+        std::unique_ptr<NnrFilter> nnr;
 #ifdef HAVE_NVIDIA_AFX
         std::unique_ptr<NvidiaAfxFilter> nvAfx;
 #endif
@@ -962,6 +1003,11 @@ private:
         RxDspSource source,
         ExternalRxAudioSourceState* externalSource) const;
 #endif
+    std::unique_ptr<NnrFilter> createNnrFilter(const QString& label,
+        int producerRate = DEFAULT_SAMPLE_RATE) const;
+    NnrFilter* nnrForSource(
+        RxDspSource source,
+        ExternalRxAudioSourceState* externalSource) const;
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> createNvAfxFilter(const QString& label,
         int producerRate = DEFAULT_SAMPLE_RATE) const;
@@ -990,9 +1036,17 @@ private:
     qint64 txCaptureNowMs() const;
     bool tciAudioFresh() const;
     void pumpWsprBeacon();
+    // `markExternalSource` arms the TCI active-audio timer (it means "a TCI/DAX
+    // client is feeding"); `source` is the origin tag forwarded to the backend.
+    // They are SEPARATE because they stopped agreeing: the AX.25 modem and the
+    // WSPR pump both feed with markExternalSource false, and only one of them is
+    // EngineGenerated. Deriving the tag from the flag is what put AX.25 in the
+    // beacon's bucket, and a beacon's bucket has no mic slider in it.
     void feedDaxTxAudioInternal(const QByteArray& float32pcm,
                                 bool markExternalSource,
-                                bool forceRadioDaxRoute, const TxCoordinator::Context& context);
+                                bool forceRadioDaxRoute,
+                                TxAudioSource source,
+                                const TxCoordinator::Context& context);
     bool selectTxContext(const TxCoordinator::Context& context);
     TxCoordinator::Context m_microphoneContext;
     TxCoordinator::Context m_hostMicrophoneContext;
@@ -1297,6 +1351,13 @@ private:
     std::unique_ptr<DeepFilterFilter> m_kiwiSdrDfnr;
 #endif
     std::atomic<bool> m_dfnrEnabled{false};
+
+    // Client-side NNR (WDSP 2.10). No build guard: the models ship in-tree.
+    std::unique_ptr<NnrFilter> m_nnr;
+    std::unique_ptr<NnrFilter> m_kiwiSdrNnr;
+    std::atomic<bool> m_nnrEnabled{false};
+    std::atomic<int>  m_nnrStrength{Nnr::kMaskFloorDefaultStrength};
+    std::atomic<int>  m_nnrModel{0};
 
     // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so
     // mutual-exclusion in the other NR setters compiles regardless of the build).

@@ -32,6 +32,7 @@ void TransmitModel::resetState()
     m_maxPowerLevel = 100;
     m_atuEnabled = false;
     m_atuStatus = ATUStatus::None;
+    m_userAbortedAtu = false;
     m_memoriesEnabled = false;
     m_usingMemory = false;
     m_showTxInWaterfall = false;
@@ -202,8 +203,22 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     {
         bool atuChanged = false;
         if (d.atuStatusRaw) {
+            const ATUStatus prevStatus = m_atuStatus;
             const ATUStatus s = parseAtuTuneStatus(*d.atuStatusRaw);
-            if (m_atuStatus != s) { m_atuStatus = s; atuChanged = true; }
+            if (m_atuStatus != s) {
+                m_atuStatus = s;
+                atuChanged = true;
+                if (prevStatus == ATUStatus::InProgress && !m_userAbortedAtu) {
+                    if (s == ATUStatus::FailBypass) {
+                        emit atuTuneFailed(s, tr("ATU tune failed — tuner was bypassed."));
+                    } else if (s == ATUStatus::Fail) {
+                        emit atuTuneFailed(s, tr("ATU tune failed to find a match."));
+                    }
+                }
+                if (s != ATUStatus::InProgress) {
+                    m_userAbortedAtu = false;
+                }
+            }
         }
         atuChanged |= assign(d.atuEnabled, m_atuEnabled);
         atuChanged |= assign(d.memoriesEnabled, m_memoriesEnabled);
@@ -520,6 +535,15 @@ void TransmitModel::requestAtu(bool start, const KeyingRoute& route)
         : start && m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Atu, true) : KeyingPermit{};
     if ((route.admit || (start && m_keyingAdmission)) && (!permit || !permit())) {
         return;
+    }
+    // Track a deliberate operator bypass of a running tune so applyChanges
+    // does not report "ATU tune failed" for an abort the operator asked for.
+    // Set after admission, on whichever route carries the command: a refused
+    // request never reached the ATU, so it must not claim an abort either.
+    if (start) {
+        m_userAbortedAtu = false;
+    } else if (m_atuStatus == ATUStatus::InProgress) {
+        m_userAbortedAtu = true;
     }
     if (route.dispatch) {
         route.dispatch(start);

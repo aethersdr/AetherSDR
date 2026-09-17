@@ -32,10 +32,33 @@ warren@pratt.one
 *																										*
 ********************************************************************************************************/
 
-EMPHP create_emphp (int run, int position, int size, int nc, int mp, double* in, double* out, int rate, int ctype, double f_low, double f_high)
+#include "firmin.h"
+
+typedef struct _emphp
+{
+	int run;
+	int position;
+	int size;
+	int nc;
+	int mp;
+	double* in;
+	double* out;
+	int ctype;
+	double f_low;
+	double f_high;
+	double g0;
+	double g1;
+	double scale;
+	double rate;
+	int wintype;
+	FCIMP pfcimp;
+	FIRCORE p;
+} emphp, * EMPHP;
+
+EMPHP create_emphp (int run, int position, int size, int nc, int mp, double* in, double* out, 
+	int rate, int ctype, double f_low, double f_high)
 {
 	EMPHP a = (EMPHP) malloc0 (sizeof (emphp));
-	double* impulse;
 	a->run = run;
 	a->position = position;
 	a->size = size;
@@ -47,15 +70,20 @@ EMPHP create_emphp (int run, int position, int size, int nc, int mp, double* in,
 	a->ctype = ctype;
 	a->f_low = f_low;
 	a->f_high = f_high;
-	impulse = fc_impulse (a->nc, a->f_low, a->f_high, -20.0 * log10(a->f_high / a->f_low), 0.0, a->ctype, a->rate, 1.0 / (2.0 * a->size), 0, 0);
-	a->p = create_fircore (a->size, a->in, a->out, a->nc, a->mp, 4, impulse);
-	_aligned_free (impulse);
+	a->wintype = 0;
+	a->pfcimp = build_fcimp (a->nc, a->wintype);
+	a->g0 = -20.0 * log10(a->f_high / a->f_low);
+	a->g1 = 0.0;
+	a->scale = 1.0 / (2.0 * a->size);
+	exec_fcimp (a->pfcimp, a->f_low, a->f_high, a->g0, a->g1, a->ctype, a->rate, a->scale, 0);
+	a->p = create_fircore (a->size, a->in, a->out, a->nc, a->mp, 4, get_pfcpulse(a->pfcimp));
 	return a;
 }
 
 void destroy_emphp (EMPHP a)
 {
 	destroy_fircore (a->p);
+	teardown_fcimp (a->pfcimp);
 	_aligned_free (a);
 }
 
@@ -81,21 +109,18 @@ void setBuffers_emphp (EMPHP a, double* in, double* out)
 
 void setSamplerate_emphp (EMPHP a, int rate)
 {
-	double* impulse;
 	a->rate = rate;
-	impulse = fc_impulse (a->nc, a->f_low, a->f_high, -20.0 * log10(a->f_high / a->f_low), 0.0, a->ctype, a->rate, 1.0 / (2.0 * a->size), 0, 0);
-	setImpulse_fircore (a->p, impulse, 1);
-	_aligned_free (impulse);
+	exec_fcimp (a->pfcimp, a->f_low, a->f_high, a->g0, a->g1, a->ctype, a->rate, a->scale, 0);
+	setImpulse_fircore (a->p, get_pfcpulse(a->pfcimp), 1);
 }
 
 void setSize_emphp (EMPHP a, int size)
 {
-	double* impulse;
 	a->size = size;
 	setSize_fircore (a->p, a->size);
-	impulse = fc_impulse (a->nc, a->f_low, a->f_high, -20.0 * log10(a->f_high / a->f_low), 0.0, a->ctype, a->rate, 1.0 / (2.0 * a->size), 0, 0);
-	setImpulse_fircore (a->p, impulse, 1);
-	_aligned_free (impulse);
+	a->scale = 1.0 / (2.0 * a->size);
+	exec_fcimp(a->pfcimp, a->f_low, a->f_high, a->g0, a->g1, a->ctype, a->rate, a->scale, 0);
+	setImpulse_fircore(a->p, get_pfcpulse(a->pfcimp), 1);
 }
 
 /********************************************************************************************************
@@ -128,15 +153,15 @@ PORT
 void SetTXAFMEmphNC (int channel, int nc)
 {
 	EMPHP a;
-	double* impulse;
 	EnterCriticalSection (&ch[channel].csDSP);
 	a = txa[channel].preemph.p;
 	if (a->nc != nc)
 	{
 		a->nc = nc;
-		impulse = fc_impulse (a->nc, a->f_low, a->f_high, -20.0 * log10(a->f_high / a->f_low), 0.0, a->ctype, a->rate, 1.0 / (2.0 * a->size), 0, 0);
-		setNc_fircore (a->p, a->nc, impulse);
-		_aligned_free (impulse);
+		teardown_fcimp(a->pfcimp);
+		a->pfcimp = build_fcimp(a->nc, a->wintype);
+		exec_fcimp(a->pfcimp, a->f_low, a->f_high, a->g0, a->g1, a->ctype, a->rate, a->scale, 0);
+		setNc_fircore (a->p, a->nc, get_pfcpulse(a->pfcimp));
 	}
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
@@ -145,18 +170,24 @@ PORT
 void SetTXAFMPreEmphFreqs (int channel, double low, double high)
 {
 	EMPHP a;
-	double* impulse;
 	EnterCriticalSection (&ch[channel].csDSP);
 	a = txa[channel].preemph.p;
 	if (a->f_low != low || a->f_high != high)
 	{
 		a->f_low = low;
 		a->f_high = high;
-		impulse = fc_impulse (a->nc, a->f_low, a->f_high, -20.0 * log10(a->f_high / a->f_low), 0.0, a->ctype, a->rate, 1.0 / (2.0 * a->size), 0, 0);
-		setImpulse_fircore (a->p, impulse, 1);
-		_aligned_free (impulse);
+		a->g0 = -20.0 * log10(a->f_high / a->f_low);
+		a->g1 = 0.0;
+		exec_fcimp(a->pfcimp, a->f_low, a->f_high, a->g0, a->g1, a->ctype, a->rate, a->scale, 0);
+		setImpulse_fircore (a->p, get_pfcpulse(a->pfcimp), 1);
 	}
 	LeaveCriticalSection (&ch[channel].csDSP);
+}
+
+void SetTXAFMPreEmphRun(int channel, int run)
+{
+	EMPHP a = txa[channel].preemph.p;
+	a->run = run;
 }
 
 /********************************************************************************************************
