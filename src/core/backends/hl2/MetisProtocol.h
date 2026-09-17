@@ -1048,7 +1048,9 @@ inline constexpr int         kEp4FullScale        = 2048;
 //
 // RESTORED IN REBASE: this constant was authored on this branch and carried by
 // the EP4 commits that #5650 superseded; the squash that landed #5650 did not
-// keep it, and Hl2Backend's wideband converter view is its consumer here.
+// keep it. Two things read it now: Hl2Backend's wideband converter view, and
+// Hl2BandscopeHeadroom.h's gatedPeakBiasDbForPeriod(), whose full-rate
+// reference IS this number.
 inline constexpr double      kAdcSampleRateHz     = 76.8e6;
 // `ep4_seq_no` is declared `logic [19:0]`: byte 4 of the header is a hardwired
 // 8'h00 and byte 5 masks to a nibble. It wraps at 1,048,576 — about 46 minutes
