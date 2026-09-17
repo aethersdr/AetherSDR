@@ -443,6 +443,18 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         }
     }, Qt::DirectConnection);
 
+    // EP6 interleaves every active DDC. Invalidate each partial FFT before
+    // the discontinuous datagram's samples arrive, including rewinds and
+    // duplicates. Like iqBlocksReady above, this runs on the I/O thread and
+    // uses its published DSP list (not the GUI thread's m_rx).
+    connect(m_metis, &MetisClient::rxSequenceGap, this, [this](quint32) {
+        for (auto* dsp : m_ioDsps) {
+            if (dsp) {
+                dsp->onSequenceGap();
+            }
+        }
+    }, Qt::DirectConnection);
+
     // Link lifecycle: first EP6 -> connected; stop -> disconnected.
     connect(m_metis, &MetisClient::linkUp, this, [this] {
         m_connected = true;
@@ -5512,6 +5524,24 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // this is the first number to look at when it does.
     put("droppedPackets", QStringLiteral("Dropped EP6 packets"),
         static_cast<qulonglong>(m_drops));
+    // Partial FFT windows discarded at discontinuities, including accepted
+    // rewinds and duplicates. Poll each DSP's atomic like the ADC peak rows;
+    // its lifetime is protected by the GUI-owned receiver list.
+    for (const auto& ids : m_ids.all()) {
+        const Receiver* r = rx(ids.ddcIndex);
+        // Guarded on `!r` alone, like the sibling loops: a receiver with no DSP
+        // chain is one between rebuilds, and that is "not reported" rather than
+        // a zero that would read as "the panadapter is clean".
+        if (!r)
+            continue;
+        const QString suffix = m_ids.size() > 1
+                                   ? QStringLiteral(" (RX%1)").arg(ids.uiNumber + 1)
+                                   : QString();
+        put(QStringLiteral("spectrumGapDiscards%1").arg(ids.uiNumber).toUtf8().constData(),
+            QStringLiteral("Panadapter frames discarded at a sequence gap") + suffix,
+            r->dsp ? QVariant(static_cast<qulonglong>(r->dsp->spectrumGapDiscards()))
+                   : QVariant());
+    }
     // The wideband bandscope. Reported unconditionally rather than only when it
     // is on, because "off" is the answer the reader of a health dialog needs
     // first — an absent row would leave "is this costing me link budget?"

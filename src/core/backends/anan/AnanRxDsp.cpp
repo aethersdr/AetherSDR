@@ -335,6 +335,20 @@ void AnanRxDsp::smoothSpectrumBins(std::vector<float>& binsDbfs)
     binsDbfs = m_smoothedBins;
 }
 
+void AnanRxDsp::onSequenceGap()
+{
+    if (!m_spectrum) {
+        return;   // between rebuilds; the new spectrum starts empty
+    }
+    // Counted only when something was actually in flight -- see
+    // Hl2RxDsp::onSequenceGap() for why a boundary-aligned gap must not be
+    // counted, and why neither the frame-rate clock nor the audio path is
+    // touched here.
+    if (m_spectrum->reset() > 0) {
+        m_spectrumGapDiscards.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
 {
     if (!m_channel)

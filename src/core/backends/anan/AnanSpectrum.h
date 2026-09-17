@@ -46,10 +46,21 @@ public:
     // process()'s == fftSize frame-boundary check and never emit again.
     void accumulate(std::span<const std::complex<float>> iq);
 
-    // Drop whatever partial frame has accumulated. Used on a geometry
-    // change, where the samples either side genuinely describe different
-    // windows.
-    void reset() noexcept { m_acc.clear(); }
+    // Drop whatever partial frame has accumulated, returning how many samples
+    // went with it (0 = nothing was in flight).
+    //
+    // Identical in purpose and in reasoning to Hl2Spectrum::reset(), which
+    // carries the full note: the geometry change this was written for
+    // reconstructs the object anyway (AnanRxDsp::installChannel() moves a freshly
+    // built AnanSpectrum in), so the real caller is a DDC sequence gap, where the
+    // samples either side of the seam describe different instants and an FFT
+    // across them measures nothing.
+    std::size_t reset() noexcept
+    {
+        const std::size_t discarded = m_acc.size();
+        m_acc.clear();
+        return discarded;
+    }
 
 private:
     void computeFrame(std::vector<float>& binsDbfs);

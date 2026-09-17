@@ -457,6 +457,12 @@ signals:
     // this object reuses, so a receiver must copy anything it keeps.
     void iqBlocksReady(const std::vector<std::vector<std::complex<float>>>& blocks);
     void dropsUpdated(quint64 drops);                             // cumulative EP6 gaps
+    // The next IQ block is discontinuous with the previous one. Emitted
+    // before iqBlockReady/iqBlocksReady in the same handleDatagram() call,
+    // including accepted rewinds and duplicates. Direct consumers can clear
+    // partial FFTs before accepting the new samples. `lost` is the forward
+    // packet gap, or zero for a rewind/duplicate; dropsUpdated stays loss-only.
+    void rxSequenceGap(quint32 lost);
     // Transport counters, published about once a second from the receive path.
     // Rate-limited for the same reason telemetryUpdated is: this would otherwise
     // cross to the GUI thread thousands of times a second to move a byte count.

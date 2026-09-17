@@ -1337,6 +1337,10 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
             m_link.drops = m_drops;
             emit dropsUpdated(m_drops);
         }
+        // Loss accounting excludes rewinds and duplicates, but their samples
+        // are still delivered below. Every discontinuity must invalidate the
+        // partial FFT before that delivery. Zero means no forward loss.
+        emit rxSequenceGap(gap < 0x80000000u ? gap : 0);
     }
     m_expectedRxSeq = *seq + 1;
     m_haveRxSeq = true;

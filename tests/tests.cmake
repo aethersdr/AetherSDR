@@ -964,6 +964,16 @@ target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
 target_link_libraries(hl2_spectrum_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
 add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
 
+# Transport discontinuities must invalidate partial FFTs before IQ delivery.
+# Covers both spectrum classes, both DSP stages, and both production ingest
+# handlers through socket-free friend seams. Qt6::Network is needed by the
+# clients, but neither client is started and no socket is created or bound.
+add_executable(spectrum_sequence_gap_test tests/spectrum_sequence_gap_test.cpp)
+target_include_directories(spectrum_sequence_gap_test PRIVATE src tests)
+target_link_libraries(spectrum_sequence_gap_test
+    PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME spectrum_sequence_gap_test COMMAND spectrum_sequence_gap_test)
+
 # HL2 RX DSP — IQ -> WdspChannel demod + Hl2Spectrum. Links aethercore (WDSP+FFTW).
 add_executable(hl2_rxdsp_test tests/hl2_rxdsp_test.cpp)
 target_include_directories(hl2_rxdsp_test PRIVATE src)
