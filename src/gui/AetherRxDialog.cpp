@@ -145,7 +145,12 @@ private:
 } // namespace
 
 AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
-    : PersistentDialog("AetherRX", "AetherRxDialogGeometry", parent)
+    // The geometry key carries a version because the default size changed
+    // after the window had shipped once: a stored geometry always wins over
+    // resize(), so anyone who had opened it would have kept the old 1420x900
+    // for ever and never seen the new default. Bumping the key retires those
+    // saved rectangles; the window persists its size again from here.
+    : PersistentDialog("AetherRX", "AetherRxDialogGeometry2", parent)
 {
     theme::setContainer(this, QStringLiteral("dialog/aetherRx"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");
