@@ -708,8 +708,10 @@ void RtlSdrBackend::setPanRfGain(const QString& panId, int gainDb)
 // IRadioBackend — transmit (guarded — RX-only)
 // ──────────────────────────────────────────────────────────────────────────────
 
-void RtlSdrBackend::setKeying(bool key)
+void RtlSdrBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    Q_UNUSED(operation);
+    Q_UNUSED(completion);
     Q_UNUSED(key);
     // RTL-SDR is receive-only. This is a no-op.
     // The bridge TX gate (AETHER_AUTOMATION_ALLOW_TX) is the real guard.

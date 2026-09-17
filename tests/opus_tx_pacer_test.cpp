@@ -7,11 +7,23 @@
 #include <limits>
 
 using AetherSDR::OpusTxPacer;
+using AetherSDR::TxCoordinator;
 
 namespace {
 
 constexpr quint32 kHeaderWithoutCount = 0x38D00010u;
 constexpr int kMarkerOffset = OpusTxPacer::kVitaHeaderBytes;
+
+// Existing cadence tests use an explicitly trusted continuous microphone.
+// The provenance tests below use the production API with operation-bound media.
+class PacerFixture : public OpusTxPacer {
+public:
+    bool enqueue(QByteArray packet) { return OpusTxPacer::enqueue({std::move(packet), context}); }
+    DrainResult takeDue(qint64 now, quint8& count) { return OpusTxPacer::takeDue(now, 0, count); }
+private:
+    TxCoordinator coordinator{[](const auto&, auto) {}};
+    TxCoordinator::Context context = coordinator.mediaContext(coordinator.registerProducer(true));
+};
 
 // A packet shaped like the ones AudioEngine::onTxAudioReady() builds: a full
 // 28-byte VITA-49 ExtDataWithStream header followed by payload. The marker
@@ -27,23 +39,23 @@ QByteArray makePacket(quint8 marker)
     return packet;
 }
 
-quint8 markerOf(const QByteArray& packet)
+quint8 markerOf(const OpusTxPacer::Packet& packet)
 {
-    return static_cast<quint8>(packet[kMarkerOffset]);
+    return static_cast<quint8>(packet.payload[kMarkerOffset]);
 }
 
-int packetCount(const QByteArray& packet)
+int packetCount(const OpusTxPacer::Packet& packet)
 {
     const quint32 header = qFromBigEndian<quint32>(
-        reinterpret_cast<const uchar*>(packet.constData()));
+        reinterpret_cast<const uchar*>(packet.payload.constData()));
     return static_cast<int>((header >> 16) & 0x0F);
 }
 
-bool packetHeaderExceptCountIsPreserved(const QByteArray& packet)
+bool packetHeaderExceptCountIsPreserved(const OpusTxPacer::Packet& packet)
 {
     constexpr quint32 kCountMask = 0x000F0000u;
     const quint32 header = qFromBigEndian<quint32>(
-        reinterpret_cast<const uchar*>(packet.constData()));
+        reinterpret_cast<const uchar*>(packet.payload.constData()));
     return (header & ~kCountMask) == kHeaderWithoutCount;
 }
 
@@ -51,7 +63,7 @@ bool packetHeaderExceptCountIsPreserved(const QByteArray& packet)
 // missed deadlines, so the pacer legitimately owes catch-up.
 bool testLateTimerCatchesUp()
 {
-    OpusTxPacer pacer;
+    PacerFixture pacer;
     for (int i = 0; i < 6; ++i) {
         pacer.enqueue(makePacket(static_cast<quint8>(i)));
     }
@@ -75,7 +87,7 @@ bool testLateTimerCatchesUp()
 
 bool testCatchUpIsBounded()
 {
-    OpusTxPacer pacer;
+    PacerFixture pacer;
     for (int i = 0; i < 10; ++i) {
         pacer.enqueue(makePacket(static_cast<quint8>(i)));
     }
@@ -94,7 +106,7 @@ bool testCatchUpIsBounded()
 
 bool testOverflowKeepsWireCountsContiguous()
 {
-    OpusTxPacer pacer;
+    PacerFixture pacer;
     bool dropped = false;
     for (int i = 0; i <= OpusTxPacer::kMaxQueuePackets; ++i) {
         dropped = pacer.enqueue(makePacket(static_cast<quint8>(i))) || dropped;
@@ -106,7 +118,7 @@ bool testOverflowKeepsWireCountsContiguous()
     }
 
     quint8 count = 14;
-    QVector<QByteArray> sent;
+    QVector<OpusTxPacer::Packet> sent;
     qint64 nowMs = 0;
     while (pacer.queueDepth() > 0) {
         const OpusTxPacer::DrainResult result = pacer.takeDue(nowMs, count);
@@ -136,7 +148,7 @@ bool testOverflowKeepsWireCountsContiguous()
 
 bool testIdleQueueResumesWithoutDelay()
 {
-    OpusTxPacer pacer;
+    PacerFixture pacer;
     quint8 count = 0;
     pacer.enqueue(makePacket(1));
     if (pacer.takeDue(10, count).packets.size() != 1) {
@@ -156,7 +168,7 @@ bool testIdleQueueResumesWithoutDelay()
 // are paced normally rather than flushed as a burst.
 bool testDrainedQueueDoesNotBankCatchUp()
 {
-    OpusTxPacer pacer;
+    PacerFixture pacer;
     quint8 count = 0;
     pacer.enqueue(makePacket(0));
     if (pacer.takeDue(100, count).packets.size() != 1
@@ -193,7 +205,7 @@ bool testDrainedQueueDoesNotBankCatchUp()
 bool testPacingSurvivesProducerDrought()
 {
     for (const qint64 droughtMs : {30, 100, 1000}) {
-        OpusTxPacer pacer;
+        PacerFixture pacer;
         quint8 count = 0;
         qint64 t = 0;
 
@@ -240,14 +252,14 @@ bool testPacingSurvivesProducerDrought()
 // Anything shorter than the VITA header is not ours to rewrite.
 bool testShortPacketIsNotStamped()
 {
-    OpusTxPacer pacer;
+    PacerFixture pacer;
     quint8 count = 7;
     QByteArray runt(OpusTxPacer::kVitaHeaderBytes - 1, '\0');
     const QByteArray original = runt;
     pacer.enqueue(runt);
 
     const OpusTxPacer::DrainResult drained = pacer.takeDue(0, count);
-    if (drained.packets.size() != 1 || drained.packets.first() != original) {
+    if (drained.packets.size() != 1 || drained.packets.first().payload != original) {
         std::printf("short packet was modified\n");
         return false;
     }
@@ -259,6 +271,36 @@ bool testShortPacketIsNotStamped()
     return true;
 }
 
+bool testQueuedProvenance()
+{
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const auto actor = coordinator.registerActor({true, 0});
+    const auto producer = coordinator.registerProducer();
+    const auto first = coordinator.acquire(actor, 1000).operation;
+    const auto oldContext = coordinator.mediaContext(producer, first);
+    OpusTxPacer pacer;
+    pacer.enqueue({makePacket(1), oldContext});
+    pacer.enqueue({makePacket(2), {}});
+    (void)coordinator.finishLocalIntent(first);
+    const auto next = coordinator.acquire(actor, 1001).operation;
+    const auto newContext = coordinator.mediaContext(producer, next);
+    pacer.enqueue({makePacket(3), newContext});
+    quint8 count = 7;
+    const auto drained = pacer.takeDue(0, 1001, count);
+    if (drained.packets.size() != 1 || markerOf(drained.packets.first()) != 3
+        || !drained.packets.first().context.sameContext(newContext)
+        || count != 8 || pacer.droppedPackets() != 2) {
+        std::printf("old or unowned queued audio crossed an operation boundary\n");
+        return false;
+    }
+    // Cancellation after drain still travels with the packet to the writer.
+    producer.invalidate();
+    if (drained.packets.first().context.beginDispatch(1002)) {
+        std::printf("drained packet lost its producer lifetime\n");
+        return false;
+    }
+    return true;
+}
 } // namespace
 
 int main()
@@ -269,7 +311,8 @@ int main()
         || !testIdleQueueResumesWithoutDelay()
         || !testDrainedQueueDoesNotBankCatchUp()
         || !testPacingSurvivesProducerDrought()
-        || !testShortPacketIsNotStamped()) {
+        || !testShortPacketIsNotStamped()
+        || !testQueuedProvenance()) {
         return 1;
     }
     std::printf("opus_tx_pacer_test passed\n");

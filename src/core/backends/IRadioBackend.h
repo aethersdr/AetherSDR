@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/RadioSettingsIdentity.h"
+#include "core/TxCoordinator.h"
 #include "core/PcmFrame.h"
 
 #include <map>
@@ -536,7 +537,12 @@ public:
     // backend only translates an already-authorized intent to its mechanism
     // (command verb, in-stream bit, hardware line). A backend whose
     // capabilities().canTransmit is false implements this as a no-op.
-    virtual void setKeying(bool key) = 0;
+    virtual void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) = 0;
+
+    // Trusted engine composition supplies the admitted operation for backend-
+    // owned producers (e.g. a TUNE tone). Copy it when starting that producer;
+    // workers must never look up whichever operation is current at delivery.
+    void setTransmitContext(const TxCoordinator::Context& context) { m_transmitContext = context; }
 
     // A client-timed CW element. This is deliberately separate from setKeying:
     // setKeying is the transmitter/PTT envelope, while this is the carrier
@@ -544,11 +550,13 @@ public:
     // shaped IQ and may use breakIn to raise/drop PTT around it; a radio-side
     // keyer translates it to its own key-line protocol. Flex keeps using its
     // timestamped NetCW path above this seam, so the default is a no-op.
-    virtual void setCwKeying(bool down, bool breakIn, int breakInDelayMs)
+    virtual void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(down);
         Q_UNUSED(breakIn);
         Q_UNUSED(breakInDelayMs);
+        Q_UNUSED(operation);
+    Q_UNUSED(completion);
     }
 
     // Let receive audio through WHILE TRANSMITTING.
@@ -587,10 +595,12 @@ public:
     // the RF Power slider. That made TUNE key at FULL power for anyone running
     // RF 100 / Tune 10, which is the opposite of what the control is for.
     // Defaulted so existing implementations stay source-compatible.
-    virtual void setTune(bool on, int tunePowerPercent = -1)
+    virtual void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(on);
         Q_UNUSED(tunePowerPercent);
+        Q_UNUSED(operation);
+    Q_UNUSED(completion);
     }
 
     // Transmit power as a percentage, 0..100.
@@ -620,12 +630,14 @@ public:
     // Empty return means accepted for delivery. A non-empty string is an
     // operator-facing rejection reason; callers must not report success when
     // the backend could not preserve the requested text.
-    virtual QString sendCwText(const QString& text)
+    virtual QString sendCwText(const QString& text, const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
+        Q_UNUSED(operation);
+    Q_UNUSED(completion);
         Q_UNUSED(text);
         return QStringLiteral("radio has no text keyer");
     }
-    virtual void abortCwText() {}
+    virtual void abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) { Q_UNUSED(operation); Q_UNUSED(completion); }
     virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
     virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }
 
@@ -671,7 +683,7 @@ public:
     //
     // KEYS THE TRANSMITTER on a radio with a real ATU, so it sits behind the
     // same TX gate as every other keying intent.
-    virtual void setAtu(bool start) { Q_UNUSED(start); }
+    virtual void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) { Q_UNUSED(start); Q_UNUSED(operation); Q_UNUSED(completion); }
 
     // Receive and transmit incremental tuning. Hz relative to the VFO.
     //
@@ -861,11 +873,13 @@ public:
     // No default argument — defaults on virtuals bind statically, and the
     // override a caller actually reaches would quietly diverge from it.
     virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                               TxAudioSource source)
+                               TxAudioSource source,
+                               const TxCoordinator::Context& context)
     {
         Q_UNUSED(int16Stereo);
         Q_UNUSED(sampleRateHz);
         Q_UNUSED(source);
+        Q_UNUSED(context);
     }
 
     // Finish a finite processed-audio stream before its caller starts the PTT
@@ -877,7 +891,7 @@ public:
     // whatever the radio buffers before its modulator — so the caller can hold
     // PTT for exactly that long rather than a compile-time worst case. Zero
     // means "nothing is buffered on your behalf; unkey when you like".
-    virtual int finishTxAudio() { return 0; }
+    virtual int finishTxAudio(const TxCoordinator::Context& context) { Q_UNUSED(context); return 0; }
 
     // ---- diagnostics ----
     //
@@ -1298,6 +1312,7 @@ signals:
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 
 protected:
+    TxCoordinator::Context transmitContext() const { return m_transmitContext; }
     quint64 pcmSession() const { return m_pcmSession; }
 
     // Compatibility publishers for current 24 kHz backends. Call on the owner
@@ -1342,6 +1357,7 @@ protected:
     }
 
 private:
+    TxCoordinator::Context m_transmitContext;
     // One line per session, not per frame: this fires at audio rate.
     void warnAudioDropped()
     {

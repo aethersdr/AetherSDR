@@ -894,8 +894,21 @@ void MetisClient::ingestControlResponse(const Ep6Response& resp)
     publishControlVerdict();
 }
 
-void MetisClient::setMox(bool keyed)
+void MetisClient::setMox(bool keyed, const TxCoordinator::Operation& operation)
 {
+    setMoxImpl(keyed, operation, false);
+}
+
+void MetisClient::setCwMox(bool keyed, const TxCoordinator::Operation& operation)
+{
+    setMoxImpl(keyed, operation, true);
+}
+
+void MetisClient::setMoxImpl(bool keyed, const TxCoordinator::Operation& operation, bool cwBreakIn)
+{
+    if (!TxCoordinator::Command{operation, keyed}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     const bool was = m_mox;
     if (keyed && !m_txAllowed) {
         // Fail SAFE and stay refused. Not an error return: a caller that could
@@ -903,6 +916,12 @@ void MetisClient::setMox(bool keyed)
         keyed = false;
     }
     m_mox = keyed;
+    m_moxOperation = keyed
+        ? (cwBreakIn ? operation.heldCwKeying() : operation.heldKeying()) : operation;
+    // main 2c693d1c: the bandscope transmit interlock runs on real key edges
+    // only. The operation fence above is set first and unconditionally — a
+    // repeat key from a NEW producer must re-anchor the fence even though the
+    // wire state did not change.
     if (m_mox == was)
         return;
 
@@ -956,8 +975,11 @@ void MetisClient::setTxDriveLevel(int level)
     m_oneShot.push_back(m_ccTxDrive);
 }
 
-void MetisClient::setCwKeyDown(bool down)
+void MetisClient::setCwKeyDown(bool down, const TxCoordinator::Operation& operation)
 {
+    if (!TxCoordinator::Command{operation, down}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
     // Refuse the carrier at the same final wire authority that refuses MOX.
     // Do not even latch a pending down edge: opening the gate later must never
     // turn an earlier refused request into RF.
@@ -975,6 +997,9 @@ void MetisClient::setCwKeyDown(bool down)
     }
     m_cwMode = true;
     m_cwKeyDown = down;
+    // The engine suppresses a global up while another CW contributor holds
+    // down. Retain that compatible set after checking this original command.
+    m_cwOperation = down ? operation.heldCwKeying() : operation;
 }
 
 void MetisClient::clearCwKeying()
@@ -988,8 +1013,15 @@ void MetisClient::clearCwKeying()
     m_txIq.clear();
 }
 
-void MetisClient::queueTxIq(std::span<const std::complex<float>> iq)
+void MetisClient::queueTxIq(std::span<const std::complex<float>> iq, const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_txIqContext.sameContext(context)) {
+        m_txIq.clear();
+        m_txIqContext = context;
+    }
     for (const auto& s : iq)
         m_txIq.push_back(s);
     // Drop the OLDEST on overflow: stale transmit audio is worse than a gap.
@@ -997,8 +1029,12 @@ void MetisClient::queueTxIq(std::span<const std::complex<float>> iq)
         m_txIq.pop_front();
 }
 
-void MetisClient::setTxTestTone(double offsetHz, double amplitude)
+void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation)
 {
+    if (!TxCoordinator::Command{operation, amplitude > 0.0}.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    m_toneOperation = operation;
     m_toneHz = offsetHz;
     m_toneAmp = amplitude < 0.0 ? 0.0 : (amplitude > 1.0 ? 1.0 : amplitude);
     if (m_toneAmp == 0.0)
@@ -1012,6 +1048,22 @@ void MetisClient::flushTxIq()
 
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
 {
+    const qint64 now = TxCoordinator::monotonicMs();
+    if (!m_moxOperation.permitsDispatch(now)) {
+        m_mox = false;
+    }
+    if (!m_cwOperation.permitsDispatch(now)) {
+        m_cwMode = false;
+        m_cwKeyDown = false;
+        m_cwEnvelope = 0.0;
+    }
+    if (!m_toneOperation.permitsDispatch(now)) {
+        m_toneAmp = 0.0;
+        m_tonePhase = 0.0;
+    }
+    if (!m_txIqContext.permitsDispatch(TxCoordinator::monotonicMs())) {
+        m_txIq.clear();
+    }
     static const Cc kCcAdc = ccAdcAssign();
     // Cleared here rather than only on confirmation: a packet built and then
     // thrown away (a test, or a caller that inspects the bytes) must not leave
@@ -1139,8 +1191,9 @@ void MetisClient::onControlPacketSent(qint64 bytesWritten, qint64 nowMs) noexcep
 
 void MetisClient::sendControlPacket()
 {
-    if (!m_socket)
+    if (!m_socket && !m_packetSinkForTest) {
         return;
+    }
     // Sub-frame 0 always carries the config bank (sample rate + receiver count)
     // so the DDC configuration is re-asserted on every frame; sub-frame 1
     // alternates the remaining banks. Matches the reference client, which pairs a
@@ -1149,7 +1202,23 @@ void MetisClient::sendControlPacket()
     // device leaves every receiver unassigned (and therefore emits all-zero IQ)
     // until it has seen it. Re-asserting it rather than sending it once keeps a
     // device that reconnects or resets mid-session from silently going quiet.
-    const qint64 written = sendTo(*m_socket, buildNextControlPacket(), m_host, m_port);
+    TxCoordinator::Dispatch audioDispatch;
+    // Count the writer through sendTo(), including CW/TUNE packets which have
+    // no queued PCM. Cancellation cannot retract an already-entered write.
+    TxCoordinator::Dispatch keyDispatch = m_moxOperation.beginDispatch(
+        TxCoordinator::monotonicMs(), m_mox);
+    if (m_mox && !keyDispatch) {
+        m_mox = false;
+    }
+    if (!m_txIq.empty()) {
+        audioDispatch = m_txIqContext.beginDispatch(TxCoordinator::monotonicMs());
+        if (!audioDispatch) {
+            m_txIq.clear();
+        }
+    }
+    const auto packet = buildNextControlPacket();
+    const qint64 written = m_packetSinkForTest ? m_packetSinkForTest(packet)
+                                              : sendTo(*m_socket, packet, m_host, m_port);
     countTx(written);
     // AFTER the write, and taking its return value: this is the seam where a
     // RQST bank stops being something we intend to send and becomes something

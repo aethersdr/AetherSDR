@@ -5,6 +5,7 @@
 #include <QPointer>
 #include <QElapsedTimer>
 #include <functional>
+#include "TxCoordinator.h"
 
 namespace AetherSDR {
 
@@ -20,6 +21,8 @@ public:
     // On client disconnect, best-effort remove a TX slice we created on demand for
     // split (so it isn't orphaned when WSJT-X etc. drops without a clean teardown).
     ~RigctlProtocol();
+    RigctlProtocol(const RigctlProtocol&) = delete;
+    RigctlProtocol& operator=(const RigctlProtocol&) = delete;
 
     // Process one command line (may contain ';' or '|'-separated batch commands).
     // '|' separator enables extended responses joined by '|' (rigctld pipe mode).
@@ -149,6 +152,9 @@ private:
     static int     hamlibModeFlag(const QString& mode);
 
     RadioModel* m_model;
+    TxCoordinator::Producer m_txProducer;
+    TxCoordinator::Request m_pttRequest;
+    TxCoordinator::Request m_cwxRequest;
     int  m_sliceIndex{0};
     bool m_extended{false};
     // Set when a bare `b` / `\send_morse` arrives without inline text.

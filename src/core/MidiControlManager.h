@@ -12,6 +12,7 @@
 #include <RtMidi.h>
 
 #include "MidiRelativeCcDecoder.h"
+#include "TxCoordinator.h"
 
 namespace AetherSDR {
 
@@ -63,6 +64,14 @@ class MidiControlManager : public QObject {
 public:
     explicit MidiControlManager(QObject* parent = nullptr);
     ~MidiControlManager() override;
+    // Configure once before opening a port. The capture callback reads only
+    // immutable/atomic producer state on RtMidi's callback thread.
+    void setTxInputCallbacks(std::function<TxCoordinator::Request()> capture,
+                             std::function<void()> discard)
+    {
+        m_captureTxInput = std::move(capture);
+        m_discardTxInputs = std::move(discard);
+    }
 
     // Device management
     QStringList availablePorts() const;
@@ -112,7 +121,7 @@ signals:
     // correlate the event for the CW/netCW diagnostic trail (#2336).
     void paramActionTrace(const QString& paramId, float scaledValue,
                           quint64 traceId, quint64 midiCallbackMs,
-                          quint64 midiDispatchMs);
+                          quint64 midiDispatchMs, const TxCoordinator::Request& input);
     // Emitted for relative knobs: accumulated steps with acceleration.
     // Positive = clockwise, negative = counter-clockwise.
     void relativeAction(const QString& paramId, int steps);
@@ -125,7 +134,9 @@ private:
                                void* userData);
     void onMidiMessage(int status, int data1, int data2,
                        quint64 traceId, quint64 midiCallbackMs,
-                       double rtDeltaSeconds);
+                       double rtDeltaSeconds, const TxCoordinator::Request& input);
+    std::function<TxCoordinator::Request()> m_captureTxInput;
+    std::function<void()> m_discardTxInputs;
 
     std::unique_ptr<RtMidiIn> m_midiIn;
     QString m_portName;

@@ -996,6 +996,7 @@ set(MODEL_SOURCES
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
     src/models/RadioModel_TxCoordinator.cpp
+    src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
     src/models/ModelCapabilities.cpp
@@ -1470,6 +1471,7 @@ target_link_libraries(aethercore PRIVATE aether::wdsp)
 # desktop executable and the automation test harnesses on the same linkage path
 # without pulling QtWidgets into the headless engine.
 add_library(aetherdesktop_support STATIC
+    src/gui/TxPointerAction.cpp
     src/core/AutomationServer.cpp
     src/core/SettingsHelpers.cpp
     src/core/ShortcutManager.cpp

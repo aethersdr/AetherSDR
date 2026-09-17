@@ -292,10 +292,13 @@ public:
     bool isRadeMode() const { return m_radeMode; }
 
     // Sends RADE modem output (float32 PCM) as VITA-49 packets via m_txSocket
-    void sendModemTxAudio(const QByteArray& float32pcm);
+    void sendModemTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
     // Queue behind the last modem block. The token crosses the radio seam so a
     // finite-stream backend can drain conversion state before PTT is released.
-    Q_INVOKABLE void finishModemTxAudio(quint64 token);
+    void finishModemTxAudio(quint64 token, const TxCoordinator::Context& context);
+    void setMicrophoneContext(const TxCoordinator::Context& context);
+    void setHostMicrophoneContext(const TxCoordinator::Context& context);
+    void setRawMicrophoneContext(const TxCoordinator::Context& context);
 
     // DAX TX: VirtualAudioBridge feeds float32 PCM for VITA-49 TX
     void setDaxTxMode(bool on);
@@ -310,7 +313,8 @@ public:
     void setRadioTransmitting(bool tx, bool ownedByUs);
     // Self-marshals onto the AudioEngine thread; safe from any caller.
     Q_INVOKABLE void clearTxAccumulators();
-    Q_INVOKABLE void feedDaxTxAudio(const QByteArray& float32pcm);
+    void discardTxMedia(const TxCoordinator::Context& context);
+    void feedDaxTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
     void feedDecodedSpeech(const QByteArray& pcm);
@@ -458,8 +462,9 @@ public:
     // on its own paced DAX/VITA-49 path, so speech processing and microphone
     // callback rates cannot distort or shorten the four-tone frame.
     WsprBeacon* wsprBeacon() { return m_wsprBeacon.get(); }
-    Q_INVOKABLE void startWsprPump();
+    void startWsprPump(const TxCoordinator::Context& context);
     Q_INVOKABLE void stopWsprPump();
+    void stopWsprPumpIfCurrent(const TxCoordinator::Context& context);
 
     // Quindar tone generator (#2262).  Sits AFTER the user DSP chain
     // and PC mic gain but BEFORE the final brickwall limiter, so the
@@ -743,7 +748,7 @@ signals:
     void dfnrEnabledChanged(bool on);
     void nnrEnabledChanged(bool on);
     void nvAfxEnabledChanged(bool on);
-    void txRawPcmReady(const QByteArray& pcm);  // raw 24kHz stereo int16 PCM for RADEEngine
+    void txRawPcmReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
     // Post-final-limiter TX monitor PCM (24 kHz stereo int16) — the exact stream
     // packetised to the radio. Fires for all phone/SSB TX (unlike txRawPcmReady,
     // which is RADE-only), so it is the source for Client-Side TX recording:
@@ -771,7 +776,11 @@ signals:
     // EngineGenerated as true, which silently retired a guard once already.
     void txFinalMonitorPcmReady(const QByteArray& int16Stereo,
                                 TxAudioSource source);
-    void modemTxAudioFinished(quint64 token);
+    // Same samples, separate transport authority. Recorder/monitor consumers
+    // remain on the unguarded local tap above.
+    void txTransportPcmReady(const QByteArray& int16Stereo, TxAudioSource source,
+                             const AetherSDR::TxCoordinator::Context& context);
+    void modemTxAudioFinished(quint64 token, const AetherSDR::TxCoordinator::Context& context);
     // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
     // stereo int16 — the recorder's native WAV format. Pumped on the audio
     // thread while the radio is keyed for CW (no mic-driven onTxAudioReady in
@@ -781,7 +790,7 @@ signals:
     // recorder opens its TX gate for CW the same way moxChanged does for voice.
     // Ownership-correct: driven by our local keyer, not any-owner interlock.
     void cwRecordingActiveChanged(bool active);
-    void txPacketReady(const QByteArray& vitaPacket);  // VITA-49 TX packet for PanadapterStream
+    void txPacketReady(const QByteArray& vitaPacket, const AetherSDR::TxCoordinator::Context& context);
     // Sidetone-tapped audio for the TX-side CW decoder (#2417).  Emitted
     // from the audio thread; receivers should connect via Qt::AutoConnection
     // (which becomes queued across threads) so feedAudio() lands on the
@@ -922,7 +931,7 @@ private:
     float computeRMS(const QByteArray& pcm) const;
     QByteArray applyBoost(const QByteArray& pcm, float gain) const;
     QByteArray buildVitaTxPacket(const float* samples, int numStereoSamples);
-    void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId);
+    void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId, const TxCoordinator::Context& context);
     void emitScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitTxPostChainScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate);
@@ -1036,7 +1045,14 @@ private:
     void feedDaxTxAudioInternal(const QByteArray& float32pcm,
                                 bool markExternalSource,
                                 bool forceRadioDaxRoute,
-                                TxAudioSource source);
+                                TxAudioSource source,
+                                const TxCoordinator::Context& context);
+    bool selectTxContext(const TxCoordinator::Context& context);
+    TxCoordinator::Context m_microphoneContext;
+    TxCoordinator::Context m_hostMicrophoneContext;
+    TxCoordinator::Context m_rawMicrophoneContext;
+    TxCoordinator::Context m_accumulatorContext;
+    TxCoordinator::Context m_wsprContext;
     void observeTxCaptureState(QAudio::State state);
     // Overload for callers that must sample the unread depth before draining it.
     void observeTxCaptureState(QAudio::State state, qint64 bufferedBytes);

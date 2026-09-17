@@ -160,11 +160,16 @@ protected:
     // Transport seam for socket-free validation of waterfall command ordering.
     virtual bool waterfallTransportConnected() const;
     virtual void sendWaterfallCommand(const QString& command);
+#ifdef HAVE_WEBSOCKETS
+    // Keep connection-state tests off the HTTP worker as well as WebSockets.
+    virtual void startStatusPreflight(const QUrl& url);
+#endif
 
 private:
     PcmProducer m_pcmProducer;
     void publishDecodedAudio(const QByteArray& pcm);
     friend class KiwiSdrWaterfallSetupTest;
+    friend class KiwiSdrWaterfallZoomCapTest;
     enum class StreamKind {
         Sound,
         Waterfall,
@@ -211,6 +216,7 @@ private:
     int kiwiHighCutHz() const;
     bool isSupportedSoundFrame(
         const KiwiSdrProtocol::FrameObservation& observation) const;
+    int effectiveWaterfallZoomCap() const;
     bool parseWaterfallFrameHeader(const QByteArray& frame, quint32* start,
                                    int* zoom) const;
     QByteArray resampleSoundSamples(const QVector<float>& monoSamples);
@@ -282,7 +288,6 @@ private:
 
 #ifdef HAVE_WEBSOCKETS
     void handleSocketError(const QString& detail, bool transportEstablished);
-    void startStatusPreflight(const QUrl& url);
     void handleStatusPreflightFinished(QNetworkReply* reply);
     void openWebSockets();
     bool retryWithSecureWebSocket(bool transportEstablished);
@@ -370,7 +375,16 @@ private:
     int m_waterfallRequestZoom{0};
     double m_waterfallRequestLowMhz{0.0};
     double m_waterfallRequestHighMhz{0.0};
+    // zoom_max is the server's MAX_ZOOM: it fixes the start fixed-point scale
+    // (WF_WIDTH << zoom_max). zoom_cap is only a ceiling on the zoom a client
+    // may request (KiwiSDR v1.900+ shared waterfalls advertise zoom_cap=11
+    // beside zoom_max=14); it never changes the scale. Conflating them
+    // encoded starts on 2^21 that the server read on 2^24. Both are seeded
+    // from kDefaultWaterfallZoomMax in connectToEndpoint().
+    int m_waterfallZoomMax{14};
     int m_waterfallZoomCap{14};
+    bool m_waterfallZoomMaxFromServer{false};
+    bool m_waterfallZoomCapFromServer{false};
     int m_waterfallFftBins{1024};
     float m_waterfallMinDbm{-110.0f};
     float m_waterfallMaxDbm{-10.0f};

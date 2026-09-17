@@ -15,6 +15,7 @@
 #include <QTimer>
 
 #include <atomic>
+#include <barrier>
 #include <cmath>
 #include <cstdio>
 #include <thread>
@@ -603,45 +604,50 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    std::atomic<bool> done{false};
     std::atomic<bool> initialized{true};
     std::atomic<unsigned> completedInitializations{0};
+    constexpr int kRetirementCycles = 300;
+    std::barrier initializationPhase(2);
     std::thread initializer([&]() {
         // This is the method scheduleAllKiwiDspStateInitialization dispatches
         // off-thread. Repeated attempts overlap typed ingress, epoch retirement
         // and source removal/recreation on the engine's owning thread.
-        while (!done.load(std::memory_order_acquire)) {
+        for (int cycle = 0; cycle < kRetirementCycles; ++cycle) {
+            initializationPhase.arrive_and_wait();
             if (!AetherSDR::AudioEngineRatesTestAccess::initializeSource(engine, sourceId)) {
                 initialized.store(false, std::memory_order_relaxed);
             }
             completedInitializations.fetch_add(1, std::memory_order_relaxed);
-            std::this_thread::yield();
+            initializationPhase.arrive_and_wait();
         }
     });
 
     AetherSDR::PcmProducer producer;
     int retiredEpochs = 0;
-    for (int cycle = 0; cycle < 300; ++cycle) {
+    for (int cycle = 0; cycle < kRetirementCycles; ++cycle) {
+        // Each churn window has an initializer attempt. A yield alone lets
+        // the owning thread finish every epoch before the worker is scheduled.
+        initializationPhase.arrive_and_wait();
         if (cycle % 8 == 0) {
             engine.removeKiwiSdrAudioSource(sourceId);
             AetherSDR::AudioEngineRatesTestAccess::enableSource(engine, sourceId);
         }
         AetherSDR::AudioEngineRatesTestAccess::clearSourceDsp(engine, sourceId);
-        if (!producer.start(AetherSDR::PcmPurpose::Auxiliary)) {
-            break;
+        if (producer.start(AetherSDR::PcmPurpose::Auxiliary)) {
+            const std::optional<AetherSDR::PcmFrame> frame = producer.produce(QVector<float>(480, 0.25f));
+            if (frame) {
+                engine.feedKiwiPcmFrame(sourceId, *frame);
+                std::this_thread::yield();
+                producer.invalidate();
+                if (AetherSDR::AudioEngineRatesTestAccess::retireAndCheck(engine, sourceId)) {
+                    ++retiredEpochs;
+                }
+            }
         }
-        const std::optional<AetherSDR::PcmFrame> frame = producer.produce(QVector<float>(480, 0.25f));
-        if (!frame) {
-            break;
-        }
-        engine.feedKiwiPcmFrame(sourceId, *frame);
-        std::this_thread::yield();
-        producer.invalidate();
-        if (AetherSDR::AudioEngineRatesTestAccess::retireAndCheck(engine, sourceId)) {
-            ++retiredEpochs;
-        }
+        // Never leave the peer waiting when a producer assertion fails: the
+        // retired-epoch count still reports that failure after both join.
+        initializationPhase.arrive_and_wait();
     }
-    done.store(true, std::memory_order_release);
     initializer.join();
     const bool prepared = AetherSDR::AudioEngineRatesTestAccess::initializeSource(engine, sourceId)
         && AetherSDR::AudioEngineRatesTestAccess::sourcePrepared(engine, sourceId);
@@ -649,7 +655,7 @@ int main(int argc, char** argv)
     const bool passed = durationChecks && invalidProcessingChecks && revocationDuringDspChecks
         && deviceRateNrChecks && meterChecks && singleFeedChecks
         && initialized.load(std::memory_order_relaxed)
-        && initializations > 0 && retiredEpochs == 300 && prepared;
+        && initializations == kRetirementCycles && retiredEpochs == kRetirementCycles && prepared;
     std::printf("%s: %d typed epochs retired; %u concurrent initialization attempts; final source %s\n",
         passed ? "PASS" : "FAIL", retiredEpochs, initializations, prepared ? "prepared" : "unprepared");
     return passed ? 0 : 1;

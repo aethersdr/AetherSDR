@@ -39,6 +39,11 @@ void IambicKeyer::setOnPaddleEvent(PaddleEventCallback cb)
     m_onPaddleEvent = std::move(cb);
 }
 
+void IambicKeyer::setOnRoutedKeyDownChange(RoutedKeyDownCallback cb)
+{
+    m_onRoutedKeyDownChange = std::move(cb);
+}
+
 void IambicKeyer::start()
 {
     if (m_running.exchange(true, std::memory_order_acq_rel))
@@ -80,15 +85,32 @@ void IambicKeyer::setSwapPaddles(bool swap) noexcept
 
 void IambicKeyer::setPaddleState(bool dit, bool dah) noexcept
 {
+    setPaddleInput(dit, dah, nullptr);
+}
+
+void IambicKeyer::setPaddleState(bool dit, bool dah, const TxCoordinator::Request& input) noexcept
+{
+    setPaddleInput(dit, dah, &input);
+}
+
+void IambicKeyer::setPaddleInput(bool dit, bool dah, const TxCoordinator::Request* input) noexcept
+{
     const bool swap = m_swap.load(std::memory_order_relaxed);
     const bool d = swap ? dah : dit;
     const bool h = swap ? dit : dah;
 
     {
         std::lock_guard<std::mutex> lk(m_mu);
-        if (m_ditPressed == d && m_dahPressed == h) return;
+        if (!d && !h && input && !input->sameRequest(m_input)) {
+            return; // another source's late release cannot end this squeeze
+        }
+        if (m_ditPressed == d && m_dahPressed == h
+            && (!input || input->sameRequest(m_input))) { return; }
         m_ditPressed = d;
         m_dahPressed = h;
+        if (d || h) {
+            m_input = input ? *input : TxCoordinator::Request{};
+        }
         m_paddleStateDirty = true;
     }
     m_cv.notify_all();
@@ -128,6 +150,9 @@ void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point w
     if (down == m_lastEmittedKeyDown) return;
     m_lastEmittedKeyDown = down;
     if (m_onKeyDownChange) m_onKeyDownChange(down, when);
+    if (m_onRoutedKeyDownChange) {
+        m_onRoutedKeyDownChange(down, when, m_elementInput);
+    }
 }
 
 void IambicKeyer::emitPaddleEvent(bool dit, bool dah)
@@ -152,6 +177,7 @@ void IambicKeyer::workerLoop()
     while (!m_stopRequested.load(std::memory_order_acquire)) {
         // ── Idle wait — block until paddle pressed ─────────────────────
         bool dit, dah;
+        TxCoordinator::Request input;
         {
             std::unique_lock<std::mutex> lk(m_mu);
             m_cv.wait(lk, [this]() {
@@ -161,6 +187,7 @@ void IambicKeyer::workerLoop()
             m_paddleStateDirty = false;
             dit = m_ditPressed;
             dah = m_dahPressed;
+            input = m_input;
         }
         // Always forward latest paddle state to the radio (even on
         // release events — the radio's iambic engine needs to see them).
@@ -253,6 +280,11 @@ void IambicKeyer::workerLoop()
             const auto onDeadline = grid + onDuration;
             // `grid` is this edge's scheduled instant — the callback runs at
             // wake time but carries the exact deadline (#4890 wake scatter).
+            // Each element gets its own normal down/up queue lifetime, but
+            // only through the input captured before the keyer was started.
+            // Cancellation/reconnect cannot mint fresh authority here. Local
+            // monitor/recorder timing remains independent of RF admission.
+            m_elementInput = input.derive();
             emitKeyDown(true, grid);
             {
                 std::unique_lock<std::mutex> lk(m_mu);
@@ -292,6 +324,15 @@ void IambicKeyer::workerLoop()
                 std::lock_guard<std::mutex> lk(m_mu);
                 wantDit = m_ditPressed;
                 wantDah = m_dahPressed;
+                if (m_input.valid() && !input.sameRequest(m_input)) {
+                    // A different input cannot inherit this squeeze's Mode-B
+                    // memory. Finish its current element, then start the new
+                    // input on the next outer iteration.
+                    m_ditMemory = false;
+                    m_dahMemory = false;
+                    m_paddleStateDirty = true;
+                    break;
+                }
             }
             emitPaddleEvent(wantDit, wantDah);
         }

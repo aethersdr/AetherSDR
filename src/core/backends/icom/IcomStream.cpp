@@ -3,6 +3,7 @@
 #include <QAbstractSocket>
 #include <QLoggingCategory>
 #include <QRandomGenerator>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QUdpSocket>
 
@@ -243,6 +244,10 @@ void IcomStream::stop()
 
 void IcomStream::sendRaw(std::span<const std::uint8_t> packet)
 {
+    if (m_testWriter) {
+        m_testWriter(packet);
+        return;
+    }
     if (!m_socket)
         return;
     const qint64 n = m_socket->write(reinterpret_cast<const char*>(packet.data()),
@@ -269,7 +274,9 @@ void IcomStream::sendRawTwice(std::span<const std::uint8_t> packet)
     sendRaw(packet);
 }
 
-void IcomStream::retain(quint16 seq, const std::vector<std::uint8_t>& packet)
+void IcomStream::retain(quint16 seq, const std::vector<std::uint8_t>& packet,
+                        const std::optional<TxCoordinator::Context>& context,
+                        const std::optional<TxCoordinator::Command>& command)
 {
     // FIFO BY INSERTION, not by key.
     //
@@ -287,7 +294,7 @@ void IcomStream::retain(quint16 seq, const std::vector<std::uint8_t>& packet)
     // deliberately avoids; it bit here in the other direction.
     if (!m_replay.contains(seq))
         m_replayOrder.push_back(seq);
-    m_replay.insert(seq, packet);
+    m_replay.insert(seq, ReplayPacket{packet, context, command});
     while (m_replay.size() > kReplayDepth && !m_replayOrder.empty()) {
         m_replay.remove(m_replayOrder.front());
         m_replayOrder.pop_front();
@@ -299,10 +306,65 @@ void IcomStream::sendTracked(std::vector<std::uint8_t> packet)
     sendTrackedImpl(std::move(packet), true);
 }
 
-void IcomStream::sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayload)
+void IcomStream::sendTrackedTxAudio(std::vector<std::uint8_t> packet, const TxCoordinator::Context& context)
 {
+    sendTrackedImpl(std::move(packet), true, context);
+}
+
+void IcomStream::sendTrackedTxCommand(std::vector<std::uint8_t> packet, const TxCoordinator::Command& command)
+{
+    sendTrackedImpl(std::move(packet), true, {}, command);
+}
+
+void IcomStream::sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayload,
+                                std::optional<TxCoordinator::Context> context,
+                                std::optional<TxCoordinator::Command> command)
+{
+    // Created before dispatch guards so an entered writer leaves before the
+    // owner learns that its queue has consumed this command.
+    const auto consumed = qScopeGuard([command] {
+        if (command) {
+            command->completion.finish();
+        }
+    });
+    TxCoordinator::Dispatch dispatch;
+    TxCoordinator::Dispatch commandDispatch;
+    if (command) {
+        commandDispatch = command->beginDispatch(TxCoordinator::monotonicMs());
+        if (!commandDispatch) {
+            return;
+        }
+    }
+    if (context) {
+        dispatch = context->beginDispatch(TxCoordinator::monotonicMs());
+        if (!dispatch) {
+            return;
+        }
+    }
     if (packet.size() < kHeaderSize)
         return;
+    const std::size_t replayGroup = command ? static_cast<std::size_t>(command->replayGroup) : 0;
+    const bool replaceable = replayGroup > 0 && replayGroup < m_replayCommandGeneration.size();
+    if (replaceable) {
+        ++m_replayCommandGeneration[replayGroup];
+        if (!command->keying) {
+            ++m_replayCleanupGeneration[replayGroup];
+        }
+        // FIFO delivery is unchanged. Only retained retries are superseded:
+        // replaying an old unkey after a newer key must not stop its producer,
+        // and replaying old key/text after cleanup must not restart it.
+        // CW text appends within a batch; a new chunk supersedes only a prior
+        // abort, while an abort supersedes every older chunk in that group.
+        for (ReplayPacket& retained : m_replay) {
+            if (retained.command && retained.command->replayGroup == command->replayGroup
+                && (command->replayGroup != TxCoordinator::Command::ReplayGroup::CwText
+                    || !command->keying || !retained.command->keying)) {
+                retained.superseded = true;
+            }
+        }
+    }
+    const quint64 commandGeneration = m_replayCommandGeneration[replaceable ? replayGroup : 0];
+    const quint64 cleanupGeneration = m_replayCleanupGeneration[replaceable ? replayGroup : 0];
     const quint16 seq = m_txSeq++;
     // Stamp the header sequence here rather than trusting the caller: the
     // replay buffer is keyed by it, and a caller-allocated sequence could name
@@ -311,7 +373,16 @@ void IcomStream::sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayloa
     packet[0x06] = static_cast<std::uint8_t>(seq & 0xff);
     packet[0x07] = static_cast<std::uint8_t>((seq >> 8) & 0xff);
     sendRaw(packet);
-    retain(seq, packet);
+    retain(seq, packet, context, command);
+    if (replaceable) {
+        // An injected terminal writer (or nested loop) may have delivered a
+        // newer command before this older write returned and was retained.
+        const bool cwAppend = command->replayGroup == TxCoordinator::Command::ReplayGroup::CwText
+            && command->keying;
+        m_replay[seq].superseded = cwAppend
+            ? cleanupGeneration != m_replayCleanupGeneration[replayGroup]
+            : commandGeneration != m_replayCommandGeneration[replayGroup];
+    }
     // Only PAYLOAD resets the quiet clock. Letting the keepalive reset it would
     // make the stream permanently believe it had just sent something real, so
     // the relaxation to a 1 s cadence would never engage.
@@ -448,8 +519,17 @@ void IcomStream::handleRetransmitRequest(std::span<const std::uint8_t> pkt)
         quint16 s = r.first;
         for (int i = 0; i < r.count() && i <= kMaxRetransmitRun; ++i, ++s) {
             auto it = m_replay.find(s);
-            if (it != m_replay.end()) {
-                sendRaw(*it);
+            TxCoordinator::Dispatch dispatch;
+            TxCoordinator::Dispatch commandDispatch;
+            if (it != m_replay.end() && it->context) {
+                dispatch = it->context->beginDispatch(TxCoordinator::monotonicMs());
+            }
+            if (it != m_replay.end() && !it->superseded && it->command) {
+                commandDispatch = it->command->beginDispatch(TxCoordinator::monotonicMs());
+            }
+            if (it != m_replay.end() && !it->superseded && (!it->context || dispatch)
+                && (!it->command || commandDispatch)) {
+                sendRaw(it->bytes);
                 ++m_counters.retransmitsServed;
             } else {
                 // We no longer hold it. Sending an IDLE carrying the requested

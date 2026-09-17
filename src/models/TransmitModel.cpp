@@ -4,6 +4,7 @@
 #include <QDebug>
 #include <QTimer>
 #include <QThread>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -379,6 +380,16 @@ void TransmitModel::setTuneAvailable(bool available)
 
 void TransmitModel::startTune(PttSource source)
 {
+    requestTune(source, false, {});
+}
+
+void TransmitModel::startTwoToneTune(PttSource source)
+{
+    requestTune(source, true, {});
+}
+
+void TransmitModel::requestTune(PttSource source, bool twoTone, const KeyingRoute& route)
+{
     if (!m_tuneAvailable) {
         return;
     }
@@ -388,8 +399,9 @@ void TransmitModel::startTune(PttSource source)
     if (!tuneAdmitted()) {
         return;
     }
-    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
-    if (m_keyingAdmission && (!permit || !permit())) {
+    const KeyingPermit permit = route.admit ? route.admit(true)
+        : m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
+    if ((route.admit || m_keyingAdmission) && (!permit || !permit())) {
         return;
     }
     const quint64 intentEpoch = ++m_tuneIntentEpoch;
@@ -399,6 +411,12 @@ void TransmitModel::startTune(PttSource source)
     // every software path as source=SW). Without this, tune inherits the stale
     // Mox tag and wrongly runs the operator-only timer. (#4131 review)
     m_activePttSource = source;
+    if (twoTone) {
+        setTuneMode(QStringLiteral("two_tone"));
+        if (intentEpoch != m_tuneIntentEpoch || (permit && !permit())) {
+            return;
+        }
+    }
 
     // Optimistic tune state, exactly as setMox() does for m_transmitting.
     //
@@ -413,38 +431,11 @@ void TransmitModel::startTune(PttSource source)
         emit tuneChanged(true);
     }
     if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
-        emit tuneCommandIssued(true);
-    }
-}
-
-void TransmitModel::startTwoToneTune(PttSource source)
-{
-    if (!m_tuneAvailable) {
-        return;
-    }
-    if (!runPttPreflight(source, false)) {
-        return;
-    }
-    if (!tuneAdmitted()) {
-        return;
-    }
-    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
-    if (m_keyingAdmission && (!permit || !permit())) {
-        return;
-    }
-    const quint64 intentEpoch = ++m_tuneIntentEpoch;
-
-    m_activePttSource = source;   // exclude local/TCI/DAX tune (see startTune, #4131)
-    setTuneMode("two_tone");
-    if (intentEpoch != m_tuneIntentEpoch || (permit && !permit())) {
-        return;
-    }
-    if (!m_tune) {
-        m_tune = true;
-        emit tuneChanged(true);
-    }
-    if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
-        emit tuneCommandIssued(true);
+        if (route.dispatch) {
+            route.dispatch(true);
+        } else {
+            emit tuneCommandIssued(true);
+        }
     }
 }
 
@@ -465,14 +456,27 @@ void TransmitModel::toggleTwoToneTune()
 
 void TransmitModel::stopTune()
 {
+    stopTune({});
+}
+
+void TransmitModel::stopTune(const KeyingRoute& route)
+{
+    const KeyingPermit permit = route.admit ? route.admit(false)
+        : m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, false) : KeyingPermit{};
+    if (route.admit && (!permit || !permit())) {
+        return;
+    }
     const quint64 intentEpoch = ++m_tuneIntentEpoch;
-    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, false) : KeyingPermit{};
     if (m_tune) {
         m_tune = false;
         emit tuneChanged(false);
     }
     if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
-        emit tuneCommandIssued(false);
+        if (route.dispatch) {
+            route.dispatch(false);
+        } else {
+            emit tuneCommandIssued(false);
+        }
     }
 }
 
@@ -517,20 +521,35 @@ void TransmitModel::setTransmitting(bool tx)
 
 void TransmitModel::atuStart()
 {
-    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Atu, true) : KeyingPermit{};
-    if (m_keyingAdmission && (!permit || !permit())) {
-        return;
-    }
-    m_userAbortedAtu = false;
-    emit atuCommandIssued(true);
+    requestAtu(true, {});
 }
 
 void TransmitModel::atuBypass()
 {
-    if (m_atuStatus == ATUStatus::InProgress) {
+    requestAtu(false, {});
+}
+
+void TransmitModel::requestAtu(bool start, const KeyingRoute& route)
+{
+    const KeyingPermit permit = route.admit ? route.admit(start)
+        : start && m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Atu, true) : KeyingPermit{};
+    if ((route.admit || (start && m_keyingAdmission)) && (!permit || !permit())) {
+        return;
+    }
+    // Track a deliberate operator bypass of a running tune so applyChanges
+    // does not report "ATU tune failed" for an abort the operator asked for.
+    // Set after admission, on whichever route carries the command: a refused
+    // request never reached the ATU, so it must not claim an abort either.
+    if (start) {
+        m_userAbortedAtu = false;
+    } else if (m_atuStatus == ATUStatus::InProgress) {
         m_userAbortedAtu = true;
     }
-    emit atuCommandIssued(false);
+    if (route.dispatch) {
+        route.dispatch(start);
+    } else {
+        emit atuCommandIssued(start);
+    }
 }
 
 void TransmitModel::setAtuMemories(bool on)
@@ -1125,9 +1144,13 @@ void TransmitModel::cancelPendingQuindarOff()
 
 void TransmitModel::invalidatePttRelease()
 {
+    const std::function<void()> abandoned = std::exchange(m_pttReleaseAbandoned, {});
     if (m_pttReleaseFence) {
         m_pttReleaseFence->store(false, std::memory_order_release);
         m_pttReleaseFence.reset();
+    }
+    if (abandoned) {
+        abandoned();
     }
 }
 
@@ -1146,19 +1169,32 @@ void TransmitModel::cancelPttRelease()
     }
 }
 
-TransmitModel::PttRelease TransmitModel::capturePttRelease()
+TransmitModel::PttRelease TransmitModel::capturePttRelease(PttRelease release)
 {
     invalidatePttRelease();
     m_pttReleaseFence = std::make_shared<std::atomic<bool>>(true);
     const std::shared_ptr<std::atomic<bool>> fence = m_pttReleaseFence;
-    return {[fence] { return fence->load(std::memory_order_acquire); },
-            [this, ownerThread = thread()] {
+    m_pttReleaseAbandoned = std::move(release.abandoned);
+    return {[fence, current = std::move(release.isCurrent)] {
+                return fence->load(std::memory_order_acquire) && (!current || current());
+            },
+            [this, fence, finish = std::move(release.finish), ownerThread = thread()] {
                 if (QThread::currentThread() == ownerThread) {
-                    setMox(false);
+                    if (!fence->exchange(false, std::memory_order_acq_rel)) {
+                        return;
+                    }
+                    // Normal completion owns its queued unkey. Cancellation
+                    // must not retire that producer before the write returns.
+                    m_pttReleaseAbandoned = {};
+                    if (finish) {
+                        finish();
+                    } else {
+                        setMox(false);
+                    }
                 } else {
                     qCWarning(lcProtocol) << "PTT release refused off the model owning thread";
                 }
-            }};
+            }, {}};
 }
 
 void TransmitModel::dispatchMoxOff(const PttRelease& release)
@@ -1175,10 +1211,18 @@ void TransmitModel::dispatchMoxOff(const PttRelease& release)
 
 void TransmitModel::requestPttOn(PttSource source)
 {
-    if (!runPttPreflight(source))
+    requestPttOn(source, {}, {});
+}
+
+void TransmitModel::requestPttOn(PttSource source, std::function<KeyingPermit()> admit,
+                                std::function<void()> engage)
+{
+    if (!runPttPreflight(source)) {
         return;
-    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Mox, true) : KeyingPermit{};
-    if (m_keyingAdmission && (!permit || !permit())) {
+    }
+    const KeyingPermit permit = admit ? admit()
+        : m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Mox, true) : KeyingPermit{};
+    if ((admit || m_keyingAdmission) && (!permit || !permit())) {
         return;
     }
     invalidatePttRelease();
@@ -1203,6 +1247,9 @@ void TransmitModel::requestPttOn(PttSource source)
             // playing locally.  MOX is already true (we never sent
             // xmit 0); just bail.
             emit quindarActiveChanged(false);
+            if (engage && (!permit || permit())) {
+                engage(); // transfer the backend fence to this admitted producer
+            }
             return;
         }
     }
@@ -1221,16 +1268,25 @@ void TransmitModel::requestPttOn(PttSource source)
         });
     }
     if (!permit || permit()) {
-        setMox(true);
+        if (engage) {
+            engage();
+        } else {
+            setMox(true);
+        }
     }
 }
 
-void TransmitModel::requestPttOff(PttSource /*source*/)
+void TransmitModel::requestPttOff(PttSource source)
+{
+    requestPttOff(source, {});
+}
+
+void TransmitModel::requestPttOff(PttSource /*source*/, PttRelease scopedRelease)
 {
     if (m_pttReleaseFence && m_pttReleaseFence->load(std::memory_order_acquire)) {
         return; // a duplicate release must not truncate an in-flight normal tail
     }
-    const PttRelease release = capturePttRelease();
+    const PttRelease release = capturePttRelease(std::move(scopedRelease));
     auto* tone = m_quindarTone;
 
     // No Quindar, no phone mode, or already shutting down → straight

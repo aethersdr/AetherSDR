@@ -35,7 +35,7 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool) override { check(false, "telemetry must never key"); }
+    void setKeying(bool, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { check(false, "telemetry must never key"); }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
 

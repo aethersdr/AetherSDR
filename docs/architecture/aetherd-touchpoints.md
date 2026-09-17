@@ -4,7 +4,7 @@
 
 Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine-design.md) §2, §10). One row per engine header the UI includes; converting a touchpoint means the UI reaches that surface through the versioned protocol instead of the header.
 
-**Totals:** 222 touchpoint headers (189 core, 33 models) — 222/222 tagged, 0/222 converted.
+**Totals:** 223 touchpoint headers (189 core, 34 models) — 223/223 tagged, 0/223 converted.
 
 | Header | Includers | Tag | Status |
 |---|---:|---|---|
@@ -68,7 +68,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/HidEncoderManager.h` | 2 | ui-support — USB HID control-surface driver (RC-28, StreamDeck+, TMate 2): desktop input device plumbing, not radio state | unconverted |
 | `core/HostVoiceChainPolicy.h` | 1 | mixed(flex) — Decides when the Flex-shaped voice controls (PROC, 8-band graphic EQ) may write the SHARED ClientComp/ClientEq objects the Aetherial strip also edits — two surfaces onto one object, so 'may we write' has a wrong answer (#4609). Universal DSP-ownership question, answered today from Flex-shaped state. | unconverted |
 | `core/IConnectionAutomation.h` | 1 | ui-support — Gui-free connect/disconnect/dialog hook the automation bridge drives; bridge plumbing, not radio state. | unconverted |
-| `core/IambicKeyer.h` | 3 | universal — Radio-agnostic software iambic state machine for local sidetone + CW paddle/keying intent; no vendor coupling. | unconverted |
+| `core/IambicKeyer.h` | 4 | universal — Radio-agnostic software iambic state machine for local sidetone + CW paddle/keying intent; no vendor coupling. | unconverted |
 | `core/IssueReport.h` | 1 | ui-support — Renders a pre-filled GitHub issue body from a SupportBundle snapshot, with PII redaction applied at the render boundary (GHSA-ccrg-j8cp-qhc4). Support and diagnostics tooling; not radio state. | unconverted |
 | `core/KiwiPublicDirectory.h` | 1 | vendor(kiwi) — Fetches/parses AetherSDR's kiwi.json mirror of the kiwisdr.com/public directory + per-sysop ext_api policy; KiwiSDR ecosystem discovery only. | unconverted |
 | `core/KiwiSdrClient.h` | 2 | vendor(kiwi) — KiwiSDR WebSocket protocol client (SND/WF streams, ADPCM, camp/monitor states) — the kiwi backend itself; also serves the Web-888 fork as a receiver family (docs/web888-cleanroom-design.md) | unconverted |
@@ -147,7 +147,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `core/ThemeManager.h` | 151 | ui-support — Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state. | unconverted |
 | `core/ThreadCpuRing.h` | 2 | ui-support — Short host-thread CPU history used by Runtime Monitor peak and sparkline presentation. Diagnostic UI support, not radio state. | unconverted |
 | `core/TimeFrameVoter.h` | 1 | universal — Shared AetherClock time-frame types plus confidence-weighted cross-frame bit voting over a sliding window. Map-agnostic pure DSP/logic — no Qt, no GUI, no vendor ties. | unconverted |
-| `core/TxKeyingMarker.h` | 8 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
+| `core/TxKeyingMarker.h` | 11 | ui-support — QWidget property marker guarding TX-keying controls from the automation bridge; GUI-shell plumbing, no radio state. | unconverted |
 | `core/UlanziDialBackend.h` | 4 | ui-support — Platform alias for Ulanzi Dial HID knob backend (evdev/hidapi); physical input device for client, not radio state | unconverted |
 | `core/UlanziDialMacOSManager.h` | 1 | ui-support — macOS IOKit implementation of the Ulanzi Dial client input surface. Desktop hardware plumbing, not radio state. | unconverted |
 | `core/UlanziDialMappings.h` | 2 | ui-support — Owner of the Ulanzi Dial's pill→action bindings in one feature-owned document (Principle V). A control surface's own configuration — it belongs to the peripheral, not to any radio — same home decision as the FlexControl USB knob. | unconverted |
@@ -219,7 +219,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/Nr2SettingsModel.h` | 5 | universal — Process-wide owner of client-side NR2 configuration as one versioned object (Principle V), so every editing surface shares state. Engine DSP configuration; radio-agnostic. | unconverted |
 | `models/PanadapterModel.h` | 3 | mixed(flex) — Per-pan display state is core-profile; DAX IQ ch, client_handle, VITA stream IDs, SmartSDR kv parsing are flex. | unconverted |
 | `models/ProfileLoadCommand.h` | 1 | vendor(flex) — Parses SmartSDR 'profile global/tx/mic load' wire command + recall-hold timing/suppression sentinels; Flex-only | unconverted |
-| `models/RadioModel.h` | 44 | mixed(flex) — Central radio aggregate: core slice/pan/TX/meter/memory state fused with Flex protocol, DAX, SmartLink, Multi-Flex | unconverted |
+| `models/RadioModel.h` | 46 | mixed(flex) — Central radio aggregate: core slice/pan/TX/meter/memory state fused with Flex protocol, DAX, SmartLink, Multi-Flex | unconverted |
 | `models/RadioSession.h` | 1 | universal — Per-radio session aggregate: owns RadioModel + id/label; session concept is core-profile, no vendor surface | unconverted |
 | `models/RadioStatusOwnership.h` | 1 | vendor(flex) — SmartSDR status parsing helpers: Flex hex handles, client_handle ownership, remote_audio_rx, interlock gate | unconverted |
 | `models/Rn2SettingsModel.h` | 1 | universal — Process-wide owner of client-side RN2 configuration as one versioned object (Principle V). Engine DSP configuration; radio-agnostic. | unconverted |
@@ -229,6 +229,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/TnfModel.h` | 1 | universal — Tracking notch filter state (freq/width/depth/permanent, global enable) — generic DSP notch surface; kv parse is transport detail | unconverted |
 | `models/TransmitModel.h` | 15 | mixed(flex) — TX state model: power/MOX/VOX/CW/filter are core-profile; ATU, DAX, APD, profiles, interlock are Flex. | unconverted |
 | `models/TunerModel.h` | 3 | mixed(flex) — External-tuner state model, intended to become vendor-neutral (usable by any 3rd-party tuner). Fuses universal tuner state with Flex-specific TGXL wiring, so it's mixed — NOT peripheral (that's the transport TgxlConnection) and NOT pure vendor. Distinct from the radio's own built-in ATU (TransmitModel). | unconverted |
+| `models/TxController.h` | 7 | universal — Engine-owned producer input controller: captures original intent and routes typed TX operations through RadioModel and TxCoordinator, with no widget or vendor dependency. | unconverted |
 | `models/XvtrPolicy.h` | 5 | mixed(flex) — XVTR policy: transverter list/freq translation is core; waterfall-tile offset + FLEX model power clamps are flex | unconverted |
 
 **Tag legend:** `universal` = core-profile surface shared across radio families; `vendor(<family>)` = family-specific radio/backend wire surface, kept behind `IRadioBackend` or exposed as a reviewed namespaced extension; `mixed(<family>)` = header carries both universal and family-specific concerns (split candidates noted); `peripheral(<family>)` = standalone accessory transport outside the radio-family seam; `ui-support` = not radio state at all (settings, theming, app plumbing) — needs a home decision, not a protocol message.
