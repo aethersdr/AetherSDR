@@ -800,6 +800,32 @@ int main(int argc, char** argv)
         }
     }
 
+#if !AETHER_HL2_TX_TXA
+    // ---- PHASING BUILD ONLY, and the reason is the block's own ----
+    //
+    // The evidence below is "these modes are BIT-IDENTICAL to USB", which is
+    // true because Hl2TxDsp::setMode()'s only reader is isLowerSideband(). A
+    // TXA channel does not work that way: it implements AM, SAM, FM and DSB as
+    // real WDSP transmit modes, and refuses WBFM outright ("WDSP TX does not
+    // define a WBFM mode"). So in the TXA build every assertion here fails --
+    // seven of them -- while nothing is wrong.
+    //
+    // The block says what to do about that in its own words: "If someone later
+    // teaches this chain a real AM or FM modulator, this block FAILS, which is
+    // the point: the failure is the reminder to take that mode back off the
+    // receive-only list." That reminder is hereby taken, and it is NOT this
+    // PR's to act on. Whether TXA makes AM and FM genuinely transmittable on a
+    // Hermes-Lite 2 is a CAPABILITY decision -- it changes what
+    // Hl2Backend::capabilities() declares and what
+    // RadioModel::refuseKeyInReceiveOnlyMode() will let an operator key -- and
+    // it belongs with the TXA migration rows (#5678 1.2, 6.2, 6.3), behind a
+    // flag that is not yet on by default and a modulator nobody has keyed on
+    // the air.
+    //
+    // Guarding rather than deleting, because the phasing build is what ships
+    // today and this is its evidence. Found by building the integration branch:
+    // #5680 landed this block on main after this branch was cut, so neither
+    // change could see the collision alone.
     // ---- THE MODES Hl2Backend DECLARES RECEIVE-ONLY ARE BIT-IDENTICAL TO USB ----
     //
     // This is the evidence behind `Hl2Backend::capabilities`'s
@@ -862,6 +888,7 @@ int main(int argc, char** argv)
                   "Hl2Backend declares it receive-only");
         }
     }
+#endif  // !AETHER_HL2_TX_TXA
 
     // ---- CHARACTERISATION SWEEP: opposite-sideband suppression vs audio frequency ----
     //
