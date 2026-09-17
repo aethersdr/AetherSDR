@@ -165,12 +165,35 @@ option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 # 16-bit EP2 wire.
 #
 # Defaulting ON would have made the first person to key TXA on the air someone
-# who did not choose to. OFF costs the identical way back -- one cmake flag --
-# and makes that person a volunteer. Flip the default when an operator has keyed
-# it into a dummy load and then onto an antenna, and say in the commit who did.
+# who did not choose to. OFF cost the identical way back -- one cmake flag --
+# and made that person a volunteer.
+#
+# THE VOLUNTEER WAS ON8ST, AND THE CONDITION THIS COMMENT SET IS MET.
+# The line above used to end "flip the default when an operator has keyed it
+# into a dummy load and then onto an antenna, and say in the commit who did."
+# Stan Claes (ON8ST) did both on his Hermes-Lite 2, board id 6, gateware 74,
+# on 2026-09-17, against this exact code:
+#
+#   DUMMY LOAD  two overs of 5 s, 1 kHz tone, 40 % drive. Power up within
+#               ~270 ms, steady 0.47-0.50 W, SWR 1.00-1.13, ALC at 0 dB gain
+#               and -19.99 dBFS, clean unkey both times.
+#   ANTENNA     two overs of 5 s on 3.695 MHz USB through a fan dipole, after a
+#               spoken identification. Steady 0.49-0.52 W, SWR 1.57-1.69, clean
+#               unkey both times.
+#
+# THE SWR IS THE CORROBORATION, not the power. 1.6 on the antenna against 1.07
+# into the load is a real mismatch where a real mismatch belongs; the power
+# figures alone could not tell the two apart. In both runs the SECOND over was
+# indistinguishable from the first, which is the property the reset fix in this
+# same PR series is about.
+#
+# The hardware time that #5678's approval asked for -- and that
+# docs/hl2-txa-configuration-diff.md §7 recorded as absent, "No hardware. No
+# radio was keyed. No antenna port was observed." -- now exists, and it is named
+# rather than asserted.
 option(AETHER_HL2_TX_TXA
-       "Hermes-Lite 2 SSB transmit modulator: ON uses WDSP's TXA chain, OFF (default) the in-tree phasing modulator"
-       OFF)
+       "Hermes-Lite 2 SSB transmit modulator: ON (default) uses WDSP's TXA chain, OFF the in-tree phasing modulator"
+       ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
