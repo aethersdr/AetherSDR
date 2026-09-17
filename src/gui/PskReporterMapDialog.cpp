@@ -455,7 +455,7 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     m_radarLegendCheck->setAccessibleDescription(tr(
         "Show a separate intensity scale and units for each displayed weather source."));
     m_radarLegendCheck->setToolTip(m_radarLegendCheck->accessibleDescription());
-    m_radarLegendCheck->setChecked(pskSettings().value("showRadarLegend").toBool(false));
+    m_radarLegendCheck->setChecked(pskSettings().value("showRadarLegend").toBool(true));
     m_radarLegendTopCheck = new QCheckBox(tr("Position at top"), reportsBox);
     m_radarLegendTopCheck->setObjectName(QStringLiteral("pskReporterRadarLegendAtTop"));
     m_radarLegendTopCheck->setAccessibleName(tr("Position weather legend at top"));

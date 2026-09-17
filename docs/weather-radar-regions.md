@@ -217,8 +217,9 @@ are in [resources/radar/README.md](../resources/radar/README.md).
 
 ## Source labels and intensity legends
 
-The optional **Intensity legend** names the displayed providers and gives each
-its own palette and units, on both projections. It is off by default. When
+The **Intensity legend** names the displayed providers and gives each
+its own palette and units, on both projections. It is on by default so mixed
+units stay labeled; uncheck **Intensity legend** to hide it. When
 shown, it uses thin color bars, subdued text and a borderless background at the
 bottom left. **Position at top** moves it to the top left when checked; leaving
 it unchecked selects the bottom left. Both preferences persist with the PSK
@@ -319,8 +320,8 @@ stopped afterward. These results describe the local implementation before public
 These native macOS captures show the RFC #5630 revisions, including bundled
 station catalogs and legends identifying the providers actually displayed.
 The muted legend captures below show the later optional-legend revision.
-The legend is off by default; enabling **Intensity legend** shows it at the
-bottom left, or at the top left with **Position at top** checked.
+The legend is on by default; uncheck **Intensity legend** to hide it. When
+shown it is at the bottom left, or at the top left with **Position at top** checked.
 The ARM64 build and eight focused CTest suites passed; a separate native Cocoa
 run passed all 49 loading, playback and rendering cases. The authenticated MCP
 walkthrough used isolated settings, DEMO-0001 and disabled TX automation.
