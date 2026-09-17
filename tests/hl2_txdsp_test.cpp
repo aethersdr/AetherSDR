@@ -158,6 +158,11 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
 
 int main(int argc, char** argv)
 {
+    // Hl2TxDsp::processAudioBlock carries its admitting context; these cases
+    // are about levelling, so a permanently-valid authority is the inert
+    // constant that leaves the source tag as the only variable. Inner scopes
+    // that need their own lifetime shadow this one.
+    TxTestAuthority authority;
     QCoreApplication app(argc, argv);
     constexpr double kFsOut = 48000.0;
     constexpr double kTone = 1000.0;
@@ -1111,7 +1116,7 @@ int main(int argc, char** argv)
                         std::vector<float>(
                             audio.begin() + static_cast<std::ptrdiff_t>(off),
                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        TxAudioSource::Microphone);
+                        TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1179,7 +1184,7 @@ int main(int argc, char** argv)
                         std::vector<float>(
                             audio.begin() + static_cast<std::ptrdiff_t>(off),
                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        TxAudioSource::Microphone);
+                        TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1263,7 +1268,7 @@ int main(int argc, char** argv)
                         std::vector<float>(
                             audio.begin() + static_cast<std::ptrdiff_t>(off),
                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        TxAudioSource::Microphone);
+                        TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1528,7 +1533,7 @@ int main(int argc, char** argv)
                     0.1 * std::sin(2.0 * M_PI * 1000.0 * static_cast<double>(n)
                                    / cfg.inputSampleRateHz));
             }
-            tx.processAudioBlock(tone, TxAudioSource::EngineGenerated);
+            tx.processAudioBlock(tone, TxAudioSource::EngineGenerated, authority.context);
             check(out.empty() && micPeakDb < -998.0f,
                   "a partial block emits nothing and is carried");
 
@@ -1538,7 +1543,7 @@ int main(int argc, char** argv)
             // scale. With the guard they are dropped, the buffer holds only
             // silence, and it is under a block again: nothing is emitted.
             const std::vector<float> silence(half, 0.0f);
-            tx.processAudioBlock(silence, TxAudioSource::Microphone);
+            tx.processAudioBlock(silence, TxAudioSource::Microphone, authority.context);
             std::fprintf(stderr,
                 "residue guard: after a source change, emitted %zu IQ samples,"
                 " mic peak %.1f dBFS\n", out.size(), micPeakDb);

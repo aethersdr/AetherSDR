@@ -746,6 +746,12 @@ private:
     QJsonObject doKeyEvent(const QString& action, const QString& spec);
     // Release-edge policing hand-back, gated on the transmitter being down.
     void releaseEdgeHandsBackPolicing();
+    // Release this bridge's captured input for `activity` and say whether
+    // there was one. A stop verb reports the result rather than an
+    // unconditional ok:true, so a client whose authorization was rotated (the
+    // controller is exchanged to {} by forceUnkey) can tell that its stop did
+    // nothing instead of being told it succeeded.
+    [[nodiscard]] bool stopCapturedInput(TxController::Activity activity);
     // Inject a learned VFO Tune Knob MIDI CC value through the controller
     // decoder. Automation-only, RX-only, and never persists a binding.
     QJsonObject doMidi(const QString& action, const QString& value) const;

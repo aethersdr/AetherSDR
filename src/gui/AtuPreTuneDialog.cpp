@@ -978,6 +978,16 @@ void AtuPreTuneDialog::cancelProgram(bool restore)
     restore = restore && root.valid();
     root.stop(); // close future derivation before ending the current point
     point.abort();
+    // #2624: a sweep abandoned mid-cycle (Abort, the per-point stuck-ATU
+    // timeout, or the dialog closing between points) must still bypass. A
+    // bypass is not only a stop edge — it also configures idle ATU relays —
+    // so it cannot be gated on our own intent bookkeeping still agreeing a
+    // cycle is in flight, which is exactly the case the timeout exists for.
+    // bypassAtu() delegates to requestProducerAtu() when an Atu intent IS
+    // bound and still reaches transmitModel().atuBypass() when none is.
+    if (!point.bypassAtu()) {
+        (void)root.bypassAtu();
+    }
     if (self && restore && controller && controller->valid()) {
         restoreOriginalFrequency(controller);
     }

@@ -36,10 +36,11 @@ void TxPointerAction::press(const QPoint& global)
     m_started = hits(global);
     if (!m_started) { return; }
     const QPointer<QAbstractButton> button = qobject_cast<QAbstractButton*>(m_button.data());
+    if (!button) { return; }
     if (button->focusPolicy() & Qt::ClickFocus) {
         button->setFocus(Qt::MouseFocusReason);
     }
-    if (button && (!m_controller || m_controller->valid())) {
+    if (!m_controller || m_controller->valid()) {
         button->setDown(true);
     }
 }

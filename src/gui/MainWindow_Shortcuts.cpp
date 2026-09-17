@@ -983,8 +983,17 @@ void MainWindow::registerShortcutActions()
     registerTxShortcut("two_tone_tune", "Two-Tone Tune", {}, TxController::Activity::Tune,
         [this](const TxController::Input& input) {
             if (m_radioModel.transmitModel().isTuning()) {
+                const bool ownedTune = input.active();
                 input.stop();
-                m_radioModel.transmitModel().setTuneMode(QStringLiteral("single_tone"));
+                // Only revert the mode after OUR tune actually stopped. A
+                // foreign producer's two-tone keeps its mode: input.stop() is
+                // void and is refused when someone else owns the Tune intent,
+                // and flipping the mode under a carrier we did not stop
+                // changes what is on the air mid-transmission. Mirrors
+                // MidiTxDispatch.h's guard on the same action.
+                if (ownedTune && !m_radioModel.transmitModel().isTuning()) {
+                    m_radioModel.transmitModel().setTuneMode(QStringLiteral("single_tone"));
+                }
             } else {
                 (void)input.start(true);
             }

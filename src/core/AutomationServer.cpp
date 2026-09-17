@@ -7159,11 +7159,10 @@ QJsonObject AutomationServer::doTxTest(const QString& action)
     auto& tx = m_radioModel->transmitModel();
 
     if (action == QLatin1String("off") || action == QLatin1String("stop")) {
-        if (m_txController) {
-            m_txController->current(TxController::Activity::Tune).stop();
-        }
+        const bool stopped = stopCapturedInput(TxController::Activity::Tune);
         releaseEdgeHandsBackPolicing();
-        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("off")}};
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("off")},
+                           {QStringLiteral("stopped"), stopped}};
     }
     if (action == QLatin1String("twotone")) {
         if (!m_txAllowed)
@@ -9111,13 +9110,13 @@ QJsonObject AutomationServer::doKey(const QString& name, const QString& arg)
                            {QStringLiteral("state"), QStringLiteral("on")}};
     };
     auto keyOff = [&](const QString& what) -> QJsonObject {
-        if (m_txController) {
-            m_txController->current(TxController::Activity::Mox).stop();
-        }
+        const bool stopped = stopCapturedInput(TxController::Activity::Mox);
         releaseEdgeHandsBackPolicing();
-        qCInfo(lcAutomation).noquote() << "key" << what << "OFF";
+        qCInfo(lcAutomation).noquote() << "key" << what << "OFF"
+                                       << (stopped ? "(released)" : "(no captured input)");
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("key"), what},
-                           {QStringLiteral("state"), QStringLiteral("off")}};
+                           {QStringLiteral("state"), QStringLiteral("off")},
+                           {QStringLiteral("stopped"), stopped}};
     };
 
     if (n == QLatin1String("ptt")) {
@@ -9173,11 +9172,10 @@ QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
                            {QStringLiteral("wpm"), wpm}};
     }
     if (a == QLatin1String("stop") || a == QLatin1String("abort") || a == QLatin1String("clear")) {
-        if (m_txController) {
-            m_txController->current(TxController::Activity::Cwx).stop();
-        }
+        const bool stopped = stopCapturedInput(TxController::Activity::Cwx);
         releaseEdgeHandsBackPolicing();
-        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("stop")}};
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("stop")},
+                           {QStringLiteral("stopped"), stopped}};
     }
     if (a == QLatin1String("send")) {
         const QString text = arg.trimmed();
@@ -9476,6 +9474,21 @@ QJsonObject AutomationServer::doShortcut(const QString& id)
 
 // A refused release or a normal tail retains policing of its original
 // operation. A later operation is never policed by the earlier claim.
+bool AutomationServer::stopCapturedInput(TxController::Activity activity)
+{
+    if (!m_txController) {
+        return false;
+    }
+    const TxController::Input input = m_txController->current(activity);
+    // active() distinguishes a live contribution from a handle whose intent
+    // has already been retired; stop() is void and cannot report the
+    // difference. Call it either way — a captured-but-inactive input still
+    // needs its request closed.
+    const bool wasActive = input.valid() && input.active();
+    input.stop();
+    return wasActive;
+}
+
 void AutomationServer::releaseEdgeHandsBackPolicing()
 {
     if (txBridgeOwnsCurrentTransmit())

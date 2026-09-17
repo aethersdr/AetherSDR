@@ -4154,7 +4154,7 @@ add_test(NAME hl2_rqst_ack_test COMMAND hl2_rqst_ack_test)
 # RQST/ACK where it meets the wire — socket-free, on MetisClient's own packet
 # builder and its EP6 response path.
 add_executable(hl2_rqst_ack_client_test tests/hl2_rqst_ack_client_test.cpp)
-target_include_directories(hl2_rqst_ack_client_test PRIVATE src)
+target_include_directories(hl2_rqst_ack_client_test PRIVATE src tests)
 target_link_libraries(hl2_rqst_ack_client_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_rqst_ack_client_test COMMAND hl2_rqst_ack_client_test)
 

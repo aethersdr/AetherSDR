@@ -539,6 +539,14 @@ void testOptionalReceiveControlActivation()
                && !prepareTxKeyingAction(&transmit, {}, "click", {})
                && !TxPointerAction::prepare(&transmit, {}) && txPreparations == 0);
 
+    // The fail-CLOSED default, which is what keeps an unmarked keying control
+    // behind AETHER_AUTOMATION_ALLOW_TX. Flipping txActionRequiresPermission to
+    // `endpoint && endpoint->requiresTxPermission` (fail open) passes every
+    // other assertion in the tree, so this is the only thing pinning it.
+    QPushButton unmarked(QStringLiteral("Unmarked"));
+    report("a control with no TX marker still requires TX permission",
+           txActionRequiresPermission(&unmarked));
+
     QCheckBox receive(QStringLiteral("Enable receive"));
     receive.resize(receive.sizeHint());
     QSignalSpy nativeClicked(&receive, &QCheckBox::clicked);

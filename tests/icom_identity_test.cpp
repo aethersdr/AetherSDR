@@ -214,7 +214,7 @@ int main(int argc, char** argv)
     {
         const int before = audioFrames;
         lastSource.reset();
-        audio.sendModemTxAudio(pcm);
+        audio.sendModemTxAudio(pcm, context);
         check(audioFrames == before + 1,
               "sendModemTxAudio reaches the seam on a host-modulating backend");
         check(lastSource == TxAudioSource::Microphone,

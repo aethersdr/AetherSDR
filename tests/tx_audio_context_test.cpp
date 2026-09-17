@@ -1,4 +1,5 @@
 #include "core/AudioEngine.h"
+#include "core/backends/TxAudioSource.h"
 #include "core/TxCoordinator.h"
 
 #include <QCoreApplication>
@@ -61,9 +62,9 @@ int main(int argc, char** argv)
     int monitorFrames = 0;
     int transportFrames = 0;
     QObject::connect(&audio, &AudioEngine::txFinalMonitorPcmReady,
-                     [&](const QByteArray&, bool) { ++monitorFrames; });
+                     [&](const QByteArray&, TxAudioSource) { ++monitorFrames; });
     QObject::connect(&audio, &AudioEngine::txTransportPcmReady,
-                     [&](const QByteArray&, bool, const TxCoordinator::Context&) { ++transportFrames; });
+                     [&](const QByteArray&, TxAudioSource, const TxCoordinator::Context&) { ++transportFrames; });
     audio.setHostModulation(true);
     audio.feedDaxTxAudio(newHalf, current);
     check(monitorFrames == 1 && transportFrames == 0,

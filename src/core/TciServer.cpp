@@ -57,22 +57,6 @@ constexpr int    kMaxClients        = 8;
 constexpr int    kDaxReleaseGraceMs = 10000;
 }
 
-// ── TCI binary audio frame header (per ExpertSDR3 TCI spec v2.0) ────────
-// 9 × uint32 = 36 bytes, followed by sample payload
-// TCI audio header: 16 × uint32 = 64 bytes
-// Per ExpertSDR3 TCI spec v2.0 Stream struct
-struct TciAudioHeader {
-    quint32 receiver;     // receiver/TRX number
-    quint32 sampleRate;   // Hz
-    quint32 format;       // 0=int16, 1=int24, 2=int32, 3=float32
-    quint32 codec;        // 0 (uncompressed)
-    quint32 crc;          // 0 (unused)
-    quint32 length;       // number of real samples in data
-    quint32 type;         // 0=IQ, 1=RX_AUDIO, 2=TX_AUDIO, 3=TX_CHRONO
-    quint32 channels;     // 1 or 2
-    quint32 reserved[8];  // zero-filled
-};
-static_assert(sizeof(TciAudioHeader) == 64, "TCI audio header must be 64 bytes");
 
 namespace {
 
@@ -2683,7 +2667,15 @@ void TciServer::onBinaryMessage(const QByteArray& data)
 {
     if (!m_audio) return;
     const TxCoordinator::Context context = m_tciTxContext;
-    if (sender() != m_tciPttClient || !m_tciPttRequestedOn || !m_tciPttWantsAudio
+    // Keyed means REQUESTED-or-CONFIRMED, not requested alone.
+    // onRadioTransmittingChanged() moves the session from requested to
+    // confirmed the moment the radio reports it is transmitting
+    // (m_tciPttConfirmedOn = true; m_tciPttRequestedOn = false), which is a
+    // few tens of ms into an over that then runs for seconds. Testing only
+    // m_tciPttRequestedOn here would refuse the client's own TX audio for
+    // effectively the whole transmission. (#5659 review)
+    const bool keyedSession = m_tciPttRequestedOn || m_tciPttConfirmedOn;
+    if (sender() != m_tciPttClient || !keyedSession || !m_tciPttWantsAudio
         || !context.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }

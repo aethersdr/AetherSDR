@@ -11,6 +11,7 @@
 #include "core/PanadapterStream.h"
 #include "core/RigctlProtocol.h"
 #include "core/SmartCatProtocol.h"
+#include "core/AudioEngine.h"
 #include "core/TciServer.h"
 #ifdef HAVE_WEBSOCKETS
 #include <QWebSocket>
@@ -58,6 +59,20 @@ public:
         server.clientStateFor(&socket)->txProducer.invalidate();
         server.abortTciPtt();
     }
+    // Wire the binary tap exactly as acceptClient() does, so QObject::sender()
+    // inside onBinaryMessage is the real socket. Calling the handler directly
+    // would leave sender() null and silently retire the owner half of its gate.
+    static void wireTciBinary(TciServer& server, QWebSocket& socket)
+    {
+        QObject::connect(&socket, &QWebSocket::binaryMessageReceived,
+                         &server, &TciServer::onBinaryMessage);
+    }
+    static void sendTciBinary(QWebSocket& socket, const QByteArray& frame)
+    {
+        emit socket.binaryMessageReceived(frame);
+    }
+    // Incremented only for a frame that passed the ownership + header gates.
+    static qint64 tciAudioBlocks(const TciServer& server) { return server.m_txAudioBlocks; }
 #endif
     static void transmitDelta(RadioModel& radio, const TransmitDelta& delta)
     {
@@ -195,6 +210,9 @@ public:
         caps.hasRadioSideCwKeyer = true;
         caps.hasTuner = true;
     }
+    int txAudioFrames{0};
+    void submitTxAudio(const QByteArray&, int, TxAudioSource,
+                       const TxCoordinator::Context&) override { ++txAudioFrames; }
     RadioCapabilities capabilities() const override { return caps; }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override {}
@@ -1631,6 +1649,26 @@ void protocolProducerLifetimes()
     drain();
     wire.clear();
     {
+        // K5PTB #5659: CatPort::onRigctlDisconnected deletes the protocol, and
+        // before this branch the destructor released nothing — a rigctl client
+        // that dropped mid-over left the radio keyed. The destructor release is
+        // now the only thing that unkeys it, and nothing pinned that: with the
+        // release removed every other TX suite still passes and the radio stays
+        // keyed here.
+        auto dropped = std::make_unique<RigctlProtocol>(&f.radio);
+        (void)dropped->handleLine("T 1");
+        drain();
+        check(wire == QStringList{"xmit 1"} && f.radio.transmitModel().isTransmitting(),
+              "rigctl client keys through its own producer");
+        wire.clear();
+        dropped.reset();  // the disconnect path: protocol destroyed mid-over
+        drain();
+        check(wire == QStringList{"xmit 0"} && !f.radio.transmitModel().isTransmitting(),
+              "a rigctl client dropping mid-over releases its own PTT");
+    }
+    drain();
+    wire.clear();
+    {
         SmartCatProtocol remaining(&f.radio);
         {
             SmartCatProtocol departing(&f.radio);
@@ -1933,6 +1971,50 @@ void tciProducerLifetimes()
     check(f.commands.isEmpty() && f.radio.captureTxMedia(otherRequest).permitsDispatch(TxCoordinator::monotonicMs()),
           "TCI teardown retains another producer's PTT and media authority");
     f.radio.setProducerTransmit(otherRequest, false);
+
+    // K5PTB #5659: `sender() != m_tciPttClient` is the only thing keeping a
+    // SECOND TCI client's binary audio off the owner's over. Removing the
+    // whole gate passes every other TX suite, so nothing pinned it. The frame
+    // below is well-formed, so a refusal can only come from ownership.
+    Fixture g;
+    AudioEngine audio;
+    QWebSocket owner;
+    QWebSocket intruder;
+    TciServer shared(&g.radio);
+    shared.setAudioEngine(&audio);
+    TxOperationIntegrationTestAccess::addTciClient(shared, owner, g.radio);
+    TxOperationIntegrationTestAccess::addTciClient(shared, intruder, g.radio);
+    TxOperationIntegrationTestAccess::wireTciBinary(shared, owner);
+    TxOperationIntegrationTestAccess::wireTciBinary(shared, intruder);
+    TxOperationIntegrationTestAccess::tciRequest(shared, owner, true);
+    check(g.commands.contains("mox:on"), "TCI owner keys before the audio-ownership check");
+
+    TciAudioHeader header{};
+    header.type = 2;        // TX_AUDIO_STREAM
+    header.format = 3;      // float32
+    header.sampleRate = 48000;
+    header.channels = 1;
+    // 1920 samples = 40 ms at 48 kHz. Long enough that the 48k->24k resampler
+    // emits on the first block: a short frame produces no output and would
+    // make the acceptance assertion below fail for the wrong reason.
+    header.length = 1920;
+    QByteArray frame(reinterpret_cast<const char*>(&header), sizeof(header));
+    frame.append(QByteArray(1920 * static_cast<int>(sizeof(float)), '\0'));
+
+    // NB: by this point the session is CONFIRMED, not merely requested —
+    // onRadioTransmittingChanged() has already flipped m_tciPttRequestedOn to
+    // false. That is the production state for all but the first few ms of an
+    // over, and it is the state the acceptance assertion below pins.
+    const qint64 beforeIntruder = TxOperationIntegrationTestAccess::tciAudioBlocks(shared);
+    TxOperationIntegrationTestAccess::sendTciBinary(intruder, frame);
+    QCoreApplication::processEvents();
+    check(TxOperationIntegrationTestAccess::tciAudioBlocks(shared) == beforeIntruder,
+          "a non-owner TCI client's audio never reaches the modulator");
+    TxOperationIntegrationTestAccess::sendTciBinary(owner, frame);
+    QCoreApplication::processEvents();
+    check(TxOperationIntegrationTestAccess::tciAudioBlocks(shared) > beforeIntruder,
+          "the owning TCI client's audio still reaches the modulator");
+    TxOperationIntegrationTestAccess::tciRequest(shared, owner, false);
 }
 #endif
 } // namespace

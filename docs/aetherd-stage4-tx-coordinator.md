@@ -77,6 +77,31 @@ controller lifetime and original input. A short-lived MCP request socket is
 not a TX producer: the bridge producer follows its trusted authorization.
 Normal tail consumption remains local bookkeeping, never radio-stop proof.
 
+### Operator-visible change: a CAT stop releases only that client's key
+
+`RX;` (SmartCAT) and `set_ptt 0` / `T 0` and `stop_morse` (rigctl) now release
+only the transmission the **same session** started. Before this stage each was
+an unconditional `setTransmit(false)` / `clearBuffer()`, so any CAT client
+could stop whatever was on the air — an operator's MOX or footswitch included.
+
+That is the point of producer ownership, and it is what stops one logger's
+macro from cutting another client's over. But it does change a habit: a
+contest logger's ESC → `RX;` used to be a panic button for the whole station
+and is now a no-op unless that logger keyed. The operator's own MOX/footswitch
+release, the bridge watchdog and `disconnect` are unaffected — and a CAT
+client that drops mid-over still releases its own PTT, from the protocol
+destructor.
+
+Measured on the recording backend fixture:
+
+| step | transmitting | wire |
+|---|---|---|
+| operator MOX on | 1 | `mox:on` |
+| SmartCAT `RX;` | 1 | `mox:on` |
+| rigctl `T 0` | 1 | `mox:on` |
+| operator MOX off | 0 | `mox:on`, `mox:off` |
+| SmartCAT `RX;` releasing its **own** key | 0 | `mox:on`, `mox:off` |
+
 `TxController` is an engine-owned facade, not another actor. A compound input
 view captures one root before delivery; subsequent button phases and sequence
 elements cannot renew that root after cancellation. Native device callbacks

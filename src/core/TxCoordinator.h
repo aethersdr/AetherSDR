@@ -292,12 +292,21 @@ public:
     // INVARIANT: every stop source needs a matching acknowledgment, because an
     // unacknowledged stop keeps admission closed forever — recovering() stays
     // true and every later acquire() is refused Recovering. Today the only
-    // production stop source is reset(), and teardownBackend()/onDisconnected()
-    // acknowledge it, so the barrier always clears with the session. cancel(),
-    // revoke(), expire() and emergencyStop() have no production callers yet;
-    // whichever increment gives one of them a caller has to land its
-    // acknowledgment path in the same change, not after it. RadioModel logs a
-    // warning when it hits this refusal outside a disconnect gap.
+    // stop source that FIRES in production is reset(), and
+    // teardownBackend()/onDisconnected() acknowledge it, so the barrier always
+    // clears with the session.
+    //
+    // expire() is NOT uncalled — acquire() calls it on every admission. It is
+    // inert only because every actor registered in production today carries
+    // maximumOperationMs == 0 (RadioModel's desktop compatibility actor), and
+    // maximumMs == 0 short-circuits the deadline arm of permitsDispatch(). The
+    // increment that registers a BOUNDED actor therefore turns this comment
+    // into a live hazard: it must land expire()'s acknowledgment path in the
+    // same change, not after it. cancel(), revoke() and emergencyStop() have
+    // no production callers at all yet and carry the same obligation.
+    //
+    // RadioModel logs a warning when it hits this refusal outside a
+    // disconnect gap.
     [[nodiscard]] bool acknowledgeStopped(const Operation& operation);
     [[nodiscard]] bool owns(const Actor& actor, const Operation& operation) const;
     [[nodiscard]] bool recovering() const;

@@ -9504,10 +9504,21 @@ void AudioEngine::onTxAudioReady()
     // authority. Retain the capture's context through buffering and pacing.
     const TxCoordinator::Context context = m_hostModulation
         ? m_hostMicrophoneContext : m_microphoneContext;
+    // The fence is absolute: no stamp, no transport delivery. There IS a
+    // window where a block can arrive unstamped — wireTxAudioAuthority posts
+    // setHostMicrophoneContext to this thread when localTransmitEngaged fires
+    // — but it is bounded to at most one block, and it is bounded by Qt's
+    // event ordering rather than by timing luck: that post and onTxAudioReady
+    // (a timer callback) are both events on THIS thread, delivered FIFO
+    // through one event loop. So every block after the install sees the stamp,
+    // and the only blocks that can miss it are those already queued ahead of
+    // it: one dspBlockSize, ~21 ms at 24 kHz, inside HL2 keying latency.
+    // Relaxing this would mean relaxing all five gates down to MetisClient's
+    // wire queue, which is not worth one block. (#5659 review)
     if (!selectTxContext(context)) {
         return;
     }
-    emit txTransportPcmReady(data, /*clientLeveled=*/false, context);
+    emit txTransportPcmReady(data, TxAudioSource::Microphone, context);
 
     // ── Opus TX path: always active for remote_audio_tx ────────────────
     // Sends Opus during both RX (VOX/met_in_rx metering) and TX (voice).
@@ -9867,13 +9878,23 @@ void AudioEngine::finishModemTxAudio(quint64 token, const TxCoordinator::Context
     // This method is queued onto the AudioEngine thread after every modem PCM
     // block. Emitting from here creates an ordered barrier: cross-thread
     // txFinalMonitorPcmReady deliveries are already ahead of this event.
-    if (context.permitsDispatch(TxCoordinator::monotonicMs())) {
-        emit modemTxAudioFinished(token, context);
-    }
+    // NOT fenced on permitsDispatch. This is a completion barrier, not a
+    // transmit command: it carries no audio and keys nothing. It is also the
+    // ONLY path that arms the AX.25 unkey timer
+    // (Ax25HfPacketDecodeDialog::handleTxAudioFinished), and there is no
+    // watchdog behind it — so fencing it here could leave PTT asserted with
+    // m_txAwaitingAudioFinish stuck true. The receiver already rejects a stale
+    // barrier by token, which is the check that actually belongs on it.
+    emit modemTxAudioFinished(token, context);
 }
 
 void AudioEngine::setMicrophoneContext(const TxCoordinator::Context& context)
 {
+    // Deliberately unguarded, unlike setHostMicrophoneContext and
+    // setRawMicrophoneContext: this setter is also the teardown path, and an
+    // empty context is how a caller revokes authority. A permitsDispatch()
+    // check here would make revocation a silent no-op. selectTxContext()
+    // re-validates on every block, so nothing downstream trusts this value.
     if (!m_microphoneContext.sameContext(context)) {
         clearTxAccumulators();
         if (m_txVoiceProcessor) {

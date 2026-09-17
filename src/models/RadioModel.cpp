@@ -1945,8 +1945,16 @@ void RadioModel::teardownBackend()
     // Drop the backend and everything it owns (RadioConnection, PanadapterStream
     // and their worker threads). Qt removes any connection whose sender or
     // receiver is destroyed, so the wiring made by setupBackend() goes with it.
-    if (!m_backend)
+    if (!m_backend) {
+        // resetTxOperations() above ran unconditionally, so a stop raised here
+        // needs its acknowledgment here too — otherwise admission stays closed
+        // for the life of the process (see TxCoordinator::acknowledgeStopped's
+        // INVARIANT). There is no transport left to tear down on this path,
+        // which is precisely why the acknowledgment is owed immediately rather
+        // than after the m_backend.reset() below.
+        acknowledgeTxTransportTeardown(m_txOperation);
         return;
+    }
     if (m_connection)
         QObject::disconnect(m_connection, nullptr, this, nullptr);
     if (m_panStream)
@@ -4929,6 +4937,12 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
     if (request && !tx) {
         const TxCoordinator::Intent bound = m_txCoordinator.requestIntent(*request);
         if (!bound.isActivity(TxActivity::Mox)) {
+            // No late-stop fallback here, unlike abortProducerPtt: a request
+            // only goes stale through reset()/onDisconnected(), and both
+            // acknowledge the stop and clear the keyed state, so a stale
+            // request never coexists with a keyed radio. A retry here would
+            // be a stop edge issued on behalf of a producer that no longer
+            // owns the transmission.
             if (!bound.pending()) {
                 (void)m_txCoordinator.closeRequest(*request);
             }
@@ -12759,9 +12773,9 @@ bool RadioModel::prepareWsprTransmit(const TxCoordinator::Request& input)
         return self && request.valid() && request.sameRequest(self->m_wsprTxInput);
     };
     m_transmitModel.setDax(true);
-    if (!current()) { return false; }
+    if (!current()) { releaseWsprTransmit(request); return false; }
     const bool ready = ensureDaxTxStream(DaxTxRequestReason::WsprBeacon);
-    if (!current()) { return false; }
+    if (!current()) { releaseWsprTransmit(request); return false; }
     if (!ready) {
         releaseWsprTransmit(request);
         return false;
