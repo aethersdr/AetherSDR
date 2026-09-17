@@ -3,6 +3,7 @@
 #include "PersistentDialog.h"
 
 class QButtonGroup;
+class QShowEvent;
 class QFrame;
 class QStackedWidget;
 
@@ -79,6 +80,9 @@ signals:
     void nr4NoiseMethodChanged(int method);
     void nr4MaskingDepthChanged(float value);
     void nr4SuppressionChanged(float value);
+
+protected:
+    void showEvent(QShowEvent* event) override;
 
 private:
     QWidget* buildStagePage(QWidget* panel);

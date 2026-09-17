@@ -26,6 +26,9 @@ namespace AetherSDR {
 
 namespace {
 
+// The size this window opens at, every time — see showEvent().
+constexpr QSize kLaunchSize(720, 480);
+
 // One tab in the left-hand bar. Same chrome as the method strip inside the
 // AetherNR page -- checkable, property-selected, sized by the layout -- but
 // left-aligned, because a column of centred labels of different lengths reads
@@ -161,7 +164,7 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     // needs beside the tab column, and geometry persists, so a window resized
     // once reopens where it was left.
     setMinimumSize(600, 400);
-    resize(720, 480);
+    resize(kLaunchSize);
 
     auto* body = new QHBoxLayout(bodyWidget());
     body->setContentsMargins(8, 8, 8, 8);
@@ -318,6 +321,22 @@ void AetherRxDialog::addStage(Stage stage, const QString& label, QWidget* page)
     const int index = m_stack->addWidget(page);
     Q_ASSERT(index == stage);   // ids double as stack indices
     Q_UNUSED(index);
+}
+
+// Opens at kLaunchSize every time, whatever is stored.
+//
+// Deliberate and temporary: the size this window wants is still being settled,
+// and a restored geometry wins over the default in the constructor, so without
+// this the first size anyone happened to leave it at is the size they keep.
+// The position is still restored and still saved — only the size is pinned.
+// To give the size back to the operator, delete this override; the geometry
+// key underneath it has been recording all along.
+void AetherRxDialog::showEvent(QShowEvent* event)
+{
+    PersistentDialog::showEvent(event);
+    if (size() != kLaunchSize) {
+        resize(kLaunchSize);
+    }
 }
 
 void AetherRxDialog::syncFromEngine()
