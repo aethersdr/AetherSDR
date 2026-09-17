@@ -157,12 +157,22 @@ the shape the bullet above routes a simulator closed loop to — see
   `pull_request` trigger tests the *merge* result — `main` + this PR **as
   `main` stood when that run started**, which is not the same as current
   `main`; a `push`-triggered check on the branch never included `main` at all.
-  So compare the newest check-run start on the head against `main`'s tip
-  (`gh api repos/aethersdr/AetherSDR/commits/<headOid>/check-runs --jq
-  '[.check_runs[].started_at] | max'` against `gh api
-  repos/aethersdr/AetherSDR/commits/main --jq .commit.committer.date`). If
-  `main` is newer, the green describes a merge that no longer exists, and any
-  conclusion you draw from it inherits that. `main` has `strict: false`, so
+  So compare the **earliest start among the required checks** against `main`'s
+  tip — earliest because one late or re-run job hides a stale `build`, and
+  required because the unrequired jobs (CodeQL, the sanitizer configure) often
+  start first and would fail a current PR:
+
+  ```sh
+  REQUIRED=$(gh api repos/aethersdr/AetherSDR/branches/main/protection \
+    --jq '[.required_status_checks.contexts[]] | join("|")')
+  gh api --paginate "repos/aethersdr/AetherSDR/commits/<headOid>/check-runs" \
+    --jq '.check_runs[] | "\(.started_at)\t\(.name)"' \
+    | awk -F'\t' -v re="^($REQUIRED)$" '$2 ~ re' | sort | head -1
+  gh api repos/aethersdr/AetherSDR/commits/main --jq .commit.committer.date
+  ```
+
+  If `main` is newer, the green describes a merge that no longer exists, and
+  any conclusion you draw from it inherits that. `main` has `strict: false`, so
   nothing forces a rerun to close the gap — say so in the report rather than
   reporting the checks as green without qualification. /pr-land turns the same
   comparison into a gate before it arms auto-merge.
