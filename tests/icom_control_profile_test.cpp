@@ -212,6 +212,8 @@ int main(int argc, char** argv)
             check(!caps.hasModeIndependentSquelch, "IC-705 SQL policy remains unchanged");
             check(caps.hasFmRepeaterOffset, "IC-705 retains native repeater offsets");
             check(caps.hasCwTune, "IC-705 CW Tune policy remains unchanged");
+            check(!caps.twoToneGenerator,
+                  "no Icom declares a two-tone generator it does not have");
         }
 
         const IcomModel* ic7300Mk2 = modelForName("IC-7300MK2");
@@ -238,6 +240,8 @@ int main(int argc, char** argv)
                   "IC-7300MK2 allows its native squelch in data and CW modes");
             check(!caps.hasFmRepeaterOffset, "MK2 does not advertise absent duplex commands");
             check(!caps.hasCwTune, "MK2 does not advertise an unimplemented CW tune carrier");
+            check(!caps.twoToneGenerator,
+                  "MK2 setTune() is one sine wave and must not claim otherwise");
             {
                 IcomCivBackend polled;
                 IcomCivBackendTestAccess::prepareSession(polled, *ic7300Mk2);

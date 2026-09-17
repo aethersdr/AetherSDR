@@ -176,6 +176,10 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = QStringLiteral("flex");
+    // SmartSDR `transmit set tune_mode=two_tone` is a real on-radio two-tone
+    // generator; FlexBackend is the only consumer of that key.
+    caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{
+        QStringLiteral("transmit set tune_mode=two_tone")};
     caps.manufacturer = QStringLiteral("FlexRadio");
     caps.model = m_modelProvider ? m_modelProvider() : QString();
     caps.fmTonePresentation = FmTonePresentation::Legacy;

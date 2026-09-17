@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QMap>
+
 #include <QByteArray>
 #include <QObject>
 #include <QSet>
@@ -293,7 +295,18 @@ private:
     [[nodiscard]] std::string semanticKey(std::span<const std::uint8_t> frame) const;
     [[nodiscard]] std::optional<std::vector<std::uint8_t>>
         confirmationFor(std::span<const std::uint8_t> frame) const;
-    [[nodiscard]] QVariantMap schedulerDiagnostics() const;
+    [[nodiscard]] QVariantMap schedulerDiagnostics(std::size_t traceLimit = 128,
+                                                   bool withValues = true) const;
+    void confirmState(const QString& key, const QVariant& value,
+                      bool accepted = true);
+    // `withValues` false omits the decoded field VALUES -- the operator's dial
+    // frequency, mode, squelch, AGC and RF power -- keeping only status, age,
+    // gatesReadiness and the semantic key. Anything that reaches the default
+    // application log takes that form: IcomCivScheduler's payload-free rule
+    // ("avoids placing frequencies, memories, or text payloads into the default
+    // support log") is about the log, not only about the transaction ring, and
+    // recordIncident() qCWarning-logs this whole snapshot (#5516 review).
+    [[nodiscard]] QVariantMap stateFreshness(bool withValues = true) const;
     [[nodiscard]] QVariantList schedulerTransactionTrace(
         std::size_t limit = 32) const;
     [[nodiscard]] QVariantMap incidentSnapshot(const QString& kind,
@@ -336,6 +349,31 @@ private:
     std::unique_ptr<IcomSession> m_session;
     std::uint64_t m_sessionGeneration = 0;
     const IcomModel* m_model = nullptr;
+
+    // ---- Confirmation provenance (the `stateFreshness` diagnostic) ----------
+    //
+    // What the RADIO last told us about a tracked value, and when. Separate from
+    // the published state above precisely because publication is optimistic in
+    // places and this is not: only a decoded receive frame lands here.
+    struct ConfirmedState {
+        QVariant value;
+        qint64 atMs = -1;
+        std::uint64_t session = 0;   // cleared with the session generation
+        std::uint64_t context = 0;   // bumped by frequency/mode/VFO changes
+        bool pending = false;        // a write is out; intent is not evidence
+        // Whether the frame that set this was NOT SUPERSEDED by a newer
+        // semantic generation. Unmatched (unsolicited, or a reply slower than
+        // the scheduler's wait) counts as accepted; only Stale does not. Only
+        // the PTT path can record a Stale one -- a stale frame agreeing with a
+        // pending intent falls through the intent branch -- and an unkey proof
+        // must be able to tell the two apart. See confirmState().
+        bool accepted = false;
+    };
+    // A fresh UUID per backend instance, so a reader can tell a reconnect in the
+    // same process from a continuation of the same observation stream.
+    QString m_diagnosticInstanceId;
+    QMap<QString, ConfirmedState> m_confirmedState;
+    std::uint64_t m_stateContext = 0;
 
     // ---- CI-V address resolution (see IcomSettings::CivSelection) ------------
     //

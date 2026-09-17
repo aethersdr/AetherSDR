@@ -11,6 +11,7 @@ void IcomCivScheduler::recordTransaction(const Queued& request,
                                          std::int64_t responseMs)
 {
     TransactionEvent event;
+    event.eventId = ++m_transactionEventId;
     event.key = request.request.key;
     event.priority = request.request.priority;
     event.generation = request.generation;
