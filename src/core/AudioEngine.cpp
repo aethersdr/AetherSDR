@@ -5641,6 +5641,40 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         }
     };
 
+    // How much the noise reduction is removing, measured once for whichever
+    // method the chain below picks. Ratio of post-NR to pre-NR block RMS on the
+    // main RX path only: the Kiwi and external sources run their own filter
+    // instances, and letting them publish here would make the reading flicker
+    // between unrelated signals. A block too quiet to divide by reports the
+    // previous gain rather than a meaningless 1.0.
+    const bool publishNrGain = (source == RxDspSource::Main) && !externalSource;
+    const float preNrRms = publishNrGain ? computeRMS(pcm) : 0.0f;
+    const auto writeNrAudioAndLevel = [this, publishNrGain, preNrRms,
+                                       &writeAudioAndLevel](
+                                          const QByteArray& processed) {
+        if (publishNrGain) {
+            if (preNrRms > 1.0e-6f) {
+                const float gain =
+                    std::clamp(computeRMS(processed) / preNrRms, 0.0f, 1.0f);
+                m_nrGain.store(gain, std::memory_order_relaxed);
+            }
+            m_nrGainActive.store(true, std::memory_order_relaxed);
+            emit nrGainChanged(m_nrGain.load(std::memory_order_relaxed), true);
+        }
+        writeAudioAndLevel(processed);
+    };
+    // The chain is running dry: no method engaged, or bypassed for TX. Say so
+    // rather than publishing a gain of 1.0, which a strip cannot tell apart
+    // from a method that is passing everything through.
+    const auto writeAudioNrIdle = [this, publishNrGain, &writeAudioAndLevel](
+                                      const QByteArray& data) {
+        if (publishNrGain) {
+            m_nrGainActive.store(false, std::memory_order_relaxed);
+            emit nrGainChanged(1.0f, false);
+        }
+        writeAudioAndLevel(data);
+    };
+
     // Bypass client-side DSP during TX (#367, #1505). NR2/RN2/BNR adapt
     // their internal state to silence during TX, causing distorted audio
     // after returning to RX. Use m_radioTransmitting (raw interlock state)
@@ -5652,7 +5686,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
     {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
         if (bypassRxChainForTx) {
-            writeAudioAndLevel(pcm);
+            writeAudioNrIdle(pcm);
         } else if (m_rn2Enabled) {
             RNNoiseFilter* rn2 = rn2ForSource(source, externalSource);
             if (!rn2 || !rn2->isValid()) {
@@ -5664,7 +5698,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             } else {
                 processed = rn2->process(pcm);
             }
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
         } else if (m_nr2Enabled) {
             if (!(externalSource ? externalSource->nr2.get()
                   : (source == RxDspSource::KiwiSdr ? m_kiwiSdrNr2.get() : m_nr2.get()))) {
@@ -5675,7 +5709,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 ? externalSource->nr2Output
                 : (source == RxDspSource::KiwiSdr ? m_kiwiSdrNr2Output
                                                    : m_nr2Output);
-            writeAudioAndLevel(nr2Output);
+            writeNrAudioAndLevel(nr2Output);
 
 #ifdef HAVE_SPECBLEACH
         } else if (m_nr4Enabled) {
@@ -5684,7 +5718,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = nr4->process(pcm);
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #endif
 #ifdef HAVE_DFNR
         } else if (m_dfnrEnabled) {
@@ -5693,7 +5727,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = dfnr->process(pcm);
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #endif
         } else if (m_nnrEnabled) {
             NnrFilter* nnr = nnrForSource(source, externalSource);
@@ -5714,7 +5748,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             if (!externalSource && source != RxDspSource::KiwiSdr) {
                 m_nnrModel.store(nnr->modelSlot(), std::memory_order_relaxed);
             }
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #ifdef HAVE_NVIDIA_AFX
         } else if (m_nvAfxEnabled) {
             NvidiaAfxFilter* nvAfx = nvAfxForSource(source, externalSource);
@@ -5722,7 +5756,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = nvAfx->process(pcm);
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #endif
 #ifdef __APPLE__
         } else if (m_mnrEnabled) {
@@ -5731,10 +5765,10 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = mnr->process(pcm);
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #endif
         } else {
-            writeAudioAndLevel(pcm);
+            writeAudioNrIdle(pcm);
         }
     }
 }

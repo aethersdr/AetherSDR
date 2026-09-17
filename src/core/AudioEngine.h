@@ -337,6 +337,10 @@ public:
     // plumbing (#5702).
     Q_INVOKABLE void applyNr2Post2Settings();
     QJsonObject nr2RuntimeDiagnostics() const;
+    // Last value published by nrGainChanged, for a view that subscribes after
+    // the fact and would otherwise draw an empty strip until the next block.
+    float nrGain() const { return m_nrGain.load(std::memory_order_relaxed); }
+    bool  nrGainActive() const { return m_nrGainActive.load(std::memory_order_relaxed); }
     QJsonObject opusTxPacingDiagnostics() const;
     // Tell the engine the main RX source is (or is not) the demo, so the main NR2
     // filter uses the original 256/2 geometry the demo's tiny frames need. Rebuilds
@@ -740,6 +744,14 @@ signals:
     void rxStarted();
     void rxStopped();
     void levelChanged(float rms);  // audio level for VU meter, 0.0–1.0
+    // How much the active client noise-reduction stage is actually taking out
+    // of the main RX path, as the linear ratio of post-NR to pre-NR block RMS
+    // (1.0 = passing everything through, 0.0 = fully suppressed). Emitted per
+    // processed block alongside levelChanged, from the one dispatch point every
+    // method shares, so it means the same thing for NR2, NR4, MNR, DFNR, RN2,
+    // BNR and NNR. `active` is false when no method is running (or the chain is
+    // bypassed for TX), which is not the same as a gain that happens to be 1.0.
+    void nrGainChanged(float gain, bool active);
     void nr2EnabledChanged(bool on);
     void nr4EnabledChanged(bool on);
     void mnrEnabledChanged(bool on);
@@ -1358,6 +1370,10 @@ private:
     std::atomic<bool> m_nnrEnabled{false};
     std::atomic<int>  m_nnrStrength{Nnr::kMaskFloorDefaultStrength};
     std::atomic<int>  m_nnrModel{0};
+    // Last published NR gain, so nrGain()/nrGainActive() can answer between
+    // blocks. Written on the audio path, read from the GUI thread.
+    std::atomic<float> m_nrGain{1.0f};
+    std::atomic<bool>  m_nrGainActive{false};
 
     // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so
     // mutual-exclusion in the other NR setters compiles regardless of the build).

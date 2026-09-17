@@ -1151,6 +1151,8 @@ set(GUI_SOURCES
     src/gui/SpotSettingsDialog.cpp
     src/gui/AetherDspDialog.cpp
     src/gui/AetherDspWidget.cpp
+    src/gui/ModemChrome.cpp
+    src/gui/NrGainStrip.cpp
     src/gui/WaveformsDialog.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DragValuePopup.cpp

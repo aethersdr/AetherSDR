@@ -19,6 +19,7 @@ class QStackedWidget;
 class QLineEdit;
 class QProgressBar;
 class QGridLayout;
+class QFrame;
 
 namespace AetherSDR {
 
@@ -33,6 +34,8 @@ class NvidiaAfxPack;
 // feature-owned settings model) so MainWindow can push it into AudioEngine. Both
 // the dialog and the applet expose a `widget()` accessor so callers can
 // connect to these signals directly.
+class NrGainStrip;
+
 class AetherDspWidget : public QWidget {
     Q_OBJECT
 
@@ -110,6 +113,9 @@ signals:
     void nr2EnableWithWisdomRequested();
 
 private:
+    // Repaint the status strip's method reading from the current controls.
+    void refreshStatusStrip();
+
     QWidget* buildNr2Page();
     QWidget* buildNr4Page();
     QWidget* buildMnrPage();
@@ -164,6 +170,16 @@ private:
     };
     std::vector<NnrAdvancedControl> m_nnrAdvanced;
     QSlider*      m_nnrStrengthSlider{nullptr};
+    // Status strip (shared by every tab, below the page stack).
+    QFrame*       m_statusFrame{nullptr};
+    QLabel*       m_statusDot{nullptr};
+    QLabel*       m_statusValue{nullptr};
+    QLabel*       m_gainLabel{nullptr};
+    NrGainStrip*  m_gainStrip{nullptr};
+    // Which method the strip is currently describing, so a change can clear
+    // the trace instead of splicing two methods' histories together.
+    int           m_lastActiveDsp{-1};
+
     QLabel*       m_nnrStrengthLabel{nullptr};
     QButtonGroup* m_nnrModelGroup{nullptr};
 
