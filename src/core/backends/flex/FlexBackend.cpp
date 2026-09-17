@@ -118,6 +118,11 @@ void FlexBackend::setCommandSink(std::function<void(const QString&)> sink)
     m_sink = std::move(sink);
 }
 
+void FlexBackend::setTxCommandSink(std::function<void(const QString&, const TxCoordinator::Command&)> sink)
+{
+    m_txSink = std::move(sink);
+}
+
 void FlexBackend::setSliceCommandSink(std::function<void(const QString&)> sink)
 {
     m_sliceSink = std::move(sink);
@@ -486,30 +491,42 @@ void FlexBackend::sendSliceWaveformCommand(int sliceId, const QString& command)
                   .arg(command));
 }
 
-void FlexBackend::setKeying(bool key)
+void FlexBackend::sendTx(const QString& command, const TxCoordinator::Command& fence)
+{
+    if (!fence.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_txSink) {
+        qCWarning(lcProtocol) << "FlexBackend: no operation-fenced TX command sink; refusing command";
+        return;
+    }
+    m_txSink(command, fence);
+}
+
+void FlexBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
     // Keying is only translated here; the interlock/authorization decision is
     // made above the seam (RFC §6). Matches RadioModel::setTransmit's wire form.
-    send(QStringLiteral("xmit %1").arg(key ? 1 : 0));
+    sendTx(QStringLiteral("xmit %1").arg(key ? 1 : 0), {operation, key, completion});
 }
 
-void FlexBackend::setTune(bool on, int tunePowerPercent)
+void FlexBackend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
     // FlexLib 4.2.18 Radio.TXTune. Power is a separate radio setting; do not
     // re-send it here. Host-modulating backends need it on this same verb.
     Q_UNUSED(tunePowerPercent);
-    send(QStringLiteral("transmit tune %1").arg(on ? 1 : 0));
+    sendTx(QStringLiteral("transmit tune %1").arg(on ? 1 : 0), {operation, on, completion});
 }
 
-void FlexBackend::setAtu(bool start)
+void FlexBackend::setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
     // FlexLib 4.2.18 Radio.ATUTuneStart / ATUTuneBypass.
-    send(start ? QStringLiteral("atu start") : QStringLiteral("atu bypass"));
+    sendTx(start ? QStringLiteral("atu start") : QStringLiteral("atu bypass"), {operation, start, completion});
 }
 
-void FlexBackend::abortCwText()
+void FlexBackend::abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
-    send(QStringLiteral("cwx clear"));
+    sendTx(QStringLiteral("cwx clear"), {operation, false, completion});
 }
 
 void FlexBackend::invokeExtension(const QString& ns, const QString& verb,

@@ -1227,8 +1227,12 @@ void MainWindow::wireRadioModel()
                     << " down=" << down
                     << " schedMs=" << cwTraceMsAt(when);
             }
-            m_radioModel.queueCwKeyEdge(down, QStringLiteral("cw:iambic-keyer"),
-                                       traceId, sourceMs, when);
+        });
+        m_iambicKeyer->setOnRoutedKeyDownChange([this](bool down,
+                std::chrono::steady_clock::time_point when, const TxCoordinator::Request& input) {
+            m_radioModel.queueProducerCwKeyEdge(input, down, QStringLiteral("cw:iambic-keyer"),
+                m_lastCwPaddleTraceId.load(std::memory_order_relaxed),
+                m_lastCwPaddleSourceMs.load(std::memory_order_relaxed), when);
         });
         m_iambicKeyer->setOnPaddleEvent([this](bool dit, bool dah) {
             // The radio's break-in setting decides whether key edges produce
@@ -2399,12 +2403,31 @@ void MainWindow::wireRxDemodAudioSinks()
 // TX VITA-49 packets → the registered PanadapterStream socket. Flex-only (the
 // socket lives on the stream); a non-Flex/RX-only backend has none. Shared by
 // wireRadioModel() and the post-swap rebind.
+void MainWindow::wireTxAudioAuthority()
+{
+    // The continuous Flex microphone contract supports VOX/met_in_rx. Host-
+    // routed PCM has no such RX transport contract: stamp it at PTT admission.
+    const TxCoordinator::Producer producer = m_radioModel.registerTxProducer(m_audio);
+    connect(&m_radioModel, &RadioModel::localTransmitEngaged, this, [this, producer] {
+        const TxCoordinator::Context context = m_radioModel.captureTxMedia(producer);
+        QMetaObject::invokeMethod(m_audio, [audio = m_audio, context] {
+            audio->setHostMicrophoneContext(context);
+        }, Qt::QueuedConnection);
+    });
+}
+
 void MainWindow::wirePanStreamTxSink()
 {
     auto* ps = m_radioModel.panStream();
     if (!ps || !m_audio)
         return;
-    connect(m_audio, &AudioEngine::txPacketReady, ps, &PanadapterStream::sendToRadio);
+    connect(m_audio, &AudioEngine::txPacketReady, ps,
+            [ps](const QByteArray& packet, const TxCoordinator::Context& context) {
+        const TxCoordinator::Dispatch dispatch = context.beginDispatch(TxCoordinator::monotonicMs());
+        if (dispatch) {
+            ps->sendToRadio(packet);
+        }
+    });
 }
 
 // TCI audio/IQ/waterfall feeds from PanadapterStream. Shared by the TCI wiring
@@ -2640,8 +2663,18 @@ bool MainWindow::startAutomationBridge(const QString& sockName)
     m_automation->setSliceReceiveSourceHandler(
         [this](const QString& arg) { return automationSetSliceReceiveSource(arg); });
     m_automation->setModemAutomationHandler(
-        [this](const QString& verb, const QString& action, const QString& value) {
-            return automationModemCommand(verb, action, value);
+        [this](const QString& verb, const QString& action, const QString& value,
+               const std::shared_ptr<TxController>& controller, const TxController::Input& input) {
+            return automationModemCommand(verb, action, value, controller, input);
+        });
+    m_automation->setShortcutAutomationHandler(
+        [this](const QString& id, bool allowTx, const std::shared_ptr<TxController>& controller) {
+            return fireShortcutAction(id, allowTx, controller);
+        });
+    m_automation->setKeyEventAutomationHandler(
+        [this](const QString& spec, bool press, bool allowTx,
+               const std::shared_ptr<TxController>& controller) {
+            return injectKeyEventForAutomation(spec, press, allowTx, controller);
         });
     m_automation->setSliceCenterLockHandler(
         [this](int sliceId, bool enabled) { return automationSetCenterLock(sliceId, enabled); });
@@ -2916,7 +2949,13 @@ void MainWindow::applyTxAudioCapabilities(bool connected, const RadioCapabilitie
     // Repeated capabilities must not enqueue duplicate capture starts.
     AudioEngine* audio = m_audio;
     const QHostAddress address = m_radioModel.radioAddress();
-    QMetaObject::invokeMethod(audio, [audio, connected, caps, pcAudioEnabled, address] {
+    if (!m_microphoneTxProducer.valid()) {
+        m_microphoneTxProducer = m_radioModel.registerTxProducer(audio, true);
+    }
+    const TxCoordinator::Context microphone = connected
+        ? m_radioModel.captureTxMedia(m_microphoneTxProducer) : TxCoordinator::Context{};
+    QMetaObject::invokeMethod(audio, [audio, connected, caps, pcAudioEnabled, address, microphone] {
+        audio->setMicrophoneContext(microphone);
         audio->applyBackendAudioCapabilities(connected, caps, pcAudioEnabled, address);
     });
     if (connected) {

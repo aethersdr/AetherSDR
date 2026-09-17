@@ -5,6 +5,7 @@
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
 #include "IcomTciUnkeySettle.h"
+#include "TxCoordinator.h"
 
 #include <QObject>
 #include <QPointer>
@@ -53,10 +54,31 @@ struct TciClientInfo {
 // TCI WebSocket server — exposes radio state and audio over the TCI protocol.
 // Phase 1: text commands (VFO, mode, filter, TX, RIT/XIT, CW, spots)
 // Phase 2: binary RX/TX audio streaming
+// ── TCI binary audio frame header (moved from TciServer.cpp so the
+// integration test can build a real frame rather than duplicate the wire
+// layout; #5659 review)
+// ── TCI binary audio frame header (per ExpertSDR3 TCI spec v2.0) ────────
+// 9 × uint32 = 36 bytes, followed by sample payload
+// TCI audio header: 16 × uint32 = 64 bytes
+// Per ExpertSDR3 TCI spec v2.0 Stream struct
+struct TciAudioHeader {
+    quint32 receiver;     // receiver/TRX number
+    quint32 sampleRate;   // Hz
+    quint32 format;       // 0=int16, 1=int24, 2=int32, 3=float32
+    quint32 codec;        // 0 (uncompressed)
+    quint32 crc;          // 0 (unused)
+    quint32 length;       // number of real samples in data
+    quint32 type;         // 0=IQ, 1=RX_AUDIO, 2=TX_AUDIO, 3=TX_CHRONO
+    quint32 channels;     // 1 or 2
+    quint32 reserved[8];  // zero-filled
+};
+static_assert(sizeof(TciAudioHeader) == 64, "TCI audio header must be 64 bytes");
+
 class TciServer : public QObject {
     Q_OBJECT
     friend class TciServerReviewTest;
     friend class Hl2TciSignalingTest;
+    friend class TxOperationIntegrationTestAccess;
 
 public:
     explicit TciServer(RadioModel* model, QObject* parent = nullptr);
@@ -205,6 +227,8 @@ private:
     void handleVfoRequest(QWebSocket* client, const TciProtocol::VfoRequest& request);
     void handleSplitRequest(QWebSocket* client, const TciProtocol::SplitRequest& request);
     void handleTrxRequest(QWebSocket* client, const TciProtocol::TrxRequest& request);
+    void handleTrxRequest(QWebSocket* client, const TciProtocol::TrxRequest& request,
+                          const TxCoordinator::Request& txRequest);
     void tuneSliceAndConfirm(
         QWebSocket* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
@@ -251,6 +275,8 @@ private:
                                       const float* samples, int sampleCount);
 
     struct ClientState {
+        TxCoordinator::Producer txProducer;
+        TxCoordinator::Request pttRequest;
         QWebSocket*  socket{nullptr};
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo
@@ -369,6 +395,7 @@ private:
     {
         QPointer<QWebSocket> client;
         TciProtocol::TrxRequest request;
+        TxCoordinator::Request txRequest;
     };
     std::optional<PendingTrxRequest> m_pendingTrxRequest;
     struct PendingRouteCommand
@@ -404,6 +431,8 @@ private:
     QTimer*           m_txChronoTimer{nullptr}; // TX_CHRONO frame cadence
     QWebSocket*       m_txChronoClient{nullptr};
     QPointer<QWebSocket> m_tciPttClient;
+    TxCoordinator::Request m_tciPttRequest;
+    TxCoordinator::Context m_tciTxContext;
     int m_tciPttTrx { 0 };
     bool m_tciPttWantsAudio { false };
     bool m_tciPttRequestedOn { false };

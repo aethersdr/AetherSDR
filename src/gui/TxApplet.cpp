@@ -407,10 +407,7 @@ void TxApplet::buildUI()
     // TUNE button — toggle tune
     connect(m_tuneBtn, &QPushButton::clicked, this, [this]() {
         if (!m_model) return;
-        if (m_model->isTuning())
-            m_model->stopTune();
-        else
-            m_model->startTune();
+        requestTune(!m_model->isTuning(), localTxInput(TxController::Activity::Tune));
     });
 
     // MOX button — toggle transmit.  Routes through requestPttOn/Off so
@@ -419,10 +416,7 @@ void TxApplet::buildUI()
     // is disabled or the active TX slice isn't on a phone mode.
     connect(m_moxBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_updatingFromModel || !m_model) return;
-        if (on)
-            m_model->requestPttOn(TransmitModel::PttSource::Mox);
-        else
-            m_model->requestPttOff(TransmitModel::PttSource::Mox);
+        requestMox(on, localTxInput(TxController::Activity::Mox));
     });
 
     // ATU button — toggle between tune and bypass.
@@ -433,22 +427,130 @@ void TxApplet::buildUI()
     //     prior status was Successful/OK
     // Mirrors SmartSDR's per-frequency toggle. (#1993)
     connect(m_atuBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_model) return;
-        const auto status = m_model->atuStatus();
-        const bool tuned = (status == ATUStatus::Successful || status == ATUStatus::OK);
-        const double curFreq = m_model->transmitFreq();
-        const bool sameFreq = (m_atuTunedFreqMhz > 0.0
-                               && std::abs(curFreq - m_atuTunedFreqMhz) < 1e-6);
-        if (tuned && sameFreq)
-            m_model->atuBypass();
-        else
-            m_model->atuStart();
+        requestAtu(localTxInput(TxController::Activity::Atu));
     });
 
     // MEM button — toggle ATU memories
     connect(m_memBtn, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel && m_model)
             m_model->setAtuMemories(on);
+    });
+    configureTxActions();
+}
+
+TxController::Input TxApplet::localTxInput(TxController::Activity activity)
+{
+    if (!m_radioModel) {
+        return {};
+    }
+    if (!m_txController || !m_txController->valid()) {
+        m_txController = m_radioModel->localTxController();
+    }
+    return m_txController->capture(activity);
+}
+
+void TxApplet::requestTune(bool on, const TxController::Input& input)
+{
+    if (!m_model) {
+        return;
+    }
+    if (m_radioModel) {
+        if (!input.belongsTo(m_radioModel)) {
+            return;
+        }
+        if (on) {
+            (void)input.start();
+        } else {
+            input.stop();
+        }
+    } else if (on) {
+        m_model->startTune();
+    } else {
+        m_model->stopTune();
+    }
+}
+
+void TxApplet::requestMox(bool on, const TxController::Input& input)
+{
+    if (!m_model) {
+        return;
+    }
+    if (m_radioModel) {
+        if (!input.belongsTo(m_radioModel)) {
+            return;
+        }
+        if (on) {
+            (void)input.start();
+        } else {
+            input.stop();
+        }
+    } else if (on) {
+        m_model->requestPttOn(TransmitModel::PttSource::Mox);
+    } else {
+        m_model->requestPttOff(TransmitModel::PttSource::Mox);
+    }
+}
+
+void TxApplet::requestAtu(const TxController::Input& input)
+{
+    if (!m_model) {
+        return;
+    }
+    const ATUStatus status = m_model->atuStatus();
+    const bool tuned = status == ATUStatus::Successful || status == ATUStatus::OK;
+    const bool sameFreq = m_atuTunedFreqMhz > 0.0
+        && std::abs(m_model->transmitFreq() - m_atuTunedFreqMhz) < 1e-6;
+    if (m_radioModel) {
+        if (!input.belongsTo(m_radioModel)) {
+            return;
+        }
+        if (tuned && sameFreq) {
+            (void)input.bypassAtu();
+        } else {
+            (void)input.start();
+        }
+    } else if (tuned && sameFreq) {
+        m_model->atuBypass();
+    } else {
+        m_model->atuStart();
+    }
+}
+
+void TxApplet::configureTxActions()
+{
+    registerTxKeyingAction(m_tuneBtn, [this](const std::shared_ptr<TxController>& controller,
+        const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (!m_model || !controller->belongsTo(m_radioModel)
+            || (action != QLatin1String("click") && action != QLatin1String("toggle"))) {
+            return {};
+        }
+        const TxController::Input input = controller->capture(TxController::Activity::Tune);
+        const bool on = !m_model->isTuning();
+        return [this, input, on] { requestTune(on, input); };
+    });
+    registerTxKeyingAction(m_moxBtn, [this](const std::shared_ptr<TxController>& controller,
+        const QString& action, const QString& value) -> TxKeyingAction::Prepared {
+        if (!m_model || !controller->belongsTo(m_radioModel)
+            || (action != QLatin1String("click") && action != QLatin1String("toggle")
+                && action != QLatin1String("setChecked"))) {
+            return {};
+        }
+        const QString normalized = value.trimmed().toLower();
+        const bool on = action == QLatin1String("setChecked")
+            ? normalized == QLatin1String("true") || normalized == QLatin1String("1")
+                || normalized == QLatin1String("on") || normalized == QLatin1String("yes")
+            : !m_moxBtn->isChecked();
+        const TxController::Input input = controller->capture(TxController::Activity::Mox);
+        return [this, input, on] { requestMox(on, input); };
+    });
+    registerTxKeyingAction(m_atuBtn, [this](const std::shared_ptr<TxController>& controller,
+        const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (!m_model || !controller->belongsTo(m_radioModel)
+            || (action != QLatin1String("click") && action != QLatin1String("toggle"))) {
+            return {};
+        }
+        const TxController::Input input = controller->capture(TxController::Activity::Atu);
+        return [this, input] { requestAtu(input); };
     });
 }
 
@@ -749,6 +851,7 @@ void TxApplet::setRadioModel(RadioModel* radio)
         disconnect(m_capabilitiesConnection);
         m_capabilitiesConnection = {};
     }
+    m_txController.reset();
     m_radioModel = radio;
     m_forwardPowerRequiresSmoothing = !radio || !radio->isConnected()
         || radio->backendCapabilities().forwardPowerRequiresSmoothing;

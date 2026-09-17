@@ -19,6 +19,7 @@
 // show up as "my audio is quiet" or "my signal is 2 kHz wide".
 
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "TxTestAuthority.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
 #include <QCoreApplication>
@@ -105,6 +106,7 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
                                                      TxAudioSource::Microphone)
 {
     Hl2TxDsp tx;
+    TxTestAuthority authority;
     Hl2TxDsp::Config cfg;
     cfg.mode = mode;
     // Optional explicit passband. Hl2Backend pushes a sign-correct, mode-derived
@@ -149,13 +151,18 @@ static std::vector<std::complex<float>> modulate(WdspChannel::Mode mode,
         const std::size_t n = std::min(kChunk, audio.size() - off);
         tx.processAudioBlock(std::vector<float>(audio.begin() + static_cast<std::ptrdiff_t>(off),
                                                 audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                             source);
+                             source, authority.context);
     }
     return out;
 }
 
 int main(int argc, char** argv)
 {
+    // Hl2TxDsp::processAudioBlock carries its admitting context; these cases
+    // are about levelling, so a permanently-valid authority is the inert
+    // constant that leaves the source tag as the only variable. Inner scopes
+    // that need their own lifetime shadow this one.
+    TxTestAuthority authority;
     QCoreApplication app(argc, argv);
     constexpr double kFsOut = 48000.0;
     constexpr double kTone = 1000.0;
@@ -742,6 +749,7 @@ int main(int argc, char** argv)
         struct Settled { double gainDb; double outPeak; };
         auto settled = [](double amplitude) -> Settled {
             Hl2TxDsp tx;
+            TxTestAuthority authority;
             Hl2TxDsp::Config cfg;
             cfg.mode = WdspChannel::Mode::Usb;
             cfg.alcEnabled = true;
@@ -771,7 +779,7 @@ int main(int argc, char** argv)
                         amplitude * std::sin(2.0 * M_PI * 1000.0
                                              * (off + static_cast<int>(n)) / fs));
                 }
-                tx.processAudioBlock(chunk, TxAudioSource::Microphone);
+                tx.processAudioBlock(chunk, TxAudioSource::Microphone, authority.context);
             }
             // Settled tail only, so the opening blocks are not representative.
             double mx = 0.0;
@@ -874,6 +882,7 @@ int main(int argc, char** argv)
     // between.
     {
         Hl2TxDsp tx;
+        TxTestAuthority authority;
         Hl2TxDsp::Config cfg;
         cfg.mode = WdspChannel::Mode::Usb;
         cfg.alcEnabled = true;   // configured ON — the bypass is per-block
@@ -901,7 +910,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    tx.processAudioBlock(chunk, TxAudioSource::ClientLeveled);
+                    tx.processAudioBlock(chunk, TxAudioSource::ClientLeveled, authority.context);
                 }
                 marks[stage + 1] = out.size();
             }
@@ -1107,7 +1116,7 @@ int main(int argc, char** argv)
                         std::vector<float>(
                             audio.begin() + static_cast<std::ptrdiff_t>(off),
                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        TxAudioSource::Microphone);
+                        TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1175,7 +1184,7 @@ int main(int argc, char** argv)
                         std::vector<float>(
                             audio.begin() + static_cast<std::ptrdiff_t>(off),
                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        TxAudioSource::Microphone);
+                        TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1259,7 +1268,7 @@ int main(int argc, char** argv)
                         std::vector<float>(
                             audio.begin() + static_cast<std::ptrdiff_t>(off),
                             audio.begin() + static_cast<std::ptrdiff_t>(off + n)),
-                        TxAudioSource::Microphone);
+                        TxAudioSource::Microphone, authority.context);
                 }
                 double mx = 0.0;
                 std::size_t atClamp = 0;
@@ -1331,6 +1340,7 @@ int main(int argc, char** argv)
                                     TxAudioSource::ClientLeveled);
 
         Hl2TxDsp tx;
+        TxTestAuthority authority;
         Hl2TxDsp::Config cfg;
         cfg.mode = WdspChannel::Mode::Usb;
         cfg.alcEnabled = true;
@@ -1365,7 +1375,7 @@ int main(int argc, char** argv)
                             levels[stage]
                             * std::sin(2.0 * M_PI * 1000.0 * sample / fs));
                     }
-                    tx.processAudioBlock(chunk, TxAudioSource::ClientLeveled);
+                    tx.processAudioBlock(chunk, TxAudioSource::ClientLeveled, authority.context);
                 }
                 if (stage == 0)
                     afterLoud = out.size();
@@ -1523,7 +1533,7 @@ int main(int argc, char** argv)
                     0.1 * std::sin(2.0 * M_PI * 1000.0 * static_cast<double>(n)
                                    / cfg.inputSampleRateHz));
             }
-            tx.processAudioBlock(tone, TxAudioSource::EngineGenerated);
+            tx.processAudioBlock(tone, TxAudioSource::EngineGenerated, authority.context);
             check(out.empty() && micPeakDb < -998.0f,
                   "a partial block emits nothing and is carried");
 
@@ -1533,7 +1543,7 @@ int main(int argc, char** argv)
             // scale. With the guard they are dropped, the buffer holds only
             // silence, and it is under a block again: nothing is emitted.
             const std::vector<float> silence(half, 0.0f);
-            tx.processAudioBlock(silence, TxAudioSource::Microphone);
+            tx.processAudioBlock(silence, TxAudioSource::Microphone, authority.context);
             std::fprintf(stderr,
                 "residue guard: after a source change, emitted %zu IQ samples,"
                 " mic peak %.1f dBFS\n", out.size(), micPeakDb);

@@ -205,7 +205,9 @@ int main(int argc, char** argv)
     // It now takes the host-modulated arm instead: the modulator is ours, the
     // AudioEngine pump already reaches it through the m_hostModulation branch
     // of feedDaxTxAudioInternal(), and there is no transport to create.
-    check(model.prepareWsprTransmit(),
+    const auto wsprProducer = model.registerTxProducer();
+    auto wsprInput = wsprProducer.request();
+    check(model.prepareWsprTransmit(wsprInput),
           "WSPR: prepareWsprTransmit() succeeds on a host-modulating backend");
     check(model.hasWsprTxStream(),
           "WSPR: the host-modulated arm reports a ready TX audio route");
@@ -219,7 +221,7 @@ int main(int argc, char** argv)
     check(!model.transmitModel().daxOn(),
           "WSPR: the host-modulated arm does not latch `transmit dax`");
 
-    model.releaseWsprTransmit();
+    model.releaseWsprTransmit(wsprInput);
     check(!model.hasWsprTxStream(),
           "WSPR: release drops the host-modulated route claim");
     check(!model.transmitModel().daxOn(),
@@ -228,9 +230,10 @@ int main(int argc, char** argv)
     // Prepare/release is idempotent and re-armable — the dialog defers a frame
     // to the next two-minute slot without re-preparing, but an operator who
     // cancels and re-arms runs this pair again.
-    check(model.prepareWsprTransmit() && model.hasWsprTxStream(),
+    wsprInput = wsprProducer.request();
+    check(model.prepareWsprTransmit(wsprInput) && model.hasWsprTxStream(),
           "WSPR: the host-modulated arm can be re-armed after a release");
-    model.releaseWsprTransmit();
+    model.releaseWsprTransmit(wsprInput);
     check(!model.hasWsprTxStream(), "WSPR: second release also clears");
 
     // An ARMED beacon must not carry its route claim onto another radio.
@@ -241,7 +244,8 @@ int main(int argc, char** argv)
     // its route was ready on a FLEX, which keys the radio for a full 111.6 s
     // frame with no dax_tx stream behind it. Unintended transmission, so it is
     // asserted rather than reasoned about. (PR #4537 review, finding 2.)
-    check(model.prepareWsprTransmit(), "WSPR: armed on HL2 for the switch test");
+    wsprInput = wsprProducer.request();
+    check(model.prepareWsprTransmit(wsprInput), "WSPR: armed on HL2 for the switch test");
     check(model.hasWsprTxStream(), "WSPR: armed claim is live before the switch");
     model.connectToRadio(flexInfo());
     check(model.backendCapabilities().family == QLatin1String("flex"),

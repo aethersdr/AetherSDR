@@ -423,7 +423,10 @@ or Web-888, and the client applies the small wire deltas. See
     beginning at 6058.062 kHz. Those starts match
     `round((visible_low_kHz / 30000 kHz) * 2^24)`, showing that W/F `start`
     is a 24-bit fixed-point low-edge offset within the full W/F bandwidth,
-    not a small segment index.
+    not a small segment index. The 24 bits are `WF_WIDTH << zoom_max`
+    (1024 << 14) for that server: the scale is `WF_WIDTH` shifted by the
+    advertised `zoom_max` (2^24 for zoom_max=14, 2^21 for zoom_max=11), and
+    `zoom_cap` never changes it.
 
 ## NR2 / Multiple Kiwi Audio Sources Regression Guard
 
@@ -550,6 +553,23 @@ the hold is derived from.
   translated, or vendored; the AetherSDR compact decoder is original code
   limited to the standard IMA ADPCM unsigned-byte predictor path required by
   the verified server frame boundary.
+- The 2026-09-12 `zoom_cap` follow-up (Kiwi v1.900 shared-waterfall start
+  scale) consulted the open-source KiwiSDR server repository
+  `https://github.com/jks-prv/KiwiSDR.git` at commit
+  `3b570602a14161188f8c85eede62ab2a70e7ad66`. The protocol facts used from
+  license-compatible server files were: `rx/rx_waterfall.h` for
+  `ZOOM_CAP` (`kiwi.wf_share ? 11 : 14`, split from `MAX_ZOOM` in upstream
+  commit `b71558744af5`, 2026-04-30); `rx/rx_waterfall.cpp` for the
+  `wf_setup` message carrying `zoom_max=MAX_ZOOM zoom_cap=ZOOM_CAP ...
+  wf_share=` and for `HZperStart = ui_srate_Hz / (WF_WIDTH << MAX_ZOOM)`;
+  and `rx/rx_waterfall_cmd.cpp` for the `SET zoom=` clamp to `ZOOM_CAP`.
+  Those files carry GNU Library General Public License version 2-or-later
+  headers in that snapshot. `rx/rx_util.cpp` and the served
+  `web/openwebrx/openwebrx.js` were displayed while checking the
+  `wf_share` waterfall-availability gate (tracked separately) and were not
+  used as references for this change. No KiwiSDR code was copied,
+  translated, or vendored; the split of the two values and the request
+  ceiling in AetherSDR are original code.
 - The 2026-06-28 compressed SND audio follow-up consulted the same
   `https://github.com/jks-prv/KiwiSDR.git` commit
   `a83085fe2222dd3e374910faf2195e0454b556ae`. The protocol facts used from
@@ -846,8 +866,20 @@ headers echoing the requested 32-bit `start` plus one-byte `zoom`. A later
 receive-only browser WebSocket observation showed that the rendered page sends
 million-scale `start` values matching a 24-bit fixed-point low-edge offset
 within the full W/F bandwidth. AetherSDR therefore treats `start` as
-`round(((row_low - full_low) / full_bandwidth) * 2^24)`, not as a coarse
-segment index. The chosen zoom is the narrowest row span that covers the
+`round(((row_low - full_low) / full_bandwidth) * (WF_WIDTH << zoom_max))`,
+not as a coarse segment index. The scale is per server: the public KiwiSDR
+source (`rx/rx_waterfall.cpp`, `HZperStart = ui_srate_Hz / (WF_WIDTH <<
+MAX_ZOOM)`) and its `wf_setup` message (`zoom_max=MAX_ZOOM`) give 2^24 on a
+KiwiSDR (zoom_max=14) and 2^21 on a Web-888 (zoom_max=11). The same scale
+decodes the `start` echoed in each W/F frame header. Recent KiwiSDR
+servers also send `zoom_cap` beside `zoom_max` on every connection; it
+equals `zoom_max` (14) except on a v1.900+ shared waterfall (`wf_share=1`,
+`ZOOM_CAP = kiwi.wf_share ? 11 : 14`), where it is 11. It is only a ceiling
+on the zoom a client may request and never changes the scale. A
+2026-09-12 capture on kphsdr.com:8075
+showed a client that keyed the scale off `zoom_cap` sending `start=989353`
+for a 14.153 MHz row, which the server (still on 2^24) served as
+1.769 MHz. The chosen zoom is the narrowest row span that covers the
 visible panadapter bandwidth after fixed-point `start` quantization, and
 `start` centers that row on the visible RF range while clamping to the server's
 full W/F span. After rounding `start`,

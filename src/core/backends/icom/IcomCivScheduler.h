@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/backends/icom/CivCodec.h"
+#include "core/TxCoordinator.h"
 
 namespace AetherSDR::icom {
 
@@ -51,6 +52,7 @@ public:
         // Reads and repeated slider writes collapse to the newest queued item.
         bool coalesce = true;
         std::int64_t notBeforeMs = 0;
+        std::optional<TxCoordinator::Command> txCommand;
     };
 
     struct Dispatch {
@@ -59,6 +61,7 @@ public:
         Priority priority = Priority::Control;
         std::uint64_t generation = 0;
         bool supersedes = false;
+        std::optional<TxCoordinator::Command> txCommand;
     };
 
     enum class Observation : std::uint8_t {

@@ -173,7 +173,9 @@ Ax25HfPacketDecodeDialog* MainWindow::ensureAx25HfPacketDecodeDialog()
 
 QJsonObject MainWindow::automationModemCommand(const QString& verb,
                                                const QString& action,
-                                               const QString& value)
+                                               const QString& value,
+                                               const std::shared_ptr<TxController>& controller,
+                                               const TxController::Input& input)
 {
     Ax25HfPacketDecodeDialog* dlg = ensureAx25HfPacketDecodeDialog();
     if (!dlg) {
@@ -181,7 +183,7 @@ QJsonObject MainWindow::automationModemCommand(const QString& verb,
             {QStringLiteral("ok"), false},
             {QStringLiteral("error"), QStringLiteral("could not construct the AetherModem window")}};
     }
-    return dlg->automationCommand(verb, action, value);
+    return dlg->automationCommand(verb, action, value, controller, input);
 }
 
 // External-controller methods (FlexControl, HID encoders / RC-28 / TMate 2 /
@@ -529,7 +531,8 @@ void MainWindow::activateRADE(int sliceId)
     // tx=true: new over starting — clear pending flag and reset engine EOO state.
     // tx=false + !pending + isTransmitting: unintercepted unkey — request EOO as
     //   best-effort (radio may already be in RX, but at least the app won't hang).
-    const auto beginOver = [this] {
+    const TxCoordinator::Producer radeProducer = m_radioModel.registerTxProducer(m_radeEngine);
+    const auto beginOver = [this, radeProducer] {
         if (!m_radeEngine || !m_radeEngine->isActive()
             || (m_radeTxActive && !m_radeEooPending)) {
             return;
@@ -541,8 +544,14 @@ void MainWindow::activateRADE(int sliceId)
         m_radeEooPending = false;
         m_radeTxActive = true;
         syncKiwiSdrTransmitMute();
-        QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine]() {
-            engine->resetTx();
+        const TxCoordinator::Context context = m_radioModel.captureTxMedia(radeProducer);
+        QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, context]() {
+            if (context.permitsDispatch(TxCoordinator::monotonicMs())) {
+                engine->resetTx(context);
+            }
+        }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_audio, [audio = m_audio, context] {
+            audio->setRawMicrophoneContext(context);
         }, Qt::QueuedConnection);
         qCDebug(lcRade) << "MainWindow: MOX asserted — RADE TX state reset for new over";
     };
@@ -561,7 +570,7 @@ void MainWindow::activateRADE(int sliceId)
             // there is no carrier-release authority to borrow from a later TX.
             m_radeFallbackReleaseFence = std::make_shared<std::atomic<bool>>(true);
             const std::shared_ptr<std::atomic<bool>> fence = m_radeFallbackReleaseFence;
-            m_radePttRelease = {[fence] { return fence->load(std::memory_order_acquire); }, {}};
+            m_radePttRelease = {[fence] { return fence->load(std::memory_order_acquire); }, {}, {}};
             const quint64 requestId = ++m_radeEooRequestId;
             syncKiwiSdrTransmitMute();
             QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, fence, requestId]() {
@@ -1246,11 +1255,19 @@ bool MainWindow::startDax()
 
     // Wire DAX TX: apps → bridge → AudioEngine → VITA-49.
     // AudioEngine chooses packet format/routing based on DaxTxLowLatency.
+    // This is one configured shared endpoint, not an inferred process identity.
+    const TxCoordinator::Producer daxProducer = m_radioModel.registerTxProducer(m_daxBridge);
+    connect(&m_radioModel, &RadioModel::localTransmitEngaged, m_daxBridge,
+            [this, bridge = m_daxBridge, daxProducer] {
+        bridge->setTxContext(m_radioModel.captureTxMedia(daxProducer));
+    });
     connect(m_daxBridge, &DaxBridge::txAudioReady,
-            this, [this](const QByteArray& pcm) {
+            this, [this](const QByteArray& pcm, const TxCoordinator::Context& context) {
         if (m_audio->isRadeMode()) return;
         if (!m_audio->isDaxTxMode()) return;
-        QMetaObject::invokeMethod(m_audio, [this, pcm]() { m_audio->feedDaxTxAudio(pcm); });
+        QMetaObject::invokeMethod(m_audio, [audio = m_audio, pcm, context] {
+            audio->feedDaxTxAudio(pcm, context);
+        });
     });
 
     // Save current mic selection before forcing PC audio source.

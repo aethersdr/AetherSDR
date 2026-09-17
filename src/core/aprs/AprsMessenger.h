@@ -2,6 +2,7 @@
 
 #include "core/aprs/AprsPacket.h"
 #include "core/tnc/Ax25.h"
+#include "core/TxCoordinator.h"
 
 #include <QDateTime>
 #include <QObject>
@@ -41,6 +42,7 @@ public:
         State state{State::Received};
         int tries{0};
         QDateTime nextTryUtc;  // outgoing: next retransmission due
+        TxCoordinator::Request input; // process-local; deliberately never persisted
     };
 
     explicit AprsMessenger(QObject* parent = nullptr);
@@ -59,22 +61,27 @@ public:
 
     // Queue an outgoing message. Returns false when the destination callsign
     // is invalid or our own callsign is not configured.
-    bool sendMessage(const QString& to, const QString& text);
+    bool sendMessage(const QString& to, const QString& text,
+                     const TxCoordinator::Request& input = {});
+    void setReceiveProgram(const TxCoordinator::Request& input) { m_receiveProgram = input; }
 
     QVector<Message> messages() const { return m_messages; }
     int unreadCount() const;
     void markAllRead();
     void clear();
+    void cancelPendingTransmissions();
 
 signals:
-    void transmitFrame(const QByteArray& rawAx25NoFcs);
+    void transmitFrame(const QByteArray& rawAx25NoFcs,
+                       const AetherSDR::TxCoordinator::Request& input);
     void messageReceived(const Message& message);
     void messagesChanged();
     void unreadCountChanged(int count);
     void activity(const QString& line);
 
 private:
-    void transmitText(const QString& infoText);
+    friend class AprsMessengerTestAccess;
+    void transmitText(const QString& infoText, const TxCoordinator::Request& input);
     void serviceRetries();
     void load();
     void save() const;
@@ -83,9 +90,11 @@ private:
     ax25::Address m_myAddress;
     QVector<ax25::Address> m_path;
     QVector<Message> m_messages;
+    TxCoordinator::Request m_receiveProgram;
     int m_nextMsgNo{1};
     QString m_persistPath;
     QTimer m_retryTimer;    // periodic scan for due retransmissions
+    bool m_servicingRetries{false};
     QTimer m_saveCoalesce;  // single-shot, HeardList-style coalesced save
 
     static constexpr int kRetryIntervalSecs = 30;

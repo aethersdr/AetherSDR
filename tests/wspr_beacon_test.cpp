@@ -1,5 +1,6 @@
 #include "core/AudioEngine.h"
 #include "core/WsprBeacon.h"
+#include "TxTestAuthority.h"
 
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -165,6 +166,7 @@ void testTwentyOneSecondsDoesNotComplete()
 
 void testIndependentDaxPump()
 {
+    TxTestAuthority authority;
     const WsprBeacon::EncodeResult encoded =
         WsprBeacon::encode(QStringLiteral("K1ABC"),
                            QStringLiteral("FN42"), 37);
@@ -184,7 +186,7 @@ void testIndependentDaxPump()
     });
 
     engine.wsprBeacon()->start(encoded.symbols, 1500.0, -20.0f, 0);
-    engine.startWsprPump();
+    engine.startWsprPump(authority.context);
     QEventLoop loop;
     QTimer::singleShot(250, &loop, &QEventLoop::quit);
     loop.exec();
@@ -372,6 +374,19 @@ void testSkipIntoTheTailStillFadesOut()
           "a skip into the tail region decays instead of ramping back up");
 }
 
+void testOriginalGeneratorCleanup()
+{
+    WsprBeacon beacon;
+    const WsprBeacon::Symbols symbols{};
+    beacon.start(symbols, 1500.0, -20.0f);
+    const uint64_t original = beacon.generation();
+    beacon.start(symbols, 1600.0, -20.0f);
+    beacon.stopIfCurrent(original);
+    check(beacon.isActive(), "old WSPR cleanup preserves the replacement generator");
+    beacon.stopIfCurrent(beacon.generation());
+    check(!beacon.isActive(), "WSPR cleanup stops its own generator");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -386,6 +401,7 @@ int main(int argc, char** argv)
     testLateStartSkipsIntoTheFrame();
     testSkipIntoTheTailStillFadesOut();
     testIndependentDaxPump();
+    testOriginalGeneratorCleanup();
     if (failures == 0) {
         std::puts("WSPR beacon tests passed");
     }

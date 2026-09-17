@@ -4,6 +4,7 @@
 #include <QString>
 #include <QVector>
 #include <functional>
+#include "models/TxController.h"
 
 class QPushButton;
 class QTextEdit;
@@ -73,6 +74,10 @@ public:
     static int macroRowMinimumHeight(const QFont& baseFont);
 
     void setModel(CwxModel* model);
+    void setTxControllerProvider(std::function<std::shared_ptr<TxController>()> provider)
+    {
+        m_txControllerProvider = std::move(provider);
+    }
     void setDisplayName(const QString& name);
     QString displayName() const;
     void configureTextKeyer(const QString& name, int minWpm, int maxWpm,
@@ -116,11 +121,14 @@ private:
     void buildSetupView();
     void showSendView();
     void showSetupView();
-    void sendBuffer();
+    void sendBuffer(const TxController::Input* input = nullptr, const QString& capturedText = {});
+    void sendButtonClicked(const TxController::Input* input = nullptr, const QString& capturedText = {});
     void resendText(const QString& text);
     void clearHistory();
     void appendHistoryBubble(const QString& rawText);
     void onKeyPress(const QString& text);
+    void sendMacro(int index, const TxController::Input* input = nullptr);
+    std::function<std::shared_ptr<TxController>()> m_txControllerProvider;
 
     CwxModel*       m_model{nullptr};
     QLabel*         m_titleLabel{nullptr};

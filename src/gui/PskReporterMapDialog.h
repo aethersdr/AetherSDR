@@ -1,6 +1,8 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "models/RadioModel.h"
+#include "models/TxController.h"
 
 #include <optional>
 
@@ -40,6 +42,7 @@ public:
                                   RadioModel* radioModel,
                                   PropForecastClient* propForecast = nullptr,
                                   QWidget* parent = nullptr);
+    ~PskReporterMapDialog() override;
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -56,6 +59,8 @@ private:
     void updateBandConditions();
     void updateConnectionIndicator();
     void scheduleBeacon();
+    void scheduleBeacon(const std::shared_ptr<TxController>& controller,
+                        TxCoordinator::Request request);
     enum class BeaconStopOutcome { Completed, Cancelled, Interrupted };
     void stopBeacon(const QString& status,
                     BeaconStopOutcome outcome = BeaconStopOutcome::Interrupted);
@@ -82,10 +87,15 @@ private:
     // the operator's own station keeps its audio processing (and VOX) for the
     // whole time the beacon is merely waiting for its slot.
     void borrowBeaconSpeechChain(TransmitModel& tx);
-    void restoreBorrowedTxState();
+    void restoreBorrowedTxState(const TxCoordinator::Request& original);
 
-    AudioEngine*         m_audioEngine{nullptr};
-    RadioModel*         m_radioModel{nullptr};
+    QPointer<AudioEngine> m_audioEngine;
+    QPointer<RadioModel> m_radioModel;
+    std::shared_ptr<TxController> m_beaconController;
+    bool m_beaconTransition{false};
+    TxCoordinator::Request m_beaconRequest;
+    TxCoordinator::Context m_beaconContext;
+    uint64_t m_beaconGeneration{0};
     PskReporterClient*  m_client{nullptr};
     PskReporterClient*  m_globalClient{nullptr};
     PropForecastClient* m_propForecast{nullptr};

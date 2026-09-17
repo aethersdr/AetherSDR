@@ -1134,8 +1134,10 @@ void AnanBackend::setCwPitch(int hz)
     emitSliceState();
 }
 
-void AnanBackend::setKeying(bool key)
+void AnanBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    Q_UNUSED(operation);
+    Q_UNUSED(completion);
     // canTransmit is false and P2Client has no PTT capability -- there is
     // nothing this method could do even if the engine's TX guard (which
     // gates every call site above this seam) let a key-on request through.

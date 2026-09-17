@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/tnc/Ax25.h"
+#include "core/TxCoordinator.h"
 #include "core/tnc/Ax25LinkTiming.h"
 
 #include <QByteArray>
@@ -39,6 +40,7 @@ public:
     enum class Mode { Command, Converse };
 
     explicit TncTerminal(QObject* parent = nullptr);
+    void setTransmitProgram(const TxCoordinator::Request& input) { m_txProgram = input; }
     ~TncTerminal() override;
 
     // Our station callsign-SSID (the address outbound connects originate from).
@@ -131,7 +133,8 @@ public slots:
 
 signals:
     // A raw AX.25 frame (address..info, no FCS) to key on the air.
-    void transmitFrame(const QByteArray& rawNoFcs);
+    void transmitFrame(const QByteArray& rawNoFcs,
+                       const AetherSDR::TxCoordinator::Request& input);
 
     // Text to append to the terminal transcript pane. Already newline-normalised
     // (peer CR / CRLF collapsed to '\n'); never carries a trailing prompt.
@@ -149,6 +152,7 @@ signals:
     void connectRequested(const QString& peer);
 
 private:
+    TxCoordinator::Request m_txProgram;
     void onLinkConnected(const ax25::Address& peer);
     void onLinkDisconnected(const ax25::Address& peer, bool byPeer);
     void onLinkConnectFailed(const ax25::Address& peer, const QString& reason);

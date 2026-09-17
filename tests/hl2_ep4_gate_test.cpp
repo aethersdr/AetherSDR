@@ -23,6 +23,7 @@
 
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
+#include "TxTestAuthority.h"
 
 #include "Hl2Ep4ArrivalsD94.h"
 
@@ -195,6 +196,10 @@ static std::uint32_t feedUntilBlock(MetisClient& c, QSignalSpy& spy,
 
 int main(int argc, char** argv)
 {
+    // MetisClient::setMox carries its admitting operation; these cases are
+    // about the transmit GATE, so a permanently-valid authority is the inert
+    // constant that leaves the gate as the only variable.
+    TxTestAuthority authority;
     QCoreApplication app(argc, argv);
 
     // ---- 1 · the guard is sized in the gateware's own units ----
@@ -521,7 +526,7 @@ int main(int argc, char** argv)
             feed(c, s);
         check(!MetisClientTestAccess::idle(c), "mid-capture");
 
-        c.setMox(true);
+        c.setMox(true, authority.operation);
         check(MetisClientTestAccess::idle(c),
               "keying abandons the cycle in flight rather than finishing it");
         check(spy.count() == 0, "half a clean block merged with half a keyed one is not a reading");
@@ -535,7 +540,7 @@ int main(int argc, char** argv)
 
         // Nor inside the post-unkey hold-off: d83 measured the transient at
         // 178-285 ms past the falling edge.
-        c.setMox(false);
+        c.setMox(false, authority.operation);
         MetisClientTestAccess::tick(c);
         check(MetisClientTestAccess::idle(c), "no arming inside the post-unkey hold-off");
         check(c.bandscopeTimeouts() == 0, "a refused arming is not a timeout");
@@ -556,7 +561,7 @@ int main(int argc, char** argv)
         c.enableTransmit(true);
         c.setBandscopeEnabled(true);
         check(MetisClientTestAccess::arming(c), "armed, no EP4 seen yet");
-        c.setMox(true);
+        c.setMox(true, authority.operation);
         check(!MetisClientTestAccess::trailingPending(c),
               "keying while ARMING leaves no flag to swallow the next cycle's first packet");
     }
@@ -570,7 +575,7 @@ int main(int argc, char** argv)
         MetisClientTestAccess::setStreaming(c);
         QSignalSpy spy(&c, &MetisClient::bandscopeBlockReady);
         c.setBandscopeEnabled(true);
-        c.setMox(true);                        // refused: enableTransmit was never called
+        c.setMox(true, authority.operation);                        // refused: enableTransmit was never called
         check(!c.isKeyed(), "the transmit gate refused the key");
         check(!MetisClientTestAccess::idle(c), "so the cycle in flight is not abandoned");
         for (std::uint32_t s = 0; s < 8; ++s)
@@ -994,8 +999,8 @@ int main(int argc, char** argv)
                 MetisClientTestAccess::setRadioPtt(c, true);
                 MetisClientTestAccess::setRadioPtt(c, false);
             } else if (edge == 1) {
-                c.setMox(true);
-                c.setMox(false);
+                c.setMox(true, authority.operation);
+                c.setMox(false, authority.operation);
             } else {
                 c.setBandscopeEnabled(false);
                 c.setBandscopeEnabled(false); // repeated cancellation is idempotent
@@ -1029,7 +1034,7 @@ int main(int argc, char** argv)
         QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
         QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
         c.requestBandscopeFrame();
-        c.setMox(true); // transmit was never enabled; no wire or peer exists
+        c.setMox(true, authority.operation); // transmit was never enabled; no wire or peer exists
         for (std::uint32_t s = 0; s < 8; ++s) {
             feed(c, s);
         }
