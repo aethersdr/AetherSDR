@@ -35,6 +35,7 @@
 
 #include <QByteArray>
 #include <QFile>
+#include <QRegularExpression>
 #include <QString>
 
 #include <cstdio>
@@ -105,9 +106,16 @@ int main()
     // an explicit argument is also the thing a reader can check at the call
     // site. If this ever reads Microphone or ClientLeveled, a WSPR beacon goes
     // back to being moved by the mic slider.
-    check(engine.contains(QLatin1String(
+    // Whitespace-normalised, and NOT anchored on the closing paren: the call
+    // carries a TxCoordinator::Context too (#5659), and a source-text assertion
+    // that pins the whole argument list fires on every signature change while
+    // the behaviour it guards is untouched. What must stay true is that THIS
+    // call site names EngineGenerated explicitly, and names nothing else.
+    QString engineFlat = engine;
+    engineFlat.replace(QRegularExpression(QStringLiteral("\\s+")), QStringLiteral(" "));
+    check(engineFlat.contains(QLatin1String(
               "feedDaxTxAudioInternal(m_wsprFloatScratch, false, true, "
-              "TxAudioSource::EngineGenerated)")),
+              "TxAudioSource::EngineGenerated")),
           "the WSPR pump feeds TxAudioSource::EngineGenerated");
 
     // NOBODY DERIVES THE TAG FROM markExternalSource AGAIN. That flag means "a
