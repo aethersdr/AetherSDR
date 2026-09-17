@@ -9085,7 +9085,14 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     if (!serialReseeds->isEmpty()) {
         auto* refreshRow = new QHBoxLayout;
         auto* refreshBtn = new QPushButton("Refresh serial ports");
-        refreshBtn->setStyleSheet(kBtnStyle);
+        // Through ThemeManager, like every sibling button in this function
+        // (speBtn, vkampBtn, lpBtn). The colour ratchet counts setStyleSheet()
+        // CALL SITES rather than colours, so a direct call here costs a ratchet
+        // slot even though kBtnStyle is the same literal hex the siblings use.
+        // MidiMappingDialog's makeStyledButton() in this same change already
+        // says exactly that in its own comment -- the constraint was understood
+        // in one file and missed in the other.
+        AetherSDR::ThemeManager::instance().applyStyleSheet(refreshBtn, kBtnStyle);
         refreshBtn->setAccessibleName(tr("Refresh serial port list"));
         refreshBtn->setToolTip(
             "Re-scan for serial ports. The list is also re-scanned every time "
