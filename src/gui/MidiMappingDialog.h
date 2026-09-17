@@ -24,8 +24,24 @@ class MidiMappingDialog : public PersistentDialog {
 public:
     explicit MidiMappingDialog(MidiControlManager* manager, QWidget* parent = nullptr);
 
+protected:
+    // MainWindow keeps this dialog in a QPointer and only hides it
+    // (showOrRaisePersistent), so the widget tree is built once per process.
+    // Re-enumerate the ports on every show, or a controller plugged in while
+    // the window was closed can never appear. Same contract as
+    // RadioSetupDialog's m_calibrationReseed / m_droopReseed.
+    void showEvent(QShowEvent* event) override;
+
 private:
+    // Repopulates m_portCombo from a live enumeration, carrying each port's
+    // NAME in Qt::UserRole item data and reselecting by that name rather than
+    // by row.  Safe to call repeatedly.
     void refreshPortList();
+    // Opens the port the combo currently NAMES, resolving that name against a
+    // fresh enumeration at click time.  Returns false (and reports why) when
+    // the named port is no longer there.
+    bool connectToSelectedPort();
+    void setPortStatus(const QString& text, const QString& colorToken);
     void refreshBindingTable();
     void refreshProfileList();
     // Manual add/edit form (#4760). One form serves both the "Manual…" button

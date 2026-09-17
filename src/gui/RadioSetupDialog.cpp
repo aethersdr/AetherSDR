@@ -625,9 +625,24 @@ static void refreshOscillatorSourceCombo(QComboBox* combo, const RadioModel* mod
 // Configuration group and the ACOM Peripherals row, which independently
 // re-implemented this match/fallback logic with a subtly different
 // isCustom computation before this was factored out.
+//
+// Safe to call more than once on the same combo — see refreshSerialPortCombo
+// below, which is how every caller re-enumerates. It clears first and works
+// under a QSignalBlocker because clear() emits currentIndexChanged and every
+// caller wires that signal to a handler that shows/hides the custom-path
+// editor; on a refresh an unblocked clear() would fire it against a
+// half-built combo. Callers apply that visibility from the returned flag
+// instead, so the blocker costs them nothing. customEdit is blocked for the
+// same reason — buildSerialTab connects its textChanged to the settings
+// saver, and the Custom-fallback setText() below would otherwise make a
+// refresh look like an operator edit. (Both blockers mirror
+// WaveformsDialog::populateDStarSerialPorts.)
 static bool populateSerialPortCombo(QComboBox* combo, QLineEdit* customEdit,
                                     const QString& savedPort)
 {
+    const QSignalBlocker blocker(combo);
+    const QSignalBlocker editBlocker(customEdit);  // null-safe by construction
+    combo->clear();
     for (const auto& info : QSerialPortInfo::availablePorts())
         combo->addItem(QString("%1 — %2").arg(info.portName(), info.description()),
                         info.portName());
@@ -646,6 +661,42 @@ static bool populateSerialPortCombo(QComboBox* combo, QLineEdit* customEdit,
         if (customEdit) customEdit->setText(savedPort);
     }
     return isCustom;
+}
+
+// Re-enumerate an already-populated serial-port combo in place.
+//
+// Why this exists: RadioSetupDialog pages are built ONCE per process
+// (buildDeferredTab erases the builder after first use, #1776) and the dialog
+// is a showOrRaisePersistent singleton that is hidden, never destroyed. So a
+// combo filled from QSerialPortInfo::availablePorts() at build time shows that
+// one snapshot forever, and closing and reopening Settings does not rebuild
+// it. Every serial combo therefore needs a path back to a live enumeration.
+//
+// Keeps the operator's choice by PORT NAME rather than by row: the ports
+// either side of it may have come or gone. A name that is no longer present
+// falls through populateSerialPortCombo's existing "Custom..." fallback with
+// the path pre-filled, which is this helper family's equivalent of the
+// "(not connected)" row DStarModemPage::refreshSerialDevices re-inserts —
+// deliberately NOT duplicated here, because __custom__ is the sentinel the
+// three save paths key on and a second representation of "configured but
+// absent" in the same combo would be ambiguous to them.
+//
+// Returns true if the combo ended up on "Custom...", i.e. the caller should
+// show its custom-path editor.
+static bool refreshSerialPortCombo(QComboBox* combo, QLineEdit* customEdit)
+{
+    if (!combo)
+        return false;
+    // Do not rebuild a list somebody is reading — the row under the cursor
+    // would change identity mid-gesture.
+    if (combo->view() && combo->view()->isVisible())
+        return combo->currentData().toString() == QLatin1String("__custom__");
+
+    QString keep = combo->currentData().toString();
+    if (keep.isEmpty() || keep == QLatin1String("__custom__"))
+        keep = customEdit ? customEdit->text().trimmed() : QString();
+
+    return populateSerialPortCombo(combo, customEdit, keep);
 }
 #endif
 
@@ -973,6 +1024,11 @@ void RadioSetupDialog::showEvent(QShowEvent* event)
         m_calibrationReseed();
     if (m_droopReseed)
         m_droopReseed();
+    // Same reasoning, for every serial-port combo on a page that has been
+    // built: the platform's port list can have changed completely while the
+    // dialog was hidden, and there is no hotplug signal to tell us.
+    for (const auto& reseed : m_serialPortReseeds)
+        reseed();
 }
 
 bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
@@ -6979,21 +7035,23 @@ QWidget* RadioSetupDialog::buildSerialTab()
             customEdit->setVisible(custom);
         });
 
-        connect(refreshBtn, &QPushButton::clicked, this, [portCombo, customEdit]() {
-            QString customText = customEdit->text();
-            int customIdx = portCombo->count() - 1;  // "Custom..." is last
-            bool wasCustom = (portCombo->currentIndex() == customIdx);
-            // Remove all but "Custom..."
-            while (portCombo->count() > 1)
-                portCombo->removeItem(0);
-            for (const auto& info : QSerialPortInfo::availablePorts())
-                portCombo->insertItem(portCombo->count() - 1,
-                    QString("%1 — %2").arg(info.portName(), info.description()),
-                    info.portName());
-            if (wasCustom) {
-                portCombo->setCurrentIndex(portCombo->count() - 1);
-            }
-        });
+        // Re-enumerate through the shared helper, which reselects by port NAME.
+        // The hand-rolled version this replaces removed every row but
+        // "Custom..." and then re-inserted ahead of it — leaving the selection
+        // parked on "Custom..." whatever it had been, so pressing Refresh with
+        // a real port chosen silently swapped the operator onto the manual-path
+        // entry and revealed the Path row.
+        auto reseedPorts = [combo = QPointer<QComboBox>(portCombo),
+                            label = QPointer<QLabel>(customLabel),
+                            edit = QPointer<QLineEdit>(customEdit)]() {
+            if (!combo || !edit)
+                return;
+            const bool custom = refreshSerialPortCombo(combo, edit);
+            if (label) label->setVisible(custom);
+            edit->setVisible(custom);
+        };
+        connect(refreshBtn, &QPushButton::clicked, this, reseedPorts);
+        m_serialPortReseeds.append(reseedPorts);
 
         // Baud rate
         grid->addWidget(new QLabel("Baud:"), 2, 0);
@@ -7872,6 +7930,14 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     auto* vbox = new QVBoxLayout(page);
     vbox->setSpacing(8);
 
+    // Reseeds for this page's serial-port combos (ACOM, SPE, LP-100A). Each
+    // row appends to both this and m_serialPortReseeds; this copy drives the
+    // page's own "Refresh serial ports" button, the member drives showEvent().
+    // shared_ptr because the rows are built by lambdas taking `this` by
+    // reference and the button outlives their scope.
+    [[maybe_unused]] auto serialReseeds =
+        std::make_shared<QVector<std::function<void()>>>();
+
     auto* group = new QGroupBox("External Devices — Manual IP Connection");
     group->setStyleSheet(kGroupStyle);
     auto* grid = new QGridLayout(group);
@@ -8179,6 +8245,18 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     [serialCombo, serialCustomEdit](int idx) {
                 serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
             });
+            // This row had NO refresh path at all: the combo was filled once,
+            // on a page that is built once, in a dialog that is never
+            // destroyed. Register a reseed so both the page's Refresh button
+            // and showEvent() can re-enumerate it.
+            auto reseed = [combo = QPointer<QComboBox>(serialCombo),
+                           edit = QPointer<QLineEdit>(serialCustomEdit)]() {
+                if (!combo || !edit)
+                    return;
+                edit->setVisible(refreshSerialPortCombo(combo, edit));
+            };
+            m_serialPortReseeds.append(reseed);
+            serialReseeds->append(reseed);
             lay->addWidget(serialCombo, 1);
             lay->addWidget(serialCustomEdit, 1);
             serialPageIdx = addrStack->addWidget(serialPage);
@@ -8400,6 +8478,18 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     [serialCombo, serialCustomEdit](int idx) {
                 serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
             });
+            // This row had NO refresh path at all: the combo was filled once,
+            // on a page that is built once, in a dialog that is never
+            // destroyed. Register a reseed so both the page's Refresh button
+            // and showEvent() can re-enumerate it.
+            auto reseed = [combo = QPointer<QComboBox>(serialCombo),
+                           edit = QPointer<QLineEdit>(serialCustomEdit)]() {
+                if (!combo || !edit)
+                    return;
+                edit->setVisible(refreshSerialPortCombo(combo, edit));
+            };
+            m_serialPortReseeds.append(reseed);
+            serialReseeds->append(reseed);
             lay->addWidget(serialCombo, 1);
             lay->addWidget(serialCustomEdit, 1);
             serialPageIdx = addrStack->addWidget(serialPage);
@@ -8817,6 +8907,18 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     [serialCombo, serialCustomEdit](int idx) {
                 serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
             });
+            // This row had NO refresh path at all: the combo was filled once,
+            // on a page that is built once, in a dialog that is never
+            // destroyed. Register a reseed so both the page's Refresh button
+            // and showEvent() can re-enumerate it.
+            auto reseed = [combo = QPointer<QComboBox>(serialCombo),
+                           edit = QPointer<QLineEdit>(serialCustomEdit)]() {
+                if (!combo || !edit)
+                    return;
+                edit->setVisible(refreshSerialPortCombo(combo, edit));
+            };
+            m_serialPortReseeds.append(reseed);
+            serialReseeds->append(reseed);
             lay->addWidget(serialCombo, 1);
             lay->addWidget(serialCustomEdit, 1);
             serialPageIdx = addrStack->addWidget(serialPage);
@@ -8973,6 +9075,30 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
             }
         });
     }
+
+#ifdef HAVE_SERIALPORT
+    // One Refresh for the page rather than one per row: the three serial rows
+    // sit in the same QGridLayout as the network-only rows above them and a
+    // per-row button would have to claim a column those rows do not use.
+    // showEvent() runs the same reseeds, so this button is for a device
+    // plugged in while the operator is already looking at the page.
+    if (!serialReseeds->isEmpty()) {
+        auto* refreshRow = new QHBoxLayout;
+        auto* refreshBtn = new QPushButton("Refresh serial ports");
+        refreshBtn->setStyleSheet(kBtnStyle);
+        refreshBtn->setAccessibleName(tr("Refresh serial port list"));
+        refreshBtn->setToolTip(
+            "Re-scan for serial ports. The list is also re-scanned every time "
+            "this window is opened.");
+        connect(refreshBtn, &QPushButton::clicked, this, [serialReseeds]() {
+            for (const auto& reseed : *serialReseeds)
+                reseed();
+        });
+        refreshRow->addWidget(refreshBtn);
+        refreshRow->addStretch();
+        vbox->addLayout(refreshRow);
+    }
+#endif
 
     note->setWordWrap(true);
     AetherSDR::ThemeManager::instance().applyStyleSheet(note, "QLabel { color: {{color.text.label}}; font-size: 11px; padding: 8px; }");
