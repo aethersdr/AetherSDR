@@ -973,6 +973,70 @@ int main(int argc, char** argv)
               "...on its own four packets, not a set the re-arm would have begun");
     }
 
+    // Abandoning a one-shot capture must answer it and admit the next request.
+    // Exercise all three gate phases and both PTT sources without a socket.
+    for (const int packetsBeforeInterrupt : {0, 1, 5}) {
+        for (const int edge : {0, 1, 2}) {
+            MetisClient c;
+            MetisClientTestAccess::setStreaming(c);
+            QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
+            QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
+            if (edge == 1) {
+                c.enableTransmit(true);
+            } else if (edge == 2) {
+                c.setBandscopeEnabled(true);
+            }
+            c.requestBandscopeFrame();
+            for (int s = 0; s < packetsBeforeInterrupt; ++s) {
+                feed(c, static_cast<std::uint32_t>(s));
+            }
+            if (edge == 0) {
+                MetisClientTestAccess::setRadioPtt(c, true);
+                MetisClientTestAccess::setRadioPtt(c, false);
+            } else if (edge == 1) {
+                c.setMox(true);
+                c.setMox(false);
+            } else {
+                c.setBandscopeEnabled(false);
+                c.setBandscopeEnabled(false); // repeated cancellation is idempotent
+            }
+            MetisClientTestAccess::expireUnkeyHoldoff(c);
+            MetisClientTestAccess::fireGuard(c);
+            check(fails.count() == 1, "an abandoned frame is answered exactly once");
+            if (!fails.isEmpty()) {
+                check(!fails.first().first().toString().isEmpty(),
+                      "cancellation carries an operator-visible reason");
+            }
+            check(frames.count() == 0, "an interrupted capture delivers no frame");
+            check(MetisClientTestAccess::idle(c), "cancellation disarms the gate");
+            check(!c.bandscopeEnabled(), "recovery does not require a standing sampler");
+
+            c.requestBandscopeFrame();
+            check(MetisClientTestAccess::arming(c), "the next request can arm normally");
+            // Include any trailing packet plus a flush and a whole fresh block.
+            for (std::uint32_t s = 8; s < 24; ++s) {
+                feed(c, s);
+            }
+            check(frames.count() == 1, "the next request delivers one complete frame");
+            check(fails.count() == 1, "successful recovery does not fail another request");
+        }
+    }
+
+    // A refused host PTT must not cancel a valid frame request.
+    {
+        MetisClient c;
+        MetisClientTestAccess::setStreaming(c);
+        QSignalSpy frames(&c, &MetisClient::bandscopeFrameReady);
+        QSignalSpy fails(&c, &MetisClient::bandscopeFrameFailed);
+        c.requestBandscopeFrame();
+        c.setMox(true); // transmit was never enabled; no wire or peer exists
+        for (std::uint32_t s = 0; s < 8; ++s) {
+            feed(c, s);
+        }
+        check(frames.count() == 1 && fails.count() == 0,
+              "a refused key leaves the frame request intact");
+    }
+
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_ep4_gate_test: all checks passed\n");
     return g_failures == 0 ? 0 : 1;

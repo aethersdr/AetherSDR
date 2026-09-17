@@ -55,8 +55,8 @@ private:
     // ClientEqFftAnalyzer's own bins are 6.02 dB low (its 2/N normalisation
     // does not remove the Hann window's coherent gain), so BandscopeDialog::
     // onFrame() adds coherentGainCorrectionDb() before the bins arrive here. A
-    // caller that forgets is not drawing dBFS and this comment is then a lie —
-    // `bandscope_analyzer_test` is what keeps it true.
+    // caller that forgets is not drawing dBFS. `bandscope_analyzer_test` pins
+    // the helper; `bandscope_trace_render_test` pins the production readout.
     //
     // The bottom is -100 dB, which sits just under the analyzer's kFloorDb
     // sentinel once that sentinel has been corrected (-100 + 6.02 = -93.98), so
@@ -101,6 +101,7 @@ public:
     ~BandscopeDialog() override;
 
 private:
+    friend struct BandscopeDialogTestAccess;
     // Ask the backend for one frame. A no-op while one is already outstanding.
     void requestFrame();
     // Tear down the reply connections for the outstanding request, if any, and

@@ -938,6 +938,9 @@ void MetisClient::setMox(bool keyed)
         // Keying up inside the arming window is exactly when that happens.
         if (m_bsState != BandscopeState::Idle)
             bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
+        // A one-shot caller has no period tick to resume this capture. Answer
+        // before leaving its guard stopped and its request latched forever.
+        failPendingBandscopeFrame(QStringLiteral("the radio started transmitting"));
     } else {
         // Start the post-unkey hold-off. d83's measured transient runs
         // 178-285 ms past the falling edge; kBandscopeUnkeyHoldoffMs clears it.
@@ -1591,6 +1594,7 @@ void MetisClient::onRadioPttEdge(bool keyed)
     if (keyed) {
         if (m_bsState != BandscopeState::Idle)
             bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
+        failPendingBandscopeFrame(QStringLiteral("the radio started transmitting"));
         return;
     }
     // d83's measured post-unkey transient runs 178-285 ms past the falling
@@ -1812,6 +1816,9 @@ void MetisClient::setBandscopeEnabled(bool on)
     if (!on)
         bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Idle);
     applyBandscopeGate();
+    if (!on) {
+        failPendingBandscopeFrame(QStringLiteral("the bandscope sampler was disabled"));
+    }
     qCInfo(lcHl2) << "HL2: wideband bandscope gate (EP4)"
                   << (on ? "running" : "stopped") << "— one block per"
                   << kBandscopeSampleMs << "ms";

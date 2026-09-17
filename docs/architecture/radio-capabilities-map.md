@@ -100,9 +100,11 @@ over bins, so the peak *bin* sits below the peak *sample* by however wide the
 signal is. Both are uncalibrated, and neither has been checked against a
 converter driven to a known level.
 
-`wideband_converter_view_test` pins the HL2 declaration, its connected-only
-condition, and that the record names a verb the backend actually answers;
-`bandscope_analyzer_test` pins the dB scale on both sides of that correction.
+`wideband_converter_view_test` pins the record's contents, its absence while
+disconnected, and that it names a verb the backend answers. Connected publication
+remains a hardware-verification gap. `bandscope_analyzer_test` pins the analyzer's
+dB scale and correction; `bandscope_trace_render_test` feeds known records through
+the production dialog and checks its displayed peak level and frequency.
 
 | Field | Flex | HL2 | Sim | Read at | Effect |
 |---|:--:|:--:|:--:|---|---|

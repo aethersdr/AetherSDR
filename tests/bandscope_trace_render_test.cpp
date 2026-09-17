@@ -1,11 +1,9 @@
-// BandscopeTrace — the paint path, executed.
+// BandscopeTrace paint path and BandscopeDialog frame-consumer regression tests.
 //
 // WHY THIS EXISTS. Nothing else in this branch runs a line of paintEvent. The
-// rest of the bandscope display is proved arithmetically — the analyzer's
-// contract, the capability's verb, the gate's one-shot cycle — and none of that
-// touches a QPainter. A widget whose drawing code has never been executed is
-// the weakest part of the change, and this is the cheapest thing that fixes it:
-// render offscreen into a QImage and look at the pixels.
+// analyzer, capability and gate tests do not touch a QPainter or the dialog's
+// frame conversion. Render offscreen into a QImage, then feed known samples
+// through onFrame and check the actual readout, including its gain correction.
 //
 // WHAT IT CANNOT TELL YOU. That the picture is RIGHT. No radio has answered the
 // verb behind this widget, so what a real converter's spectrum looks like here
@@ -21,17 +19,35 @@
 // named a token's value would be testing the theme file rather than the paint.
 
 #include "gui/BandscopeDialog.h"
+#include "TestSettingsProfile.h"
 
 #include <QApplication>
 #include <QImage>
+#include <QLabel>
 #include <QPainter>
 #include <QSet>
 #include <QVector>
+#include <QVariantMap>
 
 #include <cmath>
 #include <cstdio>
 
 using AetherSDR::BandscopeTrace;
+
+namespace AetherSDR {
+// Feed the same reply consumed by the real dialog, without a radio or transport.
+struct BandscopeDialogTestAccess {
+    static QString deliver(BandscopeDialog& dialog, const QList<float>& samples)
+    {
+        dialog.onFrame(QVariantMap{
+            {QStringLiteral("samples"), QVariant::fromValue(samples)},
+            {QStringLiteral("sampleRateHz"), 76.8e6},
+            {QStringLiteral("calibrated"), false},
+        });
+        return dialog.m_status->text();
+    }
+};
+}
 
 static int g_failures = 0;
 static void check(bool cond, const char* what)
@@ -80,6 +96,7 @@ QVector<float> carrierAt(int bin, int bins)
 
 int main(int argc, char** argv)
 {
+    TestSettingsProfile settingsProfile(QStringLiteral("bandscope-trace-render"));
     QApplication app(argc, argv);
 
     BandscopeTrace trace;
@@ -150,6 +167,33 @@ int main(int argc, char** argv)
         const QImage withAxis = renderOf(trace);
         check(noAxis != withAxis,
               "a rate of zero suppresses the frequency ticks and their labels");
+    }
+
+    // The shared analyzer test cannot pin the correction at its consumer.
+    // These assertions fail if onFrame stops applying the coherent gain, even
+    // when the analyzer and raw trace tests still pass unchanged.
+    {
+        AetherSDR::BandscopeDialog dialog(nullptr);
+        constexpr int kSamples = 2048;
+        constexpr int kToneBin = 200; // 7.5 MHz at the declared converter rate
+        for (const float amplitude : {1.0f, 0.5f, 0.01f}) {
+            QList<float> samples(kSamples);
+            for (int i = 0; i < kSamples; ++i) {
+                samples[i] = amplitude * std::sin(2.0 * 3.141592653589793
+                                                  * kToneBin * i / kSamples);
+            }
+            const QString status = AetherSDR::BandscopeDialogTestAccess::deliver(
+                dialog, samples);
+            bool parsed = false;
+            const double peakDb = status.section(QLatin1Char(' '), 1, 1).toDouble(&parsed);
+            const double expectedDb = 20.0 * std::log10(double(amplitude));
+            check(parsed && std::abs(peakDb - expectedDb) < 0.06,
+                  "production dialog reports the corrected amplitude of each new frame");
+            check(status.contains(QStringLiteral("near 7.5 MHz")),
+                  "production dialog reports the carrier's converter frequency");
+            check(status.contains(QStringLiteral("uncalibrated")),
+                  "production dialog preserves the backend's calibration disclaimer");
+        }
     }
 
     if (g_failures == 0)

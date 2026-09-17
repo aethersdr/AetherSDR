@@ -4222,9 +4222,8 @@ add_executable(bandscope_analyzer_test
 target_include_directories(bandscope_analyzer_test PRIVATE src)
 add_test(NAME bandscope_analyzer_test COMMAND bandscope_analyzer_test)
 
-# BandscopeTrace's paint path, executed offscreen. Nothing else in the
-# bandscope work runs a line of paintEvent, and a widget whose drawing has never
-# been executed is the weakest part of it. Links the dialog's TU (which holds
+# BandscopeTrace's paint path and the dialog's production frame conversion,
+# executed offscreen with isolated settings. Links the dialog's TU (which holds
 # both classes) plus PersistentDialog and the analyzer; no radio, no sockets.
 add_executable(bandscope_trace_render_test
     tests/bandscope_trace_render_test.cpp
@@ -4234,7 +4233,7 @@ add_executable(bandscope_trace_render_test
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/ClientEqFftAnalyzer.cpp
 )
-target_include_directories(bandscope_trace_render_test PRIVATE src)
+target_include_directories(bandscope_trace_render_test PRIVATE src tests)
 target_link_libraries(bandscope_trace_render_test PRIVATE
     aethercore Qt6::Core Qt6::Widgets Qt6::Test)
 set_target_properties(bandscope_trace_render_test PROPERTIES AUTOMOC ON)
@@ -5752,6 +5751,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    bandscope_trace_render_test
     noise_floor_auto_adjust_gate_test
     vfo_display_defaults_test
     audio_engine_rates_test
