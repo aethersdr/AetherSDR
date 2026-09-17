@@ -1969,6 +1969,17 @@ void RadioModel::teardownBackend()
     // reaches that path — see hasWsprTxStream().
     m_wsprTxSeamAudioArmed = false;
     m_wsprTxInput = {};
+    // Same path, same reason (#5733 review). TransmitModel's power latches say
+    // "this session's radio reported its drive", and a family switch starts a new
+    // session without ever passing onDisconnected() — so without this the HL2's
+    // operator-intent 100 survived the rebuild and published as the incoming
+    // Flex's CONFIRMED drive, for a radio that had said nothing.
+    //
+    // resetPowerProvenance(), NOT resetState(): one of this function's callers is
+    // ~RadioModel(), and resetState() emits six TX signals that have no business
+    // reaching consumers mid-destruction. Only the latches need to cross a family
+    // switch — the values behind them publish nothing once nothing vouches.
+    m_transmitModel.resetPowerProvenance();
     m_backend.reset();
     acknowledgeTxTransportTeardown(m_txOperation);
     m_connection = nullptr;

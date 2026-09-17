@@ -49,6 +49,16 @@ inline constexpr QLatin1String kCwTransmitTopic {"aethersdr/cw/transmit"};
 // Note: relay scripts that forward cw/decode into cw/transmit should filter
 // on the topic namespace ("aethersdr/...") to avoid re-publishing AetherSDR's
 // own output back to it and creating a feedback loop.
+// Payload contract lives in core/MqttRadioState.h. Three things a subscriber must
+// know and cannot infer from a sample message: fields are keyed by PRESENCE (an
+// absent `drive` means "not reported", never 0, and `drive` and `max_power_level`
+// come and go independently); `max_power_level` is the best ceiling the CLIENT
+// has rather than always a firmware answer (radio status on Flex, the per-model
+// rated output on Icom and HL2 — trustworthy either way, but not the radio
+// speaking); and the topic is not published mid-CWX — once tx:true has gone out
+// for a CWX send, nothing republishes until the send ends, so the last message
+// can predate the current transmission. A disconnect is the exception and
+// publishes immediately.
 inline constexpr QLatin1String kRadioStateTopic {"aethersdr/radio/state"};
 inline constexpr QLatin1String kAx25RxTopic     {"aethersdr/ax25/rx"};
 inline constexpr QLatin1String kAx25TxTopic     {"aethersdr/ax25/tx"};

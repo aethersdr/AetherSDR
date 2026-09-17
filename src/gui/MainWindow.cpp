@@ -19,6 +19,7 @@
 #include "MqttApplet.h"
 #include "MqttSettingsDialog.h"
 #include "core/MqttAntennaAlias.h"
+#include "core/MqttRadioState.h"
 #include "core/MqttSettings.h"
 #endif
 #include "ConnectionPanel.h"
@@ -3374,11 +3375,42 @@ void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
                           QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 
+// Re-read whether this backend reports drive back off the wire, and cache it for
+// publishRadioStateMqtt(). Called on the connect edge and on backendRebuilt(),
+// which between them cover every way the answer can change — a family switch
+// takes the second path and never emits the first (#5733 review).
+void MainWindow::refreshRadioStateDriveAuthority()
+{
+    const RadioCapabilities caps = m_radioModel.backendCapabilities();
+    m_radioStateDriveIsReadback =
+        caps.transmitDriveControl
+        && caps.transmitDriveControl->authority == SliceFrequencyControl::Authority::Radio;
+}
+
 void MainWindow::publishRadioStateMqtt()
 {
     if (!m_mqttClient) return;
     if (!isMqttTopicEnabled(QString::fromLatin1(kRadioStateTopic))) return;
-    if (m_cwxTransmitting) {
+    // A vanished radio ends the CWX send by definition, so do not make an
+    // interlock sit out the 1 s end-of-send debounce to learn the link dropped
+    // (#5733 review). Without this the disconnect publish below — deliberately
+    // direct rather than coalesced, because 150 ms was judged too long — was
+    // swallowed for a full second, and queueEmpty could not rescue it either
+    // since the radio is gone.
+    //
+    // The CWX state machine is deliberately NOT torn down here. m_cwxTxEndTimer's
+    // handler is the ONLY thing that restores the operator's CWX WPM and CW pitch
+    // after a send, and m_cwxSavedWpm is re-captured only while !m_cwxTransmitting
+    // — so cancelling that timer, or clearing the flag it keys on, discards the
+    // operator's settings rather than deferring them. Arm it instead and publish
+    // without waiting: isConnected() already reads false at the top of
+    // onDisconnected(), so the gate below can no longer arm it itself, and a drop
+    // during a key-down would otherwise leave it unarmed entirely.
+    const bool radioGone = !m_radioModel.isConnected();
+    if (m_cwxTransmitting && radioGone && !m_cwxTxEndTimer.isActive()) {
+        m_cwxTxEndTimer.start(1000);
+    }
+    if (m_cwxTransmitting && !radioGone) {
         if (!m_radioModel.isRadioTransmitting()) {
             m_cwxTxEndTimer.start(1000);  // might be done; confirm after 1 s silence
             return;
@@ -3387,15 +3419,39 @@ void MainWindow::publishRadioStateMqtt()
         if (m_cwxPublishedTxTrue) return;
         m_cwxPublishedTxTrue = true;
     }
-    auto* s = activeSlice();
-    if (!s) return;
-    QJsonObject obj;
-    obj[QStringLiteral("slice")] = s->letter();
-    obj[QStringLiteral("freq")]  = s->frequency();
-    obj[QStringLiteral("mode")]  = s->mode();
-    obj[QStringLiteral("tx")]    = m_radioModel.isRadioTransmitting();
+    // No early return on a missing slice (#5518). `drive`/`max_power_level` are
+    // RADIO-level properties, and the consumer this topic grew them for is an
+    // amplifier interlock that must be able to read power on a freshly connected
+    // radio before any slice exists. The slice fields simply go absent; the
+    // builder owns that conditionality and the test drives it directly.
+    MqttRadioStateInputs in;
+    in.connected     = m_radioModel.isConnected();
+    in.transmitting  = m_radioModel.isRadioTransmitting();
+    // Slice fields only while the radio is up. They are retired on the same edge
+    // as the power fields, so a disconnect message does not hand the next
+    // session the dead radio's frequency alongside connected:false (#5733).
+    if (in.connected) {
+        if (auto* s = activeSlice()) {
+            in.haveSlice          = true;
+            in.sliceLetter        = s->letter();
+            in.sliceFrequencyMhz  = s->frequency();
+            in.sliceMode          = s->mode();
+        }
+    }
+    const auto& tm = m_radioModel.transmitModel();
+    in.haveTransmitStatus = tm.haveTransmitStatus();
+    in.drive              = tm.rfPower();
+    in.haveMaxPowerLevel  = tm.haveMaxPowerLevel();
+    in.maxPowerLevel      = tm.maxPowerLevel();
+    // Per-message, not per-backend: the capability says drive CAN be confirmed
+    // on this radio, rfPowerIsFromRadio() says this VALUE has been (Principle II).
+    // m_radioStateDriveIsReadback caches the capability half at the connect edge
+    // — backendCapabilities() returns by value and this path runs on every PTT
+    // transition, which in CW break-in is every element.
+    in.driveIsReadback    = m_radioStateDriveIsReadback && tm.rfPowerIsFromRadio();
     m_mqttClient->publish(QString::fromLatin1(kRadioStateTopic),
-                          QJsonDocument(obj).toJson(QJsonDocument::Compact));
+                          QJsonDocument(buildMqttRadioStatePayload(in))
+                              .toJson(QJsonDocument::Compact));
 }
 #endif
 
@@ -10090,6 +10146,22 @@ void MainWindow::updateToolsMenuState()
     if (m_gpsDashboardAction) {
         m_gpsDashboardAction->setVisible(!connected
             || (caps.hasGpsLocation && m_radioModel.hasGpsHardware()));
+    }
+
+    if (m_agcTCalibrationMenuAction) {
+        SliceModel* active = activeSlice();
+        const bool externalRx = active
+            && active->externalReceiveReplacementActive();
+        m_agcTCalibrationMenuAction->setEnabled(connected && active && !externalRx);
+        m_agcTCalibrationMenuAction->setToolTip(
+            !connected
+                ? tr("Connect to a radio first")
+            : !active
+                ? tr("No active receiver to calibrate")
+            : externalRx
+                ? tr("Not available while an external receive source "
+                     "replaces this slice's RX")
+            : QString());
     }
 }
 

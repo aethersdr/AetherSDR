@@ -901,6 +901,7 @@ set(CORE_SOURCES
     src/core/PskReporterClient.cpp
     src/core/LocationAddressResolver.cpp
     src/core/MqttAntennaAlias.cpp
+    src/core/MqttRadioState.cpp
     src/core/MqttSettings.cpp
     src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp

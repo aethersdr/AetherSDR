@@ -3638,6 +3638,25 @@ target_include_directories(green_heron_protocol_test PRIVATE src)
 target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
 add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
 
+# aethersdr/radio/state payload shape + the drive-publish timing contract
+# (#5518). Links the real TransmitModel because the have-status latch and the
+# coalesce debounce are half the contract; MqttRadioState.cpp itself is pure.
+add_executable(mqtt_radio_state_test
+    tests/mqtt_radio_state_test.cpp
+    src/core/MqttRadioState.cpp
+    src/models/TransmitModel.cpp
+    src/core/ClientQuindarTone.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AsyncLogWriter.cpp
+    src/core/LogManager.cpp
+)
+target_include_directories(mqtt_radio_state_test PRIVATE src)
+target_link_libraries(mqtt_radio_state_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(mqtt_radio_state_test PRIVATE pthread)
+endif()
+add_test(NAME mqtt_radio_state_test COMMAND mqtt_radio_state_test)
+
 add_executable(mqtt_settings_test
     tests/mqtt_settings_test.cpp
     src/core/MqttSettings.cpp
@@ -5965,6 +5984,7 @@ set(AETHER_SETTINGS_CONSUMERS
     shortcut_manager_test
     antenna_alias_test
     mqtt_settings_test
+    mqtt_radio_state_test
     ax25_libmodem_shim_test
     ax25_replay
     ax25_session_analyze
