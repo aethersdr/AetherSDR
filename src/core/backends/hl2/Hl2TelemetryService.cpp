@@ -16,6 +16,26 @@ constexpr qint64 kDemandWindowMs = 5000;
 // deliberately not borrowed from anything that stops when a connection does —
 // that mistake is why this class exists at all, one level down.
 constexpr int kStateIntervalMs = 1000;
+
+// THIS FAMILY DECLARES ITSELF. The only place the string "hl2" appears in the
+// stream-free telemetry feature outside src/core/backends/hl2/ is nowhere --
+// shared code asks OfflineHealthRegistry whether the selected family declared
+// anything, and this is the declaration.
+//
+// LINKAGE, because a self-registering translation unit that nothing references
+// can be dropped from a static archive with no error anywhere and the feature
+// then simply does not exist. This TU is reached: Hl2Backend.cpp names
+// Hl2TelemetryService in setOfflineHealthSource()'s dynamic_cast, and
+// RadioModel::makeBackend names hl2::Hl2Backend. offline_health_registry_test
+// asserts the declaration is actually present rather than trusting that chain.
+[[maybe_unused]] const bool kRegisteredWithOfflineHealthRegistry = [] {
+    OfflineHealthRegistry::declare(
+        QStringLiteral("hl2"),
+        [](QObject* parent) -> std::unique_ptr<IOfflineHealthSource> {
+            return std::make_unique<Hl2TelemetryService>(parent);
+        });
+    return true;
+}();
 }  // namespace
 
 struct Hl2TelemetryService::Impl {
@@ -28,6 +48,15 @@ struct Hl2TelemetryService::Impl {
     QElapsedTimer demand;      // when the snapshot was last read
     int linkStateUpdates = 0;  // proof that something drives this
 };
+
+// Declared in the header; defined here because Impl is only complete in this
+// translation unit.
+void Hl2TelemetryServiceTestAccess::placeReply(Hl2TelemetryService& svc,
+                                               const DiscoveryReply& r)
+{
+    svc.d->reply = r;
+    svc.d->at.start();
+}
 
 Hl2TelemetryService::Hl2TelemetryService(QObject* parent)
     : QObject(parent)
@@ -80,11 +109,6 @@ void Hl2TelemetryService::setTarget(const QHostAddress& addr)
     d->poller->setTarget(addr);
 }
 
-void Hl2TelemetryService::setExpectedMac(const std::array<std::uint8_t, 6>& mac)
-{
-    d->poller->setExpectedMac(mac);
-}
-
 void Hl2TelemetryService::setAllowBroadcastFallback(bool allow)
 {
     d->poller->setAllowBroadcastFallback(allow);
@@ -98,6 +122,31 @@ int Hl2TelemetryService::linkStateUpdateCount() const noexcept
 void Hl2TelemetryService::setLinkState(Hl2LinkState state)
 {
     ++d->linkStateUpdates;
+    // A REPLY FROM A SESSION WE HAVE LEFT IS OUR OWN VOICE COMING BACK.
+    //
+    // While connected and stalled the poller still runs, and the `run` bit in
+    // the reply it caches is set BY US — so `reply->streaming` is true and the
+    // reply describes our own session. setTarget() drops the cache only when
+    // the target CHANGES, and a plain disconnect leaves the address alone. The
+    // next `health` read then sees `!connected && reply && reply->streaming`
+    // and reports HeldByOther, rendering `radioInUse: true` for a radio nobody
+    // is using. It self-corrects on the next reply, but HeldByOther is
+    // demand-gated, so "the next reply" may be after the operator has already
+    // read the wrong answer (aethersdr-agent, #5642 review).
+    //
+    // Leaving Streaming or StreamStalled is exactly the transition that ends
+    // the session the cached reply belongs to, so that is where it is dropped.
+    // The age clock goes with it: an age that outlives its reading would say a
+    // stale figure is fresh.
+    const bool leftOurOwnSession =
+        (d->state == Hl2LinkState::Streaming
+         || d->state == Hl2LinkState::StreamStalled)
+        && state != Hl2LinkState::Streaming
+        && state != Hl2LinkState::StreamStalled;
+    if (leftOurOwnSession) {
+        d->reply.reset();
+        d->at.invalidate();
+    }
     d->state = state;
     d->poller->setLinkState(state);
 }
@@ -118,14 +167,39 @@ std::optional<DiscoveryReply> Hl2TelemetryService::lastReply() const
     return d->reply;
 }
 
+bool Hl2TelemetryService::hasOfflineTarget() const
+{
+    // The MIRRORED target, not the poller's destination: the poller can also
+    // choose a broadcast address when the fallback is opted in, and "somebody
+    // named a radio" is a different claim from "something would be sent".
+    return !d->target.isNull();
+}
+
 IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
 {
     IRadioBackend::HealthSnapshot h;
-    auto put = [&h](const char* key, const QString& label, const QVariant& v) {
+    // A SECTION IS A GROUP HEADING, NOT A TAG ON EVERY ROW.
+    // docs/automation-bridge.md states the contract for `health`: "section
+    // appears on the first row of each group and is absent on the rest", and
+    // RadioHealthDialog::refresh() draws a bold header row for any key that
+    // carries one. Stamping every key drew eleven repeated headers interleaved
+    // with nearly every row -- latent until this PR, because nothing
+    // constructed the service. Reported by ten9876 on #5642.
+    //
+    // `pendingSection` is emptied by the put() that consumes it, so a group
+    // leader is whichever row happens to come first. That matters: the readings
+    // below are conditional on a reply having arrived, so the row that leads
+    // them is not a fixed key.
+    QString pendingSection = QStringLiteral("Telemetry source");
+    auto put = [&h, &pendingSection](const char* key, const QString& label,
+                                     const QVariant& v) {
         const QString k = QString::fromLatin1(key);
         h.order.push_back(k);
         h.labels.insert(k, label);
-        h.sections.insert(k, QStringLiteral("Telemetry source"));
+        if (!pendingSection.isEmpty()) {
+            h.sections.insert(k, pendingSection);
+            pendingSection.clear();
+        }
         // An INVALID variant is left out of `values` entirely, which is how the
         // snapshot spells "never reported" — the bridge renders that as JSON
         // null. Inserting a default-constructed value instead would turn "we
@@ -183,8 +257,26 @@ IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
         put(key, label, opt ? QVariant(*opt) : QVariant());
     };
     if (d->reply) {
+        // Second group: the numbers, as opposed to the attribution rows above.
+        pendingSection = QStringLiteral("Stream-free readings");
         const DiscoveryReply& r = *d->reply;
         reading("temperatureRaw",  QStringLiteral("Temperature (raw counts)"), r.temperatureRaw);
+        // THE ROW A HUMAN READS, and until now the stream-free path could not
+        // fill it. Hl2Backend gates its own `temperatureC` on the in-band path
+        // actually delivering, which is right -- a smoothed figure with no age
+        // of its own must not outlive the stream that fed it. But nothing took
+        // the row over, so the three states this class exists for rendered
+        // "PA temperature (°C): —" next to a four-digit raw count, and the
+        // feature's own headline question went unanswered (#5642 review).
+        //
+        // NOT SMOOTHED, unlike the in-band row: each poll is one reading and
+        // there is no cadence to average over. It is the same conversion the
+        // in-band path uses (MetisProtocol.h), so the two cannot disagree about
+        // what a count means, and the in-band row still WINS the merge whenever
+        // the stream is live.
+        put("temperatureC", QStringLiteral("PA temperature (°C)"),
+            r.temperatureRaw ? QVariant(hl2TemperatureCelsius(*r.temperatureRaw))
+                             : QVariant());
         reading("forwardPowerRaw", QStringLiteral("Forward (raw counts)"),     r.forwardPowerRaw);
         reading("reversePowerRaw", QStringLiteral("Reverse (raw counts)"),     r.reversePowerRaw);
         reading("biasCurrentRaw",  QStringLiteral("PA bias (raw counts)"),     r.biasCurrentRaw);
@@ -193,10 +285,29 @@ IRadioBackend::HealthSnapshot Hl2TelemetryService::healthRows() const
         reading("txFifoRecovery",  QStringLiteral("TX pacing fault (under OR overrun)"),
                 r.txFifoRecovery);
         reading("ptt",             QStringLiteral("PTT (radio)"),              r.ptt);
-        // The radio's own view of whether somebody is streaming from it. On this
-        // path that somebody is not us, which is the case A-telemetry is about.
+        // The radio's own view of whether somebody is streaming from it — and
+        // WHO that somebody is, is a question this bit cannot answer.
+        //
+        // The original comment here said "on this path that somebody is not
+        // us". That is true in NotConnected and HeldByOther, and false in
+        // exactly the state this feature exists to diagnose: while connected
+        // and stalled, the poller still runs and the `run` bit in the reply it
+        // caches was set BY US. Publishing it then told the operator another
+        // client held the radio during their own stalled session, and nothing
+        // corrected it — Hl2Backend::healthSnapshot() publishes no radioInUse
+        // key at all, so this value always survived the merge. Reported by
+        // ten9876 on #5642.
+        //
+        // The honest answer while our own session owns the stream is to say
+        // NOTHING. An absent key is "we were never told"; a false would be a
+        // claim we cannot support, since another client could also be
+        // streaming and this bit would look identical. leftOurOwnSession()
+        // above drops the cache when the session ENDS, which is the same
+        // reasoning one transition later — it just never fired mid-stall.
+        const bool streamIsOurs = d->state == Hl2LinkState::Streaming
+                               || d->state == Hl2LinkState::StreamStalled;
         put("radioInUse", QStringLiteral("In use by another client"),
-            QVariant(r.streaming));
+            streamIsOurs ? QVariant() : QVariant(r.streaming));
         // ptt_hang_time, because 31 does not mean "the longest hang" -- it
         // disables the gateware's PTT auto-unkey entirely (softerhardware/
         // Hermes-Lite2 #178). Being able to read that WITHOUT a stream is how an

@@ -1303,6 +1303,15 @@ private:
     // cached so updateTMate2Display/Indicators() can re-send without signal args.
     float   m_tmate2SmeterDbm{-140.0f};
     float   m_tmate2TxWatts{0.0f};
+
+    // The amplifier's forward power and SWR reach the S-Meter, the cross-needle
+    // and the TMate2 from TWO sources — the radio-relayed AMP meters and the
+    // amplifier's own port-9008 status. They are the same measurement, so the
+    // choice is rate, not truth, and the rule has to be the same one the
+    // applet gauges use or the shared meters go back to last-writer-wins.
+    // See applyAmpTxMeters() and kRelayMeterFreshnessMs.
+    QElapsedTimer m_ampRelayTxStamp;
+    void applyAmpTxMeters(float watts, float swr, bool fromRelay);
     bool tmate2OverlayActive() const;
     QString tmate2OverlayName() const;
     int tmate2IdleTimeoutMs() const;

@@ -3,13 +3,14 @@
 This is the canonical project guide for any AI assistant working on
 AetherSDR — Claude Code, OpenAI Codex, Cursor, GitHub Copilot, Gemini
 Code Assist, Aider, AetherClaude (our orchestrator bot), or any other
-tool. Each tool has its own well-known file at a different path
-(`CLAUDE.md`, `.github/copilot-instructions.md`, `GEMINI.md`,
-`CONVENTIONS.md`, etc.); those are thin pointers back here. Everything
-project-wide lives in **this** file.
+tool. Several of those tools look for their own well-known file at a
+different path (`CLAUDE.md`, `.github/copilot-instructions.md`,
+`GEMINI.md`); those are thin pointers back here, and a tool without one
+reads this file directly. Everything project-wide lives in
+**this** file.
 
 If you are an AI assistant: read this file end-to-end before writing
-code or recommending merges. The file is ~830 lines; that is the cost
+code or recommending merges. The file is ~1150 lines; that is the cost
 of doing the job right on this codebase.
 
 **This file is documentation, not policy.** It describes how to build
@@ -56,7 +57,7 @@ When helping with AetherSDR:
 - Use RAII everywhere (no naked new/delete)
 - Comment non-obvious protocol decisions with firmware version
 - When suggesting code: show **diff-style** changes or full function/class if small
-- Test suggestions locally if possible (assume Arch Linux build env)
+- Test suggestions locally if possible — the build must work on Linux, macOS and Windows
 - Never suggest Wine/Crossover workarounds — goal is native
 - Flag any proposal that would break slice 0 RX flow
 - If unsure about protocol behavior → ask for logs/wireshark captures first
@@ -205,8 +206,8 @@ is the sole authority on visual design and UX direction.
 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build -j$(nproc)
-./build/AetherSDR
+cmake --build build --parallel
+./build/AetherSDR          # Windows: build\AetherSDR.exe
 ```
 
 **Optional — DFNR (DeepFilterNet3) noise reduction.** Run
@@ -231,9 +232,9 @@ Drop `<feature>_test.cpp` into `tests/`, then declare its `add_executable` +
 `add_test` in **`tests/tests.cmake`**. There is no glob; every test is declared
 explicitly, so copy a neighbouring target's block.
 
-The root `CMakeLists.txt` held all 300+ of these until the split — over half its
-6,357 lines — so a stale doc, an old PR, or pattern-matching on the surrounding
-code will all point you at the wrong file. Two guards catch that: `tests.cmake`
+These all lived in the root `CMakeLists.txt` before the split, so a stale doc,
+an old PR, or pattern-matching on the surrounding code will all point you at
+the wrong file. Two guards catch that: `tests.cmake`
 aborts the CMake configure step, and `tools/check_test_registration.py --strict`
 fails the PR in CI.
 
@@ -304,9 +305,7 @@ not a socket, which is why it went unenumerated; #5405 review). Mining a retired
 *input data* for injected-transport tests is encouraged; running the fake as
 a live socket peer is not. Loopback mocks of documented HTTP APIs are a
 different trade — that contract is versioned and published; radio firmware
-behavior is not. (The example that used to sit here, `asr_remote_backend_test`,
-was one of eight removed for intermittency; see the note at the end of this
-section.)
+behavior is not.
 
 Socket tests where **our own server is the subject** (rigctld, CAT, the TCI
 server, the automation bridge's transport) remain legitimate: the code under
@@ -330,9 +329,7 @@ the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
 
 The version is stated in **five** places, and a release is not prepped until
-all five agree. This list is spelled out because it was previously described as
-"both `CMakeLists.txt` and `README.md`" — and v26.7.4.1 duly shipped with the
-other three stale:
+all five agree — check every row, not just the first two:
 
 | file | what to change |
 |---|---|
@@ -383,10 +380,6 @@ CI runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest` (~5 min builds).
 corresponding `-dev` package to `.github/docker/Dockerfile` and push.** The
 `docker-ci-image.yml` workflow rebuilds the image automatically (~3 min); wait
 for that before the next CI run can use it.
-
-**`git ship`** alias — squashes local commits ahead of origin/main, creates a
-branch, pushes, opens a PR with auto-squash-merge enabled. Commit freely
-locally, then ship once.
 
 Branch protection: signed commits required on main, CI must pass, CODEOWNERS
 review required, branches auto-delete after merge.
@@ -814,10 +807,16 @@ document why.
 
 **IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
 settings are stored via `AppSettings` (`src/core/AppSettings.h`), which
-persists to a **SQLite database** at `~/.config/AetherSDR/AetherSDR.db`
-(RFC #4603; design doc: `docs/settings-store-sqlite-design.md`). Key names use
-PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftFillColor`). Boolean
-values are stored as `"True"` / `"False"` strings.
+persists to a **SQLite database** named `AetherSDR.db` in
+`SettingsPaths::configDir()` — `QStandardPaths::GenericConfigLocation` +
+`/AetherSDR`, i.e. `~/.config/AetherSDR/` on Linux,
+`~/Library/Preferences/AetherSDR/` on macOS and `%LOCALAPPDATA%\AetherSDR\`
+on Windows. Always route store paths through `SettingsPaths`, never through
+`QStandardPaths` directly (RFC #4603; design doc:
+`docs/settings-store-sqlite-design.md`).
+Key names use PascalCase (e.g. `LastConnectedRadioSerial`,
+`DisplayFftFillColor`). Boolean values are stored as `"True"` / `"False"`
+strings.
 
 ```cpp
 auto& s = AppSettings::instance();

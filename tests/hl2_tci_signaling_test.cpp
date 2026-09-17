@@ -484,8 +484,17 @@ static void testHostModulatedTxAudio()
     // TCI audio must arrive marked client-leveled: the sender owns its level
     // (WSJT-X's Pwr slider is a digital attenuator on this very stream), so
     // the HL2 modulator bypasses its ALC for it (#4796). The mic chain emits
-    // this flag false; feedDaxTxAudio is the external-client path.
-    check(monitor.first().size() >= 2 && monitor.first().at(1).toBool(),
+    // Microphone; feedDaxTxAudio is the external-client path.
+    //
+    // COMPARE THE ENUM, NEVER toBool(). This read `at(1).toBool()` while the
+    // argument was a bool, and kept compiling when it became TxAudioSource —
+    // where toBool() goes enum -> int -> bool and reads BOTH ClientLeveled(1)
+    // and EngineGenerated(2) as true. The assertion stayed green through a
+    // deliberate reversal of the tag, which is the exact #4796 regression it
+    // exists to catch. Anything asserting on this signal compares the enum.
+    check(monitor.first().size() >= 2
+              && monitor.first().at(1).value<AetherSDR::TxAudioSource>()
+                     == AetherSDR::TxAudioSource::ClientLeveled,
           "host modulation: TCI audio is marked client-leveled at the tap");
 
     // MainWindow routes that tap to RadioModel::submitTxAudio(), whose HL2

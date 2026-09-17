@@ -58,12 +58,21 @@ private:
     sqlite3_stmt* m_stmt = nullptr;
 };
 
+// preserveOwnerBits: keep whatever owner access the file already has and only
+// strip group/other. Correct for the DATABASE, whose mode is the operator's
+// choice — but NOT for the -wal/-shm sidecars. SQLite creates those with the
+// database's own mode, so a read-only database yields a read-only -shm, and a
+// -shm we cannot write makes every later connection read-only even after the
+// operator restores the database's permissions (#5639 review: this locked the
+// store out permanently). The sidecars are SQLite's scratch files, not
+// operator state, so they are always forced back to owner read/write.
 bool setOwnerOnlyPermissions(const QString& filePath, bool required,
-                             QString& error)
+                             bool preserveOwnerBits, QString& error)
 {
 #ifdef Q_OS_WIN
     Q_UNUSED(filePath);
     Q_UNUSED(required);
+    Q_UNUSED(preserveOwnerBits);
     Q_UNUSED(error);
     return true;
 #else
@@ -75,9 +84,29 @@ bool setOwnerOnlyPermissions(const QString& filePath, bool required,
         return false;
     }
 
-    const QFileDevice::Permissions ownerOnly =
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner;
-    if (!QFile::setPermissions(filePath, ownerOnly)) {
+    constexpr QFileDevice::Permissions ownerMask =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ReadUser
+        | QFileDevice::WriteUser;
+    const QFileDevice::Permissions current = QFile::permissions(filePath);
+    QFileDevice::Permissions hardened = ownerMask;
+    if (preserveOwnerBits) {
+        // Strip group/other access, but never ADD an owner bit: writing a fixed
+        // ReadOwner|WriteOwner mode also *grants* write on a store the operator
+        // deliberately left read-only, and because this runs before the write
+        // refusal is detected, a failed open silently made a 0400 database 0600
+        // while reporting it had been left in place (#5639 review).
+        hardened = current & ownerMask;
+        if (!hardened.testAnyFlags(QFileDevice::ReadOwner
+                                   | QFileDevice::ReadUser)) {
+            // Never produce a mode with no access at all on a file we just
+            // opened; keep a read floor rather than locking ourselves out.
+            hardened |= QFileDevice::ReadOwner | QFileDevice::ReadUser;
+        }
+    }
+    if (hardened == current) {
+        return true;  // already at the target mode — nothing to tighten or write
+    }
+    if (!QFile::setPermissions(filePath, hardened)) {
         error = QStringLiteral("cannot set owner-only permissions on %1")
                     .arg(filePath);
         return false;
@@ -88,11 +117,11 @@ bool setOwnerOnlyPermissions(const QString& filePath, bool required,
 
 bool hardenDatabaseFilePermissions(const QString& path, QString& error)
 {
-    return setOwnerOnlyPermissions(path, true, error)
+    return setOwnerOnlyPermissions(path, true, /*preserveOwnerBits=*/true, error)
            && setOwnerOnlyPermissions(path + QStringLiteral("-wal"), false,
-                                      error)
+                                      /*preserveOwnerBits=*/false, error)
            && setOwnerOnlyPermissions(path + QStringLiteral("-shm"), false,
-                                      error);
+                                      /*preserveOwnerBits=*/false, error);
 }
 
 } // namespace
@@ -111,17 +140,25 @@ bool SettingsDatabase::exec(const char* sql)
     if (rc != SQLITE_OK) {
         m_lastError = QString::fromUtf8(errMsg ? errMsg : "unknown sqlite error");
         sqlite3_free(errMsg);
-        // Busy is contention, not corruption — open()'s callers must be able
-        // to tell them apart wherever in the open sequence the busy landed
-        // (under WAL a concurrent EXCLUSIVE first bites in createSchema's
-        // BEGIN IMMEDIATE, not the read probe).
-        if (rc == SQLITE_BUSY || rc == SQLITE_LOCKED) {
-            m_lastOpenBusy = true;
-        }
+        recordSqliteFailure(rc);
         qWarning() << "SettingsDatabase: exec failed:" << sql << "—" << m_lastError;
         return false;
     }
     return true;
+}
+
+void SettingsDatabase::recordSqliteFailure(int resultCode)
+{
+    // Extended SQLite result codes retain the primary result in the low byte.
+    // The recovery decision intentionally recognizes only demonstrated
+    // corruption, never a generic I/O, permission, or initialization error.
+    const int primaryResult = resultCode & 0xff;
+    if (primaryResult == SQLITE_BUSY || primaryResult == SQLITE_LOCKED) {
+        m_lastOpenBusy = true;
+    }
+    if (primaryResult == SQLITE_CORRUPT || primaryResult == SQLITE_NOTADB) {
+        m_lastOpenCorrupt = true;
+    }
 }
 
 bool SettingsDatabase::open(const QString& path)
@@ -129,20 +166,43 @@ bool SettingsDatabase::open(const QString& path)
     close();
     m_newerSchema = false;
     m_lastOpenBusy = false;
+    m_lastOpenCorrupt = false;
+    m_lastError.clear();
 
     sqlite3* db = nullptr;
     const QByteArray utf8Path = path.toUtf8();
-    if (sqlite3_open_v2(utf8Path.constData(), &db,
-                        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr)
-        != SQLITE_OK) {
+    const int openResult = sqlite3_open_v2(utf8Path.constData(), &db,
+                                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                                           nullptr);
+    if (openResult != SQLITE_OK) {
         m_lastError = db ? QString::fromUtf8(sqlite3_errmsg(db))
                          : QStringLiteral("out of memory");
+        recordSqliteFailure(openResult);
         qWarning() << "SettingsDatabase: cannot open" << path << "—" << m_lastError;
-        sqlite3_close(db);
+        if (db != nullptr) {
+            sqlite3_close(db);
+        }
         return false;
     }
     m_db = db;
     m_path = path;
+
+    // Normalize any -wal/-shm a previous connection left behind, BEFORE SQLite
+    // maps them below. SQLite creates its sidecars with the DATABASE's mode, so
+    // merely READING a read-only store leaves read-only sidecars; the next
+    // connection then maps an unwritable -wal/-shm and every write fails with
+    // SQLITE_READONLY even after the operator has restored the database's
+    // permissions — the store stays locked out for good. This is the only point
+    // where widening them still takes effect: once SQLite has mapped a handle a
+    // later chmod rescues nothing, which is the same trap as #5635 itself.
+    // They are SQLite scratch files, never operator state (#5639 review).
+    {
+        QString sidecarError;
+        setOwnerOnlyPermissions(path + QStringLiteral("-wal"), false,
+                                /*preserveOwnerBits=*/false, sidecarError);
+        setOwnerOnlyPermissions(path + QStringLiteral("-shm"), false,
+                                /*preserveOwnerBits=*/false, sidecarError);
+    }
 
     // Re-establish, at runtime, the two aether_sqlite3 compile-time hardening
     // options that a -DUSE_SYSTEM_SQLITE=ON distro library does not carry.
@@ -187,13 +247,11 @@ bool SettingsDatabase::open(const QString& path)
     // real query touches it — probe before trusting it.
     {
         Statement probe(m_db, "SELECT count(*) FROM sqlite_schema;");
-        const int rc = probe.valid() ? sqlite3_step(probe.get()) : SQLITE_ERROR;
+        const int rc = probe.valid() ? sqlite3_step(probe.get())
+                                     : sqlite3_errcode(m_db);
         if (rc != SQLITE_ROW) {
             m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
-            // SQLITE_BUSY past the timeout means another process holds the
-            // store — healthy, just contended. Report it distinctly so the
-            // caller fails the session instead of quarantining a live DB.
-            m_lastOpenBusy = (rc == SQLITE_BUSY || rc == SQLITE_LOCKED);
+            recordSqliteFailure(rc);
             qWarning() << "SettingsDatabase:" << path
                        << (m_lastOpenBusy ? "is locked by another process —"
                                           : "is not a readable database —")
@@ -206,9 +264,17 @@ bool SettingsDatabase::open(const QString& path)
     int userVersion = 0;
     {
         Statement stmt(m_db, "PRAGMA user_version;");
-        if (stmt.valid() && sqlite3_step(stmt.get()) == SQLITE_ROW) {
-            userVersion = sqlite3_column_int(stmt.get(), 0);
+        const int rc = stmt.valid() ? sqlite3_step(stmt.get())
+                                    : sqlite3_errcode(m_db);
+        if (rc != SQLITE_ROW) {
+            m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
+            recordSqliteFailure(rc);
+            qWarning() << "SettingsDatabase: could not read schema version for"
+                       << path << "—" << m_lastError;
+            close();
+            return false;
         }
+        userVersion = sqlite3_column_int(stmt.get(), 0);
     }
 
     if (userVersion > kSchemaVersion) {
@@ -224,12 +290,18 @@ bool SettingsDatabase::open(const QString& path)
         sqlite3_close(m_db);
         m_db = nullptr;
         sqlite3* readOnlyDb = nullptr;
-        if (sqlite3_open_v2(utf8Path.constData(), &readOnlyDb,
-                            SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        const int readOnlyOpenResult = sqlite3_open_v2(utf8Path.constData(),
+                                                       &readOnlyDb,
+                                                       SQLITE_OPEN_READONLY,
+                                                       nullptr);
+        if (readOnlyOpenResult != SQLITE_OK) {
             m_lastError = readOnlyDb
                               ? QString::fromUtf8(sqlite3_errmsg(readOnlyDb))
                               : QStringLiteral("out of memory");
-            sqlite3_close(readOnlyDb);
+            recordSqliteFailure(readOnlyOpenResult);
+            if (readOnlyDb != nullptr) {
+                sqlite3_close(readOnlyDb);
+            }
             m_path.clear();
             return false;
         }
@@ -242,7 +314,23 @@ bool SettingsDatabase::open(const QString& path)
         return true;
     }
 
-    if (!createSchema()) {
+    // Ask the engine whether this handle can write, rather than discovering it
+    // from a failed statement. sqlite3_open_v2(READWRITE|CREATE) silently falls
+    // back to a read-only connection when the FILE is unwritable (#5635), and
+    // the schema CREATEs are no-ops on an existing store — so without this
+    // probe an unwritable database would open "successfully" and only fail at
+    // the first real save. This is a query, not a write: it cannot dirty the
+    // store the way the old redundant user_version stamp did.
+    if (sqlite3_db_readonly(m_db, "main") == 1) {
+        m_lastError = QStringLiteral("attempt to write a readonly database");
+        recordSqliteFailure(SQLITE_READONLY);
+        qWarning() << "SettingsDatabase:" << path
+                   << "opened read-only — the file cannot be written";
+        close();
+        return false;
+    }
+
+    if (!createSchema(userVersion)) {
         close();
         return false;
     }
@@ -254,7 +342,7 @@ bool SettingsDatabase::open(const QString& path)
     return true;
 }
 
-bool SettingsDatabase::createSchema()
+bool SettingsDatabase::createSchema(int currentUserVersion)
 {
     if (!exec("BEGIN IMMEDIATE;")) {
         return false;
@@ -282,9 +370,29 @@ bool SettingsDatabase::createSchema()
                 "  value          TEXT NOT NULL,"
                 "  PRIMARY KEY (family, radio_id, feature)"
                 ") WITHOUT ROWID;")
-        && exec("PRAGMA user_version = 1;");
+        // Stamp the version only when it differs. The CREATE statements above
+        // are no-ops on an existing store and commit nothing, but a redundant
+        // "PRAGMA user_version = 1" is a real write: it commits a transaction
+        // and bumps the file change counter on EVERY launch, dirtying a
+        // database the caller may be about to promise it left untouched
+        // (#5639 review).
+        && (currentUserVersion == kSchemaVersion
+            || exec("PRAGMA user_version = 1;"));
     if (!ok) {
+        // A rollback can itself fail after the operation that made the store
+        // unusable. Keep that first error: AppSettings surfaces it and must
+        // not replace corruption/permission evidence with cleanup noise.
+        const QString originalError = m_lastError;
+        const bool originalBusy = m_lastOpenBusy;
+        const bool originalCorrupt = m_lastOpenCorrupt;
         exec("ROLLBACK;");
+        // Restore all three by assignment, exactly like m_lastError: OR-ing the
+        // flags would let a ROLLBACK that itself reported SQLITE_CORRUPT
+        // escalate a mere permission failure to quarantine-eligible, while the
+        // error string still named the permission problem (#5639 review).
+        m_lastError = originalError;
+        m_lastOpenBusy = originalBusy;
+        m_lastOpenCorrupt = originalCorrupt;
         return false;
     }
     return exec("COMMIT;");
@@ -309,24 +417,48 @@ void SettingsDatabase::close()
     m_readOnly = false;
 }
 
-bool SettingsDatabase::quickCheck()
+SettingsDatabase::IntegrityCheckResult SettingsDatabase::quickCheck()
 {
-    Statement stmt(m_db, "PRAGMA quick_check;");
-    if (!stmt.valid() || sqlite3_step(stmt.get()) != SQLITE_ROW) {
-        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
-        return false;
-    }
-    return columnText(stmt.get(), 0) == QStringLiteral("ok");
+    return runIntegrityCheck("PRAGMA quick_check;");
 }
 
-bool SettingsDatabase::integrityCheck()
+SettingsDatabase::IntegrityCheckResult SettingsDatabase::integrityCheck()
 {
-    Statement stmt(m_db, "PRAGMA integrity_check;");
-    if (!stmt.valid() || sqlite3_step(stmt.get()) != SQLITE_ROW) {
-        m_lastError = QString::fromUtf8(sqlite3_errmsg(m_db));
-        return false;
+    return runIntegrityCheck("PRAGMA integrity_check;");
+}
+
+SettingsDatabase::IntegrityCheckResult
+SettingsDatabase::runIntegrityCheck(const char* pragma)
+{
+    if (m_db == nullptr) {
+        m_lastError = QStringLiteral("settings database is not open");
+        return IntegrityCheckResult::Failed;
     }
-    return columnText(stmt.get(), 0) == QStringLiteral("ok");
+    Statement stmt(m_db, pragma);
+    int resultCode = stmt.valid() ? SQLITE_OK : sqlite3_errcode(m_db);
+    bool sawReport = false;
+    while (stmt.valid() && (resultCode = sqlite3_step(stmt.get())) == SQLITE_ROW) {
+        sawReport = true;
+        const QString report = columnText(stmt.get(), 0);
+        if (report != QStringLiteral("ok")) {
+            // A returned report is evidence, unlike failure to run the pragma.
+            m_lastError = QStringLiteral("SQLite integrity check reported: %1")
+                              .arg(report);
+            return IntegrityCheckResult::Corrupt;
+        }
+    }
+    if (sawReport && resultCode == SQLITE_DONE) {
+        return IntegrityCheckResult::Ok;
+    }
+
+    m_lastError = resultCode == SQLITE_DONE
+                      ? QStringLiteral("SQLite integrity check returned no report")
+                      : QString::fromUtf8(sqlite3_errmsg(m_db));
+    const int primaryResult = resultCode & 0xff;
+    if (primaryResult == SQLITE_CORRUPT || primaryResult == SQLITE_NOTADB) {
+        return IntegrityCheckResult::Corrupt;
+    }
+    return IntegrityCheckResult::Failed;
 }
 
 QString SettingsDatabase::metaValue(const QString& key, const QString& defaultValue)

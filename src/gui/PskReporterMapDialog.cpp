@@ -1,5 +1,6 @@
 #include "PskReporterMapDialog.h"
 #include "GuardedSlider.h"
+#include "PskBeaconLevelPolicy.h"
 #include "ComboStyle.h"
 
 #include "core/AppSettings.h"
@@ -9,6 +10,7 @@
 #include "core/MaidenheadLocator.h"
 #include "core/PropForecastClient.h"
 #include "core/PskReporterClient.h"
+#include "core/RadioSettingsScope.h"
 #include "core/TxKeyingMarker.h"
 #include "core/WsprBeacon.h"
 #include "map/CityLightsShading.h"
@@ -53,6 +55,7 @@
 #include <QVBoxLayout>
 
 #include <limits>
+#include <optional>
 
 namespace AetherSDR {
 
@@ -97,7 +100,21 @@ private:
 
 // PSK Reporter map settings live in one nested-JSON AppSettings blob under a
 // single root key (Constitution Principle V) rather than separate flat keys.
+//
+// Map and reporting preferences are properties of the INSTALLATION and belong
+// here. The WSPR beacon's generated level is not: it is a property of the
+// transmit chain the audio is about to enter, so it lives in the radio-scoped
+// document below instead.
 constexpr const char* kSettingsKey = "PskReporter";
+
+// The WSPR beacon's radio-scoped feature document (AGENTS.md, "Radio-Scoped
+// Feature Documents"). One versioned JSON document per radio, keyed by
+// RadioModel::settingsScope().
+const QString kBeaconFeature = QStringLiteral("WsprBeacon");
+constexpr int kBeaconSchemaVersion = 1;
+
+using psk::beaconLevelToApplyDbFs;
+using psk::legacyBeaconLevelAppliesTo;
 
 QJsonObject pskSettings()
 {
@@ -627,11 +644,60 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
     // the equivalent knob here had no UI at all, so an operator who came out
     // underdriven had nothing to reach for. Ceiling of -3 rather than 0 keeps a
     // little headroom ahead of the radio's own TX chain.
+    //
+    // THE DEFAULT IS BACKEND-DEPENDENT, AND SO IS THE STORED VALUE. Both
+    // decisions live in PskBeaconLevelPolicy.h, evaluated rather than copied,
+    // so psk_beacon_level_policy_test pins the expressions this runs.
+    //
+    // While Hl2TxDsp's ALC still has its makeup half, this spinbox is very
+    // nearly inert on the HL2: processAudioBlock() normalises anything from
+    // roughly -45 dBFS up to alcTargetPeak (0.85, -1.412 dBFS) onto that
+    // target, for any audio submitted with clientLeveled=false -- which the
+    // WSPR pump is, since AudioEngine::startWsprPump() reaches
+    // feedDaxTxAudioInternal() with markExternalSource=false. So -20 and -3
+    // go out at the SAME level today, and the knob added for the underdriven
+    // operator cannot help them. Measured: -1.412 dBFS on air from a
+    // -20.000 dBFS stimulus.
+    //
+    // Once the makeup half goes and the ALC becomes reduction-only, the
+    // setting is real -- the level set here is the level transmitted -- and
+    // -20 dBFS becomes 18.577 dB of unattended shortfall, measured against
+    // two binaries differing by that one change with the same stimulus and a
+    // txraw control at 0.000 dB.
+    //
+    // THE LEVEL IS PER RADIO, not per installation. It is a property of the
+    // transmit chain the audio is about to enter, so a station with an HL2 and
+    // a Flex needs two answers and gets them: the value lives in the
+    // radio-scoped WsprBeacon feature document (AGENTS.md, "Radio-Scoped
+    // Feature Documents"), keyed by RadioModel::settingsScope(). It used to be
+    // one app-global key, which meant a level chosen on the Flex silently
+    // became the HL2's unattended beacon level and nothing could correct it.
+    //
+    // RE-EVALUATED ON EVERY CAPABILITY CHANGE, not once at construction. The
+    // dialog is built on first open and cached for the session
+    // (MainWindow_DigitalModes.cpp, a QPointer with no WA_DeleteOnClose), so an
+    // operator who opens PSK Reporter BEFORE connecting would otherwise keep
+    // the disconnected answer for the whole session with nothing on screen to
+    // say so. applyBeaconLevel() therefore rides
+    // RadioModel::connectionStateChanged -- which carries the identity change,
+    // so it re-reads the new radio's stored level -- and
+    // TransmitModel::hostModulationChanged for a capability republish inside a
+    // live session. The second is not enough on its own: it is a change signal,
+    // and connecting a Flex leaves hostModulation() false either side, so it
+    // emits nothing. Caught by driving the demo radio, not by reading it.
+    //
+    // It deliberately does NOT ride RadioModel::callsignChanged, which is what
+    // updateBeaconDefaults() runs on: that signal is emitted only by the
+    // operator editing their own callsign, by the Flex `info` reply, and by a
+    // RadioDelta carrying a callsign. No HL2, sim or ANAN backend ever supplies
+    // one, so connecting an HL2 with this window open fired nothing at all --
+    // reproduced offscreen against the demo radio, where the beacon callsign
+    // field stayed empty on connect while a connect-then-open run filled it
+    // (PR #5651 review).
     m_beaconLevel->setRange(-60, -3);
     m_beaconLevel->setSingleStep(1);
     m_beaconLevel->setSuffix(tr(" dBFS"));
-    m_beaconLevel->setValue(
-        pskSettings().value("beaconLevelDbFs").toInt(-20));
+    applyBeaconLevel();
     m_beaconLevel->setAccessibleName(tr("WSPR transmit audio level"));
     m_beaconLevel->setAccessibleDescription(
         tr("Generated audio level in decibels full scale, from -60 to -3"));
@@ -1265,8 +1331,8 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
         }
         slice->tuneAndRecenter(dialMhz);
     });
-    connect(m_beaconLevel, &QSpinBox::valueChanged, this, [](int dbfs) {
-        writePskSetting("beaconLevelDbFs", dbfs);
+    connect(m_beaconLevel, &QSpinBox::valueChanged, this, [this](int dbfs) {
+        writeBeaconLevelDbFs(dbfs);
     });
     connect(m_beaconTone, &QDoubleSpinBox::valueChanged, this, [](double hz) {
         writePskSetting("beaconToneHz", hz);
@@ -1304,8 +1370,141 @@ PskReporterMapDialog::PskReporterMapDialog(AudioEngine* audioEngine,
                 stopBeacon(tr("Stopped: transmitter unkeyed"));
             }
         });
+        // BOTH signals, and neither is redundant.
+        //
+        // connectionStateChanged is the one that carries the radio IDENTITY
+        // change, so it is what re-reads the newly connected radio's stored
+        // level. RadioModel installs publishCapabilities() on this same signal
+        // in its constructor, before any dialog exists, so capabilities are
+        // already published by the time this runs.
+        //
+        // hostModulationChanged is a CHANGE signal and fires only when the
+        // answer flips, which is not every connect: TransmitModel returns early
+        // when the value is unchanged, so connecting a Flex (false -> false)
+        // emits nothing at all. It is here for the case connectionStateChanged
+        // cannot see -- a capability republish within a live session, which
+        // RadioModel also drives from a backend capability update.
+        //
+        // applyBeaconLevel() is a pure recomputation, so being called twice on
+        // one edge costs a settings read and changes nothing.
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+                [this] { applyBeaconLevel(); });
+        connect(&m_radioModel->transmitModel(),
+                &TransmitModel::hostModulationChanged, this, [this] {
+            applyBeaconLevel();
+        });
     }
     updateBeaconDefaults();
+}
+
+// The beacon level's stored value for the CONNECTED radio, if it has one.
+//
+// Returns nothing when this radio has never had one set -- which is the
+// condition for a default to apply, and is not the same as "the store is
+// empty". A present document with no levelDbFs field is a radio whose level
+// was never chosen; a present document WITH one is a deliberate choice.
+//
+// Claim-and-freeze, per scope, on first access (AGENTS.md, "Settings
+// Migration"): the first time a given radio is seen, the legacy app-global
+// PskReporter.beaconLevelDbFs is imported into that radio's document if the
+// policy says it described an on-air level there. The document's existence is
+// the migration marker, so an operator who cleared their level does not have it
+// resurrected, and the legacy key is never rewritten -- it stays frozen as the
+// downgrade snapshot.
+std::optional<int> PskReporterMapDialog::storedBeaconLevelDbFs(bool hostModulates)
+{
+    if (m_radioModel == nullptr) {
+        return std::nullopt;
+    }
+    const RadioSettingsScope scope = m_radioModel->settingsScope();
+    // No identity yet means the family-wide row, and writing one of those by
+    // accident is how a per-radio setting becomes everyone's (BandStackSettings
+    // guards the same way). With nothing to key a level to there is also
+    // nothing stored, so the capability default answers.
+    if (!scope.isValid() || !scope.hasRadioIdentity()) {
+        return std::nullopt;
+    }
+
+    AppSettings::FeatureReadStatus status = AppSettings::FeatureReadStatus::Missing;
+    const QJsonObject doc = scope.featureExact(kBeaconFeature, nullptr, &status);
+    if (status == AppSettings::FeatureReadStatus::Present) {
+        const QJsonValue level = doc.value(QStringLiteral("levelDbFs"));
+        // isDouble() rather than toInt(): a field that is null, a string from a
+        // hand-edited store, or anything a future schema leaves in an
+        // unexpected shape must fall through to the default rather than resolve
+        // to 0 and clamp to -3, which is the LOUDEST value this control can
+        // express, on an unattended 111.6 s transmission.
+        return level.isDouble() ? std::optional<int>(level.toInt())
+                                : std::nullopt;
+    }
+    if (status != AppSettings::FeatureReadStatus::Missing) {
+        // Corrupt or unavailable: retryable, so do not claim over it and do not
+        // memoize anything. The default answers for this session.
+        return std::nullopt;
+    }
+
+    // Missing: this radio has never been claimed.
+    if (!legacyBeaconLevelAppliesTo(hostModulates)) {
+        return std::nullopt;
+    }
+    const QJsonValue legacy = pskSettings().value(QStringLiteral("beaconLevelDbFs"));
+    if (!legacy.isDouble()) {
+        return std::nullopt;
+    }
+    const int claimed = legacy.toInt();
+    if (!scope.setFeature(kBeaconFeature, kBeaconSchemaVersion,
+                          QJsonObject{{QStringLiteral("levelDbFs"), claimed}})) {
+        // A refused write that the UI repaints over is the worst failure shape.
+        // The value is still correct for this session; it just will not persist.
+        qWarning() << "PskReporter: WSPR beacon level claim did not persist for"
+                   << scope.family() << scope.radioId();
+    }
+    return claimed;
+}
+
+// Persist a deliberate level for the connected radio.
+void PskReporterMapDialog::writeBeaconLevelDbFs(int dbfs)
+{
+    if (m_radioModel == nullptr) {
+        return;
+    }
+    const RadioSettingsScope scope = m_radioModel->settingsScope();
+    if (!scope.isValid() || !scope.hasRadioIdentity()) {
+        // Setting a level with no radio attached is a session-only value: there
+        // is no radio to key it to, and the beacon cannot key without one
+        // anyway. Refusing beats writing the family-wide row.
+        return;
+    }
+    QJsonObject doc = scope.featureExact(kBeaconFeature);
+    doc.insert(QStringLiteral("levelDbFs"), dbfs);
+    if (!scope.setFeature(kBeaconFeature, kBeaconSchemaVersion, doc)) {
+        qWarning() << "PskReporter: WSPR beacon level write did not persist for"
+                   << scope.family() << scope.radioId();
+    }
+}
+
+// The level this radio should show, applied whenever that answer can change.
+//
+// ONLY WHEN THE OPERATOR HAS NOT SET ONE FOR THIS RADIO. A stored value is a
+// deliberate choice and is never overridden here -- that is the difference
+// between a default and a policy.
+void PskReporterMapDialog::applyBeaconLevel()
+{
+    if (m_beaconLevel == nullptr) {
+        return;
+    }
+    const bool hostModulates =
+        m_radioModel && m_radioModel->transmitModel().hostModulation();
+    const std::optional<int> wanted = beaconLevelToApplyDbFs(
+        m_beaconArmed, storedBeaconLevelDbFs(hostModulates), hostModulates);
+    if (!wanted.has_value()) {
+        return;
+    }
+    // Blocked, because setValue() would otherwise fire valueChanged and write
+    // the very setting whose absence is the condition for being here -- one
+    // connect would turn a default into a stored choice the operator never made.
+    const QSignalBlocker blocker(m_beaconLevel);
+    m_beaconLevel->setValue(*wanted);
 }
 
 void PskReporterMapDialog::updateBeaconDefaults()

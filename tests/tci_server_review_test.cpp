@@ -205,6 +205,132 @@ public:
             && server.effectiveTrx(nullptr, 3) == 3;
     }
 
+    // #5193: the ownership join. resolveVfoB() only ever sees
+    // TciSliceEndpoint::operatedByAnotherClient; routingEndpoints(requester)
+    // is the one place that sets it, from each OTHER client's declared
+    // audio_start receiver resolved through the strict trx map. The
+    // tci_trxmap_test cases hand-build the flag, so this is the case that
+    // fails if the join stops setting it. Socket-free: the QWebSocket objects
+    // are never opened — they are identity keys for ClientState, exactly as
+    // in pttBindsToTheDeclaredAudioReceiver() above.
+    // CONSTRUCTED from the measured #5193 topology (FLEX-8400, 2026-09-13):
+    // two WSJT-X instances, receiver 0 on slice A, receiver 1 on slice B, plus
+    // a control-only client.
+    static bool routingEndpointsFlagOnlyForeignDeclaredReceivers()
+    {
+        RadioModel model;
+        TciServer server(&model);
+
+        QString error;
+        if (!model.automationApplySliceFixture(0, QStringLiteral("A"), &error)
+            || !model.automationApplySliceFixture(1, QStringLiteral("B"),
+                                                  &error)) {
+            std::fprintf(stderr, "ownership fixtures failed: %s\n",
+                         error.toUtf8().constData());
+            return false;
+        }
+        if (server.sliceForTrxStrict(0) != model.slice(0)
+            || server.sliceForTrxStrict(1) != model.slice(1)) {
+            std::fprintf(stderr, "ownership setup: expected trx0=A trx1=B\n");
+            return false;
+        }
+
+        QWebSocket wsjtxA;
+        QWebSocket wsjtxB;
+        QWebSocket controlOnly;
+        QWebSocket staleDeclarer;
+
+        TciServer::ClientState a;
+        a.socket = &wsjtxA;
+        a.audioEnabled = true;
+        a.audioReceiver = 0;
+        TciServer::ClientState b;
+        b.socket = &wsjtxB;
+        b.audioEnabled = true;
+        b.audioReceiver = 1;
+        TciServer::ClientState c;      // control only, declared nothing
+        c.socket = &controlOnly;
+        c.audioReceiver = -1;
+        TciServer::ClientState d;      // declared a receiver with no live slice
+        d.socket = &staleDeclarer;
+        d.audioEnabled = true;
+        d.audioReceiver = 2;
+        server.m_clients.append(a);
+        server.m_clients.append(b);
+        server.m_clients.append(c);
+        server.m_clients.append(d);
+
+        const auto flagged = [](const QVector<TciSliceEndpoint>& endpoints,
+                                int sliceId, bool* found) -> bool {
+            for (const TciSliceEndpoint& endpoint : endpoints) {
+                if (endpoint.sliceId == sliceId) {
+                    *found = true;
+                    return endpoint.operatedByAnotherClient;
+                }
+            }
+            *found = false;
+            return false;
+        };
+
+        bool foundA = false;
+        bool foundB = false;
+
+        // B asks: A's slice is another client's receiver, B's own is not.
+        const QVector<TciSliceEndpoint> forB = server.routingEndpoints(&wsjtxB);
+        const bool forBOk = forB.size() == 2
+            && flagged(forB, 0, &foundA) && foundA
+            && !flagged(forB, 1, &foundB) && foundB;
+        if (!forBOk) {
+            std::fprintf(stderr, "ownership: requester B expected A flagged, "
+                                 "B not\n");
+            return false;
+        }
+
+        // A asks: the mirror image.
+        const QVector<TciSliceEndpoint> forA = server.routingEndpoints(&wsjtxA);
+        const bool forAOk = forA.size() == 2
+            && !flagged(forA, 0, &foundA) && foundA
+            && flagged(forA, 1, &foundB) && foundB;
+        if (!forAOk) {
+            std::fprintf(stderr, "ownership: requester A expected B flagged, "
+                                 "A not\n");
+            return false;
+        }
+
+        // The control-only client asks: both WSJT-X slices are foreign.
+        const QVector<TciSliceEndpoint> forC
+            = server.routingEndpoints(&controlOnly);
+        const bool forCOk = forC.size() == 2
+            && flagged(forC, 0, &foundA) && foundA
+            && flagged(forC, 1, &foundB) && foundB;
+        if (!forCOk) {
+            std::fprintf(stderr, "ownership: control-only requester expected "
+                                 "both flagged\n");
+            return false;
+        }
+
+        // No requester (the PTT path's call): nothing is flagged, and the
+        // stale declaration (receiver 2, no live slice) claims nothing above.
+        const QVector<TciSliceEndpoint> forNone = server.routingEndpoints();
+        const bool forNoneOk = forNone.size() == 2
+            && !flagged(forNone, 0, &foundA) && foundA
+            && !flagged(forNone, 1, &foundB) && foundB;
+        if (!forNoneOk) {
+            std::fprintf(stderr, "ownership: no requester expected nothing "
+                                 "flagged\n");
+            return false;
+        }
+
+        // audio_stop resets the declaration (-1): A's slice stops being
+        // claimed for B on the next call.
+        server.m_clients[0].audioReceiver = -1;
+        const QVector<TciSliceEndpoint> afterStop
+            = server.routingEndpoints(&wsjtxB);
+        return afterStop.size() == 2
+            && !flagged(afterStop, 0, &foundA) && foundA
+            && !flagged(afterStop, 1, &foundB) && foundB;
+    }
+
     // The #4547 / #4567 seam. sliceForTrx() resolves through the stable trx
     // map; the PTT path must resolve through the SAME map, not TciProtocol's
     // positional statics. If it did not, a band-stack recreate would key
@@ -1839,6 +1965,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::pttBindsToTheDeclaredAudioReceiver();
     const bool pttUsesStableMap
         = AetherSDR::TciServerReviewTest::pttResolvesThroughTheStableMap();
+    const bool ownershipJoin
+        = AetherSDR::TciServerReviewTest::routingEndpointsFlagOnlyForeignDeclaredReceivers();
     const bool powerRateLimits
         = AetherSDR::TciServerReviewTest::powerBroadcastRateLimits();
     const bool trxCacheHolds
@@ -1902,6 +2030,8 @@ int main(int argc, char** argv)
                 pttBindsReceiver ? "PASS" : "FAIL");
     std::printf("%s  PTT resolves through the stable trx map (#4547/#4567)\n",
                 pttUsesStableMap ? "PASS" : "FAIL");
+    std::printf("%s  routingEndpoints flags only foreign declared receivers (#5193)\n",
+                ownershipJoin ? "PASS" : "FAIL");
     std::printf("%s  drive: rate-limits and de-dups\n",
                 powerRateLimits ? "PASS" : "FAIL");
     std::printf("%s  drive: trx survives a TX-flag clear\n",
@@ -1958,7 +2088,7 @@ int main(int argc, char** argv)
 
     return validProfile && deferredAbort && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
-        && pttUsesStableMap
+        && pttUsesStableMap && ownershipJoin
         && powerRateLimits && trxCacheHolds && cacheResets && flagSeedsDeDups
         && flagSeedSettled && txTrxResets
         && activeSliceSeed && activeSliceRemoval && trxStableRecreate

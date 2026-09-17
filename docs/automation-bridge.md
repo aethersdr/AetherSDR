@@ -1392,8 +1392,8 @@ inside AetherSDR on the host, not in radio firmware (#5401).
        {"chain":"hl2-tx","level":"dsp-config",
         "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":512,
         "filterLowHz":300,"filterHighHz":2700,
-        "alcEnabled":true,"alcTargetPeak":0.9,"alcMaxGainDb":20,
-        "alcAttackSec":0.005,"alcReleaseSec":0.25,"alcHoldBelowDbfs":-45,
+        "alcEnabled":true,"alcTargetPeak":0.9,
+        "alcReleaseSec":0.25,
         "micGainLinear":1}]}}}
 ```
 
@@ -3379,9 +3379,18 @@ check it before assuming a keying verb will work. `label` is
 `AETHER_AUTOMATION_LABEL` (a human tag for the instance).
 
 ### `health`
-The **backend's** view of the radio — the same rows the Radio Health dialog
-shows, which until now reached nothing else and so were unavailable to a script
-or a regression test. Read-only: it keys nothing and sets nothing.
+The **radio's** view of itself — the same rows the Radio Health dialog shows,
+which until now reached nothing else and so were unavailable to a script or a
+regression test. Read-only: it keys nothing and sets nothing.
+
+Two sources, merged when both are in play: the connected backend, and (for a
+family that has one) a **stream-free source** that keeps answering when the
+backend has stopped talking to the radio — see `telemetry` below. The **backend
+wins every key collision**, because an in-band reading arrives on our own
+cadence and an out-of-band probe does not; the stream-free source fills the gaps
+and owns the rows that say which path spoke. A key the winner declares but
+leaves out of its values means "not reported" and does **not** erase a value the
+other side has.
 
 ```json
 → {"cmd":"health"}
@@ -3389,7 +3398,7 @@ or a regression test. Read-only: it keys nothing and sets nothing.
      {"key":"micLevel","section":"Transmit voice chain",
       "label":"Mic slider (0-100, 50 = unity)","value":80},
      {"key":"micGainAppliedLinear",
-      "label":"Mic gain at the modulator (linear)","value":3.98},
+      "label":"Mic gain at the modulator (linear)","value":15.849},
      {"key":"rfPowerPercent","label":"Drive requested (0-100)","value":60},
      {"key":"txDriveRegister","label":"Drive written (raw 0-255)","value":153},
      {"key":"txDriveGated","label":"Drive held at 0 by the TX gate","value":false},
@@ -3414,6 +3423,22 @@ without it that divergence is invisible. Note the gateware decodes only the
 drive byte's top nibble, so the raw scale moves in steps of 16 — a percent
 alone does not tell you which of the 16 drives the radio actually got.
 
+**Assert on `dspFaultCountN`, not on `dspProcessFaultsN`.** The HL2 publishes
+both for each receiver. `dspProcessFaultsN` is PROSE meant for the dialog —
+`"none"`, or `"3 - WDSP engine error 3"` — and its format is a presentation
+choice that may change; a script matching on it is matching on wording.
+`dspFaultCountN` is the same fact as an integer, and is what a threshold or a
+soak test wants. Both are `null` until the receiver has processed a block, which
+is distinct from zero: "no faults" and "no DSP yet" are different answers.
+
+The companion rows are `dspBlocksN` (blocks WDSP turned into audio) and
+`dspUnderrunsN` (the pipeline had no input ready). **Underruns are not faults**
+and are counted separately on purpose — an underrun is the normal shape of a
+starved pipeline, while a fault is WDSP refusing data it was given. Summing them
+turns a healthy idle radio into a broken one. `N` is the zero-based receiver
+index, so a single-receiver radio publishes `dspBlocks0` and no suffix appears
+in the label.
+
 **This is deliberately not assembled from the models, and that is the whole
 point.** `get` already reports those, and a model reports what the operator
 **asked for** — so a control whose command was dropped on the way to the radio
@@ -3427,8 +3452,61 @@ of each group and is absent on the rest. A `value` of `null` means **the radio
 never reported this**, which is distinct from a zero — "the FIFO is empty" and
 "we were never told" are different answers, and collapsing them is what makes a
 readout unable to detect its own failure. An empty `rows` array with
-`"ok":true` is a real state too: no radio connected, or a family that publishes
-no health rows. Check `connected` to tell those apart.
+`"ok":true` is a real state too: nothing connected and no stream-free source
+aimed, or a family that publishes no health rows. Check `connected` to tell
+those apart.
+
+**Reading `health` is itself a demand signal.** A stream-free source polls only
+while something is watching, so each read renews a 5 s demand window and keeps
+the probe running. A script that polls `health` in a loop against an aimed radio
+is asking for one datagram a second; `telemetry target off` stops it.
+
+### `telemetry`
+Aim a **stream-free health source** at a radio **without connecting to it** —
+the one way to ask "is anyone else using this radio", "is it powered and
+reachable", or "what is its PA temperature" about a radio you are *not* holding
+a session on. Read-only: it never connects, never writes to the radio, and never
+takes a session.
+
+```json
+→ {"cmd":"telemetry","action":"target","value":"192.168.8.2"}
+← {"ok":true,"telemetry":"target","target":"192.168.8.2","family":"hl2",
+   "connected":false,"readOnly":true}
+
+→ {"cmd":"telemetry","action":"target","value":"off"}
+← {"ok":true,"telemetry":"target","target":null}
+```
+
+`target` is the only action. The rows it produces arrive through `health`, not
+through this verb.
+
+**Which families have one is a declaration, not a list here.** A family declares
+a stream-free source from its own backend directory; everything above the radio
+seam asks the registry. Today only `hl2` declares one — a Hermes-Lite 2 answers
+discovery probes on its alternate control port whether or not anybody holds its
+IQ stream. Every other family refuses the verb and its `health` is unchanged.
+
+**The address must be a radio `connect list` can see.** The family to build is
+taken from discovery rather than from whatever this session last connected to;
+an address that is not a discovered radio is refused rather than probed on a
+guess, because guessing is how one family's rows end up on another family's
+snapshot.
+
+Refused, each with a reason that says which: a non-literal address; IPv6 (the
+poller binds an IPv4 socket, so it would count unanswered polls for datagrams
+that never left); multicast, broadcast, a local segment's directed broadcast
+(`192.168.50.255`), and the unspecified addresses — this sends one datagram a
+second and must name a single radio; a family that declares no source; and a
+session that is **already connected**, because there is one instrument and
+aiming it would repoint the one the live session is reading. A connected session
+is already aimed at its own radio, so nothing is lost — just read `health`.
+
+**What it costs, stated plainly.** While aimed and while something is reading
+`health`, this sends a ~60-byte UDP datagram to the named address once a second.
+A mistyped address that happens to host an HPSDR-speaking device gets its first
+answer believed and rendered as that radio's health; a MAC latch stops the
+responder *changing* afterwards, but it cannot vet the first one. A stranger at
+a mistyped address receives an unsolicited probe. Aim it at a radio you meant.
 
 ### `mark`
 Drop a **sequenced timeline marker** into the log ring, then bracket a sequence
@@ -4268,7 +4346,7 @@ code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 74 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 76 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4307,6 +4385,7 @@ still a separate radiocert task.
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
+| `bandscope` | — | bandscope [status\|on\|off] — Hermes-Lite 2 wideband bandscope gate (endpoint 0x04); uncalibrated pre-DDC ADC headroom, reported in `health` |
 | `droopcal` | — | droopcal [status\|start\|stop\|apply\|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
@@ -4343,6 +4422,7 @@ still a separate radiocert task.
 | `menu` | — | menu list \| open <name> — menu-bar menus |
 | `whoami` | — | bridge instance info: pid, socket, label, station, txAllowed |
 | `health` | — | backend health snapshot — what the RADIO reports, not what was asked for |
+| `telemetry` | — | telemetry target <ip\|off> — aim a discovered radio's offline health source WITHOUT connecting (read-only) |
 | `log` | — | log <categories\|get\|set\|reset\|tail\|subscribe\|unsubscribe> [args] |
 | `mark` | — | mark <text> — timestamped annotation in the log ring |
 | `qrz` | — | qrz <status\|cached\|lookup\|spottext> [args] |

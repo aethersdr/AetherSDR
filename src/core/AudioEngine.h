@@ -13,6 +13,8 @@
 #include <QUdpSocket>
 #include <QTimer>
 #include <QVector>
+#include "NnrControls.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -40,6 +42,7 @@ class QMediaDevices;
 #include <deque>
 #include <vector>
 #include <cstdint>
+#include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR {
 
@@ -324,6 +327,11 @@ public:
     void setNr2GainMethod(int method);
     void setNr2NpeMethod(int method);
     void setNr2AeFilter(bool on);
+    // Push the post-processing controls from Nr2SettingsModel to every live
+    // NR2 instance. One entry point rather than four setters: the model is
+    // already where the UI writes, so this is the only direction that needs
+    // plumbing (#5702).
+    Q_INVOKABLE void applyNr2Post2Settings();
     QJsonObject nr2RuntimeDiagnostics() const;
     QJsonObject opusTxPacingDiagnostics() const;
     // Tell the engine the main RX source is (or is not) the demo, so the main NR2
@@ -742,14 +750,27 @@ signals:
     // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
     // receivers connect via Qt::AutoConnection (queued across threads).
     //
-    // `clientLeveled` is true when the frames came from an external TCI/DAX
-    // client (feedDaxTxAudio's markExternalSource) rather than the mic chain or
-    // the engine's own tone generators. Such a client owns its level — WSJT-X's
-    // Pwr slider attenuates the audio it streams — and a host-modulating
-    // backend must not run makeup gain over it (#4796). Slots that only record
-    // or meter the stream can ignore the flag (Qt permits connecting to a slot
-    // with fewer arguments).
-    void txFinalMonitorPcmReady(const QByteArray& int16Stereo, bool clientLeveled);
+    // `source` says WHERE the frames came from — TxAudioSource.h carries the
+    // contract. Which emitter sets what:
+    //
+    //   onTxAudioReady            → Microphone (the capture chain, through the
+    //                               full voice TX DSP)
+    //   feedDaxTxAudio            → ClientLeveled (external TCI/DAX; the client
+    //                               owns its level, #4796)
+    //   sendModemTxAudio          → Microphone (the AX.25 modem — its AFSK
+    //                               amplitude is a fixed constant and the packet
+    //                               dialog has no level control, so the mic
+    //                               slider is the only thing that can move it)
+    //   startWsprPump             → EngineGenerated (111.6 s unattended; the mic
+    //                               slider must not reach it)
+    //
+    // The tag is a claim about ORIGIN, not about treatment. Slots that only
+    // record or meter the stream can ignore it (Qt permits connecting to a slot
+    // with fewer arguments) — but a slot that ASSERTS on it must compare against
+    // the enum: QVariant::toBool() on this type reads both ClientLeveled and
+    // EngineGenerated as true, which silently retired a guard once already.
+    void txFinalMonitorPcmReady(const QByteArray& int16Stereo,
+                                TxAudioSource source);
     void modemTxAudioFinished(quint64 token);
     // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
     // stereo int16 — the recorder's native WAV format. Pumped on the audio
@@ -1006,9 +1027,16 @@ private:
     qint64 txCaptureNowMs() const;
     bool tciAudioFresh() const;
     void pumpWsprBeacon();
+    // `markExternalSource` arms the TCI active-audio timer (it means "a TCI/DAX
+    // client is feeding"); `source` is the origin tag forwarded to the backend.
+    // They are SEPARATE because they stopped agreeing: the AX.25 modem and the
+    // WSPR pump both feed with markExternalSource false, and only one of them is
+    // EngineGenerated. Deriving the tag from the flag is what put AX.25 in the
+    // beacon's bucket, and a beacon's bucket has no mic slider in it.
     void feedDaxTxAudioInternal(const QByteArray& float32pcm,
                                 bool markExternalSource,
-                                bool forceRadioDaxRoute);
+                                bool forceRadioDaxRoute,
+                                TxAudioSource source);
     void observeTxCaptureState(QAudio::State state);
     // Overload for callers that must sample the unread depth before draining it.
     void observeTxCaptureState(QAudio::State state, qint64 bufferedBytes);
@@ -1312,7 +1340,7 @@ private:
     std::unique_ptr<NnrFilter> m_nnr;
     std::unique_ptr<NnrFilter> m_kiwiSdrNnr;
     std::atomic<bool> m_nnrEnabled{false};
-    std::atomic<int>  m_nnrStrength{50};
+    std::atomic<int>  m_nnrStrength{Nnr::kMaskFloorDefaultStrength};
     std::atomic<int>  m_nnrModel{0};
 
     // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so

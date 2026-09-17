@@ -1723,7 +1723,7 @@ MainWindow::MainWindow(QWidget* parent)
     // in the CW portion of the file (#4281). Context stays m_qsoRecorder so the
     // connection type and lifetime are unchanged.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            m_qsoRecorder, [this](const QByteArray& pcm, bool /*clientLeveled*/) {
+            m_qsoRecorder, [this](const QByteArray& pcm, TxAudioSource /*source*/) {
         // Evaluated at queued-delivery time on the recorder's thread, so blocks
         // already in flight when ownership flips are gated by the NEW owner —
         // bounded (tens of ms) leakage in both directions at over boundaries.
@@ -1738,9 +1738,9 @@ MainWindow::MainWindow(QWidget* parent)
     // agree with what actually goes on the air. A Flex radio modulates on the
     // radio side and ignores this.
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
-            this, [this](const QByteArray& pcm, bool clientLeveled) {
+            this, [this](const QByteArray& pcm, TxAudioSource source) {
         m_radioModel.submitTxAudio(pcm, AudioEngine::DEFAULT_SAMPLE_RATE,
-                                   clientLeveled);
+                                   source);
     });
     wireModemAudioCompletion();
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
@@ -7414,17 +7414,25 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
             m_radioModel.meterModel().hasMicPeakMeter());
     }
 
-    // ── Display dBm scale: who owns it ─────────────────────────────────────
-    // A backend that decodes its scope at a fixed calibration (Icom CI-V) has
-    // no range command and never echoes one back, so the noise-floor auto-
-    // adjust must not try to move a reference level the radio will not confirm.
-    // `!connected ||` restores the permissive default on disconnect so the
+    // ── Display dBm scale: who owns it, and whether the bins hold still ────
+    // Two INDEPENDENT properties, pushed together because the auto-floor gate
+    // is the OR of them (noiseFloorAutoAdjustAllowed). A backend that decodes
+    // its scope at a fixed calibration (Icom CI-V) has no range command and
+    // never echoes one back; a backend whose bins are computed on this host
+    // (HL2, ANAN, RTL-SDR) gives the loop a fixed target instead, which
+    // terminates it just as well.
+    //
+    // `!connected ||` restores the permissive default for the echo so the
     // setting cannot leak from an Icom into the next radio connected.
+    // panBinsAbsolute() uses `connected &&` instead — its permissive default
+    // is FALSE, and disconnected the first term of the OR is already true.
     {
         const bool radioOwnsScale = !connected || caps.radioOwnsDbmScale;
+        const bool binsAbsolute = connected && caps.panBinsAbsolute();
         const QList<SpectrumWidget*> spectra = findChildren<SpectrumWidget*>();
         for (SpectrumWidget* spectrum : spectra) {
             spectrum->setRadioOwnsDbmScale(radioOwnsScale);
+            spectrum->setPanBinsAbsolute(binsAbsolute);
         }
     }
 

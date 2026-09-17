@@ -23,6 +23,7 @@ namespace AetherSDR {
 
 class SliceModel;
 class TransmitModel;
+class QsoRecorderWriteErrorTestAccess;
 
 // Records QSO audio (both RX and TX sides) to WAV files.
 //
@@ -52,6 +53,8 @@ class TransmitModel;
 
 class QsoRecorder : public QObject {
     Q_OBJECT
+
+    friend class QsoRecorderWriteErrorTestAccess;
 
 public:
     explicit QsoRecorder(QObject* parent = nullptr);
@@ -189,10 +192,15 @@ private:
 
     void startFile();
     void finalizeFile(FinalizeReport report = FinalizeReport::Diagnose);
+    void finalizeWriteFailure(quint64 generation);
     QString buildFilename() const;
     static QString sanitizeForPath(const QString& s);
-    void writeWavHeader();
-    void patchWavHeader();
+    bool writeWavHeader();
+    bool patchWavHeader();
+    qint64 writeFile(const char* data, qint64 size);
+    bool seekFile(qint64 position);
+    bool flushFile();
+    void queueWriteFailure(const QString& detail);
     bool preparePlaybackPcm(int sinkRateHz);
 
     // Recording state
@@ -205,6 +213,9 @@ private:
     QFile*      m_file{nullptr};
     QDateTime   m_startTime;
     quint32     m_dataBytes{0};    // PCM data bytes written (for WAV header patching)
+    std::atomic<bool> m_writeFailurePending{false};
+    std::atomic<quint64> m_recordingGeneration{0};
+    QString m_pendingWriteError;
 
     // Configuration
     QString     m_recordingDir;
@@ -236,6 +247,14 @@ private:
 
     // Thread safety for audio feed paths
     mutable std::mutex  m_writeMutex;
+
+    // Narrow deterministic seam for the recorder's real QFile operations.
+    // The test uses it to make a post-open write, seek, or flush fail without
+    // changing filename allocation or relying on a full filesystem. Production
+    // paths leave all three unset and call QFile directly.
+    std::function<qint64(QFile&, const char*, qint64)> m_writeForTest;
+    std::function<bool(QFile&, qint64)> m_seekForTest;
+    std::function<bool(QFile&)> m_flushForTest;
 
     // See setBackendOwnsRxAudioProvider(). Null until MainWindow installs it,
     // and null reads as false — the Flex answer, and the safe one.

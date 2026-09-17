@@ -1965,7 +1965,7 @@ void VfoWidget::buildTabContent()
         m_aetherDspBtn->setFixedHeight(26);
         m_aetherDspBtn->setStyleSheet(kDspToggle);
         m_aetherDspBtn->setAccessibleName("AetherDSP Settings");
-        m_aetherDspBtn->setToolTip("Open AetherDSP Settings (client-side NR2 / NR4 / DFNR / RN2 / BNR / MNR)");
+        m_aetherDspBtn->setToolTip("Open AetherDSP Settings (client-side NR2 / NR4 / DFNR / RN2 / BNR / MNR / NNR)");
         connect(m_aetherDspBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherDspRequested);
 
@@ -1981,7 +1981,7 @@ void VfoWidget::buildTabContent()
                 &VfoWidget::aetherVoiceRequested);
 
         // Radio-side DSP buttons only \u2014 client-side modules (NR2 / NR4 /
-        // MNR / BNR / DFNR / RN2) live in the spectrum overlay menu and
+        // MNR / BNR / DFNR / RN2 / NNR) live in the spectrum overlay menu and
         // the AetherDSP applet; users toggle them there to keep the VFO
         // grid focused on what the radio supplies.  4-column layout:
         m_dspGrid->addWidget(m_nrBtn,   0, 0);

@@ -17,6 +17,7 @@
 #include "core/backends/hl2/Hl2AdcPairing.h"
 #include "core/backends/hl2/Hl2Spectrum.h"
 #include "core/dsp/WdspChannel.h"
+#include "core/dsp/WdspProcessTally.h"
 
 namespace AetherSDR::hl2 {
 
@@ -234,6 +235,33 @@ public:
         return ago < 0 ? 0 : ago;
     }
 
+    // ── What WDSP actually did with each block ────────────────────────────
+    //
+    // Every outcome processIq() can return, counted, since this object was
+    // constructed. The five non-`Ok` ones used to be one unannotated
+    // `continue`: a chain producing no audio because WDSP returned
+    // `EngineError` on every block looked, from everywhere outside this
+    // function, exactly like a chain whose pipeline was still filling.
+    //
+    // `Underrun` is kept in its own counter rather than summed with the
+    // faults, because it is the normal state while the asynchronous output
+    // side fills and a large non-zero number on a healthy connect is how a
+    // reader learns to ignore a row. See WdspProcessTally.h.
+    //
+    // MONOTONIC ACROSS A REBUILD. configure() does not clear this, and that is
+    // deliberate: a rate change or a span change destroys the channel and
+    // builds a new one, and a rebuild is exactly the moment a fault is most
+    // likely to have been caused. Zeroing the evidence there would hide it.
+    // The counts belong to the RECEIVER's lifetime, not the channel's.
+    //
+    // SAFE TO CALL FROM ANOTHER THREAD, like adcPeakDbfs() above and for the
+    // same reason: Hl2Backend::healthSnapshot() runs on the GUI thread while
+    // this object lives on the I/O thread.
+    [[nodiscard]] WdspProcessTally::Counts processTally() const noexcept
+    {
+        return m_processTally.snapshot();
+    }
+
     // ── Manual notch filters ──────────────────────────────────────────────
     //
     // `index` is WDSP's POSITIONAL handle, and Hl2Backend is what maps stable
@@ -301,7 +329,7 @@ public:
     // index-space map (Hl2Receivers.h) precisely so nothing has to derive it.
     [[nodiscard]] int wdspChannelId() const noexcept
     {
-        return m_channel ? m_channel->channelIdForTest() : -1;
+        return m_channel ? m_channel->channelId() : -1;
     }
 
     // Demodulated-audio DC blocker, one pole per channel.
@@ -437,6 +465,10 @@ private:
     std::vector<Notch> m_notches;
     bool m_notchesEnabled = true;
     double m_notchTuneHz = 0.0;
+
+    // Per-outcome counters for m_channel->processIq(); see processTally().
+    // Written on the DSP thread in processIqBlock(), read from the GUI thread.
+    WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
     // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on

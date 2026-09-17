@@ -30,14 +30,6 @@ constexpr int kLookahead = 1;
 // rate, so a 24 kHz source is resampled around the block; a 48 kHz one is not.
 constexpr int kProcessingRate = 48000;
 
-double maskFloorForStrength(int strength)
-{
-    const double t = std::clamp(strength, 0, 100) / 100.0;
-    // 0 -> the least suppression end of the Guide's range, 100 -> the most.
-    return Nnr::kMaskFloor.maximum
-        + (Nnr::kMaskFloor.minimum - Nnr::kMaskFloor.maximum) * t;
-}
-
 }  // namespace
 
 NnrFilter::NnrFilter(int sampleRate)
@@ -63,22 +55,31 @@ NnrFilter::NnrFilter(int sampleRate)
     // cmode=1 zeroes Q, which we discard anyway.
     m_nnr = create_nnr(1, 0, m_blockFrames, m_blockIn.data(), m_blockOut.data(),
                        kProcessingRate, kNetworkRate, kFftSize, kOverlap,
-                       kLookahead, maskFloorForStrength(m_strength.load()), 1);
+                       kLookahead, Nnr::maskFloorForStrength(m_strength.load()), 1);
     if (!m_nnr) {
         qWarning() << "NnrFilter: create_nnr() failed";
         return;
     }
 
-    // NNR's delay is reported at the processing rate; the adapter needs it at
-    // the configured one, which differs when the 24 kHz path is resampling.
-    const int delayAtProcessingRate = getDelay_nnr(static_cast<NNR>(m_nnr));
-    m_stereoAdapter.setProcessingLatencyFrames(
-        delayAtProcessingRate * m_sampleRate / kProcessingRate);
+    // The adapter pairs each processed block with the dry stereo from the same
+    // moment, so it needs the TOTAL latency of this filter -- not NNR's alone.
+    //
+    // On the 24 kHz path the resamplers dominate: each contributes ~70 ms of
+    // linear-phase group delay against NNR's own 51 ms, so declaring only
+    // NNR's left the balance reading dry audio ~131 ms stale. At a 3 Hz
+    // syllable rate that is a third of a cycle, which applies the gain
+    // computed for a gap to a syllable and vice versa -- measured as voice
+    // 12 dB down and the gaps 10 dB UP, the exact inverse of what the stage
+    // is for. The 48 kHz path has no resamplers and was always correct, which
+    // is what made this look like a model problem rather than a wiring one.
+    m_stereoAdapter.setProcessingLatencyFrames(totalLatencyFrames());
 
     m_appliedModel.store(getModel_nnr(static_cast<NNR>(m_nnr)));
     qDebug() << "NnrFilter: initialized at" << sampleRate << "Hz, model slot"
-             << m_appliedModel.load() << ", delay"
-             << delayAtProcessingRate * 1000.0 / kProcessingRate << "ms";
+             << m_appliedModel.load() << ", total delay"
+             << totalLatencyFrames() * 1000.0 / m_sampleRate << "ms"
+             << "(NNR" << getDelay_nnr(static_cast<NNR>(m_nnr)) * 1000.0 / kProcessingRate
+             << "ms + resampling)";
 }
 
 NnrFilter::~NnrFilter()
@@ -97,12 +98,28 @@ void NnrFilter::reset()
     m_stereoAdapter.reset();
 }
 
-int NnrFilter::delaySamples() const
+int NnrFilter::totalLatencyFrames() const
 {
     if (!m_nnr) {
         return 0;
     }
-    return getDelay_nnr(static_cast<NNR>(m_nnr)) * m_sampleRate / kProcessingRate;
+    // NNR's own, converted from the processing rate to the configured one.
+    int frames = getDelay_nnr(static_cast<NNR>(m_nnr)) * m_sampleRate / kProcessingRate;
+    // Each resampler reports its group delay in ITS OWN source-rate samples:
+    // the upsampler's are already the configured rate, the downsampler's are
+    // at the processing rate and need converting.
+    if (m_up) {
+        frames += m_up->groupDelayInputFrames();
+    }
+    if (m_down) {
+        frames += m_down->groupDelayInputFrames() * m_sampleRate / kProcessingRate;
+    }
+    return frames;
+}
+
+int NnrFilter::delaySamples() const
+{
+    return totalLatencyFrames();
 }
 
 void NnrFilter::setStrength(int strength)
@@ -156,7 +173,7 @@ void NnrFilter::applyPendingParameters()
         return;
     }
     auto nnr = static_cast<NNR>(m_nnr);
-    setMaskFloor_nnr(nnr, maskFloorForStrength(m_strength.load()));
+    setMaskFloor_nnr(nnr, Nnr::maskFloorForStrength(m_strength.load()));
     setAlpha_nnr(nnr, m_alpha.load());
     setAlphaKnee_nnr(nnr, m_alphaKnee.load());
     setTau_nnr(nnr, m_tau.load());

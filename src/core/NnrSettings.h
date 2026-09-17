@@ -37,7 +37,12 @@ public:
     // 0..100, mapped onto the mask floor's range. See NnrControls.h.
     static int strength()
     {
-        return std::clamp(readObj().value("strength").toInt(50), 0, 100);
+        // Nnr::kMaskFloorDefaultStrength, not 50: the slider's midpoint is
+        // -30 dB, five decibels more aggressive than the -25 dB WDSP starts
+        // from, and nothing about "the middle" made that the right default.
+        return std::clamp(
+            readObj().value("strength").toInt(Nnr::kMaskFloorDefaultStrength),
+            0, 100);
     }
     static void setStrength(int v)
     {

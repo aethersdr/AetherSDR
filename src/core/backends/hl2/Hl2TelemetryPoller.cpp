@@ -1,5 +1,8 @@
 #include "core/backends/hl2/Hl2TelemetryPoller.h"
 
+#include "core/backends/hl2/Hl2TelemetryCadence.h"
+
+#include <QDebug>
 #include <QNetworkDatagram>
 #include <QTimer>
 #include <QUdpSocket>
@@ -57,17 +60,15 @@ void Hl2TelemetryPoller::setAllowBroadcastFallback(bool allow)
     applyCadence();
 }
 
-void Hl2TelemetryPoller::setExpectedMac(const std::array<std::uint8_t, 6>& mac)
-{
-    m_expectedMac = mac;
-}
-
 void Hl2TelemetryPoller::setTarget(const QHostAddress& addr)
 {
     if (m_target == addr)
         return;
     m_target = addr;
     m_lastResponder = QHostAddress();
+    // A different radio is allowed a different MAC. See the latch in
+    // onReadyRead().
+    m_latchedMac.reset();
     // A new radio's counters are not the old radio's. Anything a consumer is
     // showing belongs to the previous target until the next reply arrives.
     m_unanswered = 0;
@@ -155,7 +156,23 @@ void Hl2TelemetryPoller::applyCadence()
         // descriptor, and an unbound QUdpSocket has none yet (socketDescriptor()
         // returns -1 and the call silently does nothing). Hl2Discovery makes the
         // same ordering explicit for the same reason.
-        m_socket->bind(QHostAddress::AnyIPv4, 0, QUdpSocket::ShareAddress);
+        // THE RETURN IS NOT DECORATIVE. A discarded bind() leaves a socket
+        // with no descriptor, and everything downstream then lies in the same
+        // direction: writeDatagram() fails silently, m_unanswered climbs at
+        // send time for datagrams that structurally cannot leave, and `health`
+        // reports a radio that is not answering about a radio nobody asked.
+        // A sandbox that refuses raw UDP produced exactly that reading.
+        if (!m_socket->bind(QHostAddress::AnyIPv4, 0, QUdpSocket::ShareAddress)) {
+            qWarning()
+                << "HL2 telemetry: cannot bind a local UDP port"
+                << m_socket->errorString()
+                << "- the offline probe stays silent rather than counting "
+                   "unanswered polls it never sent";
+            m_socket->deleteLater();
+            m_socket = nullptr;
+            m_timer->stop();
+            return;
+        }
         enableBroadcast(*m_socket);
     }
 
@@ -215,13 +232,23 @@ void Hl2TelemetryPoller::onReadyRead()
         const auto reply = parseDiscoveryReply(
             {reinterpret_cast<const std::uint8_t*>(data.constData()),
              static_cast<std::size_t>(data.size())});
-        if (!reply || !reply->isHermesLite2())
+        if (!reply)
             continue;
-        // With no target set, a broadcast can be answered by more than one
-        // radio. Accepting the first is right for a single-radio bench and
-        // wrong the moment there are two, so a caller that knows which radio it
-        // means sets the serial and this drops the rest.
-        if (m_expectedMac && reply->mac != *m_expectedMac)
+        // THE RULE IS IN Hl2TelemetryCadence.h, acceptReply(), so it can be
+        // tested without a socket. What stays here is the transport.
+        //
+        // The latch is the only MAC filter, and it is narrower than the
+        // caller-supplied one it replaced: the first HL2-speaking answer from
+        // the named address is believed, whoever it is. What it stops is the
+        // responder CHANGING underneath a live aim. The supplied-MAC path was
+        // removed with setExpectedMac() -- nothing could ever call it, because
+        // an aim names an IP and the MAC is unknowable until something replies
+        // (#5642 review).
+        const auto verdict = acceptReply(reply->isHermesLite2(), reply->mac,
+                                         m_latchedMac);
+        if (verdict.latch)
+            m_latchedMac = verdict.latch;
+        if (!verdict.accept)
             continue;
         m_lastResponder = dg.senderAddress();
 

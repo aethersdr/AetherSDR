@@ -276,6 +276,7 @@ void ClientRxChainWidget::toggleStageBypass(int boxIdx)
                 else if (name == "DFNR") audio->setDfnrEnabled(true);
                 else if (name == "RN2")  audio->setRn2Enabled(true);
                 else if (name == "BNR")  audio->setNvAfxEnabled(true);
+                else if (name == "NNR")  audio->setNnrEnabled(true);
             });
         }
         return;

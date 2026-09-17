@@ -16,6 +16,7 @@
 #include <QByteArray>
 
 #include <cmath>
+#include <numbers>
 #include <cstdio>
 #include <vector>
 
@@ -48,13 +49,13 @@ float noise()
 float voice(long n)
 {
     const double t = static_cast<double>(n) / kRate;
-    const double env = 0.5 * (1.0 + std::sin(2.0 * M_PI * 3.0 * t));
+    const double env = 0.5 * (1.0 + std::sin(2.0 * std::numbers::pi * 3.0 * t));
     double v = 0.0;
     for (int h = 1; h <= 12; ++h) {
         const double f = 120.0 * h;
         const double a = std::exp(-std::fabs(f - 500.0) / 600.0)
                        + 0.7 * std::exp(-std::fabs(f - 1500.0) / 500.0);
-        v += a * std::sin(2.0 * M_PI * f * t + 0.7 * h);
+        v += a * std::sin(2.0 * std::numbers::pi * f * t + 0.7 * h);
     }
     return static_cast<float>(0.05 * env * v);
 }
@@ -146,6 +147,25 @@ int main()
     // The marker positions the tab draws must still describe this WDSP.
     check(Nnr::kMaskFloor.defaultValue == -25.0, "the mask-floor default moved");
     check(Nnr::kAlphaKnee.defaultValue == 10.0, "the alpha-knee default moved");
+
+    // The 24 kHz path is the one the latency fix is about: at 48 kHz there are
+    // no resamplers and totalLatencyFrames() equals NNR's own delay, so a test
+    // at 48 kHz alone cannot see the defect this fixes.
+    {
+        NnrFilter narrow(24000);
+        check(narrow.isValid(), "the filter did not construct at 24 kHz");
+        if (narrow.isValid()) {
+            const double declaredMs = 1000.0 * narrow.delaySamples() / 24000.0;
+            // NNR's own 51.17 ms plus two resamplers' group delay. Well over
+            // NNR's alone, which is exactly what was being declared before.
+            check(declaredMs > 100.0,
+                  "the 24 kHz path is declaring NNR's delay without the "
+                  "resamplers' group delay");
+            check(declaredMs < 400.0, "the declared 24 kHz latency is implausible");
+            check(narrow.delaySamples() > filter.delaySamples() / 2,
+                  "the 24 kHz delay should exceed half the 48 kHz figure");
+        }
+    }
 
     if (failures == 0) {
         std::printf("nnr_filter_test: all checks passed (delay %.2f ms, "

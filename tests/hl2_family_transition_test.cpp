@@ -88,6 +88,51 @@ int main(int argc, char** argv)
     check(model.panStream() == nullptr,
           "HL2 owns no PanadapterStream");
 
+    // ---- The modes the LIVE HL2 backend declares it will not transmit in ----
+    //
+    // hl2_txdsp_test proves the modulator half: AM/SAM/DSB/FM/WBFM/DRM each
+    // produce IQ bit-identical to USB, so none of them is a distinct
+    // modulation. What that test cannot see is the DECLARATION — delete a
+    // string from Hl2Backend::capabilities()'s receiveOnlyModes and it still
+    // passes. This is the live target that reads it, so the list and the
+    // evidence cannot part company unnoticed.
+    //
+    // EIGHT strings, SIX enumerators: modeFromString() maps NFM onto Mode::Fm
+    // and WFM onto Mode::Wbfm, and refuseKeyInReceiveOnlyMode() compares the
+    // string the SLICE holds rather than the enumerator this backend would have
+    // mapped it to — so dropping either alias leaves that spelling keying while
+    // its twin is refused. That is the load-bearing claim, and nothing asserted
+    // it before this block.
+    {
+        const RadioCapabilities caps = model.backendCapabilities();
+        const QStringList declared = {
+            QStringLiteral("AM"),   QStringLiteral("SAM"),
+            QStringLiteral("DSB"),  QStringLiteral("FM"),
+            QStringLiteral("NFM"),  QStringLiteral("WBFM"),
+            QStringLiteral("WFM"),  QStringLiteral("DRM"),
+        };
+        for (const QString& m : declared) {
+            check(modeIsReceiveOnly(caps, m),
+                  qPrintable(QStringLiteral("HL2 declares %1 receive-only").arg(m)));
+        }
+        // Exactly these. An ADDITION is a mode in which the operator silently
+        // loses MOX, CW keying and TUNE, so it must not arrive without the
+        // bit-identity evidence landing beside it.
+        check(caps.receiveOnlyModes.size() == declared.size(),
+              "HL2 declares exactly the modes hl2_txdsp_test carries evidence for");
+        // The deliberate exclusions: SSB modulates correctly, and CW keys the
+        // gateware NCO through MetisClient::setCwKeyDown without ever reaching
+        // Hl2TxDsp. If one of these ever appears on the list it takes an
+        // operator's transmit mode away.
+        for (const QString& m : {QStringLiteral("USB"),  QStringLiteral("LSB"),
+                                 QStringLiteral("DIGU"), QStringLiteral("DIGL"),
+                                 QStringLiteral("CW"),   QStringLiteral("CWU"),
+                                 QStringLiteral("CWL")}) {
+            check(!modeIsReceiveOnly(caps, m),
+                  qPrintable(QStringLiteral("HL2 still transmits in %1").arg(m)));
+        }
+    }
+
     // ── The normalized RX-audio bus ────────────────────────────────────────
     //
     // The CW decoder, the RTTY decoder and the QSO recorder's RX tap all ride

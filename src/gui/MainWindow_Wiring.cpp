@@ -19,6 +19,7 @@
 
 #include "MainWindow.h"
 #include "core/ClientDisplaySettings.h"
+#include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QStatusBar>
@@ -29,6 +30,7 @@
 #include "models/BandPlanManager.h"
 #include "DisplayStatusGate.h"       // #4261 adaptive-throttle echo gate
 #include "Ax25HfPacketDecodeDialog.h"
+#include "AccessoryPanelWidgets.h"   // kRelayMeterFreshnessMs
 #include "AppletPanel.h"
 #include "DbmRangeTransition.h"
 #include "MainWindowHelpers.h"
@@ -1453,6 +1455,11 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     });
     connect(w, &AetherDspWidget::nr2NpeMethodChanged, this, [this](int m) {
         QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2NpeMethod(m); });
+    });
+    connect(w, &AetherDspWidget::nr2Post2SettingsChanged, this, [this]() {
+        // Every post-processing control writes to Nr2SettingsModel first, so
+        // the engine re-reads the group rather than being handed one value.
+        QMetaObject::invokeMethod(m_audio, [this]() { m_audio->applyNr2Post2Settings(); });
     });
     connect(w, &AetherDspWidget::nr2AeFilterChanged, this, [this](bool on) {
         QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
@@ -4003,6 +4010,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // echo a range — one runaway pane is enough to churn the session.
         sw->setRadioOwnsDbmScale(!m_radioModel.isConnected()
                                  || m_radioModel.backendCapabilities().radioOwnsDbmScale);
+        // The other half of the auto-floor gate, for the same reason: a pane
+        // added after connect must learn that this radio's bins are absolute,
+        // or it arms nothing on an HL2/ANAN/RTL-SDR that the pane created
+        // before connect is happily running.
+        sw->setPanBinsAbsolute(m_radioModel.isConnected()
+                               && m_radioModel.backendCapabilities().panBinsAbsolute());
 
         wirePanDisplayStatus(applet, pan);
     }
@@ -4132,21 +4145,38 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         const bool profileLoadHeld = profileLoadRadioStateWritesHeld();
         const bool autoFloorChange = sw->pendingAutoNoiseFloorDbmRange();
 
-        // A backend whose dBm scale is FIXED never echoes a range back, and the
-        // auto-floor loop is built on that echo: it moves the reference level,
-        // requests the range, and waits for confirmation before moving again.
-        // With nothing to confirm it reads the unchanged floor as "not there
-        // yet" and steps again — a measured 24 dB/s ratchet that walks off the
-        // bottom of the scale (-202 … -1882 dBm) and only becomes visible when
-        // dbmRangeLooksPlausible() starts rejecting it at -180. Re-seed the
-        // widget from the pan's real range instead, which is the same recovery
-        // the profile-load path above uses, and drop the request.
+        // A backend whose auto-floor CANNOT CONVERGE never gets to finish this
+        // handshake: the loop moves the reference level, requests the range,
+        // and waits. With nothing to confirm it reads the unchanged floor as
+        // "not there yet" and steps again — a measured 24 dB/s ratchet that
+        // walks off the bottom of the scale (-202 … -1882 dBm) and only becomes
+        // visible when dbmRangeLooksPlausible() starts rejecting it at -180.
+        // Re-seed the widget from the pan's real range instead, which is the
+        // same recovery the profile-load path above uses, and drop the request.
+        //
+        // THIS IS THE SAME QUESTION SpectrumWidget::applyNoiseFloorAutoAdjust
+        // asks, so it must ask it the same way — noiseFloorAutoAdjustAllowed,
+        // the OR of the echo and absolute bins. The three other capability
+        // gates in this file are about whether a range can be SENT, and stay on
+        // radioOwnsDbmScale alone. This one is not: it is about whether the
+        // loop terminates. Gating it on the echo alone re-seeds the widget out
+        // from under a loop that converges perfectly well without one (ANAN,
+        // whose bins are absolute), which leaves the echo pending, stalls the
+        // loop, and hands the operator a reference level that snaps back to the
+        // pan's saved range every iteration.
+        //
+        // It stays as a backstop rather than becoming dead code: a pane created
+        // before connect has not been pushed either value yet, and one pane
+        // ratcheting is enough to churn the session.
         //
         // Deliberately NOT setNoiseFloorEnable(false): that is the operator's
         // own toggle, and forcing it would both fight the overlay menu and lose
         // the setting for the next radio. The auto-floor stays enabled and
         // simply has nothing to chase on a fixed scale.
-        if (autoFloorChange && !m_radioModel.backendCapabilities().radioOwnsDbmScale) {
+        const RadioCapabilities& dbmCaps = m_radioModel.backendCapabilities();
+        if (autoFloorChange
+            && !noiseFloorAutoAdjustAllowed(dbmCaps.radioOwnsDbmScale,
+                                            dbmCaps.panBinsAbsolute())) {
             if (auto* pan = m_radioModel.panadapter(applet->panId())) {
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());
             }
@@ -5823,10 +5853,16 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 sl->setRecordOn(on);
         }
     });
-    // Client-side recording stopped by idle timeout → update VFO button
-    connect(m_qsoRecorder, &QsoRecorder::recordingStopped, w, [w]() {
+    // A stopped recording may have failed to write/finalize; only enable
+    // playback when the recorder has a successfully finalized file.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStopped, w, [this, w]() {
         w->setRecordOn(false);
-        w->setPlayEnabled(true);
+        w->setPlayEnabled(m_qsoRecorder->hasLastRecording());
+    });
+    connect(m_qsoRecorder, &QsoRecorder::recordingError, w, [this, w]() {
+        // Initial-header failures never emit recordingStopped.
+        w->setRecordOn(m_qsoRecorder->isRecording());
+        w->setPlayEnabled(m_qsoRecorder->hasLastRecording());
     });
     // Client-side playback
     connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
@@ -6134,6 +6170,40 @@ void MainWindow::wireModemAudioCompletion()
     });
 }
 
+// One owner for the amplifier's TX meters on the SHARED readouts — the
+// S-Meter, the cross-needle and the TMate2 — matching the rule the applet
+// gauges already follow.
+//
+// The radio-relayed AMP meters and the amplifier's own port-9008 status carry
+// the same forward power and SWR; on a steady carrier they agree to within
+// 0.05 dB. What differs is rate: the relay rides the radio's meter packets,
+// the socket is polled at 5 Hz. So the relay wins while its sample is fresh,
+// and the socket takes over about a second after the relay stops — which is
+// also what gives these readouts a value when no radio is relaying at all.
+//
+// Without this the two sources simply alternated, and the S-Meter jittered
+// between two slightly different numbers at the beat rate between them.
+void MainWindow::applyAmpTxMeters(float watts, float swr, bool fromRelay)
+{
+    if (fromRelay) {
+        m_ampRelayTxStamp.restart();
+    } else if (m_ampRelayTxStamp.isValid()
+                   && m_ampRelayTxStamp.elapsed() < kRelayMeterFreshnessMs) {
+        // Dropped, not applied-then-overwritten: applying it first is what
+        // made the needle visibly step back to the slower sample.
+        return;
+    }
+
+    m_appletPanel->setMeterTxValues(watts, swr);
+#ifdef HAVE_HIDAPI
+    m_tmate2TxWatts = watts;
+    if (m_radioModel.transmitModel().isTransmitting()) {
+        updateTMate2Display();
+        updateTMate2Indicators();
+    }
+#endif
+}
+
 void MainWindow::wireMeters()
 {
     // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
@@ -6209,10 +6279,17 @@ void MainWindow::wireMeters()
     // ── Tuner: MeterModel TX meters → TunerApplet gauges ────────────────
     // Use TGXL-specific meters when available (disambiguated from PGXL by handle)
     connect(&m_radioModel.meterModel(), &MeterModel::tgxlMetersChanged,
-            m_appletPanel->tunerApplet(), &TunerApplet::updateMeters);
+            m_appletPanel->tunerApplet(), &TunerApplet::setRadioMeters);
     // Note: txMetersChanged NOT connected to TunerApplet — exciter power
-    // would overwrite TGXL readings. TGXL meters come from TunerModel
-    // via the direct TCP connection (port 9010). (#625)
+    // would overwrite TGXL readings.
+    //
+    // The tuner's own port-9010 status carries the same two readings and is
+    // wired in TunerApplet::setTunerModel. BOTH feeds are live, and they are
+    // the same measurement: on a steady carrier the relayed AMP/FWD meter and
+    // the device's `fwd` field agreed to within 0.05 dB. They are no longer
+    // last-writer-wins — each arrives through a stamped entry point and the
+    // relay wins while fresh, because it runs at the radio's meter rate while
+    // the socket is polled at 1 Hz. (#625)
     m_appletPanel->tunerApplet()->setTunerModel(&m_radioModel.tunerModel());
     m_appletPanel->tunerApplet()->setMeterModel(&m_radioModel.meterModel());
 
@@ -6333,37 +6410,46 @@ void MainWindow::wireMeters()
         // AmpModel::ampStateChanged on both paths.
         if (kvs.contains("fanmode"))
             amp->setFanMode(kvs["fanmode"]);
-        if (kvs.contains("meffa"))
-            amp->setMeff(kvs["meffa"]);
-        // Convert PGXL dBm to watts and feed S-Meter alongside radio meters.
-        // Use peakfwd (actual peak power) not fwd (floor/minimum).
-        // Skip when amp is STANDBY — peakfwd reads ~0 dBm in standby and would
-        // stomp on the exciter feed that should drive the barefoot scale.
-        if (kvs.contains("peakfwd") && m_radioModel.amplifier().present()
+        // MEffA is NOT set from here. On this path AmpModel owns it —
+        // AmpModel::meffaChanged carries the state AND whether the `setup`
+        // group is known well enough to write it, which the raw kv-set cannot
+        // say. setMeff() below is the relay-only path, where it is read-only.
+        // Ensure the S-Meter is in TX mode when the PGXL reports transmitting.
+        // The VALUES come from AmpModel::directMetersChanged below — this is
+        // the state word, which only the raw kv-set carries.
+        //
+        // Gated on the amplifier being in circuit, for the same reason the
+        // value feed is. In STANDBY the state word is STANDBY and never
+        // TRANSMIT_*, so an ungated push would force the S-Meter and the
+        // cross-needle out of TX mode five times a second for the whole of a
+        // barefoot transmission — the authoritative edge comes from
+        // TransmitModel::moxChanged, and this must not fight it.
+        if (kvs.contains("state")
+                && m_radioModel.amplifier().present()
                 && m_radioModel.amplifier().operate()) {
-            float dbm = kvs["peakfwd"].toFloat();
-            float watts = std::pow(10.0f, (dbm - 30.0f) / 10.0f);
-            qCDebug(lcTuner) << "PGXL→SMeter: peakfwd=" << dbm << "dBm =" << watts << "W";
-            float swr = 1.0f;
-            if (kvs.contains("swr")) {
-                float rl = std::abs(kvs["swr"].toFloat());
-                float rho = std::pow(10.0f, -rl / 20.0f);
-                swr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.0f;
-            }
-            // Ensure S-Meter is in TX mode when PGXL reports transmitting
-            if (kvs.value("state").startsWith("TRANSMIT"))
-                m_appletPanel->setMeterTransmitting(true);
-            else if (kvs.contains("state") && !kvs.value("state").startsWith("TRANSMIT"))
-                m_appletPanel->setMeterTransmitting(false);
-            m_appletPanel->setMeterTxValues(watts, swr);
-#ifdef HAVE_HIDAPI
-            m_tmate2TxWatts = watts;
-            if (m_radioModel.transmitModel().isTransmitting()) {
-                updateTMate2Display();
-                updateTMate2Indicators();
-            }
-#endif
+            m_appletPanel->setMeterTransmitting(
+                kvs.value("state").startsWith("TRANSMIT"));
         }
+    });
+    // The amplifier's own forward power and SWR, off its port-9008 status.
+    // AmpModel owns the dBm→watts and return-loss→ratio conversions so this
+    // path and the relayed meters cannot disagree about the arithmetic.
+    //
+    // This deliberately follows `fwd`, NOT `peakfwd`. peakfwd is a peak the
+    // DEVICE latches and never decays: an idle PGXL with its drain rail down
+    // (state=IDLE, vdd=0.0) was captured still reporting peakfwd=44.8 dBm —
+    // 30 W of forward power out of an amplifier that was not transmitting,
+    // pushed at the S-Meter five times a second. The gauges do their own
+    // peak-hold, with a timer that releases it.
+    connect(&m_radioModel.amplifier(), &AmpModel::directMetersChanged,
+            this, [this](float watts, float swr) {
+        m_appletPanel->ampApplet()->setDeviceMeters(watts, swr);
+        if (!m_radioModel.amplifier().present()
+                || !m_radioModel.amplifier().operate()) {
+            // Out of circuit: the barefoot exciter feed owns the scale.
+            return;
+        }
+        applyAmpTxMeters(watts, swr, /*fromRelay=*/false);
     });
     connect(&m_pgxlConn, &PgxlConnection::connected, this, [this]() {
         qDebug() << "PGXL direct connection established, version:" << m_pgxlConn.version();
@@ -6403,13 +6489,24 @@ void MainWindow::wireMeters()
             amp->setDrainVoltage(kvs["vdd"].toFloat());
         if (kvs.contains("vac"))
             amp->setMainsVoltage(kvs["vac"].toInt());
+        // The RELAYED MEffA state. This is the only place it appears on a
+        // station with no direct port-9008 socket, so it reads out — but it
+        // stays inert, because a write needs the rest of the `setup` group and
+        // only the socket can read that. See AmpApplet::setMeff.
         if (kvs.contains("meffa"))
             amp->setMeff(kvs["meffa"]);
     });
-    // Fan mode cycle button → direct PGXL command (fan control is not in the radio API)
-    connect(m_appletPanel->ampApplet(), &AmpApplet::fanModeChanged, this, [this](const QString& mode) {
-        m_pgxlConn.sendCommand(QString("setup fanmode=%1").arg(mode));
-    });
+    // Fan mode cycle button → direct PGXL command (fan control is not in the
+    // radio API).
+    //
+    // Routed through AmpModel rather than sent straight down the socket. A
+    // `setup` write carries the whole configuration group — the vendor utility
+    // was captured sending `setup nickname=… meffa=… ledintens=… fanmode=…
+    // authcode=` as one line — and the single-key form this used to send names
+    // only fanmode, leaving the amplifier's nickname, LED intensity, MEffA
+    // state and auth code out of a write to the group that holds them.
+    // Both directions are wired in AmpApplet::setAmpModel, against the model
+    // that owns the configuration group. Nothing to do here.
     // OPERATE button → PGXL standby/operate command (relayed via the radio's
     // amplifier API by AmpModel::setOperate; no-op if no amp handle). #4094.
     connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
@@ -6969,22 +7066,27 @@ void MainWindow::wireMeters()
         if (present) updatePgxlStyle();
     });
     connect(&m_radioModel.meterModel(), &MeterModel::ampMetersChanged,
-            this, [this](float fwdPwr, float swr, float temp) {
-        m_appletPanel->ampApplet()->setFwdPower(fwdPwr);
-        m_appletPanel->ampApplet()->setSwr(swr);
+            this, [this](float fwdPwr, float swr, float temp,
+                         float drivePwr, bool driveValid) {
+        // hasAmpPower() says whether a forward-power or SWR sample has ever
+        // landed. ampMetersChanged also fires for TEMP and DRV, and the applet
+        // must not read those as the relay being the live source of power.
+        m_appletPanel->ampApplet()->setRadioMeters(
+            fwdPwr, swr, m_radioModel.meterModel().hasAmpPower());
         m_appletPanel->ampApplet()->setTemp(temp);
+        // Exciter power at the amplifier's input — the amp's own DRV meter,
+        // relayed by the radio. There is no second source for it: the PGXL's
+        // port-9008 status carries no drive field (probed on firmware 3.8.9;
+        // `drive`, `meter`, `meters` and `help` all answer 50000015, unknown
+        // command), so the relay is the only way to see it.
+        m_appletPanel->ampApplet()->setDrivePower(drivePwr, driveValid);
         // S-Meter TX power follows the scale: amp output when PGXL is OPERATE,
         // exciter output when it's STANDBY (txMetersChanged already handles that
         // path, so we just stop overriding it here).
-        if (m_radioModel.amplifier().present() && m_radioModel.amplifier().operate()) {
-            m_appletPanel->setMeterTxValues(fwdPwr, swr);
-#ifdef HAVE_HIDAPI
-            m_tmate2TxWatts = fwdPwr;
-            if (m_radioModel.transmitModel().isTransmitting()) {
-                updateTMate2Display();
-                updateTMate2Indicators();
-            }
-#endif
+        if (m_radioModel.meterModel().hasAmpPower()
+                && m_radioModel.amplifier().present()
+                && m_radioModel.amplifier().operate()) {
+            applyAmpTxMeters(fwdPwr, swr, /*fromRelay=*/true);
             static int ampDbg = 0;
             if (++ampDbg % 50 == 1)
                 qCDebug(lcTuner) << "AMP→SMeter: fwd=" << fwdPwr << "W swr=" << swr;

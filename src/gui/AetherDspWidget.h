@@ -80,6 +80,11 @@ signals:
     void nr2GainMethodChanged(int method);
     void nr2NpeMethodChanged(int method);
     void nr2AeFilterChanged(bool on);
+    // One signal for the whole post-processing group: every control writes to
+    // Nr2SettingsModel first, so the listener only needs to know that
+    // something changed, not which. (#5702)
+    void nr2Post2RunChanged(bool on);
+    void nr2Post2SettingsChanged();
     // MNR parameter changes
     void mnrStrengthChanged(float value);
     // DFNR parameter changes
@@ -166,6 +171,13 @@ private:
     QButtonGroup* m_nr2GainGroup{nullptr};
     QButtonGroup* m_nr2NpeGroup{nullptr};
     QCheckBox*    m_nr2AeCheck{nullptr};
+    QCheckBox*    m_nr2Post2Check{nullptr};
+    QSlider*      m_nr2Post2NlevelSlider{nullptr};
+    QLabel*       m_nr2Post2NlevelLabel{nullptr};
+    QSlider*      m_nr2Post2FactorSlider{nullptr};
+    QLabel*       m_nr2Post2FactorLabel{nullptr};
+    QSlider*      m_nr2Post2TaperSlider{nullptr};
+    QLabel*       m_nr2Post2TaperLabel{nullptr};
     QSlider*      m_nr2GainMaxSlider{nullptr};
     QLabel*       m_nr2GainMaxLabel{nullptr};
     QSlider*      m_nr2GainFloorSlider{nullptr};
