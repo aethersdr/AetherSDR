@@ -6,7 +6,7 @@
 #ifdef AETHER_ASR_ENABLED
 #include "CopyAssistPanel.h"
 #endif
-#include "CwDecodeSettings.h"
+#include "models/CwDecodeSettings.h"
 #include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
 #include "RangeSlider.h"
@@ -790,7 +790,7 @@ int PanadapterApplet::pitchRangeHigh() const
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
 #ifdef HAVE_DEEPFIST
-    if (m_cwEngineCombo->currentIndex() == 1) { return; }
+    if (deepFistEngineSelected()) { return; }
 #endif
     // Filter by sensitivity threshold — drop low-confidence decodes
     if (cost >= m_cwCostThreshold) return;
@@ -825,6 +825,14 @@ void PanadapterApplet::appendCwText(const QString& text, float cost)
 }
 
 #ifdef HAVE_DEEPFIST
+bool PanadapterApplet::deepFistEngineSelected() const
+{
+    // Compare the stored key, never the row: findData() returns -1 for a key
+    // this build does not offer, and the catalog is meant to grow.
+    return m_cwEngineCombo
+        && m_cwEngineCombo->itemData(m_cwEngineCombo->currentIndex()).toString()
+               == QLatin1String("deepfist");
+}
 void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const QString& status,
     bool preparing, bool canRetry, const QString& detail)
 {
@@ -834,8 +842,17 @@ void PanadapterApplet::setCwBackendState(const QString& key, bool tuning, const 
     const QString unavailableReason = tuning ? QString{}
         : tr("%1 does not support manual decoder tuning.")
               .arg(m_cwEngineCombo->currentText());
-    for (QWidget* control : std::array<QWidget*, 5>{m_cwSensSlider, m_lockPitchBtn,
-            m_lockSpeedBtn, m_pitchRangeSlider, m_speedRangeSlider}) {
+    // A description with no name gives a screen reader nothing to anchor it to
+    // (docs/a11y.md; #4896), so name them here rather than only explaining why
+    // they are unavailable.
+    const std::array<std::pair<QWidget*, QString>, 5> tuningControls{{
+        {m_cwSensSlider, tr("CW decode sensitivity")},
+        {m_lockPitchBtn, tr("Lock CW pitch estimate")},
+        {m_lockSpeedBtn, tr("Lock CW speed estimate")},
+        {m_pitchRangeSlider, tr("CW pitch search range")},
+        {m_speedRangeSlider, tr("CW speed search range")}}};
+    for (const auto& [control, name] : tuningControls) {
+        if (control->accessibleName().isEmpty()) { control->setAccessibleName(name); }
         control->setAccessibleDescription(unavailableReason);
         control->setEnabled(tuning);
     }
@@ -892,7 +909,7 @@ void PanadapterApplet::setCwStats(float pitchHz, float speedWpm)
 {
 #ifdef HAVE_DEEPFIST
     // ggmorse may still have queued deliveries after the engine selector changes.
-    if (m_cwEngineCombo->currentIndex() == 1) { return; }
+    if (deepFistEngineSelected()) { return; }
 #endif
     if (pitchHz > 0 && speedWpm > 0)
         m_cwStatsLabel->setText(QString("%1 Hz  %2 WPM").arg(pitchHz, 0, 'f', 0).arg(speedWpm, 0, 'f', 0));

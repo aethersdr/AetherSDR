@@ -74,13 +74,17 @@ void MainWindow::refreshCwRxContext()
     m_cwDecoder.reset();
     m_cwCallsignSpotter.clear();
     if (slice) {
+        // Stream continuity across a retune is a DeepFist concern. ggmorse's
+        // reset() is a worker-thread join plus restart (CwDecoder::stop() is
+        // "A JOIN, never a timeout"), which is far too costly to run on every
+        // frequencyChanged emission while the operator spins the tuning knob.
         m_cwRxFrequencyConnection = connect(slice, &SliceModel::frequencyChanged,
             this, [this] {
-                m_cwDecoder.reset();
+                if (CwDecodeSettings::deepFistSelected()) { m_cwDecoder.reset(); }
             });
         m_cwRxModeConnection = connect(slice, &SliceModel::modeChanged,
             this, [this] {
-                m_cwDecoder.reset();
+                if (CwDecodeSettings::deepFistSelected()) { m_cwDecoder.reset(); }
             });
     }
 }
@@ -108,7 +112,17 @@ void MainWindow::selectCwRxBackend(const QString& backend)
 }
 void MainWindow::refreshCwRxStatus()
 {
-    if (m_cwDecoderApplet) {
+    // Every pan builds its own engine combo and tuning controls, so stating
+    // only the targeted applet leaves the others advertising the wrong backend
+    // and, worse, leaves a previously-targeted pan's controls disabled for good.
+    // Same broadcast selectCwRxBackend() already does for the Zero Beat button.
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            applet->setCwBackendState(m_cwDecoder.backendKey(), m_cwDecoder.supportsTuning(),
+                m_cwDecoder.status(), m_cwDecoder.preparing(), m_cwDecoder.canRetry(),
+                m_cwDecoder.detail());
+        }
+    } else if (m_cwDecoderApplet) {
         m_cwDecoderApplet->setCwBackendState(m_cwDecoder.backendKey(), m_cwDecoder.supportsTuning(),
             m_cwDecoder.status(), m_cwDecoder.preparing(), m_cwDecoder.canRetry(), m_cwDecoder.detail());
     }

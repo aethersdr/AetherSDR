@@ -204,7 +204,7 @@ Burndown manifest for the engine/UI decoupling ([RFC](../aetherd-headless-engine
 | `models/BandDefs.h` | 5 | universal — Static ARRL band plan table (edges, default freq/mode, GEN/WWV); canonical band-plan data, no vendor ties. | unconverted |
 | `models/BandPlanManager.h` | 9 | universal — Band-plan overlay data (segments/spots/license classes, region merge) from JSON; radio-agnostic canon | unconverted |
 | `models/BandSettings.h` | 6 | universal — Per-band save/restore of canonical state (freq/mode/filter/AGC/WNB/display range) — band memories, no vendor fields | unconverted |
-| `models/CwDecodeSettings.h` | 4 | ui-support — CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state. | unconverted |
+| `models/CwDecodeSettings.h` | 7 | ui-support — CW receive backend selection and display preferences in the existing feature-owned settings blob; no radio state. | unconverted |
 | `models/CwRxModel.h` | 2 | universal — Receive CW backend catalog and lifecycle over typed PCM; decoder workers remain private and TX is separate. | unconverted |
 | `models/CwxModel.h` | 1 | universal — CW keyer intent: WPM/delay/QSK, 12 macros, send/erase, sent-index progress. Generic despite Flex 'CWX' name. | unconverted |
 | `models/DStarModel.h` | 1 | universal — D-STAR configuration and session state (callsigns, RPT1/RPT2 routing, modem/serial paths). Digital-voice state any backend carrying DV would present. | unconverted |

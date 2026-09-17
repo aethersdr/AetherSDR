@@ -61,7 +61,8 @@ public:
 private:
     struct Pending : Token { int seen; double last; };
     double m_committed = 0;
-    bool m_idle = false;
+    // Starts idle: a committer that has published nothing owes no separator.
+    bool m_idle = true;
     std::vector<Pending> m_pending;
 };
 }

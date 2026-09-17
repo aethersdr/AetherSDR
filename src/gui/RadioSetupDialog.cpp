@@ -1,6 +1,6 @@
 #include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
-#include "CwDecodeSettings.h"
+#include "models/CwDecodeSettings.h"
 #include "RttyDecodeSettings.h"
 #include "ScopedChildWidget.h"
 #include "GuardedSlider.h"

@@ -106,9 +106,17 @@ QString DeepFistStream::process(const float* samples, int count, lyra::dsp::Deep
                 return {};
             }
             const lyra::dsp::CtcFrames decoded = lyra::dsp::greedyCtcFrames(m_logits.data(), frames, classes);
+            // greedyCtcFrames() does not apply the token-table bound that
+            // greedyCtcDecode() does, and it is vendored, so the check belongs
+            // here: .at() on an out-of-range id throws on the decode worker,
+            // which has no handler above it.
+            const std::size_t tokenCount = model.tokens().size();
             for (std::size_t j = 0; j < decoded.ids.size(); ++j) {
+                if (decoded.ids[j] < 0 || static_cast<std::size_t>(decoded.ids[j]) >= tokenCount) {
+                    continue;
+                }
                 const double time = end - 6.0 + decoded.frames[j] * 6.0 / frames;
-                const QString token = QString::fromStdString(model.tokens().at(decoded.ids[j]));
+                const QString token = QString::fromStdString(model.tokens()[decoded.ids[j]]);
                 tokens.push_back({decoded.ids[j], time, token});
                 if (observations) {
                     const QString decision = gated ? QStringLiteral("activity_gate")

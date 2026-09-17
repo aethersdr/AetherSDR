@@ -13,7 +13,7 @@
 #include "MainWindowHelpers.h"
 #include "WindowGeometryRestore.h"
 
-#include "CwDecodeSettings.h"
+#include "models/CwDecodeSettings.h"
 #include "DisplaySettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"

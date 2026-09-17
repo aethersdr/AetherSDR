@@ -90,14 +90,15 @@ bool retainLockedEstimates()
     decoder.lockSpeed(true);
     const float pitch = decoder.estimatedPitch();
     const float speed = decoder.estimatedSpeed();
-#ifdef HAVE_DEEPFIST
-    if (!require(decoder.selectBackend("deepfist") && !decoder.isRunning(),
-                 "DeepFist selection started an inactive worker")
+    // Switching away and back must not discard the operator's locks. Uses the
+    // inert test backend rather than DeepFist so this runs in the default
+    // build — the property belongs to CwRxModel, not to any one backend.
+    if (!require(decoder.selectBackend("stub") && !decoder.isRunning(),
+                 "Second-backend selection started an inactive worker")
         || !require(decoder.selectBackend("ggmorse") && !decoder.isRunning(),
                     "GGMorse selection started an inactive worker")
         || !require(decoder.estimatedPitch() == pitch && decoder.estimatedSpeed() == speed,
                     "Backend switch discarded locked pitch or speed")) { return false; }
-#endif
     decoder.start();
     decoder.reset();
     if (!require(decoder.estimatedPitch() == pitch && decoder.estimatedSpeed() == speed,
@@ -160,7 +161,9 @@ int main(int argc, char** argv)
     disposable->reset();
     QCoreApplication::processEvents();
     if (!require(!disposable && statuses == 0, "State notification survived facade deletion")) { return 1; }
-#ifdef HAVE_DEEPFIST
+    // A state observer replacing the backend mid-notification must not let the
+    // superseded backend keep publishing. Also on the test backend so it runs
+    // without the optional experiment.
     CwRxModel nested;
     bool replaced = false;
     QObject::connect(&nested, &CwRxModel::statsUpdated, &app, [&](float, float) {
@@ -169,11 +172,27 @@ int main(int argc, char** argv)
     QObject::connect(&nested, &CwRxModel::statusChanged, &app, [&] {
         if (nested.backendKey() != "ggmorse") { ++statuses; }
     });
-    nested.selectBackend("deepfist");
+    nested.selectBackend("stub");
     QCoreApplication::processEvents();
     QCoreApplication::processEvents();
     if (!require(replaced && nested.backendKey() == "ggmorse" && statuses == 0,
                  "Superseded backend state continued publishing")) { return 1; }
-#endif
+
+    // The statusChanged relay is a QueuedConnection, and disconnecting a
+    // backend does not retract an event already posted for it. So: make the
+    // backend post one, supersede it before the loop runs, and require that the
+    // stale post is dropped. Only the generation check can do that.
+    CwRxModel superseded;
+    int posts = 0;
+    QObject::connect(&superseded, &CwRxModel::statusChanged, &app, [&] { ++posts; });
+    superseded.selectBackend("stub");
+    QCoreApplication::processEvents();
+    const int settled = posts;
+    superseded.start();                 // stub emits statusChanged -> event queued
+    superseded.selectBackend("ggmorse");  // bumps the generation first
+    QCoreApplication::processEvents();
+    QCoreApplication::processEvents();
+    if (!require(posts == settled + 1,
+                 "Stale queued statusChanged survived the backend switch")) { return 1; }
     return require(!decoder.isRunning(), "Stopped decoder restarted") && retainLockedEstimates() ? 0 : 1;
 }
