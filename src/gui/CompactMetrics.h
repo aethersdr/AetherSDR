@@ -26,9 +26,11 @@ namespace AetherSDR {
 // edits, spin boxes): their size IS their font, and changing it is the one
 // thing this must not do. Knobs are in that group too, even though they look
 // like pure graphics -- each holds an 11 px value edit across its middle, and
-// a knob narrower than 76 px delivers "-40.0 dB" as "0.0 dB". What gives way
-// instead is the stretchy graphics around them: curve views, level meters,
-// scopes, the wordmark.
+// a knob narrower than 76 px delivers "-40.0 dB" as "0.0 dB". So is any
+// container holding text widgets, such as the EQ's per-band readout row:
+// its height is three stacked line edits. What gives way instead is the
+// stretchy graphics around them: curve views, level meters, scopes, the
+// wordmark.
 class CompactMetrics {
 public:
     // Captures every explicitly-sized graphical widget under `root`.

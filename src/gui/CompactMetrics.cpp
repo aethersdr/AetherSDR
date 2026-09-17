@@ -25,6 +25,17 @@ bool isTextWidget(const QWidget* w)
 
 bool isKnob(const QWidget* w);
 
+// A container whose children are text widgets is a text row, whatever its own
+// class says. Its height is three stacked line edits, not a graphic, and
+// taking 40% off it clips them -- which is how the EQ's per-band readouts
+// ended up with their middle line sliced through.
+bool holdsText(const QWidget* w)
+{
+    const auto children = w->findChildren<QWidget*>();
+    return std::any_of(children.begin(), children.end(),
+                       [](const QWidget* c) { return isTextWidget(c); });
+}
+
 bool hasExplicitWidth(const QWidget* w)
 {
     return w->minimumWidth() > 0 || w->maximumWidth() < QWIDGETSIZE_MAX;
@@ -67,7 +78,7 @@ CompactMetrics::CompactMetrics(QWidget* root)
     if (!root) return;
     const auto widgets = root->findChildren<QWidget*>();
     for (QWidget* w : widgets) {
-        if (isTextWidget(w) || isKnob(w)) continue;
+        if (isTextWidget(w) || isKnob(w) || holdsText(w)) continue;
         if (!hasExplicitWidth(w) && !hasExplicitHeight(w)) continue;
 
         Entry entry;

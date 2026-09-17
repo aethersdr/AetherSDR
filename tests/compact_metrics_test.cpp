@@ -44,6 +44,7 @@ class CompactMetricsTest : public QObject {
 private slots:
     void knobsAndTextAreNeverTouched();
     void metersKeepTheirWidthAndGiveUpHeight();
+    void containersOfTextAreLeftAlone();
     void plainGraphicsShrink();
     void applyIsAbsoluteNotCumulative();
     void nothingShrinksBelowTheFloor();
@@ -81,6 +82,21 @@ void CompactMetricsTest::metersKeepTheirWidthAndGiveUpHeight()
 
     QCOMPARE(meter->width(), 42);              // scale figures live here
     QVERIFY(meter->height() < 200);            // the bar itself does not
+}
+
+void CompactMetricsTest::containersOfTextAreLeftAlone()
+{
+    QWidget root;
+    auto* readoutRow = new FakeCurve(&root);   // a graphic by class...
+    readoutRow->setFixedHeight(58);
+    auto* value = new QLabel(readoutRow);      // ...holding stacked readings
+    value->setText(QStringLiteral("1.50 kHz"));
+
+    CompactMetrics metrics(&root);
+    metrics.apply(0.6);
+
+    // 58 * 0.6 is 35, which slices through the middle of three stacked lines.
+    QCOMPARE(readoutRow->height(), 58);
 }
 
 void CompactMetricsTest::plainGraphicsShrink()

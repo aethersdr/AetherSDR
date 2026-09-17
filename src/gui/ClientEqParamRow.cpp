@@ -355,7 +355,10 @@ ClientEqParamRow::ClientEqParamRow(QWidget* parent) : QWidget(parent)
     // sitting just above this row.
     setAttribute(Qt::WA_StyledBackground, false);
     setStyleSheet("background: transparent;");
-    setFixedHeight(58);
+    // Three stacked readings -- frequency, gain, Q -- and at 58 the middle one
+    // sat hard against both neighbours with its descenders touching. 66 gives
+    // each line its leading back.
+    setFixedHeight(66);
 }
 
 void ClientEqParamRow::setEq(ClientEq* eq)

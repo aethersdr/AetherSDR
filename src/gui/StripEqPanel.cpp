@@ -333,7 +333,11 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     // the only thing that grows: without this it swallows every pixel the
     // window has, and 15% of a tall graph buys nothing a shorter one does not
     // already show. The other 15 goes to a spacer at the foot of the column.
-    constexpr int kCanvasStretch = 85;
+    // 88, not 85: the param row below grew by 8 px to stop clipping its
+    // readings, and that came out of the same pool. Nudging the split keeps
+    // the graph the height it was and takes the difference off the spacer,
+    // which is the one thing here with nothing to show.
+    constexpr int kCanvasStretch = 88;
     constexpr int kSlackStretch = 100 - kCanvasStretch;
 
     m_canvas = new ClientEqEditorCanvas;
