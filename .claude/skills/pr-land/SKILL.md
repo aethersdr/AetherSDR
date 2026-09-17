@@ -415,7 +415,9 @@ Standing prohibitions, each of which has cost something real:
     exemption. The tags file is the sharpest edge, because EB3 derives its
     vendor vocabulary from it at runtime: retagging a `vendor(...)` header as
     `mixed(...)` or `peripheral(...)` un-gates it for every file above the
-    seam, permanently, on a green run with no annotation anywhere. Canon allows
+    seam. `VENDOR_STEMS_PINNED` now catches that as a blocking `EB3-load`
+    naming the stem — which makes it a design conversation, not a pin to
+    edit your way past. Canon allows
     exactly two such moves — an EB3 vocabulary reclassification proved against
     the merge base with documented evidence and an explicit maintainer review,
     and a `FROZEN_BOOL_COUNT` raise on a maintainer ruling — and both are

@@ -324,7 +324,9 @@ Read the diff against each of these; cite the specific rule when flagging:
   verify the coupling really went and pass it. A PR that *grows* one, or
   retags a header in `docs/architecture/aetherd-touchpoint-tags.json`, is
   weakening the enforcement rather than passing it — EB3 derives its vendor
-  vocabulary from that file at runtime — and that is a blocker unless it is
+  vocabulary from that file at runtime, and a de-classification also has to
+  release the stem from `VENDOR_STEMS_PINNED`, so a PR touching both is
+  telling you exactly what it did — and that is a blocker unless it is
   one of canon's two documented carveouts: a vocabulary reclassification with
   merge-base proof and explicit maintainer review, or a `FROZEN_BOOL_COUNT`
   raise on a maintainer ruling.

@@ -659,11 +659,18 @@ you:
   **derived at runtime from the touchpoint audit**
   (`docs/architecture/aetherd-touchpoint-tags.json`, the single source of
   truth), so a header newly tagged `vendor` there is enforced without
-  editing the checker. The only permitted rebaseline is an intentional
+  editing the checker. **De-classification is pinned, and only that
+  direction.** `VENDOR_STEMS_PINNED` freezes today's 33 vendor stems: a stem
+  the audit no longer tags `vendor(...)` is a blocking `EB3-load` error naming
+  it, because that single edit would otherwise un-gate the header for every
+  file above the seam on a green run. Tagging a *new* header `vendor(...)`
+  arms more enforcement and needs no checker edit — arming must never cost a
+  second diff. The only permitted rebaseline is an intentional
   vocabulary-classification change: every newly tracked include must be proven
   to predate that classification against the merge base, the evidence must be
-  documented, and a maintainer must explicitly review the rebaseline. The
-  expanded set is shrink-only after classification.
+  documented, and a maintainer must explicitly review the rebaseline — and the
+  same evidence is what releases a stem from `VENDOR_STEMS_PINNED`, dropped in
+  that same commit. The expanded set is shrink-only after classification.
 - **Adding a radio feature?** Don't include the vendor class above the
   seam. Put the wire code in the family backend
   (`src/core/backends/<family>/`) and surface it through `IRadioBackend`
@@ -738,9 +745,12 @@ walks the list:
    file's command-plane count: all of those are demanded above, and a
    conversion PR that does them is conforming, not weakening. What is
    forbidden is the other direction — growing a baseline, adding a stem or a
-   row, or retagging a `vendor(...)` header, which un-gates it for every file
-   above the seam since EB3 derives its vocabulary from
-   `aetherd-touchpoint-tags.json` at runtime. There, restructure the change.
+   row, or retagging a `vendor(...)` header. That last one un-gates the header
+   for every file above the seam, since EB3 derives its vocabulary from
+   `aetherd-touchpoint-tags.json` at runtime; it now fails as a blocking
+   `EB3-load` naming the stem rather than passing quietly, and the failure is
+   a design conversation, not a `VENDOR_STEMS_PINNED` edit. There, restructure
+   the change.
    The two carveouts above (an EB3 vocabulary reclassification with merge-base
    proof and explicit maintainer review; a `FROZEN_BOOL_COUNT` raise on a
    maintainer ruling) are maintainer rulings carrying that evidence, never a
