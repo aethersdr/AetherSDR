@@ -1021,9 +1021,6 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     const bool connected = m_model->isConnected();
     const RadioCapabilities caps = m_model->backendCapabilities();
     // M3b: these legacy info-field hides await their scoped migration.
-    if (m_flexControlInfoField) {
-        m_flexControlInfoField->setVisible(!connected || caps.hasFlexControlIntegration);
-    }
     if (m_multiFlexInfoField) {
         m_multiFlexInfoField->setVisible(!connected || caps.hasMultiClientSessions);
     }
@@ -1106,9 +1103,15 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (m_audioCompressionGroup) {
         m_audioCompressionGroup->setVisible(!connected || caps.hasAudioCompression);
     }
-    if (m_flexControlGroup) {
-        m_flexControlGroup->setVisible(!connected || caps.hasFlexControlIntegration);
-    }
+    // m_flexControlGroup and m_flexControlInfoField are deliberately ABSENT from
+    // this function. The FlexControl knob is a HOST peripheral -- FlexControlManager
+    // opens a QSerialPort and finds it by scanning QSerialPortInfo for VID 0x2192 /
+    // PID 0x0010 -- so its visibility is not a radio capability and does not belong
+    // in a capability-driven update. hasFlexControlIntegration answers "does this
+    // RADIO's protocol carry FlexControl verbs", a different question, and gating on
+    // it hid the knob's settings the moment a non-Flex radio connected (#5778). The
+    // HID encoders -- Stream Deck, RC-28, PowerMate, Shuttle -- drive the same
+    // tuneSteps signal into the same tuning path and are gated on nothing.
     if (m_optionsLabel) {
         m_optionsLabel->setText(radioOptionsText(m_model));
     }
@@ -7250,8 +7253,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* group = new QGroupBox("FlexControl Tuning Knob");
         group->setStyleSheet(kGroupStyle);
         m_flexControlGroup = group;
-        group->setVisible(!m_model->isConnected()
-                          || m_model->backendCapabilities().hasFlexControlIntegration);
+        // Host peripheral, not a radio capability -- see updateRadioCapabilityVisibility (#5778).
+        group->setVisible(true);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -9030,11 +9033,7 @@ void RadioSetupDialog::selectTab(const QString& tabName)
 
 void RadioSetupDialog::revealFlexControlSettings()
 {
-    if (m_model->isConnected()
-        && !m_model->backendCapabilities().hasFlexControlIntegration) {
-        return;
-    }
-
+    // No capability check: the knob is a host serial device (#5778).
     selectTab(QStringLiteral("Serial & Controllers"));
     if (!m_flexControlGroup) {
         return;

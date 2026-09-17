@@ -155,13 +155,9 @@ void MainWindow::buildMenuBar()
     // inside the controller window.
     auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
     m_flexControlKnobAction = flexControlKnobAction;
-    flexControlKnobAction->setVisible(true); // capability-gated after connection
+    flexControlKnobAction->setVisible(true); // host serial device, never gated (#5778)
     flexControlKnobAction->setMenuRole(QAction::NoRole);
     connect(flexControlKnobAction, &QAction::triggered, this, [this] {
-        if (m_radioModel.isConnected()
-            && !m_radioModel.backendCapabilities().hasFlexControlIntegration) {
-            return;
-        }
         if (RadioSetupDialog* dlg = openRadioSetupPage())
             dlg->revealFlexControlSettings();
     });
