@@ -29,7 +29,14 @@ $OutDir    = "third_party\portaudio"
 $TarFile   = "third_party\portaudio-${PaVersion}.tar.gz"
 
 # ── Check if already set up ──────────────────────────────────────────────
-if (Test-Path "$OutDir\lib\portaudio_static_x64.lib") {
+# The stamp is part of the test on purpose. A lib built before the #5713
+# patch below is indistinguishable from a patched one by presence alone —
+# CMake only checks that the header and lib exist — so testing the lib alone
+# would leave a pre-patch build in place forever and silently, which is the
+# opposite of the fail-loud property the patch block is built around. The one
+# person guaranteed to hit that is whoever is reproducing #5713.
+$PatchStamp = "$OutDir\.patched-5713"
+if ((Test-Path "$OutDir\lib\portaudio_static_x64.lib") -and (Test-Path $PatchStamp)) {
     Write-Host "PortAudio already set up in $OutDir" -ForegroundColor Green
     exit 0
 }
@@ -64,35 +71,77 @@ if (-not $srcDir) {
     exit 1
 }
 
-# ── Patch: free the right pointer in WdmGetPinPropertyMulti (#5713) ─────
-# PortAudio v19.7.0 (and master as of 2026-09-16) has a one-token bug in
-# src/os/win/pa_win_wdmks_utils.c: WdmGetPinPropertyMulti()'s error branch,
-# taken when a driver's second IOCTL_KS_PROPERTY reply does not match its own
-# size query, calls PaUtil_FreeMemory( ksMultipleItem ) — the KSMULTIPLE_ITEM**
-# (the caller's stack slot) — instead of *ksMultipleItem. PaUtil_FreeMemory is
-# GlobalFree on Windows, so the heap manager gets a stack address and the
-# process dies with 0xc0000374 STATUS_HEAP_CORRUPTION inside Pa_Initialize().
-# The branch is reached from the DirectSound host API's per-device WDM-KS
-# channel-count query (PA_USE_WDMKS_DEVICE_INFO, on by default). FlexRadio DAX
-# 2.0.3 endpoints take it on every filter (pin 0, KSPROPERTY_PIN_DATARANGES:
-# size query says 96 bytes / ERROR_MORE_DATA, data query returns 0 bytes /
-# ERROR_MORE_DATA), which is the #5713 connect crash whenever DAX.exe is running.
-# Measured on a FLEX-8400 Windows box: 3/3 crashes unpatched, clean with this
-# line fixed. The replacement is exact-match and fails loudly if the upstream
-# text ever changes, so a PortAudio bump cannot silently drop it.
-$wdmksUtils = Join-Path $srcDir.FullName "src\os\win\pa_win_wdmks_utils.c"
-$wdmksText  = Get-Content -Raw -Encoding UTF8 $wdmksUtils
-$badFree    = "        PaUtil_FreeMemory( ksMultipleItem );`n        return paUnanticipatedHostError;"
-$goodFree   = "        PaUtil_FreeMemory( *ksMultipleItem );   /* AetherSDR #5713: was ksMultipleItem (the caller's stack slot) */`n        *ksMultipleItem = NULL;`n        return paUnanticipatedHostError;"
-$wdmksLf    = $wdmksText -replace "`r`n", "`n"
-$hits = ([regex]::Matches($wdmksLf, [regex]::Escape($badFree))).Count
-if ($hits -ne 1) {
-    Write-Error "pa_win_wdmks_utils.c: expected exactly one WdmGetPinPropertyMulti error-branch free to patch, found $hits — PortAudio source changed, re-check the #5713 patch"
-    exit 1
-}
-[IO.File]::WriteAllText($wdmksUtils, $wdmksLf.Replace($badFree, $goodFree), (New-Object Text.UTF8Encoding $false))
-Write-Host "Applied #5713 fix to pa_win_wdmks_utils.c (WdmGetPinPropertyMulti frees *ksMultipleItem)" -ForegroundColor Yellow
+# ── Patch: free the allocation, not the pointer's address (#5713) ─────────
+# PortAudio v19.7.0 (and master as of 2026-09-16) frees the wrong pointer in
+# three places. Each is the same one-token slip: the function takes a
+# KSMULTIPLE_ITEM** out-param, allocates into *ksMultipleItem, then on its
+# error branch hands ksMultipleItem — the caller's stack slot — to
+# PaUtil_FreeMemory, which is GlobalFree on Windows. The heap manager gets a
+# stack address and the process dies with 0xc0000374 STATUS_HEAP_CORRUPTION
+# inside Pa_Initialize(). The real allocation is leaked on the way past.
+#
+#   src/os/win/pa_win_wdmks_utils.c   WdmGetPinPropertyMulti   (:157)
+#       Reached from the DirectSound and MME per-device channel-count queries
+#       (pa_win_ds.c:920/:1082, pa_win_wmme.c:663/:796), all four compiled in
+#       by PA_USE_WDMKS_DEVICE_INFO, which defaults ON.
+#   src/hostapi/wdmks/pa_win_wdmks.c  WdmGetPinPropertyMulti   (:902)
+#   src/hostapi/wdmks/pa_win_wdmks.c  WdmGetPropertyMulti      (:951)
+#       Reached from PinNew() during WDM-KS pin enumeration — PA_USE_WDMKS,
+#       also ON by default — so this file ships in the same static lib.
+#
+# The trigger is a kernel-streaming driver whose second IOCTL_KS_PROPERTY
+# reply disagrees with its own size query. Every FlexRadio DAX 2.0.3 endpoint
+# does exactly that (pin 0, KSPROPERTY_PIN_DATARANGES: size query answers
+# 96 bytes / ERROR_MORE_DATA, data query returns 0 bytes / ERROR_MORE_DATA),
+# and those endpoints exist only while DAX.exe is running — which is why the
+# #5713 connect crash needs DAX and nothing else. WdmSyncIoctl() swallows
+# ERROR_MORE_DATA only when outBufferCount == 0, i.e. on the size query, so
+# the data query's non-zero buffer turns the same reply into a hard error and
+# takes the bad branch. Measured on a FLEX-8400: 3/3 crashes unpatched, clean
+# with these lines fixed.
+#
+# Considered and rejected: -DPA_USE_WDMKS_DEVICE_INFO=OFF. It would compile
+# out all four call sites into the utils copy and is immune to upstream
+# reformatting — but it does not touch pa_win_wdmks.c's own two copies, which
+# PA_USE_WDMKS keeps in the build, and it costs the DirectSound and MME
+# reported channel counts for every device. Patching fixes the defect instead
+# of routing around one of its two entry points, and it survives the day
+# someone adds a caller.
+#
+# Reported upstream as PortAudio/portaudio#1176. When PortAudio ships the fix,
+# delete this block rather than leaving the guard to stop a build on the first
+# version that carries it.
+#
+# Replacement is exact-match with an expected hit count per file, so a
+# PortAudio bump cannot silently drop a patch — it stops the build instead.
+$paPatches = @(
+    @{
+        File     = "src\os\win\pa_win_wdmks_utils.c"
+        Expected = 1
+        Sites    = "WdmGetPinPropertyMulti (DirectSound/MME device-info query)"
+        Bad      = "        PaUtil_FreeMemory( ksMultipleItem );`n        return paUnanticipatedHostError;"
+        Good     = "        PaUtil_FreeMemory( *ksMultipleItem );   /* AetherSDR #5713: was ksMultipleItem (the caller's stack slot) */`n        *ksMultipleItem = NULL;`n        return paUnanticipatedHostError;"
+    },
+    @{
+        File     = "src\hostapi\wdmks\pa_win_wdmks.c"
+        Expected = 2
+        Sites    = "WdmGetPinPropertyMulti + WdmGetPropertyMulti (WDM-KS pin enumeration)"
+        Bad      = "        PaUtil_FreeMemory( ksMultipleItem );`n    }`n`n    return result;`n}"
+        Good     = "        PaUtil_FreeMemory( *ksMultipleItem );   /* AetherSDR #5713: was ksMultipleItem (the caller's stack slot) */`n        *ksMultipleItem = NULL;`n    }`n`n    return result;`n}"
+    }
+)
 
+foreach ($paPatch in $paPatches) {
+    $paFile = Join-Path $srcDir.FullName $paPatch.File
+    $paText = (Get-Content -Raw -Encoding UTF8 $paFile) -replace "`r`n", "`n"
+    $paHits = ([regex]::Matches($paText, [regex]::Escape($paPatch.Bad))).Count
+    if ($paHits -ne $paPatch.Expected) {
+        Write-Error "$($paPatch.File): expected exactly $($paPatch.Expected) ksMultipleItem error-branch free(s) to patch, found $paHits - PortAudio source changed, re-check the #5713 patch"
+        exit 1
+    }
+    [IO.File]::WriteAllText($paFile, $paText.Replace($paPatch.Bad, $paPatch.Good), (New-Object Text.UTF8Encoding $false))
+    Write-Host "Applied #5713 fix to $($paPatch.File) - $paHits site(s): $($paPatch.Sites)" -ForegroundColor Yellow
+}
 
 # ── Build with CMake + MSVC ──────────────────────────────────────────────
 Write-Host "Building PortAudio from source with MSVC..." -ForegroundColor Cyan
@@ -124,6 +173,11 @@ if (-not $libFile) {
 Copy-Item $libFile.FullName "$OutDir\lib\portaudio_static_x64.lib"
 # Public header plus the pa_win_* host-API headers (WASAPI stream options etc.)
 Copy-Item "$($srcDir.FullName)\include\*.h" "$OutDir\include\"
+
+# Stamp the output so the early-exit guard above can tell a patched lib from a
+# pre-#5713 one. Written only after the lib is in place, so an interrupted run
+# re-patches and rebuilds rather than claiming a patch it never applied.
+Set-Content -Path $PatchStamp -Value "#5713 ksMultipleItem free - pa_win_wdmks_utils.c, pa_win_wdmks.c (x2)" -Encoding UTF8
 
 # ── Cleanup ──────────────────────────────────────────────────────────────
 Remove-Item -Recurse -Force $tempDir
