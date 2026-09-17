@@ -97,13 +97,9 @@ SampleRate sampleRateEnum(int hz) noexcept
     }
 }
 
-// The IQ rates the HL2's DDC can be told to run, ascending. ONE list, because
-// this is simultaneously the capability advertisement, the panadapter's zoom
-// limits, and the set a zoom request snaps to — and on this radio those are the
-// same fact. The pan span IS the sample rate (Hl2Backend::emitPanState), so a
-// second list would be a way for the advertised span and the deliverable span to
-// drift apart, which is exactly the failure being fixed here.
-constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
+// kIqSampleRatesHz has moved to Hl2Backend.h — still ONE list, now visible to
+// the capability test so the declaration is pinned against the array production
+// reads rather than against a copy. See the comment there.
 
 // The radio's rated output, in watts, as the gauges' full-scale reference.
 //
@@ -1630,6 +1626,104 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.maxPanadapters = ceiling;
     for (const int rate : kIqSampleRatesHz)
         c.sampleRatesHz.append(rate);
+    PanSpanModel span;
+    // THE SPAN IS THE SAMPLE RATE, so the four rates above are not just stream
+    // rates — they are every span this radio can produce, and 48 kHz is a
+    // FLOOR, not a preference.
+    //
+    // This radio ships raw IQ and the spectrum is computed here from what
+    // arrives (Hl2Spectrum, fed by Hl2RxDsp). There is no stage between the
+    // DDC and the FFT that could narrow the window: a 5 kHz pan — the span a
+    // Flex CW or FT8 operator runs routinely — would need samples the radio
+    // never sent, because the DDC's decimation is what sets the rate in the
+    // first place. So the client must snap a zoom request to one of these
+    // (nearestIqSampleRateHz) and clamp the control at the narrowest, rather
+    // than pass a literal span down and get a silent refusal.
+    //
+    // Upstream #5223 is the RFC for showing a sub-window of a delivered span at
+    // full bin resolution. That would change what the DISPLAY shows; it would
+    // not change what this radio can deliver, which is what this declares.
+    span.followsSampleRate = true;
+    // ONE SPAN FOR THE WHOLE RADIO. The HPSDR config command carries a single
+    // two-bit sample-rate field for the board — MetisProtocol's ccConfig packs
+    // SampleRate into C1[1:0], alongside the receiver COUNT in C4, and there is
+    // no per-receiver rate anywhere in the frame. So changing one panadapter's
+    // span moves every receiver onto the new rate and rebuilds all of their DSP
+    // chains (applyPanBandwidth).
+    //
+    // This is also why receivePanBandwidthControl above is nullopt: the control
+    // is real, but it is radio-wide, and publishing it as a per-pan authority
+    // would let an operator narrow one window and silently retune the other
+    // three. The same shared budget is why receiverCeiling() FALLS as the span
+    // widens: span and receiver count draw on the same 100BASE-T link.
+    span.radioWide = true;
+    c.panSpanModel = span;
+
+    PanAmplitudeModel amplitude;
+    // THE Y AXIS IS dBFS WEARING A dBm LABEL, and this says so rather than
+    // letting the label stand for a calibration that does not exist.
+    //
+    // Not "the HL2 cannot be calibrated" — it is that nothing on this radio
+    // reports what 0 dBFS is worth at the antenna, and no HL2 oracle states a
+    // figure for it. It is a per-unit property of the board, the ADC reference
+    // and the front end, so it can only come from a measurement against a
+    // reference source that has never been made on this station. Until it is,
+    // Hl2DbReference::fullScaleDbm stays 0.0 and isCalibrated() is false.
+    //
+    // Read from that object rather than hardcoded false: the day a per-unit
+    // fullScaleDbm is populated, the declaration follows it instead of having
+    // to be remembered. The numbers remain internally consistent — a 3 dB
+    // stronger signal still reads 3 dB higher — so what this denies is
+    // COMPARISON: a level from this radio must not be published as a spot, held
+    // against another station's report, or used as an absolute threshold.
+    amplitude.calibratedDbm = m_dbRef.isCalibrated();
+    // The bins this backend emits are ABSOLUTE dBFS computed on THIS host, so
+    // they do not move when the display reference level does — which is what
+    // lets the noise-floor auto-adjust converge even though this radio owns no
+    // dBm scale and echoes no range command back.
+    //
+    // Quoting the path rather than asserting it. Hl2RxDsp::spectrumReady hands
+    // over dBFS bins; the lambda wiring it shifts them by m_dbRef.offsetDb()
+    // and publishes a raw float32 array (floatBytes). That shift is the shared
+    // LNA reference (Hl2DbReference), NOT the display reference level — it
+    // moves when the operator changes RF gain and never when m_refLevel moves,
+    // which is exactly the property this field claims. From there
+    // RadioModel::onBackendSpectrumFrame memcpy's the array into the QVector it
+    // emits on panFeedSpectrumReady — "a straight pass-through", its own
+    // comment — touching no value, and SpectrumWidget::estimateNoiseFloorDbm
+    // reads those bins directly (a trimmed mean over the array; m_refLevel
+    // appears nowhere in it). See PanAmplitudeModel::binsAbsolute.
+    amplitude.binsAbsolute = true;
+    c.panAmplitude = amplitude;
+
+    // radioOwnsDbmScale IS DELIBERATELY NOT DECLARED HERE, and the reason is a
+    // measurement rather than caution.
+    //
+    // The flag is wrong for this radio -- there is no command plane to send a
+    // display range to and nothing to echo one back, so declaring it true was
+    // always a claim about hardware this backend does not have. But it is ONE
+    // flag answering TWO questions, and on the HL2 the answers differ:
+    //
+    //   1. can the radio be commanded a dBm range?          no
+    //   2. does the auto-floor loop's MEASUREMENT depend
+    //      on such a command having been accepted?          no, also
+    //
+    // Setting the flag false answers 1 correctly and answers 2 wrongly, because
+    // SpectrumWidget::applyNoiseFloorAutoAdjust's early return keys on it and
+    // turns the local auto-floor off. Bench run d101, on this radio: the loop
+    // SETTLES. Quiescent it moved 0.307 dB in 74 s and 0.0000 dB/s over the
+    // second half; stepped 12 dB of LNA it moved 5.99 dB, re-settled within
+    // ~30 s and went flat again. With the flag declared false the reference
+    // level sat pinned at -40.000 dBm for 222 s while the measured floor moved
+    // 2 dB. So the declaration would remove a loop that demonstrably works.
+    //
+    // Splitting the flag is the fix, and this change is that split: question 2
+    // now has its own field, PanAmplitudeModel::binsAbsolute, declared true
+    // above. Answering question 1 correctly is therefore SAFE from here on --
+    // noiseFloorAutoAdjustAllowed() is an OR and the second term holds the gate
+    // open -- but it is a claim about the command plane, not about the floor,
+    // so it gets its own change with its own reasoning rather than riding in on
+    // this one.
     // The AD9866 samples at 76.8 MHz, so the first Nyquist zone — everything
     // this receiver can hear without relying on an alias — is DC to 38.4 MHz
     // (oracle §7, which is also why the wideband bandscope spans exactly that).
@@ -1681,11 +1775,71 @@ RadioCapabilities Hl2Backend::capabilities() const
     // Reported from the gate, not hardcoded: the engine's TX guard keys off this,
     // so a build with transmit disabled must look RX-only from above the seam.
     c.canTransmit = m_txAllowed;
-    // The HL2 modulates on this host, so it transmits in whatever mode WDSP is
-    // told to build — there is no mode it receives and cannot send. The transmit
-    // gate (m_txAllowed) is the only thing that stops it, and that is
-    // canTransmit above.
-    c.receiveOnlyModes = {};
+    // THE MODES THIS RADIO DEMODULATES AND CANNOT MODULATE.
+    //
+    // The comment that stood here said the HL2 "transmits in whatever mode WDSP
+    // is told to build — there is no mode it receives and cannot send", and left
+    // the list empty on that basis. **The transmit chain is not WDSP.**
+    // Hl2TxDsp is a hand-written phasing SSB modulator: setMode() stores the
+    // mode and the only reader is isLowerSideband(), which returns true for Lsb,
+    // Cwl and Digl and false for everything else. So AM, SAM, DSB, FM, NFM, WBFM
+    // and DRM all take the upper-sideband branch and go on the air as SSB,
+    // announcing nothing.
+    //
+    // WHAT STAYS OFF THE LIST, deliberately:
+    //
+    //   * USB / LSB / DIGU / DIGL are the SSB family and modulate correctly.
+    //   * CW / CWU / CWL keys a carrier the GATEWARE shapes at the TX NCO
+    //     (MetisClient::setCwKeyDown). That path never reaches Hl2TxDsp, so the
+    //     sideband switch above does not apply to it and CW transmits correctly.
+    //
+    // These strings are the neutral vocabulary SliceModel carries, and both
+    // spellings of each mode appear because modeFromString() accepts both:
+    // refuseKeyInReceiveOnlyMode() compares what the slice holds, not what this
+    // backend would have mapped it to, so listing only one spelling would leave
+    // the other keying.
+    //
+    // THIS DECLARATION ALSO WITHDRAWS TUNE IN THESE MODES. Say so here rather
+    // than let an operator discover it.
+    //
+    // refuseKeyInReceiveOnlyMode() is not a MOX-and-CW guard.
+    // RadioModel::beginLocalTxActivity() runs it for EVERY TxActivity, ahead of
+    // the per-activity capability checks, so TxActivity::Tune is refused too —
+    // and that one is a real loss, not a theoretical one. setTune() below raises
+    // the carrier from the GATEWARE test-tone generator at zero offset
+    // (MetisClient::setTxTestTone), a path that never reaches Hl2TxDsp, exactly
+    // like the CW keyer exempted above. This radio could put a clean tune
+    // carrier on the air with the TX slice in AM or FM; after this list it will
+    // not, and the operator is told "Choose a transmit mode first" and has to
+    // move the slice to a mode that transmits. (TxActivity::Atu was already
+    // refused here for want of hasTuner, so the plain TUNE button is the only
+    // behaviour this changes.)
+    //
+    // ACCEPTED, deliberately, on two grounds:
+    //
+    //   * It is what this capability already MEANS. The IC-705 declares WFM
+    //     receive-only (#5040) and is refused on this same guard, with a second
+    //     wire backstop in IcomCivBackend::refuseKeyingInReceiveOnlyMode() that
+    //     its setTune() converges on through setKeying() — "shared by every path
+    //     here that can start an emission", in its own words. HL2 is inheriting
+    //     a settled contract, not inventing one.
+    //   * receiveOnlyModes is ONE list of mode names with no per-activity
+    //     granularity, so exempting tune is not expressible from a backend at
+    //     all: it would mean changing RadioModel above the family seam, for
+    //     every family at once. That is a maintainer's call.
+    //
+    // The CW/tune asymmetry is in the SHAPE of the list, not in the reasoning
+    // behind it: CW stays off because CW is a MODE this radio transmits
+    // correctly, and tune is an ACTIVITY, which a list of mode names has no
+    // vocabulary for.
+    //
+    // What the list itself reports is only what the modulator does today. When a
+    // mode genuinely transmits — the WDSP TXA chain carries all of these — its
+    // entry comes back off this list and the tune refusal lifts with it.
+    c.receiveOnlyModes = {QStringLiteral("AM"),   QStringLiteral("SAM"),
+                          QStringLiteral("DSB"),  QStringLiteral("FM"),
+                          QStringLiteral("NFM"),  QStringLiteral("WBFM"),
+                          QStringLiteral("WFM"),  QStringLiteral("DRM")};
     c.hostModulates = true;
     // Same tap, same seam — see RadioCapabilities::takesTxAudioOverSeam.
     c.takesTxAudioOverSeam = true;             // PC runs the modulator; no on-radio mic jacks

@@ -50,13 +50,25 @@ bool spin(std::function<bool()> done, int timeoutMs = 5000)
     return done();
 }
 
-// The status reply, verbatim off a PGXL on firmware 3.8.9, with the state
-// word substituted.
+// The status reply off a PGXL on firmware 3.8.9, with the state word
+// substituted.
+//
+// `fwd` is dBm, NOT watts. This fixture read fwd=1148.0 until a live capture
+// showed the amplifier's own FWD meter declared at 30.0..63.0 dBm and its
+// direct status resting at exactly 30.0 with nothing being transmitted —
+// 1148 was a watts figure in a dBm field, which no PGXL can emit. 60.6 dBm is
+// the same 1148 W the fixture always meant, encoded the way the device does,
+// and it stays consistent with the drain figures beside it: 51.9 V x 39.0 A is
+// 2024 W in for 1148 W out, about 57% efficient.
+//
+// `swr` is return loss in dB and the direct status reports it NEGATIVE
+// (-60.0 at rest on the captured unit); the relayed RL meter reports the same
+// quantity positive.
 QByteArray statusReply(const char* state)
 {
     return QByteArray("R9|0|state=") + state +
         " bandA=40 bandB=0 bsrcA=FLEX bsrcB=FLEX flexA=FLEX-8600 flexB=FLEX-8600"
-        " vac=245 vdd=51.9 id=39.0 fwd=1148.0 swr=-20.0 temp=22.4 hltemp=23.0"
+        " vac=245 vdd=51.9 id=39.0 fwd=60.6 swr=-20.0 temp=22.4 hltemp=23.0"
         " biasA=RADIO_AAB biasB=RADIO_AB fanmode=STANDARD meffa=STANDBY\n";
 }
 
@@ -380,7 +392,10 @@ int main(int argc, char** argv)
     {
         PanelKey* key = nullptr;
         for (PanelKey* k : applet.findChildren<PanelKey*>()) {
-            if (!k->accessibleName().contains(QStringLiteral("Fan"))) key = k;
+            // By name, not by "whichever is not the fan key": the panel
+            // carries a third key now (MEffA) and a fourth would silently
+            // become the one this picked up.
+            if (k->accessibleName().contains(QStringLiteral("STBY"))) key = k;
         }
         QPushButton* rail = nullptr;
         for (QPushButton* b : applet.findChildren<QPushButton*>()) {
@@ -451,7 +466,10 @@ int main(int argc, char** argv)
         // for a moment ago, from the same press.
         PanelKey* key = nullptr;
         for (PanelKey* k : applet.findChildren<PanelKey*>()) {
-            if (!k->accessibleName().contains(QStringLiteral("Fan"))) key = k;
+            // By name, not by "whichever is not the fan key": the panel
+            // carries a third key now (MEffA) and a fourth would silently
+            // become the one this picked up.
+            if (k->accessibleName().contains(QStringLiteral("STBY"))) key = k;
         }
         CHECK(key != nullptr);
         if (key) {
@@ -537,7 +555,10 @@ int main(int argc, char** argv)
     {
         PanelKey* key = nullptr;
         for (PanelKey* k : applet.findChildren<PanelKey*>()) {
-            if (!k->accessibleName().contains(QStringLiteral("Fan"))) key = k;
+            // By name, not by "whichever is not the fan key": the panel
+            // carries a third key now (MEffA) and a fourth would silently
+            // become the one this picked up.
+            if (k->accessibleName().contains(QStringLiteral("STBY"))) key = k;
         }
         CHECK(key != nullptr);
         if (key) {
@@ -560,14 +581,20 @@ int main(int argc, char** argv)
             const int settledCost = applet.sizeHint().height();
             const int honestFloor = qRound(settledCost * kPanelMinScale) + kPanelBottomGap;
             CHECK(applet.minimumSizeHint().height() <= honestFloor + 12);
-            settle(QSize(420, 300));
+
+            // The heights are taken FROM the measured column rather than
+            // written down. What is being pinned is where the pad gives way
+            // relative to what the contents cost: slack above the contents is
+            // pad, and the pad gives way first. Add a gauge row and any fixed
+            // number here would silently start testing the old row count.
+            settle(QSize(420, settledCost + 50));
             CHECK(key->size() == tall);
-            settle(QSize(420, 260));
+            settle(QSize(420, settledCost + kPanelBottomGap + 20));
             CHECK(key->size() == tall);
 
             // Past the point where the pad has drained, height becomes the
             // limit and the contents finally give way — and only then.
-            settle(QSize(420, 195));
+            settle(QSize(420, honestFloor - 13));
             CHECK(key->height() < tall.height());
 
             // And the slack goes UNDER the contents, not around them. With

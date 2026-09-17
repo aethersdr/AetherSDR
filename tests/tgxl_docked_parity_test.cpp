@@ -314,7 +314,10 @@ int main(int argc, char** argv)
     //
     // This model has no direct connection, which is exactly that station.
     {
-        applet.updateMeters(60.0f, 1.42f);      // a settled reading
+        // Through the relay entry point, not the blind one: updateMeters is
+        // private now precisely so the wiring cannot reach it, and this
+        // relay-only station is the case setRadioMeters names.
+        applet.setRadioMeters(60.0f, 1.42f);    // a settled reading
         {
             TunerDelta d; d.tuning = true;
             model.applyChanges(d);
