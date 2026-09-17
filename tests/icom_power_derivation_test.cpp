@@ -1,4 +1,5 @@
 #include "core/backends/icom/IcomCivBackend.h"
+#include "TxTestAuthority.h"
 
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -75,6 +76,7 @@ void testIc9700DerivedForwardPowerAcrossBands()
         return;
     }
 
+    TxTestAuthority authority;
     IcomCivBackend backend;
     IcomCivBackendTestAccess::prepareGeneration(backend, 1);
     IcomCivBackendTestAccess::selectModelAndFrequency(backend, *ic9700, 144'000'000ULL);
@@ -185,7 +187,7 @@ void testIc9700DerivedForwardPowerAcrossBands()
 
     IcomCivBackendTestAccess::selectModelAndFrequency(backend, *ic9700, 430'000'000ULL);
     const int beforeClientUnkey = updateSpy.count();
-    backend.setKeying(false);
+    backend.setKeying(false, authority.operation);
     bool clientUnkeyReset = false;
     for (int i = beforeClientUnkey; i < updateSpy.count(); ++i) {
         const QList<QVariant> args = updateSpy.at(i);

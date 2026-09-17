@@ -5,6 +5,7 @@
 #include "AppSettings.h"
 #include "AudioSummaryLogger.h"
 #include "AudioDeviceNegotiator.h"
+#include "CwSidetoneBackendPolicy.h"
 #include "CwSidetoneStartPolicy.h"
 #include "TxCaptureBuffer.h"
 #include "ShutdownTrace.h"
@@ -82,6 +83,7 @@
 #include <cstring>
 #include <functional>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace AetherSDR {
@@ -1934,6 +1936,12 @@ AudioEngine::AudioEngine(QObject* parent)
     m_clientTubeRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientPuduRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientDeEssRx->prepare(DEFAULT_SAMPLE_RATE);
+    // txFinalMonitorPcmReady carries a TxAudioSource and this object lives on
+    // its own thread, so every connection to it is queued. A queued connection
+    // cannot marshal a type Qt has not been told about, and the failure is a
+    // runtime warning and a silently dropped signal — no transmit audio, no
+    // compile error to catch it.
+    qRegisterMetaType<AetherSDR::TxAudioSource>("AetherSDR::TxAudioSource");
     m_wsprBeacon->prepare(DEFAULT_SAMPLE_RATE);
 
     TxVoiceProcessor::Processors txProcessors;
@@ -2006,9 +2014,10 @@ AudioEngine::AudioEngine(QObject* parent)
     connect(m_opusTxPaceTimer, &QTimer::timeout, this, [this]() {
         OpusTxPacer::DrainResult drain =
             m_opusTxPacer.takeDue(m_opusTxPaceClock.elapsed(),
+                                  TxCoordinator::monotonicMs(),
                                   m_txPacketCount);
-        for (const QByteArray& packet : drain.packets) {
-            emit txPacketReady(packet);
+        for (const OpusTxPacer::Packet& packet : drain.packets) {
+            emit txPacketReady(packet.payload, packet.context);
         }
     });
     m_opusTxPaceTimer->start();
@@ -4287,21 +4296,41 @@ void AudioEngine::setMuted(bool muted)
         emit mutedChanged(muted);
 }
 
-// Pick the sidetone backend based on build flag + AppSettings override.
-// PortAudio when available (the callback path: lower latency on every
-// platform that builds it — Windows joined Linux/macOS in #5200, where the
-// shipped installer started providing it); QAudioSink fallback otherwise or
-// when explicitly requested by the user.
+// Pick the sidetone backend from the build flag, the platform and the
+// operator's AppSettings override. The rule — including why the default is
+// PortAudio on Linux/macOS but QAudioSink on Windows (#5713) — lives in
+// CwSidetoneBackendPolicy.h, where it is pinned by
+// tests/cw_sidetone_backend_policy_test.cpp.
 static std::unique_ptr<CwSidetoneSinkBackend> makeSidetoneBackend(QObject* qparent)
 {
-    const QString pref =
-        AppSettings::instance().value("CwSidetoneBackend", "PortAudio").toString();
+#ifdef HAVE_PORTAUDIO
+    constexpr bool kPortAudioBuilt = true;
+#else
+    constexpr bool kPortAudioBuilt = false;
+#endif
+#ifdef Q_OS_WIN
+    constexpr bool kPlatformIsWindows = true;
+#else
+    constexpr bool kPlatformIsWindows = false;
+#endif
+
+    // Held in a local: string_view does not own, and a temporary QByteArray
+    // would be gone before the policy read it.
+    const QByteArray saved =
+        AppSettings::instance().value("CwSidetoneBackend").toString().trimmed().toUtf8();
+    const SidetoneBackendChoice choice = sidetoneBackendChoice(
+        kPortAudioBuilt,
+        kPlatformIsWindows,
+        parseSidetoneBackendPreference(
+            std::string_view(saved.constData(), static_cast<std::size_t>(saved.size()))));
 
 #ifdef HAVE_PORTAUDIO
-    if (pref != "QAudioSink") {
+    if (choice == SidetoneBackendChoice::PortAudio) {
         return std::unique_ptr<CwSidetoneSinkBackend>(
             new CwSidetonePortAudioSink());
     }
+#else
+    Q_UNUSED(choice);
 #endif
     return std::unique_ptr<CwSidetoneSinkBackend>(
         new CwSidetoneQAudioSink(qparent));
@@ -9384,7 +9413,9 @@ void AudioEngine::onTxAudioReady()
         auto* fd = reinterpret_cast<float*>(f32.data());
         for (int i = 0; i < ns; ++i)
             fd[i] = i16[i] / 32768.0f;
-        emit txRawPcmReady(f32);
+        if (m_rawMicrophoneContext.permitsDispatch(TxCoordinator::monotonicMs())) {
+            emit txRawPcmReady(f32, m_rawMicrophoneContext);
+        }
         return;
     }
 
@@ -9451,9 +9482,11 @@ void AudioEngine::onTxAudioReady()
     // Expose the post-limiter int16 stream so the QSO recorder captures voice TX
     // for Client-Side recording (#3556). Emitted unconditionally; the recorder
     // slot fast-returns when not recording / not transmitting, so this is cheap.
-    // Mic-chain audio: the level is ours to manage, so the backend's ALC stays
-    // in play.
-    emit txFinalMonitorPcmReady(data, /*clientLeveled=*/false);
+    // Mic-chain audio: the OPERATOR's level, set with the mic slider, with the
+    // operator present to hear the result. The backend's ALC stays in play as
+    // protection, and the slider applies — which is exactly what does NOT
+    // happen for the WSPR pump; see startWsprPump().
+    emit txFinalMonitorPcmReady(data, TxAudioSource::Microphone);
 
     // ── TX post-final-limiter scope tap ─────────────────────────
     // Sampled here, AFTER everything the strip can do to the audio
@@ -9466,6 +9499,26 @@ void AudioEngine::onTxAudioReady()
     accumulatePcMicMeterInt16Stereo(data);
 
     emitScopeFromInt16Stereo(data, DEFAULT_SAMPLE_RATE, true);
+
+    // Local monitor/recorder/meter delivery above is independent of transport
+    // authority. Retain the capture's context through buffering and pacing.
+    const TxCoordinator::Context context = m_hostModulation
+        ? m_hostMicrophoneContext : m_microphoneContext;
+    // The fence is absolute: no stamp, no transport delivery. There IS a
+    // window where a block can arrive unstamped — wireTxAudioAuthority posts
+    // setHostMicrophoneContext to this thread when localTransmitEngaged fires
+    // — but it is bounded to at most one block, and it is bounded by Qt's
+    // event ordering rather than by timing luck: that post and onTxAudioReady
+    // (a timer callback) are both events on THIS thread, delivered FIFO
+    // through one event loop. So every block after the install sees the stamp,
+    // and the only blocks that can miss it are those already queued ahead of
+    // it: one dspBlockSize, ~21 ms at 24 kHz, inside HL2 keying latency.
+    // Relaxing this would mean relaxing all five gates down to MetisClient's
+    // wire queue, which is not worth one block. (#5659 review)
+    if (!selectTxContext(context)) {
+        return;
+    }
+    emit txTransportPcmReady(data, TxAudioSource::Microphone, context);
 
     // ── Opus TX path: always active for remote_audio_tx ────────────────
     // Sends Opus during both RX (VOX/met_in_rx metering) and TX (voice).
@@ -9518,7 +9571,7 @@ void AudioEngine::onTxAudioReady()
             // The 10 ms pacer follows elapsed deadlines and drains a bounded
             // catch-up batch after a late timer event. Cap the queue to
             // ~200 ms if the producer still outruns that recovery.
-            if (m_opusTxPacer.enqueue(std::move(pkt))) {
+            if (m_opusTxPacer.enqueue({std::move(pkt), context})) {
                 ++m_opusTxDropsSinceLog;
                 if (!m_opusTxDropLogTimer.isValid()
                     || m_opusTxDropLogTimer.hasExpired(1000)) {
@@ -9547,7 +9600,7 @@ void AudioEngine::onTxAudioReady()
             floatBuf[i] = pcm[i] / 32768.0f;
 
         QByteArray packet = buildVitaTxPacket(floatBuf, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(packet);
+        emit txPacketReady(packet, context);
 
         m_txAccumulator.remove(0, TX_PCM_BYTES_PER_PACKET);
     }
@@ -9611,8 +9664,12 @@ QByteArray AudioEngine::buildVitaTxPacket(const float* samples, int numStereoSam
     return packet;
 }
 
-void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId)
+void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId,
+                                    const TxCoordinator::Context& context)
 {
+    if (!selectTxContext(context)) {
+        return;
+    }
     // Accumulate into a separate buffer for VOX/met_in_rx audio
     m_voxAccumulator.append(pcmData);
 
@@ -9629,7 +9686,7 @@ void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId)
         QByteArray packet = buildVitaTxPacket(floatBuf, TX_SAMPLES_PER_PACKET);
         m_txStreamId = savedId;
 
-        emit txPacketReady(packet);
+        emit txPacketReady(packet, context);
         m_voxAccumulator.remove(0, TX_PCM_BYTES_PER_PACKET);
     }
 }
@@ -9750,7 +9807,7 @@ void AudioEngine::setRadeMode(bool on)
     clearTxAccumulators();
 }
 
-void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
+void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context)
 {
     // A host-modulating backend (HL2) runs the modulator on THIS host and has
     // no Flex TX stream id — the AFSK belongs in the final-monitor tap, not in
@@ -9768,12 +9825,30 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     // interlock status a host-modulating radio never sends, so testing it would
     // discard everything.
     if (m_hostModulation) {
+        // Microphone, NOT EngineGenerated, and the distinction is a transmit
+        // level rather than a label. The only generator that reaches this
+        // branch on a host-modulating radio is the AX.25 modem — RADE needs DAX
+        // audio and activateRADE() refuses any radio that cannot provide it, so
+        // it is Flex-only and a Flex modulates on its own side.
+        //
+        // The AFSK amplitude is a compile-time constant (kTxAfskAmplitude =
+        // 0.35, -9.12 dBFS in AetherAx25LibmodemShim.cpp) and the packet dialog
+        // has no level control at all, so the mic slider is the ONLY thing in
+        // the product that can move an AX.25 frame. Tagging it EngineGenerated
+        // bypasses that slider and pins HF packet 7.71 dB under the ALC target
+        // (0.85, -1.41 dBFS) with nothing able to raise it. The beacon argument
+        // does not reach this far: the WSPR pump is the unattended source, it
+        // feeds from its own call site below, and #5651 sets its default.
         feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
-                               /*forceRadioDaxRoute=*/true);
+                               /*forceRadioDaxRoute=*/true,
+                               TxAudioSource::Microphone, context);
         return;
     }
 
     if (m_txStreamId == 0) return;
+    if (!selectTxContext(context)) {
+        return;
+    }
 
     // Gate modem audio on PTT (prevents radio pre-buffer build-up)
     if (!m_transmitting) {
@@ -9793,17 +9868,77 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
         auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
         QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(pkt);
+        emit txPacketReady(pkt, context);
         m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
     }
 }
 
-void AudioEngine::finishModemTxAudio(quint64 token)
+void AudioEngine::finishModemTxAudio(quint64 token, const TxCoordinator::Context& context)
 {
     // This method is queued onto the AudioEngine thread after every modem PCM
     // block. Emitting from here creates an ordered barrier: cross-thread
     // txFinalMonitorPcmReady deliveries are already ahead of this event.
-    emit modemTxAudioFinished(token);
+    // NOT fenced on permitsDispatch. This is a completion barrier, not a
+    // transmit command: it carries no audio and keys nothing. It is also the
+    // ONLY path that arms the AX.25 unkey timer
+    // (Ax25HfPacketDecodeDialog::handleTxAudioFinished), and there is no
+    // watchdog behind it — so fencing it here could leave PTT asserted with
+    // m_txAwaitingAudioFinish stuck true. The receiver already rejects a stale
+    // barrier by token, which is the check that actually belongs on it.
+    emit modemTxAudioFinished(token, context);
+}
+
+void AudioEngine::setMicrophoneContext(const TxCoordinator::Context& context)
+{
+    // Deliberately unguarded, unlike setHostMicrophoneContext and
+    // setRawMicrophoneContext: this setter is also the teardown path, and an
+    // empty context is how a caller revokes authority. A permitsDispatch()
+    // check here would make revocation a silent no-op. selectTxContext()
+    // re-validates on every block, so nothing downstream trusts this value.
+    if (!m_microphoneContext.sameContext(context)) {
+        clearTxAccumulators();
+        if (m_txVoiceProcessor) {
+            m_txVoiceProcessor->reset();
+        }
+    }
+    m_microphoneContext = context;
+}
+
+void AudioEngine::setHostMicrophoneContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (m_hostModulation && !m_hostMicrophoneContext.sameContext(context)) {
+        clearTxAccumulators();
+        if (m_txVoiceProcessor) {
+            m_txVoiceProcessor->reset();
+        }
+    }
+    m_hostMicrophoneContext = context;
+}
+
+void AudioEngine::setRawMicrophoneContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_rawMicrophoneContext.sameContext(context) && m_txResampler) {
+        m_txResampler->reset();
+    }
+    m_rawMicrophoneContext = context;
+}
+
+bool AudioEngine::selectTxContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return false;
+    }
+    if (!m_accumulatorContext.sameContext(context)) {
+        clearTxAccumulators();
+        m_accumulatorContext = context;
+    }
+    return true;
 }
 
 void AudioEngine::setDaxTxMode(bool on)
@@ -9814,6 +9949,17 @@ void AudioEngine::setDaxTxMode(bool on)
                        << (on ? "enabled" : "disabled")
                        << "route=" << (m_daxTxUseRadioRoute ? "radio-dax" : "float32-dax-tx")
                        << "stream=0x" + QString::number(m_txStreamId, 16);
+    }
+}
+
+void AudioEngine::discardTxMedia(const TxCoordinator::Context& context)
+{
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, context] { discardTxMedia(context); }, Qt::QueuedConnection);
+        return;
+    }
+    if (m_accumulatorContext.sameContext(context)) {
+        clearTxAccumulators();
     }
 }
 
@@ -9829,6 +9975,8 @@ void AudioEngine::clearTxAccumulators()
     m_txFloatAccumulator.clear();
     m_daxPreTxBuffer.clear();
     m_opusTxPacer.clear();
+    m_opusTxAccumulator.clear();
+    m_accumulatorContext = {};
 }
 
 void AudioEngine::setTransmitting(bool tx)
@@ -9926,7 +10074,7 @@ void AudioEngine::setDaxTxUseRadioRoute(bool on)
                    << "stream=0x" + QString::number(m_txStreamId, 16);
 }
 
-void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
+void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm, const TxCoordinator::Context& context)
 {
     // The built-in WSPR source owns the DAX TX stream for its one-shot frame.
     // Ignore concurrent external DAX/TCI samples instead of interleaving two
@@ -9934,12 +10082,14 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
     if (m_wsprBeacon && m_wsprBeacon->isActive()) {
         return;
     }
-    feedDaxTxAudioInternal(inPcm, true, false);
+    feedDaxTxAudioInternal(inPcm, true, false, TxAudioSource::ClientLeveled, context);
 }
 
 void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                                          bool markExternalSource,
-                                         bool forceRadioDaxRoute)
+                                         bool forceRadioDaxRoute,
+                                         TxAudioSource source,
+                                         const TxCoordinator::Context& context)
 {
     if (inPcm.isEmpty()) return;
     // A host-modulating backend (HL2) has no Flex TX stream id and never will —
@@ -9951,7 +10101,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
     // Mark TCI as the active TX-audio source. While this timer is fresh,
     // onTxAudioReady() suppresses the local mic capture path so the two
     // packet producers don't collide on the same UDP path to the radio.
-    if (markExternalSource) {
+    if (markExternalSource && context.permitsDispatch(TxCoordinator::monotonicMs())) {
         m_tciAudioTimer.start();
     }
 
@@ -10023,17 +10173,32 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
             dst[i] = static_cast<qint16>(
                 std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
         }
-        // markExternalSource is the source split this tap needs (#4796): true
-        // for TCI/DAX client audio, whose sender owns its level and must not
-        // get ALC makeup gain; false for the engine's own pre-shaped audio
-        // (WSPR pump, AX.25 modem, RADE modem waveform — all reaching here
-        // via sendModemTxAudio or the WSPR pump with markExternalSource
-        // false), which the engine generates at a known level and which keeps
-        // the ALC so its on-air level does not change.
-        emit txFinalMonitorPcmReady(out, /*clientLeveled=*/markExternalSource);
+        // THE SPLIT THIS TAP NEEDS IS THREE-WAY, AND THE CALLER DECIDES IT.
+        //
+        // The tag used to be derived here, as `markExternalSource ?
+        // ClientLeveled : EngineGenerated`, which made "not a TCI client" mean
+        // "an unattended beacon" — and swept the AX.25 modem in with the WSPR
+        // pump. It is passed in now, so each entry point states its own origin
+        // and a reader does not have to reason backwards from a flag that
+        // means something else. See TxAudioSource.h.
+        //
+        // What rides on it: the HL2 backend bypasses the mic slider for
+        // EngineGenerated alone. That matters because the ALC's 40 dB of makeup
+        // is gone (#5646) — it used to normalise any generated level onto the
+        // modulator's target, so a beacon came out right whatever level it was
+        // generated at. Without it, a beacon generated at -20 dBFS transmits at
+        // -20 dBFS, and the mic slider was moving it by up to 40 dB. Measured:
+        // 18.58 dB down, a factor of 72 in power.
+        emit txFinalMonitorPcmReady(out, source);
+        if (selectTxContext(context)) {
+            emit txTransportPcmReady(out, source, context);
+        }
         return;
     }
 
+    if (!selectTxContext(context)) {
+        return;
+    }
     const bool useRadioDaxRoute = forceRadioDaxRoute || m_daxTxUseRadioRoute;
     if (!useRadioDaxRoute) {
         // Low-latency route: keep radio on mic path (dax=0) and packetize
@@ -10053,7 +10218,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
             auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
             QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-            emit txPacketReady(pkt);
+            emit txPacketReady(pkt, context);
             m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
         }
         return;
@@ -10124,13 +10289,17 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                     m_txFloatAccumulator.constData(), payloadBytes);
 
         m_txPacketCount = (m_txPacketCount + 1) & 0xF;
-        emit txPacketReady(pkt);
+        emit txPacketReady(pkt, context);
         m_txFloatAccumulator.remove(0, MONO_BYTES_PER_PKT);
     }
 }
 
-void AudioEngine::startWsprPump()
+void AudioEngine::startWsprPump(const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    m_wsprContext = context;
     // Suppress the local mic capture path for the whole frame. onTxAudioReady()
     // only bails out on m_daxTxMode; the WSPR feed passes
     // markExternalSource=false (it is not TCI, and claiming so would corrupt
@@ -10150,11 +10319,19 @@ void AudioEngine::startWsprPump()
     m_wsprPumpTimer->start();
 }
 
+void AudioEngine::stopWsprPumpIfCurrent(const TxCoordinator::Context& context)
+{
+    if (m_wsprContext.sameContext(context)) {
+        stopWsprPump();
+    }
+}
+
 void AudioEngine::stopWsprPump()
 {
     m_wsprPumpTimer->stop();
     m_wsprPumpClock.invalidate();
     m_wsprPumpedFrames = 0;
+    m_wsprContext = {};
     m_txFloatAccumulator.clear();
     // The forced WSPR feed buffers in the radio-native int16 route, so drop that
     // residue too — a stop mid-symbol otherwise leaves a partial packet to be
@@ -10172,7 +10349,8 @@ void AudioEngine::stopWsprPump()
 void AudioEngine::pumpWsprBeacon()
 {
     if (!m_wsprBeacon || !m_wsprBeacon->isActive()
-        || !m_wsprPumpClock.isValid()) {
+        || !m_wsprPumpClock.isValid()
+        || !m_wsprContext.permitsDispatch(TxCoordinator::monotonicMs())) {
         stopWsprPump();
         return;
     }
@@ -10220,7 +10398,10 @@ void AudioEngine::pumpWsprBeacon()
     m_wsprFloatScratch.fill('\0');
     m_wsprBeacon->process(
         reinterpret_cast<float*>(m_wsprFloatScratch.data()), frames, 2);
-    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true);
+    // The one EngineGenerated source in the tree: a WSPR frame keys for 111.6 s
+    // with nobody at the microphone, so the mic slider must not move it.
+    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true,
+                           TxAudioSource::EngineGenerated, m_wsprContext);
     m_wsprPumpedFrames += frames;
 }
 

@@ -30,6 +30,32 @@ class MetisClient;
 class Hl2RxDsp;
 class Hl2TxDsp;
 
+// The IQ rates the HL2's DDC can be told to run, ascending. ONE list, because
+// this is simultaneously the capability advertisement (RadioCapabilities::
+// sampleRatesHz), the panadapter's zoom limits (panBandwidthLimitsChanged) and
+// the set a zoom request snaps to (nearestIqSampleRateHz) — and on this radio
+// those are the same fact. The pan span IS the sample rate
+// (Hl2Backend::emitPanState), so a second list would be a way for the
+// advertised span and the deliverable span to drift apart.
+//
+// It lives in the HEADER, not in the .cpp's anonymous namespace, for the same
+// reason it is one list: the capability test asserts against THIS array rather
+// than against a re-typed copy of it. A test that carries its own copy of the
+// truth cannot detect the declaration and the hardware diverging, which is the
+// specific way a capability rots.
+inline constexpr int kIqSampleRatesHz[] = {48000, 96000, 192000, 384000};
+
+// The wideband converter view this backend declares when it is connected, as a
+// value rather than as four lines inside capabilities().
+//
+// A FREE FUNCTION SO THE DECLARATION CAN BE TESTED WITHOUT A RADIO. The record
+// names the extension verb that delivers a frame, so a consumer never has to
+// test the family — which means a typo in either string would advertise a verb
+// that answers "no extension verbs implemented", a failure that only appears at
+// the moment an operator opens the window. Exposed here, that drift is a
+// socket-free assertion instead.
+[[nodiscard]] AetherSDR::WidebandConverterView widebandConverterViewRecord() noexcept;
+
 // IRadioBackend implementation for the Hermes-Lite 2 (HPSDR Protocol 1, raw IQ).
 // Owns a MetisClient (UDP wire) and an Hl2RxDsp (demod + panadapter) and maps the
 // neutral seam verbs/signals onto them. This is the first backend that owns an
@@ -106,23 +132,24 @@ public:
     void setNotch(int notchId, const AetherSDR::NotchDelta& delta) override;
     void removeNotch(int notchId) override;
     void setNotchesEnabled(bool on) override;
-    void setKeying(bool key) override;
-    void setCwKeying(bool down, bool breakIn, int breakInDelayMs) override;
+    void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
+    void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                       bool clientLeveled) override;
+                       TxAudioSource source,
+                       const TxCoordinator::Context& context) override;
     void setTxPower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
     void setMicGain(int level) override;
     // No default argument here on purpose: defaults on virtuals bind statically,
     // so repeating the base's is how the two quietly diverge later. The sole
     // call site passes it explicitly.
-    void setTune(bool on, int tunePowerPercent) override;
+    void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void setTxAudioMonitor(bool on) override;
     void setTxFrequency(double hz);
     void setTxDriveLevel(int level);
     // Baseband TX test tone, offsetHz from the carrier, amplitude 0..1.
     // Opt-in only — never enabled by a default.
-    void setTxTestTone(double offsetHz, double amplitude);
+    void setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation);
 
     void invokeExtension(const QString& ns, const QString& verb, quint64 requestId,
                          const QVariant& arg) override;
@@ -150,7 +177,7 @@ public:
                                         Hl2TxDsp* txDsp);
     LinkStats linkStats() const override;
 
-    // Point the stream-free telemetry poller at a radio (roadmap #15).
+    // Point the stream-free telemetry poller at a radio.
     //
     // Separate from connectRadio() ON PURPOSE: the case this feature exists for
     // is a radio we are NOT connected to, because somebody else has the stream.
@@ -163,9 +190,27 @@ public:
     // now also reads the radio's own in-use bit out of the poller's replies,
     // which is fresher than any scan and arrives on the path that needs it.
     void setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther);
-    // Injected by RadioModel, which owns it. Null is legitimate: a backend
-    // built before the service exists simply does not drive it.
+    // Borrowed, never owned. Null is legitimate: a backend built before the
+    // service exists simply does not drive it.
     void setTelemetryService(Hl2TelemetryService* svc) { m_telemetryService = svc; }
+
+    // IRadioBackend seam: take the model's offline health source, if it is one
+    // we can use.
+    //
+    // THE dynamic_cast IS DELIBERATE AND IS ON THE RIGHT SIDE OF THE LINE.
+    // Knowing your own concrete type inside your own family directory is
+    // tautological; doing it in `RadioModel` is the seam leak #5554 §2.8 wants
+    // retired, and is what this override exists to remove. The model now hands
+    // every backend the same interface pointer and never asks what family it
+    // built.
+    //
+    // A null or foreign source disables the in-band drive rather than erroring:
+    // an offline source belonging to some other family is not a fault, it is
+    // simply not ours.
+    void setOfflineHealthSource(IOfflineHealthSource* src) override
+    {
+        setTelemetryService(dynamic_cast<Hl2TelemetryService*>(src));
+    }
 
 signals:
     // Connect-time progress for the CLIENT-SIDE DSP build, and deliberately not
@@ -187,6 +232,9 @@ signals:
 private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PcmTestAccess;
+    friend struct Hl2TxGateTestAccess;
+    void applyKeying(bool key, const TxCoordinator::Operation& operation,
+                     const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();
     // Publish linkStats() on the fixed cadence the seam promises. Driven by a
     // timer here rather than by MetisClient's receive path so the tick survives
@@ -212,6 +260,13 @@ private:
     // Drop the IO-board schedule on linkDown: armed timer, coalesced value and
     // remembered band all describe a session and must not survive one.
     void resetIoBoardSchedule();
+    // Every bandscope mirror back to "this session never had one". Called from
+    // all THREE link edges, not just connect: between a drop and the next
+    // connect, a snapshot built from stale mirrors answers "Wideband bandscope
+    // (EP4): true" and prints ADC levels for a session that no longer exists —
+    // the exact failure the connect-time reset exists to prevent, arrived at
+    // from the other side (PR #5650 review).
+    void resetBandscopeMirrors();
     // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
     // the band containing freqHz (falling back to the restored defaults),
     // and record the operator's current values into the maps for the band
@@ -280,7 +335,7 @@ private:
     void defineMeters();
     void publishTelemetry(const Hl2Telemetry& t);
 
-    // ---- stream-free telemetry (roadmap #15) ----
+    // ---- stream-free telemetry ----
     //
     // Drive the poller's LinkState from what the IQ path is actually doing, so
     // the cadence rule in Hl2TelemetryCadence.h is CONNECTED rather than merely
@@ -307,7 +362,7 @@ private:
     Hl2TxDsp* m_txDsp = nullptr;
     bool m_connected = false;
 
-    // ---- stream-free telemetry (roadmap #15) ----
+    // ---- stream-free telemetry ----
     //
     // Reads the radio over the alternate control port while the in-band EP6
     // path cannot: another client holds the radio, our stream has stalled, or
@@ -790,6 +845,42 @@ private:
     // MetisClient::droppedPackets(): that object lives on the I/O thread, and
     // healthSnapshot() is read from the GUI thread.
     quint64 m_drops = 0;
+    // The wideband bandscope's counters, mirrored the same way and for the same
+    // reason. Plain members here rather than fields on LinkStats: LinkStats is
+    // the family-agnostic seam type every backend fills in, and endpoint 0x04
+    // is a Hermes-Lite 2 feature that no Flex, Icom or simulated radio has.
+    // They reach only this backend's own healthSnapshot() rows.
+    quint64 m_ep4Packets = 0;
+    quint64 m_ep4Drops = 0;
+    quint64 m_ep4Rewinds = 0;
+    quint64 m_ep4Blocks = 0;
+    quint64 m_ep4Timeouts = 0;
+    // The bandscope GATE's state as MetisClient reports it on LinkCounters —
+    // never this backend's own request. Mirrored so healthSnapshot() need not
+    // reach across the I/O thread to read it.
+    bool m_bandscopeEnabled = false;
+    // The requestId of the outstanding `bandscope.frame` call, or 0. One at a
+    // time: the reply is 2048 samples taken at one instant, and two callers
+    // sharing one frame would each be told it was theirs.
+    quint64 m_bandscopeFrameRequest = 0;
+    // THE MOST RECENT ACCEPTED BANDSCOPE BLOCK, mirrored onto this thread from
+    // MetisClient::bandscopeBlockReady for exactly the reason m_drops is: that
+    // object lives on the I/O thread and healthSnapshot() is read from the GUI
+    // thread.
+    //
+    // DISPLAY ONLY. IRadioBackend.h's own rule for the rows this feeds —
+    // "Purely for display — nothing in the app makes a decision from it" —
+    // binds here and is the reason there is no accessor for it beyond the
+    // health rows. The levels are UNCALIBRATED and PRE-DDC: on the AD9866's own
+    // scale, commensurable with the gateware's clip flag and with nothing else.
+    // No antenna-referred comparison has ever been run.
+    //
+    // `samples == 0` means no block has been seen, which is what keeps the rows
+    // ABSENT rather than reading a fabricated zero — HealthSnapshot's
+    // "absent means not reported" contract.
+    AetherSDR::hl2::Ep4Stats m_bandscopeBlock;
+    // When that block arrived. Invalid until the first one does.
+    QElapsedTimer m_bandscopeBlockClock;
     // Transport counters, mirrored onto THIS thread from
     // MetisClient::linkCountersUpdated for the same reason m_drops is.
     //
@@ -829,6 +920,9 @@ private:
     bool m_tuning = false;
     bool m_cwAutoKeyed = false;
     QTimer* m_cwHangTimer = nullptr;
+    TxCoordinator::Operation m_cwHangOperation;
+    TxCoordinator::Operation m_lastTxOperation;
+    TxCoordinator::Completion m_cwHangCompletion;
     bool m_txMonitor = false;
     // Both flags above are set SYNCHRONOUSLY while the setAudioMuted they imply
     // rides a queued connection to the DSP thread, so at key-up they say
@@ -884,17 +978,26 @@ private:
     int m_txFilterHighHz = 2700;
 
     // Loudest microphone peak of the current transmission, in dBFS, so setKeying()
-    // can tell at unkey whether the operator spent the whole of it below the ALC's
-    // hold threshold — the one case where holding the gain leaves them quiet
-    // rather than merely stopping the stage pumping. -140 is the floor
-    // Hl2TxDsp::micPeak reports for silence, and means "nothing measured yet".
+    // can tell at unkey whether the operator spent the whole of it well below the
+    // ALC's target — which, now that the ALC only reduces, means they went out
+    // that quiet on the air. -140 is the floor Hl2TxDsp::micPeak reports for
+    // silence, and means "nothing measured yet".
     float m_txMicPeakMaxDbfs = -140.0f;
 
     // True once the current transmission has carried client-leveled (TCI/DAX)
-    // audio, for which the ALC is bypassed (#4796). Gates the unkey "raise mic
-    // gain" diagnostic, whose advice only applies to the microphone path.
-    // Cleared on each key edge in setKeying().
+    // audio. WRITE-ONLY for now: the unkey "raise mic gain" diagnostic this
+    // used to gate went with the ALC's makeup half, and #5647 gives the flag a
+    // real job as part of TxAudioSource — so it is kept rather than deleted,
+    // to keep that change from reading as a revert. Set in submitTxAudio(),
+    // cleared on each key edge in setKeying().
     bool m_txAudioClientLeveled = false;
+    // Set when any block of THIS transmission was tagged EngineGenerated — the
+    // WSPR pump, which is the only producer. Gates the unkey "raise mic gain"
+    // diagnostic off: a beacon has no mic slider in its path, so the advice
+    // would name a control that cannot move it. NOT set for the AX.25 modem,
+    // which is tagged Microphone precisely because the slider IS its only
+    // control, so the advice is right for a quiet packet frame.
+    bool m_txAudioEngineGenerated = false;
 
     // The passband to push at the modulator for `mode`: the operator's if they
     // have chosen one, otherwise that mode's default.
@@ -1043,18 +1146,25 @@ private:
     // exact pair that was indistinguishable while this control was dead.
     double m_appliedMicGainLinear = std::numeric_limits<double>::quiet_NaN();
 
-    // The ALC hold threshold the modulator was CONFIGURED with, captured from
-    // the Config that connectRadio() hands it. Read by healthSnapshot() and by
-    // setKeying()'s "raise mic gain" diagnostic, both of which previously
-    // re-derived it from a default-constructed Config and so would have gone on
-    // reporting -45 dBFS the day connectRadio() set the field to anything else.
+    // The ALC target peak the modulator was CONFIGURED with, captured from the
+    // Config that connectRadio() hands it. Read by healthSnapshot(), which
+    // would otherwise re-derive it from a default-constructed Config and so go
+    // on reporting 0.85 the day connectRadio() sets the field to anything
+    // else. It had a second reader — setKeying()'s "raise mic gain"
+    // diagnostic — until that went with the ALC's makeup half.
+    //
+    // This mirror used to hold alcHoldBelowDbfs. That field is gone with the
+    // ALC's makeup half, and the target replaced it rather than the row being
+    // deleted: now that the stage only reduces, the pre-ALC mic peak IS the
+    // on-air level up to the target, so the target is what both readers have
+    // to compare a peak against.
     //
     // Seeded with Config's own default so a snapshot taken before the first
     // connect still reports what the modulator would use. The literal is spelt
     // out because Hl2TxDsp is only forward-declared in this header — a
     // static_assert in Hl2Backend.cpp pins it to Config's default, so the two
     // cannot drift silently.
-    double m_alcHoldBelowDbfs = -45.0;
+    double m_alcTargetPeak = 0.85;
 
     // The slice AGC threshold -> WDSP gain ceiling map used to live here as
     // kAgcCeilingDbPerUnit. It is now Hl2DbReference::kAgcCeilingDbPerUnit,

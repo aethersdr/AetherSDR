@@ -7,7 +7,7 @@
 
 namespace AetherSDR {
 
-bool OpusTxPacer::enqueue(QByteArray packet)
+bool OpusTxPacer::enqueue(Packet packet)
 {
     bool droppedOldest = false;
     if (m_queue.size() >= kMaxQueuePackets) {
@@ -23,9 +23,15 @@ bool OpusTxPacer::enqueue(QByteArray packet)
 }
 
 OpusTxPacer::DrainResult OpusTxPacer::takeDue(qint64 nowMs,
+                                              qint64 authorityNowMs,
                                               quint8& packetCount)
 {
     DrainResult result;
+    const qsizetype before = m_queue.size();
+    m_queue.removeIf([authorityNowMs](const Packet& packet) {
+        return !packet.context.permitsDispatch(authorityNowMs);
+    });
+    m_droppedPackets += static_cast<quint64>(before - m_queue.size());
     if (m_queue.isEmpty()) {
         // The pacing timer free-runs from the AudioEngine constructor, so this
         // fires on every 10 ms tick with no audio queued — between overs, on a
@@ -58,8 +64,8 @@ OpusTxPacer::DrainResult OpusTxPacer::takeDue(qint64 nowMs,
     result.packets.reserve(sendCount);
 
     for (int i = 0; i < sendCount; ++i) {
-        QByteArray packet = m_queue.takeFirst();
-        stampPacketCount(packet, packetCount);
+        Packet packet = m_queue.takeFirst();
+        stampPacketCount(packet.payload, packetCount);
         packetCount = static_cast<quint8>((packetCount + 1) & 0x0F);
         result.packets.append(std::move(packet));
     }

@@ -49,9 +49,12 @@
 // the #3306 pattern (policy as a pure function over injected facts, platform
 // as data) applied to device SELECTION rather than format negotiation. The
 // decision itself is platform-independent: the operating system enters only
-// through whether a PortAudio backend was constructed at all (HAVE_PORTAUDIO
-// is pkg-config-gated, so Windows builds never construct one and always take
-// the `Resolved` row). Mirrors QsoRecordStartPolicy / DaxTxPolicy.
+// through whether a PortAudio backend was constructed at all, which is
+// CwSidetoneBackendPolicy.h's question, not this one. On Windows the answer is
+// normally no — HAVE_PORTAUDIO was undefined there before v26.9.3, and since
+// #5713 a Windows build that has it still defaults to QAudioSink — so Windows
+// takes the `Resolved` row unless the operator opts into PortAudio explicitly.
+// Mirrors QsoRecordStartPolicy / DaxTxPolicy.
 
 namespace AetherSDR {
 
@@ -83,8 +86,11 @@ constexpr bool isExplicitSidetoneSelection(bool savedDeviceSet,
 
 // `explicitSelection`   isExplicitSidetoneSelection(...) above.
 // `backendIsPortAudio`  the constructed sink reports name() == "PortAudio"
-//                       (false when HAVE_PORTAUDIO is off, or when the user
-//                       opted out with CwSidetoneBackend=QAudioSink).
+//                       (false when HAVE_PORTAUDIO is off, on Windows unless
+//                       the operator opted in with CwSidetoneBackend=PortAudio,
+//                       and anywhere the operator opted out with
+//                       CwSidetoneBackend=QAudioSink). See
+//                       CwSidetoneBackendPolicy.h.
 constexpr SidetoneStartDevice sidetoneStartDevice(bool explicitSelection,
                                                   bool backendIsPortAudio)
 {

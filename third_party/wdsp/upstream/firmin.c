@@ -317,7 +317,26 @@ void plan_fircore (FIRCORE a)
 	a->accum = (double *) malloc0 (2 * a->size * sizeof (complex));
 	a->crev = fftw_plan_dft_1d(2 * a->size, (fftw_complex *)a->accum, (fftw_complex *)a->out, FFTW_BACKWARD, FFTW_PATIENT);
 	a->masks_ready = 0;
-	a->pminphase = create_minphase (a->nc, a->pfactor);
+	// AetherSDR: the minimum-phase workspace is built lazily -- see
+	// AETHERSDR-PATCHES.md. Build it only when this core is actually in
+	// minimum-phase mode. Upstream built it unconditionally, and its only
+	// consumer is the `if (a->mp)` branch of calc_fircore(), so at mp == 0
+	// the object is built on the channel-open path and never executed: seven
+	// buffers of nc * pfactor elements, and FOUR FFTW_PATIENT plans of that
+	// length, per core. ensure_minphase() below keeps the lazy path honest --
+	// setMp_fircore() can turn mp on at any time, so calc_fircore() builds the
+	// workspace on first use rather than assuming plan_fircore() left one.
+	a->pminphase = a->mp ? create_minphase (a->nc, a->pfactor) : 0;
+}
+
+// AetherSDR: the minimum-phase workspace is built lazily -- see
+// AETHERSDR-PATCHES.md. Build it on demand. Idempotent, and sized from the
+// CURRENT nc/pfactor, which is what plan_fircore() would have used at this
+// point in the core's life.
+static void ensure_minphase (FIRCORE a)
+{
+	if (a->pminphase == 0)
+		a->pminphase = create_minphase (a->nc, a->pfactor);
 }
 
 void calc_fircore (FIRCORE a, int flip)
@@ -326,7 +345,10 @@ void calc_fircore (FIRCORE a, int flip)
 	// must also call after a call to plan_firopt()
 	int i;
 	if (a->mp)
+	{
+		ensure_minphase (a);								// AetherSDR: lazy minphase build
 		mp_imp_exec (a->pminphase, a->impulse, a->imp);
+	}
 	else
 		memcpy (a->imp, a->impulse, a->nc * sizeof (complex));
 	for (i = 0; i < a->nfor; i++)
@@ -367,7 +389,13 @@ FIRCORE create_fircore (int size, double* in, double* out, int nc,
 
 void deplan_fircore (FIRCORE a)
 {
-	destroy_minphase(a->pminphase);
+	// AetherSDR: the minimum-phase workspace is built lazily -- see
+	// AETHERSDR-PATCHES.md. plan_fircore() no longer always leaves one here.
+	if (a->pminphase != 0)
+	{
+		destroy_minphase (a->pminphase);
+		a->pminphase = 0;
+	}
 	fftw_destroy_plan (a->crev);
 	_aligned_free (a->accum);
 	for (int i = 0; i < a->nfor; i++)

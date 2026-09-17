@@ -9,6 +9,9 @@
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
+#include "core/backends/OfflineHealthSource.h" // health that survives disconnection
+
+#include <QHostAddress>
 #include "core/RadioConnection.h"
 #include "core/WanConnection.h"
 #include "core/PanadapterStream.h"
@@ -56,6 +59,7 @@
 #include <QElapsedTimer>
 
 namespace AetherSDR {
+class TxController;
 
 inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabilities)
 {
@@ -83,7 +87,6 @@ class RadioModel : public QObject {
     Q_PROPERTY(QString model       READ model       NOTIFY infoChanged)
     Q_PROPERTY(QString version     READ version     NOTIFY infoChanged)
     Q_PROPERTY(bool    connected   READ isConnected NOTIFY connectionStateChanged)
-    Q_PROPERTY(float   paTemp      READ paTemp      NOTIFY metersChanged)
     Q_PROPERTY(float   txPower     READ txPower     NOTIFY metersChanged)
 
 public:
@@ -121,6 +124,7 @@ public:
 
     // Sub-models owned by RadioModel (main thread). (#502)
     MeterModel&       meterModel()       { return m_meterModel; }
+    const MeterModel& meterModel() const { return m_meterModel; }
 
     // PROOF OF LIFE, per data class, in milliseconds since the last arrival.
     //
@@ -203,7 +207,6 @@ public:
     void setFullDuplex(bool on) { m_fullDuplex = on; emit infoChanged(); }
     bool transmitFrequencyCheck() const { return m_transmitFrequencyCheck; }
     void setTransmitFrequencyCheck(bool on);
-    float paTemp()    const { return m_paTemp; }
     float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
     // True when the interlock's tx_client_handle is this client (or has
@@ -341,6 +344,65 @@ public:
     // which the dialog renders as "this radio reports no health registers"
     // rather than as an empty table.
     IRadioBackend::HealthSnapshot backendHealthSnapshot() const;
+
+    // ---- health that survives disconnection ----
+    //
+    // SEPARATE FROM backendHealthSnapshot() ON PURPOSE. That one is
+    // `m_backend ? … : {}`, and while a backend does outlive a disconnect — it
+    // is built in setupBackend(), which runs from this class's constructor and
+    // from rebuildBackendForFamily(), not from connectToRadio() — what it
+    // reports does not: every family blanks its rows when it is not talking to
+    // the radio, so `health` on a disconnected app answers with nothing. That
+    // is the state another client holding the radio puts you in, and it is
+    // exactly when the questions below are worth asking. This seam is the fix.
+    //
+    // NO FAMILY IS NAMED ANYWHERE BELOW. A family declares an offline source
+    // from its own directory (OfflineHealthRegistry::declare), and this model
+    // asks the registry. A family that declared nothing gets nothing, which is
+    // the same answer a family string test gave and is arrived at without one.
+    //
+    // NOT const: reading the rows IS the demand signal, and a query that
+    // quietly restarts a demand window is a lie about what it does.
+    [[nodiscard]] IRadioBackend::HealthSnapshot offlineHealthRows();
+
+    // Whether an offline health source exists in this session at all. The gate
+    // a family-agnostic consumer asks before merging these rows into a snapshot
+    // — without it a Flex or Icom `health` grows another family's attribution
+    // keys.
+    [[nodiscard]] bool hasOfflineHealth() const
+    {
+        return m_offlineHealth != nullptr;
+    }
+
+    // Which family's instrument is currently held, or empty when none is. The
+    // caller needs it for `telemetry target off`, which names no radio and so
+    // has no address to resolve a family from.
+    [[nodiscard]] QString offlineHealthFamily() const
+    {
+        return m_offlineHealthFamily;
+    }
+
+    // Why an aim was refused. TWO reasons, because a caller that cannot tell
+    // them apart retries the one it cannot fix: "you are connected" is worth a
+    // retry after disconnecting and "this family has no such instrument" never
+    // is.
+    enum class OfflineAimResult { Ok, FamilyDeclaresNone, SessionConnected };
+
+    // Aim the offline source at a radio WITHOUT connecting.
+    //
+    // `family` is the family of the RADIO BEING AIMED AT — resolved by the
+    // caller from discovery — not the family this session is connected to. That
+    // distinction is the whole verb: the radio worth probing is usually one
+    // this process has never taken a session on, and gating on the session's
+    // own family made it unreachable until you connected first.
+    //
+    // A null address stops the poller and releases the source, so the rows go
+    // away again and `health` returns to the snapshot the session started with.
+    //
+    // Never connects, never writes to the radio, and never changes this
+    // session's family.
+    OfflineAimResult setOfflineHealthTarget(const QString& family,
+                                            const QHostAddress& addr);
 
     // Bands the radio itself declared via the optional discovery/status
     // key "bands=2m,440,23cm" (names validated against BandDefs).  Empty
@@ -574,6 +636,7 @@ public:
     // serial slot), so the TUNE-start refusal cannot slip through the gap
     // between two iambic elements when m_cwKeyActive is momentarily false.
     void    setCwPaddleHeld(bool held) { m_cwPaddleHeld = held; }
+    void setProducerCwPaddleHeld(const TxCoordinator::Request& input, bool held);
     void    setBinauralRx(bool on);  // optimistic update + radio command
     bool    muteLocalWhenRemote() const { return m_muteLocalWhenRemote; }
     bool    autoSave() const { return m_autoSave; }
@@ -646,9 +709,8 @@ public:
     // so a connect must never replay this client-persisted flag onto it.
     void notePcAudioEnabled(bool on);
     bool ensureDaxTxStream(DaxTxRequestReason reason);
-    bool prepareWsprTransmit();
-    void releaseWsprTransmit();
-    void restoreWsprTransmitDax();
+    bool prepareWsprTransmit(const TxCoordinator::Request& input);
+    void releaseWsprTransmit(const TxCoordinator::Request& input);
     // "The WSPR beacon's transmit-audio route is ready." On a Flex that is
     // literally a `dax_tx` stream; on a seam-audio backend (HL2 or Icom) there
     // is no stream to own — the pump feeds the backend through
@@ -843,6 +905,47 @@ public:
     // Snapshot for engine-owned deferred release. This is not a credential or
     // an invitation to borrow whichever operation happens to be current later.
     TxCoordinator::Operation transmitOperation() const { return m_txOperation; }
+    // Trusted composition only. A producer is a lifetime, not an actor grant.
+    TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
+    // Plain engine protocol objects invalidate this handle in their destructor.
+    TxCoordinator::Producer registerTxProducer();
+    // Trusted local operator control surface. UI buttons and equivalent
+    // keyboard/MIDI toggles share this producer; external clients must bring
+    // their own lifetime instead of borrowing it.
+    std::shared_ptr<TxController> localTxController();
+    void setTxProducerAdmissionObserver(const TxCoordinator::Producer& producer,
+                                        std::function<void()> observer);
+    TxCoordinator::Context captureTxMedia(const TxCoordinator::Producer& producer) const;
+    TxCoordinator::Context captureTxMedia(const TxCoordinator::Request& request) const;
+    bool setProducerTransmit(const TxCoordinator::Request& request, bool tx,
+                             TransmitModel::PttSource source = TransmitModel::PttSource::Dax);
+    bool requestProducerPttOn(const TxCoordinator::Request& request, TransmitModel::PttSource source);
+    void requestProducerPttOff(const TxCoordinator::Request& request, TransmitModel::PttSource source);
+    void abortProducerPtt(const TxCoordinator::Request& request, TransmitModel::PttSource source);
+    bool requestProducerTune(const TxCoordinator::Request& request, bool on, bool twoTone = false);
+    bool requestProducerAtu(const TxCoordinator::Request& request, bool start);
+    bool requestProducerAtuBypass(const TxCoordinator::Request& request);
+    bool requestProducerCwx(const TxCoordinator::Request& request, const QString& text,
+                            std::function<void()> admitted = {}, int macroIndex = 0, bool live = false);
+    void abortProducerCwx(const TxCoordinator::Request& request);
+    bool requestProducerCw(const TxCoordinator::Request& request, bool down, bool ptt = false,
+                           bool notifySidetone = true,
+                           std::chrono::steady_clock::time_point scheduledAt = {},
+                           const QString& debugSource = {}, quint64 debugTraceId = 0,
+                           quint64 debugSourceMs = 0);
+    bool producerRequestHasWork(const TxCoordinator::Request& request) const;
+    void queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
+                                const QString& source, quint64 traceId, quint64 sourceMs,
+                                std::chrono::steady_clock::time_point scheduledAt);
+    bool txProducerHasWork(const TxCoordinator::Producer& producer) const;
+    void abortTxProducerInputs(const TxCoordinator::Producer& producer,
+                               TransmitModel::PttSource source);
+    // Best-effort stop of this captured compatibility operation only. This is
+    // not a cancellation/recovery acknowledgment or proof that RF has stopped.
+    void requestTransmitStop(const TxCoordinator::Operation& operation);
+    // Explicit local operator override. Also discards pre-admission queued
+    // inputs; never exposed as another client's ordinary release operation.
+    void cancelLocalTransmit();
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     void sendCwKey(bool down, const QString& debugSource = {},
@@ -1395,14 +1498,16 @@ public:
         return m_backend != nullptr && m_flexBackend == nullptr;
     }
     // Forward processed transmit audio to a host-modulating backend. No-op when
-    // the backend modulates on the radio side. `clientLeveled` carries
-    // AudioEngine's source decision through: true for external TCI/DAX client
-    // audio, whose level the sender owns (#4796).
+    // the backend modulates on the radio side. `source` carries AudioEngine's
+    // origin decision through unchanged — Microphone, ClientLeveled or
+    // EngineGenerated. This seam neither reads it nor branches on it; the
+    // backend does (#4796, and the mic-slider bypass for EngineGenerated).
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                       bool clientLeveled);
+                       TxAudioSource source,
+                       const TxCoordinator::Context& context);
     // Ordered completion barrier for a finite modem stream. The token lets the
     // producer reject a stale completion from an aborted transmission.
-    void finishTxAudio(quint64 token);
+    void finishTxAudio(quint64 token, const TxCoordinator::Context& context);
     // Let receive audio through while transmitting. Diagnostic use only — see
     // IRadioBackend::setTxAudioMonitor.
     void setTxAudioMonitor(bool on);
@@ -1594,6 +1699,18 @@ private:
     void handRestoredStateToBackend();  // RFC #4603
     void persistOperatingState(bool force = false);          // RFC #4603 PR 3
     void scheduleOperatingStateSave();
+    // Build the offline health source for `family` on first need, or return
+    // null when that family declared none. Rebuilds when the source it is
+    // holding was built for a DIFFERENT family — without that, a second
+    // declaring family is handed the first one's instrument and publishes its
+    // rows. The only place m_offlineHealth is created, so "which sessions pay
+    // for it" has one answer and it is visible at its call sites.
+    IOfflineHealthSource* ensureOfflineHealth(const QString& family);
+    // Take the backend's borrow back through the seam, then destroy it, so its
+    // rows stop appearing. Without this the source was built once and never
+    // released: `telemetry target off` left the rows standing for the life of
+    // the process, and a family switch carried them across.
+    void releaseOfflineHealth();
     void captureClientOwnedCwState(RestoredRadioState& state) const;
     void restoreClientOwnedCwState(const RestoredRadioState& state);
 
@@ -1628,6 +1745,27 @@ private:
     QString m_family;
     std::unique_ptr<IRadioBackend> m_backend;
     std::unique_ptr<AprsDigipeaterModel> m_aprsDigipeater;
+    // Health that survives disconnection. Its lifetime is this model's and not
+    // a connection's — it must keep answering when the backend above has
+    // stopped talking to a radio, which is the whole reason it does not live
+    // inside the backend.
+    //
+    // A POINTER, NOT A VALUE MEMBER, and null unless the selected family
+    // declared one. As a value member every RadioModel constructed it and
+    // started its timer, Flex and Icom and Sim sessions included, and every
+    // consumer of this header compiled the family's wire headers. "Idle until
+    // demand" was true of the polling and not of the object.
+    //
+    // The type here is the INTERFACE. This header names no family and includes
+    // no family's header, which is the structural difference between this and
+    // the version that failed docs/HERMES.md's pre-PR grep.
+    std::unique_ptr<IOfflineHealthSource> m_offlineHealth;
+    // Which family's factory built m_offlineHealth. The interface carries no
+    // family and must not — it would be a wire concept in a header whose point
+    // is not having one — so the owner remembers instead. Empty when nothing is
+    // held. Without it, `if (!m_offlineHealth)` answers "we have one" for a
+    // source belonging to a different family.
+    QString m_offlineHealthFamily;
     QVector<TxPowerBand> m_txPowerBands;
     double m_activeTxPowerBandLowHz = 0.0;
     double m_activeTxPowerBandHighHz = 0.0;
@@ -1747,6 +1885,15 @@ public:
 private:
     friend class RadioModelSliceLifecycleTestAccess;
     friend class TxOperationIntegrationTestAccess;
+    void expirePendingCallbacks(const QString& reason);
+
+    // True only while expirePendingCallbacks() is invoking the drained
+    // callbacks. sendCmd() refuses for the duration so an expiring callback
+    // cannot repopulate the map being drained. (#5653 review)
+    bool m_expiringPendingCallbacks{false};
+    // Bumped at every session end. Captured by deferred work (the multiFLEX
+    // peek window) so a timer armed in one session cannot fire into the next.
+    quint64 m_sessionGeneration{0};
     void wireBackendReceiverState();
     bool dispatchSliceLifecycleCommand(const QString& command, ResponseCallback callback = {});
     quint64 m_backendReceiverGeneration = 0;
@@ -1797,26 +1944,60 @@ private:
     // the desktop methods. Per-client authority is a subsequent Stage 4 step;
     // no daemon client can register or obtain this actor.
     TxCoordinator m_txCoordinator;
+    std::shared_ptr<TxController> m_localTxController;
     TxCoordinator::Actor m_desktopTxActor;
     TxCoordinator::Operation m_txOperation;
-    enum class TxActivity : unsigned { Mox = 1, Tune = 2, Atu = 4, CwKey = 8, CwPtt = 16, Cwx = 32 };
-    unsigned m_txActivities{0};
+    TxCoordinator::Producer m_backendTxProducer;
+    using TxActivity = TxCoordinator::Activity;
+    // One handle per existing compatibility entry point, not per client yet.
+    // Future producers retain their own handles rather than sharing these slots.
+    QMap<TxActivity, TxCoordinator::Intent> m_localTxIntents;
+    unsigned m_txOperationActivities{0}; // includes radio-buffered tails after local handoff
+    unsigned m_pendingTxDeliveries{0};
     bool m_txSessionClosing{false};
+    bool m_txInputsStopping{false};
     quint64 m_txCommandEpoch{0};
     quint64 m_tuneCommandEpoch{0};
     quint64 m_atuCommandEpoch{0};
-    quint64 m_cwKeyDeliveryEpoch{0};
-    quint64 m_cwPttDeliveryEpoch{0};
+    TxCoordinator::Intent m_atuCommandIntent; // captured before synchronous readback notifications
+    TxCoordinator::Intent m_cwxCommandIntent;
+    TxCoordinator::Operation m_cwxCommandOperation;
+    unsigned m_cwxPendingDeliveries{0};
+    bool m_cwxHandoffComplete{false};
     std::atomic<quint64> m_cwInputSession{0};
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
-    void endLocalTxActivity(TxActivity activity);
+    bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request);
+    TransmitModel::KeyingRoute producerKeyingRoute(const TxCoordinator::Request& request,
+                                                  TxActivity activity, bool& dispatched);
+    bool dispatchTuneIntent(bool on, const TxCoordinator::Request* request = nullptr);
+    bool dispatchAtuIntent(bool start, const TxCoordinator::Request* request = nullptr);
+    bool setTransmitImpl(bool tx, TransmitModel::PttSource source,
+                         const TxCoordinator::Request* request, bool alreadyClosing = false);
+    void endLocalTxActivity(const TxCoordinator::Intent& intent);
+    unsigned activeTxActivities() const;
+    bool hasOtherPttHolds(const TxCoordinator::Operation& operation,
+                          const TxCoordinator::Intent& excluded) const;
+    void completeLocalTxIfDrained();
+    void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
+    std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
+    void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);
+    TxCoordinator::Completion trackTxQueue(const TxCoordinator::Operation& operation,
+                                           std::function<void()> finished = {});
+    void sendCwxCommand(const QString& command, bool keying,
+                        const TxCoordinator::Operation& operation, ResponseCallback reply = {});
+    void dispatchCwxCommand(const QString& command, TxCoordinator::Operation operation,
+                            int epoch = -1, int nChars = -1);
+    bool dispatchCwxText(const QString& text, TxCoordinator::Operation operation);
+    void finishCwxDispatch(int epoch, bool untrackedMacro, TxCoordinator::Intent intent);
+    TxCoordinator::Completion trackCwxQueue(const TxCoordinator::Operation& operation);
     void stopTxOperation(const TxCoordinator::Operation& operation, TxCoordinator::StopReason reason);
     void resetTxOperations();
     void applyBackendTransmitDelta(const TransmitDelta& delta);
-    bool sendNetCwTcp(const QString& command, const TxCoordinator::Operation& operation,
-                     bool keying, std::function<void()> delivered);
+    bool sendTxTcpCommand(const QString& command, const TxCoordinator::Operation& operation,
+                          bool keying, std::function<void()> delivered,
+                          ResponseCallback reply = {}, std::function<bool()> currentBatch = {});
     EqualizerModel   m_equalizerModel;
     TnfModel         m_tnfModel;
     SpotModel        m_spotModel;
@@ -1836,7 +2017,8 @@ private:
     bool sendNetCwCommand(const QString& cmd, const QString& debugSource = {},
                           quint64 debugTraceId = 0, quint64 debugSourceMs = 0,
                           std::chrono::steady_clock::time_point scheduledAt = {},
-                          std::function<void()> delivered = {});
+                          std::function<void()> delivered = {},
+                          const TxCoordinator::Operation* captured = nullptr);
     QByteArray buildNetCwPacket(const QByteArray& payload);
 
     QString     m_name;
@@ -1867,7 +2049,6 @@ private:
     QString     m_version;          // software version from discovery (e.g. "4.1.5")
     QString     m_versionLabel;     // display-only word for it (Gateware on an HL2)
     QString     m_protocolVersion;  // protocol version from V line (e.g. "1.4.0.0")
-    float       m_paTemp{0.0f};
     float       m_txPower{0.0f};
     QString     m_chassisSerial;
     QString     m_callsign;
@@ -1919,6 +2100,7 @@ private:
     bool        m_cwKeyActive{false}; // true while CW key/paddle is held (#1379)
     bool        m_cwxActive{false};   // true while CWX send is in flight (#2047, #2097)
     bool        m_cwPaddleHeld{false}; // true while a paddle is physically held (#5422)
+    std::vector<TxCoordinator::Request> m_producerCwPaddleInputs;
     bool        m_cwxDrainArmed{false}; // CWX drain-release latch, immune to interlock flicker (#3949)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
@@ -2065,7 +2247,13 @@ private:
     // Apply the same capability + receive-only-pan preflight to a non-Flex CW
     // carrier edge before it crosses the backend seam. Key-up always passes so
     // an inhibit arriving mid-element can never strand RF on.
-    bool forwardNonFlexCwKeying(bool down);
+    bool forwardNonFlexCwKeying(bool down, const TxCoordinator::Operation& operation,
+                                const TxCoordinator::Completion& completion);
+    bool sendCwInput(bool down, bool ptt, bool notifySidetone,
+                     const QString& debugSource, quint64 debugTraceId, quint64 debugSourceMs,
+                     std::chrono::steady_clock::time_point scheduledAt,
+                     const TxCoordinator::Request* request = nullptr);
+    quint64 m_cwCommandEpoch{0};
     bool interlockNotificationArmed() const;
     void emitInterlockNotification(const QString& message,
                                    const QString& key,
@@ -2175,6 +2363,8 @@ private:
     quint32     m_daxTxStreamId{0};
     bool        m_daxTxActive{false};
     bool        m_wsprTxOwnershipRequested{false};
+    TxCoordinator::Request m_wsprTxInput;
+    bool        m_wsprTxTransition{false};
     bool        m_wsprTxYieldAfterUse{false};
     bool        m_wsprTxReleaseWhenReady{false};
     bool        m_wsprTxPreviousDax{false};   // `transmit dax` before the beacon armed

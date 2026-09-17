@@ -1,4 +1,5 @@
 #include "core/backends/icom/IcomCivScheduler.h"
+#include "TxTestAuthority.h"
 
 #include <algorithm>
 #include <array>
@@ -60,6 +61,40 @@ CivFrame ok()
 int main()
 {
     using Priority = IcomCivScheduler::Priority;
+
+    {
+        TxTestAuthority authority;
+        IcomCivScheduler scheduler;
+        int consumed = 0;
+        auto pending = write("ptt", 0x1c, 0x00, 1, Priority::Operator);
+        pending.txCommand = AetherSDR::TxCoordinator::Command{
+            authority.operation, true,
+            AetherSDR::TxCoordinator::Completion([&] { ++consumed; })};
+        scheduler.enqueue(std::move(pending), 0);
+        (void)authority.coordinator.finishLocalIntent(authority.operation);
+        scheduler.enqueue(read("meter.s", 0x15, 0x02, Priority::ActiveMeter), 0);
+        const auto next = scheduler.takeNext(0);
+        check(next && next->key == "meter.s" && !next->txCommand,
+              "cancelled key-on is dropped before taking a reply slot; observation continues");
+        check(consumed == 1, "dropping a cancelled queued command retires its local completion once");
+    }
+    {
+        TxTestAuthority authority;
+        IcomCivScheduler scheduler;
+        auto cleanup = write("ptt", 0x1c, 0x00, 0, Priority::Emergency);
+        cleanup.txCommand = AetherSDR::TxCoordinator::Command{authority.operation, false};
+        scheduler.enqueue(std::move(cleanup), 0);
+        (void)authority.coordinator.finishLocalIntent(authority.operation);
+        const auto fresh = authority.coordinator.acquire(
+            authority.actor, AetherSDR::TxCoordinator::monotonicMs()).operation;
+        auto key = write("fresh-ptt", 0x1c, 0x00, 1, Priority::Operator);
+        key.txCommand = AetherSDR::TxCoordinator::Command{fresh, true};
+        scheduler.enqueue(std::move(key), 0);
+        const auto next = scheduler.takeNext(0);
+        check(next && next->key == "fresh-ptt" && next->txCommand
+                  && next->txCommand->operation.sameOperation(fresh),
+              "stale emergency-priority key-up cannot overtake a new operation");
+    }
 
     {
         IcomCivScheduler scheduler;
@@ -500,6 +535,27 @@ int main()
               "failure accounting preserves each request identity and lifecycle state");
     }
 
+    {
+        IcomCivScheduler scheduler;
+        for (int i = 0; i < 140; ++i) {
+            scheduler.enqueue(read("same", 0x15, 0x02, Priority::ActiveMeter), i * 30);
+            (void)scheduler.takeNext(i * 30);
+            (void)scheduler.observe(reply(0x15, 0x02, 0), i * 30 + 1);
+        }
+        const auto& events = scheduler.recentTransactions();
+        check(events.size() == 128 && events.front().eventId == 13
+                  && events.back().eventId == 140,
+              "repeated same-generation polls have unique IDs across ring eviction");
+        check(events.front().generation == events.back().generation,
+              "event identity is independent of semantic generation");
+        scheduler.clearTransactionHistory();
+        (void)scheduler.reset();
+        scheduler.enqueue(read("same", 0x15, 0x02, Priority::ActiveMeter), 5000);
+        (void)scheduler.takeNext(5000);
+        (void)scheduler.observe(reply(0x15, 0x02, 0), 5001);
+        check(scheduler.recentTransactions().back().eventId == 141,
+              "history clear and scheduler reset never reuse event IDs");
+    }
     if (g_failures == 0) {
         std::printf("icom_civ_scheduler_test: all checks passed\n");
         return 0;

@@ -44,12 +44,13 @@ private:
     QHash<QString, State> m_states;
 };
 
-// Only the explicitly named NASA GIBS and NWS imagery hosts are gated. Other
+// Only the explicitly named NASA and weather imagery hosts are gated. Other
 // map providers retain the existing QNetworkAccessManager behavior. During a
 // cooldown a local asynchronous error feeds existing UI retry/status paths;
 // it never starts HTTP or restarts/extends the provider's cooldown.
 class MapProviderNetworkAccessManager : public QNetworkAccessManager {
 public:
+    inline static std::function<QNetworkReply*(const QNetworkRequest&, QObject*)> radarRequestHandler;
     explicit MapProviderNetworkAccessManager(QObject* parent = nullptr,
         std::shared_ptr<MapProviderRetryPolicy> policy = {});
 

@@ -140,6 +140,37 @@ if(NOT AETHERSDR_SANITIZER STREQUAL "none")
     unset(_aether_san_list)
 endif()
 option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
+# Which SSB modulator the Hermes-Lite 2 transmit path is BUILT with. There is
+# no runtime switch and there must not be one: two silent transmit paths are
+# worse than one, and Hl2TxDsp.cpp records that the prior TXA attempt failed
+# SILENTLY. A compile flag gives a way back without giving an operator a way to
+# be on the wrong one (#5678).
+#
+# ON  — WDSP's TXA chain. The migration's payoff is the LOW EDGE: measured
+#       opposite-sideband suppression on the {150, 3000} DIGU/DIGL passband
+#       goes from 22 dB at 150 Hz to past this instrument's numerical floor.
+#       At 1 kHz the incumbent already reads 87 dB against EP2's ~96 dB
+#       signed-16-bit wire (MetisProtocol.cpp, ep2WriteTxIq), so TXA's
+#       advantage THERE is below the wire and unusable.
+# OFF — the in-tree phasing modulator, unchanged. The fallback, kept building
+#       and kept tested, for a machine or a report where TXA misbehaves.
+#
+# DEFAULT OFF, DELIBERATELY, AND NOT BECAUSE TXA IS DOUBTED. The approval on
+# #5678 was conditional: keep the phasing modulator behind a switch "until the
+# TXA path passes the extended suite AND HAS HAD HARDWARE TIME. The
+# silent-failure argument doesn't expire on merge." The extended suite passes.
+# The hardware time does not exist yet -- docs/hl2-txa-configuration-diff.md §7
+# opens "No hardware. No radio was keyed. No antenna port was observed," and
+# every figure in this branch is a unit test reading emitted IQ above the
+# 16-bit EP2 wire.
+#
+# Defaulting ON would have made the first person to key TXA on the air someone
+# who did not choose to. OFF costs the identical way back -- one cmake flag --
+# and makes that person a volunteer. Flip the default when an operator has keyed
+# it into a dummy load and then onto an antenna, and say in the commit who did.
+option(AETHER_HL2_TX_TXA
+       "Hermes-Lite 2 SSB transmit modulator: ON uses WDSP's TXA chain, OFF (default) the in-tree phasing modulator"
+       OFF)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -745,6 +776,7 @@ set(CORE_SOURCES
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
     src/core/backends/sim/NoiseMixer.cpp                 # demo mode — audio engine (RFC #4288 Phase 2b)
+    src/core/backends/OfflineHealthSource.cpp # family-neutral registry: health that survives disconnection
     src/core/backends/hl2/MetisProtocol.cpp  # aetherd HL2 Phase 1a (HPSDR Protocol 1)
     src/core/backends/hl2/MetisClient.cpp    # aetherd HL2 Phase 1a (UDP wire + RX ingest)
     src/core/backends/hl2/Hl2ControlRequest.cpp # RQST/ACK: one outstanding, echo-matched (§13 item 13)
@@ -766,6 +798,7 @@ set(CORE_SOURCES
     src/core/backends/anan/AnanRxDsp.cpp     # aetherd ANAN P2 Phase 1b (IQ -> WdspChannel demod + spectrum)
     src/core/backends/anan/AnanDroopCorrection.cpp # ANAN DDC0 droop compensation (pure apply math)
     src/core/backends/anan/AnanDroopCalibrator.cpp # live, in-app DDC0 droop calibration sweep
+    src/core/backends/anan/AnanDroopDefaults.cpp   # derived per-gateware droop defaults (generated data)
     src/core/backends/anan/AnanBackend.cpp   # aetherd ANAN P2 Phase 1b (IRadioBackend impl)
     src/core/backends/anan/AnanSettings.cpp  # owned config object, "Anan" root key (Principle V)
     src/core/backends/icom/IcomProtocol.cpp  # IcomCIV Phase 0 (RS-BA1 UDP transport)
@@ -897,6 +930,7 @@ set(CORE_SOURCES
     src/core/DigitalVoiceWaveformTelemetry.cpp
     src/core/DigitalVoiceWaveformProcess.cpp
     src/core/DvkWavTransfer.cpp
+    src/core/weather/OperaRadarImage.cpp
     src/core/ZipArchive.cpp
     src/core/ProfileTransfer.cpp
     src/core/QsoRecorder.cpp
@@ -994,6 +1028,7 @@ set(MODEL_SOURCES
     src/models/Rn2SettingsModel.cpp
     src/models/RadioModel.cpp
     src/models/RadioModel_TxCoordinator.cpp
+    src/models/TxController.cpp
     src/models/DeclaredBands.cpp
     src/models/RadioSession.cpp
     src/models/ModelCapabilities.cpp
@@ -1052,6 +1087,11 @@ set(GUI_SOURCES
     src/gui/MainWindow_KiwiSdr.cpp
     src/gui/map/CityLightsItem.cpp
     src/gui/map/CityLightsSource.cpp
+    src/gui/map/OperaRadarNetwork.cpp
+    src/gui/map/LibreRadarNetwork.cpp
+    src/gui/map/RegionalRadarComposite.cpp
+    src/gui/map/WeatherRadarController.cpp
+    src/gui/map/WeatherRadarLegend.cpp
     src/gui/map/MapDisplayWidget.cpp
     src/gui/map/MapProviderNetworkAccessManager.cpp
     src/gui/map/GlobeMapView.cpp
@@ -1117,6 +1157,7 @@ set(GUI_SOURCES
     src/gui/CallsignLookupDialog.cpp
     src/gui/CwxPanel.cpp
     src/gui/BandStackPanel.cpp
+    src/gui/BandscopeDialog.cpp
     src/gui/FramelessWindowTitleBar.cpp
     src/gui/FramelessResizer.cpp
     src/gui/PanFloatingWindow.cpp
@@ -1436,7 +1477,7 @@ if(ENABLE_DFNR AND AETHER_EMBED_DFNR_MODEL)
     endif()
 endif()
 
-qt_add_resources(RESOURCES resources/resources.qrc)
+qt_add_resources(RESOURCES resources/resources.qrc resources/radar.qrc)
 
 # WDSP 2.00 is an engine-only dependency for raw-IQ radio backends. Its C API,
 # platform shims, and FFTW dependency remain private to aethercore.
@@ -1463,6 +1504,7 @@ target_link_libraries(aethercore PRIVATE aether::wdsp)
 # desktop executable and the automation test harnesses on the same linkage path
 # without pulling QtWidgets into the headless engine.
 add_library(aetherdesktop_support STATIC
+    src/gui/TxPointerAction.cpp
     src/core/AutomationServer.cpp
     src/core/SettingsHelpers.cpp
     src/core/ShortcutManager.cpp
@@ -2208,6 +2250,19 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::OpenGLWidgets
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
+
+# PUBLIC, not PRIVATE: tests/hl2_txdsp_test.cpp asserts a different
+# opposite-sideband floor for each modulator and has to know which one it
+# linked, and tests link aethercore. Defined in BOTH directions rather than
+# only when ON, so a source that reads it can be compiled with -Wundef and so
+# that "the flag was never plumbed" cannot look like "the flag is off".
+if(AETHER_HL2_TX_TXA)
+    target_compile_definitions(aethercore PUBLIC AETHER_HL2_TX_TXA=1)
+    message(STATUS "HL2 transmit modulator ... WDSP TXA (AETHER_HL2_TX_TXA=ON)")
+else()
+    target_compile_definitions(aethercore PUBLIC AETHER_HL2_TX_TXA=0)
+    message(STATUS "HL2 transmit modulator ... in-tree phasing modulator (AETHER_HL2_TX_TXA=OFF)")
+endif()
 
 if(Qt6SerialPort_FOUND)
     # PUBLIC: gui (MainWindow.cpp, RadioSetupDialog.cpp) uses QSerialPort and

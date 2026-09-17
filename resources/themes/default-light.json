@@ -118,6 +118,11 @@
             "key.standby.foreground": "#8a5a00",
             "key.bypass.background":  "#f2cea0",
             "key.bypass.foreground":  "#6a3f00",
+            "key.meffa.active.background": "#0b6b3a",
+            "key.meffa.active.border":     "#0e8a4b",
+            "key.meffa.active.hover":      "#0e7a44",
+            "key.meffa.active.foreground": "#ffffff",
+            "key.meffa.standby.foreground": "#0b6b3a",
             "swrScale": {
               "type": "linear-gradient",
               "angle": 90,

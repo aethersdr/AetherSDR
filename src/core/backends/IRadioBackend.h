@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/RadioSettingsIdentity.h"
+#include "core/TxCoordinator.h"
 #include "core/PcmFrame.h"
 
 #include <map>
@@ -26,6 +27,7 @@
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"
 #include "core/backends/TunerDelta.h"
+#include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR {
 
@@ -174,6 +176,9 @@ struct MemoryRecallDetails {
 // burndown (docs/architecture/aetherd-touchpoints.md) converts each gui→engine
 // touchpoint into a protocol/backend verb. Do NOT dump all 140 touchpoints
 // here at once.
+// Owned by the model, borrowed by a backend. See backends/OfflineHealthSource.h.
+class IOfflineHealthSource;
+
 class IRadioBackend : public QObject {
     Q_OBJECT
 
@@ -532,7 +537,12 @@ public:
     // backend only translates an already-authorized intent to its mechanism
     // (command verb, in-stream bit, hardware line). A backend whose
     // capabilities().canTransmit is false implements this as a no-op.
-    virtual void setKeying(bool key) = 0;
+    virtual void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) = 0;
+
+    // Trusted engine composition supplies the admitted operation for backend-
+    // owned producers (e.g. a TUNE tone). Copy it when starting that producer;
+    // workers must never look up whichever operation is current at delivery.
+    void setTransmitContext(const TxCoordinator::Context& context) { m_transmitContext = context; }
 
     // A client-timed CW element. This is deliberately separate from setKeying:
     // setKeying is the transmitter/PTT envelope, while this is the carrier
@@ -540,11 +550,13 @@ public:
     // shaped IQ and may use breakIn to raise/drop PTT around it; a radio-side
     // keyer translates it to its own key-line protocol. Flex keeps using its
     // timestamped NetCW path above this seam, so the default is a no-op.
-    virtual void setCwKeying(bool down, bool breakIn, int breakInDelayMs)
+    virtual void setCwKeying(bool down, bool breakIn, int breakInDelayMs, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(down);
         Q_UNUSED(breakIn);
         Q_UNUSED(breakInDelayMs);
+        Q_UNUSED(operation);
+    Q_UNUSED(completion);
     }
 
     // Let receive audio through WHILE TRANSMITTING.
@@ -583,10 +595,12 @@ public:
     // the RF Power slider. That made TUNE key at FULL power for anyone running
     // RF 100 / Tune 10, which is the opposite of what the control is for.
     // Defaulted so existing implementations stay source-compatible.
-    virtual void setTune(bool on, int tunePowerPercent = -1)
+    virtual void setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
         Q_UNUSED(on);
         Q_UNUSED(tunePowerPercent);
+        Q_UNUSED(operation);
+    Q_UNUSED(completion);
     }
 
     // Transmit power as a percentage, 0..100.
@@ -616,12 +630,14 @@ public:
     // Empty return means accepted for delivery. A non-empty string is an
     // operator-facing rejection reason; callers must not report success when
     // the backend could not preserve the requested text.
-    virtual QString sendCwText(const QString& text)
+    virtual QString sendCwText(const QString& text, const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {})
     {
+        Q_UNUSED(operation);
+    Q_UNUSED(completion);
         Q_UNUSED(text);
         return QStringLiteral("radio has no text keyer");
     }
-    virtual void abortCwText() {}
+    virtual void abortCwText(const TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) { Q_UNUSED(operation); Q_UNUSED(completion); }
     virtual void setCwSpeed(int wpm) { Q_UNUSED(wpm); }
     virtual void setCwBreakIn(bool on) { Q_UNUSED(on); }
 
@@ -667,7 +683,7 @@ public:
     //
     // KEYS THE TRANSMITTER on a radio with a real ATU, so it sits behind the
     // same TX gate as every other keying intent.
-    virtual void setAtu(bool start) { Q_UNUSED(start); }
+    virtual void setAtu(bool start, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) { Q_UNUSED(start); Q_UNUSED(operation); Q_UNUSED(completion); }
 
     // Receive and transmit incremental tuning. Hz relative to the VFO.
     //
@@ -845,18 +861,25 @@ public:
     // the microphone and any future source all reach the air through ONE path,
     // so what the operator monitors is what gets transmitted.
     //
-    // `clientLeveled` is true when the audio came from an external TCI/DAX
-    // client rather than the mic chain or the engine's own generators. The
-    // sender of such audio has already applied its own level control, so a
-    // host-modulating backend must not run makeup gain (ALC) over it (#4796).
+    // `source` says WHERE THE AUDIO CAME FROM, which decides whose level it is.
+    // TxAudioSource.h carries the full contract for the three states and why it
+    // is not the bool it replaced; the short version is that the mic slider
+    // applies to Microphone and ClientLeveled and not to EngineGenerated.
+    //
+    // ORIGIN, NOT TREATMENT. What a backend does with the tag is the backend's
+    // business, and most do nothing: Hl2TxDsp is the only consumer in the tree,
+    // and a radio that modulates on its own side ignores it entirely.
+    //
     // No default argument — defaults on virtuals bind statically, and the
     // override a caller actually reaches would quietly diverge from it.
     virtual void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
-                               bool clientLeveled)
+                               TxAudioSource source,
+                               const TxCoordinator::Context& context)
     {
         Q_UNUSED(int16Stereo);
         Q_UNUSED(sampleRateHz);
-        Q_UNUSED(clientLeveled);
+        Q_UNUSED(source);
+        Q_UNUSED(context);
     }
 
     // Finish a finite processed-audio stream before its caller starts the PTT
@@ -868,7 +891,7 @@ public:
     // whatever the radio buffers before its modulator — so the caller can hold
     // PTT for exactly that long rather than a compile-time worst case. Zero
     // means "nothing is buffered on your behalf; unkey when you like".
-    virtual int finishTxAudio() { return 0; }
+    virtual int finishTxAudio(const TxCoordinator::Context& context) { Q_UNUSED(context); return 0; }
 
     // ---- diagnostics ----
     //
@@ -901,6 +924,29 @@ public:
         [[nodiscard]] bool isEmpty() const { return order.isEmpty(); }
     };
     virtual HealthSnapshot healthSnapshot() const { return {}; }
+
+    // Take a BORROWED pointer to the model's offline health source, if this
+    // backend has any use for one. Default no-op, and that default is the
+    // point: a family with no offline instrument never learns the concept
+    // exists, and the model does not have to know which families do.
+    //
+    // REPLACES A CONCRETE-BACKEND CAST. The model used to reach for
+    // `dynamic_cast<hl2::Hl2Backend*>` to hand the HL2 its telemetry service.
+    // #5554 §2.8 already lists that cast shape as a seam leak to be retired
+    // (`Hl2Backend`'s off-seam `dspSetupProgress` forcing one in `MainWindow`),
+    // and `docs/HERMES.md`'s coding-agent section forbids adding new ones. A
+    // virtual with a no-op default is what the seam is for.
+    //
+    // NOT AN OWNERSHIP TRANSFER. The source outlives every backend — that is
+    // its whole purpose — and nothing tells a backend the source has gone, so
+    // the owner must not destroy it while a backend could still be holding it.
+    // See `RadioModel::releaseOfflineHealth()`, which hands the borrow back
+    // through this same setter before destroying what was lent.
+    //
+    // Declared here rather than on a family interface because the borrow is a
+    // seam event: it happens in `setupBackend()`, for whatever backend was just
+    // built, with no family name in sight.
+    virtual void setOfflineHealthSource(IOfflineHealthSource*) {}
 
     // WHAT THE DSP IS ACTUALLY CONFIGURED WITH, as opposed to what the model
     // says it asked for.
@@ -1266,6 +1312,7 @@ signals:
     void audioFrameReady(const AetherSDR::PcmFrame& pcm);
 
 protected:
+    TxCoordinator::Context transmitContext() const { return m_transmitContext; }
     quint64 pcmSession() const { return m_pcmSession; }
 
     // Compatibility publishers for current 24 kHz backends. Call on the owner
@@ -1310,6 +1357,7 @@ protected:
     }
 
 private:
+    TxCoordinator::Context m_transmitContext;
     // One line per session, not per frame: this fires at audio rate.
     void warnAudioDropped()
     {

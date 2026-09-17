@@ -741,6 +741,9 @@ void IcomSession::onAudioPayload(const QByteArray& packet)
 
 void IcomSession::onTxPump()
 {
+    if (!m_txContext.permitsDispatch(TxCoordinator::monotonicMs())) {
+        flushTxAudio();
+    }
     if (!m_audio || !m_audio->isReady())
         return;
     if (m_tx.pendingBytes() < kAudioFrameBytes) {
@@ -772,9 +775,9 @@ void IcomSession::onTxPump()
         if (chunks.empty())
             break;
         for (const auto& c : chunks) {
-            m_audio->sendTracked(buildAudio(m_audio->localSessionId(),
+            m_audio->sendTrackedTxAudio(buildAudio(m_audio->localSessionId(),
                                             m_audio->remoteSessionId(), 0, m_audioSendSeq++,
-                                            c.bytes));
+                                            c.bytes), m_txContext);
         }
     }
     m_txFramesSent += sent;
@@ -799,10 +802,19 @@ int IcomSession::txAudioDrainMs() const
         + static_cast<int>(m_params.txBufferMs);
 }
 
-void IcomSession::sendCiv(std::span<const std::uint8_t> frame)
+void IcomSession::sendCiv(std::span<const std::uint8_t> frame,
+                          const std::optional<TxCoordinator::Command>& command)
 {
     if (!m_serial || !m_serial->isReady())
         return;
+    if (command) {
+        if (!command->permitsDispatch(TxCoordinator::monotonicMs())) {
+            return;
+        }
+        m_serial->sendTrackedTxCommand(buildSerialData(m_serial->localSessionId(),
+            m_serial->remoteSessionId(), 0, m_serialSendSeq++, frame), *command);
+        return;
+    }
     m_serial->sendTracked(buildSerialData(m_serial->localSessionId(),
                                           m_serial->remoteSessionId(), 0, m_serialSendSeq++,
                                           frame));
@@ -819,19 +831,31 @@ bool IcomSession::reopenCivPipe()
     return true;
 }
 
-void IcomSession::sendAudio(std::span<const float> mono)
+void IcomSession::sendAudio(std::span<const float> mono, const TxCoordinator::Context& context)
 {
-    if (!m_params.enableTx)
+    if (!m_params.enableTx || !context.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
+    }
+    if (!m_txContext.sameContext(context)) {
+        flushTxAudio();
+        m_txContext = context;
+    }
     m_tx.submit(mono);
 }
 
-std::size_t IcomSession::padTxAudioToFrame()
+std::size_t IcomSession::padTxAudioToFrame(const TxCoordinator::Context& context)
 {
-    return m_params.enableTx ? m_tx.padToFrame() : 0;
+    return m_params.enableTx && context.sameContext(m_txContext)
+        && context.permitsDispatch(TxCoordinator::monotonicMs()) ? m_tx.padToFrame() : 0;
 }
 
-void IcomSession::flushTxAudio() { m_tx.flush(); }
+void IcomSession::flushTxAudio()
+{
+    m_tx.flush();
+    m_txContext = {};
+    m_txPumpClock.invalidate();
+    m_txFramesSent = 0;
+}
 
 IcomSession::Stats IcomSession::stats() const
 {

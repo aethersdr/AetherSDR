@@ -289,16 +289,20 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     // returns the panel to safe non-live typing without retransmitting text
     // that may already have been keyed character-by-character.
     connect(m_sendBtn, &QPushButton::clicked, this, [this]() {
-        const bool wasLive = m_model ? m_model->isLive()
-                                     : (m_liveBtn && m_liveBtn->isChecked());
-        if (m_model)
-            m_model->setLive(false);
-        else if (m_liveBtn)
-            m_liveBtn->setChecked(false);
-        m_setupBtn->setChecked(false);
-        showSendView();
-        if (!wasLive)
-            sendBuffer();
+        sendButtonClicked();
+    });
+    registerTxKeyingAction(m_sendBtn, [this](const std::shared_ptr<TxController>& controller,
+        const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (!m_model || !m_textEdit
+            || (action != QLatin1String("click") && action != QLatin1String("toggle"))) {
+            return {};
+        }
+        const TxController::Input input = controller->capture(TxController::Activity::Cwx);
+        if (!input.belongsTo(m_model)) {
+            return {};
+        }
+        const QString text = m_textEdit->toPlainText().trimmed();
+        return [this, input, text] { sendButtonClicked(&input, text); };
     });
     connect(m_liveBtn, &QPushButton::clicked, this, [this](bool on) {
         m_setupBtn->setChecked(false);
@@ -335,6 +339,9 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
         sc->setEnabled(false);
         m_shortcuts.append(sc);
         connect(sc, &QShortcut::activated, this, [this, i]() {
+            const std::shared_ptr<TxController> controller = m_txControllerProvider ? m_txControllerProvider() : nullptr;
+            const TxController::Input input = controller ? controller->capture(TxController::Activity::Cwx)
+                                                        : TxController::Input{};
             if (!m_model) return;
             if (m_txModeProvider) {
                 const QString mode = m_txModeProvider();
@@ -349,9 +356,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
             // Log the macro text to the history feed BEFORE firing the
             // command so the snapshot of m_model->sentIndex() lines up
             // with the chars about to be keyed for this bubble. (#3146)
-            const QString raw = m_model->macro(i);
-            appendHistoryBubble(raw);
-            m_model->sendMacro(i + 1);
+            sendMacro(i, controller ? &input : nullptr);
         });
     }
 
@@ -604,13 +609,20 @@ void CwxPanel::buildSetupView()
 
         // Click F-key label → log macro text to history, then send. (#3146)
         connect(label, &QPushButton::clicked, this, [this, i]() {
-            if (!m_model) return;
-            if (!m_model->canSend()) {
-                return;   // TUNE active: no bubble (#5422)
-            }
-            const QString raw = m_model->macro(i);
-            appendHistoryBubble(raw);
-            m_model->sendMacro(i + 1);
+            sendMacro(i);
+        });
+        registerTxKeyingAction(label, [this, i](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+            if (!m_model || action != QLatin1String("click")) { return {}; }
+            const TxController::Input input = controller->capture(TxController::Activity::Cwx);
+            if (!input.belongsTo(m_model)) { return {}; }
+            const QString text = m_model->macro(i);
+            return [this, input, text, i] {
+                const QPointer<CwxPanel> guard(this);
+                const auto admitted = [guard, text] { if (guard) { guard->appendHistoryBubble(text); } };
+                if (!text.isEmpty()) { (void)input.send(text, admitted); }
+                else { (void)input.sendMacro(i + 1, admitted); }
+            };
         });
 
         // Edit → save macro (debounced — save when focus leaves)
@@ -653,14 +665,60 @@ void CwxPanel::showSetupView()
     m_stack->setCurrentWidget(m_setupPage);
 }
 
-void CwxPanel::sendBuffer()
+void CwxPanel::sendButtonClicked(const TxController::Input* input, const QString& capturedText)
 {
+    if (!input && m_txControllerProvider) {
+        const auto controller = m_txControllerProvider();
+        const TxController::Input native = controller ? controller->capture(TxController::Activity::Cwx)
+                                                     : TxController::Input{};
+        sendButtonClicked(&native, m_textEdit ? m_textEdit->toPlainText().trimmed() : QString{});
+        return;
+    }
+    const bool wasLive = m_model ? m_model->isLive() : (m_liveBtn && m_liveBtn->isChecked());
+    if (m_model) {
+        m_model->setLive(false);
+    } else if (m_liveBtn) {
+        m_liveBtn->setChecked(false);
+    }
+    m_setupBtn->setChecked(false);
+    showSendView();
+    if (!wasLive) {
+        sendBuffer(input, capturedText);
+    }
+}
+
+void CwxPanel::sendBuffer(const TxController::Input* input, const QString& capturedText)
+{
+    if (!input && m_txControllerProvider) {
+        const auto controller = m_txControllerProvider();
+        const TxController::Input native = controller ? controller->capture(TxController::Activity::Cwx)
+                                                     : TxController::Input{};
+        sendBuffer(&native, m_textEdit ? m_textEdit->toPlainText().trimmed() : QString{});
+        return;
+    }
     if (!m_model || !m_textEdit) return;
-    QString text = m_textEdit->toPlainText().trimmed();
+    const QString text = input ? capturedText : m_textEdit->toPlainText().trimmed();
     if (text.isEmpty()) return;
     // TUNE active: the model would refuse the send, so touch nothing — the
     // text stays in the editor and no "sent" bubble is painted. (#5422)
     if (!m_model->canSend()) {
+        return;
+    }
+    if (input) {
+        if (!input->belongsTo(m_model)) {
+            return;
+        }
+        const QPointer<CwxPanel> guard(this);
+        (void)input->send(text, [guard, text] {
+            if (guard) {
+                // Commit the editor/history only after engine admission, but
+                // before send replies advance the global sent index.
+                guard->appendHistoryBubble(text);
+                if (guard->m_textEdit->toPlainText().trimmed() == text) {
+                    guard->m_textEdit->clear();
+                }
+            }
+        });
         return;
     }
 
@@ -671,6 +729,29 @@ void CwxPanel::sendBuffer()
     m_textEdit->clear();
 
     m_model->send(text);
+}
+
+void CwxPanel::sendMacro(int index, const TxController::Input* input)
+{
+    if (!input && m_txControllerProvider) {
+        const auto controller = m_txControllerProvider();
+        const TxController::Input native = controller ? controller->capture(TxController::Activity::Cwx)
+                                                     : TxController::Input{};
+        sendMacro(index, &native);
+        return;
+    }
+    if (!m_model || index < 0 || index >= 12 || !m_model->canSend()) { return; }
+    const QString text = m_model->macro(index);
+    if (!input) {
+        appendHistoryBubble(text);
+        m_model->sendMacro(index + 1);
+        return;
+    }
+    if (!input->belongsTo(m_model)) { return; }
+    const QPointer<CwxPanel> guard(this);
+    const auto admitted = [guard, text] { if (guard) { guard->appendHistoryBubble(text); } };
+    if (!text.isEmpty()) { (void)input->send(text, admitted); }
+    else { (void)input->sendMacro(index + 1, admitted); }
 }
 
 void CwxPanel::appendHistoryBubble(const QString& rawText)
@@ -766,7 +847,12 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
                 if (ke->key() == Qt::Key_Backspace) {
                     m_model->erase(1);
                 } else {
-                    m_model->sendChar(text);
+                    if (m_txControllerProvider) {
+                        const auto controller = m_txControllerProvider();
+                        if (controller) { (void)controller->capture(TxController::Activity::Cwx).sendChar(text); }
+                    } else {
+                        m_model->sendChar(text);
+                    }
                 }
             }
             // Still let the text edit display the character
@@ -785,18 +871,32 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
             auto* ce = static_cast<QContextMenuEvent*>(event);
             // History can be cleared while the nested menu loop runs.
             const QString resend = bubble->rawText();
-            QMenu menu(this);
-            AetherSDR::ThemeManager::instance().applyStyleSheet(&menu, "QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
+            const QPointer<CwxPanel> guard(this);
+            const auto controller = m_txControllerProvider ? m_txControllerProvider() : nullptr;
+            const TxController::Input input = controller ? controller->capture(TxController::Activity::Cwx)
+                                                        : TxController::Input{};
+            // Unparented scoped ownership survives deletion of the panel from
+            // the nested menu loop. All follow-up work checks its receiver.
+            auto menu = std::make_unique<QMenu>();
+            AetherSDR::ThemeManager::instance().applyStyleSheet(menu.get(), "QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
                 "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.spectrum}}; }"
                 "QMenu::separator { height: 1px; background: {{color.background.2}}; margin: 4px 8px; }");
-            QAction* resendAction = menu.addAction("Resend");
-            menu.addSeparator();
-            QAction* clearAction  = menu.addAction("Clear History");
-            QAction* chosen = menu.exec(ce->globalPos());
+            QAction* resendAction = menu->addAction("Resend");
+            menu->addSeparator();
+            QAction* clearAction  = menu->addAction("Clear History");
+            connect(this, &QObject::destroyed, menu.get(), &QMenu::close);
+            QAction* chosen = menu->exec(ce->globalPos());
+            if (!guard) { return true; }
             if (chosen == resendAction) {
                 // Resend the raw text (modifiers intact) so per-word speeds
                 // are preserved rather than re-keyed at base WPM. (#272)
-                resendText(resend);
+                if (controller) {
+                    (void)input.send(resend, [guard, resend] {
+                        if (guard) { guard->appendHistoryBubble(resend); }
+                    });
+                } else {
+                    resendText(resend);
+                }
             } else if (chosen == clearAction) {
                 clearHistory();
             }

@@ -1046,6 +1046,31 @@ used by the stacked trace renderer.
 - `kiwiFftTraceFloorDbm` versus `kiwiDisplayFloorDbm` — distinguishes the FFT
   trace floor used by 3D placement from the waterfall color floor.
 
+`get meters` additionally reports `temperature` and `voltage` observations with
+`status`, `value`, `unit` and `ageMs`. `status` is one of `unsupported`,
+`unreliable`, `never-fed`, `stale` or `fresh`; every status but `fresh` has a
+null value, and a fresh zero is still a real reading. `unreliable` is the same
+known-bad annotation `all[].reliable` carries, rejected here rather than
+reported as a qualified reading. The freshness budget is 1500 ms, matching
+`FRESH_MS` in `tools/tx_meter_test.py` (`MeterModel::kVitalsFreshMs`).
+**The legacy `paTemp` and `supplyVolts` scalars are now nullable** — previously
+they always carried a number, falling back to a `0.0f` initialiser for a sensor
+the radio never reported. A consumer doing arithmetic on them must handle null. The legacy `paTemp` and `supplyVolts`
+scalars carry those same qualified values, **and so does `paTemp` in
+`get radio`, in the `connect wait` reply and in `radiocert persist`'s `radio`
+block** — one snapshot gives one answer about one sensor. `alc` retains the
+native unit and age; `swAlc` is a legacy conversion and must not be labeled
+physical Icom dBFS.
+
+`txtest twotone` is refused whenever the connected backend does not declare a
+`twoToneGenerator` record. That is a capability, not a family check: only Flex has a
+two-tone route (`transmit set tune_mode=two_tone`), while Icom's `setTune()` and
+the HL2's built-in test tone at zero offset both produce a single carrier, so
+accepting the verb there would certify two-tone RF that was never on the air.
+The refusal comes before the TX gate — it is about what the evidence would
+claim, so it applies even when `AETHER_AUTOMATION_ALLOW_TX=1`. Ordinary TUNE
+remains available in supported modes.
+
 ### `radiocert persist`
 
 `radiocert persist` returns a **read-only persistence snapshot**, also allowed in
@@ -1060,6 +1085,47 @@ or session recreates objects. Pan snapshots also expose FFT average, weighted
 average (with its known flag), waterfall rate (legacy name
 `waterfallLineDuration`, **1..100, not milliseconds**, -1 unknown), center-known,
 WNB and available RX antennas.
+
+For Icom, `backendDiagnostics.result` also includes the read-only `civ scheduler`
+payload. Its `stateFreshness` separates `transportConnected`, CI-V `identified`,
+and `trackedStateReady`. The six tracked fields are selected-VFO frequency,
+mode/DATA/filter tuple (decimal wire codes), squelch percent, AGC code, RF power
+percent, and PTT. Each has a last decoded value, age, semantic key and status:
+`never-confirmed`, `previous-context`, `stale`, or `confirmed`, plus two
+independent booleans. **`pending`** means a write is in flight — it withholds
+`trackedStateReady` but does not mask `status`, which keeps describing the last
+confirmed value's age. **`accepted`** says the confirming frame was an accepted
+observation; it is true everywhere except the one PTT case where a stale reply
+agreeing with a pending unkey intent still publishes (Constitution VI forbids
+suppressing a "still keyed" report) without being proof. A consumer citing PTT
+as evidence of an unkey must require `accepted` and reject `pending`.
+Only validated receive publications refresh these fields, including unchanged
+replies. A setter or generic ACK cannot confirm them. Frequency/mode/filter
+changes and outgoing VFO select/exchange invalidate the prior context; session
+changes invalidate old observations. **Context invalidation is deliberately
+coarser than the physical coupling:** a frequency change also sends `agcCode`,
+`rfPowerPercent` and `ptt` to `previous-context`, which a frequency change
+cannot actually affect. That is conservative rather than wrong — those fields
+were last observed under a context that no longer holds — but it means
+`trackedStateReady` flaps while an operator is tuning, and recovers only as
+`onLinkTick` re-polls each field. Any readiness timing quoted from a **no-action
+window does not describe a station in use.** The diagnostic age budget is 5000 ms and
+does not change polling or authorize TX.
+
+`trackedStateReady` is the conjunction of the fields whose per-field
+`gatesReadiness` is true — frequency, mode/DATA/filter, AGC, RF power and PTT,
+each of which `onLinkTick` reconciles on its own cadence. **Squelch is reported
+but does not gate it.** `level::kSquelch` is re-polled only under the model
+profile's `pollCwSquelchAndTxBandwidth`, which today only the IC-7300MK2 sets;
+on every other Icom it is read once at connect, so requiring it made the
+aggregate go false about five seconds into an IC-705 or IC-9700 session and stay
+there. `squelchPercent` still ages to `stale`, and that is accurate — nothing
+reconciles it on those models. Read `gatesReadiness` rather than assuming the
+membership of this list. Fields outside this list, including
+filter width and AGC threshold/off level, carry no freshness claim. CI-V has no
+transaction identifiers, so delayed unsolicited data cannot prove physical
+intent correlation or an unobserved front-panel VFO change with identical mode
+and frequency.
 
 The snapshot explicitly identifies its evidence as **client model and
 presentation**. Some model setters update optimistically. Equality here alone
@@ -1389,11 +1455,12 @@ inside AetherSDR on the host, not in radio firmware (#5401).
         "agcMode":"fast","agcMaxGainDb":90,"agcSlopeDb":0,"agcFixedGainDb":10,
         "wdspNotchCount":0,"appliedNoiseBlanker":false},
        {"chain":"rx-wdsp","receiver":1,"level":"not-configured"},
-       {"chain":"hl2-tx","level":"dsp-config",
-        "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":512,
+       {"chain":"hl2-tx","level":"channel-config","modulator":"wdsp-txa",
+        "wdspChannelId":2,"modulatorBlocks":18432,"modulatorFaultBlocks":0,
+        "inputRateHz":48000,"outputRateHz":48000,"dspBlockSize":1024,"inputBlockSize":512,"dspRateHz":48000,
         "filterLowHz":300,"filterHighHz":2700,
-        "alcEnabled":true,"alcTargetPeak":0.9,"alcMaxGainDb":20,
-        "alcAttackSec":0.005,"alcReleaseSec":0.25,"alcHoldBelowDbfs":-45,
+        "alcEnabled":true,"alcTargetPeak":0.9,
+        "alcReleaseSec":0.25,
         "micGainLinear":1}]}}}
 ```
 
@@ -1418,11 +1485,32 @@ inside AetherSDR on the host, not in radio firmware (#5401).
   cannot prove that they reached the DSP; backend read-backs such as this object
   and `get hostnb` expose that distinction.
 - `backend.chains[].chain` — **which** chain the entry describes: on a
-  Hermes-Lite 2, `rx-wdsp` (WDSP on receive) or `hl2-tx` (a hand-written phasing
-  modulator on transmit, whose config is a different struct entirely). A backend
-  may run more than one chain and they need not share a vocabulary, so key off
-  `chain` rather than guessing from which fields are present. `rx-wdsp` entries
-  also carry `receiver` — the **DDC index**, not a slice id.
+  Hermes-Lite 2, `rx-wdsp` (WDSP on receive) or `hl2-tx` (the SSB transmit
+  modulator, whose config is a different struct entirely). A backend may run
+  more than one chain and they need not share a vocabulary, so key off `chain`
+  rather than guessing from which fields are present. `rx-wdsp` entries also
+  carry `receiver` — the **DDC index**, not a slice id.
+- `backend.chains[].modulator` — **which transmit modulator this binary was
+  built with**, on an `hl2-tx` entry: `phasing` (the in-tree phasing modulator,
+  which is what a STOCK build ships) or `wdsp-txa` (WDSP's TXA chain, built with
+  `-DAETHER_HL2_TX_TXA=ON`). It is decided by the
+  `AETHER_HL2_TX_TXA` compile flag and there is **no runtime switch** — the
+  other chain is not in the process, so an operator cannot select the wrong
+  one. It is reported because they can be running the wrong **build**, and a
+  transmit report that does not say which modulator produced the signal is not
+  actionable.
+- On TXA entries, `level` is `channel-config` and `filterLowHz` / `filterHighHz`
+  are the signed passband last accepted by the channel (negative for LSB/DIGL).
+  `dspBlockSize` is the channel's DSP-rate size; `inputBlockSize` is its audio-rate
+  size, and `dspRateHz` names the DSP rate. Refused requests leave applied values unchanged. Phasing entries retain
+  `dsp-config` and audio-domain positive passband magnitudes.
+- `wdspChannelId`, `modulatorBlocks`, `modulatorFaultBlocks` — present only
+  when the modulator has a WDSP channel behind it (so, `wdsp-txa` only).
+  `modulatorFaultBlocks` counts blocks the modulator could not place on the
+  wire, and is present **even at zero**: "no blocks were dropped" and "nobody
+  counted" must not look the same. Non-zero means the modulator is being fed
+  faster than it can drain, or has stalled; it is logged on `aether.hl2.tx`
+  at the same moment.
 - `backend.chains[].level` — **how close to the DSP the values came from**.
   "Read-back" is used loosely, and the difference decides what a mismatch
   proves:
@@ -3379,9 +3467,18 @@ check it before assuming a keying verb will work. `label` is
 `AETHER_AUTOMATION_LABEL` (a human tag for the instance).
 
 ### `health`
-The **backend's** view of the radio — the same rows the Radio Health dialog
-shows, which until now reached nothing else and so were unavailable to a script
-or a regression test. Read-only: it keys nothing and sets nothing.
+The **radio's** view of itself — the same rows the Radio Health dialog shows,
+which until now reached nothing else and so were unavailable to a script or a
+regression test. Read-only: it keys nothing and sets nothing.
+
+Two sources, merged when both are in play: the connected backend, and (for a
+family that has one) a **stream-free source** that keeps answering when the
+backend has stopped talking to the radio — see `telemetry` below. The **backend
+wins every key collision**, because an in-band reading arrives on our own
+cadence and an out-of-band probe does not; the stream-free source fills the gaps
+and owns the rows that say which path spoke. A key the winner declares but
+leaves out of its values means "not reported" and does **not** erase a value the
+other side has.
 
 ```json
 → {"cmd":"health"}
@@ -3389,13 +3486,32 @@ or a regression test. Read-only: it keys nothing and sets nothing.
      {"key":"micLevel","section":"Transmit voice chain",
       "label":"Mic slider (0-100, 50 = unity)","value":80},
      {"key":"micGainAppliedLinear",
-      "label":"Mic gain at the modulator (linear)","value":3.98},
+      "label":"Mic gain at the modulator (linear)","value":15.849},
      {"key":"rfPowerPercent","label":"Drive requested (0-100)","value":60},
      {"key":"txDriveRegister","label":"Drive written (raw 0-255)","value":153},
      {"key":"txDriveGated","label":"Drive held at 0 by the TX gate","value":false},
      {"key":"forwardPowerPeakW",
       "label":"Forward (W, approx — peak HOLD, display only)","value":4.56}]}
 ```
+
+**`spectrumGapDiscards<n>` counts discarded FFT windows, not packet loss.**
+On HL2 there is one row per active receiver. It increments when a transport
+sequence discontinuity discards a nonempty spectrum accumulator, including
+accepted rewinds and duplicate packets. `droppedPackets` counts forward packet
+loss only. The two can differ in either direction: a discontinuity at an empty
+accumulator costs no window, while a rewind can discard a window without
+increasing the loss count. The reset prevents a transform across discontinuous
+samples; the counter records that prevention, not a corrupted frame rendered.
+Repeated discontinuities can prevent a full FFT window from forming and leave
+the last trace displayed, so use frame liveness as well as counter deltas when
+assessing a measurement run.
+
+`spectrumGapDiscards<n>` is monotonic for the receiver DSP object's lifetime.
+A sample-rate change reconfigures that object in place and does not reset the
+count. Only destroying and rebuilding the receiver DSP starts it at zero.
+Compare deltas across a run; do not switch geometry to zero the counter. A
+receiver without a DSP reports `null`, meaning unavailable rather than clean.
+ANAN has the same DSP counter but does not publish health rows yet.
 
 **Assert on `forwardPowerW`, never on `forwardPowerPeakW`.** The peak row is a
 meter's display hold: a single key-edge ADC sample decays over seconds, so a
@@ -3414,6 +3530,22 @@ without it that divergence is invisible. Note the gateware decodes only the
 drive byte's top nibble, so the raw scale moves in steps of 16 — a percent
 alone does not tell you which of the 16 drives the radio actually got.
 
+**Assert on `dspFaultCountN`, not on `dspProcessFaultsN`.** The HL2 publishes
+both for each receiver. `dspProcessFaultsN` is PROSE meant for the dialog —
+`"none"`, or `"3 - WDSP engine error 3"` — and its format is a presentation
+choice that may change; a script matching on it is matching on wording.
+`dspFaultCountN` is the same fact as an integer, and is what a threshold or a
+soak test wants. Both are `null` until the receiver has processed a block, which
+is distinct from zero: "no faults" and "no DSP yet" are different answers.
+
+The companion rows are `dspBlocksN` (blocks WDSP turned into audio) and
+`dspUnderrunsN` (the pipeline had no input ready). **Underruns are not faults**
+and are counted separately on purpose — an underrun is the normal shape of a
+starved pipeline, while a fault is WDSP refusing data it was given. Summing them
+turns a healthy idle radio into a broken one. `N` is the zero-based receiver
+index, so a single-receiver radio publishes `dspBlocks0` and no suffix appears
+in the label.
+
 **This is deliberately not assembled from the models, and that is the whole
 point.** `get` already reports those, and a model reports what the operator
 **asked for** — so a control whose command was dropped on the way to the radio
@@ -3427,8 +3559,61 @@ of each group and is absent on the rest. A `value` of `null` means **the radio
 never reported this**, which is distinct from a zero — "the FIFO is empty" and
 "we were never told" are different answers, and collapsing them is what makes a
 readout unable to detect its own failure. An empty `rows` array with
-`"ok":true` is a real state too: no radio connected, or a family that publishes
-no health rows. Check `connected` to tell those apart.
+`"ok":true` is a real state too: nothing connected and no stream-free source
+aimed, or a family that publishes no health rows. Check `connected` to tell
+those apart.
+
+**Reading `health` is itself a demand signal.** A stream-free source polls only
+while something is watching, so each read renews a 5 s demand window and keeps
+the probe running. A script that polls `health` in a loop against an aimed radio
+is asking for one datagram a second; `telemetry target off` stops it.
+
+### `telemetry`
+Aim a **stream-free health source** at a radio **without connecting to it** —
+the one way to ask "is anyone else using this radio", "is it powered and
+reachable", or "what is its PA temperature" about a radio you are *not* holding
+a session on. Read-only: it never connects, never writes to the radio, and never
+takes a session.
+
+```json
+→ {"cmd":"telemetry","action":"target","value":"192.168.8.2"}
+← {"ok":true,"telemetry":"target","target":"192.168.8.2","family":"hl2",
+   "connected":false,"readOnly":true}
+
+→ {"cmd":"telemetry","action":"target","value":"off"}
+← {"ok":true,"telemetry":"target","target":null}
+```
+
+`target` is the only action. The rows it produces arrive through `health`, not
+through this verb.
+
+**Which families have one is a declaration, not a list here.** A family declares
+a stream-free source from its own backend directory; everything above the radio
+seam asks the registry. Today only `hl2` declares one — a Hermes-Lite 2 answers
+discovery probes on its alternate control port whether or not anybody holds its
+IQ stream. Every other family refuses the verb and its `health` is unchanged.
+
+**The address must be a radio `connect list` can see.** The family to build is
+taken from discovery rather than from whatever this session last connected to;
+an address that is not a discovered radio is refused rather than probed on a
+guess, because guessing is how one family's rows end up on another family's
+snapshot.
+
+Refused, each with a reason that says which: a non-literal address; IPv6 (the
+poller binds an IPv4 socket, so it would count unanswered polls for datagrams
+that never left); multicast, broadcast, a local segment's directed broadcast
+(`192.168.50.255`), and the unspecified addresses — this sends one datagram a
+second and must name a single radio; a family that declares no source; and a
+session that is **already connected**, because there is one instrument and
+aiming it would repoint the one the live session is reading. A connected session
+is already aimed at its own radio, so nothing is lost — just read `health`.
+
+**What it costs, stated plainly.** While aimed and while something is reading
+`health`, this sends a ~60-byte UDP datagram to the named address once a second.
+A mistyped address that happens to host an HPSDR-speaking device gets its first
+answer believed and rendered as that radio's health; a MAC latch stops the
+responder *changing* afterwards, but it cannot vet the first one. A stranger at
+a mistyped address receives an unsolicited probe. Aim it at a radio you meant.
 
 ### `mark`
 Drop a **sequenced timeline marker** into the log ring, then bracket a sequence
@@ -3701,6 +3886,23 @@ producer in isolation:
    "lastTimeoutKey":"control.nr",
    "pendingPttIntent":false}}
 ```
+
+The scheduler also returns up to 128 `transactions`, `firstRetainedEventId`,
+`lastRetainedEventId`, and `stateFreshness` (see Persist above). `civ scheduler
+freshness` returns the same reply with an empty `transactions` list — and with
+`firstRetainedEventId`/`lastRetainedEventId` describing **the rows actually
+returned**, so a truncated reply never advertises coverage of events it omitted
+(both are **0 when `transactions` is empty**, meaning "this reply describes no
+events" — not a backward jump, and never something to compare against a
+previously collected ID) — for callers that only need the confirmation block — the TX harness polls it that way on its
+unkey path rather than pulling the whole ring to read one field. Deduplicate
+completion events by `backendInstanceId` plus `eventId`, never by semantic
+`key`/`generation`/`completion`: periodic polls reuse those three fields.
+Event IDs increase across ring eviction, history clears and scheduler resets.
+A timeout and its eventual late reply are separate completion events. A jump
+past the previously collected ID is an evidence gap, not zero missing activity.
+A new backend starts a new UUID `backendInstanceId`, also present inside
+`stateFreshness`; use it even when a reconnect reuses the same process and radio.
 
 While a PTT request is awaiting confirmation the reply also carries
 `"pttIntent"` (the requested state) and `"pttIntentRemainingMs"` (how much of
@@ -4268,7 +4470,7 @@ code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 74 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 76 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4307,6 +4509,7 @@ still a separate radiocert task.
 | `waveform` | — | waveform <start\|stop\|unregister\|resync> [args] — digital-voice service |
 | `tune` | — | tune <mhz> [sliceId] — set a slice frequency (default: the active slice) |
 | `freqcal` | — | freqcal [get\|set <ppb>\|from_vfo <reference_mhz>\|reset] — manual frequency calibration (radios that cannot calibrate themselves) |
+| `bandscope` | — | bandscope [status\|on\|off] — Hermes-Lite 2 wideband bandscope gate (endpoint 0x04); uncalibrated pre-DDC ADC headroom, reported in `health` |
 | `droopcal` | — | droopcal [status\|start\|stop\|apply\|discard] — ANAN-G2 DDC0 droop calibration sweep (radios with a measured DDC edge droop) |
 | `targettune` | — | targettune <mhz> — absolute tune through band-stack preselection |
 | `memory` | — | memory activate <index> [panId] — recall a radio memory |
@@ -4343,6 +4546,7 @@ still a separate radiocert task.
 | `menu` | — | menu list \| open <name> — menu-bar menus |
 | `whoami` | — | bridge instance info: pid, socket, label, station, txAllowed |
 | `health` | — | backend health snapshot — what the RADIO reports, not what was asked for |
+| `telemetry` | — | telemetry target <ip\|off> — aim a discovered radio's offline health source WITHOUT connecting (read-only) |
 | `log` | — | log <categories\|get\|set\|reset\|tail\|subscribe\|unsubscribe> [args] |
 | `mark` | — | mark <text> — timestamped annotation in the log ring |
 | `qrz` | — | qrz <status\|cached\|lookup\|spottext> [args] |

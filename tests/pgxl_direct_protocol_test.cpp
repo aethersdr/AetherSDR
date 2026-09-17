@@ -24,6 +24,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 
+#include <cmath>
 #include <cstdio>
 #include <functional>
 
@@ -45,9 +46,30 @@ bool spin(std::function<bool()> done, int timeoutMs = 5000)
     return done();
 }
 
+// A status reply captured with the amplifier keyed, so the meter fields carry
+// something to read. Verbatim off 192.168.50.102 on firmware 3.8.9
+// (2026-09-15) apart from the sequence number:
+//
+//   vdd=51.9 id=7.5 peakid=7.5 fwd=42.2 peakfwd=43.6 swr=-60.0 temp=43.9
+//
+// fwd is dBm (42.2 dBm = 16.6 W) and swr is return loss in dB, reported
+// negative on this transport.
+QByteArray transmittingStatusReply(const char* seq)
+{
+    return QByteArray("R") + seq + "|0|state=TRANSMIT_A"
+        " bandA=40 bandB=0 bsrcA=FLEX bsrcB=FLEX bsrcAutoA=0 bsrcAutoB=0"
+        " flexA=FLEX-8600 flexB=FLEX-8600 vac=246 vdd=51.9 id=7.5 peakid=7.5"
+        " fwd=42.2 peakfwd=43.6 swr=-60.0 temp=43.9 cntfreq=0 cat1freq=0"
+        " cat2freq=0 hltemp=24.8 biasA=RADIO_AAB biasB=RADIO_AB"
+        " fanmode=STANDARD meffa=STANDBY\n";
+}
+
 // The status reply, verbatim, with the state word substituted. Everything
 // else — the bands, the bias profiles, the FLEX-8600 on both ports — is
 // exactly what the amplifier sent.
+//
+// fwd=30.0 is not a low reading, it is the FLOOR: the amplifier's own FWD
+// meter is declared 30.0..63.0 dBm and an idle PGXL rests at exactly 30.0.
 QByteArray statusReply(const char* seq, const char* state)
 {
     return QByteArray("R") + seq + "|0|state=" + state +
@@ -56,6 +78,18 @@ QByteArray statusReply(const char* seq, const char* state)
         " fwd=30.0 peakfwd=30.0 swr=-60.0 temp=23.1 cntfreq=0 cat1freq=0"
         " cat2freq=0 hltemp=23.4 biasA=RADIO_AAB biasB=RADIO_AB"
         " fanmode=STANDARD meffa=STANDBY\n";
+}
+
+// Everything the client has sent. Accumulated rather than sampled: the check
+// is "was this ever sent", and a single readAll() only sees whatever happens
+// to be buffered at that instant.
+QByteArray g_clientTraffic;
+
+bool peerSaw(QTcpSocket* peer, const char* needle)
+{
+    peer->waitForReadyRead(20);
+    g_clientTraffic += peer->readAll();
+    return g_clientTraffic.contains(needle);
 }
 
 }  // namespace
@@ -108,7 +142,7 @@ int main(int argc, char** argv)
     CHECK(!model.hasPortInfo());
 
     // ── The per-port block ────────────────────────────────────────────
-    peer->write(statusReply("2", "IDLE"));
+    peer->write(statusReply("12", "IDLE"));
     peer->flush();
     CHECK(spin([&] { return ports.count() >= 1; }));
     CHECK(model.hasPortInfo());
@@ -137,7 +171,7 @@ int main(int argc, char** argv)
     // a repaint per poll is a repaint per poll forever.
     {
         const int settled = ports.count();
-        peer->write(statusReply("3", "IDLE"));
+        peer->write(statusReply("13", "IDLE"));
         peer->flush();
         spin([&] { return ports.count() > settled; }, 300);
         CHECK(ports.count() == settled);
@@ -150,7 +184,7 @@ int main(int argc, char** argv)
     // from it, and exactly one of them can be lit.
     {
         const int settled = ports.count();
-        peer->write(statusReply("4", "TRANSMIT_A"));
+        peer->write(statusReply("14", "TRANSMIT_A"));
         peer->flush();
         CHECK(spin([&] { return ports.count() > settled; }));
         CHECK(model.stateText() == QLatin1String("TRANSMIT_A"));
@@ -158,16 +192,194 @@ int main(int argc, char** argv)
         CHECK(!model.portB().ptt);
     }
     {
-        peer->write(statusReply("5", "TRANSMIT_B"));
+        peer->write(statusReply("15", "TRANSMIT_B"));
         peer->flush();
         CHECK(spin([&] { return model.portB().ptt; }));
         CHECK(!model.portA().ptt);
     }
     {
-        peer->write(statusReply("6", "IDLE"));
+        peer->write(statusReply("16", "IDLE"));
         peer->flush();
         CHECK(spin([&] { return !model.portB().ptt; }));
         CHECK(!model.portA().ptt);
+    }
+
+    // ── Forward power and SWR off the amplifier's own socket ──────────
+    //
+    // The radio relays AMP/FWD and AMP/RL for the same amplifier, but only
+    // when a radio is relaying at all. This is the other source, and it is the
+    // only one on a station whose radio publishes no amplifier meters.
+    {
+        QSignalSpy meters(&model, &AmpModel::directMetersChanged);
+        CHECK(meters.isValid());
+        peer->write(transmittingStatusReply("17"));
+        peer->flush();
+        CHECK(spin([&] { return meters.count() >= 1; }));
+        const QList<QVariant> last = meters.last();
+        // 42.2 dBm = 16.6 W.
+        CHECK(std::fabs(last.at(0).toFloat() - 16.6f) < 0.2f);
+        // Return loss 60 dB is a matched load: rho = 0.001, SWR 1.002:1.
+        CHECK(std::fabs(last.at(1).toFloat() - 1.002f) < 0.01f);
+
+        // Repeated identically on the next poll, and emitted again: a meter
+        // that settles on one number is still live, and suppressing the repeat
+        // is what freezes a gauge.
+        const int settled = meters.count();
+        peer->write(transmittingStatusReply("18"));
+        peer->flush();
+        CHECK(spin([&] { return meters.count() > settled; }));
+
+        // Idle floors the reading at 30.0 dBm — 1 W, not 16.6.
+        peer->write(statusReply("19", "IDLE"));
+        peer->flush();
+        CHECK(spin([&] {
+            return !meters.isEmpty()
+                && std::fabs(meters.last().at(0).toFloat() - 1.0f) < 0.01f;
+        }));
+    }
+
+    // ── MEffA, and the shape of a `setup` write ───────────────────────
+    //
+    // Pinned against a capture of the vendor's own utility (Power Genius
+    // Utility 3.8.9 against a PGXL on 3.8.9, 2026-09-15), which was the only
+    // way to learn any of it: the User Guide documents the utility's UI and
+    // the CAT protocol, never this one.
+    {
+        // On connect the client asks for the configuration group. It has to:
+        // a `setup` WRITE carries every key in the group, so changing one
+        // means holding the other four.
+        CHECK(peerSaw(peer, "setup read"));
+
+        // MEffA arrives on the STATUS frame, never in the `setup read` reply.
+        // Three values exist — ACTIVE, STANDBY and OFF — and the operator
+        // controls one bit of them: which of ACTIVE/STANDBY an ENABLED
+        // algorithm lands in is the amplifier's call, decided by the PA bias
+        // class (class AAB, which SSB and AM select, cannot use it at all).
+        peer->write(transmittingStatusReply("20"));
+        peer->flush();
+        CHECK(spin([&] { return model.meffa() == QLatin1String("STANDBY"); }));
+        CHECK(model.meffaEnabled());   // STANDBY is enabled, not disabled
+
+        // It cannot be written yet. The rest of the group is still unknown,
+        // and a write that guessed at a nickname or an LED intensity would
+        // overwrite real configuration with a guess.
+        CHECK(!model.canWriteSetup());
+        model.setMeffaEnabled(false);
+        spin([&] { return false; }, 150);
+        CHECK(!peerSaw(peer, "setup nickname="));
+
+        // Fan mode, however, still goes out — as the single key, which is what
+        // shipped before the group write existed. The group form's whole point
+        // is carrying the values we are not changing, and here we do not have
+        // them; refusing would make fan mode less available than it was, on
+        // any firmware that answers `setup read` with an error.
+        g_clientTraffic.clear();
+        model.setFanMode(QStringLiteral("contest"));
+        CHECK(spin([&] { return peerSaw(peer, "setup fanmode=CONTEST"); }));
+        CHECK(!g_clientTraffic.contains("nickname="));
+
+        // The `setup read` reply, verbatim off the amplifier. Note that it
+        // carries neither meffa nor fanmode — which is exactly why those two
+        // are taken off the status frame instead.
+        peer->write("R2|0|ledintens=141 txdelay=16 inactivity-timeout=0"
+                    " nickname=PowerGeniusXL authcode=\n");
+        peer->flush();
+        CHECK(spin([&] { return model.canWriteSetup(); }));
+
+        // Now it writes — and it writes the WHOLE group, in the vendor's own
+        // order, carrying back the four values it is not changing:
+        //   setup nickname=PowerGeniusXL meffa=OFF ledintens=141 fanmode=STANDARD authcode=
+        model.setMeffaEnabled(false);
+        CHECK(spin([&] {
+            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=OFF"
+                                 " ledintens=141 fanmode=STANDARD authcode=");
+        }));
+
+        // And no `save`. The vendor's indicator toggle is volatile by design
+        // (§9.4) — persisting it is a separate, explicit act, and a panel
+        // toggle must not rewrite the amplifier's stored configuration.
+        CHECK(!peerSaw(peer, "|save"));
+
+        // Enabling asks for AUTO. The settable vocabulary is NOT the reported
+        // one: status says OFF / STANDBY / ACTIVE — what the algorithm is
+        // doing — while a write takes AUTO or OFF, whether it may run at all.
+        // Sending a reported word back is refused: `meffa=ACTIVE` draws
+        // 50000013, and the amplifier does not change. Captured off the vendor
+        // utility, which sends AUTO when its checkbox is ticked.
+        peer->write("S0|state=IDLE fanmode=CONTEST meffa=OFF\n");
+        peer->flush();
+        CHECK(spin([&] { return model.meffa() == QLatin1String("OFF"); }));
+        CHECK(!model.meffaEnabled());
+        model.setMeffaEnabled(true);
+        CHECK(spin([&] {
+            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=AUTO"
+                                 " ledintens=141 fanmode=CONTEST authcode=");
+        }));
+        // And never a reported word, which is what the amplifier refuses.
+        CHECK(!peerSaw(peer, "meffa=ACTIVE"));
+        CHECK(!peerSaw(peer, "meffa=STANDBY"));
+
+        // A fan-mode change takes the same road, carrying MEffA with it. Sent
+        // as a single key it would name fanmode and leave the other four out
+        // of a write to the group that holds them.
+        model.setFanMode(QStringLiteral("broadcast"));
+        CHECK(spin([&] {
+            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=AUTO"
+                                 " ledintens=141 fanmode=BROADCAST authcode=");
+        }));
+
+        // ── And it carries a SETTABLE MEffA word, never a reported one ──
+        //
+        // This is the whole bug that the AUTO fix above closes, on the other
+        // write path. With MEffA enabled the status frame reports STANDBY or
+        // ACTIVE; substituting either into the group draws 50000013 and the
+        // amplifier keeps its old fan mode — silently, while the panel has
+        // already repainted with the new one. An operator on SSB (class AAB,
+        // so STANDBY) hit this on every fan change.
+        g_clientTraffic.clear();
+        peer->write("S0|state=IDLE fanmode=CONTEST meffa=STANDBY\n");
+        peer->flush();
+        CHECK(spin([&] { return model.meffa() == QLatin1String("STANDBY"); }));
+        model.setFanMode(QStringLiteral("standard"));
+        CHECK(spin([&] {
+            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=AUTO"
+                                 " ledintens=141 fanmode=STANDARD authcode=");
+        }));
+        CHECK(!g_clientTraffic.contains("meffa=STANDBY"));
+        CHECK(!g_clientTraffic.contains("meffa=ACTIVE"));
+
+        // ── The commanded bit outlives the poll that has not caught up ──
+        //
+        // Between our write and the amplifier's next status the reported word
+        // is still the OLD one. Deriving the write from it would send
+        // meffa=OFF one poll after the operator enabled MEffA and turn it
+        // straight back off.
+        g_clientTraffic.clear();
+        peer->write("S0|state=IDLE fanmode=CONTEST meffa=OFF\n");
+        peer->flush();
+        CHECK(spin([&] { return model.meffa() == QLatin1String("OFF"); }));
+        model.setMeffaEnabled(true);                 // commands AUTO
+        CHECK(spin([&] { return peerSaw(peer, "meffa=AUTO"); }));
+        g_clientTraffic.clear();
+        model.setFanMode(QStringLiteral("contest")); // device still says OFF
+        CHECK(spin([&] {
+            return peerSaw(peer, "setup nickname=PowerGeniusXL meffa=AUTO"
+                                 " ledintens=141 fanmode=CONTEST authcode=");
+        }));
+        CHECK(!g_clientTraffic.contains("meffa=OFF"));
+
+        // ── A refusal releases an outstanding `setup read` ──
+        //
+        // An error reply is `R<seq>|<code>|` with an EMPTY body, so it reads
+        // as "nothing to parse" unless the code is looked at. Left unread, a
+        // refused `setup read` would keep canWriteSetup() false for the life
+        // of the connection and both MEffA and fan mode would be inert.
+        QSignalSpy refused(&conn, &PgxlConnection::commandRefused);
+        CHECK(refused.isValid());
+        peer->write("R99|50000013|\n");
+        peer->flush();
+        CHECK(spin([&] { return refused.count() >= 1; }));
+        CHECK(refused.last().at(1).toString() == QLatin1String("50000013"));
     }
 
     // A state push with a prefix word before the first key parses the same

@@ -101,6 +101,7 @@ QString SmartCatProtocol::freqField(double mhz)
 SmartCatProtocol::SmartCatProtocol(RadioModel* model, int vfoA, int vfoB,
                                    bool flexExtensions)
     : m_model(model)
+    , m_txProducer(model ? model->registerTxProducer() : TxCoordinator::Producer{})
     , m_vfoA(vfoA)
     , m_vfoB(vfoB)
     , m_flexExtensions(flexExtensions)
@@ -108,6 +109,8 @@ SmartCatProtocol::SmartCatProtocol(RadioModel* model, int vfoA, int vfoB,
 
 SmartCatProtocol::~SmartCatProtocol()
 {
+    m_txProducer.invalidate();
+    releasePtt();
     // Client disconnect: undo a split ONLY if WE engaged it (moved TX to VFO B).
     // A split set up by the operator or another client must survive our disconnect.
     if (m_weEngagedSplit)
@@ -508,8 +511,10 @@ QString SmartCatProtocol::cmdFR(const QString& arg)
 QString SmartCatProtocol::cmdTX(const QString& arg)
 {
     if (arg == "0") return cmdRX();
-    m_pttAssertedByMe = true;
-    m_model->setTransmit(true, TransmitModel::PttSource::Dax);
+    if (!m_pttRequest.valid()) {
+        m_pttRequest = m_txProducer.request();
+    }
+    (void)m_model->setProducerTransmit(m_pttRequest, true, TransmitModel::PttSource::Dax);
     return {};
 }
 
@@ -517,8 +522,9 @@ QString SmartCatProtocol::cmdTX(const QString& arg)
 
 QString SmartCatProtocol::cmdRX()
 {
-    m_pttAssertedByMe = false;
-    m_model->setTransmit(false, TransmitModel::PttSource::Dax);
+    const TxCoordinator::Request request = m_pttRequest;
+    m_pttRequest = {};
+    (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Dax);
     return {};
 }
 
@@ -526,9 +532,16 @@ QString SmartCatProtocol::cmdRX()
 
 void SmartCatProtocol::releasePtt()
 {
-    if (!m_pttAssertedByMe) return;
-    m_pttAssertedByMe = false;
-    m_model->setTransmit(false, TransmitModel::PttSource::Dax);
+    // SmartCatSession calls this at disconnect, before QObject destruction.
+    // Invalidate now so a terminal queue cannot key during deleteLater's gap.
+    m_txProducer.invalidate();
+    const TxCoordinator::Request request = m_pttRequest;
+    m_pttRequest = {};
+    if (m_model) {
+        (void)m_model->setProducerTransmit(request, false, TransmitModel::PttSource::Dax);
+        m_model->abortProducerCwx(m_cwxRequest);
+    }
+    m_cwxRequest = {};
 }
 
 // ── ID — rig identification ───────────────────────────────────────────────────
@@ -1030,7 +1043,10 @@ QString SmartCatProtocol::cmdKY(const QString& arg)
         return "?;";
     }
     if (!text.isEmpty()) {
-        m_model->cwxModel().send(text);
+        if (!m_cwxRequest.valid()) {
+            m_cwxRequest = m_txProducer.request();
+        }
+        m_model->requestProducerCwx(m_cwxRequest, text);
     }
     return {};
 }

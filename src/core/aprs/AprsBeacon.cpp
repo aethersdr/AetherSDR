@@ -79,6 +79,11 @@ bool AprsBeacon::currentPosition(double& lat, double& lon) const
 
 bool AprsBeacon::sendNow()
 {
+    return sendNow(m_txProgram);
+}
+
+bool AprsBeacon::sendNow(const TxCoordinator::Request& input)
+{
     if (!m_myAddress.isValid()) {
         emit activity(QStringLiteral("APRS beacon skipped: no callsign configured."));
         return false;
@@ -95,7 +100,7 @@ bool AprsBeacon::sendNow()
     Address dest;
     dest.call = kTocall;
     const Frame frame = Frame::makeUI(dest, m_myAddress, m_path, info.toLatin1());
-    emit transmitFrame(frame.encode());
+    emit transmitFrame(frame.encode(), input.derive());
     emit activity(QStringLiteral("APRS beacon sent (%1 via %2): %3")
                       .arg(m_gpsValid ? QStringLiteral("GPS")
                                       : QStringLiteral("manual position"),

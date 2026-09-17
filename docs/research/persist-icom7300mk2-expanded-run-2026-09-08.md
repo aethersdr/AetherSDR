@@ -86,7 +86,9 @@ controlled regression and live before/after prove causality.
 
 ## Guarded transmit and restoration
 
-After the fourth retention restart, one 1.6-second USB two-tone window used
+After the fourth retention restart, one 1.6-second USB window requested the
+bridge two-tone action. Later source review established that Icom generated a
+single tone; this is not two-tone/IMD proof. That window used
 7.200 MHz, ANT1, RF 3% and Tune 2%. It obtained six fresh positive forward-power
 samples, peak unsmoothed calibrated **2.098 W** and SWR **1.0**, with no stop
 reason. The actual forward gauge was sampled while keyed; explicit unkey
@@ -156,3 +158,7 @@ TX safety checks passed in the publication worktree; bridge-doc generation and
 whitespace validation passed. An initial `unittest` module invocation lacked the
 tools import path; direct documented script entry points completed successfully.
 These are tooling checks, not new native-build or hardware-fix evidence.
+
+The subsequent [P1 follow-up](persist-icom7300mk2-p1-followup-2026-09-08.md)
+implements bounded freshness diagnostics and corrects meter/TX-test reporting.
+It preserves this earlier run and its unresolved observations.

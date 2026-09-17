@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include "TxCoordinator.h"
 
 namespace AetherSDR {
 
@@ -22,6 +23,8 @@ public:
     // On client disconnect, tear down an active split (restore TX to slice A)
     // so it isn't left applied on the radio.
     ~SmartCatProtocol();
+    SmartCatProtocol(const SmartCatProtocol&) = delete;
+    SmartCatProtocol& operator=(const SmartCatProtocol&) = delete;
 
     QString processCommand(const QString& cmd);
 
@@ -40,7 +43,8 @@ public:
 
     // PTT safety: release transmit if this protocol instance asserted it.
     // Call from the session's onDisconnected() / dtor so an abrupt client
-    // drop does not leave the radio keyed.  No-op if we never asserted PTT.
+    // drop cannot deliver queued key-on. Closes this producer lifetime even
+    // when no PTT was admitted; cleanup affects only our original request.
     void releasePtt();
 
     // Public helpers used by SmartCatSession's AI push
@@ -174,6 +178,9 @@ private:
     static QString zzToSSDR(const QString& two);
 
     RadioModel* m_model;
+    TxCoordinator::Producer m_txProducer;
+    TxCoordinator::Request m_pttRequest;
+    TxCoordinator::Request m_cwxRequest;
     int         m_vfoA{0};
     int         m_vfoB{-1};
     bool        m_flexExtensions{true};
@@ -188,7 +195,6 @@ private:
     bool        m_weEngagedSplit{false};
     bool        m_rxVfoB{false};   // false = VFO A is the RX VFO. FR selector echo only:
                                    // intentionally does NOT swap VFOs (SmartSDR-Mac parity).
-    bool        m_pttAssertedByMe{false};
 };
 
 } // namespace AetherSDR

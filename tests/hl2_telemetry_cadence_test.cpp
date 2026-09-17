@@ -29,6 +29,20 @@
 
 #include "core/backends/hl2/Hl2TelemetryCadence.h"
 
+// Included here rather than reached through the header under test.
+//
+// All three arrive today only because Hl2TelemetryCadence.h needs them for its
+// OWN declarations. That is a coincidence of the header's current shape, not a
+// contract: the day acceptReply() stops taking a std::array or its optional
+// parameters change form, the header drops the include it no longer needs and
+// this file stops compiling -- reporting it as a failure of the thing it tests.
+// (The header could not drop these while still needing them for its own
+// signature; what this buys is independence from a future change to WHAT it
+// needs.)
+#include <array>
+#include <cstdint>
+#include <optional>
+
 #include <cstdio>
 #include <initializer_list>
 
@@ -126,6 +140,51 @@ int main()
                   "a stalled stream is polled with nothing on screen");
     static_assert(hl2PollIntervalMs(Hl2LinkState::HeldByOther, false) == 0,
                   "a display state is not polled with nothing on screen");
+
+    // ---- which replies the poller may believe ----------------------------
+    //
+    // acceptReply() is the rule lifted out of Hl2TelemetryPoller::onReadyRead()
+    // so it can be exercised without a socket. The defect it answers:
+    // setExpectedMac() had no production caller, so the MAC filter it gated was
+    // dead on every live path while the address policy rested on it in the
+    // comments (#5642 review). That setter and its branch are now gone; the
+    // latch below is the only MAC concept, because it is the only one that can
+    // be armed.
+    {
+        const std::array<std::uint8_t, 6> radioA{{0x00, 0x1C, 0xC0, 0xA2, 0x13, 0xDD}};
+        const std::array<std::uint8_t, 6> radioB{{0x00, 0x1C, 0xC0, 0xA2, 0x13, 0xEE}};
+        const std::optional<std::array<std::uint8_t, 6>> none;
+
+        check(!acceptReply(false, radioA, none).accept,
+              "a reply that is not a Hermes-Lite 2 is never believed");
+        check(!acceptReply(false, radioA, radioA).accept,
+              "not even from the radio we already latched");
+
+        // THE LATCH, and what it does NOT buy. The first answer from the named
+        // address is accepted whoever sent it -- an aim names an IP and the MAC
+        // cannot be known before something replies, so there is nothing to
+        // check it against. Saying otherwise is what the old comment did.
+        const auto first = acceptReply(true, radioA, none);
+        check(first.accept, "the first HL2 answer at a target IS believed");
+        check(first.latch.has_value() && *first.latch == radioA,
+              "and it latches the MAC that answered");
+
+        // What it DOES buy: the responder cannot change underneath a live aim.
+        // A DHCP reassignment, a second radio on the same address, or a NAT
+        // answering for whatever is behind it today all produce a reading that
+        // is continuous and wrong, which is the failure that survives longest
+        // without being noticed.
+        const auto changed = acceptReply(true, radioB, first.latch);
+        check(!changed.accept,
+              "a DIFFERENT MAC at the same address is refused once latched");
+        check(!changed.latch.has_value(),
+              "and a refused reply does not move the latch");
+
+        const auto again = acceptReply(true, radioA, first.latch);
+        check(again.accept, "while the latched radio keeps being believed");
+        check(!again.latch.has_value(),
+              "and an accepted reply from the latched radio does not re-latch");
+    }
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_telemetry_cadence_test: all checks passed\n");

@@ -1,4 +1,5 @@
 #pragma once
+#include "TxCoordinator.h"
 
 #include <QObject>
 #include <QByteArray>
@@ -50,13 +51,14 @@ public:
     void setChannelGain(int channel, float g);  // per-channel RX gain (1-4)
     void setTxGain(float g);                    // TX gain
     float gain() const { return m_gain; }
+    void setTxContext(const TxCoordinator::Context& context);
 
 public slots:
     void feedDaxAudio(int channel, const QByteArray& pcm);
     void setTransmitting(bool tx);
 
 signals:
-    void txAudioReady(const QByteArray& pcm);
+    void txAudioReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
     void daxRxLevel(int channel, float rms);  // 0.0–1.0 RMS for meter display
     void daxTxLevel(float rms);
 
@@ -80,6 +82,7 @@ private:
         QString pipePath;
     };
     TxPipe m_tx;
+    TxCoordinator::Context m_txContext;
 
     QTimer* m_txReadTimer{nullptr};
     void readTxPipe();

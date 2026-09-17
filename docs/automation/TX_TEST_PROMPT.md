@@ -84,7 +84,27 @@ subscription path.
 - Begin with the lowest authorized Tune Power percentage.
 - Sample forward power, SWR, ALC, compression, voltage, current, and thermal
   data that the radio actually supports. Mark unsupported meters as such.
-- Reject stale ages and rail-pinned values.
+- Reject stale ages and rail-pinned values. Do not substitute scalar defaults
+  for unsupported temperature or voltage. Report ALC in its declared native unit.
+- The forward-power median now aggregates only samples that also carry a finite
+  `fwdPowerInstant` within the 500 ms safety window, rather than any smoothed
+  reading under 1500 ms. A backend that publishes `fwdPower` but no instant peak
+  reports no median at all — that is a reporting-surface gap, not a radio fault.
+- Start the freshness deadline at the key command, including command latency.
+  A sample predating that command cannot qualify as this burst's telemetry.
+  That rule governs what may be RECORDED, not what may stop the run: an SWR or
+  forward-power reading over its ceiling still aborts on the ordinary 1500 ms
+  reporting window, because an alarming sample is a reason to unkey whether or
+  not it postdates the key command.
+- In CW, a zero-carrier gap deliberately nulls the displayed SWR. It can continue
+  only after a qualified SWR was observed in this burst, with fresh zero-watt
+  power and fresh SWR receive timestamps. Missing/stale telemetry and a missing
+  ratio with positive power still stop the run. The 0.9 s deadline, the 500 ms
+  safety-freshness window and the watt ceiling are unchanged; the post-key rule
+  narrows only which samples may enter an aggregate.
+- Icom's and the HL2's current TUNE producers are a single sine wave. `txtest
+  twotone` refuses any backend that does not declare a `twoToneGenerator`; do
+  not record ordinary TUNE output as two-tone or IMD proof.
 - Verify the actual power gauge is live only while keyed.
 - Unkey immediately, then verify the gauge is zero both at the edge and after a
   late in-flight response could arrive.
@@ -106,6 +126,16 @@ bypass state. The sampling window repeats the context check and uses fresh
 peak SWR and every sampled meter row. Missing/unknown link state, a missing or
 stale calibrated power definition, and missing/stale SWR stop the run. Unkey
 is confirmed before restoring power; unknown TX flags never count as unkeyed.
+Where the backend answers `civ scheduler freshness` with a `stateFreshness`
+block, model flags alone are insufficient: the harness additionally requires
+`stateFreshness.fields.ptt` to report a confirmed false value received during
+that unkey observation window and younger than 500 ms, carrying
+`accepted: true` and `pending: false`. `accepted` is what separates a real
+readback from a stale frame that merely agreed with the pending unkey intent;
+the backend publishes both, and only the first is proof. An app build that does
+not report the field fails closed. The gate is keyed on the
+backend answering, not on a radio name. A backend without CI-V diagnostics — or
+an older app build — takes the flags-only path.
 
 ### 4. Restart proof
 

@@ -17,10 +17,29 @@ SpeConnection::SpeConnection(QObject* parent)
     m_parser.setDisplayCallback([this](const QByteArray& raw) {
         // LCD freshness and Status liveness are deliberately independent:
         // a moving display must not keep stale telemetry/buttons looking live.
+        // The guard covers the emit too, so nothing is delivered while
+        // polling is off. It does NOT correlate: a reply already in the
+        // buffer when the presentation flips back can still repaint once
+        // polling resumes — setLcdPolling() deliberately leaves m_parser
+        // alone, since resetting it mid-connection would also discard a
+        // partially-received Status frame.
         if (const auto frame = Spe::Lcd::decode(raw)) {
-            emit lcdFrameReceived(*frame);
-            setLcdFresh(true);
-            m_lcdStaleTimer.start();
+            if (m_lcdWanted && m_connected) {
+                emit lcdFrameReceived(*frame);
+                setLcdFresh(true);
+                m_lcdStaleTimer.start();
+                // Pacing the next request from the REPLY is what breaks
+                // the send-side phase-lock: two free-running timers whose
+                // periods divide evenly (the original 600 ms cadence was
+                // an exact multiple of the 100 ms Status poll) coalesce —
+                // Qt's coarse timers do it actively — with every display
+                // reply straddling a status poll on the wire, for many
+                // seconds at a time. Folding the amp's variable response
+                // latency into the period makes a stable phase
+                // relationship impossible, and lets kLcdPollIntervalMs be
+                // a small idle gap rather than a worst-case-link period.
+                applyLcdEffect(m_lcdScheduler.replyValid());
+            }
         }
     });
 
@@ -46,14 +65,67 @@ SpeConnection::SpeConnection(QObject* parent)
     m_powerOnTimer.setSingleShot(true);
     connect(&m_powerOnTimer, &QTimer::timeout, this, &SpeConnection::powerOnStep);
 
-    m_lcdTimer.setInterval(kLcdPollIntervalMs);
-    connect(&m_lcdTimer, &QTimer::timeout, this, &SpeConnection::requestLcdFrame);
+    // ONE timer, single-shot, always armed with an explicit interval by
+    // applyLcdEffect() for whichever role the scheduler assigned it (idle
+    // gap, lost-reply fallback, or reject-retry pause). Request pacing
+    // itself lives in Spe::LcdScheduler — a deterministic, I/O-free state
+    // machine every trigger path flows through, so requests stay
+    // single-file by construction and the property is unit-tested in
+    // spe_protocol_test rather than asserted in comments.
+    m_lcdTimer.setSingleShot(true);
+    connect(&m_lcdTimer, &QTimer::timeout, this, [this]() {
+        applyLcdEffect(m_lcdScheduler.timerFired());
+    });
 
     m_lcdStaleTimer.setSingleShot(true);
     m_lcdStaleTimer.setInterval(kLcdStaleTimeoutMs);
     connect(&m_lcdStaleTimer, &QTimer::timeout, this, [this]() {
+        // Routine on best-effort links (a stall, an amp quiet spell, RF
+        // mid-transmit) — logged so field reports can measure the gaps.
+        qCDebug(lcTuner) << "SpeConnection: no valid display frame for"
+                         << kLcdStaleTimeoutMs << "ms — menu keys gated until"
+                            " the next one";
         setLcdFresh(false);
     });
+
+    // A display frame that died on the wire is re-requested promptly (the
+    // field case: strong RF near the serial run mid-transmit corrupts the
+    // long display replies far more often than the short Status ones, and
+    // one clean frame every second or two is all the mirror needs to stay
+    // live). The scheduler classifies the outstanding request as resolved
+    // and supersedes its lost-reply fallback with the short retry pause —
+    // a late-arriving corrupted frame therefore cannot leave two timers
+    // racing toward two sends. The pause is the flood guard; each retry
+    // is additionally self-limited by the link's own serialization time,
+    // since only a complete received-and-rejected frame provokes one.
+    m_parser.setDisplayRejectCallback([this]() {
+        if (!m_lcdWanted || !m_connected) {
+            return;
+        }
+        qCDebug(lcTuner) << "SpeConnection: display frame failed validation —"
+                            " re-requesting";
+        applyLcdEffect(m_lcdScheduler.replyRejected());
+    });
+}
+
+void SpeConnection::applyLcdEffect(const Spe::LcdScheduler::Effect& effect)
+{
+    if (effect.sendRequest) {
+        sendRaw(Spe::Lcd::buildRequest());
+    }
+    switch (effect.arm) {
+        case Spe::LcdScheduler::Timer::IdleGap:
+            m_lcdTimer.start(kLcdPollIntervalMs);
+            break;
+        case Spe::LcdScheduler::Timer::LostReply:
+            m_lcdTimer.start(kLcdLostReplyMs);
+            break;
+        case Spe::LcdScheduler::Timer::RejectRetry:
+            m_lcdTimer.start(kLcdRetryGapMs);
+            break;
+        case Spe::LcdScheduler::Timer::None:
+            break;  // leave the armed timer alone — never a stop
+    }
 }
 
 void SpeConnection::setLcdPolling(bool on)
@@ -64,23 +136,13 @@ void SpeConnection::setLcdPolling(bool on)
     m_lcdWanted = on;
     if (on && m_connected) {
         setLcdFresh(false);
-        requestLcdFrame();  // first refresh without the full wait
+        applyLcdEffect(m_lcdScheduler.enable());  // first refresh, no full wait
     } else {
+        m_lcdScheduler.reset();
         m_lcdTimer.stop();
         m_lcdStaleTimer.stop();
         setLcdFresh(false);
     }
-}
-
-void SpeConnection::requestLcdFrame()
-{
-    if (!m_lcdWanted || !m_connected) {
-        return;
-    }
-    sendRaw(Spe::Lcd::buildRequest());
-    // An ACK-triggered refresh resets the periodic cadence, avoiding an
-    // immediate duplicate request from the timer that may already be near due.
-    m_lcdTimer.start();
 }
 
 void SpeConnection::setLcdFresh(bool fresh)
@@ -196,6 +258,7 @@ void SpeConnection::disconnect()
     m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
     m_pollTimer.stop();
+    m_lcdScheduler.reset();
     m_lcdTimer.stop();
     m_lcdStaleTimer.stop();
     setLcdFresh(false);
@@ -246,7 +309,7 @@ void SpeConnection::onTransportUp()
     sendRaw(Spe::buildStatusRequest());
     m_pollTimer.start();
     if (m_lcdWanted) {
-        requestLcdFrame();
+        applyLcdEffect(m_lcdScheduler.enable());
     }
 
     emit connected();
@@ -257,6 +320,7 @@ void SpeConnection::onTransportDown()
     const bool wasConnected = m_connected;
     m_connected = false;
     m_pollTimer.stop();
+    m_lcdScheduler.reset();
     m_lcdTimer.stop();
     m_lcdStaleTimer.stop();
     setLcdFresh(false);
@@ -360,9 +424,11 @@ void SpeConnection::onFrameReceived(const Spe::Frame& f)
         qCDebug(lcTuner) << "SpeConnection: ACK for command"
                           << QString::number(static_cast<quint8>(f.data.at(0)), 16);
         // The keys are safe only beside a fresh mirror. Pull the resulting
-        // screen immediately instead of making a fast menu sequence wait up
-        // to the next 600 ms periodic refresh.
-        requestLcdFrame();
+        // screen immediately when the line is free — and when a display
+        // request is already in flight, as pending work the scheduler
+        // services the moment that request resolves, never as a second
+        // in-flight request (the review-caught overlap path).
+        applyLcdEffect(m_lcdScheduler.ackSeen());
         return;
     }
 

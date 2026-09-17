@@ -432,8 +432,10 @@ ruling things out quickly.
 
 ### Sideband selection — the mode does NOT choose it
 
-Two facts that took a full session to establish, and that no amount of reading
-WDSP's headers would have given us. Both measured against WWV on live hardware.
+Facts that took a full session to establish, and that no amount of reading
+WDSP's headers would have given us. The first two bullets were measured against
+WWV on live hardware; the last two are read off the vendored WDSP 2.10 sources
+in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
 
 - **RX: the passband edges select the sideband, not the mode.** `SetRXAMode`
   rebuilds the NBP stage from its own per-mode notion of the passband, so any
@@ -445,16 +447,46 @@ WDSP's headers would have given us. Both measured against WWV on live hardware.
   independently by `hl2_rxdsp_test` and `hl2_shift_test`. This is the single
   least intuitive fact in the whole backend and everything in §15 follows from
   it.
-- **TX is the mirror image: the MODE selects the sideband and the bandpass is an
-  audio-domain magnitude.** `SetTXABandpassFreqs` wants **positive** edges for
-  every mode. Handing TX the RX table's signed pairs put LSB and DIGL on the
-  upper sideband — caught by `hl2_txdsp_test` before it shipped, which is why
-  `Hl2Backend` keeps two separate tables (`defaultPassbandForMode` signed for RX,
+- **TX — in `Hl2TxDsp` — is the mirror image: the MODE selects the sideband and
+  the bandpass is an audio-domain magnitude.** `Hl2TxDsp` filters with one real
+  bandpass plus a Hilbert pair built from **positive** edges, and chooses the
+  sideband in `isLowerSideband()`, which negates Q. Handing it the RX table's
+  signed pairs put LSB and DIGL on the upper sideband — caught by
+  `hl2_txdsp_test` before it shipped, which is why `Hl2Backend` keeps two
+  separate tables (`defaultPassbandForMode` signed for RX,
   `defaultTxPassbandForMode` positive for TX).
+- **That positive-edges rule is `Hl2TxDsp`'s and NOT WDSP's —
+  `SetTXABandpassFreqs` is signed, exactly like RXA.** `TXA.c`'s
+  `TXASetupBPFilters` handles `TXA_LSB` and `TXA_USB` in the *same* fall-through
+  case, with one identical `CalcBandpassFilter (…, f_low, f_high, 2.0)`; no
+  per-mode sideband branch exists outside `TXA_AM_LSB` / `TXA_AM_USB`, which
+  themselves only pick a *sign* for `f_high`. And `create_txa` defaults to
+  `TXA_LSB` with `f_low = -5000.0`, `f_high = -100.0` — negative, which would be
+  meaningless if the mode chose the sideband. So `SetTXABandpassFreqs(ch, +300,
+  +2700)` builds the same filter for LSB as for USB: **feeding TXA this table's
+  positive pairs transmits LSB on the upper sideband.**
+- **Why the signed rule is counter-intuitive: `fir_bandpass` is inverted.**
+  `fir.c` builds the complex prototype as `+coef * cos (pos * w_osc)` for I and
+  **`-coef * sin (pos * w_osc)`** for Q — that is `exp(-j·w_osc·pos)` — so a
+  **positive** signed band selects the **negative** baseband half. RXA's NBP and
+  TXA's bandpass both reach it through `CalcBandpassFilter`/`fir_bandpass` with
+  `rtype = 1`, so this one function is the mechanism behind both the RX bullet
+  above and the TX correction here.
 
-The trap: RX and TX use **opposite conventions**, and both look plausible. A
-table written for one and reused for the other is silently wrong on exactly half
-the modes.
+The trap: RXA and `Hl2TxDsp` use **opposite conventions**, and both look
+plausible. A table written for one and reused for the other is silently wrong on
+exactly half the modes. The second trap is assuming the first one describes
+WDSP's transmit path: it does not.
+
+> **Forward note — not an instruction, and nothing here changes behaviour.**
+> Whether transmit should move from `Hl2TxDsp` onto a real TXA channel is the
+> open question in **#5678**; nothing has been decided. An **unfiled** analysis
+> behind that issue argues such a migration should drop `Hl2TxDsp`'s wire
+> conjugation and feed TXA *signed* RX-style edges rather than
+> `defaultTxPassbandForMode`. It is unfiled deliberately — there is no artifact
+> to cite and no number to follow, so treat the arrangement as unestablished. It
+> is a code change for a migration PR to settle and measure, not a claim this
+> section makes.
 
 ### CW has no BFO unless you build one
 
@@ -807,9 +839,12 @@ sub-actions, so action-level drift is invisible to CI.
 1. ~~**Read back what the DSP was actually configured with.**~~ **DONE.**
    `get_state model=dsp` now carries a `backend` object alongside the
    client-side chain: `family`, and a `chains` list. Each entry names its
-   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive and a
-   hand-written phasing modulator on transmit, whose config is a different
-   struct) and its `level`, because "read-back" is used loosely and the
+   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive, and
+   optionally a WDSP TXA channel on transmit whose config is a different struct;
+   `modulator` on that entry names the transmit modulator the binary was built
+   with, `phasing` in a stock build or `wdsp-txa` under
+   `-DAETHER_HL2_TX_TXA=ON`, and there is no runtime switch between them) and its `level`, because "read-back" is used loosely
+   and the
    difference decides what a mismatch proves: `channel-config` is what
    `WdspChannel` was OPENED with after clamping or refusal, `dsp-config` is the
    DSP's own state, and `not-configured` marks an unavailable configuration.
@@ -1301,10 +1336,15 @@ right after `OpenChannel` (`RXASetNC(id, fft_size)`, `RXASetMP(id,
 low_latency)`); we take WDSP's defaults silently. §7 notes these matter a lot
 to CW operators.
 
-**`SetChannelState` is never used.** We pass `state = 1` at open and never stop
-the channel. §2 is explicit that `SetChannelState` is the T/R call (it applies
-the ramps) and `CloseChannel` is for teardown only — "conflating them means
-either clicks (closing) or leaks (never closing)."
+**~~`SetChannelState` is never used.~~ SUPERSEDED — see §13 row 9.** This
+paragraph was wrong when it was written and is kept, struck, because §13 row 9
+is a retraction of it and a retraction needs something to point at.
+`WdspChannel::open`/`close` have used `SetChannelState` since #4448, which
+predates this audit: open STOPPED, configure, start; stop-and-flush before
+`CloseChannel`. What was genuinely missing is the RUNTIME verb, and
+`WdspChannel::setRunning` is it. §2's point — that `SetChannelState` is the T/R
+call and `CloseChannel` is teardown only, and that "conflating them means either
+clicks (closing) or leaks (never closing)" — still stands, and is item 9a.
 
 ### 12.4 Divergences that are defensible, but should be deliberate
 
@@ -1406,7 +1446,9 @@ Audited against this branch's merge base, `6f46eea7`.
 |---|---|---|---|---|
 | 7 | ~~Read receiver count from discovery `0x13`~~ | O §1 | **DONE — §19.** `maxSlices`/`maxPanadapters` report the RUNNING count: requested, clamped by discovery `0x13`, clamped again by the link budget | S |
 | ~~8~~ | ~~Move HL2 wire + DSP off the GUI thread~~ **DONE** | O §2 | `Hl2Backend` runs `MetisClient` and both DSP chains on a dedicated `hl2-io` thread. Note the consequence: EP2 pacing, EP6 ingest, WDSP and the panadapter FFT now share ONE thread, so per-sample cost there scales with the span (§15.2) | — |
-| 9 | `SetChannelState` for start/stop; `CloseChannel` only for teardown | A3 §2 | Conflating them gives clicks or leaks. Needed before T/R | S |
+| ~~9~~ | ~~`SetChannelState` for start/stop; `CloseChannel` only for teardown~~ | A3 §2 | **DONE — and half of it was never broken.** `WdspChannel::open`/`close` have used `SetChannelState` since #4448 (2026-07-25): open STOPPED, configure, start; stop-and-flush before `CloseChannel`. §12.3's "`SetChannelState` is never used" was a misreading of code that already did it — the same commit that A3 was audited against. **No `CloseChannel` in this tree has ever been a stop**: the only one is `WdspChannel::close`, reached from the destructor and from `reconfigure()`. What WAS missing is the runtime verb, and `WdspChannel::setRunning` is it — it stops and starts a live channel, preserving the notch database, the FFTW plans and the AGC/shift/blanker state a close discards (pinned by `runStartStopTest`, which contrasts it against `reconfigure()`). It HAS production callers now, but not the one the audit meant: `Hl2RxDsp` and `AnanRxDsp` stop the channel before they destroy or replace it, which is 9b. The T/R caller the audit was actually after is still 9a | — |
+| 9a | Decide whether the T/R mute should become `setRunning(false)` | ours, from 9 | **OPEN.** This is the half of item 9 that "needed before T/R" was actually about, and it is the ONLY place in the tree where a stop can be taken with the audio path still feeding the channel — so it is also the only place WDSP's mute ramp would actually run (9b's teardown stops never drain). `Hl2RxDsp::setAudioMuted` and `AnanRxDsp::setAudioMuted` both stop the chain by clocking ZEROS through it, so item 1's anti-click envelope is never applied on a T/R edge — it only ever runs at channel open. Switching them to the real stop is not free: WDSP flushes on stop, so the output ring refills from empty and there is a genuine hole at the head of every receive period. NOT DECIDABLE FROM THE SOURCE. Whether the ramp beats the hole depends on how the slew time compares with the actual keying turnaround on the bench, and that is a hardware keying measurement that has not been authorised — nothing here has been measured on the air. Note the two families are not the same case — ANAN's mute is a rate-change settle, not T/R at all. ONE TRAP THAT WOULD HAVE BITTEN THIS CALLER IS NOW GONE: a T/R edge produces stop/start pairs spaced by the keying turnaround, not by 96 blocks, and upstream WDSP's `SetChannelState` case 1 armed the up-slew without clearing `slew.downflag`. A start taken before the host had clocked the down-ramp out left it pending on a channel WDSP considered running; the next few blocks finished it, and `downslew2`'s completion arm clears `ch[].exchange`, after which `fexchange2` returns having touched nothing — permanent silence with `isRunning()` reporting true, recoverable only by a `reconfigure()`. Found in review of #5628, fixed as AetherSDR patch 7 to the vendored WDSP (`third_party/wdsp/AETHERSDR-PATCHES.md`): case 1 now cancels a pending ramp under `csEXCH`. **AND THAT WAS ONLY HALF THE WINDOW, WHICH THIS ROW ASSERTED OTHERWISE FOR A DAY.** It said `setRunning` had no clocking precondition and that stop/start pairs were safe at any spacing including none; that was true for the regime we had tested — restarts *inside* the ramp — and false immediately outside it (K5PTB, second review of #5628). A ramp that has COMPLETED has already released `Sem_Flush`, and WDSP's `flushChannel` thread sets `exec_bypass` whenever it is next scheduled, possibly after case 1 cleared it; `wdspmain` then skips `dexchange`/`xrxa` and the channel produces nothing, or, in the blocking form, parks the host in `fexchange2` on a `Sem_OutReady` the bypassed worker will never release. MEASURED HERE, restarting with no gap across spacings 0-10 blocks at 256/48 kHz: 42 of 440 non-blocking trials dead (24 at spacing 3, 18 at spacing 4, none at 0-2), against 0 of 440 for a control that sleeps 20 ms before each start; and 20 of 20 blocking trials hung at spacing 3. AetherSDR patch 8 adds a bounded wait for that flush before arming, and both go to 0. WHAT IS ACTUALLY SAFE NOW: any spacing including none, at the cost of a start that may wait for the flush thread — bounded by WDSP's 100 ms, measured under 3 ms, and zero unless the previous stop's ramp was clocked out. **AND A THIRD TRAP UNDER THE SAME THREAD, WHICH IS THE ONE THAT COULD HAVE CORRUPTED A LIVE RADIO'S HEAP.** A stop that IS clocked out — which is precisely what this row contemplates, and what `WdspChannel.h` documents as correct usage — releases `Sem_Flush` and leaves WDSP's `flushChannel` thread runnable. `CloseChannel` waited for the `wdspmain` worker (AetherSDR patch 4) and for nothing else; upstream's own `flushChannel` handshake sat in `destroy_iobuffs`, i.e. AFTER `destroy_main`. So `destroy_main` -> `destroy_rxa` freed the RXA chain while `flushChannel` was inside `flush_rxa` on it. MEASURED HERE, one trial per process, non-blocking (what both owners use): stop-then-clock-then-destroy CRASHED 30 of 30, against clean 15 of 15 for both never-stopped-then-destroy and stop-then-destroy-with-nothing-clocked, and clean 30 of 30 for a control that sleeps 50 ms before the destroy. Found by ten9876 in review of #5628; fixed as AetherSDR patch 9, which moves upstream's handshake into `pre_main_destroy`. Note what this means for the order of work on this row: the T/R mute could not have been landed safely before it, and the teardown stops of 9b were on the safe shape only because they clock nothing after the stop — an assumption that was stated and not enforced. `runCloseAfterStoppedClockingTest` drives the crashing shape and goes red, as a signal rather than a message, in 5 of 5 runs with patch 9 reverted. NOT MEASURED ON HARDWARE: the probe is synthetic and no radio has run it. `runRestartDuringRampTest` now straddles the ramp — spacings 0 and 1 inside it, 3, 4 and 5 at and past its completion — and goes red on one of the past-the-ramp rows in 5 of 5 runs with patch 8 reverted. Bench decision, per family | S |
+| ~~9b~~ | ~~`WdspChannel::close`'s `SetChannelState(0, 1)` always burns its full 100 ms~~ | ours, from 9 | **DONE.** First, the mechanism as written here was one hop off: the flush flag is NOT cleared by `fexchange2`. `fexchange0`/`fexchange2` run the down-slew and release the channel's `Sem_Flush` when it completes (the `ReleaseSemaphore` calls at the tail of each); WDSP's per-channel `flushChannel` thread wakes on that semaphore and clears `flushflag` (the tail of `flushChannel`). The conclusion survives: only a host still calling `fexchange*` can satisfy the wait, and `close()` runs behind the control fence, so it always ran to the 100 ms timeout. Two changes. (a) `close()` now takes `g_setupMutex` only for `CloseChannel`, not across the wait — `SetChannelState` touches nothing but `ch[channel]`/`ch[channel].iob`, and no `fftw_plan`/`fftw_destroy_plan` is reachable from `flush_main` either, so the planner lock was never protecting it. (b) The owners stop the channel BEFORE they let it go — `Hl2RxDsp`'s destructor and pre-swap in `configure()`, `AnanRxDsp`'s destructor and `installChannel()` — so `SetChannelState` no-ops at close and the wait is skipped. WHICH PATHS BENEFIT: the rate change (every receiver, from the GUI thread through a `BlockingQueuedConnection` — the visible one, see §22.4), `removePanadapter`, `releaseReceiverDsps` on connect, and the backend destructor. WHAT IS NOT BOUGHT: a clean down-slew. Every one of those paths has already withdrawn the chain from the sample fan-out, or the wire was never started, so nothing feeds the channel and WDSP's ramp does not run — the saving is the skipped wait only. The drain needs 9a. **AND THAT "NOTHING FEEDS THE CHANNEL" IS A CORRECTNESS PRECONDITION, NOT A PERFORMANCE NOTE** — it was written here and in both destructors as the reason the ramp does not run, and it was also, unremarked, the only thing keeping these paths off a use-after-free. Skipping the 100 ms removes a barrier as well as a wait: a stop that IS clocked out wakes WDSP's `flushChannel` thread, and nothing in `CloseChannel` waited for it. The three owner paths above are safe because they clock nothing after the stop; the T/R mute of 9a would not have been. Fixed in the vendored tree as AetherSDR patch 9 so the barrier is explicit and covers every caller — see 9a for the measurement, and note that the RTL backend's `WdspReceiver` (`src/core/backends/rtl/RtlReceiverRegistry.cpp`) is a THIRD `WdspChannel` owner that this row's change does not cover: it retires a bank on the registry's executor thread rather than on the thread that drives `processIq()`, so the fence argument does not carry across and it still pays the 100 ms per channel. Raised by ten9876 in review of #5628. Pinned by `runCloseSetupLockTest` (no stopwatch: the run flag is observed clearing while the test holds the setup lock), `runStoppedCloseTest` and `runCloseAfterStoppedClockingTest`. The "~0.4 s of serialised disconnect for four receivers" this row used to claim was always an INFERENCE from the 100 ms constant, never a measurement, and nothing here has been measured on hardware | XS |
 | ~~10~~ | ~~RADE null-deref at `MainWindow_DigitalModes.cpp:461`~~ **DONE** | ours, gap 9 | Fixed, and §18.3 already records it. `activateRADE()` guards `panStream()` at its top and declines with a message; the bare `connect` further down is inside that guarded region | — |
 | 11 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured~~ | ours, gap 10 | **Withdrawn.** The variable was removed application-wide; nothing reads it. See gap 10 and the §10 recipe | — |
 | ~~12~~ | ~~One dB-reference object per slice (LNA + calibration + AGC threshold)~~ **DONE** — but **NOT per slice**, see below | A2 §A3 | `Hl2DbReference` now owns all three terms. The display half (LNA + calibration) was already built; what landed here is the AGC-T half, which the operator HEARS rather than sees. **The row's "per slice" was wrong on this radio**: the LNA is one AD9866 field in front of all four DDCs and `fullScaleDbm` is a property of the board, so two of the three terms physically cannot differ between slices and N copies of them would be the very drift the class exists to prevent. Only the AGC-T is per receiver; it stays in `Receiver::agcThresholdDb` and is an ARGUMENT to `agcCeilingDb()`, not a copy inside it. Calibration is still an honest hole — `isCalibrated()` is false and no constant was invented. **One caveat the row could not know:** the reference subtracts the COMMANDED gain, and the AD9866 folds `code & 0x1F` above code 31 (upstream #177, design intent), so above +19 dB commanded the correction over-shoots by up to 32 dB. Named in the class header; the fix belongs at the clamp (`kLnaGainMaxDb` still publishes +48), not in the reference | — |
@@ -1422,7 +1464,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | 15 | Discovery-reply telemetry (temp, power, PTT) | O §1 | Pollable **without a stream** — cheapest first increment, and a diagnostic when the stream is broken. **The clip field is excluded**: at idle it is a latched rail, not a level (§11.4) | S |
 | ~~16~~ | ~~Pair WDSP `RXA_ADC_PK` with the hardware clip indicator~~ **DONE** | A3 §7 | The Converter health section now carries both: the pre-DDC overload flag (RADDR `0x00` bit 24) and, per slice, WDSP's post-DDC `RXA_ADC_PK` with an age on it — plus a sentence naming which of the four ways they can stand relative to each other is happening (`Hl2AdcPairing.h`). It only READS, which is why it did not have to wait for 13. The sentence requires both a recent peak and proof that slice-side sampling has resumed after any queued mute transition: the slice value freezes through TX while the pre-DDC flag keeps moving, so held data pairs to "not reported" rather than to a causal claim (`kSliceStaleMs`, `SliceSamplingGate`). Note also what bit 24 is — `(&clip_cnt)`, the AND-reduction of the gateware clip counter, so it asserts on a SATURATED counter and not on one clip; the counter as a count is still row 14. **Display only**, and **both sides are uncalibrated** and not even on a common scale: what survives is the relationship, never either number on its own | — |
 | 17 | TX IQ FIFO servo | O §6, A1 §B3 | The oracle wants pacing servoed against a FIFO depth rather than a host timer. **The wire carries no depth** — `dsiq_status` is a recovery flag plus the top 7 bits of the fill level. So this item first has to establish what one unit of that field is worth in samples; until then there is nothing to servo against | M |
-| 18 | Wideband bandscope (endpoint `0x04`) | O §7, A1 §A1 | Unimplemented by piHPSDR (dead code) and declined by SDR Console — a differentiation opportunity. **4 packets/block on HL2, not 32** | M |
+| 18 | Wideband bandscope (endpoint `0x04`) | O §7, A1 §A1 | **Transport + protocol DONE (#5650)** — `MetisProtocol` parses EP4, `MetisClient` gates it to one 2048-sample block/s, headroom lands in the health dialog behind the bridge's `bandscope` verb. Still open: the continuous DISPLAY (wants its own RFC) and the policy that acts on it (#5535). Unimplemented by piHPSDR (dead code) and declined by SDR Console — a differentiation opportunity. **4 packets/block on HL2, not 32** | M |
 | ~~19~~ | ~~Filter board band switching (J16 / I2C `0x20`)~~ **DONE** — PA bias + config EEPROM still open | O §8 | Band filters auto-select from the slice frequency (`Hl2Backend::applyBandFilter`). PA bias and the config EEPROM are untouched and still want the RQST/ACK path | — |
 | 20 | ~~Multi-slice: index-space mapping object~~ | A3 §3 | **DONE — §19.** `Hl2Receivers.h`. The WDSP channel really is not the DDC index: ids come from a shared 32-slot pool, so after a TX channel has come and gone receiver 0 is routinely not channel 0 | S |
 | 21 | Diversity as a **pre-channel combiner** | A3 §6 | `divEXT` takes two DDC streams and yields one. Modelling it as a two-input slice fights the DSP layer | M |
@@ -4075,3 +4117,6 @@ has ordering constraints the connect does not: the DSP must expect the new rate
 before EP6 starts delivering at it, and a partial failure has to roll every
 receiver back to a single rate. Left as a follow-up rather than bolted onto the
 connect fix.
+
+The opt-in TXA modulator and its offline evidence are described in
+[HL2 TXA configuration and lifecycle](hl2-txa-configuration-diff.md).
