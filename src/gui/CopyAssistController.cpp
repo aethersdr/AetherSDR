@@ -465,6 +465,9 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // LogManager is a process-lifetime singleton, and its flush returns at once
     // when the writer has already stopped.
     asrSetLogFlushHook([] { LogManager::instance().flushLog(); });
+    // whisper/ggml warnings and errors otherwise reach stderr only, which no
+    // support bundle carries.
+    asrInstallLogRouting();
 
     buildEngine();
     m_constructed = true; // subsequent VAD toggles may download/rebuild
