@@ -167,6 +167,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         return socket->sendBinaryMessage(data);
     };
     m_rxBacklog = [](QWebSocket* socket) { return socket->bytesToWrite(); };
+    m_rxClose = [](QWebSocket* socket, QWebSocketProtocol::CloseCode code,
+                   const QString& reason) {
+        if (socket) {
+            socket->close(code, reason);
+        }
+    };
     m_tciPttTelemetryClock.start();
 
     // Load per-channel RX gains from persistence (decoupled from DaxRxGain<n>, #1627).
@@ -2939,8 +2945,23 @@ void TciServer::retireAllRxRoutes()
 void TciServer::retireSliceRx(int sliceId)
 {
     for (auto it = m_rxRoutes.begin(); it != m_rxRoutes.end(); ++it) {
-        if (it->sliceId == sliceId) {
-            resetRxRoute(it.key());
+        if (it->sliceId != sliceId) {
+            continue;
+        }
+        resetRxRoute(it.key());
+        // A DAX producer owns a stream/channel, not a slice, so a slice
+        // removal revokes nothing and its pin stays current. A tombstone here
+        // could therefore never be lifted: the retired-route sweep only erases
+        // a route whose pin has died, and receivePcm's `live && retired` guard
+        // returns before it reaches `retired = false`. The channel goes silent
+        // for the rest of the session — and Flex band recall drops and
+        // re-creates a slice with the SAME id, so that is a routine action.
+        // A DAX channel is already fail-closed without the tombstone:
+        // onDaxPcmReady re-resolves a LIVE owner for every packet and returns
+        // when none claims the channel, and an owner change resets the
+        // histories below. Slice routes keep the tombstone — their producer IS
+        // revoked on sliceRemoved (IRadioBackend's constructor), so it lifts.
+        if ((it.key() >> 32) != static_cast<quint64>(RxRouteKind::Dax)) {
             it->retired = true;
         }
     }
@@ -3197,10 +3218,8 @@ void TciServer::receivePcm(RxRouteKind kind, int id, SliceModel* slice,
                         << (pending < 0 ? "invalid backlog" : "backlog limit")
                         << "peer=" << socket->peerAddress().toString() << socket->peerPort()
                         << "pending_bytes=" << pending << "packet_bytes=" << packet.size();
-                    if (socket) {
-                        socket->close(QWebSocketProtocol::CloseCodeTooMuchData,
-                                      QStringLiteral("RX audio backlog limit"));
-                    }
+                    self->m_rxClose(socket, QWebSocketProtocol::CloseCodeTooMuchData,
+                                    QStringLiteral("RX audio backlog limit"));
                     return false;
                 }
                 // Last epoch check is immediately before handing bytes to Qt.

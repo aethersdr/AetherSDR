@@ -1464,7 +1464,12 @@ public:
         producer.start(PcmPurpose::Slice, 0);
         QString error;
         model.automationApplySliceFixture(0, QString(), &error);
-        server.onSlicePcmReady(0, *producer.legacyStereo24(pcm));
+        const auto framedPcm = producer.legacyStereo24(pcm);
+        if (!framedPcm) {
+            std::fprintf(stderr, "FAIL: producer did not frame the pcm payload\n");
+            return false;
+        }
+        server.onSlicePcmReady(0, *framedPcm);
         spin(20);
         if (!receivedFrame.isEmpty()) {
             std::printf("      48 kHz staging unexpectedly emitted a frame\n");
@@ -1492,7 +1497,12 @@ public:
         for (int i = 0; i < kFrames * 2; ++i) {
             expectedSamples[i] *= kGain;
         }
-        server.onSlicePcmReady(0, *producer.legacyStereo24(nextPcm));
+        const auto framedNextpcm = producer.legacyStereo24(nextPcm);
+        if (!framedNextpcm) {
+            std::fprintf(stderr, "FAIL: producer did not frame the nextPcm payload\n");
+            return false;
+        }
+        server.onSlicePcmReady(0, *framedNextpcm);
 
         for (int i = 0; i < 100 && receivedFrame.isEmpty(); ++i) {
             spin(10);

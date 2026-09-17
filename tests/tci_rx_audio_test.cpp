@@ -86,7 +86,8 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool) override {}
+    void setKeying(bool, const TxCoordinator::Operation&,
+                   const TxCoordinator::Completion&) override {}
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
     void add(int id, int dax = 0)
     {
@@ -674,6 +675,66 @@ public:
         check(!departing && attempts == 1 && f.packets[fast].size() == 4,
               "failed send may destroy its socket before diagnostics without disrupting healthy client");
     }
+    // #5722 review S1: the two refusal paths differ deliberately — a backlog
+    // refusal requests graceful close of the shared audio/CAT/PTT socket, a
+    // short/failed send only stops audio. Both are stated in the PR body and in
+    // docs/tci-receive-audio.md, and until now neither direction was pinned:
+    // deleting the close() call left all assertions green.
+    // #5722 review: a DAX route retired by a slice removal must recover when
+    // the slice comes back. The Slice route recovers because IRadioBackend's
+    // ctor revokes its producer on sliceRemoved; a DAX producer lives in
+    // PanadapterStream::m_daxPcm and a slice removal revokes NOTHING, so the
+    // pin stays current, the retired-route sweep cannot erase it, and the
+    // `live && retired` guard drops every later packet. Flex band recall
+    // drops and re-creates a slice with the SAME id, so this is a routine
+    // operator action, not a corner case.
+    static void daxRouteSurvivesSliceRecreate()
+    {
+        Fixture f; f.backend->add(3,2);
+        QWebSocket* client = f.client();
+        PcmProducer producer; producer.start(PcmPurpose::Auxiliary);
+        f.server.onDaxPcmReady(2, frame(producer,3));
+        check(f.packets[client].size() == 1, "DAX route delivers before the recall");
+
+        // Band recall: slice dropped and re-created with the same id. The DAX
+        // producer is NOT revoked — that is the whole point.
+        f.backend->remove(3);
+        f.backend->add(3,2);
+        f.server.onDaxPcmReady(2, frame(producer,3));
+        check(f.packets[client].size() == 2,
+              "a re-created slice resumes its DAX route without producer revocation");
+    }
+
+    static void refusalCloseDistinction()
+    {
+        // Backlog refusal MUST request close.
+        {
+            Fixture f; f.backend->add(3);
+            QWebSocket* client = f.client();
+            int closes = 0;
+            f.server.m_rxClose = [&](QWebSocket*, QWebSocketProtocol::CloseCode, const QString&) { ++closes; };
+            f.server.m_rxBacklog = [](QWebSocket*) { return qint64{256*1024}; };
+            PcmProducer producer; producer.start(PcmPurpose::Slice,3);
+            f.feed(3,frame(producer,4096));
+            check(closes == 1, "a backlog refusal requests graceful close of the shared socket");
+        }
+        // A short send MUST NOT close: the socket still carries CAT and PTT.
+        {
+            Fixture f; f.backend->add(3);
+            QWebSocket* client = f.client();
+            int closes = 0;
+            f.server.m_rxClose = [&](QWebSocket*, QWebSocketProtocol::CloseCode, const QString&) { ++closes; };
+            f.server.m_rxSend = [&](QWebSocket*, const QByteArray& packet) -> qint64 {
+                return packet.size() - 1;
+            };
+            PcmProducer producer; producer.start(PcmPurpose::Slice,3);
+            f.feed(3,frame(producer,4096));
+            TciServer::ClientState* state = f.server.clientStateFor(client);
+            check(closes == 0 && state && !state->audioEnabled,
+                  "a short send stops audio without closing the shared socket");
+        }
+    }
+
     static void backlogDiagnostics()
     {
         for (qint64 pending : {qint64{-1},qint64{256*1024}}) {
@@ -717,7 +778,7 @@ public:
     {
         rateMatrixAndStereo(); unsupportedRatePreservesStream(); sparseRoutingAndSingleFeed(); formatEncoding();
         replayAndEpochs(); resetIsolation(); subscriptionAndForwardGapStaging(); retiredRouteAndCapacity(); daxLifecycle(); daxOwnerTransition();
-        staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); pressureAndReplacement();
+        staleFinalCheckAndChurn(); levelCallbackRetirement(); negotiationClientChurn(); lifecycleChurnAndConcurrentRevocation(); failedSendIsolation(); failedSendSocketDeletion(); backlogDiagnostics(); refusalCloseDistinction(); daxRouteSurvivesSliceRecreate(); pressureAndReplacement();
         std::printf("TCI RX: %d checks, %d failures\n",checks,failures);
         return failures==0 ? 0 : 1;
     }
