@@ -973,6 +973,10 @@ void RadioSetupDialog::showEvent(QShowEvent* event)
         m_calibrationReseed();
     if (m_droopReseed)
         m_droopReseed();
+    // Same reason, for the PC audio device lists: a headset connected or
+    // removed while this dialog was hidden has to be picked up on show.
+    if (m_audioDeviceReseed)
+        m_audioDeviceReseed();
 }
 
 bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
@@ -3845,6 +3849,45 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
 
 // ── Audio tab ────────────────────────────────────────────────────────────────
 
+namespace {
+
+// Refill a PC-audio device combo from a LIVE enumeration, pinning the user's
+// selection to its device ID rather than to its row: the platform reorders its
+// list on hot-plug, so a row number is not a stable identity for a device.
+//
+// Signals stay blocked for the refill. Clearing a QComboBox emits
+// currentIndexChanged, and that signal tears down and rebuilds a QAudioSource
+// (#1114) — so an unblocked repopulate would restart the audio device on every
+// PipeWire hiccup. A device merely ARRIVING must not re-point the engine; that
+// is platform churn, not an actionable change (#2864). A device VANISHING is
+// MainWindow::handleAudioDeviceListChanged's call, not this combo's, which is
+// why `engineDevice` — what the engine is actually on — is the fallback: when
+// the previous selection is gone the combo follows the engine rather than
+// inventing a switch of its own.
+void repopulateAudioDeviceCombo(QComboBox* combo,
+                                const QList<QAudioDevice>& devices,
+                                const QAudioDevice& engineDevice)
+{
+    if (!combo)
+        return;
+    QByteArray wantedId = combo->currentData().toByteArray();
+    if (wantedId.isEmpty())
+        wantedId = engineDevice.id();
+
+    QSignalBlocker blocker(combo);
+    combo->clear();
+    for (const auto& dev : devices)
+        combo->addItem(dev.description(), dev.id());
+
+    int idx = combo->findData(wantedId);
+    if (idx < 0)
+        idx = combo->findData(engineDevice.id());
+    if (idx >= 0)
+        combo->setCurrentIndex(idx);
+}
+
+} // namespace
+
 QWidget* RadioSetupDialog::buildAudioTab()
 {
     auto* page = new QWidget;
@@ -4076,13 +4119,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     inLabel->setFixedWidth(90);
     auto* inCombo = new QComboBox;
     AetherSDR::applyComboStyle(inCombo);
-    const auto inDevices = QMediaDevices::audioInputs();
-    for (const auto& dev : inDevices)
-        inCombo->addItem(dev.description(), dev.id());
-    const auto curIn = m_audio ? m_audio->inputDevice() : QAudioDevice();
-    const auto selIn = curIn.isNull() ? QMediaDevices::defaultAudioInput() : curIn;
-    int inIdx = inCombo->findData(selIn.id());
-    if (inIdx >= 0) inCombo->setCurrentIndex(inIdx);
+    // Filled by reseedAudioDeviceCombos below, not from a snapshot taken here.
     inRow->addWidget(inLabel);
     inRow->addWidget(inCombo, 1);
     pcLayout->addLayout(inRow);
@@ -4094,14 +4131,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     outLabel->setFixedWidth(90);
     auto* outCombo = new QComboBox;
     AetherSDR::applyComboStyle(outCombo);
-    const auto outDevices = QMediaDevices::audioOutputs();
-    for (const auto& dev : outDevices)
-        outCombo->addItem(dev.description(), dev.id());
-    // Select current device (or system default)
-    const auto curOut = m_audio ? m_audio->outputDevice() : QAudioDevice();
-    const auto selOut = curOut.isNull() ? QMediaDevices::defaultAudioOutput() : curOut;
-    int outIdx = outCombo->findData(selOut.id());
-    if (outIdx >= 0) outCombo->setCurrentIndex(outIdx);
+    // Filled by reseedAudioDeviceCombos below, not from a snapshot taken here.
     outRow->addWidget(outLabel);
     outRow->addWidget(outCombo, 1);
     pcLayout->addLayout(outRow);
@@ -4123,28 +4153,102 @@ QWidget* RadioSetupDialog::buildAudioTab()
     });
     pcLayout->addWidget(promptCheck);
 
+    // ── Keep both combos level with the platform ──────────────────────
+    // This page is built ONCE per process (buildDeferredTab erases the builder,
+    // #1776) and the dialog is a showOrRaisePersistent singleton that is hidden
+    // rather than destroyed. A list enumerated at build time is therefore the
+    // list the user sees for the rest of the session: connect a headset with
+    // this pane open and it never appears — and closing and reopening Settings
+    // does not bring it back either, because nothing is rebuilt. Watch the
+    // platform instead of trusting one snapshot.
+    auto reseedAudioDeviceCombos = [this, inCombo, outCombo] {
+        const QAudioDevice curIn = m_audio ? m_audio->inputDevice() : QAudioDevice();
+        const QAudioDevice curOut = m_audio ? m_audio->outputDevice() : QAudioDevice();
+        repopulateAudioDeviceCombo(inCombo, QMediaDevices::audioInputs(),
+            curIn.isNull() ? QMediaDevices::defaultAudioInput() : curIn);
+        repopulateAudioDeviceCombo(outCombo, QMediaDevices::audioOutputs(),
+            curOut.isNull() ? QMediaDevices::defaultAudioOutput() : curOut);
+    };
+    reseedAudioDeviceCombos();
+
+    {
+        // One QMediaDevices per built page, parented to the group box. That it
+        // is constructed HERE and not in the dialog constructor is the whole
+        // point of #1776: hardware probing happens when the user opens the
+        // Audio page, never before.
+        auto* audioDeviceMonitor = new QMediaDevices(pcGroup);
+        auto* settle = new QTimer(pcGroup);
+        settle->setSingleShot(true);
+        // Deliberately trails MainWindow::setupAudioDeviceChangeMonitor's own
+        // 750 ms settle: when a removal forces the engine back to the default
+        // we want to show the device it ended up on, not the one that vanished.
+        settle->setInterval(900);
+        connect(settle, &QTimer::timeout, this,
+                [settle, inCombo, outCombo, reseedAudioDeviceCombos] {
+            // Never pull the list out from under an open dropdown. PipeWire can
+            // churn device IDs continuously (#2864); a combo that rebuilds
+            // while the user is reading it is worse than one that waits.
+            const bool popupOpen =
+                (inCombo->view() && inCombo->view()->isVisible())
+                || (outCombo->view() && outCombo->view()->isVisible());
+            if (popupOpen) {
+                settle->start();
+                return;
+            }
+            reseedAudioDeviceCombos();
+        });
+        connect(audioDeviceMonitor, &QMediaDevices::audioInputsChanged,
+                settle, qOverload<>(&QTimer::start));
+        connect(audioDeviceMonitor, &QMediaDevices::audioOutputsChanged,
+                settle, qOverload<>(&QTimer::start));
+    }
+    if (m_audio) {
+        // The SELECTION can go stale without the list changing at all: the
+        // hot-plug prompt and resetMissingAudioDevicesToDefault both re-point
+        // the engine behind this pane's back. Queued across the audio thread.
+        connect(m_audio, &AudioEngine::inputDeviceChanged, this,
+                reseedAudioDeviceCombos);
+        connect(m_audio, &AudioEngine::outputDeviceChanged, this,
+                reseedAudioDeviceCombos);
+    }
+    // Same contract as m_calibrationReseed: re-read on every show, so a change
+    // that landed while the dialog was hidden cannot survive a close and reopen.
+    m_audioDeviceReseed = reseedAudioDeviceCombos;
+
     // Wire device changes to AudioEngine
     if (m_audio) {
         // Route through QueuedConnection so setInputDevice/setOutputDevice
         // execute on the audio worker thread, preventing use-after-free on
         // macOS CoreAudio when switching devices from the GUI thread (#1114).
-        connect(inCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this, inDevices](int idx) {
-            if (idx >= 0 && idx < inDevices.size()) {
-                const QAudioDevice dev = inDevices[idx];
-                QMetaObject::invokeMethod(m_audio, [this, dev]() {
-                    m_audio->setInputDevice(dev);
+        // Resolve the choice by device ID against a LIVE enumeration. These
+        // lambdas used to capture the build-time device list by value and index
+        // into it, which is only correct while the combo can never be refilled.
+        auto applyChoice = [this](const QByteArray& id, bool input) {
+            const QList<QAudioDevice> devices =
+                input ? QMediaDevices::audioInputs() : QMediaDevices::audioOutputs();
+            for (const QAudioDevice& dev : devices) {
+                if (dev.id() != id)
+                    continue;
+                // Still queued onto the audio thread: switching a device from
+                // the GUI thread is a use-after-free on macOS CoreAudio (#1114).
+                QMetaObject::invokeMethod(m_audio, [this, dev, input]() {
+                    if (input)
+                        m_audio->setInputDevice(dev);
+                    else
+                        m_audio->setOutputDevice(dev);
                 }, Qt::QueuedConnection);
+                return;
             }
+        };
+        connect(inCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [inCombo, applyChoice](int idx) {
+            if (idx >= 0)
+                applyChoice(inCombo->itemData(idx).toByteArray(), true);
         });
         connect(outCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this, outDevices](int idx) {
-            if (idx >= 0 && idx < outDevices.size()) {
-                const QAudioDevice dev = outDevices[idx];
-                QMetaObject::invokeMethod(m_audio, [this, dev]() {
-                    m_audio->setOutputDevice(dev);
-                }, Qt::QueuedConnection);
-            }
+                this, [outCombo, applyChoice](int idx) {
+            if (idx >= 0)
+                applyChoice(outCombo->itemData(idx).toByteArray(), false);
         });
     }
 

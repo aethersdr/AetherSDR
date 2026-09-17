@@ -275,6 +275,13 @@ private:
     int                       m_droopCalibrationPageIndex{-1};
     // Same reason as m_calibrationReseed above, for the Droop Correction page.
     std::function<void()>     m_droopReseed;
+    // Re-fills the Audio page's PC Input/Output combos from a LIVE device
+    // enumeration. Same cause as m_calibrationReseed — page built once, dialog
+    // a persistent singleton — but the stale thing here is the LIST, not one
+    // value: without it a headset connected after first build never appears,
+    // with or without closing the dialog. A QMediaDevices watcher on the page
+    // drives the same lambda so the pane also updates while it is open.
+    std::function<void()>     m_audioDeviceReseed;
     QMetaObject::Connection   m_droopStatusConnection;
     QHash<QString, QComboBox*> m_apdSamplerCombos;
 
