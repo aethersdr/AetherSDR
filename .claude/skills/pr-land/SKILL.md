@@ -6,7 +6,7 @@ description: Post-review remediation pass for AetherSDR — takes a PR whose pro
 # Land the PR — remediate, resolve, approve, arm
 
 Work the PR given in `$ARGUMENTS` (a number or a full URL; if absent, the PR
-for the current branch via `gh pr view`). Six deliverables, in this order:
+for the current branch via `gh pr view`). Seven deliverables, in this order:
 
 1. **One push** that resolves every outstanding finding, each one proved.
 2. **Every review thread answered and resolved** — evidence in the reply.
@@ -14,6 +14,8 @@ for the current branch via `gh pr view`). Six deliverables, in this order:
 4. **One approving review**, posted after the last push.
 5. **Auto-merge armed and confirmed able to fire** — not merely requested.
 6. **A markdown report to the operator** (step 12).
+7. **`main` green on the squash-merge commit** (step 13) — the check that
+   actually demonstrates the fix, and the one a PR-branch pass never does.
 
 Where `gh` is unavailable — Claude Code Remote and web sessions have no `gh`
 CLI — use the GitHub MCP tools (`mcp__github__*`) throughout. Everything below
@@ -33,11 +35,16 @@ What is **not** approved is the code as it currently stands. Hold this posture:
   reviewer behind you. Auto-merge fires unattended — possibly hours later,
   possibly while CI is the only thing watching. Everything upstream of the
   arming step is verified, not assumed.
-- **Principle VIII (Evidence Over Assertion) and IX (Fixes Are Demonstrated)
+- **Principle VIII (Evidence Over Assertion) and XI (Fixes Are Demonstrated)
   govern this skill.** "Fixed" is not a disposition. "Fixed in `<sha>`,
   `<file>:<line>`, proved by `<test name + output>` / `<bridge state JSON>`"
   is. Every thread reply, every dismissal message and the approving review
-  carry that shape or they do not get posted.
+  carry that shape or they do not get posted. XI also sets the ceiling on
+  what your own evidence is worth: it names the demonstration as CI re-running
+  on the **squash-merge commit on `main`**, not on the PR branch, and says in
+  as many words that agent self-grading does not substitute for that
+  independent re-run. Everything you prove in steps 5 and 6 is the hypothesis.
+  Step 13 is the check, and the pass is not over until it passes.
 - **Completeness over deferral.** Nothing is left "for the author". Nothing
   becomes a follow-up issue in order to avoid making a call. If a finding
   needs a decision, the decision goes to the maintainer (next section) — not
@@ -110,6 +117,17 @@ authorization). Conventional defaults with one sensible answer are not
 decisions either. Applying the gate to trivia is its own failure mode — it
 turns a cleanup pass into an interrogation.
 
+### When the tool is not there
+
+`AskUserQuestion` is unavailable in headless, cron and background runs, and an
+"Always ask" item reached there leaves no legal move: guessing is forbidden and
+stalling strands a dirty worktree and a half-swept thread list. **Stop before
+the push.** Leave the branch untouched, post nothing to GitHub, and deliver the
+open decisions as the report — each with the options, the trade-offs and your
+recommendation — so the next interactive run starts from a decision list rather
+than re-deriving one. An unmade decision handed back is a finished pass; an
+unmade decision guessed at is not.
+
 ### How to ask
 
 Do **everything that does not depend on the answer first**, then batch the
@@ -152,6 +170,15 @@ Do all of this before touching code. Each item has cost a real merge.
   with CODEOWNERS review required; `enforce_admins: false`. Two of those set
   the order of this skill and are the most common way it fails silently —
   see step 10.
+- **Know which GitHub identity you are acting as** — `gh api user --jq .login`.
+  Everything this skill posts is attributed to it, and step 10 only works if
+  it is a **code owner** for the paths the PR touches: `main` requires a
+  CODEOWNERS approval, and `GOVERNANCE.md` § AI Contributors puts
+  `@AetherClaude` deliberately outside every code-owner team precisely so a
+  bot cannot approve its own work or another agent's. Run under a code-owner
+  identity (the operator's) and the approval counts. Run under the bot's, and
+  it never can: do the remediation, resolve the threads, and hand the approval
+  to a human code owner rather than posting one that cannot satisfy the gate.
 - **Work in a fresh worktree, never in the invoking checkout.** Someone else
   may be working there and a checkout retargets them mid-task. Build there
   too. Never `git stash` in this repo — the stash stack is shared across every
@@ -213,11 +240,15 @@ the inline threads are the whole of it.
 The inventory is what others found. This step is what they missed, and it is
 the reason this pass exists rather than a checklist of replies.
 
-- **Run the automated pass.** Invoke the `code-review` skill at medium effort
-  against the PR. Standing authorization covers it — do not skip it and do not
-  ask. Fold in only findings you verify yourself; drop anything you can refute
-  with evidence. If it is not model-invocable in this build, do the equivalent
-  by hand and say in the report that it was unavailable. Never imply it ran.
+- **Run the automated pass.** `code-review` is a harness-provided skill, not
+  one of this repo's — `.claude/skills/` holds only `pr-review` and `pr-land`
+  — so its availability varies by build. Where it is model-invocable, run it
+  at medium effort against the PR; standing authorization covers that, so do
+  not skip it and do not ask. Fold in only findings you verify yourself and
+  drop anything you can refute with evidence. Where it is absent or marked
+  `disable-model-invocation`, do the equivalent pass by hand and say in the
+  report that the automated pass was unavailable — never imply it ran. The
+  `ultra` variant is user-triggered and billed: never launch it yourself.
 - **Re-read the diff for what is not in it.** The sibling call site, the error
   return nobody checks, the migration path for existing users' saved state,
   the second slice, the second radio, the test that would have caught this.
@@ -278,8 +309,9 @@ A fix without evidence is not landable, and the evidence is what you paste
 into the thread reply and the dismissal. Per item:
 
 - **Build and run the tests** in your worktree — every commit, not just the
-  last. `ninja -j$(nproc)` unless `pgrep -a ninja` shows another build
-  running, in which case halve it.
+  last. `cmake --build build --parallel`, which is portable; drop to an
+  explicit lower job count when `pgrep -lf ninja` shows another build already
+  running.
 - **Name the test that fails without the fix.** For any behaviour change,
   the strongest artifact is the test that goes red when you revert the fix and
   green with it. Run it both ways where the fix is small enough to invert.
@@ -312,10 +344,17 @@ AETHER_SETTINGS_DIR="$SCRATCH/settings" \
 AETHER_AUTOMATION_IDENTITY=pr-<PR>-land \
 AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR> \
 AETHER_AUTOMATION_NO_TX=1 \
-setsid nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
+nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
 ```
 
-`pgrep -a AetherSDR` **first** — instances that are not yours are the
+Detach so a shell exit cannot `SIGHUP` the instance — prefix `setsid` on Linux,
+where it exists. On macOS the binary is inside the bundle,
+`./build/AetherSDR.app/Contents/MacOS/AetherSDR`; `docs/automation-bridge.md`
+gives both paths.
+
+`pgrep -lf AetherSDR` **first** — `-lf` is the portable spelling, since BSD and
+macOS read a bare `-a` as "include ancestors" and print no command line to
+judge by. Instances that are not yours are the
 operator's session; never drive, close or kill one. Always pass an explicit
 socket; the discovery file is last-writer-wins and will point at another
 agent's instance. The `sim` verb injects faults (`swr`, `dropslice`,
@@ -398,6 +437,24 @@ read `CHANGES_REQUESTED`.
 
 ## 10. Approve — after the last push, at the real head
 
+**The authority for this step is the invocation itself.** `pr-review` leaves
+approval to the operator "unless they have said otherwise for this PR";
+running `/pr-land` on a named PR **is** that otherwise, for that PR, and is
+what distinguishes this skill from a review. It does not generalise: it
+authorises the approving review on the PR you were pointed at, and on no
+other.
+
+It authorises the *review*, not an identity. The approval must be posted by a
+code owner for the paths the PR touches or it cannot satisfy `main`'s
+CODEOWNERS requirement, and `GOVERNANCE.md` § AI Contributors keeps
+`@AetherClaude` outside every code-owner team so that a bot can never approve
+its own work or another agent's. Under a code-owner identity the approval
+counts regardless of who authored the PR — a human code owner approving a
+bot-authored PR is exactly what that section prescribes. Under a
+non-code-owner identity nothing here makes an approval valid: finish the
+remediation, resolve the threads, and hand the approval off (step 11's
+`BLOCKED` fourth cause).
+
 Two protection settings decide the order here, and both fail silently:
 
 - **`dismiss_stale_reviews: true`** — any push dismisses an existing
@@ -447,6 +504,16 @@ Arming is a request, not an outcome. Read `mergeStateStatus` after:
   non-blocking" holds the merge indefinitely and nothing in `gh pr view`
   names the cause. Go straight to the step-1 thread query; it will never
   clear on its own and polling has already cost half an hour once.
+- `BLOCKED` with every thread resolved and `reviewDecision: REVIEW_REQUIRED`
+  — **no code-owner approval yet**, which on this repo is the likelier of the
+  two. `required_approving_review_count: 1` with CODEOWNERS review required
+  means the approval has to come from an owner of every tier the PR touches;
+  if step 10 could not post one — the 422 on your own PR, or a non-code-owner
+  identity — this is where it surfaces, and it never clears on its own. No
+  amount of re-running the thread query will find it. Name the owner it needs
+  and put the route to the maintainer: admin-merge (`enforce_admins: false`
+  allows it), request a review from a core dev, or leave it armed and blocked
+  pending that review.
 - `BEHIND` — `strict: false`, so being behind does not block; do not merge
   main in reflexively.
 - `DIRTY` — conflicts. Resolving them is a decision (gate): ask.
@@ -496,10 +563,45 @@ are indistinguishable. Name anything unverified and why.
 `reviewDecision`, `mergeStateStatus`, required checks, whether auto-merge is
 armed and confirmed able to fire — plus the one thing still standing between
 the PR and `main`, if there is one.
+
+### Post-merge (Principle XI)
+The squash commit's SHA and the verdict of `main`'s CI on it — the check that
+actually demonstrates the fix. If the merge had not fired yet, say that
+plainly and name what it is waiting on; never leave it implied.
 ```
 
 State current state, not the churn: what the branch is now, not a narration of
 what was tried and undone.
+
+## 13. The merge is not the end — Principle XI
+
+A fix is demonstrated by CI re-running on the **squash-merge commit on
+`main`**, not on the PR branch, with the required checks green. Everything
+above is the hypothesis; this is the independent check, and the Constitution
+is explicit that agent self-grading does not substitute for it. Skipping it
+because "PR CI was green on identical content" is named there as the
+rationalization shape that leads to bypassed verification — the squash result
+is a different commit from the head you tested.
+
+Once auto-merge fires:
+
+```sh
+gh pr view <PR> --json mergedAt,mergeCommit --jq '{mergedAt, sha: .mergeCommit.oid}'
+gh run list --branch main --limit 5 --json status,conclusion,headSha,workflowName
+```
+
+Wait for the runs on that SHA to conclude. Read `conclusion`, not
+`statusCheckRollup` — the latter's `conclusion` is empty while a check is
+still running, which reads as "not failing" and is not the same thing.
+
+A red `main` traceable to this merge is **yours**: fix forward immediately or
+escalate to the maintainer with the failing job. Do not close the pass out on
+PR-branch green alone, and do not leave `main` red behind you.
+
+If the merge has not fired by the time the session ends — CI still running, or
+an approval still outstanding — say so in the report and name what the last
+check is waiting on. An honest "armed, not yet merged, main unverified" is a
+finished pass; an implied one is not.
 
 ## Never
 
@@ -514,3 +616,7 @@ what was tried and undone.
 - `git push origin HEAD:<branch>` on a fork PR.
 - Push an empty commit to retrigger CI.
 - Leave an item "for the author".
+- Post an approving review from an identity that is not a code owner for the
+  paths the PR touches.
+- Call the pass finished on PR-branch green, or walk away from a `main` turned
+  red by the merge you armed.
