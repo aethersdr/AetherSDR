@@ -149,6 +149,32 @@ inline AsrTierResolution asrReconcileDefaultTier(const QString& currentTier,
     return {currentTier, false};
 }
 
+// Whether a model tier of `tierSizeBytes` (the weights file) can be expected to
+// load on a device reporting this much memory. Gates only the AUTOMATIC raise
+// to the GPU-default tier: "a GPU exists" says nothing about room, and a 1.6 GB
+// model auto-selected for a 2 GB card is #4972. An explicit operator choice is
+// never refused here — that stays the operator's call.
+//
+// The headroom is what whisper allocates beyond the weights (KV caches and
+// compute buffers). MEASURED (#4972 bench, RTX 5060 Laptop, ggml-vulkan,
+// 2026-09-16): large-v3-turbo occupies 1818 MiB against a 1549 MiB file
+// (+268 MiB), base 293 MiB against 141 MiB (+152 MiB); whisper's own load log
+// sums to the same figure. 300 MiB covers the larger of the two.
+//
+// Both figures 0 means the device could not be asked (AsrGpuDevice) — unknown
+// is not "too small", so it keeps the previous behaviour. Integrated GPUs
+// report shared system memory and pass on their own numbers. Header-inline and
+// whisper-free, like asrReconcileDefaultTier above.
+inline constexpr quint64 kAsrTierVramHeadroomBytes = 300ull * 1024ull * 1024ull;
+
+inline bool asrTierFitsVram(quint64 vramFreeBytes, quint64 vramTotalBytes, qint64 tierSizeBytes)
+{
+    if (vramTotalBytes == 0 || tierSizeBytes <= 0) {
+        return true;
+    }
+    return vramFreeBytes >= static_cast<quint64>(tierSizeBytes) + kAsrTierVramHeadroomBytes;
+}
+
 // A selectable transcription language: `code` is the ISO code passed to the
 // backend (e.g. "en", "es"); `name` is the English display name ("English").
 struct AsrLanguage {
