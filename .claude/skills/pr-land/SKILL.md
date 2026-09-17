@@ -93,13 +93,15 @@ The bar is: *would a different answer have changed the work?* If yes, ask.
   this push — not even adding a new test to a gate regex. What runs in a merge
   gate changes cost and flake exposure for every PR. Make the code and test
   change, then ask.
-- **Anything that would move an aetherd ratchet** — a baseline row or count in
-  `tools/check_engine_boundary.py`, `FROZEN_BOOL_COUNT`, a
-  `tools/check_command_plane.py` baseline, or a tag in
-  `docs/architecture/aetherd-touchpoint-tags.json` — and **any new
-  `gui/`→engine touchpoint**. See the prohibition in step 4: these are the
-  enforcement itself, and canon's two carveouts are maintainer calls, never a
-  route to green.
+- **Anything that would *loosen* an aetherd ratchet** — growing a baseline
+  count in `tools/check_engine_boundary.py` or
+  `tools/check_command_plane.py`, adding a stem or a row to
+  `KNOWN_VENDOR_INCLUDE_BASELINE`, raising `FROZEN_BOOL_COUNT`, or retagging a
+  header in `docs/architecture/aetherd-touchpoint-tags.json` — and **any new
+  `gui/`→engine touchpoint**. See the prohibition in step 4. A **reduction**
+  is not this: dropping a stem whose coupling the push actually removed,
+  lowering a freeze count, deleting an emptied row — canon demands those of a
+  conversion, so do them and say so in one line.
 - **Restructuring toward the aetherd RFC.** `AGENTS.md` is explicit: do not
   pre-emptively restructure code toward it — no new engine/UI seams, no
   backend interfaces, no speculative library targets — and architecture ahead
@@ -311,14 +313,18 @@ EB2 is a per-file **count**, not a set: a lateral swap inside a tracked file —
 drop one QtWidgets usage, add another — keeps the number flat and passes. Read
 the file's findings, not its total.
 
-**A new `gui/`→engine include fails nothing at all.** The manifest just
-regenerates one row longer and the burndown moves backwards; no gate goes red.
-A new row is a finding — the PR added a touchpoint somebody now has to convert
-— so name the header and the includer and put it to the maintainer. When
-`--check` *does* go red, the fix is `python tools/gen_touchpoint_manifest.py`
-and commit the result. The table is generated and says so in its first line:
-hand-editing it to match, or adding a tag so it matches, falsifies the burndown
-rather than fixing anything.
+**A new `gui/`→engine include stops at "regenerate", not at "justify".** The
+manifest records per-header includer counts, so a new include makes the table
+stale and `gen_touchpoint_manifest.py --check` *does* go red inside the
+required context. That is the whole of what it asks: regenerate with
+`python tools/gen_touchpoint_manifest.py`, commit the result, and the grown
+burndown is green with nothing anywhere flagging that a touchpoint was added.
+So diff the manifest itself, merge base against head — a new row, or a row
+whose includer count went up, is a finding: name the header and the includer
+and put it to the maintainer. And regenerate it, never repair it by hand. The
+table is generated and says so in its first line; editing it to match, or
+adding a tag so it matches, falsifies the burndown rather than fixing
+anything.
 
 **The seam contract has no test behind most of it.** `IRadioBackend`'s rules
 are pinned for the simulator and for HL2 re-entrancy; live seam emission for
@@ -328,10 +334,20 @@ contract text against the diff, and where a test drives a backend, carry
 `tests/SeamThreadAffinityProbe.h` into it — that is the proof artifact for
 this class of fix. The neighbouring trap no checker sees:
 `IRadioBackend::audioFrameReady` has two routes to
-`AudioEngine::feedAudioData`, so an in-process backend double-feeds the sink
-unless the relay is gated on `IRadioBackend::ownsRxAudio()` — and
-`Qt::UniqueConnection` does not protect you, because they are two different
-signals arriving at one slot. The same shape exists on the spectrum side.
+`AudioEngine::feedPcmFrame`, so an in-process backend double-feeds the sink
+unless one of them is gated. **The two gates have opposite senses and are
+deliberately named apart.** The relay's is
+`MainWindow::backendFeedsEngineDirectly()` (`dynamic_cast<SimBackend*>`); the
+direct connect in `wireBackendSeam()` is the site whose gate belongs on
+"does this backend own its RX audio". Do not merge them: an HL2 is
+`ownsRxAudio() == true` **and** needs the relay, so delegating the relay to
+`backend()->ownsRxAudio()` swallows every HL2 frame and silences the speaker —
+`MainWindow_Session.cpp` has a paragraph at the function asking you not to
+make exactly that substitution. `Qt::UniqueConnection` protects neither site:
+at the relay they are two different signals arriving at one slot, and at
+`wireBackendSeam()` it cannot catch a lambda connect. The spectrum side had
+the same shape and was resolved by one producer and one path through `panFeed`
+rather than by a gate.
 
 **The #5554 items are mostly invisible to CI.** The notice at the top of
 `AGENTS.md` § "AI Agent Guidelines" gates any change touching
@@ -379,21 +395,32 @@ Standing prohibitions, each of which has cost something real:
 - **No TX keying, ever**, and no automation into a keyed transmitter
   (Principle VI). TX verbs stay behind `AETHER_AUTOMATION_ALLOW_TX`.
 - **No scope growth past what the maintainer approved** without asking.
-- **Never weaken an aetherd ratchet to get green.** The baselines in
+- **Never loosen an aetherd ratchet to get green** — and know which direction
+  is which, because one of them is required of you. The baselines in
   `tools/check_engine_boundary.py` (`KNOWN_VENDOR_INCLUDE_BASELINE` and the
-  EB2 counts), `FROZEN_BOOL_COUNT` in `tools/check_capability_records.py`, the
-  per-file baseline in `tools/check_command_plane.py`, and the tags in
+  `KNOWN_WIDGETS_LEGACY` EB2 counts), `FROZEN_BOOL_COUNT` in
+  `tools/check_capability_records.py`, the per-file baseline in
+  `tools/check_command_plane.py`, and the tags in
   `docs/architecture/aetherd-touchpoint-tags.json` **are** the enforcement,
-  not paperwork in front of it. AGENTS.md's rule is to restructure the change
-  — not to move the file, weaken the check, or add an exemption. The tags file
-  is the sharpest edge, because EB3 derives its vendor vocabulary from it at
-  runtime: retagging a `vendor(...)` header as `mixed(...)` or
-  `peripheral(...)` un-gates it for every file above the seam, permanently, on
-  a green run with no annotation anywhere. Canon allows exactly two moves — an
-  EB3 vocabulary reclassification proved against the merge base with documented
-  evidence and an explicit maintainer review, and raising `FROZEN_BOOL_COUNT`
-  on a maintainer ruling — and both are decisions carrying that evidence
-  through `AskUserQuestion`. Neither is ever a way to make a check pass.
+  not paperwork in front of it.
+  - **Shrinking is conformance.** Drop the stem whose vendor include the push
+    actually removed and delete the row when it empties; lower
+    `FROZEN_BOOL_COUNT` when a bool became a record — the checker prints the
+    number to lower it to; lower a converted file's command-plane count. Canon
+    demands each of these of the PR that does the conversion. Do them, prove
+    the coupling is gone, and note it in one line.
+  - **Growing is the prohibition.** A larger count, a new stem or row, a
+    raised `FROZEN_BOOL_COUNT`, a retagged header. AGENTS.md's rule is to
+    restructure the change — not to move the file, weaken the check, or add an
+    exemption. The tags file is the sharpest edge, because EB3 derives its
+    vendor vocabulary from it at runtime: retagging a `vendor(...)` header as
+    `mixed(...)` or `peripheral(...)` un-gates it for every file above the
+    seam, permanently, on a green run with no annotation anywhere. Canon allows
+    exactly two such moves — an EB3 vocabulary reclassification proved against
+    the merge base with documented evidence and an explicit maintainer review,
+    and a `FROZEN_BOOL_COUNT` raise on a maintainer ruling — and both are
+    decisions carrying that evidence through `AskUserQuestion`. Neither is ever
+    a way to make a check pass.
 - **No revert commits and no "we used to do X" notes.** When something is
   dropped, the branch must read as if it never existed — squash the removal
   into the commit that introduced it rather than committing a revert on top.
@@ -715,8 +742,9 @@ finished pass; an implied one is not.
 - Resolve a thread without a reply carrying the evidence.
 - Decide anything in the "Always ask" list without asking.
 - Edit `.github/workflows/`, add a `CHANGELOG.md` entry, or key TX.
-- Weaken an aetherd ratchet to get a check green — a baseline row or count, a
-  freeze number, or a retagged vendor header.
+- Loosen an aetherd ratchet to get a check green — a grown baseline row or
+  count, a raised freeze number, or a retagged vendor header. (Shrinking one
+  the push earned is the opposite: canon asks for it.)
 - Hand-edit the generated touchpoint manifest, or add a new `gui/`→engine
   include without asking.
 - Touch the live FLEX-8600, or drive an AetherSDR instance that is not yours.

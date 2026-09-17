@@ -312,15 +312,22 @@ Read the diff against each of these; cite the specific rule when flagging:
   `IRadioBackend.h`. Read the whole section on the PR's head; it moves as the
   RFC's staged order advances. **A green `Static checks` is not this audit** —
   findings against tracked EB2/EB3 baselines only warn (about a hundred ride
-  on a green run), EB2 is a per-file count so a lateral swap passes flat, and
-  a new `gui/`→engine include fails nothing at all: it silently grows the
-  burndown by a row. Run the gates on the merge base and on the head and diff
-  the per-file findings. A PR that instead edits a baseline, raises
-  `FROZEN_BOOL_COUNT`, or retags a header in
-  `docs/architecture/aetherd-touchpoint-tags.json` is weakening the
-  enforcement rather than passing it — EB3 derives its vendor vocabulary from
-  that file at runtime — and that is a blocker unless it is canon's documented
-  reclassification carveout, with merge-base proof and a maintainer's review.
+  on a green run), and EB2 is a per-file count, so a lateral swap inside a
+  tracked file passes flat. Run the gates on the merge base and on the head
+  and diff the per-file findings, and diff the touchpoint manifest too: a new
+  `gui/`→engine include only makes `--check` red until it is regenerated, so
+  the grown burndown then rides green with nothing flagging the added
+  touchpoint. On the baselines, read the **direction**. A PR that *shrinks*
+  one — drops a stem whose coupling it removed, deletes an emptied row, lowers
+  `FROZEN_BOOL_COUNT` because a bool became a record, lowers a converted
+  file's command-plane count — is doing what canon demands of a conversion;
+  verify the coupling really went and pass it. A PR that *grows* one, or
+  retags a header in `docs/architecture/aetherd-touchpoint-tags.json`, is
+  weakening the enforcement rather than passing it — EB3 derives its vendor
+  vocabulary from that file at runtime — and that is a blocker unless it is
+  one of canon's two documented carveouts: a vocabulary reclassification with
+  merge-base proof and explicit maintainer review, or a `FROZEN_BOOL_COUNT`
+  raise on a maintainer ruling.
   Also walk the #5554 notice at the top of § "AI Agent Guidelines" when the PR
   touches `src/core/backends/`, `RadioModel`, `RadioSession`, `TransmitModel`,
   `ConnectionPanel`, discovery or `RadioCapabilities`; most of its items — a

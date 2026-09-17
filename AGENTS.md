@@ -538,14 +538,32 @@ method is advertised before the step-4 arbiter exists.
 
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
-`AudioEngine::feedAudioData` — the `RadioModel::backendAudioFrameReady`
+`AudioEngine::feedPcmFrame` — the `RadioModel::backendAudioFrameReady`
 relay, and a direct connect in `wireBackendSeam()`. `FlexBackend` is
 structurally immune because it never emits `audioFrameReady` at all (audio
 rides `PanadapterStream`/VITA-49), so the "no double-feed" reasoning that
-holds for Flex stops holding for any in-process backend. Gate the relay on
-`backendOwnsRxAudio()`. `Qt::UniqueConnection` does **not** protect you here
-— they are two different signals arriving at the same slot, so nothing looks
-duplicate to Qt. The same shape exists on the spectrum side.
+holds for Flex stops holding for any in-process backend.
+
+**The two gates have opposite senses and are deliberately named apart — do
+not merge them.** The relay's gate is `MainWindow::backendFeedsEngineDirectly()`
+(`dynamic_cast<SimBackend*>`, `MainWindow_Session.cpp`): sim feeds the engine
+itself, so the relay returns early for sim and for nobody else. The direct
+connect in `wireBackendSeam()` is sim-only for the same reason, and *that* is
+the site whose gate belongs on "does this backend own its RX audio"
+(`MainWindow.cpp`). An HL2 is `ownsRxAudio() == true` **and** needs the relay,
+so delegating the relay to `backend()->ownsRxAudio()` swallows every HL2 frame
+and silences the speaker — the code says so at the function, citing the #4537
+review. `Qt::UniqueConnection` does **not** protect you at either site: at the
+relay they are two different signals arriving at the same slot, so nothing
+looks duplicate to Qt, and at `wireBackendSeam()` it cannot catch a lambda
+connect at all.
+
+The spectrum side had the same shape and was resolved differently — not with a
+gate but with one producer and one path: `spectrumFrameReady` is consumed by
+`RadioModel::onBackendSpectrumFrame` and re-emitted on the neutral `panFeed`
+path every backend already renders (`MainWindow.cpp`, "One producer, one
+path"). Drawing it a second time at the seam is what that comment exists to
+prevent.
 
 **Build targets (post-RFC step 1):**
 
@@ -701,28 +719,38 @@ walks the list:
    baselines *warn*; only a new violation or a grown baseline errors. EB2 is a
    per-file **count**, so a lateral swap inside a tracked file — one QtWidgets
    usage out, another in — passes flat.
-2. **A new `gui/`→engine include is a regression that fails nothing.** The
-   manifest regenerates one row longer and the burndown moves backwards. A new
-   row needs a justification in the PR body, or it is a finding.
-3. **Regenerate the manifest; never hand-edit it.** A red `--check` means run
+2. **A new `gui/`→engine include stops at "regenerate", not at "justify".**
+   `gen_touchpoint_manifest.py --check` *does* go red — the manifest records
+   per-header includer counts, so the table goes stale and the required
+   context fails. But regenerating clears it: commit the regenerated table and
+   the grown burndown is green, with nothing anywhere flagging that a
+   touchpoint was added. Diff the manifest between merge base and head. A new
+   row, or a row whose includer count went up, needs a justification in the PR
+   body, or it is a finding.
+3. **Regenerate the manifest; never hand-edit it.** Run
    `python tools/gen_touchpoint_manifest.py` and commit the result. Editing the
    generated table, or adding a tag so the table matches, falsifies the
    burndown instead of fixing it.
-4. **A baseline edit is never how a check goes green.** The vendor-include
-   baseline and the EB2 counts, `FROZEN_BOOL_COUNT`, the command-plane
-   baseline and the tags in `aetherd-touchpoint-tags.json` are the enforcement
-   itself — retagging a `vendor(...)` header un-gates it for every file above
-   the seam, since EB3 derives its vocabulary from that file at runtime.
-   Restructure the change. The two carveouts above (an EB3 vocabulary
-   reclassification with merge-base proof and explicit maintainer review; a
-   `FROZEN_BOOL_COUNT` raise on a maintainer ruling) are maintainer rulings
-   carrying that evidence, not a route to a passing check.
+4. **A baseline edit is never how a check goes green — but a reduction is
+   required maintenance, not a finding.** Dropping a stem whose coupling the
+   PR actually removed (and deleting the row when it empties), lowering
+   `FROZEN_BOOL_COUNT` when a bool became a record, lowering a converted
+   file's command-plane count: all of those are demanded above, and a
+   conversion PR that does them is conforming, not weakening. What is
+   forbidden is the other direction — growing a baseline, adding a stem or a
+   row, or retagging a `vendor(...)` header, which un-gates it for every file
+   above the seam since EB3 derives its vocabulary from
+   `aetherd-touchpoint-tags.json` at runtime. There, restructure the change.
+   The two carveouts above (an EB3 vocabulary reclassification with merge-base
+   proof and explicit maintainer review; a `FROZEN_BOOL_COUNT` raise on a
+   maintainer ruling) are maintainer rulings carrying that evidence, never a
+   route to a passing check.
 5. **Touching a backend?** Read the THREADING AND LIFETIME CONTRACT in
-   `IRadioBackend.h` against the diff — live seam emission for flex, anan,
-   icom and rtl is a survey result, not a pinned test, so nothing else catches
-   a violation — carry `tests/SeamThreadAffinityProbe.h` into any test that
-   drives a backend, and re-read the #5554 notice at the top of "AI Agent
-   Guidelines".
+   `IRadioBackend.h` against the diff, and re-read the #5554 notice at the top
+   of "AI Agent Guidelines". What is pinned versus surveyed, and the probe to
+   carry into a test that drives a backend, are stated at the head of this
+   section — the point here is only that a survey result means reading is the
+   check, because no test will fail.
 
 ---
 
