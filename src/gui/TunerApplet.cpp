@@ -4,6 +4,7 @@
 #include "models/TunerModel.h"
 #include "models/MeterModel.h"
 #include "models/BandSettings.h"
+#include <QElapsedTimer>
 
 #include <QAccessible>
 #include <QPushButton>
@@ -1011,9 +1012,11 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // State changes → refresh UI
     connect(m_model, &TunerModel::stateChanged, this, &TunerApplet::syncFromModel);
 
-    // Forward power and SWR from direct TGXL connection (#625)
+    // Forward power and SWR from direct TGXL connection (#625). Routed through
+    // the stamped entry point so it yields to the radio-relayed AMP meters
+    // while those are arriving — see setDeviceMeters.
     connect(m_model, &TunerModel::metersChanged,
-            this, &TunerApplet::updateMeters);
+            this, &TunerApplet::setDeviceMeters);
 
     // Enable relay bar scrolling when direct TGXL connection is active (#469)
     auto updateScrollEnabled = [this]() {
@@ -1190,6 +1193,24 @@ void TunerApplet::cycleOperateState()
         m_model->setBypass(false);
         m_model->setOperate(true);
     }
+}
+
+void TunerApplet::setRadioMeters(float fwdPower, float swr)
+{
+    m_radioMeters.restart();
+    updateMeters(fwdPower, swr);
+}
+
+void TunerApplet::setDeviceMeters(float fwdPower, float swr)
+{
+    // Discarded, not applied-then-overwritten, while the relay is live. Two
+    // sources writing one gauge at different rates is last-writer-wins, and
+    // the slower one kept dragging the bar back to a stale sample.
+    if (m_radioMeters.isValid()
+            && m_radioMeters.elapsed() < kRelayMeterFreshnessMs) {
+        return;
+    }
+    updateMeters(fwdPower, swr);
 }
 
 void TunerApplet::updateMeters(float fwdPower, float swr)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QWidget>
 #include <QPushButton>
 #include <QComboBox>
@@ -52,8 +53,21 @@ public:
     // block, the state word, the antenna map and the alert channel.
     void setAmpModel(AmpModel* model);
 
-    void setFwdPower(float watts);
-    void setSwr(float swr);
+    // Two transports carry the same two readings. Both stamp their arrival and
+    // defer to applyMeters(), which picks one — see the note there. Callers
+    // must use these rather than setFwdPower/setSwr, which apply blind.
+    // radio-relayed AMP meters. powerValid=false means this update carried no
+    // forward-power/SWR sample (a TEMP- or DRV-only change), and must neither
+    // move the gauges nor count as the relay being live — see the note there.
+    void setRadioMeters(float watts, float swr, bool powerValid = true);
+    void setDeviceMeters(float watts, float swr);  // the amplifier's own socket
+
+    // Exciter power measured at the amplifier's input (the PGXL "DRV" meter).
+    // valid=false blanks the row: not every amplifier publishes one, and a
+    // drive gauge resting at zero would read as "no drive" rather than
+    // "not measured".
+    void setDrivePower(float watts, bool valid);
+
     void setTemp(float degC);
     void setTempB(float degC);
     void setDrainCurrent(float amps);
@@ -61,6 +75,11 @@ public:
     void setMainsVoltage(int volts);
     void setState(const QString& state);
     void setFanMode(const QString& mode);  // STANDARD, CONTEST, BROADCAST
+    // The Maximum Efficiency Algorithm's reported state — ACTIVE, STANDBY or
+    // OFF — or empty when the amplifier has not reported one. `settable` is
+    // false until the whole `setup` write group is known, which is what a
+    // write needs; the control is shown but inert until then.
+    void setMeffa(const QString& state, bool settable);
     void setMeff(const QString& meff);
     void setDirectConnected(bool direct);
 
@@ -84,6 +103,10 @@ public:
 signals:
     void operateToggled(bool on);
     void fanModeChanged(const QString& mode);  // uppercase, ready for sendCommand
+    // The operator asked to enable or disable MEffA. Only ever the one bit:
+    // whether the amplifier then reports ACTIVE or STANDBY is its own call,
+    // decided by the PA bias class. See AmpModel::meffa().
+    void meffaToggled(bool enabled);
 
 protected:
     // Keeps the alert overlay covering the applet as it resizes.
@@ -122,12 +145,32 @@ private:
     // Same for the two fan controls — the rail's pull-down and the panel's
     // one-letter key are two faces of one mode.
     void applyFanControls();
+    // MEffA wears three states and the operator controls one bit of them, so
+    // one place decides what both controls say and how each is lit.
+    void applyMeffaControls();
 
     void updatePortRows();
     void applyPortInfo(AccessoryPortRow* row, const AmpPortInfo& info);
     // Outlines exactly the port transmit is routed to, or neither when that
     // is not knowable. Never both.
     void updateActivePort();
+    // One rule, one place: the radio-relayed AMP meters and the amplifier's own
+    // port-9008 status carry the SAME measurement — on a steady carrier the
+    // relayed FWD meter and the device's `fwd` field agree to within 0.05 dB —
+    // so the choice between them is about rate, not truth. The relay arrives
+    // with the radio's meter packets (~20 fps); the device is polled at 5 Hz.
+    // The relay therefore wins while its sample is fresh, and the device feed
+    // takes over when the radio is not publishing amplifier meters at all
+    // (no relay, or before the meter manifest lands). Last-writer-wins between
+    // two live sources is what this replaces.
+    void applyMeters(float watts, float swr);
+    // Apply blind, without consulting the source rule. Private precisely so
+    // that they cannot be reached from the wiring: reintroducing a second
+    // unmediated writer is the defect this whole path exists to remove.
+    void setFwdPower(float watts);
+    void setSwr(float swr);
+    void updateDriveLabel();
+
     void setAlertText(const QString& text);
     void applyAlertStyle();
     void layOutAlertOverlay();
@@ -136,11 +179,13 @@ private:
 
     // Bargraph gauges
     HGauge*  m_fwdGauge{nullptr};
+    HGauge*  m_drvGauge{nullptr};
     HGauge*  m_swrGauge{nullptr};
     HGauge*  m_idGauge{nullptr};
 
     // Left-side label+value (updated as telemetry arrives)
     QLabel*  m_pwrLabel{nullptr};   // "PWR 1148"
+    QLabel*  m_drvLabel{nullptr};   // "DRV   11"
     QLabel*  m_swrLabel{nullptr};   // "SWR 1.2:1"
     QLabel*  m_idLabel{nullptr};    // "Id   39"
 
@@ -210,6 +255,14 @@ private:
     // a single glyph has nothing for the extra width to hold, and exactly as
     // tall as the key beside it.
     PanelKey*    m_fanKey{nullptr};
+    // MEffA: the rail's button and the panel's key, two faces of one control.
+    // Placed beside the fan controls because it is the same kind of thing — a
+    // run-time mode the amplifier holds until it is told otherwise, not a
+    // stored setting (see AmpModel::setMeffaEnabled on why no `save` follows).
+    QPushButton* m_meffaBtn{nullptr};
+    PanelKey*    m_meffaKey{nullptr};
+    QString      m_meffaState;
+    bool         m_meffaSettable{false};
     // The widest caption's natural width at scale 1.0, measured once before
     // the key has been given a fixed size — deriving it from the laid-out row
     // instead is a one-way ratchet.
@@ -234,9 +287,17 @@ private:
     QTimer*  m_peakTimer{nullptr};
     float    m_peakFwd{0.0f};
 
+    // When the radio relay last delivered a power/SWR sample. See
+    // setDeviceMeters() for the rule it decides. Monotonic on purpose: an
+    // elapsed-time gate measured off the wall clock wedges shut for the length
+    // of any backwards clock step.
+    QElapsedTimer m_radioMeters;
+
     // Cached telemetry values — gauges update every call, labels update at 10 Hz
     float    m_fwdWatts{0.0f};
     float    m_swrVal{1.0f};
+    float    m_drvWatts{0.0f};
+    bool     m_haveDrive{false};
     float    m_drainAmps{0.0f};
     float    m_tempA{0.0f};
     float    m_tempB{0.0f};

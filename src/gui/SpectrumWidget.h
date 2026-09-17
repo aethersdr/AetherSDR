@@ -352,6 +352,14 @@ public:
     // persist to the next radio. See RadioCapabilities::radioOwnsDbmScale.
     void setRadioOwnsDbmScale(bool on) { m_radioOwnsDbmScale = on; }
     bool radioOwnsDbmScale() const { return m_radioOwnsDbmScale; }
+    // The connected backend's spectrum bins carry ABSOLUTE levels — they do not
+    // move when m_refLevel moves. Pushed in alongside the flag above rather
+    // than read from capabilities here, because the widget has no backend: both
+    // are set from applyCapabilitiesToUi and again when a pane is added after
+    // connect. Together they form the auto-floor gate, an OR — see
+    // noiseFloorAutoAdjustAllowed() and RadioCapabilities::panBinsAbsolute().
+    void setPanBinsAbsolute(bool on) { m_panBinsAbsolute = on; }
+    bool panBinsAbsolute() const { return m_panBinsAbsolute; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Width of the frequency canvas, in logical pixels: the widget width minus
@@ -1482,6 +1490,10 @@ private:
     // Defaults true so every existing backend is unaffected; only a backend
     // that opts out (RadioCapabilities::radioOwnsDbmScale=false) disarms.
     bool  m_radioOwnsDbmScale{true};
+    // Mirrors RadioCapabilities::panBinsAbsolute(), and defaults FALSE for the
+    // same reason it does there: the gate is an OR and m_radioOwnsDbmScale
+    // above already defaults true, so this default changes nothing on its own.
+    bool  m_panBinsAbsolute{false};
     int   m_noiseFloorPosition{75};  // 1=top, 99=bottom
     int   m_flexNoiseFloorPosition{75};
     int   m_kiwiNoiseFloorPosition{75};

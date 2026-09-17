@@ -215,6 +215,69 @@ int main(int argc, char** argv)
         }
     }
 
+    // ---- THE MODES Hl2Backend DECLARES RECEIVE-ONLY ARE BIT-IDENTICAL TO USB ----
+    //
+    // This is the evidence behind `Hl2Backend::capabilities`'s
+    // `receiveOnlyModes` list, and it is deliberately stronger than asserting
+    // that a list contains some strings. A list can drift from the modulator;
+    // this cannot.
+    //
+    // Hl2TxDsp::setMode() stores the mode and the ONLY reader is
+    // isLowerSideband(), which returns true for Lsb/Cwl/Digl and false for
+    // everything else. So AM, SAM, DSB, FM, WBFM and DRM do not take some
+    // degraded AM or FM path -- they take the USB path exactly, and what goes on
+    // the air is single-sideband suppressed carrier while the mode indicator
+    // says otherwise.
+    //
+    // If someone later teaches this chain a real AM or FM modulator, this block
+    // FAILS, which is the point: the failure is the reminder to take that mode
+    // back off the receive-only list.
+    //
+    // SIX enumerators here cover EIGHT declared strings: Hl2Backend's
+    // modeFromString() maps NFM onto Mode::Fm and WFM onto Mode::Wbfm, so those
+    // two spellings have no enumerator of their own to modulate. That the
+    // DECLARATION still carries both — the guard compares the string the slice
+    // holds, not the enumerator — is asserted in hl2_family_transition_test,
+    // which reads capabilities() off a live backend. This file cannot see it.
+    {
+        const double usbBand[2] = {300.0, 2700.0};
+        const auto reference = modulate(WdspChannel::Mode::Usb, kTone, 0.25,
+                                        1.0, 1.0, nullptr, false, usbBand);
+        check(!reference.empty(), "USB reference modulation produced IQ");
+
+        struct DeclaredReceiveOnly { const char* name; WdspChannel::Mode mode; };
+        const DeclaredReceiveOnly declared[] = {
+            {"AM",   WdspChannel::Mode::Am},
+            {"SAM",  WdspChannel::Mode::Sam},
+            {"DSB",  WdspChannel::Mode::Dsb},
+            {"FM",   WdspChannel::Mode::Fm},
+            {"WBFM", WdspChannel::Mode::Wbfm},
+            {"DRM",  WdspChannel::Mode::Drm},
+        };
+
+        for (const DeclaredReceiveOnly& d : declared) {
+            const auto iq = modulate(d.mode, kTone, 0.25, 1.0, 1.0,
+                                     nullptr, false, usbBand);
+            check(iq.size() == reference.size(),
+                  "declared receive-only mode produced the same sample count as USB");
+            bool identical = (iq.size() == reference.size());
+            std::size_t firstDiff = 0;
+            for (std::size_t k = 0; identical && k < iq.size(); ++k) {
+                if (iq[k] != reference[k]) { identical = false; firstDiff = k; }
+            }
+            std::fprintf(stderr,
+                         "%-4s vs USB: %s\n", d.name,
+                         identical ? "bit-identical (no distinct modulation)"
+                                   : "DIFFERS -- a real modulator now exists");
+            if (!identical) {
+                std::fprintf(stderr, "  first difference at sample %zu\n", firstDiff);
+            }
+            check(identical,
+                  "this mode is indistinguishable from USB, which is why "
+                  "Hl2Backend declares it receive-only");
+        }
+    }
+
     // ---- audio outside the passband does not get transmitted ----
     {
         // 5 kHz is well above the 2700 Hz TX filter.

@@ -2070,6 +2070,24 @@ target_link_libraries(dvk_wav_transfer_generation_test PRIVATE aethercore Qt6::C
 add_test(NAME dvk_wav_transfer_generation_test COMMAND dvk_wav_transfer_generation_test)
 set_tests_properties(dvk_wav_transfer_generation_test PROPERTIES TIMEOUT 120)
 
+# #5662 — DVK exports stage into QSaveFile and atomically replace an existing
+# WAV only after the radio stream is complete. Socket-free injected coverage.
+add_executable(dvk_wav_transfer_test
+    tests/dvk_wav_transfer_test.cpp
+)
+target_include_directories(dvk_wav_transfer_test PRIVATE src)
+target_link_libraries(dvk_wav_transfer_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME dvk_wav_transfer_test COMMAND dvk_wav_transfer_test)
+
+# #5663 — socket-free DVK upload queue accounting. An injected QTcpSocket
+# writer accepts and drains partial spans without binding a radio-peer socket.
+add_executable(dvk_wav_upload_test
+    tests/dvk_wav_upload_test.cpp
+)
+target_include_directories(dvk_wav_upload_test PRIVATE src)
+target_link_libraries(dvk_wav_upload_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME dvk_wav_upload_test COMMAND dvk_wav_upload_test)
+
 # #5640 — QsoRecorder claims filename candidates atomically so a same-second
 # recording cannot truncate a populated WAV or a concurrently-created file.
 add_executable(qso_recorder_filename_collision_test
@@ -4165,6 +4183,21 @@ target_include_directories(dbm_range_plausibility_test PRIVATE src)
 target_link_libraries(dbm_range_plausibility_test PRIVATE Qt6::Core)
 add_test(NAME dbm_range_plausibility_test COMMAND dbm_range_plausibility_test)
 
+# The auto-floor gate: its truth table, plus each family's declaration read off
+# a real backend instance. Links aethercore for the backends; the RTL row is
+# compiled only when AETHER_BACKEND_RTL is defined, same condition as the
+# backend itself. Qt6::Network because RtlSdrBackend's discovery path needs it.
+add_executable(noise_floor_auto_adjust_gate_test
+    tests/noise_floor_auto_adjust_gate_test.cpp)
+# PRIVATE src tests: the target needs tests/ for TestSettingsProfile.h, which
+# keeps the backends' construction-time AppSettings reads off the operator's
+# live store (aethersdr-agent, #5726).
+target_include_directories(noise_floor_auto_adjust_gate_test PRIVATE src tests)
+target_link_libraries(noise_floor_auto_adjust_gate_test PRIVATE
+    aethercore Qt6::Core Qt6::Network Qt6::Test)
+add_test(NAME noise_floor_auto_adjust_gate_test
+         COMMAND noise_floor_auto_adjust_gate_test)
+
 add_executable(radiomodel_pan_range_null_test tests/radiomodel_pan_range_null_test.cpp)
 target_include_directories(radiomodel_pan_range_null_test PRIVATE src)
 target_link_libraries(radiomodel_pan_range_null_test PRIVATE aethercore Qt6::Core Qt6::Test)
@@ -5167,6 +5200,20 @@ add_executable(hl2_gain_restore_test tests/hl2_gain_restore_test.cpp)
 target_include_directories(hl2_gain_restore_test PRIVATE src tests)
 target_link_libraries(hl2_gain_restore_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_gain_restore_test COMMAND hl2_gain_restore_test)
+# Socket-free HL2 panadapter-limit DECLARATIONS: the span shape, the four
+# discrete rates and the dBm axis. NOT radioOwnsDbmScale -- the HL2 deliberately
+# leaves that undeclared and this target asserts only its DEFAULT, which is a
+# different fact. An earlier version of this line claimed otherwise. The span
+# floor and rate set, the shared span, and the uncalibrated dBm axis — each
+# asserted against the constant or predicate production reads, never a copy.
+# Constructs a backend and reads capabilities(); binds nothing and connects
+# nothing. It is a separate target from the rest because the fixture the HL2
+# seam contract used to live in is retired (see the commented block above) and
+# a declaration must not be pinned only inside something that does not build.
+add_executable(hl2_pan_limits_declaration_test tests/hl2_pan_limits_declaration_test.cpp)
+target_include_directories(hl2_pan_limits_declaration_test PRIVATE src tests)
+target_link_libraries(hl2_pan_limits_declaration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_pan_limits_declaration_test COMMAND hl2_pan_limits_declaration_test)
 add_executable(hl2_band_memory_test
     tests/hl2_band_memory_test.cpp
 )
@@ -5623,6 +5670,7 @@ target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 # directly (rather than linking aethercore) needs the vendored SQLite engine.
 # Conditional targets are guarded with if(TARGET ...).
 set(AETHER_SETTINGS_CONSUMERS
+    noise_floor_auto_adjust_gate_test
     vfo_display_defaults_test
     audio_engine_rates_test
     audio_engine_pcm_lifetime_test
@@ -5647,6 +5695,7 @@ set(AETHER_SETTINGS_CONSUMERS
     rtl_slice_settings_test
     weather_radar_loading_test
     hl2_gain_restore_test
+    hl2_pan_limits_declaration_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test

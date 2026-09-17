@@ -335,6 +335,49 @@ RadioCapabilities AnanBackend::capabilities() const
 {
     RadioCapabilities c;
     c.family = QStringLiteral("anan");
+    // THE dBm AXIS IS dBFS WEARING A dBm LABEL, and this file says so in its own
+    // words twice over. kUncalibratedDbfsToDbmOffset is 0.0f, carrying a TODO
+    // that calls it "an unexplained 1:1 dBFS/dBm mapping", and the spectrum path
+    // emits `binsDbfs[i] + kUncalibratedDbfsToDbmOffset` -- the bins ARE the
+    // dBFS, relabelled. The SignalPeak comment states the consequence directly:
+    // registering it as SLC:LEVEL "would feed the shared S-meter, whose scale
+    // and S-unit labels require real dBm".
+    //
+    // The numbers stay internally consistent; what is denied is COMPARISON. A
+    // level from this radio may not be published as a spot, held against another
+    // station's report, or used as an absolute threshold.
+    PanAmplitudeModel amplitude;
+    amplitude.calibratedDbm = false;
+    // ...and BECAUSE those bins are the raw dBFS, they are also ABSOLUTE:
+    // AnanRxDsp::spectrumReady hands over WDSP's dBFS bins and this backend
+    // emits `binsDbfs[i] + kUncalibratedDbfsToDbmOffset`, where that constant
+    // is 0.0f -- the bins ARE the dBFS, relabelled. Nothing in that expression
+    // is the display reference level, so the auto-floor's measurement holds
+    // still under its own correction and the loop converges.
+    //
+    // This is the behaviour change in the flag split: c.radioOwnsDbmScale =
+    // false, declared further down this function, used to switch the auto-floor
+    // off here, and that was the conflation rather than a decision about this
+    // radio.
+    amplitude.binsAbsolute = true;
+    c.panAmplitude = amplitude;
+
+    // THE SPAN HALF, declared here too rather than left absent. AnanBackend.h
+    // states the same fact the HL2's followsSampleRate carries: the span snaps
+    // "to the nearest rate this radio actually offers (capabilities()
+    // .sampleRatesHz), by RATIO", mirroring Hl2Backend::nearestIqSampleRateHz(),
+    // and "there is no continuous zoom here — DDC0 runs at exactly one of six
+    // fixed rates". panBandwidthLimitsChanged clamps to that list's endpoints.
+    //
+    // radioWide is FALSE, and the difference from the HL2 is real rather than
+    // an oversight: the HL2 puts one DDC stream in front of every receiver, so
+    // they share one span. This radio has one receiver, so there is no shared
+    // budget to declare — absent would have read as "nobody looked", which is
+    // the ambiguity these optionals exist to remove (aethersdr-agent, #5725).
+    PanSpanModel span;
+    span.followsSampleRate = true;
+    span.radioWide = false;
+    c.panSpanModel = span;
     c.hasAgcThreshold = true; // Host receiver DSP implements threshold/off gain.
     c.manufacturer = QStringLiteral("Apache Labs");
     c.model = QStringLiteral("ANAN-G2");

@@ -7,6 +7,8 @@
 #include <QFile>
 #include <QTimer>
 
+class QSaveFile;
+
 #include <functional>
 #include <utility>
 
@@ -73,6 +75,9 @@ private:
     void handleReadyRead(quint64 generation, QTcpSocket* socket);
     void handleDownloadFinished(quint64 generation, QTcpSocket* socket);
     void handleDownloadError(quint64 generation, QTcpSocket* socket);
+    bool openDownloadFile();
+    void receiveDownloadBytes(const QByteArray& data);
+    void finalizeDownload();
 
     // Upload (client → radio)
     std::function<void(int, const QString&)> makeUploadPortCallback(quint64 generation,
@@ -89,22 +94,23 @@ private:
     void startConnectTimeout(quint64 generation);
     void stopConnectTimeout();
 
-    void cleanup(bool removeFile);
+    void cleanup(bool discardDownload);
 
-    // Single idempotent funnel: emits finished() once and tears down.
+    // Single idempotent funnel: tears down, then emits finished() once.
     // Re-entrant calls (e.g. a second socket signal during teardown) are no-ops.
-    void finish(bool success, const QString& message, bool removeFile);
+    void finish(bool success, const QString& message, bool discardDownload);
 
     QPointer<RadioModel> m_model;
     QTcpServer*  m_server{nullptr};    // download: we listen
     QTcpSocket*  m_client{nullptr};    // download: accepted socket / upload: our socket
-    QFile*       m_file{nullptr};      // download: output file
+    QSaveFile*   m_file{nullptr};      // download: staged output file
     QTimer*      m_timeout{nullptr};
     int          m_slotId{-1};
     QString      m_filePath;           // download: save path / upload: source path
     qint64       m_bytesReceived{0};
     QByteArray   m_uploadData;
-    qint64       m_bytesSent{0};
+    qint64       m_bytesSent{0};      // bytes confirmed drained by QTcpSocket
+    qint64       m_bytesAccepted{0};  // bytes accepted by QTcpSocket::write()
     Direction    m_direction{None};
     bool         m_transferring{false};
     bool         m_cancelled{false};
