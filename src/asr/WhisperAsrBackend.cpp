@@ -1,5 +1,7 @@
 #include "asr/WhisperAsrBackend.h"
 
+#include "asr/AsrStageTrace.h"
+
 #include <QFileInfo>
 #include <QLoggingCategory>
 #include <QThread>
@@ -155,6 +157,19 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
     cparams.use_gpu = useGpu;
     cparams.gpu_device = useGpu ? m_gpuDevice : 0;
 
+    // Opened after the asrGpuAvailable() pass above, which writes its own
+    // discovery record, so the two never nest and the last begin record in a
+    // crashed session's log names the stage that was actually running. The file
+    // name only: a custom model's directory is the operator's business.
+    const QFileInfo modelFile(modelPath);
+    AsrStageTrace stage("asr.model_load",
+                        QStringLiteral("model=%1 size_mb=%2 device=%3 threads=%4")
+                            .arg(modelFile.fileName())
+                            .arg(modelFile.size() / (1024 * 1024))
+                            .arg(useGpu ? QStringLiteral("gpu%1").arg(m_gpuDevice)
+                                        : QStringLiteral("cpu"))
+                            .arg(m_threads));
+
     const QByteArray pathUtf8 = modelPath.toUtf8();
     QString failure;
     m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
@@ -196,6 +211,8 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
         m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
     }
     if (m_ctx == nullptr) {
+        // `useGpu` here means a CPU retry ran above and failed as well.
+        stage.fail(useGpu ? "gpu_and_cpu_failed" : "load_failed");
         if (error != nullptr) {
             *error = failure.isEmpty()
                 ? QStringLiteral("whisper failed to load model: %1").arg(modelPath)
@@ -213,6 +230,9 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
     // latching. That is the safe direction: an over-latch costs a session of
     // GPU speed, an under-latch costs the process (#4502).
     m_ctxOnGpu = cparams.use_gpu;
+    if (useGpu && !m_ctxOnGpu) {
+        stage.fail("gpu_failed_cpu_ok"); // loaded, but only after the CPU retry
+    }
 
     qCInfo(lcAsrWhisper) << "Loaded model" << modelPath << "(" << m_threads << "threads )";
     return true;
@@ -518,6 +538,12 @@ std::vector<AsrGpuDevice> asrGpuDevices()
     // (CPU-only) instead; a partial enumeration is discarded rather than
     // returned, so an index never points at a device other than the one
     // whisper would pick.
+    //
+    // The record sits here rather than at the GUI call site because this
+    // function has a second caller: load() reaches it through asrGpuAvailable()
+    // on the ASR worker thread, a full enumerate-and-probe pass outside any
+    // window the controller could bracket (#5190 triage).
+    AsrStageTrace stage("asr.device_discovery");
     std::vector<AsrGpuDevice> devices;
     try {
         int index = 0;
@@ -601,9 +627,11 @@ std::vector<AsrGpuDevice> asrGpuDevices()
         }
     } catch (const std::exception& e) {
         qCWarning(lcAsrWhisper) << "GPU device enumeration failed:" << e.what();
+        stage.fail("enumeration_threw");
         devices.clear();
     } catch (...) {
         qCWarning(lcAsrWhisper) << "GPU device enumeration failed: unknown exception";
+        stage.fail("enumeration_threw");
         devices.clear();
     }
     return devices;

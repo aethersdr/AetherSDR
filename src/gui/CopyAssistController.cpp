@@ -7,6 +7,7 @@
 #include "asr/AsrEngine.h"
 #include "asr/AsrModelCatalog.h"
 #include "asr/AsrModelManager.h"
+#include "asr/AsrStageTrace.h"
 #include "asr/RemoteAsrBackend.h"
 #include "asr/SherpaOnnxBackend.h"
 #include "asr/WhisperAsrBackend.h"
@@ -456,6 +457,14 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
         CopyAssistSettings::setValue(QStringLiteral("AsrNewlineOnSilence"),
                     on ? QStringLiteral("True") : QStringLiteral("False"));
     });
+
+    // The ASR stage records (asr/AsrStageTrace.h) flush the log around device
+    // discovery and the model load, so a session that dies inside either leaves
+    // a log naming it (#5190). aetherasr does not link LogManager, so hand it
+    // the flush — before the first discovery pass below. Never uninstalled:
+    // LogManager is a process-lifetime singleton, and its flush returns at once
+    // when the writer has already stopped.
+    asrSetLogFlushHook([] { LogManager::instance().flushLog(); });
 
     buildEngine();
     m_constructed = true; // subsequent VAD toggles may download/rebuild
