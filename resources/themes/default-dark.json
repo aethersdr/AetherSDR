@@ -117,6 +117,11 @@
             "key.standby.foreground": "{color.amber.500}",
             "key.bypass.background":  "#8a6000",
             "key.bypass.foreground":  "#ffd9a0",
+            "key.meffa.active.background": "#006030",
+            "key.meffa.active.border":     "#008040",
+            "key.meffa.active.hover":      "#007040",
+            "key.meffa.active.foreground": "{color.gray.50}",
+            "key.meffa.standby.foreground": "#008040",
             "swrScale": {
               "type": "linear-gradient",
               "angle": 90,

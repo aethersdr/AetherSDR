@@ -1,4 +1,5 @@
 #pragma once
+#include "TxCoordinator.h"
 
 #include <QObject>
 #include <QByteArray>
@@ -62,6 +63,7 @@ public:
     // Read TX audio from shared memory (apps → radio).
     // Returns float32 stereo PCM, or empty if no data available.
     QByteArray readTxAudio(int maxFrames = 480);
+    void setTxContext(const TxCoordinator::Context& context);
 
 public slots:
     // Feed decoded DAX audio for a channel (1-8).
@@ -72,7 +74,7 @@ public slots:
     void setTransmitting(bool tx);
 
 signals:
-    void txAudioReady(const QByteArray& pcm);
+    void txAudioReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
     void daxRxLevel(int channel, float rms);
     void daxTxLevel(float rms);
 
@@ -107,6 +109,7 @@ private:
     // TX channel (apps → radio)
     int m_txShmFd{-1};
     DaxShmBlock* m_txBlock{nullptr};
+    TxCoordinator::Context m_txContext;
     ::QTimer* m_txPollTimer{nullptr};
 
     void feedSilenceToAllChannels();

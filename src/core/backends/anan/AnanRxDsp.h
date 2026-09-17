@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <memory>
@@ -15,6 +16,7 @@
 #include "core/backends/anan/P2Protocol.h"   // kDdc0RatesKsps
 #include "core/backends/anan/AnanSpectrum.h"
 #include "core/dsp/WdspChannel.h"
+#include "core/dsp/WdspProcessTally.h"
 
 #include <QMap>
 
@@ -216,6 +218,29 @@ public:
     // configure()/installRebuiltChannel().
     [[nodiscard]] const WdspChannel* channelForTest() const noexcept { return m_channel.get(); }
 
+    // Every outcome m_channel->processIq() returned, counted, since this
+    // object was constructed. IDENTICAL to Hl2RxDsp::processTally() and
+    // deliberately so: this class and Hl2RxDsp collapsed all five non-`Ok`
+    // results into the same unannotated `continue`, and a fix applied to one
+    // copy and not the other is worse than none — a reader who finds the
+    // counter on the HL2 will assume the ANAN has it too.
+    //
+    // `Underrun` is counted separately from the four faults because it is
+    // normal while the asynchronous output side fills; see WdspProcessTally.h.
+    //
+    // MONOTONIC ACROSS A REBUILD, which matters more here than on the HL2:
+    // this class rebuilds its channel OFF-THREAD (buildChannel /
+    // installRebuiltChannel) and swaps it in under a running stream, so a
+    // rebuild is the likeliest moment for a `Busy` or a geometry fault, and
+    // clearing the count at exactly that moment would erase the evidence.
+    //
+    // Safe to call from another thread: relaxed atomics, like every other
+    // cross-thread readback on this class.
+    [[nodiscard]] WdspProcessTally::Counts processTally() const noexcept
+    {
+        return m_processTally.snapshot();
+    }
+
     // Mute the DEMODULATOR while transmitting. Suppressing audio further
     // downstream is not enough -- this pipeline keeps demodulating our own
     // transmission and the backlog drains to the speakers on unmute. Muted,
@@ -265,10 +290,34 @@ public:
             std::exp(-2.0 * std::numbers::pi * cornerHz / sampleRateHz));
     }
 
+    // ── Panadapter integrity across a transport gap ───────────────────────
+    //
+    // Partial FFT windows discarded at DDC0 discontinuities, including
+    // accepted rewinds and duplicates. Same lifetime/empty-window semantics
+    // as Hl2RxDsp::spectrumGapDiscards(). AnanBackend does not expose health
+    // rows yet; this counter is currently available only at the DSP stage.
+    [[nodiscard]] quint64 spectrumGapDiscards() const noexcept
+    {
+        return m_spectrumGapDiscards.load(std::memory_order_relaxed);
+    }
+
 public slots:
     // Feed one IQ block (normalized complex<float>). Emits spectrumReady per
     // FFT frame and audioReady/meterUpdate per completed WdspChannel block.
     void processIqBlock(const std::vector<std::complex<float>>& iq);
+
+    // A DDC0 sequence gap preceded the NEXT block this stage will be handed.
+    // AnanBackend routes P2Client::ddcSequenceGap here by DirectConnection on
+    // the I/O thread this object already lives on -- the same thread and the
+    // same call chain that then delivers the block, so this is a plain call and
+    // introduces no cross-thread edge.
+    //
+    // Discards the partial panadapter frame; see Hl2RxDsp::onSequenceGap() for
+    // the full reasoning, including why the AUDIO path is deliberately left
+    // alone, and why the per-bin smoother below is too -- smoothSpectrumBins()
+    // blends MAGNITUDES between frames and stays meaningful across a gap, while
+    // the FFT the gap corrupts is phase-coherent within one frame.
+    void onSequenceGap();
 
 signals:
     void pcmReady(const AetherSDR::PcmFrame& frame);
@@ -306,6 +355,9 @@ private:
     // the client-side one.
     void smoothSpectrumBins(std::vector<float>& binsDbfs);
     std::vector<float> m_smoothedBins;   // persists across frames; see smoothSpectrumBins()
+    // See spectrumGapDiscards(). Written on the I/O thread by onSequenceGap(),
+    // read by whatever polls it; relaxed for the same reasons Hl2RxDsp gives.
+    std::atomic<quint64> m_spectrumGapDiscards {0};
     // Weight on the NEW frame each call (1 - this on the running average).
     // Lighter than SpectrumWidget's client-side SMOOTH_ALPHA (0.35): the
     // trace already gets THAT smoothing on top of this one, so a second,
@@ -320,6 +372,10 @@ private:
     Config m_config;
     // See beginRebuild()/installRebuiltChannel()'s own comments.
     bool m_rebuildInFlight = false;
+
+    // Per-outcome counters for m_channel->processIq(); see processTally().
+    // Written on the DSP thread in processIqBlock(), read from elsewhere.
+    WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
     int m_spectrumIntervalMs = 0;   // 0 = uncapped

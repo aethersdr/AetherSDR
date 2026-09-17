@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/tnc/Ax25.h"
+#include "core/TxCoordinator.h"
 
 #include <QObject>
 #include <QString>
@@ -47,9 +48,12 @@ public:
     // manual send doesn't double up with an imminent timed one). Returns
     // false when no callsign or no position is configured.
     bool sendNow();
+    bool sendNow(const TxCoordinator::Request& input);
+    void setTransmitProgram(const TxCoordinator::Request& input) { m_txProgram = input; }
 
 signals:
-    void transmitFrame(const QByteArray& rawAx25NoFcs);
+    void transmitFrame(const QByteArray& rawAx25NoFcs,
+                       const AetherSDR::TxCoordinator::Request& input);
     void activity(const QString& line);
 
 private:
@@ -62,6 +66,7 @@ private:
     bool m_enabled{false};
     int m_intervalMin{30};
     QTimer m_timer;
+    TxCoordinator::Request m_txProgram;
 
     bool m_gpsValid{false};
     double m_gpsLat{0.0};

@@ -6,6 +6,7 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTimer>
+#include <QScopeGuard>
 
 namespace AetherSDR {
 
@@ -21,7 +22,10 @@ KissTncServer::~KissTncServer()
 
 bool KissTncServer::start(quint16 port)
 {
+    if (m_stopping) { return false; }
+    const QPointer<KissTncServer> self(this);
     stop();
+    if (!self) { return false; }
 
     m_server = new QTcpServer(this);
     connect(m_server, &QTcpServer::newConnection, this, &KissTncServer::onNewConnection);
@@ -56,6 +60,10 @@ bool KissTncServer::start(quint16 port)
 
 void KissTncServer::stop()
 {
+    if (m_stopping) { return; }
+    m_stopping = true;
+    const QPointer<KissTncServer> self(this);
+    const auto stopping = qScopeGuard([self] { if (self) { self->m_stopping = false; } });
     if (m_sweepTimer) {
         m_sweepTimer->stop();
         m_sweepTimer->deleteLater();
@@ -65,11 +73,9 @@ void KissTncServer::stop()
     const bool wasListening = m_server != nullptr;
     const int hadClients = m_clients.size();
 
-    for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
-        QTcpSocket* socket = it.key();
-        socket->disconnect(this); // stop our slots firing during teardown
-        socket->abort();
-        socket->deleteLater();
+    QVector<std::pair<QPointer<QTcpSocket>, std::shared_ptr<TxController>>> clients;
+    for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
+        clients.append({it.key(), it->controller});
     }
     m_clients.clear();
 
@@ -78,12 +84,23 @@ void KissTncServer::stop()
         m_server->deleteLater();
         m_server = nullptr;
     }
+    for (const auto& [socket, controller] : clients) {
+        if (socket) {
+            socket->disconnect(this);
+            socket->abort();
+            socket->deleteLater();
+        }
+        if (controller) { controller->invalidate(); }
+        if (!self) { return; }
+    }
 
     if (wasListening) {
         qCInfo(lcAx25).noquote()
             << QStringLiteral("KISS TNC stopped (closed %1 client(s)).").arg(hadClients);
         emit activity(QStringLiteral("KISS TNC stopped."));
+        if (!self) { return; }
         emit listeningChanged(false);
+        if (!self) { return; }
         emitClientCount();
     }
 }
@@ -95,19 +112,22 @@ bool KissTncServer::isListening() const
 
 void KissTncServer::onNewConnection()
 {
-    if (!m_server)
+    if (!m_server || m_stopping)
         return;
 
-    while (QTcpSocket* socket = m_server->nextPendingConnection()) {
+    const QPointer<KissTncServer> self(this);
+    const QPointer<QTcpServer> server = m_server;
+    while (QTcpSocket* socket = server->nextPendingConnection()) {
         if (m_clients.size() >= m_maxClients) {
             const QString peer = QStringLiteral("%1:%2")
                 .arg(socket->peerAddress().toString()).arg(socket->peerPort());
             qCWarning(lcAx25).noquote()
                 << QStringLiteral("KISS TNC refused %1: client limit (%2) reached")
                        .arg(peer).arg(m_maxClients);
-            emit activity(QStringLiteral("KISS TNC refused %1 (client limit reached).").arg(peer));
             socket->abort();
             socket->deleteLater();
+            emit activity(QStringLiteral("KISS TNC refused %1 (client limit reached).").arg(peer));
+            if (!self || !server || m_server != server || m_stopping) { return; }
             continue;
         }
 
@@ -116,6 +136,12 @@ void KissTncServer::onNewConnection()
         socket->setSocketOption(QAbstractSocket::LowDelayOption, 1); // Nagle off: small KISS frames
 
         Client client;
+        if (m_txControllerFactory) {
+            const auto factory = m_txControllerFactory;
+            const QPointer<QTcpSocket> pending(socket);
+            client.controller = factory();
+            if (!self || !server || !pending || m_server != server || m_stopping) { return; }
+        }
         client.peer = QStringLiteral("%1:%2")
             .arg(socket->peerAddress().toString()).arg(socket->peerPort());
         client.lastActivity.start();
@@ -128,7 +154,9 @@ void KissTncServer::onNewConnection()
             << QStringLiteral("KISS TNC client connected: %1 (now %2 client(s))")
                    .arg(client.peer).arg(m_clients.size());
         emit activity(QStringLiteral("KISS client connected: %1.").arg(client.peer));
+        if (!self || !server || m_server != server || m_stopping) { return; }
         emitClientCount();
+        if (!self || !server || m_server != server || m_stopping) { return; }
     }
 }
 
@@ -144,6 +172,11 @@ void KissTncServer::onReadyRead()
     it->lastActivity.restart();
     const QByteArray chunk = socket->readAll();
     const QVector<QByteArray> frames = it->decoder.feed(chunk);
+    // Keep this accepted client identity even if a subscriber closes it while
+    // the first frame is delivered. Remaining decoded frames cannot remint it.
+    const std::shared_ptr<TxController> controller = it->controller;
+    const QString peer = it->peer;
+    const QPointer<KissTncServer> self(this);
 
     for (const QByteArray& frame : frames) {
         quint8 portNibble = 0;
@@ -155,19 +188,25 @@ void KissTncServer::onReadyRead()
         if (command == kiss::kCmdData) {
             if (payload.isEmpty())
                 continue;
+            const TxCoordinator::Request input = controller
+                ? controller->captureProgram(TxController::Activity::Mox).request()
+                : TxCoordinator::Request{};
             ++m_framesFromClients;
             qCDebug(lcAx25).noquote()
                 << QStringLiteral("KISS TX from %1: %2 AX.25 bytes (frame #%3)")
-                       .arg(it->peer).arg(payload.size()).arg(m_framesFromClients);
-            emit ax25FrameFromClient(payload);
+                       .arg(peer).arg(payload.size()).arg(m_framesFromClients);
+            emit ax25FrameFromClient(payload, input);
         } else if (command == kiss::kCmdReturn) {
             qCDebug(lcAx25).noquote()
-                << QStringLiteral("KISS exit (return) from %1 — ignored on a TCP link").arg(it->peer);
+                << QStringLiteral("KISS exit (return) from %1 — ignored on a TCP link").arg(peer);
         } else {
             qCDebug(lcAx25).noquote()
                 << QStringLiteral("KISS param from %1: cmd=0x%2 bytes=%3")
-                       .arg(it->peer).arg(command, 2, 16, QLatin1Char('0')).arg(payload.size());
+                       .arg(peer).arg(command, 2, 16, QLatin1Char('0')).arg(payload.size());
             emit kissParameterReceived(command, payload);
+        }
+        if (!self || (controller && !controller->valid())) {
+            return;
         }
     }
 }
@@ -230,11 +269,20 @@ void KissTncServer::closeClient(QTcpSocket* socket, const QString& reason)
         return;
     }
     const QString peer = it->peer;
+    const std::shared_ptr<TxController> controller = it->controller;
     m_clients.erase(it);
 
     socket->disconnect(this);
     socket->abort();
     socket->deleteLater();
+
+    const QPointer<KissTncServer> self(this);
+    if (controller) {
+        controller->invalidate();
+    }
+    if (!self) {
+        return;
+    }
 
     qCInfo(lcAx25).noquote()
         << QStringLiteral("KISS TNC client %1 closed: %2 (now %3 client(s))")

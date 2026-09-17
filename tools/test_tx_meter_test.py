@@ -1,11 +1,24 @@
 #!/usr/bin/env python3
 """Safety regressions for tools/tx_meter_test.py; never connects or keys."""
 
+import itertools
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tx_meter_test as subject  # noqa: E402
+
+
+def fake_clock(*values):
+    """A `time.monotonic` stand-in: yields `values`, then holds the last one.
+
+    A test says WHEN things happen; it should not also have to pin how many
+    times the code reads the clock. A fixed side_effect list did, so separating
+    the sampling window from the freshness epoch -- one extra read -- surfaced
+    as StopIteration rather than as the behaviour change it was. The final value
+    must lie past the window so the sampling loop still terminates.
+    """
+    return itertools.chain(values, itertools.repeat(values[-1]))
 
 
 def check(condition, message):
@@ -193,7 +206,165 @@ def test_unknown_transmit_flags_never_confirm_unkeyed():
           "missing flags did not attempt semantic unkey")
 
 
+def test_cw_swr_gap_requires_fresh_zero_carrier_and_prior_ratio():
+    m = meter_snapshot(fwd=0, swr=None, fwd_age=50, swr_age=80)
+    check(subject.swr_gap_is_observed(m, 1000, True), "fresh zero-carrier gap rejected")
+    check(not subject.swr_gap_is_observed(m, 1000, False), "never-established SWR accepted")
+    for key, value in (("fwdPowerInstant", 1), ("fwdPowerInstant", float("nan")),
+                       ("fwdPowerAgeMs", 600), ("swrAgeMs", 600), ("swrAgeMs", -1)):
+        changed = {**m, key: value}
+        check(not subject.swr_gap_is_observed(changed, 1000, True), changed)
+
+
+def test_icom_unkey_requires_new_confirmed_ptt_off():
+    from unittest.mock import patch
+    class CivBridge:
+        """A backend that answers `civ scheduler` with a freshness block."""
+        def __init__(self, ptt): self.ptt = ptt; self.asked = []
+        def request(self, request):
+            if request.get("cmd") == "get":
+                return {"ok": True, "value": False}
+            self.asked.append(request)
+            return {"ok": True, "result": {"stateFreshness": {"fields": {"ptt": self.ptt}}}}
+    class PlainBridge:
+        """Any backend without CI-V diagnostics: flags-only, as before."""
+        def request(self, request):
+            if request.get("cmd") == "get":
+                return {"ok": True, "value": False}
+            return {"ok": False, "error": "sim backend: unknown namespace 'icom'"}
+    fresh_off = {"status": "confirmed", "value": False, "ageMs": 0, "accepted": True}
+    with patch.object(subject.time, "sleep"):
+        for state in ({},
+                      {"status": "pending", "value": False, "ageMs": 0, "accepted": True},
+                      {"status": "confirmed", "value": True, "ageMs": 0, "accepted": True},
+                      {"status": "confirmed", "value": False, "ageMs": 400, "accepted": True},
+                      # A STALE frame that merely agreed with the pending unkey
+                      # intent. The backend publishes it -- Constitution VI will
+                      # not have an "still keyed" report suppressed -- but it is
+                      # not proof, and the gate must not open on it.
+                      {"status": "confirmed", "value": False, "ageMs": 0, "accepted": False},
+                      # An older app that never reports the field fails closed.
+                      {"status": "confirmed", "value": False, "ageMs": 0},
+                      # A write is still in flight: intent is not evidence.
+                      {**fresh_off, "pending": True}):
+            check(not subject.Tx(CivBridge(state)).ensure_unkeyed(), state)
+        bridge = CivBridge(dict(fresh_off))
+        check(subject.Tx(bridge).ensure_unkeyed(), "new confirmed PTT-off was rejected")
+        # The gate is keyed on the backend answering, not on a display string,
+        # and it asks for the freshness block rather than the transaction ring.
+        check(all(r.get("value") == "freshness" for r in bridge.asked), bridge.asked)
+        check(subject.Tx(PlainBridge()).ensure_unkeyed(),
+              "a backend without CI-V diagnostics must not be held by the Icom gate")
+
+
+def test_window_deadlines_start_at_the_keyed_edge_not_the_key_command():
+    from unittest.mock import patch
+    # Key command at t=0, radio keyed at t=1.0 -- a second of bridge round trip
+    # plus key-up. The 0.9 s safety deadline is a position in the BURST, so it
+    # is measured from 1.0; measuring it from the command aborted a healthy
+    # radio 0.2 s into its first sample and filed that as guarded-stop evidence.
+    no_power = meter_snapshot(fwd_age=-1)   # no FWDPWR row at all
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.2, 99)):
+        result = subject.sample_window(FakeTx(no_power), dur=1.5, settle=-1, keyed_at=0)
+    check(result["stopReason"] is None,
+          f"the deadline was charged key-up latency: {result['stopReason']}")
+    # ...and it still fires once the WINDOW itself reaches 0.9 s.
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.95, 99)):
+        result = subject.sample_window(FakeTx(no_power), dur=1.5, settle=-1, keyed_at=0)
+    check("no fresh calibrated FWDPWR" in str(result["stopReason"]), result)
+
+
+def test_wait_for_keyed_is_bounded_and_does_not_extend_the_window():
+    from unittest.mock import patch
+
+    class Keyer:
+        """Reports keyed on the Nth poll; never, if n_until is None."""
+        def __init__(self, n_until): self.n_until = n_until; self.polls = 0
+        def request(self, request):
+            self.polls += 1
+            keyed = self.n_until is not None and self.polls >= self.n_until
+            return {"ok": True, "value": keyed}
+
+    with patch.object(subject.time, "sleep"):
+        tx = subject.Tx(Keyer(3))
+        check(subject.wait_for_keyed(tx, subject.time.monotonic()),
+              "the keyed edge was not observed")
+        # Bounded: a radio that never keys falls through to the window's own
+        # deadlines, which are what produce the stop reason. It must not hang.
+        started = subject.time.monotonic()
+        check(not subject.wait_for_keyed(tx := subject.Tx(Keyer(None)), started, limit=0.2),
+              "a radio that never keys must not hold the harness")
+        check(subject.time.monotonic() - started < 1.0, "wait_for_keyed overran its limit")
+
+
+def test_alarming_sample_still_aborts_outside_the_post_key_window():
+    from unittest.mock import patch
+    # 600 ms old: too old to be THIS burst's evidence, plenty alarming enough
+    # to stop transmitting. Aggregates must stay empty; the run must stop.
+    # Window opens at t=1.0 (the keyed edge); the key command was at t=0, so the
+    # freshness horizon is 1000 ms and a 600 ms sample is still inside it -- yet
+    # outside the 500 ms safety window, so it may alarm but not aggregate.
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.0, 99)):
+        result = subject.sample_window(FakeTx(meter_snapshot(swr=4.0, swr_age=600)),
+                                       dur=1.5, settle=-1, keyed_at=0, max_swr=2.5)
+    check("SWR 4.00 exceeds" in str(result["stopReason"]), result)
+    check(result["swr"] is None, "a pre-key SWR leaked into the aggregate")
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.0, 99)):
+        result = subject.sample_window(FakeTx(meter_snapshot(fwd=99, fwd_age=600)),
+                                       dur=1.5, settle=-1, keyed_at=0, max_watts=10)
+    check("exceeds 10.0 W ceiling" in str(result["stopReason"]), result)
+    check(result["fwd"] is None, "a pre-key power sample leaked into the aggregate")
+
+
+def test_native_meter_reporting():
+    meters = meter_snapshot()
+    meters.update(paTemp=0, swAlc=-42)
+    missing = subject.reported_meter(meters, "PATEMP")
+    check(missing["status"] == "unsupported" and missing["value"] is None, missing)
+    meters["all"].append({"name": "ALC", "source": "TX", "unit": "Percent",
+                          "has_value": True, "age_ms": 0, "value": 63.5})
+    result = run_once(FakeTx(meters))
+    check(result["alc"] == 63.5 and result["alcUnit"] == "Percent", result)
+    check(result["paTemp"] is None, result)
+    row = meters["all"][-1]
+    row["has_value"] = False
+    check(subject.reported_meter(meters, "ALC")["status"] == "never-fed", row)
+    row["has_value"] = True
+    row["age_ms"] = 2000
+    check(subject.reported_meter(meters, "ALC")["status"] == "stale", row)
+    row["reliable"] = False
+    check(subject.reported_meter(meters, "ALC")["status"] == "unreliable", row)
+
+
+def test_previous_burst_sample_cannot_satisfy_safety():
+    from unittest.mock import patch
+    # Age 400ms looks fresh under the old 500ms check, but predates this key.
+    with patch.object(subject, "POWER_SAMPLE_DEADLINE_S", 0):
+        result = run_once(FakeTx(meter_snapshot(fwd_age=400, swr_age=400)), max_watts=10)
+    check("no fresh calibrated FWDPWR" in result["stopReason"], result)
+    check(result["fwd"] is None and result["swr"] is None, "prior-burst samples leaked into aggregates")
+
+
+def test_old_swr_cannot_qualify_a_later_carrier_gap():
+    from unittest.mock import patch
+    # Reach the 0.9 s safety deadline inside the window (t0=1.0, sample at 1.95)
+    # while the only SWR on offer is 600 ms old -- older than the 500 ms safety
+    # window, so it can neither aggregate nor satisfy the deadline.
+    with patch.object(subject.time, "monotonic", side_effect=fake_clock(1.0, 1.0, 1.95, 99)):
+        result = subject.sample_window(FakeTx(meter_snapshot(swr_age=600)), dur=1.5, settle=-1, keyed_at=0)
+    check(result["swr"] is None and result["peakSwr"] is None, result)
+    check(result["stopReason"] == "no fresh SWR sample before safety deadline", result)
+
+
 if __name__ == "__main__":
+    test_cw_swr_gap_requires_fresh_zero_carrier_and_prior_ratio()
+    test_icom_unkey_requires_new_confirmed_ptt_off()
+    test_window_deadlines_start_at_the_keyed_edge_not_the_key_command()
+    test_wait_for_keyed_is_bounded_and_does_not_extend_the_window()
+    test_alarming_sample_still_aborts_outside_the_post_key_window()
+    test_native_meter_reporting()
+    test_previous_burst_sample_cannot_satisfy_safety()
+    test_old_swr_cannot_qualify_a_later_carrier_gap()
     test_over_watt_unkeys()
     test_high_swr_unkeys()
     test_missing_power_unkeys()

@@ -285,6 +285,8 @@ RadioCapabilities SimBackend::capabilities() const
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = familyName();
+    // The demo cannot key at all (Principle VI), let alone synthesise tones.
+    caps.twoToneGenerator = std::nullopt;
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
     caps.fmTonePresentation = FmTonePresentation::Legacy;
@@ -570,8 +572,10 @@ void SimBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
                                    hz / 1.0e6, kDemoPanBandwidthMhz);
 }
 
-void SimBackend::setKeying(bool key)
+void SimBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    Q_UNUSED(operation);
+    Q_UNUSED(completion);
     // RX-only (capabilities().canTransmit == false): the engine TX guard above
     // the seam already denies keying. We DON'T transmit — but we do forward the
     // intent so the source mutes the synthetic RX while "keyed": the demo never

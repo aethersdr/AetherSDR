@@ -4,6 +4,7 @@
 #include "models/TunerModel.h"
 #include "models/MeterModel.h"
 #include "models/BandSettings.h"
+#include <QElapsedTimer>
 
 #include <QAccessible>
 #include <QPushButton>
@@ -1011,9 +1012,11 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // State changes → refresh UI
     connect(m_model, &TunerModel::stateChanged, this, &TunerApplet::syncFromModel);
 
-    // Forward power and SWR from direct TGXL connection (#625)
+    // Forward power and SWR from direct TGXL connection (#625). Routed through
+    // the stamped entry point so it yields to the radio-relayed AMP meters
+    // while those are arriving — see setDeviceMeters.
     connect(m_model, &TunerModel::metersChanged,
-            this, &TunerApplet::updateMeters);
+            this, &TunerApplet::setDeviceMeters);
 
     // Enable relay bar scrolling when direct TGXL connection is active (#469)
     auto updateScrollEnabled = [this]() {
@@ -1105,16 +1108,14 @@ void TunerApplet::syncFromModel()
     m_c2Dial->setValue(m_relayC2);
 
     // Operate/Bypass/Standby button — 3-state display, captioned with the
-    // same abbreviations the expanded panel uses (OPR / BYP / STBY). Spelled
-    // out they do not fit the rail's button and were clipped mid-word
-    // ("OPERATI"), and a caption the operator has to guess at is worse than a
-    // short one they have already learned from the panel.
-    //
-    // The accessible name stays the full word: the abbreviation is a fit
-    // problem, and a screen reader has no width to run out of.
-    // operate=1, bypass=0 → OPR  (green)
-    // operate=1, bypass=1 → BYP  (orange)
-    // operate=0            → STBY (default)
+    // full word. Spelled out they overflow the rail's button at the default
+    // size and were once clipped mid-word ("OPERATI"); fittedRailFontPx()
+    // shrinks the caption to fit instead of abbreviating it, so the operator
+    // reads the same word here as on the expanded panel and the button's
+    // accessible name is that word too.
+    // operate=1, bypass=0 → OPERATE  (green)
+    // operate=1, bypass=1 → BYPASS   (orange)
+    // operate=0           → STANDBY  (default)
     auto& theme = AetherSDR::ThemeManager::instance();
     const bool operate = m_model->isOperate();
     const bool bypass = m_model->isBypass();
@@ -1192,6 +1193,24 @@ void TunerApplet::cycleOperateState()
         m_model->setBypass(false);
         m_model->setOperate(true);
     }
+}
+
+void TunerApplet::setRadioMeters(float fwdPower, float swr)
+{
+    m_radioMeters.restart();
+    updateMeters(fwdPower, swr);
+}
+
+void TunerApplet::setDeviceMeters(float fwdPower, float swr)
+{
+    // Discarded, not applied-then-overwritten, while the relay is live. Two
+    // sources writing one gauge at different rates is last-writer-wins, and
+    // the slower one kept dragging the bar back to a stale sample.
+    if (m_radioMeters.isValid()
+            && m_radioMeters.elapsed() < kRelayMeterFreshnessMs) {
+        return;
+    }
+    updateMeters(fwdPower, swr);
 }
 
 void TunerApplet::updateMeters(float fwdPower, float swr)

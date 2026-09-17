@@ -42,6 +42,7 @@
 #include "ProfileManagerDialog.h"
 #include "SettingsBrowserDialog.h"
 #include "ThemeEditorDialog.h"
+#include "BandscopeDialog.h"
 #include "TxBandDialog.h"
 #include "TxApplet.h"
 #include "UlanziDialMapperDialog.h"
@@ -1336,6 +1337,55 @@ void MainWindow::buildMenuBar()
     toolsMenu->addAction(netSchedulerAction);
     toolsMenu->addAction(memoryAction);
     toolsMenu->addAction(waveformsAct);
+
+    // The wideband converter view — docs/HERMES.md §13 item 18. ADDITIVE: a new
+    // entry that opens a new window. Nothing existing changes behaviour, and no
+    // other entry in this menu is touched.
+    //
+    // IN TOOLS, BESIDE RADIO HEALTH, not in View. #5595 sorted the menu bar
+    // Tools-first: Tools holds the instrument windows (Add Panadapter, Radio
+    // Health, GPS Dashboard, Runtime Monitor, SWR Scan) and View keeps the
+    // presentation settings (themes, marker size, UI scale, band plan). A
+    // window showing the converter is an instrument. Created on toolsMenu
+    // directly rather than through the removeAction/addAction shim above,
+    // which exists to MIGRATE actions that used to live in View.
+    //
+    // GATED ON THE CAPABILITY AND NOT ON A FAMILY. The action starts disabled
+    // and follows RadioCapabilities::widebandConverterView, which today exactly
+    // one backend engages. Disabled rather than hidden, and rather than the
+    // permissive-on-disconnect convention the other capability gates use: this
+    // is not a control a connected radio might be shy about reporting — with no
+    // radio there is no converter to look at, so an enabled entry would open a
+    // window that could only say so.
+    //
+    // AND IT SAYS WHY IT IS GREYED. The tooltip describes what the entry is;
+    // nothing there tells an operator looking at a disabled row what would
+    // change it. A QAction has no accessibleDescription, so a screen reader
+    // gets the text and nothing else — the status tip is the one string Qt
+    // announces for an action, and it is cleared again when the entry is live
+    // so the reason cannot outlive the condition that produced it.
+    auto* bandscopeAct = toolsMenu->addAction("Wideband Bandscope...");
+    bandscopeAct->setMenuRole(QAction::NoRole);
+    bandscopeAct->setToolTip(
+        "The radio's converter, before tuning and filtering");
+    bandscopeAct->setEnabled(false);
+    bandscopeAct->setStatusTip(
+        "Unavailable: no radio is connected that provides a wideband "
+        "converter view.");
+    connect(&m_radioModel, &RadioModel::capabilitiesChanged, bandscopeAct,
+            [bandscopeAct](bool connected, const RadioCapabilities& caps) {
+        const bool on = connected && caps.widebandConverterView.has_value();
+        bandscopeAct->setEnabled(on);
+        bandscopeAct->setStatusTip(on
+            ? QString()
+            : (connected
+                   ? QStringLiteral("Unavailable: this radio does not provide "
+                                    "a wideband converter view.")
+                   : QStringLiteral("Unavailable: no radio is connected.")));
+    });
+    connect(bandscopeAct, &QAction::triggered, this, [this] {
+        showOrRaisePersistent(m_bandscopeDialog, &m_radioModel);
+    });
 
     toolsMenu->addSeparator();
     toolsMenu->addAction("Radio Health...", this, [this] {

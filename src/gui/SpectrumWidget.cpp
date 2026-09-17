@@ -22,6 +22,8 @@
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
 #include "core/EibiClient.h"
+#include "core/backends/NoiseFloorAutoAdjustGate.h"
+#include "NoiseFloorEstimator.h"
 #include <QVariant>
 #include <QVariantAnimation>
 
@@ -3507,26 +3509,12 @@ void SpectrumWidget::publishPerfDragState() const {
 
 float SpectrumWidget::estimateNoiseFloorDbm(const QVector<float>& bins) const
 {
-    if (bins.isEmpty()) return -1000.0f;
-
-    // Stride-sample to cap work at ~512 reads even on very wide pans.
-    const int stride = std::max(1, static_cast<int>(bins.size() / 512));
-    float sum = 0.0f;
-    int count = 0;
-    for (int i = 0; i < bins.size(); i += stride) {
-        const float v = bins[i];
-        if (std::isfinite(v)) { sum += v; ++count; }
-    }
-    if (count <= 0) return -1000.0f;
-
-    const float mean = sum / static_cast<float>(count);
-    float baselineSum = 0.0f;
-    int baselineCount = 0;
-    for (int i = 0; i < bins.size(); i += stride) {
-        const float v = bins[i];
-        if (std::isfinite(v) && v <= mean) { baselineSum += v; ++baselineCount; }
-    }
-    return (baselineCount > 0) ? baselineSum / static_cast<float>(baselineCount) : mean;
+    // The estimator itself lives in NoiseFloorEstimator.h so a test can drive
+    // it without a QApplication -- same reason the gate it feeds lives in
+    // NoiseFloorAutoAdjustGate.h. This stays as the QVector-shaped seam every
+    // call site here already uses.
+    return AetherSDR::estimateNoiseFloorDbm(
+        std::span<const float>(bins.constData(), static_cast<std::size_t>(bins.size())));
 }
 
 float SpectrumWidget::estimateKiwiSdrVisualNoiseFloorDbm(
@@ -4070,13 +4058,31 @@ bool SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
 
 void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
 {
-    // A FIXED-scale backend has no reference level to move: the floor is where
-    // its calibration puts it. Moving m_refLevel here would ratchet forever,
-    // because the loop only stops when the radio echoes the requested range
-    // back and there is nothing on the other end to echo. This is the gate that
-    // actually stops the runaway — the ones on the outbound command paths stop
-    // the traffic, but m_refLevel is local and would keep marching without this.
-    if (!m_radioOwnsDbmScale) {
+    // THE GATE. The loop needs something that makes it terminate, and there are
+    // two such things — a real echo from the radio, or bins that stay put while
+    // m_refLevel moves. Either alone is enough, so this is an OR and the early
+    // return fires only when NEITHER holds.
+    //
+    // With neither, m_refLevel ratchets forever: it is local, so the outbound
+    // command guards stop the traffic but not the march. That is the 24 dB/s
+    // runaway measured on an IC-9700.
+    //
+    // It is NOT enough to ask "does the radio own the scale". A Hermes-Lite 2
+    // owns nothing of the kind and its auto-floor still settles, because its
+    // bins are computed on this host: bench run d101 measured 0.307 dB of drift
+    // over 74 s quiescent and 0.0000 dB/s over the second half, and a re-settle
+    // within ~30 s after a 12 dB LNA step.
+    //
+    // WHY A MEASUREMENT ON AN HL2 SPEAKS FOR THE ANAN, which is the radio whose
+    // behaviour this change actually alters. The HL2's gate was ALREADY open
+    // before this — it leaves radioOwnsDbmScale at the permissive default — so
+    // d101 did not measure this change. What it measured is a loop running
+    // echo-free against absolute bins: RadioModel::sendCmd drops the range at
+    // hasCommandPlane() for the HL2 too, so no echo has ever come back there.
+    // That is exactly the ANAN's configuration once this merges, and it is the
+    // only reason a bench run on one radio carries to another. Raised by
+    // aethersdr-agent on #5726; the analogy was load-bearing and unstated.
+    if (!noiseFloorAutoAdjustAllowed(m_radioOwnsDbmScale, m_panBinsAbsolute)) {
         return;
     }
     if (noiseFloorAutoAdjustHeld(nowMs)) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "TxCoordinator.h"
 #include <QObject>
 #include <QByteArray>
 #include <QString>
@@ -51,8 +52,8 @@ public slots:
     // channel is the DAX channel number (1-8), only processes channel 1.
     void feedRxAudio(int channel, const QByteArray& pcm);
 
-    // Feed mic audio (24kHz stereo int16) for encoding.
-    void feedTxAudio(const QByteArray& pcm);
+    // Feed mic audio (24kHz stereo float32) for encoding.
+    void feedTxAudio(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
 
     // Request End-of-Over (EOO) transmission. Once requested, the engine
     // will finish processing any queued voice audio, then append the EOO
@@ -64,11 +65,11 @@ public slots:
     void setTxCallsign(const QString& callsign);
 
     // Flush TX encoder state (call on MOX release to prevent stale audio)
-    void resetTx();
+    void resetTx(const AetherSDR::TxCoordinator::Context& context = {});
 
 signals:
     void rxSpeechReady(const QByteArray& pcm);   // Decoded speech, 24kHz stereo int16
-    void txModemReady(const QByteArray& pcm);     // Encoded modem, 24kHz stereo int16
+    void txModemReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
     void eooFinished(quint64 requestId); // original request, after EOO and silence tail
     void syncChanged(bool synced);
     void snrChanged(float snrDb);
@@ -76,6 +77,7 @@ signals:
     void eooCallsignReceived(const QString& callsign);
 
 private:
+    TxCoordinator::Context m_txContext;
 #ifdef HAVE_RADE
     struct rade*         m_rade{nullptr};
     LPCNetEncState*      m_lpcnetEnc{nullptr};

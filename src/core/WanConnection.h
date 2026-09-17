@@ -101,6 +101,8 @@ private:
     void processLine(const QString& line);
 
     QSslSocket m_socket;
+    void resetSessionState();   // drop everything scoped to one TLS session
+
     QByteArray m_readBuffer;
     QTimer     m_heartbeat;
     QString    m_wanHandle;

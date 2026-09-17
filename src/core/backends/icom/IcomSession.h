@@ -1,4 +1,5 @@
 #pragma once
+#include "core/TxCoordinator.h"
 
 #include <QElapsedTimer>
 #include <QHostAddress>
@@ -99,17 +100,18 @@ public:
     void setCivAddress(std::uint8_t address) noexcept { m_params.civAddress = address; }
 
     // Send one CI-V frame. Frames are built by CivCodec's cmd* helpers.
-    void sendCiv(std::span<const std::uint8_t> frame);
+    void sendCiv(std::span<const std::uint8_t> frame,
+                 const std::optional<TxCoordinator::Command>& command = {});
     // Re-open only the RS-BA1 CI-V data pipe while retaining the authenticated
     // control and audio streams. The backend owns the bounded retry policy.
     [[nodiscard]] bool reopenCivPipe();
     // Queue transmit audio (mono float). Nothing leaves until a full 20 ms
     // frame is available — the radio's jitter buffer reads a short packet as a
     // discontinuity.
-    void sendAudio(std::span<const float> mono);
+    void sendAudio(std::span<const float> mono, const TxCoordinator::Context& context);
     // Complete the last 20 ms transport frame with silence. Returns bytes
     // appended; the normal TX pump still sends the completed frame on cadence.
-    [[nodiscard]] std::size_t padTxAudioToFrame();
+    [[nodiscard]] std::size_t padTxAudioToFrame(const TxCoordinator::Context& context);
     // Milliseconds of already-queued transmit audio still to be played: the
     // host queue at wire cadence, plus the TX buffer the radio was asked to
     // hold before its modulator. Measured from what is pending NOW, so a
@@ -218,6 +220,7 @@ private:
 
     CivReassembler m_civ;
     TxPacketizer m_tx;
+    TxCoordinator::Context m_txContext;
     RxAssembler m_rx;
 };
 

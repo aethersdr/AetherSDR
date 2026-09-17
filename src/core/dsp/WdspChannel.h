@@ -143,7 +143,137 @@ public:
                             std::span<float> outputLeft,
                             std::span<float> outputRight) noexcept;
 
+    // ── Start and stop, which are NOT teardown ────────────────────────────
+    //
+    // The T/R call. Stopping runs the Config mute envelope DOWN, flushes the
+    // chain, and leaves everything the channel owns in place: the FFTW plans,
+    // the filter masks, the notch database, the AGC and shift state, the noise
+    // blanker stage. Starting runs the envelope back up. Nothing is allocated
+    // or freed either way, which is the whole point — `allocationSequenceForTest()`
+    // does not move across a stop/start, and does move across a reconfigure().
+    //
+    // CloseChannel is not this and must not be used as this. It frees the
+    // channel, so a "stop" written as a close throws all of the above away and
+    // pays a rebuild to get it back — on this codebase that rebuild is FFTW
+    // planning (see loadWisdomOnce() in the .cpp), which is the expensive half
+    // of a connect. Closing is teardown, and this class does it in exactly one
+    // place: close(), reached from the destructor and from reconfigure().
+    //
+    // DMODE, and why a running stop cannot use the blocking form. WDSP's stop
+    // sets a down-slew flag and a flush flag, and clearing them takes TWO hops,
+    // not one: the next fexchange0/fexchange2 calls run the down-slew and
+    // release the channel's Sem_Flush when it completes (the ReleaseSemaphore
+    // calls at the tail of fexchange0/fexchange2, iobuffs.c), and WDSP's
+    // per-channel flushChannel thread wakes on that semaphore, flushes, and
+    // clears the flush flag (the tail of flushChannel, channel.c). Either way
+    // the drain
+    // starts on the thread that is feeding the channel, not inside
+    // SetChannelState, and a channel nobody is feeding can never finish it.
+    // The blocking form
+    // (dmode 1) is therefore correct only once the feed has been fenced off,
+    // which is what close() does behind beginControlOperation(). Called with
+    // the feed still live — and worse, from the feeding thread itself — it
+    // waits out its entire 100 ms timeout, then force-clears the flags and
+    // abandons the ramp, which is the click it exists to prevent. This takes
+    // the non-blocking form and lets processIq() play the ramp out.
+    //
+    // While stopped, processIq() still runs (that is what advances the ramp)
+    // and returns silence at the caller's normal cadence: once WDSP's exchange
+    // bit clears, fexchange2 writes nothing at all, so this class zeroes the
+    // output itself rather than letting the last block before the stop repeat.
+    //
+    // A START HAS NO CLOCKING PRECONDITION, and that took a vendored patch.
+    // Upstream's SetChannelState case 1 arms the up-slew but never clears
+    // slew.downflag, and the two flags are read independently on opposite sides
+    // of fexchange2 — up gates the input, down gates the output. So a start
+    // taken before the previous stop's ramp had been clocked out used to leave
+    // that ramp pending on a channel WDSP considered running; the next few
+    // blocks finished it, and downslew2's completion arm clears
+    // ch[].exchange, after which fexchange2 returns having touched nothing at
+    // all. The channel was silently dead, isRunning() said true, and only a
+    // reconfigure() recovered it. AetherSDR patch 7 (see
+    // third_party/wdsp/AETHERSDR-PATCHES.md) makes case 1 cancel a pending
+    // down-ramp first.
+    //
+    // That fixed the ramp that is still PENDING and nothing else, and this
+    // header said "safe at any spacing, including none" on the strength of it.
+    // THAT WAS TRUE ONLY FOR THE REGIME WE HAD TESTED — restarts inside the
+    // ramp — and false just outside it (K5PTB, review of #5628). A ramp that
+    // has COMPLETED has already released Sem_Flush, and the flushChannel
+    // thread sets exec_bypass whenever it next gets scheduled, which can be
+    // after case 1 has cleared it: the worker is then bypassed, so the channel
+    // produces nothing, or — in the blocking form — parks the host in
+    // fexchange2 forever on a semaphore the bypassed worker will never
+    // release. Measured on this tree, restarting with no gap at the spacing
+    // where the ramp completes: 42 of 440 non-blocking trials dead, and 20 of
+    // 20 blocking trials hung. Patch 8 waits that flush out before arming, and
+    // both are 0.
+    //
+    // AND A STOP FOLLOWED BY CLOCKING USED TO MAKE THE NEXT CLOSE A
+    // USE-AFTER-FREE, which is the other half of the same thread's story and
+    // took a third vendored patch (ten9876, review of #5628). A completed ramp
+    // makes flushChannel runnable; CloseChannel waited for the wdspmain worker
+    // and for nothing else, so destroy_main() freed the RXA chain while
+    // flushChannel was inside flush_rxa() on it. MEASURED: the shape stop ->
+    // clock -> destroy crashed 30 of 30 trials, against clean 15 of 15 for both
+    // stop -> destroy and never-stopped -> destroy; a 50 ms gap before the
+    // destroy was clean 30 of 30, which is what identifies the flush thread.
+    // AetherSDR patch 9 moves upstream's own flushChannel handshake out of
+    // destroy_iobuffs() and into pre_main_destroy(), so it runs BEFORE
+    // destroy_main() instead of after it. Pinned by
+    // runCloseAfterStoppedClockingTest.
+    //
+    // SO, PLAINLY, WHAT IS SAFE. With patches 7, 8 and 9 together: a stop/start
+    // pair is safe at any spacing including none, EXCEPT that the start may
+    // block up to WDSP's 100 ms timeout waiting for the flush thread — in
+    // practice under 3 ms, and 0 unless the previous stop's ramp was clocked
+    // out; and a stopped channel may be clocked for as long as the caller likes
+    // and then destroyed, with no ordering obligation on the caller.
+    //
+    // THAT LAST CLAUSE RESTS ON A PATCH, and it was false before it. Clocking a
+    // stopped channel completes the down-ramp, which leaves WDSP's flushChannel
+    // thread runnable; its flush_iobuffs() then drained the very token
+    // pre_main_destroy() posts to wake the worker, the worker parked forever,
+    // and destroy_iobuffs() closed that semaphore under a live waiter -- where
+    // glibc's pthread_cond_destroy() blocks and never returns. ten9876 measured
+    // it on #5628: 7 hangs in 16 runs under 8-way parallel load. Patch 4's wait
+    // loop now re-posts the token on every iteration, which closes it. See
+    // third_party/wdsp/AETHERSDR-PATCHES.md, patch 4.
+    //
+    // What is NOT claimed: none of this has run on hardware, the measurements
+    // behind it are synthetic probes rather than a T/R edge, and the hang above
+    // does not reproduce on macOS/arm64 at all -- 16 runs clean with the fix and
+    // 16 clean without it -- so that platform cannot confirm the fix, only that
+    // it causes no regression. Pinned by
+    // runRestartDuringRampTest, whose scenarios straddle the ramp, and by
+    // runCloseAfterStoppedClockingTest.
+    //
+    // Control-path work, guarded exactly like setMode(): returns false if a
+    // control operation is already in flight, and must not be called from
+    // processIq(). Setting the state it is already in is a no-op that succeeds.
+    //
+    // [[nodiscard]] because beginControlOperation() REFUSES rather than waits:
+    // a caller that ignores false has not stopped the channel and will silently
+    // pay close()'s 100 ms instead. Every owner in this tree calls this from the
+    // thread that drives processIq(), where a callback cannot be in flight, so
+    // today it cannot fail — the attribute is there to make it a compile error
+    // rather than a mystery if that ownership ever moves off that thread.
+    [[nodiscard]] bool setRunning(bool running) noexcept;
+    // TX only: discard queued samples and filter history without clocking a fade.
+    // Leaves the channel stopped, retaining its plans/configuration. Control-path
+    // operation: uses existing channel locks and refreshes the output semaphore.
+    // Refuses while a callback or an asynchronous fade/flush is outstanding.
+    [[nodiscard]] bool discardTransmitData() noexcept;
+    [[nodiscard]] bool isRunning() const noexcept
+    {
+        return m_running.load(std::memory_order_relaxed);
+    }
+
     // The caller must stop feeding processIq() before a control operation.
+    // Rebuilds the channel, and therefore DESTROYS what setRunning() preserves
+    // (the notch database most visibly — see addNotch()'s note). It does
+    // restore the running state it found, the way WDSP's own rebuilds do, so
+    // reconfiguring a stopped channel does not put it back on the air.
     bool reconfigure(const Config& config, std::string* error = nullptr) noexcept;
     bool setMode(Mode mode) noexcept;
     bool setFilter(double lowHz, double highHz) noexcept;
@@ -283,7 +413,19 @@ public:
 
     [[nodiscard]] const Config& config() const noexcept { return m_config; }
     [[nodiscard]] std::size_t outputBlockSize() const noexcept;
-    [[nodiscard]] int channelIdForTest() const noexcept { return m_channelId; }
+    // The WDSP channel number this object owns.
+    //
+    // A PRODUCTION ACCESSOR, despite the alias below. Two log lines read it --
+    // Hl2RxDsp::stop and AnanRxDsp's equivalent, both naming the channel in a
+    // warning an operator is expected to act on -- and a name ending in
+    // ForTest is precisely what a cleanup strips or wraps in an ifdef, which
+    // would take those log lines with it. Renamed on #5738 after
+    // aethersdr-agent noticed the two non-test callers.
+    [[nodiscard]] int channelId() const noexcept { return m_channelId; }
+
+    // Retained so the existing test call sites keep compiling. New code wants
+    // channelId(); this spelling says only "a test wrote it first".
+    [[nodiscard]] int channelIdForTest() const noexcept { return channelId(); }
 
     static uint64_t allocationSequenceForTest() noexcept;
     static uint64_t outstandingAllocationsForTest() noexcept;
@@ -337,6 +479,11 @@ private:
     std::atomic<unsigned> m_callbacksInFlight {0};
     std::atomic<bool> m_controlOperation {false};
     bool m_open = false;
+    // WDSP's channel state, mirrored. Atomic because processIq() consults it on
+    // the real-time path to decide whether it owns the output buffer this
+    // block, the same way it consults m_nbActive — the control handshake
+    // already orders the write, this keeps the read from being a data race.
+    std::atomic<bool> m_running {false};
 
     // ── Noise blanker state ───────────────────────────────────────────────
     //

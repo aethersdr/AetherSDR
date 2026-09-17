@@ -47,8 +47,8 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool) override {}
-    void setAtu(bool start) override { start ? ++atuStarts : ++atuBypasses; }
+    void setKeying(bool, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override {}
+    void setAtu(bool start, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { start ? ++atuStarts : ++atuBypasses; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
 };
 
@@ -135,6 +135,37 @@ static void receiveOnlyModeBlocksStart()
     check(f.backend->atuStarts == 1, "transmit mode: start dispatches once");
 }
 
+// The ATU cycle is not the only thing a receive-only mode withdraws.
+//
+// beginLocalTxActivity() runs refuseKeyInReceiveOnlyMode() for EVERY
+// TxActivity, ahead of the per-activity capability checks, so the plain TUNE
+// carrier goes with it — on every family, including one whose tune carrier is
+// raised in gateware and would have been perfectly clean (HL2's built-in test
+// tone at zero offset, PR #5680). Asserted rather than reasoned about: it is
+// the consequence an operator actually meets, and it needs its own fixture
+// because emitInterlockNotification() deduplicates an identical key for 5 s,
+// so a second refusal in the same fixture would be silent.
+//
+// The interlock key is what makes this discriminating: a TUNE stopped by the
+// PTT preflight or the CW-keyed tune admission raises pttBlocked and no
+// interlock at all, and would fail this rather than pass it.
+static void receiveOnlyModeBlocksTune()
+{
+    Fixture f(QStringLiteral("icom"), /*canTransmit=*/true, {QStringLiteral("WFM")});
+    f.setMode(QStringLiteral("WFM"));
+    f.radio.transmitModel().startTune();
+    check(!f.radio.transmitModel().isTuning(),
+          "receive-only mode: TUNE does not latch");
+    check(f.interlocks.contains(QStringLiteral("rx-only-mode:WFM")),
+          "receive-only mode: the TUNE refusal names the mode");
+    // Leaving the mode gives the carrier back.
+    f.setMode(QStringLiteral("USB"));
+    f.radio.transmitModel().startTune();
+    check(f.radio.transmitModel().isTuning(),
+          "transmit mode: TUNE latches again");
+    f.radio.transmitModel().stopTune();
+}
+
 static void panInhibitBlocksStart()
 {
     Fixture f(QStringLiteral("icom"), /*canTransmit=*/true);
@@ -178,6 +209,7 @@ int main(int argc, char** argv)
     permittedStartDispatchesOnce();
     receiveOnlyBackendBlocksStart();
     receiveOnlyModeBlocksStart();
+    receiveOnlyModeBlocksTune();
     panInhibitBlocksStart();
     flexUsesTheSameTypedPath();
     std::printf("%d failure(s)\n", failures);

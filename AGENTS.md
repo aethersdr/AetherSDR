@@ -3,13 +3,14 @@
 This is the canonical project guide for any AI assistant working on
 AetherSDR — Claude Code, OpenAI Codex, Cursor, GitHub Copilot, Gemini
 Code Assist, Aider, AetherClaude (our orchestrator bot), or any other
-tool. Each tool has its own well-known file at a different path
-(`CLAUDE.md`, `.github/copilot-instructions.md`, `GEMINI.md`,
-`CONVENTIONS.md`, etc.); those are thin pointers back here. Everything
-project-wide lives in **this** file.
+tool. Several of those tools look for their own well-known file at a
+different path (`CLAUDE.md`, `.github/copilot-instructions.md`,
+`GEMINI.md`); those are thin pointers back here, and a tool without one
+reads this file directly. Everything project-wide lives in
+**this** file.
 
 If you are an AI assistant: read this file end-to-end before writing
-code or recommending merges. The file is ~830 lines; that is the cost
+code or recommending merges. The file is ~1150 lines; that is the cost
 of doing the job right on this codebase.
 
 **This file is documentation, not policy.** It describes how to build
@@ -56,7 +57,7 @@ When helping with AetherSDR:
 - Use RAII everywhere (no naked new/delete)
 - Comment non-obvious protocol decisions with firmware version
 - When suggesting code: show **diff-style** changes or full function/class if small
-- Test suggestions locally if possible (assume Arch Linux build env)
+- Test suggestions locally if possible — the build must work on Linux, macOS and Windows
 - Never suggest Wine/Crossover workarounds — goal is native
 - Flag any proposal that would break slice 0 RX flow
 - If unsure about protocol behavior → ask for logs/wireshark captures first
@@ -205,8 +206,8 @@ is the sole authority on visual design and UX direction.
 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build -j$(nproc)
-./build/AetherSDR
+cmake --build build --parallel
+./build/AetherSDR          # Windows: build\AetherSDR.exe
 ```
 
 **Optional — DFNR (DeepFilterNet3) noise reduction.** Run
@@ -231,9 +232,9 @@ Drop `<feature>_test.cpp` into `tests/`, then declare its `add_executable` +
 `add_test` in **`tests/tests.cmake`**. There is no glob; every test is declared
 explicitly, so copy a neighbouring target's block.
 
-The root `CMakeLists.txt` held all 300+ of these until the split — over half its
-6,357 lines — so a stale doc, an old PR, or pattern-matching on the surrounding
-code will all point you at the wrong file. Two guards catch that: `tests.cmake`
+These all lived in the root `CMakeLists.txt` before the split, so a stale doc,
+an old PR, or pattern-matching on the surrounding code will all point you at
+the wrong file. Two guards catch that: `tests.cmake`
 aborts the CMake configure step, and `tools/check_test_registration.py --strict`
 fails the PR in CI.
 
@@ -304,9 +305,7 @@ not a socket, which is why it went unenumerated; #5405 review). Mining a retired
 *input data* for injected-transport tests is encouraged; running the fake as
 a live socket peer is not. Loopback mocks of documented HTTP APIs are a
 different trade — that contract is versioned and published; radio firmware
-behavior is not. (The example that used to sit here, `asr_remote_backend_test`,
-was one of eight removed for intermittency; see the note at the end of this
-section.)
+behavior is not.
 
 Socket tests where **our own server is the subject** (rigctld, CAT, the TCI
 server, the automation bridge's transport) remain legitimate: the code under
@@ -330,9 +329,7 @@ the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
 
 The version is stated in **five** places, and a release is not prepped until
-all five agree. This list is spelled out because it was previously described as
-"both `CMakeLists.txt` and `README.md`" — and v26.7.4.1 duly shipped with the
-other three stale:
+all five agree — check every row, not just the first two:
 
 | file | what to change |
 |---|---|
@@ -383,10 +380,6 @@ CI runs in Docker image `ghcr.io/aethersdr/aethersdr-ci:latest` (~5 min builds).
 corresponding `-dev` package to `.github/docker/Dockerfile` and push.** The
 `docker-ci-image.yml` workflow rebuilds the image automatically (~3 min); wait
 for that before the next CI run can use it.
-
-**`git ship`** alias — squashes local commits ahead of origin/main, creates a
-branch, pushes, opens a PR with auto-squash-merge enabled. Commit freely
-locally, then ship once.
 
 Branch protection: signed commits required on main, CI must pass, CODEOWNERS
 review required, branches auto-delete after merge.
@@ -543,16 +536,66 @@ remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.
 
+Step 4 has an engine-owned `TxCoordinator` and a transitional desktop actor;
+this is not yet per-client TX authorization. Flex primary keying and CWX text
+carry operation/batch fences to the original TCP writer. A queue-consumed
+callback ends local handoff only, never proves radio idle. Preserve normal
+operator reengagement, but use `finishLocalIntent()` rather than asserting a
+qualified stop: the coordinator retains that actor until matching stop evidence
+arrives. Uncorrelated RX status must not clear this handoff barrier. Preserve
+short key-down/key-up sequences, Quindar/RADE release tails, and held MOX when
+cancelling a CWX batch. Do not enable independent-client handoff or daemon TX
+until independent trusted grants and the qualified stop/recovery contract
+are complete. See `docs/aetherd-stage4-tx-coordinator.md`. This work does not
+widen `welcome`/capability serialization or replace #5598's RX PCM seam work.
+The bridge watchdog tracks its authorization-lifetime producer's original
+contributions with a monotonic, non-renewable deadline. A boolean keyed sample alone cannot establish ownership
+(CWX has QSK gaps); repeated commands must not renew that deadline. Deferred
+TX widget invocations retain the original input before queueing and
+claim only after admission. These are producer-isolation safeguards, not
+per-socket actor grants or qualified radio-idle evidence.
+
+Local producer contributions now use opaque `TxCoordinator::Intent` handles,
+not activity bits as ownership. Repeat admission reuses a producer's live
+handle. Mark release before callbacks/queueing, retain the captured handle
+until its normal tail is consumed, and end that handle only. Reengagement gets
+a distinct handle so an earlier completion cannot release it. The coordinator
+refuses local operation completion while any contribution remains. The six
+legacy desktop entry points retain compatibility slots, while `TxController`
+binds converted UI, device and bridge inputs to their actual producer. Capture
+before the first queued hop; derive scheduled elements from the original root,
+never from callback-time authority. Device close, authorization changes and
+reconnect fence stale work. Keep TX audio context through backend queues and
+retries. Producer identity still does not confer an independent actor grant.
+
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
-`AudioEngine::feedAudioData` — the `RadioModel::backendAudioFrameReady`
+`AudioEngine::feedPcmFrame` — the `RadioModel::backendAudioFrameReady`
 relay, and a direct connect in `wireBackendSeam()`. `FlexBackend` is
 structurally immune because it never emits `audioFrameReady` at all (audio
 rides `PanadapterStream`/VITA-49), so the "no double-feed" reasoning that
-holds for Flex stops holding for any in-process backend. Gate the relay on
-`backendOwnsRxAudio()`. `Qt::UniqueConnection` does **not** protect you here
-— they are two different signals arriving at the same slot, so nothing looks
-duplicate to Qt. The same shape exists on the spectrum side.
+holds for Flex stops holding for any in-process backend.
+
+**The two gates have opposite senses and are deliberately named apart — do
+not merge them.** The relay's gate is `MainWindow::backendFeedsEngineDirectly()`
+(`dynamic_cast<SimBackend*>`, `MainWindow_Session.cpp`): sim feeds the engine
+itself, so the relay returns early for sim and for nobody else. The direct
+connect in `wireBackendSeam()` is sim-only for the same reason, and *that* is
+the site whose gate belongs on "does this backend own its RX audio"
+(`MainWindow.cpp`). An HL2 is `ownsRxAudio() == true` **and** needs the relay,
+so delegating the relay to `backend()->ownsRxAudio()` swallows every HL2 frame
+and silences the speaker — the code says so at the function, citing the #4537
+review. `Qt::UniqueConnection` does **not** protect you at either site: at the
+relay they are two different signals arriving at the same slot, so nothing
+looks duplicate to Qt, and at `wireBackendSeam()` it cannot catch a lambda
+connect at all.
+
+The spectrum side had the same shape and was resolved differently — not with a
+gate but with one producer and one path: `spectrumFrameReady` is consumed by
+`RadioModel::onBackendSpectrumFrame` and re-emitted on the neutral `panFeed`
+path every backend already renders (`MainWindow.cpp`, "One producer, one
+path"). Drawing it a second time at the seam is what that comment exists to
+prevent.
 
 **Build targets (post-RFC step 1):**
 
@@ -648,11 +691,18 @@ you:
   **derived at runtime from the touchpoint audit**
   (`docs/architecture/aetherd-touchpoint-tags.json`, the single source of
   truth), so a header newly tagged `vendor` there is enforced without
-  editing the checker. The only permitted rebaseline is an intentional
+  editing the checker. **De-classification is pinned, and only that
+  direction.** `VENDOR_STEMS_PINNED` freezes today's 33 vendor stems: a stem
+  the audit no longer tags `vendor(...)` is a blocking `EB3-load` error naming
+  it, because that single edit would otherwise un-gate the header for every
+  file above the seam on a green run. Tagging a *new* header `vendor(...)`
+  arms more enforcement and needs no checker edit — arming must never cost a
+  second diff. The only permitted rebaseline is an intentional
   vocabulary-classification change: every newly tracked include must be proven
   to predate that classification against the merge base, the evidence must be
-  documented, and a maintainer must explicitly review the rebaseline. The
-  expanded set is shrink-only after classification.
+  documented, and a maintainer must explicitly review the rebaseline — and the
+  same evidence is what releases a stem from `VENDOR_STEMS_PINNED`, dropped in
+  that same commit. The expanded set is shrink-only after classification.
 - **Adding a radio feature?** Don't include the vendor class above the
   seam. Put the wire code in the family backend
   (`src/core/backends/<family>/`) and surface it through `IRadioBackend`
@@ -694,6 +744,55 @@ freezes today's above-seam vendor coupling and lets it be decoupled
 subsystem-by-subsystem. Converting a touchpoint still follows the claim
 protocol + before/after `tools/verify_slice0_rx.py` recipe; a converted
 file drops its vendor include and lowers its EB3 baseline.
+
+**Before you merge — the aetherd conformance checklist.** Every item below has
+a green CI run behind it, so a passing `Static checks` answers none of them.
+Whoever lands a PR in this territory — agent or human, author or reviewer —
+walks the list:
+
+1. **Run the four gates on the merge base *and* on the head, and diff the
+   findings per file** — not the exit codes. `check_engine_boundary.py
+   --strict`, `gen_touchpoint_manifest.py --check`,
+   `check_capability_records.py --strict`, `check_command_plane.py --strict`,
+   all stdlib Python and seconds each. Findings against tracked EB2/EB3
+   baselines *warn*; only a new violation or a grown baseline errors. EB2 is a
+   per-file **count**, so a lateral swap inside a tracked file — one QtWidgets
+   usage out, another in — passes flat.
+2. **A new `gui/`→engine include stops at "regenerate", not at "justify".**
+   `gen_touchpoint_manifest.py --check` *does* go red — the manifest records
+   per-header includer counts, so the table goes stale and the required
+   context fails. But regenerating clears it: commit the regenerated table and
+   the grown burndown is green, with nothing anywhere flagging that a
+   touchpoint was added. Diff the manifest between merge base and head. A new
+   row, or a row whose includer count went up, needs a justification in the PR
+   body, or it is a finding.
+3. **Regenerate the manifest; never hand-edit it.** Run
+   `python tools/gen_touchpoint_manifest.py` and commit the result. Editing the
+   generated table, or adding a tag so the table matches, falsifies the
+   burndown instead of fixing it.
+4. **A baseline edit is never how a check goes green — but a reduction is
+   required maintenance, not a finding.** Dropping a stem whose coupling the
+   PR actually removed (and deleting the row when it empties), lowering
+   `FROZEN_BOOL_COUNT` when a bool became a record, lowering a converted
+   file's command-plane count: all of those are demanded above, and a
+   conversion PR that does them is conforming, not weakening. What is
+   forbidden is the other direction — growing a baseline, adding a stem or a
+   row, or retagging a `vendor(...)` header. That last one un-gates the header
+   for every file above the seam, since EB3 derives its vocabulary from
+   `aetherd-touchpoint-tags.json` at runtime; it now fails as a blocking
+   `EB3-load` naming the stem rather than passing quietly, and the failure is
+   a design conversation, not a `VENDOR_STEMS_PINNED` edit. There, restructure
+   the change.
+   The two carveouts above (an EB3 vocabulary reclassification with merge-base
+   proof and explicit maintainer review; a `FROZEN_BOOL_COUNT` raise on a
+   maintainer ruling) are maintainer rulings carrying that evidence, never a
+   route to a passing check.
+5. **Touching a backend?** Read the THREADING AND LIFETIME CONTRACT in
+   `IRadioBackend.h` against the diff, and re-read the #5554 notice at the top
+   of "AI Agent Guidelines". What is pinned versus surveyed, and the probe to
+   carry into a test that drives a backend, are stated at the head of this
+   section — the point here is only that a survey result means reading is the
+   check, because no test will fail.
 
 ---
 
@@ -814,10 +913,16 @@ document why.
 
 **IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
 settings are stored via `AppSettings` (`src/core/AppSettings.h`), which
-persists to a **SQLite database** at `~/.config/AetherSDR/AetherSDR.db`
-(RFC #4603; design doc: `docs/settings-store-sqlite-design.md`). Key names use
-PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftFillColor`). Boolean
-values are stored as `"True"` / `"False"` strings.
+persists to a **SQLite database** named `AetherSDR.db` in
+`SettingsPaths::configDir()` — `QStandardPaths::GenericConfigLocation` +
+`/AetherSDR`, i.e. `~/.config/AetherSDR/` on Linux,
+`~/Library/Preferences/AetherSDR/` on macOS and `%LOCALAPPDATA%\AetherSDR\`
+on Windows. Always route store paths through `SettingsPaths`, never through
+`QStandardPaths` directly (RFC #4603; design doc:
+`docs/settings-store-sqlite-design.md`).
+Key names use PascalCase (e.g. `LastConnectedRadioSerial`,
+`DisplayFftFillColor`). Boolean values are stored as `"True"` / `"False"`
+strings.
 
 ```cpp
 auto& s = AppSettings::instance();

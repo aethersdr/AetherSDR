@@ -83,11 +83,6 @@ public:
     // taking Hl2Discovery::macToSerial's string would make this agree with that
     // function by construction, and drag the whole AppSettings layer into a
     // socket class that has no business knowing about settings.
-    //
-    // Unset accepts the first HL2 that answers, which is right for a
-    // single-radio bench and wrong the moment there are two -- so a caller that
-    // knows which radio it means should say so.
-    void setExpectedMac(const std::array<std::uint8_t, 6>& mac);
     void setLinkState(LinkState s);
     // Whether anything is actually looking at the telemetry. Only consulted in
     // NotConnected: polling a radio nobody is watching is pure wire cost.
@@ -146,7 +141,10 @@ private:
     QTimer* m_timer = nullptr;
     QHostAddress m_target;          // null = broadcast and take what answers
     QHostAddress m_lastResponder;
-    std::optional<std::array<std::uint8_t, 6>> m_expectedMac;
+    // Set from the FIRST accepted reply when no caller supplied a MAC, and
+    // cleared by setTarget(). It does not stop a stranger being believed once;
+    // it stops the responder changing underneath a live aim. See onReadyRead().
+    std::optional<std::array<std::uint8_t, 6>> m_latchedMac;
     bool m_allowBroadcast = false;   // see setTarget for why this is the default
     LinkState m_state = LinkState::NotConnected;
     bool m_surfaceVisible = false;

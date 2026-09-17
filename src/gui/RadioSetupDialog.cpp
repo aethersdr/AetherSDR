@@ -3671,7 +3671,9 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
     {
         auto* intro = new QLabel(
             "This radio's DDC has a real amplitude droop near the edges of the "
-            "displayed span, measured here rather than guessed. For the most "
+            "displayed span. A correction derived from the radio's own gateware "
+            "ships with AetherSDR and is applied automatically; sweeping here "
+            "measures YOUR radio and replaces it. For the most "
             "accurate correction, disconnect the antenna or terminate it in a "
             "dummy load before starting — the sweep measures the receiver's own "
             "noise floor as a flat reference, and a live signal during the "
@@ -3784,10 +3786,18 @@ QWidget* RadioSetupDialog::buildDroopCalibrationTab()
             const QVariantList corrections = state.value(QStringLiteral("corrections")).toList();
             for (const QVariant& value : corrections) {
                 const QVariantMap correction = value.toMap();
-                lines << QStringLiteral("%1 ksps: %2–%3 dB correction")
-                    .arg(correction.value(QStringLiteral("rateKsps")).toInt())
+                // Tag the source per rate. A partial sweep leaves the rest on
+                // the shipped default, and collapsing the two into one list
+                // would hide which is which -- see AnanBackend::droopStatus().
+                const bool measured =
+                    correction.value(QStringLiteral("source")).toString()
+                        == QLatin1String("measured");
+                lines << QStringLiteral("%1 ksps: %2–%3 dB  (%4)")
+                    .arg(correction.value(QStringLiteral("rateKsps")).toInt(), 4)
                     .arg(correction.value(QStringLiteral("minDb")).toDouble(), 0, 'f', 1)
-                    .arg(correction.value(QStringLiteral("maxDb")).toDouble(), 0, 'f', 1);
+                    .arg(correction.value(QStringLiteral("maxDb")).toDouble(), 0, 'f', 1)
+                    .arg(measured ? QStringLiteral("measured")
+                                  : QStringLiteral("shipped default"));
             }
         }
         summaryLbl->setText(lines.join(QStringLiteral("\n")));

@@ -11,6 +11,7 @@
 #include <complex>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 class QTimer;
@@ -166,6 +167,11 @@ signals:
     // connecting per-DDC signals.
     void ddcIqReady(int ddcIndex, const std::vector<std::complex<float>>& block);
     void dropsUpdated(quint64 totalDrops);
+    // This DDC's next IQ block is discontinuous, including accepted rewinds
+    // and duplicates. Emitted before ddcIqReady/ddc0IqReady in the same
+    // handleDatagram() call so direct consumers can clear partial FFTs first.
+    // Other DDCs have independent sequence counters and are unaffected.
+    void ddcSequenceGap(int ddcIndex);
     // This session's own Discovery reply -- the SAME radio start() already
     // sent a Discovery packet to, on this socket, per the class comment.
     // Emitted at most once per start(), whenever it happens to arrive
@@ -181,6 +187,9 @@ private slots:
     void onConnectTimeout();
 
 private:
+    friend struct P2ClientTestAccess;
+    void handleDatagram(std::span<const std::uint8_t> bytes, quint16 senderPort);
+
     // p.8: "a Command & Control packet must be sent at least every second
     // (every 100 mS is recommended). Should a C&C packet not be received,
     // and the hardware is in the RUN state, then the hardware will switch

@@ -16,6 +16,7 @@
 // Frames are injected through the same test seam icom_power_derivation_test
 // uses; no session, no UDP peer.
 #include "core/backends/icom/IcomCivBackend.h"
+#include "TxTestAuthority.h"
 
 #include <QCoreApplication>
 
@@ -99,6 +100,7 @@ void testCommandIsIntentAndReadbackIsState()
         return;
     }
 
+    TxTestAuthority authority;
     IcomCivBackend backend;
     IcomCivBackendTestAccess::prepareGeneration(backend, 1);
     IcomCivBackendTestAccess::selectModel(backend, *ic705);
@@ -112,7 +114,7 @@ void testCommandIsIntentAndReadbackIsState()
     });
 
     // ---- key-on: intent only -------------------------------------------
-    backend.setKeying(true);
+    backend.setKeying(true, authority.operation);
     check(moxPublications.empty(),
           "setKeying(true) publishes no transmit edge on its own");
     check(!IcomCivBackendTestAccess::keyed(backend),
@@ -150,7 +152,7 @@ void testCommandIsIntentAndReadbackIsState()
           "an unchanged keyed poll answer republishes nothing");
 
     // ---- unkey: intent only, but the contradiction is never swallowed ----
-    backend.setKeying(false);
+    backend.setKeying(false, authority.operation);
     check(moxPublications.size() == 1,
           "setKeying(false) publishes no transmit edge on its own");
     check(IcomCivBackendTestAccess::keyed(backend),
@@ -181,7 +183,7 @@ void testCommandIsIntentAndReadbackIsState()
           "TX audio is gated off once the radio reports RX");
 
     // ---- the key-on window is BOUNDED -----------------------------------
-    backend.setKeying(true);
+    backend.setKeying(true, authority.operation);
     check(IcomCivBackendTestAccess::audioGateOpen(backend),
           "a fresh key-on intent admits TX audio again");
     IcomCivBackendTestAccess::expirePendingIntentWindow(backend);
@@ -202,6 +204,7 @@ void testClientUnkeyClearsDerivedForwardPower()
         return;
     }
 
+    TxTestAuthority authority;
     IcomCivBackend backend;
     IcomCivBackendTestAccess::prepareGeneration(backend, 1);
     IcomCivBackendTestAccess::selectModel(backend, *ic9700);
@@ -226,7 +229,7 @@ void testClientUnkeyClearsDerivedForwardPower()
           "IC-9700 keyed readback publishes the keyed edge");
 
     forwardPowerCleared = false;
-    backend.setKeying(false);
+    backend.setKeying(false, authority.operation);
     check(forwardPowerCleared,
           "client-requested Icom unkey immediately clears derived forward power");
     check(moxPublications.size() == 1,

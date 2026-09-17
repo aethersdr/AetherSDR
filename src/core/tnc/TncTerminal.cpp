@@ -28,7 +28,9 @@ TncTerminal::TncTerminal(QObject* parent)
     // VHF default so a terminal that is never told otherwise still works.
     setLinkProfile(ax25::LinkTimingProfile::forBaud(1200));
 
-    connect(m_link, &Ax25Connection::sendFrame, this, &TncTerminal::transmitFrame);
+    connect(m_link, &Ax25Connection::sendFrame, this, [this](const QByteArray& frame) {
+        emit transmitFrame(frame, m_txProgram.derive());
+    });
     connect(m_link, &Ax25Connection::activity, this, &TncTerminal::onLinkActivity);
     connect(m_link, &Ax25Connection::connected, this, &TncTerminal::onLinkConnected);
     connect(m_link, &Ax25Connection::disconnected, this, &TncTerminal::onLinkDisconnected);

@@ -57,7 +57,7 @@ public:
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString& id, double hz, PanCenterIntent) override { panId = id; record("center", {{"hz", hz}}); }
     void setPanBandwidth(const QString& id, double hz) override { panId = id; record("bandwidth", {{"hz", hz}}); }
-    void setKeying(bool) override { ++keys; }
+    void setKeying(bool, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { ++keys; }
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
     void record(const QString& name, const QJsonObject& values) { ++intents; method = name; args = values; }
 };

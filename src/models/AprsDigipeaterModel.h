@@ -2,6 +2,7 @@
 
 #include "core/aprs/AprsFillInDigipeater.h"
 #include "core/aprs/AprsBeacon.h"
+#include "core/TxCoordinator.h"
 #include <QQueue>
 
 namespace AetherSDR {
@@ -14,13 +15,16 @@ class AprsDigipeaterModel : public QObject {
 public:
     explicit AprsDigipeaterModel(QObject* parent = nullptr);
     using Stats = AprsFillInDigipeater::Stats;
-    struct PendingFrame { QByteArray raw; bool digi{false}; };
+    struct PendingFrame { QByteArray raw; bool digi{false}; TxCoordinator::Request input; };
     static constexpr int kMaxQueueDepth = 64;
     bool isEnabled() const { return m_enabled; }
     void setEnabled(bool on);
+    void setTransmitProgram(const TxCoordinator::Request& input)
+    { m_txProgram = input; m_beacon.setTransmitProgram(input); }
     void setBaud(int baud);
     void receiveFrame(const QByteArray& raw);
-    void enqueue(const QByteArray& raw, bool digi = false);
+    void enqueue(const QByteArray& raw, bool digi = false,
+                 const TxCoordinator::Request& input = {});
     bool isEmpty() const { return m_queue.isEmpty(); }
     int size() const { return m_queue.size(); }
     void clear() { m_queue.clear(); }
@@ -54,6 +58,7 @@ signals:
     void disarmed();
     void activity(const QString& line);
 private:
+    TxCoordinator::Request m_txProgram;
     AprsFillInDigipeater m_engine;
     AprsBeacon m_beacon;
     QQueue<PendingFrame> m_queue;

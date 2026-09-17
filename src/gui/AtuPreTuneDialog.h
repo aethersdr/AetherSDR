@@ -2,6 +2,8 @@
 
 #include <QDialog>
 #include <QVector>
+#include <QPointer>
+#include "models/TxController.h"
 
 class QCheckBox;
 class QComboBox;
@@ -36,6 +38,7 @@ public:
     AtuPreTuneDialog(RadioModel* radio,
                      BandPlanManager* bandPlan,
                      QWidget* parent = nullptr);
+    ~AtuPreTuneDialog() override;
 
     void setFramelessMode(bool on);
 
@@ -43,6 +46,7 @@ protected:
     void closeEvent(QCloseEvent* ev) override;
 
 private:
+    friend class TxAppletPowerReconciliationTestAccess;
     // One band row in the band picklist.
     struct BandRow {
         QString name;               // "160m", "80m", …
@@ -67,6 +71,9 @@ private:
     QString selectedLicenseClass() const;
     QVector<double> centersForBand(const BandRow& row) const;
     void onStartClicked();
+    void startSweep(const std::shared_ptr<TxController>& controller, const TxController::Input& input);
+    void cancelProgram(bool restore = false);
+    void configureTxActions();
     void onTuneClicked();
     void onSkipClicked();
     void onAbortClicked();
@@ -76,13 +83,17 @@ private:
     void beginNextPoint();
     void requestTuneNow();
     void finishSweep(const QString& summaryExtra = {});
-    void restoreOriginalFrequency();
+    void restoreOriginalFrequency(const std::shared_ptr<TxController>& controller);
     void setStepControlsEnabled(bool enabled);
     void showFailControls(bool failBypass);
     void setAbortButtonAbortMode();
     void setAbortButtonCloseMode();
 
-    RadioModel*       m_radio{nullptr};
+    QPointer<RadioModel> m_radio;
+    std::shared_ptr<TxController> m_programController;
+    TxController::Input m_programInput;
+    TxController::Input m_pointInput;
+    bool m_preparingSweep{false};
     BandPlanManager*  m_bandPlan{nullptr};
 
     QWidget*     m_titleBar{nullptr};

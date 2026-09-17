@@ -1,4 +1,5 @@
 #pragma once
+#include "core/TxCoordinator.h"
 
 #include "core/tnc/Ax25.h"
 #include "core/tnc/Ax25LinkTiming.h"
@@ -30,6 +31,7 @@ class PmsMailbox : public QObject {
     Q_OBJECT
 
 public:
+    void setTransmitProgram(const TxCoordinator::Request& input) { m_txProgram = input; }
     struct Message {
         int id{0};
         QChar type{QLatin1Char('P')}; // 'P' private, 'B' bulletin
@@ -141,13 +143,15 @@ public slots:
 
 signals:
     // A raw AX.25 frame (address..info, no FCS) to key on the air.
-    void transmitFrame(const QByteArray& rawNoFcs);
+    void transmitFrame(const QByteArray& rawNoFcs,
+                       const AetherSDR::TxCoordinator::Request& input);
     // Human-readable activity for the AetherModem log.
     void activity(const QString& message);
     // Connection/state/stats changed — the GUI should refresh its Mailbox panel.
     void stateChanged();
 
 private:
+    TxCoordinator::Request m_txProgram;
     void onLinkConnected(const ax25::Address& peer);
     void onLinkDisconnected(const ax25::Address& peer, bool byPeer);
     void onLinkData(const QByteArray& data);
@@ -181,11 +185,12 @@ private:
     QString messagesPath() const;
     QString callersPath() const;
     QString heardPath() const;
-    void ensureStorageDir() const;
+    bool ensureStorageDir() const;
     void loadAll();
-    void saveMessages() const;
-    void saveCallers() const;
-    void saveHeard() const;
+    bool saveMessages(const QVector<Message>& messages, int nextId);
+    bool saveCallers(const QVector<Caller>& callers);
+    bool saveHeard(const QVector<Heard>& heard);
+    void reportPersistenceFailure(const QString& store, const QString& detail);
 
     // Cap on unterminated inbound text. paclen tops out at 256 bytes and a
     // mailbox command is a few dozen characters, so anything approaching this

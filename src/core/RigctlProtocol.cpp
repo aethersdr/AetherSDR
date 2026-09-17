@@ -227,10 +227,18 @@ QString antMaskToName(int mask, const QStringList& available)
 
 RigctlProtocol::RigctlProtocol(RadioModel* model)
     : m_model(model)
+    , m_txProducer(model ? model->registerTxProducer() : TxCoordinator::Producer{})
 {}
 
 RigctlProtocol::~RigctlProtocol()
 {
+    m_txProducer.invalidate(); // fences queued key-on before any teardown callback
+    if (m_model) {
+        QMetaObject::invokeMethod(m_model, [model = m_model, request = m_pttRequest, cwx = m_cwxRequest] {
+            (void)model->setProducerTransmit(request, false);
+            model->abortProducerCwx(cwx);
+        }, Qt::QueuedConnection);
+    }
     // Client dropped without a clean set_split_vfo 0 (e.g. WSJT-X quit): best-effort
     // remove the TX slice we created on demand so it isn't orphaned. Safe if it's
     // already gone or never existed.
@@ -954,7 +962,19 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
     // create-on-demand window too.
     const bool splitActive = clientSplitActive(/*includePending=*/true);
 
-    QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx, splitActive]() {
+    if (tx && !m_pttRequest.valid()) {
+        m_pttRequest = m_txProducer.request();
+    }
+    const TxCoordinator::Request request = m_pttRequest;
+    if (!tx) {
+        m_pttRequest = {};
+    } else if (!request.valid()) {
+        return rprt(-1);
+    }
+    QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx, splitActive, request]() {
+        if (tx && !request.valid()) {
+            return;
+        }
         // Non-split: ensure this protocol's bound slice is the TX slice so the
         // correct slice is used for transmission. Split: leave the split TX slice
         // (VFOB) keyed — do NOT seize TX back to the RX slice.
@@ -969,7 +989,7 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
             if (slice && !slice->isTxSlice())
                 slice->setTxSlice(true);
         }
-        model->setTransmit(tx, TransmitModel::PttSource::Dax);
+        (void)model->setProducerTransmit(request, tx, TransmitModel::PttSource::Dax);
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -1736,8 +1756,12 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
     // CwxModel::transmissionRequested) fires alongside the radio command.
     // Going through sendCmdPublic directly would silently bypass the
     // sidetone path used by the MIDI key and CWX panel. (#2909)
-    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
-        model->cwxModel().send(text);
+    if (!m_cwxRequest.valid()) {
+        m_cwxRequest = m_txProducer.request();
+    }
+    const TxCoordinator::Request request = m_cwxRequest;
+    QMetaObject::invokeMethod(m_model, [model = m_model, text, request]() {
+        model->requestProducerCwx(request, text);
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -1751,8 +1775,10 @@ QString RigctlProtocol::cmdStopMorse()
     if (!m_model->hasRadioSideCwKeyer()) return rprt(-11);
     // CwxModel::clearBuffer emits transmissionCancelled, which cuts any
     // in-flight local sidetone in addition to sending "cwx clear". (#2909)
-    QMetaObject::invokeMethod(m_model, [model = m_model]() {
-        model->cwxModel().clearBuffer();
+    const TxCoordinator::Request request = m_cwxRequest;
+    m_cwxRequest = {};
+    QMetaObject::invokeMethod(m_model, [model = m_model, request]() {
+        model->abortProducerCwx(request);
     }, Qt::QueuedConnection);
     return rprt(0);
 }

@@ -9,6 +9,7 @@
 #include "core/AppSettings.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Bands.h"
+#include "core/backends/hl2/Hl2TxLevelPolicy.h"
 
 #include "core/backends/SliceDelta.h"
 
@@ -876,6 +877,22 @@ int main(int argc, char** argv)
         backend.setMicGain(150);
         check(micLevelIn(backend.currentOperatingState()) == 100,
               "an out-of-range level is clamped before it can be captured");
+
+        // THE CURVE IS STAMPED BESIDE THE LEVEL, and that is what makes the
+        // curve-1 migration one-shot rather than a ratchet. The arithmetic is
+        // deliberately NOT idempotent — hl2_tx_level_policy_test pins
+        // micLevelFromCurve1(micLevelFromCurve1(100)) == 63 — so a document
+        // that went back to disk without its stamp would be re-migrated on the
+        // next connect and again on the one after: 80 -> 65 -> 58 -> 54 -> 52
+        // -> 51, an operator's +12 dB walking down to +0.8 dB over five
+        // launches with nothing on the panel to say why. Nothing else in the
+        // suite notices if this key stops being written.
+        const QJsonObject stamped = backend.currentOperatingState()
+                                        .extension.value(QStringLiteral("txSetpoints"))
+                                        .toObject();
+        check(stamped.value(QStringLiteral("micLevelCurve")).toInt(-1)
+                  == hl2::kMicLevelCurve,
+              "the capture stamps the mic curve beside the level");
     }
 
     // ---- a restore does not fake the modulator's mirror --------------------

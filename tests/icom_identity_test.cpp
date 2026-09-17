@@ -12,6 +12,7 @@
 #include <QTimer>
 #include <QTemporaryDir>
 #include <cstdio>
+#include <optional>
 
 using namespace AetherSDR;
 using namespace AetherSDR::icom;
@@ -53,6 +54,13 @@ struct IcomCivBackendTestAccess {
     // right — is the unkey INTENT and the address it was sent to.
     static bool unkeyIntended(const IcomCivBackend& b)
     { return b.m_pendingPttIntent && !*b.m_pendingPttIntent; }
+    static void dispatchReady(IcomCivBackend& b)
+    {
+        // A command's enqueue time can cross the millisecond sampled by its
+        // immediate pump. Advance the existing socket-free dispatch seam,
+        // without assuming the whole identity callback fits in one tick.
+        b.pumpCiv(b.nowMs());
+    }
     static void advertise(IcomCivBackend& b, std::uint8_t address)
     { b.m_session->m_advertisedCivAddress = address; }
     static void enableWake(IcomCivBackend& b, uint modelId)
@@ -119,6 +127,9 @@ int main(int argc, char** argv)
     check(IcomSettings::wakeOnConnect(), "wake policy round-trips through the Icom document");
     IcomSettings::setWakeOnConnect(false);
     AudioEngine audio;
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const auto operation = coordinator.acquire(coordinator.registerActor({true, 0}), TxCoordinator::monotonicMs()).operation;
+    const auto context = coordinator.mediaContext(coordinator.registerProducer(), operation);
     IcomCivBackend backend;
     QString nickname;
     QStringList antennas;
@@ -142,12 +153,20 @@ int main(int argc, char** argv)
         audio.applyBackendAudioCapabilities(backend.isConnected(), backend.capabilities(),
                                             false, {});
     });
+    // The source of the last frame that reached the seam, so each entry point's
+    // tag is asserted BEHAVIOURALLY rather than by reading the source file.
+    // AGENTS.md prefers this to a grep, and the cost here is one variable:
+    // AudioEngine.cpp is in CORE_SOURCES and therefore inside aethercore, which
+    // this target already links, and it is standing up a real AudioEngine with
+    // hostModulation() true a few lines above.
+    std::optional<TxAudioSource> lastSource;
     QObject::connect(&audio, &AudioEngine::txFinalMonitorPcmReady,
-                     [&](const QByteArray& pcm, bool clientLeveled) {
-        check(pcm.size() == 1920 && clientLeveled, "TCI stereo PCM reaches the backend seam intact");
+                     [&](const QByteArray& pcm, TxAudioSource source) {
+        check(pcm.size() == 1920, "TCI stereo PCM reaches the backend seam intact");
+        lastSource = source;
         ++audioFrames;
         // The real Icom submission gate must drop this while unkeyed.
-        backend.submitTxAudio(pcm, 24000, clientLeveled);
+        backend.submitTxAudio(pcm, 24000, source, context);
     });
     const QByteArray pcm(960 * sizeof(float), '\0');
     for (const QString& name : {QStringLiteral("Shack portable"), QStringLiteral("IC-7300MK2"),
@@ -158,7 +177,7 @@ int main(int argc, char** argv)
         check(nickname == (name.isEmpty() ? QStringLiteral("Unknown Icom") : name),
               "the network name remains presentation text");
         const int before = audioFrames;
-        audio.feedDaxTxAudio(pcm);
+        audio.feedDaxTxAudio(pcm, context);
         check(audioFrames == before, "unidentified backend cannot receive TCI PCM");
         // IC-705 model ID A4 at customized bus address 94 (IC-7300's default).
         IcomCivBackendTestAccess::inject(backend, "fefee0941900a4fd");
@@ -170,13 +189,43 @@ int main(int argc, char** argv)
         check(nickname == (name.isEmpty() ? QStringLiteral("IC-705") : name),
               "identification preserves the nickname or supplies the empty-name fallback");
         check(!preamps.isEmpty(), "late identity publishes the front-end controls");
-        audio.feedDaxTxAudio(pcm);
+        audio.feedDaxTxAudio(pcm, context);
         check(audioFrames == before + 1, "late identification enables actual TCI PCM delivery");
+        // #4796: the client owns its level, so the seam must say ClientLeveled.
+        check(lastSource == TxAudioSource::ClientLeveled,
+              "feedDaxTxAudio tags TCI/DAX audio ClientLeveled");
         const int published = publications;
         IcomCivBackendTestAccess::inject(backend, "fefee0941900a4fd");
         check(publications == published, "duplicate ID confirmation is inert");
         check(!audio.isTxStreaming(), "TCI-only operation does not open microphone capture");
     }
+    // ---- WHICH ENTRY POINT TAGS AUDIO AS WHAT, checked by running it ----
+    //
+    // The tag decides whether Hl2TxDsp applies the mic slider, and a mis-tag is
+    // silent on the air. feedDaxTxAudio's ClientLeveled is asserted in the loop
+    // above; this is the other reachable one.
+    //
+    // sendModemTxAudio is the AX.25 modem's path. It must be Microphone, NOT
+    // EngineGenerated: the AFSK amplitude is a compile-time constant
+    // (kTxAfskAmplitude = 0.35) and the packet dialog has no level control, so
+    // the mic slider is the only thing in the product that can move a packet
+    // frame. Tagging it EngineGenerated bypasses that slider and pins HF packet
+    // 7.71 dB under the HL2's ALC target with nothing able to raise it.
+    {
+        const int before = audioFrames;
+        lastSource.reset();
+        audio.sendModemTxAudio(pcm, context);
+        check(audioFrames == before + 1,
+              "sendModemTxAudio reaches the seam on a host-modulating backend");
+        check(lastSource == TxAudioSource::Microphone,
+              "sendModemTxAudio tags modem audio Microphone, so the mic slider"
+              " still reaches an AX.25 frame");
+    }
+    // EngineGenerated has one producer, AudioEngine::startWsprPump(), and
+    // reaching it here would need a prepared beacon and a timer tick for a
+    // 111.6 s frame. It is pinned at its call site by tx_audio_source_wiring_test
+    // instead, and that gap is named there rather than papered over.
+
     IcomCivBackendTestAccess::connect(backend, "Desktop");
     IcomCivBackendTestAccess::timeout(backend);
     IcomCivBackendTestAccess::inject(backend, "fefee0501900b6fd");
@@ -215,6 +264,7 @@ int main(int argc, char** argv)
     IcomCivBackendTestAccess::inject(backend, "fefee0501900a4fd");
     IcomCivBackendTestAccess::markKeyed(backend);
     IcomCivBackendTestAccess::inject(backend, "fefee0511900a4fd");
+    IcomCivBackendTestAccess::dispatchReady(backend);
     // The unkey must LEAVE, and it must leave for the destination this session
     // already selected — not the conflicting responder that just arrived.
     // m_keyed itself stays radio-authoritative until the 1C 00 readback (#5311).
@@ -227,7 +277,7 @@ int main(int argc, char** argv)
               && !backend.capabilities().canTransmit && !audio.hostModulation(),
           "two responders with the SAME model ID revoke identity and the audio route");
     const int before = audioFrames;
-    audio.feedDaxTxAudio(pcm);
+    audio.feedDaxTxAudio(pcm, context);
     check(audioFrames == before, "capability withdrawal stops TCI PCM delivery");
     IcomCivBackendTestAccess::inject(backend, "fefee0501900a4fd");
     check(!backend.capabilities().canTransmit, "late duplicate cannot undo ambiguous-bus rejection");
