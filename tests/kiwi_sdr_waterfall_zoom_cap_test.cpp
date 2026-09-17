@@ -10,8 +10,8 @@
 // even noise with no signals (kphsdr.com:8075, 2026-09-12, start 7914826 ->
 // 989353 after "zoom_cap = 11"). Socket-free: no socket is bound, listened
 // to or connected; the transport seam is injected, frames enter through
-// handleWaterfallFrame(), and the status preflight that connectToEndpoint()
-// schedules is never serviced (no event loop runs). Production metadata
+// handleWaterfallFrame(), and the HTTP status preflight is overridden before
+// it can create a network manager or dispatch work. Production metadata
 // handling and request encoding run unchanged.
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
@@ -24,6 +24,7 @@
 #include <QVector>
 
 #include <cmath>
+#include <cfenv>
 
 namespace AetherSDR {
 
@@ -286,10 +287,40 @@ public:
                         << m_waterfallRequestStart << zoomLines();
             return fail("zoom_max=11 alone no longer drives the 2^21 scale");
         }
+        // Large finite values must be bounded before rounding and narrowing.
+        // Exercise each key independently, including values beyond long's
+        // range, without accepting FE_INVALID as a successful conversion.
+        const struct {
+            const char* value;
+            int expected;
+        } zoomValues[] = {
+            {"0", 0}, {"20", 20}, {"21", 20}, {"-1", 0},
+            {"10.49", 10}, {"10.5", 11},
+            {"2147483648", 20}, {"4294967296", 20},
+            {"1e100", 20}, {"-1e100", 0},
+        };
+        for (const char* key : {"zoom_max", "zoom_cap"}) {
+            for (const auto& zoomValue : zoomValues) {
+                std::feclearexcept(FE_ALL_EXCEPT);
+                handleTextMessage(StreamKind::Waterfall,
+                    QStringLiteral("MSG %1=%2")
+                        .arg(QString::fromLatin1(key),
+                             QString::fromLatin1(zoomValue.value)));
+                const int actual = QString::fromLatin1(key) == QLatin1String("zoom_max")
+                    ? m_waterfallZoomMax : m_waterfallZoomCap;
+                if (actual != zoomValue.expected || std::fetestexcept(FE_INVALID)) {
+                    qCritical() << key << zoomValue.value << "parsed as" << actual;
+                    return fail("finite zoom metadata was not bounded before conversion");
+                }
+            }
+        }
         return true;
     }
 
 protected:
+#ifdef HAVE_WEBSOCKETS
+    void startStatusPreflight(const QUrl&) override { ++preflightsSuppressed; }
+#endif
     bool waterfallTransportConnected() const override { return true; }
     void sendWaterfallCommand(const QString& command) override
     {
@@ -297,11 +328,19 @@ protected:
     }
 
 private:
-    // connectToEndpoint() is the production per-connection reset; it only
-    // leaves a status preflight pending, which this test never services.
+    // Exercise the production reset, but inject the HTTP transport boundary.
     bool resetConnectionState()
     {
+#ifdef HAVE_WEBSOCKETS
+        const int previousPreflights = preflightsSuppressed;
+#endif
         connectToEndpoint(QStringLiteral("example.invalid:8073"), QString());
+#ifdef HAVE_WEBSOCKETS
+        if (preflightsSuppressed != previousPreflights + 1
+            || m_statusNetworkAccessManager || m_statusReply) {
+            return fail("connection reset did not use the injected HTTP preflight");
+        }
+#endif
         commands.clear();
         return m_waterfallZoomMax == 14 && m_waterfallZoomCap == 14
             && !m_waterfallZoomMaxFromServer && !m_waterfallZoomCapFromServer
@@ -379,6 +418,9 @@ private:
         return false;
     }
     QStringList commands;
+#ifdef HAVE_WEBSOCKETS
+    int preflightsSuppressed{0};
+#endif
     int rowsSeen{0};
     double rowLowMhz{-1.0};
     double rowHighMhz{-1.0};

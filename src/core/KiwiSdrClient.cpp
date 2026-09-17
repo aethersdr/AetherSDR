@@ -2624,8 +2624,10 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                 continue;
             }
             const int previousZoomMax = m_waterfallZoomMax;
-            m_waterfallZoomMax = std::clamp(
-                static_cast<int>(std::lround(value)), 0, 20);
+            // Bound the floating-point value before rounding/narrowing:
+            // finite metadata can still exceed both long and int ranges.
+            m_waterfallZoomMax = static_cast<int>(
+                std::lround(std::clamp(value, 0.0, 20.0)));
             m_waterfallZoomMaxFromServer = true;
             if (!m_waterfallZoomCapFromServer) {
                 m_waterfallZoomCap = m_waterfallZoomMax;
@@ -2645,8 +2647,8 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
             if (!std::isfinite(value)) {
                 continue;
             }
-            m_waterfallZoomCap = std::clamp(
-                static_cast<int>(std::lround(value)), 0, 20);
+            m_waterfallZoomCap = static_cast<int>(
+                std::lround(std::clamp(value, 0.0, 20.0)));
             m_waterfallZoomCapFromServer = true;
             // Before the server's zoom_max is known the scale is only the
             // seed, so a request now would repeat the bug transiently on a

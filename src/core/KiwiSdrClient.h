@@ -160,6 +160,10 @@ protected:
     // Transport seam for socket-free validation of waterfall command ordering.
     virtual bool waterfallTransportConnected() const;
     virtual void sendWaterfallCommand(const QString& command);
+#ifdef HAVE_WEBSOCKETS
+    // Keep connection-state tests off the HTTP worker as well as WebSockets.
+    virtual void startStatusPreflight(const QUrl& url);
+#endif
 
 private:
     PcmProducer m_pcmProducer;
@@ -284,7 +288,6 @@ private:
 
 #ifdef HAVE_WEBSOCKETS
     void handleSocketError(const QString& detail, bool transportEstablished);
-    void startStatusPreflight(const QUrl& url);
     void handleStatusPreflightFinished(QNetworkReply* reply);
     void openWebSockets();
     bool retryWithSecureWebSocket(bool transportEstablished);
