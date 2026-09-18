@@ -359,7 +359,7 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     addStage(Tube, QStringLiteral("Tube"), buildStagePage(m_tube));
 
     m_voice = new StripPuduPanel(audio, this);
-    addStage(Voice, QStringLiteral("AetherVoice"), buildStagePage(m_voice));
+    addStage(Voice, QStringLiteral("Exciter"), buildStagePage(m_voice));
 
     // Output and waveform share the last tab: the meter is what you read and
     // the waveform is what you read it against, so splitting them would mean
@@ -822,14 +822,14 @@ void AetherRxDialog::syncFromEngine()
 
 void AetherRxDialog::selectTab(const QString& name)
 {
-    // Both spellings resolve. The two stages were AGC-G and AGC-C until the
-    // tabs were renamed, and callers elsewhere — plus anything driving this
-    // window through the automation bridge — still say those.
+    // Both spellings resolve. These stages were AGC-G, AGC-C and AetherVoice
+    // until the tabs were renamed, and callers elsewhere — plus anything
+    // driving this window through the automation bridge — still say those.
     static const struct { Stage stage; const char* label; } kStages[] = {
         {Nr, "AetherNR"},   {Gate, "Gate"},        {Eq, "EQ"},
-        {Comp, "Compressor"}, {Tube, "Tube"},      {Voice, "AetherVoice"},
+        {Comp, "Compressor"}, {Tube, "Tube"},      {Voice, "Exciter"},
         {Output, "Out"},
-        {Gate, "AGC-G"},    {Comp, "AGC-C"},
+        {Gate, "AGC-G"},    {Comp, "AGC-C"},      {Voice, "AetherVoice"},
     };
     for (const auto& entry : kStages) {
         if (name.compare(QLatin1String(entry.label), Qt::CaseInsensitive) != 0) {

@@ -106,7 +106,7 @@ void ClientPuduApplet::buildUI()
     // ── Logo ────────────────────────────────────────────────────
     m_logo = new PooDooLogo;
     m_logo->setMinimumHeight(40);
-    m_logo->setWordmark(QString::fromUtf8("AetherVoice\xe2\x84\xa2"));
+    m_logo->setWordmark(QStringLiteral("Exciter"));
     outer->addWidget(m_logo);
 
     // ── A/B mode toggle ─────────────────────────────────────────

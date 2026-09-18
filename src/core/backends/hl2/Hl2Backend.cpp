@@ -3936,7 +3936,7 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                               << "of 100 with only" << travelLeftDb
                               << "dB of travel left — the slider cannot close"
                                  " this. Raise the microphone's own level"
-                                 " (AetherVoice input gain, or the mic's own"
+                                 " (Exciter input gain, or the mic's own"
                                  " control) instead.";
             }
         }

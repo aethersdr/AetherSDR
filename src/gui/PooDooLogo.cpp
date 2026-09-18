@@ -104,7 +104,7 @@ void PooDooLogo::paintEvent(QPaintEvent*)
         : m_wordmark;
 
     // Size off the height, then take it back down until it fits the width.
-    // The mark is set per instance — "PooDoo™" on the applet, "AetherVoice™"
+    // The mark is set per instance — "PooDoo™" on some surfaces, "Exciter"
     // on the strip panel — and height alone sized the longer one straight off
     // both edges of the widget, losing its first and last glyph. Advance is
     // near-linear in pixel size, so one proportional correction lands it; the

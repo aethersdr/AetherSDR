@@ -110,10 +110,10 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
 
     // ── Logo (big in the editor) ────────────────────────────────
     m_logo = new PooDooLogo;
-    // Strip-side rebrand — the docked applet keeps the legacy
-    // "PooDoo™" mark; this strip panel uses the operator-facing
-    // marketing name.
-    m_logo->setWordmark(QString::fromUtf8("AetherVoice\xe2\x84\xa2"));
+    // No ™: "Exciter" names what the stage does — it synthesises harmonics
+    // that were not in the signal — rather than carrying a brand, and a
+    // trademark sign on a common noun reads as a mistake.
+    m_logo->setWordmark(QStringLiteral("Exciter"));
     m_logo->setMinimumHeight(80);
     // ...and a ceiling. Nothing else in this column can grow — the mode
     // buttons and the knobs are all fixed — so without one the logo took
