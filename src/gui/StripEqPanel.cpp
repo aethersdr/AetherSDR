@@ -344,14 +344,6 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     // the only thing that grows: without this it swallows every pixel the
     // window has, and 15% of a tall graph buys nothing a shorter one does not
     // already show. The other 15 goes to a spacer at the foot of the column.
-    // 94, not 85: the param row grew by 8 px to stop clipping its readings
-    // and the output fader moved under the graph for another 34, both out of
-    // this same pool. Nudging the split keeps the graph roughly the height it
-    // was and takes the difference off the spacer, which is the one thing
-    // here with nothing to show.
-    constexpr int kCanvasStretch = 94;
-    constexpr int kSlackStretch = 100 - kCanvasStretch;
-
     m_canvas = new ClientEqEditorCanvas;
     m_canvas->setObjectName(QStringLiteral("stripEqCanvas"));
     m_canvas->setAudioEngine(m_audio);
@@ -360,7 +352,11 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     // but the canvas needed to be constructed before this push could land.
     m_canvas->setSmoothingOctaveFraction(m_savedSmoothingFraction);
     m_canvas->setReferenceCurvePreset(m_savedReferenceCurvePreset);
-    eqColumn->addWidget(m_canvas, kCanvasStretch);
+    // Every spare pixel in the column goes to the graph: the icon row, the
+    // width row and the param row are fixed height, and a spacer holding
+    // height back from the one thing that can use it was only ever a way of
+    // making the graph shorter.
+    eqColumn->addWidget(m_canvas, 1);
     // Forward cutoff-line drag events as a path-tagged signal so MainWindow
     // can dispatch to TransmitModel (TX) or the active SliceModel (RX).
     connect(m_canvas, &ClientEqEditorCanvas::cutoffsDragged,
@@ -370,7 +366,6 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
 
     m_paramRow = new ClientEqParamRow;
     eqColumn->addWidget(m_paramRow);
-    eqColumn->addStretch(kSlackStretch);
 
     body->addLayout(eqColumn, 1);
 
