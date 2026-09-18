@@ -19,11 +19,13 @@ listed in §7 and is listed there in full.
 
 > **Status, added when TXA landed.** This document was written while TXA was a
 > *candidate*. It is now a BUILD OPTION, `AETHER_HL2_TX_TXA`, and it is
-> **OFF by default**: a stock build still ships the phasing modulator, and
-> `-DAETHER_HL2_TX_TXA=ON` opens a TXA channel at the geometry derived here and
-> compiles the phasing modulator out. The default is OFF because #5678's
-> approval asked for hardware time and §7 below records that there has been
-> none — not because anything here is in doubt. The configuration in
+> **ON by default since #5779**: a stock build now opens a TXA channel at the
+> geometry derived here and compiles the phasing modulator out, and
+> `-DAETHER_HL2_TX_TXA=OFF` is the way back to it. The default WAS OFF because
+> #5678's approval asked for hardware time and §7 recorded that there had been
+> none; §7 now records the runs that supplied it, **and the limits of what they
+> observed** — read that section rather than this sentence before relying on
+> the change. The configuration in
 > §1 and §2 is what `Hl2TxDsp::buildModulator` and `applyModeAndFilter` now do;
 > the measurements in §3 and §4 stand as written. Two details have moved on:
 > `hl2_txdsp_test`'s DIGU low-edge block is an **assertion** rather than a
@@ -388,7 +390,38 @@ it deliberate sleeping.
 
 ## 7. What was NOT measured
 
-- **No hardware. No radio was keyed. No antenna port was observed.** Every figure here is
+**2026-09-17 — hardware time now exists, and what it did NOT see matters as much
+as what it did.** Three runs on ON8ST's Hermes-Lite 2, board id 6, gateware 74:
+
+| run | what it was | what it establishes |
+|---|---|---|
+| 2026-09-16 22:36, antenna | operator's own over, **heard correct on an external SDR receiver** | the emission was right — on a build whose `resetModulatorState()` is EMPTY, i.e. NOT the merged code |
+| d104, dummy load | 2 × 5 s, 1 kHz tone, 40 % drive, merged code | power up within ~270 ms, steady 0.47–0.50 W, SWR 1.00–1.13, ALC 0 dB / −19.99 dBFS, clean unkey, second over indistinguishable from the first |
+| d105, antenna | 2 × 5 s, 3.695 MHz USB, merged code, ID first | steady 0.49–0.52 W, **SWR 1.57–1.69** against the load's 1.07 — a real mismatch where one belongs, which is what shows the RF reached the antenna |
+
+**WHAT NONE OF THEM OBSERVED IS THE EMISSION ITSELF, ON THE MERGED CODE.**
+Forward power, SWR, ALC gain and ALC dBFS are readings of the load and the level
+chain; every one is unchanged by an inverted or spurious emission. This file's
+own §1 records the precedent — the phasing modulator once transmitted every
+signal on the wrong sideband and it took *an operator with a second receiver* to
+catch it, because it is "invisible from inside this application". The d105 over
+was **USB on 80 m**, where an inverted emission is LSB, the band's conventional
+sideband: it would have sounded entirely ordinary, and nobody was listening.
+
+So one run observed the emission on the wrong code, and one ran the right code
+without observing the emission. **No single run covers both.** Raised by
+aethersdr-agent on #5779.
+
+**AND NONE OF THEM EXERCISED THE PAYOFF.** §1 says the migration's return is the
+LOW EDGE of the `{150, 3000}` DIGU/DIGL passband, and that at 1 kHz the
+incumbent already reads 87 dB against EP2's ~96 dB wire so TXA's advantage there
+is *below the wire and unusable*. The dummy over was a 1 kHz tone and the
+antenna over was voice. There is no DIGU/DIGL over and no WSJT-X transmission —
+the hardware time on record is at the one frequency this document says is
+uninformative.
+
+- **The figures below predate all of that.** No radio was keyed for them and no
+  antenna port was observed. Every figure here is
   from a test binary.
 - **One machine, one architecture, one build type.** macOS/arm64, RelWithDebInfo. Not run
   on x86-64, not run under ASan or TSan, not run on Linux or Windows.

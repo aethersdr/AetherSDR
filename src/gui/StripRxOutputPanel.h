@@ -3,6 +3,9 @@
 #include <QElapsedTimer>
 #include <QWidget>
 
+class QHideEvent;
+class QShowEvent;
+
 #include "MeterSmoother.h"
 
 class QLabel;
@@ -43,6 +46,11 @@ public:
     // engine-driven knobs here, but the strip iterates every panel
     // uniformly when applying a preset.
     void syncControlsFromEngine();
+
+protected:
+    // The animation tick stops while the page is hidden — see PanelTick.h.
+    void showEvent(QShowEvent* ev) override;
+    void hideEvent(QHideEvent* ev) override;
 
 private:
     void onScopeSamples(const QByteArray& monoFloat32, int sampleRate, bool tx);

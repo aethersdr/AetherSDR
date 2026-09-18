@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "RxChainRunner.h"
 #include "RxClientEffects.h"
 #include <QSignalBlocker>
 #include "core/backends/RadioCapabilities.h"
@@ -1860,7 +1861,6 @@ AudioEngine::AudioEngine(QObject* parent)
     , m_clientGateTx(std::make_unique<ClientGate>())
     , m_clientGateRx(std::make_unique<ClientGate>())
     , m_clientDeEssTx(std::make_unique<ClientDeEss>())
-    , m_clientDeEssRx(std::make_unique<ClientDeEss>())
     , m_clientTubeTx(std::make_unique<ClientTube>())
     , m_clientTubeRx(std::make_unique<ClientTube>())
     , m_clientPuduTx(std::make_unique<ClientPudu>())
@@ -1935,7 +1935,6 @@ AudioEngine::AudioEngine(QObject* parent)
     m_clientCompRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientTubeRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientPuduRx->prepare(DEFAULT_SAMPLE_RATE);
-    m_clientDeEssRx->prepare(DEFAULT_SAMPLE_RATE);
     // txFinalMonitorPcmReady carries a TxAudioSource and this object lives on
     // its own thread, so every connection to it is queued. A queued connection
     // cannot marshal a type Qt has not been told about, and the failure is a
@@ -1975,7 +1974,6 @@ AudioEngine::AudioEngine(QObject* parent)
     loadClientTubeRxSettings();  // restore persisted RX tube params
     loadClientPuduRxSettings();  // restore persisted RX PUDU params
     loadClientDeEssSettings();   // restore persisted de-esser params
-    loadClientDeEssRxSettings(); // restore persisted RX de-esser params
     loadClientTubeSettings();    // restore persisted tube params
     loadClientPuduSettings();    // restore persisted PUDU params
     loadClientReverbSettings();  // restore persisted reverb params
@@ -1983,6 +1981,7 @@ AudioEngine::AudioEngine(QObject* parent)
     loadClientQuindarSettings();       // restore persisted Quindar tone params
     loadClientRxChainOrder();    // restore persisted RX chain order (Phase 0+)
     loadAetherialTubePreampTxSettings(); // restore TX mic pre-amp toggles (#2813)
+    dropRetiredSettingsKeys();   // tidy keys no build reads any more
 
     // Restore saved audio device selections
     auto& s = AppSettings::instance();
@@ -4692,7 +4691,6 @@ void AudioEngine::resetMainPcmState(int producerRate, bool rebuildDsp)
     m_clientEqRx->prepare(producerRate);
     m_clientGateRx->prepare(producerRate);
     m_clientCompRx->prepare(producerRate);
-    m_clientDeEssRx->prepare(producerRate);
     m_clientTubeRx->prepare(producerRate);
     m_clientPuduRx->prepare(producerRate);
     {
@@ -5266,12 +5264,7 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
     m_rxPackets.clear();
     m_kiwiSdrRxResampler.reset();
     m_kiwiSdrRxResamplerR.reset();
-    m_clientEqRxScratch.clear();
-    m_clientGateRxScratch.clear();
-    m_clientCompRxScratch.clear();
-    m_clientDeEssRxScratch.clear();
-    m_clientTubeRxScratch.clear();
-    m_clientPuduRxScratch.clear();
+    m_rxChainScratch = RxChainScratch{};
     m_nr2Output.clear();
     m_kiwiSdrNr2Output.clear();
     for (const auto& source : m_externalKiwiSources) {
@@ -5296,9 +5289,6 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
     }
     if (m_clientCompRx) {
         m_clientCompRx->reset();
-    }
-    if (m_clientDeEssRx) {
-        m_clientDeEssRx->reset();
     }
     if (m_clientTubeRx) {
         m_clientTubeRx->reset();
@@ -5461,7 +5451,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         : (source == RxDspSource::KiwiSdr ? m_legacyKiwiClientEffects.get() : nullptr);
     if (auxiliaryEffects) {
         auxiliaryEffects->syncParametersFrom(*m_clientEqRx, *m_clientGateRx,
-            *m_clientCompRx, *m_clientDeEssRx, *m_clientTubeRx, *m_clientPuduRx);
+            *m_clientCompRx, *m_clientTubeRx, *m_clientPuduRx);
     }
     auto writeAudio = [this, source, externalSource, sourcePan, auxiliaryEffects,
                        txPresentationGated, bypassRxChainForTx](
@@ -5471,7 +5461,6 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         ClientEq* eq = auxiliaryEffects ? &auxiliaryEffects->eq() : m_clientEqRx.get();
         ClientGate* gate = auxiliaryEffects ? &auxiliaryEffects->gate() : m_clientGateRx.get();
         ClientComp* comp = auxiliaryEffects ? &auxiliaryEffects->comp() : m_clientCompRx.get();
-        ClientDeEss* deEss = auxiliaryEffects ? &auxiliaryEffects->deEss() : m_clientDeEssRx.get();
         ClientTube* tube = auxiliaryEffects ? &auxiliaryEffects->tube() : m_clientTubeRx.get();
         ClientPudu* pudu = auxiliaryEffects ? &auxiliaryEffects->pudu() : m_clientPuduRx.get();
 
@@ -5481,82 +5470,53 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         // process because the caller owns `data`. Skip when disabled or
         // during TX (matches the NR-chain TX bypass policy) — except for
         // managed Kiwi sources, whose input stays live signal during TX.
-        const QByteArray* eqSource = &data;
-        if (eq && eq->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientEqRxScratch = data;
-            const int frames = m_clientEqRxScratch.size()
-                             / (2 * static_cast<int>(sizeof(float)));
-            eq->process(
-                reinterpret_cast<float*>(m_clientEqRxScratch.data()),
-                frames, 2);
-            eqSource = &m_clientEqRxScratch;
-        }
+        // The RX chain, in the order the operator arranged it.
+        //
+        // This used to be five hardcoded blocks running EQ → Gate → Comp →
+        // Tube → Pudu whatever the stored order said, so dragging a row in
+        // AetherRX (or a tile on the chain strip, which has had drag-reorder
+        // since it shipped) changed the window and the saved profile and left
+        // the audio alone. The order-aware dispatcher that was meant to do
+        // this — applyClientRxDspFloat32 — had TODO-only branches and no call
+        // sites. Even the default order disagreed: defaultRxChain() leads with
+        // Gate, the fixed path led with EQ.
+        //
+        // The walk lives in runRxChain() so a test can drive it with real PCM
+        // and real modules; an assertion on the stored vector cannot show that
+        // the samples changed. Read the packed order straight from the atomic
+        // rather than through rxChainStages(), which builds a QVector — this
+        // is the audio thread.
+        //
+        // There is no RX de-esser: sibilance is a transmit problem, and the
+        // stage only ever existed on this side because the RX chain was built
+        // by mirroring the TX one.
+        RxChainModules chainModules;
+        chainModules.eq = eq;
+        chainModules.gate = gate;
+        chainModules.comp = comp;
+        chainModules.tube = tube;
+        chainModules.pudu = pudu;
+
+        // One set of scratch buffers for every source, as before this change:
+        // writeAudio runs on the audio thread and each call finishes before
+        // the next begins, so a Kiwi block and a main block never share one.
+        const QByteArray* postEqSource = nullptr;
+        const QByteArray* stageSource = runRxChain(
+            m_rxChainPacked.load(std::memory_order_acquire), data, chainModules,
+            m_rxChainScratch, bypassRxChainForTx, &postEqSource);
 
         // Tap post-EQ audio into the ring buffer for the editor's FFT
-        // analyzer. Runs whether EQ is active or bypassed — the tap shows
-        // the signal actually heading to the sink at native 24 kHz.
-        const int tapFrames = eqSource->size() / (2 * static_cast<int>(sizeof(float)));
+        // analyzer. Runs whether EQ is active or bypassed — the tap shows the
+        // signal actually heading to the sink at native 24 kHz — and follows
+        // EQ wherever the operator has put it, so it keeps meaning "after the
+        // EQ" rather than "after the second stage".
+        const int tapFrames =
+            postEqSource->size() / (2 * static_cast<int>(sizeof(float)));
         if (tapFrames > 0 && !txPresentationGated
             && (!auxiliaryEffects || !mainPcmSourceOwnsDisplay())) {
             tapClientEqRxStereo(
-                reinterpret_cast<const float*>(eqSource->constData()),
+                reinterpret_cast<const float*>(postEqSource->constData()),
                 tapFrames);
-        }
-
-        // RX chain stage: GATE — runs after EQ, in place on a scratch
-        // buffer so the EQ tap above sees the post-EQ / pre-gate signal
-        // (matches the user's signal-flow expectation).  Skip during TX
-        // for the same reason as EQ.
-        const QByteArray* gateSource = eqSource;
-        if (gate && gate->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientGateRxScratch = *eqSource;
-            gate->process(reinterpret_cast<float*>(m_clientGateRxScratch.data()),
-                m_clientGateRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
-            gateSource = &m_clientGateRxScratch;
-        }
-
-        // RX chain stage: COMP — runs after GATE.  Same scratch-copy
-        // pattern.
-        const QByteArray* compSource = gateSource;
-        if (comp && comp->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientCompRxScratch = *gateSource;
-            comp->process(reinterpret_cast<float*>(m_clientCompRxScratch.data()),
-                m_clientCompRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
-            compSource = &m_clientCompRxScratch;
-        }
-
-        // RX chain stage: DESS — runs after COMP, before TUBE.  Same
-        // scratch-copy pattern as the surrounding stages.
-        const QByteArray* deEssSource = compSource;
-        if (deEss && deEss->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientDeEssRxScratch = *compSource;
-            deEss->process(reinterpret_cast<float*>(m_clientDeEssRxScratch.data()),
-                m_clientDeEssRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
-            deEssSource = &m_clientDeEssRxScratch;
-        }
-
-        // RX chain stage: TUBE — runs after DESS.
-        const QByteArray* tubeSource = deEssSource;
-        if (tube && tube->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientTubeRxScratch = *deEssSource;
-            tube->process(reinterpret_cast<float*>(m_clientTubeRxScratch.data()),
-                m_clientTubeRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
-            tubeSource = &m_clientTubeRxScratch;
-        }
-
-        // RX chain stage: PUDU — runs after TUBE.
-        const QByteArray* puduSource = tubeSource;
-        if (pudu && pudu->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientPuduRxScratch = *tubeSource;
-            pudu->process(reinterpret_cast<float*>(m_clientPuduRxScratch.data()),
-                m_clientPuduRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
-            puduSource = &m_clientPuduRxScratch;
         }
 
         if (auxiliaryEffects && !txPresentationGated && !bypassRxChainForTx
@@ -5568,8 +5528,8 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         const QByteArray& resampled =
             (m_rxOutputRate.load() != (source == RxDspSource::Main
                     ? m_rxProducerRate.load() : DEFAULT_SAMPLE_RATE))
-                ? resampleStereo(*puduSource, source, externalSource)
-                : *puduSource;
+                ? resampleStereo(*stageSource, source, externalSource)
+                : *stageSource;
         const QByteArray* output = &resampled;
         QByteArray boosted;
         if (m_rxBoost.load()) {
@@ -5641,6 +5601,53 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         }
     };
 
+    // How much the noise reduction is removing, measured once for whichever
+    // method the chain below picks. Ratio of post-NR to pre-NR block RMS on the
+    // main RX path only: the Kiwi and external sources run their own filter
+    // instances, and letting them publish here would make the reading flicker
+    // between unrelated signals. A block too quiet to divide by reports the
+    // previous gain rather than a meaningless 1.0.
+    //
+    // The ratio is against the RMS of the CURRENT input block, while an
+    // overlap-add method such as NR2 emits a block delayed by its own
+    // latency. On a speech onset the numerator and denominator are therefore
+    // not the same audio and the reading twitches for a block or two. It is a
+    // meter, the clamp keeps it bounded, and correcting it would mean
+    // carrying a per-method delay line for a cosmetic strip — so this is
+    // noted rather than fixed.
+    const bool publishNrGain = (source == RxDspSource::Main) && !externalSource;
+    // Computed on first use, not up front: the idle path below never reads it,
+    // and for an operator running no NR at all that was a full-buffer RMS pass
+    // on the audio thread for every block, thrown away.
+    float preNrRms = -1.0f;
+    const auto writeNrAudioAndLevel = [this, publishNrGain, &preNrRms, &pcm,
+                                       &writeAudioAndLevel](
+                                          const QByteArray& processed) {
+        if (publishNrGain) {
+            if (preNrRms < 0.0f) preNrRms = computeRMS(pcm);
+            if (preNrRms > 1.0e-6f) {
+                const float gain =
+                    std::clamp(computeRMS(processed) / preNrRms, 0.0f, 1.0f);
+                m_nrGain.store(gain, std::memory_order_relaxed);
+            }
+            m_nrGainActive.store(true, std::memory_order_relaxed);
+            publishNrGainIfChanged(
+                m_nrGain.load(std::memory_order_relaxed), true);
+        }
+        writeAudioAndLevel(processed);
+    };
+    // The chain is running dry: no method engaged, or bypassed for TX. Say so
+    // rather than publishing a gain of 1.0, which a strip cannot tell apart
+    // from a method that is passing everything through.
+    const auto writeAudioNrIdle = [this, publishNrGain, &writeAudioAndLevel](
+                                      const QByteArray& data) {
+        if (publishNrGain) {
+            m_nrGainActive.store(false, std::memory_order_relaxed);
+            publishNrGainIfChanged(1.0f, false);
+        }
+        writeAudioAndLevel(data);
+    };
+
     // Bypass client-side DSP during TX (#367, #1505). NR2/RN2/BNR adapt
     // their internal state to silence during TX, causing distorted audio
     // after returning to RX. Use m_radioTransmitting (raw interlock state)
@@ -5652,7 +5659,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
     {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
         if (bypassRxChainForTx) {
-            writeAudioAndLevel(pcm);
+            writeAudioNrIdle(pcm);
         } else if (m_rn2Enabled) {
             RNNoiseFilter* rn2 = rn2ForSource(source, externalSource);
             if (!rn2 || !rn2->isValid()) {
@@ -5664,7 +5671,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             } else {
                 processed = rn2->process(pcm);
             }
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
         } else if (m_nr2Enabled) {
             if (!(externalSource ? externalSource->nr2.get()
                   : (source == RxDspSource::KiwiSdr ? m_kiwiSdrNr2.get() : m_nr2.get()))) {
@@ -5675,7 +5682,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 ? externalSource->nr2Output
                 : (source == RxDspSource::KiwiSdr ? m_kiwiSdrNr2Output
                                                    : m_nr2Output);
-            writeAudioAndLevel(nr2Output);
+            writeNrAudioAndLevel(nr2Output);
 
 #ifdef HAVE_SPECBLEACH
         } else if (m_nr4Enabled) {
@@ -5684,7 +5691,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = nr4->process(pcm);
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #endif
 #ifdef HAVE_DFNR
         } else if (m_dfnrEnabled) {
@@ -5693,7 +5700,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = dfnr->process(pcm);
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #endif
         } else if (m_nnrEnabled) {
             NnrFilter* nnr = nnrForSource(source, externalSource);
@@ -5714,7 +5721,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             if (!externalSource && source != RxDspSource::KiwiSdr) {
                 m_nnrModel.store(nnr->modelSlot(), std::memory_order_relaxed);
             }
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #ifdef HAVE_NVIDIA_AFX
         } else if (m_nvAfxEnabled) {
             NvidiaAfxFilter* nvAfx = nvAfxForSource(source, externalSource);
@@ -5722,7 +5729,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = nvAfx->process(pcm);
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #endif
 #ifdef __APPLE__
         } else if (m_mnrEnabled) {
@@ -5731,10 +5738,10 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                 return; // enabled processor is still preparing or failed
             }
             QByteArray processed = mnr->process(pcm);
-            writeAudioAndLevel(processed);
+            writeNrAudioAndLevel(processed);
 #endif
         } else {
-            writeAudioAndLevel(pcm);
+            writeAudioNrIdle(pcm);
         }
     }
 }
@@ -5749,7 +5756,6 @@ void AudioEngine::updateAuxiliaryClientEffectMeters(RxClientEffects& source)
     }
     m_clientGateRx->copyMeteringFrom(source.gate());
     m_clientCompRx->copyMeteringFrom(source.comp());
-    m_clientDeEssRx->copyMeteringFrom(source.deEss());
     m_clientTubeRx->copyMeteringFrom(source.tube());
     m_clientPuduRx->copyMeteringFrom(source.pudu());
 }
@@ -5942,16 +5948,6 @@ void AudioEngine::applyClientGateRxFloat32(QByteArray& float32)
                             frames, 2);
 }
 
-void AudioEngine::applyClientDeEssRxFloat32(QByteArray& float32)
-{
-    if (!m_clientDeEssRx || !m_clientDeEssRx->isEnabled()) return;
-    const int frames = float32.size() / static_cast<int>(sizeof(float)) / 2;
-    if (frames <= 0) return;
-
-    m_clientDeEssRx->process(reinterpret_cast<float*>(float32.data()),
-                             frames, 2);
-}
-
 void AudioEngine::applyClientTubeRxFloat32(QByteArray& float32)
 {
     if (!m_clientTubeRx || !m_clientTubeRx->isEnabled()) return;
@@ -5974,28 +5970,6 @@ void AudioEngine::applyClientPuduRxFloat32(QByteArray& float32)
                             frames, 2);
 }
 
-void AudioEngine::applyClientRxDspFloat32(QByteArray& float32)
-{
-    // Walk the packed RX chain-stage list and dispatch each entry to
-    // its per-stage apply helper.  Phase 0 ships with no implemented
-    // stages — every entry is a no-op until Phase 1+ slot in the DSP
-    // classes (RX EQ first).  Same atomic-load pattern as TX so the
-    // audio thread reads the entire chain order in one access.
-    const uint64_t packed = m_rxChainPacked.load(std::memory_order_acquire);
-    for (int i = 0; i < kMaxRxChainStages; ++i) {
-        const auto stage = static_cast<RxChainStage>((packed >> (i * 8)) & 0xFF);
-        switch (stage) {
-            case RxChainStage::None:  return;     // end-of-list marker
-            case RxChainStage::Eq:    /* TODO Phase 1 */ break;
-            case RxChainStage::Gate:  /* TODO Phase 2 */ break;
-            case RxChainStage::Comp:  /* TODO Phase 3 */ break;
-            case RxChainStage::Tube:  /* TODO Phase 4 */ break;
-            case RxChainStage::Pudu:  /* TODO Phase 5 */ break;
-            case RxChainStage::DeEss: /* TODO Phase 6 */ break;
-        }
-    }
-    (void)float32;  // unused until first stage lands
-}
 
 namespace {
 
@@ -6102,10 +6076,17 @@ QString rxStageName(AudioEngine::RxChainStage s)
         case AudioEngine::RxChainStage::Comp:  return "Comp";
         case AudioEngine::RxChainStage::Tube:  return "Tube";
         case AudioEngine::RxChainStage::Pudu:  return "Pudu";
-        case AudioEngine::RxChainStage::DeEss: return "DeEss";
         case AudioEngine::RxChainStage::None:  return "";
     }
     return "";
+}
+
+// Stage names this build no longer has, but wrote itself in an earlier one.
+// Distinct from an unrecognised name: these are dropped from a stored chain
+// and the rest of the operator's order is kept.
+bool isRetiredRxStageName(const QString& name)
+{
+    return name.compare(QLatin1String("DeEss"), Qt::CaseInsensitive) == 0;
 }
 
 AudioEngine::RxChainStage rxStageFromName(const QString& name)
@@ -6115,7 +6096,6 @@ AudioEngine::RxChainStage rxStageFromName(const QString& name)
     if (name == "Comp")  return AudioEngine::RxChainStage::Comp;
     if (name == "Tube")  return AudioEngine::RxChainStage::Tube;
     if (name == "Pudu")  return AudioEngine::RxChainStage::Pudu;
-    if (name == "DeEss") return AudioEngine::RxChainStage::DeEss;
     return AudioEngine::RxChainStage::None;
 }
 
@@ -6130,7 +6110,6 @@ QVector<AudioEngine::RxChainStage> defaultRxChain()
         AudioEngine::RxChainStage::Gate,
         AudioEngine::RxChainStage::Eq,
         AudioEngine::RxChainStage::Comp,
-        AudioEngine::RxChainStage::DeEss,
         AudioEngine::RxChainStage::Tube,
         AudioEngine::RxChainStage::Pudu,
     };
@@ -6306,12 +6285,6 @@ void AudioEngine::setRxBypassed(bool on)
                     saveClientPuduRxSettings();
                 }
                 break;
-            case RxChainStage::DeEss:
-                if (m_clientDeEssRx) {
-                    m_clientDeEssRx->setEnabled(enabled);
-                    saveClientDeEssRxSettings();
-                }
-                break;
             case RxChainStage::None:
                 break;
         }
@@ -6324,7 +6297,6 @@ void AudioEngine::setRxBypassed(bool on)
             case RxChainStage::Comp:  return m_clientCompRx  && m_clientCompRx->isEnabled();
             case RxChainStage::Tube:  return m_clientTubeRx  && m_clientTubeRx->isEnabled();
             case RxChainStage::Pudu:  return m_clientPuduRx  && m_clientPuduRx->isEnabled();
-            case RxChainStage::DeEss: return m_clientDeEssRx && m_clientDeEssRx->isEnabled();
             case RxChainStage::None:  return false;
         }
         return false;
@@ -6336,7 +6308,6 @@ void AudioEngine::setRxBypassed(bool on)
         RxChainStage::Comp,
         RxChainStage::Tube,
         RxChainStage::Pudu,
-        RxChainStage::DeEss,
     };
 
     if (on) {
@@ -6381,24 +6352,81 @@ QVector<AudioEngine::RxChainStage> AudioEngine::rxChainStages() const
     return unpackRxChain(m_rxChainPacked.load(std::memory_order_acquire));
 }
 
+// Keys that were written by an earlier build and are read by nothing now.
+// Left in place they are harmless, but they accumulate: every operator's
+// settings file carries a de-esser that no longer exists and two attack values
+// no control can reach. Removed once, on the load that follows the upgrade.
+void AudioEngine::dropRetiredSettingsKeys()
+{
+    static const char* const kRetired[] = {
+        // The RX de-esser: the stage went, so its eight parameters went.
+        "ClientDeEssRxEnabled",     "ClientDeEssRxThresholdDb",
+        "ClientDeEssRxAmountDb",    "ClientDeEssRxFrequencyHz",
+        "ClientDeEssRxQ",           "ClientDeEssRxSlopeStages",
+        "ClientDeEssRxAttackMs",    "ClientDeEssRxReleaseMs",
+        // Gate and tube attack are fixed constants now — see
+        // ClientGate::kAttackMs and ClientTube::kAttackMs.
+        "ClientGateTxAttackMs",     "ClientGateRxAttackMs",
+        "ClientTubeTxAttackMs",     "ClientTubeRxAttackMs",
+    };
+    auto& s = AppSettings::instance();
+    bool removedAny = false;
+    for (const char* key : kRetired) {
+        const QString name = QString::fromLatin1(key);
+        if (s.value(name, QString()).toString().isEmpty()) continue;
+        s.remove(name);
+        removedAny = true;
+    }
+    if (removedAny) s.save();
+}
+
+void AudioEngine::publishNrGainIfChanged(float gain, bool active)
+{
+    // A hundredth of a dB-ish in linear terms: below anything the strip can
+    // draw, and far below anything an operator can see move.
+    constexpr float kEpsilon = 0.002f;
+    if (m_nrGainEverPublished
+        && active == m_lastPublishedNrActive
+        && std::fabs(gain - m_lastPublishedNrGain) < kEpsilon) {
+        return;
+    }
+    m_lastPublishedNrGain = gain;
+    m_lastPublishedNrActive = active;
+    m_nrGainEverPublished = true;
+    emit nrGainChanged(gain, active);
+}
+
 void AudioEngine::loadClientRxChainOrder()
 {
     auto& s = AppSettings::instance();
     QVector<RxChainStage> stages;
     bool sawUnknown = false;
+    bool droppedRetired = false;
     const QString stored = s.value("ClientRxChainStages", "").toString();
     if (!stored.isEmpty()) {
-        for (const QString& name : stored.split(',', Qt::SkipEmptyParts)) {
-            const auto stage = rxStageFromName(name.trimmed());
+        for (const QString& rawName : stored.split(',', Qt::SkipEmptyParts)) {
+            const QString name = rawName.trimmed();
+            // A stage this build has retired is not an unknown name. "DeEss"
+            // is one AetherSDR wrote itself, and every settings file that has
+            // ever held an RX chain order contains it — so treating it as
+            // foreign threw away the operator's whole ordering on first launch
+            // after the stage went, which is a poor welcome to a release that
+            // makes the chain drag-reorderable. Drop the entry, keep the rest
+            // in the order they were left in, exactly as the preset path
+            // already does through rxStageNameToEnum().
+            if (isRetiredRxStageName(name)) {
+                droppedRetired = true;
+                continue;
+            }
+            const auto stage = rxStageFromName(name);
             if (stage != RxChainStage::None) stages.append(stage);
             else                              sawUnknown = true;
         }
     }
-    // Any unknown name in the stored list is a strong signal that the
-    // settings file is from a different (or old) version of AetherSDR.
-    // Reset to the canonical default rather than silently filtering the
-    // unknown entries — that filtering shuffles the remaining stages
-    // into a misleading order.
+    // A name that is neither current nor knowingly retired is a strong signal
+    // that the settings file is from a different (or much older) build. Reset
+    // to the canonical default rather than silently filtering it out — that
+    // filtering shuffles the remaining stages into a misleading order.
     const bool resetFromStale = sawUnknown;
     if (sawUnknown || stages.isEmpty()) stages = defaultRxChain();
 
@@ -6409,9 +6437,10 @@ void AudioEngine::loadClientRxChainOrder()
     }
     m_rxChainPacked.store(packRxChain(stages), std::memory_order_release);
 
-    // Overwrite the stale value on disk so the user's settings file
-    // doesn't keep showing names from a previous build.
-    if (resetFromStale) {
+    // Overwrite the stored value when it no longer matches what was loaded:
+    // after a reset, and after a retired stage was dropped, so the name does
+    // not sit in the file for ever.
+    if (resetFromStale || droppedRetired) {
         QStringList names;
         for (auto st : stages) {
             const QString n = rxStageName(st);
@@ -6616,8 +6645,8 @@ void AudioEngine::loadClientGateSettings()
         s.value("ClientGateTxReturnDb", "2.0").toFloat());
     m_clientGateTx->setRatio(
         s.value("ClientGateTxRatio", "2.0").toFloat());
-    m_clientGateTx->setAttackMs(
-        s.value("ClientGateTxAttackMs", "0.5").toFloat());
+    // Fixed, not persisted — see ClientGate::kAttackMs.
+    m_clientGateTx->setAttackMs(ClientGate::kAttackMs);
     m_clientGateTx->setHoldMs(
         s.value("ClientGateTxHoldMs", "20.0").toFloat());
     m_clientGateTx->setReleaseMs(
@@ -6642,8 +6671,6 @@ void AudioEngine::saveClientGateSettings() const
         QString::number(m_clientGateTx->returnDb()));
     s.setValue("ClientGateTxRatio",
         QString::number(m_clientGateTx->ratio()));
-    s.setValue("ClientGateTxAttackMs",
-        QString::number(m_clientGateTx->attackMs()));
     s.setValue("ClientGateTxHoldMs",
         QString::number(m_clientGateTx->holdMs()));
     s.setValue("ClientGateTxReleaseMs",
@@ -6670,8 +6697,8 @@ void AudioEngine::loadClientGateRxSettings()
         s.value("ClientGateRxReturnDb", "2.0").toFloat());
     m_clientGateRx->setRatio(
         s.value("ClientGateRxRatio", "2.0").toFloat());
-    m_clientGateRx->setAttackMs(
-        s.value("ClientGateRxAttackMs", "0.5").toFloat());
+    // Fixed, not persisted — see ClientGate::kAttackMs.
+    m_clientGateRx->setAttackMs(ClientGate::kAttackMs);
     m_clientGateRx->setHoldMs(
         s.value("ClientGateRxHoldMs", "20.0").toFloat());
     m_clientGateRx->setReleaseMs(
@@ -6696,8 +6723,6 @@ void AudioEngine::saveClientGateRxSettings() const
         QString::number(m_clientGateRx->returnDb()));
     s.setValue("ClientGateRxRatio",
         QString::number(m_clientGateRx->ratio()));
-    s.setValue("ClientGateRxAttackMs",
-        QString::number(m_clientGateRx->attackMs()));
     s.setValue("ClientGateRxHoldMs",
         QString::number(m_clientGateRx->holdMs()));
     s.setValue("ClientGateRxReleaseMs",
@@ -6753,51 +6778,6 @@ void AudioEngine::saveClientDeEssSettings() const
         QString::number(m_clientDeEssTx->slopeStages()));
 }
 
-void AudioEngine::loadClientDeEssRxSettings()
-{
-    if (!m_clientDeEssRx) return;
-    auto& s = AppSettings::instance();
-    m_clientDeEssRx->setEnabled(
-        s.value("ClientDeEssRxEnabled", "False").toString() == "True");
-    m_clientDeEssRx->setFrequencyHz(
-        s.value("ClientDeEssRxFrequencyHz", "6000.0").toFloat());
-    m_clientDeEssRx->setQ(
-        s.value("ClientDeEssRxQ", "2.0").toFloat());
-    m_clientDeEssRx->setThresholdDb(
-        s.value("ClientDeEssRxThresholdDb", "-30.0").toFloat());
-    m_clientDeEssRx->setAmountDb(
-        s.value("ClientDeEssRxAmountDb", "-6.0").toFloat());
-    m_clientDeEssRx->setAttackMs(
-        s.value("ClientDeEssRxAttackMs", "1.0").toFloat());
-    m_clientDeEssRx->setReleaseMs(
-        s.value("ClientDeEssRxReleaseMs", "100.0").toFloat());
-    m_clientDeEssRx->setSlopeStages(
-        s.value("ClientDeEssRxSlopeStages", "2").toInt());
-}
-
-void AudioEngine::saveClientDeEssRxSettings() const
-{
-    if (!m_clientDeEssRx) return;
-    auto& s = AppSettings::instance();
-    auto toBool = [](bool on) { return on ? QString("True") : QString("False"); };
-    s.setValue("ClientDeEssRxEnabled",
-        toBool(m_clientDeEssRx->isEnabled()));
-    s.setValue("ClientDeEssRxFrequencyHz",
-        QString::number(m_clientDeEssRx->frequencyHz()));
-    s.setValue("ClientDeEssRxQ",
-        QString::number(m_clientDeEssRx->q()));
-    s.setValue("ClientDeEssRxThresholdDb",
-        QString::number(m_clientDeEssRx->thresholdDb()));
-    s.setValue("ClientDeEssRxAmountDb",
-        QString::number(m_clientDeEssRx->amountDb()));
-    s.setValue("ClientDeEssRxAttackMs",
-        QString::number(m_clientDeEssRx->attackMs()));
-    s.setValue("ClientDeEssRxReleaseMs",
-        QString::number(m_clientDeEssRx->releaseMs()));
-    s.setValue("ClientDeEssRxSlopeStages",
-        QString::number(m_clientDeEssRx->slopeStages()));
-}
-
 void AudioEngine::loadClientTubeSettings()
 {
     if (!m_clientTubeTx) return;
@@ -6821,8 +6801,8 @@ void AudioEngine::loadClientTubeSettings()
         s.value("ClientTubeTxDryWet", "1.0").toFloat());
     m_clientTubeTx->setEnvelopeAmount(
         s.value("ClientTubeTxEnvelope", "0.0").toFloat());
-    m_clientTubeTx->setAttackMs(
-        s.value("ClientTubeTxAttackMs", "5.0").toFloat());
+    // Fixed, not persisted — see ClientTube::kAttackMs.
+    m_clientTubeTx->setAttackMs(ClientTube::kAttackMs);
     m_clientTubeTx->setReleaseMs(
         s.value("ClientTubeTxReleaseMs", "35.0").toFloat());
 }
@@ -6847,8 +6827,6 @@ void AudioEngine::saveClientTubeSettings() const
         QString::number(m_clientTubeTx->dryWet()));
     s.setValue("ClientTubeTxEnvelope",
         QString::number(m_clientTubeTx->envelopeAmount()));
-    s.setValue("ClientTubeTxAttackMs",
-        QString::number(m_clientTubeTx->attackMs()));
     s.setValue("ClientTubeTxReleaseMs",
         QString::number(m_clientTubeTx->releaseMs()));
 }
@@ -6876,8 +6854,8 @@ void AudioEngine::loadClientTubeRxSettings()
         s.value("ClientTubeRxDryWet", "1.0").toFloat());
     m_clientTubeRx->setEnvelopeAmount(
         s.value("ClientTubeRxEnvelope", "0.0").toFloat());
-    m_clientTubeRx->setAttackMs(
-        s.value("ClientTubeRxAttackMs", "5.0").toFloat());
+    // Fixed, not persisted — see ClientTube::kAttackMs.
+    m_clientTubeRx->setAttackMs(ClientTube::kAttackMs);
     m_clientTubeRx->setReleaseMs(
         s.value("ClientTubeRxReleaseMs", "35.0").toFloat());
 }
@@ -6902,8 +6880,6 @@ void AudioEngine::saveClientTubeRxSettings() const
         QString::number(m_clientTubeRx->dryWet()));
     s.setValue("ClientTubeRxEnvelope",
         QString::number(m_clientTubeRx->envelopeAmount()));
-    s.setValue("ClientTubeRxAttackMs",
-        QString::number(m_clientTubeRx->attackMs()));
     s.setValue("ClientTubeRxReleaseMs",
         QString::number(m_clientTubeRx->releaseMs()));
 }

@@ -14,6 +14,7 @@
 // which pins the same throttle for SMeterWidget.
 
 #include "gui/RangeSlider.h"
+#include "TestWindowActivation.h"
 
 #include <QAccessible>
 #include <QApplication>
@@ -114,7 +115,7 @@ int main(int argc, char** argv)
     sibling->setFocusPolicy(Qt::StrongFocus);
     layout->addWidget(sibling);
     host.show();
-    host.activateWindow();
+    activateForTest(host);
     slider->setFocus(Qt::OtherFocusReason);
     QApplication::processEvents();
     expect(slider->hasFocus(), QStringLiteral("announcement fixture receives focus"));

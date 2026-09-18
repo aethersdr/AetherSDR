@@ -942,17 +942,46 @@ void CopyAssistController::applyGpuDevices(std::vector<AsrGpuDevice> gpus)
         // walk-back, the load-time fallback arm kept large-v3-turbo running
         // on CPU: the "backlog climbing, no text" symptom this PR opens with
         // (#4767 review). An explicitly chosen tier is never changed.
-        const bool resolvedGpuUsable = resolvedDevice >= 0 && [&] {
-            for (const AsrGpuDevice& g : m_gpuDevices) {
-                if (g.index == resolvedDevice) {
-                    return g.usable;
-                }
+        const AsrGpuDevice* resolvedGpu = nullptr;
+        for (const AsrGpuDevice& g : m_gpuDevices) {
+            if (g.index == resolvedDevice) {
+                resolvedGpu = &g;
+                break;
             }
-            return false;
-        }();
+        }
+        const bool resolvedGpuUsable =
+            resolvedDevice >= 0 && resolvedGpu != nullptr && resolvedGpu->usable;
+        // The raise additionally needs ROOM: a usable GPU that cannot hold the
+        // GPU-default tier must not be handed it (#4972 — 1.6 GB auto-selected
+        // for a 2 GB card). Only the raise is gated. A tier already running is
+        // not walked back on this figure: once a model is loaded, the device's
+        // free memory is low because of that very model.
+        const QString gpuDefaultTier = QStringLiteral("large-v3-turbo");
+        bool wantGpuDefault = m_useGpuDefaultIfAvailable;
+        if (wantGpuDefault && resolvedGpuUsable) {
+            const AsrModelTier* gpuTier = AsrModelCatalog::tierById(gpuDefaultTier);
+            const qint64 gpuTierBytes = gpuTier != nullptr ? gpuTier->sizeBytes : 0;
+            if (!asrTierFitsVram(resolvedGpu->vramFreeBytes, resolvedGpu->vramTotalBytes,
+                                 gpuTierBytes)) {
+                wantGpuDefault = false;
+                // Warning, not info: lcGui is declared QtWarningMsg, so an info
+                // line would be absent from every default support log — and
+                // this is the line that explains why the GPU tier was withheld.
+                const quint64 needMb =
+                    (static_cast<quint64>(gpuTierBytes) + kAsrTierVramHeadroomBytes)
+                    / (1024 * 1024);
+                qCWarning(lcGui).nospace()
+                    << "ASR: keeping the default model tier - " << resolvedGpu->name << " has "
+                    << (resolvedGpu->vramFreeBytes / (1024 * 1024)) << " of "
+                    << (resolvedGpu->vramTotalBytes / (1024 * 1024)) << " MB free, "
+                    << gpuDefaultTier << " needs about " << needMb << " MB free on a device of "
+                    << (needMb + kAsrTierVramDesktopReserveBytes / (1024 * 1024))
+                    << " MB or more";
+            }
+        }
         const AsrTierResolution tier = asrReconcileDefaultTier(
-            m_tierId, m_useGpuDefaultIfAvailable, m_gpuDefaultTierActive,
-            resolvedGpuUsable, QStringLiteral("large-v3-turbo"),
+            m_tierId, wantGpuDefault, m_gpuDefaultTierActive,
+            resolvedGpuUsable, gpuDefaultTier,
             AsrModelCatalog::defaultTierId());
         m_gpuDefaultTierActive = tier.gpuDefaultActive;
         if (tier.tierId != m_tierId) {

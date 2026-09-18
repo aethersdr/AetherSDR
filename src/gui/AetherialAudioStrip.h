@@ -13,23 +13,21 @@ class QVBoxLayout;
 
 namespace AetherSDR {
 
-class AetherDspWidget;
 class AudioEngine;
 class ChannelStripPresets;
 class StripChainWidget;
-class StripRxChainWidget;
 class EditorFramelessTitleBar;
 class StripTubePanel;
+class StripDeEssPanel;
 class StripGatePanel;
 class StripEqPanel;
 class StripCompPanel;
-class StripDeEssPanel;
 class StripPuduPanel;
 class StripReverbPanel;
 class StripWaveformPanel;
 class StripFinalOutputPanel;
 
-// Aetherial Audio Channel Strip — unified TX DSP window.
+// AetherTX — the transmit chain in one window.
 //
 // First-iteration plumbing for issue #2301.  Toplevel `Qt::Window`
 // that embeds all 7 client-side TX DSP stage panels in a single
@@ -70,13 +68,6 @@ public:
     void setMicInputReady(bool ready);
     void setTxActive(bool active);
 
-    // RX-side status forwarders — feed the embedded StripRxChainWidget's
-    // RADIO / ADSP / SPEAK status tiles.  Mirror the docked applet's
-    // setRxPcAudioEnabled / setRxClientDspActive / setRxOutputUnmuted.
-    void setRxPcAudioEnabled(bool on);
-    void setRxClientDspActive(bool on, const QString& label = QString());
-    void setRxOutputUnmuted(bool on);
-
     // Repaint the embedded StripChainWidget — used by MainWindow when
     // the docked Chain applet toggles a stage so the strip's tile
     // visuals stay in sync.  Engine state is the source of truth; this
@@ -87,14 +78,6 @@ public:
     // this to TransmitModel::quindarActiveChanged so the QUIN chip
     // flashes via signal hop instead of a poll.
     StripFinalOutputPanel* finalOutputPanel() const { return m_finalOutput; }
-
-    // Accessor for the embedded RX ADSP widget so MainWindow can call
-    // wireAetherDspWidget() on it.  Without that wiring, NR2/NR4/DFNR/
-    // BNR/MNR controls emit signals into the void — the AetherDspWidget
-    // doesn't talk to the engine directly; every parameter change goes
-    // through MainWindow's wire-up.  Same lifecycle as the dialog and
-    // docked applet paths.
-    AetherDspWidget* adspWidget() const { return m_adspRx; }
 
 signals:
     // Re-emitted from the embedded StripEqPanel when the user drags one
@@ -115,21 +98,6 @@ signals:
     // routes this to the same handler as ClientChainApplet's signal
     // so the docked Chain applet's chain widget repaints in lock-step.
     void stageEnabledChanged(AudioEngine::TxChainStage stage, bool enabled);
-
-    // RX-side equivalent of stageEnabledChanged.  MainWindow routes
-    // this to the docked ClientRxChainWidget so its visual state
-    // matches the strip's RX chain (#2425).
-    void rxStageEnabledChanged(AudioEngine::RxChainStage stage, bool enabled);
-
-    // Emitted when the user clicks the ADSP launcher tile in the
-    // strip's RX chain widget.  MainWindow opens the AetherDsp
-    // dialog (or focuses an existing instance).
-    void rxDspEditRequested();
-
-    // Emitted when the user double-clicks an implemented RX stage
-    // tile in the strip's chain widget.  MainWindow routes this to
-    // the corresponding RX editor.
-    void rxStageEditRequested(AudioEngine::RxChainStage stage);
 
 protected:
     void closeEvent(QCloseEvent* ev) override;
@@ -168,12 +136,6 @@ private:
     QVBoxLayout*         m_bodyLayout{nullptr};
     QLabel*              m_titleLbl{nullptr};   // title text — toggles "— TX" / "— RX" suffix
     StripChainWidget*    m_chain{nullptr};
-    StripRxChainWidget*  m_chainRx{nullptr};
-    QStackedWidget*      m_chainStack{nullptr}; // page 0 = TX chain, page 1 = RX chain
-    QStackedWidget*      m_panelStack{nullptr}; // page 0 = TX panels, page 1 = RX panels
-    bool                 m_rxMode{false};       // currently displaying RX chain + panels
-    QPushButton*         m_txBtn{nullptr};
-    QPushButton*         m_rxBtn{nullptr};
     QPushButton*         m_bypassBtn{nullptr};
     QPushButton*         m_monRecBtn{nullptr};
     QPushButton*         m_monPlayBtn{nullptr};
@@ -197,15 +159,6 @@ private:
     // RX panel instances (#2425).  Same Strip*Panel classes as the TX
     // grid above, but each one is pinned to its RX side via showForRx
     // / showForPath(Rx) and bound to the engine's RX DSP instances.
-    AetherDspWidget*   m_adspRx{nullptr};      // ADSP launcher panel — embeds AetherDspWidget
-    StripGatePanel*    m_agcT{nullptr};        // AGC-T (RX gate)
-    StripEqPanel*      m_eqRx{nullptr};
-    StripCompPanel*    m_agcC{nullptr};        // AGC-C (RX comp)
-    StripDeEssPanel*   m_dessRx{nullptr};      // DESS (RX de-esser, #2425)
-    StripTubePanel*    m_tubeRx{nullptr};
-    StripPuduPanel*    m_evo{nullptr};         // EVO (RX pudu)
-    class StripRxOutputPanel* m_outputRx{nullptr};   // RX output meter + mute + boost
-    StripWaveformPanel*       m_waveformRx{nullptr}; // RX-side waveform tap
     bool               m_restoring{false};
 };
 

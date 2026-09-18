@@ -4,20 +4,24 @@
 #include "core/dsp/WdspChannel.h"
 
 #include <QElapsedTimer>
+#include <QPointer>
 #include <QString>
 #include <QThread>
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2AdcPairing.h"
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/Hl2CapabilityAnnouncer.h"
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
 #include "core/backends/hl2/Hl2TelemetryCadence.h"  // Hl2LinkState (#15)
 #include "core/backends/hl2/Hl2TelemetryService.h"  // borrowed, owned by RadioModel
 #include "core/backends/hl2/Hl2TelemetrySource.h"   // the shared attribution rule
+#include "core/backends/hl2/Hl2RateCommit.h"
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
+#include <atomic>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -297,6 +301,31 @@ private:
     // configured before MetisClient::start(), because EP2 must not stop (see
     // the note above buildReceivers() and docs/HERMES.md §20.8). The sequence stays
     // serial on the I/O thread; only the GUI thread stopped waiting for it.
+    // The GUI-thread half of a rate change, resumed once the DEDICATED BUILD
+    // THREAD has produced a complete new set of chains and the I/O thread has
+    // swapped them in. See applyPanBandwidth() for the three-thread split and
+    // for why there is no roll-back to design.
+    void finishRateChange(bool ok, quint64 generation, int targetRate,
+                          int previousRate,
+                          const std::vector<QPointer<Hl2RxDsp>>& covered,
+                          std::size_t failedIndex,
+                          const std::string& error);
+    // Which rate change is current. An operator dragging a zoom produces
+    // crossings back to back; a task that finishes after a newer one has
+    // started installs nothing and publishes nothing rather than putting a
+    // superseded rate on the radio.
+    //
+    // ATOMIC because the I/O thread reads it too: the install step runs there
+    // and must decide, at the last possible moment before it touches anything
+    // live, whether this rebuild is still the one being asked for.
+
+
+    // Which rate is on the wire, and which crossing is current. Both questions
+    // used to be answered by separate members, and the rate one was answered by
+    // m_sampleRateHz — which is the rate being ATTEMPTED, not the rate running.
+    // See Hl2RateCommit.h for the two bugs that came of the difference.
+    AetherSDR::hl2::RateCommitLedger m_rateLedger {48000};
+
     void beginDspSetup();
     void armDspSetupWatchdog();
     void onDspSetupWatchdog();
@@ -489,6 +518,15 @@ private:
         bool audioMuted = false;
         float audioGain = 1.0f;
         int audioPanPercent = 50;
+
+        // The IQ rate this receiver's chain was actually BUILT for, or 0
+        // before it has one. Distinct from Hl2Backend::m_sampleRateHz, which is
+        // the rate this object is TRYING to reach and moves optimistically the
+        // moment a zoom is accepted. A receiver opened while a rate change is
+        // in flight is built for the rate the radio is really producing, so
+        // these two legitimately disagree for the length of a rebuild, and
+        // finishRateChange() reconciles the difference on the success path.
+        int configuredRateHz = 0;
 
         // Per-receiver S-meter ballistics. Deliberately NOT shared: a strong
         // signal on receiver 1 must not move receiver 3's needle, which is what
@@ -821,7 +859,7 @@ private:
     // much the UI would like them to be. Four panadapters on four bands share
     // one preamp setting and one filter selection; see applyBandFilter() for
     // what happens when they disagree.
-    int m_lnaGainDb = 20;
+    int m_lnaGainDb = hl2::kLnaDefaultGainDb;
     // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
     // rather than a real selection — kOcNone (0x00) is a legitimate value
     // meaning "every relay released", so it cannot double as the sentinel.
@@ -833,6 +871,26 @@ private:
     // header for why the EP2 pacer in particular must not share a thread with
     // the UI. Owned by this object; joined in the destructor.
     QThread* m_ioThread = nullptr;
+
+    // ── The rate-change build thread ──────────────────────────────────────
+    //
+    // A THIRD thread, and the reason it must exist is that m_ioThread is not
+    // one receiver's thread but ALL of them AND the wire: MetisClient paces EP2
+    // from a 2 ms timer on it and drains EP6 on it, and the EP6 sample path is
+    // a DirectConnection straight into every Hl2RxDsp::processIqBlock(). One
+    // queued task holding that thread for the length of a rebuild therefore
+    // starves every receiver's audio AND stops EP2 — which docs/HERMES.md §20.8
+    // says the gateware watchdog answers by halting the stream. Putting the
+    // rebuild on m_ioThread keeps the WINDOW alive and kills the AUDIO; this is
+    // where the build actually goes.
+    //
+    // Same shape as AnanBackend::m_dspBuildThread/m_dspBuildContext, which
+    // shipped first. m_dspBuildContext owns no state — it exists only because
+    // QMetaObject::invokeMethod needs a QObject living on the target thread to
+    // post to, and a QThread has the affinity of the thread that CREATED it.
+    // Parentless for the same reason: moveToThread() refuses a parented object.
+    QThread* m_dspBuildThread = nullptr;
+    QObject* m_dspBuildContext = nullptr;
 
     // Process-wide transmit availability, decided once at construction:
     // interactive runs may transmit; automation runs defer to the bridge's
@@ -951,7 +1009,7 @@ private:
     RestoredRadioState m_restoredState;
     QMap<QString, int> m_lnaDbByBand;
     QMap<QString, int> m_driveByBand;
-    int m_lnaDefaultDb = 20;         // matches m_lnaGainDb's own default
+    int m_lnaDefaultDb = hl2::kLnaDefaultGainDb;
     // The connect param pinned a gain that the start band did not have stored.
     // Live value honoured, persistence refused: see Hl2BandMemoryPolicy.h.
     // Cleared when the operator changes gain or leaves the start band.
@@ -1187,9 +1245,9 @@ private:
     // limits rather than a policy choice — clamping anywhere else would let a
     // value be silently truncated on the wire instead of stopping at the end of
     // the slider's travel.
-    static constexpr int kLnaGainMinDb  = -12;
-    static constexpr int kLnaGainMaxDb  = 48;
-    static constexpr int kLnaGainStepDb = 1;
+    static constexpr int kLnaGainMinDb  = hl2::kLnaGainMinDb;
+    static constexpr int kLnaGainMaxDb  = hl2::kLnaGainMaxDb;
+    static constexpr int kLnaGainStepDb = hl2::kLnaGainStepDb;
 
     // The TX passband's ceiling: Nyquist of the TX AUDIO rate, which is
     // AudioEngine's 24 kHz — NOT of the 48 kHz EP2 rate. The modulator

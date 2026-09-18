@@ -304,7 +304,7 @@ const QVector<InternalMqttTopicDef>& internalMqttPublishTopicDefs()
 {
     static const QVector<InternalMqttTopicDef> defs = {
         { QString(kCwDecodeTopic),    QStringLiteral("CW decoded text"),             true, true },
-        { QString(kRadioStateTopic),  QStringLiteral("Radio VFO / mode / TX state"), true },
+        { QString(kRadioStateTopic),  QStringLiteral("Radio VFO / mode / TX state / RF drive"), true },
         { QString(kAx25RxTopic),      QStringLiteral("AX.25 received frames"),       true },
     };
     return defs;

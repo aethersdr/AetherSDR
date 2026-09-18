@@ -1,7 +1,10 @@
 #include "PooDooLogo.h"
+#include "PanelTick.h"
 #include "core/ClientPudu.h"
 
 #include <QFont>
+#include <QFontMetricsF>
+#include <algorithm>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRadialGradient>
@@ -25,15 +28,18 @@ PooDooLogo::PooDooLogo(QWidget* parent) : QWidget(parent)
     setAttribute(Qt::WA_OpaquePaintEvent, false);
 
     m_timer = new QTimer(this);
-    m_timer->setInterval(33);
+    m_timer->setInterval(kPanelTickMs);
     connect(m_timer, &QTimer::timeout, this, &PooDooLogo::tick);
 }
 
 void PooDooLogo::setPudu(ClientPudu* p)
 {
     m_pudu = p;
-    if (m_pudu) m_timer->start();
-    else        m_timer->stop();
+    // Only while on screen: see PanelTick.h. Binding a model to a widget
+    // that is not visible used to start a poll nothing would ever stop,
+    // because a never-shown widget gets no hideEvent.
+    if (m_pudu && isVisible()) m_timer->start();
+    else                         m_timer->stop();
     update();
 }
 
@@ -91,13 +97,34 @@ void PooDooLogo::paintEvent(QPaintEvent*)
     // PooDoo™ wordmark — bold amber text, centred.
     QFont f = p.font();
     f.setFamily("Arial Black");        // bold, closest to a logo face
-    f.setPixelSize(static_cast<int>(r.height() * 0.55f));
     f.setWeight(QFont::Black);
-    p.setFont(f);
 
     const QString wordmark = m_wordmark.isEmpty()
         ? QString::fromUtf8("PooDoo\xe2\x84\xa2")
         : m_wordmark;
+
+    // Size off the height, then take it back down until it fits the width.
+    // The mark is set per instance — "PooDoo™" on some surfaces, "AetherVoice™"
+    // on the strip panel — and height alone sized the longer one straight off
+    // both edges of the widget, losing its first and last glyph. Advance is
+    // near-linear in pixel size, so one proportional correction lands it; the
+    // loop is a guard for the rounding, not the method.
+    int px = std::max(8, static_cast<int>(r.height() * 0.55f));
+    const qreal room = r.width() * 0.92;    // a little air at each end
+    f.setPixelSize(px);
+    qreal advance = QFontMetricsF(f).horizontalAdvance(wordmark);
+    if (advance > room && advance > 0.0) {
+        px = std::max(8, static_cast<int>(px * room / advance));
+        for (int guard = 0; guard < 8 && px > 8; ++guard) {
+            f.setPixelSize(px);
+            advance = QFontMetricsF(f).horizontalAdvance(wordmark);
+            if (advance <= room) break;
+            --px;
+        }
+    }
+    f.setPixelSize(px);
+    p.setFont(f);
+
     p.setPen(textColor);
     p.drawText(r, Qt::AlignCenter, wordmark);
 
@@ -111,6 +138,19 @@ void PooDooLogo::paintEvent(QPaintEvent*)
     const float ux1 = r.left() + r.width() * 0.15f;
     const float ux2 = r.right() - r.width() * 0.15f;
     p.drawLine(QPointF(ux1, uy), QPointF(ux2, uy));
+}
+
+
+void PooDooLogo::showEvent(QShowEvent* ev)
+{
+    QWidget::showEvent(ev);
+    if (m_pudu && m_timer) m_timer->start();
+}
+
+void PooDooLogo::hideEvent(QHideEvent* ev)
+{
+    if (m_timer) m_timer->stop();
+    QWidget::hideEvent(ev);
 }
 
 } // namespace AetherSDR

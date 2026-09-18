@@ -49,6 +49,24 @@ public:
     float thresholdDb() const noexcept;
     void  setRatio(float ratio) noexcept;          // 1.0 (off) .. 10.0 (hard gate)
     float ratio() const noexcept;
+    // Fixed at kAttackMs — no surface offers it any more.
+    //
+    // The knob went because its range was mostly harmful rather than useful:
+    // across 0.1–100 ms everything past a few ms audibly chews word onsets,
+    // so most of the travel was a way to get the gate wrong, and Peek
+    // (lookahead) is the control that actually protects an onset. A gate's
+    // attack is not a voicing the way a compressor's is.
+    //
+    // 1.0 rather than the 0.5 that shipped: that is where operators report
+    // leaving it, and the two are not meaningfully apart — both sit in the
+    // "fast" end this stage wants, well inside where lookahead covers the
+    // transient either way. The argument above is about the top of the old
+    // range, not about these two values; it should not be read as calling
+    // 0.5 too slow.
+    //
+    // The setter stays for the per-slice mirror in RxClientEffects, which
+    // copies whatever the master holds.
+    static constexpr float kAttackMs = 1.0f;
     void  setAttackMs(float ms) noexcept;          // 0.1 .. 100 ms
     float attackMs() const noexcept;
     void  setReleaseMs(float ms) noexcept;         // 5 .. 2000 ms
@@ -89,7 +107,7 @@ private:
         std::atomic<uint8_t>  mode{static_cast<uint8_t>(Mode::Expander)};
         std::atomic<float>    thresholdDb{-40.0f};
         std::atomic<float>    ratio{2.0f};
-        std::atomic<float>    attackMs{0.5f};
+        std::atomic<float>    attackMs{kAttackMs};
         std::atomic<float>    releaseMs{100.0f};
         std::atomic<float>    holdMs{20.0f};
         std::atomic<float>    floorDb{-15.0f};

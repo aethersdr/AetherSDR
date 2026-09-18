@@ -379,20 +379,20 @@ public:
     // Set panadapter bandwidth zoom limits (MHz). Called per-radio model.
     void setBandwidthLimits(double minMhz, double maxMhz) { m_minBwMhz = minMhz; m_maxBwMhz = maxMhz; }
 
-    // Fade the outer edges of the spectrum trace and waterfall to the
-    // background color -- purely cosmetic, drawn into m_overlayStatic (the
-    // layer already composited on top of the FFT trace/waterfall each
-    // frame), NOT a crop of the bin data and NOT a change to the reported
+    // Crop the outer kEdgeTaperFraction of each side of the spectrum trace,
+    // waterfall and 3D surface, and narrow the displayed coordinate mapping
+    // to match (croppedBinsForDisplay(), effectiveBandwidthMhz()), so the
+    // kept span fills the panel. DISPLAY-only: NOT a change to the reported
     // bandwidth. An earlier attempt hid the DDC's always-present edge
     // roll-off by dropping bins in the BACKEND and under-reporting the
     // bandwidth to match -- that coupling was the actual bug (#zoom-out
     // regression): the widget's own zoom math used the under-reported value
     // as its baseline and a zoom-out request could no longer cross into
-    // "closer to the next rate up." Doing the fade here instead means the
-    // bandwidth and bin count this widget's zoom math sees are always the
-    // real ones; only the PIXELS at the margin are dimmed. Called per-radio
-    // model -- only a DDC-based backend like ANAN has this roll-off;
-    // Flex/HL2/Icom/Kiwi don't.
+    // "closer to the next rate up." Cropping here instead means the
+    // bandwidth this widget requests and reports is always the real one;
+    // only what is drawn is narrowed. Called per-radio model -- only a
+    // DDC-based backend like ANAN has this roll-off; Flex/HL2/Icom/Kiwi
+    // don't.
     void setPanEdgeTaperEnabled(bool enabled)
     {
         if (m_edgeTaperEnabled == enabled)
@@ -1408,6 +1408,22 @@ private:
     int mhzToX(double mhz) const;
     // Convert pixel x back to MHz.
     double xToMhz(int x) const;
+    // m_bandwidthMhz narrowed by kEdgeTaperFraction when m_edgeTaperEnabled,
+    // else the value unchanged. This is the DISPLAY bandwidth (what
+    // mhzToX()/xToMhz(), the trace, and the waterfall lay out on screen) --
+    // deliberately NOT what gets requested from or reported to the backend,
+    // so it must never feed a setPanBandwidth() call or similar (that
+    // coupling caused a documented zoom-out regression). Center is
+    // unaffected: the crop is symmetric.
+    bool panEdgeCropActive() const;
+    double effectiveBandwidthMhz() const;
+    // Central (1 - 2*kEdgeTaperFraction) fraction of bins, or bins unchanged
+    // when m_edgeTaperEnabled is false. Pairs with effectiveBandwidthMhz():
+    // cropping the bin array here is what
+    // lets the trace/waterfall's existing "stretch the whole array across
+    // the whole width" pixel math fill the panel with just the cropped
+    // range, with no changes to that math itself.
+    QVector<float> croppedBinsForDisplay(const QVector<float>& bins) const;
 
     QVector<float> m_bins;       // raw FFT frame (dBm)
     QVector<float> m_smoothed;   // exponential-smoothed for visual stability

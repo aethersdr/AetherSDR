@@ -140,7 +140,7 @@ void MainWindow::buildMenuBar()
 
     auto* flexControlAction = settingsMenu->addAction("AetherControl...");
     m_aetherControlAction = flexControlAction;
-    flexControlAction->setVisible(true); // capability-gated after connection
+    flexControlAction->setVisible(true); // host controller, independent of radio capabilities
     flexControlAction->setMenuRole(QAction::NoRole);
     connect(flexControlAction, &QAction::triggered,
             this, &MainWindow::showFlexControlDialog);
@@ -155,13 +155,9 @@ void MainWindow::buildMenuBar()
     // inside the controller window.
     auto* flexControlKnobAction = settingsMenu->addAction("FlexControl Knob & Buttons...");
     m_flexControlKnobAction = flexControlKnobAction;
-    flexControlKnobAction->setVisible(true); // capability-gated after connection
+    flexControlKnobAction->setVisible(true); // host serial device, never gated (#5778)
     flexControlKnobAction->setMenuRole(QAction::NoRole);
     connect(flexControlKnobAction, &QAction::triggered, this, [this] {
-        if (m_radioModel.isConnected()
-            && !m_radioModel.backendCapabilities().hasFlexControlIntegration) {
-            return;
-        }
         if (RadioSetupDialog* dlg = openRadioSetupPage())
             dlg->revealFlexControlSettings();
     });
@@ -704,10 +700,10 @@ void MainWindow::buildMenuBar()
         });
     }
 
-    auto* dspAction = settingsMenu->addAction("AetherDSP Settings...");
+    auto* dspAction = settingsMenu->addAction("AetherRX...");
     dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
     connect(dspAction, &QAction::triggered, this, [this] {
-        ensureAetherDspDialog();
+        ensureAetherRxDialog();
     });
 
     auto* settingsBrowserAction = settingsMenu->addAction("Settings Browser...");
@@ -1261,7 +1257,7 @@ void MainWindow::buildMenuBar()
     // every one of these handlers can legitimately decline (no active pan, keyer
     // indicator disabled), which would otherwise leave the menu asserting a
     // panel is open when it is not.
-    auto* aetherialAction = toolsMenu->addAction("Aetherial Audio");
+    auto* aetherialAction = toolsMenu->addAction("AetherTX...");
     m_aetherialAction = aetherialAction;
     aetherialAction->setCheckable(true);
     connect(aetherialAction, &QAction::triggered, this, [this] {
@@ -1399,6 +1395,19 @@ void MainWindow::buildMenuBar()
     auto* gpsDashboardAction = toolsMenu->addAction("GPS Dashboard...", this, [this] {
         showGpsLocationDialog();
     });
+    // Discoverability mitigation for AGC-T calibration's right-click-only
+    // entry point (docs/agc-t-calibration-design.md §0 flags this exact
+    // tension and prescribes a mitigation — this is the Tools-menu half of
+    // it, additive to the slider's right-click menu, not a replacement).
+    // Requested by Larry, KE2ET. Targets the active slice, same as the
+    // right-click path (RxApplet.cpp) — "the currently selected panadapter."
+    auto* agcTCalibrationAction = toolsMenu->addAction(
+        "Calibrate AGC-T Against Noise Floor...", this, [this] {
+        if (auto* s = activeSlice()) {
+            showAgcCalibrationDialog(s->sliceId());
+        }
+    });
+    m_agcTCalibrationMenuAction = agcTCalibrationAction;
     toolsMenu->addAction(networkAction);
     toolsMenu->addAction("Runtime Monitor...", this, [this] {
         showSystemInfoDialog();

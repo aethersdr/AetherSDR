@@ -1,10 +1,12 @@
 #pragma once
 
 #include "ClientEqApplet.h"  // for Path enum
+#include <QVector>
 #include <QWidget>
 #include <memory>
 
 class QComboBox;
+class QHBoxLayout;
 class QLabel;
 class QPushButton;
 class QTimer;
@@ -38,6 +40,7 @@ public:
     // Safe to call whether or not the window is currently visible.
     void showForPath(ClientEqApplet::Path path);
 
+
     // Push the radio's TX low/high filter cutoffs to the canvas as
     // dashed yellow guide lines.  No-op when the editor's current path
     // is RX.  Pass 0 for either edge to suppress that guide.
@@ -48,6 +51,12 @@ public:
     // Cached so RX → TX → RX path swaps restore the correct guides.
     void setRxFilterCutoffs(int audioLowHz, int audioHighHz);
 
+    // The receive filter ladder for the slice's current mode, and the width it
+    // is running now so the matching button can show as active. Pushed in by
+    // MainWindow, which owns the slice; an empty ladder hides the row, which is
+    // what FM wants.
+    void setRxFilterPresets(const QVector<int>& widthsHz, int currentWidthHz);
+
     // Reload every visual control (icon row, canvas, param row, family
     // combo, bypass button) from the engine's current band state.
     // Used after a preset import / load writes new values into the
@@ -56,6 +65,11 @@ public:
     void refreshFromEngine();
 
 signals:
+    // A width button was pressed. MainWindow turns it into a passband and sends
+    // it to the slice: the rule is per mode and needs slice state this panel
+    // has no business holding.
+    void rxFilterWidthRequested(int widthHz);
+
     // Fired when the bypass button is toggled in the editor. The docked
     // applet subscribes so its Enable toggle stays in sync — both widgets
     // read/write the same ClientEq::enabled flag underneath.
@@ -75,6 +89,8 @@ protected:
     void hideEvent(QHideEvent* ev) override;
 
 private:
+    void rebuildFilterRow();
+
     void saveGeometryToSettings();
     void restoreGeometryFromSettings();
 
@@ -107,6 +123,13 @@ private:
     ClientEqIconRow*           m_iconRow{nullptr};
     ClientEqEditorCanvas*      m_canvas{nullptr};
     ClientEqParamRow*          m_paramRow{nullptr};
+
+    // Receive filter width row: the ladder for the slice's current mode, the
+    // width it is running now (so one button shows active), and the row itself.
+    QWidget*                   m_filterRow{nullptr};
+    QHBoxLayout*               m_filterRowLayout{nullptr};
+    QVector<int>               m_filterWidths;
+    int                        m_currentFilterWidth{0};
     ClientEqOutputFader*       m_outFader{nullptr};
     QTimer*                    m_fftTimer{nullptr};
     std::unique_ptr<ClientEqFftAnalyzer> m_fftAnalyzer;

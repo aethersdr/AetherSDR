@@ -1,5 +1,6 @@
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2Bands.h"
+#include "core/backends/hl2/Hl2ModeVocabulary.h"
 
 #include <QJsonObject>
 
@@ -205,22 +206,6 @@ WdspChannel::Mode modeFromString(const QString& mode) noexcept
     return WdspChannel::Mode::Usb;
 }
 
-// Is `mode` a name modeFromString() genuinely maps (rather than falling back
-// to USB)? The restore boundary uses this so a corrupt document's mode string
-// is dropped instead of reaching Receiver::mode, the UI, and — via capture —
-// re-persisting itself (PR #4619 review, Ozy311).
-bool isKnownModeString(const QString& mode) noexcept
-{
-    static const QStringList kKnown = {
-        QStringLiteral("LSB"), QStringLiteral("USB"), QStringLiteral("DSB"),
-        QStringLiteral("CWL"), QStringLiteral("CWU"), QStringLiteral("CW"),
-        QStringLiteral("FM"),  QStringLiteral("NFM"), QStringLiteral("AM"),
-        QStringLiteral("DIGU"), QStringLiteral("DIGL"), QStringLiteral("SAM"),
-        QStringLiteral("DRM"), QStringLiteral("WBFM"), QStringLiteral("WFM"),
-    };
-    return kKnown.contains(mode.toUpper());
-}
-
 // The same question for the AGC vocabulary, and it needs asking for the same
 // reason: wdspAgcMode() FALLS BACK to medium for anything it does not
 // recognise, so a corrupt or hand-edited document would otherwise turn into a
@@ -414,6 +399,16 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_metis->moveToThread(m_ioThread);
     m_txDsp->moveToThread(m_ioThread);
     m_ioThread->start();
+
+    // The rate-change build thread — see the member declarations. Started here
+    // and never restarted: it is idle except during a pan-bandwidth crossing,
+    // and creating it lazily would put a thread start inside the one path whose
+    // whole purpose is to not make the operator wait.
+    m_dspBuildThread = new QThread(this);
+    m_dspBuildThread->setObjectName(QStringLiteral("hl2-dsp-build"));
+    m_dspBuildContext = new QObject();   // nullptr parent: moveToThread requires it
+    m_dspBuildContext->moveToThread(m_dspBuildThread);
+    m_dspBuildThread->start();
 
     m_cwHangTimer = new QTimer(this);
     m_cwHangTimer->setSingleShot(true);
@@ -759,18 +754,25 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
 
 void Hl2Backend::publishLinkStats()
 {
+    // Fresh packets since the last tick — the transport-level proof of life the
+    // heartbeat runs on. Computed here rather than in linkStats() because the
+    // comparison CONSUMES the previous value, and linkStats() is a const getter
+    // any caller may poll at any rate.
+    //
+    // STORED ON m_link, not on the outgoing copy. It used to be written only to
+    // the local `s` that is emitted, so the SIGNAL path carried liveness and the
+    // GETTER path never did: linkStats() returned m_link.alive, which nothing
+    // had ever written, so every poller — the `liveness` automation verb among
+    // them — read a healthy radio as dead. Two paths, one of them silently
+    // wrong, and the wrong one is the one a diagnostic uses.
+    m_link.alive = m_connected && m_link.rxPackets != m_linkRxPacketsAtLastTick;
+    m_linkRxPacketsAtLastTick = m_link.rxPackets;
     LinkStats s = m_link;
     // The link is REPORTED from the moment we are connected, even before the
     // first counter snapshot has crossed from the I/O thread. Otherwise the
     // consumer's first tick sees reported=false, keeps its Flex sources, and
     // renders the blank readout this whole path exists to fix.
     s.reported = true;
-    // Fresh packets since the last tick — the transport-level proof of life the
-    // heartbeat runs on. Computed here rather than in linkStats() because the
-    // comparison CONSUMES the previous value, and linkStats() is a const getter
-    // any caller may poll at any rate.
-    s.alive = m_connected && m_link.rxPackets != m_linkRxPacketsAtLastTick;
-    m_linkRxPacketsAtLastTick = m_link.rxPackets;
     emit linkStatsUpdated(s);
 }
 
@@ -977,10 +979,17 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
             [this, ui](const std::vector<float>& bins) {
         if (!m_ids.byUi(ui))
             return;
-        // dBFS -> dBm through the one object that owns the reference. With
-        // an uncalibrated fullScaleDbm this is a pure -lnaGain shift, which
-        // is the part that is exactly right: it holds the trace still across
-        // a gain change instead of letting the whole display jump.
+        // dBFS -> dBm through the one object that owns the reference. Two
+        // terms now: the DERIVED full-scale figure, and -lnaGain. The second
+        // is the part that is exactly right whatever the first is worth --
+        // it holds the trace still across a gain change instead of letting
+        // the whole display jump. The first moves the floor once, to a
+        // figure that can be checked, and never again.
+        //
+        // WHICH IS WHY THE off == 0.0 FAST PATH NOW RARELY FIRES: at the
+        // default 0 dB of gain the offset is the constant +3, not zero. The
+        // branch stays because an operator at +3 dB of LNA gain still hits
+        // it, and because it is the same test either way.
         //
         // The reference is SHARED because the LNA it describes is shared —
         // one AD9866 behind every DDC — so a gain change moves all four
@@ -1149,7 +1158,14 @@ bool Hl2Backend::createPanadapter()
     }
 
     Hl2RxDsp::Config dc;
-    dc.inputSampleRateHz = m_sampleRateHz;
+    // THE COMMITTED RATE, NOT m_sampleRateHz. A receiver can be opened while a
+    // rate change is still building, and m_sampleRateHz has already moved to the
+    // rate being ATTEMPTED. Building this chain for that rate would hand it a
+    // decimation geometry for IQ the radio is not producing yet — and if the
+    // build in flight then fails, never will. The chain is built for what the
+    // wire is actually carrying; finishRateChange() rebuilds it if and when the
+    // crossing commits.
+    dc.inputSampleRateHz = m_rateLedger.committed();
     dc.audioSampleRateHz = 24000;
     dc.mode = modeFromString(r.mode);
     std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
@@ -1175,6 +1191,10 @@ bool Hl2Backend::createPanadapter()
         }
         return false;
     }
+
+    // What this chain was actually built for, so a rate change that commits
+    // while it was being opened can tell that it still needs rebuilding.
+    r.configuredRateHz = dc.inputSampleRateHz;
 
     int channelId = -1;
     QMetaObject::invokeMethod(dsp, [dsp, &channelId] {
@@ -1606,6 +1626,21 @@ void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
 
 Hl2Backend::~Hl2Backend()
 {
+    // THE BUILD THREAD FIRST, before the I/O thread it posts back to. A build
+    // in flight hands its finished channels to the I/O thread's loop, so
+    // joining it while that loop is still running is what lets those channels
+    // be installed (or, if the generation moved on, destroyed) by the thread
+    // that owns them rather than leaking with the undelivered event. Joining in
+    // the other order would race the loop's end against the post.
+    //
+    // This BLOCKS for an in-flight OpenChannel, exactly as the I/O-thread join
+    // below does and for the same reason: WDSP's open cannot be cancelled. A
+    // family switch or an app quit during a rate change waits it out. That is
+    // the same GUI stall the connect split leaves standing (see below).
+    if (m_dspBuildThread) {
+        m_dspBuildThread->quit();
+        m_dspBuildThread->wait();
+    }
     if (m_ioThread) {
         // Stop the wire ON its own thread and WAIT for it. A queued stop() would
         // never run -- quit() below ends the event loop that would deliver it --
@@ -1639,6 +1674,8 @@ Hl2Backend::~Hl2Backend()
     m_ids.clear();
     delete m_txDsp;
     delete m_metis;
+    // After both joins, so nothing can be posting to it.
+    delete m_dspBuildContext;
 }
 
 AetherSDR::WidebandConverterView widebandConverterViewRecord() noexcept
@@ -1744,8 +1781,15 @@ RadioCapabilities Hl2Backend::capabilities() const
     // reports what 0 dBFS is worth at the antenna, and no HL2 oracle states a
     // figure for it. It is a per-unit property of the board, the ADC reference
     // and the front end, so it can only come from a measurement against a
-    // reference source that has never been made on this station. Until it is,
-    // Hl2DbReference::fullScaleDbm stays 0.0 and isCalibrated() is false.
+    // reference source that has never been made on this station.
+    //
+    // AND A DERIVED FIGURE IS NOT THAT MEASUREMENT. Hl2DbReference::
+    // fullScaleDbm is no longer 0.0 -- it carries +3 dBm derived from the
+    // AD9866 datasheet and the HL2's own input network -- which makes the
+    // zero point far better than arbitrary and still not measured.
+    // isCalibrated() reports whether setFullScaleDbm has been called, and
+    // nothing in src/ calls it, so this stays false and this paragraph stays
+    // true.
     //
     // Read from that object rather than hardcoded false: the day a per-unit
     // fullScaleDbm is populated, the declaration follows it instead of having
@@ -1926,6 +1970,13 @@ RadioCapabilities Hl2Backend::capabilities() const
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
     c.forwardPowerRequiresSmoothing = true;
+    // Drive here is OPERATOR INTENT, not a readback (#5518). setTxPower() records
+    // the requested percent before the transmit gate and applyDrive() holds the
+    // drive register at 0 while !m_txAllowed, so TransmitModel::rfPower() can read
+    // 100 with no RF leaving the radio. Consumers that act on drive must see that
+    // distinction rather than infer applied power from a request.
+    c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
+        SliceFrequencyControl::Authority::Engine};
     c.hasRadioDialLock = false;
     c.hasTuner = false;
     c.hasTunerMemories = false;
@@ -2274,6 +2325,12 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     mp.host = host;
     mp.port = request.port ? request.port : kMetisPort;
     mp.sampleRate = sampleRateEnum(m_sampleRateHz);
+    // The connect handshake IS the first commit: this rate goes into
+    // MetisClient's initial command bank, so from here the radio is running at
+    // it. Without seeding it here the first zoom of a session would capture the
+    // 48 kHz construction default as its previousRate and a failed build would
+    // "restore" a rate the operator never had.
+    m_rateLedger.commit(m_sampleRateHz);
     // COMMANDED, not true-RF: this seeds MetisClient's initial RX and TX
     // command banks, which are register contents. Everything else in this
     // function keeps startFreqHz in the true-RF domain.
@@ -3598,7 +3655,12 @@ void Hl2Backend::applyPanBandwidth(double hz)
         return;
     }
 
-    const int previousRate = m_sampleRateHz;
+    // THE COMMITTED RATE, NOT m_sampleRateHz. This is the rate a failed build
+    // must put back, and m_sampleRateHz is not it while another crossing is in
+    // flight: that one already moved it optimistically to a rate the register
+    // has not been written with. Capturing it here made a failed second
+    // crossing "restore" a rate the radio had never been commanded to.
+    const int previousRate = m_rateLedger.committed();
 
     // A WIDER span may not fit the receivers that are running. Both axes cost
     // bandwidth, so zooming out with four receivers open can cross the link
@@ -3619,120 +3681,371 @@ void Hl2Backend::applyPanBandwidth(double hz)
 
     m_sampleRateHz = rate;
 
-    // The DDC rate lives in the config register (C0=0x00), latched into the next
-    // C&C round. Deliberately NOT followed by a filter-pipeline reset: sending
-    // 0x39 on every geometry change is what wedged a board hard enough to need a
-    // power cycle (see MetisClient::requestPipelineReset). The decimation filters
-    // settle on their own within a few blocks.
-    if (m_metis)
-        QMetaObject::invokeMethod(m_metis, "setSampleRate", Qt::QueuedConnection,
-            Q_ARG(AetherSDR::hl2::SampleRate, sampleRateEnum(rate)));
+    // THE RATE REGISTER IS NOT WRITTEN HERE. It used to be — posted to
+    // MetisClient at exactly this point, before a single chain had been
+    // rebuilt — and that is the ordering this change exists to undo: the radio
+    // switched rate and then every receiver spent the length of the rebuild
+    // decimating the new IQ for the old rate. The write now happens on the
+    // SUCCESS PATH only, in the same I/O-thread turn that installs the new
+    // chains, and a failed rebuild therefore never reaches the radio at all.
+    // See the install step below and finishRateChange().
 
-    // FOLLOW-UP: this loop still BLOCKS THE GUI THREAD, which is the same defect
-    // connectRadio() had before it was split into beginDspSetup()/
-    // finishDspSetup(). Each receiver costs an open (40-175 ms) plus a close
-    // that flushes under WDSP's 100 ms timeout, and it runs for every receiver
-    // because the rate register is radio-wide — roughly 0.6-1.1 s of frozen UI
-    // per rate-boundary crossing with four panadapters open. That is the
-    // "chunky zoom" operators report. docs/HERMES.md §22.4 has the measurements.
+    // ── Three threads, and each one is there for a reason ─────────────────
     //
-    // Not fixed here on purpose: unlike the connect, this has ordering
-    // constraints that survive a partial failure — the DSP must expect the new
-    // rate BEFORE EP6 delivers at it, and a receiver that fails to reconfigure
-    // has to put the ones already rebuilt back, or the set is split across two
-    // rates with nothing reporting it. The phase split is reusable; the
-    // roll-back is what needs designing.
+    // GUI THREAD (here): snapshot every per-receiver Config. m_rx is
+    // GUI-thread-only, so the decisions that need it are all made now and
+    // copied; nothing downstream reads the container.
     //
-    // Rebuild the receive chain at the new input rate. WDSP's channel is opened
-    // with a fixed input rate, so a rate change is a reconfigure, not a setter —
-    // Hl2RxDsp::Config carries the operator's live mode/filter/AGC/shift so the
-    // rebuild comes back up where they left it rather than on construction
-    // defaults.
+    // BUILD THREAD (m_dspBuildThread): construct a COMPLETE set of N new
+    // chains while the old set keeps running and keeps producing audio.
+    // Nothing live is touched. N, not one, because the DDC rate register is
+    // RADIO-WIDE — that is the one way this differs from AnanBackend, which
+    // has a single DDC and therefore a single chain to rebuild.
     //
-    // Blocking, and in this order: the DSP must already expect the new rate
-    // before EP6 starts delivering at it. Reconfiguring afterwards would feed
-    // 384 kHz IQ into a chain still decimating for 48 kHz, which is not an error
-    // anything reports — it is simply the wrong audio and a mis-scaled spectrum.
-    // EVERY receiver, because the rate register is radio-wide: one receiver left
-    // decimating for the old rate would produce wrong audio and a mis-scaled
-    // spectrum, with nothing reporting an error.
+    // I/O THREAD (m_ioThread, reached through m_metis): if all N built, swap
+    // them in and write the rate register, in one turn. The swap is pointer
+    // writes.
+    //
+    // WHY NOT THE I/O THREAD FOR THE BUILD, which is where the previous commit
+    // left it. That thread is not one receiver's — it is the wire's AND every
+    // receiver's. MetisClient paces EP2 from a 2 ms timer on it and drains EP6
+    // on it, and iqBlocksReady is a Qt::DirectConnection that runs
+    // Hl2RxDsp::processIqBlock() inline on it. So a rebuild task holding that
+    // thread starves every receiver's audio and stops EP2, and
+    // docs/HERMES.md §20.8 is explicit that the gateware watchdog halts the
+    // stream when EP2 stops arriving. Moving the wait off the GUI thread kept
+    // the WINDOW alive during a zoom; only moving the WORK off the I/O thread
+    // keeps the RADIO alive.
+    //
+    // WHY THERE IS NO ROLL-BACK, which the two previous notes here each said
+    // was the hard part. There is nothing to roll back. Until every one of the
+    // N builds has succeeded, the rate register is unwritten and no published
+    // chain has been touched — so the failure path is "destroy the new set and
+    // return", and the radio and every receiver are exactly as they were. The
+    // roll-back was only ever needed because the old code changed live state
+    // before it knew whether it could.
+    //
+    // WHAT THIS DOES NOT CLAIM. Nothing here is measured. The 0.6-1.1 s figure
+    // is docs/HERMES.md §22.4's, from the blocking-on-the-GUI-thread era, and
+    // whether the audio actually stays clean across a crossing needs a radio,
+    // four panadapters and a zoom drag.
+    struct RebuildStep {
+        // QPointer, not a raw Hl2RxDsp*: a receiver can be closed while a
+        // build is in flight, and tearDownReceivers() retires these through
+        // deleteLater() posted to the I/O thread. Both the clear and every
+        // check below therefore happen ON the I/O thread, which is what makes
+        // a QPointer — reentrant, not thread-safe — sound here. The BUILD
+        // thread never CHECKS these: buildChannel() is static and takes only a
+        // Config, which is the entire reason it is static. It does hold them —
+        // `steps` is captured by value, so a copy of every QPointer is
+        // constructed and destroyed on the build thread — and that is safe for
+        // the narrower reason that QWeakPointer's refcount is atomic. It is the
+        // isNull() check behind `if (st.dsp)` that is not thread-safe, and every
+        // one of those stays on the I/O thread.
+        QPointer<Hl2RxDsp> dsp;
+        Hl2RxDsp::Config next;
+        std::size_t index = 0;
+    };
+    std::vector<RebuildStep> steps;
+    steps.reserve(m_rx.size());
     for (std::size_t i = 0; i < m_rx.size(); ++i) {
         Receiver& r = m_rx[i];
         if (!r.dsp)
             continue;
-        Hl2RxDsp::Config dc;
-        dc.inputSampleRateHz = m_sampleRateHz;
-        dc.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
-        dc.mode = modeFromString(r.mode);
-        std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
+        RebuildStep st;
+        st.dsp = r.dsp;
+        st.index = i;
+        st.next.inputSampleRateHz = m_sampleRateHz;
+        st.next.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
+        st.next.mode = modeFromString(r.mode);
+        std::tie(st.next.filterLowHz, st.next.filterHighHz) = dspFilterHz(r);
         // Carried through the rebuild rather than reapplied afterwards. A
-        // reconfigured channel opens on Config's defaults, so an operator who had
-        // moved their AGC would have had it silently snap back to medium/39 dB
-        // every time they zoomed.
-        dc.agcMode = wdspAgcMode(r.agcMode);
-        dc.maximumAgcGainDb = m_dbRef.agcCeilingDb(r.agcThresholdDb);
-        std::string err;
-        bool ok = false;
-        Hl2RxDsp* dsp = r.dsp;
-        QMetaObject::invokeMethod(dsp, [dsp, &dc, &err, &ok] {
-            ok = dsp->configure(dc, &err);
-        }, Qt::BlockingQueuedConnection);
-        if (!ok) {
-            // Failing back to the old rate keeps the wire and the DSP agreeing.
-            // The alternative — leaving the register commanded to a rate the DSP
-            // cannot process — is silent: audio would be wrong with nothing in
-            // the UI to say why.
-            //
-            // The receivers already rebuilt are put BACK, so a partial failure
-            // does not leave the set split across two rates. That is the failure
-            // mode multi-receiver adds: with one receiver there was nothing to
-            // be inconsistent with.
-            qWarning() << "Hl2Backend: could not reconfigure RX DSP" << i << "for"
-                       << m_sampleRateHz << "Hz —"
-                       << QString::fromStdString(err)
-                       << "— staying at" << previousRate << "Hz";
-            m_sampleRateHz = previousRate;
-            for (std::size_t k = 0; k < i; ++k) {
-                Hl2RxDsp* back = m_rx[k].dsp;
-                if (!back)
-                    continue;
-                Hl2RxDsp::Config rc = dc;
-                rc.inputSampleRateHz = previousRate;
-                rc.mode = modeFromString(m_rx[k].mode);
-                std::tie(rc.filterLowHz, rc.filterHighHz) = dspFilterHz(m_rx[k]);
-                rc.agcMode = wdspAgcMode(m_rx[k].agcMode);
-                rc.maximumAgcGainDb = m_dbRef.agcCeilingDb(m_rx[k].agcThresholdDb);
-                std::string backErr;
-                bool backOk = false;
-                QMetaObject::invokeMethod(back, [back, &rc, &backErr, &backOk] {
-                    backOk = back->configure(rc, &backErr);
-                }, Qt::BlockingQueuedConnection);
-                if (!backOk) {
-                    qCCritical(lcHl2) << "HL2: receiver" << k
-                                      << "could not be restored to" << previousRate
-                                      << "Hz —" << QString::fromStdString(backErr);
-                }
-            }
-            if (m_metis)
-                QMetaObject::invokeMethod(m_metis, "setSampleRate",
-                    Qt::QueuedConnection,
-                    Q_ARG(AetherSDR::hl2::SampleRate,
-                          sampleRateEnum(previousRate)));
-            // #5594 (M1): the rate went back, so the ceiling may have gone back
-            // with it. Guarded, so a rollback to the rate we already announced
-            // says nothing.
-            announceReceiverCeilingRevision();
-            emitAllPanState();
-            return;
-        }
+        // reconfigured channel opens on Config's defaults, so an operator who
+        // had moved their AGC would have had it silently snap back to
+        // medium/39 dB every time they zoomed.
+        st.next.agcMode = wdspAgcMode(r.agcMode);
+        st.next.maximumAgcGainDb = m_dbRef.agcCeilingDb(r.agcThresholdDb);
+        steps.push_back(st);
     }
 
-    // Remember it. The span is the operator's deliberate choice about how much
-    // network and CPU this radio may consume, so it survives the session rather
-    // than snapping back to the conservative default on the next launch.
-    // Written only after the reconfigure SUCCEEDED — persisting a rate the DSP
-    // just refused would make the failure permanent across restarts.
+    // A SECOND CROSSING WHILE ONE IS IN FLIGHT. An operator dragging a zoom
+    // produces these back to back. The generation is checked TWICE: once on
+    // the I/O thread immediately before anything live is touched, so a
+    // superseded set is destroyed instead of installed, and again on the GUI
+    // thread so a superseded outcome publishes nothing.
+    const quint64 generation = m_rateLedger.beginCrossing();
+    const int targetRate = m_sampleRateHz;
+
+    if (steps.empty()) {
+        // No chains to rebuild, so nothing can fail — command the rate and
+        // publish, which is what the whole success path below reduces to here.
+        if (m_metis) {
+            QMetaObject::invokeMethod(m_metis, "setSampleRate", Qt::QueuedConnection,
+                Q_ARG(AetherSDR::hl2::SampleRate, sampleRateEnum(rate)));
+            // Commanded, so it is committed. Queued rather than direct, but
+            // nothing can overtake it: the next crossing's register write is
+            // posted to the same thread behind this one.
+            m_rateLedger.commit(rate);
+        }
+        Hl2Settings::setSpanMhz(static_cast<double>(m_sampleRateHz) / 1.0e6);
+        announceReceiverCeilingRevision();
+        emitAllPanState();
+        notifyOperatingStateChanged();
+        return;
+    }
+
+    // m_metis is the handle onto the I/O thread's event loop — the object that
+    // actually lives there (publishIoDspList() says the same). It is created in
+    // the constructor and deleted in the destructor, after both threads are
+    // joined, so it is stable for this object's whole life and safe to capture.
+    MetisClient* const metis = m_metis;
+    if (!metis) {
+        // No wire object means no I/O thread loop to post to and no radio to
+        // command. Nothing was changed; report the failure the way a failed
+        // build would.
+        finishRateChange(false, generation, targetRate, previousRate, {}, 0,
+                         "HL2: no wire client to command the new rate");
+        return;
+    }
+
+    QMetaObject::invokeMethod(metis, [this, metis, steps, generation, targetRate,
+                                      previousRate] {
+        // ---- I/O THREAD, turn 1: mark, snapshot, hand off ----
+        //
+        // beginRebuild() FIRST, on each chain's own thread, so a setMode/
+        // setFilter/setAgc/setShift/notch/NB call arriving while the build runs
+        // updates that chain's mirrors instead of blocking this thread on
+        // WDSP's process-wide setup mutex, which the build is about to hold.
+        // Hl2RxDsp::installRebuiltChannel() re-applies every one of them at the
+        // swap. Nothing the operator asks for during a zoom is lost.
+        //
+        // The noise-blanker pair is snapshotted here because the channel is
+        // OPENED with it (Hl2RxDsp::buildChannel()'s own note) and it is
+        // deliberately not part of Config.
+        struct BuildInput {
+            Hl2RxDsp::Config cfg;
+            bool nbOn = false;
+            int nbLevel = 50;
+        };
+        std::vector<BuildInput> inputs;
+        inputs.reserve(steps.size());
+        for (const RebuildStep& st : steps) {
+            BuildInput in;
+            in.cfg = st.next;
+            if (st.dsp) {
+                st.dsp->beginRebuild(st.next);
+                in.nbOn = st.dsp->noiseBlankerEnabled();
+                in.nbLevel = st.dsp->noiseBlankerLevel();
+            }
+            inputs.push_back(in);
+        }
+
+        QMetaObject::invokeMethod(m_dspBuildContext, [this, metis, steps, inputs,
+                                                      generation, targetRate,
+                                                      previousRate] {
+            // ---- BUILD THREAD: the whole cost, and nothing live in reach ----
+            //
+            // SERIAL, and not as a concession: WDSP's OpenChannel and
+            // Hl2Spectrum's FFT plan both run under the SAME process-wide lock
+            // (WdspChannel.cpp's g_setupMutex, taken by open() and by
+            // WdspChannel::fftwSetupLock() which Hl2Spectrum's constructor
+            // uses). N builds on N threads would serialise on that lock anyway
+            // and the wall clock would be identical. What matters is WHICH
+            // thread pays it, not how many.
+            std::vector<Hl2RxDsp::RebuildResult> built;
+            built.reserve(steps.size());
+            bool ok = true;
+            std::size_t failedAt = 0;
+            std::string err;
+            for (std::size_t n = 0; n < inputs.size(); ++n) {
+                Hl2RxDsp::RebuildResult r = Hl2RxDsp::buildChannel(
+                    inputs[n].cfg, inputs[n].nbOn, inputs[n].nbLevel);
+                if (!r.channel) {
+                    ok = false;
+                    failedAt = n;
+                    err = r.error;
+                    break;   // the set is all-or-nothing; building past the
+                             // first failure is waste
+                }
+                built.push_back(std::move(r));
+            }
+            const std::size_t failedIndex = ok ? 0 : steps[failedAt].index;
+
+            QMetaObject::invokeMethod(metis, [this, metis, steps, generation,
+                                              targetRate, previousRate, ok,
+                                              failedIndex, err,
+                                              b = std::move(built)]() mutable {
+                // ---- I/O THREAD, turn 2: the only step that touches live state ----
+                //
+                // SUPERSEDED, FAILED, and SUCCEEDED all end the same way for
+                // the radio: unless every chain is ready AND this is still the
+                // rate being asked for, the register is not written and no
+                // published chain is touched. `b` is destroyed on the way out,
+                // which closes the new channels on this thread — the thread
+                // that owns them.
+                const bool current = (m_rateLedger.isCurrent(generation));
+                if (!ok || !current) {
+                    for (const RebuildStep& st : steps) {
+                        if (st.dsp)
+                            st.dsp->abandonRebuild();
+                    }
+                    b.clear();
+                } else {
+                    // ALL N SUCCEEDED. Install every chain, then command the
+                    // radio, in ONE turn of this thread's loop — which is also
+                    // the thread EP6 is delivered on, so no block is processed
+                    // between the two and no chain is ever fed IQ at a rate it
+                    // was not built for by this sequence. (The radio's own
+                    // latency to latch the register is a separate, much shorter
+                    // window, and is NOT covered here — see finishRateChange().)
+                    for (std::size_t n = 0; n < steps.size(); ++n) {
+                        if (steps[n].dsp)
+                            steps[n].dsp->installRebuiltChannel(std::move(b[n]));
+                        else
+                            b[n] = Hl2RxDsp::RebuildResult {};   // receiver closed mid-build
+                    }
+                    // Straight through, not queued: this lambda is ALREADY on
+                    // m_metis's thread, so the call is the same turn as the
+                    // installs above. The DDC rate lives in the config register
+                    // (C0=0x00), latched into the next C&C round. Deliberately
+                    // NOT followed by a filter-pipeline reset: sending 0x39 on
+                    // every geometry change is what wedged a board hard enough
+                    // to need a power cycle (see
+                    // MetisClient::requestPipelineReset). The decimation
+                    // filters settle on their own within a few blocks.
+                    metis->setSampleRate(sampleRateEnum(targetRate));
+                    // COMMITTED — written here and nowhere else on this path,
+                    // in the same turn as the register write, so the value can
+                    // never describe a rate the wire did not get.
+                    m_rateLedger.commit(targetRate);
+                }
+
+                // WHICH CHAINS THIS CROSSING ACTUALLY COVERED. Identified by
+                // pointer, not by index: closeReceiver() erases from the middle
+                // of m_rx, so an index captured at snapshot time can be naming a
+                // different receiver by the time this returns. Carried to the
+                // GUI thread so finishRateChange() can tell a chain this
+                // crossing rebuilt from one that was opened while it ran.
+                std::vector<QPointer<Hl2RxDsp>> covered;
+                covered.reserve(steps.size());
+                for (const RebuildStep& st : steps)
+                    covered.push_back(st.dsp);
+
+                QMetaObject::invokeMethod(this, [this, ok, generation, targetRate,
+                                                 previousRate, failedIndex, err,
+                                                 covered = std::move(covered)] {
+                    finishRateChange(ok, generation, targetRate, previousRate,
+                                     covered, failedIndex, err);
+                }, Qt::QueuedConnection);
+            }, Qt::QueuedConnection);
+        }, Qt::QueuedConnection);
+    }, Qt::QueuedConnection);
+}
+
+// The GUI-thread half of a rate change. Everything here used to run inline in
+// applyPanBandwidth(); it is separated only so the build and the swap between
+// them can happen without the GUI thread waiting — and, since this commit,
+// without the I/O thread being held either.
+//
+// WHAT IS NOT DONE HERE, and is worth naming because AnanBackend's equivalent
+// does it: there is no MUTE across the window between the register write and
+// the radio actually latching the new rate. For that one C&C round the new
+// chains are fed IQ still arriving at the old rate — audible as a moment of
+// wrong-pitch audio and a mis-scaled spectrum, not as an error. ANAN mutes its
+// single chain across a settle timer; doing the same for N chains here would
+// have to share setAudioMuted() with the transmit path, whose mute must not be
+// lifted by a zoom that lands mid-transmission. Left undone deliberately rather
+// than done unsafely. NOT MEASURED: how long that window actually is.
+void Hl2Backend::finishRateChange(bool ok, quint64 generation, int targetRate,
+                                  int previousRate,
+                                  const std::vector<QPointer<Hl2RxDsp>>& covered,
+                                  std::size_t failedIndex,
+                                  const std::string& error)
+{
+    // SUPERSEDED. A newer crossing has already snapshotted its own steps from
+    // this receiver set and is running or has run; publishing this one's
+    // outcome would report a rate that is no longer being asked for. The I/O
+    // thread has already made the same check against the same counter, and
+    // installed nothing — this one only stops the REPORT.
+    if (!m_rateLedger.isCurrent(generation))
+        return;
+
+    if (!ok) {
+        // NOTHING TO UNDO ON THE RADIO. The register is written only on the
+        // success path, in the same I/O-thread turn that installs the chains,
+        // so a failed build never reached the wire and every receiver is still
+        // running at previousRate with the chain it always had. All that is
+        // wrong is this object's optimistic m_sampleRateHz.
+        qWarning() << "Hl2Backend: could not build RX DSP" << failedIndex
+                   << "for" << targetRate << "Hz —"
+                   << QString::fromStdString(error)
+                   << "— staying at" << previousRate << "Hz";
+        m_sampleRateHz = previousRate;
+        announceReceiverCeilingRevision();
+        emitAllPanState();
+        return;
+    }
+
     Hl2Settings::setSpanMhz(static_cast<double>(m_sampleRateHz) / 1.0e6);
+
+    // ── THE RECEIVER THIS CROSSING DID NOT KNOW ABOUT ────────────────────
+    //
+    // The snapshot in applyPanBandwidth() is taken on the GUI thread and then
+    // the build runs for 0.6-1.1 s. A receiver opened inside that window is not
+    // in `covered`, and it was deliberately built for the rate the radio was
+    // still producing (see openReceiver()). The register has now moved, so that
+    // chain is the one thing left decimating for a rate that no longer arrives:
+    // exactly the split set the removed FOLLOW-UP comment called "the set is
+    // split across two rates with nothing reporting it".
+    //
+    // It is rebuilt here, synchronously. That is the honest cost and it is
+    // small: one chain, on the GUI thread, only when an operator managed to open
+    // a receiver during a zoom — not the N-chain wait this PR exists to remove.
+    // Doing it on the build thread would need a second crossing's worth of
+    // machinery for a case that cannot involve more than the receivers opened in
+    // one rebuild window.
+    for (Receiver& r : m_rx) {
+        if (!r.dsp || r.configuredRateHz == targetRate)
+            continue;
+        const bool wasCovered =
+            std::any_of(covered.begin(), covered.end(),
+                        [&r](const QPointer<Hl2RxDsp>& p) { return p == r.dsp; });
+        if (wasCovered) {
+            // Rebuilt by this crossing and installed on the I/O thread; only
+            // this object's record of it still says the old rate.
+            r.configuredRateHz = targetRate;
+            continue;
+        }
+
+        Hl2RxDsp::Config dc;
+        dc.inputSampleRateHz = targetRate;
+        dc.audioSampleRateHz = 24000;
+        dc.mode = modeFromString(r.mode);
+        std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
+        dc.agcMode = wdspAgcMode(r.agcMode);
+        dc.maximumAgcGainDb = m_dbRef.agcCeilingDb(r.agcThresholdDb);
+
+        std::string err;
+        bool built = false;
+        Hl2RxDsp* dsp = r.dsp;
+        QMetaObject::invokeMethod(dsp, [dsp, &dc, &err, &built] {
+            built = dsp->configure(dc, &err);
+        }, Qt::BlockingQueuedConnection);
+        if (built) {
+            r.configuredRateHz = targetRate;
+            qCInfo(lcHl2) << "HL2: rebuilt receiver opened during the"
+                          << targetRate << "Hz crossing";
+        } else {
+            // The radio has already moved; this one chain could not follow. Say
+            // so rather than leaving it silently decimating for a rate that is
+            // no longer on the wire.
+            qCWarning(lcHl2) << "HL2: receiver opened during the" << targetRate
+                             << "Hz crossing could not be rebuilt —"
+                             << QString::fromStdString(err)
+                             << "— its audio and spectrum will be wrong until it"
+                                " is reconfigured";
+        }
+    }
 
     // #5594 (M1): the rate is committed, so the receiver ceiling this radio can
     // honestly offer may have moved with it — maxSlices and maxPanadapters both
@@ -5176,8 +5489,9 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // NEITHER IS CALIBRATED, and they do not even share a scale: the slice
     // figure is dB relative to WIRE full scale, the DDC between the two
     // measurement points carries an unquantified processing gain, and
-    // Hl2DbReference::fullScaleDbm is 0.0 with isCalibrated() false, so nothing
-    // here is antenna-referred. The labels say "uncalibrated" because that is
+    // Hl2DbReference::isCalibrated() is false -- its fullScaleDbm is DERIVED
+    // rather than measured, and it refers the DISPLAY path in any case, not
+    // these two readings -- so nothing here is antenna-referred. The labels say "uncalibrated" because that is
     // the whole of what can be claimed. What survives the missing calibration
     // is the PAIRING itself — the pairing row below states a relationship, and
     // a relationship needs no absolute reference.
@@ -5859,8 +6173,8 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_haveRestoredState = false;
     m_lnaDbByBand.clear();
     m_driveByBand.clear();
-    m_lnaDefaultDb = 20;          // Hl2Backend.h: m_lnaGainDb's constructed default
-    m_lnaGainDb = 20;
+    m_lnaDefaultDb = hl2::kLnaDefaultGainDb;
+    m_lnaGainDb = hl2::kLnaDefaultGainDb;
     m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default
@@ -5903,10 +6217,28 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     RestoredRadioState valid;
     if (state.rfFrequencyHz >= 100'000.0 && state.rfFrequencyHz <= 38'400'000.0)
         valid.rfFrequencyHz = state.rfFrequencyHz;
+    // ACCEPTED, THEN RECONCILED — two steps, and the second one is #5755's
+    // review finding (jensenpat). isKnownModeString() answers "may the document
+    // say this"; canonicalOfferedMode() answers "which spelling does the menu
+    // carry for it". Doing only the first left a session saved in NFM restoring
+    // with the slice holding "NFM" while publishedModeStrings() no longer
+    // offers it, and both mode combos rebuild with findText(currentText) and
+    // move the selection only on a hit — so the operator was shown LSB with the
+    // receiver in FM. That is the fault #5580 exists to remove, arriving from
+    // the other direction.
+    //
+    // This drops nothing: NFM and FM are one WdspChannel mode (modeFromString
+    // branches on them together), so the operator keeps the mode they saved and
+    // only its spelling settles. It weakens no TX refusal either — every alias
+    // pair is on capabilities().receiveOnlyModes both ways or neither way, and
+    // hl2_mode_vocabulary_test pins that for every accepted spelling. It also
+    // does the uppercasing the old comment here was about: a "cw" from a
+    // hand-edited document must not round-trip into the UI.
+    //
+    // BEFORE the passband work below, which reads valid.mode through
+    // defaultPassbandForMode() and cwBfoOffsetHz().
     if (isKnownModeString(state.mode))
-        valid.mode = state.mode.toUpper();   // canonical casing — a "cw" from a
-                                             // hand-edited document must not
-                                             // round-trip into the UI
+        valid.mode = canonicalOfferedMode(state.mode);
     // A passband is kept only as a sane pair; mode+passband are applied
     // together in pushInitialState() (the #4484 reconciliation).
     if (state.filterLowHz < state.filterHighHz
@@ -7100,6 +7432,21 @@ void Hl2Backend::emitSliceState(int ddc)
 
     SliceDelta d;
     d.panId = ids->panId;
+    // WHAT THIS RADIO ACTUALLY DEMODULATES, published so the UI stops offering
+    // what it does not.
+    //
+    // modeFromString() FALLS BACK TO USB for anything it does not recognise, so
+    // selecting RTTY, DFM or DSTR on an HL2 put the receiver in USB while every
+    // readback agreed the mode was RTTY -- the slice keeps the string it was
+    // given. The operator sees a mode they chose and hears a mode they did not,
+    // and nothing in the path disagrees with them.
+    //
+    // publishedModeStrings(), not knownModeStrings(): a subset of the same
+    // source, so the menu can never offer a mode the restore boundary would
+    // REJECT, while the boundary stays free to accept spellings the menu has no
+    // business showing. See publishedModeStrings() for which three groups those
+    // are and why.
+    d.modeList = publishedModeStrings();
     d.frequency = r->sliceFreqHz / 1.0e6;   // MHz
     d.mode = r->mode;
     d.filterLow = r->filterLowHz;

@@ -1016,6 +1016,25 @@ target_include_directories(hl2_rxdsp_rate_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_rate_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_rate_test COMMAND hl2_rxdsp_rate_test)
 
+# A rate-change rebuild runs off the owning thread now; what it CARRIES across
+# the swap -- notches, noise blanker, shift, and any control verb that arrived
+# mid-build -- is silent when it is lost.
+add_executable(hl2_rxdsp_async_rebuild_test tests/hl2_rxdsp_async_rebuild_test.cpp)
+target_include_directories(hl2_rxdsp_async_rebuild_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_async_rebuild_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_async_rebuild_test COMMAND hl2_rxdsp_async_rebuild_test)
+
+# WHICH RATE IS ON THE WIRE, as against the rate a crossing is attempting. A
+# pan-bandwidth change moves the backend's own m_sampleRateHz optimistically and
+# only writes the register when every chain has rebuilt, so for the length of a
+# build the two disagree -- and reading the optimistic one made an overlapping
+# crossing restore a rate the radio had never been commanded to. Header-only and
+# socket-free: the end-to-end seam needs a MetisClient and a localhost peer.
+add_executable(hl2_rate_commit_test tests/hl2_rate_commit_test.cpp)
+target_include_directories(hl2_rate_commit_test PRIVATE src)
+target_link_libraries(hl2_rate_commit_test PRIVATE Qt6::Core)
+add_test(NAME hl2_rate_commit_test COMMAND hl2_rate_commit_test)
+
 # The panadapter frame rate must follow the operator's slider, not the span
 # (#4470). Wall-clock paced, so it lives in its own target.
 
@@ -1213,6 +1232,63 @@ add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.
 qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc)
+add_executable(mode_filter_presets_test
+    tests/mode_filter_presets_test.cpp
+    src/gui/ModeFilterPresets.cpp
+)
+target_include_directories(mode_filter_presets_test PRIVATE src)
+target_link_libraries(mode_filter_presets_test PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+add_test(NAME mode_filter_presets_test COMMAND mode_filter_presets_test)
+
+add_executable(aether_rx_profiles_test
+    tests/aether_rx_profiles_test.cpp
+)
+target_include_directories(aether_rx_profiles_test PRIVATE src)
+target_link_libraries(aether_rx_profiles_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME aether_rx_profiles_test COMMAND aether_rx_profiles_test)
+
+add_executable(rx_chain_runner_test
+    tests/rx_chain_runner_test.cpp
+)
+target_include_directories(rx_chain_runner_test PRIVATE src)
+target_link_libraries(rx_chain_runner_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME rx_chain_runner_test COMMAND rx_chain_runner_test)
+
+add_executable(rx_stage_reorder_test
+    tests/rx_stage_reorder_test.cpp
+)
+target_include_directories(rx_stage_reorder_test PRIVATE src)
+target_link_libraries(rx_stage_reorder_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME rx_stage_reorder_test COMMAND rx_stage_reorder_test)
+
+add_executable(compact_metrics_test
+    tests/compact_metrics_test.cpp
+    src/gui/CompactMetrics.cpp
+)
+target_include_directories(compact_metrics_test PRIVATE src)
+target_link_libraries(compact_metrics_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME compact_metrics_test COMMAND compact_metrics_test)
+set_tests_properties(compact_metrics_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# ModemChrome::colour() resolves a token through ThemeManager, so the test
+# needs the theming stack behind it — same set theme_manager_test links.
+add_executable(modem_chrome_test
+    tests/modem_chrome_test.cpp
+    src/gui/ModemChrome.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(modem_chrome_test PRIVATE src)
+target_link_libraries(modem_chrome_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME modem_chrome_test COMMAND modem_chrome_test)
+set_tests_properties(modem_chrome_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(theme_manager_test
     tests/theme_manager_test.cpp
     src/core/ThemeManager.cpp
@@ -2293,6 +2369,26 @@ set_tests_properties(firmware_close_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 
+# #5778: production dialog with injected capability/connection state; no sockets or peers.
+add_executable(flex_control_visibility_test
+    tests/flex_control_visibility_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(flex_control_visibility_test PRIVATE src tests)
+target_link_libraries(flex_control_visibility_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME flex_control_visibility_test COMMAND flex_control_visibility_test)
+set_tests_properties(flex_control_visibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
     src/core/ZipArchive.cpp
@@ -2551,6 +2647,14 @@ target_include_directories(scoped_child_widget_test PRIVATE src)
 target_link_libraries(scoped_child_widget_test PRIVATE Qt6::Widgets)
 add_test(NAME scoped_child_widget_test COMMAND scoped_child_widget_test)
 set_tests_properties(scoped_child_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Socket-free serial selector refresh; injected port lists, real Qt widgets.
+add_executable(serial_port_combo_test tests/serial_port_combo_test.cpp)
+target_include_directories(serial_port_combo_test PRIVATE src)
+target_link_libraries(serial_port_combo_test PRIVATE Qt6::Widgets)
+add_test(NAME serial_port_combo_test COMMAND serial_port_combo_test)
+set_tests_properties(serial_port_combo_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(spectrum_preview_logic_test
@@ -3637,6 +3741,25 @@ add_executable(green_heron_protocol_test
 target_include_directories(green_heron_protocol_test PRIVATE src)
 target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
 add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
+
+# aethersdr/radio/state payload shape + the drive-publish timing contract
+# (#5518). Links the real TransmitModel because the have-status latch and the
+# coalesce debounce are half the contract; MqttRadioState.cpp itself is pure.
+add_executable(mqtt_radio_state_test
+    tests/mqtt_radio_state_test.cpp
+    src/core/MqttRadioState.cpp
+    src/models/TransmitModel.cpp
+    src/core/ClientQuindarTone.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AsyncLogWriter.cpp
+    src/core/LogManager.cpp
+)
+target_include_directories(mqtt_radio_state_test PRIVATE src)
+target_link_libraries(mqtt_radio_state_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(mqtt_radio_state_test PRIVATE pthread)
+endif()
+add_test(NAME mqtt_radio_state_test COMMAND mqtt_radio_state_test)
 
 add_executable(mqtt_settings_test
     tests/mqtt_settings_test.cpp
@@ -5442,6 +5565,14 @@ add_executable(hl2_pan_limits_declaration_test tests/hl2_pan_limits_declaration_
 target_include_directories(hl2_pan_limits_declaration_test PRIVATE src tests)
 target_link_libraries(hl2_pan_limits_declaration_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_pan_limits_declaration_test COMMAND hl2_pan_limits_declaration_test)
+# The two HL2 mode vocabularies and the containment between them. Separate
+# target for the same reason as the one above: the fake-radio fixture that would
+# have carried a seam assertion is retired, and a declaration must not be pinned
+# only inside something that does not build.
+add_executable(hl2_mode_vocabulary_test tests/hl2_mode_vocabulary_test.cpp)
+target_include_directories(hl2_mode_vocabulary_test PRIVATE src tests)
+target_link_libraries(hl2_mode_vocabulary_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_mode_vocabulary_test COMMAND hl2_mode_vocabulary_test)
 add_executable(hl2_band_memory_test
     tests/hl2_band_memory_test.cpp
 )
@@ -5675,6 +5806,7 @@ add_executable(rx_applet_squelch_reconciliation_test
     tests/rx_applet_squelch_reconciliation_test.cpp
     src/gui/RxApplet.cpp
     src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/DragValuePopup.cpp
@@ -5702,6 +5834,7 @@ add_executable(gui_nested_lifetime_test
     tests/gui_nested_lifetime_test.cpp
     src/gui/RxApplet.cpp
     src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/DragValuePopup.cpp
@@ -5911,6 +6044,7 @@ set(AETHER_SETTINGS_CONSUMERS
     automation_nnr_probe_test
     pcm_compatibility_test
     firmware_close_dialog_test
+    flex_control_visibility_test
     atu_seam_gate_test
     backend_capability_revision_test
     radio_capacity_declaration_test
@@ -5931,6 +6065,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_gain_restore_test
     hl2_tx_gate_test
     hl2_pan_limits_declaration_test
+    hl2_mode_vocabulary_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test
@@ -5941,6 +6076,8 @@ set(AETHER_SETTINGS_CONSUMERS
     automation_bridge_start_outcome_test
     slice_label_test
     ulanzi_mapping_migration_test
+    modem_chrome_test
+    aether_rx_profiles_test
     theme_manager_test
     theme_seed_test
     panadapter_message_overlay_test
@@ -5965,6 +6102,7 @@ set(AETHER_SETTINGS_CONSUMERS
     shortcut_manager_test
     antenna_alias_test
     mqtt_settings_test
+    mqtt_radio_state_test
     ax25_libmodem_shim_test
     ax25_replay
     ax25_session_analyze

@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <vector>
+#include <limits>
 
 using namespace AetherSDR::hl2;
 
@@ -182,6 +183,12 @@ int main()
         check(ccRxGain(48)[4] == (0x40 | 60), "gain +48 dB -> code 60 (max)");
         check(ccRxGain(999)[4] == (0x40 | 60), "gain clamps high");
         check(ccRxGain(-999)[4] == (0x40 | 0), "gain clamps low");
+        check(ccRxGain(std::numeric_limits<int>::max())[4] == (0x40 | 60),
+              "INT_MAX clamps before adding the gain bias");
+        check(ccRxGain(std::numeric_limits<int>::min())[4] == 0x40,
+              "INT_MIN clamps to the minimum native gain code");
+        check(ccRxGain(19)[4] == (0x40 | 31), "native code 31 remains available");
+        check(ccRxGain(21)[4] == (0x40 | 33), "native code 33 is not folded");
         check(ccRxGain(20)[0] == 0x14, "gain C0 = 0x14 (register 0x0a)");
     }
 

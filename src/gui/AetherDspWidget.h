@@ -19,6 +19,7 @@ class QStackedWidget;
 class QLineEdit;
 class QProgressBar;
 class QGridLayout;
+class QFrame;
 
 namespace AetherSDR {
 
@@ -26,13 +27,15 @@ class AudioEngine;
 class NvidiaAfxPack;
 
 // AetherDSP settings body — the QTabWidget + per-tab controls shared by the
-// modeless AetherDspDialog (Settings menu)
+// modeless AetherRxDialog (Settings menu)
 // and the docked ClientRxDspApplet (PooDoo Audio RX side).
 //
 // Signals fire on every parameter change (after the new value lands in the
 // feature-owned settings model) so MainWindow can push it into AudioEngine. Both
 // the dialog and the applet expose a `widget()` accessor so callers can
 // connect to these signals directly.
+class NrGainStrip;
+
 class AetherDspWidget : public QWidget {
     Q_OBJECT
 
@@ -60,7 +63,7 @@ public:
 
     // Scale every child QPushButton / QLabel font to 13 px to match the
     // VFO DSP toggle row.  The applet path leaves this off; only the
-    // Settings-menu AetherDspDialog calls it.
+    // Settings-menu AetherRxDialog calls it.
     void setDialogMode(bool on);
 
     // Disable the NR2 selector button when compressed (Opus / SmartLink)
@@ -110,6 +113,9 @@ signals:
     void nr2EnableWithWisdomRequested();
 
 private:
+    // Repaint the status strip's method reading from the current controls.
+    void refreshStatusStrip();
+
     QWidget* buildNr2Page();
     QWidget* buildNr4Page();
     QWidget* buildMnrPage();
@@ -164,6 +170,16 @@ private:
     };
     std::vector<NnrAdvancedControl> m_nnrAdvanced;
     QSlider*      m_nnrStrengthSlider{nullptr};
+    // Status strip (shared by every tab, below the page stack).
+    QFrame*       m_statusFrame{nullptr};
+    QLabel*       m_statusDot{nullptr};
+    QLabel*       m_statusValue{nullptr};
+    QLabel*       m_gainLabel{nullptr};
+    NrGainStrip*  m_gainStrip{nullptr};
+    // Which method the strip is currently describing, so a change can clear
+    // the trace instead of splicing two methods' histories together.
+    int           m_lastActiveDsp{-1};
+
     QLabel*       m_nnrStrengthLabel{nullptr};
     QButtonGroup* m_nnrModelGroup{nullptr};
 

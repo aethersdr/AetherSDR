@@ -8,7 +8,7 @@ upstream `LICENSE` covers the bundled `ggml/` tree too — upstream ships one MI
 file for both.
 
 Keep this a pristine mirror: do **not** modify vendored sources in place unless
-the change genuinely cannot live outside the tree. Three files currently do;
+the change genuinely cannot live outside the tree. Four files currently do;
 every one is recorded in [`AETHERSDR-PATCHES.md`](AETHERSDR-PATCHES.md), and
 anything not listed there is a drift bug.
 
@@ -52,7 +52,7 @@ fallback). `GGML_NATIVE=OFF` is forced for portable/Pi/CI binaries.
 
 ## Local patches (deviations from pristine upstream)
 
-Three vendored files carry AetherSDR-local changes; the pristine-mirror rule
+Four vendored files carry AetherSDR-local changes; the pristine-mirror rule
 above holds for everything else. Each is described — with its rationale and
 the refresh checklist — in [`AETHERSDR-PATCHES.md`](AETHERSDR-PATCHES.md),
 following the same convention as `third_party/wdsp` and
@@ -67,6 +67,10 @@ following the same convention as `third_party/wdsp` and
   throttle guard to a feature-detect so it compiles under MinGW-w64, which
   doesn't declare `THREAD_POWER_THROTTLING_STATE`. Fixes the same MinGW-only
   compile break originally raised in #4406.
+- `src/whisper.cpp` — fails the model load when the weight buffer cannot be
+  allocated instead of uploading into unbacked tensors (SIGSEGV on a GPU short
+  of memory). Fixes #4972. Not in the prebuilt Windows `whisper-gpu` pack until
+  that pack is rebuilt.
 
 The two Metal changes are kept as thin as possible: the *policy* around them —
 required toolchain, missing-toolchain behaviour, deployment target, shader
@@ -85,5 +89,5 @@ To add a different GPU backend (CUDA, Metal, …), **re-copy that backend's
 directory** from upstream at the pinned commit and turn its `GGML_<X>` option ON
 (with the matching toolchain + CI runner). To refresh: clone upstream at
 `COMMIT`, re-run the same trim (keeping `ggml-cpu`, `ggml-blas`, `ggml-vulkan`),
-and diff — then re-apply the three local patches (see **Local patches** above);
-a clean diff plus exactly those three files is the expected end state.
+and diff — then re-apply the four local patches (see **Local patches** above);
+a clean diff plus exactly those four files is the expected end state.

@@ -133,12 +133,49 @@ jobs:
           #     total past the cap — reachable with a few hundred failures.
           set +e
 
+          # The 40 KB tail is the END of the run, and a test that fails at
+          # ordinal 396 of 494 has had its assertion scrolled far out of it —
+          # #5762/#5766/#5770 all shipped nothing but the progress lines of the
+          # last hundred tests, and diagnosing one meant downloading the
+          # artifact to read LastTest.log by hand. So lift the failure lines
+          # out by pattern first and place them ABOVE the tail, where the
+          # 45 KB cap below cannot reach them.
+          #
+          # --output-on-failure prints `N/M Test #N: name ...***Failed` BEFORE
+          # the captured output, so the nearest PRECEDING such line names the
+          # test that owns each assertion. `[FAIL]` is this suite's own
+          # convention (188 of the test .cpp files print it); the rest cover
+          # the three QtTest binaries and the ways a test dies without
+          # printing a verdict at all. Bounded twice (200 lines, then 8 KB) so
+          # a few hundred failures cannot crowd out the sections below.
+          awk '
+            /^ *[0-9]+\/[0-9]+ +Test +#[0-9]+: +[A-Za-z0-9_.-]+/ {
+              t = $0
+              sub(/^ *[0-9]+\/[0-9]+ +Test +#[0-9]+: +/, "", t)
+              sub(/ *\.\.\..*$/, "", t)
+              cur = t
+              next
+            }
+            /\[FAIL\]|^FAIL!|^ *Loc: \[|Assertion .* failed|^terminate called|^QFATAL|Segmentation fault/ {
+              if (n++ < 200) print (cur == "" ? "?" : cur) ": " $0
+            }
+          ' full-suite.log > failures.txt 2>/dev/null
+          head -c 8000 failures.txt > failures.cap 2>/dev/null
+
           # ctest's own tail names every failed test; keep that, and the last
           # 40 KB of output above it for the assertion text. Truncate through a
           # FILE, not a live `head` pipeline, so a large report cannot kill the
           # writer.
           {
             sed -n '/^The following tests FAILED:/,$p' full-suite.log
+            # Emit the section only when it matched something. An
+            # unconditional header would also defeat the `-lt 80` empty-report
+            # guard below, padding a zero-test run into looking substantive.
+            if [ -s failures.cap ]; then
+              echo
+              echo '--- failing assertions ---'
+              cat failures.cap
+            fi
             echo
             echo '--- last 40 KB of ctest output ---'
             tail -c 40000 full-suite.log

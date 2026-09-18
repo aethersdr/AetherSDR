@@ -161,7 +161,7 @@ class PropDashboardDialog;
 class UpdateChecker;
 class TxBandDialog;
 class BandscopeDialog;
-class AetherDspDialog;
+class AetherRxDialog;
 class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
@@ -844,16 +844,16 @@ private:
     // duplicating; on first construction wires them once, on subsequent calls
     // just raises the existing instance.  Returns nullptr only if construction
     // failed (e.g. allocation failure).
-    AetherDspDialog* ensureAetherDspDialog();
+    AetherRxDialog* ensureAetherRxDialog();
 
     // Toggle helper for the AetherDSP Settings dialog: open it when hidden,
     // close it when visible.  Gives the per-slice DSP-tab ADSP button the same
     // press-to-open / press-again-to-close semantics as its sibling AetherVoice
     // button (#3877).  close() deletes the WA_DeleteOnClose dialog and clears
     // the QPointer, so the next press re-creates and re-wires via
-    // ensureAetherDspDialog()'s wasFresh path.  Only the DSP-tab button toggles;
+    // ensureAetherRxDialog()'s wasFresh path.  Only the DSP-tab button toggles;
     // the menu action and chain/strip launchers keep pure open semantics.
-    void toggleAetherDspDialog();
+    void toggleAetherRxDialog();
 
     // Wire the txBandSettingsRequested, serialSettingsChanged (HAVE_SERIALPORT),
     // sliceLetterDisplayModeChanged, and QDialog::finished handlers on a freshly-
@@ -925,6 +925,7 @@ private:
     void showMqttSettingsDialog();
     void publishCwDecodeMqtt(const QString& text, float cost, bool rx);
     void publishRadioStateMqtt();
+    void refreshRadioStateDriveAuthority();
 #endif
     void applyPanLayout(const QString& layoutId);
     void startCanvasPanLayoutSettle(const QString& layoutId, int expectedPanCount);
@@ -1182,6 +1183,11 @@ private:
     QMetaObject::Connection m_radioStateFreqConn;
     QMetaObject::Connection m_radioStateModeConn;
     QTimer                  m_radioStateCoalesceTimer;
+    // Cached RadioCapabilities::transmitDriveControl authority == Radio, refreshed
+    // on the connect and backend-rebuild edges. publishRadioStateMqtt() runs on
+    // every PTT transition and backendCapabilities() builds the whole struct by
+    // value, so reading it per publish allocated a band table per CW element.
+    bool                    m_radioStateDriveIsReadback = false;
     QMetaObject::Connection m_cwStatsConn;
     QMetaObject::Connection m_cwxSpeedRestoreConn;
     int               m_cwxSavedWpm{0};
@@ -1333,15 +1339,6 @@ private:
     // cached so updateTMate2Display/Indicators() can re-send without signal args.
     float   m_tmate2SmeterDbm{-140.0f};
     float   m_tmate2TxWatts{0.0f};
-
-    // The amplifier's forward power and SWR reach the S-Meter, the cross-needle
-    // and the TMate2 from TWO sources — the radio-relayed AMP meters and the
-    // amplifier's own port-9008 status. They are the same measurement, so the
-    // choice is rate, not truth, and the rule has to be the same one the
-    // applet gauges use or the shared meters go back to last-writer-wins.
-    // See applyAmpTxMeters() and kRelayMeterFreshnessMs.
-    QElapsedTimer m_ampRelayTxStamp;
-    void applyAmpTxMeters(float watts, float swr, bool fromRelay);
     bool tmate2OverlayActive() const;
     QString tmate2OverlayName() const;
     int tmate2IdleTimeoutMs() const;
@@ -1360,6 +1357,15 @@ private:
     QMetaObject::Connection m_tmate2RitConn;
     QMetaObject::Connection m_tmate2XitConn;
 #endif
+
+    // The amplifier's forward power and SWR reach the S-Meter, the cross-needle
+    // and the TMate2 from TWO sources — the radio-relayed AMP meters and the
+    // amplifier's own port-9008 status. They are the same measurement, so the
+    // choice is rate, not truth, and the rule has to be the same one the
+    // applet gauges use or the shared meters go back to last-writer-wins.
+    // See applyAmpTxMeters() and kRelayMeterFreshnessMs.
+    QElapsedTimer m_ampRelayTxStamp;
+    void applyAmpTxMeters(float watts, float swr, bool fromRelay);
 #ifdef Q_OS_LINUX
     EvdevEncoderManager*       m_dialBackend{nullptr};
 #elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
@@ -1528,7 +1534,7 @@ private:
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<ContributeDialog> m_contributeDialog;
-    QPointer<AetherDspDialog> m_dspDialog;
+    QPointer<AetherRxDialog> m_rxDialog;
     QPointer<QDialog> m_nr2WisdomDialog;
 #ifdef HAVE_MQTT
     QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
@@ -1572,6 +1578,7 @@ private:
     QAction*         m_cwKeyerAction{nullptr};
     QAction*         m_copyAssistAction{nullptr};
     QAction*         m_gpsDashboardAction{nullptr};
+    QAction*         m_agcTCalibrationMenuAction{nullptr};
     // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from
     // applyCapabilitiesToUi() *and* the menu's aboutToShow, because the
     // automation bridge reaches menu-bar actions without popping the menu
@@ -1732,7 +1739,7 @@ private:
     class ClientPuduEditor* ensureClientPuduEditor();
 
     // Wire AetherDspWidget parameter signals to AudioEngine setters.  Used
-    // by both the modeless AetherDspDialog and the docked ClientRxDspApplet
+    // by both the modeless AetherRxDialog and the docked ClientRxDspApplet
     // so they push every change into the engine identically.
     void wireAetherDspWidget(class AetherDspWidget* widget);
     void updateAetherDspModePolicy();

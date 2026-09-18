@@ -60,6 +60,11 @@ const QString kModeStyle = QStringLiteral(
 QWidget* makeBracketLabel(const QString& text)
 {
     auto* w = new QWidget;
+    // The label inside is a QLabel, whose vertical policy is Preferred with no
+    // maximum, so this wrapper grew to 116 px on a tall page and left "Body"
+    // floating in the middle of an empty box with its rules drawn across the
+    // centreline. It needs only the height of its own text.
+    w->setMaximumHeight(20);
     auto* h = new QHBoxLayout(w);
     h->setContentsMargins(0, 0, 0, 0);
     h->setSpacing(6);
@@ -105,12 +110,26 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
 
     // ── Logo (big in the editor) ────────────────────────────────
     m_logo = new PooDooLogo;
-    // Strip-side rebrand — the docked applet keeps the legacy
-    // "PooDoo™" mark; this strip panel uses the operator-facing
-    // marketing name.
+    // The tab calls this stage what it is — an Exciter — and the mark keeps
+    // the name the product goes by. They are not in competition: one says
+    // where you are in the chain, the other is the badge on the panel.
     m_logo->setWordmark(QString::fromUtf8("AetherVoice\xe2\x84\xa2"));
     m_logo->setMinimumHeight(80);
-    root->addWidget(m_logo);
+    // ...and a ceiling. Nothing else in this column can grow — the mode
+    // buttons and the knobs are all fixed — so without one the logo took
+    // every pixel the page had spare and drew itself at two and a half times
+    // its designed size.
+    m_logo->setMaximumHeight(200);
+    // Two equal stretches: one above the logo, one at the very foot of the
+    // column (added after the knob grid below). Whatever height is left over
+    // once the logo reaches its ceiling is split evenly between them, rather
+    // than being handed to whichever widget happens to lack a maximum.
+    root->addStretch(1);
+    // A stretch factor far above the buffers' own, so the logo takes height
+    // first and only what it cannot use — because it has hit the ceiling
+    // above — reaches them. Give it the same factor as the buffers and it
+    // shares the surplus three ways instead, landing well short of 200.
+    root->addWidget(m_logo, 100);
 
     // ── Even / Odd mode toggle — centred in the gap between the
     // PooDoo™ wordmark and the Poo/Doo knob row.  Aphex generates
@@ -265,8 +284,12 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
         root->addLayout(grid);
     }
 
-    // No trailing stretch — let the cell size to the panel's natural
-    // content height instead of growing to fill whatever the grid gives.
+    // The second of the pair, under the controls rather than under the logo.
+    // A stretch item's own size hint is zero, so this does not change what the
+    // panel asks for — the strip cell still sizes to the natural content
+    // height it always did. It only decides where surplus goes when a host
+    // gives the panel more room than that, which is the AetherRX page.
+    root->addStretch(1);
 
     if (m_audio && pudu()) {
         m_logo->setPudu(pudu());

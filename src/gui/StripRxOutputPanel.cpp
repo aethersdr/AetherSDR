@@ -1,4 +1,5 @@
 #include "StripRxOutputPanel.h"
+#include "PanelTick.h"
 
 #include "ClientCompKnob.h"
 #include "EditorFramelessTitleBar.h"
@@ -326,15 +327,16 @@ StripRxOutputPanel::StripRxOutputPanel(AudioEngine* engine, QWidget* parent)
                 Qt::QueuedConnection);
     }
 
-    // 120 Hz animation tick — kMeterSmootherIntervalMs is the project's
-    // canonical poll rate so this panel's ballistics match every other
-    // meter in the app.
+    // The shared panel cadence, so this meter steps in time with every
+    // other one in the window. MeterSmoother integrates against wall clock,
+    // so the ballistics are the ones it always had.
     m_animTimer = new QTimer(this);
-    m_animTimer->setInterval(kMeterSmootherIntervalMs);
+    m_animTimer->setInterval(kPanelTickMs);
     connect(m_animTimer, &QTimer::timeout,
             this, &StripRxOutputPanel::tick);
     m_animClock.start();
-    m_animTimer->start();
+    // Not started here: showEvent does that, and only once the page is on
+    // screen. See PanelTick.h.
 }
 
 StripRxOutputPanel::~StripRxOutputPanel() = default;
@@ -444,6 +446,22 @@ void StripRxOutputPanel::tick()
         }
     }
     if (m_meter)   m_meter->update();
+}
+
+
+void StripRxOutputPanel::showEvent(QShowEvent* ev)
+{
+    QWidget::showEvent(ev);
+    // Restart the clock as well as the timer: the elapsed time across a
+    // spell of being hidden is not time the ballistics should integrate.
+    m_animClock.restart();
+    if (m_animTimer) m_animTimer->start();
+}
+
+void StripRxOutputPanel::hideEvent(QHideEvent* ev)
+{
+    if (m_animTimer) m_animTimer->stop();
+    QWidget::hideEvent(ev);
 }
 
 } // namespace AetherSDR

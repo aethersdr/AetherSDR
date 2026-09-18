@@ -8681,6 +8681,27 @@ QJsonObject AutomationServer::doLiveness()
                             static_cast<double>(ls.txBytes));
             liveness.insert(QStringLiteral("rxPacketsLost"),
                             static_cast<double>(ls.rxPacketsLost));
+            // DELIVERY TIMING. The backend computes all four of these every
+            // publish interval and nothing could read any of them, so every
+            // question of the form "did the stream stall, and for how long"
+            // had to be answered with a proxy — most recently by differencing
+            // txBytes at 1 Hz to infer whether the EP2 pacer had been starved.
+            // gapMaxMs is the longest gap between socket wakeups in the window,
+            // which is that question asked directly.
+            //
+            // -1 means NOT MEASURED and renders as null, never as zero: the
+            // struct's own comment is explicit that a stream-only transport has
+            // no request/response exchange to time, so a protocol-1 radio
+            // reports rttMs = -1 and must not appear to have answered in under
+            // a millisecond.
+            auto msOrUnmeasured = [](int ms) -> QJsonValue {
+                return ms < 0 ? QJsonValue(QJsonValue::Null)
+                              : QJsonValue(static_cast<double>(ms));
+            };
+            liveness.insert(QStringLiteral("gapMaxMs"), msOrUnmeasured(ls.gapMaxMs));
+            liveness.insert(QStringLiteral("gapMs"), msOrUnmeasured(ls.gapMs));
+            liveness.insert(QStringLiteral("jitterMs"), msOrUnmeasured(ls.jitterMs));
+            liveness.insert(QStringLiteral("rttMs"), msOrUnmeasured(ls.rttMs));
         }
     }
 

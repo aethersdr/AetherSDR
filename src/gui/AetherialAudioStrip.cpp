@@ -3,16 +3,13 @@
 #include <QGuiApplication>
 #include <QScreen>
 
-#include "AetherDspWidget.h"
 #include "FramelessMoveHelper.h"
 #include "FramelessResizer.h"
 #include "StripChainWidget.h"
-#include "StripRxChainWidget.h"
 #include "ClientEqApplet.h"
 #include "EditorFramelessTitleBar.h"
 #include "StripCompPanel.h"
 #include "StripDeEssPanel.h"
-#include "StripRxOutputPanel.h"
 #include "StripEqPanel.h"
 #include "StripGatePanel.h"
 #include "StripPuduPanel.h"
@@ -73,7 +70,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     connect(m_presets, &ChannelStripPresets::presetsChanged, this, [this]() {
         rebuildPresetCombo(m_currentPresetName);
     });
-    const QString title = QString::fromUtf8("Aetherial Audio \xe2\x80\x94 Channel Strip");
+    const QString title = QStringLiteral("AetherTX");
     setWindowTitle(title);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
         "QFrame#stripGroupBox { border: 1px solid {{color.background.1}};"
@@ -138,7 +135,9 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
             " font-size: 10px; }");
         row->addWidget(grip);
 
-        m_titleLbl = new QLabel(title + QString::fromUtf8(" \xe2\x80\x94 TX"),
+        // No side suffix any more: this window is the transmit chain, and the
+        // receive chain is AetherRX.
+        m_titleLbl = new QLabel(title,
                                 m_titleBar);
         m_titleLbl->setStyleSheet(
             "QLabel { background: transparent; color: #e0ecf4;"
@@ -202,67 +201,6 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         chainRow->setContentsMargins(0, 0, 0, 0);
         chainRow->setSpacing(6);
 
-        // TX / RX mode toggles — exclusive group, TX checked by default.
-        // Visual parity with the docked chain applet's mode buttons; the
-        // strip currently embeds TX panels only, so RX is present as a
-        // no-op placeholder until RX-side strip panels arrive.
-        const QString modeBtnStyle = QStringLiteral(
-            "QPushButton {"
-            "  background: #1a2a3a; border: 1px solid #2a4458;"
-            "  border-radius: 3px; color: #8aa8c0;"
-            "  font-size: 12px; font-weight: bold;"
-            "  padding: 2px 10px; min-width: 30px;"
-            "}"
-            "QPushButton:hover { background: #24384e; }"
-            "QPushButton:checked {"
-            "  background: #3a2a0e; color: #f2c14e;"
-            "  border: 1px solid #f2c14e;"
-            "}");
-
-        auto* modeGroup = new QButtonGroup(this);
-        modeGroup->setExclusive(true);
-
-        m_txBtn = new QPushButton("TX", content);
-        m_txBtn->setCheckable(true);
-        m_txBtn->setChecked(true);
-        m_txBtn->setFixedHeight(30);
-        m_txBtn->setStyleSheet(modeBtnStyle);
-        m_txBtn->setToolTip(tr("Show and edit the TX DSP chain"));
-        modeGroup->addButton(m_txBtn);
-        chainRow->addWidget(m_txBtn);
-
-        m_rxBtn = new QPushButton("RX", content);
-        m_rxBtn->setCheckable(true);
-        m_rxBtn->setFixedHeight(30);
-        m_rxBtn->setStyleSheet(modeBtnStyle);
-        m_rxBtn->setToolTip(tr("Show and edit the RX DSP chain"));
-        modeGroup->addButton(m_rxBtn);
-        chainRow->addWidget(m_rxBtn);
-
-        // Mode toggle — swap chain widget + panel grid + BYPASS target
-        // + title-bar suffix when the user clicks RX (or TX).  Mode is
-        // persisted so the strip reopens at the user's last choice.
-        connect(m_rxBtn, &QPushButton::toggled, this, [this](bool on) {
-            m_rxMode = on;
-            if (m_chainStack) m_chainStack->setCurrentIndex(on ? 1 : 0);
-            if (m_panelStack) m_panelStack->setCurrentIndex(on ? 1 : 0);
-            if (m_titleLbl) {
-                const QString base =
-                    QString::fromUtf8("Aetherial Audio \xe2\x80\x94 Channel Strip");
-                m_titleLbl->setText(base + (on
-                    ? QString::fromUtf8(" \xe2\x80\x94 RX")
-                    : QString::fromUtf8(" \xe2\x80\x94 TX")));
-            }
-            if (m_bypassBtn && m_audio) {
-                QSignalBlocker b(m_bypassBtn);
-                m_bypassBtn->setChecked(on
-                    ? m_audio->isRxBypassed()
-                    : m_audio->isTxBypassed());
-            }
-            AppSettings::instance().setValue("AetherialStripMode",
-                                             on ? "RX" : "TX");
-        });
-
         m_chain = new StripChainWidget(content);
         m_chain->setAudioEngine(m_audio);
         // Forward stage-bypass clicks out as our own signal so MainWindow
@@ -270,23 +208,8 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         connect(m_chain, &StripChainWidget::stageEnabledChanged,
                 this,    &AetherialAudioStrip::stageEnabledChanged);
 
-        m_chainRx = new StripRxChainWidget(content);
-        m_chainRx->setAudioEngine(m_audio);
-        connect(m_chainRx, &StripRxChainWidget::stageEnabledChanged,
-                this,      &AetherialAudioStrip::rxStageEnabledChanged);
-        connect(m_chainRx, &StripRxChainWidget::dspEditRequested,
-                this,      &AetherialAudioStrip::rxDspEditRequested);
-        connect(m_chainRx, &StripRxChainWidget::editRequested,
-                this,      &AetherialAudioStrip::rxStageEditRequested);
-
-        // QStackedWidget lets the TX/RX toggle swap the visible chain
-        // without rebuilding either widget.  Both pages stay alive so
-        // their engine bindings keep observing.
-        m_chainStack = new QStackedWidget(content);
-        m_chainStack->addWidget(m_chain);     // page 0 — TX
-        m_chainStack->addWidget(m_chainRx);   // page 1 — RX
-        m_chainStack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        chainRow->addWidget(m_chainStack);
+        m_chain->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        chainRow->addWidget(m_chain);
 
         // BYPASS — sits to the right of the chain's TX endpoint.  Same
         // checkable amber toggle as the docked applet.
@@ -323,17 +246,10 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
             // whichever mode the strip is currently displaying.
             connect(m_audio, &AudioEngine::txBypassChanged,
                     this, [this](bool on) {
-                if (!m_bypassBtn || m_rxMode) return;
+                if (!m_bypassBtn) return;
                 QSignalBlocker b(m_bypassBtn);
                 m_bypassBtn->setChecked(on);
                 if (m_chain) m_chain->update();
-            });
-            connect(m_audio, &AudioEngine::rxBypassChanged,
-                    this, [this](bool on) {
-                if (!m_bypassBtn || !m_rxMode) return;
-                QSignalBlocker b(m_bypassBtn);
-                m_bypassBtn->setChecked(on);
-                if (m_chainRx) m_chainRx->update();
             });
         }
         chainRow->addWidget(m_bypassBtn);
@@ -529,67 +445,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical "
         "{ background: none; }");
 
-    // RX panel grid (#2425) — same `wrap`-into-frame helper as TX, but
-    // 4 rows of [ADSP|AGC-T] / [EQ wide] / [AGC-C|DESS] / [TUBE|EVO].
-    // ADSP embeds AetherDspWidget directly (already a reusable widget,
-    // shared with AetherDspDialog and the docked applet).  DESS has no
-    // RX DSP class yet so it ships as a stub label until that lands.
-    auto* gridRx = new QGridLayout;
-    gridRx->setContentsMargins(0, 0, 0, 0);
-    gridRx->setHorizontalSpacing(8);
-    gridRx->setVerticalSpacing(8);
-
-    m_adspRx = new AetherDspWidget(m_audio, this);
-    // Match Settings → AetherDSP Settings... — 13 px fonts, full-size
-    // controls.  The applet-bar path uses setCompactMode(true) instead.
-    m_adspRx->setDialogMode(true);
-    m_agcT   = new StripGatePanel  (m_audio, this);
-    m_eqRx   = new StripEqPanel    (m_audio, this);
-    m_agcC   = new StripCompPanel  (m_audio, this);
-    m_dessRx = new StripDeEssPanel (m_audio, this);
-    m_tubeRx = new StripTubePanel  (m_audio, this);
-    m_evo    = new StripPuduPanel  (m_audio, this);
-
-    int rr = 0;
-    gridRx->addWidget(wrap(m_adspRx),                  rr,   0);
-    gridRx->addWidget(wrap(m_agcT),                    rr,   1);
-    gridRx->addWidget(wrap(m_eqRx),                  ++rr,   0, 1, 2);
-    gridRx->addWidget(wrap(m_agcC),                  ++rr,   0);
-    gridRx->addWidget(wrap(m_dessRx),                  rr,   1);
-    gridRx->addWidget(wrap(m_tubeRx, Qt::AlignTop),  ++rr,   0);
-    gridRx->addWidget(wrap(m_evo,    Qt::AlignTop),    rr,   1);
-    // 5th row — RX-side counterparts of the TX strip's bottom row:
-    // output meter on the LEFT, waveform tap on the RIGHT.
-    m_outputRx   = new StripRxOutputPanel (m_audio, this);
-    m_waveformRx = new StripWaveformPanel (m_audio, this);
-    gridRx->addWidget(wrap(m_outputRx,   Qt::AlignTop), ++rr, 0);
-    gridRx->addWidget(wrap(m_waveformRx, Qt::AlignTop),   rr, 1);
-
-    gridRx->setColumnStretch(0, 1);
-    gridRx->setColumnStretch(1, 1);
-    gridRx->setRowStretch(0, 0);
-    gridRx->setRowStretch(1, 1);   // EQ row absorbs extra vertical space
-    gridRx->setRowStretch(2, 0);
-    gridRx->setRowStretch(3, 0);
-    gridRx->setRowStretch(4, 0);   // RX output + waveform stay at content height
-
-    auto* gridRxHost = new QWidget;
-    gridRxHost->setLayout(gridRx);
-    auto* gridRxScroll = new QScrollArea;
-    gridRxScroll->setWidget(gridRxHost);
-    gridRxScroll->setWidgetResizable(true);
-    gridRxScroll->setFrameShape(QFrame::NoFrame);
-    gridRxScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    gridRxScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    gridRxScroll->setStyleSheet(gridScroll->styleSheet());
-
-    // Panel stack: page 0 = TX grid (above), page 1 = RX grid.  Mode
-    // toggle swaps the page.
-    m_panelStack = new QStackedWidget;
-    m_panelStack->addWidget(gridScroll);
-    m_panelStack->addWidget(gridRxScroll);
-
-    body->addWidget(m_panelStack, 1);
+    body->addWidget(gridScroll, 1);
 
     // Wire each panel to its TX-side engine.  The panels' showForTx() /
     // showForPath() methods do this — they also call show() / raise() /
@@ -606,18 +462,6 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     m_reverb->showForTx();
     m_waveform->showForTx();
     m_finalOutput->showForTx();
-
-    // Pin each RX panel to its RX engine instance.  Same one-shot
-    // initialiser pattern as TX above; subsequent visibility is owned
-    // by the panel-stack page swap.
-    if (m_tubeRx)     m_tubeRx->showForRx();
-    if (m_agcT)       m_agcT->showForRx();
-    if (m_eqRx)       m_eqRx->showForPath(ClientEqApplet::Path::Rx);
-    if (m_agcC)       m_agcC->showForRx();
-    if (m_dessRx)     m_dessRx->showForRx();
-    if (m_evo)        m_evo->showForRx();
-    if (m_outputRx)   m_outputRx->showForRx();
-    if (m_waveformRx) m_waveformRx->showForRx();
 
     // Forward the EQ panel's cutoff-drag signal to the strip's public
     // signal so MainWindow can wire it the same way it wires the
@@ -654,16 +498,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
                         static_cast<QWidget*>(m_comp),
                         static_cast<QWidget*>(m_dess),
                         static_cast<QWidget*>(m_pudu),
-                        static_cast<QWidget*>(m_reverb),
-                        // RX panels (#2425) — same chrome cleanup pass.
-                        static_cast<QWidget*>(m_agcT),
-                        static_cast<QWidget*>(m_eqRx),
-                        static_cast<QWidget*>(m_agcC),
-                        static_cast<QWidget*>(m_dessRx),
-                        static_cast<QWidget*>(m_tubeRx),
-                        static_cast<QWidget*>(m_evo),
-                        static_cast<QWidget*>(m_outputRx),
-                        static_cast<QWidget*>(m_waveformRx) }) {
+                        static_cast<QWidget*>(m_reverb) }) {
         if (!p) continue;
         recolour(p);
         for (QObject* child : p->children()) {
@@ -679,17 +514,6 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
 
-    // Restore last selected mode (#2425).  Default = TX so users on
-    // upgrade keep the existing behaviour.  Toggling the button fires
-    // the connected lambda which swaps the chain stack, panel stack,
-    // BYPASS target, and title-bar suffix.
-    {
-        const QString m = AppSettings::instance()
-            .value("AetherialStripMode", "TX").toString();
-        if (m == "RX" && m_rxBtn) {
-            m_rxBtn->setChecked(true);
-        }
-    }
 }
 
 AetherialAudioStrip::~AetherialAudioStrip() = default;
@@ -771,25 +595,9 @@ void AetherialAudioStrip::setTxActive(bool active)
     if (m_chain) m_chain->setTxActive(active);
 }
 
-void AetherialAudioStrip::setRxPcAudioEnabled(bool on)
-{
-    if (m_chainRx) m_chainRx->setPcAudioEnabled(on);
-}
-
-void AetherialAudioStrip::setRxClientDspActive(bool on, const QString& label)
-{
-    if (m_chainRx) m_chainRx->setClientDspActive(on, label);
-}
-
-void AetherialAudioStrip::setRxOutputUnmuted(bool on)
-{
-    if (m_chainRx) m_chainRx->setOutputUnmuted(on);
-}
-
 void AetherialAudioStrip::refreshChainPaint()
 {
     if (m_chain) m_chain->update();
-    if (m_chainRx) m_chainRx->update();
 }
 
 void AetherialAudioStrip::saveGeometryToSettings()
@@ -883,15 +691,10 @@ void AetherialAudioStrip::onBypassToggled(bool checked)
 {
     if (!m_audio) return;
     // Engine owns the bypass snapshots — both this widget and the docked
-    // Chain applet route through setTxBypassed / setRxBypassed and
-    // observe the matching *BypassChanged signal to stay in lock-step.
-    if (m_rxMode) {
-        m_audio->setRxBypassed(checked);
-        if (m_chainRx) m_chainRx->update();
-    } else {
-        m_audio->setTxBypassed(checked);
-        if (m_chain) m_chain->update();
-    }
+    // Chain applet route through setTxBypassed and observe
+    // txBypassChanged to stay in lock-step. RX bypass belongs to AetherRX.
+    m_audio->setTxBypassed(checked);
+    if (m_chain) m_chain->update();
 }
 
 // ──────────────────────────────────────────────────────────────────

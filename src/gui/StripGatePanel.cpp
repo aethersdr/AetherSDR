@@ -1,19 +1,23 @@
 #include "StripGatePanel.h"
+#include "PanelTick.h"
 #include "ClientCompKnob.h"
 #include "ClientGateCurveWidget.h"
 #include "ClientGateLevelView.h"
 #include "EditorFramelessTitleBar.h"
+#include "Theme.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientGate.h"
 
 #include <QCloseEvent>
+#include <QButtonGroup>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QStackedWidget>
 #include <QHideEvent>
 #include <QLabel>
 #include <QMoveEvent>
+#include <QSlider>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QShowEvent>
@@ -56,16 +60,28 @@ const QString kBypassStyle = QStringLiteral(
 // green palette, Gate (checked) uses the amber palette that marks
 // more-aggressive settings elsewhere in the chain.  The colour
 // itself tells you which mode you're in without reading the label.
+// Unchecked is muted, checked is lit. The green-when-off styling this
+// inherited from the single Flip button was readable while only one of these
+// existed at a time; with both halves of a pair on screen it said that Level
+// and Curve were both on, and only the shade told you which.
+// Tokens, not literals: the unchecked half of each pair is the panel's own
+// ground and label colour, and the checked half is the transmit-amber the rest
+// of the app already uses to mark a more aggressive setting. Applied through
+// ThemeManager::applyStyleSheet() so the {{...}} resolve.
 const QString kFlipStyle = QStringLiteral(
     "QPushButton {"
-    "  background: #006040; border: 1px solid #00a060; border-radius: 3px;"
-    "  color: #00ff88; font-size: 10px; font-weight: bold; padding: 3px 6px;"
+    "  background: {{color.background.1}};"
+    "  border: 1px solid {{color.border.strong}}; border-radius: 3px;"
+    "  color: {{color.text.secondary}};"
+    "  font-size: 10px; font-weight: bold; padding: 3px 6px;"
     "}"
-    "QPushButton:hover { background: #007050; }"
+    "QPushButton:hover {"
+    "  background: {{color.background.2}}; color: {{color.text.primary}};"
+    "}"
     "QPushButton:checked {"
-    "  background: #3a2a0e; color: #f2c14e; border: 1px solid #f2c14e;"
-    "}"
-    "QPushButton:checked:hover { background: #4a3a1e; }");
+    "  background: {{color.background.tx}}; color: {{color.meter.gainReduction}};"
+    "  border: 1px solid {{color.meter.gainReduction}};"
+    "}");
 
 // Lookahead dropdown values in ms.  0 disables the delay line; 1 and
 // 1.5 ms match Ableton's preset options; 3 / 5 added for users who
@@ -92,13 +108,20 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
 
     // Bypass moved to the CHAIN widget's single-click gesture.
 
-    // ── Main body: left control column + right level view ─────────
+    // The page reads the way the EQ's does: a toolbar of switches along the
+    // top, the display filling everything under it, and every knob in one row
+    // at the foot. The old shape -- a column of knobs down the left with the
+    // display beside it -- spent a third of a 562 px page on a 150 px column
+    // and left a hole under it that nothing could fill.
+    auto* toolbar = new QHBoxLayout;
+    toolbar->setSpacing(8);
+
     auto* body = new QHBoxLayout;
     body->setSpacing(12);
 
-    // Left column: threshold, return, flip/lookahead
-    auto* left = new QVBoxLayout;
-    left->setSpacing(8);
+    // Knobs, all of them, in one row at the foot.
+    auto* left = new QHBoxLayout;
+    left->setSpacing(4);
 
     // Threshold — the single largest control, matches Ableton's big
     // top-left knob.  -80..0 dB linear.
@@ -133,73 +156,113 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
             this, &StripGatePanel::applyReturn);
     left->addWidget(m_returnKnob, 0, Qt::AlignHCenter);
 
-    // Graph view toggle — flips the centre stack between the live level
-    // history (default) and the Ableton-Live-style transfer curve from
-    // the docked applet.  Same checkable styling as the Flip button so
-    // the bottom of the column reads as one consistent control bank.
-    m_viewToggle = new QPushButton("Level");   // default = level history
-    m_viewToggle->setCheckable(true);
-    m_viewToggle->setStyleSheet(kFlipStyle);
-    m_viewToggle->setFixedHeight(22);
-    m_viewToggle->setToolTip(
-        "Switch the gate display between the live level history and "
-        "the static transfer-curve view.");
-    connect(m_viewToggle, &QPushButton::toggled, this, [this](bool on) {
-        if (m_viewStack) m_viewStack->setCurrentIndex(on ? 1 : 0);
-        // Label tracks what's currently shown.
-        if (m_viewToggle) m_viewToggle->setText(on ? "Curve" : "Level");
-    });
-    left->addWidget(m_viewToggle);
-
-    // Spacer pushes Peek + Flip to the bottom of the column so the
-    // Threshold/Return knobs stay anchored at the top while the mode
-    // toggle and lookahead picker hug the bottom edge.
-    left->addStretch();
-
-    // Peek (lookahead) row — sits directly above the Flip button.
+    // Level / Curve — a pair, not a toggle. Both states stay on screen, and
+    // the lit one is the one being shown.
     {
-        auto* lookWrap = new QHBoxLayout;
-        lookWrap->setSpacing(4);
-        auto* lookLbl = new QLabel("Peek:");
-        lookWrap->addWidget(lookLbl);
-        m_lookahead = new QComboBox;
-        m_lookahead->setStyleSheet(
-            "QComboBox { padding-left: 0px; padding-right: 0px; }"
-            "QComboBox::drop-down { width: 14px; }");
-        for (float v : kLookaheadOptions) {
-            const QString label = (v <= 0.0f)
-                ? "Off" : (QString::number(v, 'g', 2) + " ms");
-            m_lookahead->addItem(label, v);
-        }
-        connect(m_lookahead,
-                QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this](int i) {
-            if (i < 0 || i >= kLookaheadOptions.size()) return;
-            applyLookahead(kLookaheadOptions[i]);
+        toolbar->addWidget(new QLabel("View:"));
+        auto* group = new QButtonGroup(this);
+        group->setExclusive(true);
+
+        const auto makeViewBtn = [&](const QString& text, int page) {
+            auto* b = new QPushButton(text);
+            b->setObjectName(QStringLiteral("gateView") + text);
+            b->setCheckable(true);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(b, kFlipStyle);
+            b->setFixedHeight(22);
+            group->addButton(b, page);
+            toolbar->addWidget(b);
+            return b;
+        };
+        m_viewLevelBtn = makeViewBtn(QStringLiteral("Level"), 0);
+        m_viewCurveBtn = makeViewBtn(QStringLiteral("Curve"), 1);
+        m_viewLevelBtn->setChecked(true);
+        m_viewLevelBtn->setToolTip("Live level history.");
+        m_viewCurveBtn->setToolTip("Static transfer curve.");
+
+        connect(group, &QButtonGroup::idClicked, this, [this](int page) {
+            if (m_viewStack) m_viewStack->setCurrentIndex(page);
         });
-        lookWrap->addWidget(m_lookahead, 1);
-        left->addLayout(lookWrap);
     }
 
-    // Flip button (Expander ↔ Gate) — bottom-most control.
-    m_flip = new QPushButton("Flip");
-    m_flip->setCheckable(true);
-    m_flip->setStyleSheet(kFlipStyle);
-    m_flip->setFixedHeight(22);
-    m_flip->setToolTip(
-        "Flip between downward Expander (gentle) and Gate (hard) "
-        "modes.  Snaps ratio + floor to preset pairs; other knobs "
-        "stay where you left them.");
-    connect(m_flip, &QPushButton::toggled, this, [this](bool checked) {
-        applyMode(checked ? 1 : 0);
-    });
-    left->addWidget(m_flip);
+    // Gate / Expander — the same treatment: hard gating or gentle downward
+    // expansion, each named on its own button.
+    {
+        // Air between the pairs, and a word in front of each: four buttons in
+        // an even row read as one set of four choices, when they are two
+        // questions -- what the display shows, and how the gate behaves.
+        toolbar->addSpacing(16);
+        toolbar->addWidget(new QLabel("Mode:"));
+        auto* group = new QButtonGroup(this);
+        group->setExclusive(true);
 
-    body->addLayout(left, 0);
+        const auto makeModeBtn = [&](const QString& text) {
+            auto* b = new QPushButton(text);
+            b->setObjectName(QStringLiteral("gateMode") + text);
+            b->setCheckable(true);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(b, kFlipStyle);
+            b->setFixedHeight(22);
+            group->addButton(b);
+            toolbar->addWidget(b);
+            return b;
+        };
+        m_gateBtn = makeModeBtn(QStringLiteral("Gate"));
+        m_expanderBtn = makeModeBtn(QStringLiteral("Expander"));
+        // What the old Flip tooltip said, split between the two buttons that
+        // now do its job: switching snaps ratio and floor to that mode's preset
+        // pair, and leaves every other knob where the operator put it.
+        m_gateBtn->setToolTip(
+            "Gate: hard gating below the threshold.\n"
+            "Snaps ratio + floor to the gate pair; other knobs stay put.");
+        m_expanderBtn->setToolTip(
+            "Expander: gentle downward expansion below the threshold.\n"
+            "Snaps ratio + floor to the expander pair; other knobs stay put.");
 
-    // Right side: level view + bottom knob row
-    auto* right = new QVBoxLayout;
-    right->setSpacing(8);
+        connect(m_gateBtn, &QPushButton::clicked, this,
+                [this]() { applyMode(true); });
+        connect(m_expanderBtn, &QPushButton::clicked, this,
+                [this]() { applyMode(false); });
+    }
+
+    // Peek (lookahead) — a slider at the right-hand end of the toolbar rather
+    // than a dropdown. Five stops, so it steps between them; the reading sits
+    // beside it because a slider with no number cannot say "1.5 ms".
+    {
+        toolbar->addStretch(1);
+
+        auto* lookLbl = new QLabel("Peek:");
+        toolbar->addWidget(lookLbl);
+
+        m_lookahead = new QSlider(Qt::Horizontal);
+        m_lookahead->setObjectName(QStringLiteral("gatePeekSlider"));
+        m_lookahead->setAccessibleName(QStringLiteral("Gate lookahead"));
+        m_lookahead->setRange(0, int(kLookaheadOptions.size()) - 1);
+        m_lookahead->setPageStep(1);
+        m_lookahead->setFixedWidth(120);
+        m_lookahead->setToolTip(
+            "Lookahead: how far ahead of the threshold crossing the gate "
+            "opens, so an attack is not clipped.");
+        applyPrimarySliderStyle(m_lookahead);
+        toolbar->addWidget(m_lookahead);
+
+        m_lookaheadValue = new QLabel;
+        m_lookaheadValue->setFixedWidth(42);
+        m_lookaheadValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        toolbar->addWidget(m_lookaheadValue);
+
+        const auto showValue = [this](int i) {
+            if (!m_lookaheadValue || i < 0 || i >= kLookaheadOptions.size()) return;
+            const float v = kLookaheadOptions[i];
+            m_lookaheadValue->setText(v <= 0.0f
+                ? QStringLiteral("Off")
+                : QString::number(v, 'g', 2) + QStringLiteral(" ms"));
+        };
+        showValue(0);
+        connect(m_lookahead, &QSlider::valueChanged, this, [this, showValue](int i) {
+            if (i < 0 || i >= kLookaheadOptions.size()) return;
+            showValue(i);
+            applyLookahead(kLookaheadOptions[i]);
+        });
+    }
 
     // Stack the level history and the transfer curve so the toggle in
     // the left column can flip between them in place.
@@ -208,7 +271,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     m_curveView = new ClientGateCurveWidget;
     m_viewStack->addWidget(m_levelView);   // index 0 = live history
     m_viewStack->addWidget(m_curveView);   // index 1 = transfer curve
-    right->addWidget(m_viewStack, 1);
+    body->addWidget(m_viewStack, 1);
 
     // Bottom row: Attack, Hold, Release, Floor (small knobs).
     auto* bottom = new QHBoxLayout;
@@ -223,21 +286,6 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     };
 
     // Attack: 0.1..100 ms exponential.
-    m_attack = makeBottomKnob("Attack");
-    m_attack->setRange(0.1f, 100.0f);
-    m_attack->setDefault(0.5f);
-    m_attack->setValueFromNorm([](float n) {
-        return 0.1f * std::pow(1000.0f, n);           // 0.1 → 100
-    });
-    m_attack->setNormFromValue([](float v) {
-        return std::log(std::max(0.1f, v) / 0.1f) / std::log(1000.0f);
-    });
-    m_attack->setLabelFormat([](float v) {
-        return QString::number(v, 'f', v < 10.0f ? 2 : 1) + " ms";
-    });
-    connect(m_attack, &ClientCompKnob::valueChanged,
-            this, &StripGatePanel::applyAttack);
-    bottom->addWidget(m_attack, 0, Qt::AlignHCenter);
 
     // Hold: 0..500 ms linear.
     m_hold = makeBottomKnob("Hold");
@@ -301,11 +349,15 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
             this, &StripGatePanel::applyRatio);
     bottom->addWidget(m_ratio, 0, Qt::AlignHCenter);
 
-    right->addLayout(bottom);
+    // Thresh and Return lead the row: they are the two the operator sets
+    // first, and they were the column this layout did away with.
+    for (int i = bottom->count(); i > 0; --i) {
+        left->addItem(bottom->takeAt(0));
+    }
 
-    body->addLayout(right, 1);
-
-    root->addLayout(body);
+    root->addLayout(toolbar);
+    root->addLayout(body, 1);
+    root->addLayout(left);
 
     // Bind both views to the gate once so they start polling.
     if (m_audio && gate()) {
@@ -320,7 +372,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     // here live, and vice versa.  30 Hz is cheap — each knob setValue
     // is a short clamp + repaint when values differ.
     m_syncTimer = new QTimer(this);
-    m_syncTimer->setInterval(33);
+    m_syncTimer->setInterval(kPanelTickMs);
     connect(m_syncTimer, &QTimer::timeout,
             this, &StripGatePanel::syncControlsFromEngine);
 }
@@ -357,7 +409,11 @@ void StripGatePanel::showForTx()
     show();
     raise();
     activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
 }
 
 void StripGatePanel::showForRx()
@@ -376,7 +432,11 @@ void StripGatePanel::showForRx()
     show();
     raise();
     activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
 }
 
 void StripGatePanel::syncControlsFromEngine()
@@ -387,9 +447,11 @@ void StripGatePanel::syncControlsFromEngine()
     m_restoring = true;
 
     {
-        QSignalBlocker b(m_flip);
-        m_flip->setChecked(g->mode() == ClientGate::Mode::Gate);
-        m_flip->setText(g->mode() == ClientGate::Mode::Gate ? "Gate" : "Expander");
+        const bool hard = (g->mode() == ClientGate::Mode::Gate);
+        QSignalBlocker bg(m_gateBtn);
+        QSignalBlocker be(m_expanderBtn);
+        m_gateBtn->setChecked(hard);
+        m_expanderBtn->setChecked(!hard);
     }
     {
         QSignalBlocker b(m_threshold);  m_threshold->setValue(g->thresholdDb());
@@ -401,7 +463,6 @@ void StripGatePanel::syncControlsFromEngine()
         QSignalBlocker b(m_ratio);      m_ratio->setValue(g->ratio());
     }
     {
-        QSignalBlocker b(m_attack);     m_attack->setValue(g->attackMs());
     }
     {
         QSignalBlocker b(m_hold);       m_hold->setValue(g->holdMs());
@@ -421,7 +482,13 @@ void StripGatePanel::syncControlsFromEngine()
             const float d = std::fabs(kLookaheadOptions[i] - la);
             if (d < bestDiff) { bestDiff = d; bestIdx = i; }
         }
-        m_lookahead->setCurrentIndex(bestIdx);
+        m_lookahead->setValue(bestIdx);
+        if (m_lookaheadValue) {
+            const float v = kLookaheadOptions[bestIdx];
+            m_lookaheadValue->setText(v <= 0.0f
+                ? QStringLiteral("Off")
+                : QString::number(v, 'g', 2) + QStringLiteral(" ms"));
+        }
     }
 
     m_restoring = false;
@@ -452,12 +519,6 @@ void StripGatePanel::applyRatio(float ratio)
     saveGateSettings();
 }
 
-void StripGatePanel::applyAttack(float ms)
-{
-    if (m_restoring || !m_audio) return;
-    gate()->setAttackMs(ms);
-    saveGateSettings();
-}
 
 void StripGatePanel::applyHold(float ms)
 {
@@ -538,11 +599,15 @@ void StripGatePanel::resizeEvent(QResizeEvent* ev)
 void StripGatePanel::showEvent(QShowEvent* ev)
 {
     QWidget::showEvent(ev);
+    if (m_syncTimer) m_syncTimer->start();
 }
 
 void StripGatePanel::hideEvent(QHideEvent* ev)
 {
     saveGeometryToSettings();
+    // Stacked behind another tab, or the window closed: stop reading the
+    // engine for something nobody can see.
+    if (m_syncTimer) m_syncTimer->stop();
     QWidget::hideEvent(ev);
 }
 
