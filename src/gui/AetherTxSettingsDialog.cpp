@@ -51,7 +51,7 @@ AetherTxSettingsDialog::AetherTxSettingsDialog(AudioEngine* audio, QWidget* pare
 
     m_list = new QListWidget;
     m_list->setObjectName(QStringLiteral("aetherTxProfileList"));
-    m_list->setAccessibleName(tr("Saved AetherRX profiles"));
+    m_list->setAccessibleName(tr("Saved AetherTX profiles"));
     root->addWidget(m_list, 1);
 
     // Library actions, then the two that cross the filesystem.
@@ -196,7 +196,7 @@ void AetherTxSettingsDialog::onSave()
 {
     bool ok = false;
     const QString name = QInputDialog::getText(
-        this, tr("Save profile"), tr("Name for this receive chain:"),
+        this, tr("Save profile"), tr("Name for this transmit chain:"),
         QLineEdit::Normal, selectedName(), &ok).trimmed();
     if (!ok || name.isEmpty()) return;
 
