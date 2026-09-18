@@ -3,17 +3,20 @@
 #include "ClientGateCurveWidget.h"
 #include "ClientGateLevelView.h"
 #include "EditorFramelessTitleBar.h"
+#include "Theme.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientGate.h"
 
 #include <QCloseEvent>
+#include <QButtonGroup>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QStackedWidget>
 #include <QHideEvent>
 #include <QLabel>
 #include <QMoveEvent>
+#include <QSlider>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QShowEvent>
@@ -56,12 +59,16 @@ const QString kBypassStyle = QStringLiteral(
 // green palette, Gate (checked) uses the amber palette that marks
 // more-aggressive settings elsewhere in the chain.  The colour
 // itself tells you which mode you're in without reading the label.
+// Unchecked is muted, checked is lit. The green-when-off styling this
+// inherited from the single Flip button was readable while only one of these
+// existed at a time; with both halves of a pair on screen it said that Level
+// and Curve were both on, and only the shade told you which.
 const QString kFlipStyle = QStringLiteral(
     "QPushButton {"
-    "  background: #006040; border: 1px solid #00a060; border-radius: 3px;"
-    "  color: #00ff88; font-size: 10px; font-weight: bold; padding: 3px 6px;"
+    "  background: #16202c; border: 1px solid #2a3a4d; border-radius: 3px;"
+    "  color: #8aa0b4; font-size: 10px; font-weight: bold; padding: 3px 6px;"
     "}"
-    "QPushButton:hover { background: #007050; }"
+    "QPushButton:hover { background: #1e2c3a; color: #c8d8e8; }"
     "QPushButton:checked {"
     "  background: #3a2a0e; color: #f2c14e; border: 1px solid #f2c14e;"
     "}"
@@ -140,67 +147,107 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
             this, &StripGatePanel::applyReturn);
     left->addWidget(m_returnKnob, 0, Qt::AlignHCenter);
 
-    // Graph view toggle — flips the centre stack between the live level
-    // history (default) and the Ableton-Live-style transfer curve from
-    // the docked applet.  Same checkable styling as the Flip button so
-    // the bottom of the column reads as one consistent control bank.
-    m_viewToggle = new QPushButton("Level");   // default = level history
-    m_viewToggle->setCheckable(true);
-    m_viewToggle->setStyleSheet(kFlipStyle);
-    m_viewToggle->setFixedHeight(22);
-    m_viewToggle->setToolTip(
-        "Switch the gate display between the live level history and "
-        "the static transfer-curve view.");
-    connect(m_viewToggle, &QPushButton::toggled, this, [this](bool on) {
-        if (m_viewStack) m_viewStack->setCurrentIndex(on ? 1 : 0);
-        // Label tracks what's currently shown.
-        if (m_viewToggle) m_viewToggle->setText(on ? "Curve" : "Level");
-    });
-    toolbar->addWidget(m_viewToggle);
-
-    // No spacer here. Pushing Peek and Flip to the foot of the column put
-    // 200 px of nothing through the middle of it, in a window that has 446 to
-    // spend: the five controls read as one bank when they sit together, and
-    // the slack goes to the bottom where nothing has to read across it.
-    // Peek (lookahead) row — sits directly above the Flip button.
+    // Level / Curve — a pair, not a toggle. Both states stay on screen, and
+    // the lit one is the one being shown.
     {
-        auto* lookWrap = new QHBoxLayout;
-        lookWrap->setSpacing(4);
-        auto* lookLbl = new QLabel("Peek:");
-        lookWrap->addWidget(lookLbl);
-        m_lookahead = new QComboBox;
-        m_lookahead->setStyleSheet(
-            "QComboBox { padding-left: 0px; padding-right: 0px; }"
-            "QComboBox::drop-down { width: 14px; }");
-        for (float v : kLookaheadOptions) {
-            const QString label = (v <= 0.0f)
-                ? "Off" : (QString::number(v, 'g', 2) + " ms");
-            m_lookahead->addItem(label, v);
-        }
-        connect(m_lookahead,
-                QOverload<int>::of(&QComboBox::currentIndexChanged),
-                this, [this](int i) {
-            if (i < 0 || i >= kLookaheadOptions.size()) return;
-            applyLookahead(kLookaheadOptions[i]);
+        auto* group = new QButtonGroup(this);
+        group->setExclusive(true);
+
+        const auto makeViewBtn = [&](const QString& text, int page) {
+            auto* b = new QPushButton(text);
+            b->setObjectName(QStringLiteral("gateView") + text);
+            b->setCheckable(true);
+            b->setStyleSheet(kFlipStyle);
+            b->setFixedHeight(22);
+            group->addButton(b, page);
+            toolbar->addWidget(b);
+            return b;
+        };
+        m_viewLevelBtn = makeViewBtn(QStringLiteral("Level"), 0);
+        m_viewCurveBtn = makeViewBtn(QStringLiteral("Curve"), 1);
+        m_viewLevelBtn->setChecked(true);
+        m_viewLevelBtn->setToolTip("Live level history.");
+        m_viewCurveBtn->setToolTip("Static transfer curve.");
+
+        connect(group, &QButtonGroup::idClicked, this, [this](int page) {
+            if (m_viewStack) m_viewStack->setCurrentIndex(page);
         });
-        lookWrap->addWidget(m_lookahead, 1);
-        toolbar->addLayout(lookWrap);
     }
 
-    // Flip button (Expander ↔ Gate) — bottom-most control.
-    m_flip = new QPushButton("Flip");
-    m_flip->setCheckable(true);
-    m_flip->setStyleSheet(kFlipStyle);
-    m_flip->setFixedHeight(22);
-    m_flip->setToolTip(
-        "Flip between downward Expander (gentle) and Gate (hard) "
-        "modes.  Snaps ratio + floor to preset pairs; other knobs "
-        "stay where you left them.");
-    connect(m_flip, &QPushButton::toggled, this, [this](bool checked) {
-        applyMode(checked ? 1 : 0);
-    });
-    toolbar->addWidget(m_flip);
-    toolbar->addStretch(1);
+    // Gate / Expander — the same treatment: hard gating or gentle downward
+    // expansion, each named on its own button.
+    {
+        auto* group = new QButtonGroup(this);
+        group->setExclusive(true);
+
+        const auto makeModeBtn = [&](const QString& text) {
+            auto* b = new QPushButton(text);
+            b->setObjectName(QStringLiteral("gateMode") + text);
+            b->setCheckable(true);
+            b->setStyleSheet(kFlipStyle);
+            b->setFixedHeight(22);
+            group->addButton(b);
+            toolbar->addWidget(b);
+            return b;
+        };
+        m_gateBtn = makeModeBtn(QStringLiteral("Gate"));
+        m_expanderBtn = makeModeBtn(QStringLiteral("Expander"));
+        // What the old Flip tooltip said, split between the two buttons that
+        // now do its job: switching snaps ratio and floor to that mode's preset
+        // pair, and leaves every other knob where the operator put it.
+        m_gateBtn->setToolTip(
+            "Gate: hard gating below the threshold.\n"
+            "Snaps ratio + floor to the gate pair; other knobs stay put.");
+        m_expanderBtn->setToolTip(
+            "Expander: gentle downward expansion below the threshold.\n"
+            "Snaps ratio + floor to the expander pair; other knobs stay put.");
+
+        connect(m_gateBtn, &QPushButton::clicked, this,
+                [this]() { applyMode(true); });
+        connect(m_expanderBtn, &QPushButton::clicked, this,
+                [this]() { applyMode(false); });
+    }
+
+    // Peek (lookahead) — a slider at the right-hand end of the toolbar rather
+    // than a dropdown. Five stops, so it steps between them; the reading sits
+    // beside it because a slider with no number cannot say "1.5 ms".
+    {
+        toolbar->addStretch(1);
+
+        auto* lookLbl = new QLabel("Peek:");
+        toolbar->addWidget(lookLbl);
+
+        m_lookahead = new QSlider(Qt::Horizontal);
+        m_lookahead->setObjectName(QStringLiteral("gatePeekSlider"));
+        m_lookahead->setAccessibleName(QStringLiteral("Gate lookahead"));
+        m_lookahead->setRange(0, int(kLookaheadOptions.size()) - 1);
+        m_lookahead->setPageStep(1);
+        m_lookahead->setFixedWidth(120);
+        m_lookahead->setToolTip(
+            "Lookahead: how far ahead of the threshold crossing the gate "
+            "opens, so an attack is not clipped.");
+        applyPrimarySliderStyle(m_lookahead);
+        toolbar->addWidget(m_lookahead);
+
+        m_lookaheadValue = new QLabel;
+        m_lookaheadValue->setFixedWidth(42);
+        m_lookaheadValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        toolbar->addWidget(m_lookaheadValue);
+
+        const auto showValue = [this](int i) {
+            if (!m_lookaheadValue || i < 0 || i >= kLookaheadOptions.size()) return;
+            const float v = kLookaheadOptions[i];
+            m_lookaheadValue->setText(v <= 0.0f
+                ? QStringLiteral("Off")
+                : QString::number(v, 'g', 2) + QStringLiteral(" ms"));
+        };
+        showValue(0);
+        connect(m_lookahead, &QSlider::valueChanged, this, [this, showValue](int i) {
+            if (i < 0 || i >= kLookaheadOptions.size()) return;
+            showValue(i);
+            applyLookahead(kLookaheadOptions[i]);
+        });
+    }
 
     // Stack the level history and the transfer curve so the toggle in
     // the left column can flip between them in place.
@@ -392,9 +439,11 @@ void StripGatePanel::syncControlsFromEngine()
     m_restoring = true;
 
     {
-        QSignalBlocker b(m_flip);
-        m_flip->setChecked(g->mode() == ClientGate::Mode::Gate);
-        m_flip->setText(g->mode() == ClientGate::Mode::Gate ? "Gate" : "Expander");
+        const bool hard = (g->mode() == ClientGate::Mode::Gate);
+        QSignalBlocker bg(m_gateBtn);
+        QSignalBlocker be(m_expanderBtn);
+        m_gateBtn->setChecked(hard);
+        m_expanderBtn->setChecked(!hard);
     }
     {
         QSignalBlocker b(m_threshold);  m_threshold->setValue(g->thresholdDb());
@@ -426,7 +475,13 @@ void StripGatePanel::syncControlsFromEngine()
             const float d = std::fabs(kLookaheadOptions[i] - la);
             if (d < bestDiff) { bestDiff = d; bestIdx = i; }
         }
-        m_lookahead->setCurrentIndex(bestIdx);
+        m_lookahead->setValue(bestIdx);
+        if (m_lookaheadValue) {
+            const float v = kLookaheadOptions[bestIdx];
+            m_lookaheadValue->setText(v <= 0.0f
+                ? QStringLiteral("Off")
+                : QString::number(v, 'g', 2) + QStringLiteral(" ms"));
+        }
     }
 
     m_restoring = false;
