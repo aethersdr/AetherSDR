@@ -39,6 +39,14 @@ public:
 
     void setPeakLinear(float peakLinear);
 
+    // Whether this strip sets the EQ's master gain as well as reporting the
+    // level. Off leaves a meter: no handle, no drag, no editable value, and the
+    // gain it would have written stays where it is. The receive chain uses that
+    // -- its EQ runs at unity and its band gains are where its level is set --
+    // while transmit keeps the control.
+    void setGainControlEnabled(bool enabled);
+    bool gainControlEnabled() const { return m_gainControl; }
+
 signals:
     void gainChanged(float linear);
 
@@ -80,6 +88,7 @@ private:
     QElapsedTimer m_extremesClock;
     qint64        m_lastExtremesMs{0};
     float   m_gain{1.0f};
+    bool    m_gainControl{true};
     float   m_smoothedPeak{-120.0f};  // dB
     bool    m_dragging{false};
 

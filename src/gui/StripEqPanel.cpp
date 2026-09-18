@@ -494,6 +494,18 @@ void StripEqPanel::showForPath(ClientEqApplet::Path path)
     m_canvas->setEq(eq);
     if (m_iconRow)  m_iconRow->setEq(eq);
     if (m_paramRow) m_paramRow->setEq(eq);
+    // Receive runs the EQ's master gain at unity and shows the strip as a meter
+    // only: on that side the band gains are where the level is set, and a
+    // second gain stage sharing the meter's axis was one control too many. The
+    // transmit side keeps the fader.
+    const bool rx = (path == ClientEqApplet::Path::Rx);
+    if (m_outFader) m_outFader->setGainControlEnabled(!rx);
+    if (eq && rx && std::abs(eq->masterGain() - 1.0f) > 1e-4f) {
+        // Unity from here on, including for anyone upgrading with a gain
+        // already stored: nothing in the UI could return it to 1.0 afterwards.
+        eq->setMasterGain(1.0f);
+        if (m_audio) m_audio->saveClientEqSettings();
+    }
     if (m_outFader && eq) m_outFader->setGainLinear(eq->masterGain());
     if (m_familyCombo && eq) {
         QSignalBlocker b(m_familyCombo);

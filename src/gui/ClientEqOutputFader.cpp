@@ -223,6 +223,26 @@ void ClientEqOutputFader::setGainFromPos(QPoint pos)
     update();
 }
 
+void ClientEqOutputFader::setGainControlEnabled(bool enabled)
+{
+    if (m_gainControl == enabled) return;
+    m_gainControl = enabled;
+
+    if (m_valueEdit) {
+        // Hidden rather than made read-only: a greyed field that cannot be
+        // typed into still reads as a control someone has taken away, and the
+        // room it frees goes to the meter.
+        m_valueEdit->setVisible(enabled);
+    }
+    setCursor(Qt::ArrowCursor);
+    setToolTip(enabled
+        ? QStringLiteral("Output gain (dB). Drag to set, wheel for fine step,\n"
+                         "double-click to reset to 0 dB.")
+        : QStringLiteral("Post-EQ output level."));
+    rebuildLabelLayout();
+    update();
+}
+
 void ClientEqOutputFader::setOrientation(Qt::Orientation orientation)
 {
     if (m_orientation == orientation) return;
@@ -257,17 +277,21 @@ void ClientEqOutputFader::rebuildLabelLayout()
         row->setSpacing(6);
         row->addWidget(m_endLabel, 0, Qt::AlignVCenter);
         row->addStretch(1);
-        m_valueEdit->setFixedWidth(46);
-        row->addWidget(m_valueEdit, 0, Qt::AlignVCenter);
+        if (m_gainControl) {
+            m_valueEdit->setFixedWidth(46);
+            row->addWidget(m_valueEdit, 0, Qt::AlignVCenter);
+        }
     } else {
         auto* col = new QVBoxLayout(this);
         col->setContentsMargins(0, 2, 0, 2);
         col->setSpacing(0);
         col->addWidget(m_endLabel);
         col->addStretch(1);
-        m_valueEdit->setMinimumWidth(0);
-        m_valueEdit->setMaximumWidth(QWIDGETSIZE_MAX);
-        col->addWidget(m_valueEdit);
+        if (m_gainControl) {
+            m_valueEdit->setMinimumWidth(0);
+            m_valueEdit->setMaximumWidth(QWIDGETSIZE_MAX);
+            col->addWidget(m_valueEdit);
+        }
     }
 }
 
@@ -306,8 +330,8 @@ QRectF ClientEqOutputFader::holeRect() const
 
     const int gap = 8;
     const int left = (m_endLabel ? m_endLabel->geometry().right() : 0) + gap;
-    const int right = (m_valueEdit ? m_valueEdit->geometry().left() : width())
-                    - gap;
+    const int right = ((m_gainControl && m_valueEdit)
+                           ? m_valueEdit->geometry().left() : width()) - gap;
     const double holeW = std::max(1, right - left);
     const double unitY = double(height()) / kControlH;
 
@@ -461,6 +485,8 @@ void ClientEqOutputFader::paintHorizontal(QPainter& p)
                    label);
     }
 
+    if (!m_gainControl) return;
+
     // The gain handle: the one thing here the flag's meter has no need of,
     // since that one only reports. White, standing across the whole hole, so it
     // reads as a setting rather than as part of the level.
@@ -574,6 +600,7 @@ void ClientEqOutputFader::paintVertical(QPainter& p)
 
 void ClientEqOutputFader::mousePressEvent(QMouseEvent* ev)
 {
+    if (!m_gainControl) { QWidget::mousePressEvent(ev); return; }
     if (ev->button() == Qt::LeftButton) {
         m_dragging = true;
         setCursor(Qt::ClosedHandCursor);
@@ -586,7 +613,7 @@ void ClientEqOutputFader::mousePressEvent(QMouseEvent* ev)
 
 void ClientEqOutputFader::mouseMoveEvent(QMouseEvent* ev)
 {
-    if (m_dragging) {
+    if (m_gainControl && m_dragging) {
         setGainFromPos(ev->pos());
         ev->accept();
         return;
@@ -607,6 +634,7 @@ void ClientEqOutputFader::mouseReleaseEvent(QMouseEvent* ev)
 
 void ClientEqOutputFader::mouseDoubleClickEvent(QMouseEvent* ev)
 {
+    if (!m_gainControl) { QWidget::mouseDoubleClickEvent(ev); return; }
     if (ev->button() == Qt::LeftButton) {
         m_gain = 1.0f;  // 0 dB
         refreshValueLabel();
@@ -620,6 +648,7 @@ void ClientEqOutputFader::mouseDoubleClickEvent(QMouseEvent* ev)
 
 void ClientEqOutputFader::wheelEvent(QWheelEvent* ev)
 {
+    if (!m_gainControl) { QWidget::wheelEvent(ev); return; }
     // 0.5 dB per notch (12 notches for a full deg of the wheel).
     const int notches = ev->angleDelta().y() / 120;
     if (notches == 0) { QWidget::wheelEvent(ev); return; }

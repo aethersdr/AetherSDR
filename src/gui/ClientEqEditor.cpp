@@ -425,6 +425,15 @@ void ClientEqEditor::showForPath(ClientEqApplet::Path path)
     m_canvas->setEq(eq);
     if (m_iconRow)  m_iconRow->setEq(eq);
     if (m_paramRow) m_paramRow->setEq(eq);
+    // Receive runs the EQ's master gain at unity, the same as the strip: if this
+    // window could still set it, the value would last only until the strip was
+    // next shown and reset it, which is a worse answer than not offering it.
+    const bool rx = (path == ClientEqApplet::Path::Rx);
+    if (m_outFader) m_outFader->setGainControlEnabled(!rx);
+    if (eq && rx && std::abs(eq->masterGain() - 1.0f) > 1e-4f) {
+        eq->setMasterGain(1.0f);
+        if (m_audio) m_audio->saveClientEqSettings();
+    }
     if (m_outFader && eq) m_outFader->setGainLinear(eq->masterGain());
     if (m_familyCombo && eq) {
         QSignalBlocker b(m_familyCombo);
