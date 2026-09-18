@@ -60,6 +60,11 @@ const QString kModeStyle = QStringLiteral(
 QWidget* makeBracketLabel(const QString& text)
 {
     auto* w = new QWidget;
+    // The label inside is a QLabel, whose vertical policy is Preferred with no
+    // maximum, so this wrapper grew to 116 px on a tall page and left "Body"
+    // floating in the middle of an empty box with its rules drawn across the
+    // centreline. It needs only the height of its own text.
+    w->setMaximumHeight(20);
     auto* h = new QHBoxLayout(w);
     h->setContentsMargins(0, 0, 0, 0);
     h->setSpacing(6);
@@ -110,7 +115,21 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
     // marketing name.
     m_logo->setWordmark(QString::fromUtf8("AetherVoice\xe2\x84\xa2"));
     m_logo->setMinimumHeight(80);
-    root->addWidget(m_logo);
+    // ...and a ceiling. Nothing else in this column can grow — the mode
+    // buttons and the knobs are all fixed — so without one the logo took
+    // every pixel the page had spare and drew itself at two and a half times
+    // its designed size.
+    m_logo->setMaximumHeight(200);
+    // Equal stretches either side, so whatever height is left over after the
+    // logo hits its ceiling is split evenly above and below it rather than
+    // being handed to whichever widget happens to lack a maximum.
+    root->addStretch(1);
+    // A stretch factor far above the buffers' own, so the logo takes height
+    // first and only what it cannot use — because it has hit the ceiling
+    // above — reaches them. Give it the same factor as the buffers and it
+    // shares the surplus three ways instead, landing well short of 200.
+    root->addWidget(m_logo, 100);
+    root->addStretch(1);
 
     // ── Even / Odd mode toggle — centred in the gap between the
     // PooDoo™ wordmark and the Poo/Doo knob row.  Aphex generates
