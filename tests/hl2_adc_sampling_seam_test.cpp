@@ -158,10 +158,33 @@ int main(int argc, char** argv)
             feedOneBlock(dsp, phase);
         }
         app.processEvents();
-        QObject::disconnect(conn);
         check(meterEmissions == 0,
               "a muted chain publishes NO S-meter level — it is not a signal, "
               "it is the silence we clocked in");
+
+        // THE POSITIVE CONTROL, and the assertion above is worth nothing
+        // without it. "No emissions" is also what a connection that was never
+        // made looks like, what a renamed signal looks like, and what a
+        // chain fed too few blocks looks like. Unmute the SAME chain with the
+        // SAME connection still attached and require the emissions to start:
+        // that is the one arrangement in which zero-while-muted can only mean
+        // the guard.
+        meterEmissions = 0;
+        QMetaObject::invokeMethod(&dsp, "setAudioMuted", Qt::QueuedConnection,
+                                  Q_ARG(bool, false));
+        app.processEvents();
+        for (int i = 0; i < kMaxBlocksForOneSample; ++i) {
+            feedOneBlock(dsp, phase);
+        }
+        app.processEvents();
+        QObject::disconnect(conn);
+        check(meterEmissions > 0,
+              "and the same chain unmuted DOES publish — the silence above was "
+              "the guard, not a dead connection");
+        // Put the chain back where the surrounding test expects it.
+        keyed = true;
+        queueMute();
+        app.processEvents();
     }
 
     // ── Key up, short. THE BUG. ──────────────────────────────────────────
