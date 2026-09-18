@@ -227,7 +227,11 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
         AetherSDR::ThemeManager::instance().applyStyleSheet(peakHoldBtn, "QPushButton {"
             "  background: {{color.background.0}}; color: {{color.text.primary}};"
             "  border: 1px solid {{color.background.1}}; border-radius: 3px;"
-            "  padding: 2px 12px; font-size: 11px; font-weight: bold;"
+            // No horizontal padding. The row is tight enough on this page that
+            // the layout squeezes this button below the width its own label
+            // needs, and the padding was taken out of the text rather than the
+            // button: "Peak Hold" rendered as "?eak Hol".
+            "  padding: 2px 0px; font-size: 11px; font-weight: bold;"
             "}"
             "QPushButton:hover { background: {{color.background.1}}; }"
             "QPushButton:checked {"
