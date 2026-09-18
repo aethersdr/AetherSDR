@@ -545,35 +545,15 @@ void CopyAssistController::adoptSurvivingFault()
     // Two slots (see AsrMarkerState). When both survived, the load is the one
     // to believe: it was armed later, and a timed-out discovery was merely still
     // running beside it.
-    const QString loadInFlight =
-        CopyAssistSettings::value(QStringLiteral("AsrInFlight"), QString()).toString();
-    const QString discoveryInFlight =
-        CopyAssistSettings::value(QStringLiteral("AsrInFlightDiscovery"), QString()).toString();
-    AsrAttempt died = asrAttemptFromJson(loadInFlight);
-    if (!died.isValid()) {
-        died = asrAttemptFromJson(discoveryInFlight);
-    }
-    if (!loadInFlight.isEmpty()) {
-        CopyAssistSettings::setValue(QStringLiteral("AsrInFlight"), QString());
-    }
-    if (!discoveryInFlight.isEmpty()) {
-        CopyAssistSettings::setValue(QStringLiteral("AsrInFlightDiscovery"), QString());
-    }
-
-    const AsrAttempt previous = asrAttemptFromJson(
+    const AsrAttempt adopted = CopyAssistSettings::adoptSurvivingFault();
+    m_lastFault = asrAttemptFromJson(
         CopyAssistSettings::value(QStringLiteral("AsrLastFault"), QString()).toString());
-    if (died.isValid()) {
-        // Still set at startup: the previous run never reached the clear.
-        // Merged, not replaced — a GPU an earlier fault condemned stays out.
-        m_lastFault = asrMergeFault(previous, died);
-        CopyAssistSettings::setValue(QStringLiteral("AsrLastFault"), asrAttemptToJson(m_lastFault));
+    if (adopted.isValid()) {
         qCWarning(lcGui).noquote()
-            << "Copy Assist: the previous session ended inside ASR stage" << died.stage
-            << "- device" << (died.device < 0 ? QStringLiteral("cpu") : died.deviceName)
-            << "tier" << died.tier << "version" << died.appVersion
+            << "Copy Assist: the previous session ended inside ASR stage" << adopted.stage
+            << "- device" << (adopted.device < 0 ? QStringLiteral("cpu") : adopted.deviceName)
+            << "tier" << adopted.tier << "version" << adopted.appVersion
             << "- devices already retired:" << m_lastFault.retired.size();
-    } else {
-        m_lastFault = previous;
     }
 
     switch (asrFaultAction(m_lastFault, asrAppVersionStamp(), std::nullopt)) {

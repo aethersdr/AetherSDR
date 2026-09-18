@@ -1,6 +1,7 @@
 #include "gui/CopyAssistSettings.h"
 
 #include "core/AppSettings.h"
+#include "asr/AsrCrashMarker.h"
 
 #include <QDebug>
 #include <QEventLoop>
@@ -263,6 +264,36 @@ void updateValue(const QString& field, const std::function<QString(const QString
     auto& s = AppSettings::instance();
     s.setValue(rootKey(), QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
     s.save();
+}
+
+AsrAttempt adoptSurvivingFault()
+{
+    const QMutexLocker lock(&objectMutex());
+    ensureMigrated();
+    QJsonObject obj = readObject();
+    const QString load = obj.value(QStringLiteral("AsrInFlight")).toString();
+    const QString discovery = obj.value(QStringLiteral("AsrInFlightDiscovery")).toString();
+    AsrAttempt died = asrAttemptFromJson(load);
+    if (!died.isValid()) {
+        died = asrAttemptFromJson(discovery);
+    }
+    if (load.isEmpty() && discovery.isEmpty()) {
+        return {};
+    }
+    AsrAttempt adopted;
+    if (died.isValid()) {
+        adopted = asrMergeFault(
+            asrAttemptFromJson(obj.value(QStringLiteral("AsrLastFault")).toString()), died);
+        obj.insert(QStringLiteral("AsrLastFault"), asrAttemptToJson(adopted));
+    }
+    obj.insert(QStringLiteral("AsrInFlight"), QString());
+    obj.insert(QStringLiteral("AsrInFlightDiscovery"), QString());
+    // One document replacement and one SQLite transaction: interruption leaves
+    // either the surviving markers or their adopted fault, never neither.
+    auto& settings = AppSettings::instance();
+    settings.setValue(rootKey(), QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    settings.save();
+    return adopted;
 }
 
 } // namespace CopyAssistSettings

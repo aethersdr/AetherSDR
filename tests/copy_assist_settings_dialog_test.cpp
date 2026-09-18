@@ -5,6 +5,7 @@
 #include "TestSettingsProfile.h"
 
 #include "core/AppSettings.h"
+#include "core/SettingsBootstrap.h"
 #include "gui/CopyAssistSettingsDialog.h"
 #include "gui/FramelessWindowTitleBar.h"
 
@@ -501,6 +502,55 @@ int main(int argc, char** argv)
                     CopyAssistSettings::value(QStringLiteral("AsrInFlight")).toString())
                     .isValid(),
                "a cleared marker reads as no attempt");
+
+        // Adopt through the production store seam, and inspect a separate
+        // read-only database connection rather than the in-memory settings.
+        {
+            AsrAttempt older = gpuLoad;
+            older.device = 0;
+            older.deviceName = QStringLiteral("GPU Zero");
+            CopyAssistSettings::setValue(QStringLiteral("AsrLastFault"), asrAttemptToJson(older));
+            CopyAssistSettings::setValue(QStringLiteral("AsrInFlight"), asrAttemptToJson(gpuLoad));
+            CopyAssistSettings::setValue(QStringLiteral("AsrInFlightDiscovery"), asrAttemptToJson(discovery));
+            const auto diskDocument = [] {
+                return QJsonDocument::fromJson(
+                    SettingsBootstrap::readValue(CopyAssistSettings::rootKey()).toUtf8()).object();
+            };
+            const QJsonObject before = diskDocument();
+            expect(!before.value(QStringLiteral("AsrInFlight")).toString().isEmpty(),
+                   "the recovery input is durable before adoption");
+            const AsrAttempt adopted = CopyAssistSettings::adoptSurvivingFault();
+            const QJsonObject after = diskDocument();
+            const AsrAttempt persisted = asrAttemptFromJson(
+                after.value(QStringLiteral("AsrLastFault")).toString());
+            expect(adopted.device == 1 && persisted.device == 1
+                       && persisted.retired.size() == 1 && persisted.retired[0].device == 0,
+                   "adoption durably merges the load fault with earlier retired GPUs");
+            expect(after.value(QStringLiteral("AsrInFlight")).toString().isEmpty()
+                       && after.value(QStringLiteral("AsrInFlightDiscovery")).toString().isEmpty(),
+                   "the same adoption consumes both marker slots");
+            expect(after.value(QStringLiteral("AsrCpuFallbackProbe"))
+                       == before.value(QStringLiteral("AsrCpuFallbackProbe")),
+                   "adoption preserves unrelated CopyAssist fields");
+            expect(!CopyAssistSettings::adoptSurvivingFault().isValid()
+                       && diskDocument() == after,
+                   "repeated adoption does not erase or change the adopted fault");
+
+            // A save refused during reset must leave the OLD durable document
+            // intact, with its marker available for a subsequent process.
+            CopyAssistSettings::setValue(QStringLiteral("AsrInFlightDiscovery"), asrAttemptToJson(discovery));
+            const QJsonObject beforeRefusal = diskDocument();
+            app.setProperty("AetherSettingsResetInProgress", true);
+            CopyAssistSettings::adoptSurvivingFault();
+            expect(diskDocument() == beforeRefusal,
+                   "a refused adoption commit retains the complete durable marker document");
+            app.setProperty("AetherSettingsResetInProgress", false);
+            AppSettings::instance().save();
+            expect(asrAttemptFromJson(diskDocument().value(QStringLiteral("AsrLastFault")).toString()).stage
+                       == QLatin1String(kAsrStageDiscovery),
+                   "retrying the pending save publishes the complete discovery fault");
+            CopyAssistSettings::setValue(QStringLiteral("AsrLastFault"), QString());
+        }
 
         // The undo control: hidden by default, shown with the reason, one click
         // asks for another attempt.
