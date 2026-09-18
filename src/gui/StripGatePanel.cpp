@@ -150,6 +150,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     // Level / Curve — a pair, not a toggle. Both states stay on screen, and
     // the lit one is the one being shown.
     {
+        toolbar->addWidget(new QLabel("View:"));
         auto* group = new QButtonGroup(this);
         group->setExclusive(true);
 
@@ -177,6 +178,11 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     // Gate / Expander — the same treatment: hard gating or gentle downward
     // expansion, each named on its own button.
     {
+        // Air between the pairs, and a word in front of each: four buttons in
+        // an even row read as one set of four choices, when they are two
+        // questions -- what the display shows, and how the gate behaves.
+        toolbar->addSpacing(16);
+        toolbar->addWidget(new QLabel("Mode:"));
         auto* group = new QButtonGroup(this);
         group->setExclusive(true);
 
