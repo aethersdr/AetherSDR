@@ -675,13 +675,16 @@ void CopyAssistController::applyGpuDevices(std::vector<AsrGpuDevice> gpus)
                 // Warning, not info: lcGui is declared QtWarningMsg, so an info
                 // line would be absent from every default support log — and
                 // this is the line that explains why the GPU tier was withheld.
+                const quint64 needMb =
+                    (static_cast<quint64>(gpuTierBytes) + kAsrTierVramHeadroomBytes)
+                    / (1024 * 1024);
                 qCWarning(lcGui).nospace()
                     << "ASR: keeping the default model tier - " << resolvedGpu->name << " has "
-                    << (resolvedGpu->vramFreeBytes / (1024 * 1024)) << " MB free, "
-                    << gpuDefaultTier << " needs about "
-                    << ((static_cast<quint64>(gpuTierBytes) + kAsrTierVramHeadroomBytes)
-                        / (1024 * 1024))
-                    << " MB";
+                    << (resolvedGpu->vramFreeBytes / (1024 * 1024)) << " of "
+                    << (resolvedGpu->vramTotalBytes / (1024 * 1024)) << " MB free, "
+                    << gpuDefaultTier << " needs about " << needMb << " MB free on a device of "
+                    << (needMb + kAsrTierVramDesktopReserveBytes / (1024 * 1024))
+                    << " MB or more";
             }
         }
         const AsrTierResolution tier = asrReconcileDefaultTier(

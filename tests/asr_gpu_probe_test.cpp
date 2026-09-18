@@ -206,7 +206,8 @@ int main()
     // exists" must not be enough to select a 1.6 GB model.
     {
         constexpr quint64 kMiB = 1024ull * 1024ull;
-        // large-v3-turbo weights file, AsrModelCatalog.cpp.
+        // Copy of the "large-v3-turbo" sizeBytes in AsrModelCatalog.cpp (this
+        // target does not link the catalog) — keep the two in step.
         constexpr qint64 kTurboBytes = 1624555275;
 
         // MEASURED (#4972 bench, RTX 5060 Laptop 8151 MiB under VRAM ballast,
@@ -240,6 +241,25 @@ int main()
                                  "headroom (#4972)\n");
             return 1;
         }
+        // CONSTRUCTED input on a MEASURED total (2176 MB, #5730 reporter log):
+        // ggml-vulkan reports free == total for a device without
+        // VK_EXT_memory_budget (ggml_backend_vk_get_device_memory), so the same
+        // card can present as 2176 of 2176 MB free. No capture of a driver in
+        // that mode exists; the row pins that the answer does not depend on it.
+        if (asrTierFitsVram(2176 * kMiB, 2176 * kMiB, kTurboBytes)) {
+            std::fprintf(stderr, "[FAIL] a 2 GB-class card reporting free == total "
+                                 "was judged to fit the 1.6 GB tier (#4972)\n");
+            return 1;
+        }
+        // CONSTRUCTED: the total boundary — need + desktop reserve fits, one
+        // byte less does not, with free memory ample in both.
+        const quint64 needTotal = need + kAsrTierVramDesktopReserveBytes;
+        if (!asrTierFitsVram(needTotal, needTotal, kTurboBytes)
+            || asrTierFitsVram(needTotal - 1, needTotal - 1, kTurboBytes)) {
+            std::fprintf(stderr, "[FAIL] VRAM gate total boundary is not weights + "
+                                 "headroom + desktop reserve (#4972)\n");
+            return 1;
+        }
         // CONSTRUCTED: memory unknown (AsrGpuDevice leaves both 0 when the
         // device could not be asked) is not "too small" — previous behaviour.
         if (!asrTierFitsVram(0, 0, kTurboBytes)) {
@@ -254,7 +274,8 @@ int main()
             return 1;
         }
         std::printf("[ok] #4972 VRAM gate on the GPU-default tier "
-                    "(weights + headroom, unknown memory passes)\n");
+                    "(weights + headroom, total clears a desktop reserve, "
+                    "unknown memory passes)\n");
     }
 
     QElapsedTimer timer;
