@@ -158,7 +158,9 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
     m_dryWet->setAccessibleName(QStringLiteral("Tube dry/wet mix"));
     m_dryWet->setRange(0, 100);
     m_dryWet->setPageStep(10);
-    m_dryWet->setFixedWidth(120);
+    // Twice the gate's Peek width: Peek has five stops, this has a hundred,
+    // so it earns the travel.
+    m_dryWet->setFixedWidth(240);
     m_dryWet->setToolTip(
         "Dry/Wet: how much of the saturated signal is blended back over "
         "the clean one. 100 % is fully saturated.");
