@@ -168,7 +168,11 @@ StripCompPanel::StripCompPanel(AudioEngine* engine, QWidget* parent)
         m_outputMeter->setLabel("Out");
         m_outputMeter->setTickSide(ClientCompMeter::TickSide::Right);
         m_outputMeter->setShowValueLabel(true);
-        m_outputMeter->setFixedWidth(42);
+        // The Out meter carries the makeup fader, so it needs its own tick
+        // gutter on the left for the makeup scale on top of the level ticks
+        // on the right — 42 px only ever fitted one of the two.
+        m_outputMeter->setMakeupControlEnabled(true);
+        m_outputMeter->setFixedWidth(72);
 
         auto* col = new QVBoxLayout;
         col->setSpacing(2);
@@ -246,13 +250,6 @@ StripCompPanel::StripCompPanel(AudioEngine* engine, QWidget* parent)
         return QString::number(v, 'f', 1) + " dB";
     });
 
-    m_makeup = makeKnob("Makeup");
-    m_makeup->setRange(-12.0f, 24.0f);
-    m_makeup->setDefault(0.0f);
-    m_makeup->setLabelFormat([](float v) {
-        return (v >= 0.0f ? "+" : "") + QString::number(v, 'f', 1) + " dB";
-    });
-
     // Pre-comp PAPR controls (#2887), TX only — see the header. Drive pushes
     // more material across the threshold so the comp engages harder; Phase
     // rotates voice peaks to be more symmetric so the harder compression
@@ -306,7 +303,10 @@ StripCompPanel::StripCompPanel(AudioEngine* engine, QWidget* parent)
             this, &StripCompPanel::applyRelease);
     connect(m_knee,    &ClientCompKnob::valueChanged,
             this, &StripCompPanel::applyKnee);
-    connect(m_makeup,  &ClientCompKnob::valueChanged,
+    // Makeup now rides the Out meter instead of a knob in the foot row:
+    // it is an output-side gain, so it reads where the output level is
+    // shown, and the row it left was over-full.
+    connect(m_outputMeter, &ClientCompMeter::makeupChanged,
             this, &StripCompPanel::applyMakeup);
     connect(m_limiterEnable, &QPushButton::toggled,
             this, &StripCompPanel::applyLimiterEnabled);
@@ -403,7 +403,7 @@ void StripCompPanel::syncControlsFromEngine()
     QSignalBlocker ba(m_attack);
     QSignalBlocker brl(m_release);
     QSignalBlocker bk(m_knee);
-    QSignalBlocker bm(m_makeup);
+    QSignalBlocker bm(m_outputMeter);
     QSignalBlocker bce(m_ceiling);
     QSignalBlocker ble(m_limiterEnable);
     QSignalBlocker bdv(m_drive);
@@ -413,7 +413,7 @@ void StripCompPanel::syncControlsFromEngine()
     m_attack->setValue(c->attackMs());
     m_release->setValue(c->releaseMs());
     m_knee->setValue(c->kneeDb());
-    m_makeup->setValue(c->makeupDb());
+    m_outputMeter->setMakeupDb(c->makeupDb());
     setCeilingDb(c->limiterCeilingDb());
     m_limiterEnable->setChecked(c->limiterEnabled());
     if (m_side == Side::Tx) {
@@ -463,7 +463,7 @@ void StripCompPanel::tickMeters()
     if (m_attack)  { QSignalBlocker b(m_attack);  m_attack->setValue(c->attackMs()); }
     if (m_release) { QSignalBlocker b(m_release); m_release->setValue(c->releaseMs()); }
     if (m_knee)    { QSignalBlocker b(m_knee);    m_knee->setValue(c->kneeDb()); }
-    if (m_makeup)  { QSignalBlocker b(m_makeup);  m_makeup->setValue(c->makeupDb()); }
+    if (m_outputMeter) { QSignalBlocker b(m_outputMeter); m_outputMeter->setMakeupDb(c->makeupDb()); }
     if (m_ceiling) { QSignalBlocker b(m_ceiling); setCeilingDb(c->limiterCeilingDb()); }
     if (m_drive && m_side == Side::Tx) {
         QSignalBlocker b(m_drive);

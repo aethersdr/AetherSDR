@@ -1330,6 +1330,22 @@ add_test(NAME modem_chrome_test COMMAND modem_chrome_test)
 set_tests_properties(modem_chrome_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(comp_makeup_fader_test
+    tests/comp_makeup_fader_test.cpp
+    src/gui/ClientCompMeter.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(comp_makeup_fader_test PRIVATE src)
+target_link_libraries(comp_makeup_fader_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME comp_makeup_fader_test COMMAND comp_makeup_fader_test)
+set_tests_properties(comp_makeup_fader_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(theme_manager_test
     tests/theme_manager_test.cpp
     src/core/ThemeManager.cpp
@@ -6137,6 +6153,7 @@ set(AETHER_SETTINGS_CONSUMERS
     slice_label_test
     ulanzi_mapping_migration_test
     modem_chrome_test
+    comp_makeup_fader_test
     aether_tx_profiles_test
     aether_rx_profiles_test
     theme_manager_test
