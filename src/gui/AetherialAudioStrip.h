@@ -9,13 +9,13 @@ class QPushButton;
 class QComboBox;
 class QLabel;
 class QStackedWidget;
+class QTimer;
 class QVBoxLayout;
 
 namespace AetherSDR {
 
 class AudioEngine;
-class ChannelStripPresets;
-class StripChainWidget;
+class StageTabBar;
 class EditorFramelessTitleBar;
 class StripTubePanel;
 class StripDeEssPanel;
@@ -43,6 +43,11 @@ class AetherialAudioStrip : public QWidget {
     Q_OBJECT
 
 public:
+    // The tabs, in the order they appear and in the order the signal meets
+    // them. Used as a stack index, so entries are appended, never inserted.
+    enum Stage { Gate = 0, Eq, DeEss, Comp, Tube, Enh, Reverb, Output,
+                 StageCount };
+
     explicit AetherialAudioStrip(AudioEngine* engine, QWidget* parent = nullptr);
     ~AetherialAudioStrip() override;
 
@@ -116,33 +121,29 @@ private:
     // ClientChainApplet's BYPASS button.
     void onBypassToggled(bool checked);
 
-    // Preset combo helpers.
-    void rebuildPresetCombo(const QString& selectName = QString());
-    void onPresetComboActivated(int idx);
-    void doImportPreset();
-    void doExportPreset();
-    void doExportLibrary();
-    void doSavePreset();
-    void doDeletePreset();
-    void updatePresetButtonEnable();
-    // After a preset has been applied to the engine, push fresh values
+    void addStage(Stage stage, const QString& label, QWidget* page);
+
+    // Commit a checkbox to the engine, and read the engine back into one.
+    void setStageEnabled(Stage stage, bool on);
+    bool stageEnabled(Stage stage) const;
+
+    // The profile library, bypass and the transmit monitor.
+    void showSettings();
+
+    // After a profile has been applied to the engine, push fresh values
     // into every embedded panel's UI so labels / knobs / combos stop
     // showing the previous preset's data.
     void refreshAllPanelsFromEngine();
 
     AudioEngine*         m_audio{nullptr};
-    ChannelStripPresets* m_presets{nullptr};
     QWidget*             m_titleBar{nullptr};   // custom inline ContainerTitleBar-styled bar
     QVBoxLayout*         m_bodyLayout{nullptr};
     QLabel*              m_titleLbl{nullptr};   // title text — toggles "— TX" / "— RX" suffix
-    StripChainWidget*    m_chain{nullptr};
-    QPushButton*         m_bypassBtn{nullptr};
-    QPushButton*         m_monRecBtn{nullptr};
-    QPushButton*         m_monPlayBtn{nullptr};
-    QComboBox*           m_presetCombo{nullptr};
-    QPushButton*         m_presetSaveBtn{nullptr};
-    QPushButton*         m_presetDeleteBtn{nullptr};
-    QString              m_currentPresetName;
+    StageTabBar*         m_tabs{nullptr};
+    QStackedWidget*      m_stack{nullptr};
+    // Polls the engine so the enable boxes follow changes made elsewhere —
+    // the docked chain applet toggles the same flags.
+    QTimer*              m_checkTimer{nullptr};
     bool                 m_buildingCombo{false};
     bool               m_monRecording{false};
     bool               m_monPlaying{false};

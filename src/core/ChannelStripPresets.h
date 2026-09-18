@@ -87,6 +87,12 @@ public:
     static QJsonObject captureRxJson(AudioEngine* engine);
     static void        applyRxJson(AudioEngine* engine, const QJsonObject& rx);
 
+    // The TX half, likewise. Unlike the RX block these fields sit loose at the
+    // top level of a preset, so capture returns them unwrapped and apply reads
+    // them from wherever the caller keeps them.
+    static QJsonObject captureTxJson(AudioEngine* engine);
+    static void        applyTxJson(AudioEngine* engine, const QJsonObject& tx);
+
 signals:
     void presetsChanged();
 
