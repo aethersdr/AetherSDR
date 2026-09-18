@@ -2,6 +2,8 @@
 #include "core/ClientPudu.h"
 
 #include <QFont>
+#include <QFontMetricsF>
+#include <algorithm>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRadialGradient>
@@ -91,13 +93,34 @@ void PooDooLogo::paintEvent(QPaintEvent*)
     // PooDoo™ wordmark — bold amber text, centred.
     QFont f = p.font();
     f.setFamily("Arial Black");        // bold, closest to a logo face
-    f.setPixelSize(static_cast<int>(r.height() * 0.55f));
     f.setWeight(QFont::Black);
-    p.setFont(f);
 
     const QString wordmark = m_wordmark.isEmpty()
         ? QString::fromUtf8("PooDoo\xe2\x84\xa2")
         : m_wordmark;
+
+    // Size off the height, then take it back down until it fits the width.
+    // The mark is set per instance — "PooDoo™" on the applet, "AetherVoice™"
+    // on the strip panel — and height alone sized the longer one straight off
+    // both edges of the widget, losing its first and last glyph. Advance is
+    // near-linear in pixel size, so one proportional correction lands it; the
+    // loop is a guard for the rounding, not the method.
+    int px = std::max(8, static_cast<int>(r.height() * 0.55f));
+    const qreal room = r.width() * 0.92;    // a little air at each end
+    f.setPixelSize(px);
+    qreal advance = QFontMetricsF(f).horizontalAdvance(wordmark);
+    if (advance > room && advance > 0.0) {
+        px = std::max(8, static_cast<int>(px * room / advance));
+        for (int guard = 0; guard < 8 && px > 8; ++guard) {
+            f.setPixelSize(px);
+            advance = QFontMetricsF(f).horizontalAdvance(wordmark);
+            if (advance <= room) break;
+            --px;
+        }
+    }
+    f.setPixelSize(px);
+    p.setFont(f);
+
     p.setPen(textColor);
     p.drawText(r, Qt::AlignCenter, wordmark);
 
