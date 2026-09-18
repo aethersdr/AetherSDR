@@ -3,6 +3,7 @@
 #include "MeterExtremes.h"
 
 #include <QElapsedTimer>
+#include <QRectF>
 #include <QWidget>
 
 class QLabel;
@@ -43,6 +44,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* ev) override;
+    void resizeEvent(QResizeEvent* ev) override;
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;
     void mouseReleaseEvent(QMouseEvent* ev) override;
@@ -60,6 +62,12 @@ private:
     void paintHorizontal(QPainter& p);
     // A level in dB to its hole-local position in SmartMTR UNITS.
     double posUnitsForDb(double db) const;
+    // Where the hole sits, in pixels, for the current size and font. Paint and
+    // the label layout both read it so the caps cannot drift off the meter.
+    QRectF holeRect() const;
+    // Keep the "OUT" and value caps centred on the hole rather than on the
+    // widget, which the ticks and labels above push them off.
+    void centreCapsOnHole();
 
     QLineEdit* m_valueEdit{nullptr};
     class QLabel* m_endLabel{nullptr};   // the "OUT" cap

@@ -16,6 +16,7 @@
 #include <QHBoxLayout>
 #include <QPainterPath>
 #include <QPolygonF>
+#include <QResizeEvent>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <algorithm>
@@ -294,21 +295,62 @@ void ClientEqOutputFader::paintEvent(QPaintEvent*)
 // vertical keeps the design's proportions; the horizontal stretches to the
 // panel's width, which a uniform fit would letterbox away, and that width is
 // the whole reason this meter moved down here.
-void ClientEqOutputFader::paintHorizontal(QPainter& p)
+// The hole, in pixels. SmartMTR budgets 20 units above it for the scale labels
+// and ticks; whatever that budget does not spend is dead space, and half of it
+// is moved below the meter so the control sits nearer the middle of its band
+// instead of riding high in it.
+QRectF ClientEqOutputFader::holeRect() const
 {
     using namespace SmartMtrUnits;
+    if (m_orientation != Qt::Horizontal) return QRectF();
 
     const int gap = 8;
     const int left = (m_endLabel ? m_endLabel->geometry().right() : 0) + gap;
     const int right = (m_valueEdit ? m_valueEdit->geometry().left() : width())
                     - gap;
     const double holeW = std::max(1, right - left);
+    const double unitY = double(height()) / kControlH;
 
+    const double labelUnits =
+        std::max(7.0, kLabelHeightNormal * unitY * 0.8) / std::max(0.01, unitY);
+    const double needed = labelUnits + kLabelGap + kMarkerLargeH;
+    const double spare = std::max(0.0, kHoleMargY - needed);
+    const double topUnits = kHoleMargY - spare / 2.0;
+
+    return QRectF(left, topUnits * unitY, holeW, kHoleH * unitY);
+}
+
+void ClientEqOutputFader::centreCapsOnHole()
+{
+    if (m_orientation != Qt::Horizontal) return;
+    auto* row = qobject_cast<QHBoxLayout*>(layout());
+    if (!row) return;
+
+    // A layout centres its children in the band left by its margins, so shift
+    // that band down by twice the offset between the widget's centre and the
+    // hole's: the caps then line up with the meter, not with the widget.
+    const QRectF hole = holeRect();
+    if (hole.isEmpty()) return;
+    const int delta = int(std::lround(2.0 * (hole.center().y() - height() / 2.0)));
+    row->setContentsMargins(4, std::max(0, delta), 4, std::max(0, -delta));
+}
+
+void ClientEqOutputFader::resizeEvent(QResizeEvent* ev)
+{
+    QWidget::resizeEvent(ev);
+    centreCapsOnHole();
+}
+
+void ClientEqOutputFader::paintHorizontal(QPainter& p)
+{
+    using namespace SmartMtrUnits;
+
+    const QRectF holeR = holeRect();
+    const double left = holeR.left();
+    const double holeW = holeR.width();
     const double unitX = holeW / kHoleW;
     const double unitY = double(height()) / kControlH;
     const auto px = [&](double units) { return left + units * unitX; };
-
-    const QRectF holeR(left, kHoleMargY * unitY, holeW, kHoleH * unitY);
     // Mouse geometry is the scale band, not the whole hole: the bar's 0..10
     // stub is decoration, and dragging there should mean "minimum", not a
     // position off the bottom of the scale.
@@ -409,7 +451,8 @@ void ClientEqOutputFader::paintHorizontal(QPainter& p)
         if (!large) continue;
         const QString label = QString::fromLatin1(t.label);
         const int tw = fm.horizontalAdvance(label);
-        const int tx = std::clamp(int(x) - tw / 2, left, right - tw);
+        const int tx = std::clamp(int(x) - tw / 2, int(holeR.left()),
+                                  int(holeR.right()) - tw);
         p.setPen(colour);
         p.drawText(tx, int(holeR.top() - kMarkerLargeH * unitY - kLabelGap * unitY),
                    label);
