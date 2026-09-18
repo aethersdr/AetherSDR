@@ -384,13 +384,25 @@ void ClientEqOutputFader::paintHorizontal(QPainter& p)
     for (const auto& t : kTicks) {
         const double x = px(posUnitsForDb(t.db));
         const bool large = (t.label != nullptr);
-        const double tickH = (large ? kMarkerLargeH : kMarkerSmallH) * unitY;
-        const double tickW = std::max(1.0, (large ? kMarkerLargeW : kMarkerSmallW) * unitX);
+        // Sub-ticks are half the height of a labelled one. The large tick keeps
+        // the flag's kMarkerLargeH, since that is what the label gap above is
+        // budgeted against.
+        const double tickH = (large ? kMarkerLargeH : kMarkerLargeH / 2.0) * unitY;
+        // A pixel narrower than the design calls for, both kinds: at this
+        // meter's width a unit is over two pixels, and the ladder reads better
+        // finer than it does bolder.
+        const double tickW = std::max(
+            1.0, (large ? kMarkerLargeW : kMarkerSmallW) * unitX - 1.0);
         const QColor colour = t.high ? SmartMtrColors::kMarkerHigh
                                      : SmartMtrColors::kMarkerNormal;
 
         p.setOpacity(large ? 1.0 : kMarkerSmallOpacity);
+        // Above and below: the hole sits 20 units down a 35-unit control, so
+        // the 5 below it are exactly a large tick's worth and the ladder can
+        // run both sides without the widget growing.
         p.fillRect(QRectF(x - tickW / 2.0, holeR.top() - tickH, tickW, tickH),
+                   colour);
+        p.fillRect(QRectF(x - tickW / 2.0, holeR.bottom(), tickW, tickH),
                    colour);
         p.setOpacity(1.0);
 
