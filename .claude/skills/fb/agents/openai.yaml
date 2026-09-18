@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fix AetherSDR Bug"
+  short_description: "Fix and prove an AetherSDR issue end-to-end"
+  default_prompt: "Use $fb to investigate, fix, prove, and publish the specified AetherSDR issue."
