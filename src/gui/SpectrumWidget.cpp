@@ -5309,12 +5309,12 @@ void SpectrumWidget::appendDssWaterfallRow(const QVector<float>& binsDbm,
         const FrequencyFrame previewBase{
             m_frequencyPreviewBaseCenterMhz,
             panDisplayBandwidthMhz(m_frequencyPreviewBaseBandwidthMhz,
-                                   m_edgeTaperEnabled && !m_kiwiSdrWaterfallActive),
+                                   panEdgeCropActive()),
         };
         const FrequencyFrame previewTarget{
             m_frequencyPreviewTargetCenterMhz,
             panDisplayBandwidthMhz(m_frequencyPreviewTargetBandwidthMhz,
-                                   m_edgeTaperEnabled && !m_kiwiSdrWaterfallActive),
+                                   panEdgeCropActive()),
         };
         const bool usePreviewBase = dssUntaggedRowUsesPreviewBase(
             previewBase, previewTarget,
@@ -5676,12 +5676,12 @@ const QVector<float>& SpectrumWidget::remapPreviewDssRow(
     const FrequencyFrame previewBase{
         m_frequencyPreviewBaseCenterMhz,
         panDisplayBandwidthMhz(m_frequencyPreviewBaseBandwidthMhz,
-                                   m_edgeTaperEnabled && !m_kiwiSdrWaterfallActive),
+                                   panEdgeCropActive()),
     };
     const FrequencyFrame previewTarget{
         m_frequencyPreviewTargetCenterMhz,
         panDisplayBandwidthMhz(m_frequencyPreviewTargetBandwidthMhz,
-                                   m_edgeTaperEnabled && !m_kiwiSdrWaterfallActive),
+                                   panEdgeCropActive()),
     };
     const FrequencyFrame sourceFrame = resolvedUntaggedDssFrame(
         FrequencyFrame{frameCenterMhz, frameBandwidthMhz},
@@ -6155,7 +6155,7 @@ void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
     // downstream consumer below (resetVisibleWaterfallFrequencyFrames(),
     // paintWaterfallRowsFromHistory() -> remapHistoryRowInto()) so the
     // pixel layout matches mhzToX()/xToMhz()'s effectiveBandwidthMhz().
-    if (m_edgeTaperEnabled) {
+    if (panEdgeCropActive()) {
         bandwidthMhz *= (1.0 - 2.0 * kEdgeTaperFraction);
     }
 
@@ -6298,9 +6298,9 @@ void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
     // so its reprojection/rebuild target frame needs the same effective
     // bandwidth or a stamped row and the viewport it's read against would
     // disagree about what span it covers.
-    const double effOldDssBw = m_edgeTaperEnabled
+    const double effOldDssBw = panEdgeCropActive()
         ? oldBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : oldBandwidthMhz;
-    const double effNewDssBw = m_edgeTaperEnabled
+    const double effNewDssBw = panEdgeCropActive()
         ? newBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : newBandwidthMhz;
     auto reprojectStream = [this, oldCenterMhz, oldBandwidthMhz,
                             newCenterMhz, newBandwidthMhz,
@@ -6462,7 +6462,7 @@ void SpectrumWidget::commitFrequencyPreview()
             // Effective (cropped) bandwidth -- see rebuildDssViewportFromHistory()'s
             // matching comment; this call site is its own raw target, not
             // inherited from an already-cropped local.
-            const double effTargetBw = m_edgeTaperEnabled
+            const double effTargetBw = panEdgeCropActive()
                 ? targetBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
                 : targetBandwidthMhz;
             rebuildDssViewportFromHistoryForFrame(targetCenterMhz, effTargetBw);
@@ -7433,9 +7433,9 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
         // so crop locally -- same effective bandwidth mhzToX()/xToMhz() use.
         // Crop the OLD/NEW parameters directly (not m_bandwidthMhz, which may
         // already have moved on from oldBandwidthMhz by the time this runs).
-        const double effOldBw = m_edgeTaperEnabled
+        const double effOldBw = panEdgeCropActive()
             ? oldBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : oldBandwidthMhz;
-        const double effNewBw = m_edgeTaperEnabled
+        const double effNewBw = panEdgeCropActive()
             ? newBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : newBandwidthMhz;
         reprojectWaterfallImage(m_waterfall, oldCenterMhz, effOldBw,
                                 newCenterMhz, effNewBw);
@@ -8808,7 +8808,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
             supplementalLevels.constData(),
             outputFrames.supplementalFrame.centerMhz,
             outputFrames.supplementalFrame.bandwidthMhz);
-        if (m_edgeTaperEnabled) {
+        if (panEdgeCropActive()) {
             appendDssWaterfallRow(croppedBinsForDisplay(displaySpectrumBins()),
                                  m_centerMhz, displayBw, true,
                                  dssSupplemental, incomingSupplementalCenterMhz,
@@ -9381,14 +9381,19 @@ double SpectrumWidget::frequencyCanvasFractionAtGlobal(
     return frequencyCanvasFraction(localPosition.x(), contentWidth());
 }
 
+bool SpectrumWidget::panEdgeCropActive() const
+{
+    return panEdgeCropApplies(m_edgeTaperEnabled, m_kiwiSdrWaterfallActive);
+}
+
 double SpectrumWidget::effectiveBandwidthMhz() const
 {
-    return panDisplayBandwidthMhz(m_bandwidthMhz, m_edgeTaperEnabled);
+    return panDisplayBandwidthMhz(m_bandwidthMhz, panEdgeCropActive());
 }
 
 QVector<float> SpectrumWidget::croppedBinsForDisplay(const QVector<float>& bins) const
 {
-    if (!m_edgeTaperEnabled) return bins;
+    if (!panEdgeCropActive()) return bins;
     const int n = bins.size();
     const int margin = static_cast<int>(n * kEdgeTaperFraction);
     if (margin <= 0 || n - 2 * margin < 2) return bins;
@@ -10937,7 +10942,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const double zoomCenter = std::max(
             centerForAnchoredPanBandwidth(
                 m_bwDragAnchorMhz, m_bwDragAnchorFraction, newBw,
-                m_edgeTaperEnabled),
+                panEdgeCropActive()),
             newBw / 2.0);
         const bool previewed = updateFrequencyPreview(
             m_centerMhz, m_bandwidthMhz, zoomCenter, newBw);
@@ -11643,7 +11648,7 @@ bool SpectrumWidget::event(QEvent* ev)
                 FrequencyFrame{m_centerMhz, effectiveBandwidthMhz()}, mouseXFrac);
             const double newCenter = std::max(
                 centerForAnchoredPanBandwidth(
-                    anchorMhz, mouseXFrac, newBw, m_edgeTaperEnabled),
+                    anchorMhz, mouseXFrac, newBw, panEdgeCropActive()),
                 newBw / 2.0);
             const bool previewed = updateFrequencyPreview(
                 m_centerMhz, m_bandwidthMhz, newCenter, newBw);
@@ -11839,7 +11844,7 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
             FrequencyFrame{m_centerMhz, effectiveBandwidthMhz()}, mouseXFrac);
         const double newCenter = std::max(
             centerForAnchoredPanBandwidth(
-                anchorMhz, mouseXFrac, newBw, m_edgeTaperEnabled),
+                anchorMhz, mouseXFrac, newBw, panEdgeCropActive()),
             newBw / 2.0);
         const bool previewed = updateFrequencyPreview(
             m_centerMhz, m_bandwidthMhz, newCenter, newBw);
@@ -12508,7 +12513,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     }
 
     const std::optional<FrequencyFrame> croppedFrame = edgeCroppedWaterfallFrame(
-        FrequencyFrame{m_centerMhz, m_bandwidthMhz}, m_edgeTaperEnabled);
+        FrequencyFrame{m_centerMhz, m_bandwidthMhz}, panEdgeCropActive());
     if (croppedFrame) {
         // The retained pixels, live pixels and DSS bins all cover this span.
         appendHistoryRow(levels.constData(), QDateTime::currentMSecsSinceEpoch(),
@@ -14011,7 +14016,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         && std::isfinite(m_frequencyPreviewTargetBandwidthMhz)
         && m_frequencyPreviewTargetBandwidthMhz > 0.0) {
         dssTargetCenterMhz = m_frequencyPreviewTargetCenterMhz;
-        dssTargetBandwidthMhz = m_edgeTaperEnabled
+        dssTargetBandwidthMhz = panEdgeCropActive()
             ? m_frequencyPreviewTargetBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
             : m_frequencyPreviewTargetBandwidthMhz;
         ++m_frequencyPreviewPresentCount;
@@ -14025,10 +14030,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             frequencyPreviewTransform(
                 FrequencyFrame{m_frequencyPreviewOverlayBaseCenterMhz,
                                panDisplayBandwidthMhz(m_frequencyPreviewOverlayBaseBandwidthMhz,
-                                                      m_edgeTaperEnabled)},
+                                                      panEdgeCropActive())},
                 FrequencyFrame{m_frequencyPreviewTargetCenterMhz,
                                panDisplayBandwidthMhz(m_frequencyPreviewTargetBandwidthMhz,
-                                                      m_edgeTaperEnabled)});
+                                                      panEdgeCropActive())});
         if (m_frequencyPreviewActive && overlayTransform.valid) {
             overlayScale = static_cast<float>(overlayTransform.scale);
             overlayOffset = static_cast<float>(overlayTransform.offset);
@@ -14233,7 +14238,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
 
-            // Edge crop (m_edgeTaperEnabled) happens upstream now, at the
+            // Edge crop (panEdgeCropActive()) happens upstream now, at the
             // bin/coordinate level (croppedBinsForDisplay(), and
             // mhzToX()/xToMhz()'s effectiveBandwidthMhz()) rather than as a
             // post-render overlay here -- see kEdgeTaperFraction's own comment
@@ -15399,7 +15404,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     p.fillRect(wfRect, Qt::black);  // paint the strip gap before the time tape
     drawWaterfall(p, wfContentRect);
 
-    // Edge crop (m_edgeTaperEnabled) now happens upstream, at the bin/
+    // Edge crop (panEdgeCropActive()) now happens upstream, at the bin/
     // coordinate level (croppedBinsForDisplay(), mhzToX()/xToMhz()'s
     // effectiveBandwidthMhz()) rather than as a post-render overlay here --
     // see kEdgeTaperFraction's own comment for why, and renderGpuFrame()'s
@@ -17034,7 +17039,7 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
         && std::isfinite(m_frequencyPreviewTargetBandwidthMhz)
         && m_frequencyPreviewTargetBandwidthMhz > 0.0) {
         centerMhz = m_frequencyPreviewTargetCenterMhz;
-        bandwidthMhz = m_edgeTaperEnabled
+        bandwidthMhz = panEdgeCropActive()
             ? m_frequencyPreviewTargetBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
             : m_frequencyPreviewTargetBandwidthMhz;
     }
@@ -17055,10 +17060,10 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
         frequencyPreviewTransform(
             FrequencyFrame{m_frequencyPreviewBaseCenterMhz,
                            panDisplayBandwidthMhz(m_frequencyPreviewBaseBandwidthMhz,
-                                                  m_edgeTaperEnabled)},
+                                                  panEdgeCropActive())},
             FrequencyFrame{m_frequencyPreviewTargetCenterMhz,
                            panDisplayBandwidthMhz(m_frequencyPreviewTargetBandwidthMhz,
-                                                  m_edgeTaperEnabled)});
+                                                  panEdgeCropActive())});
     if (m_frequencyPreviewActive && previewTransform.valid) {
         frequencyScale = static_cast<float>(previewTransform.scale);
         frequencyOffset = static_cast<float>(previewTransform.offset);

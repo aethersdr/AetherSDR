@@ -1415,6 +1415,7 @@ private:
     // so it must never feed a setPanBandwidth() call or similar (that
     // coupling caused a documented zoom-out regression). Center is
     // unaffected: the crop is symmetric.
+    bool panEdgeCropActive() const;
     double effectiveBandwidthMhz() const;
     // Central (1 - 2*kEdgeTaperFraction) fraction of bins, or bins unchanged
     // when m_edgeTaperEnabled is false. Pairs with effectiveBandwidthMhz():

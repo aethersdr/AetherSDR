@@ -75,6 +75,10 @@ int testCursorAnchoredZoom()
 int testEdgeCropGateAndZoomAnchor()
 {
     using namespace AetherSDR;
+    if (panEdgeCropApplies(false, false) || panEdgeCropApplies(false, true)
+        || panEdgeCropApplies(true, true) || !panEdgeCropApplies(true, false)) {
+        return fail("only the native stream of an edge-crop radio may be cropped");
+    }
     const FrequencyFrame raw{14.2, 0.192};
     const FrequencyFrame previewBase{14.1, 0.384};
     for (const bool enabled : {false, true}) {

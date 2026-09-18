@@ -86,6 +86,13 @@ struct FrequencyFrame {
 // because it sits inside this crop. Below 0.03 it would show on screen.
 inline constexpr double kEdgeTaperFraction = 0.04;
 
+// A Kiwi overlay shares the native radio's widget/capabilities but supplies
+// its own uncropped stream. Capability alone must not crop that overlay.
+inline bool panEdgeCropApplies(bool capabilityEnabled, bool kiwiStream)
+{
+    return capabilityEnabled && !kiwiStream;
+}
+
 // Keep display geometry separate from the full bandwidth sent to the radio.
 inline double panDisplayBandwidthMhz(double bandwidthMhz, bool edgeCropEnabled)
 {
