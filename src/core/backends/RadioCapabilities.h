@@ -955,7 +955,7 @@ struct RadioCapabilities {
     // it is the only automatic floor the operator has.
     bool hasRadioSideWaterfallAutoBlack = false;
 
-    // The DDC's own CIC/half-band decimation chain rolls off amplitude
+    // The DDC's own decimation filter chain rolls off amplitude
     // toward the extreme edges of the panadapter bandwidth -- real,
     // bench-measured attenuation baked into the sampled data itself, not a
     // display artifact. True for ANAN-G2, the first (and so far only) DDC-
@@ -964,7 +964,7 @@ struct RadioCapabilities {
     // rather than a family-string check at the one call site
     // (MainWindow::onConnectionStateChanged(), which drives
     // SpectrumWidget::setPanEdgeTaperEnabled()) so a future DDC backend
-    // gets the same cosmetic edge fade automatically instead of needing
+    // gets the same display-only edge crop automatically instead of needing
     // its own family added to a hardcoded list.
     bool hasDdcPanEdgeRolloff = false;
 

@@ -389,6 +389,23 @@ static constexpr int kFilterEdgeGrabPx = 8;
 static constexpr int kFilterPassbandMinBodyPx = 6;
 static constexpr int kMaxFftDisplayTracePoints = 8192;
 static constexpr int kFftDisplayOversample = 4;
+// Fraction of the panadapter cropped from EACH side when the backend reports
+// hasDdcPanEdgeRolloff (ANAN only). Display-only: croppedBinsForDisplay()
+// drops these bins from the trace, waterfall and 3D surface, and
+// effectiveBandwidthMhz() narrows mhzToX()/xToMhz() to match. The bandwidth
+// requested from and reported to the backend is never narrowed.
+//
+// 0.04, not the 0.09 fade it replaces. The shipped DDC0 droop defaults
+// (AnanDroopDefaults) are non-zero only in the outer 88 of 1024 bins per side
+// (~8.6%), all of which a 0.09 margin hid. At 0.04 the corrected 4-8.6% band
+// is on screen, and only the outermost 4% -- the steepest part of the DDC
+// FIR's transition band, where the correction climbs to its 90 dB clamp --
+// is dropped.
+//
+// NOTE for anyone lowering this further: AnanRxDsp's applyEdgeFade() rewrites
+// the outer 3% of every frame (tailFraction 0.03), and that is only invisible
+// because it sits inside this crop. Below 0.03 it would show on screen.
+static constexpr double kEdgeTaperFraction = 0.04;
 static constexpr float kFftDisplaySpatialSmoothBlend = 0.75f;
 static constexpr float kFftLineFeatherPx = 1.0f;
 static constexpr float kFftLineFeatherAlpha = 0.22f;
@@ -5922,7 +5939,10 @@ void SpectrumWidget::rebuildWaterfallViewport()
 
 void SpectrumWidget::rebuildDssViewportFromHistory()
 {
-    rebuildDssViewportFromHistoryForFrame(m_centerMhz, m_bandwidthMhz);
+    // Effective (cropped) bandwidth -- rebuildDssViewportFromHistoryForFrame()
+    // is a pure pass-through with no crop of its own; each caller supplies
+    // whatever it already knows is correct for its own situation.
+    rebuildDssViewportFromHistoryForFrame(m_centerMhz, effectiveBandwidthMhz());
 }
 
 void SpectrumWidget::rebuildDssViewportFromHistoryForFrame(double centerMhz,
@@ -6100,7 +6120,10 @@ void SpectrumWidget::recolorWaterfallViewport()
     if (!m_waterfallSupplemental.isNull()) {
         m_waterfallSupplemental.fill(Qt::black);
     }
-    resetVisibleWaterfallFrequencyFrames(m_centerMhz, m_bandwidthMhz);
+    // Effective (cropped) bandwidth -- see rebuildWaterfallViewportForFrame()'s
+    // matching comment; this function doesn't route through it.
+    const double effectiveBw = effectiveBandwidthMhz();
+    resetVisibleWaterfallFrequencyFrames(m_centerMhz, effectiveBw);
 
 #ifdef AETHER_GPU_SPECTRUM
     const WaterfallPipelineMode pipelineMode = m_wfPipelineMode;
@@ -6108,7 +6131,7 @@ void SpectrumWidget::recolorWaterfallViewport()
     constexpr WaterfallPipelineMode pipelineMode =
         WaterfallPipelineMode::Legacy;
 #endif
-    paintWaterfallRowsFromHistory(m_centerMhz, m_bandwidthMhz,
+    paintWaterfallRowsFromHistory(m_centerMhz, effectiveBw,
                                   m_wfWriteRow, pipelineMode);
 
 #ifdef AETHER_GPU_SPECTRUM
@@ -6139,6 +6162,15 @@ void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
     }
     if (m_waterfall.isNull()) {
         return;
+    }
+
+    // Callers pass the true on-screen bandwidth (whatever that call site's
+    // own "current"/"target" frame is); narrow it here, once, for every
+    // downstream consumer below (resetVisibleWaterfallFrequencyFrames(),
+    // paintWaterfallRowsFromHistory() -> remapHistoryRowInto()) so the
+    // pixel layout matches mhzToX()/xToMhz()'s effectiveBandwidthMhz().
+    if (m_edgeTaperEnabled) {
+        bandwidthMhz *= (1.0 - 2.0 * kEdgeTaperFraction);
     }
 
     m_wfHistoryOffsetRows = std::clamp(m_wfHistoryOffsetRows, 0, maxWaterfallHistoryOffsetRows());
@@ -6271,8 +6303,22 @@ void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
 {
     const bool originalKiwiActive = m_kiwiSdrWaterfallActive;
 
+    // DSS-only crop, mirroring reprojectWaterfall()'s own internal one
+    // (rebuildWaterfallViewportForFrame() / the image-fallback branch) --
+    // computed here rather than inside reprojectWaterfall() itself since
+    // that function re-crops internally and would double-crop if handed
+    // already-cropped values. DssRenderer::pushRow() already receives
+    // cropped bins (see pushWaterfallRow()'s appendDssWaterfallRow() call),
+    // so its reprojection/rebuild target frame needs the same effective
+    // bandwidth or a stamped row and the viewport it's read against would
+    // disagree about what span it covers.
+    const double effOldDssBw = m_edgeTaperEnabled
+        ? oldBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : oldBandwidthMhz;
+    const double effNewDssBw = m_edgeTaperEnabled
+        ? newBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : newBandwidthMhz;
     auto reprojectStream = [this, oldCenterMhz, oldBandwidthMhz,
-                            newCenterMhz, newBandwidthMhz](bool kiwiStream) {
+                            newCenterMhz, newBandwidthMhz,
+                            effOldDssBw, effNewDssBw](bool kiwiStream) {
         const bool visibleStream = beginWaterfallStreamWrite(kiwiStream);
         auto restoreStream = qScopeGuard([&] {
             endWaterfallStreamWrite(kiwiStream, visibleStream);
@@ -6286,12 +6332,12 @@ void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
             ? kKiwiSdrWaterfallMinDbm
             : m_refLevel - m_dynamicRange;
         if (m_wfLive || m_dss.historyRowCount() <= 0) {
-            m_dss.reprojectFrequencyFrame(oldCenterMhz, oldBandwidthMhz,
-                                          newCenterMhz, newBandwidthMhz,
+            m_dss.reprojectFrequencyFrame(oldCenterMhz, effOldDssBw,
+                                          newCenterMhz, effNewDssBw,
                                           dssFallback,
                                           !kiwiStream);
         } else {
-            rebuildDssViewportFromHistoryForFrame(newCenterMhz, newBandwidthMhz);
+            rebuildDssViewportFromHistoryForFrame(newCenterMhz, effNewDssBw);
         }
         resetDssUploadState();
     };
@@ -6427,8 +6473,13 @@ void SpectrumWidget::commitFrequencyPreview()
                                             targetCenterMhz, targetBandwidthMhz);
     } else if (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) {
         if (!m_wfLive && m_dss.historyRowCount() > 0) {
-            rebuildDssViewportFromHistoryForFrame(targetCenterMhz,
-                                                  targetBandwidthMhz);
+            // Effective (cropped) bandwidth -- see rebuildDssViewportFromHistory()'s
+            // matching comment; this call site is its own raw target, not
+            // inherited from an already-cropped local.
+            const double effTargetBw = m_edgeTaperEnabled
+                ? targetBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
+                : targetBandwidthMhz;
+            rebuildDssViewportFromHistoryForFrame(targetCenterMhz, effTargetBw);
         }
     }
     m_frequencyPreviewCommitLastNs = timer.nsecsElapsed();
@@ -7388,11 +7439,21 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
     // frames, especially when switching between native and Kiwi waterfall data;
     // rebuilding from stamped history preserves each row's own frequency frame.
     if (m_waterfallHistory.isConfigured() && m_wfHistoryRowCount > 0) {
+        // rebuildWaterfallViewportForFrame() applies the effective-bandwidth
+        // crop itself -- pass the true bandwidth through unmodified here.
         rebuildWaterfallViewportForFrame(newCenterMhz, newBandwidthMhz);
     } else {
-        reprojectWaterfallImage(m_waterfall, oldCenterMhz, oldBandwidthMhz,
-                                newCenterMhz, newBandwidthMhz);
-        resetVisibleWaterfallFrequencyFrames(newCenterMhz, newBandwidthMhz);
+        // This branch doesn't route through rebuildWaterfallViewportForFrame(),
+        // so crop locally -- same effective bandwidth mhzToX()/xToMhz() use.
+        // Crop the OLD/NEW parameters directly (not m_bandwidthMhz, which may
+        // already have moved on from oldBandwidthMhz by the time this runs).
+        const double effOldBw = m_edgeTaperEnabled
+            ? oldBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : oldBandwidthMhz;
+        const double effNewBw = m_edgeTaperEnabled
+            ? newBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : newBandwidthMhz;
+        reprojectWaterfallImage(m_waterfall, oldCenterMhz, effOldBw,
+                                newCenterMhz, effNewBw);
+        resetVisibleWaterfallFrequencyFrames(newCenterMhz, effNewBw);
     }
     m_prevTileLevels.clear();
     resetWfBlankerState();
@@ -9326,11 +9387,28 @@ double SpectrumWidget::frequencyCanvasFractionAtGlobal(
     return frequencyCanvasFraction(localPosition.x(), contentWidth());
 }
 
+double SpectrumWidget::effectiveBandwidthMhz() const
+{
+    return m_edgeTaperEnabled
+        ? m_bandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
+        : m_bandwidthMhz;
+}
+
+QVector<float> SpectrumWidget::croppedBinsForDisplay(const QVector<float>& bins) const
+{
+    if (!m_edgeTaperEnabled) return bins;
+    const int n = bins.size();
+    const int margin = static_cast<int>(n * kEdgeTaperFraction);
+    if (margin <= 0 || n - 2 * margin < 2) return bins;
+    return bins.mid(margin, n - 2 * margin);
+}
+
 int SpectrumWidget::mhzToX(double mhz) const
 {
-    if (m_bandwidthMhz <= 0.0) return -1;
-    const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
-    const double px = (mhz - startMhz) / m_bandwidthMhz * contentWidth();
+    const double bwMhz = effectiveBandwidthMhz();
+    if (bwMhz <= 0.0) return -1;
+    const double startMhz = m_centerMhz - bwMhz / 2.0;
+    const double px = (mhz - startMhz) / bwMhz * contentWidth();
     if (std::isnan(px) || std::isinf(px)) return -1;
     // Round to nearest pixel so all vertical markers (VFO, TNF, filter edges) are
     // centred on the true frequency.  Truncation caused ±1 px jitter during
@@ -9341,8 +9419,9 @@ int SpectrumWidget::mhzToX(double mhz) const
 
 double SpectrumWidget::xToMhz(int x) const
 {
-    const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
-    return startMhz + (static_cast<double>(x) / contentWidth()) * m_bandwidthMhz;
+    const double bwMhz = effectiveBandwidthMhz();
+    const double startMhz = m_centerMhz - bwMhz / 2.0;
+    return startMhz + (static_cast<double>(x) / contentWidth()) * bwMhz;
 }
 
 void SpectrumWidget::updateTrackedCursorState(const QPoint& localPos, bool insideWidget)
@@ -9640,8 +9719,14 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         // wildly off-canvas (#3482 review).
         m_bwDragAnchorFraction = frequencyCanvasFractionAtGlobal(
             ev->globalPosition());
+        // Effective (cropped) bandwidth, not the raw one: mouseXFrac is a
+        // pixel-fraction position, and mhzToX()/xToMhz() now lay pixels out
+        // against the cropped span -- using the raw bandwidth here would
+        // anchor a different frequency than the one actually under the
+        // cursor. newBw itself (below) stays on the raw bandwidth, so what
+        // gets requested from the backend is unaffected.
         m_bwDragAnchorMhz = frequencyAtFraction(
-            FrequencyFrame{m_centerMhz, m_bandwidthMhz},
+            FrequencyFrame{m_centerMhz, effectiveBandwidthMhz()},
             m_bwDragAnchorFraction);
         setSpectrumCursor(Qt::SizeHorCursor);
         ev->accept();
@@ -11557,8 +11642,11 @@ bool SpectrumWidget::event(QEvent* ev)
             // Anchor: keep the frequency under the cursor at the same pixel.
             const double mouseXFrac = frequencyCanvasFractionAtGlobal(
                 ge->globalPosition());
+            // Effective (cropped) bandwidth for the anchor -- see the
+            // matching comment at the bandwidth-drag-start anchor above.
+            // newBw itself stays on the raw bandwidth.
             const double anchorMhz = frequencyAtFraction(
-                FrequencyFrame{m_centerMhz, m_bandwidthMhz}, mouseXFrac);
+                FrequencyFrame{m_centerMhz, effectiveBandwidthMhz()}, mouseXFrac);
             const double newCenter = std::max(
                 centerForAnchoredBandwidth(anchorMhz, mouseXFrac, newBw),
                 newBw / 2.0);
@@ -11749,8 +11837,11 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
         if (qFuzzyCompare(newBw, m_bandwidthMhz)) { ev->accept(); return; }
         const double mouseXFrac = frequencyCanvasFractionAtGlobal(
             ev->globalPosition());
+        // Effective (cropped) bandwidth for the anchor -- see the matching
+        // comment at the bandwidth-drag-start anchor above. newBw itself
+        // stays on the raw bandwidth.
         const double anchorMhz = frequencyAtFraction(
-            FrequencyFrame{m_centerMhz, m_bandwidthMhz}, mouseXFrac);
+            FrequencyFrame{m_centerMhz, effectiveBandwidthMhz()}, mouseXFrac);
         const double newCenter = std::max(
             centerForAnchoredBandwidth(anchorMhz, mouseXFrac, newBw),
             newBw / 2.0);
@@ -12369,8 +12460,22 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     if (m_transmitting && txWaterfallAffectsThisPan())
         useTxFilterMask = txWaterfallMaskRange(txMaskLowMhz, txMaskHighMhz);
 
-    const int srcSize = bins.size();
-    const double panStartMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    // Crop to the central (1 - 2*kEdgeTaperFraction) fraction of bins first
+    // -- same principle as the trace's croppedBinsForDisplay() call, so the
+    // interpolation below stretches just the cropped range across destWidth.
+    const QVector<float> croppedBins = croppedBinsForDisplay(bins);
+    const int srcSize = croppedBins.size();
+    // One frame for this whole row: on-screen, narrowed by the crop. `bins`
+    // is m_bins, which reprojectSpectrum()/updateSpectrum() keep resampled to
+    // the CURRENT on-screen m_centerMhz/m_bandwidthMhz, not the last-confirmed
+    // span, so the pixels below are laid out in that frame. The TX mask and
+    // the history/DSS stamps must use the same one, or during a zoom's
+    // divergence window the mask blanks the wrong columns and the stamp
+    // labels the row with a span it was not drawn in. effectiveBandwidthMhz()
+    // is m_bandwidthMhz less the cropped margin -- exactly the span the
+    // cropped bins cover.
+    const double effectiveBw = effectiveBandwidthMhz();
+    const double panStartMhz = m_centerMhz - effectiveBw / 2.0;
 
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
     QVector<quint8> levels(destWidth, 0);
@@ -12379,7 +12484,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         if (useTxFilterMask) {
             const double freqMhz = panStartMhz
                 + (static_cast<double>(x) / static_cast<double>(destWidth))
-                    * m_bandwidthMhz;
+                    * effectiveBw;
             if (freqMhz < txMaskLowMhz || freqMhz > txMaskHighMhz) {
                 scanline[x] = qRgb(0, 0, 0);
                 continue;
@@ -12388,7 +12493,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
 
         float dbm = m_wfMinDbm;
         if (srcSize == 1) {
-            dbm = std::max(bins[0], kMinDisplayDbm);
+            dbm = std::max(croppedBins[0], kMinDisplayDbm);
         } else if (srcSize > 1) {
             const float binF = (destWidth > 1)
                 ? static_cast<float>(x) * static_cast<float>(srcSize - 1)
@@ -12397,8 +12502,8 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
             const int binIdx = std::clamp(static_cast<int>(binF), 0, srcSize - 1);
             const int nextIdx = std::min(binIdx + 1, srcSize - 1);
             const float frac = binF - static_cast<float>(binIdx);
-            const float b0 = std::max(bins[binIdx], kMinDisplayDbm);
-            const float b1 = std::max(bins[nextIdx], kMinDisplayDbm);
+            const float b0 = std::max(croppedBins[binIdx], kMinDisplayDbm);
+            const float b1 = std::max(croppedBins[nextIdx], kMinDisplayDbm);
             dbm = b0 + frac * (b1 - b0);
         }
         const float level = dbmToWaterfallLevel(dbm);
@@ -12406,8 +12511,15 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         scanline[x] = colorLut[levels[x]];
     }
 
-    appendHistoryRow(levels.constData(), QDateTime::currentMSecsSinceEpoch());
-    appendDssWaterfallRow(bins);
+    appendHistoryRow(levels.constData(), QDateTime::currentMSecsSinceEpoch(),
+                     m_centerMhz, effectiveBw);
+    // Cropped bins + effective bandwidth, same as the 2D waterfall above --
+    // DssRenderer::pushRow() resamples "any bin count" to its fixed kCols
+    // internally (peak-preserving downsample), purely by column index, so
+    // feeding it the cropped range is enough to fill the mesh edge to edge;
+    // the frame stamp matters separately for reprojection (rowCenterMhz/
+    // rowBandwidthMhzAtAge()), same reasoning as m_wfHistoryRowBwMhz.
+    appendDssWaterfallRow(croppedBins, m_centerMhz, effectiveBw);
     if (m_wfLive) {
         appendVisibleRow(scanline.constData());
     } else {
@@ -13852,7 +13964,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
         : 0.0f;
     const float waterfallTargetCenterOffsetMhz = static_cast<float>(
         m_centerMhz - m_wfFrameReferenceCenterMhz);
-    const float waterfallTargetBandwidthMhz = static_cast<float>(m_bandwidthMhz);
+    // Effective (cropped) bandwidth -- matches mhzToX()/xToMhz() and the CPU
+    // remap path (remapHistoryRowInto()'s curBwMhz), since the per-row frame
+    // texture this shader reprojects against (m_wfFrameUpload, built from
+    // m_wfHistoryRowBwMhz) is already stamped with the effective bandwidth
+    // by pushWaterfallRow()'s explicit appendHistoryRow() call.
+    const float waterfallTargetBandwidthMhz =
+        static_cast<float>(effectiveBandwidthMhz());
     const float waterfallRowFrequencyFrames =
         m_wfPipelineMode == WaterfallPipelineMode::RowFrequencyFrames
             && m_wfFrameTexReady
@@ -13875,14 +13993,21 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
     // Every DSS row carries its own capture frame, matching the waterfall.
     // The shader maps all rows directly into this target without rebuilding or
     // destructively reprojecting the scrolling ring during a gesture.
+    // Effective (cropped) bandwidth throughout -- every stored row is now
+    // stamped with the effective bandwidth (appendDssWaterfallRow()'s cropped
+    // bins + effectiveBandwidthMhz()), so the target frame the
+    // shader reprojects those rows against has to match, same reasoning as
+    // the 2D waterfall's waterfallTargetBandwidthMhz above.
     double dssTargetCenterMhz = m_centerMhz;
-    double dssTargetBandwidthMhz = m_bandwidthMhz;
+    double dssTargetBandwidthMhz = effectiveBandwidthMhz();
     if (m_frequencyPreviewActive
         && std::isfinite(m_frequencyPreviewTargetCenterMhz)
         && std::isfinite(m_frequencyPreviewTargetBandwidthMhz)
         && m_frequencyPreviewTargetBandwidthMhz > 0.0) {
         dssTargetCenterMhz = m_frequencyPreviewTargetCenterMhz;
-        dssTargetBandwidthMhz = m_frequencyPreviewTargetBandwidthMhz;
+        dssTargetBandwidthMhz = m_edgeTaperEnabled
+            ? m_frequencyPreviewTargetBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
+            : m_frequencyPreviewTargetBandwidthMhz;
         ++m_frequencyPreviewPresentCount;
     }
 
@@ -14100,59 +14225,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             QPainter p(&m_overlayStatic);
             p.setRenderHint(QPainter::Antialiasing, false);
 
-            // Cosmetic fade over the outer margin of the spectrum trace and
-            // waterfall, toward the canvas background -- see
-            // setPanEdgeTaperEnabled()'s own comment for why this is drawn
-            // here (a pixel-only overlay, on top of everything below it)
-            // rather than as a bin crop. Drawn first in this layer so the
-            // freq scale, WNB/RF-gain indicators, etc. below still paint on
-            // top of it unaffected. Only the CONTENT width (excluding the
-            // dBm strip, which isn't spectrum data) is faded.
-            if (m_edgeTaperEnabled) {
-                // 0.09 (9% margin per side) -- derived, not guessed: once
-                // AnanDroopCorrection applies a real per-bin dB correction
-                // (measured by AnanDroopCalibrator's sweep) to most of
-                // the span, this fade only needs to cover the residual
-                // sliver where that correction was CLAMPED -- i.e. the bins
-                // close enough to the CIC null that boosting them further
-                // would amplify noise, not recover signal, so they stay
-                // genuinely uncorrected. The sweep reported a
-                // clamped fraction of ~0.079-0.082 across all 6 DDC0 rates
-                // (consistent, since it's the same relative filter shape at
-                // every rate) -- 0.09 is that worst case plus a small
-                // margin. fftSize is fixed at 1024 for every rate, and this
-                // fraction applies uniformly to pixel width, so a bin-count
-                // fraction and a pixel-width fraction are the same number
-                // with no unit conversion needed. paintEvent()'s software
-                // path carries the SAME constant and must be changed with
-                // this one -- they are one fade drawn by two renderers, and
-                // letting them drift means the same radio hides a different
-                // fraction of its span depending only on whether RHI came
-                // up. Superseded value: 0.05,
-                // from the pre-AnanDroopCorrection era when this fade was
-                // the ONLY mitigation and had to cover the whole droop
-                // region, not just its unrecoverable edge.
-                static constexpr double kEdgeTaperFraction = 0.09;
-                const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
-                QColor bgOpaque = bg; bgOpaque.setAlpha(255);
-                QColor bgClear = bg; bgClear.setAlpha(0);
-                auto paintTaperedEdges = [&](const QRect& area, int contentW) {
-                    const int marginPx = static_cast<int>(contentW * kEdgeTaperFraction);
-                    if (marginPx <= 0) return;
-                    QLinearGradient left(area.left(), 0, area.left() + marginPx, 0);
-                    left.setColorAt(0.0, bgOpaque);
-                    left.setColorAt(1.0, bgClear);
-                    p.fillRect(QRect(area.left(), area.top(), marginPx, area.height()), left);
-                    const int rightContentEdge = area.left() + contentW;
-                    QLinearGradient right(rightContentEdge - marginPx, 0, rightContentEdge, 0);
-                    right.setColorAt(0.0, bgClear);
-                    right.setColorAt(1.0, bgOpaque);
-                    p.fillRect(QRect(rightContentEdge - marginPx, area.top(), marginPx, area.height()),
-                              right);
-                };
-                paintTaperedEdges(specRect, specContentW);
-                paintTaperedEdges(wfRect, wfContentW);
-            }
+            // Edge crop (m_edgeTaperEnabled) happens upstream now, at the
+            // bin/coordinate level (croppedBinsForDisplay(), and
+            // mhzToX()/xToMhz()'s effectiveBandwidthMhz()) rather than as a
+            // post-render overlay here -- see kEdgeTaperFraction's own comment
+            // for why. The trace and waterfall content fills
+            // specContentW/wfContentW edge to edge, with no cropped margin
+            // left to paint over.
 
             // Divider bar
             p.fillRect(0, specH, w, DIVIDER_H, AetherSDR::ThemeManager::instance().color("color.background.2"));
@@ -14816,8 +14895,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             const int cols = std::clamp(
                 static_cast<int>(std::lround(specContentW * fbDpr)),
                 2, kMaxFftDisplayTracePoints);
+            // Crop to the central (1 - 2*kEdgeTaperFraction) fraction of
+            // bins first: buildFftDisplayTrace()'s existing resample already
+            // stretches whatever it's given across `cols`, so feeding it a
+            // pre-cropped array is what fills the panel with just that range.
+            const QVector<float> croppedBins =
+                croppedBinsForDisplay(displaySpectrumBins());
             const QVector<float>& trace =
-                buildFftDisplayTrace(displaySpectrumBins(), cols);
+                buildFftDisplayTrace(croppedBins, cols);
             const int n = trace.size();
             if (n >= 2) {
                 fftTracePointCount = n;
@@ -15306,41 +15391,11 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     p.fillRect(wfRect, Qt::black);  // paint the strip gap before the time tape
     drawWaterfall(p, wfContentRect);
 
-    // Cosmetic fade over the outer margin of the spectrum trace and
-    // waterfall, toward the canvas background -- software-path mirror of
-    // renderGpuFrame()'s own overlay taper (see setPanEdgeTaperEnabled()'s
-    // own comment for why this exists and isn't a bin crop). Drawn here,
-    // after both content regions are fully painted but before the VFO
-    // flags/TNF/spot markers/SWR overlay below, so those stay fully
-    // visible on top of it, same ordering as the GPU path.
-    if (m_edgeTaperEnabled) {
-        // 0.09 (9% margin per side) -- see renderGpuFrame()'s own comment
-        // for the derivation, and why guessing a gentler-looking smaller
-        // value was wrong. This value is PAIRED with that one on purpose:
-        // it is the same fade, drawn by whichever path is live, and the two
-        // drifting apart means the same radio fades a different fraction of
-        // its span depending only on whether RHI came up. Change both.
-        static constexpr double kEdgeTaperFraction = 0.09;
-        const QColor bg = AetherSDR::ThemeManager::instance().color("color.background.0");
-        QColor bgOpaque = bg; bgOpaque.setAlpha(255);
-        QColor bgClear = bg; bgClear.setAlpha(0);
-        auto paintTaperedEdges = [&](const QRect& area, int contentW) {
-            const int marginPx = static_cast<int>(contentW * kEdgeTaperFraction);
-            if (marginPx <= 0) return;
-            QLinearGradient left(area.left(), 0, area.left() + marginPx, 0);
-            left.setColorAt(0.0, bgOpaque);
-            left.setColorAt(1.0, bgClear);
-            p.fillRect(QRect(area.left(), area.top(), marginPx, area.height()), left);
-            const int rightContentEdge = area.left() + contentW;
-            QLinearGradient right(rightContentEdge - marginPx, 0, rightContentEdge, 0);
-            right.setColorAt(0.0, bgClear);
-            right.setColorAt(1.0, bgOpaque);
-            p.fillRect(QRect(rightContentEdge - marginPx, area.top(), marginPx, area.height()),
-                      right);
-        };
-        paintTaperedEdges(specRect, specContentRect.width());
-        paintTaperedEdges(wfRect, wfContentRect.width());
-    }
+    // Edge crop (m_edgeTaperEnabled) now happens upstream, at the bin/
+    // coordinate level (croppedBinsForDisplay(), mhzToX()/xToMhz()'s
+    // effectiveBandwidthMhz()) rather than as a post-render overlay here --
+    // see kEdgeTaperFraction's own comment for why, and renderGpuFrame()'s
+    // mirrored comment at its own former overlay site.
 
     repositionVfoFlags(specRect);
     if (is3D && m_threeDSliceDepth) {
@@ -15640,8 +15695,11 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
 
 void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 {
+    // Crop first -- see the matching comment at renderGpuFrame()'s own
+    // buildFftDisplayTrace() call.
+    const QVector<float> croppedBins = croppedBinsForDisplay(displaySpectrumBins());
     const QVector<float>& fftBins =
-        buildFftDisplayTrace(displaySpectrumBins(),
+        buildFftDisplayTrace(croppedBins,
                              qMax(2, r.width() * kFftDisplayOversample));
     if (fftBins.isEmpty()) {
         p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.dim"));
@@ -16958,14 +17016,19 @@ SpectrumWidget::buildDssDepthGeometry(const QRect& specRect,
         return geometry;
     }
 
+    // Effective (cropped) bandwidth -- matches dssTargetBandwidthMhz's own
+    // comment in renderGpuFrame(): every DSS row is stamped with the
+    // effective bandwidth, so this shadow-positioning frame has to agree.
     double centerMhz = m_centerMhz;
-    double bandwidthMhz = m_bandwidthMhz;
+    double bandwidthMhz = effectiveBandwidthMhz();
     if (m_frequencyPreviewActive
         && std::isfinite(m_frequencyPreviewTargetCenterMhz)
         && std::isfinite(m_frequencyPreviewTargetBandwidthMhz)
         && m_frequencyPreviewTargetBandwidthMhz > 0.0) {
         centerMhz = m_frequencyPreviewTargetCenterMhz;
-        bandwidthMhz = m_frequencyPreviewTargetBandwidthMhz;
+        bandwidthMhz = m_edgeTaperEnabled
+            ? m_frequencyPreviewTargetBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
+            : m_frequencyPreviewTargetBandwidthMhz;
     }
     if (!std::isfinite(centerMhz) || !std::isfinite(bandwidthMhz)
         || bandwidthMhz <= 0.0) {
@@ -17624,7 +17687,7 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
     // every Nth line so labels don't overlap (~60px minimum between labels).
     int labelEvery = 1;
     if (m_freqGridSpacingKhz > 0 && width() > 0) {
-        double pxPerStep = (stepMhz / m_bandwidthMhz) * contentWidth();  // label spacing in mapped px (#3482)
+        double pxPerStep = (stepMhz / effectiveBandwidthMhz()) * contentWidth();  // label spacing in mapped px (#3482)
         if (pxPerStep < 60.0)
             labelEvery = static_cast<int>(std::ceil(60.0 / pxPerStep));
     }
