@@ -10448,7 +10448,16 @@ void MainWindow::centerActiveSliceInPanadapter(bool forceRadioCenter, double cen
     // deferred, in which case the pan must keep showing truthful spectrum for the
     // span the radio still has.
     if (!centerDeferred) {
-        sw->setFrequencyRange(viewCenterMhz, bandwidthMhz);
+        // LOCAL, not confirmed. requestPanCenter() above returning true means
+        // the command reached the wire, not that the radio took the value --
+        // an Icom refuses a non-drag centre outright and re-asserts its own.
+        // Advancing the view is still right (that is what this block is for),
+        // but recording it as backend truth would stamp every waterfall row
+        // captured during the round trip with a centre the radio never had:
+        // the defect #5142 exists to close, at the site whose own comment
+        // above already names it.
+        sw->setFrequencyRangeLocal(viewCenterMhz, bandwidthMhz,
+                                   /*animateSmallNudges=*/true);
     }
     pushSliceFrequencyToOverlays(s, targetMhz);
 

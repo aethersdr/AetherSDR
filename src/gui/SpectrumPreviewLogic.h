@@ -68,6 +68,191 @@ struct FrequencyFrame {
     }
 };
 
+// A frequency frame the BACKEND actually echoed, as distinct from whatever is
+// currently on screen.
+//
+// This is a separate type and not a bare FrequencyFrame on purpose. The defect
+// this file exists to prevent is a row being stamped or laid out against an
+// on-screen zoom guess that the radio never took, and the two frames are the
+// same shape, so nothing but the type system stops one being passed where the
+// other is meant. Every function below that needs backend truth demands this
+// type, so reaching for SpectrumWidget's m_centerMhz/m_bandwidthMhz instead is
+// a compile error rather than a silent regression -- which matters because
+// SpectrumWidget.cpp is not compiled into any test target, so no test can
+// catch that substitution after the fact.
+struct ConfirmedFrame {
+    FrequencyFrame frame{};
+};
+
+// A history row is stamped with whatever frame the caller explicitly
+// supplied; callers that have no per-row frame of their own (the Legacy/2D
+// waterfall path) fall back to the last frame the backend actually
+// confirmed, never an on-screen zoom guess that might not become true --
+// see SpectrumWidget's m_confirmed.
+[[nodiscard]] inline FrequencyFrame stampFrameForHistoryRow(
+    const FrequencyFrame& requested, ConfirmedFrame confirmed) noexcept
+{
+    return requested.isValid() ? requested : confirmed.frame;
+}
+
+// The frequency frame a native tile's PRIMARY waterfall row is laid out in,
+// and therefore the only span that row may claim.
+//
+// updateWaterfallRow() crops a tile to the viewport and rasterises it across
+// the row's pixels. That is correct for FlexRadio, whose community guidance
+// is that a tile extends BEYOND the panadapter edges -- every viewport pixel
+// has real bin data behind it, so cropping loses nothing and keeps the row at
+// full display resolution. An exact-span backend breaks the assumption:
+// IcomCivBackend::onCivFrame() emits each sweep's own centre/span through
+// panCenterBandwidthChanged() immediately before the bins, so
+// lowFreqMhz/highFreqMhz describe the exact data extent and nothing beyond
+// it.
+//
+// Crop such a tile to a viewport it does not cover and the uncovered columns
+// are zero-filled, yet the row still claims the whole viewport frame.
+// remapHistoryRowInto() tests the primary frame FIRST and only falls through
+// to the supplemental row for columns OUTSIDE it, so those zeros are
+// unreachable: the correctly framed supplemental row cannot repair them and
+// they stay black in retained history for good. Observed on an IC-7300MK2 as
+// wide black rectangles committed by every horizontal pan drag (jensenpat,
+// #5142 review).
+//
+// So crop only where the tile really does cover the viewport. Everywhere
+// else the producer's own extent is authoritative: the row spans the tile,
+// every pixel it claims has data behind it, and remapHistoryRowInto() places
+// it against whatever the viewport has since become -- which is what the
+// per-row frame stamp exists for.
+[[nodiscard]] inline FrequencyFrame primaryRowFrameForNativeTile(
+    ConfirmedFrame confirmedViewport,
+    double tileLowMhz,
+    double tileHighMhz) noexcept
+{
+    const FrequencyFrame& viewport = confirmedViewport.frame;
+    const double tileSpanMhz = tileHighMhz - tileLowMhz;
+    if (!std::isfinite(tileLowMhz) || !std::isfinite(tileHighMhz)
+        || tileSpanMhz <= 0.0) {
+        // No usable producer extent -- nothing better to offer than the
+        // viewport, and the caller's rasterisation loop is skipped anyway.
+        return viewport;
+    }
+    const FrequencyFrame tileFrame{tileLowMhz + tileSpanMhz / 2.0, tileSpanMhz};
+    if (!viewport.isValid()) {
+        return tileFrame;
+    }
+    const double viewportStartMhz =
+        viewport.centerMhz - viewport.bandwidthMhz / 2.0;
+    const double viewportEndMhz = viewportStartMhz + viewport.bandwidthMhz;
+    // Absorbs float noise only. A tile falling short by even a fraction of a
+    // bin would zero-fill an edge column, and the producer frame costs
+    // nothing, so anything short of real coverage takes it.
+    constexpr double kCoverageToleranceMhz = 1e-9;
+    const bool coversViewport =
+        tileLowMhz <= viewportStartMhz + kCoverageToleranceMhz
+        && tileHighMhz >= viewportEndMhz - kCoverageToleranceMhz;
+    return coversViewport ? viewport : tileFrame;
+}
+
+// Where in the tile does destination column `x` land?
+//
+// This is the exact mapping updateWaterfallRow()'s rasterisation loop uses,
+// lifted out of the widget so it can be driven directly by a test. That
+// matters here specifically: the defect this PR fixes was a disagreement
+// between the frame a row CLAIMS and the pixels it actually has, and a test
+// that reimplemented the mapping would not have caught it (jensenpat, #5142
+// review, item 4).
+//
+// Returns a fractional bin index into the tile. Values outside
+// [0, binCount) mean the tile does not reach that column, and the caller
+// leaves the pixel at zero -- which is legitimate ONLY when the row's frame
+// does not claim that column. primaryRowFrameForNativeTile() is what keeps
+// those two facts in agreement.
+[[nodiscard]] inline double nativeTileBinForColumn(const FrequencyFrame& rowFrame,
+                                                   double tileLowMhz,
+                                                   double tileBinBandwidthMhz,
+                                                   int x,
+                                                   int destWidth) noexcept
+{
+    if (destWidth <= 0 || !(tileBinBandwidthMhz > 0.0))
+        return -1.0;
+    const double rowStartMhz = rowFrame.centerMhz - rowFrame.bandwidthMhz / 2.0;
+    const double freqMhz =
+        rowStartMhz
+        + (static_cast<double>(x) / static_cast<double>(destWidth))
+              * rowFrame.bandwidthMhz;
+    return (freqMhz - tileLowMhz) / tileBinBandwidthMhz;
+}
+
+// True when every column of a row laid out across `rowFrame` has real tile
+// data behind it -- i.e. the row claims nothing it zero-filled.
+//
+// This is the invariant jensenpat's items 1 and 2 asked for, stated once so a
+// test can assert it over a sequence rather than eyeballing a screenshot. It
+// must hold for EVERY row this widget commits to history, at any viewport and
+// any tile extent, because a row that fails it bakes a black rectangle into
+// retained history that no later supplemental row can repair.
+[[nodiscard]] inline bool nativeTileRowIsFullyCovered(const FrequencyFrame& rowFrame,
+                                                      double tileLowMhz,
+                                                      double tileHighMhz,
+                                                      int destWidth,
+                                                      int binCount) noexcept
+{
+    if (destWidth <= 0 || binCount <= 0)
+        return false;
+    const double tileSpanMhz = tileHighMhz - tileLowMhz;
+    if (!(tileSpanMhz > 0.0))
+        return false;
+    const double binBwMhz = tileSpanMhz / static_cast<double>(binCount);
+    for (int x = 0; x < destWidth; ++x) {
+        const double binF =
+            nativeTileBinForColumn(rowFrame, tileLowMhz, binBwMhz, x, destWidth);
+        const int binIdx = static_cast<int>(binF);
+        if (binIdx < 0 || binIdx >= binCount)
+            return false;
+    }
+    return true;
+}
+
+// The ONE frequency frame the FFT-derived waterfall path works in, and the
+// counterpart to primaryRowFrameForNativeTile() for the other caller.
+//
+// pushWaterfallRow()'s pixels come from m_bins, which reprojectSpectrum() and
+// updateSpectrum() keep resampled to the CURRENT on-screen centre/bandwidth --
+// including the optimistic value a zoom gesture writes before the backend has
+// confirmed anything. So everything that row produces has to agree on that
+// same frame: the proportional bin-to-column stretch, the TX mask's per-column
+// frequency, the visible row, the DSS row, and the history stamp.
+//
+// Stamping such a row with the CONFIRMED frame labels guessed pixels with a
+// span they are not in, and remapHistoryRowInto() then shifts their content
+// once the viewport rebuilds (jensenpat, #5142 review). Note this is the
+// OPPOSITE case to a native tile: a tile carries real producer data and takes
+// the confirmed viewport only where it genuinely covers it, whereas these bins
+// ARE the guess and must be labelled as one.
+//
+// Confirmed geometry is still the fallback for the one case where there is no
+// on-screen frame yet -- before the first geometry push, where bandwidth is
+// still zero -- which is what stampFrameForHistoryRow() would have done anyway.
+[[nodiscard]] inline FrequencyFrame fftDerivedRowFrame(
+    const FrequencyFrame& onScreen, ConfirmedFrame confirmed) noexcept
+{
+    return onScreen.isValid() ? onScreen : confirmed.frame;
+}
+
+// The frequency destination column `x` represents, in the frame that row is
+// laid out in. The TX mask and the history stamp must both come from here, so
+// a future edit cannot move one without the other -- the same "one
+// implementation" reason nativeTileBinForColumn() exists.
+[[nodiscard]] inline double fftDerivedColumnFrequencyMhz(
+    const FrequencyFrame& rowFrame, int x, int destWidth) noexcept
+{
+    if (destWidth <= 0)
+        return std::numeric_limits<double>::quiet_NaN();
+    const double startMhz = rowFrame.centerMhz - rowFrame.bandwidthMhz / 2.0;
+    return startMhz
+        + (static_cast<double>(x) / static_cast<double>(destWidth))
+              * rowFrame.bandwidthMhz;
+}
+
 // A native waterfall tile supplies two independently calibrated rows: the
 // viewport row and the full-tile supplemental row. A blanked row must keep
 // their capture frames paired with the matching pixels.

@@ -165,6 +165,17 @@ public:
     // Same range update, but snaps instead of using the small pan-follow
     // animation. Center Lock uses this so the locked slice stays pinned.
     void setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz);
+    // Advance the VISIBLE geometry without recording it as backend-confirmed.
+    //
+    // For callers that have asked the radio for this geometry but have not been
+    // told it was taken. RadioModel::requestPanCenter() returning true means the
+    // command reached the wire, not that the radio accepted the value, and a
+    // backend may refuse or snap it -- IcomCivBackend::onCivFrame() explicitly
+    // refuses a non-drag centre and re-asserts its own. Routing such a caller
+    // through setFrequencyRange() would stamp waterfall history rows with a
+    // centre the radio never had, for the whole round trip.
+    void setFrequencyRangeLocal(double centerMhz, double bandwidthMhz,
+                                bool animateSmallNudges);
     void clearDisplay();  // blank spectrum and waterfall on disconnect
     void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
     void prepareForTopLevelChange(); // unregister QRhiWidget from the current backing-store QRhi
@@ -966,8 +977,11 @@ public:
     static void toggleStarstruckMode();
 
 private:
+    // `confirmed` says whether this geometry is the BACKEND'S answer (true) or
+    // a local request the radio has not acknowledged (false). Only the former
+    // may advance m_confirmed; see setFrequencyRangeLocal().
     void setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
-                                   bool animateSmallNudges);
+                                   bool animateSmallNudges, bool confirmed);
     double effectiveGridStepMhz(int widgetWidth) const;
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);
@@ -1448,6 +1462,29 @@ private:
 
     double m_centerMhz{14.225};
     double m_bandwidthMhz{0.200};
+    // Last geometry the backend has ACTUALLY confirmed, separate from
+    // m_centerMhz/m_bandwidthMhz above, which may hold a local guess the radio
+    // has not taken yet. Many paths advance the on-screen pair ahead of
+    // confirmation for instant feedback: the four zoom gestures (2251, 10742,
+    // 11438, 11618), the pan drag (10473), the slice-drag edge pan (10339) and
+    // the "Center Slice" context action (9905). None of them touch this one.
+    //
+    // appendHistoryRow()'s callers use THIS, not the on-screen value, so a
+    // waterfall history row is never permanently stamped or laid out with a
+    // guess that might not become true. ConfirmedFrame is a distinct type so
+    // that passing the on-screen pair here is a compile error -- SpectrumWidget
+    // is in no test target, so nothing else could catch that substitution.
+    //
+    // Seeded EMPTY, not with a plausible default: before the first echo the
+    // widget genuinely knows nothing, and an invalid frame is how the helpers
+    // in SpectrumPreviewLogic.h detect that. A fictitious 14.225 MHz viewport
+    // would instead be measured against as if it were truth.
+    //
+    // Mirrors the discipline RadioModel::requestPanCenter() already established
+    // one layer up (its own -1.0 "don't advance optimistically" bandwidth
+    // argument, citing this exact "bakes black rows into waterfall history"
+    // failure) -- that fix doesn't reach here, where the row stamping happens.
+    ConfirmedFrame m_confirmed{};
     // Pan-follow smooth animation (#989): animates m_centerMhz toward the target
     // for small nudges so the VFO widget glides instead of snapping.
     QVariantAnimation* m_panCenterAnim{nullptr};
