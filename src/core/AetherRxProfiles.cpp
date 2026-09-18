@@ -7,6 +7,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <QJsonDocument>
 #include <QStandardPaths>
 
@@ -99,12 +100,22 @@ bool AetherRxProfiles::loadFromDisk()
     return true;
 }
 
-bool AetherRxProfiles::saveToDisk() const
+// Atomic, and checked at every step (Constitution XIV). The previous version
+// opened the live library WriteOnly|Truncate, which destroys every saved
+// profile before a single replacement byte is written — an interrupted save
+// took the lot — and ignored the write result, so a full disk reported
+// success and the dialog said "Saved".
+bool AetherRxProfiles::writeDocument(const QJsonObject& root) const
 {
-    QFile f(filePath());
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-    f.write(QJsonDocument(m_root).toJson(QJsonDocument::Indented));
-    return true;
+    QSaveFile f(filePath());
+    if (!f.open(QIODevice::WriteOnly)) return false;
+    const QByteArray bytes = QJsonDocument(root).toJson(QJsonDocument::Indented);
+    if (f.write(bytes) != bytes.size()) {
+        f.cancelWriting();
+        return false;
+    }
+    // commit() is the rename; until it returns true the old file is intact.
+    return f.commit();
 }
 
 QStringList AetherRxProfiles::profileNames() const
@@ -142,9 +153,15 @@ bool AetherRxProfiles::addProfile(const QString& name, const QJsonObject& profil
     // for it to be wrong after a rename.
     stored.remove(QStringLiteral("name"));
     profiles[name.trimmed()] = stored;
-    m_root["profiles"] = profiles;
-    m_root["version"]  = kSchemaVersion;
-    if (!saveToDisk()) return false;
+
+    // Candidate first, publish second: a refused write must leave the
+    // in-memory library exactly as the operator last saw it, or the dialog
+    // would list a profile that is not on disk.
+    QJsonObject candidate = m_root;
+    candidate["profiles"] = profiles;
+    candidate["version"]  = kSchemaVersion;
+    if (!writeDocument(candidate)) return false;
+    m_root = candidate;
     emit profilesChanged();
     return true;
 }
@@ -168,8 +185,11 @@ bool AetherRxProfiles::deleteProfile(const QString& name)
     QJsonObject profiles = m_root.value("profiles").toObject();
     if (!profiles.contains(name)) return false;
     profiles.remove(name);
-    m_root["profiles"] = profiles;
-    if (!saveToDisk()) return false;
+
+    QJsonObject candidate = m_root;
+    candidate["profiles"] = profiles;
+    if (!writeDocument(candidate)) return false;
+    m_root = candidate;
     emit profilesChanged();
     return true;
 }
@@ -186,10 +206,16 @@ bool AetherRxProfiles::exportToFile(const QString& name, const QString& filePath
     out["kind"]    = QStringLiteral("AetherRX profile");
     out["version"] = kSchemaVersion;
 
-    QFile f(filePath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-    f.write(QJsonDocument(out).toJson(QJsonDocument::Indented));
-    return true;
+    // Same contract as the library write: an export that fails must not leave
+    // a truncated file behind, and must not tell the operator it succeeded.
+    QSaveFile f(filePath);
+    if (!f.open(QIODevice::WriteOnly)) return false;
+    const QByteArray bytes = QJsonDocument(out).toJson(QJsonDocument::Indented);
+    if (f.write(bytes) != bytes.size()) {
+        f.cancelWriting();
+        return false;
+    }
+    return f.commit();
 }
 
 QJsonObject AetherRxProfiles::readFile(const QString& path,

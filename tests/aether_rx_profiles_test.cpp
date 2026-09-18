@@ -10,6 +10,7 @@
 #include "core/AppSettings.h"
 #include "core/ClientGate.h"
 
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
@@ -49,6 +50,7 @@ private slots:
     void aRetiredStageNameDoesNotDiscardTheStoredOrder();
     void anUnknownStageNameStillResetsToTheDefault();
     void retiredSettingsKeysAreDroppedOnLoad();
+    void aRefusedWriteKeepsTheLibraryAndReportsFailure();
 
 private:
     QTemporaryDir m_home;
@@ -309,6 +311,37 @@ void AetherRxProfilesTest::retiredSettingsKeysAreDroppedOnLoad()
     }
     QCOMPARE(settings.value(QStringLiteral("ClientGateTxHoldMs")).toString(),
              QStringLiteral("20.0"));
+}
+
+// A save that cannot be written must leave both the file and the in-memory
+// library exactly as they were, and must say so. The old code truncated the
+// library before writing a byte and ignored the result, so an interrupted
+// save destroyed every profile and the dialog still said "Saved".
+void AetherRxProfilesTest::aRefusedWriteKeepsTheLibraryAndReportsFailure()
+{
+    AetherRxProfiles lib(nullptr);
+    QVERIFY(lib.addProfile("Keep Me", sampleProfile(-11.0)));
+
+    // Make the directory unwritable so the atomic replace cannot commit.
+    const QString dir = QFileInfo(m_home.filePath("AetherSDR")).absoluteFilePath();
+    QFile dirFile(dir);
+    const QFileDevice::Permissions saved = dirFile.permissions();
+    QVERIFY(dirFile.setPermissions(QFileDevice::ReadOwner
+                                   | QFileDevice::ExeOwner));
+
+    const bool refused = !lib.addProfile("Should Not Land", sampleProfile());
+    QVERIFY(dirFile.setPermissions(saved));   // restore before asserting
+
+    if (!refused) {
+        QSKIP("the filesystem allowed the write anyway (running as root?)");
+    }
+    // The refused name never entered the library...
+    QVERIFY(!lib.hasProfile("Should Not Land"));
+    // ...and the profile that was there is still there, on disk too.
+    QVERIFY(lib.hasProfile("Keep Me"));
+    AetherRxProfiles reopened(nullptr);
+    QVERIFY(reopened.hasProfile("Keep Me"));
+    QVERIFY(!reopened.hasProfile("Should Not Land"));
 }
 
 QTEST_MAIN(AetherRxProfilesTest)

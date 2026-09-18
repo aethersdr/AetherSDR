@@ -1228,6 +1228,13 @@ target_include_directories(aether_rx_profiles_test PRIVATE src)
 target_link_libraries(aether_rx_profiles_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME aether_rx_profiles_test COMMAND aether_rx_profiles_test)
 
+add_executable(rx_chain_runner_test
+    tests/rx_chain_runner_test.cpp
+)
+target_include_directories(rx_chain_runner_test PRIVATE src)
+target_link_libraries(rx_chain_runner_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME rx_chain_runner_test COMMAND rx_chain_runner_test)
+
 add_executable(rx_stage_reorder_test
     tests/rx_stage_reorder_test.cpp
 )

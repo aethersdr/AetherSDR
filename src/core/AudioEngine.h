@@ -3,6 +3,8 @@
 #include "core/PcmFrame.h"
 
 #include <QObject>
+#include "RxChainRunner.h"
+
 #include <QAudioSink>
 #include <QAudioSource>
 #include <QAudioDevice>
@@ -1093,11 +1095,6 @@ private:
     void logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event);
     void logTxCaptureHealthSummary(const QString& reason, bool anomaly);
 
-    // Apply the whole RX DSP chain in the configured order.  Phase 0
-    // ships the dispatcher with no implemented stages — every entry is
-    // a no-op until its class lands.  Plays float32 stereo (the native
-    // RX format after NR).
-    void applyClientRxDspFloat32(QByteArray& float32);
 
     // RX
     QAudioSink*   m_audioSink{nullptr};
@@ -1476,11 +1473,10 @@ private:
     bool m_rxBypassSnapshotRn2{false};
     bool m_rxBypassActive{false};
     // Scratch buffer for in-place EQ on the RX path (avoids per-call alloc).
-    QByteArray m_clientEqRxScratch;
-    QByteArray m_clientCompRxScratch;
-    QByteArray m_clientGateRxScratch;
-    QByteArray m_clientTubeRxScratch;
-    QByteArray m_clientPuduRxScratch;
+    // One scratch buffer per RX stage, reused block after block. Grouped
+    // because runRxChain() takes them together — the stages run in the
+    // operator's order, so no one buffer belongs to a fixed position.
+    RxChainScratch m_rxChainScratch;
     // Post-EQ analyzer tap. One ring per path, mono (L+R averaged).
     // Audio thread writes via tapClientEqRxStereo() / tapClientEqTxFloat32();
     // UI thread snapshots via the public

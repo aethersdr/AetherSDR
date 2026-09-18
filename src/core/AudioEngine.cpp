@@ -1,4 +1,5 @@
 #include "AudioEngine.h"
+#include "RxChainRunner.h"
 #include "RxClientEffects.h"
 #include <QSignalBlocker>
 #include "core/backends/RadioCapabilities.h"
@@ -5263,11 +5264,7 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
     m_rxPackets.clear();
     m_kiwiSdrRxResampler.reset();
     m_kiwiSdrRxResamplerR.reset();
-    m_clientEqRxScratch.clear();
-    m_clientGateRxScratch.clear();
-    m_clientCompRxScratch.clear();
-    m_clientTubeRxScratch.clear();
-    m_clientPuduRxScratch.clear();
+    m_rxChainScratch = RxChainScratch{};
     m_nr2Output.clear();
     m_kiwiSdrNr2Output.clear();
     for (const auto& source : m_externalKiwiSources) {
@@ -5473,73 +5470,53 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         // process because the caller owns `data`. Skip when disabled or
         // during TX (matches the NR-chain TX bypass policy) — except for
         // managed Kiwi sources, whose input stays live signal during TX.
-        const QByteArray* eqSource = &data;
-        if (eq && eq->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientEqRxScratch = data;
-            const int frames = m_clientEqRxScratch.size()
-                             / (2 * static_cast<int>(sizeof(float)));
-            eq->process(
-                reinterpret_cast<float*>(m_clientEqRxScratch.data()),
-                frames, 2);
-            eqSource = &m_clientEqRxScratch;
-        }
+        // The RX chain, in the order the operator arranged it.
+        //
+        // This used to be five hardcoded blocks running EQ → Gate → Comp →
+        // Tube → Pudu whatever the stored order said, so dragging a row in
+        // AetherRX (or a tile on the chain strip, which has had drag-reorder
+        // since it shipped) changed the window and the saved profile and left
+        // the audio alone. The order-aware dispatcher that was meant to do
+        // this — applyClientRxDspFloat32 — had TODO-only branches and no call
+        // sites. Even the default order disagreed: defaultRxChain() leads with
+        // Gate, the fixed path led with EQ.
+        //
+        // The walk lives in runRxChain() so a test can drive it with real PCM
+        // and real modules; an assertion on the stored vector cannot show that
+        // the samples changed. Read the packed order straight from the atomic
+        // rather than through rxChainStages(), which builds a QVector — this
+        // is the audio thread.
+        //
+        // There is no RX de-esser: sibilance is a transmit problem, and the
+        // stage only ever existed on this side because the RX chain was built
+        // by mirroring the TX one.
+        RxChainModules chainModules;
+        chainModules.eq = eq;
+        chainModules.gate = gate;
+        chainModules.comp = comp;
+        chainModules.tube = tube;
+        chainModules.pudu = pudu;
+
+        // One set of scratch buffers for every source, as before this change:
+        // writeAudio runs on the audio thread and each call finishes before
+        // the next begins, so a Kiwi block and a main block never share one.
+        const QByteArray* postEqSource = nullptr;
+        const QByteArray* stageSource = runRxChain(
+            m_rxChainPacked.load(std::memory_order_acquire), data, chainModules,
+            m_rxChainScratch, bypassRxChainForTx, &postEqSource);
 
         // Tap post-EQ audio into the ring buffer for the editor's FFT
-        // analyzer. Runs whether EQ is active or bypassed — the tap shows
-        // the signal actually heading to the sink at native 24 kHz.
-        const int tapFrames = eqSource->size() / (2 * static_cast<int>(sizeof(float)));
+        // analyzer. Runs whether EQ is active or bypassed — the tap shows the
+        // signal actually heading to the sink at native 24 kHz — and follows
+        // EQ wherever the operator has put it, so it keeps meaning "after the
+        // EQ" rather than "after the second stage".
+        const int tapFrames =
+            postEqSource->size() / (2 * static_cast<int>(sizeof(float)));
         if (tapFrames > 0 && !txPresentationGated
             && (!auxiliaryEffects || !mainPcmSourceOwnsDisplay())) {
             tapClientEqRxStereo(
-                reinterpret_cast<const float*>(eqSource->constData()),
+                reinterpret_cast<const float*>(postEqSource->constData()),
                 tapFrames);
-        }
-
-        // RX chain stage: GATE — runs after EQ, in place on a scratch
-        // buffer so the EQ tap above sees the post-EQ / pre-gate signal
-        // (matches the user's signal-flow expectation).  Skip during TX
-        // for the same reason as EQ.
-        const QByteArray* gateSource = eqSource;
-        if (gate && gate->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientGateRxScratch = *eqSource;
-            gate->process(reinterpret_cast<float*>(m_clientGateRxScratch.data()),
-                m_clientGateRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
-            gateSource = &m_clientGateRxScratch;
-        }
-
-        // RX chain stage: COMP — runs after GATE.  Same scratch-copy
-        // pattern.
-        const QByteArray* compSource = gateSource;
-        if (comp && comp->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientCompRxScratch = *gateSource;
-            comp->process(reinterpret_cast<float*>(m_clientCompRxScratch.data()),
-                m_clientCompRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
-            compSource = &m_clientCompRxScratch;
-        }
-
-        // RX chain stage: TUBE — runs after COMP. There is no RX de-esser:
-        // sibilance is a transmit problem, and the stage only ever existed on
-        // this side because the RX chain was built by mirroring the TX one.
-        const QByteArray* tubeSource = compSource;
-        if (tube && tube->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientTubeRxScratch = *compSource;
-            tube->process(reinterpret_cast<float*>(m_clientTubeRxScratch.data()),
-                m_clientTubeRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
-            tubeSource = &m_clientTubeRxScratch;
-        }
-
-        // RX chain stage: PUDU — runs after TUBE.
-        const QByteArray* puduSource = tubeSource;
-        if (pudu && pudu->isEnabled()
-            && !bypassRxChainForTx) {
-            m_clientPuduRxScratch = *tubeSource;
-            pudu->process(reinterpret_cast<float*>(m_clientPuduRxScratch.data()),
-                m_clientPuduRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
-            puduSource = &m_clientPuduRxScratch;
         }
 
         if (auxiliaryEffects && !txPresentationGated && !bypassRxChainForTx
@@ -5551,8 +5528,8 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         const QByteArray& resampled =
             (m_rxOutputRate.load() != (source == RxDspSource::Main
                     ? m_rxProducerRate.load() : DEFAULT_SAMPLE_RATE))
-                ? resampleStereo(*puduSource, source, externalSource)
-                : *puduSource;
+                ? resampleStereo(*stageSource, source, externalSource)
+                : *stageSource;
         const QByteArray* output = &resampled;
         QByteArray boosted;
         if (m_rxBoost.load()) {
@@ -5993,27 +5970,6 @@ void AudioEngine::applyClientPuduRxFloat32(QByteArray& float32)
                             frames, 2);
 }
 
-void AudioEngine::applyClientRxDspFloat32(QByteArray& float32)
-{
-    // Walk the packed RX chain-stage list and dispatch each entry to
-    // its per-stage apply helper.  Phase 0 ships with no implemented
-    // stages — every entry is a no-op until Phase 1+ slot in the DSP
-    // classes (RX EQ first).  Same atomic-load pattern as TX so the
-    // audio thread reads the entire chain order in one access.
-    const uint64_t packed = m_rxChainPacked.load(std::memory_order_acquire);
-    for (int i = 0; i < kMaxRxChainStages; ++i) {
-        const auto stage = static_cast<RxChainStage>((packed >> (i * 8)) & 0xFF);
-        switch (stage) {
-            case RxChainStage::None:  return;     // end-of-list marker
-            case RxChainStage::Eq:    /* TODO Phase 1 */ break;
-            case RxChainStage::Gate:  /* TODO Phase 2 */ break;
-            case RxChainStage::Comp:  /* TODO Phase 3 */ break;
-            case RxChainStage::Tube:  /* TODO Phase 4 */ break;
-            case RxChainStage::Pudu:  /* TODO Phase 5 */ break;
-        }
-    }
-    (void)float32;  // unused until first stage lands
-}
 
 namespace {
 

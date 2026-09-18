@@ -81,7 +81,9 @@ signals:
 private:
     QString filePath() const;
     bool    loadFromDisk();
-    bool    saveToDisk() const;
+    // Atomically replace the library file with `root`. False on any failure,
+    // with the file on disk left exactly as it was.
+    bool    writeDocument(const QJsonObject& root) const;
 
     AudioEngine* m_engine{nullptr};
     QJsonObject  m_root;

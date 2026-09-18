@@ -837,6 +837,7 @@ set(CORE_SOURCES
     src/core/AetherDspModePolicy.cpp
     src/core/SharedCapturePolicy.cpp
     src/core/RxClientEffects.cpp
+    src/core/RxChainRunner.cpp
     src/core/AudioEngine.cpp
     src/core/TxCaptureBuffer.cpp
     src/core/TxMicChannelNormalizer.cpp
