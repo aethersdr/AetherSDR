@@ -1001,31 +1001,24 @@ private:
     //   * this member is "is the loop RUNNING", and a constructed backend has
     //     not connected, so of course it is false;
     //   * m_autoRfGainWanted is "does the operator WANT it", and a document
-    //     with no `autoEnabled` key reads as TRUE. The connect edge then arms
-    //     it if the baseline is one the loop trusts.
+    //     with no `autoEnabled` key reads as FALSE. The control ships OFF and
+    //     an operator turns it on.
     //
-    // WHICH IT NOW IS. An earlier revision of this block said "OFF BY DEFAULT,
-    // and with evidence rather than caution", and the evidence was real: the
-    // prior art ships its equivalent ON from a baseline mapping to +19 dB LNA
-    // on this radio -- the row in #5354's own table reading 100 % clip rate --
-    // so it would start saturated on every connect and the operator's first
-    // impression of the band would be intermodulation.
+    // OFF BY DEFAULT, AND THE REASON IS THE GAIN AXIS RATHER THAN CAUTION.
+    // RFC #5535 approved this loop and asked for it armed by default; that is
+    // not shippable yet, and the obstacle is arithmetic rather than judgement.
+    // This radio's constructed LNA default is +20 dB (kLnaDefaultGainDb, which
+    // #5752 examined and deliberately preserved), and +20 is one dB ABOVE
+    // kAutoRfGainMaxBaselineDb -- so arming from a fresh connect REFUSES, by
+    // design, every time. Defaulting the wish to true would ship a control that
+    // announces itself and then declines to run, which is worse than one that
+    // is honestly off.
     //
-    // That argument died with the gain axis under it. The constructed default
-    // was +20 dB commanded, which the AD9866 applied as -12 (code 32 folds to
-    // code 0; measured at -44.55 dB on ON8ST's board, d103), and +20 is one dB
-    // ABOVE kAutoRfGainMaxBaselineDb -- so setAutoRfGain(true) REFUSED and the
-    // control could not be armed from the default by anyone, ever. "Off by
-    // default" was not a conservative choice; it was the only reachable state.
-    // With #5752's ceiling at +19 and default at 0 dB, arming works and starts
-    // from a baseline that means what it says.
-    //
-    // SO AN OPERATOR ON A FRESH CONNECT WILL SEE THE RF GAIN MOVE ON ITS OWN.
-    // That is intended -- ON8ST, 2026-09-16: "I would also make the auto gain
-    // setting the default" -- and it is the thing to say out loud, because the
-    // first person to read it as a fault will be reading this comment. An
-    // explicit `autoEnabled: false`, which switching the control off writes, is
-    // still honoured.
+    // WHAT WOULD CHANGE IT is a trustworthy gain axis at the shipped default:
+    // either the AD9866 fold reconciled against the gateware RTL or replicated
+    // on a second board -- the evidence bar #5752 set -- or a default gain that
+    // starts inside the region the loop trusts. Neither is this PR's to decide,
+    // and #5535's default-on half waits on whichever lands first.
     //
     // NO TIMER. The policy is evaluated on the existing telemetry publish,
     // which is where the observation arrives; the window length is an input

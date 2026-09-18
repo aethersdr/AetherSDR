@@ -770,13 +770,14 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_autoRfGainCheck->setToolTip(
         "Automatic RF Gain — reduces gain when the radio's converter clips.\n"
         "The slider becomes the CEILING: this can only take gain away, never add.\n"
-        "Armed by default (RFC #5535). Does nothing while transmitting.");
+        "Off by default. Does nothing while transmitting.");
     m_autoRfGainCheck->setVisible(false);
     gainRow->addWidget(m_autoRfGainCheck);
     vbox->addLayout(gainRow);
 
-    // THE VISIBILITY HALF OF RFC #5535, and the reason the loop above is
-    // allowed to be armed by default at all. Its own row rather than squeezed
+    // THE VISIBILITY HALF OF RFC #5535, which the ruling made a condition of
+    // shipping the loop above at all -- armed by default or not. Its own row
+    // rather than squeezed
     // into gainRow: the line has to fit "Clipping hard  -6 dB" without
     // elliding, because a truncated warning is the failure this exists to
     // prevent. Hidden with the checkbox -- a family that cannot observe its

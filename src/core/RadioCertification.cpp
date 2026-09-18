@@ -583,8 +583,18 @@ void RadioCertification::stageControlEffect(const Options& o)
         // Re-arm AFTER the gain is back where it was, so the loop's first
         // window is about the operator's own setting rather than this stage's
         // probe value.
-        if (autoGainWasOn && autoGain) {
-            autoGain->setArmed(true);
+        //
+        // RE-FETCHED, NOT REUSED. The pointer taken above is borrowed and valid
+        // only for the call that obtained it (AutoRfGainControl.h), and between
+        // there and here spin() has run a real QEventLoop for 200 + 1200 + 1200
+        // + 400 ms. A link drop inside any of those reaches RadioModel's
+        // teardown and m_backend.reset(), which destroys the object behind it --
+        // leaving the old pointer non-null and dangling, so a null guard would
+        // not have caught it. Asking again returns nullptr in exactly that case.
+        if (autoGainWasOn) {
+            if (auto* ag = m_radio->autoRfGain()) {
+                ag->setArmed(true);
+            }
         }
         m[QStringLiteral("autoRfGainSuspended")] = autoGainWasOn;
 

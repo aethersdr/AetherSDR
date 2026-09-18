@@ -6582,31 +6582,25 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // never armed anything, and reading a missing key as on would switch a
     // control on for an operator who never asked." It was right about the
     // mechanism and wrong about the alternative, because there was no neutral
-    // option -- only a choice between two defaults, one of which was broken.
+    // ABSENT MEANS OFF. A document with no `autoEnabled` key is an operator who
+    // has never expressed a preference, and they get the control switched off.
     //
-    // WHAT CHANGED IS THE GAIN AXIS UNDER IT. This radio's constructed LNA
-    // default was +20 dB, which ccRxGain encoded as code 32 and the gateware
-    // decoded as code 0 = -12 dB: a fresh connect sat at the BOTTOM of the
-    // range reporting the top. And +20 is one dB above
-    // kAutoRfGainMaxBaselineDb, so setAutoRfGain(true) REFUSED -- the control
-    // could not be armed from the default at all, by anyone, ever. "Off by
-    // default" was not a conservative choice; it was the only reachable state.
+    // NOT A JUDGEMENT ABOUT WHETHER THE LOOP IS GOOD -- RFC #5535 approved it
+    // and asked for it armed by default. It is that arming from the shipped
+    // default cannot work: this radio's constructed LNA default is +20 dB
+    // (kLnaDefaultGainDb, which #5752 examined and deliberately preserved) and
+    // kAutoRfGainMaxBaselineDb is +19, so the connect edge would call
+    // setAutoRfGain(true), the baseline guard would refuse, and every new
+    // operator would get a warning in the log about a control they never asked
+    // for. Defaulting to true here would ship exactly that.
     //
-    // With the ceiling at +19 and the default at 0 dB, arming from a fresh
-    // connect works and starts from a baseline that means what it says. An
-    // operator who wants a fixed gain still has one: switching the control off
-    // WRITES `autoEnabled: false` here, and an explicit false is honoured. What
-    // absence now means is "this operator has never expressed a preference",
-    // and for them a loop that finds the right gain is a better answer than a
-    // constant that cannot.
-    //
-    // ON8ST, 2026-09-16, operating the radio this was measured on: "I would
-    // also make the auto gain setting the default."
-    //
-    // DEPENDS ON THE CEILING LANDING. Without the +19 clamp and the 0 dB
-    // default, this line arms nothing -- the baseline guard refuses.
+    // The default-on half of #5535 waits on a trustworthy gain axis at the
+    // shipped default -- the AD9866 fold reconciled against the gateware RTL or
+    // replicated on a second board, or a default gain inside the trusted
+    // region. An operator who wants the loop today switches it on and that
+    // choice is persisted here.
     m_autoRfGainWanted =
-        rfGain.value(QStringLiteral("autoEnabled")).toBool(true);
+        rfGain.value(QStringLiteral("autoEnabled")).toBool(false);
     const QJsonObject lnaByBand =
         rfGain.value(QStringLiteral("lnaDbByBand")).toObject();
     for (auto it = lnaByBand.constBegin(); it != lnaByBand.constEnd(); ++it)
@@ -6820,7 +6814,24 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     // launch, from a gain the operator chose. See m_lnaAutoOffsetDb.
     QJsonObject rfGain{{QStringLiteral("defaultDb"), m_lnaDefaultDb},
                        {QStringLiteral("lnaDbByBand"), lnaByBand},
-                       {QStringLiteral("autoEnabled"), m_autoRfGainEnabled}};
+                       // THE WISH, NOT THE RUNNING FLAG. m_autoRfGainEnabled is
+                       // whether the loop is running right now; m_autoRfGainWanted
+                       // is whether the operator wants it to. Those differ exactly
+                       // when the backend DECLINED to arm -- refusing from a
+                       // baseline where the gain axis is not trustworthy -- and
+                       // Hl2Backend.h states the invariant that makes the
+                       // difference matter: "the wish stays true, the control
+                       // stays off, and the next connect from a baseline it
+                       // trusts honours the operator without them having to ask
+                       // twice."
+                       //
+                       // Persisting the running flag broke that in the one
+                       // direction that cannot recover: a declined session wrote
+                       // an explicit false, and an explicit false is honoured
+                       // forever -- so the operator lowering their RF Gain into
+                       // the trusted region would never see the loop arm again,
+                       // and would have no way to know why.
+                       {QStringLiteral("autoEnabled"), m_autoRfGainWanted}};
     QJsonObject txSetpoints{{QStringLiteral("driveByBand"), driveByBand}};
     if (m_driveDefaultPercent >= 0)
         txSetpoints.insert(QStringLiteral("defaultPercent"), m_driveDefaultPercent);
@@ -6951,6 +6962,17 @@ void Hl2Backend::setAutoRfGain(bool on)
         // operator's own number so the feature could be switched on would be a
         // UI reporting one value while the wire carried another.
         if (m_lnaGainDb > kAutoRfGainMaxBaselineDb) {
+            // THE ASKING SURVIVES THE REFUSAL. This is what makes the invariant
+            // on m_autoRfGainWanted true rather than merely stated: the
+            // operator asked, the radio declined on its own evidence, and the
+            // request is what is persisted -- so the next connect from a
+            // baseline the loop trusts arms without them having to ask twice.
+            //
+            // Recorded BEFORE the return, which is where it was missing. The
+            // disarm branch below already says "a REFUSAL does not reach here,
+            // so a radio that declined to arm keeps the operator's on
+            // recorded"; without this line nothing had recorded it.
+            m_autoRfGainWanted = true;
             qWarning().noquote()
                 << QStringLiteral(
                        "Hl2Backend: auto RF gain declined — the RF Gain baseline is "

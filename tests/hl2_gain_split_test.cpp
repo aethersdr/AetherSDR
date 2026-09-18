@@ -369,6 +369,73 @@ int main(int argc, char** argv)
               "and a negative one resolves to zero — 'may take no gain at all'");
     }
 
+    // ---- WHAT `autoEnabled` MEANS ON DISK: THE WISH, NOT THE RUNNING FLAG.
+    //
+    // The two are the same number until the backend DECLINES to arm, which it
+    // does from any baseline above kAutoRfGainMaxBaselineDb because the gain
+    // axis is not trustworthy there. At that moment "the operator wants this"
+    // and "the loop is running" diverge, and only the first belongs on disk:
+    // an explicit `false` is honoured forever, so persisting the running flag
+    // would silently and permanently withdraw a preference the operator never
+    // withdrew -- and would keep doing so after they lowered RF Gain into the
+    // region where it would have worked.
+    //
+    // Nothing exercised this key before, which is why the suite was green
+    // across a revision that had it backwards.
+    {
+        RestoredRadioState st;
+        st.rfFrequencyHz = 14'200'000.0;
+        Session s(st);
+
+        // A baseline the loop refuses: above the trusted ceiling.
+        s.backend.setPanRfGain(s.panId, hl2::Hl2Backend::kAutoRfGainMaxBaselineDb + 1);
+        s.backend.setAutoRfGain(true);
+        check(!s.backend.isArmed(),
+              "the loop declines to arm from an untrusted baseline");
+
+        const QJsonObject declined =
+            s.backend.currentOperatingState().extension
+                .value(QStringLiteral("rfGain")).toObject();
+        check(declined.value(QStringLiteral("autoEnabled")).toBool() == true,
+              "a DECLINED arm still persists the wish as true — the operator "
+              "asked, the radio refused, and the asking is what survives");
+
+        // Now a baseline it trusts: the same wish arms, and still reads true.
+        s.backend.setPanRfGain(s.panId, hl2::Hl2Backend::kAutoRfGainMaxBaselineDb);
+        s.backend.setAutoRfGain(true);
+        check(s.backend.isArmed(), "and arms from a trusted one");
+        const QJsonObject armed =
+            s.backend.currentOperatingState().extension
+                .value(QStringLiteral("rfGain")).toObject();
+        check(armed.value(QStringLiteral("autoEnabled")).toBool() == true,
+              "which persists as true too");
+
+        // Switching it OFF is a real withdrawal and must persist as false.
+        s.backend.setAutoRfGain(false);
+        const QJsonObject off =
+            s.backend.currentOperatingState().extension
+                .value(QStringLiteral("rfGain")).toObject();
+        check(off.value(QStringLiteral("autoEnabled")).toBool() == false,
+              "and switching it off persists false — an explicit refusal is "
+              "the one thing that must be honoured next launch");
+    }
+
+    // ---- ABSENT MEANS OFF. RFC #5535 asked for armed-by-default; the shipped
+    // LNA default of +20 dB sits one dB above the baseline the loop will arm
+    // from, so default-on would refuse on every fresh connect. Until the gain
+    // axis is trustworthy at that default, a document with no key reads false.
+    {
+        RestoredRadioState st;
+        st.rfFrequencyHz = 14'200'000.0;
+        Session s(st);
+        check(!s.backend.isArmed(),
+              "a fresh profile does not arm the loop");
+        check(hl2::kLnaDefaultGainDb > hl2::Hl2Backend::kAutoRfGainMaxBaselineDb,
+              "and the reason is arithmetic: the shipped LNA default is above "
+              "the baseline the loop will arm from, so default-on would only "
+              "ever warn");
+    }
+
     if (failures == 0) {
         std::printf("\nALL PASS\n");
         return 0;
