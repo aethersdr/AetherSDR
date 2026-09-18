@@ -131,6 +131,12 @@ AetherTxSettingsDialog::AetherTxSettingsDialog(AudioEngine* audio, QWidget* pare
     m_monPlayBtn->setEnabled(false);
     m_monPlayBtn->setToolTip(
         tr("Play back the captured audio. Click again to cancel."));
+    // Why it is greyed out has to reach the accessible channel too, not just
+    // the tooltip — a screen-reader user meets a disabled button with no
+    // explanation otherwise (#4896).
+    m_monPlayBtn->setAccessibleDescription(
+        tr("Unavailable until something has been recorded. "
+           "Use Record first."));
     connect(m_monPlayBtn, &QPushButton::clicked,
             this, &AetherTxSettingsDialog::monitorPlayClicked);
     liveRow->addWidget(m_monPlayBtn);
@@ -313,7 +319,12 @@ void AetherTxSettingsDialog::setMonitorPlaying(bool on)
 
 void AetherTxSettingsDialog::setMonitorHasRecording(bool has)
 {
-    if (m_monPlayBtn) m_monPlayBtn->setEnabled(has);
+    if (!m_monPlayBtn) return;
+    m_monPlayBtn->setEnabled(has);
+    m_monPlayBtn->setAccessibleDescription(
+        has ? tr("Play back the captured audio. Click again to cancel.")
+            : tr("Unavailable until something has been recorded. "
+                 "Use Record first."));
 }
 
 void AetherTxSettingsDialog::setBypassed(bool on)
