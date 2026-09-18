@@ -92,13 +92,20 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
 
     // Bypass moved to the CHAIN widget's single-click gesture.
 
-    // ── Main body: left control column + right level view ─────────
+    // The page reads the way the EQ's does: a toolbar of switches along the
+    // top, the display filling everything under it, and every knob in one row
+    // at the foot. The old shape -- a column of knobs down the left with the
+    // display beside it -- spent a third of a 562 px page on a 150 px column
+    // and left a hole under it that nothing could fill.
+    auto* toolbar = new QHBoxLayout;
+    toolbar->setSpacing(8);
+
     auto* body = new QHBoxLayout;
     body->setSpacing(12);
 
-    // Left column: threshold, return, flip/lookahead
-    auto* left = new QVBoxLayout;
-    left->setSpacing(8);
+    // Knobs, all of them, in one row at the foot.
+    auto* left = new QHBoxLayout;
+    left->setSpacing(4);
 
     // Threshold — the single largest control, matches Ableton's big
     // top-left knob.  -80..0 dB linear.
@@ -149,13 +156,12 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
         // Label tracks what's currently shown.
         if (m_viewToggle) m_viewToggle->setText(on ? "Curve" : "Level");
     });
-    left->addWidget(m_viewToggle);
+    toolbar->addWidget(m_viewToggle);
 
-    // Spacer pushes Peek + Flip to the bottom of the column so the
-    // Threshold/Return knobs stay anchored at the top while the mode
-    // toggle and lookahead picker hug the bottom edge.
-    left->addStretch();
-
+    // No spacer here. Pushing Peek and Flip to the foot of the column put
+    // 200 px of nothing through the middle of it, in a window that has 446 to
+    // spend: the five controls read as one bank when they sit together, and
+    // the slack goes to the bottom where nothing has to read across it.
     // Peek (lookahead) row — sits directly above the Flip button.
     {
         auto* lookWrap = new QHBoxLayout;
@@ -178,7 +184,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
             applyLookahead(kLookaheadOptions[i]);
         });
         lookWrap->addWidget(m_lookahead, 1);
-        left->addLayout(lookWrap);
+        toolbar->addLayout(lookWrap);
     }
 
     // Flip button (Expander ↔ Gate) — bottom-most control.
@@ -193,13 +199,8 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     connect(m_flip, &QPushButton::toggled, this, [this](bool checked) {
         applyMode(checked ? 1 : 0);
     });
-    left->addWidget(m_flip);
-
-    body->addLayout(left, 0);
-
-    // Right side: level view + bottom knob row
-    auto* right = new QVBoxLayout;
-    right->setSpacing(8);
+    toolbar->addWidget(m_flip);
+    toolbar->addStretch(1);
 
     // Stack the level history and the transfer curve so the toggle in
     // the left column can flip between them in place.
@@ -208,7 +209,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     m_curveView = new ClientGateCurveWidget;
     m_viewStack->addWidget(m_levelView);   // index 0 = live history
     m_viewStack->addWidget(m_curveView);   // index 1 = transfer curve
-    right->addWidget(m_viewStack, 1);
+    body->addWidget(m_viewStack, 1);
 
     // Bottom row: Attack, Hold, Release, Floor (small knobs).
     auto* bottom = new QHBoxLayout;
@@ -301,11 +302,15 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
             this, &StripGatePanel::applyRatio);
     bottom->addWidget(m_ratio, 0, Qt::AlignHCenter);
 
-    right->addLayout(bottom);
+    // Thresh and Return lead the row: they are the two the operator sets
+    // first, and they were the column this layout did away with.
+    for (int i = bottom->count(); i > 0; --i) {
+        left->addItem(bottom->takeAt(0));
+    }
 
-    body->addLayout(right, 1);
-
-    root->addLayout(body);
+    root->addLayout(toolbar);
+    root->addLayout(body, 1);
+    root->addLayout(left);
 
     // Bind both views to the gate once so they start polling.
     if (m_audio && gate()) {
