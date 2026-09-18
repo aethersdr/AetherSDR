@@ -56,7 +56,15 @@ public:
     // callers can keep connecting to the dialog directly.
     AetherDspWidget* widget() const { return m_widget; }
 
+    // The receive EQ panel, for MainWindow to feed the slice's filter edges and
+    // width ladder into -- the same push it already makes to the docked applet
+    // and the floating editor.
+    StripEqPanel* eqPanel() const { return m_eq; }
+
 signals:
+    // A receive filter width button was pressed on the EQ page.
+    void rxFilterWidthRequested(int widthHz);
+
     // NR2 parameter changes (forwarded from m_widget)
     void nr2GainMaxChanged(float value);
     void nr2GainFloorChanged(float value);

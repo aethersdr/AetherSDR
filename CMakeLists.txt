@@ -1152,6 +1152,7 @@ set(GUI_SOURCES
     src/gui/AetherRxDialog.cpp
     src/gui/AetherDspWidget.cpp
     src/gui/CompactMetrics.cpp
+    src/gui/ModeFilterPresets.cpp
     src/gui/ModemChrome.cpp
     src/gui/NrGainStrip.cpp
     src/gui/WaveformsDialog.cpp

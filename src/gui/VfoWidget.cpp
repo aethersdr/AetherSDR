@@ -8,6 +8,7 @@
 #include "FmTonePresentation.h"
 #include "gui/CtcssToneLabel.h"
 #include "PhaseKnob.h"
+#include "ModeFilterPresets.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SmartMtrWidget.h"
 #include "MeterViewController.h"
@@ -5475,31 +5476,10 @@ void VfoWidget::refreshDspLevelTarget()
 }
 
 // ── Mode tab helpers ──────────────────────────────────────────────────────────
-
-struct ModeFilterPresets {
-    QVector<int> filterWidths;
-};
-
-static const ModeFilterPresets& filterPresetsFor(const QString& mode)
-{
-    // From docs/data/vfo_mode_filters.csv — 8 presets per mode, 4x2 grid
-    static const ModeFilterPresets usb{{1800, 2100, 2400, 2700, 2900, 3300, 4000, 6000}};
-    static const ModeFilterPresets am {{5600, 6000, 8000, 10000, 12000, 14000, 16000, 20000}};
-    static const ModeFilterPresets cw {{50, 100, 250, 400, 500, 600, 800, 1000}};
-    static const ModeFilterPresets dig{{100, 300, 600, 1000, 1500, 2000, 3000, 6000}};
-    static const ModeFilterPresets rtty{{250, 300, 350, 400, 500, 1000, 1500, 3000}};
-    static const ModeFilterPresets dfm{{6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000}};
-    static const ModeFilterPresets fm{{}};
-
-    if (mode == "USB" || mode == "LSB") return usb;
-    if (mode == "AM" || mode == "SAM") return am;
-    if (isCwMode(mode)) return cw;
-    if (mode == "DIGU" || mode == "DIGL" || mode == "NT") return dig;
-    if (mode == "RTTY") return rtty;
-    if (mode == "DFM") return dfm;
-    if (mode == "FM" || mode == "NFM") return fm;
-    return usb;
-}
+//
+// The ladders and the width -> edges rule live in ModeFilterPresets now: the EQ
+// offers the same widths, and two copies of a rule this fiddly would have
+// drifted the first time one of them was corrected.
 
 void VfoWidget::updateModeTab()
 {
@@ -5547,7 +5527,7 @@ void VfoWidget::updateModeTab()
         }
     }
     if (m_filterWidths.isEmpty()) {
-        m_filterWidths = filterPresetsFor(cur).filterWidths;
+        m_filterWidths = ModeFilters::widthsForMode(cur);
         m_filterCustomLo.fill(INT_MIN, m_filterWidths.size());
         m_filterCustomHi.fill(INT_MIN, m_filterWidths.size());
     }
@@ -5758,7 +5738,7 @@ void VfoWidget::rebuildFilterButtons()
             });
             menu.addAction("Reset to Default", btn, [this, i] {
                 if (!m_slice) return;
-                const auto& factory = filterPresetsFor(m_slice->mode()).filterWidths;
+                const auto& factory = ModeFilters::widthsForMode(m_slice->mode());
                 if (i >= factory.size()) return;
                 m_filterWidths[i] = factory[i];
                 m_filterCustomLo[i] = INT_MIN;
@@ -5975,85 +5955,10 @@ void VfoWidget::updateFilterHighlight()
 void VfoWidget::applyFilterPreset(int widthHz)
 {
     if (!m_slice) return;
-    int lo, hi;
-    const QString& mode = m_slice->mode();
-
-    if (mode == "DIGU") {
-        // For widths < 3000 Hz, center the filter on the stored digu_offset.
-        // SmartSDR behavior (fw v1.4.0.0): offset is the audio center frequency;
-        // filter spans [offset - width/2, offset + width/2], clamped so lo >= 95.
-        // For widths >= 3000 Hz, SmartSDR ignores the offset and runs from 95 Hz
-        // upward — preserve that behavior unchanged.
-        if (widthHz < 3000) {
-            int offset = m_slice->diguOffset();
-            lo = offset - widthHz / 2;
-            hi = offset + widthHz / 2;
-            if (lo < 95) {
-                // Clamp: don't let lo drop below 95 Hz (carrier rejection)
-                hi += (95 - lo);
-                lo = 95;
-            }
-        } else {
-            lo = 95;
-            hi = widthHz;
-        }
-    } else if (mode == "DIGL") {
-        // Mirror of DIGU: offset is negative (below carrier). For widths < 3000 Hz,
-        // center on -digl_offset, clamped so hi <= -95.
-        // For widths >= 3000 Hz, run from -95 downward.
-        if (widthHz < 3000) {
-            int offset = m_slice->diglOffset();
-            hi = -offset + widthHz / 2;
-            lo = -offset - widthHz / 2;
-            if (hi > -95) {
-                lo -= (hi + 95);
-                hi = -95;
-            }
-        } else {
-            lo = -widthHz;
-            hi = -95;
-        }
-    } else if (mode == "LSB") {
-        // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
-        // filter); the high cut is derived as lo + width so the effective
-        // passband equals the labeled width. Mirror of USB below the
-        // carrier: edge nearest the carrier is -100 Hz. (#3292)
-        hi = -100; lo = -100 - widthHz;
-    } else if (mode == "RTTY") {
-        // RTTY: RF_frequency = mark. Filter is relative to mark.
-        // Space is at -rttyShift. Passband should encompass both tones.
-        // Expand symmetrically around the midpoint between mark(0) and space(-shift).
-        int shift = m_slice->rttyShift();
-        int mid = -shift / 2;
-        lo = mid - widthHz / 2;
-        hi = mid + widthHz / 2;
-    } else if (mode == "CW" || mode == "CWL" || mode == "CWU") {
-        // Centered on carrier — radio's BFO handles pitch offset.
-        // CWU belongs with the other two spellings: it was falling through to
-        // the final else and getting a USB-shaped {95, width} with no carrier
-        // in it. It is reachable — NetSchedulerDialog lists it as a schedulable
-        // mode and RadioSetupDialog has it as the CWU/CWL sideband toggle — and
-        // it was wrong under the old passband convention too, just less visibly.
-        lo = -widthHz / 2;
-        hi =  widthHz / 2;
-    } else if (mode == "AM" || mode == "SAM" || mode == "DSB"
-               || mode == "FM" || mode == "NFM" || mode == "DFM") {
-        lo = -(widthHz / 2); hi = (widthHz / 2);
-    } else if (mode == "FDVL") {
-        lo = -widthHz; hi = -95;
-    } else if (mode == "USB") {
-        // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
-        // filter); the high cut is derived as lo + width so the effective
-        // passband equals the labeled width. Previously this sent lo=95,
-        // hi=width, which yielded an effective width of (label-95) — e.g.
-        // the 2.9k preset produced ~2805 Hz — and left the active-preset
-        // matcher comparing against off-by-95 widths. (#3292)
-        lo = 100; hi = 100 + widthHz;
-    } else {
-        // FDVU/FDV/etc: low cut at 95 Hz to reject carrier/hum
-        lo = 95; hi = widthHz;
-    }
-    m_slice->setFilterWidth(lo, hi);
+    const ModeFilters::Edges edges = ModeFilters::edgesForWidth(
+        m_slice->mode(), widthHz,
+        {m_slice->diguOffset(), m_slice->diglOffset(), m_slice->rttyShift()});
+    m_slice->setFilterWidth(edges.lo, edges.hi);
 }
 
 void VfoWidget::saveFilterPresets()

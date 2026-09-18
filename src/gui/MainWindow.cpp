@@ -159,6 +159,8 @@
 #include "core/UlanziDialBackend.h"
 #include "UlanziDialMapperDialog.h"
 #include "AetherRxDialog.h"
+#include "ModeFilterPresets.h"
+#include "StripEqPanel.h"
 #include "AetherDspWidget.h"
 #include "WaveformsDialog.h"
 #include "ClientRxDspApplet.h"
@@ -3309,6 +3311,21 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
     showOrRaisePersistent(m_rxDialog, m_audio);
     if (wasFresh && m_rxDialog) {
         if (auto* w = m_rxDialog->widget()) wireAetherDspWidget(w);
+        // The EQ page's width buttons: turn a labelled width into the passband
+        // that width means in this mode, through the same rule the VFO's filter
+        // grid uses, and send it to the slice.
+        connect(m_rxDialog, &AetherRxDialog::rxFilterWidthRequested,
+                this, [this](int widthHz) {
+            auto* s = activeSlice();
+            if (!s) return;
+            const ModeFilters::Edges edges = ModeFilters::edgesForWidth(
+                s->mode(), widthHz,
+                {s->diguOffset(), s->diglOffset(), s->rttyShift()});
+            s->setFilterWidth(edges.lo, edges.hi);
+        });
+        // Seed the page with the filter it is looking at right now, rather than
+        // leaving it blank until the next slice change pushes one.
+        pushRxFilterCutoffsToEq();
     }
     return m_rxDialog.data();
 }
@@ -7972,6 +7989,21 @@ void MainWindow::pushRxFilterCutoffsToEq()
         m_appletPanel->clientEqRxApplet()->setRxFilterCutoffs(audioLow, audioHigh);
     if (m_clientEqEditor)
         m_clientEqEditor->setRxFilterCutoffs(audioLow, audioHigh);
+
+    // AetherRX's own EQ page draws the same edges, and carries the width row
+    // beneath its toolbar -- so it gets the ladder for the mode as well.
+    if (m_rxDialog && m_rxDialog->eqPanel()) {
+        StripEqPanel* eq = m_rxDialog->eqPanel();
+        eq->setRxFilterCutoffs(audioLow, audioHigh);
+        if (auto* s = activeSlice()) {
+            eq->setRxFilterPresets(
+                ModeFilters::widthsForMode(s->mode()),
+                ModeFilters::widthForEdges(s->mode(), s->filterLow(),
+                                           s->filterHigh()));
+        } else {
+            eq->setRxFilterPresets({}, 0);
+        }
+    }
 }
 
 const char* MainWindow::tuneIntentName(TuneIntent intent)

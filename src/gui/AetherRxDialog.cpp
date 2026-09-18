@@ -215,6 +215,10 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     addStage(Gate, QStringLiteral("AGC-G"), buildStagePage(m_gate));
 
     m_eq = new StripEqPanel(audio, this);
+    // Straight through: the panel asks, MainWindow decides what a width means
+    // for the mode the slice is in.
+    connect(m_eq, &StripEqPanel::rxFilterWidthRequested,
+            this, &AetherRxDialog::rxFilterWidthRequested);
     addStage(Eq, QStringLiteral("EQ"), buildStagePage(m_eq));
 
     m_comp = new StripCompPanel(audio, this);

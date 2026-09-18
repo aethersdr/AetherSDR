@@ -13,6 +13,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QHBoxLayout>
+#include <QLayoutItem>
 #include <QHideEvent>
 #include <QLabel>
 #include <QMoveEvent>
@@ -324,6 +325,16 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     eqColumn->setContentsMargins(0, 0, 0, 0);
     eqColumn->setSpacing(6);
 
+    // Receive filter widths for the current mode. Between the toolbar above and
+    // the filter-type icons below: it belongs with the controls rather than
+    // with the graph, and the widths it offers change with the mode.
+    m_filterRow = new QWidget;
+    m_filterRowLayout = new QHBoxLayout(m_filterRow);
+    m_filterRowLayout->setContentsMargins(0, 0, 0, 0);
+    m_filterRowLayout->setSpacing(4);
+    m_filterRow->setVisible(false);   // until a ladder arrives
+    eqColumn->addWidget(m_filterRow);
+
     m_iconRow = new ClientEqIconRow;
     m_iconRow->setAudioEngine(m_audio);
     eqColumn->addWidget(m_iconRow);
@@ -500,6 +511,7 @@ void StripEqPanel::showForPath(ClientEqApplet::Path path)
     // transmit side keeps the fader.
     const bool rx = (path == ClientEqApplet::Path::Rx);
     if (m_outFader) m_outFader->setGainControlEnabled(!rx);
+    rebuildFilterRow();
     if (eq && rx && std::abs(eq->masterGain() - 1.0f) > 1e-4f) {
         // Unity from here on, including for anyone upgrading with a gain
         // already stored: nothing in the UI could return it to 1.0 afterwards.
@@ -555,6 +567,66 @@ void StripEqPanel::setRxFilterCutoffs(int audioLowHz, int audioHighHz)
     m_rxFilterHighCutHz = audioHighHz;
     if (m_canvas && m_path == ClientEqApplet::Path::Rx)
         m_canvas->setFilterCutoffs(audioLowHz, audioHighHz);
+}
+
+void StripEqPanel::setRxFilterPresets(const QVector<int>& widthsHz,
+                                      int currentWidthHz)
+{
+    if (m_filterWidths == widthsHz && m_currentFilterWidth == currentWidthHz) {
+        return;
+    }
+    m_filterWidths = widthsHz;
+    m_currentFilterWidth = currentWidthHz;
+    rebuildFilterRow();
+}
+
+void StripEqPanel::rebuildFilterRow()
+{
+    if (!m_filterRow || !m_filterRowLayout) return;
+
+    // Transmit has its own filter controls on the radio side; this row is the
+    // receive filter, so it only appears on the receive path.
+    const bool show = (m_path == ClientEqApplet::Path::Rx)
+                   && !m_filterWidths.isEmpty();
+    m_filterRow->setVisible(show);
+    if (!show) return;
+
+    while (QLayoutItem* item = m_filterRowLayout->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+
+    for (int widthHz : m_filterWidths) {
+        // 1.8k, 2.4k, 20k -- the labels the ladder is known by. Below a
+        // kilohertz the figure is plain Hz, which is how CW and RTTY widths
+        // are spoken.
+        const QString label = widthHz >= 1000
+            ? QStringLiteral("%1k").arg(widthHz / 1000.0, 0, 'g', 2)
+            : QString::number(widthHz);
+
+        auto* b = new QPushButton(label, m_filterRow);
+        // The running width has to read as chosen. The panel's own sheet has no
+        // :checked rule for a plain button, so without this the active preset
+        // looks exactly like the seven that are not.
+        AetherSDR::ThemeManager::instance().applyStyleSheet(b,
+            "QPushButton { background: {{color.background.1}}; color: {{color.text.secondary}};"
+            "  border: 1px solid {{color.border.strong}}; border-radius: 3px;"
+            "  font-size: 11px; font-weight: bold; padding: 2px 4px; }"
+            "QPushButton:hover { color: {{color.text.primary}}; border-color: {{color.accent}}; }"
+            "QPushButton:checked { background: {{color.background.tx}};"
+            "  color: {{color.accent.warning}}; border: 1px solid {{color.accent.warning}}; }");
+        b->setObjectName(QStringLiteral("eqRxFilter%1").arg(widthHz));
+        b->setAccessibleName(
+            QStringLiteral("Receive filter %1 Hz").arg(widthHz));
+        b->setCheckable(true);
+        b->setChecked(widthHz == m_currentFilterWidth);
+        b->setFixedHeight(24);
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        connect(b, &QPushButton::clicked, this, [this, widthHz]() {
+            emit rxFilterWidthRequested(widthHz);
+        });
+        m_filterRowLayout->addWidget(b);
+    }
 }
 
 void StripEqPanel::refreshFromEngine()

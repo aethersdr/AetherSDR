@@ -1213,6 +1213,14 @@ add_test(NAME slice_model_squelch_memory_test COMMAND slice_model_squelch_memory
 # theme loads from Qt resources, scalar tokens resolve, missing tokens
 # don't crash, and the stylesheet template resolver substitutes correctly.
 qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc)
+add_executable(mode_filter_presets_test
+    tests/mode_filter_presets_test.cpp
+    src/gui/ModeFilterPresets.cpp
+)
+target_include_directories(mode_filter_presets_test PRIVATE src)
+target_link_libraries(mode_filter_presets_test PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+add_test(NAME mode_filter_presets_test COMMAND mode_filter_presets_test)
+
 add_executable(compact_metrics_test
     tests/compact_metrics_test.cpp
     src/gui/CompactMetrics.cpp
@@ -5981,6 +5989,7 @@ set(AETHER_SETTINGS_CONSUMERS
     slice_label_test
     ulanzi_mapping_migration_test
     compact_metrics_test
+    mode_filter_presets_test
     modem_chrome_test
     theme_manager_test
     theme_seed_test
