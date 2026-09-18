@@ -49,7 +49,12 @@ QPushButton* makeStageTab(const QString& text)
 // min/max/close trio, and a legacy band colour from when they were floating
 // editors. Inside a host window the trio does nothing, so strip it, the same
 // way the Aetherial strip does for its own embedded panels.
-void tidyEmbeddedPanel(QWidget* panel)
+//
+// `keepTitle` decides whether the name plate goes too. A page showing one panel
+// has already named it in the tab, and a second copy of "EQ" above the graph is
+// a row of pixels saying nothing; a page stacking two panels keeps both plates,
+// because there the titles are what tell them apart.
+void tidyEmbeddedPanel(QWidget* panel, bool keepTitle = false)
 {
     if (!panel) return;
     const auto recolour = [](QWidget* w) {
@@ -66,8 +71,12 @@ void tidyEmbeddedPanel(QWidget* panel)
         // dynamic_cast rather than findChild: EditorFramelessTitleBar has no
         // Q_OBJECT macro.
         if (auto* tb = dynamic_cast<EditorFramelessTitleBar*>(child)) {
-            tb->setControlsVisible(false);
-            recolour(tb);
+            if (keepTitle) {
+                tb->setControlsVisible(false);
+                recolour(tb);
+            } else {
+                tb->hide();
+            }
             break;
         }
     }
@@ -245,15 +254,17 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     if (m_output)   m_output->showForRx();
     if (m_waveform) m_waveform->showForRx();
 
+    // One panel to a page: the tab already names it, so the plate comes off.
     for (QWidget* panel : {static_cast<QWidget*>(m_gate),
                            static_cast<QWidget*>(m_eq),
                            static_cast<QWidget*>(m_comp),
                            static_cast<QWidget*>(m_tube),
-                           static_cast<QWidget*>(m_voice),
-                           static_cast<QWidget*>(m_output),
-                           static_cast<QWidget*>(m_waveform)}) {
+                           static_cast<QWidget*>(m_voice)}) {
         tidyEmbeddedPanel(panel);
     }
+    // The Out page stacks two, and their plates are what say which is which.
+    tidyEmbeddedPanel(m_output, /*keepTitle=*/true);
+    tidyEmbeddedPanel(m_waveform, /*keepTitle=*/true);
 
     if (auto* first = m_tabGroup->button(Nr)) {
         first->setChecked(true);
