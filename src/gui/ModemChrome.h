@@ -27,24 +27,34 @@ namespace AetherSDR::ModemChrome {
 //   QPushButton[chrome="tab"]  one tab in the top strip; checked draws green
 //   QPushButton#IconButton a square, flat, icon-only button
 //
+// Every colour is a ThemeManager token placeholder, not a literal, so the
+// chrome follows the loaded theme instead of pinning one palette. The sheet
+// therefore has to be applied through ThemeManager::applyStyleSheet(), which
+// resolves the {{...}} and re-resolves them when the theme changes; plain
+// setStyleSheet() would install the placeholders verbatim and paint nothing.
+//
+// These were literals until the hardcoded-colour ratchet caught them, and the
+// migration is why the panels read slightly differently: close variants
+// collapse onto one token, which is the point — three greens a hover apart
+// were three more unique colours for no gain the eye could find.
 namespace Colour {
-inline constexpr const char* Background   = "#07101c";
-inline constexpr const char* PanelTop     = "#111d2c";
-inline constexpr const char* PanelBottom  = "#0a1421";
-inline constexpr const char* Border       = "#233246";
-inline constexpr const char* BorderSoft   = "#1c2a3b";
-inline constexpr const char* ControlBorder= "#26374e";
-inline constexpr const char* Text         = "#aeb9cc";
-inline constexpr const char* TextBright   = "#d6dfeb";
-inline constexpr const char* TextDim      = "#6e7a8d";
-inline constexpr const char* Section      = "#8d99ad";
-inline constexpr const char* StatusValue  = "#b9c4d7";
-inline constexpr const char* Field        = "#050b13";
-inline constexpr const char* FieldText    = "#c4cedd";
-inline constexpr const char* Green        = "#64d36e";
-inline constexpr const char* GreenEdge    = "#54c768";
-inline constexpr const char* GreenBright  = "#80ed91";
-inline constexpr const char* Amber        = "#d2a448";
+inline constexpr const char* Background   = "{{color.background.0}}";
+inline constexpr const char* PanelTop     = "{{color.background.1}}";
+inline constexpr const char* PanelBottom  = "{{color.background.0}}";
+inline constexpr const char* Border       = "{{color.border.strong}}";
+inline constexpr const char* BorderSoft   = "{{color.border.subtle}}";
+inline constexpr const char* ControlBorder= "{{color.border.strong}}";
+inline constexpr const char* Text         = "{{color.text.secondary}}";
+inline constexpr const char* TextBright   = "{{color.text.primary}}";
+inline constexpr const char* TextDim      = "{{color.text.label}}";
+inline constexpr const char* Section      = "{{color.text.secondary}}";
+inline constexpr const char* StatusValue  = "{{color.text.primary}}";
+inline constexpr const char* Field        = "{{color.background.spectrum}}";
+inline constexpr const char* FieldText    = "{{color.text.primary}}";
+inline constexpr const char* Green        = "{{color.accent.success}}";
+inline constexpr const char* GreenEdge    = "{{color.accent.success}}";
+inline constexpr const char* GreenBright  = "{{color.accent.success}}";
+inline constexpr const char* Amber        = "{{color.accent.warning}}";
 } // namespace Colour
 
 // Two sizes of the same chrome. Dialog is the modem's own 14 px scale; Compact

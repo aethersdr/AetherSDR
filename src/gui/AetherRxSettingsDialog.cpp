@@ -1,6 +1,7 @@
 #include "AetherRxSettingsDialog.h"
 #include "ModemChrome.h"
 #include "core/AetherRxProfiles.h"
+#include "core/ThemeManager.h"
 
 #include <QFileDialog>
 #include <QFileInfo>
@@ -28,7 +29,8 @@ AetherRxSettingsDialog::AetherRxSettingsDialog(AudioEngine* audio, QWidget* pare
 {
     setWindowTitle(tr("AetherRX Settings"));
     setObjectName(QStringLiteral("aetherRxSettingsDialog"));
-    setStyleSheet(ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
+    ThemeManager::instance().applyStyleSheet(
+        this, ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
     resize(460, 380);
 
     auto* root = new QVBoxLayout(this);

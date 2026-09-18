@@ -314,7 +314,8 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     // application font: three points more is enough to push the minus sign
     // out of a knob's 76 px value editor. The AetherNR body applies the same
     // sheet to itself, so the only thing that loses by this is nothing.
-    m_tabsFrame->setStyleSheet(ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_tabsFrame, ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
     // Wide enough for the longest label with a grip on one side of it and a
     // checkbox on the other.
     m_tabsFrame->setFixedWidth(180);

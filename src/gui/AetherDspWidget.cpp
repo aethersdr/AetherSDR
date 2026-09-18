@@ -234,7 +234,7 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
     : QWidget(parent)
     , m_audio(audio)
 {
-    setStyleSheet(widgetStyle(false));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, widgetStyle(false));
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(4, 4, 4, 4);
@@ -671,7 +671,7 @@ void AetherDspWidget::resetCurrentTab()
 
 void AetherDspWidget::setCompactMode(bool on)
 {
-    setStyleSheet(widgetStyle(on));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, widgetStyle(on));
 
     // Slider value labels were sized to fit the full-dialog 40 px slot.
     // In compact mode they're rendered with a smaller font and fit in 30

@@ -64,16 +64,24 @@ const QString kBypassStyle = QStringLiteral(
 // inherited from the single Flip button was readable while only one of these
 // existed at a time; with both halves of a pair on screen it said that Level
 // and Curve were both on, and only the shade told you which.
+// Tokens, not literals: the unchecked half of each pair is the panel's own
+// ground and label colour, and the checked half is the transmit-amber the rest
+// of the app already uses to mark a more aggressive setting. Applied through
+// ThemeManager::applyStyleSheet() so the {{...}} resolve.
 const QString kFlipStyle = QStringLiteral(
     "QPushButton {"
-    "  background: #16202c; border: 1px solid #2a3a4d; border-radius: 3px;"
-    "  color: #8aa0b4; font-size: 10px; font-weight: bold; padding: 3px 6px;"
+    "  background: {{color.background.1}};"
+    "  border: 1px solid {{color.border.strong}}; border-radius: 3px;"
+    "  color: {{color.text.secondary}};"
+    "  font-size: 10px; font-weight: bold; padding: 3px 6px;"
     "}"
-    "QPushButton:hover { background: #1e2c3a; color: #c8d8e8; }"
+    "QPushButton:hover {"
+    "  background: {{color.background.2}}; color: {{color.text.primary}};"
+    "}"
     "QPushButton:checked {"
-    "  background: #3a2a0e; color: #f2c14e; border: 1px solid #f2c14e;"
-    "}"
-    "QPushButton:checked:hover { background: #4a3a1e; }");
+    "  background: {{color.background.tx}}; color: {{color.meter.gainReduction}};"
+    "  border: 1px solid {{color.meter.gainReduction}};"
+    "}");
 
 // Lookahead dropdown values in ms.  0 disables the delay line; 1 and
 // 1.5 ms match Ableton's preset options; 3 / 5 added for users who
@@ -159,7 +167,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
             auto* b = new QPushButton(text);
             b->setObjectName(QStringLiteral("gateView") + text);
             b->setCheckable(true);
-            b->setStyleSheet(kFlipStyle);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(b, kFlipStyle);
             b->setFixedHeight(22);
             group->addButton(b, page);
             toolbar->addWidget(b);
@@ -191,7 +199,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
             auto* b = new QPushButton(text);
             b->setObjectName(QStringLiteral("gateMode") + text);
             b->setCheckable(true);
-            b->setStyleSheet(kFlipStyle);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(b, kFlipStyle);
             b->setFixedHeight(22);
             group->addButton(b);
             toolbar->addWidget(b);
