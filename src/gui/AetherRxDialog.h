@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ClientEqApplet.h"   // ClientEqApplet::Path
 #include "PersistentDialog.h"
 
 class QButtonGroup;
@@ -64,6 +65,12 @@ public:
 signals:
     // A receive filter width button was pressed on the EQ page.
     void rxFilterWidthRequested(int widthHz);
+
+    // A filter edge was dragged on the EQ canvas. Same signal the docked applet
+    // and the floating editor raise, so MainWindow applies it the same way:
+    // audio-domain Hz, converted to slice offsets for the mode.
+    void cutoffsDragRequested(ClientEqApplet::Path path,
+                              int audioLowHz, int audioHighHz);
 
     // NR2 parameter changes (forwarded from m_widget)
     void nr2GainMaxChanged(float value);

@@ -356,7 +356,12 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     // width row and the param row are fixed height, and a spacer holding
     // height back from the one thing that can use it was only ever a way of
     // making the graph shorter.
+    //
+    // 4 px of air top and bottom, so the trace and the band dots are not drawn
+    // hard against the icon row above or the band plan below.
+    eqColumn->addSpacing(4);
     eqColumn->addWidget(m_canvas, 1);
+    eqColumn->addSpacing(4);
     // Forward cutoff-line drag events as a path-tagged signal so MainWindow
     // can dispatch to TransmitModel (TX) or the active SliceModel (RX).
     connect(m_canvas, &ClientEqEditorCanvas::cutoffsDragged,

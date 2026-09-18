@@ -219,6 +219,8 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     // for the mode the slice is in.
     connect(m_eq, &StripEqPanel::rxFilterWidthRequested,
             this, &AetherRxDialog::rxFilterWidthRequested);
+    connect(m_eq, &StripEqPanel::cutoffsDragRequested,
+            this, &AetherRxDialog::cutoffsDragRequested);
     addStage(Eq, QStringLiteral("EQ"), buildStagePage(m_eq));
 
     m_comp = new StripCompPanel(audio, this);

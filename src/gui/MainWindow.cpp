@@ -3314,6 +3314,10 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
         // The EQ page's width buttons: turn a labelled width into the passband
         // that width means in this mode, through the same rule the VFO's filter
         // grid uses, and send it to the slice.
+        // Dragging an edge on the EQ canvas retunes the receive filter, through
+        // the same handler the docked applet and the floating editor use.
+        connect(m_rxDialog, &AetherRxDialog::cutoffsDragRequested,
+                this, &MainWindow::onEqCutoffsDragRequested);
         connect(m_rxDialog, &AetherRxDialog::rxFilterWidthRequested,
                 this, [this](int widthHz) {
             auto* s = activeSlice();
