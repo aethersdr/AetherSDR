@@ -240,9 +240,8 @@ static double binPower(const std::vector<std::complex<float>>& iq, double hz,
 // only be larger than the real one". That is scalar thinking about a COMPLEX
 // quantity. The correlation error e is a complex vector added to the true
 // image I, and |I + e| < |I| whenever e opposes I -- which needs only
-// |e| < 2|I| and then happens for cos(theta) < -|e|/(2|I|), i.e. for 10% to
-// 47% of error phases across that range. The reported ratio then EXCEEDS the
-// true one.
+// 0 < |e| < 2|I| and then happens for cos(theta) < -|e|/(2|I|).
+// The reported ratio then EXCEEDS the true one.
 //
 // @jensenpat demonstrated it numerically on #5810 rather than arguing it: at
 // 48 kHz, a 1 kHz tone over 34992 float samples with a tiny imaginary
@@ -310,20 +309,12 @@ static constexpr double kSidebandEps = 1e-30;
 // ── What the TXA build is entitled to assert about a subject it cannot
 //    measure ─────────────────────────────────────────────────────────────
 //
-// WHAT THIS CAN AND CANNOT CATCH, stated plainly because the 100.0 it replaces
-// did not. There is NO threshold below the instrument's floor that the floor
-// cannot satisfy on its own: with the floor as low as 158 dB, any gate under
-// 158 dB can be met by the arithmetic alone, whatever the modulator does. So
-// this constant is not a measurement and cannot become one. Its power is
-// one-sided:
-//
-//   IT GOES RED only if a change brings TXA's image back above the floor and
-//   past this line -- a regression to worse than 140 dB, which is 24 dB worse
-//   than the best point the chain TXA replaced reaches anywhere in this file.
-//
-//   IT CAN NEVER GO GREEN "BECAUSE TXA IS GOOD". It is green today because the
-//   image is unresolvable, and it would be green in exactly the same way if
-//   TXA's true suppression were 150 dB or 500 dB.
+// This is a regression threshold on the computed ratio, not a measurement
+// of true suppression or an uncertainty bound. It can detect an image that
+// rises far enough above numerical error to reduce the ratio below 140 dB.
+// Passing does not prove that the image is unresolved: a resolvable 150 dB
+// ratio passes too, below the 158 dB diagnostic floor. Correlation error can
+// either increase or decrease the ratio, as documented above.
 //
 // WHERE 140 COMES FROM, and it is not from any TXA run -- a bound copied off a
 // run is a test that agrees with itself:
@@ -367,15 +358,10 @@ static constexpr double kFloorLimitedSuppDb = 140.0;
 // 150 Hz and never could, and a floor the incumbent cannot meet would be a
 // failing test rather than a record of why it was replaced.
 //
-// IN THE TXA BUILD BOTH OF THESE ARE FLOOR-LIMITED AND NEITHER IS A PROPERTY
-// OF THE MODULATOR. They were 100.0, and the rationale above reads as a
-// statement about TXA. The policy in it is still right; the thing the number
-// is compared against is the instrument, and nothing said so. The lowest
-// figure anywhere in this build is 167.31 dB (the sweep's USB row at 300 Hz)
-// and the floor is 158-191 dB, so a gate anywhere under the floor passes
-// whether TXA's true suppression is 150 dB or 500 dB -- see
-// kFloorLimitedSuppDb, which is what these now carry and what states the
-// one-sided guarantee that leaves.
+// Both TXA assertions use the same computed-ratio regression threshold.
+// The reported ratios can exceed the empirical numerical floor; that does
+// not make them bounds on true suppression. See kFloorLimitedSuppDb for the
+// distinction between the 140 dB gate and the 158 dB diagnostic marker.
 #if AETHER_HL2_TX_TXA
 static constexpr double kMinSuppDb = kFloorLimitedSuppDb;
 static constexpr double kMinLowEdgeSuppDb = kFloorLimitedSuppDb;
@@ -796,9 +782,9 @@ int main(int argc, char** argv)
     //
     // The floor differs per build on purpose -- see kMinLowEdgeSuppDb. In the
     // phasing build this is #5741's characterisation bound and records why the
-    // chain was replaced; in the TXA build it is the same floor-limited bound
-    // the mid-band rows are held to (kFloorLimitedSuppDb), and what it asserts
-    // is that the image is unresolvable, not that the suppression is a number.
+    // chain was replaced; in the TXA build it is the same computed-ratio
+    // regression threshold as the mid-band rows (kFloorLimitedSuppDb).
+    // Passing does not establish true suppression or an unresolved image.
     //
     // THAT SENTENCE USED TO SAY "the same 100 dB ... which sits above the
     // phasing modulator's BEST measured point anywhere", AND IT WAS NOT TRUE
@@ -1155,10 +1141,9 @@ int main(int argc, char** argv)
     // exactly where an operator who widens the low edge all the way would
     // live.
     //
-    // Everywhere else the CHARACTERISATION lives in the phasing build, and
-    // what the TXA build does here is assert that the image is unresolvable.
-    // That is a different claim and it is deliberately not dressed up as a
-    // number.
+    // Elsewhere the TXA sweep checks the computed ratio against a regression
+    // threshold. floorMark() separately flags ratios at the empirical
+    // numerical floor; neither the gate nor the marker gives an error bound.
     //
     // NOT MEASURED HERE: nothing in this block touches a radio. No transmitter
     // is keyed, no simulator runs, no network socket opens. These are the
@@ -1231,9 +1216,9 @@ int main(int argc, char** argv)
         // nothing about the modulator has changed. Caught by aethersdr-agent on
         // #5741, who ran the eSSB case and got 11.86 dB -- under the 15.0 a
         // single hoisted floor would have asserted.
-        // sweepFloorDb and settledFloorDb are PHASING characterisation
-        // bounds. See settledFloor() below for what the TXA build asserts
-        // instead, and why it cannot assert these.
+        // These values originate in the phasing characterisation. Both builds
+        // retain sweepFloorDb, including the resolvable low-edge wide rows.
+        // settledFloor() selects the stronger TXA regression threshold.
         struct Band { const char* name; WdspChannel::Mode mode;
                       double lo; double hi; bool wireUpper;
                       double sweepFloorDb; double settledFloorDb; };
@@ -1283,14 +1268,10 @@ int main(int argc, char** argv)
         // statement about a 255-tap Blackman design's sidelobes, and the
         // mutation table above is what earns it.
         //
-        // In the TXA build the settled band is past the instrument's numerical
-        // floor (kInstrumentFloorDb), so there is no suppression there to
-        // bound. Left at 70 dB it would be satisfied by double arithmetic
-        // alone, with between 97 and 262 dB of slack depending on the row --
-        // a green light that cannot go red, which is worse than no assertion
-        // because it reads as one. What IS assertable there is that the image
-        // is UNRESOLVABLE, and that is what kMinSuppDb carries in this build
-        // (kFloorLimitedSuppDb).
+        // TXA uses the stronger computed-ratio regression threshold instead
+        // of the phasing bound. It detects regressions that the old threshold
+        // missed, but does not assert that the image is unresolved or provide
+        // a lower bound on true suppression; see kFloorLimitedSuppDb.
         //
         // Written as a runtime ternary rather than an #if so both arms keep
         // compiling in both builds, the same reason AETHER_HL2_TX_TXA is
