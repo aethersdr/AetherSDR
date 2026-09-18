@@ -9,7 +9,9 @@ asks (`sort:capability`). Every issue number is a markdown link to
 - ✅ clean — small surface, bridge proves it, no TX gate → ideal for today
 - ➖ caveat — provable but has a wrinkle (TX-gated, restart cycle, platform-specific, multislice setup)
 - ❌ no — not realistically closeable today (needs hardware, audio judgment, big design)
-- ⏳ in-flight — `claude-active` or an active non-AetherClaude assignment; don't double-book
+- ⏳ in-flight — an active non-AetherClaude assignee; don't double-book.
+  `claude-active` is **not** this: it marks the automated triage bot, triage
+  isn't exclusive, and it blocks nobody — never mark a row ⏳ for that label alone
 
 ## Layout A — priority / report (default)
 
@@ -21,7 +23,7 @@ comments descending within each tier:
 ### 🔴 High
 | # | Cmts | Opener | What | Today? |
 |---|---|---|---|---|
-| [#3714](…/issues/3714) | 5 | mkoechel | Crash adding 2nd panadapter | ⚠️ crash — repro fast, fix may be deeper |
+| [#3714](…/issues/3714) | 5 | mkoechel | Crash adding 2nd panadapter | ➖ repro fast via `pan add`, fix may be deeper |
 
 ### 🟠 Medium
 …

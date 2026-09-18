@@ -123,12 +123,21 @@ Exclude fixes already merged or actively covered by an open PR; a closed,
 unmerged attempt does not resolve an issue. Flag ambiguous coverage. Then
 re-check live state for the survivors and:
 
-- **Drop** anything now `CLOSED` (the backlog moves under you — verify, don't assume).
-- **Flag** `claude-active` (in progress), `awaiting-response` / `insufficient-info`
-  (blocked on the reporter — not "today" material), and active non-AetherClaude
-  `assignees`. AetherClaude-only assignment is
-  persistent triage engagement, not an exclusive implementation claim (see
-  `AGENTS.md`).
+- **Drop** anything now `CLOSED` (the backlog moves under you — verify, don't
+  assume). The helper hardcodes `--state open`, so its `STATE` column is always
+  `OPEN` and can never carry this signal — the re-check has to be a live query.
+- **Flag** `awaiting-response` / `insufficient-info` (blocked on the reporter —
+  not "today" material), and active non-AetherClaude `assignees`. That assignee
+  list is the only in-flight signal: `AGENTS.md` makes it the visible claim
+  mechanism, and AetherClaude-only assignment is persistent triage engagement,
+  not an exclusive implementation claim.
+- **Don't** treat `claude-active` as in-flight. It means the automated triage
+  bot is working the issue, and triage is not exclusive — two workers can triage
+  the same issue at once. It blocks nothing, so it must not suppress a
+  candidate; note it if useful and rank the issue on its merits.
+- **Note** `aetherclaude-eligible` where present. `AGENTS.md` names it the gate
+  on *AetherClaude's own* implementation runs, not on a human contributor's
+  `/fb` work, so it informs the row rather than filtering it.
 - **Note** issues the operator opened themselves (self-filed, still valid).
 
 Resolve `<operator>` with `gh api user --jq .login`, respecting any explicit

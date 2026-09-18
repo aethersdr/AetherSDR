@@ -16,7 +16,8 @@ facing condensation.
 
 ## Shared issue workflows
 
-Repository skills live in `.claude/skills/`:
+Two shared issue workflows live in `.claude/skills/`, alongside the
+maintainer-facing review skills:
 
 - [`/papercuts`](../.claude/skills/papercuts/SKILL.md) ranks open issues by
   what can be fixed and demonstrated with the agent automation bridge. It is
@@ -26,7 +27,11 @@ Repository skills live in `.claude/skills/`:
   `/fb ISSUE_NUMBER`.
 
 Use them from Claude Code in this checkout. Other agents can read the linked
-`SKILL.md` files and their bundled resources directly. GitHub access uses the
+`SKILL.md` files and their bundled resources directly. Each of the two also
+carries an `agents/openai.yaml` manifest, read by the OpenAI Codex CLI to
+expose the skill as a named agent; Claude Code ignores it and reads `SKILL.md`.
+The maintainer-facing `pr-review` and `pr-land` skills have no manifest — they
+are not exposed that way. GitHub access uses the
 contributor's existing `gh` authentication; the papercuts helper also requires
 Bash and `jq` (Git Bash on Windows). Build and live-radio prerequisites apply
 when a chosen fix needs them; neither skill grants permission to transmit.

@@ -33,6 +33,8 @@ default_since() {
 
 SINCE=""
 NUMS=()
+NUMS_N=0   # tracked separately: bash < 4.4 (macOS /bin/bash) treats
+           # ${#NUMS[@]} on an empty array as unbound under `set -u`.
 while [ $# -gt 0 ]; do
   case "$1" in
     --since)
@@ -40,15 +42,15 @@ while [ $# -gt 0 ]; do
       SINCE="$2"; shift 2 ;;
     --since=*) SINCE="${1#*=}"; shift ;;
     *[!0-9]*|'') echo "invalid argument: $1" >&2; exit 2 ;;
-    *) NUMS+=("$1"); shift ;;
+    *) NUMS+=("$1"); NUMS_N=$((NUMS_N + 1)); shift ;;
   esac
 done
-[ -z "$SINCE" ] && [ ${#NUMS[@]} -eq 0 ] && SINCE="$(default_since)"
+[ -z "$SINCE" ] && [ "$NUMS_N" -eq 0 ] && SINCE="$(default_since)"
 
 if [ -n "$SINCE" ] && ! [[ "$SINCE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
   echo "--since requires YYYY-MM-DD" >&2; exit 2
 fi
-if [ -n "$SINCE" ] && [ ${#NUMS[@]} -gt 0 ]; then
+if [ -n "$SINCE" ] && [ "$NUMS_N" -gt 0 ]; then
   echo "use --since or issue numbers, not both" >&2; exit 2
 fi
 
@@ -68,7 +70,7 @@ if [ "$(jq length "$RAW")" -ge 600 ]; then
 fi
 
 # Build the filter: by explicit numbers if given, else by createdAt window.
-if [ ${#NUMS[@]} -gt 0 ]; then
+if [ "$NUMS_N" -gt 0 ]; then
   FILTER='[.[] | select(.number as $n | $nums | index($n))]'
   NUMS_JSON="$(printf '%s\n' "${NUMS[@]}" | jq -s '.')"
   jq --argjson nums "$NUMS_JSON" "$FILTER" "$RAW" > "$RAW.tmp" && mv "$RAW.tmp" "$RAW"
@@ -77,7 +79,7 @@ else
     > "$RAW.tmp" && mv "$RAW.tmp" "$RAW"
 fi
 
-if [ ${#NUMS[@]} -gt 0 ]; then
+if [ "$NUMS_N" -gt 0 ]; then
   MISSING="$(jq -c --argjson nums "$NUMS_JSON" '$nums - [.[].number]' "$RAW")"
   if [ "$MISSING" != '[]' ]; then
     echo "warning: requested issues not returned: $MISSING; verify live state separately" >&2
@@ -93,11 +95,18 @@ jq -r '
     (([.reactionGroups[]?|select(.content=="THUMBS_UP")|.users.totalCount]|add)//0|tostring),
     ((.comments|length)|tostring),
     .author.login,
-    ([.labels[].name] | map(select(. as $l | ["claude-active","awaiting-response","insufficient-info","no-claude"] | index($l))) | join(",")),
+    ([.labels[].name] | map(select(. as $l | ["claude-active","awaiting-response","insufficient-info","no-claude","aetherclaude-eligible"] | index($l))) | join(",")),
     (.title[0:60])
   ] | @tsv
 ' "$RAW" | tee "$TSV"
 
+COUNT="$(jq length "$RAW")"
+# A shape-valid but non-existent date (2026-02-30, 2026-13-01) is accepted by
+# the search API and returns nothing, which reads like an empty backlog.
+if [ "$COUNT" -eq 0 ] && [ -n "$SINCE" ]; then
+  echo "warning: no open issues created on/after $SINCE; check the date is real" >&2
+fi
+
 echo "issues.json: $RAW"   >&2
 echo "signals.tsv: $TSV"   >&2
-echo "count: $(jq length "$RAW")" >&2
+echo "count: $COUNT" >&2

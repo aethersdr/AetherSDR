@@ -53,5 +53,10 @@ third_party/portaudio-*.tar.gz
 # IS tracked — those are shared project skills — so ignore just this file.
 .claude/launch.json
 
+# Contributor worktrees created by /fb (.claude/skills/fb/SKILL.md step 5),
+# each with its own build/ inside. Per-developer and per-issue, so they must
+# never be tracked or show up as untracked noise in the parent checkout.
+.worktrees/
+
 # macOS Finder metadata
 .DS_Store
