@@ -6609,8 +6609,8 @@ void AudioEngine::loadClientGateSettings()
         s.value("ClientGateTxReturnDb", "2.0").toFloat());
     m_clientGateTx->setRatio(
         s.value("ClientGateTxRatio", "2.0").toFloat());
-    m_clientGateTx->setAttackMs(
-        s.value("ClientGateTxAttackMs", "0.5").toFloat());
+    // Fixed, not persisted — see ClientGate::kAttackMs.
+    m_clientGateTx->setAttackMs(ClientGate::kAttackMs);
     m_clientGateTx->setHoldMs(
         s.value("ClientGateTxHoldMs", "20.0").toFloat());
     m_clientGateTx->setReleaseMs(
@@ -6635,8 +6635,6 @@ void AudioEngine::saveClientGateSettings() const
         QString::number(m_clientGateTx->returnDb()));
     s.setValue("ClientGateTxRatio",
         QString::number(m_clientGateTx->ratio()));
-    s.setValue("ClientGateTxAttackMs",
-        QString::number(m_clientGateTx->attackMs()));
     s.setValue("ClientGateTxHoldMs",
         QString::number(m_clientGateTx->holdMs()));
     s.setValue("ClientGateTxReleaseMs",
@@ -6663,8 +6661,8 @@ void AudioEngine::loadClientGateRxSettings()
         s.value("ClientGateRxReturnDb", "2.0").toFloat());
     m_clientGateRx->setRatio(
         s.value("ClientGateRxRatio", "2.0").toFloat());
-    m_clientGateRx->setAttackMs(
-        s.value("ClientGateRxAttackMs", "0.5").toFloat());
+    // Fixed, not persisted — see ClientGate::kAttackMs.
+    m_clientGateRx->setAttackMs(ClientGate::kAttackMs);
     m_clientGateRx->setHoldMs(
         s.value("ClientGateRxHoldMs", "20.0").toFloat());
     m_clientGateRx->setReleaseMs(
@@ -6689,8 +6687,6 @@ void AudioEngine::saveClientGateRxSettings() const
         QString::number(m_clientGateRx->returnDb()));
     s.setValue("ClientGateRxRatio",
         QString::number(m_clientGateRx->ratio()));
-    s.setValue("ClientGateRxAttackMs",
-        QString::number(m_clientGateRx->attackMs()));
     s.setValue("ClientGateRxHoldMs",
         QString::number(m_clientGateRx->holdMs()));
     s.setValue("ClientGateRxReleaseMs",

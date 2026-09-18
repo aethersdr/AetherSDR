@@ -278,21 +278,6 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     };
 
     // Attack: 0.1..100 ms exponential.
-    m_attack = makeBottomKnob("Attack");
-    m_attack->setRange(0.1f, 100.0f);
-    m_attack->setDefault(0.5f);
-    m_attack->setValueFromNorm([](float n) {
-        return 0.1f * std::pow(1000.0f, n);           // 0.1 → 100
-    });
-    m_attack->setNormFromValue([](float v) {
-        return std::log(std::max(0.1f, v) / 0.1f) / std::log(1000.0f);
-    });
-    m_attack->setLabelFormat([](float v) {
-        return QString::number(v, 'f', v < 10.0f ? 2 : 1) + " ms";
-    });
-    connect(m_attack, &ClientCompKnob::valueChanged,
-            this, &StripGatePanel::applyAttack);
-    bottom->addWidget(m_attack, 0, Qt::AlignHCenter);
 
     // Hold: 0..500 ms linear.
     m_hold = makeBottomKnob("Hold");
@@ -470,7 +455,6 @@ void StripGatePanel::syncControlsFromEngine()
         QSignalBlocker b(m_ratio);      m_ratio->setValue(g->ratio());
     }
     {
-        QSignalBlocker b(m_attack);     m_attack->setValue(g->attackMs());
     }
     {
         QSignalBlocker b(m_hold);       m_hold->setValue(g->holdMs());
@@ -527,12 +511,6 @@ void StripGatePanel::applyRatio(float ratio)
     saveGateSettings();
 }
 
-void StripGatePanel::applyAttack(float ms)
-{
-    if (m_restoring || !m_audio) return;
-    gate()->setAttackMs(ms);
-    saveGateSettings();
-}
 
 void StripGatePanel::applyHold(float ms)
 {

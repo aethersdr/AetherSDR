@@ -49,6 +49,12 @@ public:
     float thresholdDb() const noexcept;
     void  setRatio(float ratio) noexcept;          // 1.0 (off) .. 10.0 (hard gate)
     float ratio() const noexcept;
+    // Fixed at kAttackMs — no surface offers it any more. A gate wants to
+    // open fast: slow is a defect you hear as chewed word onsets, not a
+    // voicing anyone reaches for, and Peek (lookahead) is the control that
+    // actually keeps an onset intact. The setter stays for the per-slice
+    // mirror in RxClientEffects, which copies whatever the master holds.
+    static constexpr float kAttackMs = 1.0f;
     void  setAttackMs(float ms) noexcept;          // 0.1 .. 100 ms
     float attackMs() const noexcept;
     void  setReleaseMs(float ms) noexcept;         // 5 .. 2000 ms
@@ -89,7 +95,7 @@ private:
         std::atomic<uint8_t>  mode{static_cast<uint8_t>(Mode::Expander)};
         std::atomic<float>    thresholdDb{-40.0f};
         std::atomic<float>    ratio{2.0f};
-        std::atomic<float>    attackMs{0.5f};
+        std::atomic<float>    attackMs{kAttackMs};
         std::atomic<float>    releaseMs{100.0f};
         std::atomic<float>    holdMs{20.0f};
         std::atomic<float>    floorDb{-15.0f};

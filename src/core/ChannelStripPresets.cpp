@@ -428,7 +428,6 @@ QJsonObject ChannelStripPresets::capturePresetJson() const
         o["mode"]         = gateModeName(g->mode());
         o["thresholdDb"]  = g->thresholdDb();
         o["ratio"]        = g->ratio();
-        o["attackMs"]     = g->attackMs();
         o["releaseMs"]    = g->releaseMs();
         o["holdMs"]       = g->holdMs();
         o["floorDb"]      = g->floorDb();
@@ -588,7 +587,6 @@ void ChannelStripPresets::applyPresetJson(const QJsonObject& preset)
         g->setMode(gateModeFromName(jstr(o, "mode", gateModeName(g->mode()))));
         g->setThresholdDb(jnum(o, "thresholdDb", g->thresholdDb()));
         g->setRatio(jnum(o, "ratio", g->ratio()));
-        g->setAttackMs(jnum(o, "attackMs", g->attackMs()));
         g->setReleaseMs(jnum(o, "releaseMs", g->releaseMs()));
         g->setHoldMs(jnum(o, "holdMs", g->holdMs()));
         g->setFloorDb(jnum(o, "floorDb", g->floorDb()));
@@ -770,7 +768,6 @@ QJsonObject ChannelStripPresets::captureRxJson(AudioEngine* engine)
         o["mode"]         = gateModeName(g->mode());
         o["thresholdDb"]  = g->thresholdDb();
         o["ratio"]        = g->ratio();
-        o["attackMs"]     = g->attackMs();
         o["releaseMs"]    = g->releaseMs();
         o["holdMs"]       = g->holdMs();
         o["floorDb"]      = g->floorDb();
@@ -866,7 +863,6 @@ void ChannelStripPresets::applyRxJson(AudioEngine* engine, const QJsonObject& rx
         g->setMode(gateModeFromName(jstr(o, "mode", gateModeName(g->mode()))));
         g->setThresholdDb(jnum(o, "thresholdDb", g->thresholdDb()));
         g->setRatio(jnum(o, "ratio", g->ratio()));
-        g->setAttackMs(jnum(o, "attackMs", g->attackMs()));
         g->setReleaseMs(jnum(o, "releaseMs", g->releaseMs()));
         g->setHoldMs(jnum(o, "holdMs", g->holdMs()));
         g->setFloorDb(jnum(o, "floorDb", g->floorDb()));

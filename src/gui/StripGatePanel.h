@@ -72,7 +72,6 @@ private:
     void applyThreshold(float db);
     void applyReturn(float db);
     void applyRatio(float ratio);
-    void applyAttack(float ms);
     void applyHold(float ms);
     void applyRelease(float ms);
     void applyFloor(float db);
@@ -98,7 +97,6 @@ private:
     ClientCompKnob*       m_threshold{nullptr};
     ClientCompKnob*       m_returnKnob{nullptr};
     ClientCompKnob*       m_ratio{nullptr};
-    ClientCompKnob*       m_attack{nullptr};
     ClientCompKnob*       m_hold{nullptr};
     ClientCompKnob*       m_release{nullptr};
     ClientCompKnob*       m_floor{nullptr};
