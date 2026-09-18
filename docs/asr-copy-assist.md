@@ -173,7 +173,8 @@ support). Copy Assist notes which step it was in before it starts one, so the
   it as *(unavailable)*. If a second GPU does the same, both stay out.
 - **It closed while starting the engine, or while loading on the CPU** → local
   Copy Assist stays off for that session and says so; a **Remote server** tier
-  still works.
+  still works. This includes a load that was aimed at a GPU, failed there in a
+  way the app could catch, and closed during the CPU retry that follows.
 
 Either way the **⚙ settings dialog** shows the reason under **Compute**, with a
 **Try again next launch** button — use it after a driver update, or if the app

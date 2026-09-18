@@ -16,10 +16,24 @@ namespace AetherSDR {
 // library calling it. Unset = no flush, which is what the tests want.
 using AsrLogFlushHook = void (*)();
 
+// Called on the ASR worker thread when a model load that was aimed at a GPU is
+// about to run on CPU instead — inside the same load() call, where no queued
+// signal could arrive first. The application uses it to re-aim the persisted
+// attempt marker (asr/AsrCrashMarker.h): a process that dies in the CPU pass
+// must not be recorded as a GPU fault. Installed for the same reason as the
+// flush: aetherasr cannot reach the settings store. Unset = no-op.
+using AsrCpuFallbackHook = void (*)();
+
 namespace detail {
 inline std::atomic<AsrLogFlushHook>& asrLogFlushHookSlot()
 {
     static std::atomic<AsrLogFlushHook> hook{nullptr};
+    return hook;
+}
+
+inline std::atomic<AsrCpuFallbackHook>& asrCpuFallbackHookSlot()
+{
+    static std::atomic<AsrCpuFallbackHook> hook{nullptr};
     return hook;
 }
 
@@ -38,6 +52,18 @@ inline void asrSetLogFlushHook(AsrLogFlushHook hook)
 inline void asrFlushLog()
 {
     if (const AsrLogFlushHook hook = detail::asrLogFlushHookSlot().load()) {
+        hook();
+    }
+}
+
+inline void asrSetCpuFallbackHook(AsrCpuFallbackHook hook)
+{
+    detail::asrCpuFallbackHookSlot().store(hook);
+}
+
+inline void asrNotifyCpuFallback()
+{
+    if (const AsrCpuFallbackHook hook = detail::asrCpuFallbackHookSlot().load()) {
         hook();
     }
 }
@@ -95,6 +121,21 @@ public:
             << " elapsed_ms=" << m_timer.elapsed();
         asrFlushLog();
         detail::asrOpenStageCount().fetch_sub(1);
+    }
+
+    // A flushed record INSIDE the stage, for a step that changes what a death
+    // from here on means (the load's CPU retry). `event` is a short stable
+    // token; `detail` a key=value tail like the constructor's.
+    void note(const char* event, const QString& detail = QString())
+    {
+        {
+            QDebug out = message(m_where);
+            out.noquote().nospace() << "phase=" << m_phase << " event=" << event;
+            if (!detail.isEmpty()) {
+                out << ' ' << detail;
+            }
+        } // emitted here, before the flush
+        asrFlushLog();
     }
 
     // Record that the stage did not succeed. `why` is a short stable token (no

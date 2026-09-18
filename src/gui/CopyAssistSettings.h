@@ -6,6 +6,8 @@
 #include <QStringList>
 #include <QVariant>
 
+#include <functional>
+
 // Copy Assist owns its configuration as one self-contained object stored under a
 // single AppSettings root key ("CopyAssist"), per Constitution Principle V —
 // never scattered as loose flat "Asr*" keys across the shared namespace. These
@@ -63,6 +65,10 @@ inline QJsonObject foldLegacyKeys(const QMap<QString, QString>& present, QJsonOb
 // "AsrLanguage"). Reads/writes go through AppSettings; setValue() persists.
 QVariant value(const QString& field, const QVariant& defaultValue = {});
 void setValue(const QString& field, const QVariant& val);
+// Replace a field with update(current) as ONE step: nothing else written through
+// this namespace lands between the read and the write, on any thread. `update`
+// runs under the lock — keep it short, and never call back into this namespace.
+void updateValue(const QString& field, const std::function<QString(const QString&)>& update);
 
 } // namespace CopyAssistSettings
 } // namespace AetherSDR

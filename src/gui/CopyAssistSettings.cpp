@@ -5,6 +5,8 @@
 #include <QDebug>
 #include <QEventLoop>
 #include <QJsonDocument>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QTimer>
 
 #ifdef HAVE_KEYCHAIN
@@ -15,6 +17,17 @@ namespace AetherSDR {
 namespace CopyAssistSettings {
 
 namespace {
+
+// Serializes the whole-object read-modify-write below. AppSettings is
+// thread-safe per call, but a field write here is read + insert + write, and the
+// ASR worker thread now rewrites the load marker (updateValue, #5190) while the
+// GUI thread may be writing any other field. Never held across the api-key
+// paths, which spin an event loop.
+QMutex& objectMutex()
+{
+    static QMutex m;
+    return m;
+}
 
 QJsonObject readObject()
 {
@@ -43,8 +56,10 @@ bool& apiKeyLoaded()
     return loaded;
 }
 
+// Takes objectMutex itself: never call it with the lock held.
 void stripApiKeyFromDoc()
 {
+    const QMutexLocker lock(&objectMutex());
     auto& s = AppSettings::instance();
     QJsonObject obj = readObject();
     if (!obj.contains(kApiKeyField)) {
@@ -208,11 +223,15 @@ void ensureMigrated()
 
 QVariant value(const QString& field, const QVariant& defaultValue)
 {
-    ensureMigrated();
+    {
+        const QMutexLocker lock(&objectMutex());
+        ensureMigrated();
+    }
     if (field == kApiKeyField) {
         const QString key = loadApiKey();
         return key.isEmpty() ? defaultValue : QVariant(key);
     }
+    const QMutexLocker lock(&objectMutex());
     const QJsonObject obj = readObject();
     const QJsonValue v = obj.value(field);
     return v.isUndefined() ? defaultValue : QVariant(v.toString());
@@ -220,13 +239,27 @@ QVariant value(const QString& field, const QVariant& defaultValue)
 
 void setValue(const QString& field, const QVariant& val)
 {
-    ensureMigrated();
     if (field == kApiKeyField) {
+        {
+            const QMutexLocker lock(&objectMutex());
+            ensureMigrated();
+        }
         storeApiKey(val.toString());
         return;
     }
+    const QString text = val.toString();
+    updateValue(field, [&text](const QString&) { return text; });
+}
+
+void updateValue(const QString& field, const std::function<QString(const QString&)>& update)
+{
+    if (field == kApiKeyField || !update) {
+        return; // the api key lives in the keychain, not in this object
+    }
+    const QMutexLocker lock(&objectMutex());
+    ensureMigrated();
     QJsonObject obj = readObject();
-    obj.insert(field, val.toString());
+    obj.insert(field, update(obj.value(field).toString()));
     auto& s = AppSettings::instance();
     s.setValue(rootKey(), QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
     s.save();

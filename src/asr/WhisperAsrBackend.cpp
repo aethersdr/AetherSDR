@@ -177,6 +177,13 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
                                         : QStringLiteral("cpu"))
                             .arg(m_threads));
 
+    // Aimed at a GPU but not entering it (the device is latched, or no GPU
+    // backend answered): this load runs on CPU, and the attempt marker the
+    // controller armed may still name the GPU (#5190).
+    if (m_gpuDevice >= 0 && !useGpu) {
+        asrNotifyCpuFallback();
+    }
+
     const QByteArray pathUtf8 = modelPath.toUtf8();
     QString failure;
     m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
@@ -203,6 +210,13 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
                                 << "- retrying on CPU";
         if (modelPlausible) {
             asrMarkGpuDeviceFailed(m_gpuDevice);
+            // After the latch, before the retry: from here a death is a CPU
+            // death, and the persisted marker must say so, or the next launch
+            // retires the GPU and walks straight back into this same CPU load
+            // (#5190). Only when the device was latched: an unlatched GPU may
+            // be entered by a load already queued behind this one, and its
+            // marker must keep naming that GPU.
+            asrNotifyCpuFallback();
         } else {
             qCWarning(lcAsrWhisper)
                 << "model file is empty or unreadable - not latching device"
@@ -215,6 +229,9 @@ bool WhisperAsrBackend::load(const QString& modelPath, QString* error)
         // null would otherwise be reported with the GPU's Vulkan exception
         // text — blaming the driver for, say, a truncated model file.
         failure.clear();
+        // The log says so too, flushed, whatever the latch decided above: the
+        // begin record named the GPU, and a death from here on is on the CPU.
+        stage.note("cpu_retry", QStringLiteral("device=cpu"));
         m_ctx = initWhisperContext(pathUtf8, cparams, &failure);
     }
     if (m_ctx == nullptr) {

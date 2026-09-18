@@ -488,6 +488,13 @@ CopyAssistController::CopyAssistController(AudioEngine* audio, CopyAssistPanel* 
     // LogManager is a process-lifetime singleton, and its flush returns at once
     // when the writer has already stopped.
     asrSetLogFlushHook([] { LogManager::instance().flushLog(); });
+    // Runs on the ASR worker thread, inside load(), just before a load that was
+    // aimed at a GPU runs on CPU. Touches the persisted marker only — never a
+    // controller member. With nothing armed the transform returns empty, so
+    // no marker is invented.
+    asrSetCpuFallbackHook([] {
+        CopyAssistSettings::updateValue(QStringLiteral("AsrInFlight"), asrMarkerJsonOnCpuFallback);
+    });
     // whisper/ggml warnings and errors otherwise reach stderr only, which no
     // support bundle carries.
     asrInstallLogRouting();
@@ -617,14 +624,25 @@ void CopyAssistController::armFaultMarker(const char* stage)
             }
         }
     }
-    // setValue() commits before returning (AppSettings::save() is a sqlite
+    // updateValue() commits before returning (AppSettings::save() is a sqlite
     // transaction on this thread), which is what lets the marker outlive a
     // signal that kills the process a moment later. The store runs WAL with
     // synchronous=NORMAL, so this is a guarantee against the PROCESS dying, not
     // against power loss.
-    CopyAssistSettings::setValue(isLoad ? QStringLiteral("AsrInFlight")
-                                        : QStringLiteral("AsrInFlightDiscovery"),
-                                 asrAttemptToJson(a));
+    //
+    // The latch is read INSIDE the update, under the same lock the worker's
+    // CPU-fallback hook takes: a load queued behind one whose GPU attempt just
+    // failed will run on CPU, and re-arming with the GPU's index after the hook
+    // already wrote -1 would put the stale device back (#5190 review).
+    const int device = a.device;
+    CopyAssistSettings::updateValue(
+        isLoad ? QStringLiteral("AsrInFlight") : QStringLiteral("AsrInFlightDiscovery"),
+        [&a, device](const QString&) {
+            if (device >= 0 && asrGpuDeviceFailed(device)) {
+                return asrAttemptToJson(asrAttemptOnCpuFallback(a));
+            }
+            return asrAttemptToJson(a);
+        });
 }
 
 void CopyAssistController::loadSettled()

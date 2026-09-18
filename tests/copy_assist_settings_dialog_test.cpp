@@ -347,6 +347,28 @@ int main(int argc, char** argv)
         expect(asrFaultAction(cpuLoad, ver, std::nullopt) == AsrFaultAction::DisableAsr,
                "load fault already on CPU -> local engine off (forcing CPU cannot help)");
 
+        // #5190 review (NF0T): load() retries on CPU inside the same call after a
+        // CAUGHT GPU failure. A death in that retry is a CPU death; the marker the
+        // fallback hook persists must classify like one.
+        {
+            const AsrAttempt fellBack = asrAttemptOnCpuFallback(gpuLoad);
+            expect(fellBack.device == -1 && fellBack.deviceName.isEmpty()
+                       && fellBack.vramFreeMb == 0 && fellBack.vramTotalMb == 0,
+                   "CPU fallback re-aims a GPU load marker at the CPU");
+            expect(fellBack.stage == gpuLoad.stage && fellBack.tier == gpuLoad.tier
+                       && fellBack.appVersion == gpuLoad.appVersion
+                       && fellBack.startedUtc == gpuLoad.startedUtc,
+                   "CPU fallback keeps what the attempt was (tier, version, start)");
+            expect(asrFaultAction(fellBack, ver, std::nullopt) == AsrFaultAction::DisableAsr
+                       && asrFaultAction(fellBack, ver, QStringLiteral("GPU One"))
+                           == AsrFaultAction::DisableAsr,
+                   "caught GPU failure then a death in the CPU retry -> local engine off, "
+                   "not RetireGpu");
+            expect(asrMarkerJsonOnCpuFallback(QString()).isEmpty()
+                       && asrMarkerJsonOnCpuFallback(QStringLiteral("not json")).isEmpty(),
+                   "CPU fallback with nothing armed leaves the field empty");
+        }
+
         AsrAttempt discovery;
         discovery.stage = QString::fromLatin1(kAsrStageDiscovery);
         discovery.appVersion = ver;
@@ -450,6 +472,30 @@ int main(int argc, char** argv)
                        .deviceName
                    == QStringLiteral("GPU One"),
                "the marker reads back through CopyAssistSettings");
+        // The transform the controller's CPU-fallback hook installs, applied by
+        // updateValue() to a GPU load marker in the real store (#5190 review).
+        // This pins the store write, not the call sites inside load() — those
+        // need a GPU load to fail and are covered on the bench.
+        {
+            CopyAssistSettings::setValue(QStringLiteral("AsrCpuFallbackProbe"), QStringLiteral("kept"));
+            QString seenByUpdate;
+            CopyAssistSettings::updateValue(QStringLiteral("AsrInFlight"),
+                                            [&seenByUpdate](const QString& current) {
+                                                seenByUpdate = current;
+                                                return asrMarkerJsonOnCpuFallback(current);
+                                            });
+            expect(asrAttemptFromJson(seenByUpdate).device == 1,
+                   "updateValue hands the update the field's current value");
+            const AsrAttempt stored = asrAttemptFromJson(
+                CopyAssistSettings::value(QStringLiteral("AsrInFlight")).toString());
+            expect(stored.isValid() && stored.device == -1 && stored.tier == gpuLoad.tier,
+                   "the persisted GPU marker is re-aimed at the CPU");
+            expect(asrFaultAction(stored, ver, QStringLiteral("GPU One")) == AsrFaultAction::DisableAsr,
+                   "a death after the CPU fallback reads back as DisableAsr, not RetireGpu");
+            expect(CopyAssistSettings::value(QStringLiteral("AsrCpuFallbackProbe")).toString()
+                       == QStringLiteral("kept"),
+                   "updateValue leaves the document's other fields in place");
+        }
         CopyAssistSettings::setValue(QStringLiteral("AsrInFlight"), QString());
         expect(!asrAttemptFromJson(
                     CopyAssistSettings::value(QStringLiteral("AsrInFlight")).toString())

@@ -126,6 +126,35 @@ inline AsrAttempt asrAttemptFromJson(const QString& json)
     return a;
 }
 
+// The marker to persist once a load aimed at a GPU is about to run on CPU
+// instead (WhisperAsrBackend::load() retries there after a CAUGHT GPU failure
+// that latched the device, and starts there when it is not entering the GPU it
+// was aimed at). From that moment a death is a CPU death — the
+// #4972-then-#4509 sequence — and must classify as DisableAsr, not RetireGpu:
+// retiring the GPU would send the next launch straight back onto the CPU path
+// that killed this one. The GPU's own failure was caught, so it needs no record.
+// Anything that is not a load marker passes through untouched.
+inline AsrAttempt asrAttemptOnCpuFallback(const AsrAttempt& armed)
+{
+    AsrAttempt a = armed;
+    if (a.stage != QLatin1String(kAsrStageLoad)) {
+        return a;
+    }
+    a.device = -1;
+    a.deviceName.clear();
+    a.vramFreeMb = 0;
+    a.vramTotalMb = 0;
+    return a;
+}
+
+// The same, on the persisted field's text — what the controller's CPU-fallback
+// hook hands to CopyAssistSettings::updateValue(). Empty or unparseable in,
+// empty out: nothing armed must never become a marker.
+inline QString asrMarkerJsonOnCpuFallback(const QString& json)
+{
+    return asrAttemptToJson(asrAttemptOnCpuFallback(asrAttemptFromJson(json)));
+}
+
 // The record to keep when a marker survived (`died`) and an older record may
 // already exist (`previous`). The new fault becomes the record's subject; a GPU
 // the previous record condemned stays condemned, as long as both come from the
