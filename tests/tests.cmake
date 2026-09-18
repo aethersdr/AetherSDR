@@ -1221,6 +1221,13 @@ target_include_directories(mode_filter_presets_test PRIVATE src)
 target_link_libraries(mode_filter_presets_test PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
 add_test(NAME mode_filter_presets_test COMMAND mode_filter_presets_test)
 
+add_executable(rx_stage_reorder_test
+    tests/rx_stage_reorder_test.cpp
+)
+target_include_directories(rx_stage_reorder_test PRIVATE src)
+target_link_libraries(rx_stage_reorder_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME rx_stage_reorder_test COMMAND rx_stage_reorder_test)
+
 add_executable(compact_metrics_test
     tests/compact_metrics_test.cpp
     src/gui/CompactMetrics.cpp
@@ -5991,6 +5998,7 @@ set(AETHER_SETTINGS_CONSUMERS
     compact_metrics_test
     mode_filter_presets_test
     modem_chrome_test
+    rx_stage_reorder_test
     theme_manager_test
     theme_seed_test
     panadapter_message_overlay_test

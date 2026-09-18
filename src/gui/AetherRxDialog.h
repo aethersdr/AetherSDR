@@ -3,11 +3,15 @@
 #include "ClientEqApplet.h"   // ClientEqApplet::Path
 #include "PersistentDialog.h"
 
+#include <QVector>
+
 #include <array>
 
 class QButtonGroup;
 class QCheckBox;
+class QEvent;
 class QHideEvent;
+class QObject;
 class QShowEvent;
 class QFrame;
 class QStackedWidget;
@@ -39,11 +43,19 @@ class StripWaveformPanel;
 // method strip — the seven noise-reduction methods stay one click apart
 // rather than becoming seven more entries in this bar.
 //
-// Each tab carries a checkbox that enables or bypasses that stage, the same
-// flag the RX chain strip's click-to-bypass toggles — this window is where you
-// set a stage up, so it is where you should be able to switch it off. Out is
-// the exception: a meter and a waveform are not a stage and have nothing to
-// bypass, so that row is indented to the others' labels and carries no box.
+// Each tab carries a checkbox at its right-hand end that enables or bypasses
+// that stage, the same flag the RX chain strip's click-to-bypass toggles —
+// this window is where you set a stage up, so it is where you should be able
+// to switch it off. Out is the exception: a meter and a waveform are not a
+// stage and have nothing to bypass, so that row is indented to the others'
+// labels and carries no box.
+//
+// The five rows that are chain stages also carry a grip on the left, and
+// dragging one up or down rewrites AudioEngine's RX chain order — the bar is
+// the signal path, so moving a row moves the stage. AetherNR and Out have no
+// grip: client noise reduction runs ahead of the chain rather than inside it,
+// and Out is the meter at the end of it, so neither appears in RxChainStage
+// and neither can be anywhere but first and last.
 class AetherRxDialog : public PersistentDialog {
     Q_OBJECT
 
@@ -115,6 +127,9 @@ signals:
 protected:
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    // Drag-and-drop for the tab column: the grips start the drag, the frame
+    // takes the drop, and this is where the frame's events are intercepted.
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     QWidget* buildStagePage(QWidget* panel);
@@ -128,12 +143,24 @@ private:
     // behind this window's back, so the boxes are polled while it is visible.
     void refreshStageChecks();
 
+    // A row was dropped at `y` within the tab column: work out where it
+    // landed, commit the new order to the engine, and relay the rows out.
+    void dropStageAt(Stage moved, int y);
+    // Order the rows to match AudioEngine's RX chain: AetherNR first, the
+    // chain stages in engine order, Out last. No-op when they already match,
+    // so the poll can call it every tick.
+    void relayoutStageRows();
+
     AudioEngine*        m_audio{nullptr};
     AetherDspWidget*    m_widget{nullptr};
     QFrame*             m_tabsFrame{nullptr};
     QButtonGroup*       m_tabGroup{nullptr};
     QStackedWidget*     m_stack{nullptr};
     std::array<QCheckBox*, StageCount> m_stageChecks{};
+    std::array<QWidget*, StageCount>   m_stageRows{};
+    // The chain-stage order the rows are currently laid out in, so the poll
+    // can tell whether the engine has been reordered from somewhere else.
+    QVector<int>        m_rowOrder;
     QWidget*            m_outIndent{nullptr};
     QTimer*             m_checkTimer{nullptr};
     // Set while refreshStageChecks() is writing, so a box being brought in
