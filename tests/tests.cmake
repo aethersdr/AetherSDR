@@ -2293,6 +2293,26 @@ set_tests_properties(firmware_close_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 
+# #5778: production dialog with injected capability/connection state; no sockets or peers.
+add_executable(flex_control_visibility_test
+    tests/flex_control_visibility_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(flex_control_visibility_test PRIVATE src tests)
+target_link_libraries(flex_control_visibility_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME flex_control_visibility_test COMMAND flex_control_visibility_test)
+set_tests_properties(flex_control_visibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
     src/core/ZipArchive.cpp
@@ -5930,6 +5950,7 @@ set(AETHER_SETTINGS_CONSUMERS
     automation_nnr_probe_test
     pcm_compatibility_test
     firmware_close_dialog_test
+    flex_control_visibility_test
     atu_seam_gate_test
     backend_capability_revision_test
     radio_capacity_declaration_test

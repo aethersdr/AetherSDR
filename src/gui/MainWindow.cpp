@@ -7793,8 +7793,7 @@ void MainWindow::applyCapabilitiesToUi(bool connected, const RadioCapabilities& 
     updateToolsMenuState();
     // Both entries open the SAME host serial knob (m_aetherControlAction is
     // this app's name for it), so neither is a radio capability -- see #5778.
-    // The close() below was the sharpest edge of all: opening the knob
-    // settings and then connecting to a non-Flex radio shut the window.
+    // Connecting to a non-Flex radio must also leave its window open.
     if (m_aetherControlAction) {
         m_aetherControlAction->setVisible(true);
     }

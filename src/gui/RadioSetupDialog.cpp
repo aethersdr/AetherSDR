@@ -1021,6 +1021,10 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     const bool connected = m_model->isConnected();
     const RadioCapabilities caps = m_model->backendCapabilities();
     // M3b: these legacy info-field hides await their scoped migration.
+    // This legacy radio/API status is distinct from the host knob settings.
+    if (m_flexControlInfoField) {
+        m_flexControlInfoField->setVisible(!connected || caps.hasFlexControlIntegration);
+    }
     if (m_multiFlexInfoField) {
         m_multiFlexInfoField->setVisible(!connected || caps.hasMultiClientSessions);
     }
@@ -1103,15 +1107,8 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (m_audioCompressionGroup) {
         m_audioCompressionGroup->setVisible(!connected || caps.hasAudioCompression);
     }
-    // m_flexControlGroup and m_flexControlInfoField are deliberately ABSENT from
-    // this function. The FlexControl knob is a HOST peripheral -- FlexControlManager
-    // opens a QSerialPort and finds it by scanning QSerialPortInfo for VID 0x2192 /
-    // PID 0x0010 -- so its visibility is not a radio capability and does not belong
-    // in a capability-driven update. hasFlexControlIntegration answers "does this
-    // RADIO's protocol carry FlexControl verbs", a different question, and gating on
-    // it hid the knob's settings the moment a non-Flex radio connected (#5778). The
-    // HID encoders -- Stream Deck, RC-28, PowerMate, Shuttle -- drive the same
-    // tuneSteps signal into the same tuning path and are gated on nothing.
+    // The host serial knob settings remain available for every radio (#5778).
+    // Only the legacy radio/API info field above follows radio capabilities.
     if (m_optionsLabel) {
         m_optionsLabel->setText(radioOptionsText(m_model));
     }

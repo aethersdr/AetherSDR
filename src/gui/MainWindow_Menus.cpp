@@ -140,7 +140,7 @@ void MainWindow::buildMenuBar()
 
     auto* flexControlAction = settingsMenu->addAction("AetherControl...");
     m_aetherControlAction = flexControlAction;
-    flexControlAction->setVisible(true); // capability-gated after connection
+    flexControlAction->setVisible(true); // host controller, independent of radio capabilities
     flexControlAction->setMenuRole(QAction::NoRole);
     connect(flexControlAction, &QAction::triggered,
             this, &MainWindow::showFlexControlDialog);
