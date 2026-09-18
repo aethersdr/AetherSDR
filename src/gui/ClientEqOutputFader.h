@@ -1,5 +1,8 @@
 #pragma once
 
+#include "MeterExtremes.h"
+
+#include <QElapsedTimer>
 #include <QWidget>
 
 class QLabel;
@@ -55,10 +58,19 @@ private:
     void rebuildLabelLayout();
     void paintVertical(QPainter& p);
     void paintHorizontal(QPainter& p);
+    // A level in dB to its hole-local position in SmartMTR UNITS.
+    double posUnitsForDb(double db) const;
 
     QLineEdit* m_valueEdit{nullptr};
     class QLabel* m_endLabel{nullptr};   // the "OUT" cap
     Qt::Orientation m_orientation{Qt::Vertical};
+
+    // Peak / trough sweep markers, the same tracker the VFO flag's meter uses.
+    // Driven from setPeakLinear(), which the panel's FFT timer already calls at
+    // ~25 Hz, so this needs no clock of its own beyond measuring the gaps.
+    MeterExtremes m_extremes;
+    QElapsedTimer m_extremesClock;
+    qint64        m_lastExtremesMs{0};
     float   m_gain{1.0f};
     float   m_smoothedPeak{-120.0f};  // dB
     bool    m_dragging{false};
