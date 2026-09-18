@@ -23,6 +23,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/AetherRxProfiles.h": {
+  "tag": "universal",
+  "note": "Named-profile save/recall/import-export for the receive DSP chain; operates on core-profile DSP state only, same precedent as core/ChannelStripPresets.h, whose RX capture/apply it shares.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AdaptiveFilterEngine.h": {
   "tag": "universal",
   "note": "GUI-thread adaptive RX passband coordinator over SliceModel/spectrum frames; canonical radio state, no vendor ties.",
