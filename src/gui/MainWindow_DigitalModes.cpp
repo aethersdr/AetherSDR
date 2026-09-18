@@ -15,6 +15,7 @@
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
 #include "MainWindow.h"
+#include "DStarAvailabilityGate.h"
 
 #include "AppletPanel.h"
 #include "Ax25HfPacketDecodeDialog.h"
@@ -27,6 +28,8 @@
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
+#include "RttyDecodeSettings.h"
+#include "models/CwDecodeSettings.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "WfmDeviceDialog.h"
@@ -60,17 +63,116 @@
 
 namespace AetherSDR {
 
+#ifdef HAVE_DEEPFIST
+void MainWindow::refreshCwRxContext()
+{
+    SliceModel* slice = activeSlice();
+    if (slice == m_cwRxSlice) { return; }
+    disconnect(m_cwRxFrequencyConnection);
+    disconnect(m_cwRxModeConnection);
+    m_cwRxSlice = slice;
+    m_cwDecoder.reset();
+    m_cwCallsignSpotter.clear();
+    if (slice) {
+        // Stream continuity across a retune is a DeepFist concern. ggmorse's
+        // reset() is a worker-thread join plus restart (CwDecoder::stop() is
+        // "A JOIN, never a timeout"), which is far too costly to run on every
+        // frequencyChanged emission while the operator spins the tuning knob.
+        m_cwRxFrequencyConnection = connect(slice, &SliceModel::frequencyChanged,
+            this, [this] {
+                if (CwDecodeSettings::deepFistSelected()) { m_cwDecoder.reset(); }
+            });
+        m_cwRxModeConnection = connect(slice, &SliceModel::modeChanged,
+            this, [this] {
+                if (CwDecodeSettings::deepFistSelected()) { m_cwDecoder.reset(); }
+            });
+    }
+}
+void MainWindow::selectCwRxBackend(const QString& backend)
+{
+    if (!m_cwDecoder.selectBackend(backend)) { return; }
+    m_cwCallsignSpotter.clear();
+    CwDecodeSettings::setBackend(backend);
+    if (m_cwDecoderApplet && m_cwDecoder.supportsTuning()) {
+        m_cwDecoder.setPitchRange(m_cwDecoderApplet->pitchRangeLow(), m_cwDecoderApplet->pitchRangeHigh());
+        m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(), m_cwDecoderApplet->speedRangeHigh());
+    }
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            for (VfoWidget* vfo : applet->findChildren<VfoWidget*>()) {
+                vfo->refreshCwDecoderControls();
+            }
+        }
+    }
+    if (m_cwDecoderApplet) {
+        m_cwDecoderApplet->clearCwText();
+        m_cwDecoderApplet->setCwStats(0, 0);
+    }
+    refreshCwDecodeState();
+}
+void MainWindow::refreshCwRxStatus()
+{
+    // Every pan builds its own engine combo and tuning controls, so stating
+    // only the targeted applet leaves the others advertising the wrong backend
+    // and, worse, leaves a previously-targeted pan's controls disabled for good.
+    // Same broadcast selectCwRxBackend() already does for the Zero Beat button.
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            applet->setCwBackendState(m_cwDecoder.backendKey(), m_cwDecoder.supportsTuning(),
+                m_cwDecoder.status(), m_cwDecoder.preparing(), m_cwDecoder.canRetry(),
+                m_cwDecoder.detail());
+        }
+    } else if (m_cwDecoderApplet) {
+        m_cwDecoderApplet->setCwBackendState(m_cwDecoder.backendKey(), m_cwDecoder.supportsTuning(),
+            m_cwDecoder.status(), m_cwDecoder.preparing(), m_cwDecoder.canRetry(), m_cwDecoder.detail());
+    }
+}
+void MainWindow::cwRxModelAction()
+{
+    if (m_cwDecoder.preparing()) { m_cwDecoder.cancelPreparation(); }
+    else { m_cwDecoder.retry(); }
+}
+void MainWindow::appendUnscoredCwText(const QString& text)
+{
+    if (m_cwDecoderApplet && m_cwDecoder.isRunning()) {
+        m_cwDecoderApplet->appendUnscoredCwText(text);
+    }
+}
+void MainWindow::refreshCwRxBackend()
+{
+    m_cwDecoder.selectBackend(CwDecodeSettings::backend());
+    connect(&m_cwDecoder, &CwRxModel::unscoredTextDecoded,
+        this, &MainWindow::appendUnscoredCwText, Qt::UniqueConnection);
+    connect(&m_cwDecoder, &CwRxModel::statusChanged,
+        this, &MainWindow::refreshCwRxStatus, Qt::UniqueConnection);
+    if (m_cwDecoderApplet) {
+        connect(m_cwDecoderApplet, &PanadapterApplet::cwEngineChanged,
+            this, &MainWindow::selectCwRxBackend, Qt::UniqueConnection);
+        connect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
+            this, &MainWindow::cwRxModelAction, Qt::UniqueConnection);
+        connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
+            &m_cwDecoder, &CwRxModel::stop, Qt::UniqueConnection);
+    }
+    refreshCwRxStatus();
+}
+#endif
+
 void MainWindow::scheduleDigitalVoiceAutoStart()
 {
     if (!kLocalDigitalVoiceWaveformAvailable
-        || !DigitalVoiceWaveformSettings::autoStart()) {
+        || !DigitalVoiceWaveformSettings::autoStart()
+        || !m_radioModel.backendCapabilities().hasWaveforms) {
         return;
     }
 
     QTimer::singleShot(3000, this, [this] {
         // The helper must reach the radio directly; a SmartLink/WAN session's
         // advertised LAN address is not a usable transport endpoint.
-        if (!m_radioModel.isConnected() || m_radioModel.isWan()) {
+        // hasWaveforms is the same gate as Tools ▸ Waveforms… and the
+        // AetherModem D-STAR tab: without a SmartSDR waveform API the
+        // helper cannot register and would run with no reachable Stop.
+        if (!dstarServiceCanStart(m_radioModel.isConnected(), m_radioModel.isWan(),
+                                  m_radioModel.backendCapabilities().hasWaveforms)) {
             return;
         }
         m_radioModel.dstarModel().start(
@@ -166,7 +268,9 @@ Ax25HfPacketDecodeDialog* MainWindow::ensureAx25HfPacketDecodeDialog()
 
 QJsonObject MainWindow::automationModemCommand(const QString& verb,
                                                const QString& action,
-                                               const QString& value)
+                                               const QString& value,
+                                               const std::shared_ptr<TxController>& controller,
+                                               const TxController::Input& input)
 {
     Ax25HfPacketDecodeDialog* dlg = ensureAx25HfPacketDecodeDialog();
     if (!dlg) {
@@ -174,7 +278,7 @@ QJsonObject MainWindow::automationModemCommand(const QString& verb,
             {QStringLiteral("ok"), false},
             {QStringLiteral("error"), QStringLiteral("could not construct the AetherModem window")}};
     }
-    return dlg->automationCommand(verb, action, value);
+    return dlg->automationCommand(verb, action, value, controller, input);
 }
 
 // External-controller methods (FlexControl, HID encoders / RC-28 / TMate 2 /
@@ -207,8 +311,6 @@ void MainWindow::routeRttyDecoderOutput()
                    &m_rttyDecoder, &RttyDecoder::setBaudRate);
         disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
                    &m_rttyDecoder, &RttyDecoder::setReversePolarity);
-        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyPanelCloseRequested,
-                   &m_rttyDecoder, &RttyDecoder::stop);
     }
 
     m_rttyDecoderApplet = target;
@@ -226,9 +328,19 @@ void MainWindow::routeRttyDecoderOutput()
                 &m_rttyDecoder, &RttyDecoder::setBaudRate);
         connect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
                 &m_rttyDecoder, &RttyDecoder::setReversePolarity);
-        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyPanelCloseRequested,
-                &m_rttyDecoder, &RttyDecoder::stop);
     }
+}
+
+void MainWindow::onRttyPanelCloseRequested()
+{
+    // The ✕ on the RTTY pane is the operator saying "I don't want this
+    // window", not "hide it until something touches the slice" (#5353).
+    // Record it before refreshing, or the very next refresh — a slice
+    // switch, an active-pan change, or the rtty_mark echo the radio sends
+    // on a band change — would recompute visibility from the mode alone
+    // and put the pane straight back up.
+    RttyDecodeSettings::setEnabled(false);
+    refreshRttyDecodeState();
 }
 
 void MainWindow::refreshRttyDecodeState()
@@ -238,12 +350,20 @@ void MainWindow::refreshRttyDecodeState()
     // mode used for PSK31, FT8, SSTV, etc. — showing a Baudot decoder on
     // those signals would be confusing.  Users who do FSK on DIGL can open
     // the panel manually via the slice context menu (future work).
+    //
+    // Mode availability and operator intent are separate gates. The CW
+    // decoder also has enable gates, but does not persist pane dismissal.
+    // an RTTY slice makes the decoder *available*, the persisted enable
+    // flag decides whether the operator actually wants it (#5353).  The
+    // flag defaults to True, so a session that never closes the pane
+    // behaves as before.
     const bool isRtty = s && s->mode() == "RTTY";
+    const bool wanted = isRtty && RttyDecodeSettings::enabled();
 
-    setDecoderPanelVisibleOnly(m_rttyDecoderApplet, isRtty,
+    setDecoderPanelVisibleOnly(m_rttyDecoderApplet, wanted,
                                &PanadapterApplet::setRttyPanelVisible);
 
-    if (!isRtty) {
+    if (!wanted) {
         if (m_rttyDecoder.isRunning()) m_rttyDecoder.stop();
         return;
     }
@@ -278,12 +398,12 @@ void MainWindow::activateRADE(int sliceId)
     auto* s = m_radioModel.slice(sliceId);
     if (!s) return;
 
-    // RADE's receive path is DAX channel audio (PanadapterStream::daxAudioReady),
+    // RADE's receive path is DAX channel audio (PanadapterStream::daxPcmReady),
     // and only a Flex backend owns a PanadapterStream — RadioModel leaves
     // panStream() null for every other family. The connect() further down
     // dereferenced it bare, so selecting RADE on a Hermes-Lite 2 was a SEGFAULT,
     // not a decline. Same shape as the null-deref that crashed every HL2 connect
-    // three seconds in (HERMES.md §6 gap 1) and as the startDax() guard, which
+    // three seconds in (docs/HERMES.md §6 gap 1) and as the startDax() guard, which
     // this deliberately mirrors.
     //
     // Checked HERE rather than at the connect: everything between this point and
@@ -448,24 +568,32 @@ void MainWindow::activateRADE(int sliceId)
     // Layer 1 — PttOffHook: catches MOX button (TxApplet) and TciServer callers
     // that go through TransmitModel::requestPttOff(). Fires BEFORE setMox(false),
     // so the radio stays in TX while EOO is generated and sent.
-    m_radioModel.transmitModel().setPttOffHook([this]() {
-        if (m_radeEooPending) {
+    m_radioModel.transmitModel().setPttOffHook([this](TransmitModel::PttRelease release) {
+        if (m_radeEooPending && m_radePttRelease.current()) {
             qCDebug(lcRade) << "MainWindow: PttOffHook — EOO already pending, ignoring duplicate";
             return;
         }
+        m_radePttRelease = release;
+        const quint64 requestId = ++m_radeEooRequestId;
         m_radeEooPending = true;
         syncKiwiSdrTransmitMute();
         qCDebug(lcRade) << "MainWindow: PttOffHook — intercepted requestPttOff, deferring for RADE EOO";
-        QMetaObject::invokeMethod(m_radeEngine, [this]() {
-            m_radeEngine->setEooRequested(true);
+        QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, release, requestId]() {
+            if (release.current()) {
+                engine->setEooRequested(true, requestId);
+            }
         }, Qt::QueuedConnection);
     });
 
     // Layer 2 — eooFinished: once EOO audio is queued in AudioEngine, close the
     // audio gate (after EOO packets) then wait for the full EOO playout before
     // dropping the carrier. EOO=144ms + silence=60ms + margin=50ms = 254ms.
-    connect(m_radeEngine, &RADEEngine::eooFinished, this, [this]() {
-        if (!m_radeEooPending) {
+    connect(m_radeEngine, &RADEEngine::eooFinished, this, [this](quint64 requestId) {
+        if (requestId != m_radeEooRequestId) {
+            return;
+        }
+        const TransmitModel::PttRelease release = m_radePttRelease;
+        if (!m_radeEooPending || !release.current()) {
             qCDebug(lcRade) << "MainWindow: eooFinished — no pending PTT release (EOO triggered without an intercepted unkey; no carrier to release)";
             return;
         }
@@ -476,8 +604,10 @@ void MainWindow::activateRADE(int sliceId)
         // Post setTransmitting(false) AFTER the queued txModemReady(eoo/silence)
         // signals so the audio gate closes only after EOO is in the UDP send buffer.
         if (m_audio)
-            QMetaObject::invokeMethod(m_audio, [this]() {
-                m_audio->setTransmitting(false);
+            QMetaObject::invokeMethod(m_audio, [audio = m_audio, release]() {
+                if (release.current()) {
+                    audio->setTransmitting(false);
+                }
             }, Qt::QueuedConnection);
 
         constexpr int kEooPlaybackMs = RADEEngine::kEooFrameMs
@@ -485,9 +615,9 @@ void MainWindow::activateRADE(int sliceId)
                                      + RADEEngine::kEooTransportMarginMs;
         qCDebug(lcRade) << "MainWindow: RADE eooFinished — deferring xmit 0 by"
                         << kEooPlaybackMs << "ms for EOO playback";
-        QTimer::singleShot(kEooPlaybackMs, this, [this]() {
+        QTimer::singleShot(kEooPlaybackMs, this, [release]() {
             qCDebug(lcRade) << "MainWindow: RADE EOO playback timer expired — releasing radio PTT";
-            m_radioModel.setTransmit(false);
+            release.release();
         });
     });
 
@@ -496,23 +626,52 @@ void MainWindow::activateRADE(int sliceId)
     // tx=true: new over starting — clear pending flag and reset engine EOO state.
     // tx=false + !pending + isTransmitting: unintercepted unkey — request EOO as
     //   best-effort (radio may already be in RX, but at least the app won't hang).
+    const TxCoordinator::Producer radeProducer = m_radioModel.registerTxProducer(m_radeEngine);
+    const auto beginOver = [this, radeProducer] {
+        if (!m_radeEngine || !m_radeEngine->isActive()
+            || (m_radeTxActive && !m_radeEooPending)) {
+            return;
+        }
+        ++m_radeEooRequestId;
+        if (m_radeFallbackReleaseFence) {
+            m_radeFallbackReleaseFence->store(false, std::memory_order_release);
+        }
+        m_radeEooPending = false;
+        m_radeTxActive = true;
+        syncKiwiSdrTransmitMute();
+        const TxCoordinator::Context context = m_radioModel.captureTxMedia(radeProducer);
+        QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, context]() {
+            if (context.permitsDispatch(TxCoordinator::monotonicMs())) {
+                engine->resetTx(context);
+            }
+        }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_audio, [audio = m_audio, context] {
+            audio->setRawMicrophoneContext(context);
+        }, Qt::QueuedConnection);
+        qCDebug(lcRade) << "MainWindow: MOX asserted — RADE TX state reset for new over";
+    };
+    // A re-engage during EOO may leave optimistic MOX true and emit no state
+    // edge at all. Its explicit intent still has to restart the encoder.
+    m_radePttIntentConn = connect(&m_radioModel, &RadioModel::localTransmitEngaged, this, beginOver);
     m_radeMoxFallbackConn = connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            this, [this](bool tx) {
+            this, [this, beginOver](bool tx) {
         if (!m_radeEngine || !m_radeEngine->isActive()) return;
         if (tx) {
-            m_radeEooPending = false;
-            m_radeTxActive = true;
-            syncKiwiSdrTransmitMute();
-            QMetaObject::invokeMethod(m_radeEngine, [this]() {
-                m_radeEngine->resetTx();
-            }, Qt::QueuedConnection);
-            qCDebug(lcRade) << "MainWindow: MOX asserted — RADE TX state reset for new over";
+            beginOver();
         } else if (!m_radeEooPending && m_radeTxActive) {
             qCDebug(lcRade) << "MainWindow: moxChanged(false) fallback — unintercepted PTT release, requesting EOO";
             m_radeEooPending = true;
+            // The radio already unkeyed. Finish the old audio pipeline only;
+            // there is no carrier-release authority to borrow from a later TX.
+            m_radeFallbackReleaseFence = std::make_shared<std::atomic<bool>>(true);
+            const std::shared_ptr<std::atomic<bool>> fence = m_radeFallbackReleaseFence;
+            m_radePttRelease = {[fence] { return fence->load(std::memory_order_acquire); }, {}, {}};
+            const quint64 requestId = ++m_radeEooRequestId;
             syncKiwiSdrTransmitMute();
-            QMetaObject::invokeMethod(m_radeEngine, [this]() {
-                m_radeEngine->setEooRequested(true);
+            QMetaObject::invokeMethod(m_radeEngine, [engine = m_radeEngine, fence, requestId]() {
+                if (fence->load(std::memory_order_acquire)) {
+                    engine->setEooRequested(true, requestId);
+                }
             }, Qt::QueuedConnection);
         }
     });
@@ -521,8 +680,12 @@ void MainWindow::activateRADE(int sliceId)
     // Filter by the RADE slice's DAX channel so other slices' DAX audio is ignored.
     // Look up the channel live so it tracks if the user changes DAX assignment.
     int sid = sliceId;
-    connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
-            m_radeEngine, [this, sid](int channel, const QByteArray& pcm) {
+    connect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
+            m_radeEngine, [this, sid](int channel, const PcmFrame& frame) {
+        const QByteArray pcm = frame.legacyStereo24();
+        if (pcm.isEmpty()) {
+            return;
+        }
         auto* s = m_radioModel.slice(sid);
         if (s && channel == s->daxChannel())
             m_radeEngine->feedRxAudio(channel, pcm);
@@ -664,13 +827,24 @@ void MainWindow::deactivateRADE()
 
     m_radioModel.transmitModel().clearPttOffHook();
     disconnect(m_radeMoxFallbackConn);
+    disconnect(m_radePttIntentConn);
+    const TransmitModel::PttRelease pendingRelease = m_radePttRelease;
     m_radeEooPending = false;
     m_radeTxActive = false;
+    // Leaving RADE during a pending tail must release that tail's own carrier,
+    // not abandon it or borrow a newer transmission's authority.
+    pendingRelease.release();
+    ++m_radeEooRequestId;
+    if (m_radeFallbackReleaseFence) {
+        m_radeFallbackReleaseFence->store(false, std::memory_order_release);
+    }
+    m_radioModel.transmitModel().invalidatePttRelease();
+    m_radePttRelease = {};
     syncKiwiSdrTransmitMute();
 
     m_audio->setRadeMode(false);
     m_radioModel.setDigitalVoiceTxSlice(-1);
-    m_audio->clearTxAccumulators();  // flush stale RADE modem data
+    m_audio->clearTxAccumulators();  // flush stale RADE modem data (self-marshals)
     m_appletPanel->phoneCwApplet()->setRadeActive(false);
 
     if (auto* applet = m_appletPanel->radeApplet()) {
@@ -695,7 +869,7 @@ void MainWindow::deactivateRADE()
                    m_radeEngine, nullptr);
         disconnect(m_radeEngine, &RADEEngine::txModemReady,
                    m_audio, nullptr);
-        disconnect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
+        disconnect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
                    m_radeEngine, nullptr);
         disconnect(m_radeEngine, &RADEEngine::rxSpeechReady,
                    m_audio, nullptr);
@@ -974,6 +1148,36 @@ void MainWindow::showFreeDvReporter()
         connect(m_freedvClient, &FreeDvClient::reportingStateChanged,
                 m_freedvReporterDialog, &FreeDvReporterDialog::setReportingActive,
                 Qt::QueuedConnection);
+        connect(m_freedvReporterDialog, &FreeDvReporterDialog::tuneRequested,
+                this, [this](double freqMhz) {
+            auto* sl = activeSlice();
+            if (!sl) return;
+            // Don't force RADE on a frequency the slice never actually moved
+            // to — pointless if the tune itself was refused (#4125 review).
+            if (tuneBlockedByGuards(sl))
+                return;
+            applyTuneRequest(sl, freqMhz, TuneIntent::AbsoluteJump, "freedv-reporter");
+#ifdef HAVE_RADE
+            // Without HAVE_RADE the build can't run the modem, so there is
+            // no activateRADE() to call — same reasoning as the FreeDV
+            // spot-click path in MainWindow_Wiring.cpp (#1846).
+            //
+            // Only a family with a PanadapterStream (Flex) can actually run
+            // RADE; activateRADE() otherwise declines with a blocking
+            // QMessageBox::warning, which would pop on every double-click
+            // here even though the gesture has nothing to do with RADE.
+            // Skip the call on those families instead of surfacing that
+            // modal (#4125 review).
+            //
+            // Reuse the same auto-switch gate DX Cluster uses for its
+            // CW/SSB mode-follow (#2298), so one setting controls "does
+            // double-click-to-tune also change what the radio is doing"
+            // everywhere (#4125).
+            if (m_radioModel.panStream()
+                    && AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() == "True")
+                activateRADE(sl->sliceId());
+#endif
+        });
         // Seed: reporting may already be on when the dialog is first opened.
         m_freedvReporterDialog->setReportingActive(
             m_freedvClient->isReportingEnabled());
@@ -1110,8 +1314,13 @@ bool MainWindow::startDax()
     }));
 
     // Wire DAX RX: PanadapterStream routes registered DAX streams here
-    connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
-            m_daxBridge, &DaxBridge::feedDaxAudio);
+    connect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
+            m_daxBridge, [bridge = m_daxBridge](int channel, const PcmFrame& frame) {
+        const QByteArray pcm = frame.legacyStereo24();
+        if (!pcm.isEmpty()) {
+            bridge->feedDaxAudio(channel, pcm);
+        }
+    });
 
     // DAX-IQ stream-status routing, the VITA-49 IQ feed, level meter, and the
     // enable/disable/rate connections are wired ONCE at construction (see the
@@ -1141,11 +1350,19 @@ bool MainWindow::startDax()
 
     // Wire DAX TX: apps → bridge → AudioEngine → VITA-49.
     // AudioEngine chooses packet format/routing based on DaxTxLowLatency.
+    // This is one configured shared endpoint, not an inferred process identity.
+    const TxCoordinator::Producer daxProducer = m_radioModel.registerTxProducer(m_daxBridge);
+    connect(&m_radioModel, &RadioModel::localTransmitEngaged, m_daxBridge,
+            [this, bridge = m_daxBridge, daxProducer] {
+        bridge->setTxContext(m_radioModel.captureTxMedia(daxProducer));
+    });
     connect(m_daxBridge, &DaxBridge::txAudioReady,
-            this, [this](const QByteArray& pcm) {
+            this, [this](const QByteArray& pcm, const TxCoordinator::Context& context) {
         if (m_audio->isRadeMode()) return;
         if (!m_audio->isDaxTxMode()) return;
-        QMetaObject::invokeMethod(m_audio, [this, pcm]() { m_audio->feedDaxTxAudio(pcm); });
+        QMetaObject::invokeMethod(m_audio, [audio = m_audio, pcm, context] {
+            audio->feedDaxTxAudio(pcm, context);
+        });
     });
 
     // Save current mic selection before forcing PC audio source.
@@ -1169,7 +1386,7 @@ void MainWindow::stopDax()
     if (!m_daxBridge) return;
 
     m_audio->setDaxTxMode(false);
-    m_audio->clearTxAccumulators();
+    m_audio->clearTxAccumulators();  // self-marshals
 
     // #2895: drop the per-slice daxChannelChanged / sliceAdded reactions wired
     // in startDax() so they don't fire against a torn-down bridge.
@@ -1179,7 +1396,7 @@ void MainWindow::stopDax()
     m_daxSliceConns.clear();
     m_daxSliceLastCh.clear();
 
-    disconnect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
+    disconnect(m_radioModel.panStream(), &PanadapterStream::daxPcmReady,
                m_daxBridge, nullptr);
     disconnect(m_daxBridge, &DaxBridge::txAudioReady,
                this, nullptr);

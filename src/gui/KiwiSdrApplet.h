@@ -18,6 +18,10 @@ class SliceModel;
 struct KiwiSdrReceiverStatus {
     QString id;
     QString name;
+    // Receiver family served by this profile (KiwiSDR or Web-888), rendered
+    // as a badge next to the receiver name.
+    KiwiSdrProtocol::KiwiSdrReceiverFamily family{
+        KiwiSdrProtocol::KiwiSdrReceiverFamily::Kiwi};
     KiwiSdrClient::State state{KiwiSdrClient::State::Disconnected};
     QString detail;
     QString metadataSummary;

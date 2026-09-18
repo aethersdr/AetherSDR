@@ -34,6 +34,22 @@ QByteArray makeStereoBlock(int frames, float leftScale, float rightScale)
     return block;
 }
 
+// Same tone and same elapsed time at any supported rate: the carrier is tied to
+// sampleRate, so a 48 kHz block of 2N frames spans exactly the wall-clock
+// interval a 24 kHz block of N frames does.
+QByteArray makeStereoBlockAtRate(int frames, int sampleRate, float leftScale, float rightScale)
+{
+    QByteArray block(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+    auto* samples = reinterpret_cast<float*>(block.data());
+    for (int i = 0; i < frames; ++i) {
+        const float carrier = std::sin(
+            2.0f * kPi * 733.0f * static_cast<float>(i) / static_cast<float>(sampleRate));
+        samples[i * 2] = leftScale * carrier;
+        samples[i * 2 + 1] = rightScale * carrier;
+    }
+    return block;
+}
+
 QByteArray makeOppositePhaseStereoBlock(int frames, float scale)
 {
     QByteArray block(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
@@ -144,6 +160,64 @@ Rms measureRms(const QByteArray& stereoBlock, int discardFrames)
 bool nearlyEqual(double a, double b, double tolerance)
 {
     return std::abs(a - b) <= tolerance;
+}
+
+// The 48 kHz envelope rescale is the only genuinely new numerical logic in this
+// change, and the obvious assertions cannot see it. A steady-state balance ratio
+// is coefficient-independent: m_leftPower and m_rightPower are driven by the same
+// coefficient from the same zero initial condition, so their ratio is correct
+// from the first sample whatever that coefficient is.
+//
+// What the coefficient does govern is how fast the envelope TRACKS A CHANGE. So
+// converge the balance on one L/R ratio, flip to the opposite ratio, and measure
+// how far it has travelled after a fixed elapsed time — 24 kHz over N frames
+// against 48 kHz over 2N, which is the same wall clock. The rescale exists
+// precisely so those agree.
+//
+// Remove it and the legacy per-sample coefficient advances the 48 kHz envelope
+// twice as fast in wall-clock terms, so the two diverge and this fails. The
+// m_balancePowerFloor rescale rides on the same two coefficients.
+bool testEnvelopeTracksElapsedTimeAcrossRates()
+{
+    // ~1.04 s legacy time constant, so 0.25 s leaves the flip clearly in flight.
+    auto trackedRatioAfterFlip = [](int sampleRate) {
+        const int converge = sampleRate;           // 1.0 s
+        const int observe = sampleRate / 4;        // 0.25 s
+        MonoDspStereoAdapter adapter(0, sampleRate);
+
+        const QByteArray primed = makeStereoBlockAtRate(converge, sampleRate, 0.8f, 0.2f);
+        const std::vector<float> primedMono = makeProcessedMono(primed, 0.42f);
+        adapter.pushDryStereo(primed);
+        adapter.takeProcessedMono(primedMono.data(), static_cast<int>(primedMono.size()));
+
+        // Flip the balance; the envelope now has to travel the other way.
+        const QByteArray flipped = makeStereoBlockAtRate(observe, sampleRate, 0.2f, 0.8f);
+        const std::vector<float> flippedMono = makeProcessedMono(flipped, 0.42f);
+        adapter.pushDryStereo(flipped);
+        const QByteArray out =
+            adapter.takeProcessedMono(flippedMono.data(), static_cast<int>(flippedMono.size()));
+
+        const Rms rms = measureRms(out, 0);
+        return rms.left / std::max(rms.right, 1.0e-12);
+    };
+
+    const double tracked24 = trackedRatioAfterFlip(24000);
+    const double tracked48 = trackedRatioAfterFlip(48000);
+
+    // The flip must still be in flight at both rates, or the comparison is
+    // vacuous: fully converged (0.25) or untouched (4.0) would match regardless.
+    if (tracked24 <= 0.35 || tracked24 >= 3.5) {
+        std::printf("rate-domain envelope check is vacuous: 24k ratio %.6f is not mid-flight\n",
+                    tracked24);
+        return false;
+    }
+    if (!nearlyEqual(tracked24, tracked48, 0.05 * tracked24)) {
+        std::printf("envelope did not track elapsed time across rates: "
+                    "24k %.6f vs 48k %.6f over the same 0.25 s after a balance flip\n",
+                    tracked24, tracked48);
+        return false;
+    }
+    return true;
 }
 
 bool testPreservesRatioWithSharedGain()
@@ -482,7 +556,40 @@ bool testOverflowClearsInsteadOfMisaligning()
 
 int main()
 {
+    for (const int rate : {24000, 48000}) {
+        MonoDspStereoAdapter adapter(0, rate);
+        adapter.pushDryStereo(makeConstantStereoBlock(rate * 4, 0.8f, 0.2f));
+        if (!adapter.isValid() || adapter.sampleRate() != rate
+            || adapter.bufferedFrames() != rate * 4) {
+            std::printf("rate-aware queue discarded a valid four-second buffer\n");
+            return 1;
+        }
+        adapter.pushDryStereo(makeConstantStereoBlock(rate * 2, 0.8f, 0.2f));
+        if (adapter.bufferedFrames() != 0) {
+            std::printf("rate-aware queue failed its five-second cap\n");
+            return 1;
+        }
+    }
+    MonoDspStereoAdapter invalid(0, 44100);
+    invalid.pushDryStereo(makeConstantStereoBlock(100, 0.8f, 0.2f));
+    if (invalid.isValid() || invalid.bufferedFrames() != 0) {
+        return 1;
+    }
+    MonoDspStereoAdapter legacy;
+    MonoDspStereoAdapter explicit24(0, 24000);
+    const QByteArray dry = makeConstantStereoBlock(2400, 0.8f, 0.2f);
+    const std::vector<float> wet(2400, 0.25f);
+    legacy.pushDryStereo(dry);
+    explicit24.pushDryStereo(dry);
+    if (legacy.takeProcessedMono(wet.data(), wet.size())
+        != explicit24.takeProcessedMono(wet.data(), wet.size())) {
+        std::printf("explicit24 changed legacy adapter output\n");
+        return 1;
+    }
     if (!testPreservesRatioWithSharedGain()) {
+        return 1;
+    }
+    if (!testEnvelopeTracksElapsedTimeAcrossRates()) {
         return 1;
     }
     if (!testBuffersDryUntilProcessedArrives()) {

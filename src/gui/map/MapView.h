@@ -1,4 +1,7 @@
 #pragma once
+#include "RadarCoverage.h"
+
+#include "WeatherRadarSource.h"
 
 #include <QWidget>
 #include <QTimer>
@@ -9,15 +12,25 @@
 #include <QGeoView/QGVGlobal.h>
 
 class QGVMap;
+class QGVItem;
 class QGVLayer;
+class QAbstractAnimation;
 class QLabel;
+class QOpenGLWidget;
 class QToolButton;
 class QVariantAnimation;
 
 namespace AetherSDR {
 
+class DarkBasemapLayer;
+
 class MapMarkerItem;
-class MapPathItem;
+class MapMarkerBatchItem;
+class MapPathBatchItem;
+class MapTerminatorItem;
+class CityLightsItem;
+class WeatherRadarPlaybackItem;
+class WeatherRadarTileLayer;
 
 // Reusable OpenStreetMap slippy-map widget (#mapping-engine).
 //
@@ -34,6 +47,11 @@ class MapView : public QWidget {
     Q_OBJECT
 
 public:
+    enum class ViewportMode {
+        Raster,
+        OpenGlIfAvailable
+    };
+
     struct Marker {
         double  lat{0.0};
         double  lon{0.0};
@@ -41,10 +59,24 @@ public:
         QString tooltip;     // hover detail
         QColor  color{Qt::red};
         bool    isHome{false};  // drawn as a distinct station marker
+        bool    isMonitor{false}; // larger active-receiver marker
+        bool    pathEnabled{true};
+        bool    hasPathOrigin{false};
+        double  pathFromLat{0.0};
+        double  pathFromLon{0.0};
+        QString pathGroup;       // non-empty groups related hover paths
+        bool    hoverShowsPathGroup{false};
         QString clickInfo;      // rich text shown on click (empty = none)
     };
 
-    explicit MapView(QWidget* parent = nullptr);
+    explicit MapView(
+        QWidget* parent = nullptr,
+        ViewportMode viewportMode = ViewportMode::Raster);
+
+    // A narrow diagnostic seam for automation and platform smoke tests. The
+    // answer changes to false if the requested OpenGL viewport cannot create
+    // a context and MapView has fallen back to the raster viewport.
+    bool openGlViewportActive() const;
 
     // Home position (e.g. radio GPS fix). Home key / resetToHome() recenters
     // here. Also draws/updates the home station marker when showMarker.
@@ -64,6 +96,32 @@ public:
     void setPathsVisible(bool visible);
     bool pathsVisible() const { return m_pathsVisible; }
 
+    void setDayNightTerminatorVisible(bool visible);
+    bool dayNightTerminatorVisible() const;
+    void setCityLightsVisible(bool visible);
+    void setCityLightsImage(const QImage& image, const QRectF& bounds);
+    void setBasemapDarkEnabled(bool enabled);
+    void setBasemapBrightness(int percent);
+    void setCityLightsBrightness(int percent);
+    void setRadarSites(const QVector<RadarSite>& sites, bool visible);
+    void setDetailedAttributionVisible(bool visible);
+    void setWeatherRadarVisible(bool visible);
+    bool weatherRadarVisible() const;
+    int pendingWeatherRadarRequests() const;
+    bool weatherRadarLoadFailed() const;
+    void refreshWeatherRadar();
+    void setWeatherRadarSource(const WeatherRadarSource& source);
+    QRectF weatherRadarPlaybackBounds() const;
+    QSize weatherRadarPlaybackSize() const;
+    // Atomic presentation of a single original NOAA observation.
+    bool showWeatherRadarPlaybackFrame(
+        const QImage& image, const QDateTime& frameTime, const QRectF& bounds);
+    void acknowledgeWeatherRadarPlaybackFrame(quint64 presentationSequence);
+    void preloadWeatherRadarPlaybackFrame(const QImage& image,
+                                          const QDateTime& frameTime,
+                                          const QRectF& bounds);
+    void clearWeatherRadarPlayback();
+
     // Color/label legend chip, lower-left. Empty list hides it.
     void setLegend(const QVector<QPair<QString, QColor>>& entries);
 
@@ -73,7 +131,13 @@ public:
     QGVMap* map() const { return m_map; }
 
 signals:
+    void imageOverlayViewChanged();
     void markerClicked(const MapView::Marker& marker);
+    void weatherRadarProvidersChanged(int providers);
+    void weatherRadarFrameLoaded(const QDateTime& frameTime);
+    void weatherRadarPlaybackPresented(quint64 presentationSequence);
+    void weatherRadarPlaybackFramePreloaded(const QDateTime& frameTime);
+    void weatherRadarPlaybackInvalidated();
 
 public slots:
     void resetToHome();
@@ -95,9 +159,12 @@ private:
     static void ensureTileNetworkManager();
 
     void pan(double dxFraction, double dyFraction);
+    void animateZoom(double factor);
     QToolButton* makeOverlayButton(const QString& text, const QString& tip);
     void layoutOverlayButtons();
     void rebuildPaths();
+    void updateHoverPath(int markerIndex);
+    void clearHoverPath();
     void clampMinZoomToViewport();
     // How many world copies either side of the base one the markers and paths
     // must be replicated into for the widest viewport this widget can reach.
@@ -113,17 +180,42 @@ private:
     // Instant hover tooltip driven by mouse-move (QGeoView's built-in
     // tooltip waits for the OS hover delay, which is too slow here).
     void showHoverTooltip(const QPointF& projPos);
+    void handleWeatherRadarFrameReady(WeatherRadarTileLayer* layer,
+                                      const QDateTime& frameTime);
+    void configureViewportInput(QWidget* viewport);
+    void fallBackToRasterViewport();
+    void updateAttributionStyle();
+    void updateMapAttribution();
 
+    class RadarCoverageItem* m_radarCoverageItem{nullptr};
+    DarkBasemapLayer* m_basemapLayer{nullptr};
+    QGVItem* m_basemapDimmer{nullptr};
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
+    QGVLayer* m_terminatorLayer{nullptr};
+    CityLightsItem* m_cityLightsItem{nullptr};
+    bool m_cityLightsVisible{false};
+    QGVLayer* m_weatherRadarPlaybackLayer{nullptr};
+    WeatherRadarTileLayer* m_weatherRadarLayer{nullptr};
+    WeatherRadarTileLayer* m_weatherRadarNextLayer{nullptr};
+    WeatherRadarSource m_weatherRadarSource;
+    QString m_pendingWeatherRadarFrameId;
+    QVariantAnimation* m_weatherRadarTransition{nullptr};
+    WeatherRadarPlaybackItem* m_weatherRadarPlaybackItem{nullptr};
+    bool m_weatherRadarPlaybackActive{false};
+    bool m_weatherRadarEnabled{false};
+    QLabel* m_attribution{nullptr};
+    bool m_detailedAttributionVisible{true};
+    MapTerminatorItem* m_terminatorItem{nullptr};
+    QTimer* m_terminatorTimer{nullptr};
     QVector<MapMarkerItem*> m_homeMarkers;
-    // QPointer, not a raw pointer: marker items are deleted from more than one
-    // path and this must never outlive the item it names.
-    QPointer<MapMarkerItem> m_hoverMarker;
+    int m_hoverMarkerIndex{-1};
     QLabel* m_hoverCard{nullptr};
-    QVector<MapMarkerItem*> m_markers;
+    MapMarkerBatchItem* m_markerBatch{nullptr};
     QVector<Marker> m_markerData;
-    QVector<MapPathItem*> m_paths;
+    MapPathBatchItem* m_pathBatch{nullptr};
+    MapPathBatchItem* m_hoverPathBatch{nullptr};
+    int m_hoverPathMarkerIndex{-1};
     bool m_pathsVisible{true};
     QLabel* m_legend{nullptr};
 
@@ -140,6 +232,9 @@ private:
     QToolButton* m_zoomInBtn{nullptr};
     QToolButton* m_zoomOutBtn{nullptr};
     QToolButton* m_homeBtn{nullptr};
+    QPointer<QAbstractAnimation> m_zoomAnimation;
+    QPointer<QOpenGLWidget> m_openGlViewport;
+    bool m_openGlViewportChecked{false};
 
     // Sonar pulse on the home marker: a short ring animation fired every
     // few seconds. The animation only runs for its ~1s duration, so the

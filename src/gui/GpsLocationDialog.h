@@ -6,6 +6,10 @@
 #include <QString>
 
 class QLabel;
+class QCheckBox;
+class QFrame;
+class QGroupBox;
+class QLineEdit;
 class QProgressBar;
 class QPushButton;
 class QTimer;
@@ -31,6 +35,7 @@ private:
     void refreshGps(bool reportArrived);
     void updateClockAndAges();
     void updateNtpServerTip();
+    void updateGpsTimeControls();
     void requestAddress(double latitude, double longitude, bool force);
     void copyGridSquare();
     void copyAddress();
@@ -45,8 +50,11 @@ private:
     QLabel* m_satelliteSummaryLabel{nullptr};
     QLabel* m_referenceSummaryLabel{nullptr};
     QLabel* m_freshnessLabel{nullptr};
+    QFrame* m_satelliteMetricCard{nullptr};
+    QFrame* m_referenceMetricCard{nullptr};
 
     QLabel* m_gridLabel{nullptr};
+    QLabel* m_sourceLabel{nullptr};
     QLabel* m_latitudeLabel{nullptr};
     QLabel* m_longitudeLabel{nullptr};
     QLabel* m_nativeCoordinatesLabel{nullptr};
@@ -67,13 +75,22 @@ private:
     QLabel* m_referenceActualLabel{nullptr};
     QLabel* m_referenceLockLabel{nullptr};
     QLabel* m_lockDurationLabel{nullptr};
+    QGroupBox* m_satelliteGroup{nullptr};
 
     QLabel* m_utcTimeLabel{nullptr};
     QLabel* m_localTimeLabel{nullptr};
     QLabel* m_timeZoneLabel{nullptr};
     QLabel* m_radioGpsTimeLabel{nullptr};
     QLabel* m_clockAgreementLabel{nullptr};
+    QLabel* m_timeSourceNote{nullptr};
     QLabel* m_ntpServerTipLabel{nullptr};
+    QGroupBox* m_gpsTimeControlGroup{nullptr};
+    QCheckBox* m_ntpEnabledCheck{nullptr};
+    QLineEdit* m_ntpServerEdit{nullptr};
+    QPushButton* m_applyNtpServerButton{nullptr};
+    QCheckBox* m_gpsTimeCorrectionCheck{nullptr};
+    QPushButton* m_ntpSyncButton{nullptr};
+    QLabel* m_ntpSyncStatusLabel{nullptr};
 
     QElapsedTimer m_reportAge;
     qint64 m_lockBeganMs{0};

@@ -3,6 +3,8 @@
 #include "SettingsSanitizer.h"
 #include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
 #include "LogManager.h"
+#include "SystemInventory.h"
+#include "GpuSelector.h"
 #include "ZipArchive.h"
 #include "models/RadioModel.h"
 
@@ -68,7 +70,10 @@ SupportBundle::SystemInfo SupportBundle::collectSystemInfo()
         QSysInfo::prettyProductName(),
         QSysInfo::kernelVersion(),
         QSysInfo::currentCpuArchitecture(),
-        QString::fromLatin1(__DATE__)
+        QString::fromLatin1(__DATE__),
+        SystemInventory::cpuSummary(),
+        SystemInventory::ramSummary(),
+        GpuSelector::appliedSummary()
     };
 }
 
@@ -88,6 +93,45 @@ SupportBundle::RadioInfo SupportBundle::collectRadioInfo(const RadioModel* model
     info.ip              = model->ip();
     return info;
 }
+
+namespace {
+
+// Stream a log file through redactPii() line by line. Bounded memory: a log
+// can be tens of megabytes and the bundle is generated on the GUI thread.
+bool copyLogRedacted(const QString& from, const QString& to)
+{
+    QFile in(from);
+    if (!in.open(QIODevice::ReadOnly | QIODevice::Text))
+        return false;
+    QFile out(to);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Text))
+        return false;
+    while (!in.atEnd()) {
+        const QByteArray raw = in.readLine();
+        const QString line = QString::fromUtf8(raw);
+        const QByteArray scrubbed = redactPii(line).toUtf8();
+        // A short write leaves a TRUNCATED log in the bundle that reads as a
+        // short log rather than a failed copy, which is the worst of both: the
+        // recipient draws conclusions from an incomplete file without knowing
+        // it is incomplete. Fail the copy and remove the partial destination so
+        // the caller's `continue` skips it entirely.
+        if (out.write(scrubbed) != scrubbed.size()) {
+            qWarning() << "support bundle: log copy failed for" << from << out.errorString();
+            out.close();
+            out.remove();
+            return false;
+        }
+    }
+    out.close();
+    if (out.error() != QFileDevice::NoError) {
+        qWarning() << "support bundle: log flush failed for" << from << out.errorString();
+        out.remove();
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
 
 QString SupportBundle::createBundle(const RadioInfo& radio)
 {
@@ -115,24 +159,32 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
             if (fi.isSymLink() || fi.size() < 100) continue;
             QString dest = (copied == 0) ? "aethersdr.log"
                                          : QString("aethersdr-%1.log").arg(copied);
-            QFile::copy(fi.absoluteFilePath(), tmp + "/" + dest);
+            // RE-SCRUB ON THE WAY IN, don't QFile::copy (#5480).
+            //
+            // Lines are redacted at capture, so a log written by THIS build is
+            // already clean. An older log on disk is not: it was written by
+            // whatever redactor shipped at the time, and a bundle generated
+            // after an upgrade would carry those pre-upgrade lines out of the
+            // machine unchanged. Redaction is idempotent, so running it again
+            // over an already-clean line is a no-op.
+            //
+            // The source log is deliberately left alone: it is the operator's
+            // own diagnostic record on their own machine, and rewriting it
+            // would destroy detail they may still need. Only the copy that
+            // leaves is scrubbed.
+            if (!copyLogRedacted(fi.absoluteFilePath(), tmp + "/" + dest))
+                continue;
             ++copied;
         }
     }
 
-    // 2. System info JSON
+    // 2. System info JSON — field set defined (and regression-pinned) via
+    // systemInfoJson() in the header.
     {
-        auto sys = collectSystemInfo();
-        QJsonObject obj;
-        obj["aetherVersion"] = sys.aetherVersion;
-        obj["qtVersion"]     = sys.qtVersion;
-        obj["os"]            = sys.osName;
-        obj["kernel"]        = sys.kernelVersion;
-        obj["cpu"]           = sys.cpuArch;
-        obj["buildDate"]     = sys.buildDate;
         QFile f(tmp + "/system-info.json");
         if (f.open(QIODevice::WriteOnly))
-            f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
+            f.write(QJsonDocument(systemInfoJson(collectSystemInfo()))
+                        .toJson(QJsonDocument::Indented));
     }
 
     // 3. Radio info JSON
@@ -247,7 +299,9 @@ void SupportBundle::openEmailClient(const QString& bundlePath,
     body += QString("App: AetherSDR v%1\n").arg(sys.aetherVersion);
     body += QString("Qt: %1\n").arg(sys.qtVersion);
     body += QString("OS: %1 (kernel %2)\n").arg(sys.osName, sys.kernelVersion);
-    body += QString("CPU: %1\n").arg(sys.cpuArch);
+    body += QString("CPU: %1\n").arg(sys.cpu);
+    body += QString("RAM: %1\n").arg(sys.ram);
+    body += QString("GPU: %1\n").arg(sys.gpu);
     body += QString("Build: %1\n").arg(sys.buildDate);
 
     if (radio.connected) {

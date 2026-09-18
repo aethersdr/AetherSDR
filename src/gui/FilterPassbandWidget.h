@@ -18,6 +18,7 @@ public:
 
     void setFilter(int lo, int hi);
     void setMode(const QString& mode);
+    void setWidthRange(int minimumHz, int maximumHz, int stepHz);
 
     int filterLo() const { return m_lo; }
     int filterHi() const { return m_hi; }
@@ -38,6 +39,9 @@ private:
     int m_lo{100};
     int m_hi{2800};
     QString m_mode{"USB"};
+    int m_minimumWidthHz{50};
+    int m_maximumWidthHz{0};  // no advertised limit: preserve legacy gestures
+    int m_widthStepHz{50};
 
     enum DragMode { DragNone, DragShift, DragLo, DragHi };
     DragMode m_dragMode{DragNone};
@@ -45,7 +49,6 @@ private:
     int m_dragStartLo{0};
     int m_dragStartHi{0};
 
-    static constexpr int MIN_BW = 50;
 };
 
 } // namespace AetherSDR

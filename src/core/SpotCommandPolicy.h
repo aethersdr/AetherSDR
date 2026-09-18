@@ -8,6 +8,6 @@ inline constexpr const char* kPassiveSpotsModeKey = "PassiveSpotsMode";
 
 bool passiveModeFromSetting(const QVariant& value);
 bool passiveSpotsModeEnabled();
-bool shouldSendSpotAddCommands();
+bool shouldSendSpotAddCommands(bool backendAlwaysUsesClientSideSpots);
 
 } // namespace AetherSDR::SpotCommandPolicy

@@ -49,8 +49,112 @@ warren@pratt.one
  
 #define LOWESS_BANDWIDTH   0.15
 #define LOWESS_ROBUST_ITER 3 
+#define BISQUARE_SCALE     6.0
 #define TAIL_X_MIN         0.90 
 #define AGREE_TOL_FRAC     0.05
+
+typedef struct _stlowess
+{
+    double* rw;
+    double* resid;
+    double* resid_sorted;
+}stlowess, *STLOWESS;
+
+typedef struct _point 
+{ 
+    double x, y; 
+} Point;
+
+typedef struct _extrap1
+{
+    STLOWESS stl;
+    Point* pts;
+    double* xs;
+    double* ys;
+    double* sm;
+    double* tw;
+}extrap1, *EXTRAP1;
+
+typedef struct _extrap0
+{
+    STLOWESS stl;
+    Point* pts;
+    double* xs;
+    double* ys;
+    double* sm;
+    double* hw;
+}extrap0, *EXTRAP0;
+
+static void* zmalloc(int size)
+{
+    const int alignment = 16;
+    void* p = _aligned_malloc(size, alignment);
+    if (p != 0) memset(p, 0, size);
+    return p;
+}
+
+STLOWESS build_lowess(int n)
+{
+    STLOWESS s = (STLOWESS)zmalloc(sizeof(stlowess));
+    s->rw = (double*)zmalloc(n * sizeof(double));
+    s->resid = (double*)zmalloc(n * sizeof(double));
+    s->resid_sorted = (double*)zmalloc(n * sizeof(double));
+    return s;
+}
+
+EXTRAP1 build_extrap1(int n)
+{
+    EXTRAP1 a = (EXTRAP1)zmalloc(sizeof(extrap1));
+    a->stl = build_lowess(n);
+    a->pts = (Point*)zmalloc(n * sizeof(Point));
+    a->xs = (double*)zmalloc(n * sizeof(double));
+    a->ys = (double*)zmalloc(n * sizeof(double));
+    a->sm = (double*)zmalloc(n * sizeof(double));
+    a->tw = (double*)zmalloc(n * sizeof(double));
+    return a;
+}
+
+EXTRAP0 build_extrap0(int n)
+{
+    EXTRAP0 a = (EXTRAP0)zmalloc(sizeof(extrap0));
+    a->stl = build_lowess(n);
+    a->pts = (Point*)zmalloc(n * sizeof(Point));
+    a->xs = (double*)zmalloc(n * sizeof(double));
+    a->ys = (double*)zmalloc(n * sizeof(double));
+    a->sm = (double*)zmalloc(n * sizeof(double));
+    a->hw = (double*)zmalloc(n * sizeof(double));
+    return a;
+}
+
+void teardown_lowess(STLOWESS s)
+{
+    _aligned_free(s->resid_sorted);
+    _aligned_free(s->resid);
+    _aligned_free(s->rw);
+    _aligned_free(s);
+}
+
+void teardown_extrap1(EXTRAP1 a)
+{
+    _aligned_free(a->tw);
+    _aligned_free(a->sm);
+    _aligned_free(a->ys);
+    _aligned_free(a->xs);
+    _aligned_free(a->pts);
+    teardown_lowess(a->stl);
+    _aligned_free(a);
+}
+
+void teardown_extrap0(EXTRAP0 a)
+{
+    _aligned_free(a->hw);
+    _aligned_free(a->sm);
+    _aligned_free(a->ys);
+    _aligned_free(a->xs);
+    _aligned_free(a->pts);
+    teardown_lowess(a->stl);
+    _aligned_free(a);
+}
 
 static double tricube(double u)
 {
@@ -70,7 +174,6 @@ static double bisquare(double u)
 
 static double median_of(double *arr, int n)
 {
-     
     for (int i = 1; i < n; i++) 
     {
         double key = arr[i];
@@ -104,9 +207,8 @@ static double wls_degree1(const double *xv, const double *yv,
  
 static int gauss_solve(double *A, double *b, double *x, int sz)
 {
-     
-    for (int col = 0; col < sz; col++) {
-         
+    for (int col = 0; col < sz; col++) 
+    {
         int pivot = col;
         double best = fabs(A[col*sz + col]);
         for (int row = col+1; row < sz; row++) 
@@ -174,24 +276,13 @@ static double wls_poly(const double *xv, const double *yv,
     return result;
 }
  
-#define BISQUARE_SCALE 6.0
- 
-static void lowess(const double *xs, const double *ys, int n,
+static void lowess(STLOWESS a, const double *xs, const double *ys, int n,
                    double bandwidth, int robust_iters, double *smoothed)
 {
     int k = (int)ceil(bandwidth * (double)n);
     if (k < 2) k = 2;
     if (k > n) k = n;
-    double *rw    = (double *)malloc(n * sizeof(double));
-    double *resid = (double *)malloc(n * sizeof(double));
-    if (!rw || !resid) 
-    {
-        memcpy(smoothed, ys, n * sizeof(double));
-        free(rw);
-        free(resid);
-        return;
-    }
-    for (int i = 0; i < n; i++) rw[i] = 1.0;
+    for (int i = 0; i < n; i++) a->rw[i] = 1.0;
     for (int iter = 0; iter <= robust_iters; iter++) 
     { 
         for (int i = 0; i < n; i++) {
@@ -209,7 +300,7 @@ static void lowess(const double *xs, const double *ys, int n,
             for (int j = lo; j <= hi; j++) 
             {
                 double u = fabs(xs[j] - xs[i]) / dmax;
-                double w = tricube(u) * rw[j];
+                double w = tricube(u) * a->rw[j];
                 S0 += w;
                 S1 += w * xs[j];
                 S2 += w * xs[j] * xs[j];
@@ -230,21 +321,14 @@ static void lowess(const double *xs, const double *ys, int n,
         }
         if (iter == robust_iters) break;
         for (int i = 0; i < n; i++)
-            resid[i] = fabs(ys[i] - smoothed[i]);
-        double *resid_sorted = (double *)malloc(n * sizeof(double));
-        if (!resid_sorted) continue;
-        memcpy(resid_sorted, resid, n * sizeof(double));
-        double med = median_of(resid_sorted, n);
-        free(resid_sorted);
+            a->resid[i] = fabs(ys[i] - smoothed[i]);
+        memcpy(a->resid_sorted, a->resid, n * sizeof(double));
+        double med = median_of(a->resid_sorted, n);
         double scale = fmax(BISQUARE_SCALE * med, 1e-10);
         for (int i = 0; i < n; i++)
-            rw[i] = bisquare(resid[i] / scale);
+            a->rw[i] = bisquare(a->resid[i] / scale);
     }
-    free(rw);
-    free(resid);
 }
- 
-typedef struct { double x, y; } Point;
 
 static int cmp_point_x(const void *a, const void *b)
 {
@@ -252,7 +336,7 @@ static int cmp_point_x(const void *a, const void *b)
     return (dx > 0) - (dx < 0);
 }
 
-ExtrapolationResult extrapolate_y_at_1(const double *x, const double *y, int n)
+ExtrapolationResult extrapolate_y_at_1(EXTRAP1 a, const double *x, const double *y, int n)
 {
     ExtrapolationResult result = {0.5, EXTRAP_LOW_CONFIDENCE, 0.5, 0.5, 0.5};
 
@@ -261,29 +345,20 @@ ExtrapolationResult extrapolate_y_at_1(const double *x, const double *y, int n)
         result.y_at_1 = 1.0;
         return result;
     } 
-    Point *pts = (Point *)malloc(n * sizeof(Point));
-    if (!pts) return result;
-    for (int i = 0; i < n; i++) { pts[i].x = x[i]; pts[i].y = y[i]; }
+    for (int i = 0; i < n; i++) { a->pts[i].x = x[i]; a->pts[i].y = y[i]; }
     for (int i = 0; i < n; i++) 
     {
-        if (pts[i].x < 0.0) pts[i].x = 0.0;   
-        if (pts[i].x > 1.0) pts[i].x = 1.0;   
+        if (a->pts[i].x < 0.0) a->pts[i].x = 0.0;
+        if (a->pts[i].x > 1.0) a->pts[i].x = 1.0;
     }
-    qsort(pts, n, sizeof(Point), cmp_point_x);
-    double *xs = (double *)malloc(n * sizeof(double));
-    double *ys = (double *)malloc(n * sizeof(double));
-    double *sm = (double *)malloc(n * sizeof(double));
-    if (!xs || !ys || !sm) 
-    {
-        free(pts); free(xs); free(ys); free(sm);
-        return result;
-    }
-    for (int i = 0; i < n; i++) { xs[i] = pts[i].x; ys[i] = pts[i].y; }
-    free(pts); 
-    lowess(xs, ys, n, LOWESS_BANDWIDTH, LOWESS_ROBUST_ITER, sm); 
+    qsort(a->pts, n, sizeof(Point), cmp_point_x);
+    for (int i = 0; i < n; i++) { a->xs[i] = a->pts[i].x; a->ys[i] = a->pts[i].y; }
+    memset(a->sm, 0, n * sizeof(double));
+    memset(a->tw, 0, n * sizeof(double));
+    lowess(a->stl, a->xs, a->ys, n, LOWESS_BANDWIDTH, LOWESS_ROBUST_ITER, a->sm);
     int tail_n = 0;
     for (int i = 0; i < n; i++)
-        if (xs[i] >= TAIL_X_MIN) tail_n++;
+        if (a->xs[i] >= TAIL_X_MIN) tail_n++;
     if (tail_n < 4) 
     {
         tail_n = n / 10;
@@ -291,25 +366,19 @@ ExtrapolationResult extrapolate_y_at_1(const double *x, const double *y, int n)
         if (tail_n > n) tail_n = n;
     }
     int tail_start = n - tail_n;
-    const double *tx = xs + tail_start;    
-    const double *ty = sm + tail_start;     
-    double *tw = (double *)malloc(tail_n * sizeof(double));
-    if (!tw) 
-    {
-        free(xs); free(ys); free(sm);
-        return result;
-    }
+    const double *tx = a->xs + tail_start;
+    const double *ty = a->sm + tail_start;
     double x_min_tail = tx[0];
     double x_range    = 1.0 - x_min_tail;
     if (x_range < 1e-9) x_range = 1e-9;
     for (int i = 0; i < tail_n; i++) 
     {
         double rel = (tx[i] - x_min_tail) / x_range;   
-        tw[i] = 0.1 + 0.9 * rel;   
+        a->tw[i] = 0.1 + 0.9 * rel;
     }
-    double y1 = wls_poly(tx, ty, tw, tail_n, 1, 1.0);
-    double y2 = wls_poly(tx, ty, tw, tail_n, 2, 1.0);
-    double y3 = wls_poly(tx, ty, tw, tail_n, 3, 1.0);
+    double y1 = wls_poly(tx, ty, a->tw, tail_n, 1, 1.0);
+    double y2 = wls_poly(tx, ty, a->tw, tail_n, 2, 1.0);
+    double y3 = wls_poly(tx, ty, a->tw, tail_n, 3, 1.0);
     double ty_min = ty[0], ty_max = ty[0];
     for (int i = 1; i < tail_n; i++) 
     {
@@ -336,14 +405,11 @@ ExtrapolationResult extrapolate_y_at_1(const double *x, const double *y, int n)
         result.y_at_1      = y1;    
         result.confidence  = EXTRAP_LOW_CONFIDENCE;
     }
-    free(xs); free(ys); free(sm); free(tw);
     return result;
 }
 
-ExtrapolationResult extrapolate_y_at_0(const double *x, const double *y,
-                                        int n,
-                                        double x_lo,
-                                        double x_head_max)
+ExtrapolationResult extrapolate_y_at_0(EXTRAP0 a, const double *x, const double *y,
+                                          int n, double x_lo, double x_head_max)
 {
     ExtrapolationResult result = {1.0, EXTRAP_LOW_CONFIDENCE, 1.0, 1.0, 1.0};
     if (n < 4) 
@@ -354,8 +420,6 @@ ExtrapolationResult extrapolate_y_at_0(const double *x, const double *y,
     if (x_head_max <= 0.0) x_head_max = 0.15;
     if (x_head_max >  1.0) x_head_max = 1.0;
     if (x_lo >= x_head_max) x_lo = 0.0;    
-    Point *pts = (Point *)malloc(n * sizeof(Point));
-    if (!pts) return result;
     int n_filt = 0;
     for (int i = 0; i < n; i++) 
     {
@@ -363,44 +427,30 @@ ExtrapolationResult extrapolate_y_at_0(const double *x, const double *y,
         if (xi < x_lo) continue;               
         if (xi < 0.0)  xi = 0.0;
         if (xi > 1.0)  xi = 1.0;
-        pts[n_filt].x = xi;
-        pts[n_filt].y = y[i];
+        a->pts[n_filt].x = xi;
+        a->pts[n_filt].y = y[i];
         n_filt++;
     }
     if (n_filt < 4) 
     {
-        free(pts);
         return result;
     }
-    qsort(pts, n_filt, sizeof(Point), cmp_point_x);
-    double *xs = (double *)malloc(n_filt * sizeof(double));
-    double *ys = (double *)malloc(n_filt * sizeof(double));
-    double *sm = (double *)malloc(n_filt * sizeof(double));
-    if (!xs || !ys || !sm) 
-    {
-        free(pts); free(xs); free(ys); free(sm);
-        return result;
-    }
-    for (int i = 0; i < n_filt; i++) { xs[i] = pts[i].x; ys[i] = pts[i].y; }
-    free(pts);
-    lowess(xs, ys, n_filt, LOWESS_BANDWIDTH, LOWESS_ROBUST_ITER, sm);
+    qsort(a->pts, n_filt, sizeof(Point), cmp_point_x);
+    for (int i = 0; i < n_filt; i++) { a->xs[i] = a->pts[i].x; a->ys[i] = a->pts[i].y; }
+    memset(a->sm, 0, n * sizeof(double));
+    memset(a->hw, 0, n * sizeof(double));
+    lowess(a->stl, a->xs, a->ys, n_filt, LOWESS_BANDWIDTH, LOWESS_ROBUST_ITER, a->sm);
     int head_n = 0;
     for (int i = 0; i < n_filt; i++)
-        if (xs[i] <= x_head_max) head_n++;
+        if (a->xs[i] <= x_head_max) head_n++;
     if (head_n < 4) 
     {
         head_n = n_filt / 10;
         if (head_n < 4)  head_n = 4;
         if (head_n > n_filt) head_n = n_filt;
     }
-    const double *hx = xs;         
-    const double *hy = sm;         
-    double *hw = (double *)malloc(head_n * sizeof(double));
-    if (!hw) 
-    {
-        free(xs); free(ys); free(sm);
-        return result;
-    }
+    const double *hx = a->xs;
+    const double *hy = a->sm;
     double x_min_head = hx[0];
     double x_span     = x_head_max - x_min_head;
     if (x_span < 1e-9) x_span = 1e-9;
@@ -409,11 +459,11 @@ ExtrapolationResult extrapolate_y_at_0(const double *x, const double *y,
         double rel = 1.0 - (hx[i] - x_min_head) / x_span;
         if (rel < 0.0) rel = 0.0;
         if (rel > 1.0) rel = 1.0;
-        hw[i] = 0.1 + 0.9 * rel;    
+        a->hw[i] = 0.1 + 0.9 * rel;
     }
-    double y1 = wls_poly(hx, hy, hw, head_n, 1, 0.0);
-    double y2 = wls_poly(hx, hy, hw, head_n, 2, 0.0);
-    double y3 = wls_poly(hx, hy, hw, head_n, 3, 0.0); 
+    double y1 = wls_poly(hx, hy, a->hw, head_n, 1, 0.0);
+    double y2 = wls_poly(hx, hy, a->hw, head_n, 2, 0.0);
+    double y3 = wls_poly(hx, hy, a->hw, head_n, 3, 0.0);
     double hy_min = hy[0], hy_max = hy[0];
     for (int i = 1; i < head_n; i++) 
     {
@@ -440,7 +490,6 @@ ExtrapolationResult extrapolate_y_at_0(const double *x, const double *y,
         result.y_at_1     = y1;    
         result.confidence = EXTRAP_LOW_CONFIDENCE;
     }
-    free(xs); free(ys); free(sm); free(hw);
     return result;
 }
 

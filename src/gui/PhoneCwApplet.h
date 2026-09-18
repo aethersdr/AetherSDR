@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QPointer>
 
 class QPushButton;
 class QLabel;
@@ -12,7 +13,13 @@ class QStackedWidget;
 namespace AetherSDR {
 
 class HGauge;
+class SliceModel;
 class TransmitModel;
+
+enum class MicMeterSessionState {
+    Disconnected,
+    Connected,
+};
 
 // P/CW applet — mode-aware panel that shows Phone controls (default) or CW
 // controls when the active slice is in CW/CWL mode.  Both sub-panels live
@@ -27,11 +34,45 @@ public:
     // Show or hide the mic-level gauge. False on a radio that defines no
     // microphone-peak meter at all — the face would be permanently at its floor
     // and read as a fault rather than as an absence.
-    void setMicLevelMeterAvailable(bool available);
+    void setMicLevelMeterState(MicMeterSessionState session, bool available);
     void setDaxVisible(bool visible);
+    void setCompressionMaximumDb(float maximum);
+    void setCwControlLimits(int minWpm, int maxWpm, int minPitchHz,
+                           int maxPitchHz, int pitchStepHz);
+    void setSpeechProcessorPresentation(const QString& label, int maximum);
     explicit PhoneCwApplet(QWidget* parent = nullptr);
 
     void setTransmitModel(TransmitModel* model);
+
+    // Bind the active slice.  TransmitModel is radio-global TX state; APF is a
+    // per-slice receive filter, so the CW panel needs the slice itself to drive
+    // its APF row (#4879).  Re-binding disconnects the previous slice first —
+    // AppletPanel::setSlice is called on every active-slice change, so a
+    // connect-only binding stacked a duplicate handler each time the operator
+    // returned to a slice they had used before.
+    void setSlice(SliceModel* slice);
+
+    // Does the attached radio run a CW audio peaking filter in firmware?
+    // Gates the APF row, whose only effect is `slice set <n> apf=` — a Flex
+    // verb, not "any radio-side DSP". hasRadioSideDsp is too coarse: Icom
+    // declares that true for NR/NB/notch and has no APF register. Pushed from
+    // MainWindow::applyCapabilitiesToUi off RadioModel::hasAudioPeakingFilter(),
+    // which is permissive while disconnected so the row does not blink off
+    // on a Flex unplug.
+    void setHasAudioPeakingFilter(bool has);
+
+    // Does THIS session's radio publish an ALCGAIN meter? Gates the ALC Gain
+    // gauge, which is otherwise a face that can never move: the HL2 is the
+    // only family in the tree that publishes the meter, and the shared Phone
+    // panel is also Flex's, Icom's and the sim's. Pushed from
+    // MainWindow::applyCapabilitiesToUi off MeterModel::hasAlcGainMeter(),
+    // and again on definition changes, because meters are DEFINED after
+    // capabilities are published on the connect edge.
+    //
+    // NOT permissive while disconnected, unlike the APF row above: this gauge
+    // is new, and "no radio attached" must render as the panel that shipped
+    // before it rather than as a gauge nothing can drive.
+    void setHasAlcGainMeter(bool has);
 
 signals:
     void micLevelChanged(int level);  // slider value 0-100
@@ -51,12 +92,25 @@ public slots:
                       float micPeak, float compPeak);
     void updateCompression(float compPeak);
 
+    // The gain the transmitter's ALC is applying, in dB (0 = unity). A
+    // different reading from updateAlc() below, not a second scaling of it:
+    // that one is the post-ALC LEVEL, which sits near the ALC's target however
+    // the operator has set their gain, and this is how hard the stage is
+    // working to put it there — the half that answers "is the ALC holding, and
+    // by how much" when a transmission goes out quiet.
+    void updateAlcGain(float gainDb);
+    // Clear immediately to the face floor on unkey, disconnect or invalidation.
+    // A missing reading must not animate through apparently measured gains.
+    void resetAlcGain();
+
     // Notify the applet when RADE mode activates/deactivates so the mic level
     // slider and meter behave correctly (client-side gain + RX metering).
     void setRadeActive(bool on);
 
     // CW meter (ALC 0–100)
     void updateAlc(float alc);
+    void setAlcMeterUnit(const QString& unit);
+    void resetAlc();
 
     // Switch between Phone and CW sub-panels based on slice mode.
     void setMode(const QString& mode);
@@ -69,9 +123,16 @@ private:
     void buildCwPanel();
     void syncPhoneFromModel();
     void syncCwFromModel();
+    void syncApfFromSlice();
     void applyLevelMeterReceiveGate();
+    void resetLevelMeter();
 
     TransmitModel* m_model{nullptr};
+    // QPointer, not a raw pointer: MainWindow calls setSlice(nullptr) from
+    // onSliceRemoved, by which point the outgoing SliceModel is already
+    // deleteLater'd — disconnecting through a dangling raw pointer would be a
+    // use-after-free on any path that drains the event loop first.
+    QPointer<SliceModel> m_slice;
     QStackedWidget* m_stack{nullptr};
     QWidget* m_phonePanel{nullptr};
     QWidget* m_cwPanel{nullptr};
@@ -79,8 +140,19 @@ private:
     // ── Phone sub-panel widgets ──────────────────────────────────────────
 
     HGauge* m_levelGauge{nullptr};
+    MicMeterSessionState m_micLevelMeterSession{MicMeterSessionState::Disconnected};
     bool m_micLevelMeterAvailable{true};
     HGauge* m_compGauge{nullptr};
+    // Phone panel only, beside Compression — the two gauges that report what
+    // the transmit chain is DOING to the operator's audio, as opposed to the
+    // Level and ALC gauges above and below them, which report levels. Not
+    // mirrored onto the CW panel the way the ALC gauge is: the remedy this
+    // meter points at is the mic slider, which is a Phone control.
+    HGauge* m_alcGainGauge{nullptr};
+    // Hidden until a radio says it publishes the meter — see
+    // setHasAlcGainMeter(). False by default so the gauge is built hidden and
+    // a family that never publishes ALCGAIN gets the panel it had before.
+    bool m_hasAlcGainMeter{false};
 
     QComboBox* m_micProfileCombo{nullptr};
 
@@ -91,7 +163,10 @@ private:
     QPushButton* m_accBtn{nullptr};
 
     QPushButton* m_procBtn{nullptr};
-    QSlider*     m_procSlider{nullptr};   // 3-position: 0=NOR, 1=DX, 2=DX+
+    QSlider*     m_procSlider{nullptr};   // capability-shaped: presets or 0..100
+    QLabel*      m_procLowLabel{nullptr};
+    QLabel*      m_procMidLabel{nullptr};
+    QLabel*      m_procHighLabel{nullptr};
     QPushButton* m_daxBtn{nullptr};
 
     QPushButton* m_monBtn{nullptr};
@@ -121,10 +196,31 @@ private:
 
     QPushButton* m_breakinBtn{nullptr};
     QPushButton* m_iambicBtn{nullptr};
+    QPushButton* m_holdDelayBtn{nullptr};   // "Hold Dly" — opt-in, AppSettings-backed
+    // Renders the three states of the Hold Dly toggle (off / on-and-holding /
+    // on-but-holding-nothing) in style, tooltip and accessible description.
+    void updateHoldDelayAffordance();
 
+    QString m_alcMeterUnit{QStringLiteral("dBFS")};
+    float m_compressionMaximumDb{25.0f};
+    int m_pitchMinHz{100};
+    int m_pitchMaxHz{6000};
+    int m_pitchStepHz{10};
     QLineEdit*   m_pitchEdit{nullptr};
     QPushButton* m_pitchDown{nullptr};
     QPushButton* m_pitchUp{nullptr};
+
+    // APF — per-slice CW audio peaking filter, mirroring the VfoWidget DSP-tab
+    // pair.  Both surfaces drive the same SliceModel, so they stay in sync
+    // without any bridging between them (#4879).
+    QWidget*     m_apfRow{nullptr};   // container, so the capability gate can hide the row whole
+    QPushButton* m_apfBtn{nullptr};
+    QSlider*     m_apfSlider{nullptr};
+    QLineEdit*   m_apfEdit{nullptr};
+    // Permissive default, matching RadioModel::hasAudioPeakingFilter()'s
+    // disconnected rule: the row shows until a backend says otherwise, so it
+    // does not blink out of existence on every Flex disconnect edge.
+    bool m_hasAudioPeakingFilter{true};
 
     // ── Shared state ─────────────────────────────────────────────────────
 

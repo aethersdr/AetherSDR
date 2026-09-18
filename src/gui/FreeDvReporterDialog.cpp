@@ -235,6 +235,14 @@ void FreeDvReporterDialog::buildBody()
     m_table->setShowGrid(true);
     m_table->sortByColumn(FreeDvReporterModel::MHz, Qt::AscendingOrder);
 
+    // Double-click to tune + force RADE (#4125).
+    connect(m_table, &QTableView::doubleClicked, this, [this](const QModelIndex& idx) {
+        const QModelIndex src = m_proxy->mapToSource(idx);
+        const QModelIndex mhzIdx = m_model->index(src.row(), FreeDvReporterModel::MHz);
+        const double mhz = m_model->data(mhzIdx, Qt::UserRole).toDouble();
+        if (mhz > 0.0) emit tuneRequested(mhz);
+    });
+
     ThemeManager::instance().applyStyleSheet(m_table,
         "QTableView {"
         "  background-color: {{color.background.0}};"

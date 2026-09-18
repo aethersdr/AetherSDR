@@ -117,6 +117,25 @@ int main(int argc, char** argv)
         report("aether.cat description mentions TCI", catDesc.contains("TCI", Qt::CaseInsensitive));
     }
 
+    // #2554: aether.render must be REGISTERED, not merely declared. A category
+    // that exists only as a Q_LOGGING_CATEGORY is swept up by the blanket
+    // "aether.*.debug=false" in applyFilterRules(), and no UI toggle can switch
+    // it back on, because the toggle list is built from m_categories. That is
+    // not hypothetical: aether.hl2 shipped that way and silently hid the TX IQ
+    // FIFO depth until someone noticed. Assert reachability, not just presence.
+    {
+        bool found = false;
+        for (const auto& c : lm.categories()) {
+            if (c.id == "aether.render") { found = true; break; }
+        }
+        report("aether.render is registered", found);
+
+        lm.setEnabled("aether.render", true);
+        report("aether.render can be switched on", lcRender().isInfoEnabled());
+        lm.setEnabled("aether.render", false);
+        report("aether.render can be switched off", !lcRender().isInfoEnabled());
+    }
+
     // Toggling back off closes the gate again.
     lm.setEnabled("aether.cat", false);
     report("re-disabled: info off", !lcCat().isInfoEnabled());

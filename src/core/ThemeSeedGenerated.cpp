@@ -28,6 +28,28 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.accent.dim", QString("#0070c0"));
     m_tokens.insert("color.accent.success", QString("#4dd87a"));
     m_tokens.insert("color.accent.warning", QString("#ffb84d"));
+    m_tokens.insert("color.accessory.dial.face", QString("#0070c0"));
+    m_tokens.insert("color.accessory.dial.needle", QString("#e6f0fa"));
+    m_tokens.insert("color.accessory.dial.rim", QString("#3a4a5a"));
+    m_tokens.insert("color.accessory.key.bypass.background", QString("#8a6000"));
+    m_tokens.insert("color.accessory.key.bypass.foreground", QString("#ffd9a0"));
+    m_tokens.insert("color.accessory.key.meffa.active.background", QString("#006030"));
+    m_tokens.insert("color.accessory.key.meffa.active.border", QString("#008040"));
+    m_tokens.insert("color.accessory.key.meffa.active.foreground", QString("#e6f0fa"));
+    m_tokens.insert("color.accessory.key.meffa.active.hover", QString("#007040"));
+    m_tokens.insert("color.accessory.key.meffa.standby.foreground", QString("#008040"));
+    m_tokens.insert("color.accessory.key.standby.background", QString("#5a3a0a"));
+    m_tokens.insert("color.accessory.key.standby.foreground", QString("#ffb84d"));
+    {
+        ThemeGradient g;
+        g.type = ThemeGradient::Linear;
+        g.angle = 90.0;
+        g.stops.append({0.0, QColor("#1a5c30")});
+        g.stops.append({0.35, QColor("#4a5520")});
+        g.stops.append({0.65, QColor("#6a4520")});
+        g.stops.append({1.0, QColor("#6e1f1f")});
+        m_tokens.insert("color.accessory.swrScale", QVariant::fromValue(g));
+    }
     m_tokens.insert("color.background.0", QString("#0f0f1a"));
     m_tokens.insert("color.background.1", QString("#1a2a3a"));
     m_tokens.insert("color.background.2", QString("#304050"));
@@ -49,6 +71,8 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.button.foreground.disabled", QString("#506070"));
     m_tokens.insert("color.canvas.background", QString("#08080d"));
     m_tokens.insert("color.canvas.dots", QString("#50e6f0fa"));
+    m_tokens.insert("color.control.inactive", QString("#8ea8c0"));
+    m_tokens.insert("color.control.unavailable", QString("#3a4a5a"));
     m_tokens.insert("color.highlight.fg", QString("#000000"));
     m_tokens.insert("color.highlight.message", QString("#e58be5"));
     m_tokens.insert("color.highlight.rx", QString("#379baf"));
@@ -59,6 +83,8 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.knob.foreground.disabled", QString("#3a4a5a"));
     m_tokens.insert("color.knob.handle", QString("#c8d8e8"));
     m_tokens.insert("color.knob.handle.disabled", QString("#506070"));
+    m_tokens.insert("color.map.darkBackground", QString("#18212b"));
+    m_tokens.insert("color.map.darkDetail", QString("#c8d8e8"));
     m_tokens.insert("color.meter.bar.fill", QString("#405060"));
     {
         ThemeGradient g;
@@ -102,10 +128,17 @@ void ThemeManager::seedGeneratedDefaults()
     m_tokens.insert("color.slider.foreground.disabled", QString("#3a4a5a"));
     m_tokens.insert("color.slider.handle", QString("#c8d8e8"));
     m_tokens.insert("color.slider.handle.disabled", QString("#506070"));
+    m_tokens.insert("color.spe.lcd.background", QString("#102010"));
+    m_tokens.insert("color.spe.lcd.bezel", QString("#222822"));
+    m_tokens.insert("color.spe.lcd.dim", QString("#3a553a"));
+    m_tokens.insert("color.spe.lcd.foreground", QString("#d6f5d6"));
     m_tokens.insert("color.spectrum.average", QString("#8ea8c0"));
     m_tokens.insert("color.spectrum.grid", QString("#1a2330"));
     m_tokens.insert("color.spectrum.peakHold", QString("#ffb84d"));
     m_tokens.insert("color.spectrum.trace", QString("#00b4d8"));
+    m_tokens.insert("color.spectrum.zoomButton.disabled.background", QString("#5a0f0f1a"));
+    m_tokens.insert("color.spectrum.zoomButton.disabled.border", QString("#5a304050"));
+    m_tokens.insert("color.spectrum.zoomButton.disabled.text", QString("#8c90a0b0"));
     m_tokens.insert("color.text.disabled", QString("#3a4a5a"));
     m_tokens.insert("color.text.label", QString("#506070"));
     m_tokens.insert("color.text.primary", QString("#c8d8e8"));
@@ -198,6 +231,8 @@ void ThemeManager::seedGeneratedDefaults()
     }
     m_tokens.insert("color.waterfall.history", QString("#506070"));
     m_tokens.insert("color.waterfall.live", QString("#ff4d4d"));
+    m_tokens.insert("color.waterfall.timeMarker.background", QString("#dc0f0f1a"));
+    m_tokens.insert("color.waterfall.timeMarker.foreground", QString("#c8d8e8"));
     {
         ThemeFont f;
         f.family = QStringLiteral("DSEG7 Modern");

@@ -1,5 +1,9 @@
 #include "ConnectionPanel.h"
 #include "core/AppSettings.h"
+#include "core/backends/ConnectionSharingPolicy.h"  // in-use share gate (#4448), shared with MainWindow_Session
+#include "core/backends/anan/AnanDiscovery.h" // shared nickname + MAC->serial helpers
+#include "core/backends/anan/AnanSettings.h"  // owned "Anan" settings object (Principle V)
+#include "core/backends/anan/P2Protocol.h"  // buildDiscovery/parseDiscoveryReply, kRadioPort
 #include "core/backends/hl2/Hl2Discovery.h"   // shared nickname + MAC->serial helpers
 #include "core/backends/icom/IcomCredentials.h"  // password -> OS keychain, never settings
 #include "core/backends/icom/IcomSettings.h"     // host/user/ports (Principle V)
@@ -34,6 +38,7 @@
 #include <QScreen>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QSpinBox>
 #include <QStyle>
 #include <QTcpSocket>
 #include <QHostInfo>
@@ -178,8 +183,12 @@ QString familyFromProfile(const QJsonObject& profile)
         profile.value("identity").toObject().value("family").toString().trimmed().toLower();
     if (family == QLatin1String(ConnectionPanel::kFamilyHl2))
         return QString::fromLatin1(ConnectionPanel::kFamilyHl2);
+    if (family == QLatin1String(ConnectionPanel::kFamilyAnan))
+        return QString::fromLatin1(ConnectionPanel::kFamilyAnan);
     if (family == QLatin1String(ConnectionPanel::kFamilyIcom))
         return QString::fromLatin1(ConnectionPanel::kFamilyIcom);
+    if (family == QLatin1String(ConnectionPanel::kFamilyRtl))
+        return QString::fromLatin1(ConnectionPanel::kFamilyRtl);
     return QString::fromLatin1(ConnectionPanel::kFamilyFlex);
 }
 
@@ -194,6 +203,18 @@ RadioBindSettings bindSettingsFromProfile(const QJsonObject& profile)
     settings.interfaceName = bind.value("interface_name").toString();
     settings.bindAddress = QHostAddress(bind.value("last_successful_ipv4").toString());
     return settings;
+}
+
+bool icomBasePortFromProfile(const QJsonObject& profile, quint16* basePort)
+{
+    const int stored = profile.value("icom").toObject().value("base_port").toInt(0);
+    if (stored <= 0 || stored > IcomSettings::maximumBasePort()) {
+        return false;
+    }
+    if (basePort) {
+        *basePort = static_cast<quint16>(stored);
+    }
+    return true;
 }
 
 QString staleSelectionText(const RadioBindSettings& settings)
@@ -699,7 +720,11 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     AetherSDR::applyComboStyle(m_manualRadioTypeCombo, comboExtraRules);
     m_manualRadioTypeCombo->addItem(tr("FlexRadio"), QString::fromLatin1(kFamilyFlex));
     m_manualRadioTypeCombo->addItem(tr("Hermes-Lite 2"), QString::fromLatin1(kFamilyHl2));
+    m_manualRadioTypeCombo->addItem(tr("ANAN-G2"), QString::fromLatin1(kFamilyAnan));
     m_manualRadioTypeCombo->addItem(tr("Icom (network)"), QString::fromLatin1(kFamilyIcom));
+#ifdef AETHER_BACKEND_RTL
+    m_manualRadioTypeCombo->addItem(tr("RTL-SDR (USB)"), QString::fromLatin1(kFamilyRtl));
+#endif
     addManualRow(QStringLiteral("Radio type:"), m_manualRadioTypeCombo);
 
     m_manualIpCombo = new QComboBox(manualGroup);
@@ -750,9 +775,49 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     ThemeManager::instance().applyStyleSheet(m_manualIcomPassEdit, lineEditStyle);
     m_manualIcomPassRow = addManualRow(QStringLiteral("Icom password:"), m_manualIcomPassEdit);
 
-    // The CI-V address is the third thing the operator has to read off the
-    // radio, alongside the two above — theirs live in the Network menu, this
-    // one in Connectors > CI-V. Without it the address can only ever be the
+    // The RS-BA1 transport is always three UDP ports: control, CI-V and audio.
+    // NAT deployments commonly forward several radios through one public IP,
+    // so the operator chooses only the first external port and the next two are
+    // derived. The ordinary on-radio triplet remains the zero-effort default.
+    m_manualIcomPortCombo = new QComboBox(manualGroup);
+    m_manualIcomPortCombo->setObjectName(QStringLiteral("connectionManualIcomPortMode"));
+    m_manualIcomPortCombo->setAccessibleName(tr("Icom network ports"));
+    m_manualIcomPortCombo->setAccessibleDescription(
+        tr("Use the standard Icom UDP ports, or choose a custom first port for NAT. "
+           "The CI-V and audio ports are the next two sequential ports."));
+    AetherSDR::applyComboStyle(m_manualIcomPortCombo, comboExtraRules);
+    m_manualIcomPortCombo->addItem(
+        tr("Standard (%1–%2)")
+            .arg(IcomSettings::defaultBasePort())
+            .arg(IcomSettings::defaultBasePort() + 2),
+        QStringLiteral("__standard__"));
+    m_manualIcomPortCombo->addItem(tr("Custom NAT ports..."),
+                                   QStringLiteral("__custom__"));
+    m_manualIcomPortRow =
+        addManualRow(QStringLiteral("Icom ports:"), m_manualIcomPortCombo);
+
+    m_manualIcomBasePortSpin = new QSpinBox(manualGroup);
+    m_manualIcomBasePortSpin->setObjectName(QStringLiteral("connectionManualIcomBasePort"));
+    m_manualIcomBasePortSpin->setAccessibleName(tr("Icom first UDP port"));
+    m_manualIcomBasePortSpin->setAccessibleDescription(
+        tr("First external UDP port forwarded to the radio. AetherSDR also uses the next "
+           "two ports for CI-V and audio."));
+    m_manualIcomBasePortSpin->setRange(1, IcomSettings::maximumBasePort());
+    m_manualIcomBasePortSpin->setValue(IcomSettings::controlPort());
+    m_manualIcomBasePortSpin->setToolTip(
+        tr("First of three sequential UDP ports: control, CI-V, audio"));
+    m_manualIcomPortCustomRow =
+        addManualRow(QStringLiteral("First UDP port:"), m_manualIcomBasePortSpin);
+
+    if (!IcomSettings::usesDefaultPorts()) {
+        m_manualIcomPortCombo->setCurrentIndex(1);
+    }
+    connect(m_manualIcomPortCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int) { syncIcomPortCustomRow(); });
+
+    // The CI-V address is another value the operator may have to read off the
+    // radio. The network credentials live in the Network menu, while this one
+    // lives in Connectors > CI-V. Without it the address can only ever be the
     // IC-705 default, and every other model in kModels is unreachable: CI-V is
     // addressed, so an IC-9700 on 0xA2 silently ignores everything sent to
     // 0xA4. No ID reply, no model, and the conservative unknown fallback means
@@ -826,6 +891,136 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     // left in as a comment promising something it does not do.
     connect(m_manualIcomCivCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) { syncIcomCivCustomRow(); });
+
+    // ANAN-G2 DDC0 rate. The session's STARTING span -- live zoom (the
+    // panadapter's +/- buttons) can change it afterward, but a wide-band
+    // operator would otherwise pay the ~48 kHz default every connect and
+    // have to zoom out by hand every time. Persisted via AnanSettings
+    // (Principle V), not a bare AppSettings key, matching IcomSettings'
+    // shape for this backend's owned config.
+    m_manualAnanRateCombo = new QComboBox(manualGroup);
+    m_manualAnanRateCombo->setObjectName(QStringLiteral("connectionManualAnanRateCombo"));
+    m_manualAnanRateCombo->setAccessibleName(tr("ANAN-G2 sample rate"));
+    m_manualAnanRateCombo->setAccessibleDescription(
+        tr("DDC0 sample rate, in ksps -- also the starting width of the panadapter span. "
+           "Higher rates use more of the radio's Ethernet link."));
+    m_manualAnanRateCombo->setToolTip(
+        tr("DDC0 sample rate (ksps) -- also the starting width of the panadapter span.\n"
+           "Higher rates use more of the radio's Ethernet link."));
+    AetherSDR::applyComboStyle(m_manualAnanRateCombo, comboExtraRules);
+    for (const int ksps : anan::kDdc0RatesKsps)
+        m_manualAnanRateCombo->addItem(tr("%1 ksps").arg(ksps), ksps);
+    {
+        const int idx = m_manualAnanRateCombo->findData(anan::AnanSettings::ddc0RateKsps());
+        m_manualAnanRateCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    m_manualAnanRateRow = addManualRow(QStringLiteral("Sample rate:"), m_manualAnanRateCombo);
+    connect(m_manualAnanRateCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+        if (index < 0) return;
+        anan::AnanSettings::setDdc0RateKsps(m_manualAnanRateCombo->itemData(index).toInt());
+    });
+
+    // Which ADC feeds DDC0 (P2Protocol.h byte 17, spec p.25). Per the
+    // Appendix D block diagram (p.90): ADC0's receive chain sits behind the
+    // Ant1/2/3 relay bank, while ADC1's own RX2 chain is wired straight to
+    // its jack with no relay in front of it -- two physically different
+    // signal paths into the same DDC, not a cosmetic label swap.
+    m_manualAnanAdcCombo = new QComboBox(manualGroup);
+    m_manualAnanAdcCombo->setObjectName(QStringLiteral("connectionManualAnanAdcCombo"));
+    m_manualAnanAdcCombo->setAccessibleName(tr("ANAN-G2 ADC select"));
+    m_manualAnanAdcCombo->setAccessibleDescription(
+        tr("Which receive chain feeds DDC0: ADC0, behind the switched Ant1/2/3 "
+           "relay bank, or ADC1, wired directly to its own RX2 jack."));
+    m_manualAnanAdcCombo->setToolTip(
+        tr("Which receive chain feeds DDC0:\n"
+           "ADC0 -- behind the switched Ant1/2/3 relay bank\n"
+           "ADC1 -- wired directly to its own RX2 jack"));
+    AetherSDR::applyComboStyle(m_manualAnanAdcCombo, comboExtraRules);
+    m_manualAnanAdcCombo->addItem(tr("ADC0 (ANT1/2/3)"), 0);
+    m_manualAnanAdcCombo->addItem(tr("ADC1 (RX2)"), 1);
+    {
+        const int idx = m_manualAnanAdcCombo->findData(anan::AnanSettings::ddc0AdcIndex());
+        m_manualAnanAdcCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    m_manualAnanAdcRow = addManualRow(QStringLiteral("Select ADC:"), m_manualAnanAdcCombo);
+    connect(m_manualAnanAdcCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+        if (index < 0) return;
+        anan::AnanSettings::setDdc0AdcIndex(m_manualAnanAdcCombo->itemData(index).toInt());
+    });
+
+    // ADC dither/randomization -- standard ADC linearization options
+    // (P2Protocol.h bytes 5/6, spec p.24-25), default on. One control each,
+    // not per-ADC: this radio does not expose a per-ADC pair for either.
+    m_manualAnanDitherCheck = new QCheckBox(tr("Dither"), manualGroup);
+    m_manualAnanDitherCheck->setObjectName(QStringLiteral("connectionManualAnanDither"));
+    m_manualAnanDitherCheck->setAccessibleDescription(
+        tr("Enables the ADC's dither bit. Standard converter linearization; "
+           "leave this on unless you have a specific reason to test without it."));
+    m_manualAnanDitherCheck->setToolTip(
+        tr("Enables the ADC's dither bit -- standard converter linearization.\n"
+           "Leave this on unless you have a specific reason to test without it."));
+    m_manualAnanDitherCheck->setChecked(anan::AnanSettings::ditherEnabled());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_manualAnanDitherCheck, lowBandwidthCheckStyle);
+    m_manualAnanDitherRow = addManualRow(QStringLiteral(""), m_manualAnanDitherCheck);
+    connect(m_manualAnanDitherCheck, &QCheckBox::toggled,
+            this, [](bool on) { anan::AnanSettings::setDitherEnabled(on); });
+
+    m_manualAnanRandomCheck = new QCheckBox(tr("Random"), manualGroup);
+    m_manualAnanRandomCheck->setObjectName(QStringLiteral("connectionManualAnanRandom"));
+    m_manualAnanRandomCheck->setAccessibleDescription(
+        tr("Enables the ADC's random bit. Standard converter linearization; "
+           "leave this on unless you have a specific reason to test without it."));
+    m_manualAnanRandomCheck->setToolTip(
+        tr("Enables the ADC's random bit -- standard converter linearization.\n"
+           "Leave this on unless you have a specific reason to test without it."));
+    m_manualAnanRandomCheck->setChecked(anan::AnanSettings::randomEnabled());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_manualAnanRandomCheck, lowBandwidthCheckStyle);
+    m_manualAnanRandomRow = addManualRow(QStringLiteral(""), m_manualAnanRandomCheck);
+    connect(m_manualAnanRandomCheck, &QCheckBox::toggled,
+            this, [](bool on) { anan::AnanSettings::setRandomEnabled(on); });
+
+    // Alex0/Alex1's own HF Bypass relays (spec Appendix D p.90-91), one per
+    // ADC's filter bank. Default on, and for now this is NOT a selectivity
+    // trade-off despite the name: this backend has no per-band filter
+    // selection yet (02-working-plan.md Step 3, not started), so nothing
+    // ever picks one of the bank's narrow filters. With Bypass off AND no
+    // filter selected, the relay chain has no closed path through it at
+    // all -- not "filtered but attenuated", literally disconnected. Bypass
+    // stays the only way to receive anything on this ADC until Step 3 adds
+    // real band-filter selection to choose between.
+    m_manualAnanBypassAdc0Check = new QCheckBox(tr("ADC0 RF filter bypass"), manualGroup);
+    m_manualAnanBypassAdc0Check->setObjectName(QStringLiteral("connectionManualAnanBypassAdc0"));
+    m_manualAnanBypassAdc0Check->setAccessibleDescription(
+        tr("Routes ADC0's antenna signal around its front-end filter bank instead of "
+           "through a specific band filter. Leave this checked: no band filter is ever "
+           "selected in this version, so with it unchecked nothing reaches the ADC at "
+           "all, not just a less selective receiver."));
+    m_manualAnanBypassAdc0Check->setToolTip(
+        tr("Routes ADC0's antenna signal around its front-end filter bank instead\n"
+           "of through a specific band filter. Leave this checked: no band filter\n"
+           "is ever selected in this version, so unchecked means nothing reaches\n"
+           "the ADC at all -- not just a less selective receiver."));
+    m_manualAnanBypassAdc0Check->setChecked(anan::AnanSettings::bypassAdc0Filters());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_manualAnanBypassAdc0Check, lowBandwidthCheckStyle);
+    m_manualAnanBypassAdc0Row = addManualRow(QStringLiteral(""), m_manualAnanBypassAdc0Check);
+    connect(m_manualAnanBypassAdc0Check, &QCheckBox::toggled,
+            this, [](bool on) { anan::AnanSettings::setBypassAdc0Filters(on); });
+
+    m_manualAnanBypassAdc1Check = new QCheckBox(tr("ADC1 RF filter bypass"), manualGroup);
+    m_manualAnanBypassAdc1Check->setObjectName(QStringLiteral("connectionManualAnanBypassAdc1"));
+    m_manualAnanBypassAdc1Check->setAccessibleDescription(
+        tr("The same bypass, for ADC1's own filter bank (the RX2 jack). Leave this "
+           "checked for the same reason as ADC0's."));
+    m_manualAnanBypassAdc1Check->setToolTip(
+        tr("The same bypass, for ADC1's own filter bank (the RX2 jack).\n"
+           "Leave this checked for the same reason as ADC0's."));
+    m_manualAnanBypassAdc1Check->setChecked(anan::AnanSettings::bypassAdc1Filters());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_manualAnanBypassAdc1Check, lowBandwidthCheckStyle);
+    m_manualAnanBypassAdc1Row = addManualRow(QStringLiteral(""), m_manualAnanBypassAdc1Check);
+    connect(m_manualAnanBypassAdc1Check, &QCheckBox::toggled,
+            this, [](bool on) { anan::AnanSettings::setBypassAdc1Filters(on); });
 
     // One column, set from the widest label. Rows that are hidden for a family
     // still count: the Icom rows appear and disappear as the operator changes
@@ -955,6 +1150,23 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     });
     root->addWidget(m_autoConnectCheck);
 
+    auto* wakeOnConnect = new QCheckBox(tr("Wake Icom on connect"), this);
+    wakeOnConnect->setObjectName(QStringLiteral("connectionWakeOnConnect"));
+    wakeOnConnect->setAccessibleName(tr("Wake Icom on connect"));
+    wakeOnConnect->setAccessibleDescription(tr(
+        "If Icom identity does not answer, wake the selected supported model once. "
+        "Supports IC-705, IC-7300MK2 and IC-9700, including automatic detection."));
+    wakeOnConnect->setToolTip(tr(
+        "Wake a supported Icom from standby only if it does not answer identification. "
+        "For a custom CI-V address, select the model in Connect by IP. "
+        "Does not put the radio to sleep on disconnect."));
+    wakeOnConnect->setChecked(IcomSettings::wakeOnConnect());
+    AetherSDR::ThemeManager::instance().applyStyleSheet(wakeOnConnect, lowBandwidthCheckStyle);
+    connect(wakeOnConnect, &QCheckBox::toggled, this, [](bool on) {
+        IcomSettings::setWakeOnConnect(on);
+    });
+    root->addWidget(wakeOnConnect);
+
     // Demo mode (RFC #4288): offer the synthetic "AetherSDR Demo — Simulator"
     // entry in the radio list. Default on for discoverability; the choice
     // persists. Toggling just writes the setting and shows/hides the entry — the
@@ -1057,11 +1269,20 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
             this, &ConnectionPanel::onManualConnectClicked);
     connect(m_manualIpEdit, &QLineEdit::textChanged,
             this, &ConnectionPanel::onManualIpChanged);
+    // Editing the route hands control back to the operator, including while
+    // the asynchronous startup credential read is still pending.
+    connect(m_manualIpEdit, &QLineEdit::textEdited, this, [this] {
+        m_startupProbe = false;
+    });
+    connect(m_manualRadioTypeCombo, &QComboBox::activated, this, [this] {
+        m_startupProbe = false;
+    });
     // The address was CHOSEN, not typed — restore its remembered radio type.
     // `activated` fires only for a pick out of the popup, which is exactly the
     // gesture the per-address family restore was written for; the keystroke
     // path deliberately does not carry it (see applySavedSourceSelection).
     connect(m_manualIpCombo, &QComboBox::activated, this, [this](int) {
+        m_startupProbe = false;
         applySavedSourceSelection(m_manualIpEdit->text().trimmed(),
                                   /*restoreFamily=*/true);
     });
@@ -1296,6 +1517,7 @@ void ConnectionPanel::clearPendingIcomCredentials()
     m_pendingIcomPassword.clear();
     m_pendingIcomHost.clear();
     m_pendingIcomResolvedHost.clear();
+    m_pendingIcomBasePort = 0;
     m_pendingIcomBindSettings = RadioBindSettings{};
     m_pendingIcomSessionBindAddress.clear();
 }
@@ -1323,22 +1545,27 @@ void ConnectionPanel::setConnected(bool connected)
             // host and credentials together.
             saveManualProfile(m_pendingIcomHost,
                               m_pendingIcomBindSettings,
-                              m_pendingIcomSessionBindAddress);
+                              m_pendingIcomSessionBindAddress,
+                              m_pendingIcomBasePort);
             if (m_pendingIcomResolvedHost != m_pendingIcomHost) {
                 // MainWindow retains the resolved address in LastRoutedRadioIp.
                 // Mirror the profile under that key as well so a hostname such
                 // as ic-705.local still restores the Icom family at startup.
                 saveManualProfile(m_pendingIcomResolvedHost,
                                   m_pendingIcomBindSettings,
-                                  m_pendingIcomSessionBindAddress);
+                                  m_pendingIcomSessionBindAddress,
+                                  m_pendingIcomBasePort);
             }
         }
     }
     if (!connected || !m_pendingIcomPassword.isEmpty()) {
         // Cleared on BOTH edges: a failed attempt must not commit on the next
         // unrelated connect, and a committed one must not commit twice.
-        m_pendingIcomPassword.clear();
-        m_pendingIcomHost.clear();
+        clearPendingIcomCredentials();
+    }
+
+    if (connected) {
+        m_startupProbe = false;
     }
 
     m_connected = connected;
@@ -1409,10 +1636,11 @@ bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp,
     if (!wantedFamily.isEmpty()
         && wantedFamily != QLatin1String(kFamilyFlex)
         && wantedFamily != QLatin1String(kFamilyHl2)
+        && wantedFamily != QLatin1String(kFamilyAnan)
         && wantedFamily != QLatin1String(kFamilyIcom)) {
         setAutomationError(
             error,
-            QStringLiteral("unknown radio family '%1' (use flex, hl2 or icom)")
+            QStringLiteral("unknown radio family '%1' (use flex, hl2, anan or icom)")
                 .arg(family.trimmed()));
         return false;
     }
@@ -1714,12 +1942,20 @@ void ConnectionPanel::showRadioContextMenu(const QPoint& pos)
 
     // Reflect the change immediately: re-label this row from the saved setting
     // rather than waiting for the next discovery sweep.
-    RadioInfo updated = radio;
-    updated.nickname =
-        hl2::Hl2Discovery::effectiveNickname(radio.family, radio.serial,
-                                             radio.model);
-    m_radios[row] = updated;
-    item->setText(formatLocalRadioLabel(updated));
+    // Discovery may remove or reorder rows while either nested loop runs.
+    // Resolve the radio again instead of retaining a QListWidgetItem pointer.
+    for (int i = 0; i < m_radios.size(); ++i) {
+        RadioInfo& updated = m_radios[i];
+        if (updated.family != radio.family || updated.serial != radio.serial) {
+            continue;
+        }
+        updated.nickname = hl2::Hl2Discovery::effectiveNickname(
+            updated.family, updated.serial, updated.model);
+        if (QListWidgetItem* currentItem = m_radioList->item(i)) {
+            currentItem->setText(formatLocalRadioLabel(updated));
+        }
+        break;
+    }
 }
 
 void ConnectionPanel::onRadioDiscovered(const RadioInfo& radio)
@@ -1849,10 +2085,11 @@ void ConnectionPanel::onLocalConnectClicked()
         return;
 
     const RadioInfo& info = m_radios[row];
-    // F5 (#4448): a non-Flex family (HL2) is single-client under HPSDR Protocol 1
-    // — an in-use radio can't be shared, and connecting would wedge both clients.
-    // Fail closed. Flex multiFlex sharing is a separate, Flex-only path.
-    if (info.inUse && info.family != QLatin1String("flex")) {
+    // F5 (#4448): an in-use radio of a single-client family can't be shared,
+    // and connecting would wedge both clients. Fail closed. The rule lives in
+    // ConnectionSharingPolicy.h — one home, shared with the startup
+    // auto-connect gate in MainWindow_Session.
+    if (info.inUse && !AetherSDR::familySupportsSharedInUseConnect(info.family)) {
         setStatusText(QStringLiteral(
             "%1 is already in use by another client and can't be shared.")
             .arg(info.model));
@@ -2052,6 +2289,23 @@ void ConnectionPanel::applySavedSourceSelection(const QString& ip, bool restoreF
     if (restoreFamily)
         setManualFamily(familyFromProfile(profile));
 
+    // The external port triplet belongs to the routed endpoint, not to the
+    // physical Icom model. Restore it only when the operator chose a saved
+    // address (or startup restored one), never while an editable address is
+    // being typed character by character.
+    if (restoreFamily
+        && familyFromProfile(profile) == QLatin1String(kFamilyIcom)
+        && m_manualIcomPortCombo && m_manualIcomBasePortSpin) {
+        quint16 basePort = IcomSettings::defaultBasePort();
+        const bool hasSavedBasePort = icomBasePortFromProfile(profile, &basePort);
+        const bool standard = !hasSavedBasePort
+            || basePort == IcomSettings::defaultBasePort();
+        m_manualIcomPortCombo->setCurrentIndex(standard ? 0 : 1);
+        m_manualIcomBasePortSpin->setValue(
+            standard ? IcomSettings::defaultBasePort() : basePort);
+        syncIcomPortCustomRow();
+    }
+
     RadioBindSettings settings = bindSettingsFromProfile(profile);
     if (settings.mode == RadioBindMode::Explicit) {
         const auto resolved = NetworkPathResolver::resolveExplicitSelection(
@@ -2103,7 +2357,9 @@ void ConnectionPanel::setManualFamily(const QString& family)
     const QString lowered = family.trimmed().toLower();
     const QString wanted =
         lowered == QLatin1String(kFamilyHl2)  ? QString::fromLatin1(kFamilyHl2)
+      : lowered == QLatin1String(kFamilyAnan) ? QString::fromLatin1(kFamilyAnan)
       : lowered == QLatin1String(kFamilyIcom) ? QString::fromLatin1(kFamilyIcom)
+      : lowered == QLatin1String(kFamilyRtl)  ? QString::fromLatin1(kFamilyRtl)
                                               : QString::fromLatin1(kFamilyFlex);
     const int index = m_manualRadioTypeCombo->findData(wanted);
     if (index < 0 || index == m_manualRadioTypeCombo->currentIndex()) {
@@ -2213,23 +2469,63 @@ void ConnectionPanel::syncIcomCivCustomRow()
     m_manualIcomCivCustomRow->setVisible(icom && custom);
 }
 
+void ConnectionPanel::syncIcomPortCustomRow()
+{
+    if (!m_manualIcomPortCombo || !m_manualIcomPortCustomRow) {
+        return;
+    }
+    const bool icom = currentManualFamily() == QLatin1String(kFamilyIcom);
+    const bool custom =
+        m_manualIcomPortCombo->currentData().toString() == QLatin1String("__custom__");
+    m_manualIcomPortCustomRow->setVisible(icom && custom);
+}
+
+quint16 ConnectionPanel::selectedIcomBasePort() const
+{
+    if (m_manualIcomPortCombo && m_manualIcomBasePortSpin
+        && m_manualIcomPortCombo->currentData().toString()
+               == QLatin1String("__custom__")) {
+        return static_cast<quint16>(m_manualIcomBasePortSpin->value());
+    }
+    return IcomSettings::defaultBasePort();
+}
+
 void ConnectionPanel::updateManualFamilyHints()
 {
     const QString family = currentManualFamily();
     const bool hl2  = family == QLatin1String(kFamilyHl2);
+    const bool anan = family == QLatin1String(kFamilyAnan);
     const bool icom = family == QLatin1String(kFamilyIcom);
 
-    // The credential pair belongs to Icom alone. Hiding the row CONTAINERS
-    // rather than the fields keeps their labels from being left behind.
+    // The credentials and network selectors belong to Icom alone. Hiding the
+    // row CONTAINERS rather than the fields keeps their labels from being left
+    // behind.
     if (m_manualIcomUserRow)
         m_manualIcomUserRow->setVisible(icom);
     if (m_manualIcomPassRow)
         m_manualIcomPassRow->setVisible(icom);
+    if (m_manualIcomPortRow) {
+        m_manualIcomPortRow->setVisible(icom);
+    }
     if (m_manualIcomCivRow)
         m_manualIcomCivRow->setVisible(icom);
     // The hex row has a second condition — "Custom..." — so it gets the shared
     // helper rather than a copy of the visibility rule.
     syncIcomCivCustomRow();
+    syncIcomPortCustomRow();
+
+    if (m_manualAnanRateRow)
+        m_manualAnanRateRow->setVisible(anan);
+    if (m_manualAnanAdcRow)
+        m_manualAnanAdcRow->setVisible(anan);
+    if (m_manualAnanDitherRow)
+        m_manualAnanDitherRow->setVisible(anan);
+    if (m_manualAnanRandomRow)
+        m_manualAnanRandomRow->setVisible(anan);
+    if (m_manualAnanBypassAdc0Row)
+        m_manualAnanBypassAdc0Row->setVisible(anan);
+    if (m_manualAnanBypassAdc1Row)
+        m_manualAnanBypassAdc1Row->setVisible(anan);
 
     if (icom) {
         // Fill from settings, and read the password out of the keychain — which
@@ -2281,13 +2577,19 @@ void ConnectionPanel::updateManualFamilyHints()
             icom
                 ? QStringLiteral(
                       "Enter the radio address and the network user name and password "
-                      "configured for network control. %1")
+                      "configured for network control. Standard UDP ports are used unless "
+                      "you choose a custom three-port NAT range. %1")
                       .arg(passwordStorageHint)
                 : hl2
                 ? QStringLiteral(
                       "Use this path when discovery broadcasts cannot reach the radio — a VPN, a "
                       "routed subnet, or a switch that drops broadcasts. AetherSDR sends a "
                       "Hermes-Lite 2 discovery request straight to the address you enter.")
+                : anan
+                ? QStringLiteral(
+                      "Use this path when discovery broadcasts cannot reach the radio — a VPN, a "
+                      "routed subnet, or a switch that drops broadcasts. AetherSDR sends an "
+                      "openHPSDR Protocol 2 discovery request straight to the address you enter.")
                 : QStringLiteral(
                       "Use this path for VPN or other routed networks where discovery broadcasts "
                       "cannot reach the radio. Enter the radio IP address and AetherSDR will take "
@@ -2297,6 +2599,7 @@ void ConnectionPanel::updateManualFamilyHints()
         m_manualIpEdit->setPlaceholderText(
             icom ? QStringLiteral("Example: radio.local or 192.168.1.90")
           : hl2  ? QStringLiteral("Example: 192.168.1.21")
+          : anan ? QStringLiteral("Example: 172.16.10.14")
                  : QStringLiteral("Example: 10.0.0.25"));
     }
 }
@@ -2339,7 +2642,8 @@ void ConnectionPanel::rememberManualIp(const QString& ip)
 
 void ConnectionPanel::saveManualProfile(const QString& targetIp,
                                         const RadioBindSettings& settings,
-                                        const QHostAddress& lastSuccessfulLocalIp)
+                                        const QHostAddress& lastSuccessfulLocalIp,
+                                        quint16 icomBasePort)
 {
     if (targetIp.trimmed().isEmpty())
         return;
@@ -2359,6 +2663,16 @@ void ConnectionPanel::saveManualProfile(const QString& targetIp,
     bind["interface_name"] = settings.interfaceName;
     bind["last_successful_ipv4"] = lastSuccessfulLocalIp.toString();
     profile["bind"] = bind;
+
+    if (currentManualFamily() == QLatin1String(kFamilyIcom)) {
+        QJsonObject icom;
+        const quint16 basePort = icomBasePort != 0
+            ? icomBasePort
+            : selectedIcomBasePort();
+        icom["base_port"] = basePort;
+        profile["icom"] = icom;
+        profile["schema_version"] = 2;
+    }
 
     profiles[targetIp] = profile;
     saveRoutedProfiles(profiles);
@@ -2381,6 +2695,7 @@ void ConnectionPanel::onManualConnectClicked()
         return;
 
     m_manualConnectPending = true;
+    m_startupProbe = false;
     setManualMessage(QStringLiteral("Checking %1…").arg(ip));
     probeRadio(ip);
 }
@@ -2391,11 +2706,38 @@ void ConnectionPanel::onManualAdvancedToggled(bool checked)
     m_manualAdvancedWidget->setVisible(checked);
 }
 
+void ConnectionPanel::reportStartupProbeFailure(const QString& reason)
+{
+    // A startup probe is the one probe with nobody reading the manual page.
+    // MainWindow has covered the window with "Looking for your radio…", and it
+    // suppressed the no-saved-radio dialog popup precisely BECAUSE a radio is
+    // saved — so setManualMessage() alone writes the reason onto a page behind a
+    // dialog that will never open. The operator is left with a spinner and no
+    // route back to the connection UI. Hand the reason up instead.
+    if (!m_startupProbe) {
+        return;
+    }
+    m_startupProbe = false;
+    // Land the operator on the page that explains the failure: the full
+    // guidance setManualMessage() wrote lives on the Connect by IP page, and
+    // the footer line MainWindow sets carries only the short reason.
+    setCurrentMode(ManualMode);
+    emit startupConnectUnavailable(reason);
+}
+
 void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
 {
     const QString trimmedIp = ip.trimmed();
     if (trimmedIp.isEmpty())
         return;
+
+    // Latched, not assigned: the Icom keychain read below re-enters probeRadio()
+    // without restoreSavedFamily, and that second pass is still the same startup
+    // attempt. Cleared on failure, probe dispatch, a proven connection, or
+    // an operator route edit/manual connect.
+    if (restoreSavedFamily) {
+        m_startupProbe = true;
+    }
 
     // Interactive and automation probes keep the family currently selected by
     // the operator. Startup is the exception: it has no current operator
@@ -2420,6 +2762,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         updateManualAdvancedVisibility();
         setManualMessage("Choose a live source path before trying again.", true);
         m_manualConnectPending = false;
+        reportStartupProbeFailure(
+            QStringLiteral("The saved source path for this radio is unavailable."));
         return;
     }
 
@@ -2461,6 +2805,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                                "radio. Check Network Control is ON in the radio's menu, then "
                                "enter the same credentials here."),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("This Icom needs its network user name and password."));
             return;
         }
         if (pass.isEmpty()) {
@@ -2481,6 +2827,12 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                     || panel->m_manualIpEdit->text().trimmed() != requestedHost) {
                     panel->resetManualConnectButton();
                     panel->m_manualConnectPending = false;
+                    // An operator edit has normally cleared the latch already,
+                    // making this a no-op; if the route changed under the read
+                    // any other way, the startup attempt still ends here and
+                    // must not leave the overlay with no owner.
+                    panel->reportStartupProbeFailure(
+                        QStringLiteral("The saved Icom route changed before its password loaded."));
                     return;
                 }
                 if (password.isEmpty()) {
@@ -2491,6 +2843,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                             "set on the radio, then connect once to remember it."),
                         true);
                     panel->m_manualConnectPending = false;
+                    panel->reportStartupProbeFailure(
+                        QStringLiteral("No saved password for this Icom."));
                     return;
                 }
                 if (panel->m_manualIcomPassEdit
@@ -2550,19 +2904,31 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                         // input reproduces the exact symptom the field is here to
                         // cure, and the operator would be left reading a "no reply"
                         // that their typo caused.
-                        setStatusText(tr("CI-V address \"%1\" is not a hex byte "
-                                         "(try A2, 0xA2 or A2h) — not connecting.")
-                                          .arg(m_manualIcomCivEdit->text().trimmed()));
+                        const QString civError =
+                            QStringLiteral("CI-V address \"%1\" is not a hex byte "
+                                           "(try A2, 0xA2 or A2h) — not connecting.")
+                                .arg(m_manualIcomCivEdit->text().trimmed());
+                        setStatusText(civError);
                         m_manualIcomCivEdit->setFocus();
                         m_manualIcomCivEdit->selectAll();
+                        reportStartupProbeFailure(civError);
                         return;
                     }
                 }
             }
         }
 
-        // NOT setLastHost, and NOT save(), until the radio has actually
-        // accepted us.
+        // One operator value describes the complete RS-BA1 forwarding rule.
+        // The radio transport always opens control, CI-V and audio as three
+        // independent UDP streams, in that order. Bound the base in the widget
+        // and again in IcomSettings so base+2 can never wrap past 65535.
+        const quint16 basePort = selectedIcomBasePort();
+        IcomSettings::setBasePort(basePort);
+
+        // Do NOT setLastHost or save the credential until the radio has
+        // actually accepted us. The non-secret port choice is safe to retain
+        // immediately so a retry and the backend's reconnect timer use the
+        // same forwarding triplet.
         //
         // Both used to run here, before the connect was even attempted. One
         // mistyped password therefore replaced a working keychain entry with a
@@ -2578,6 +2944,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         IcomCredentials::setSessionPassword(pass);
         m_pendingIcomHost = trimmedIp;
         m_pendingIcomPassword = pass;
+        m_pendingIcomBasePort = basePort;
         m_pendingIcomBindSettings = bindSettings;
         m_pendingIcomSessionBindAddress =
             bindSettings.mode == RadioBindMode::Explicit
@@ -2599,6 +2966,8 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
                     QStringLiteral("Could not resolve \"%1\". Check the name, or enter the "
                                    "radio's IP address instead.").arg(trimmedIp),
                     true);
+                reportStartupProbeFailure(
+                    QStringLiteral("Could not resolve \"%1\".").arg(trimmedIp));
                 return;
             }
             resolved = hostInfo.addresses().first();
@@ -2608,13 +2977,15 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         RadioInfo info;
         info.family   = QString::fromLatin1(kFamilyIcom);
         info.address  = resolved;
-        info.port     = IcomSettings::controlPort();
+        info.port     = basePort;
         info.model    = QStringLiteral("Icom");
         info.name     = info.model;
         // No discovery means no MAC and no reported serial, so the host is the
         // only stable identity this radio has for us. It has to be SOMETHING:
         // the restore/persist scope keys off it.
-        info.serial   = QStringLiteral("icom:%1").arg(resolved.toString());
+        info.serial   = basePort == IcomSettings::defaultBasePort()
+            ? QStringLiteral("icom:%1").arg(resolved.toString())
+            : QStringLiteral("icom:%1:%2").arg(resolved.toString()).arg(basePort);
         info.nickname = info.model;
         // Manual Icom sessions use the same retention path as routed Flex and
         // HL2 sessions. Without this marker MainWindow removes
@@ -2625,7 +2996,7 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         info.sessionBindAddress = m_pendingIcomSessionBindAddress;
         rememberManualIp(trimmedIp);
         resetManualConnectButton();
-        emit connectRequested(info);
+        finishManualProbe(info);
         return;
     }
 
@@ -2634,20 +3005,58 @@ void ConnectionPanel::probeRadio(const QString& ip, bool restoreSavedFamily)
         // failure has already reported itself, and pointing the operator at the
         // radio would be actively wrong. (PR #4528 review.)
         const Hl2ProbeResult probe = probeHermesLite2(trimmedIp, bindSettings);
-        if (probe == Hl2ProbeResult::NoAnswer) {
+        handleHl2ProbeResult(probe, trimmedIp);
+        return;
+    }
+
+    if (currentManualFamily() == QLatin1String(kFamilyAnan)) {
+        const AnanProbeResult probe = probeAnan(trimmedIp, bindSettings);
+        if (probe == AnanProbeResult::NoAnswer) {
             resetManualConnectButton();
             setManualMessage(
-                QStringLiteral("No Hermes-Lite 2 answered at %1. Check the address, and that the "
+                QStringLiteral("No ANAN-G2 answered at %1. Check the address, and that the "
                                "radio is powered, idle, and reachable on UDP port 1024.")
                     .arg(trimmedIp),
                 true);
-        } else if (probe == Hl2ProbeResult::NotAttempted) {
+            reportStartupProbeFailure(
+                QStringLiteral("No ANAN-G2 answered at %1.").arg(trimmedIp));
+        } else if (probe == AnanProbeResult::NotAttempted) {
             resetManualConnectButton();
         }
         return;
     }
 
     probeFlexRadio(trimmedIp, bindSettings);
+}
+
+void ConnectionPanel::handleHl2ProbeResult(Hl2ProbeResult probe, const QString& trimmedIp)
+{
+    if (probe == Hl2ProbeResult::NoAnswer) {
+        resetManualConnectButton();
+        setManualMessage(
+            QStringLiteral("No Hermes-Lite 2 answered at %1. Check the address, and that the "
+                           "radio is powered, idle, and reachable on UDP port 1024.")
+                .arg(trimmedIp),
+            true);
+        reportStartupProbeFailure(
+            QStringLiteral("No Hermes-Lite 2 answered at %1.").arg(trimmedIp));
+    } else if (probe == Hl2ProbeResult::NotAttempted) {
+        // probeHermesLite2() has already reported its own reason, upward
+        // included; only the button needs restoring here.
+        resetManualConnectButton();
+    }
+}
+
+void ConnectionPanel::finishManualProbe(const RadioInfo& info, bool routedOnly)
+{
+    // Discovery has handed off to the session layer. A later session failure
+    // or interactive probe must not inherit this startup probe's ownership.
+    m_startupProbe = false;
+    if (routedOnly) {
+        emit routedRadioFound(info);
+    } else {
+        emit connectRequested(info);
+    }
 }
 
 void ConnectionPanel::refitToContent()
@@ -2710,11 +3119,15 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                 QStringLiteral("AetherSDR could not use that VPN source path. "
                                "Try Auto or choose another path."),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("The saved source path for this radio is unavailable."));
         } else {
             setManualMessage(
                 QStringLiteral("Could not open a UDP socket to probe for a "
                                "Hermes-Lite 2: %1").arg(hpsdr.errorString()),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("Could not open a UDP socket to reach the Hermes-Lite 2."));
         }
         return Hl2ProbeResult::NotAttempted;
     }
@@ -2752,6 +3165,8 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                     : QStringLiteral("“%1” has no IPv4 address, and a Hermes-Lite 2 "
                                      "is reachable over IPv4 only.").arg(ip),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("Could not resolve “%1” to an IPv4 address.").arg(ip));
             return Hl2ProbeResult::NotAttempted;
         }
     }
@@ -2767,6 +3182,8 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
             QStringLiteral("Could not send a discovery request to %1: %2")
                 .arg(dest.toString(), hpsdr.errorString()),
             true);
+        reportStartupProbeFailure(
+            QStringLiteral("Could not send a discovery request to %1.").arg(dest.toString()));
         return Hl2ProbeResult::NotAttempted;
     }
 
@@ -2827,6 +3244,9 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                     QStringLiteral("The Hermes-Lite 2 at %1 is already in use by another client "
                                    "and can't be shared.").arg(ip),
                     true);
+                reportStartupProbeFailure(
+                    QStringLiteral("The Hermes-Lite 2 at %1 is in use by another client.")
+                        .arg(ip));
                 return Hl2ProbeResult::Answered;
             }
 
@@ -2840,12 +3260,153 @@ ConnectionPanel::Hl2ProbeResult ConnectionPanel::probeHermesLite2(
                 QStringLiteral("Found a Hermes-Lite 2 at %1 — connecting.").arg(ip), false);
             // A staged Icom credential belongs to the attempt it was staged for.
             clearPendingIcomCredentials();
-            emit connectRequested(info);
+            finishManualProbe(info);
             return Hl2ProbeResult::Answered;
         }
     }
 
     return Hl2ProbeResult::NoAnswer;
+}
+
+// Directed (unicast) openHPSDR Protocol 2 discovery against one host. Same
+// shape as probeHermesLite2() and for the same reason -- a routed/VPN path
+// never sees a broadcast sweep -- with the wire details swapped for
+// Protocol 2 (P2Protocol::buildDiscovery/parseDiscoveryReply, kRadioPort,
+// isSaturn() instead of isHermesLite2()).
+ConnectionPanel::AnanProbeResult ConnectionPanel::probeAnan(
+    const QString& ip, const RadioBindSettings& bindSettings)
+{
+    QUdpSocket hpsdr;
+    const bool explicitBind = bindSettings.mode == RadioBindMode::Explicit
+                           && !bindSettings.bindAddress.isNull();
+    const bool bound = explicitBind
+        ? hpsdr.bind(bindSettings.bindAddress, 0)
+        : hpsdr.bind(QHostAddress(QHostAddress::AnyIPv4), 0);
+    if (!bound) {
+        if (explicitBind) {
+            m_manualSourceWarningLabel->setText(
+                QStringLiteral("Failed to bind %1: %2")
+                    .arg(bindSettings.bindAddress.toString(), hpsdr.errorString()));
+            m_manualSourceWarningLabel->setVisible(true);
+            updateManualAdvancedVisibility();
+            setManualMessage(
+                QStringLiteral("AetherSDR could not use that VPN source path. "
+                               "Try Auto or choose another path."),
+                true);
+        } else {
+            setManualMessage(
+                QStringLiteral("Could not open a UDP socket to probe for an "
+                               "ANAN-G2: %1").arg(hpsdr.errorString()),
+                true);
+        }
+        reportStartupProbeFailure(explicitBind
+            ? QStringLiteral("The saved source path for this radio is unavailable.")
+            : QStringLiteral("Could not open a UDP socket to reach the ANAN-G2."));
+        return AnanProbeResult::NotAttempted;
+    }
+
+    // RESOLVE FIRST -- see probeHermesLite2()'s comment; the same bug shape
+    // applies verbatim to a hostname entered for an ANAN-G2.
+    QHostAddress dest(ip);
+    if (dest.isNull()) {
+        const QHostInfo resolved = QHostInfo::fromName(ip);
+        for (const QHostAddress& a : resolved.addresses()) {
+            if (a.protocol() == QAbstractSocket::IPv4Protocol) {
+                dest = a;
+                break;
+            }
+        }
+        if (dest.isNull()) {
+            setManualMessage(
+                resolved.error() != QHostInfo::NoError
+                    ? QStringLiteral("Could not resolve “%1”: %2")
+                          .arg(ip, resolved.errorString())
+                    : QStringLiteral("“%1” has no IPv4 address, and an ANAN-G2 "
+                                     "is reachable over IPv4 only.").arg(ip),
+                true);
+            reportStartupProbeFailure(
+                QStringLiteral("Could not resolve an IPv4 address for the ANAN-G2 at %1.").arg(ip));
+            return AnanProbeResult::NotAttempted;
+        }
+    }
+
+    const auto request = anan::buildDiscovery();
+    if (hpsdr.writeDatagram(reinterpret_cast<const char*>(request.data()),
+                            qint64(request.size()),
+                            dest,
+                            anan::kRadioPort) < 0) {
+        setManualMessage(
+            QStringLiteral("Could not send a discovery request to %1: %2")
+                .arg(dest.toString(), hpsdr.errorString()),
+            true);
+        reportStartupProbeFailure(
+            QStringLiteral("Could not send a discovery request to %1.").arg(dest.toString()));
+        return AnanProbeResult::NotAttempted;
+    }
+
+    QDeadlineTimer deadline(600);
+    while (!deadline.hasExpired()) {
+        if (!hpsdr.waitForReadyRead(static_cast<int>(deadline.remainingTime())))
+            break;
+        while (hpsdr.hasPendingDatagrams()) {
+            const QByteArray d = hpsdr.receiveDatagram().data();
+            const auto reply = anan::parseDiscoveryReply(
+                std::span<const std::uint8_t>(
+                    reinterpret_cast<const std::uint8_t*>(d.constData()), std::size_t(d.size())));
+            // Board type 10 (SATURN) only -- this project supports the G2
+            // bring-up radio and no other Protocol 2 board (RFC §2.11), same
+            // predicate AnanDiscovery applies to broadcast replies.
+            if (!reply || !reply->isSaturn())
+                continue;
+
+            RadioInfo info;
+            info.family   = QString::fromLatin1(kFamilyAnan);
+            info.address  = dest;
+            info.port     = anan::kRadioPort;
+            info.model    = QStringLiteral("ANAN-G2");
+            info.name     = info.model;
+            info.serial   = anan::AnanDiscovery::macToSerial(reply->mac);
+            info.nickname = anan::AnanDiscovery::effectiveNickname(info.family, info.serial,
+                                                                    info.model);
+            info.version  = QString::number(reply->firmwareVer);
+            // A bare integer is a gateware bitstream number, not a software
+            // version (discrepancy #1, see P2Protocol.h's DiscoveryReply) --
+            // same label the broadcast path sets.
+            info.versionLabel = QStringLiteral("Gateware");
+            info.inUse    = reply->streaming;
+            info.status   = reply->streaming ? QStringLiteral("In_Use")
+                                             : QStringLiteral("Available");
+            info.isRouted           = true;
+            info.bindSettings       = bindSettings;
+            info.sessionBindAddress = bindSettings.mode == RadioBindMode::Explicit
+                ? bindSettings.bindAddress
+                : QHostAddress();
+
+            resetManualConnectButton();
+
+            if (reply->streaming) {
+                // openHPSDR Protocol 2 is single-client, same as Protocol 1.
+                // Fail closed rather than wedging both clients.
+                setManualMessage(
+                    QStringLiteral("The ANAN-G2 at %1 is already in use by another client "
+                                   "and can't be shared.").arg(ip),
+                    true);
+                reportStartupProbeFailure(
+                    QStringLiteral("The ANAN-G2 at %1 is in use by another client.").arg(ip));
+                return AnanProbeResult::Answered;
+            }
+
+            saveManualProfile(ip, bindSettings, info.sessionBindAddress);
+            rememberManualIp(ip);
+            setManualMessage(
+                QStringLiteral("Found an ANAN-G2 at %1 — connecting.").arg(ip), false);
+            clearPendingIcomCredentials();
+            finishManualProbe(info);
+            return AnanProbeResult::Answered;
+        }
+    }
+
+    return AnanProbeResult::NoAnswer;
 }
 
 void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSettings& bindSettings)
@@ -2863,6 +3424,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
         m_manualConnectPending = false;
         m_manualConnectBtn->setText("Connect by IP");
         updateActionState();
+        reportStartupProbeFailure(
+            QStringLiteral("The saved source path for this radio is unavailable."));
         return;
     }
 
@@ -2880,6 +3443,8 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
                                "address and try Advanced only if your VPN exposes multiple adapters.")
                     .arg(trimmedIp),
                 true);
+            reportStartupProbeFailure(
+                QStringLiteral("No radio responded at %1.").arg(trimmedIp));
         }
     });
 
@@ -2988,12 +3553,12 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
                 // A staged Icom credential belongs to the attempt it was staged for.
                 clearPendingIcomCredentials();
                 m_manualConnectPending = false;
-                emit connectRequested(info);
+                finishManualProbe(info);
             } else {
                 setManualMessage(
                     QStringLiteral("Found a radio at %1 and saved the path for later.")
                         .arg(trimmedIp));
-                emit routedRadioFound(info);
+                finishManualProbe(info, /*routedOnly=*/true);
             }
         };
 
@@ -3030,13 +3595,14 @@ void ConnectionPanel::probeFlexRadio(const QString& trimmedIp, const RadioBindSe
 
     connect(sock, &QTcpSocket::errorOccurred, this,
             [this, sock, trimmedIp](QAbstractSocket::SocketError) {
-        setManualMessage(
-            QStringLiteral("Could not reach %1: %2").arg(trimmedIp, sock->errorString()),
-            true);
+        const QString reason =
+            QStringLiteral("Could not reach %1: %2").arg(trimmedIp, sock->errorString());
+        setManualMessage(reason, true);
         sock->deleteLater();
         m_manualConnectPending = false;
         m_manualConnectBtn->setText("Connect by IP");
         updateActionState();
+        reportStartupProbeFailure(reason);
     });
 }
 

@@ -33,6 +33,10 @@ void CloseChannel(int channel);
 // which is what makes it safe to tear down or reconfigure behind it; dmode 0
 // returns immediately. Returns the prior state, so callers can restore it.
 int SetChannelState(int channel, int state, int dmode);
+// Local patch: synchronously discard TX rings/filter history and leave stopped.
+// Caller excludes exchange/control calls. Returns 0 for RX or a pending fade/flush.
+// Retains FFTW plans; flush_iobuffs refreshes its output semaphore.
+int DiscardTXAChannelData(int channel);
 void fexchange2(int channel, float* inputI, float* inputQ,
                 float* outputLeft, float* outputRight, int* error);
 void SetRXAMode(int channel, int mode);
@@ -203,6 +207,99 @@ enum AetherWdspRxMeter
     AETHER_WDSP_RXA_AGC_GAIN = 4
 };
 double GetRXAMeter(int channel, int meterType);
+
+// ── Neural Noise Reduction (NNR, nnr.c — new in WDSP 2.10) ────────────────
+//
+// A HOST-SIDE STAGE, like the impulse blanker above and unlike everything
+// else here. create_nnr()/xnnr()/destroy_nnr() touch neither ch[] nor rxa[],
+// so the block runs without a channel — which is what lets AetherSDR run it
+// in AudioEngine beside DFNR and RN2 rather than inside the RXA chain, and
+// therefore on every backend rather than only the ones that demodulate here
+// (RFC #5684 §3.4). RXA builds its own NNR per channel regardless; that one
+// is left at run=0 and is not this.
+//
+// A SPEECH MODEL, trained on HF noise with SSB-processed speech. Measured on
+// a 700 Hz carrier it attenuates 28 dB — it classifies an unmodulated tone as
+// noise and deletes it. Voice modes only; CW, the digital modes and anything
+// on the data path must never reach it.
+//
+// SAMPLE RATE MUST BE AN INTEGER MULTIPLE OF 16000. calc_nnr() sets run = 0
+// and logs otherwise, so a 44.1 kHz path would silently produce no noise
+// reduction rather than an error. 48000 gives decim 3.
+//
+// BUFFER FORMAT is INTERLEAVED DOUBLE — I,Q,I,Q — `size` complex samples,
+// same as the blanker. Only I is read. On output, Q is zeroed when cmode is
+// 1 and mirrors I when it is 0. The same pointer may not be passed as both
+// in and out: the block delays its output through an internal FIFO.
+//
+// LATENCY is 51.17 ms at 48 kHz, and getDelay_nnr() reports it in samples.
+// That is less than WDSP's own spectral NR (64 ms). Both models have the same
+// latency — the larger one costs processor time, not delay.
+//
+// SIZE AND RATE ARE FIXED AT CONSTRUCTION in practice. setSize_nnr() and
+// setSamplerate_nnr() tear the block down and rebuild it, which reallocates
+// ~17 buffers, re-plans two FFTW_PATIENT transforms and re-deserialises both
+// trained models. Control-path work only — never from an audio callback.
+//
+// COSTS, measured: ~13% of one modern x86 P-core for the Standard model and
+// ~29% for Premium, per instance, plus ~9 MB RSS because each instance copies
+// both models' weights into its own double blob.
+//
+// LOCKING IS THE CALLER'S. The setters below are the RXA properties without
+// their ch[channel].csDSP section (AETHERSDR-PATCHES.md patch 5), so a host
+// that drives them from a GUI thread while xnnr() runs on an audio thread
+// must serialise them itself.
+//
+// MODEL FILES: every construction looks for wdsp_nnr_0.bin and wdsp_nnr_1.bin
+// in the PROCESS'S WORKING DIRECTORY and prefers either over the built-in
+// copy. A well-formed model with the wrong dimensions leaves that slot
+// passing audio through untouched. Kept deliberately (RFC #5684 §8);
+// third_party/wdsp/README.md has the measured behaviour.
+typedef struct _nnr* NNR;
+
+// run: 0 bypasses (a straight copy when in != out). position: which xnnr()
+// call site acts, for hosts that call it from more than one. size: complex
+// samples per xnnr() call. rate: must be a multiple of nrate. nrate/fftsize/
+// overlap/lookahead: 16000/512/2/1 are what RXA uses and what the models were
+// trained for. mask_floor: how far one bin may be attenuated, −10 (most noise
+// passed) to −50 (maximum suppression), default −25. cmode: 1 zeroes Q.
+NNR create_nnr(int run, int position, int size, double* in_buff, double* out_buff,
+               int rate, int nrate, int fftsize, int overlap, int lookahead,
+               double mask_floor, int cmode);
+void destroy_nnr(NNR a);
+// Runs only when the block's own position matches `pos`; otherwise copies.
+void xnnr(NNR a, int pos);
+// Clears the FIFO, the overlap-add state and the network's recurrent state.
+void flush_nnr(NNR a);
+void setBuffers_nnr(NNR a, double* in, double* out);
+// Both rebuild the block — control path only. See the note above.
+void setSamplerate_nnr(NNR a, int rate);
+void setSize_nnr(NNR a, int size);
+// Algorithmic delay in samples at the dsp rate.
+int getDelay_nnr(NNR a);
+int getRun_nnr(NNR a);
+// 0 = Standard, 1 = Premium. Both are compiled in and both are loaded, so a
+// switch takes effect within a frame. RETURNS THE SLOT ACTUALLY IN USE, which
+// differs from the request when that slot holds no model — the documented way
+// to discover what a build contains instead of assuming.
+int setModel_nnr(NNR a, int slot);
+int getModel_nnr(NNR a);
+
+// The control surface. setMaskFloor_nnr is the one control the WDSP Guide
+// intends operators to touch; the rest are undocumented tuning that AetherSDR
+// exposes by decision (RFC #5684 §8). src/core/NnrControls.h carries each
+// one's range and the value WDSP starts it at.
+void setRun_nnr(NNR a, int run);
+void setPosition_nnr(NNR a, int position);
+void setCmode_nnr(NNR a, int cmode);
+void setMaskFloor_nnr(NNR a, double floor_db);
+// 0 = network, 1 = identity, 2 = lowpass. Debug; not an operator control.
+void setTestMode_nnr(NNR a, int mode);
+void setAlpha_nnr(NNR a, double alpha);
+void setAlphaKnee_nnr(NNR a, double knee_db);
+void setTau_nnr(NNR a, double tau);
+void setMaxGain_nnr(NNR a, double gmax_db);
+void setSmooth_nnr(NNR a, double att_ms, double rel_ms);
 
 int GetWDSPVersion(void);
 

@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <cmath>
+#include <type_traits>
 
 namespace AetherSDR {
 
@@ -36,12 +37,11 @@ constexpr qint64 kCompressionSummaryLogIntervalMs = 500;
 constexpr qint64 kDirectionalMeterFreshnessMs = 500;
 constexpr int kMinTxWaveformSourceIndex = 8;
 
-float compressionValueForGauge(float compPeakDb)
+float compressionValueForGauge(float compPeakDb, float maximumDb)
 {
     // The radio reports COMPPEAK directly as the compression amount.
-    // Keep the model value positive (0 = none, 25 = heavy) and let widgets
-    // adapt it to their visible meter face.
-    return qBound(0.0f, compPeakDb, 25.0f);
+    // Keep the physical amount positive and honor the backend's declared face.
+    return qBound(0.0f, compPeakDb, maximumDb);
 }
 
 QJsonObject meterToJson(const MeterDef& def, bool hasValue, float value, qint64 ageMs)
@@ -86,6 +86,10 @@ void MeterModel::setTgxlHandle(quint32 handle)
     m_lastTgxlSwrUpdateMs = 0;
     m_ampFwdPwrIdx = -1;
     m_ampSwrIdx = -1;
+    m_ampDrvIdx = -1;
+    m_ampDrv = 0.0f;
+    m_hasAmpDrvValue = false;
+    m_hasAmpPwrValue = false;
     m_ampTempIdx = -1;
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const auto& def = *it;
@@ -99,6 +103,13 @@ void MeterModel::setTgxlHandle(quint32 handle)
                 m_tgxlSwrIdx = def.index;
             else
                 m_ampSwrIdx = def.index;
+        } else if (def.source == "AMP" && def.name == "DRV" && def.unit == "dBm") {
+            // Handle-matched like FWD and RL even though only the PGXL
+            // publishes DRV today: the routing rule is "which device is this
+            // meter about", and answering it per-name would put a tuner's
+            // drive meter on the amplifier's panel the day one appears.
+            if (handle == 0 || def.sourceIndex != static_cast<int>(handle))
+                m_ampDrvIdx = def.index;
         } else if (def.source == "AMP" && def.name == "TEMP") {
             m_ampTempIdx = def.index;
         }
@@ -107,9 +118,31 @@ void MeterModel::setTgxlHandle(quint32 handle)
 
 void MeterModel::defineMeter(const MeterDef& def)
 {
+    const auto previous = m_defs.constFind(def.index);
+    const bool redefinition = previous != m_defs.constEnd()
+        && previous->source == def.source && previous->sourceIndex == def.sourceIndex
+        && previous->name == def.name;
+    if (previous != m_defs.constEnd() && !redefinition) {
+        // An ID reused for a different meter must lose every old route/sample.
+        // This is an incoming definition, not a protocol removal: keep the
+        // context of its current block while purging the previous identity.
+        const int sliceContext = m_manifestSliceContext;
+        removeMeter(def.index);
+        m_manifestSliceContext = sliceContext;
+    }
+    const bool nativeUnitChanged = redefinition && def.index == m_nativeAlcIndex
+        && previous->unit != def.unit;
     m_defs[def.index] = def;
-    if (def.source == "SLC")
+    if (nativeUnitChanged) {
+        m_nativeAlcIndex = -1;
+        emit alcValueChanged(alcValue(), alcUnit());
+    }
+    if (def.source == "SLC") {
         m_manifestSliceContext = def.sourceIndex;
+    } else if (!isTxWaveformMeter(def)) {
+        // A non-waveform block ends the observed SLC -> TX manifest context.
+        m_manifestSliceContext = -1;
+    }
 
     // Cache indices for high-frequency lookups
     if (def.source == "SLC" && def.name == "LEVEL")
@@ -129,10 +162,8 @@ void MeterModel::defineMeter(const MeterDef& def)
     else if (def.name == "MICPEAK")
         m_micPeakIdx = def.index;
     else if (isTxWaveformMeter(def) && def.name == "COMPPEAK") {
-        if (hasExplicitTxWaveformSourceIndex(def))
-            m_compPeakIdxByTxSource[def.sourceIndex] = def.index;
-        else
-            m_compPeakIdxBySlice[implicitTxWaveformSliceIndex()] = def.index;
+        registerTxWaveformMeter(def, redefinition,
+                                m_compPeakIdxByTxSource, m_compPeakIdxBySlice);
     }
     else if (def.name == "MIC")
         m_micLevelIdx = def.index;
@@ -140,25 +171,33 @@ void MeterModel::defineMeter(const MeterDef& def)
         m_compLevelIdx = def.index;
     else if (def.name == "HWALC")
         m_hwAlcIdx = def.index;
+    else if (isTxWaveformMeter(def) && def.name == "ALC") {
+        registerTxWaveformMeter(def, redefinition,
+                                m_swAlcIdxByTxSource, m_swAlcIdxBySlice);
+    }
     else if (def.name == "ALC") {
-        m_swAlcIdx = def.index;
-        m_swAlcUnit = def.unit;
+        qCWarning(lcMeters) << "MeterModel: ALC definition has no TX waveform route"
+                            << def.index << def.source << def.sourceIndex;
+    }
+    else if (isTxWaveformMeter(def) && def.name == "ALCGAIN") {
+        registerTxWaveformMeter(def, redefinition,
+                                m_alcGainIdxByTxSource, m_alcGainIdxBySlice);
+    }
+    else if (def.name == "ALCGAIN") {
+        qCWarning(lcMeters) << "MeterModel: ALCGAIN definition has no TX waveform route"
+                            << def.index << def.source << def.sourceIndex;
     }
     else if (isTxWaveformMeter(def)
              && (def.name == "SC_MIC" || def.name == "SC_FILT_1"
                  || def.name == "SC_FILT_2")) {
-        // Same resolution COMPPEAK uses: key by explicit TX-waveform
-        // sourceIndex where the radio supplies one, otherwise by the slice
-        // context the manifest was in when this block arrived.
-        const bool explicitSource = hasExplicitTxWaveformSourceIndex(def);
-        const int key = explicitSource ? def.sourceIndex
-                                       : implicitTxWaveformSliceIndex();
-        if (def.name == "SC_MIC")
-            (explicitSource ? m_scMicIdxByTxSource : m_scMicIdxBySlice)[key] = def.index;
-        else if (def.name == "SC_FILT_1")
-            (explicitSource ? m_scFilt1IdxByTxSource : m_scFilt1IdxBySlice)[key] = def.index;
-        else
-            (explicitSource ? m_scFilt2IdxByTxSource : m_scFilt2IdxBySlice)[key] = def.index;
+        // All waveform meters share the same stable registration policy.
+        QMap<int, int>& byTxSource = def.name == "SC_MIC" ? m_scMicIdxByTxSource
+                                        : def.name == "SC_FILT_1" ? m_scFilt1IdxByTxSource
+                                                                  : m_scFilt2IdxByTxSource;
+        QMap<int, int>& bySlice = def.name == "SC_MIC" ? m_scMicIdxBySlice
+                                   : def.name == "SC_FILT_1" ? m_scFilt1IdxBySlice
+                                                             : m_scFilt2IdxBySlice;
+        registerTxWaveformMeter(def, redefinition, byTxSource, bySlice);
     }
     else if (def.source != "AMP" && def.name == "PATEMP")
         m_paTempIdx = def.index;
@@ -183,6 +222,12 @@ void MeterModel::defineMeter(const MeterDef& def)
         else
             m_ampSwrIdx = def.index;
     }
+    else if (def.source == "AMP" && def.name == "DRV" && def.unit == "dBm") {
+        // Exciter power measured at the amplifier's input. See setTgxlHandle
+        // for why this is handle-matched rather than name-matched.
+        if (m_tgxlHandle == 0 || def.sourceIndex != static_cast<int>(m_tgxlHandle))
+            m_ampDrvIdx = def.index;
+    }
     else if (def.source == "AMP" && def.name == "TEMP")
         m_ampTempIdx = def.index;
 
@@ -194,44 +239,45 @@ void MeterModel::defineMeter(const MeterDef& def)
     if (isTxWaveformMeter(def) && def.name == "COMPPEAK") {
         logCompressionMeterMap(def);
     }
+    emit meterDefinitionChanged(def.index);
+}
+
+QList<int> MeterModel::firstDefinedIndices(int limit, std::optional<int> after) const
+{
+    QList<int> indices;
+    for (auto it = after ? m_defs.upperBound(*after) : m_defs.cbegin();
+         it != m_defs.cend() && indices.size() < limit; ++it) {
+        indices.append(it.key());
+    }
+    return indices;
 }
 
 void MeterModel::removeMeter(int index)
 {
+    const int activeSwAlcIdx = swAlcIndexForActiveTxSlice();
+    // Resolved BEFORE the maps are erased, exactly like the filter taps below:
+    // once the entry is gone the resolver returns -1 and the reading would
+    // outlive the meter it describes.
+    const int activeAlcGainIdx = alcGainIndexForActiveTxSlice();
+    // Removal starts a new manifest lifecycle. Existing ownership survives,
+    // but newly declared meters need fresh SLC context or the source fallback.
+    m_manifestSliceContext = -1;
     m_defs.remove(index);
     m_values.remove(index);
     m_valueUpdatedMs.remove(index);
 
-    // Remove from per-slice LEVEL map
-    for (auto it = m_sLevelIdxBySlice.begin(); it != m_sLevelIdxBySlice.end(); ) {
-        if (it.value() == index) it = m_sLevelIdxBySlice.erase(it);
-        else ++it;
-    }
-    for (auto it = m_escLevelIdxBySlice.begin(); it != m_escLevelIdxBySlice.end(); ) {
-        if (it.value() == index) it = m_escLevelIdxBySlice.erase(it);
-        else ++it;
-    }
-    bool compressionMapChanged = false;
-    for (auto it = m_compPeakIdxByTxSource.begin(); it != m_compPeakIdxByTxSource.end(); ) {
-        if (it.value() == index) {
-            it = m_compPeakIdxByTxSource.erase(it);
-            compressionMapChanged = true;
-        } else {
-            ++it;
-        }
-    }
-    for (auto it = m_compPeakIdxBySlice.begin(); it != m_compPeakIdxBySlice.end(); ) {
-        if (it.value() == index) {
-            it = m_compPeakIdxBySlice.erase(it);
-            compressionMapChanged = true;
-        } else {
-            ++it;
-        }
-    }
+    const auto matchesIndex = [index](QMap<int, int>::iterator entry) {
+        return entry.value() == index;
+    };
+    m_sLevelIdxBySlice.removeIf(matchesIndex);
+    m_escLevelIdxBySlice.removeIf(matchesIndex);
+    const bool removedCompSource = m_compPeakIdxByTxSource.removeIf(matchesIndex) > 0;
+    const bool removedCompSlice = m_compPeakIdxBySlice.removeIf(matchesIndex) > 0;
+    const bool compressionMapChanged = removedCompSource || removedCompSlice;
     if (index == m_fwdPwrIdx) { m_fwdPwrIdx = -1; m_fwdPwrUnit.clear(); }
     if (index == m_refPwrIdx) {
         m_refPwrIdx = -1;
-    m_refPwrUnit.clear();
+        m_refPwrUnit.clear();
         m_reflectedPower = 0.0f;
         m_lastReflectedPowerUpdateMs = 0;
     }
@@ -240,7 +286,19 @@ void MeterModel::removeMeter(int index)
     if (index == m_micLevelIdx)  m_micLevelIdx = -1;
     if (index == m_compLevelIdx) m_compLevelIdx = -1;
     if (index == m_hwAlcIdx)     m_hwAlcIdx = -1;
-    if (index == m_swAlcIdx)   { m_swAlcIdx = -1; m_swAlcUnit.clear(); }
+    m_swAlcIdxByTxSource.removeIf(matchesIndex);
+    m_swAlcIdxBySlice.removeIf(matchesIndex);
+    if (index == activeSwAlcIdx) {
+        m_swAlc = kAlcGaugeFloorDbfs;
+        m_nativeAlcIndex = -1;
+        emit swAlcChanged(m_swAlc);
+        emit alcValueChanged(alcValue(), alcUnit());
+    }
+    m_alcGainIdxByTxSource.removeIf(matchesIndex);
+    m_alcGainIdxBySlice.removeIf(matchesIndex);
+    if (index == activeAlcGainIdx && clearAlcGainState()) {
+        emit alcGainChanged(m_alcGainDb);
+    }
     // A level must never outlive the meter it describes.
     // Resolve the ACTIVE indices BEFORE erasing: once the entry is gone the
     // resolver returns -1 and the has-a-sample flag would never be cleared.
@@ -250,11 +308,9 @@ void MeterModel::removeMeter(int index)
     for (QMap<int, int>* m : {&m_scMicIdxByTxSource, &m_scMicIdxBySlice,
                               &m_scFilt1IdxByTxSource, &m_scFilt1IdxBySlice,
                               &m_scFilt2IdxByTxSource, &m_scFilt2IdxBySlice}) {
-        for (auto it = m->begin(); it != m->end(); ) {
-            if (it.value() == index) it = m->erase(it);
-            else ++it;
-        }
+        m->removeIf(matchesIndex);
     }
+
     if (index == activeScMic)   m_hasScMicValue = false;
     if (index == activeScFilt1) m_hasScFilt1Value = false;
     if (index == activeScFilt2) m_hasScFilt2Value = false;
@@ -270,9 +326,39 @@ void MeterModel::removeMeter(int index)
         m_supplyIdx = -1;
         m_hasSupplyVoltsValue = false;   // the sample cannot outlive its meter
     }
-    if (index == m_ampFwdPwrIdx) m_ampFwdPwrIdx = -1;
-    if (index == m_ampSwrIdx)    m_ampSwrIdx = -1;
-    if (index == m_ampTempIdx)   m_ampTempIdx = -1;
+    bool ampMeterWithdrawn = false;
+    if (index == m_ampFwdPwrIdx) {
+        m_ampFwdPwrIdx = -1;
+        m_ampFwdPwr = 0.0f;
+        ampMeterWithdrawn = true;
+    }
+    if (index == m_ampSwrIdx) {
+        m_ampSwrIdx = -1;
+        m_ampSwr = 1.0f;
+        ampMeterWithdrawn = true;
+    }
+    if (m_ampFwdPwrIdx < 0 && m_ampSwrIdx < 0) m_hasAmpPwrValue = false;
+    if (index == m_ampDrvIdx) {
+        m_ampDrvIdx = -1;
+        m_ampDrv = 0.0f;
+        m_hasAmpDrvValue = false;
+        ampMeterWithdrawn = true;
+    }
+    if (index == m_ampTempIdx) {
+        m_ampTempIdx = -1;
+        m_ampTemp = 0.0f;
+        ampMeterWithdrawn = true;
+    }
+    // Announce the withdrawal. Clearing the cache is not enough on its own:
+    // the amplifier panel only ever hears about these meters through this
+    // signal, so without it the row keeps rendering the last reading of a
+    // meter that no longer exists — a drive figure, at full scale, for an
+    // amplifier nobody is talking to any more.
+    if (ampMeterWithdrawn) {
+        emit ampMetersChanged(m_ampFwdPwr, m_ampSwr, m_ampTemp,
+                              m_hasAmpDrvValue ? m_ampDrv : 0.0f,
+                              m_hasAmpDrvValue);
+    }
     if (index == m_tgxlFwdIdx) {
         m_tgxlFwdIdx = -1;
         m_tgxlFwdPwr = 0.0f;
@@ -289,6 +375,9 @@ void MeterModel::removeMeter(int index)
         clearCompressionState();
         logCompressionSummary("meter-removed", true);
     }
+    // Presence subscribers query the routing maps synchronously. Notify only
+    // after the withdrawn meter has been removed from every index map.
+    emit meterRemoved(index);
 }
 
 float MeterModel::convertRaw(const MeterDef& def, qint16 raw) const
@@ -308,6 +397,9 @@ float MeterModel::convertRaw(const MeterDef& def, qint16 raw) const
 bool MeterModel::updateValueByName(const QString& source, const QString& name,
                                    float converted, int sourceIndex)
 {
+    if (!std::isfinite(converted)) {
+        return false;
+    }
     const int idx = findMeter(source, name, sourceIndex);
     if (idx < 0)
         return false;
@@ -315,7 +407,8 @@ bool MeterModel::updateValueByName(const QString& source, const QString& name,
     if (!def)
         return false;
 
-    // Inverse of convertRaw(). Kept adjacent to it so the two cannot drift.
+    // Preserve the established physical range limits without quantizing.
+    // Flex wire packets still use convertRaw() unchanged.
     float scale = 1.0f;
     if (def->unit == "dBm" || def->unit == "dB" || def->unit == "dBFS" || def->unit == "SWR")
         scale = 128.0f;
@@ -324,14 +417,8 @@ bool MeterModel::updateValueByName(const QString& source, const QString& name,
     else if (def->unit == "degF" || def->unit == "degC")
         scale = 64.0f;
 
-    const float scaled = converted * scale;
-    // Saturate rather than wrap: a wrapped qint16 turns a large positive
-    // reading into a large NEGATIVE one, which on a power meter reads as
-    // "no output" at exactly the moment there is the most of it.
-    const qint16 raw = static_cast<qint16>(
-        std::clamp(scaled, -32768.0f, 32767.0f));
-
-    updateValues(QVector<quint16>{static_cast<quint16>(idx)}, QVector<qint16>{raw});
+    const float bounded = std::clamp(converted, -32768.0f / scale, 32767.0f / scale);
+    applyValues(QVector<quint16>{static_cast<quint16>(idx)}, QVector<float>{bounded});
     return true;
 }
 
@@ -357,8 +444,10 @@ void MeterModel::clear()
     m_micLevelIdx = -1;
     m_compLevelIdx = -1;
     m_hwAlcIdx = -1;
-    m_swAlcIdx = -1;
-    m_swAlcUnit.clear();
+    m_swAlcIdxByTxSource.clear();
+    m_swAlcIdxBySlice.clear();
+    m_alcGainIdxByTxSource.clear();
+    m_alcGainIdxBySlice.clear();
     m_paTempIdx = -1;
     m_paCurrentIdx = -1;
     m_hasPaTempValue = false;
@@ -376,6 +465,7 @@ void MeterModel::clear()
     m_hasSupplyVoltsValue = false;
     m_ampFwdPwrIdx = -1;
     m_ampSwrIdx = -1;
+    m_ampDrvIdx = -1;
     m_ampTempIdx = -1;
     m_tgxlFwdIdx = -1;
     m_tgxlSwrIdx = -1;
@@ -398,13 +488,31 @@ void MeterModel::clear()
     m_micLevel = -50.0f;
     m_compLevel = 0.0f;
     m_hwAlc = 0.0f;
-    m_swAlc = 0.0f;
+    m_swAlc = kAlcGaugeFloorDbfs;
+    m_nativeAlcIndex = -1;
+    // No signal here: clear() is the disconnect path and every consumer is
+    // rebuilt or reset behind it, which is why none of its neighbours emit.
+    clearAlcGainState();
     m_paTemp = 0.0f;
     m_paCurrent = 0.0f;
     m_supplyVolts = 0.0f;
     m_ampFwdPwr = 0.0f;
     m_ampSwr = 1.0f;
+    m_ampDrv = 0.0f;
+    m_hasAmpDrvValue = false;
+    m_hasAmpPwrValue = false;
     m_ampTemp = 0.0f;
+    emit metersCleared();
+}
+
+void MeterModel::setCompressionMaximumDb(float maximum)
+{
+    if (!std::isfinite(maximum) || maximum <= 0.0f || maximum == m_compressionMaximumDb) {
+        return;
+    }
+    m_compressionMaximumDb = maximum;
+    m_compPeak = compressionValueForGauge(m_compPeakLevel, maximum);
+    emit micMetersChanged(m_micLevel, m_compLevel, m_micPeak, m_compPeak);
 }
 
 void MeterModel::setActiveTxSlice(int sliceIndex)
@@ -419,8 +527,49 @@ void MeterModel::setActiveTxSlice(int sliceIndex)
     m_hasScFilt1Value = false;
     m_hasScFilt2Value = false;
     clearCompressionState();
+    m_swAlc = kAlcGaugeFloorDbfs;
+    m_nativeAlcIndex = -1;
+    // The gain describes the transmitter that was active, so it does not
+    // survive the change any more than the ALC level or the compression does.
+    const bool alcGainCleared = clearAlcGainState();
     logCompressionSummary("active-slice-change", true);
     emit micMetersChanged(m_micLevel, m_compLevel, m_micPeak, m_compPeak);
+    emit swAlcChanged(m_swAlc);
+    if (alcGainCleared) {
+        emit alcGainChanged(m_alcGainDb);
+    }
+    emit alcValueChanged(alcValue(), alcUnit());
+}
+
+bool MeterModel::clearAlcGainState()
+{
+    if (m_alcGainDb == 0.0f && !m_hasAlcGainValue) {
+        return false;
+    }
+    m_alcGainDb = 0.0f;
+    m_hasAlcGainValue = false;
+    return true;
+}
+
+float MeterModel::alcValue() const
+{
+    const int index = swAlcIndexForActiveTxSlice();
+    if (index >= 0 && index == m_nativeAlcIndex) {
+        return value(index);
+    }
+    return alcUnit() == QLatin1String("Percent") ? 0.0f : kAlcGaugeFloorDbfs;
+}
+
+QString MeterModel::alcUnit() const
+{
+    const MeterDef* def = meterDef(swAlcIndexForActiveTxSlice());
+    return def ? def->unit : QString{};
+}
+
+qint64 MeterModel::alcUpdatedAtMs() const
+{
+    const int index = swAlcIndexForActiveTxSlice();
+    return index >= 0 && index == m_nativeAlcIndex ? valueUpdatedAtMs(index) : 0;
 }
 
 void MeterModel::clearCompressionState()
@@ -434,17 +583,13 @@ void MeterModel::clearCompressionState()
     m_lastCompressionSummaryReason.clear();
 }
 
-// Mirrors PhoneCwApplet's kAlcGaugeFloorDbfs. Duplicated rather than shared
-// because models must not include gui headers; meter_model_test pins the pair.
-static constexpr float kAlcGaugeFloorDbfs = -20.0f;
-
-float MeterModel::convertAlcToGaugeDbfs(float raw) const
+float MeterModel::convertAlcToGaugeDbfs(float raw, const QString& unit)
 {
-    if (m_swAlcUnit.compare(QLatin1String("dBFS"), Qt::CaseInsensitive) == 0
-        || m_swAlcUnit.isEmpty()) {
+    if (unit.compare(QLatin1String("dBFS"), Qt::CaseInsensitive) == 0
+        || unit.isEmpty()) {
         return raw;   // already the gauge's own unit, or a backend from before this field
     }
-    if (m_swAlcUnit.compare(QLatin1String("Percent"), Qt::CaseInsensitive) == 0) {
+    if (unit.compare(QLatin1String("Percent"), Qt::CaseInsensitive) == 0) {
         const float frac = qBound(0.0f, raw / 100.0f, 1.0f);
         return kAlcGaugeFloorDbfs * (1.0f - frac);
     }
@@ -471,6 +616,30 @@ bool MeterModel::isTxWaveformMeter(const MeterDef& def) const
 bool MeterModel::hasExplicitTxWaveformSourceIndex(const MeterDef& def) const
 {
     return isTxWaveformMeter(def) && def.sourceIndex >= kMinTxWaveformSourceIndex;
+}
+
+void MeterModel::registerTxWaveformMeter(const MeterDef& def, bool redefinition,
+                                        QMap<int, int>& byTxSource,
+                                        QMap<int, int>& bySlice)
+{
+    // Updating units/description is not a new ownership declaration. In
+    // particular, an isolated re-announcement must not inherit another
+    // slice's most recent SLC block. Identity changes are removed first.
+    if (redefinition) {
+        return;
+    }
+
+    // FlexLib attaches only SLC meters to Slice.Meters. The observed
+    // FLEX-8400M fw 4.2.18 TX- sources are 0 for A and 9 for B, so use the
+    // preceding SLC block when available. Do not also register a source
+    // fallback: that could volunteer a known B meter after A's is removed.
+    if (m_manifestSliceContext >= 0) {
+        bySlice[m_manifestSliceContext] = def.index;
+    } else if (hasExplicitTxWaveformSourceIndex(def)) {
+        byTxSource[def.sourceIndex] = def.index;
+    } else {
+        bySlice[implicitTxWaveformSliceIndex()] = def.index;
+    }
 }
 
 int MeterModel::implicitTxWaveformSliceIndex() const
@@ -520,33 +689,22 @@ int MeterModel::activeTxWaveformSourceIndex() const
 
 int MeterModel::compPeakIndexForActiveTxSlice() const
 {
-    const int txSource = activeTxWaveformSourceIndex();
-    if (txSource >= 0 && m_compPeakIdxByTxSource.contains(txSource))
-        return m_compPeakIdxByTxSource.value(txSource);
-    const int bySlice = m_compPeakIdxBySlice.value(m_activeTxSlice, -1);
-    if (bySlice >= 0)
-        return bySlice;
+    return resolveTxWaveformIndex(m_compPeakIdxByTxSource, m_compPeakIdxBySlice, true);
+}
 
-    // ONE transmitter, and transmit is not on the slice the manifest filed the
-    // meter under.
-    //
-    // A Flex declares COMPPEAK per TX-waveform slice, so the explicit map above
-    // answers and this never runs. A backend with a single modulator however
-    // many receivers it runs (HL2) declares ONE implicit-source COMPPEAK, and
-    // defineMeter() files it under implicitTxWaveformSliceIndex() — the
-    // manifest's SLC sourceIndex, which is 0 — while m_activeTxSlice follows
-    // whichever receiver currently owns transmit. Move transmit to the second
-    // receiver and the lookup above misses, so the compression gauge went dead
-    // for a compressor that was still working (#4609 review).
-    //
-    // Deliberately narrow. With an explicit per-waveform map present, or more
-    // than one implicit entry, "which slice" is a real question and answering it
-    // by picking the only entry would point the gauge at the wrong transmitter.
-    if (m_activeTxSlice >= 0 && m_compPeakIdxByTxSource.isEmpty()
-        && m_compPeakIdxBySlice.size() == 1) {
-        return m_compPeakIdxBySlice.constBegin().value();
-    }
-    return -1;
+int MeterModel::swAlcIndexForActiveTxSlice() const
+{
+    return resolveTxWaveformIndex(m_swAlcIdxByTxSource, m_swAlcIdxBySlice, true);
+}
+
+int MeterModel::alcGainIndexForActiveTxSlice() const
+{
+    // allowSingleImplicit, matching ALC and COMPPEAK rather than the filter
+    // taps: a one-modulator backend (the HL2 is one) declares this meter
+    // without an explicit TX-waveform source index, and it follows TX between
+    // receivers (#4609). The taps decline the fallback because THEY are only
+    // meaningful as a matched pair; a gain is a single reading.
+    return resolveTxWaveformIndex(m_alcGainIdxByTxSource, m_alcGainIdxBySlice, true);
 }
 
 void MeterModel::logCompressionMeterMap(const MeterDef& def) const
@@ -555,9 +713,9 @@ void MeterModel::logCompressionMeterMap(const MeterDef& def) const
         return;
 
     const int base = txWaveformBase();
-    const int slice = hasExplicitTxWaveformSourceIndex(def)
-        ? (base >= 0 ? def.sourceIndex - base : -1)
-        : implicitTxWaveformSliceIndex();
+    const int knownSlice = m_compPeakIdxBySlice.key(def.index, -1);
+    const int slice = knownSlice >= 0 ? knownSlice
+        : (base >= 0 ? def.sourceIndex - base : -1);
     qCDebug(lcMeters) << "MeterModel: compression meter map"
                       << "name" << def.name
                       << "id" << def.index
@@ -643,9 +801,17 @@ bool MeterModel::hasRecentReflectedPower(qint64 maxAgeMs) const
 
 void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>& vals)
 {
+    applyValues(ids, vals);
+}
+
+template<typename Value>
+void MeterModel::applyValues(const QVector<quint16>& ids, const QVector<Value>& vals)
+{
     const int n = qMin(ids.size(), vals.size());
     const qint64 packetUpdatedMs = QDateTime::currentMSecsSinceEpoch();
     const int activeCompPeakIdx = compPeakIndexForActiveTxSlice();
+    const int activeSwAlcIdx = swAlcIndexForActiveTxSlice();
+    const int activeAlcGainIdx = alcGainIndexForActiveTxSlice();
     // Resolved once per packet, same shape as activeCompPeakIdx: these must
     // track the ACTIVE TX slice, not whichever block was defined last.
     const int activeScMicIdx   = scMicIndexForActiveTxSlice();
@@ -658,6 +824,7 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
     bool micChanged = false;
     bool hwAlcChangedFlag = false;
     bool swAlcChangedFlag = false;
+    bool alcGainChangedFlag = false;
     bool txFilterLevelsChangedFlag = false;
     bool hwChanged = false;
     bool ampChanged = false;
@@ -668,7 +835,12 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
         auto it = m_defs.constFind(idx);
         if (it == m_defs.constEnd()) continue;
 
-        const float v = convertRaw(*it, vals[i]);
+        float v;
+        if constexpr (std::is_same_v<Value, qint16>) {
+            v = convertRaw(*it, vals[i]);
+        } else {
+            v = vals[i];
+        }
         m_values[idx] = v;
         m_valueUpdatedMs[idx] = packetUpdatedMs;  // per-meter freshness (#3646)
 
@@ -768,7 +940,7 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             m_compPeakLevel = v;
             m_hasCompPeakLevel = true;
             m_compPeakUpdatedMs = packetUpdatedMs;
-            m_compPeak = compressionValueForGauge(v);
+            m_compPeak = compressionValueForGauge(v, m_compressionMaximumDb);
             m_hasCompPeakValue = true;
             logCompressionSummary("ok");
             micChanged = true;
@@ -781,18 +953,18 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
         } else if (idx == m_hwAlcIdx) {
             m_hwAlc = v;
             hwAlcChangedFlag = true;
-        } else if (idx == m_swAlcIdx) {
-            // The ALC consumers are a dBFS gauge (-20..0). A radio that runs its
-            // OWN ALC has no dBFS to give — the IC-705 reports 0..100 % of full
-            // scale — so a percentage handed straight over pins the gauge at the
-            // top and stays there, which is what "ALC is completely pegged"
-            // looked like.
-            //
-            // Map it onto the gauge instead. This is a PRESENTATION mapping and
-            // not a measurement: it says "this fraction of the radio's own ALC
-            // range", and the only honest claim it makes is proportionality.
-            m_swAlc = convertAlcToGaugeDbfs(v);
+        } else if (idx == activeSwAlcIdx) {
+            // Native presentation follows the same active waveform route as
+            // legacy TCI ALC; a percent mapping is not physical dBFS.
+            m_nativeAlcIndex = idx;
+            m_swAlc = convertAlcToGaugeDbfs(v, it->unit);
             swAlcChangedFlag = true;
+        } else if (activeAlcGainIdx >= 0 && idx == activeAlcGainIdx) {
+            // Straight through. The unit is dB by declaration and there is no
+            // second unit to reconcile it with — see alcGainDb().
+            m_alcGainDb = v;
+            m_hasAlcGainValue = true;
+            alcGainChangedFlag = true;
         } else if (activeScMicIdx >= 0 && idx == activeScMicIdx) {
             m_scMic = v;
             m_hasScMicValue = true;
@@ -833,10 +1005,16 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             tgxlChanged = true;
         } else if (idx == m_ampFwdPwrIdx) {
             m_ampFwdPwr = std::pow(10.0f, v / 10.0f) / 1000.0f;  // dBm → watts
+            m_hasAmpPwrValue = true;
             ampChanged = true;
         } else if (idx == m_ampSwrIdx) {
             float rho = std::pow(10.0f, -v / 20.0f);
             m_ampSwr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.9f;
+            m_hasAmpPwrValue = true;
+            ampChanged = true;
+        } else if (idx == m_ampDrvIdx) {
+            m_ampDrv = std::pow(10.0f, v / 10.0f) / 1000.0f;  // dBm → watts
+            m_hasAmpDrvValue = true;
             ampChanged = true;
         } else if (idx == m_ampTempIdx) {
             m_ampTemp = v;
@@ -903,43 +1081,70 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
         emit micMetersChanged(m_micLevel, m_compLevel, m_micPeak, m_compPeak);
     if (hwAlcChangedFlag)
         emit this->hwAlcChanged(m_hwAlc);
-    if (swAlcChangedFlag)
+    if (swAlcChangedFlag) {
         emit this->swAlcChanged(m_swAlc);
+        emit alcValueChanged(alcValue(), alcUnit());
+    }
+    if (alcGainChangedFlag) {
+        emit this->alcGainChanged(m_alcGainDb);
+    }
     if (txFilterLevelsChangedFlag)
         emit txFilterLevelsChanged(m_scFilt1, m_scFilt2);
     if (hwChanged)
         emit hwTelemetryChanged(m_paTemp, m_supplyVolts);
     if (ampChanged)
-        emit ampMetersChanged(m_ampFwdPwr, m_ampSwr, m_ampTemp);
+        emit ampMetersChanged(m_ampFwdPwr, m_ampSwr, m_ampTemp,
+                              m_hasAmpDrvValue ? m_ampDrv : 0.0f,
+                              m_hasAmpDrvValue);
     if (tgxlChanged)
         emit tgxlMetersChanged(m_tgxlFwdPwr, m_tgxlSwr);
 }
 
-static int resolveTxWaveformIndex(const QMap<int, int>& byTxSource,
-                                  const QMap<int, int>& bySlice,
-                                  int txSource, int activeSlice)
+int MeterModel::resolveTxWaveformIndex(const QMap<int, int>& byTxSource,
+                                     const QMap<int, int>& bySlice,
+                                     bool allowSingleImplicit) const
 {
-    if (txSource >= 0 && byTxSource.contains(txSource))
+    if (bySlice.contains(m_activeTxSlice)) {
+        return bySlice.value(m_activeTxSlice);
+    }
+    const int txSource = activeTxWaveformSourceIndex();
+    if (txSource >= 0 && byTxSource.contains(txSource)) {
         return byTxSource.value(txSource);
-    return bySlice.value(activeSlice, -1);
+    }
+    // A single implicit modulator follows TX between receivers (#4609).
+    // Registration is exclusive, so map size counts distinct meter indices.
+    // Keep explicit per-waveform ownership strict even with only one meter;
+    // one observed entry does not prove another slice uses that transmitter.
+    if (allowSingleImplicit && byTxSource.isEmpty() && bySlice.size() == 1) {
+        const int index = bySlice.constBegin().value();
+        const MeterDef* def = meterDef(index);
+        if (def && !hasExplicitTxWaveformSourceIndex(*def)) {
+            return index;
+        }
+    }
+    return -1;
 }
 
 int MeterModel::scMicIndexForActiveTxSlice() const
 {
+    // Filter diagnostics require an associated pair for the active slice.
+    // Unlike ALC/COMPPEAK, do not assemble one from singleton fallbacks that
+    // could belong to different chains. A one-modulator backend can declare
+    // the taps for its active slice if it supports this diagnostic.
     return resolveTxWaveformIndex(m_scMicIdxByTxSource, m_scMicIdxBySlice,
-                                  activeTxWaveformSourceIndex(), m_activeTxSlice);
+                                  false);
 }
 
 int MeterModel::scFilt1IndexForActiveTxSlice() const
 {
     return resolveTxWaveformIndex(m_scFilt1IdxByTxSource, m_scFilt1IdxBySlice,
-                                  activeTxWaveformSourceIndex(), m_activeTxSlice);
+                                  false);
 }
 
 int MeterModel::scFilt2IndexForActiveTxSlice() const
 {
     return resolveTxWaveformIndex(m_scFilt2IdxByTxSource, m_scFilt2IdxBySlice,
-                                  activeTxWaveformSourceIndex(), m_activeTxSlice);
+                                  false);
 }
 
 qint64 MeterModel::txFilterLevelSkewMs() const

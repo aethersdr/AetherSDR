@@ -541,6 +541,15 @@ std::vector<AsrGpuDevice> asrGpuDevices()
                     // usable. The device is kept in the list either way, so
                     // the indices whisper's gpu_device refers to never shift.
                     try {
+                        // Physical-memory query first (#4986): device
+                        // properties only, useful even for a device that then
+                        // fails the probe. A throw here lands in the same
+                        // latch handlers as a probe throw — a device that
+                        // cannot answer a property query is not one to retry.
+                        size_t vramFree = 0, vramTotal = 0;
+                        ggml_backend_dev_memory(dev, &vramFree, &vramTotal);
+                        d.vramFreeBytes = vramFree;
+                        d.vramTotalBytes = vramTotal;
                         d.usable = asrDeviceUsableForDecode(dev);
                         if (!d.usable) {
                             qCInfo(lcAsrWhisper)
@@ -561,16 +570,31 @@ std::vector<AsrGpuDevice> asrGpuDevices()
                         asrMarkGpuDeviceFailed(d.index);
                         qCWarning(lcAsrWhisper)
                             << "GPU device" << d.index << d.name
-                            << "failed the capability probe:" << e.what()
+                            << "threw during the memory query or capability probe:" << e.what()
                             << "- not offered, and not retried this session";
                     } catch (...) {
                         d.usable = false;
                         asrMarkGpuDeviceFailed(d.index);
                         qCWarning(lcAsrWhisper)
                             << "GPU device" << d.index << d.name
-                            << "failed the capability probe (unknown exception)"
+                            << "threw during the memory query or capability probe (unknown exception)"
                             << "- not offered, and not retried this session";
                     }
+                }
+                // One inventory line per device — name, VRAM, verdict — so a
+                // support log answers "which GPU, how much memory" without a
+                // follow-up ask (#4986).
+                if (d.vramTotalBytes > 0) {
+                    qCInfo(lcAsrWhisper)
+                        << "GPU device" << d.index << d.name
+                        << "- VRAM free" << (d.vramFreeBytes / (1024 * 1024))
+                        << "of" << (d.vramTotalBytes / (1024 * 1024)) << "MB -"
+                        << (d.usable ? "usable" : "not offered");
+                } else {
+                    qCInfo(lcAsrWhisper)
+                        << "GPU device" << d.index << d.name
+                        << "- VRAM unknown -"
+                        << (d.usable ? "usable" : "not offered");
                 }
                 devices.push_back(std::move(d));
             }

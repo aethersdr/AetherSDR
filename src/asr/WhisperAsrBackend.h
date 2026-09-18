@@ -79,6 +79,11 @@ struct AsrGpuDevice {
     int index = 0;
     QString name;
     bool usable = true;
+    // Physical memory as reported by ggml_backend_dev_memory (#4986); both 0
+    // when unknown — query unavailable, or the device was latched out before
+    // it could be asked.
+    quint64 vramFreeBytes = 0;
+    quint64 vramTotalBytes = 0;
 };
 
 // Factory for wiring AsrEngine to the production whisper backend. Kept here so

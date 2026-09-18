@@ -55,14 +55,11 @@ public:
 
     // Set one meter from an ALREADY-CONVERTED value, addressed by source+name.
     //
-    // For backends that decode their own telemetry (HL2) rather than streaming
-    // Flex's raw meter packets. It converts back to the raw fixed-point form and
-    // goes through updateValues() on purpose: every derived quantity — forward
-    // power smoothing, SWR, TX-meter freshness timestamps, the change signals —
-    // lives in that path, and a second entry point that recomputed any of it
-    // would drift from the first.
-    //
-    // Returns false if no such meter is defined.
+    // Backends that decode their own telemetry supply physical values directly.
+    // Both entry points share the derived-value/signal path, but converted
+    // values must not round-trip through Flex's int16 wire representation:
+    // native Watts have no fractional wire scale and would lose sub-watt RF.
+    // Returns false for an undefined meter or a non-finite input.
     bool updateValueByName(const QString& source, const QString& name,
                            float converted, int sourceIndex = -1);
 
@@ -80,6 +77,8 @@ public:
     // exposed this as age_ms; this makes it available in C++ for the same
     // reason.
     qint64 valueAgeMs(int index) const;
+    // Last accepted sample timestamp, including unchanged values; zero if unfed.
+    qint64 valueUpdatedAtMs(int index) const { return m_valueUpdatedMs.value(index, 0); }
     // Age of the FRESHEST value across every meter, or -1 when none has ever
     // been fed. Proof that the metering path as a whole is still answering,
     // which no single meter can give: a TX meter is legitimately silent while
@@ -89,6 +88,9 @@ public:
     // the producer->consumer direction as well as the reverse, which is how a
     // meter that is published and rendered nowhere becomes visible.
     QList<int> definedIndices() const { return m_defs.keys(); }
+    // Bounded traversal for telemetry consumers; never copies the full map.
+    QList<int> firstDefinedIndices(int limit, std::optional<int> after = {}) const;
+    qsizetype definitionCount() const { return m_defs.size(); }
 
     // Current converted value for a meter index. Returns 0 if unknown.
     float value(int index) const;
@@ -180,6 +182,7 @@ public:
     // says a dead meter and a real reading of nothing look identical.
     bool hasMicPeakMeter() const { return m_micPeakIdx >= 0; }
     float compPeak() const { return m_compPeak; }
+    void setCompressionMaximumDb(float maximum);
     bool hasCompressionMeterValue() const { return m_hasCompPeakValue; }
 
     // Convenience: instantaneous mic level and compression (non-peak).
@@ -191,10 +194,44 @@ public:
     // connection is wired into the radio's HWALC RCA — kept around for
     // SliceTroubleshootingDialog telemetry; not what users normally watch.
     float hwAlc() const { return m_hwAlc; }
-    // Convenience: post-software-ALC SSB-peak meter (dBFS, from TX "ALC").
-    // This is the indicator users actually want — moves with voice peaks
-    // and CW keying envelope.  Drives the ALC gauges in the Phone/CW applet.
+    // Legacy normalized ALC for TCI compatibility. Native percent meters are
+    // mapped to -20..0 here; this is not a physical dBFS measurement on Icom.
     float swAlc() const { return m_swAlc; }
+    // The GAIN the transmitter's ALC is applying, in dB; 0 is unity. The
+    // companion to swAlc(), and a different measurement rather than a different
+    // scaling of it — swAlc() is the post-ALC LEVEL, which sits near the ALC's
+    // target whatever the operator does, and this is how hard the stage is
+    // working to put it there. Positive is makeup, negative is reduction.
+    //
+    // NOT converted anywhere, unlike swAlc()'s dBFS/Percent split. That split
+    // exists because an Icom reports its ALC level as a percentage of its own
+    // full scale; no radio in this tree reports a GAIN in anything but dB, so
+    // a mapping here would be a conversion with nothing to convert from.
+    float alcGainDb() const { return m_alcGainDb; }
+    // Whether a SAMPLE has landed, not merely whether the meter is defined.
+    // Load-bearing here in a way it is not for a level: 0 dB is a real and
+    // common reading — the ALC holding at unity — so the initialiser and a
+    // measurement are the same number, and a gauge keyed on the index alone
+    // would render "no gain is being applied" before anything had been said.
+    // Same shape, and the same reason, as hasCompressionMeterValue().
+    bool hasAlcGainValue() const { return m_hasAlcGainValue; }
+    // Whether the radio DEFINES an ALCGAIN meter at all — the companion
+    // question to hasAlcGainValue(), and the one a GAUGE has to ask. Same
+    // shape and the same reason as hasMicPeakMeter(): no radio in this tree
+    // but the HL2 publishes this meter, so on every other family the face
+    // could never move, and lesson 1.8 says a dead meter and a real reading
+    // of nothing look identical. Not slice-scoped, deliberately — the
+    // question is whether this SESSION has the meter, and clear() empties
+    // both maps on disconnect so it cannot outlive the radio that answered.
+    bool hasAlcGainMeter() const
+    {
+        return !m_alcGainIdxByTxSource.isEmpty() || !m_alcGainIdxBySlice.isEmpty();
+    }
+
+    // Canonical ALC retains the meter's declared units and accepted sample.
+    float alcValue() const;
+    QString alcUnit() const;
+    qint64 alcUpdatedAtMs() const;
 
     // Convenience: the TX-filter input/output pair (dBFS, from TX "SC_MIC" and
     // TX "SC_FILT_2").  SC_MIC is where PC/remote audio enters the TX chain;
@@ -224,9 +261,29 @@ public:
     // Convenience: PA heatsink temperature (°C).
     float paTemp() const { return m_paTemp; }
     bool hasPaTemp() const { return m_hasPaTempValue; }
+    // Age of the low-rate vitals, -1 when the meter is undeclared. "Ever fed"
+    // is not "current": a radio that reported PA temperature once and stopped
+    // would otherwise keep that reading alive forever on every surface that
+    // gated on hasPaTemp() alone (#5516).
+    qint64 paTempAgeMs() const
+    { return m_paTempIdx >= 0 ? valueAgeMs(m_paTempIdx) : -1; }
+    qint64 supplyVoltsAgeMs() const
+    { return m_supplyIdx >= 0 ? valueAgeMs(m_supplyIdx) : -1; }
+    // The freshness window for those vitals, shared by every consumer so they
+    // cannot answer differently about one sensor. Matches FRESH_MS in
+    // tools/tx_meter_test.py; see AutomationServer's meterObservation().
+    static constexpr qint64 kVitalsFreshMs = 1500;
+    static bool vitalIsFresh(bool declaredAndFed, qint64 ageMs)
+    { return declaredAndFed && ageMs >= 0 && ageMs < kVitalsFreshMs; }
     float paCurrent() const { return m_paCurrent; }
     bool hasPaCurrentMeter() const { return m_paCurrentIdx >= 0; }
     bool hasPaCurrent() const { return m_hasPaCurrentValue; }
+    // True once a forward-power or SWR sample has arrived for the amplifier.
+    // ampMetersChanged also fires for TEMP and DRV, so a consumer choosing
+    // between the relayed meters and the amplifier's own socket must gate on
+    // this rather than on the signal alone — otherwise a temperature update
+    // reads as a live relay carrying 0 W and locks the socket out (#4805).
+    bool hasAmpPower() const { return m_hasAmpPwrValue; }
 
     // Convenience: supply voltage (Volts, from "+13.8A" meter — measurement point A, before fuse).
     float supplyVolts() const { return m_supplyVolts; }
@@ -243,6 +300,9 @@ public:
     bool hasSupplyVoltage() const { return m_hasSupplyVoltsValue; }
 
 signals:
+    void meterDefinitionChanged(int index);
+    void meterRemoved(int index);
+    void metersCleared();
     // Emitted when the S-meter value changes (dBm).
     // sliceIndex identifies which slice's LEVEL meter this is.
     void sLevelChanged(int sliceIndex, float dbm);
@@ -288,8 +348,13 @@ signals:
     // Emitted when the external Hardware ALC RCA voltage changes (dBFS).
     void hwAlcChanged(float dbfs);
     // Emitted when the post-software-ALC SSB-peak meter changes (dBFS).
-    // Drives the in-app ALC gauges; fires during voice peaks and CW keying.
+    // Retained for normalized consumers such as TCI.
     void swAlcChanged(float dbfs);
+    // Emitted when the ALC's applied GAIN changes (dB, 0 = unity), and when it
+    // is cleared because the reading no longer describes the active
+    // transmitter. See alcGainDb().
+    void alcGainChanged(float db);
+    void alcValueChanged(float value, const QString& unit);
 
     // Emitted when either side of the TX-filter pair changes (dBFS in, dBFS out).
     void txFilterLevelsChanged(float scFilt1, float scFilt2);
@@ -298,8 +363,19 @@ signals:
     void hwTelemetryChanged(float paTemp, float supplyVolts);
     void paCurrentChanged(float amps);
 
-    // Emitted when amplifier meters change (PGXL fwd power, SWR, temp).
-    void ampMetersChanged(float fwdPower, float swr, float temp);
+    // Emitted when amplifier meters change (PGXL fwd power, SWR, temp, drive).
+    //
+    // `drivePower` is the exciter power measured AT THE AMPLIFIER'S INPUT --
+    // the PGXL's own "DRV" meter, relayed by the radio (declared 10..50 dBm,
+    // i.e. 10 mW..100 W). It is the amplifier's measurement, not the radio's
+    // FWDPWR: the pair (drive in, forward out) is the amplifier's gain, which
+    // is the one reading that says whether it is amplifying at all.
+    //
+    // driveValid=false means no DRV meter exists for this amplifier -- not
+    // every amp publishes one. The float alongside is 0.0f and MUST NOT be
+    // rendered, exactly as with txMetersChanged's swrValid.
+    void ampMetersChanged(float fwdPower, float swr, float temp,
+                          float drivePower, bool driveValid);
     void tgxlMetersChanged(float fwdPower, float swr);
 
     // Emitted when any meter value changes (for debug/generic display).
@@ -307,17 +383,34 @@ signals:
 
 private:
     float convertRaw(const MeterDef& def, qint16 raw) const;
+    template<typename Value>
+    void applyValues(const QVector<quint16>& ids, const QVector<Value>& vals);
     void clearCompressionState();
     void recomputeSourceIndexMins();
     // Map a radio-side ALC reading onto the dBFS range the gauges are built
     // for. Identity when the backend already declares dBFS.
-    float convertAlcToGaugeDbfs(float raw) const;
+    // Mirrors the Phone/CW gauge's floor without introducing a gui dependency.
+    static constexpr float kAlcGaugeFloorDbfs = -20.0f;
+    static float convertAlcToGaugeDbfs(float raw, const QString& unit);
+    void registerTxWaveformMeter(const MeterDef& def, bool redefinition,
+                                 QMap<int, int>& byTxSource, QMap<int, int>& bySlice);
+    int resolveTxWaveformIndex(const QMap<int, int>& byTxSource,
+                               const QMap<int, int>& bySlice,
+                               bool allowSingleImplicit = false) const;
     bool isTxWaveformMeter(const MeterDef& def) const;
     bool hasExplicitTxWaveformSourceIndex(const MeterDef& def) const;
     int implicitTxWaveformSliceIndex() const;
     int txWaveformBase() const;
     int activeTxWaveformSourceIndex() const;
     int compPeakIndexForActiveTxSlice() const;
+    int swAlcIndexForActiveTxSlice() const;
+    int alcGainIndexForActiveTxSlice() const;
+    // One place that answers "this reading no longer describes the active
+    // transmitter", so the three paths that can invalidate it — a slice change,
+    // a disconnect and the radio withdrawing the meter — cannot drift apart.
+    // Returns whether anything actually changed, so a no-op re-selection does
+    // not emit a clear.
+    bool clearAlcGainState();
     void logCompressionMeterMap(const MeterDef& def) const;
     void logCompressionSummary(const char* reason, bool force = false);
 
@@ -331,13 +424,14 @@ private:
     // Cached indices for fast lookup of important meters
     QMap<int, int> m_sLevelIdxBySlice;  // sliceIndex → meter index for "SLC"/"LEVEL"
     QMap<int, int> m_escLevelIdxBySlice; // sliceIndex → meter index for "SLC"/"ESC"
-    QMap<int, int> m_compPeakIdxByTxSource; // TX waveform sourceIndex → "COMPPEAK"
-    QMap<int, int> m_compPeakIdxBySlice;    // active slice → "COMPPEAK" for TX blocks with num=0
+    QMap<int, int> m_compPeakIdxByTxSource; // TX waveform sourceIndex → "COMPPEAK" fallback
+    QMap<int, int> m_compPeakIdxBySlice;    // preceding SLC manifest block → "COMPPEAK"
     int m_minSliceSourceIndex{-1};
     int m_minTxWaveformSourceIndex{-1};
-    int m_manifestSliceContext{-1};
+    int m_manifestSliceContext{-1}; // new definitions only; cleared by removal/non-TX blocks
     int m_activeTxSlice{-1};
-    // The UNIT each of these was DECLARED with, cached at definition time.
+    // The UNIT each directional-power meter was DECLARED with, cached at
+    // definition time. ALC resolves the unit from the active meter definition.
     //
     // Load-bearing, and the absence of it was a real defect. This model used to
     // interpret a meter purely by NAME and apply a unit it ASSUMED — FWDPWR was
@@ -350,7 +444,8 @@ private:
     // correctly reported both as fed.
     QString m_fwdPwrUnit;
     QString m_refPwrUnit;
-    QString m_swAlcUnit;
+    // Only a sample accepted for the current TX selection is presentable.
+    int m_nativeAlcIndex{-1};
 
     int m_fwdPwrIdx{-1};     // "FWDPWR"
     int m_refPwrIdx{-1};     // "REFPWR"
@@ -359,14 +454,20 @@ private:
     int m_micLevelIdx{-1};   // "COD-" / "MIC" (hardware mic RX level)
     int m_compLevelIdx{-1};  // "TX" / "COMP" (instantaneous)
     int m_hwAlcIdx{-1};      // "TX" / "HWALC" — external RCA jack voltage
-    int m_swAlcIdx{-1};      // "TX" / "ALC"   — post-software-ALC SSB peak
+    QMap<int, int> m_swAlcIdxByTxSource; // TX waveform sourceIndex → "ALC" fallback
+    QMap<int, int> m_swAlcIdxBySlice;    // preceding SLC manifest block → "ALC"
+    // Routed exactly like ALC above, for the same reason: an ALC gain belongs
+    // to ONE transmitter, and a single index per meter would be
+    // last-definition-wins and silently watch another slice.
+    QMap<int, int> m_alcGainIdxByTxSource; // TX waveform sourceIndex → "ALCGAIN"
+    QMap<int, int> m_alcGainIdxBySlice;    // preceding SLC manifest block → "ALCGAIN"
     // Per-slice, exactly like COMPPEAK above: a radio can publish one TX
-    // waveform meter block PER ACTIVE SLICE (6600 uses distinct sourceIndex
-    // values, 8000 repeats "TX- num=0" after each SLC block). A single index
-    // per meter would be last-definition-wins, and the TX-filter check would
-    // silently watch some other slice's filter.
-    QMap<int, int> m_scMicIdxByTxSource;    // "TX" / "SC_MIC"    (explicit sourceIndex)
-    QMap<int, int> m_scMicIdxBySlice;       //                    (implicit, num=0)
+    // waveform meter block PER ACTIVE SLICE. TX- sourceIndex is not a slice-ID
+    // contract: models may use distinct values, repeated zero, or mixed 0/9.
+    // The preceding SLC block supplies the slice association. A single index
+    // per meter would be last-definition-wins and silently watch another slice.
+    QMap<int, int> m_scMicIdxByTxSource;    // "TX" / "SC_MIC" sourceIndex fallback
+    QMap<int, int> m_scMicIdxBySlice;       // preceding SLC manifest block
     QMap<int, int> m_scFilt1IdxByTxSource;  // "TX" / "SC_FILT_1"
     QMap<int, int> m_scFilt1IdxBySlice;
     QMap<int, int> m_scFilt2IdxByTxSource;  // "TX" / "SC_FILT_2"
@@ -376,6 +477,7 @@ private:
     int m_supplyIdx{-1};     // "RAD" / "+13.8A" (supply voltage, point A = before fuse)
     int m_ampFwdPwrIdx{-1};  // "AMP" / "FWD" (PGXL)
     int m_ampSwrIdx{-1};     // "AMP" / "RL" (PGXL)
+    int m_ampDrvIdx{-1};     // "AMP" / "DRV" (PGXL — exciter power at the amp input)
     int m_ampTempIdx{-1};    // "AMP" / "TEMP"
     int m_tgxlFwdIdx{-1};   // "AMP" / "FWD" (TGXL — matched by handle)
     int m_tgxlSwrIdx{-1};   // "AMP" / "RL" (TGXL — matched by handle)
@@ -396,7 +498,8 @@ private:
     qint64 m_lastReflectedPowerUpdateMs{0};
     qint64 m_lastSwrUpdateMs{0};
     float m_micPeak{-50.0f};
-    float m_compPeak{0.0f};       // radio-provided compression amount, 0..25 dB
+    float m_compressionMaximumDb{25.0f};
+    float m_compPeak{0.0f};       // radio-provided compression amount in dB
     bool m_hasCompPeakValue{false};
     float m_compPeakLevel{0.0f};  // last raw converted COMPPEAK sample
     bool m_hasCompPeakLevel{false};
@@ -406,7 +509,12 @@ private:
     float m_micLevel{-50.0f};
     float m_compLevel{0.0f};
     float m_hwAlc{0.0f};
-    float m_swAlc{0.0f};
+    float m_swAlc{kAlcGaugeFloorDbfs};
+    // Unity, not a floor: a gain's empty presentation is "nothing is being
+    // added or taken away". Which is also a legitimate reading, hence the
+    // separate has-a-sample flag — see hasAlcGainValue().
+    float m_alcGainDb{0.0f};
+    bool m_hasAlcGainValue{false};
     float m_scMic{0.0f};
     float m_scFilt1{0.0f};
     float m_scFilt2{0.0f};
@@ -426,6 +534,16 @@ private:
     float m_ampFwdPwr{0.0f};
     float m_ampSwr{1.0f};
     float m_ampTemp{0.0f};
+    float m_ampDrv{0.0f};
+    // Set when a FWD or RL value packet lands for the amplifier. ampMetersChanged
+    // also fires for TEMP and DRV, and a consumer that arbitrates between the
+    // relay and the amplifier's own socket has to know whether a POWER sample
+    // actually arrived — otherwise a temperature update reads as a live relay
+    // carrying 0 W. See hasAmpPower().
+    bool m_hasAmpPwrValue{false};
+    // Set when a DRV value packet lands, cleared wherever m_ampDrvIdx is, so a
+    // drive reading can never outlive the meter it describes.
+    bool m_hasAmpDrvValue{false};
 };
 
 } // namespace AetherSDR

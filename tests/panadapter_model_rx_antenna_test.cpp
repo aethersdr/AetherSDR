@@ -155,6 +155,74 @@ int main(int argc, char** argv)
         EXPECT_EQ(pan.waterfallId(), QStringLiteral("4200000f"));    // bare hex accepted
     }
 
+    // Socket-free reproduction of the no-echo setter case and reconciliation.
+    pan.applyStateExtension({{"average", "50"}, {"fps", "25"}});
+    QSignalSpy averageReported(&pan, &PanadapterModel::averageReported);
+    QSignalSpy fpsReported(&pan, &PanadapterModel::fpsReported);
+    pan.setRequestedFftSettings(17, 15);
+    EXPECT_EQ(pan.average(), 17);
+    EXPECT_EQ(pan.fps(), 15);
+    EXPECT_EQ(pan.radioReportedAverage(), 50);
+    EXPECT_EQ(pan.radioReportedFps(), 25);
+    EXPECT_EQ(pan.averageIsRequest(), true);
+    EXPECT_EQ(pan.fpsIsRequest(), true);
+    EXPECT_EQ(averageReported.count(), 0);
+    EXPECT_EQ(fpsReported.count(), 0);
+    pan.applyStateExtension({{"average", "bad"}, {"fps", "bad"}});
+    EXPECT_EQ(pan.averageIsRequest(), true);
+    EXPECT_EQ(pan.fpsIsRequest(), true);
+    // The old value is still authoritative when published again, even after
+    // a newer intent. There is no stale-value hold or deferred replay here.
+    pan.applyStateExtension({{"average", "50"}, {"fps", "25"}});
+    EXPECT_EQ(pan.average(), 50);
+    EXPECT_EQ(pan.fps(), 25);
+    EXPECT_EQ(pan.averageIsRequest(), false);
+    EXPECT_EQ(pan.fpsIsRequest(), false);
+    EXPECT_EQ(averageReported.count(), 1);
+    EXPECT_EQ(fpsReported.count(), 1);
+    pan.setRequestedFftSettings(0, 30);
+    pan.applyStateExtension({{"average", "0"}, {"fps", "30"}});
+    EXPECT_EQ(pan.average(), 0);
+    EXPECT_EQ(pan.radioReportedAverage(), 0);
+    EXPECT_EQ(pan.averageIsRequest(), false);
+    pan.setRequestedFftSettings(-2, 101);
+    EXPECT_EQ(pan.average(), 0);
+    EXPECT_EQ(pan.fps(), 30);
+    EXPECT_EQ(pan.fpsIsRequest(), false);
+
+    // ---- setLocalAverage: the raw-spectrum backends' path ----
+    //
+    // The distinguishing property is the one the header comment is entirely
+    // about: this setter is AUTHORITATIVE, so it clears averageIsRequest where
+    // setRequestedFftSettings sets it. Without an assertion on that, the two
+    // could be collapsed into one and the suite would stay green.
+    pan.setRequestedFftSettings(40, -1);
+    EXPECT_EQ(pan.averageIsRequest(), true);
+    const int beforeLocal = averageReported.count();
+    pan.setLocalAverage(12);
+    EXPECT_EQ(pan.average(), 12);
+    EXPECT_EQ(pan.averageIsRequest(), false);
+    EXPECT_EQ(averageReported.count(), beforeLocal + 1);
+
+    // Reported EVEN WHEN UNCHANGED. The pan-rebuild restore reads the reported
+    // value, so a setter that stayed silent on an equal write would lose the
+    // seed for exactly the operators who never moved the slider again.
+    pan.setLocalAverage(12);
+    EXPECT_EQ(pan.average(), 12);
+    EXPECT_EQ(averageReported.count(), beforeLocal + 2);
+
+    // Both ends of the range are legal; outside it nothing moves and nothing
+    // is emitted.
+    pan.setLocalAverage(0);
+    EXPECT_EQ(pan.average(), 0);
+    pan.setLocalAverage(100);
+    EXPECT_EQ(pan.average(), 100);
+    const int beforeReject = averageReported.count();
+    pan.setLocalAverage(-1);
+    pan.setLocalAverage(101);
+    EXPECT_EQ(pan.average(), 100);
+    EXPECT_EQ(averageReported.count(), beforeReject);
+
     if (g_failures == 0) {
         std::printf("panadapter_model_rx_antenna_test: all checks passed\n");
         return 0;

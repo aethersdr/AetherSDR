@@ -73,6 +73,20 @@ QByteArray canonicalizeInt16ToMonoStereo(const QByteArray& input,
                                          AutoState* autoState,
                                          Diagnostics* diagnostics);
 
+// Float32 capture sibling of canonicalizeInt16ToMonoStereo(): same channel
+// selection, same Auto hold state, same diagnostics — but it stays in float,
+// so the block handed to TxVoiceProcessor::processCapturedFloat32() has never
+// been quantized. Reuses kMaxRealtimeBlockBytes rather than the float ceiling
+// below: that ceiling exists for TCI, whose blocks arrive already upsampled,
+// whereas a capture block is bounded in BYTES by TxCaptureBuffer::kMaxReadBytes
+// whatever its sample width.
+QByteArray canonicalizeFloat32ToMonoStereo(const QByteArray& input,
+                                           int inputChannels,
+                                           int inputSampleRate,
+                                           ChannelMode requestedMode,
+                                           AutoState* autoState,
+                                           Diagnostics* diagnostics);
+
 QByteArray collapseFloat32ToInt16MonoBigEndian(const QByteArray& input,
                                                int inputChannels,
                                                int inputSampleRate,

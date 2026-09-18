@@ -4,10 +4,17 @@ name: Sign Release Artifacts
 # macOS artifacts are signed via Apple codesign + notarization.
 
 on:
+  # NO `branches:` filter here, deliberately.  `branches: [main]` restricts the
+  # workflow_run event to runs whose head branch is `main`, but a tag build's
+  # head_branch is the tag (`v26.8.3`) — and the job's own `if` below requires
+  # exactly that.  The two were mutually exclusive, so this trigger could only
+  # ever skip: every signed release through v26.8.1 was signed by a manual
+  # workflow_dispatch instead, and v26.8.2 shipped unsigned because nobody
+  # remembered to run one.  The `if` is what restricts this to tags; a `main`
+  # build still reaches it and is still skipped there.
   workflow_run:
     workflows: ["AppImage", "Windows Installer"]
     types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
@@ -16,6 +23,14 @@ on:
 
 permissions:
   contents: write
+
+# Both AppImage and Windows Installer trigger this, so one tag produces two
+# runs.  Serialise them per tag rather than letting them race on the same
+# --clobber uploads; the second run re-signs the same complete set, which is
+# harmless because signing is idempotent in effect.
+concurrency:
+  group: sign-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
 
 jobs:
   sign:
@@ -26,7 +41,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Check out the TAG being signed, not the default branch.  "Generate source
+      # archive" below is `git archive HEAD`, so without this it archives main's
+      # tip: a tarball named for the tag, containing whatever had merged since.
+      # Signing that produces an authenticated misstatement, which is worse than
+      # an unsigned release — so this ref is load-bearing, not tidiness.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
 
       - name: Determine tag
         id: tag
@@ -36,6 +58,34 @@ jobs:
           else
             echo "tag=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
           fi
+
+      # Whichever build finishes first triggers this run, while the other may
+      # still be uploading.  Signing then covers a partial set and — worse —
+      # SHA256SUMS.txt silently omits whatever had not landed yet, while still
+      # looking like a complete manifest.  Wait for the full signable set first.
+      # macOS DMGs are deliberately absent: they are Apple-notarized, not GPG
+      # signed, so they are neither waited for nor signed here.
+      - name: Wait for every signable artifact to be attached
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          want="x86_64.AppImage aarch64.AppImage Windows-x64-setup.exe Windows-x64-portable.zip"
+          for i in $(seq 1 90); do
+            names=$(gh release view "$TAG" --json assets --jq '[.assets[].name] | join(" ")')
+            missing=
+            for w in $want; do
+              case "$names" in *"$w"*) ;; *) missing="$missing $w" ;; esac
+            done
+            if [ -z "$missing" ]; then
+              echo "All signable artifacts present."
+              exit 0
+            fi
+            echo "Waiting for:$missing  ($i/90)"
+            sleep 20
+          done
+          echo "::error::Timed out after 30 min waiting for release artifacts:$missing"
+          exit 1
 
       - name: Download release artifacts
         env:

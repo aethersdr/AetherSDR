@@ -42,7 +42,8 @@ RadioCapabilities hl2Caps()
     caps.family = QStringLiteral("hl2");
     caps.clientSettingsDomains = Domain::Tuning | Domain::Passband
                                  | Domain::SpanRate | Domain::RfGain
-                                 | Domain::TxSetpoints | Domain::Agc;
+                                 | Domain::TxSetpoints | Domain::Agc
+                                 | Domain::Cw;
     return caps;
 }
 
@@ -56,6 +57,17 @@ RestoredRadioState sampleState()
     state.sampleRateHz = 192'000;
     state.agcMode = QStringLiteral("slow");
     state.agcThreshold = 40;
+    state.cwSpeed = 31;
+    state.cwPitch = 720;
+    state.cwBreakIn = 1;
+    state.cwDelay = 275;
+    state.cwSidetone = 0;
+    state.cwIambic = 0;
+    state.cwIambicMode = 1;
+    state.cwSwapPaddles = 1;
+    state.cwlEnabled = 1;
+    state.monGainCw = 73;
+    state.monPanCw = 22;
     state.extensionSchemaVersion = 1;
     // The extension's top level is domain sub-objects (the per-domain gate);
     // each sub-object's contents are backend-owned.
@@ -119,6 +131,14 @@ int main(int argc, char** argv)
         check(restored.agcMode == QStringLiteral("slow")
                   && restored.agcThreshold == 40,
               "AGC mode and threshold round-trip (#4909)");
+        check(restored.cwSpeed == 31 && restored.cwPitch == 720
+                  && restored.cwBreakIn == 1 && restored.cwDelay == 275
+                  && restored.cwSidetone == 0 && restored.cwIambic == 0
+                  && restored.cwIambicMode == 1
+                  && restored.cwSwapPaddles == 1
+                  && restored.cwlEnabled == 1 && restored.monGainCw == 73
+                  && restored.monPanCw == 22,
+              "the complete client-owned CW surface round-trips");
         check(restored.extensionSchemaVersion == 1
                   && restored.extension.value(QStringLiteral("rfGain"))
                              .toObject()
@@ -162,6 +182,45 @@ int main(int argc, char** argv)
         // deliberate AGC-T of 0.
         check(gated.agcMode.isEmpty() && gated.agcThreshold == -1,
               "an undeclared Agc domain is absent, not a threshold of 0");
+        check(gated.cwSpeed == 0 && gated.cwPitch == 0
+                  && gated.cwBreakIn == -1 && gated.cwDelay == -1
+                  && gated.monGainCw == -1 && gated.monPanCw == -1,
+              "an undeclared CW domain stays absent");
+    }
+
+    // ---- deliberate false/zero CW values survive -------------------------
+    // Every boolean and slider can legitimately sit at zero. The absent
+    // sentinel is therefore -1 for those fields, while speed/pitch use zero
+    // because their valid ranges start above it.
+    {
+        RadioCapabilities cwOnly;
+        cwOnly.family = QStringLiteral("hl2");
+        cwOnly.clientSettingsDomains = Domain::Cw;
+        const RadioSettingsScope zeroCwRadio(
+            QStringLiteral("hl2"), QStringLiteral("00:00:00:00:00:C0"));
+        RestoredRadioState state;
+        state.cwSpeed = 5;
+        state.cwPitch = 100;
+        state.cwBreakIn = 0;
+        state.cwDelay = 0;
+        state.cwSidetone = 0;
+        state.cwIambic = 0;
+        state.cwIambicMode = 0;
+        state.cwSwapPaddles = 0;
+        state.cwlEnabled = 0;
+        state.monGainCw = 0;
+        state.monPanCw = 0;
+        check(RadioStateMemory::store(zeroCwRadio, cwOnly, state),
+              "deliberate false/zero CW values store");
+        const RestoredRadioState back =
+            RadioStateMemory::load(zeroCwRadio, cwOnly);
+        check(back.cwSpeed == 5 && back.cwPitch == 100
+                  && back.cwBreakIn == 0 && back.cwDelay == 0
+                  && back.cwSidetone == 0 && back.cwIambic == 0
+                  && back.cwIambicMode == 0 && back.cwSwapPaddles == 0
+                  && back.cwlEnabled == 0 && back.monGainCw == 0
+                  && back.monPanCw == 0,
+              "false/zero CW values are not mistaken for absent");
     }
 
     // ---- a threshold of ZERO survives the round-trip -----------------------

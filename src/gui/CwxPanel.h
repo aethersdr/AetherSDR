@@ -4,6 +4,7 @@
 #include <QString>
 #include <QVector>
 #include <functional>
+#include "models/TxController.h"
 
 class QPushButton;
 class QTextEdit;
@@ -16,6 +17,7 @@ class QVBoxLayout;
 class QShortcut;
 class QResizeEvent;
 class QPaintEvent;
+class QFont;
 
 namespace AetherSDR {
 
@@ -62,7 +64,24 @@ class CwxPanel : public QWidget {
 public:
     explicit CwxPanel(CwxModel* model, QWidget* parent = nullptr);
 
+    // The Setup page's F1-F12 macro row floor (#4945/#5121 review) — ~2
+    // text lines derived from font metrics rather than a bare pixel count,
+    // so it moves with the theme's font. Public and static so a test can
+    // call the SAME function buildSetupView() uses instead of keeping its
+    // own copy of the derivation, which is exactly how the two drifted
+    // apart the first time (#5125 review, credit NF0T): production moved
+    // to a font-metrics formula and the test kept its old hardcoded number.
+    static int macroRowMinimumHeight(const QFont& baseFont);
+
     void setModel(CwxModel* model);
+    void setTxControllerProvider(std::function<std::shared_ptr<TxController>()> provider)
+    {
+        m_txControllerProvider = std::move(provider);
+    }
+    void setDisplayName(const QString& name);
+    QString displayName() const;
+    void configureTextKeyer(const QString& name, int minWpm, int maxWpm,
+                            bool supportsLive, bool supportsStoredMacros);
 
     // Optional providers used to guard the global F1-F12 / ESC shortcuts
     // so they don't fire in modes/states where they'd be surprising (#1552).
@@ -102,13 +121,17 @@ private:
     void buildSetupView();
     void showSendView();
     void showSetupView();
-    void sendBuffer();
+    void sendBuffer(const TxController::Input* input = nullptr, const QString& capturedText = {});
+    void sendButtonClicked(const TxController::Input* input = nullptr, const QString& capturedText = {});
     void resendText(const QString& text);
     void clearHistory();
     void appendHistoryBubble(const QString& rawText);
     void onKeyPress(const QString& text);
+    void sendMacro(int index, const TxController::Input* input = nullptr);
+    std::function<std::shared_ptr<TxController>()> m_txControllerProvider;
 
     CwxModel*       m_model{nullptr};
+    QLabel*         m_titleLabel{nullptr};
 
     QStackedWidget* m_stack{nullptr};
 

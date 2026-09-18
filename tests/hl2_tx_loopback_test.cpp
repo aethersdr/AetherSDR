@@ -32,7 +32,7 @@
 // the fed-back tone read BELOW centre. This test was written against that older
 // display in #4466 and went on asserting the negative offset afterwards. That
 // staleness — not transmit — is the whole of the "fails on transmit-sideband
-// checks" that HERMES.md carried as pre-existing.
+// checks" that docs/HERMES.md carried as pre-existing.
 //
 // BUT cancelling conjugations mean this loopback ALONE cannot prove absolute
 // sideband: a handedness error at BOTH ends still cancels. That is exactly how a
@@ -43,6 +43,7 @@
 // the scene anchor below.
 
 #include "core/backends/hl2/Hl2Backend.h"
+#include "TxTestAuthority.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 #include "TestDspBuildWait.h"
@@ -97,7 +98,7 @@ enum class Probe { NoReply, Unreadable, NotSimulator, Simulator };
 // "fails non-deterministically" reputation came from, since the answers depended
 // on what that other machine was doing at the time.
 //
-// Which hpsdrsim: the g0orx/pihpsdr build HERMES.md §7 pins as the fixture. It
+// Which hpsdrsim: the g0orx/pihpsdr build docs/HERMES.md §7 pins as the fixture. It
 // writes those bytes at hpsdrsim.c:628-633. Current upstream (dl1ycf/pihpsdr)
 // uses a different synthetic MAC, so a simulator built from that one reads as
 // NotSimulator and this test skips rather than running against it.
@@ -200,6 +201,7 @@ static float peakNear(const std::vector<float>& spec, int centreBin, int halfWid
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    TxTestAuthority authority;
     qRegisterMetaType<SliceDelta>();
 
     // Loopback by default: a simulator on this machine is the normal case, and
@@ -252,7 +254,7 @@ int main(int argc, char** argv)
         // Somebody else's session. hpsdrsim serves one client: connecting tears
         // down its EP6 handler and re-points it at us, and this test then keys
         // PTT. Leaving it alone is the same call as the NotSimulator arm — and
-        // it is the collision HERMES.md used to warn about, now that the local
+        // it is the collision docs/HERMES.md used to warn about, now that the local
         // simulator is the default target rather than an accident.
         if (reply.streaming) {
             std::fprintf(stderr,
@@ -342,12 +344,12 @@ int main(int argc, char** argv)
 
     // ---- transmit a tone ----
     constexpr double kToneOffsetHz = 5000.0;
-    backend.setTxTestTone(kToneOffsetHz, 0.5);
-    backend.setKeying(true);
+    backend.setTxTestTone(kToneOffsetHz, 0.5, authority.operation);
+    backend.setKeying(true, authority.operation);
     spin(2500);
     const std::vector<float> keyed = lastSpectrum;
-    backend.setKeying(false);
-    backend.setTxTestTone(0.0, 0.0);
+    backend.setKeying(false, authority.operation);
+    backend.setTxTestTone(0.0, 0.0, authority.operation);
 
     check(keyed.size() == baseline.size() && !keyed.empty(),
           "spectrum still flowing while keyed");
@@ -398,7 +400,7 @@ int main(int argc, char** argv)
     {
         backend.setSliceMode(0, QStringLiteral("USB"));
         spin(300);
-        backend.setKeying(true);
+        backend.setKeying(true, authority.operation);
 
         std::vector<float> voice;
         constexpr double kAudioHz = 1500.0;
@@ -415,7 +417,8 @@ int main(int argc, char** argv)
                 out[2 * n] = v;
                 out[2 * n + 1] = v;      // AudioEngine duplicates across channels
             }
-            backend.submitTxAudio(pcm, kRate, /*clientLeveled=*/false);
+            backend.submitTxAudio(pcm, kRate, TxAudioSource::Microphone,
+                                  authority.context);
             spin(20);
             // Capture WHILE transmitting. Sampling after the loop would read
             // silence: the queue drains in well under a second once audio stops,
@@ -424,7 +427,7 @@ int main(int argc, char** argv)
             if (blk == 80)
                 voice = lastSpectrum;
         }
-        backend.setKeying(false);
+        backend.setKeying(false, authority.operation);
 
         // Assert the capture happened. Without this the three checks below are
         // skipped in silence when `voice` never arrived, and the test still

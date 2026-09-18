@@ -49,18 +49,29 @@ private:
     void rebuildFilterCombo();
     QSet<int> selectedMemoryIndices() const;
     void updateSelectionActions();
+    void scheduleTableRefresh();
+    void updateEditingAvailability();
 
     RadioModel* m_model;
     QTableWidget* m_table;
     QLineEdit* m_searchEdit;
     QComboBox* m_filterCombo;
+    QLabel* m_filterLabel{nullptr};
     QLabel* m_selectionLabel{nullptr};
+    QLabel* m_selectionHintLabel{nullptr};
+    QLabel* m_syncStatusLabel{nullptr};
     QPushButton* m_selectBtn{nullptr};
     QPushButton* m_selectAllBtn{nullptr};
     QPushButton* m_removeBtn{nullptr};
+    QPushButton* m_addBtn{nullptr};
+    QPushButton* m_importBtn{nullptr};
+    QPushButton* m_exportBtn{nullptr};
+    QPushButton* m_syncBtn{nullptr};
+    bool m_syncInProgress{false};
+    bool m_tableRefreshPending{false};
     int m_pendingEditMemoryIndex{-1};
     int m_pendingEditRetries{0};
-    int m_sortColumn{2};
+    int m_sortColumn{-1};
     Qt::SortOrder m_sortOrder{Qt::AscendingOrder};
 };
 

@@ -88,6 +88,7 @@ def check_file(path: Path) -> list:
     findings += check_value_change_methods(lines)
     findings += check_widget_constructor_names(lines)
     findings += check_custom_painted_widgets(lines, path)
+    findings += check_disabled_reason_is_accessible(lines)
     return findings
 
 
@@ -380,6 +381,85 @@ def check_custom_painted_widgets(lines: list, path: Path) -> list:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Check 5 -- a disabled control whose reason lives only in a tooltip
+# ---------------------------------------------------------------------------
+#
+# #5262 M3a doctrine: a control the radio cannot support is DIMMED WITH A
+# REASON, never hidden. The reason has to reach a screen reader, and a tooltip
+# does not — Qt exposes accessibleDescription (widgets) and statusTip (actions)
+# to accessibility clients, but a tooltip is a mouse affordance.
+#
+# This is the shape that already regressed twice. #5266 gave the Enforce Private
+# IP button a disabled state, a tooltip AND an accessibleDescription; #5299
+# replaced the lot with a bare setVisible() four days later. TX Band Settings
+# and Inhibit-during-TUNE shipped with setEnabled + setToolTip and no accessible
+# channel at all, short of their own acceptance criteria on the day they merged.
+# Both are fixed; this stops the third one.
+#
+# Deliberately narrow: it fires only when a tooltip is set on the SAME OBJECT in
+# the same lexical block as a disabling setEnabled, which is the "dimmed with a
+# reason" pattern. A tooltip that merely describes a control is not a finding.
+
+# Keep the receiver, including the menuAction() indirection, as its identity.
+RECEIVER = r"(\w+(?:\s*->\s*menuAction\s*\(\s*\))?)"
+DISABLE_RE = re.compile(RECEIVER + r"\s*->\s*setEnabled\s*\(([^;]*)")
+TOOLTIP_RE = re.compile(RECEIVER + r"\s*->\s*setToolTip\s*\(")
+ACCESSIBLE_RE = re.compile(RECEIVER + r"\s*->\s*(?:setAccessibleDescription|setStatusTip)\s*\(")
+# Mask comments and literals before counting braces; QSS strings often contain
+# entire blocks. Preserve newlines so annotations still point at source lines.
+CPP_NON_CODE_RE = re.compile(
+    r'//[^\n]*|/\*.*?\*/|R"(?P<delimiter>[^ ()\\\t\r\n]{0,16})\(.*?\)(?P=delimiter)"'
+    r'|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.DOTALL)
+
+
+def check_disabled_reason_is_accessible(lines: list) -> list:
+    findings = []
+    code = CPP_NON_CODE_RE.sub(
+        lambda m: "".join("\n" if c == "\n" else " " for c in m.group()),
+        "\n".join(lines)).splitlines()
+    # A lexical block is deliberately narrower than a function: a reason in
+    # another branch (or another function's local variable of the same name)
+    # must not suppress this gate. This is a heuristic, not a C++ dataflow pass.
+    blocks = [{}]
+    window = 12
+
+    def finish(block):
+        for name, calls in block.items():
+            for tip in calls["tip"]:
+                if any(abs(disabled - tip) <= window for disabled in calls["disabled"]) \
+                        and not any(abs(accessible - tip) <= window for accessible in calls["accessible"]):
+                    findings.append((tip + 1, "a11y-disabled-reason-not-announced",
+                        f"`{name}` is disabled and given a tooltip reason, but no "
+                        "accessibleDescription (widget) or statusTip (QAction) nearby "
+                        "in the same block. Put the reason on the accessible channel "
+                        "as well as the tooltip. (#5262 M3a doctrine, #4896)"))
+
+    for i, line in enumerate(code):
+        # Process braces in source order, including one-line inline functions.
+        for fragment in re.split(r"([{}])", line):
+            if fragment == "{":
+                blocks.append({})
+                continue
+            if fragment == "}":
+                if len(blocks) > 1:
+                    finish(blocks.pop())
+                continue
+            if re.search(r"//\s*a11y-check\s*:\s*skip-line", lines[i]):
+                continue
+            for pattern, kind in ((DISABLE_RE, "disabled"), (TOOLTIP_RE, "tip"),
+                                  (ACCESSIBLE_RE, "accessible")):
+                for match in pattern.finditer(fragment):
+                    if kind == "disabled" and re.match(r"\s*true\s*\)", match.group(2)):
+                        continue
+                    name = re.sub(r"\s+", "", match.group(1))
+                    calls = blocks[-1].setdefault(name, {"disabled": [], "tip": [], "accessible": []})
+                    calls[kind].append(i)
+    for block in blocks:
+        finish(block)
+    return sorted(findings)
+
 
 def main() -> None:
     files = collect_files(sys.argv[1:])

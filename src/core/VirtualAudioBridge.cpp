@@ -137,6 +137,7 @@ bool VirtualAudioBridge::open(int activeChannels)
         constexpr int FRAMES_PER_READ = 128;   // ~5.3ms @ 24kHz
         constexpr int MAX_CHUNKS_PER_TICK = 8; // keep UI responsive under load
         for (int i = 0; i < MAX_CHUNKS_PER_TICK; ++i) {
+            const TxCoordinator::Context context = m_txContext;
             QByteArray audio = readTxAudio(FRAMES_PER_READ);
             if (audio.isEmpty()) break;
 
@@ -147,7 +148,7 @@ bool VirtualAudioBridge::open(int activeChannels)
                          << "(chunk #" << txPollCount << ")"
                          << "wp=" << m_txBlock->writePos.load(std::memory_order_relaxed)
                          << "active=" << m_txBlock->active;
-            emit txAudioReady(audio);
+            emit txAudioReady(audio, context);
         }
     });
     m_txPollTimer->start();
@@ -157,8 +158,23 @@ bool VirtualAudioBridge::open(int activeChannels)
     return true;
 }
 
+void VirtualAudioBridge::setTxContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs()) || m_txContext.sameContext(context)) {
+        return;
+    }
+    // Establish the boundary at the configured shared endpoint. Samples that
+    // preceded this intent must not acquire its authority when the poll runs.
+    if (m_txBlock) {
+        m_txBlock->readPos.store(m_txBlock->writePos.load(std::memory_order_acquire),
+                                 std::memory_order_release);
+    }
+    m_txContext = context;
+}
+
 void VirtualAudioBridge::close()
 {
+    m_txContext = {};
     if (m_silenceTimer) {
         m_silenceTimer->stop();
         delete m_silenceTimer;

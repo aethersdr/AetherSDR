@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AutoBlackMode.h"
+#include "RfGainPresentation.h"
 
 #include <limits>
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include <QPointer>
 #include <QMap>
 #include <QImage>
+#include <QFont>
 #include <QColor>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -26,6 +28,7 @@
 #include "DssRenderer.h"
 #include "SpectrumPreviewLogic.h"
 #include "WaterfallHistoryBuffer.h"
+#include "WaterfallTimeMarkers.h"
 
 class QVariantAnimation;
 class QSoundEffect;
@@ -73,7 +76,19 @@ struct WfGradientStop { float pos; int r, g, b; };
 const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count);
 
 // Returns the display name for a color scheme.
-const char* wfSchemeName(WfColorScheme scheme);
+// Inlined in header so standalone test targets (e.g. spectrum_overlay_band_highlight_test)
+// link cleanly without pulling in the full SpectrumWidget TU.
+inline const char* wfSchemeName(WfColorScheme scheme)
+{
+    switch (scheme) {
+    case WfColorScheme::Grayscale: return "Grayscale";
+    case WfColorScheme::BlueGreen: return "Blue-Green";
+    case WfColorScheme::Fire:      return "Fire";
+    case WfColorScheme::Plasma:    return "Plasma";
+    case WfColorScheme::Purple:    return "Purple";
+    default:                       return "Default";
+    }
+}
 
 // Spectrum render mode for the panadapter surface.
 enum class SpectrumRenderMode : int {
@@ -124,8 +139,15 @@ public:
     ~SpectrumWidget() override;
 
     // Per-pan settings persistence
-    void setPanIndex(int idx) { m_panIndex = idx; }
+    void setPanIndex(int idx);
     int panIndex() const { return m_panIndex; }
+    // Read-only by design: the interval is set through the context menu (or
+    // DisplaySettings), never by reflection. Exposing it for reads keeps the
+    // automation bridge's dss snapshot honest without adding settable surface.
+    Q_PROPERTY(int waterfallTimeMarkerSeconds READ waterfallTimeMarkerSeconds)
+    int waterfallTimeMarkerSeconds() const { return m_wfTimeMarkerSeconds; }
+    void setWaterfallTimeMarkerSeconds(int seconds);
+
     QString settingsKey(const QString& base) const;
     void loadSettings();
 
@@ -341,6 +363,14 @@ public:
     // persist to the next radio. See RadioCapabilities::radioOwnsDbmScale.
     void setRadioOwnsDbmScale(bool on) { m_radioOwnsDbmScale = on; }
     bool radioOwnsDbmScale() const { return m_radioOwnsDbmScale; }
+    // The connected backend's spectrum bins carry ABSOLUTE levels — they do not
+    // move when m_refLevel moves. Pushed in alongside the flag above rather
+    // than read from capabilities here, because the widget has no backend: both
+    // are set from applyCapabilitiesToUi and again when a pane is added after
+    // connect. Together they form the auto-floor gate, an OR — see
+    // noiseFloorAutoAdjustAllowed() and RadioCapabilities::panBinsAbsolute().
+    void setPanBinsAbsolute(bool on) { m_panBinsAbsolute = on; }
+    bool panBinsAbsolute() const { return m_panBinsAbsolute; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
     // Width of the frequency canvas, in logical pixels: the widget width minus
@@ -359,6 +389,49 @@ public:
 
     // Set panadapter bandwidth zoom limits (MHz). Called per-radio model.
     void setBandwidthLimits(double minMhz, double maxMhz) { m_minBwMhz = minMhz; m_maxBwMhz = maxMhz; }
+
+    // Fade the outer edges of the spectrum trace and waterfall to the
+    // background color -- purely cosmetic, drawn into m_overlayStatic (the
+    // layer already composited on top of the FFT trace/waterfall each
+    // frame), NOT a crop of the bin data and NOT a change to the reported
+    // bandwidth. An earlier attempt hid the DDC's always-present edge
+    // roll-off by dropping bins in the BACKEND and under-reporting the
+    // bandwidth to match -- that coupling was the actual bug (#zoom-out
+    // regression): the widget's own zoom math used the under-reported value
+    // as its baseline and a zoom-out request could no longer cross into
+    // "closer to the next rate up." Doing the fade here instead means the
+    // bandwidth and bin count this widget's zoom math sees are always the
+    // real ones; only the PIXELS at the margin are dimmed. Called per-radio
+    // model -- only a DDC-based backend like ANAN has this roll-off;
+    // Flex/HL2/Icom/Kiwi don't.
+    void setPanEdgeTaperEnabled(bool enabled)
+    {
+        if (m_edgeTaperEnabled == enabled)
+            return;
+        m_edgeTaperEnabled = enabled;
+        markOverlayDirty();
+    }
+
+    // Enable/disable the "S"/"B" (segment/band zoom) buttons and explain why
+    // when disabled. Both send FlexLib wire text (band_zoom=/segment_zoom=,
+    // see togglePanZoomModeForPan()) that only a Flex radio's command plane
+    // ever answers -- on every other backend the click was a silent no-op,
+    // with nothing on screen saying so. Called per-radio model, same as
+    // setBandwidthLimits() above.
+    void setBandSegmentZoomAvailable(bool available)
+    {
+        const QString tip = available
+            ? QString()
+            : tr("Band/segment zoom is available on FlexRadio only.");
+        if (m_zoomBandBtn) {
+            m_zoomBandBtn->setEnabled(available);
+            m_zoomBandBtn->setToolTip(tip);
+        }
+        if (m_zoomSegBtn) {
+            m_zoomSegBtn->setEnabled(available);
+            m_zoomSegBtn->setToolTip(tip);
+        }
+    }
 
     // Set the per-mode filter limits (Hz). Called when mode changes.
     void setFilterLimits(int minHz, int maxHz) { m_filterMinHz = minHz; m_filterMaxHz = maxHz; }
@@ -405,6 +478,21 @@ public:
             reacquireNoiseFloorLock();
         }
         markOverlayDirty();
+    }
+    void setRfGainPresentation(const QString& suffix, int neutralValue) {
+        const QString normalized = normalizedRfGainUnitSuffix(suffix);
+        if (m_rfGainUnitSuffix != normalized
+            || m_rfGainNeutralValue != neutralValue) {
+            m_rfGainUnitSuffix = normalized;
+            m_rfGainNeutralValue = neutralValue;
+            markOverlayDirty();
+        }
+    }
+    void setPreampIndicator(const QString& text) {
+        if (m_preampIndicator != text) {
+            m_preampIndicator = text;
+            markOverlayDirty();
+        }
     }
     void setWideActive(bool on) {
         if (m_wideActive != on) {
@@ -456,6 +544,16 @@ public:
     bool extendedFrequencyLine() const { return m_extendedFrequencyLine; }
     void setExtendedPassband(bool on);
     bool extendedPassband() const { return m_extendedPassband; }
+    void setExtendedTnf(bool on);
+    bool extendedTnf() const { return m_extendedTnf; }
+    // Push a global pan-display flag onto every other open panadapter,
+    // floating ones included. See the definition for why the walk is over
+    // topLevelWidgets() rather than window()'s children.
+    // `onApplied` runs on each sibling that actually changed, for toggles that
+    // own more than a flag (e.g. stopping that pan's tune-guide timer).
+    void propagateGlobalDisplayToggle(
+        bool SpectrumWidget::*flag, bool on, const char* cause,
+        const std::function<void(SpectrumWidget*)>& onApplied = {});
     void setThreeDSliceDepth(bool on);
     bool threeDSliceDepth() const { return m_threeDSliceDepth; }
     void setFloating(bool on) { m_isFloating = on; }
@@ -913,7 +1011,11 @@ private:
     void drawSmartMtrValueLabels(QPainter& p);
     void drawOffScreenSlices(QPainter& p, const QRect& specRect);
     void drawBandPlan(QPainter& p, const QRect& specRect);
-    void drawTnfMarkers(QPainter& p, const QRect& specRect);
+    // wfRect is the waterfall band the notch is optionally extended into; pass
+    // an empty rect (or leave it defaulted) where there is no waterfall to
+    // paint, e.g. a pan rendered without one.
+    void drawTnfMarkers(QPainter& p, const QRect& specRect,
+                        const QRect& wfRect = QRect());
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
@@ -1034,6 +1136,7 @@ private:
         QImage waterfall;
         QImage waterfallSupplemental;
         int wfWriteRow{0};
+        QVector<WaterfallTimeRow> visibleTimeRows;
         QVector<double> visibleRowCenterMhz;
         QVector<double> visibleRowBwMhz;
         QVector<double> visibleSupplementalCenterMhz;
@@ -1160,6 +1263,14 @@ private:
         const QRgb* supplementalRowData = nullptr,
         double supplementalCenterMhz = -1.0,
         double supplementalBandwidthMhz = -1.0);
+    QVector<WaterfallTimeMarker> visibleWaterfallTimeMarkers(qreal height) const;
+    void prepareWaterfallTimeMarkerAtlas(const QVector<WaterfallTimeMarker>& markers);
+    void drawWaterfallTimeMarkers(QPainter& painter, const QRect& rect);
+#ifdef AETHER_GPU_SPECTRUM
+    void prepareWaterfallTimeMarkersGpu(QRhiResourceUpdateBatch* batch, const QRect& rect, const QSize& logicalSize);
+    void drawWaterfallTimeMarkersGpu(QRhiCommandBuffer* cb);
+    void releaseWaterfallTimeMarkersGpu();
+#endif
     int waterfallHistoryCapacityRows() const;
     int maxWaterfallHistoryOffsetRows() const;
     int historyRowIndexForAge(int ageRows) const;
@@ -1416,6 +1527,10 @@ private:
     // Defaults true so every existing backend is unaffected; only a backend
     // that opts out (RadioCapabilities::radioOwnsDbmScale=false) disarms.
     bool  m_radioOwnsDbmScale{true};
+    // Mirrors RadioCapabilities::panBinsAbsolute(), and defaults FALSE for the
+    // same reason it does there: the gate is an OR and m_radioOwnsDbmScale
+    // above already defaults true, so this default changes nothing on its own.
+    bool  m_panBinsAbsolute{false};
     int   m_noiseFloorPosition{75};  // 1=top, 99=bottom
     int   m_flexNoiseFloorPosition{75};
     int   m_kiwiNoiseFloorPosition{75};
@@ -1494,7 +1609,7 @@ private:
     bool m_showGrid{true};          // false = hide grid lines
     int  m_freqGridSpacingKhz{0};   // 0=Auto, or 1/2/5/10/25/50/100 kHz (#1390)
     int  m_freqScaleFontPt{8};      // freq-scale label size, 8..14 pt (#3501)
-    float m_fftLineWidth{2.0f};     // spectrum trace width in pixels
+    float m_fftLineWidth{1.0f};     // spectrum trace width in pixels (RFC #5561)
 
     // ── Waterfall display controls (radio-side via "display panafall set") ─
     int   m_wfColorGain{50};         // 0-100, maps intensity to color range
@@ -1574,6 +1689,14 @@ private:
     float m_wfMaxDbm{-50.0f};
 
     // Scrolling waterfall image (Format_RGB32)
+    int m_wfTimeMarkerSeconds{0};
+    qint64 m_wfIncomingTimestampMs{0};
+    QVector<WaterfallTimeRow> m_wfVisibleTimeRows;
+    QImage m_wfTimeMarkerAtlas;
+    QFont m_wfTimeMarkerAtlasFont;
+    QVector<qint64> m_wfTimeMarkerLabels;
+    bool m_wfTimeMarkerAtlasDirty{true};
+    int m_wfTimeMarkerLabelHeight{0};
     QImage m_waterfall;
     // Same ring topology as m_waterfall. Native FLEX tiles are rasterized over
     // their full (wider) frequency frame here; the primary viewport row wins
@@ -1778,6 +1901,9 @@ private:
     bool m_wnbActive{false};
     bool m_wnbUpdating{false};
     int  m_rfGainValue{0};
+    QString m_rfGainUnitSuffix{QStringLiteral("dB")};
+    int m_rfGainNeutralValue = 0;
+    QString m_preampIndicator;
     bool m_wideActive{false};
 
     // HF propagation forecast overlay
@@ -1813,6 +1939,7 @@ private:
     bool    m_showTuneGuides{false};
     bool    m_extendedFrequencyLine{false};
     bool    m_extendedPassband{false};
+    bool    m_extendedTnf{false};
     bool    m_threeDSliceDepth{false};
     bool    m_isFloating{false};
     bool    m_tuneGuideVisible{false};
@@ -1980,9 +2107,16 @@ private:
     QPushButton* m_zoomBandBtn{nullptr};
     QPushButton* m_zoomOutBtn{nullptr};
     QPushButton* m_zoomInBtn{nullptr};
+
+    // See setPanEdgeTaperEnabled()'s own comment.
+    bool m_edgeTaperEnabled{false};
     bool m_kiwiSdrDisplaySourceKiwi{false};
 
 #ifdef AETHER_GPU_SPECTRUM
+    QRhiTexture* m_wfTimeMarkerTexture{nullptr};
+    QRhiShaderResourceBindings* m_wfTimeMarkerSrb{nullptr};
+    QRhiBuffer* m_wfTimeMarkerVbo{nullptr};
+    int m_wfTimeMarkerQuadCount{0};
     bool m_rhiInitialized{false};
     bool m_rhiFailureForcedForAutomation{false};
     SpectrumRhiFailureState m_rhiFailure;

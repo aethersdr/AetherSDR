@@ -41,8 +41,11 @@ public:
     int frameSizeBits()  const { return m_frameSizeBits; }
     int preambleCount()  const { return m_preambleCount; }
 
-    // Frame bytes including the 2-byte FCS field.  Valid from the
-    // processBit() call that set complete() until reset() is called.
+    // Frame bytes including the 2-byte FCS field.  Valid only from the
+    // processBit() call that set complete() until the NEXT processBit()
+    // call, which clears the buffer for the incoming frame.  Read
+    // frameData()/frameSize()/fcsValid() immediately after processBit()
+    // returns true; do not hold them across a subsequent call.
     const uint8_t* frameData() const { return m_frameBuffer.data(); }
     size_t         frameSize() const { return m_frameByteCount; }
 

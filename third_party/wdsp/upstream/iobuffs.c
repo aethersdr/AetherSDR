@@ -418,17 +418,67 @@ void create_iobuffs (int channel)
 	create_slews (a);
 
 	InterlockedBitTestAndReset(&a->flush_bypass, 0);
+	// AetherSDR patch 9: explicit, alongside upstream's flush_bypass reset. The
+	// iob comes from malloc0 so this is already zero, but the handshake reads
+	// it and the reset above sets the convention for this pair of flags.
+	InterlockedBitTestAndReset(&a->flush_quiesced, 0);
 	a->Sem_Flush = CreateSemaphore(0, 0, 1, 0);
 	_beginthread(flushChannel, 0, (void*)(uintptr_t)a->channel);
+}
+
+// AetherSDR patch 9: THE flushChannel EXIT HANDSHAKE, LIFTED OUT OF
+// destroy_iobuffs() SO IT CAN RUN ON THE OTHER SIDE OF destroy_main().
+//
+// The handshake itself is upstream's, moved rather than invented: set
+// flush_bypass, release Sem_Flush so a parked thread wakes and sees it, and
+// wait for the thread's own reset of flush_bypass at the tail of
+// flushChannel() (channel.c). What was wrong was WHERE upstream ran it.
+// destroy_iobuffs() is reached only from post_main_destroy(), and CloseChannel()
+// is pre_main_destroy(); destroy_main(); post_main_destroy() — so the flush
+// thread was still live across destroy_main(), which is destroy_rxa()/
+// destroy_txa(), exactly the chain flush_main() -> flush_rxa() walks. See
+// AETHERSDR-PATCHES.md patch 9 for the measurement.
+//
+// BOUNDED, where upstream's spin was not, for the reason patch 4 gives for
+// bounding its worker handshake: upstream ignores _beginthread() failure, and
+// an unbounded wait on a thread that was never created would hang CloseChannel()
+// forever. NOT free, though, and the registry entry is precise about it:
+// upstream's wait could not fall through, this one can, and on exhaustion the
+// CloseHandle() in destroy_iobuffs() runs under a possibly-parked flush thread
+// -- patch 4's own failure mode, inherited. The cap is deliberately generous
+// for that reason; do not shorten it without re-reading patch 9.
+//
+// IDEMPOTENT, because both ends of the pre/post pair call it. A second pass must
+// not re-arm flush_bypass — the thread that would acknowledge it is gone, and
+// the wait would burn the whole cap on every close.
+void quiesce_flush (int channel)
+{
+	IOB a = ch[channel].iob.pc;
+	int waited = 0;
+	if (_InterlockedAnd (&a->flush_quiesced, 1)) return;
+	InterlockedBitTestAndSet (&a->flush_bypass, 0);
+	// May legitimately fail: Sem_Flush has a maximum count of 1, and a ramp that
+	// completed has already released it. That token wakes the thread just as
+	// ours would, and flush_bypass is what it reads on waking, so the wake is
+	// delivered either way.
+	ReleaseSemaphore (a->Sem_Flush, 1, 0);
+	while (InterlockedAnd (&a->flush_bypass, 0xffffffff) && waited < 1000)
+	{
+		Sleep (1);
+		waited++;
+	}
+	InterlockedBitTestAndSet (&a->flush_quiesced, 0);
 }
 
 void destroy_iobuffs (int channel)
 {
 	IOB a = ch[channel].iob.pc;
 
-	InterlockedBitTestAndSet(&a->flush_bypass, 0);
-	ReleaseSemaphore(a->Sem_Flush, 1, 0);
-	while (InterlockedAnd(&a->flush_bypass, 0xffffffff)) Sleep(1);
+	// AetherSDR patch 9: normally a no-op — pre_main_destroy() has already run
+	// the handshake, before destroy_main(). Kept here so destroy_iobuffs()
+	// remains self-sufficient for any future caller that does not pair with
+	// pre_main_destroy(); today it has exactly one, post_main_destroy().
+	quiesce_flush (channel);
 	CloseHandle(a->Sem_Flush);
 
 	destroy_slews (a);
@@ -580,11 +630,28 @@ void fexchange2 (int channel, INREAL *Iin, INREAL *Qin, OUTREAL *Iout, OUTREAL *
 	}
 }
 
-void dexchange (int channel, double* in, double* out)
+int dexchange (int channel, double* in, double* out)
 {
 	int n;
 	IOB a = ch[channel].iob.pd;
-	if (!_InterlockedAnd (&ch[channel].run, 1)) _endthread();
+	if (!_InterlockedAnd (&ch[channel].run, 1))
+	{
+		// AetherSDR patch 4: upstream called _endthread() here — terminating
+		// the worker mid-function, with csDSP HELD (wdspmain() calls us inside
+		// it and _endthread() does not unwind, so post_main_destroy() later
+		// found a locked section to DeleteCriticalSection), and skipping
+		// wdspmain()'s exit handshake entirely, so pre_main_destroy() waited
+		// out its full cap on a thread that was already gone and then fell
+		// through with no barrier at all.
+		//
+		// RETURN instead, and let the caller unwind. That makes wdspmain()'s
+		// tail the worker's single exit, which is what lets the handshake
+		// store a generation held in a LOCAL — shared state would be wrong
+		// here: after a fall-through the abandoned worker is still alive, and
+		// anything it reads from ch[] could belong to its successor (#5411
+		// second-opinion review).
+		return 1;
+	}
 
 	EnterCriticalSection (&a->r2_ControlSection);
 	a->r2_havesamps += a->r2_insize;
@@ -601,4 +668,5 @@ void dexchange (int channel, double* in, double* out)
 	memcpy (out, a->r1_baseptr + 2 * a->r1_outidx, a->r1_outsize * sizeof (complex));
 	if ((a->r1_outidx += a->r1_outsize) == a->r1_active_buffsize)
 		a->r1_outidx = 0;
+	return 0;
 }

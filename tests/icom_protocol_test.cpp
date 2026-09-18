@@ -271,11 +271,24 @@ static void testCapabilities()
         caps[0x42 + i] = static_cast<std::uint8_t>(i + 1);
     std::memcpy(caps.data() + 0x52, "IC-705", 6);
 
+    caps[0x94] = 0xB6;
     RadioId id{};
     check(parseCapabilities(caps, id), "recognises the capabilities packet");
     check(id[0] == 1 && id[15] == 16, "radio id is the 16 bytes at 0x42");
+    check(radioIdHex(id) == "0102030405060708090a0b0c0d0e0f10",
+          "radio id has a stable address-independent import key");
+    check(radioIdHex(RadioId{}).empty(),
+          "an absent radio id is rejected rather than aliasing every radio");
     check(parseCapabilitiesName(caps) == "IC-705",
           "the radio names itself — hardcoding IC-705 is what blocks other models");
+    check(parseCapabilitiesCivAddress(caps) == 0xB6,
+          "network destination is independent of the editable IC-705 name");
+    caps[0x94] = 0x50;
+    check(parseCapabilitiesCivAddress(caps) == 0x50, "custom network destination survives");
+    caps[0x94] = 0xE0;
+    check(parseCapabilitiesCivAddress(caps) == 0, "controller destination is refused");
+    caps.resize(0x94);
+    check(parseCapabilitiesCivAddress(caps) == 0, "truncated capability record has no destination");
 }
 
 static void testSerialEnvelope()
@@ -323,6 +336,10 @@ static void testSerialEnvelope()
           "serial open is 0xc0 with magic 0x05");
     auto close = buildSerialOpen(1, 2, 1, false);
     check(close[0x15] == 0x00, "serial close is magic 0x00");
+    const auto restart = buildSerialRestart(1, 2, 2);
+    check(restart.size() == kLenOpenClose && restart[0x10] == 0xc0
+              && restart[0x15] == 0x04,
+          "serial data restart retains the open envelope with magic 0x04");
 }
 
 static void testAudioEnvelope()

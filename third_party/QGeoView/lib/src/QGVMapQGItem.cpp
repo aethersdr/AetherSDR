@@ -18,6 +18,8 @@
 
 #include "QGVMapQGItem.h"
 #include "QGVDrawItem.h"
+#include "QGVMapQGView.h"
+#include "Raster/QGVImage.h"
 
 #include <QGraphicsSceneMouseEvent>
 #include <QPainter>
@@ -26,7 +28,21 @@
 QGVMapQGItem::QGVMapQGItem(QGVDrawItem* geoObject)
 {
     mGeoObject = geoObject;
-    setCacheMode(QGraphicsItem::DeviceCoordinateCache);
+    const QGVMap* map = geoObject->getMap();
+    const bool gpuImage = qobject_cast<QGVImage*>(geoObject) != nullptr
+        && map != nullptr && map->geoView() != nullptr
+        && map->geoView()->viewport()->inherits("QOpenGLWidget");
+    // An image already has a stable QImage identity that Qt's GL paint engine
+    // uses to cache its original-resolution texture. DeviceCoordinateCache
+    // instead rasterizes a viewport-scaled copy into the shared QPixmapCache.
+    // At HiDPI, visible/fallback tiles can exceed that cache and evict one
+    // another on EVERY radar repaint: the GUI blocks on resampling basemap
+    // images, then uploads the freshly allocated copies again. Draw the source
+    // image directly on GL; do not fix this by growing a process-wide cache or
+    // reducing radar/base-map resolution. Raster views and vector items retain
+    // upstream caching. Use Qt metadata so QGeoView need not link OpenGLWidgets.
+    setCacheMode(gpuImage ? QGraphicsItem::NoCache
+                         : QGraphicsItem::DeviceCoordinateCache);
 }
 
 QGVDrawItem* QGVMapQGItem::geoObjectFromQGItem(QGraphicsItem* item)

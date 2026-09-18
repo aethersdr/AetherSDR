@@ -24,6 +24,10 @@
 QGVLayerTiles::QGVLayerTiles()
 {
     mCurZoom = -1;
+    mCameraUpdateTimer.setSingleShot(true);
+    mCameraUpdateTimer.setInterval(100);
+    connect(&mCameraUpdateTimer, &QTimer::timeout,
+            this, &QGVLayerTiles::processCamera);
     sendToBack();
 }
 
@@ -102,19 +106,26 @@ void QGVLayerTiles::onCamera(const QGVCameraState& oldState, const QGVCameraStat
     }
 
     if (needUpdate) {
-        processCamera();
+        // Existing tile graphics follow the QGraphicsView transform
+        // immediately. Rebuilding the active tile set for every fractional
+        // trackpad or drag event only churns scene items on the GUI thread.
+        // Coalesce that bookkeeping until input pauses; the final camera is
+        // still processed, while interaction remains responsive.
+        mCameraUpdateTimer.start();
     }
 }
 
 void QGVLayerTiles::onUpdate()
 {
     QGVLayer::onUpdate();
+    mCameraUpdateTimer.stop();
     processCamera();
 }
 
 void QGVLayerTiles::onClean()
 {
     QGVLayer::onClean();
+    mCameraUpdateTimer.stop();
     mCurZoom = -1;
     mCurRect = {};
     mIndex.clear();
@@ -138,6 +149,76 @@ void QGVLayerTiles::onTile(const QGV::GeoTilePos& tilePos, QGVDrawItem* tileObj)
             if (below.contains(tilePos)) {
                 removeWhenCovered(below);
             }
+        }
+    }
+    if (mTransparentFallbackEnabled) {
+        for (const auto& level : std::as_const(mIndex)) {
+            for (QGVDrawItem* item : level) {
+                if (item != nullptr) {
+                    item->repaint();
+                }
+            }
+        }
+    }
+}
+
+QPainterPath QGVLayerTiles::tileUncoveredPath(const QGV::GeoTilePos& tilePos) const
+{
+    QPainterPath path;
+    // Keep both lookups const: painting must not copy/refcount a level map
+    // or detach the shared tile index.
+    const auto levelIt = mIndex.constFind(tilePos.zoom());
+    if (levelIt == mIndex.cend()) {
+        return path;
+    }
+    const QGVDrawItem* tile = levelIt.value().value(tilePos, nullptr);
+    if (tile == nullptr) {
+        return path;
+    }
+    path = tile->projShape();
+    // Transparent replacement pixels mean "no rain", NOT "show old rain
+    // underneath". Remove the entire completed child footprint from parents.
+    // Pending/failed children have no footprint and keep their parent visible.
+    for (auto level = mIndex.upperBound(tilePos.zoom()); level != mIndex.cend(); ++level) {
+        for (auto item = level->cbegin(); item != level->cend(); ++item) {
+            if (item.value() != nullptr && tilePos.contains(item.key())) {
+                path = path.subtracted(item.value()->projShape());
+            }
+        }
+    }
+    return path;
+}
+
+bool QGVLayerTiles::currentTilesComplete() const
+{
+    // A queued camera update still describes the previous viewport. Do not
+    // publish that coverage until the coalesced tile selection has settled.
+    if (mCameraUpdateTimer.isActive() || mCurZoom < 0 || mCurRect.isEmpty()) {
+        return false;
+    }
+    for (int x = mCurRect.left(); x < mCurRect.right(); ++x) {
+        for (int y = mCurRect.top(); y < mCurRect.bottom(); ++y) {
+            if (!isTileFinished(QGV::GeoTilePos(mCurZoom, QPoint(x, y)))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void QGVLayerTiles::retryUnfinishedTiles()
+{
+    if (getMap() == nullptr || !isVisible()) {
+        return;
+    }
+    // Failed requests leave null placeholders in mIndex. They are not absent
+    // tiles, and processCamera() is a no-op at the same zoom/rect. Retry only
+    // these current-view placeholders; the online layer coalesces requests
+    // still in flight and repeated world copies. Snapshot keys before calling
+    // request(), since a decoded-cache hit can synchronously change mIndex.
+    for (const QGV::GeoTilePos& tile : existingTiles(mCurZoom)) {
+        if (mCurRect.contains(tile.pos()) && !isTileFinished(tile)) {
+            request(tile);
         }
     }
 }
@@ -331,15 +412,20 @@ void QGVLayerTiles::removeAllAbove(const QGV::GeoTilePos& tilePos)
 
 void QGVLayerTiles::removeWhenCovered(const QGV::GeoTilePos& tilePos)
 {
-    const int zoomDelta = mCurZoom - tilePos.zoom() + 1;
-    const int neededCount = static_cast<int>(qPow(2, zoomDelta));
-    int count = neededCount;
+    const int zoomDelta = mCurZoom - tilePos.zoom();
+    if (zoomDelta < 1 || zoomDelta > 30) {
+        return;
+    }
+    // A tile has FOUR children per zoom (not 2^(delta+1), which only happens
+    // to be correct for a single step). Fast multi-step zooms need all of them.
+    const qint64 neededCount = qint64{1} << (2 * zoomDelta);
+    qint64 count = neededCount;
     for (const QGV::GeoTilePos& current : existingTiles(mCurZoom)) {
         if (!tilePos.contains(current)) {
             continue;
         }
         if (!isTileFinished(current)) {
-            break;
+            continue;
         }
         count--;
         if (count == 0) {

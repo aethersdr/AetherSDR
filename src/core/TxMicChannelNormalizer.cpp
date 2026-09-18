@@ -323,6 +323,91 @@ QByteArray canonicalizeInt16ToMonoStereo(const QByteArray& input,
     return stereo;
 }
 
+QByteArray canonicalizeFloat32ToMonoStereo(const QByteArray& input,
+                                           int inputChannels,
+                                           int inputSampleRate,
+                                           ChannelMode requestedMode,
+                                           AutoState* autoState,
+                                           Diagnostics* diagnostics)
+{
+    const int channels = inputChannels <= 1 ? 1 : 2;
+    Diagnostics diag;
+    diag.inputChannels = channels;
+    diag.inputSampleRate = inputSampleRate;
+    if (!boundRealtimeBlock(input, sizeof(float), channels,
+                            kMaxRealtimeBlockBytes, diag)) {
+        if (diagnostics) {
+            *diagnostics = diag;
+        }
+        return {};
+    }
+
+    const qsizetype sampleCount = input.size() / static_cast<qsizetype>(sizeof(float));
+    const int frames = static_cast<int>(sampleCount / channels);
+    diag.frames = frames;
+
+    const auto* src = reinterpret_cast<const float*>(input.constData());
+    const qsizetype outputBytes = static_cast<qsizetype>(frames)
+        * 2 * static_cast<qsizetype>(sizeof(float));
+    QByteArray stereo(outputBytes, Qt::Uninitialized);
+    auto* dst = reinterpret_cast<float*>(stereo.data());
+
+    if (channels == 1) {
+        analyzeFloat32Mono(src, frames, diag);
+        diag.selectedMode = ChannelMode::Mono;
+        diag.oneSidedStereo = false;
+        if (autoState) {
+            autoState->reset();
+        }
+
+        for (int i = 0; i < frames; ++i) {
+            const float mono = finiteOrZero(src[i]);
+            dst[i * 2] = mono;
+            dst[i * 2 + 1] = mono;
+        }
+    } else {
+        analyzeFloat32Stereo(src, frames, diag);
+        bool oneSided = false;
+        const ChannelMode selected = chooseStereoMode(diag.leftRms,
+                                                      diag.rightRms,
+                                                      inputSampleRate,
+                                                      frames,
+                                                      requestedMode,
+                                                      autoState,
+                                                      &oneSided);
+        diag.selectedMode = selected;
+        diag.oneSidedStereo = oneSided;
+
+        for (int i = 0; i < frames; ++i) {
+            const float left = finiteOrZero(src[i * 2]);
+            const float right = finiteOrZero(src[i * 2 + 1]);
+            float mono = 0.0f;
+            switch (selected) {
+            case ChannelMode::Left:
+                mono = left;
+                break;
+            case ChannelMode::Right:
+                mono = right;
+                break;
+            case ChannelMode::Average:
+            case ChannelMode::Auto:
+            case ChannelMode::Mono:
+                // Average in float. The Int16 sibling rounds here; this route
+                // is the reason the whole change exists, so it must not.
+                mono = 0.5f * (left + right);
+                break;
+            }
+            dst[i * 2] = mono;
+            dst[i * 2 + 1] = mono;
+        }
+    }
+
+    if (diagnostics) {
+        *diagnostics = diag;
+    }
+    return stereo;
+}
+
 QByteArray collapseFloat32ToInt16MonoBigEndian(const QByteArray& input,
                                                int inputChannels,
                                                int inputSampleRate,

@@ -73,7 +73,70 @@ static void *ns_calloc(size_t n, size_t sz)
 }
 static double ns_sq(double x) { return x*x; }
 
-static void build_spline_segments(const double *xs, const double *ys,
+static void *ns_zmalloc(size_t size)
+{
+    const size_t alignment = 16;
+    void *p = _aligned_malloc(size, alignment);
+    if (!p) { fprintf(stderr,"nurbs_spline: out of memory\n"); exit(1); }
+    memset(p, 0, size);
+    return p;
+}
+
+typedef struct _ns_ws
+{
+    int      n_pts_max;                     
+    int      seg_cap;                
+    double  *xs_t;
+    double  *ys_t;
+    double  *ts;
+    double  *seg_h;
+    double  *seg_sub;
+    double  *seg_dia;
+    double  *seg_sup;
+    double  *seg_rhs;
+    double  *seg_M;
+} ns_ws;
+
+NS_WS build_ns_ws(int n_ctrl_max)
+{
+    int by_ctrl   = NS_SAMPLES_PER_CTRL * n_ctrl_max;
+    int n_pts_max = (by_ctrl > NS_DEFAULT_PTS) ? by_ctrl : NS_DEFAULT_PTS;
+
+    int seg_cap   = n_pts_max + NS_EXTEND_PTS + 1;
+
+    NS_WS ws      = (NS_WS)ns_zmalloc(sizeof(ns_ws));
+    ws->n_pts_max = n_pts_max;
+    ws->seg_cap   = seg_cap;
+
+    ws->xs_t      = (double*)ns_zmalloc((size_t)n_pts_max * sizeof(double));
+    ws->ys_t      = (double*)ns_zmalloc((size_t)n_pts_max * sizeof(double));
+    ws->ts        = (double*)ns_zmalloc((size_t)n_pts_max * sizeof(double));
+
+    ws->seg_h     = (double*)ns_zmalloc((size_t)seg_cap * sizeof(double));
+    ws->seg_sub   = (double*)ns_zmalloc((size_t)seg_cap * sizeof(double));
+    ws->seg_dia   = (double*)ns_zmalloc((size_t)seg_cap * sizeof(double));
+    ws->seg_sup   = (double*)ns_zmalloc((size_t)seg_cap * sizeof(double));
+    ws->seg_rhs   = (double*)ns_zmalloc((size_t)seg_cap * sizeof(double));
+    ws->seg_M     = (double*)ns_zmalloc((size_t)seg_cap * sizeof(double));
+    return ws;
+}
+
+void teardown_ns_ws(NS_WS ws)
+{
+    if (!ws) return;
+    _aligned_free(ws->seg_M);
+    _aligned_free(ws->seg_rhs);
+    _aligned_free(ws->seg_sup);
+    _aligned_free(ws->seg_dia);
+    _aligned_free(ws->seg_sub);
+    _aligned_free(ws->seg_h);
+    _aligned_free(ws->ts);
+    _aligned_free(ws->ys_t);
+    _aligned_free(ws->xs_t);
+    _aligned_free(ws);
+}
+
+static void build_spline_segments(NS_WS ws, const double *xs, const double *ys,
                                    int n, NS_Seg *segs)
 {
     int m = n - 1;
@@ -88,21 +151,30 @@ static void build_spline_segments(const double *xs, const double *ys,
         return;
     }
 
-    double *h = (double*)ns_malloc(m * sizeof(double));
-    for (int i = 0; i < m; i++)
-        h[i] = xs[i+1] - xs[i];
+    int ni = n - 2;        
+    if (ni < 1) return;             
 
-    int ni = n - 2;   /* number of interior unknowns */
-
-    if (ni < 1) {
-        free(h);
-        return;
+    double *h, *sub, *dia, *sup, *rhs, *M;
+    int ws_scratch = (ws != NULL && n <= ws->seg_cap);
+    if (ws_scratch) {
+        h   = ws->seg_h;
+        sub = ws->seg_sub;
+        dia = ws->seg_dia;
+        sup = ws->seg_sup;
+        rhs = ws->seg_rhs;
+        M   = ws->seg_M;
+        memset(M, 0, (size_t)n * sizeof(double));      
+    } else {
+        h   = (double*)ns_malloc(m  * sizeof(double));
+        sub = (double*)ns_malloc(ni * sizeof(double));
+        dia = (double*)ns_malloc(ni * sizeof(double));
+        sup = (double*)ns_malloc(ni * sizeof(double));
+        rhs = (double*)ns_malloc(ni * sizeof(double));
+        M   = (double*)ns_calloc(n, sizeof(double));
     }
 
-    double *sub = (double*)ns_malloc(ni * sizeof(double));
-    double *dia = (double*)ns_malloc(ni * sizeof(double));
-    double *sup = (double*)ns_malloc(ni * sizeof(double));
-    double *rhs = (double*)ns_malloc(ni * sizeof(double));
+    for (int i = 0; i < m; i++)
+        h[i] = xs[i+1] - xs[i];
 
     for (int k = 0; k < ni; k++) {
         int i   = k + 1;
@@ -130,7 +202,6 @@ static void build_spline_segments(const double *xs, const double *ys,
         dia[k] -= factor * sup[k-1];
         rhs[k] -= factor * rhs[k-1];
     }
-    double *M = (double*)ns_calloc(n, sizeof(double));
     M[ni] = (fabs(dia[ni-1]) > 1e-15) ? rhs[ni-1] / dia[ni-1] : 0.0;
     for (int k = ni-2; k >= 0; k--) {
         double r = rhs[k] - sup[k] * M[k+2];
@@ -148,7 +219,9 @@ static void build_spline_segments(const double *xs, const double *ys,
         segs[i].d  = (M[i+1] - M[i]) / (6.0 * h[i]);
     }
 
-    free(h); free(sub); free(dia); free(sup); free(rhs); free(M);
+    if (!ws_scratch) {
+        free(h); free(sub); free(dia); free(sup); free(rhs); free(M);
+    }
 }
 
 #define NS_MAX_BRANCHES 16
@@ -186,7 +259,8 @@ static int find_branches(const double *xs_t, int n,
     return nb;
 }
 
-NS_Spline *ns_build(const NF_Curve    *curve,
+NS_Spline *ns_build(NS_WS               ws,
+                    const NF_Curve    *curve,
                     const NF_FitResult *result,
                     int                 n_pts)
 {
@@ -205,9 +279,11 @@ NS_Spline *ns_build(const NF_Curve    *curve,
     }
     if (n_pts < 4) n_pts = 4;
 
-    double *xs_t = (double*)ns_malloc(n_pts * sizeof(double));
-    double *ys_t = (double*)ns_malloc(n_pts * sizeof(double));
-    double *ts   = (double*)ns_malloc(n_pts * sizeof(double));
+    if (n_pts > ws->n_pts_max) n_pts = ws->n_pts_max;
+
+    double *xs_t = ws->xs_t;
+    double *ys_t = ws->ys_t;
+    double *ts   = ws->ts;
 
     for (int i = 0; i < n_pts; i++) {
         double t  = (double)i / (double)(n_pts-1);
@@ -263,7 +339,7 @@ NS_Spline *ns_build(const NF_Curve    *curve,
         br->t_mid = 0.5 * (ts[ascending ? i0 : i1] +
                            ts[ascending ? i1 : i0]);
 
-        build_spline_segments(br->xs, br->ys, nclean, br->segs);
+        build_spline_segments(ws, br->xs, br->ys, nclean, br->segs);
 
         double branch_x_span = (nclean > 1) ? br->xs[nclean-1] - br->xs[0] : 1.0;
         double branch_y_lo   = br->ys[0], branch_y_hi = br->ys[0];
@@ -299,11 +375,28 @@ NS_Spline *ns_build(const NF_Curve    *curve,
         }
     }
 
-    free(xs_t); free(ys_t); free(ts);
     return s;
 }
 
-int ns_extend_left(NS_Spline *s,
+static double ns_branch_eval(const NS_Branch *br, double x)
+{
+    int n = br->n_pts, si;
+    if (x <= br->xs[0])            si = 0;
+    else if (x >= br->xs[n-1])     si = n - 2;
+    else {
+        int lo = 0, hi = n - 1;
+        while (hi - lo > 1) {
+            int mid = (lo + hi) >> 1;
+            if (x < br->xs[mid]) hi = mid; else lo = mid;
+        }
+        si = lo;
+    }
+    double dx = x - br->segs[si].x0;
+    return br->segs[si].a + dx*(br->segs[si].b + dx*(br->segs[si].c + dx*br->segs[si].d));
+}
+
+int ns_extend_left(NS_WS ws,
+                   NS_Spline *s,
                    double x_target,
                    double x_anchor,
                    double bound_frac,
@@ -350,13 +443,31 @@ int ns_extend_left(NS_Spline *s,
     double B    = br->segs[seg_i].b;
     double C    = br->segs[seg_i].c;
     double D    = br->segs[seg_i].d;
-    double yb   = A + dxb * (B + dxb * (C + dxb * D));
-    double ypb  = B + dxb * (2.0 * C + dxb * 3.0 * D);
-    double yppb = 2.0 * C + dxb * 6.0 * D;
-    double L = xb - x_target;
-    double A3 = yppb / (6.0 * L);
-    double A1 = ypb - L * yppb / 2.0;
-    double A0 = yb - L * ypb + L * L * yppb / 3.0;
+    double yb   = A + dxb * (B + dxb * (C + dxb * D));          
+    double L    = xb - x_target;                            
+
+    double ypb;
+    {
+        double win = L;
+        if (win > x_right - xb) win = x_right - xb;        
+        if (win < 1e-9) {
+            ypb = B + dxb * (2.0 * C + dxb * 3.0 * D);               
+        } else {
+            const int NW = 16;
+            double sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+            for (int i = 0; i < NW; i++) {
+                double xx = xb + win * (double)i / (double)(NW - 1);
+                double yy = ns_branch_eval(br, xx);
+                sx += xx; sy += yy; sxx += xx*xx; sxy += xx*yy;
+            }
+            double det = (double)NW * sxx - sx * sx;
+            ypb = (fabs(det) > 1e-15) ? ((double)NW * sxy - sx * sy) / det
+                                      : (B + dxb * (2.0 * C + dxb * 3.0 * D));
+        }
+    }
+    double A0 = yb - L * ypb;               
+    double A1 = ypb;                                         
+    double A2 = 0.0;                         
     double y_natural = A0;
     double bf = (bound_frac > 0.0) ? bound_frac : 0.0;
     double lo_bnd = yb - bf * fabs(yb);
@@ -364,16 +475,14 @@ int ns_extend_left(NS_Spline *s,
     if (lo_bnd < y_lo_clamp) lo_bnd = y_lo_clamp;
     if (hi_bnd > y_hi_clamp) hi_bnd = y_hi_clamp;
 
-    int    use_quintic = 0;
-    double y_targ      = y_natural;
-    if (y_targ < lo_bnd) { y_targ = lo_bnd; use_quintic = 1; }
-    if (y_targ > hi_bnd) { y_targ = hi_bnd; use_quintic = 1; }
-    double q_a0=0, q_a3=0, q_a4=0, q_a5=0;
-    if (use_quintic) {
-        q_a0 = y_targ;
-        q_a3 = ( L*L*yppb - 8.0*L*ypb + 20.0*yb - 20.0*y_targ) / (2.0*L*L*L);
-        q_a4 = (-L*L*yppb + 7.0*L*ypb - 15.0*yb + 15.0*y_targ) / (L*L*L*L);
-        q_a5 = ( L*L*yppb - 6.0*L*ypb + 12.0*yb - 12.0*y_targ) / (2.0*L*L*L*L*L);
+    double y_targ  = y_natural;
+    int    clamped = 0;
+    if (y_targ < lo_bnd) { y_targ = lo_bnd; clamped = 1; }
+    if (y_targ > hi_bnd) { y_targ = hi_bnd; clamped = 1; }
+    if (clamped) {
+        A0 = y_targ;
+        A2 = (y_targ + ypb * L - yb) / (L * L);
+        A1 = ypb - 2.0 * A2 * L;
     }
 
     int keep_from = 0;
@@ -391,13 +500,7 @@ int ns_extend_left(NS_Spline *s,
     for (int i = 0; i < next; i++) {
         double x = x_target + span * ((double)i / (double)next);
         double u = x - x_target;
-        double y;
-        if (use_quintic) {
-            double u2 = u*u, u3 = u2*u;
-            y = q_a0 + u3 * (q_a3 + u * (q_a4 + u * q_a5));
-        } else {
-            y = A0 + A1 * u + A3 * u * u * u;
-        }
+        double y = A0 + A1 * u + A2 * u * u;
         new_xs[idx] = x;
         new_ys[idx] = y;
         idx++;
@@ -423,7 +526,7 @@ int ns_extend_left(NS_Spline *s,
     br->segs  = new_segs;
     br->n_pts = newn;
 
-    build_spline_segments(br->xs, br->ys, br->n_pts, br->segs);
+    build_spline_segments(ws, br->xs, br->ys, br->n_pts, br->segs);
 
     return 1;
 }
@@ -583,11 +686,13 @@ int ns_eval_all(const NS_Spline *s, double x,
 void ns_x_range(const NS_Spline *s, double *x_min, double *x_max)
 {
     double lo=DBL_MAX, hi=-DBL_MAX;
-    for (int b = 0; b < s->n_branches; b++) {
-        const NS_Branch *br = &s->branches[b];
-        if (br->n_pts < 2) continue;
-        if (br->xs[0]          < lo) lo = br->xs[0];
-        if (br->xs[br->n_pts-1] > hi) hi = br->xs[br->n_pts-1];
+    if (s) {                                            
+        for (int b = 0; b < s->n_branches; b++) {          
+            const NS_Branch *br = &s->branches[b];
+            if (br->n_pts < 2) continue;
+            if (br->xs[0]          < lo) lo = br->xs[0];
+            if (br->xs[br->n_pts-1] > hi) hi = br->xs[br->n_pts-1];
+        }
     }
     if (x_min) *x_min = lo;
     if (x_max) *x_max = hi;
@@ -597,6 +702,9 @@ double ns_accuracy_check(const NS_Spline *s, const NF_Curve *curve,
                           int n_check,
                           double *max_err_out, double *rms_err_out)
 {
+    if (max_err_out) *max_err_out = 0.0;
+    if (rms_err_out) *rms_err_out = 0.0;
+    if (!s || !curve) return 0.0;                        
     if (n_check <= 0) n_check = 1000;
     double max_err = 0.0, sse = 0.0;
     int    cnt     = 0;
@@ -716,7 +824,7 @@ static NS_Spline *read_spline(FILE *f, double *cksum)
                 goto err;
             *cksum += br->xs[i] + br->ys[i];
         }
-        build_spline_segments(br->xs, br->ys, br->n_pts, br->segs);
+        build_spline_segments(NULL, br->xs, br->ys, br->n_pts, br->segs);
     }
     return s;
 
@@ -845,10 +953,11 @@ double get_mag_correction_ema(const CurveEMA *e, double x, double *prev_y)
     return ema_interp(e, x);
 }
 
-double get_phase_correction_ema(const CurveEMA *e, double x, double *prev_y)
+double get_phase_correction_ema(const CurveEMA* e, double x, double* prev_y)
 {
     (void)prev_y;
-    if (!e || x <= 0.0) return ema_interp(e, 0.0);
+    if (!e) return 0.0;
+    if (x <= 0.0) return ema_interp(e, 0.0);
     return ema_interp(e, x);
 }
 

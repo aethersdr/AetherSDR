@@ -75,6 +75,20 @@ int main(int argc, char** argv)
         CHECK(!d.detectedModel.has_value() && !d.operate.has_value());
     }
 
+    // ---- SmartSDR's startup placeholder is hidden from the neutral model ----
+    {
+        const AmpDelta d = decode(b, "0x00000000", "PowerGeniusXL",
+                                  {{"state", "OPERATE"}}, false);
+        CHECK(d.handle.isEmpty());
+        CHECK(d.detectedModel.has_value() && *d.detectedModel == "PowerGeniusXL");
+        CHECK(d.operate.has_value() && *d.operate == true);
+
+        // Removal keeps the wire handle so cache/removal matching retains its
+        // existing semantics; only live status is normalized.
+        const AmpDelta removed = decode(b, "0x00000000", QString(), {}, true);
+        CHECK(removed.removed && removed.handle == "0x00000000");
+    }
+
     // ---- #4203: a known-tuner handle mis-routed into the amp decode must NOT be
     // cached as m_ampHandle. Observe via the encode path: with no amp handle
     // cached, amp.operate fails closed (extensionError), never targeting the TGXL.

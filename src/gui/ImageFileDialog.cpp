@@ -1,4 +1,5 @@
 #include "ImageFileDialog.h"
+#include "ScopedChildWidget.h"
 
 #include <QButtonGroup>
 #include <QDialog>
@@ -259,7 +260,8 @@ private:
 
 QString getBackgroundImagePath(QWidget* parent, const QString& caption)
 {
-    QFileDialog dlg(parent, caption, QString(), buildImageFilter());
+    ScopedChildWidget<QFileDialog> dialogOwner(parent, caption, QString(), buildImageFilter());
+    QFileDialog& dlg = *dialogOwner.get();
     dlg.setFileMode(QFileDialog::ExistingFile);
     dlg.setOption(QFileDialog::DontUseNativeDialog, true);
     dlg.setAcceptMode(QFileDialog::AcceptOpen);
@@ -401,8 +403,10 @@ QString getBackgroundImagePath(QWidget* parent, const QString& caption)
                           [previewLabel](const QString& path) { previewLabel->setPreviewPath(path); });
     }
 
-    if (dlg.exec() != QDialog::Accepted)
+    const int result = dlg.exec();
+    if (!dialogOwner || result != QDialog::Accepted) {
         return {};
+    }
     return dlg.selectedFiles().value(0, QString());
 }
 

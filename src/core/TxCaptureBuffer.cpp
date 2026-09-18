@@ -12,9 +12,10 @@ namespace {
 // 6-channel negotiated device has 12-byte frames, which 256 KiB does not divide
 // evenly. Keeping a partial frame would leave every later block straddling a
 // frame boundary.
-qint64 frameBytesFor(int inputChannels)
+qint64 frameBytesFor(int inputChannels, int bytesPerSample)
 {
-    return std::max<qint64>(1, inputChannels) * static_cast<qint64>(sizeof(qint16));
+    return std::max<qint64>(1, inputChannels)
+        * std::max<qint64>(1, bytesPerSample);
 }
 
 qint64 alignDown(qint64 bytes, qint64 frameBytes)
@@ -30,13 +31,13 @@ qint64 alignUp(qint64 bytes, qint64 frameBytes)
 
 } // namespace
 
-BoundedRead readLatestBoundedInt16(QIODevice* device, int inputChannels)
+BoundedRead readLatestBounded(QIODevice* device, int inputChannels, int bytesPerSample)
 {
     if (!device) {
         return {};
     }
 
-    const qint64 frameBytes = frameBytesFor(inputChannels);
+    const qint64 frameBytes = frameBytesFor(inputChannels, bytesPerSample);
     const qint64 alignedLimit = alignDown(kMaxReadBytes, frameBytes);
 
     BoundedRead out;
@@ -67,9 +68,9 @@ BoundedRead readLatestBoundedInt16(QIODevice* device, int inputChannels)
     return out;
 }
 
-qint64 trimToLatestBoundedInt16(QByteArray& block, int inputChannels)
+qint64 trimToLatestBounded(QByteArray& block, int inputChannels, int bytesPerSample)
 {
-    const qint64 frameBytes = frameBytesFor(inputChannels);
+    const qint64 frameBytes = frameBytesFor(inputChannels, bytesPerSample);
     const qint64 alignedLimit = alignDown(kMaxReadBytes, frameBytes);
     if (block.size() <= alignedLimit) {
         return 0;

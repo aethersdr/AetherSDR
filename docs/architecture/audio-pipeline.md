@@ -295,6 +295,18 @@ CW sidetone and Quindar local monitor output are independent local paths:
   `ClientQuindarTone::processSidetone()` so the operator hears the local
   Quindar tones corresponding to TX tone insertion.
 
+Which backend is constructed is decided by `CwSidetoneBackendPolicy.h` from
+three facts: whether `HAVE_PORTAUDIO` was defined at build time, the platform,
+and `AppSettings["CwSidetoneBackend"]`. An operator preference wins everywhere;
+the platform only supplies the default for an install that has never set one.
+That default is PortAudio on Linux and macOS — the callback path, sub-5 ms
+against PipeWire and CoreAudio — and `QAudioSink` on Windows, where the
+PortAudio path shipped for the first time in v26.9.3 and corrupted the process
+heap at connect (#5713). Windows operators can still opt in with
+`AetherSDR.exe --config set CwSidetoneBackend PortAudio`; the value is matched
+case-insensitively, because the setting has no GUI and is typed at a command
+line.
+
 The sidetone backend is opened against the same PC output selection as RX audio.
 When the operator has selected a specific output, the PortAudio backend maps the
 Qt device name to a PortAudio output; if that mapping is missing or ambiguous,
@@ -929,8 +941,8 @@ warning before it is discarded and regenerated.
 | `PipeWireAudioBridge::feedDaxAudio()` | Downmix and upsample | float32 stereo 24 kHz | float32 mono 48 kHz | Averages L/R for PipeWire source output |
 | `PipeWireAudioBridge::pollTxPipe()` | Format conversion and duplicate | s16le mono 24 kHz | float32 stereo 24 kHz | Duplicates mono DAX TX to L/R |
 | `TciServer::onBinaryMessage()` TX | Resample and possible downmix | 48 kHz float32/Int16 | 24 kHz float32 stereo | Uses mono-to-stereo or stereo-to-stereo helper depending on detected layout |
-| `TciServer::onDaxAudioReady()` RX mono client | Downmix | float32 stereo | mono client payload | Mono client output averages L/R |
-| `TciServer::onDaxAudioReady()` RX resample | Resample and downmix | float32 stereo 24 kHz | requested rate stereo | Current stereo resample uses `processStereoToStereo()` |
+| `TciServer::receivePcm()` RX mono client | Downmix | typed `PcmFrame` | mono client payload | Mono client output averages L/R |
+| `TciServer::receivePcm()` RX resample | Resample, per channel | typed `PcmFrame` 24/48 kHz | requested rate stereo | Uses `TciRxConverter`: **independent L/R histories**, so antiphase and wide stereo survive. It does NOT use `processStereoToStereo()` — that helper's mono collapse is the defect it replaced. See `docs/tci-receive-audio.md` |
 | Scope helpers | Mono scope conversion | Int16 or float32 stereo | float32 mono scope | Average L/R for `scopeSamplesReady` and post-chain scopes |
 
 ## Meter tap table
@@ -953,7 +965,7 @@ warning before it is discarded and regenerated.
 | macOS DAX TX level | `VirtualAudioBridge::readTxAudio()` | After DAX TX gain, before `txAudioReady()` | Left channel only | Linear RMS |
 | PipeWire DAX RX level | `PipeWireAudioBridge::feedDaxAudio()` | After downmix/upconvert for PipeWire source | All output mono samples | Linear RMS |
 | PipeWire DAX TX level | `PipeWireAudioBridge::pollTxPipe()` | From mono pipe source samples | Mono source samples | Linear RMS |
-| TCI RX level | `TciServer::onDaxAudioReady()` | Before client payload encoding, after channel gain | All input samples | Linear RMS |
+| TCI RX level | `TciServer::receivePcm()` | Before client payload encoding, after channel gain | All input samples | Linear RMS |
 | TCI TX level | `TciServer::onBinaryMessage()` | After TCI gain/resample, before `feedDaxTxAudio()` | All output samples | Linear RMS |
 | Radio meter model | `PanadapterStream::decodeMeterData()` / `MeterModel` | Radio-provided telemetry | Radio-defined | dBm, dB, dBFS, volts, amps, SWR, temperature, or raw depending on meter |
 

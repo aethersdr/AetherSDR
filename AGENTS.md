@@ -3,13 +3,14 @@
 This is the canonical project guide for any AI assistant working on
 AetherSDR — Claude Code, OpenAI Codex, Cursor, GitHub Copilot, Gemini
 Code Assist, Aider, AetherClaude (our orchestrator bot), or any other
-tool. Each tool has its own well-known file at a different path
-(`CLAUDE.md`, `.github/copilot-instructions.md`, `GEMINI.md`,
-`CONVENTIONS.md`, etc.); those are thin pointers back here. Everything
-project-wide lives in **this** file.
+tool. Several of those tools look for their own well-known file at a
+different path (`CLAUDE.md`, `.github/copilot-instructions.md`,
+`GEMINI.md`); those are thin pointers back here, and a tool without one
+reads this file directly. Everything project-wide lives in
+**this** file.
 
 If you are an AI assistant: read this file end-to-end before writing
-code or recommending merges. The file is ~830 lines; that is the cost
+code or recommending merges. The file is ~1150 lines; that is the cost
 of doing the job right on this codebase.
 
 **This file is documentation, not policy.** It describes how to build
@@ -37,13 +38,26 @@ look, feel, and every function SmartSDR is capable of. The reference radio is a
 
 ## AI Agent Guidelines
 
+> **TEMPORARY — read before opening any PR that touches `src/core/backends/`,
+> `RadioModel`, `RadioSession`, `TransmitModel`, `ConnectionPanel`, discovery,
+> or `RadioCapabilities`.** The 2026-09-10 backend architecture review is
+> tracked in **#5554** (meta: every open seam/multi-radio issue plus the new
+> findings). Before you submit, check that your change does not add to any
+> item listed there — no new `usesFlexCommandPlane()` / family-string
+> branches, no new raw Flex wire text above the seam, no new `dynamic_cast`
+> to a concrete backend, no new capability declared without a verb behind
+> it, no copy of HL2 scaffolding into another host-DSP family, and no new
+> keying-class verb that skips the TX gate in `RadioModel`. If your PR
+> resolves one of those items, link it. This notice is removed when #5554's
+> §2 items each have their own issue and #5262 M1 has landed.
+
 When helping with AetherSDR:
 - Prefer C++20 / Qt6 idioms (std::ranges, concepts if clean, Qt signals/slots over lambdas when possible)
 - Keep classes small and single-responsibility
 - Use RAII everywhere (no naked new/delete)
 - Comment non-obvious protocol decisions with firmware version
 - When suggesting code: show **diff-style** changes or full function/class if small
-- Test suggestions locally if possible (assume Arch Linux build env)
+- Test suggestions locally if possible — the build must work on Linux, macOS and Windows
 - Never suggest Wine/Crossover workarounds — goal is native
 - Flag any proposal that would break slice 0 RX flow
 - If unsure about protocol behavior → ask for logs/wireshark captures first
@@ -55,6 +69,7 @@ When helping with AetherSDR:
   reviews what) and `docs/DEVELOPER-GUIDE.md` for the contributor-facing
   coding conventions and the AI-to-AI debugging protocol (open a GitHub issue
   for cross-agent coordination)
+- **Gating a control on a radio capability? Dim it, never hide it.** Individual controls render in one of three states — unavailable (the radio lacks it, dimmed **with a stated reason**), inactive (supported, not engaged), active. Hiding survives only at applet granularity for a cohesive radio-specific cluster. Register with `ControlAvailabilityRegistry` rather than writing another `setVisible()`; the reason must reach a screen reader via `accessibleDescription` (widgets) or `statusTip` (`QAction`s), because a tooltip is a mouse affordance that is never announced. `tools/check_a11y.py` warns on a disabled control whose reason lives only in a tooltip. Doctrine: [`docs/style/theme-style-guide.md`](docs/style/theme-style-guide.md) §"Three-state controls" (#5262 M3a, #4896).
 - **Adding or changing UI? Read [`docs/style/theme-style-guide.md`](docs/style/theme-style-guide.md) first** — every colour resolves through a ThemeManager token (error/warning/success/notification/TX all have one); never hardcode a colour literal. CI's hardcoded-colour ratchet fails a PR that raises the count above its base branch.
 - **Sign every commit you author.** `main` enforces `required_signatures`, so a
   PR with unsigned commits cannot merge without an admin override. If the
@@ -191,8 +206,8 @@ is the sole authority on visual design and UX direction.
 
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build -j$(nproc)
-./build/AetherSDR
+cmake --build build --parallel
+./build/AetherSDR          # Windows: build\AetherSDR.exe
 ```
 
 **Optional — DFNR (DeepFilterNet3) noise reduction.** Run
@@ -205,6 +220,10 @@ include DFNR; it is a manual prereq only for local dev builds. NR still
 works without it — RN2 (RNNoise) is bundled and always built, needing no
 setup.
 
+**RNNoise architecture check.** The `third_party/rnnoise/src/x86` sources and
+include directory belong only in x86 build graphs. After configuring any ARM
+build, `rg 'rnnoise/src/x86' <build-dir>/build.ninja` must find no matches.
+
 Full dependency list is in `README.md` — don't duplicate it here.
 
 ### Adding a test — declare it in `tests/tests.cmake`, not `CMakeLists.txt`
@@ -213,9 +232,9 @@ Drop `<feature>_test.cpp` into `tests/`, then declare its `add_executable` +
 `add_test` in **`tests/tests.cmake`**. There is no glob; every test is declared
 explicitly, so copy a neighbouring target's block.
 
-The root `CMakeLists.txt` held all 300+ of these until the split — over half its
-6,357 lines — so a stale doc, an old PR, or pattern-matching on the surrounding
-code will all point you at the wrong file. Two guards catch that: `tests.cmake`
+These all lived in the root `CMakeLists.txt` before the split, so a stale doc,
+an old PR, or pattern-matching on the surrounding code will all point you at
+the wrong file. Two guards catch that: `tests.cmake`
 aborts the CMake configure step, and `tools/check_test_registration.py --strict`
 fails the PR in CI.
 
@@ -231,15 +250,86 @@ this at the point of use.
 A test that touches `AppSettings` also needs its target name in the
 `AETHER_SETTINGS_CONSUMERS` list at the bottom of `tests.cmake`.
 
-Current version: **26.8.3**.
+**Do not add a `ctest -R` step for it to `.github/workflows/ci.yml`.** The
+per-PR gate there is a frozen allow-list (`.github/ci-test-gate.txt`) of
+tests kept on the macOS and Windows jobs because the claim each pins is about
+that platform's toolchain (Apple Metal, MSVC portability); the Linux job runs
+no tests at all, and the list does not grow. Every test declared in
+`tests.cmake` that the default configure builds runs unfiltered in two places
+from the moment it is declared: on every push to `main` (`full-suite.yml`,
+minutes after the merge) and again weekly under the sanitizers
+(`sanitizers.yml`). That is where a new test runs. (A test behind a
+default-OFF option runs in neither unless that lane passes the option; say so
+in the PR.) `tools/check_ci_test_gate.py` runs in `Static checks` and fails
+the PR if a `-R` pattern in a pull-request workflow resolves to a name the
+frozen list does not carry. Removing a test from the gate is fine:
+run the script with `--update` and commit the shorter list. The script only
+ever shrinks the list; growing it is a hand edit to the maintainer-owned
+file, with the reason in the PR body. See "Gate integrity" below.
+
+Every unconditional `add_executable(<name>_test …)` must have a matching
+`add_test`, or carry a `# not registered: <reason>` marker the registration
+checker recognizes (option-gated and manual targets qualify). A test that
+compiles but is never registered reads as coverage while running in no job —
+`issue_report_test`, the GHSA-ccrg-j8cp-qhc4 regression guard, has run in no
+job from its creation to this day (#5101, still open, registers it). This
+becomes checked once the `check_test_registration.py` extension from #5254
+lands; until then it is convention.
+
+A test for a fixed bug should be mutation-checked before the PR goes up:
+break the guard on purpose, watch the test fail, restore it, and say so in
+the PR body.
+
+### Test-layer boundary — where an assertion lives
+
+Decide the layer before writing the test (#5232):
+
+| The assertion proves | It lives in |
+|---|---|
+| Wire encoding, parser bounds, model tables, scheduling, DSP, capability/safety policy | a socket-free CTest in `tests/`, grounded in the official guide or gateware |
+| A refusal, a non-event, a dropped/malformed/disconnected input, a TX guard | a socket-free test that **injects the transport** — feed the frame handler or state machine directly; no `QTcpServer`/`QUdpSocket`, no peer process |
+| A race or lifetime bug under churn | the sanitizer lane (`sanitizers.yml`) — the sanitizer is the point |
+| The app converges with real firmware (session, RX, controls, meter liveness) | the automation bridge + `radiocert` on live hardware. Positive effects only: radiocert is a diagnostic, not pass/fail, and cannot prove an isolated non-event |
+| A closed loop that needs a simulator peer (hpsdrsim TX) | an explicit opt-in target, never registered by default |
+
+**No new synthetic peer standing in for third-party radio or amplifier
+firmware enters the default graph.** A fake radio proves the client agrees
+with our model of the radio, not with the radio; the model freezes while
+firmware moves, so the test fails on correct changes or stays green on real
+divergence (#5232). Four legacy exceptions remain in
+the default graph, all tracked for socket-free extraction in #5254:
+`vkamp_connection_test` (fake VKAMP amplifier), `hl2_receiver_count_restart_test`
+(fake Metis radio), `gui_client_registration_recovery_test` (fake FLEX-6700
+handshake peer), and `thumbdv_queue_test` (a pty-backed fake DV3000 dongle —
+not a socket, which is why it went unenumerated; #5405 review). Mining a retired fake peer's frame tables as
+*input data* for injected-transport tests is encouraged; running the fake as
+a live socket peer is not. Loopback mocks of documented HTTP APIs are a
+different trade — that contract is versioned and published; radio firmware
+behavior is not.
+
+Socket tests where **our own server is the subject** (rigctld, CAT, the TCI
+server, the automation bridge's transport) remain legitimate: the code under
+test is real, the socket is how you reach it. The carve-out exempts a test
+from the fake-firmware ban, not from visibility: any new socket-owning test
+is disclosed in the PR body, its `tests.cmake` block names the socket it
+binds, reviewers notify the operator before continuing, and the test fails
+fast (or skips, exit 77) when it cannot bind rather than consuming its
+timeout.
+
+Prefer behavioral seams over source-text assertions: a test that greps a
+source file for an expression breaks on behavior-preserving refactors and
+gets deleted by whoever it fires on. Applets already link into unit tests,
+so the seam is a `tests.cmake` entry, not a missing capability.
+
+### Version and release files
+
+Current version: **26.9.3**.
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
 
 The version is stated in **five** places, and a release is not prepped until
-all five agree. This list is spelled out because it was previously described as
-"both `CMakeLists.txt` and `README.md`" — and v26.7.4.1 duly shipped with the
-other three stale:
+all five agree — check every row, not just the first two:
 
 | file | what to change |
 |---|---|
@@ -291,10 +381,6 @@ corresponding `-dev` package to `.github/docker/Dockerfile` and push.** The
 `docker-ci-image.yml` workflow rebuilds the image automatically (~3 min); wait
 for that before the next CI run can use it.
 
-**`git ship`** alias — squashes local commits ahead of origin/main, creates a
-branch, pushes, opens a PR with auto-squash-merge enabled. Commit freely
-locally, then ship once.
-
 Branch protection: signed commits required on main, CI must pass, CODEOWNERS
 review required, branches auto-delete after merge.
 
@@ -304,6 +390,40 @@ AI-assistant instructions (algorithm, anti-patterns, completion
 message). Works for Windows / macOS / Linux / WSL / Raspberry Pi
 contributors. Default to SSH signing; GPG is the fallback for
 contributors with existing GPG workflows.
+
+### Gate integrity
+
+- The per-PR gate in `ci.yml` is frozen (see "Adding a test" above). A test
+  does not join it. If a maintainer decides one must — the claim it pins is
+  about a platform toolchain the weekly Linux lane cannot exercise — the
+  name goes into `.github/ci-test-gate.txt` by hand, in the same PR, with
+  the reason in the PR body; the step comment in `ci.yml` says what it
+  guards. `--update` will not add a name.
+- Every `ctest` invocation in a workflow carries `--no-tests=error`: a `-R`
+  filter that matches nothing exits 0, so a deregistered or renamed test
+  silently shrinks the gate while the job stays green — #5232 demonstrated
+  this live. The unfiltered sanitizer sweep carries it too, so an empty
+  test tree fails rather than passing vacuously.
+- Erosion inside a pattern is caught two ways, and they cover different
+  halves. The frozen list catches it in the SOURCE: the checker requires
+  the names a PR workflow selects to EQUAL the list, so a renamed or
+  deregistered `add_test` fails `Static checks` on the missing name. It
+  cannot catch erosion at CONFIGURE time — it reads `tests.cmake` as text
+  and does not evaluate the conditions around an `add_test`, so a test
+  that stops being registered on a platform leaves the text unchanged and
+  the list still matching. That is what the `Total Tests: N` pin on a
+  multi-name step is for, and why the ThumbDV step still carries one
+  (#5232, #5405 review). A single-name anchored step needs no pin:
+  `--no-tests=error` already distinguishes one from zero.
+- Deregistering or renaming a test requires grepping `.github/workflows/`
+  for its name in the same PR, and running `--update` if it was on the
+  frozen list. The gate regexes are part of the test's surface.
+- The weekly lane's sticky failure issues (`[sanitizer] … weekly run
+  failure`) carry ctest's own failed-test list first, then the sanitizer
+  blocks. A test failing there on a plain assertion is a regression on
+  `main` with no PR that went red for it; treat it as one.
+- A flaky test gets an issue naming the root cause — never empty retrigger
+  commits, which cost every contributor and record nothing.
 
 ---
 
@@ -345,8 +465,24 @@ The accepted RFC at
 clients, with pluggable radio backends (`IRadioBackend`). Implementation
 follows the RFC's §10 staged order; **step 1 (`libaethercore`) and the
 step-2 seam have landed** — the engine is a static library, and
-`IRadioBackend` (`src/core/backends/`) now has **four** implementors,
-selected at connect time by a `family` string through `makeBackend()`:
+`IRadioBackend` (`src/core/backends/`) now has **six** implementors,
+selected at connect time by a `family` string through `makeBackend()`.
+The seam's known gaps and the multi-radio migration order are tracked in
+#5262 (M0–M6) and the review meta-issue #5554 — read both before changing
+anything in this table's territory (see the temporary notice at the top of
+"AI Agent Guidelines"). **Every implementor honours the THREADING AND
+LIFETIME CONTRACT at the top of `IRadioBackend.h`** (backend lives on its
+owner's thread, every seam signal is emitted from it, workers are private,
+payloads declared and registered in one place, teardown bounded and
+ordered). What is pinned versus surveyed: `backend_seam_affinity_test`
+pins rules 1, 2 and 6 for the simulator and rule 1 plus a cold
+construct/teardown for every other family; `hl2_connect_reentrancy_test`
+pins rule 2 for HL2 while its DSP build runs on the I/O thread;
+`backend_family_switch_test` pins rule 5 across the production switch with
+a deterministic stale-delivery injection. Live-emission affinity for flex,
+anan, icom and rtl is a survey result until
+`tests/SeamThreadAffinityProbe.h` — which drops the same tripwire into any
+test that drives a backend — is carried by a test that drives one:
 
 | Family | Backend | Notes |
 |---|---|---|
@@ -354,27 +490,120 @@ selected at connect time by a `family` string through `makeBackend()`:
 | `hl2` | `Hl2Backend` (`src/core/backends/hl2/`) | Hermes-Lite 2, shipped v26.7.4 — Metis/HPSDR transport, raw-IQ RX/TX DSP done in-client |
 | `icom` | `IcomCivBackend` (`src/core/backends/icom/`) | Networked Icom, shipped v26.8.2 — CI-V command plane inside the RS-BA1 UDP transport; the radio owns its own state, so `clientSettingsDomains` is empty |
 | `sim` | `SimBackend` (`src/core/backends/sim/`) | Synthetic demo backend, shipped v26.7.4 — generates its own audio + spectrum, RX-only by construction (Principle VI) |
+| `anan` | `AnanBackend` (`src/core/backends/anan/`) | ANAN-G2 receive support over openHPSDR Ethernet Protocol 2; raw-IQ RX DSP runs in-client and TX remains absent by construction |
+| `rtl` | `RtlSdrBackend` (`src/core/backends/rtl/`) | RTL-SDR USB receive backend; raw-IQ RX DSP runs in-client and the backend is RX-only by construction |
 
-The versioned protocol (step 3+) has not landed — UI code still consumes
-models directly, and that remains correct.
+Step 3 is in progress: the normative v1 envelope contract, bounded codec,
+observe-only local handshake/capability service, and a QtWidgets-free
+`aetherd` skeleton have landed. The typed observe-only `server`,
+`radioSession`, `slice`, and `panadapter` resources now publish through
+`RadioResourceAdapter`; `resource.get` plus atomic snapshot/event
+`resource.subscribe`/`resource.unsubscribe`, per-resource revisions, bounded
+coalescing/session resync, and an independent local-socket hard disconnect cap
+are live over the current-user local transport.
+The headless daemon also owns a bounded, observe-only `radioCatalogue` through
+the normalized `RadioDiscoverySource` seam. Native discovery adapters stay under
+`src/core/backends/`; desktop discovery/autoconnect is unchanged. Discovery is
+passive by default: `--discover-local` opts into Flex/HL2/ANAN LAN discovery and
+available RTL-SDR USB enumeration; `--discover-sim` publishes only demo metadata.
+Neither option connects a radio. Icom manual setup, SmartLink and external
+directories are excluded. Catalogue fields and lifecycle are specified in
+`docs/aetherd-control-resource-v1-catalogue.md`.
+Sessions require explicit trusted authorization; the local transport defaults
+to observe permission, and reads/subscriptions enforce it. The daemon's explicit
+`--allow-local-control` flag additionally grants non-TX control to current-user
+local clients. Typed catalogue-selected `radio.connect` / `radio.disconnect`
+are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
+revision checks and limits. Clients cannot supply arbitrary endpoints or
+credentials. Every negotiated session, observer or controller, now shares a
+per-client request budget (100/s, burst 200, advertised in `limits`); exceeding
+it is terminal for that connection. The revocation hook
+discards pending observations and terminates local delivery; no wire or daemon
+path invokes it yet. Remote credential verification/provisioning and transmit
+grants are not implemented yet.
+`slice.setFrequency` now dispatches a bounded, revision-checked intent for an
+existing owned slice, with explicit backend observation provenance and fail-closed
+TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
+not optimistically update the model. Unknown coverage/readback remains unavailable.
+The receive-control milestone adds typed mode/filter/gain/mute and pan
+center/bandwidth intents for qualified existing owned resources, separate
+backend receive observations, bounded latest-value `meter` resources and a
+read-only `transmitState`; see `docs/aetherd-local-receive-control.md` for the
+per-backend support matrix and remaining no-op, geometry and TX-idle limits.
+This is not all-backend feature parity: unavailable operations remain absent.
+The desktop adapter has not landed; UI code still consumes models directly, and that
+remains correct. New resource fields belong in the adapter and the versioned
+catalogue, never in a transport or via QObject reflection. No protocol TX
+method is advertised before the step-4 arbiter exists.
+
+Step 4 has an engine-owned `TxCoordinator` and a transitional desktop actor;
+this is not yet per-client TX authorization. Flex primary keying and CWX text
+carry operation/batch fences to the original TCP writer. A queue-consumed
+callback ends local handoff only, never proves radio idle. Preserve normal
+operator reengagement, but use `finishLocalIntent()` rather than asserting a
+qualified stop: the coordinator retains that actor until matching stop evidence
+arrives. Uncorrelated RX status must not clear this handoff barrier. Preserve
+short key-down/key-up sequences, Quindar/RADE release tails, and held MOX when
+cancelling a CWX batch. Do not enable independent-client handoff or daemon TX
+until independent trusted grants and the qualified stop/recovery contract
+are complete. See `docs/aetherd-stage4-tx-coordinator.md`. This work does not
+widen `welcome`/capability serialization or replace #5598's RX PCM seam work.
+The bridge watchdog tracks its authorization-lifetime producer's original
+contributions with a monotonic, non-renewable deadline. A boolean keyed sample alone cannot establish ownership
+(CWX has QSK gaps); repeated commands must not renew that deadline. Deferred
+TX widget invocations retain the original input before queueing and
+claim only after admission. These are producer-isolation safeguards, not
+per-socket actor grants or qualified radio-idle evidence.
+
+Local producer contributions now use opaque `TxCoordinator::Intent` handles,
+not activity bits as ownership. Repeat admission reuses a producer's live
+handle. Mark release before callbacks/queueing, retain the captured handle
+until its normal tail is consumed, and end that handle only. Reengagement gets
+a distinct handle so an earlier completion cannot release it. The coordinator
+refuses local operation completion while any contribution remains. The six
+legacy desktop entry points retain compatibility slots, while `TxController`
+binds converted UI, device and bridge inputs to their actual producer. Capture
+before the first queued hop; derive scheduled elements from the original root,
+never from callback-time authority. Device close, authorization changes and
+reconnect fence stale work. Keep TX audio context through backend queues and
+retries. Producer identity still does not confer an independent actor grant.
 
 **Backends that demodulate in-process double-feed the sink if you let
 them.** `IRadioBackend::audioFrameReady` has two possible routes to
-`AudioEngine::feedAudioData` — the `RadioModel::backendAudioFrameReady`
+`AudioEngine::feedPcmFrame` — the `RadioModel::backendAudioFrameReady`
 relay, and a direct connect in `wireBackendSeam()`. `FlexBackend` is
 structurally immune because it never emits `audioFrameReady` at all (audio
 rides `PanadapterStream`/VITA-49), so the "no double-feed" reasoning that
-holds for Flex stops holding for any in-process backend. Gate the relay on
-`backendOwnsRxAudio()`. `Qt::UniqueConnection` does **not** protect you here
-— they are two different signals arriving at the same slot, so nothing looks
-duplicate to Qt. The same shape exists on the spectrum side.
+holds for Flex stops holding for any in-process backend.
+
+**The two gates have opposite senses and are deliberately named apart — do
+not merge them.** The relay's gate is `MainWindow::backendFeedsEngineDirectly()`
+(`dynamic_cast<SimBackend*>`, `MainWindow_Session.cpp`): sim feeds the engine
+itself, so the relay returns early for sim and for nobody else. The direct
+connect in `wireBackendSeam()` is sim-only for the same reason, and *that* is
+the site whose gate belongs on "does this backend own its RX audio"
+(`MainWindow.cpp`). An HL2 is `ownsRxAudio() == true` **and** needs the relay,
+so delegating the relay to `backend()->ownsRxAudio()` swallows every HL2 frame
+and silences the speaker — the code says so at the function, citing the #4537
+review. `Qt::UniqueConnection` does **not** protect you at either site: at the
+relay they are two different signals arriving at the same slot, so nothing
+looks duplicate to Qt, and at `wireBackendSeam()` it cannot catch a lambda
+connect at all.
+
+The spectrum side had the same shape and was resolved differently — not with a
+gate but with one producer and one path: `spectrumFrameReady` is consumed by
+`RadioModel::onBackendSpectrumFrame` and re-emitted on the neutral `panFeed`
+path every backend already renders (`MainWindow.cpp`, "One producer, one
+path"). Drawing it a second time at the seam is what that comment exists to
+prevent.
 
 **Build targets (post-RFC step 1):**
 
 | Target | Contents | May link |
 |---|---|---|
-| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. **Never `gui/`; QtWidgets only via the tracked-legacy files below, shrinking to zero** |
+| `libaethercore` (`aethercore`) | `src/core/` + `src/models/` — the engine | Qt Core/Gui/Network/Multimedia/WebSockets/SerialPort/DBus, the DSP + third-party libs. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it is a burndown target. **Never `gui/` or QtWidgets**; the remaining EB2 warnings are source-location debt compiled only by the desktop target |
 | `AetherSDR` | `src/gui/` + `main.cpp` — the desktop app | `aethercore` + Qt Widgets + qgeoview + QRhi private |
+| `aetherd` | `src/aetherd/main.cpp` — headless service shell | `aethercore` + direct Qt Core/Network links. It currently inherits the engine's public/private runtime surface, including Qt Concurrent, Gui, Multimedia, SerialPort, WebSockets, DBus, and qtkeychain when those optional dependencies are enabled. Qt Gui remains because `BandPlanManager` and `DxccColorProvider` expose `QColor`; removing it and narrowing the other transitive edges are burndown targets. **Never QtWidgets** |
 
 The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
 `static-checks.yml`, `--strict`) by three ratchets:
@@ -383,10 +612,11 @@ The dependency direction is CI-enforced (`tools/check_engine_boundary.py`,
 - **EB2** — no `core/`/`models/` file may use QtWidgets (a shrinking
   tracked-legacy set warns, new usage errors).
 - **EB3** — no file **above the radio seam** (all of `src/gui/`,
-  `src/core/`, `src/models/` **except** the backend tree
-  `src/core/backends/`) may include a **vendor header** — the
-  family-specific wire classes the RFC keeps behind `IRadioBackend`
-  (SmartSDR/FlexLib + KiwiSDR; the headers tagged `vendor(...)` in
+  `src/core/`, `src/models/`, plus the root app-shell files `src/main.cpp`
+  and `src/MacStartupAbortGuard.{h,cpp}`, **except** the backend tree
+  `src/core/backends/`) may include a **vendor header** — any radio-family-
+  specific wire class the RFC keeps behind `IRadioBackend` (currently Flex,
+  Kiwi, HL2, Sim, Icom, ANAN, and RTL; the headers tagged `vendor(...)` in
   `docs/architecture/aetherd-touchpoint-tags.json`). Only `vendor(...)` is
   EB3-gated: a standalone *accessory* device's own transport (the 4O3A
   antenna switch, the Tgxl/Pgxl direct sockets) is `peripheral(...)`, a
@@ -410,9 +640,36 @@ rules (pre-drafted in
 [`docs/aetherd-agents-md-staging.md`](docs/aetherd-agents-md-staging.md));
 if a rule isn't in this file, its step hasn't landed. Architecture changes
 ahead of the RFC steps remain maintainer-only (see Autonomous Agent
-Boundaries above). The CI-enforced rules so far are EB1/EB2/EB3 above
-(`tools/check_engine_boundary.py`, warning for tracked baselines, error
-for new violations).
+Boundaries above). The CI-enforced rules so far — all three run in the
+`Static checks` job, which became a **required status check on 2026-09-12**, so
+a red run blocks the merge rather than merely reporting. Note what that does
+*not* change: a finding against a TRACKED EB2/EB3 baseline still warns, and only
+a new violation or a grown baseline errors:
+
+- **EB1/EB2/EB3** above (`tools/check_engine_boundary.py`, warning for
+  tracked baselines, error for new violations).
+- **The capability-boolean freeze** (#5262 M2,
+  `tools/check_capability_records.py`). `RadioCapabilities`' boolean
+  population is frozen and may only shrink. **A new capability lands as a
+  per-feature record** — `std::optional<FeatureRecord>`, engaged =
+  present, fields = shape, the `cwText*` pattern generalized — not as
+  another loose bool. Two reasons, both of which have already cost us:
+  a bool encodes a yes/no that turns out to have shape and then fissions
+  when the second radio family arrives (`hasRadioSideDsp` became four
+  tiers, `hostModulates` became two fields), and a bool a backend simply
+  forgot to set reports a definite "no" indistinguishable from a
+  considered one. Converting one to a record means lowering
+  `FROZEN_BOOL_COUNT` in the same commit.
+- **The command-plane freeze** (#5262 M4,
+  `tools/check_command_plane.py`). Raw Flex wire text above the seam is
+  frozen per file and may only shrink; **a file not already in the
+  baseline must stay at zero.** This is why the GUI↔Radio Sync note below
+  describes the plane being migrated away from rather than a pattern to
+  copy: on HL2/Icom/ANAN/RTL that text is silently dropped, so a new
+  control written this way looks live and does nothing. New controls use
+  a typed intent through `IRadioBackend`. Growth under
+  `src/core/backends/flex/` is deliberately not counted — that is where
+  the encode is moving to.
 
 **Engine boundary ratchet — EB3 (vendor includes).** As of RFC step 2.4,
 `check_engine_boundary.py` also enforces that nothing above the radio seam
@@ -434,7 +691,18 @@ you:
   **derived at runtime from the touchpoint audit**
   (`docs/architecture/aetherd-touchpoint-tags.json`, the single source of
   truth), so a header newly tagged `vendor` there is enforced without
-  editing the checker.
+  editing the checker. **De-classification is pinned, and only that
+  direction.** `VENDOR_STEMS_PINNED` freezes today's 33 vendor stems: a stem
+  the audit no longer tags `vendor(...)` is a blocking `EB3-load` error naming
+  it, because that single edit would otherwise un-gate the header for every
+  file above the seam on a green run. Tagging a *new* header `vendor(...)`
+  arms more enforcement and needs no checker edit — arming must never cost a
+  second diff. The only permitted rebaseline is an intentional
+  vocabulary-classification change: every newly tracked include must be proven
+  to predate that classification against the merge base, the evidence must be
+  documented, and a maintainer must explicitly review the rebaseline — and the
+  same evidence is what releases a stem from `VENDOR_STEMS_PINNED`, dropped in
+  that same commit. The expanded set is shrink-only after classification.
 - **Adding a radio feature?** Don't include the vendor class above the
   seam. Put the wire code in the family backend
   (`src/core/backends/<family>/`) and surface it through `IRadioBackend`
@@ -446,9 +714,10 @@ you:
 - **Removing coupling (the goal).** When you convert a file's radio access
   to the seam and drop a vendor include, **remove that stem from the
   file's row** in `KNOWN_VENDOR_INCLUDE_BASELINE` (delete the row when it
-  empties). The set only shrinks — never add a stem or a row to make a
-  build pass. If EB3 blocks you and the include is genuinely unavoidable,
-  that's a design conversation for a maintainer, not a baseline edit.
+  empties). Outside the documented vocabulary-classification carveout above,
+  the set only shrinks — never add a stem or a row to make a build pass. If EB3
+  blocks you and the include is genuinely unavoidable, that's a design
+  conversation for a maintainer, not a baseline edit.
 - **`src/gui/**` is in the CI trigger** for `static-checks.yml` now
   (EB3 guards gui files), so a gui-only PR that adds vendor coupling is
   still caught.
@@ -475,6 +744,55 @@ freezes today's above-seam vendor coupling and lets it be decoupled
 subsystem-by-subsystem. Converting a touchpoint still follows the claim
 protocol + before/after `tools/verify_slice0_rx.py` recipe; a converted
 file drops its vendor include and lowers its EB3 baseline.
+
+**Before you merge — the aetherd conformance checklist.** Every item below has
+a green CI run behind it, so a passing `Static checks` answers none of them.
+Whoever lands a PR in this territory — agent or human, author or reviewer —
+walks the list:
+
+1. **Run the four gates on the merge base *and* on the head, and diff the
+   findings per file** — not the exit codes. `check_engine_boundary.py
+   --strict`, `gen_touchpoint_manifest.py --check`,
+   `check_capability_records.py --strict`, `check_command_plane.py --strict`,
+   all stdlib Python and seconds each. Findings against tracked EB2/EB3
+   baselines *warn*; only a new violation or a grown baseline errors. EB2 is a
+   per-file **count**, so a lateral swap inside a tracked file — one QtWidgets
+   usage out, another in — passes flat.
+2. **A new `gui/`→engine include stops at "regenerate", not at "justify".**
+   `gen_touchpoint_manifest.py --check` *does* go red — the manifest records
+   per-header includer counts, so the table goes stale and the required
+   context fails. But regenerating clears it: commit the regenerated table and
+   the grown burndown is green, with nothing anywhere flagging that a
+   touchpoint was added. Diff the manifest between merge base and head. A new
+   row, or a row whose includer count went up, needs a justification in the PR
+   body, or it is a finding.
+3. **Regenerate the manifest; never hand-edit it.** Run
+   `python tools/gen_touchpoint_manifest.py` and commit the result. Editing the
+   generated table, or adding a tag so the table matches, falsifies the
+   burndown instead of fixing it.
+4. **A baseline edit is never how a check goes green — but a reduction is
+   required maintenance, not a finding.** Dropping a stem whose coupling the
+   PR actually removed (and deleting the row when it empties), lowering
+   `FROZEN_BOOL_COUNT` when a bool became a record, lowering a converted
+   file's command-plane count: all of those are demanded above, and a
+   conversion PR that does them is conforming, not weakening. What is
+   forbidden is the other direction — growing a baseline, adding a stem or a
+   row, or retagging a `vendor(...)` header. That last one un-gates the header
+   for every file above the seam, since EB3 derives its vocabulary from
+   `aetherd-touchpoint-tags.json` at runtime; it now fails as a blocking
+   `EB3-load` naming the stem rather than passing quietly, and the failure is
+   a design conversation, not a `VENDOR_STEMS_PINNED` edit. There, restructure
+   the change.
+   The two carveouts above (an EB3 vocabulary reclassification with merge-base
+   proof and explicit maintainer review; a `FROZEN_BOOL_COUNT` raise on a
+   maintainer ruling) are maintainer rulings carrying that evidence, never a
+   route to a passing check.
+5. **Touching a backend?** Read the THREADING AND LIFETIME CONTRACT in
+   `IRadioBackend.h` against the diff, and re-read the #5554 notice at the top
+   of "AI Agent Guidelines". What is pinned versus surveyed, and the probe to
+   carry into a test that drives a backend, are stated at the head of this
+   section — the point here is only that a survey result means reading is the
+   check, because no test will fail.
 
 ---
 
@@ -595,10 +913,16 @@ document why.
 
 **IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
 settings are stored via `AppSettings` (`src/core/AppSettings.h`), which
-persists to a **SQLite database** at `~/.config/AetherSDR/AetherSDR.db`
-(RFC #4603; design doc: `docs/settings-store-sqlite-design.md`). Key names use
-PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftFillColor`). Boolean
-values are stored as `"True"` / `"False"` strings.
+persists to a **SQLite database** named `AetherSDR.db` in
+`SettingsPaths::configDir()` — `QStandardPaths::GenericConfigLocation` +
+`/AetherSDR`, i.e. `~/.config/AetherSDR/` on Linux,
+`~/Library/Preferences/AetherSDR/` on macOS and `%LOCALAPPDATA%\AetherSDR\`
+on Windows. Always route store paths through `SettingsPaths`, never through
+`QStandardPaths` directly (RFC #4603; design doc:
+`docs/settings-store-sqlite-design.md`).
+Key names use PascalCase (e.g. `LastConnectedRadioSerial`,
+`DisplayFftFillColor`). Boolean values are stored as `"True"` / `"False"`
+strings.
 
 ```cpp
 auto& s = AppSettings::instance();
@@ -768,6 +1092,15 @@ level), that value must be client-only — never a value the radio also echoes.
 
 ### GUI↔Radio Sync (No Feedback Loops)
 
+> **The `commandReady` plane is FROZEN and is being removed** (#5262 M4).
+> It is described here because most of the tree still uses it, not as the
+> pattern for new work: the wire text below is Flex-only and is silently
+> dropped on HL2/Icom/ANAN/RTL, so a new control written this way is a
+> live-looking dead control on four of six radio families. A new control
+> emits a **typed intent** through `IRadioBackend` instead, and
+> `tools/check_command_plane.py` fails a file that grows its raw-command
+> count (or any file that gains one from zero).
+
 - Model setters emit `commandReady(cmd)` → `RadioModel` sends to radio
 - Radio status pushes update models via `applyStatus(kvs)`
 - Use `m_updatingFromModel` guard or `QSignalBlocker` to prevent echo loops
@@ -858,6 +1191,10 @@ The KiwiSDR browser is a clean-room, API-policy-aware public-receiver directory
 FlexRadio protocol path. Kiwi panadapters are receive-only (TX is inhibited).
 See `docs/kiwisdr-public-directory.md` (directory / API-policy behaviour) and
 `docs/kiwisdr-cleanroom-design.md` (clean-room design notes, Principle IV).
+
+The Kiwi path also serves the Web-888 (a KiwiSDR server fork) as a receiver
+family: profiles carry a receiver type, and the client applies the small wire
+deltas. See `docs/web888-cleanroom-design.md`.
 
 ---
 

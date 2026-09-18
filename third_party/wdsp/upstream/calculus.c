@@ -1,3 +1,30 @@
+/*  calculus.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2026 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+warren@wpratt.com
+
+*/
+
+
 double GG[241 * 241] = {
 7.25654181154076983e-01,    7.05038822098223439e-01,    6.85008217584843870e-01,    6.65545775927326222e-01,
 6.46635376294157682e-01,    6.28261355371665386e-01,    6.10408494407843394e-01,    5.93062006626410732e-01,

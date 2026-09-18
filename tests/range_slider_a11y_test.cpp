@@ -1,4 +1,4 @@
-// RangeSlider accessibility announcement contract (#4565).
+﻿// RangeSlider accessibility announcement contract (#4565).
 //
 // Two behaviours have to hold at the same time, and they pull against each
 // other, which is why they are pinned together here:
@@ -83,6 +83,27 @@ int main(int argc, char** argv)
         QAccessible::installUpdateHandler(captureAccessibleValueUpdate);
     const bool wasAccessible = QAccessible::isActive();
     QAccessible::setActive(true);
+
+    // setActive(true) is a request Qt refuses when the platform plugin has no
+    // accessibility backend — true of offscreen/minimal, which is what CI uses.
+    // The widget is then correct to stay silent and every announcement check
+    // below fails as `got []`. Skip rather than fail; see the longer note in
+    // relay_bar_a11y_test.cpp and issue #4360.
+    //
+    // Skipping also removes the ASSERT crash this test produced in CI: once the
+    // announcement list is empty, the .first() call below trips Qt's
+    // `ASSERT: "!isEmpty()" in qlist.h` and the test aborts rather than
+    // reporting, which is why it showed as "Subprocess aborted" and not a
+    // normal failure.
+    if (!QAccessible::isActive()) {
+        std::cerr << "SKIP: the platform plugin ("
+                  << QApplication::platformName().toStdString()
+                  << ") has no accessibility backend, so QAccessible::setActive(true) "
+                     "does not take — announcements cannot be observed here.\n";
+        QAccessible::installUpdateHandler(previousHandler);
+        QAccessible::setActive(wasAccessible);
+        return 77;
+    }
 
     // Mirrors the CW decoder Pitch slider in PanadapterApplet.
     QWidget host;

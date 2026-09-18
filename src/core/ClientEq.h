@@ -60,7 +60,8 @@ public:
     ClientEq(const ClientEq&)            = delete;
     ClientEq& operator=(const ClientEq&) = delete;
 
-    // Main thread — call before first process() and on sample-rate change.
+    // Audio owner — call before first process() and on sample-rate change.
+    // Never call concurrently with process(); parameter setters remain atomic.
     void prepare(double sampleRate);
 
     // Main thread — global enable (bypass when false). Lock-free.
@@ -97,7 +98,8 @@ public:
 
     // Sample rate this EQ was prepared at. UI uses this when computing
     // the displayed magnitude response.
-    double sampleRate() const noexcept { return m_sampleRate; }
+    double sampleRate() const noexcept
+    { return m_sampleRate.load(std::memory_order_relaxed); }
 
     // Compute the analytic magnitude of one band at a probe frequency,
     // in dB, from its target parameters. Pure function, stateless, safe
@@ -172,7 +174,8 @@ private:
                             const AtomicBand& target,
                             float smoothCoeff) noexcept;
 
-    double             m_sampleRate{24000.0};
+    // Audio owner writes in prepare(); UI reads the displayed processing rate.
+    std::atomic<double> m_sampleRate{24000.0};
     float              m_smoothCoeff{0.0f};   // recomputed in prepare()
     std::atomic<bool>  m_enabled{false};
     std::atomic<int>   m_activeBandCount{0};

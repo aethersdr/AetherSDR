@@ -179,10 +179,11 @@ QString formatCwSidetone(const CwSidetoneSummary& summary)
 {
     QStringList lines;
     lines << QStringLiteral("Audio CW sidetone summary:")
-          << QStringLiteral("  backend=\"%1\" %2 rate=%3Hz")
+          << QStringLiteral("  backend=\"%1\" %2 rate=%3Hz path=%4")
                  .arg(valueOrUnknown(summary.backend),
                       field(QStringLiteral("device"), summary.deviceDescription))
                  .arg(summary.sampleRate)
+                 .arg(valueOrUnknown(summary.timingPath))
           << QStringLiteral("  %1").arg(fallbackText(summary.fallbackOccurred,
                                                      summary.fallbackReason));
     return lines.join(QLatin1Char('\n'));

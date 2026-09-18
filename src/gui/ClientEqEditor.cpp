@@ -6,6 +6,7 @@
 #include "ClientEqParamRow.h"
 #include "ComboStyle.h"
 #include "EditorFramelessTitleBar.h"
+#include "WindowShowState.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientEq.h"
@@ -452,11 +453,10 @@ void ClientEqEditor::showForPath(ClientEqApplet::Path path)
             m_canvas->setFilterCutoffs(m_txFilterLowCutHz, m_txFilterHighCutHz);
     }
 
-    if (!isVisible()) {
-        show();
-    }
-    raise();
-    activateWindow();
+    // A window manager can iconify this frameless top-level even though it
+    // has no minimize button (taskbar click, Super+H); a bare show() would
+    // then leave it minimized.  Same fix as the Aetherial strip (#5365).
+    showAndRaiseWindow(this);
 }
 
 void ClientEqEditor::setTxFilterCutoffs(int lowHz, int highHz)

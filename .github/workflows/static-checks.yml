@@ -11,33 +11,39 @@ name: Static Checks
 # #4585's colour ratchet was folded in below per #4657, and colour-ratchet.yml
 # deleted, rather than left as a fourth near-identical workflow.
 #
-# None of these were required status checks, so consolidating them does not
-# touch branch protection (required contexts are build / check-windows /
-# check-macos).
+# `Static checks` IS a required status check (flipped 2026-09-12). The required
+# contexts are build / check-windows / check-macos / Static checks, so a red run
+# here blocks a merge — the frozen per-PR test gate
+# (tools/check_ci_test_gate.py) included, which is what the #5405 rollout was
+# for.
+#
+# WHAT THAT DOES AND DOES NOT MAKE ENFORCING. A step only blocks if it can fail
+# the job, so "required" promotes the --strict steps and nothing else. Still
+# advisory by design, and unchanged by the flip:
+#   * the accessibility step below — warnings only, never fails the job
+#     (docs/a11y.md);
+#   * EB2/EB3 findings against TRACKED baselines — those warn; only a new
+#     violation or a grown baseline errors. 102 warnings currently ride on a
+#     green run.
+#
+# This was the LAST action of the #5405 rollout and it sat undone from
+# 2026-09-04 to 2026-09-12: for eight days the gate that PR existed to enforce
+# was itself unenforced. The lesson for the next rollout ending in a manual
+# step is the durable part — nothing in CI can tell you the step was skipped,
+# and this file asserted "NOT yet required" throughout with nothing checking
+# whether that was still true.
+#
+# The `paths:` filter is gone, and that ordering is deliberate: a required
+# check a PR never triggers blocks that PR forever, so the filter has to go
+# BEFORE the flip, not with it. (Making it required first is what briefly
+# blocked eleven open PRs.) Every step is stdlib Python in seconds, so running
+# on every pull request costs less than one blocked docs-only PR. That ordering
+# held: at the flip every open PR had already run this workflow, so none was
+# stranded on a check it could not trigger.
 
 on:
   pull_request:
     branches: ["**"]
-    # Union of what the three workflows gated on, widened to src/** rather than
-    # the old src/{gui,core,models} enumeration. The scripts are seconds each
-    # and now share one runner, so a broader trigger is cheaper than a precise
-    # one — and ci.yml's own history (see the check-windows comment) is a long
-    # record of hand-maintained path allow-lists leaking. a11y-check.yml
-    # previously had NO paths filter at all and ran on docs-only PRs.
-    paths:
-      - "src/**"
-      - "resources/themes/**"
-      - "resources/shaders/**"
-      - "CMakeLists.txt"
-      - "tools/audit_colours.py"
-      - "tools/check_a11y.py"
-      - "tools/check_engine_boundary.py"
-      - "tools/check_network_timeouts.py"
-      - "tools/check_shader_dialects.py"
-      - "tools/check_test_registration.py"
-      - "tools/check_theme_seed.py"
-      - "tools/gen_theme_seed.py"
-      - ".github/workflows/static-checks.yml"
 
 # Auto-cancel superseded runs when a newer commit lands on the same PR. PR-only
 # workflow: the run_id suffix and the main guard never trigger here (ref is
@@ -57,6 +63,86 @@ permissions:
   pull-requests: write
 
 jobs:
+  # Configure-only gate for the tree-wide sanitizer switch (#5406, #5419).
+  #
+  # Nothing else in CI exercises AETHERSDR_SANITIZER in either state: the
+  # sanitizer lane injects flags through CFLAGS/CXXFLAGS/LDFLAGS and never
+  # passes -D, and every other job builds with the option off. So the one
+  # thing that could silently rot is the option itself.
+  #
+  # Configure-only, deliberately. Every assertion below is decided during
+  # cmake's configure step, which is seconds; building anything would cost
+  # tens of minutes and prove nothing extra about the switch.
+  #
+  # A separate job rather than a step in static-checks: this needs the CI
+  # image for Qt and the rest of the dependency set, and that job is a
+  # containerless stdlib-Python runner. NOTE for branch protection: this is
+  # its own check context, so it does not gate a merge until it is added to
+  # the required list alongside `Static checks`.
+  sanitizer-option:
+    name: Sanitizer option configures
+    runs-on: ubuntu-latest
+    container: ghcr.io/aethersdr/aethersdr-ci:latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: A valid sanitizer configures, an impossible one is refused
+        shell: bash
+        run: |
+          set -u
+          fail=0
+
+          # 1. thread — the configuration that was IMPOSSIBLE before #5419,
+          #    because Debug hardcoded -fsanitize=address onto four targets and
+          #    address cannot coexist with thread. This is the whole point.
+          if cmake -B /tmp/cfg-thread -S . -G Ninja \
+                   -DAETHERSDR_SANITIZER=thread > /tmp/thread.log 2>&1; then
+            grep -q 'sanitizer = thread' /tmp/thread.log \
+              || { echo "::error::configure succeeded but did not report the sanitizer"; fail=1; }
+          else
+            echo "::error::-DAETHERSDR_SANITIZER=thread failed to configure"
+            tail -30 /tmp/thread.log
+            fail=1
+          fi
+
+          # 2. The digital-voice opt-in must STAND DOWN under thread. This is
+          #    the regression #5419 introduced and caught by hand: the guard
+          #    reads CMAKE_{C,CXX}_FLAGS, add_compile_options never lands
+          #    there, and without the third source 77 translation units got
+          #    both -fsanitize=thread and -fsanitize=address,undefined — a
+          #    COMPILE error, invisible to a configure that succeeds. Assert on
+          #    the generated ninja file, not on the log line, so a reworded
+          #    message cannot make this pass vacuously.
+          if [ -f /tmp/cfg-thread/build.ninja ]; then
+            both=$(grep 'fsanitize=address' /tmp/cfg-thread/build.ninja | grep -c 'fsanitize=thread' || true)
+            if [ "${both:-0}" -ne 0 ]; then
+              echo "::error::$both translation units carry BOTH thread and address sanitizers (#4360 shape)"
+              fail=1
+            fi
+          fi
+
+          # 3. address+thread must be refused AT CONFIGURE, with the reason.
+          #    Discovering it at link is what cost five weeks in #4360.
+          if cmake -B /tmp/cfg-both -S . -G Ninja \
+                   -DAETHERSDR_SANITIZER=address,thread > /tmp/both.log 2>&1; then
+            echo "::error::address,thread configured successfully; it must be refused"
+            fail=1
+          else
+            grep -q 'cannot be combined' /tmp/both.log \
+              || { echo "::error::address,thread was refused, but not with the expected reason"; tail -20 /tmp/both.log; fail=1; }
+          fi
+
+          # 4. An unknown value must be refused too, so a typo is not silently
+          #    passed to the compiler.
+          if cmake -B /tmp/cfg-bogus -S . -G Ninja \
+                   -DAETHERSDR_SANITIZER=bogus > /tmp/bogus.log 2>&1; then
+            echo "::error::an unknown sanitizer name configured successfully"
+            fail=1
+          fi
+
+          exit "$fail"
+
   static-checks:
     name: Static checks
     runs-on: ubuntu-latest
@@ -76,14 +162,22 @@ jobs:
       #   EB1/EB2 — the engine (src/core/ + src/models/) must never depend on
       #             the UI: no gui/ header includes, no QtWidgets.
       #   EB3     — no file ABOVE the radio seam (src/gui/ + src/core/ +
-      #             src/models/, excluding the backend tree) may include a
-      #             VENDOR header; the wire is reached only through
-      #             IRadioBackend (RFC step 2.4).
+      #             src/models/ + root app-shell files, excluding the backend
+      #             tree) may include a family-specific VENDOR header; the wire
+      #             is reached only through IRadioBackend (RFC step 2.4).
       # Known legacy offenders are tracked in tools/check_engine_boundary.py and
       # warn without blocking; NEW violations fail (--strict). Baselines only
       # shrink. Full-tree scan, stdlib-only.
       - name: Engine/UI dependency direction
         run: python tools/check_engine_boundary.py --strict
+
+      # The aetherd burndown table is generated from live gui→engine includes
+      # plus its tag/status sidecars. Keep the committed catalogue synchronized
+      # and require every live touchpoint to carry a valid semantic tag so the
+      # EB3 vendor vocabulary cannot acquire an unclassified blind spot.
+      - name: aetherd touchpoint manifest
+        if: ${{ !cancelled() }}
+        run: python tools/gen_touchpoint_manifest.py --check
 
       # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
       # was 6,357 lines, over half of it 300+ test-target declarations; the split
@@ -95,6 +189,53 @@ jobs:
       - name: Test registration location
         if: ${{ !cancelled() }}
         run: python tools/check_test_registration.py --strict
+
+      # ── #5262 M2: the capability descriptor's boolean population is FROZEN.
+      # A new capability lands as a per-feature record (std::optional<Record>:
+      # engaged = present, fields = shape), not another loose bool. Booleans
+      # fission when the second radio family arrives (hasRadioSideDsp became
+      # four tiers, hostModulates became two fields), and one a backend simply
+      # forgot to set reports a definite "no" indistinguishable from a
+      # considered one.
+      #
+      # This is a ratchet rather than a convention because the convention was
+      # written down and did not hold: #5299 alone added seven bools after M2
+      # was recorded. The count only falls; converting one means lowering
+      # FROZEN_BOOL_COUNT in the same commit.
+      - name: Capability record convention
+        if: ${{ !cancelled() }}
+        run: python tools/check_capability_records.py --strict
+
+      # ── #5262 M4: raw Flex wire text above the seam is FROZEN per file.
+      # Models emitting commandReady and widgets calling sendCommand hand
+      # RadioModel::sendCmd() a wire string that is SILENTLY DROPPED on
+      # HL2/Icom/ANAN/RTL — so every unconverted control is a live-looking dead
+      # control there. M0 (#5265) made the drop loud; this stops the backlog
+      # growing while the by-subsystem conversion works through it.
+      #
+      # Per file, not a total: a total would let one subsystem's conversion pay
+      # for another's regression, and a file absent from the baseline must stay
+      # at zero so a NEW control on the old plane fails even mid-migration.
+      # Growth under src/core/backends/flex/ is deliberately not counted — that
+      # is where the encode is supposed to end up.
+      - name: Command plane above the seam
+        if: ${{ !cancelled() }}
+        run: python tools/check_command_plane.py --strict
+
+      # ── The per-PR test gate in ci.yml is FROZEN. ci.yml runs no Linux tests
+      # and a short allow-list of platform-toolchain tests behind `ctest -R`
+      # steps; the full suite runs unfiltered on every push to main
+      # (full-suite.yml) and again weekly under the sanitizers
+      # (sanitizers.yml), and every add_test() in tests/tests.cmake that the
+      # default configure builds joins both the moment it is declared. This
+      # resolves every -R pattern in every pull-request workflow against the
+      # registered names the way ctest does and fails if the result is not
+      # exactly .github/ci-test-gate.txt. Removing a test from the gate: run
+      # `python tools/check_ci_test_gate.py --update` and commit. Adding one is
+      # a diff to that maintainer-owned file, on purpose.
+      - name: Per-PR test gate is frozen
+        if: ${{ !cancelled() }}
+        run: python tools/check_ci_test_gate.py --strict
 
       # ── Network transfer-timeout ratchet (#4688 §6). A QNetworkAccessManager
       # with no transfer timeout turns a half-open connection into a reply that

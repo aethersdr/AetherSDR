@@ -71,6 +71,21 @@ static RadioInfo flexInfo()
     return i;
 }
 
+// The TX-signaling contract is independent of connection establishment. Use
+// the production backend seam without opening a Metis transport or pretending
+// an unanswered TEST-NET connection is a completed radio session.
+static void prepareTxFixture(RadioModel& model)
+{
+    model.setBackendForTest(std::make_unique<hl2::Hl2Backend>(), QStringLiteral("hl2"));
+    if (!model.automationApplySliceFixture(0, QStringLiteral("A")) || !model.slice(0)) {
+        qFatal("Could not install the TX slice fixture");
+    }
+    SliceDelta delta;
+    delta.txSlice = true;
+    delta.mode = QStringLiteral("USB");
+    model.slice(0)->applyChanges(delta);
+}
+
 // Grants access to the private predicate that gates every DAX arrangement in
 // TciServer. Declared as a friend in TciServer.h.
 //
@@ -135,13 +150,12 @@ public:
 static void testTransmitEdgeIsPublished()
 {
     RadioModel model;
-    model.connectToRadio(hl2Info());
+    prepareTxFixture(model);
 
     QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
 
     // Exactly the call TciServer::handleTrxRequest makes for a WSJT-X key.
-    // PttSource::Dax is what lets it through the local interlock preflight with
-    // no slice assigned, so this reaches the seam on a link-less model.
+    // The injected model has the explicit prerequisites to reach the seam.
     model.setTransmit(true, TransmitModel::PttSource::Dax);
     check(edges.size() == 1, "HL2 key publishes one radioTransmittingChanged");
     check(!edges.isEmpty() && edges.first().first().toBool(),
@@ -167,7 +181,7 @@ static void testTransmitEdgeIsPublished()
 static void testMoxPathPublishesTheSameEdge()
 {
     RadioModel model;
-    model.connectToRadio(hl2Info());
+    prepareTxFixture(model);
 
     QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
 
@@ -188,13 +202,11 @@ static void testMoxPathPublishesTheSameEdge()
 static void testTunePathPublishesTheSameEdge()
 {
     RadioModel model;
-    model.connectToRadio(hl2Info());
+    prepareTxFixture(model);
 
     QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
 
-    // PttSource::Dax for the same reason the key test uses it: it is the one
-    // source localPttInterlockMessage() lets through with no TX slice assigned,
-    // and TCI/DAX-initiated tune is a real path (see TransmitModel::startTune).
+    // TCI/DAX-initiated tune is a real path (see TransmitModel::startTune).
     model.transmitModel().startTune(TransmitModel::PttSource::Dax);
     check(edges.size() == 1 && edges.first().first().toBool(),
           "HL2 TUNE-on publishes radioTransmittingChanged(true)");
@@ -215,11 +227,15 @@ static void testFlexEdgeStaysInterlockOwned()
     model.connectToRadio(flexInfo());
 
     QSignalSpy edges(&model, &RadioModel::radioTransmittingChanged);
+    QSignalSpy moxCommands(&model.transmitModel(), &TransmitModel::moxCommandIssued);
     model.setTransmit(true, TransmitModel::PttSource::Dax);
+    model.transmitModel().noteActivePttSource(TransmitModel::PttSource::Dax);
     model.transmitModel().setMox(true);
     model.transmitModel().startTune(TransmitModel::PttSource::Dax);
     check(edges.isEmpty(),
           "Flex publishes no raw-TX edge from a command; interlock owns it");
+    check(moxCommands.size() == 1,
+          "Flex MOX assertion reaches command dispatch, not a preflight refusal");
 }
 
 // ── Which command plane the radio speaks ──────────────────────────────────
@@ -274,7 +290,7 @@ static void testRefusedKeyPublishesNoTransmitEdge()
     qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
 
     RadioModel model;
-    model.connectToRadio(hl2Info());
+    prepareTxFixture(model);
     check(!model.backendCapabilities().canTransmit,
           "fixture precondition: the HL2 transmit gate is closed");
 
@@ -430,6 +446,9 @@ static void testSeamBackendPromoteAlwaysAnswers()
 static void testHostModulatedTxAudio()
 {
     AudioEngine audio;
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const auto operation = coordinator.acquire(coordinator.registerActor({true, 0}), TxCoordinator::monotonicMs()).operation;
+    const auto context = coordinator.mediaContext(coordinator.registerProducer(), operation);
 
     // The exact frame TciServer hands over: float32 interleaved stereo at
     // 24 kHz, already gain- and overflow-processed, L == R (WSJT-X duplicates).
@@ -447,7 +466,7 @@ static void testHostModulatedTxAudio()
         QSignalSpy monitor(&audio, &AudioEngine::txFinalMonitorPcmReady);
         QSignalSpy packets(&audio, &AudioEngine::txPacketReady);
         audio.setHostModulation(false);
-        audio.feedDaxTxAudio(in);
+        audio.feedDaxTxAudio(in, context);
         check(monitor.isEmpty() && packets.isEmpty(),
               "no TX stream and no host modulation: TCI audio is dropped");
     }
@@ -456,7 +475,7 @@ static void testHostModulatedTxAudio()
     QSignalSpy monitor(&audio, &AudioEngine::txFinalMonitorPcmReady);
     QSignalSpy packets(&audio, &AudioEngine::txPacketReady);
     audio.setHostModulation(true);
-    audio.feedDaxTxAudio(in);
+    audio.feedDaxTxAudio(in, context);
 
     check(monitor.size() == 1,
           "host modulation: TCI audio reaches the final-monitor tap");
@@ -468,8 +487,17 @@ static void testHostModulatedTxAudio()
     // TCI audio must arrive marked client-leveled: the sender owns its level
     // (WSJT-X's Pwr slider is a digital attenuator on this very stream), so
     // the HL2 modulator bypasses its ALC for it (#4796). The mic chain emits
-    // this flag false; feedDaxTxAudio is the external-client path.
-    check(monitor.first().size() >= 2 && monitor.first().at(1).toBool(),
+    // Microphone; feedDaxTxAudio is the external-client path.
+    //
+    // COMPARE THE ENUM, NEVER toBool(). This read `at(1).toBool()` while the
+    // argument was a bool, and kept compiling when it became TxAudioSource —
+    // where toBool() goes enum -> int -> bool and reads BOTH ClientLeveled(1)
+    // and EngineGenerated(2) as true. The assertion stayed green through a
+    // deliberate reversal of the tag, which is the exact #4796 regression it
+    // exists to catch. Anything asserting on this signal compares the enum.
+    check(monitor.first().size() >= 2
+              && monitor.first().at(1).value<AetherSDR::TxAudioSource>()
+                     == AetherSDR::TxAudioSource::ClientLeveled,
           "host modulation: TCI audio is marked client-leveled at the tap");
 
     // MainWindow routes that tap to RadioModel::submitTxAudio(), whose HL2

@@ -70,6 +70,12 @@ public:
     void appendCwTextTx(const QString& text, float cost = 0.0f);
     void setCwStats(float pitchHz, float speedWpm);
     void clearCwText();
+#ifdef HAVE_DEEPFIST
+    bool deepFistEngineSelected() const;
+    void setCwBackendState(const QString& key, bool tuning, const QString& status, bool preparing,
+                         bool canRetry, const QString& detail);
+    void appendUnscoredCwText(const QString& text);
+#endif
     QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
     QPushButton* lockSpeedButton()  const { return m_lockSpeedBtn; }
     float        cwCostThreshold()  const { return m_cwCostThreshold; }
@@ -90,10 +96,18 @@ public:
     int   rttyShiftHz() const;
     float rttyBaud()    const;
     bool  rttyReverse() const;
+    // Per-character confidence below which appendRttyText() drops the
+    // character (#5028).  Confidence is max(mark,space)/(mark+space), so it
+    // lives in [0.5, 1.0]; the slider maps 0..100 onto 0.50..0.95.
+    float rttyConfThreshold() const { return m_rttyConfThreshold; }
 
     QSize sizeHint() const override { return {800, 316}; }
 
 signals:
+#ifdef HAVE_DEEPFIST
+    void cwEngineChanged(const QString& backend);
+    void cwModelActionRequested();
+#endif
     void activated(const QString& panId);
     // The canvas live-move stream (RFC #4887 phase 4; only while on-canvas).
     void canvasDragBegan(const QPoint& globalPos);
@@ -162,6 +176,10 @@ private:
 #endif
 
     // CW decode
+#ifdef HAVE_DEEPFIST
+    QComboBox*    m_cwEngineCombo{nullptr};
+    QPushButton* m_cwModelAction{nullptr};
+#endif
     QWidget*      m_cwPanel{nullptr};
     QWidget*      m_cwGrip{nullptr};
     QTextEdit*    m_cwText{nullptr};
@@ -192,6 +210,8 @@ private:
     QComboBox*    m_rttyShiftCombo{nullptr};
     QComboBox*    m_rttyBaudCombo{nullptr};
     QPushButton*  m_rttyRevBtn{nullptr};
+    QSlider*      m_rttySensSlider{nullptr};
+    float         m_rttyConfThreshold{0.5f};   // slider default 0 = the confidence floor: never drops
 };
 
 } // namespace AetherSDR

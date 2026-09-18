@@ -46,6 +46,22 @@ struct RestoredRadioState {
                                   // agcThresholdDb nearby. Matches
                                   // SliceDelta::agcThreshold, the same 0..100 scale.
 
+    // CW controls. Flex persists and reports these in the radio; a host-keyed
+    // backend has no such authority, so a backend declaring the Cw domain makes
+    // the client its radio-scoped memory. Sentinel values distinguish an older
+    // document with no CW section from deliberate zero/false selections.
+    int cwSpeed = 0;              // Cw — 5..100 WPM; 0 = not restored
+    int cwPitch = 0;              // Cw — 100..6000 Hz; 0 = not restored
+    int cwBreakIn = -1;           // Cw — 0/1; -1 = not restored
+    int cwDelay = -1;             // Cw — 0..2000 ms; -1 = not restored
+    int cwSidetone = -1;          // Cw — 0/1; -1 = not restored
+    int cwIambic = -1;            // Cw — 0/1; -1 = not restored
+    int cwIambicMode = -1;        // Cw — 0=A, 1=B; -1 = not restored
+    int cwSwapPaddles = -1;       // Cw — 0/1; -1 = not restored
+    int cwlEnabled = -1;          // Cw — 0/1; -1 = not restored
+    int monGainCw = -1;           // Cw — 0..100; -1 = not restored
+    int monPanCw = -1;            // Cw — 0..100; -1 = not restored
+
     // Per-family extension document (per-band gain/drive maps live here —
     // RFC PR 3). Versioned by its owner. GATED PER DOMAIN at the top level:
     // the engine hands over only the sub-objects named for declared domains —
@@ -66,6 +82,10 @@ struct RestoredRadioState {
         return rfFrequencyHz == 0.0 && mode.isEmpty() && filterLowHz == 0.0
                && filterHighHz == 0.0 && sampleRateHz == 0
                && agcMode.isEmpty() && agcThreshold < 0
+               && cwSpeed == 0 && cwPitch == 0 && cwBreakIn < 0
+               && cwDelay < 0 && cwSidetone < 0 && cwIambic < 0
+               && cwIambicMode < 0 && cwSwapPaddles < 0 && cwlEnabled < 0
+               && monGainCw < 0 && monPanCw < 0
                && extension.isEmpty();
     }
 };

@@ -18,6 +18,7 @@
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
 #include "core/N1MMSpotClient.h"
+#include "models/TransmitModel.h"
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #ifdef HAVE_MQTT
@@ -87,7 +88,7 @@ void MainWindow::wireSpotSubsystem()
     // RX decoder uses rx:true; TX sidetone decoder uses rx:false.
     // Any MQTT subscriber (e.g. a contest logger) receives the stream
     // without additional AetherSDR interfaces.
-    connect(&m_cwDecoder,   &CwDecoder::textDecoded, this,
+    connect(&m_cwDecoder,   &CwRxModel::textDecoded, this,
             [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, true);  });
     connect(&m_cwDecoderTx, &CwDecoder::textDecoded, this,
             [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, false); });
@@ -100,6 +101,45 @@ void MainWindow::wireSpotSubsystem()
             this, &MainWindow::publishRadioStateMqtt);
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool) { publishRadioStateMqtt(); });
+    // RF drive and the max-power ceiling it scales against (#5518). Without these
+    // the fields would publish once and then sit stale until the next retune or
+    // PTT — the topic has no other drive-change edge. rfPowerChanged rather than
+    // the catch-all stateChanged() because the radio restores per-band power on
+    // QSY, so drive moves on its own and that edge must stay distinguishable.
+    // Through the coalesce timer, not a direct publish: dragging the drive slider
+    // emits per step, exactly the reason freq/mode already go through it.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::rfPowerChanged,
+            this, [this](int) { m_radioStateCoalesceTimer.start(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::maxPowerLevelChanged,
+            this, [this](int) { m_radioStateCoalesceTimer.start(); });
+    // The provenance edge, which no value-change signal can carry (#5733 review).
+    // A radio reporting its drive as 100 into a model already holding the 100
+    // default emits nothing — assign() returns false — so without this the very
+    // first status of a session went unpublished and an operator running full
+    // drive never saw `drive` on the topic at all. Also covers drive crossing
+    // between radio-confirmed and operator-requested at an unchanged value.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::powerProvenanceChanged,
+            this, [this] { m_radioStateCoalesceTimer.start(); });
+    // Connect/disconnect edges. On disconnect this is the message that retires the
+    // session's power: TransmitModel::resetState() has already cleared its
+    // have-status latch by the time this fires (RadioModel::onDisconnected calls
+    // it well before emitting connectionStateChanged(false)), so the payload drops
+    // drive/max_power_level and carries connected:false instead of leaving a dead
+    // radio's drive on the topic for the next session to inherit. Direct publish,
+    // not coalesced — an interlock should not wait 150 ms to learn the radio is
+    // gone.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool) { refreshRadioStateDriveAuthority(); publishRadioStateMqtt(); });
+    // A family switch rebuilds the backend without a disconnect edge, so the
+    // cached authority has to follow it or the next radio publishes under the
+    // previous one's answer (#5733 review).
+    // …and publish, not merely re-cache. teardownBackend() clears the latches
+    // through the deliberately signal-free resetPowerProvenance(), so without a
+    // publish here nothing retires the OUTGOING radio's drive from the topic: a
+    // switch whose following connect stalls leaves a last-known-value subscriber
+    // holding the previous radio's 100% indefinitely (#5733 review).
+    connect(&m_radioModel, &RadioModel::backendRebuilt,
+            this, [this] { refreshRadioStateDriveAuthority(); publishRadioStateMqtt(); });
     // Debounce timer for end-of-CWX detection (queueEmpty unreliable with sync_cwx=0).
     // Fires 1 s after the last tx:false with no intervening tx:true = transmission done.
     m_cwxTxEndTimer.setSingleShot(true);
@@ -137,10 +177,16 @@ void MainWindow::wireSpotSubsystem()
                               << "radio has no radio-side CW keyer";
             return;
         }
+        const QString rejection = m_radioModel.cwTextValidationError(text);
+        if (!rejection.isEmpty()) {
+            qCWarning(lcMqtt) << "cw/transmit ignored:" << rejection;
+            return;
+        }
         auto& tx = m_radioModel.transmitModel();
         const int wpm = obj.value(QStringLiteral("speed_wpm")).toInt(0);
         const int hz  = obj.value(QStringLiteral("pitch_hz")).toInt(0);
-        const bool changeWpm = (wpm >= 5 && wpm <= 100);
+        const bool changeWpm = (wpm >= m_radioModel.cwTextMinWpm()
+                                && wpm <= m_radioModel.cwTextMaxWpm());
         const bool changeHz  = (hz >= 100 && hz <= 6000);
         if (!m_cwxTransmitting) {
             m_cwxSavedWpm = changeWpm ? m_radioModel.cwxModel().speed() : 0;
@@ -432,7 +478,8 @@ void MainWindow::wireSpotSubsystem()
         if (isDuplicateSpot(spot)) return;
         const int lifetimeSec = spotLifetimeSeconds(spot, source);
         const QString spotColor = spotColorForSource(spot, source);
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             addPassiveSpotToModel(spot, source, spotColor, lifetimeSec);
             return;
         }
@@ -462,7 +509,8 @@ void MainWindow::wireSpotSubsystem()
     spotCmdTimer->start(1000);
     connect(spotCmdTimer, &QTimer::timeout, this, [this] {
         if (m_spotCmdBatch.isEmpty() || !m_radioModel.isConnected()) return;
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             m_spotCmdBatch.clear();
             return;
         }
@@ -707,7 +755,8 @@ void MainWindow::wireSpotSubsystem()
             cmd += " comment=" + QString(colored.comment).replace(' ', QChar(0x7f));
         if (!colored.color.isEmpty())
             cmd += " color=" + colored.color;
-        if (!SpotCommandPolicy::shouldSendSpotAddCommands()) {
+        if (!SpotCommandPolicy::shouldSendSpotAddCommands(
+                m_radioModel.backendCapabilities().alwaysUseClientSideSpots)) {
             addPassiveSpotToModel(colored, "WSJT-X", colored.color,
                                   spotLifetimeSeconds(colored, "WSJT-X"));
             return;

@@ -18,10 +18,12 @@ class CwSidetoneGenerator;
 //                             Pulse/PipeWire pull-mode happy).
 //   - CwSidetonePortAudioSink — PortAudio direct callback path.  Sub-5 ms
 //                               latency on Linux PipeWire and macOS
-//                               CoreAudio.  Built only when HAVE_PORTAUDIO.
+//                               CoreAudio.  Built only when HAVE_PORTAUDIO,
+//                               and not the default on Windows (#5713).
 //
 // AudioEngine owns one of these via std::unique_ptr; the factory picks
-// based on build flag + AppSettings["CwSidetoneBackend"].
+// based on build flag, platform and AppSettings["CwSidetoneBackend"], by
+// the rule in CwSidetoneBackendPolicy.h.
 class CwSidetoneSinkBackend {
 public:
     virtual ~CwSidetoneSinkBackend() = default;

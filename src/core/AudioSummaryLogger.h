@@ -31,6 +31,7 @@ struct CwSidetoneSummary {
     QString backend;
     QString deviceDescription;
     int sampleRate{0};
+    QString timingPath;  // "pull" (PortAudio callback) or "push" (QAudioSink timer)
     bool fallbackOccurred{false};
     QString fallbackReason;
 };

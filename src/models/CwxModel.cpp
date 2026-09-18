@@ -2,6 +2,9 @@
 #include "core/LogManager.h"
 #include <QDebug>
 #include <QMap>
+#include <QScopeGuard>
+#include <QPointer>
+#include <limits>
 
 namespace AetherSDR {
 
@@ -15,6 +18,17 @@ inline int clampWpm(int wpm) { return qBound(5, wpm, 100); }
 CwxModel::CwxModel(QObject* parent)
     : QObject(parent)
 {}
+
+CwxModel::~CwxModel()
+{
+    m_queueValid->store(false, std::memory_order_release);
+}
+
+CwxModel::TransmissionPermit CwxModel::queuedTransmissionPermit() const
+{
+    const std::shared_ptr<std::atomic<bool>> valid = m_queueValid;
+    return [valid] { return valid->load(std::memory_order_acquire); };
+}
 
 QString CwxModel::macro(int idx) const
 {
@@ -99,7 +113,45 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
     return segs;
 }
 
-void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
+CwxModel::TransmissionPermit CwxModel::admitTransmission(const TransmissionRoute& route)
+{
+    const QPointer<CwxModel> self(this);
+    if (m_clearing) {
+        return {};
+    }
+    const SendAvailability available = m_sendAvailability;
+    if (available && !available()) {
+        qCWarning(lcCw) << "CWX send refused: TUNE is active (#5422)";
+        return {};
+    }
+    if (!self) { return {}; }
+    const int epoch = m_drainEpoch;
+    const TransmissionAdmission admission = route.admit ? route.admit : m_transmissionAdmission;
+    const TransmissionPermit permit = admission ? admission() : TransmissionPermit{};
+    if (!self) { return {}; }
+    const bool permitted = !admission || (permit && permit());
+    if (!self || !permitted) {
+        return {};
+    }
+    return [self, permit, epoch] {
+        return self && epoch == self->m_drainEpoch && (!permit || permit()) && self;
+    };
+}
+
+void CwxModel::dispatchCommand(const QString& command, int epoch, int nChars,
+                               const TransmissionRoute& route)
+{
+    if (route.command) {
+        route.command(command, epoch, nChars);
+    } else if (nChars >= 0) {
+        emit replyCommandReady(command, epoch, nChars);
+    } else {
+        emit commandReady(command);
+    }
+}
+
+void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs, const TransmissionPermit& permit,
+                                const TransmissionRoute& route)
 {
     // Find last segment with non-empty text — that block's cwx send goes via
     // replyCommandReady so RadioModel can capture the radio_index and detect
@@ -110,71 +162,156 @@ void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
     }
 
     int cmdWpm = m_speed;
+    const int epoch = m_drainEpoch;
+    const QPointer<CwxModel> self(this);
+    const auto restoreSpeed = qScopeGuard([self, &cmdWpm, epoch, &route] {
+        // This is cleanup, not a fresh keying intent. Every early return must
+        // restore the base speed too. An epoch change means clearBuffer already
+        // restored it, or the original session has gone away; don't write into
+        // a replacement batch/session from this old stack frame.
+        if (self && epoch == self->m_drainEpoch && cmdWpm != self->m_speed) {
+            ++self->m_pendingWpmEchoes;
+            self->dispatchCommand(QString("cwx wpm %1").arg(self->m_speed), epoch, -1, route);
+        }
+    });
     for (int i = 0; i < segs.size(); ++i) {
+        if (!permit()) {
+            return;
+        }
         const SpeedSegment& seg = segs[i];
         if (seg.wpm != cmdWpm) {
-            emit commandReady(QString("cwx wpm %1").arg(seg.wpm));
             ++m_pendingWpmEchoes;   // swallow this transient's echo (#272)
             cmdWpm = seg.wpm;
+            dispatchCommand(QString("cwx wpm %1").arg(seg.wpm), epoch, -1, route);
+        }
+        if (!permit()) {
+            return;
         }
         QString encoded = seg.text;
         encoded.replace(' ', QChar(0x7f));
         if (!encoded.isEmpty()) {
             const QString cmd =
                 QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++);
-            if (i == lastNonEmpty)
+            if (i == lastNonEmpty) {
                 // Segments queue contiguously, so the last segment's start
                 // (radio_index) + its length - 1 is the last char of the whole
                 // message — the correct batch-end index to watch. (#3949)
-                emit replyCommandReady(cmd, m_drainEpoch, seg.text.length());
-            else
-                emit commandReady(cmd);
+                dispatchCommand(cmd, m_drainEpoch, seg.text.length(), route);
+            } else {
+                dispatchCommand(cmd, m_drainEpoch, -1, route);
+            }
         }
-        if (!seg.text.isEmpty())
-            emit transmissionRequested(seg.text, seg.wpm);
+        if (!permit()) {
+            return;
+        }
+        if (!seg.text.isEmpty() && !notifyTransmission(seg.text, seg.wpm, permit, route)) {
+            return;
+        }
     }
-    // Restore authoritative WPM if transient changes were made
-    if (cmdWpm != m_speed) {
-        emit commandReady(QString("cwx wpm %1").arg(m_speed));
-        ++m_pendingWpmEchoes;   // swallow the restore's echo too (#272)
+}
+
+bool CwxModel::notifyTransmission(const QString& text, int wpm, const TransmissionPermit& permit,
+                                  const TransmissionRoute& route)
+{
+    if (!permit()) {
+        return false;
     }
+    const TextSender sender = route.text ? route.text : m_textSender;
+    if (sender && !sender(text, wpm)) {
+        if (permit()) {
+            clearBuffer();
+        }
+        return false;
+    }
+    if (!permit()) {
+        return false;
+    }
+    emit transmissionRequested(text, wpm);
+    return permit();
 }
 
 void CwxModel::send(const QString& text)
 {
-    if (text.isEmpty()) return;
-    emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep));
+    send(text, {});
+}
+
+void CwxModel::send(const QString& text, const TransmissionRoute& route)
+{
+    if (text.isEmpty()) {
+        return;
+    }
+    const TransmissionPermit permit = admitTransmission(route);
+    if (!permit) {
+        return;
+    }
+    if (!m_speedModifiersEnabled) {
+        notifyTransmission(text, m_speed, permit, route);
+    } else {
+        emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep), permit, route);
+    }
+    if (permit()) {
+        if (route.dispatched) {
+            route.dispatched(m_drainEpoch, false);
+        } else {
+            emit transmissionDispatched(m_drainEpoch, false);
+        }
+    }
 }
 
 void CwxModel::sendChar(const QString& ch)
 {
+    sendChar(ch, {});
+}
+
+void CwxModel::sendChar(const QString& ch, const TransmissionRoute& route)
+{
     if (ch.isEmpty()) return;
+    const TransmissionPermit permit = admitTransmission(route);
+    if (!permit) {
+        return;
+    }
     QString encoded = ch;
     encoded.replace(' ', QChar(0x7f));
     // Live-mode chars go via the reply path (not fire-and-forget commandReady)
     // so each char's radio_index advances the drain watch. Without this a
     // live-typing-only session arms no watch and the ~60 s stuck-TX survives,
     // and chars typed after a macro would be truncated by a stale watch. (#3949)
-    emit replyCommandReady(
-        QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++),
-        m_drainEpoch, ch.length());
-    emit transmissionRequested(ch, m_speed);
+    const QString command = QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++);
+    if (route.command) { route.command(command, m_drainEpoch, ch.length()); }
+    else { emit replyCommandReady(command, m_drainEpoch, ch.length()); }
+    if (permit() && notifyTransmission(ch, m_speed, permit, route)) {
+        if (route.dispatched) { route.dispatched(m_drainEpoch, false); }
+        else { emit transmissionDispatched(m_drainEpoch, false); }
+    }
 }
 
 void CwxModel::sendMacro(int idx)
 {
+    sendMacro(idx, {});
+}
+
+void CwxModel::sendMacro(int idx, const TransmissionRoute& route)
+{
     if (idx < 1 || idx > 12) return;
+    const TransmissionPermit permit = admitTransmission(route);
+    if (!permit) {
+        return;
+    }
     const QString text = m_macros[idx - 1];
     if (text.isEmpty()) {
         // Local copy not yet synced (the macroN= status is still pending in the
         // first seconds after connect) — fall back to radio-side expansion so an
         // early F-key press still transmits instead of silently keying nothing.
         // The radio is authoritative for stored macros (Principle II).
-        // Caveat: this fire-and-forget path can't arm the reply-driven drain
-        // watch (no client-side char count), so a macro keyed before sync
-        // completes relies on the radio's own break-in for TX release. It's a
-        // narrow first-few-seconds window; keying something beats keying nothing.
-        emit commandReady(QString("cwx macro send %1").arg(idx));
+        // No client-side character count exists, so this can only complete
+        // local dispatch, never claim that the radio has finished transmitting.
+        const QString command = QString("cwx macro send %1").arg(idx);
+        if (route.command) { route.command(command, m_drainEpoch, -1); }
+        else { emit commandReady(command); }
+        if (permit()) {
+            if (route.dispatched) { route.dispatched(m_drainEpoch, true); }
+            else { emit transmissionDispatched(m_drainEpoch, true); }
+        }
         return;
     }
     // Expand speed modifiers client-side via cwx send blocks rather than
@@ -182,7 +319,11 @@ void CwxModel::sendMacro(int idx)
     // single cwx send identical in effect to the radio-side expansion, but
     // the unified path ensures + / - prefixes are never forwarded to the
     // radio where they would be misread as prosigns (AR / hyphen).
-    emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep));
+    emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep), permit, route);
+    if (permit()) {
+        if (route.dispatched) { route.dispatched(m_drainEpoch, false); }
+        else { emit transmissionDispatched(m_drainEpoch, false); }
+    }
 }
 
 void CwxModel::saveMacro(int idx, const QString& text)
@@ -219,16 +360,31 @@ void CwxModel::erase(int numChars)
 
 void CwxModel::clearBuffer()
 {
+    if (m_clearing) {
+        return;
+    }
+    m_clearing = true;
+    const QPointer<CwxModel> self(this);
+    const auto clearing = qScopeGuard([self] { if (self) { self->m_clearing = false; } });
     resetDrainWatch();    // abort pending watch + bump epoch (#3949)
     m_pendingWpmEchoes = 0;   // abort — abandon any pending transient suppression (#272)
     // Re-anchor WPM before clearing so ESC can't leave the radio parked at
     // a transient speed that was in-flight from an expandedSend sequence.
     emit commandReady(QString("cwx wpm %1").arg(m_speed));
+    if (!self) { return; }
     emit commandReady("cwx clear");
+    if (!self) { return; }
     emit transmissionCancelled();
 }
 
 void CwxModel::resetDrainWatch()
+{
+    m_queueValid->store(false, std::memory_order_release);
+    m_queueValid = std::make_shared<std::atomic<bool>>(true);
+    abandonDrainWatch();
+}
+
+void CwxModel::abandonDrainWatch()
 {
     // Bumping the epoch invalidates any in-flight cwx-send reply so it can't
     // re-arm the watch for a batch the radio has discarded. Clearing the end
@@ -249,6 +405,7 @@ void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch, i
         return;
     if (resultCode != 0) {
         qCWarning(lcCw) << "CwxModel: cwx send failed, result=" << resultCode;
+        clearBuffer();
         return;
     }
     // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83.
@@ -257,6 +414,7 @@ void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch, i
     const int radioIndex = indexStr.toInt(&ok);
     if (!ok || radioIndex < 0) {
         qCWarning(lcCw) << "CwxModel: failed to parse radio_index from reply body:" << body;
+        clearBuffer();
         return;
     }
     // radio_index is the FIRST-char (insertion-start) queue position of this
@@ -264,8 +422,11 @@ void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch, i
     // is radio_index + nChars - 1. Verified on FLEX-6500 fw 4.2.20.41343 (see
     // handleSendReply() doc in the header). nChars is always >= 1 for a real
     // send; guard defensively so an empty batch can't retract the index. (#3949)
-    if (nChars < 1)
+    if (nChars < 1 || radioIndex > std::numeric_limits<int>::max() - (nChars - 1)) {
+        qCWarning(lcCw) << "CwxModel: invalid character count in send reply";
+        clearBuffer();
         return;
+    }
     const int endIndex = radioIndex + nChars - 1;
     // Only ever advance the watch, never retract it. cwx send replies on the
     // single command socket are normally ordered, but if two back-to-back
@@ -285,6 +446,16 @@ void CwxModel::setSpeed(int wpm)
     if (wpm != m_speed) {
         m_speed = wpm;
         emit commandReady(QString("cwx wpm %1").arg(m_speed));
+        emit speedChanged(m_speed);
+        emit speedCommandIssued(m_speed);
+    }
+}
+
+void CwxModel::adoptSpeed(int wpm)
+{
+    wpm = clampWpm(wpm);
+    if (wpm != m_speed) {
+        m_speed = wpm;
         emit speedChanged(m_speed);
     }
 }

@@ -1,7 +1,10 @@
 #include "SliceModel.h"
 #include "core/DigitalVoiceModeRegistry.h"
+#include "core/DtcsCodes.h"
 #include "core/KiwiSdrProtocol.h"
 #include <QDebug>
+
+#include <cmath>
 
 namespace AetherSDR {
 
@@ -334,6 +337,7 @@ void SliceModel::setLocked(bool locked)
     // FlexAPI: "slice lock <id>" / "slice unlock <id>"
     sendCommand(locked ? QString("slice lock %1").arg(m_id)
                        : QString("slice unlock %1").arg(m_id));
+    emit lockCommandIssued(locked);
     if (!locked) {
         m_lockedFeedbackTimer.stop();
         setLockedFeedbackActive(false);
@@ -558,6 +562,46 @@ void SliceModel::setAgcMode(const QString& mode)
     emit agcCommandIssued(m_agcMode, m_agcThreshold);
 }
 
+int SliceModel::receiveAgcThresholdMinimum() const
+{
+    return m_externalReceiveAudioReplacement ? KiwiSdrProtocol::kAgcThresholdMinDb : 0;
+}
+
+int SliceModel::receiveAgcThresholdMaximum() const
+{
+    return m_externalReceiveAudioReplacement ? KiwiSdrProtocol::kAgcThresholdMaxDb : 100;
+}
+
+bool SliceModel::agcTKnobUsesOffLevel() const
+{
+    return receiveAgcMode() == QStringLiteral("off");
+}
+
+int SliceModel::agcTKnobMinimum() const
+{
+    return agcTKnobUsesOffLevel() ? 0 : receiveAgcThresholdMinimum();
+}
+
+int SliceModel::agcTKnobMaximum() const
+{
+    return agcTKnobUsesOffLevel() ? 100 : receiveAgcThresholdMaximum();
+}
+
+int SliceModel::agcTKnobLevel() const
+{
+    return agcTKnobUsesOffLevel() ? receiveAgcOffLevel() : receiveAgcThreshold();
+}
+
+// The setters clamp and de-duplicate; nothing is re-asserted here.
+void SliceModel::setAgcTKnobLevel(int value)
+{
+    if (agcTKnobUsesOffLevel()) {
+        setAgcOffLevel(value);
+    } else {
+        setAgcThreshold(value);
+    }
+}
+
 void SliceModel::setAgcThreshold(int value)
 {
     if (m_externalReceiveAudioReplacement) {
@@ -619,6 +663,14 @@ void SliceModel::setSquelch(bool on, int level)
     level = qBound(0, level, 100);
     const bool onChanged = (m_squelchOn != on);
     const bool levelChanged = (m_squelchLevel != level);
+
+    // Optimistic local changes are not fresh readback for a later reattach.
+    if (onChanged) {
+        m_squelchOnKnown = false;
+    }
+    if (levelChanged) {
+        m_squelchLevelKnown = false;
+    }
 
     m_squelchOn    = on;
     m_squelchLevel = level;
@@ -767,6 +819,7 @@ void SliceModel::setFmToneMode(const QString& mode)
     if (m_fmToneMode == mode) return;
     m_fmToneMode = mode;
     sendCommand(QString("slice set %1 fm_tone_mode=%2").arg(m_id).arg(mode));
+    emit fmToneModeCommandIssued(mode);
     emit fmToneModeChanged(mode);
 }
 
@@ -775,7 +828,28 @@ void SliceModel::setFmToneValue(const QString& value)
     if (m_fmToneValue == value) return;
     m_fmToneValue = value;
     sendCommand(QString("slice set %1 fm_tone_value=%2").arg(m_id).arg(value));
+    emit fmToneValueCommandIssued(value.toDouble());
     emit fmToneValueChanged(value);
+}
+
+void SliceModel::setFmToneRxValue(const QString& value)
+{
+    if (m_fmToneRxValue == value) {
+        return;
+    }
+    m_fmToneRxValue = value;
+    emit fmToneRxValueCommandIssued(value.toDouble());
+    emit fmToneRxValueChanged(value);
+}
+
+void SliceModel::setFmDtcs(int code, bool txReverse, bool rxReverse)
+{
+    if (!isCanonicalDtcsCode(code)) {
+        return;
+    }
+    // Operator intent is not radio state. The IC-9700 echoes 1B 02, and only
+    // that reply reaches applyChanges() and fmDtcsChanged().
+    emit fmDtcsCommandIssued(code, txReverse, rxReverse);
 }
 
 void SliceModel::setRepeaterOffsetDir(const QString& dir)
@@ -783,6 +857,7 @@ void SliceModel::setRepeaterOffsetDir(const QString& dir)
     if (m_repeaterOffsetDir == dir) return;
     m_repeaterOffsetDir = dir;
     sendCommand(QString("slice set %1 repeater_offset_dir=%2").arg(m_id).arg(dir));
+    emit repeaterOffsetDirCommandIssued(dir);
     emit repeaterOffsetDirChanged(dir);
 }
 
@@ -792,7 +867,66 @@ void SliceModel::setFmRepeaterOffsetFreq(double mhz)
     m_fmRepeaterOffsetFreq = mhz;
     sendCommand(QString("slice set %1 fm_repeater_offset_freq=%2")
                     .arg(m_id).arg(mhz, 0, 'f', 6));
+    emit fmRepeaterOffsetCommandIssued(mhz * 1.0e6);
     emit fmRepeaterOffsetFreqChanged(mhz);
+}
+
+void SliceModel::applyRecalledFmRepeater(const QString& direction, double offsetMhz,
+                                         const QString& toneMode, double toneHz)
+{
+    // Local-memory radios have no vendor memory command to decode back through
+    // the model.  Apply the requested snapshot locally as one unit, then emit a
+    // grouped backend intent.  This deliberately avoids the four Flex wire
+    // strings above: RadioModel calls it only for the local-memory path.
+    applyRecalledFmRepeaterState(
+        direction, offsetMhz, toneMode, toneHz, 0.0);
+    emit fmRepeaterRecallCommandIssued(direction, offsetMhz * 1.0e6,
+                                       toneMode, toneHz);
+}
+
+void SliceModel::applyRecalledFmRepeaterState(
+    const QString& direction, double offsetMhz,
+    const QString& toneMode, double toneValue, double rxToneValue,
+    int dtcsCode, bool dtcsTxReverse, bool dtcsRxReverse)
+{
+    if (m_repeaterOffsetDir != direction) {
+        m_repeaterOffsetDir = direction;
+        emit repeaterOffsetDirChanged(direction);
+    }
+    if (!qFuzzyCompare(m_fmRepeaterOffsetFreq, offsetMhz)) {
+        m_fmRepeaterOffsetFreq = offsetMhz;
+        emit fmRepeaterOffsetFreqChanged(offsetMhz);
+    }
+    const QString toneText = QString::number(toneValue, 'f', 1);
+    if (m_fmToneValue != toneText) {
+        m_fmToneValue = toneText;
+        emit fmToneValueChanged(m_fmToneValue);
+    }
+    const QString rxToneText = QString::number(rxToneValue, 'f', 1);
+    if (rxToneValue > 0.0 && m_fmToneRxValue != rxToneText) {
+        m_fmToneRxValue = rxToneText;
+        emit fmToneRxValueChanged(m_fmToneRxValue);
+    }
+    if (dtcsCode >= 0 && (m_fmDtcsCode != dtcsCode
+        || m_fmDtcsTxReverse != dtcsTxReverse
+        || m_fmDtcsRxReverse != dtcsRxReverse)) {
+        m_fmDtcsCode = dtcsCode;
+        m_fmDtcsTxReverse = dtcsTxReverse;
+        m_fmDtcsRxReverse = dtcsRxReverse;
+        emit fmDtcsChanged(dtcsCode, dtcsTxReverse, dtcsRxReverse);
+    }
+    if (m_fmToneMode != toneMode) {
+        m_fmToneMode = toneMode;
+        emit fmToneModeChanged(toneMode);
+    }
+}
+
+double SliceModel::txOffsetForDirection(const QString& dir, double magnitudeMhz)
+{
+    const double magnitude = std::abs(magnitudeMhz);
+    if (dir == QLatin1String("up"))   return  magnitude;
+    if (dir == QLatin1String("down")) return -magnitude;
+    return 0.0;   // simplex, and anything not a duplex direction
 }
 
 void SliceModel::setTxOffsetFreq(double mhz)
@@ -1033,6 +1167,32 @@ void SliceModel::emitLetterRefresh()
 
 void SliceModel::applyChanges(const SliceDelta& d)
 {
+    const ReceiveObservation previousObservation = m_receiveObservation;
+    if (d.mode) {
+        // A mode change invalidates the old mode's passband. Partial filter
+        // reports may restore each edge independently, never from UI state.
+        if (m_receiveObservation.mode != d.mode) {
+            m_receiveObservation.filterLowHz.reset();
+            m_receiveObservation.filterHighHz.reset();
+        }
+        m_receiveObservation.mode = d.mode->isEmpty() || d.mode->size() > 32
+            ? std::nullopt : d.mode;
+    }
+    if (d.filterLow) {
+        m_receiveObservation.filterLowHz = d.filterLow;
+    }
+    if (d.filterHigh) {
+        m_receiveObservation.filterHighHz = d.filterHigh;
+    }
+    if (d.audioGain) {
+        const double gain = *d.audioGain;
+        m_receiveObservation.gain = std::isfinite(gain) && gain >= 0 && gain <= 100
+                && std::floor(gain) == gain
+            ? std::optional<int>(static_cast<int>(gain)) : std::nullopt;
+    }
+    if (d.audioMute) {
+        m_receiveObservation.muted = d.audioMute;
+    }
     // aetherd RFC 2.3: the Flex slice-status wire decode moved to
     // FlexBackend::decodeSliceStatus, which emits sliceChanged(sliceId, changes)
     // with normalized, canonically-named typed values. This applies those
@@ -1064,6 +1224,9 @@ void SliceModel::applyChanges(const SliceDelta& d)
 
     if (d.frequency.has_value()) {
         const double f = *d.frequency;
+        m_frequencyReportedKnown = std::isfinite(f)
+            && f > 0.0 && f <= kMaximumReportedFrequencyMhz;
+        m_reportedFrequency = m_frequencyReportedKnown ? f : 0.0;
         // qFuzzyCompare fails when either value is 0.0 — use explicit epsilon
         if (std::abs(m_frequency - f) > 1e-9) {
             m_frequency = f;
@@ -1433,6 +1596,8 @@ void SliceModel::applyChanges(const SliceDelta& d)
         emit agcOffLevelChanged(m_agcOffLevel);
     }
     if (d.squelchOn.has_value() || d.squelchLevel.has_value()) {
+        m_squelchOnKnown |= d.squelchOn.has_value();
+        m_squelchLevelKnown |= d.squelchLevel.has_value();
         if (d.squelchOn.has_value())
             m_squelchOn = *d.squelchOn;
         if (d.squelchLevel.has_value()) {
@@ -1515,6 +1680,25 @@ void SliceModel::applyChanges(const SliceDelta& d)
         m_fmToneValue = QString::number(v, 'f', 1);
         emit fmToneValueChanged(m_fmToneValue);
     }
+    if (d.fmToneRxValue.has_value()) {
+        const double v = *d.fmToneRxValue;
+        m_fmToneRxValue = QString::number(v, 'f', 1);
+        emit fmToneRxValueChanged(m_fmToneRxValue);
+    }
+    if (d.fmDtcsCode.has_value() || d.fmDtcsTxReverse.has_value()
+        || d.fmDtcsRxReverse.has_value()) {
+        const int code = d.fmDtcsCode.value_or(m_fmDtcsCode);
+        const bool txReverse = d.fmDtcsTxReverse.value_or(m_fmDtcsTxReverse);
+        const bool rxReverse = d.fmDtcsRxReverse.value_or(m_fmDtcsRxReverse);
+        if (code != m_fmDtcsCode || txReverse != m_fmDtcsTxReverse
+            || rxReverse != m_fmDtcsRxReverse) {
+            m_fmDtcsCode = code;
+            m_fmDtcsTxReverse = txReverse;
+            m_fmDtcsRxReverse = rxReverse;
+            emit fmDtcsChanged(m_fmDtcsCode, m_fmDtcsTxReverse,
+                               m_fmDtcsRxReverse);
+        }
+    }
     if (d.repeaterOffsetDir.has_value()) {
         m_repeaterOffsetDir = *d.repeaterOffsetDir;
         emit repeaterOffsetDirChanged(m_repeaterOffsetDir);
@@ -1556,10 +1740,34 @@ void SliceModel::applyChanges(const SliceDelta& d)
         if (changed) emit stepChanged(m_stepHz, m_stepList);
     }
 
+    if (d.frequency.has_value() && !freqChanged) {
+        // Also report a same-value echo following an optimistic desktop tune.
+        // A changed value already notifies observation consumers below.
+        emit frequencyReported();
+    }
     if (freqChanged)
         emit frequencyChanged(m_frequency);
     if (modeChanged_)   emit modeChanged(m_mode);
     if (filterChanged_) emit filterChanged(m_filterLow, m_filterHigh);
+    if (previousObservation != m_receiveObservation) {
+        emit receiveObservationChanged();
+    }
+    if (d.mode) {
+        emit receiveModeReported();
+    }
+}
+
+void SliceModel::invalidateFrequencyObservation()
+{
+    if (m_receiveObservation != ReceiveObservation{}) {
+        m_receiveObservation = {};
+        emit receiveObservationChanged();
+    }
+    if (m_frequencyReportedKnown) {
+        m_frequencyReportedKnown = false;
+        m_reportedFrequency = 0.0;
+        emit frequencyReported();
+    }
 }
 
 void SliceModel::applyRecalledStepHz(int hz)

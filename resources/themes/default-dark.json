@@ -37,6 +37,7 @@
             "spectrum": "{color.gray.950}",
             "app":      "{color.gray.900}"
           },
+          "map": { "darkBackground": "#18212b", "darkDetail": "#c8d8e8" },
           "canvas": {
             "background": "#08080d",
             "dots":       "#50e6f0fa"
@@ -47,6 +48,8 @@
           "accent.warning": "{color.amber.500}",
           "accent.danger":  "{color.red.500}",
           "accent.success": "{color.green.500}",
+          "waterfall.timeMarker.foreground": "#c8d8e8",
+          "waterfall.timeMarker.background": "#dc0f0f1a",
           "waterfall.live":    "{color.red.500}",
           "waterfall.history": "{color.gray.500}",
           "tx.mox.border":       "#d08020",
@@ -58,6 +61,10 @@
             "secondary": "{color.gray.400}",
             "label":     "{color.gray.500}",
             "disabled":  "{color.gray.600}"
+          },
+          "control": {
+            "inactive":    "{color.gray.400}",
+            "unavailable": "{color.gray.600}"
           },
           "border": {
             "subtle": "{color.gray.850}",
@@ -91,7 +98,40 @@
             "trace":    "{color.blue.500}",
             "peakHold": "{color.amber.500}",
             "average":  "{color.gray.400}",
-            "grid":     "{color.gray.850}"
+            "grid":     "{color.gray.850}",
+            "zoomButton.disabled.background": "#5a0f0f1a",
+            "zoomButton.disabled.border":     "#5a304050",
+            "zoomButton.disabled.text":       "#8c90a0b0"
+          },
+          "spe.lcd": {
+            "background": "#102010",
+            "foreground": "#d6f5d6",
+            "dim":        "#3a553a",
+            "bezel":      "#222822"
+          },
+          "accessory": {
+            "dial.face":   "{color.blue.700}",
+            "dial.needle": "{color.gray.50}",
+            "dial.rim":    "{color.gray.600}",
+            "key.standby.background": "#5a3a0a",
+            "key.standby.foreground": "{color.amber.500}",
+            "key.bypass.background":  "#8a6000",
+            "key.bypass.foreground":  "#ffd9a0",
+            "key.meffa.active.background": "#006030",
+            "key.meffa.active.border":     "#008040",
+            "key.meffa.active.hover":      "#007040",
+            "key.meffa.active.foreground": "{color.gray.50}",
+            "key.meffa.standby.foreground": "#008040",
+            "swrScale": {
+              "type": "linear-gradient",
+              "angle": 90,
+              "stops": [
+                { "at": 0.00, "color": "#1a5c30" },
+                { "at": 0.35, "color": "#4a5520" },
+                { "at": 0.65, "color": "#6a4520" },
+                { "at": 1.00, "color": "#6e1f1f" }
+              ]
+            }
           },
           "waterfall.colormap": {
             "default": {

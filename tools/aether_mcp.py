@@ -25,9 +25,12 @@ AETHER_AUTOMATION_ALLOW_TX — that gate lives in the app, not here, so
 no MCP client can key a live radio by accident.
 
 Auth: if the operator set an access token in Radio Setup → Network, the
-bridge rejects every verb (except ping) without a matching token. Put
-that token in AETHER_MCP_TOKEN and this server attaches it to every
-request. Without the right token the app cannot be driven — that's what
+bridge rejects every verb (except ping) without a matching token. This
+process inherits AETHER_MCP_TOKEN from the environment that launched your
+assistant. Set it only for the current session using a secret-safe input
+method; do not put the literal token in a shell profile or command history.
+Nothing here reads an "env" block from an MCP config file, so no file needs
+to carry it. Without the right token the app cannot be driven — that's what
 stops a random local agent from touching the radio.
 
 Env:
@@ -304,21 +307,35 @@ def _remove_owned_socket(instance):
         pass  # app-owned socket cleanup is best-effort after process exit
 
 
-def _signal_owned_process(process, sig):
+def _signal_owned_process(process, *, force=False):
     """Signal the child's whole session, not just its PID.
 
     The child is launched with start_new_session=True, so it is a session
     leader (pgid == pid) and any helper subprocesses it spawns share that
     group; signalling the group reaps them too. Fall back to the single
-    process if the group is already gone or on Windows (no POSIX groups)."""
+    process if the group is already gone or on Windows (no POSIX groups).
+
+    The two platforms are NOT equivalent, and the fallback is weaker than it
+    looks. On Windows terminate()/kill() are TerminateProcess: no signal is
+    delivered, so a SIGTERM handler in the child never runs — including the
+    HL2 emergency unkey in src/core/backends/hl2/Hl2EmergencyStop.cpp, whose
+    SIGTERM/SIGINT registration is deliberately outside the #ifndef Q_OS_WIN.
+    TerminateProcess also does not reap descendants, so the group-reaping
+    property above is POSIX-only. This is not fixable at this seam:
+    CREATE_NEW_PROCESS_GROUP is set at launch, but CTRL_BREAK_EVENT only
+    reaches console applications, not a windowed Qt process. It is bounded in
+    practice because the app_instance launch path pins
+    AETHER_AUTOMATION_NO_TX=1 and drops AETHER_AUTOMATION_ALLOW_TX, so an
+    owned app cannot key through the bridge."""
     if sys.platform != "win32":
+        sig = signal.SIGKILL if force else signal.SIGTERM
         try:
             os.killpg(os.getpgid(process.pid), sig)
             return
         except (ProcessLookupError, PermissionError, OSError):
             pass  # group already reaped, or racing exit — fall back below
     try:
-        (process.kill if sig == signal.SIGKILL else process.terminate)()
+        (process.kill if force else process.terminate)()
     except OSError:
         pass
 
@@ -330,11 +347,11 @@ def _stop_owned_app():
         return {"ok": True, "running": False}
     process = instance["process"]
     if process.poll() is None:
-        _signal_owned_process(process, signal.SIGTERM)
+        _signal_owned_process(process)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            _signal_owned_process(process, signal.SIGKILL)
+            _signal_owned_process(process, force=True)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -482,7 +499,10 @@ TOOLS = [
             "setChecked, setValue, setText, setCurrentText, "
             "setCurrentIndex, selectRow, submit (QLineEdit: setText + "
             "returnPressed), trigger (QAction/menu item, works while "
-            "the menu is closed). Target = objectName / class / "
+            "the menu is closed), showPopup / hidePopup (QComboBox: hold "
+            "the drop-down open; the open list is named aetherComboPopup "
+            "for grab_widget/dump_tree — valid only while open). "
+            "Target = objectName / class / "
             "accessibleName from dump_tree. The bridge REFUSES "
             "transmit-keying controls (MOX/PTT/TUNE/ATU/CWX) unless the "
             "app was launched with AETHER_AUTOMATION_ALLOW_TX."),
@@ -732,7 +752,8 @@ TOOLS = [
             "Raw escape hatch for the verbs without a dedicated tool — "
             "send any JSON request object ({\"cmd\": ...}) straight to "
             "the bridge and get the raw response. Reaches: the low-level "
-            "widget verbs (hover, tooltip, hitTest, clickAt, rightClick, "
+            "widget verbs (hover, tooltip, hitTest, clickAt, doubleClick, "
+            "doubleClickAt, rightClick, "
             "contextMenu, close, scrollTo, drag, showMenu), the "
             "transmit-keying verbs (key, txtest, atu, cwx, testtone, "
             "txwaterfall — gated by AETHER_AUTOMATION_ALLOW_TX), and the "
@@ -998,8 +1019,11 @@ def handle_tool(name, args):
                 status["hint"] = ("This bridge requires a token, but "
                                   "AETHER_MCP_TOKEN is not set for this server. "
                                   "Copy the token from Radio Setup → Network → "
-                                  "Access Token and set it in this MCP server's "
-                                  "env config.")
+                                  "Access Token, then set AETHER_MCP_TOKEN only for "
+                                  "the current shell session using secret-safe input "
+                                  "that does not record it in history. Do not put the "
+                                  "literal token in a shell profile or MCP config; "
+                                  "this process inherits the session environment.")
             if status.get("bridge_read_only"):
                 status["read_only_note"] = (
                     "This bridge is observe-only. Read verbs work; every "

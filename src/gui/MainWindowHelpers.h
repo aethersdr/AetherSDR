@@ -44,6 +44,20 @@ struct WanRadioInfo;
 // non-mac platforms; the caller is itself #ifdef Q_OS_MAC-gated).
 bool macDaxDriverInstalled();
 
+// ─── Band admissibility ──────────────────────────────────────────────────────
+
+// THE refusal an operator reads when a band gate says no — one sentence for
+// every surface that asks.
+//
+// The decision belongs to XvtrPolicy::evaluateBandTune(); the WORDING belongs
+// here, because there are three gates (band button, typed VFO entry, net tune)
+// and the same refusal reading differently depending on which one the operator
+// touched is a bug they cannot diagnose. XvtrPolicy is a plain namespace with
+// no QObject to hang tr() on, which is why the out-of-range case travels as
+// typed fields and is composed — translatably — here (#5041).
+QString bandTuneRefusalText(const XvtrPolicy::BandTuneAdmissibility& admissibility,
+                            const QString& bandName);
+
 // ─── Network diagnostics tooltip ─────────────────────────────────────────────
 
 QString formatNetworkMs(int ms);

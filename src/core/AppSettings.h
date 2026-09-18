@@ -72,9 +72,13 @@ public:
     // Exact-row read — NO family-wide fallback. The write-side schema guard
     // must judge the row it is about to overwrite, not whatever the read
     // fallback resolves to (PR #4614 review).
+    enum class FeatureReadStatus { Missing, Present, Corrupt, Unavailable };
+    // Status distinguishes absence from a corrupt row or failed/closed store.
+    // Exact reads report the raw schema even if JSON parsing fails.
     QJsonObject radioFeatureExact(const QString& family, const QString& radioId,
                                   const QString& feature,
-                                  int* schemaVersionOut = nullptr) const;
+                                  int* schemaVersionOut = nullptr,
+                                  FeatureReadStatus* statusOut = nullptr) const;
     bool setRadioFeature(const QString& family, const QString& radioId,
                          const QString& feature, int schemaVersion,
                          const QJsonObject& doc);

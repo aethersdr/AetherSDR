@@ -39,6 +39,24 @@ bool macDaxDriverInstalled()
 #endif
 }
 
+// ─── Band admissibility ──────────────────────────────────────────────────────
+
+QString bandTuneRefusalText(const XvtrPolicy::BandTuneAdmissibility& admissibility,
+                            const QString& bandName)
+{
+    if (admissibility.outsideTuningRange) {
+        return QObject::tr("Band %1 is outside this radio's tuning range "
+                           "(%2–%3 MHz)")
+            .arg(bandName)
+            .arg(admissibility.rangeMinMhz, 0, 'f', 3)
+            .arg(admissibility.rangeMaxMhz, 0, 'f', 3);
+    }
+    // Everything else is the Flex band-stack vocabulary, which arrives already
+    // worded because only that layer knows which of its several refusals this
+    // is. Untranslated, and pre-dating this helper.
+    return admissibility.reason;
+}
+
 // ─── Network diagnostics tooltip ─────────────────────────────────────────────
 
 // Shown where a figure exists in the readout but this transport cannot produce

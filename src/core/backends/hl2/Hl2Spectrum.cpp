@@ -2,6 +2,8 @@
 
 #include <fftw3.h>
 
+#include "core/dsp/WdspChannel.h"
+
 #include <cmath>
 
 namespace AetherSDR::hl2 {
@@ -29,14 +31,50 @@ Hl2Spectrum::Hl2Spectrum(int fftSize) : m_fftSize(fftSize < 2 ? 2 : fftSize)
     if (m_coherentGain < 1e-9)
         m_coherentGain = 1.0;
 
-    m_in = fftw_malloc(sizeof(fftw_complex) * static_cast<std::size_t>(m_fftSize));
-    m_out = fftw_malloc(sizeof(fftw_complex) * static_cast<std::size_t>(m_fftSize));
-    m_plan = fftw_plan_dft_1d(m_fftSize, static_cast<fftw_complex*>(m_in),
-                              static_cast<fftw_complex*>(m_out), FFTW_FORWARD, FFTW_ESTIMATE);
+    {
+        // FFTW's planner is process-global and NOT thread-safe. Hl2Backend's
+        // beginDspSetup() constructs this on its worker while WdspChannel::open()
+        // builds a WDSP channel — which plans, allocates and frees through FFTW
+        // too — so the two raced with nothing between them. TSan, once Qt and the
+        // vendored C were both instrumented (#5275 S4/S6):
+        //
+        //   Write of size 8 by thread T9:  free <- create_fircore (firmin.c:360)
+        //                                       <- OpenChannel <- WdspChannel::open()
+        //   Previous write     by thread T4:  memalign <- fftw_malloc_plain
+        //                                       <- make_unique<Hl2Spectrum>
+        //
+        // AnanSpectrum, the sibling of this class, has taken this same lock since
+        // it hit the same problem; this one never did.
+        //
+        // The lock covers the ALLOCATIONS as well as the plan, which is wider
+        // than AnanSpectrum's — deliberately. AnanSpectrum's comment records the
+        // mallocs as safe unguarded, but the two frames TSan actually names here
+        // are fftw_malloc_plain and free, not the planner, so a plan-only lock
+        // would leave the reported edge unsynchronised. It costs nothing: this
+        // runs once per spectrum construction, never on the audio path.
+        // execute() below stays unguarded, same as AnanSpectrum and
+        // WdspChannel::processIq().
+        //
+        // The evidence came from radiomodel_pan_id_mapping_test, which failed
+        // this way in 4 of 4 sanitizer runs and has since been removed as
+        // intermittent (#5423). The race is not intermittent and is not about
+        // that test: two threads reach a non-thread-safe planner on every HL2
+        // connect, and nothing tests for it now.
+        auto lock = WdspChannel::fftwSetupLock();
+        m_in = fftw_malloc(sizeof(fftw_complex) * static_cast<std::size_t>(m_fftSize));
+        m_out = fftw_malloc(sizeof(fftw_complex) * static_cast<std::size_t>(m_fftSize));
+        m_plan = fftw_plan_dft_1d(m_fftSize, static_cast<fftw_complex*>(m_in),
+                                  static_cast<fftw_complex*>(m_out), FFTW_FORWARD, FFTW_ESTIMATE);
+    }
 }
 
 Hl2Spectrum::~Hl2Spectrum()
 {
+    // Same lock as the constructor, and over the frees for the same reason: the
+    // race TSan reported was a free on one thread against an allocation on
+    // another, so guarding only destroy_plan would leave the teardown half of
+    // that edge open.
+    auto lock = WdspChannel::fftwSetupLock();
     if (m_plan) fftw_destroy_plan(static_cast<fftw_plan>(m_plan));
     if (m_in) fftw_free(m_in);
     if (m_out) fftw_free(m_out);

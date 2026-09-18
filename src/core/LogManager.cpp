@@ -35,6 +35,7 @@ Q_LOGGING_CATEGORY(lcMqtt,       "aether.mqtt",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcRbn,        "aether.rbn",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDevices,    "aether.devices",     QtWarningMsg)
 Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
+Q_LOGGING_CATEGORY(lcRender,     "aether.render",      QtWarningMsg)
 Q_LOGGING_CATEGORY(lcCw,         "aether.cw",          QtWarningMsg)
 Q_LOGGING_CATEGORY(lcSHistory,  "aether.shistory",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAx25,       "aether.ax25",        QtWarningMsg)
@@ -94,6 +95,7 @@ LogManager::LogManager()
         {"aether.rbn",        "RBN",          "Reverse Beacon Network connection and spots"},
         {"aether.devices",    "Ext Devices",  "Serial port, FlexControl, MIDI, HID encoder"},
         {"aether.perf",       "Performance",  "Render timing and CPU profiling data"},
+        {"aether.render",     "Render",       "Render pipeline: RHI/GPU path selection and fallback, paint stalls, texture upload churn"},
         {"aether.propforecast", "Propagation",  "Solar and propagation forecast updates"},
         {"aether.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
         {"aether.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},
@@ -122,6 +124,19 @@ LogManager::LogManager()
         // one control, and someone chasing transmit telemetry will tick the
         // wrong box and conclude the logging is still broken.
         {"aether.hl2.tx",     "Hermes-Lite 2 TX", "HL2 transmit telemetry: TX IQ FIFO depth with underflow/overflow flags, and forward/reflected power counts. Separate toggle — ticking \"Hermes-Lite 2\" does NOT enable this (high-rate)"},
+        // ICOM — the same "declared locally, never registered" hole the HL2
+        // categories above had. All five were unreachable: applyFilterRules()'s
+        // blanket `aether.*.debug=false` switched them off and no UI toggle
+        // could switch them back on, so an Icom session logged nothing beyond
+        // its INF lines. Chasing a mode-reporting bug on a live IC-9700 that
+        // way means guessing from published state instead of reading frames.
+        {"aether.icom.session", "Icom Session",  "Icom RS-BA1 session: handshake, token/auth, capabilities, keepalive"},
+        {"aether.icom.stream",  "Icom Streams",  "Icom UDP stream lifecycle: control/serial/audio handshakes and ports"},
+        {"aether.icom.civ",     "Icom CI-V",     "Every CI-V frame in and out, decoded — command, subcommand and payload bytes. The only way to tell 'the radio never sent it' from 'we sent it and dropped the reply' (high-rate)"},
+        {"aether.icom.pan",     "Icom Scope",    "Icom spectrum scope: sweep frames, division reassembly, bounds"},
+        {"aether.icom.link",    "Icom Link",     "Icom backend link state: connect/disconnect, model resolution, capability publication"},
+        {"aether.icom.cred",    "Icom Credentials", "Icom credential storage and retrieval (no secret values are logged)"},
+        {"aether.sysinfo",    "System Info",  "Startup hardware/capability inventory: OS, CPU model + SIMD features, RAM, and the speech-engine ISA baseline check (#4986). A few lines once per launch"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.
@@ -387,7 +402,7 @@ void LogManager::loadSettings()
     // Default Discovery, Commands, and Status to on
     static const QStringList defaultOn = {
         "aether.discovery", "aether.connection", "aether.protocol",
-        "aether.audio.summary", "aether.kiwisdr"
+        "aether.audio.summary", "aether.kiwisdr", "aether.sysinfo"
     };
     for (auto& c : m_categories) {
         QString def = defaultOn.contains(c.id) ? "True" : "False";

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include <QPointer>
 
 class QLabel;
 class QAction;
@@ -16,8 +17,9 @@ namespace AetherSDR {
 class RadioModel;
 class WaveformInstaller;
 
-// Non-modal dialog for WFP status and waveform management (File → Waveforms).
-// Mirrors the SmartSDR File → Waveforms panel: shows WFP power/ready/IP at the
+// Non-modal dialog for WFP status and waveform management (Tools → Waveforms).
+// Mirrors the SmartSDR File → Waveforms panel (its home in FlexRadio's
+// client, unchanged by our own menu move): shows WFP power/ready/IP at the
 // top and one row per installed waveform with Restart and Remove/Uninstall
 // buttons.  The install menu supports legacy .ssdr_waveform packages and
 // Docker waveform images via WaveformInstaller; Docker install is gated by the
@@ -66,6 +68,11 @@ private:
     QWidget*           m_listContainer{nullptr};
     QVBoxLayout*       m_listLayout{nullptr};
     WaveformInstaller* m_installer{nullptr};
+    // The model m_installer was built for. The guards in installWaveformFile()
+    // establish that a model swap across a file picker is reachable, so a
+    // cached installer must not keep uploading to the previous radio (#5568
+    // review).
+    QPointer<RadioModel> m_installerModel;
 
     QLabel*      m_dstarStatusLabel{nullptr};
     QLabel*      m_dstarDetailLabel{nullptr};

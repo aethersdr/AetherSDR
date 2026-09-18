@@ -53,7 +53,11 @@ QString buildIssueReport(const SupportBundle::SystemInfo& sys,
     body += QString("- AetherSDR: %1\n").arg(sys.aetherVersion);
     body += QString("- Qt: %1\n").arg(sys.qtVersion);
     body += QString("- OS: %1 (kernel %2)\n").arg(sys.osName, sys.kernelVersion);
-    body += QString("- Arch: %1\n").arg(sys.cpuArch);
+    // Model + arch + SIMD features in one line: the hardware facts that
+    // decide GPU/ISA crash reports (#4986) — not sensitive, unlike serial/IP.
+    body += QString("- CPU: %1\n").arg(sys.cpu);
+    body += QString("- RAM: %1\n").arg(sys.ram);
+    body += QString("- GPU: %1\n").arg(sys.gpu);
     body += QString("- Build: %1\n\n").arg(sys.buildDate);
 
     body += "### Recent log\n";

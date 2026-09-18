@@ -51,10 +51,24 @@ int main(int argc, char** argv)
 
     // ---- Default is Flex: transmits, reboots ----
     RadioModel model;
+    check(model.backendCapabilities().family == QLatin1String("flex"),
+          "isFlexRadio identifies the default Flex backend");
     check(model.backendCapabilities().canTransmit,
           "Flex default advertises canTransmit");
     check(model.backendCapabilities().canReboot,
           "Flex default advertises canReboot");
+
+    RadioInfo networkSeed = flexInfo();
+    networkSeed.address = QHostAddress(QStringLiteral("192.0.2.44"));
+    model.connectToRadio(networkSeed);
+    check(model.ip() == QStringLiteral("192.0.2.44"),
+          "connect seeds only the selected radio endpoint");
+    model.disconnectFromRadio();
+    check(QMetaObject::invokeMethod(&model, "onDisconnected", Qt::DirectConnection),
+          "network reset fixture reached RadioModel");
+    check(model.ip().isEmpty() && model.netmask().isEmpty()
+              && model.gateway().isEmpty() && model.mac().isEmpty(),
+          "disconnect clears session-owned network identity");
     check(!model.backendCapabilities().hostModulates,
           "#4449: Flex modulates on-radio, not on the host");
 
@@ -63,6 +77,8 @@ int main(int argc, char** argv)
     // advertises canTransmit=true, matching Flex. Headless automation stays
     // gated behind AETHER_AUTOMATION_ALLOW_TX inside the backend (m_txAllowed).
     model.connectToRadio(hl2Info());
+    check(model.backendCapabilities().family != QLatin1String("flex"),
+          "isFlexRadio rejects the HL2 family without a model-name table");
     check(model.backendCapabilities().canTransmit,
           "HL2 advertises canTransmit (transmit landed post-#4448)");
     check(!model.backendCapabilities().canReboot,
@@ -71,6 +87,51 @@ int main(int argc, char** argv)
           "#4449: HL2 host-modulates (PC runs the modulator, no on-radio jacks)");
     check(model.panStream() == nullptr,
           "HL2 owns no PanadapterStream");
+
+    // ---- The modes the LIVE HL2 backend declares it will not transmit in ----
+    //
+    // hl2_txdsp_test proves the modulator half: AM/SAM/DSB/FM/WBFM/DRM each
+    // produce IQ bit-identical to USB, so none of them is a distinct
+    // modulation. What that test cannot see is the DECLARATION — delete a
+    // string from Hl2Backend::capabilities()'s receiveOnlyModes and it still
+    // passes. This is the live target that reads it, so the list and the
+    // evidence cannot part company unnoticed.
+    //
+    // EIGHT strings, SIX enumerators: modeFromString() maps NFM onto Mode::Fm
+    // and WFM onto Mode::Wbfm, and refuseKeyInReceiveOnlyMode() compares the
+    // string the SLICE holds rather than the enumerator this backend would have
+    // mapped it to — so dropping either alias leaves that spelling keying while
+    // its twin is refused. That is the load-bearing claim, and nothing asserted
+    // it before this block.
+    {
+        const RadioCapabilities caps = model.backendCapabilities();
+        const QStringList declared = {
+            QStringLiteral("AM"),   QStringLiteral("SAM"),
+            QStringLiteral("DSB"),  QStringLiteral("FM"),
+            QStringLiteral("NFM"),  QStringLiteral("WBFM"),
+            QStringLiteral("WFM"),  QStringLiteral("DRM"),
+        };
+        for (const QString& m : declared) {
+            check(modeIsReceiveOnly(caps, m),
+                  qPrintable(QStringLiteral("HL2 declares %1 receive-only").arg(m)));
+        }
+        // Exactly these. An ADDITION is a mode in which the operator silently
+        // loses MOX, CW keying and TUNE, so it must not arrive without the
+        // bit-identity evidence landing beside it.
+        check(caps.receiveOnlyModes.size() == declared.size(),
+              "HL2 declares exactly the modes hl2_txdsp_test carries evidence for");
+        // The deliberate exclusions: SSB modulates correctly, and CW keys the
+        // gateware NCO through MetisClient::setCwKeyDown without ever reaching
+        // Hl2TxDsp. If one of these ever appears on the list it takes an
+        // operator's transmit mode away.
+        for (const QString& m : {QStringLiteral("USB"),  QStringLiteral("LSB"),
+                                 QStringLiteral("DIGU"), QStringLiteral("DIGL"),
+                                 QStringLiteral("CW"),   QStringLiteral("CWU"),
+                                 QStringLiteral("CWL")}) {
+            check(!modeIsReceiveOnly(caps, m),
+                  qPrintable(QStringLiteral("HL2 still transmits in %1").arg(m)));
+        }
+    }
 
     // ── The normalized RX-audio bus ────────────────────────────────────────
     //
@@ -92,10 +153,12 @@ int main(int argc, char** argv)
     {
         int busBlocks = 0;
         QObject::connect(&model, &RadioModel::rxDemodAudioReady,
-                         &model, [&busBlocks](const QByteArray&) { ++busBlocks; });
+                         &model, [&busBlocks](const PcmFrame&) { ++busBlocks; });
 
         const QByteArray frame(256, '\0');
-        emit model.backendAudioFrameReady(frame);
+        AetherSDR::PcmProducer pcmProducer;
+        pcmProducer.start();
+        emit model.backendAudioFrameReady(*pcmProducer.legacyStereo24(frame));
         check(busBlocks == 1,
               "RX bus: a seam backend's audio reaches rxDemodAudioReady exactly once");
 
@@ -105,7 +168,8 @@ int main(int argc, char** argv)
         // catching a doubled count later would. (PR #4537 review.)
         model.connectToRadio(flexInfo());
         busBlocks = 0;
-        emit model.backendAudioFrameReady(frame);
+        pcmProducer.start();
+        emit model.backendAudioFrameReady(*pcmProducer.legacyStereo24(frame));
         check(busBlocks == 0,
               "RX bus: the seam relay is dropped when a Flex takes over");
 
@@ -113,7 +177,8 @@ int main(int argc, char** argv)
         // on the seam relay, which is the case Qt cannot clean up for us.
         model.connectToRadio(hl2Info());
         busBlocks = 0;
-        emit model.backendAudioFrameReady(frame);
+        pcmProducer.start();
+        emit model.backendAudioFrameReady(*pcmProducer.legacyStereo24(frame));
         check(busBlocks == 1,
               "RX bus: still exactly one producer after a family round-trip");
     }
@@ -140,7 +205,9 @@ int main(int argc, char** argv)
     // It now takes the host-modulated arm instead: the modulator is ours, the
     // AudioEngine pump already reaches it through the m_hostModulation branch
     // of feedDaxTxAudioInternal(), and there is no transport to create.
-    check(model.prepareWsprTransmit(),
+    const auto wsprProducer = model.registerTxProducer();
+    auto wsprInput = wsprProducer.request();
+    check(model.prepareWsprTransmit(wsprInput),
           "WSPR: prepareWsprTransmit() succeeds on a host-modulating backend");
     check(model.hasWsprTxStream(),
           "WSPR: the host-modulated arm reports a ready TX audio route");
@@ -154,7 +221,7 @@ int main(int argc, char** argv)
     check(!model.transmitModel().daxOn(),
           "WSPR: the host-modulated arm does not latch `transmit dax`");
 
-    model.releaseWsprTransmit();
+    model.releaseWsprTransmit(wsprInput);
     check(!model.hasWsprTxStream(),
           "WSPR: release drops the host-modulated route claim");
     check(!model.transmitModel().daxOn(),
@@ -163,9 +230,10 @@ int main(int argc, char** argv)
     // Prepare/release is idempotent and re-armable — the dialog defers a frame
     // to the next two-minute slot without re-preparing, but an operator who
     // cancels and re-arms runs this pair again.
-    check(model.prepareWsprTransmit() && model.hasWsprTxStream(),
+    wsprInput = wsprProducer.request();
+    check(model.prepareWsprTransmit(wsprInput) && model.hasWsprTxStream(),
           "WSPR: the host-modulated arm can be re-armed after a release");
-    model.releaseWsprTransmit();
+    model.releaseWsprTransmit(wsprInput);
     check(!model.hasWsprTxStream(), "WSPR: second release also clears");
 
     // An ARMED beacon must not carry its route claim onto another radio.
@@ -176,9 +244,12 @@ int main(int argc, char** argv)
     // its route was ready on a FLEX, which keys the radio for a full 111.6 s
     // frame with no dax_tx stream behind it. Unintended transmission, so it is
     // asserted rather than reasoned about. (PR #4537 review, finding 2.)
-    check(model.prepareWsprTransmit(), "WSPR: armed on HL2 for the switch test");
+    wsprInput = wsprProducer.request();
+    check(model.prepareWsprTransmit(wsprInput), "WSPR: armed on HL2 for the switch test");
     check(model.hasWsprTxStream(), "WSPR: armed claim is live before the switch");
     model.connectToRadio(flexInfo());
+    check(model.backendCapabilities().family == QLatin1String("flex"),
+          "round-trip: isFlexRadio restores on the Flex family");
     check(!model.hasWsprTxStream(),
           "WSPR: an armed host-modulated claim does NOT survive onto a Flex");
     model.connectToRadio(hl2Info());
@@ -208,10 +279,11 @@ int main(int argc, char** argv)
     // fresh one, so the new Hl2TxDsp starts at its own 1.0 default. But the
     // seam carrying mic gain to a host-modulating backend fires on operator
     // INTENT — the slider moving — and a rebuild is not the slider moving.
-    // TransmitModel is never reset and micLevel is not persisted, so without an
-    // explicit re-assert the slider goes on reading the operator's value while
-    // the modulator sits at unity, and the radio transmits several dB below
-    // what every readout claims.
+    // TransmitModel is never reset — resetState() leaves micLevel alone — and
+    // the level's persistence restores it at CONNECT, which a mid-session
+    // backend rebuild is not. So without an explicit re-assert the slider goes
+    // on reading the operator's value while the modulator sits at unity, and
+    // the radio transmits several dB below what every readout claims.
     //
     // That is exactly the readback-agrees-with-the-failure shape the mic-gain
     // fix exists to eliminate, displaced one seam over, so it gets its own pin.

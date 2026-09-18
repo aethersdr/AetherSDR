@@ -1496,6 +1496,150 @@ void WorkspaceController::resetToClassic()
     emit workspacesChanged();   // the window list may have collapsed
 }
 
+QStringList WorkspaceController::activeMainPanIdsForLayout() const
+{
+    if (!m_enabled) {
+        return {};
+    }
+
+    const WorkspaceDocument& doc = m_store.document();
+    const Workspace* ws = nullptr;
+    for (const Workspace& candidate : doc.workspaces) {
+        if (candidate.id == doc.activeWorkspace) {
+            ws = &candidate;
+            break;
+        }
+    }
+    if (!ws) {
+        return {};
+    }
+
+    const WorkspaceSurface* main = nullptr;
+    for (const WorkspaceSurface& surface : ws->surfaces) {
+        if (surface.id == WorkspaceSurface::kMainId) {
+            main = &surface;
+            break;
+        }
+    }
+    if (!main) {
+        return {};
+    }
+
+    QSet<QString> mainItemIds;
+    for (const CanvasItem& item : main->items) {
+        if (item.id.startsWith(kPanItemPrefix)) {
+            mainItemIds.insert(item.id);
+        }
+    }
+
+    QList<QPair<int, QString>> ordered;
+    for (auto it = m_panSlots.cbegin(); it != m_panSlots.cend(); ++it) {
+        const QString itemId = QStringLiteral("pan:%1").arg(it.value());
+        if (!mainItemIds.contains(itemId)
+            || (m_panHost.isFloating && m_panHost.isFloating(it.key()))) {
+            continue;
+        }
+        ordered.append(qMakePair(it.value(), it.key()));
+    }
+    std::sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.first < rhs.first;
+    });
+
+    QStringList panIds;
+    for (const auto& entry : ordered) {
+        panIds.append(entry.second);
+    }
+    return panIds;
+}
+
+bool WorkspaceController::applyPanLayout(const QString& layoutId)
+{
+    if (!m_enabled || panCellsForLayout(layoutId).isEmpty()) {
+        return false;
+    }
+
+    WorkspaceDocument doc = m_store.document();
+    Workspace* ws = nullptr;
+    for (Workspace& candidate : doc.workspaces) {
+        if (candidate.id == doc.activeWorkspace) {
+            ws = &candidate;
+            break;
+        }
+    }
+    WorkspaceSurface* main = nullptr;
+    if (ws) {
+        for (WorkspaceSurface& surface : ws->surfaces) {
+            if (surface.id == WorkspaceSurface::kMainId) {
+                main = &surface;
+                break;
+            }
+        }
+    }
+    if (!main) {
+        return false;
+    }
+
+    // ClassicLayout is the one canonical pan-cell implementation. Build its
+    // result from the eligible main-surface pans, not every known slot: a
+    // floating or extra-surface lower slot must not leave a hole in the
+    // visible canvas arrangement. Unlike resetToClassic(), this must not
+    // change applets or other surfaces.
+    QStringList slotIds;
+    const QStringList panIds = activeMainPanIdsForLayout();
+    for (const QString& panId : panIds) {
+        slotIds.append(QString::number(m_panSlots.value(panId)));
+    }
+    const LegacyLayoutState legacy = readLegacyLayoutState(effectiveKnownAppletIds());
+    const QList<CanvasItem> classic = composeClassic(
+        slotIds, legacy.appletPanelVisible ? legacy.openAppletIds : QStringList{},
+        layoutId, legacy.appletsLeft);
+    QHash<QString, NormRect> rects;
+    for (const CanvasItem& item : classic) {
+        if (item.id.startsWith(kPanItemPrefix)) {
+            rects.insert(item.id, item.rect);
+        }
+    }
+
+    QHash<QString, NormRect> changed;
+    for (CanvasItem& item : main->items) {
+        if (!item.id.startsWith(kPanItemPrefix)) {
+            continue;
+        }
+        const QString panId = panIdForItem(item.id);
+        if (panId.isEmpty()
+            || (m_panHost.isFloating && m_panHost.isFloating(panId))) {
+            continue;
+        }
+        const auto it = rects.constFind(item.id);
+        if (it == rects.constEnd() || item.rect == it.value()) {
+            continue;
+        }
+        item.rect = it.value();
+        changed.insert(item.id, item.rect);
+    }
+
+    if (changed.isEmpty()) {
+        return true;
+    }
+
+    // Make the complete document authoritative before publishing matching
+    // canvas geometry, then flush both as one persisted gesture below. The
+    // replay signals describe this document update; they are not fresh edits.
+    const bool wasApplying = m_applying;
+    m_applying = true;
+    m_store.setDocument(doc);
+    for (auto it = changed.cbegin(); it != changed.cend(); ++it) {
+        if (m_canvas->contains(it.key())) {
+            m_canvas->setItemRect(it.key(), it.value());
+        }
+    }
+    m_applying = wasApplying;
+    if (!m_store.flush()) {
+        qWarning() << "WorkspaceController: pan layout did not persist (read-only session?)";
+    }
+    return true;
+}
+
 void WorkspaceController::tidyLayout(WorkspaceCanvas* canvas)
 {
     if (!m_enabled) {

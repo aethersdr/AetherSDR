@@ -349,6 +349,19 @@ public:
     // guaranteed way back to a sane shell.
     void resetToClassic();
 
+    // Apply a legacy pan-layout selection to canvas mode without resetting the
+    // workspace. Only live, non-floating pan slots already on the active main
+    // surface are reflowed; applets, extra surfaces, and other workspaces keep
+    // their operator-arranged geometry. Returns false when the canvas is off
+    // or the layout id is not one ClassicLayout understands.
+    bool applyPanLayout(const QString& layoutId);
+
+    // Live radio ids participating in an active-main-surface layout, ordered
+    // by stable canvas slot. Floating and extra-surface pans are intentionally
+    // outside the legacy selector's count/removal domain while canvas mode is
+    // authoritative.
+    QStringList activeMainPanIdsForLayout() const;
+
     // Resolve applet-vs-applet overlaps by minimal downward pushes.  Items
     // overlapping the PAN AREA are left alone on purpose: a meter over the
     // spectrum is a feature, not disorder.

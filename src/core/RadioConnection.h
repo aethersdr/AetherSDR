@@ -26,6 +26,9 @@ enum class ConnectionState {
 // Call init() after moveToThread() to create the socket and timer.
 class RadioConnection : public QObject {
     Q_OBJECT
+    friend class TxOperationIntegrationTestAccess;
+    friend class RadioConnectionSessionTestAccess;
+    std::function<void(quint32, const QString&)> m_commandSinkForTest;
 
 public:
     explicit RadioConnection(QObject* parent = nullptr);
@@ -100,6 +103,7 @@ private slots:
     void onHeartbeat();
 
 private:
+    void resetSessionState();
     void processLine(const QString& line);
     void setState(ConnectionState s);
 
@@ -118,6 +122,11 @@ private:
 
     QTcpSocket*  m_socket{nullptr};
     QByteArray   m_readBuffer;
+    // Bumped by resetSessionState() at every session edge. Deferred work
+    // captures it so a timer armed in one session cannot fire into the next
+    // (the synthetic-demo handshake). Connection-thread only, like the
+    // buffer above. (#5653 review)
+    quint64      m_sessionGeneration{0};
     QTimer*      m_heartbeat{nullptr};
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};

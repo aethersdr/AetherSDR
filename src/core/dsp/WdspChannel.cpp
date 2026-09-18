@@ -13,6 +13,7 @@
 #include <new>
 #include <string>
 #include <thread>
+#include <utility>
 
 #ifdef _WIN32
 #include <process.h>
@@ -40,8 +41,11 @@ std::mutex g_channelMutex;
 std::mutex g_setupMutex;
 std::array<bool, kWdspChannelCount> g_channelsInUse {};
 
-// WDSP builds its FFTs with FFTW_PATIENT (35 plans per channel), which re-runs
-// exhaustive measurement on every OpenChannel — ~a minute per channel open.
+// WDSP builds its FFTs with FFTW_PATIENT — ~220 planner calls per RX channel
+// open, over 11 distinct (transform kind, size) pairs — which re-runs exhaustive
+// measurement on every OpenChannel: ~a minute per channel open. It is the
+// distinct set that wisdom covers, so the repeats are already free; WDSP 2.10
+// added 3 calls and 2 of those pairs (NNR's 512-point r2c/c2r).
 // FFTW wisdom is global: prime it once from a persisted cache so those plans are
 // imported instantly. First run still measures (and caches); later runs import.
 // Called under g_setupMutex, so this global FFTW-planner I/O never races a
@@ -51,6 +55,23 @@ std::string wisdomPath()
 {
     namespace fs = std::filesystem;
     fs::path dir;
+    // Explicit override, consulted before anything else. This exists so a TEST
+    // process can be pointed at a build-local cache and be structurally unable
+    // to reach the operator's real one — see tests/TestWdspWisdomIsolation.cpp,
+    // which sets it before main() so it holds for a test binary run DIRECTLY,
+    // not only for one launched through ctest.
+    //
+    // Redirecting beats suppressing the export: the tests keep a persistent
+    // cache of their own, so repeat runs import instead of re-measuring, and
+    // there is no "did we remember to disable writing" question left to get
+    // wrong. Never set by the app.
+    if (const char* override = std::getenv("AETHER_WDSP_WISDOM_DIR");
+        override != nullptr && *override != '\0') {
+        dir = override;
+        std::error_code overrideEc;
+        fs::create_directories(dir, overrideEc);   // best-effort
+        return (dir / "wdsp-fftw-wisdom").string();
+    }
 #ifdef _WIN32
     if (const char* la = std::getenv("LOCALAPPDATA")) dir = la;
 #else
@@ -67,10 +88,67 @@ std::string wisdomPath()
     return (dir / "wdsp-fftw-wisdom").string();
 }
 
+// Test/CI escape hatch: bound how long FFTW may spend measuring each plan.
+//
+// WDSP builds every FFT with FFTW_PATIENT, which is right for a radio session
+// and ruinous for a test suite: the first OpenChannel in a cold process spends
+// 20 s (macOS, arm64) to 190 s (CI, x86_64) measuring plans, and a CI container
+// starts cold on every single run. That cost is not the tests' own work and it
+// buys them nothing -- a correctness test cares that the FFT is right, never
+// that it is optimal.
+//
+// AETHER_WDSP_FFTW_TIMELIMIT=<seconds> caps the planner via FFTW's own
+// documented global setting, so no vendored WDSP source has to be patched to
+// reach the flag it hardcodes. Measured on this machine, 15 representative
+// PATIENT plans: 4.79 s unbounded, 0.02 s at 0.001. The bound is approximate
+// and applies PER PLAN, not to the process -- FFTW cannot interrupt a single
+// measurement -- so the total still scales with the number of plans. Do not
+// read a 0.001 limit as "planning takes 1 ms".
+//
+// UNSET IS THE SHIPPING PATH. A radio session never sets this and gets the
+// full PATIENT plans it always had.
+//
+// A bounded process also NEVER WRITES THE WISDOM CACHE (see open()). Plans
+// measured under a time limit are worse than the ones a real session wants,
+// and the cache is shared with the app -- exporting them would hand the
+// operator's radio the test suite's rushed plans. That is the whole reason
+// this is one knob and not two: it is not possible to bound the planner and
+// forget to isolate the cache.
+double plannerTimeLimitSeconds()
+{
+    static const double limit = [] {
+        const char* raw = std::getenv("AETHER_WDSP_FFTW_TIMELIMIT");
+        if (raw == nullptr || *raw == '\0')
+            return -1.0;
+        char* end = nullptr;
+        const double parsed = std::strtod(raw, &end);
+        // A malformed value is ignored rather than treated as 0: silently
+        // rushing every plan because someone typed "yes" would be a very
+        // quiet way to ship bad plans.
+        if (end == raw || !std::isfinite(parsed) || parsed < 0.0)
+            return -1.0;
+        return parsed;
+    }();
+    return limit;
+}
+
+// True when this process is running with a bounded planner, i.e. its measured
+// plans are not good enough to publish to the shared cache.
+bool plannerIsBounded()
+{
+    return plannerTimeLimitSeconds() >= 0.0;
+}
+
 void loadWisdomOnce()
 {
     static std::once_flag flag;
-    std::call_once(flag, [] { fftw_import_wisdom_from_filename(wisdomPath().c_str()); });
+    std::call_once(flag, [] {
+        // Before the first plan, so it governs every one of them. FFTW's
+        // default is FFTW_NO_TIMELIMIT and we only ever move off it here.
+        if (plannerIsBounded())
+            fftw_set_timelimit(plannerTimeLimitSeconds());
+        fftw_import_wisdom_from_filename(wisdomPath().c_str());
+    });
 }
 
 // Write the wisdom cache NOW. Called at the end of open(), under g_setupMutex,
@@ -132,18 +210,6 @@ void armWisdomExportOnce()
 {
     static std::once_flag flag;
     std::call_once(flag, [] { std::atexit([] { exportWisdomNow(); }); });
-}
-
-int acquireChannelId()
-{
-    const std::scoped_lock lock(g_channelMutex);
-    for (int channel = 0; channel < kWdspChannelCount; ++channel) {
-        if (!g_channelsInUse[static_cast<std::size_t>(channel)]) {
-            g_channelsInUse[static_cast<std::size_t>(channel)] = true;
-            return channel;
-        }
-    }
-    return -1;
 }
 
 void releaseChannelId(int channel)
@@ -215,25 +281,92 @@ std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
     if (!validateConfig(config, error)) {
         return nullptr;
     }
-    if (GetWDSPVersion() != 200) {
-        setError(error, "The linked WDSP library is not version 2.00");
+    if (GetWDSPVersion() != 210) {
+        setError(error, "The linked WDSP library is not version 2.10");
         return nullptr;
     }
-
-    const int channelId = acquireChannelId();
-    if (channelId < 0) {
+    std::optional<Reservation> reservation = reserveChannels(1);
+    if (!reservation) {
         setError(error, "All WDSP channel slots are in use");
         return nullptr;
     }
+    return create(config, *reservation, error);
+}
+
+std::unique_ptr<WdspChannel> WdspChannel::create(const Config& config,
+    Reservation& reservation, std::string* error) noexcept
+{
+    if (!validateConfig(config, error)) {
+        return nullptr;
+    }
+    if (GetWDSPVersion() != 210) {
+        setError(error, "The linked WDSP library is not version 2.10");
+        return nullptr;
+    }
+    if (reservation.m_count == 0) {
+        setError(error, "No reserved WDSP channel slots remain");
+        return nullptr;
+    }
+    const int channelId = reservation.m_ids[reservation.m_count - 1];
 
     std::unique_ptr<WdspChannel> channel(new (std::nothrow) WdspChannel(channelId, config));
     if (!channel) {
-        releaseChannelId(channelId);
         setError(error, "Could not allocate the WDSP channel owner");
         return nullptr;
     }
+    --reservation.m_count;
     channel->open();
     return channel;
+}
+
+std::optional<WdspChannel::Reservation> WdspChannel::reserveChannels(std::size_t count)
+{
+    if (count == 0 || count > kWdspChannelCount) {
+        return std::nullopt;
+    }
+    Reservation reservation;
+    const std::scoped_lock lock(g_channelMutex);
+    for (int id = 0; id < kWdspChannelCount && reservation.m_count < count; ++id) {
+        if (!g_channelsInUse[static_cast<std::size_t>(id)]) {
+            reservation.m_ids[reservation.m_count++] = id;
+        }
+    }
+    if (reservation.m_count != count) {
+        // Nothing was acquired: failed batches cannot consume a partial pool.
+        reservation.m_count = 0;
+        return std::nullopt;
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+        g_channelsInUse[static_cast<std::size_t>(reservation.m_ids[index])] = true;
+    }
+    return reservation;
+}
+
+WdspChannel::Reservation::Reservation(Reservation&& other) noexcept
+    : m_ids(other.m_ids), m_count(std::exchange(other.m_count, 0))
+{
+}
+
+WdspChannel::Reservation& WdspChannel::Reservation::operator=(Reservation&& other) noexcept
+{
+    if (this != &other) {
+        release();
+        m_ids = other.m_ids;
+        m_count = std::exchange(other.m_count, 0);
+    }
+    return *this;
+}
+
+WdspChannel::Reservation::~Reservation()
+{
+    release();
+}
+
+void WdspChannel::Reservation::release() noexcept
+{
+    while (m_count != 0) {
+        releaseChannelId(m_ids[--m_count]);
+    }
 }
 
 WdspChannel::WdspChannel(int channelId, const Config& config) noexcept
@@ -324,6 +457,30 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
         }
     }
 
+    if (!m_running.load(std::memory_order_relaxed)) {
+        // Stopped, but still clocked, and this is where the two are reconciled.
+        // Once the down-slew has finished, fexchange2 returns having touched
+        // NOTHING — WDSP's exchange bit is clear, so it does not write the
+        // output and does not zero it either, and whatever the caller's buffer
+        // held is what the caller will emit, block after block, for the whole
+        // stopped period. Making "stopped" mean "silence" is therefore this
+        // class's job, not WDSP's.
+        //
+        // HONEST NOTE ON WHAT THIS IS WORTH. Removing these two lines does not
+        // currently fail runStartStopTest: WDSP's own downslew2 happens to
+        // leave the tail of its last written block at zero, so today the stale
+        // buffer IS silence. That is an implementation detail of vendored
+        // third-party code (which this repo already carries four patches to),
+        // not a contract. Kept as the contract, and costed accordingly — a
+        // memset paid only while the channel is stopped.
+        //
+        // Zero FIRST, not instead of the call: while the ramp is still running
+        // fexchange2 overwrites this with the slewed tail — that is the
+        // anti-click envelope actually being heard — and calling it is also the
+        // only thing that advances the ramp to completion at all.
+        std::ranges::fill(outputLeft, 0.0f);
+        std::ranges::fill(outputRight, 0.0f);
+    }
     fexchange2(m_channelId,
                const_cast<float*>(channelI),
                const_cast<float*>(channelQ),
@@ -343,6 +500,58 @@ WdspChannel::ProcessResult WdspChannel::processIq(std::span<const float> inputI,
     return ProcessResult::Ok;
 }
 
+bool WdspChannel::discardTransmitData() noexcept
+{
+    if (m_config.direction != Direction::Transmit || !beginControlOperation()) {
+        return false;
+    }
+    const bool discarded = DiscardTXAChannelData(m_channelId) != 0;
+    if (discarded) {
+        m_running.store(false, std::memory_order_relaxed);
+    }
+    endControlOperation();
+    return discarded;
+}
+
+bool WdspChannel::setRunning(bool running) noexcept
+{
+    // Idempotent, and deliberately BEFORE the handshake: WDSP's own
+    // SetChannelState already no-ops when the state matches, so taking the
+    // control fence here would make a redundant T/R edge able to fail purely
+    // because a block was in flight.
+    if (m_running.load(std::memory_order_relaxed) == running) {
+        return true;
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+    // dmode 0 in BOTH directions — see the header. The drain is processIq()'s
+    // job and this thread cannot wait for it.
+    //
+    // OUTSIDE g_setupMutex, like close()'s stop and for the reason spelled out
+    // there: that lock serialises the FFTW planner and SetChannelState enters
+    // none of it.
+    //
+    // FOUR SetChannelState SITES IN THIS FILE, and the convention holds at three
+    // of them: this one, reconfigure()'s restore, and close()'s stop. The fourth
+    // is open()'s start, which runs INSIDE open()'s g_setupMutex scope because
+    // it is one statement in a build sequence that is genuinely planner-bound
+    // from end to end; hoisting it alone would buy nothing and split the build.
+    //
+    // That exception is worth naming now rather than leaving implicit, because
+    // AetherSDR patch 8 gave case 1 a bounded Sleep(1) loop, and at open()'s
+    // site that loop would run while holding the process-global planner lock.
+    // It cannot fire there: the wait's predicate needs flushflag SET, and
+    // pre_main_build clears flushflag before OpenChannel ever reaches its start
+    // (channel.c). That is an invariant of vendored code rather than a guard in
+    // this file, so it is stated here, where the next reader will look. Raised
+    // in review of #5628.
+    SetChannelState(m_channelId, running ? 1 : 0, 0);
+    m_running.store(running, std::memory_order_relaxed);
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
 {
     if (!validateConfig(config, error) || !beginControlOperation()) {
@@ -352,10 +561,27 @@ bool WdspChannel::reconfigure(const Config& config, std::string* error) noexcept
         return false;
     }
 
+    const bool wasRunning = m_running.load(std::memory_order_relaxed);
     close();
     m_config = config;
     m_outputBlockSize = computeOutputBlockSize(m_config);
     open();
+    if (!wasRunning) {
+        // Restore the state this found, the way WDSP's own rebuilds do
+        // (channel.c SetDSPBuffsize: oldstate = SetChannelState(0,1) ... then
+        // SetChannelState(oldstate, 0)). open() always starts the channel,
+        // because that is what an initial build wants; a rebuild of a STOPPED
+        // channel must not put it back on the air behind the caller's back.
+        //
+        // Safe to leave a ramp pending here, which it did not used to be: this
+        // arms a down-slew that nothing is obliged to clock, and before
+        // AetherSDR patch 7 a later setRunning(true) would then have finished
+        // that stale ramp and killed the channel. Case 1 now cancels it.
+        //
+        // Outside g_setupMutex, like setRunning()'s and close()'s stops.
+        SetChannelState(m_channelId, 0, 0);
+        m_running.store(false, std::memory_order_relaxed);
+    }
     endControlOperation();
     return true;
 }
@@ -615,9 +841,9 @@ uint64_t WdspChannel::outstandingAllocationsForTest() noexcept
     return wdspPortOutstandingAllocations();
 }
 
-std::string WdspChannel::wisdomCachePathForTest()
+std::unique_lock<std::mutex> WdspChannel::fftwSetupLock()
 {
-    return wisdomPath();
+    return std::unique_lock<std::mutex>(g_setupMutex);
 }
 
 bool WdspChannel::validateConfig(const Config& config, std::string* error) noexcept
@@ -779,13 +1005,19 @@ void WdspChannel::open() noexcept
     }
     // Cache what this open measured, right now, while we still hold the setup
     // lock -- a kill or a crash before exit must not throw the measurement away.
-    exportWisdomNow();
-    armWisdomExportOnce();   // and again at exit, for later setMode/setFilter plans
+    // Bounded planner => rushed plans => do not publish them. See
+    // plannerTimeLimitSeconds(): this cache is shared with the running app, so
+    // a test run that exported would degrade the operator's next connect.
+    if (!plannerIsBounded()) {
+        exportWisdomNow();
+        armWisdomExportOnce();   // and again at exit, for later setMode/setFilter plans
+    }
     // Before the channel starts, so the first block through processIq() finds
     // its staging buffers sized and the stage already created.
     openNoiseBlanker();
     // Fully configured -- now run. dmode 0: nothing to flush on the way up.
     SetChannelState(m_channelId, 1, 0);
+    m_running.store(true, std::memory_order_relaxed);
     m_open = true;
 }
 
@@ -794,17 +1026,91 @@ void WdspChannel::close() noexcept
     if (!m_open) {
         return;
     }
-    const std::scoped_lock setupLock(g_setupMutex);
-    // Stop and FLUSH before teardown (dmode 1 blocks until the channel has
-    // drained, bounded by WDSP's own 100 ms timeout). CloseChannel on a running
-    // channel frees buffers out from under the mute ramp and skips the flush
-    // entirely, which is both a click on the way out and a race.
+    // TEARDOWN, and the only CloseChannel in this process. Stop first:
+    // CloseChannel on a running channel frees buffers out from under the mute
+    // ramp and skips the flush entirely, which is both a click on the way out
+    // and a race.
+    //
+    // dmode 1 here, unlike setRunning()'s stop, and it does NOT mean the same
+    // thing. The flag it waits on is ch[channel].flushflag, and NOTHING ON THIS
+    // THREAD can clear it. The chain is one hop longer than it looks:
+    // fexchange0/fexchange2 run the down-slew and, when the slew completes,
+    // release a->Sem_Flush (the ReleaseSemaphore calls at the tail of
+    // fexchange0/fexchange2); WDSP's per-channel flushChannel thread wakes on
+    // that semaphore, flushes, and only then clears flushflag (the tail of
+    // flushChannel, channel.c). So the wait is satisfiable ONLY while
+    // the host keeps calling fexchange*, and close() runs behind the control
+    // fence — the destructor has drained the callbacks, reconfigure() holds
+    // beginControlOperation() — so by construction nothing will call it and the
+    // wait runs to WDSP's 100 ms timeout.
+    //
+    // The blocking form is still the right call here, because the timeout
+    // branch is not waste: it force-clears exchange, flushflag and
+    // slew.downflag, which is exactly the state CloseChannel wants to find.
+    // Passing dmode 0 would skip the wait AND the force-clear, which is not the
+    // same shortcut.
+    //
+    // AND THAT IS NOT AN ARGUMENT AGAINST THE OWNER-SIDE STOP DESCRIBED IN THE
+    // NEXT PARAGRAPH, which deliberately makes this line a no-op so the
+    // force-clear never runs. Reaching CloseChannel with all three flags still
+    // set is benign, checked rather than assumed: pre_main_destroy clears
+    // exchange, pre_main_build clears flushflag, and post_main_destroy ->
+    // destroy_iobuffs frees the whole iob so create_iobuffs hands back a fresh
+    // slew with downflag zeroed. A future reader following the paragraph above
+    // should not re-add the wait. (Raised in review of #5628.)
+    //
+    // THE ONE THING THE 100 ms WAS ALSO DOING, and the reason this is safe to
+    // skip only since AetherSDR patch 9. The wait was never only a wait: while
+    // it ran, an in-flight flushChannel thread had time to leave flush_rxa()
+    // before destroy_main() freed the RXA chain underneath it. Nothing in
+    // CloseChannel waited for that thread — patch 4's handshake waits for the
+    // wdspmain worker, and upstream's flushChannel handshake sat in
+    // destroy_iobuffs(), i.e. AFTER destroy_main(). So a channel stopped through
+    // setRunning() and then CLOCKED — which is what the header documents as
+    // correct usage, and what the T/R mute of docs/HERMES.md §13 row 9a will do
+    // — reached this line with the flush thread runnable and no barrier left.
+    // MEASURED as a use-after-free, reproduced before it was fixed; ten9876
+    // found it in review of #5628. Patch 9 moves that handshake into
+    // pre_main_destroy, so the barrier is explicit and covers every caller of
+    // CloseChannel rather than only the ones that happen to pay a timeout.
+    // runCloseAfterStoppedClockingTest is what holds it.
+    //
+    // The rest of the fix is at the OWNER, not here: a channel already stopped
+    // through setRunning() takes none of this, because SetChannelState no-ops
+    // when the state already matches. Two of the three WdspChannel owners in
+    // this tree — Hl2RxDsp and AnanRxDsp — now stop before they let a channel
+    // go, so on those paths this line is normally a no-op and the 100 ms is not
+    // paid at all. The third, WdspReceiver in
+    // src/core/backends/rtl/RtlReceiverRegistry.cpp, deliberately does not:
+    // it retires a bank on the registry's executor thread rather than on the
+    // thread that drives processIq(), so the "a callback cannot be in flight"
+    // argument the other two rest on does not carry across without work this PR
+    // has not done. Since patch 9 that is a latency question and not a safety
+    // one, and the RTL path still pays the 100 ms per channel. (Raised in
+    // review of #5628.)
+    //
+    // OUTSIDE g_setupMutex, and it is the only WDSP call in this class that is.
+    // That lock exists to serialise the FFTW PLANNER (see the comments at the
+    // top of this file); SetChannelState enters none of it. Everything it
+    // touches is indexed by channel — ch[channel].state/flushflag/exchange,
+    // ch[channel].iob.pc->slew — and so is everything the flushChannel thread
+    // it hands off to reaches: flush_iobuffs/flush_main are memsets and index
+    // resets over rxa[channel]/txa[channel], with no fftw_plan or
+    // fftw_destroy_plan reachable from either (checked by walking the call
+    // graph out of flush_main across the vendored tree). Under the lock, N
+    // channels closing while running queued N timeouts end to end. NOT
+    // MEASURED, an inference from the 100 ms constant: four receivers would
+    // have been ~0.4 s of serialised teardown.
     SetChannelState(m_channelId, 0, 1);
-    CloseChannel(m_channelId);
-    // After the channel has stopped and drained: while it is still running a
-    // callback can be inside processIq(), and destroying the stage under one
-    // frees the delay line out from under xanb().
-    closeNoiseBlanker();
+    m_running.store(false, std::memory_order_relaxed);
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        CloseChannel(m_channelId);
+        // After the channel has stopped and drained: while it is still running
+        // a callback can be inside processIq(), and destroying the stage under
+        // one frees the delay line out from under xanb().
+        closeNoiseBlanker();
+    }
     m_open = false;
 }
 

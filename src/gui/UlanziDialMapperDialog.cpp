@@ -25,6 +25,7 @@
 #ifdef Q_OS_LINUX
 #include "core/LogManager.h"
 #include <QMessageBox>
+#include "ScopedChildWidget.h"
 #include <QMetaObject>
 #include <QProcess>
 #include <QStandardPaths>
@@ -680,9 +681,11 @@ void UlanziDialMapperDialog::onGrantAccessClicked()
 {
     const QString pkexec = QStandardPaths::findExecutable(QStringLiteral("pkexec"));
     if (pkexec.isEmpty()) {
-        QMessageBox::warning(this, tr("Grant access"),
+        ScopedChildWidget<QMessageBox> boxOwner(
+            QMessageBox::Warning, tr("Grant access"),
             tr("pkexec was not found. Install polkit, or add this user to the "
-               "'input' group manually."));
+               "'input' group manually."), QMessageBox::Ok, this);
+        boxOwner.get()->exec();
         return;
     }
 

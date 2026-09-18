@@ -6,7 +6,8 @@
 //   - save() before a successful load() can never create or damage a store
 //   - the one-time XML import: parity, recovery-ladder sources, frozen
 //     snapshot, meta stamping, credential exodus, no re-import
-//   - corruption handling: quarantine + backup restore, XML re-import
+//   - corruption handling: quarantine + backup restore, XML re-import, while
+//     permission/I/O failures leave healthy databases in place
 //   - newer-schema databases open read-only
 //   - dirty-row saves persist exactly the mutated rows
 #include "TestSettingsProfile.h"
@@ -29,6 +30,10 @@
 #include <QXmlStreamWriter>
 
 #include <cstdio>
+
+#ifndef Q_OS_WIN
+#include <sys/stat.h>
+#endif
 
 using namespace AetherSDR;
 
@@ -210,6 +215,47 @@ void testFirstRunInitialization()
                && lastRadio == QStringLiteral("True")
                && dbHas(QStringLiteral("GUIClientID")),
            "first-run initialization writes the intentional default profile");
+}
+
+// Pins the runtime hardening SettingsDatabase::open() re-establishes for
+// -DUSE_SYSTEM_SQLITE=ON, where the distro library doesn't carry the
+// vendored target's SQLITE_DEFAULT_FILE_PERMISSIONS=0600. Platform-gated
+// because Windows ACLs have no POSIX owner-only bit for QFileDevice
+// permissions to model.
+void testDatabaseFilePermissions()
+{
+#ifdef Q_OS_WIN
+    std::printf("[SKIP] database file is owner-only on disk (no POSIX mode bits on Windows)\n");
+#else
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+
+    const auto isOwnerOnly = [](const QString& path) {
+        struct stat fileStatus {};
+        const QByteArray nativePath = QFile::encodeName(path);
+        return ::stat(nativePath.constData(), &fileStatus) == 0
+               && (fileStatus.st_mode & 0777) == 0600;
+    };
+
+    expect(QFile::exists(dbPath()), "first-run load creates the database");
+    expect(isOwnerOnly(dbPath()),
+           "the database file is owner-read/write only, group/other have no access");
+
+    // journal_mode=WAL is on by default (testFirstRunInitialization's own
+    // profile confirms this store reaches createSchema()), so -wal exists
+    // by the time load() returns; -shm's presence is backend-dependent and
+    // only checked if SettingsDatabase actually created one.
+    const QString walPath = dbPath() + QStringLiteral("-wal");
+    if (QFile::exists(walPath)) {
+        expect(isOwnerOnly(walPath),
+               "the -wal sidecar is owner-read/write only");
+    }
+    const QString shmPath = dbPath() + QStringLiteral("-shm");
+    if (QFile::exists(shmPath)) {
+        expect(isOwnerOnly(shmPath),
+               "the -shm sidecar is owner-read/write only");
+    }
+#endif
 }
 
 void testImportPromotesValidTemp()
@@ -491,6 +537,278 @@ void testLockedDbFailsClosed()
            "the next launch recovers normally once the lock is gone");
 }
 
+// A read-only owner file can still be opened and queried before SQLite reaches
+// createSchema()'s user_version write. That ordinary write refusal is not a
+// corruption report: quarantining it would replace current settings with an
+// older backup or legacy XML. Exercise both no-backup and backup-present forms
+// because recovery must stay forbidden in either case.
+int testReadOnlyDbFailsClosed(bool hasOlderBackup)
+{
+#ifdef Q_OS_WIN
+    Q_UNUSED(hasOlderBackup);
+    std::printf("[SKIP] POSIX owner-read-only fixture is not available on Windows\n");
+    return 77;
+#else
+    AppSettings& settings = AppSettings::instance();
+    const QByteArray frozenXml = settingsDocument(10, QStringLiteral("legacy"));
+    expect(writeFile(xmlPath(), frozenXml), "frozen legacy XML fixture is written");
+    settings.load();
+    settings.setValue(QStringLiteral("Survivor"), QStringLiteral("current"));
+    settings.save();
+    settings.reset();
+
+    QDir backups(SettingsPaths::backupsDir());
+    if (hasOlderBackup) {
+        expect(!backups.entryList({QStringLiteral("*.db")}, QDir::Files).isEmpty(),
+               "a verified older backup exists before the read-only failure");
+    } else {
+        const QStringList backupFiles = backups.entryList({QStringLiteral("*.db")},
+                                                           QDir::Files);
+        for (const QString& name : backupFiles) {
+            expect(backups.remove(name), "fixture backup is removed");
+        }
+        expect(backups.entryList({QStringLiteral("*.db")}, QDir::Files).isEmpty(),
+               "no backup remains before the read-only failure");
+    }
+    SettingsDatabase verifier;
+    expect(verifier.open(dbPath())
+               && verifier.quickCheck()
+                      == SettingsDatabase::IntegrityCheckResult::Ok,
+           "original database is healthy before permissions are changed");
+    verifier.close();
+    expect(QFile::setPermissions(dbPath(), QFileDevice::ReadOwner),
+           "healthy database is made owner-read-only");
+    if (g_failures != 0) {
+        return 1;
+    }
+    if (QFileInfo(dbPath()).isWritable()) {
+        QFile::setPermissions(dbPath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        std::printf("[SKIP] this process can bypass owner-read-only permissions\n");
+        return 77;
+    }
+
+    settings.load();
+    settings.setValue(QStringLiteral("MustNotSave"), QStringLiteral("x"));
+    settings.save();
+
+    expect(QFile::exists(dbPath()), "a read-only database remains in place");
+    expect(!settings.storeWritable(),
+           "a read-only database failure keeps the session non-writable");
+    expect(!settings.loadNotice().isEmpty(),
+           "a read-only database failure is surfaced to the operator");
+    const QDir quarantine(SettingsPaths::quarantineDir());
+    expect(quarantine.entryList(QDir::Files).isEmpty(),
+           "a read-only database is never quarantined");
+    QString survivor;
+    expect(dbRow(QStringLiteral("Survivor"), survivor)
+               && survivor == QStringLiteral("current"),
+           "the original current database remains authoritative");
+    expect(!dbHas(QStringLiteral("MustNotSave")),
+           "the failed read-only session cannot save");
+    expect(readFile(xmlPath()) == frozenXml,
+           "the frozen legacy XML is unchanged by the failed read-only session");
+
+    // The app must NOT have quietly restored owner-write for us; the retry
+    // below only works because the operator (here, the fixture) put it back.
+    expect(!QFileInfo(dbPath()).isWritable(),
+           "the failed load left the database read-only, as the operator set it");
+    expect(QFile::setPermissions(dbPath(),
+                                 QFileDevice::ReadOwner | QFileDevice::WriteOwner),
+           "database permissions are restored for the retry");
+    settings.reset();
+    settings.load();
+    expect(settings.value(QStringLiteral("Survivor")).toString()
+               == QStringLiteral("current"),
+           "a later writable launch loads the original database without recovery");
+    return g_failures == 0 ? 0 : 1;
+#endif
+}
+
+void testUnavailableIntegrityCheck()
+{
+    SettingsDatabase database;
+    expect(database.quickCheck() == SettingsDatabase::IntegrityCheckResult::Failed,
+           "an unavailable quick check is an execution failure, not corruption");
+    expect(database.integrityCheck() == SettingsDatabase::IntegrityCheckResult::Failed,
+           "an unavailable full check is an execution failure, not corruption");
+    expect(!database.lastOpenWasCorrupt() && !database.lastOpenWasBusy(),
+           "integrity execution failures do not change open-path classification");
+    expect(!database.lastError().isEmpty(), "an unavailable check reports its error");
+}
+
+void testFilesystemFailureFailsClosed()
+{
+    const QString markerPath = dbPath() + QStringLiteral("/ordinary-failure-marker");
+    expect(QDir().mkpath(dbPath()), "database-path directory obstacle is created");
+    expect(writeFile(markerPath, QByteArray("leave this ordinary filesystem failure")),
+           "database-path obstacle marker is written");
+
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    settings.setValue(QStringLiteral("MustNotSave"), QStringLiteral("x"));
+    settings.save();
+
+    expect(QDir(dbPath()).exists(),
+           "an ordinary filesystem failure leaves the existing path in place");
+    expect(readFile(markerPath) == QByteArray("leave this ordinary filesystem failure"),
+           "an ordinary filesystem failure leaves existing path contents intact");
+    expect(!settings.storeWritable(),
+           "an ordinary filesystem failure keeps the session non-writable");
+    expect(!settings.loadNotice().isEmpty(),
+           "an ordinary filesystem failure is surfaced to the operator");
+    // Without this, the scenario would pass equally well if load() took the
+    // "no file, cannot create one" branch instead of the preserve branch:
+    // both leave the marker, both refuse saves, both set a notice. Only the
+    // empty quarantine distinguishes them. (The branch is reached because
+    // QFile::exists() is true for a DIRECTORY at the database path — it
+    // forwards to QFileInfo::exists — which is load-bearing here.)
+    const QDir fsQuarantine(SettingsPaths::quarantineDir());
+    expect(fsQuarantine.entryList(QDir::Files).isEmpty(),
+           "an ordinary filesystem failure is never quarantined");
+}
+
+// A structurally valid database with a damaged data page still opens and
+// passes the schema probe; only the integrity check reports the damage. That
+// report is corruption evidence and must still authorize quarantine + restore.
+// This is the OTHER half of the admission rule: without it, downgrading
+// runIntegrityCheck()'s report arm to Failed leaves every scenario green.
+void testIntegrityReportRestoresBackup()
+{
+    expect(writeFile(xmlPath(), settingsDocument(400, QStringLiteral("original"))),
+           "import fixture is written");
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    settings.setValue(QStringLiteral("Survivor"), QStringLiteral("via-backup"));
+    settings.save();
+    settings.reset();
+
+    // Scribble a middle page, leaving page 1 (header + schema) intact.
+    QFile database(dbPath());
+    expect(database.open(QIODevice::ReadWrite), "database fixture opens for damage");
+    const QByteArray header = database.read(100);
+    const int pageSize = (static_cast<unsigned char>(header[16]) << 8)
+                         | static_cast<unsigned char>(header[17]);
+    const qint64 pages = database.size() / (pageSize > 0 ? pageSize : 4096);
+    expect(pages >= 4, "fixture database spans enough pages to damage a middle one");
+    database.seek((pages / 2) * pageSize);
+    database.write(QByteArray(pageSize, '\xA5'));
+    database.close();
+
+    SettingsDatabase probe;
+    expect(probe.open(dbPath()),
+           "a damaged data page still OPENS — header and schema are intact");
+    expect(probe.quickCheck() == SettingsDatabase::IntegrityCheckResult::Corrupt,
+           "the integrity check returns a damage REPORT, not an execution failure");
+    expect(!probe.lastOpenWasCorrupt(),
+           "the open path saw no corruption — the report is the only evidence");
+    probe.close();
+
+    settings.load();
+    const QDir quarantine(SettingsPaths::quarantineDir());
+    expect(!quarantine.entryList(QDir::Files).isEmpty(),
+           "a damage report authorizes quarantine");
+    expect(settings.value(QStringLiteral("Key005")).toString()
+               == QStringLiteral("original-5"),
+           "a damage report restores the verified backup");
+    expect(settings.storeWritable(),
+           "recovery from a damage report leaves the session writable");
+}
+
+// The preserve promise is byte-for-byte AND mode-for-mode. Two writes used to
+// break it: createSchema()'s redundant user_version stamp, and the permission
+// hardening pass rewriting a deliberately read-only store to 0600.
+int testPreserveKeepsBytesAndMode()
+{
+#ifdef Q_OS_WIN
+    std::printf("[SKIP] POSIX owner-read-only fixture is not available on Windows\n");
+    return 77;
+#else
+    AppSettings& settings = AppSettings::instance();
+    expect(writeFile(xmlPath(), settingsDocument(10, QStringLiteral("legacy"))),
+           "frozen legacy XML fixture is written");
+    settings.load();
+    settings.setValue(QStringLiteral("Survivor"), QStringLiteral("current"));
+    settings.save();
+    settings.reset();
+
+    QDir backups(SettingsPaths::backupsDir());
+    const QStringList backupFiles = backups.entryList({QStringLiteral("*.db")},
+                                                      QDir::Files);
+    for (const QString& name : backupFiles) {
+        expect(backups.remove(name), "fixture backup is removed");
+    }
+    expect(QFile::setPermissions(dbPath(), QFileDevice::ReadOwner),
+           "healthy database is made owner-read-only");
+    if (g_failures != 0) {
+        return 1;
+    }
+    if (QFileInfo(dbPath()).isWritable()) {
+        QFile::setPermissions(dbPath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        std::printf("[SKIP] this process can bypass owner-read-only permissions\n");
+        return 77;
+    }
+
+    const QByteArray before = readFile(dbPath());
+    const QFileDevice::Permissions modeBefore = QFile::permissions(dbPath());
+    settings.load();
+
+    expect(readFile(dbPath()) == before,
+           "a preserved database is byte-for-byte identical after a failed load");
+    expect(QFile::permissions(dbPath()) == modeBefore,
+           "a preserved database keeps its original permissions");
+    expect(!settings.storeWritable(), "the preserved session refuses saves");
+    expect(!settings.loadNotice().isEmpty(), "the failure is surfaced");
+
+    // Reading an unwritable store makes SQLite create its -wal/-shm with the
+    // DATABASE's mode. Those scratch files must not be allowed to stay
+    // read-only: the next connection maps them before any hardening pass can
+    // widen them, so BEGIN IMMEDIATE would fail with SQLITE_READONLY and the
+    // store would stay locked out even now that permissions are restored.
+    // open() normalizes them on the way IN, which is the only point that
+    // works — a later chmod rescues nothing, exactly as in #5635 itself.
+    QFile::setPermissions(dbPath(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    settings.reset();
+    settings.load();
+    expect(settings.storeWritable(),
+           "restoring permissions makes the store writable again — no lock-out");
+    expect(settings.value(QStringLiteral("Survivor")).toString()
+               == QStringLiteral("current"),
+           "the retry loads the preserved database, not a backup or the XML");
+    return g_failures == 0 ? 0 : 1;
+#endif
+}
+
+// Opening an already-current store must not write to it at all: the schema
+// CREATEs are no-ops, so the only write was the redundant user_version stamp.
+void testReopenDoesNotWrite()
+{
+    expect(writeFile(xmlPath(), settingsDocument(10, QStringLiteral("original"))),
+           "import fixture is written");
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+    settings.setValue(QStringLiteral("Survivor"), QStringLiteral("current"));
+    settings.save();
+    settings.reset();
+
+    const QByteArray before = readFile(dbPath());
+    expect(!before.isEmpty(), "the store exists before the reopen");
+    SettingsDatabase database;
+    expect(database.open(dbPath()), "an up-to-date store reopens cleanly");
+    database.close();
+    expect(readFile(dbPath()) == before,
+           "reopening an up-to-date store leaves it byte-for-byte identical");
+
+    // The stamp must still be WRITTEN when it is genuinely absent.
+    expect(QFile::remove(dbPath()), "the store is removed for the fresh-create case");
+    SettingsDatabase fresh;
+    expect(fresh.open(dbPath()), "a fresh store is created");
+    fresh.close();
+    SettingsDatabase reread;
+    expect(reread.open(dbPath()) && !reread.isNewerSchema(),
+           "the fresh store carries the current schema version");
+    reread.close();
+}
+
 void testNewerSchemaOpensReadOnly()
 {
     // Create a healthy store, then stamp a schema version from the future.
@@ -574,6 +892,41 @@ void testThreeDSliceDepthDefaultAndOptIn()
     DisplaySettings::setThreeDSliceDepth(false);
     expect(!DisplaySettings::threeDSliceDepth(),
            "3D Slice Shadow can be disabled again after opting in");
+}
+
+void testPanMenuStateDefaultAndPerSlotPersistence()
+{
+    AppSettings& settings = AppSettings::instance();
+    settings.load();
+
+    expect(DisplaySettings::panMenuExpanded(0),
+           "the panadapter menu defaults expanded when no state exists");
+    expect(DisplaySettings::panMenuExpanded(1),
+           "each additional pan slot defaults expanded independently");
+
+    DisplaySettings::setPanMenuExpanded(0, false);
+    DisplaySettings::setPanMenuExpanded(1, true);
+    expect(!DisplaySettings::panMenuExpanded(0),
+           "slot zero remembers a collapsed menu");
+    expect(DisplaySettings::panMenuExpanded(1),
+           "slot one remains expanded when slot zero is collapsed");
+
+    QString persisted;
+    expect(settings.readAppRowFromDisk(QStringLiteral("Display"), persisted),
+           "pan menu state is committed to the settings database");
+    const QJsonObject slotStates = QJsonDocument::fromJson(persisted.toUtf8())
+                                      .object()
+                                      .value(QStringLiteral("panMenuExpanded"))
+                                      .toObject();
+    expect(slotStates.value(QStringLiteral("0")).toString() == QStringLiteral("False")
+               && slotStates.value(QStringLiteral("1")).toString() == QStringLiteral("True"),
+           "all pan slots share one nested Display configuration object");
+
+    settings.reset();
+    settings.load();
+    expect(!DisplaySettings::panMenuExpanded(0)
+               && DisplaySettings::panMenuExpanded(1),
+           "independent pan menu states survive a settings reload");
 }
 
 // A nickname is stored under a key derived from the radio's MAC, folded to the
@@ -786,12 +1139,72 @@ int main(int argc, char** argv)
     }
 
     const QString scenario = QString::fromLocal8Bit(argv[1]);
-    if (scenario == QStringLiteral("save-before-load")) {
+    if (scenario == QStringLiteral("explicit-profile-outside-test-mode")) {
+        // Match a real automation launch, but seed ONLY a file-backed INI
+        // fixture. CFPreferences can ignore HOME even when fileName() reports
+        // a private path, so never create a native preference sentinel here.
+        QStandardPaths::setTestModeEnabled(false);
+        const QString localLegacy = SettingsPaths::configDir()
+            + QStringLiteral("/legacy-qsettings.ini");
+        const QString sentinel = profile.path() + QStringLiteral("/profile-only");
+        {
+            QSettings fixture(localLegacy, QSettings::IniFormat);
+            fixture.setValue(QStringLiteral("lastRadioSerial"), sentinel);
+            fixture.sync();
+            expect(fixture.status() == QSettings::NoError, "create private profile fixture");
+        }
+        QFile original(localLegacy);
+        expect(original.open(QIODevice::ReadOnly), "read private fixture before migration");
+        const QByteArray bytes = original.readAll();
+        original.close();
+        AppSettings::instance().load();
+        expect(AppSettings::instance().value("LastConnectedRadioSerial").toString() == sentinel,
+               "explicit profile imports its own source outside Qt test mode");
+        QFile remaining(localLegacy);
+        expect(remaining.open(QIODevice::ReadOnly) && remaining.readAll() == bytes,
+               "profile legacy source stays byte-identical");
+    } else if (scenario == QStringLiteral("explicit-profile-path-isolation")) {
+#if defined(Q_OS_MAC) || defined(Q_OS_WIN)
+        // Windows known folders do not honor HOME overrides. Keep Qt test
+        // mode there, and skip rather than create a fixture outside our root.
+#ifdef Q_OS_MAC
+        QStandardPaths::setTestModeEnabled(false);
+#endif
+        const QString oldPath = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
+            + QStringLiteral("/AetherSDR/AetherSDR.settings");
+        if (!QFileInfo(oldPath).absoluteFilePath().startsWith(profile.path() + '/')) {
+            std::fprintf(stderr, "[SKIP] native path cannot be redirected into private profile\n");
+            return 77;
+        }
+        const QByteArray original = settingsDocument(3, QStringLiteral("NATIVE-XML"));
+        expect(writeFile(oldPath, original), "create isolated legacy path fixture");
+        AppSettings::instance().load();
+        QFile remaining(oldPath);
+        expect(remaining.open(QIODevice::ReadOnly) && remaining.readAll() == original,
+               "explicit profile never moves or edits the ordinary legacy XML");
+        expect(!AppSettings::instance().contains(QStringLiteral("Key000")),
+               "ordinary legacy XML is not imported into explicit profile");
+#else
+        return 77; // Legacy path relocation exists only on macOS and Windows.
+#endif
+    } else if (scenario == QStringLiteral("save-before-load")) {
         testSaveBeforeLoad();
     } else if (scenario == QStringLiteral("xml-import-parity")) {
         testXmlImportParity();
+    } else if (scenario == QStringLiteral("isolated-legacy-import")) {
+        const QString localLegacy = SettingsPaths::configDir()
+            + QStringLiteral("/legacy-qsettings.ini");
+        expect(writeFile(localLegacy, "[General]\nlastRadioSerial=PROFILE-SENTINEL\n"),
+               "write legacy fixture inside explicit profile");
+        AppSettings::instance().load();
+        expect(AppSettings::instance().value("LastConnectedRadioSerial").toString()
+                   == QStringLiteral("PROFILE-SENTINEL"),
+               "explicit profile imports only its own legacy preferences");
+        expect(QFile::exists(localLegacy), "local legacy source stays frozen");
     } else if (scenario == QStringLiteral("first-run")) {
         testFirstRunInitialization();
+    } else if (scenario == QStringLiteral("database-file-permissions")) {
+        testDatabaseFilePermissions();
     } else if (scenario == QStringLiteral("xml-import-tmp-promotion")) {
         testImportPromotesValidTemp();
     } else if (scenario == QStringLiteral("xml-import-bak-fallback")) {
@@ -810,12 +1223,28 @@ int main(int argc, char** argv)
         testCorruptDbReimportsFrozenXml();
     } else if (scenario == QStringLiteral("locked-db-fails-closed")) {
         testLockedDbFailsClosed();
+    } else if (scenario == QStringLiteral("readonly-db-fails-closed")) {
+        return testReadOnlyDbFailsClosed(false);
+    } else if (scenario == QStringLiteral("readonly-db-with-backup-fails-closed")) {
+        return testReadOnlyDbFailsClosed(true);
+    } else if (scenario == QStringLiteral("unavailable-integrity-check")) {
+        testUnavailableIntegrityCheck();
+    } else if (scenario == QStringLiteral("filesystem-failure-fails-closed")) {
+        testFilesystemFailureFailsClosed();
+    } else if (scenario == QStringLiteral("integrity-report-restores-backup")) {
+        testIntegrityReportRestoresBackup();
+    } else if (scenario == QStringLiteral("preserve-keeps-bytes-and-mode")) {
+        return testPreserveKeepsBytesAndMode();
+    } else if (scenario == QStringLiteral("reopen-does-not-write")) {
+        testReopenDoesNotWrite();
     } else if (scenario == QStringLiteral("newer-schema-readonly")) {
         testNewerSchemaOpensReadOnly();
     } else if (scenario == QStringLiteral("dirty-row-save")) {
         testDirtyRowSaves();
     } else if (scenario == QStringLiteral("display-slice-depth-default")) {
         testThreeDSliceDepthDefaultAndOptIn();
+    } else if (scenario == QStringLiteral("display-pan-menu-state")) {
+        testPanMenuStateDefaultAndPerSlotPersistence();
     } else if (scenario == QStringLiteral("nickname-key-roundtrip")) {
         testNicknameKeySurvivesDisk();
     } else if (scenario == QStringLiteral("browser-api")) {

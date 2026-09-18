@@ -6,6 +6,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QObject>
+#include <QtGlobal>
 
 #ifdef HAVE_KEYCHAIN
 #include <qt6keychain/keychain.h>
@@ -97,6 +98,20 @@ bool AutomationBridgeSettings::readOnly()
     return readObj().value(QLatin1String(kFieldReadOnly)).toBool(false);
 }
 void AutomationBridgeSettings::setReadOnly(bool on) { writeBool(kFieldReadOnly, on); }
+
+bool AutomationBridgeSettings::envForced()
+{
+    return qEnvironmentVariableIsSet("AETHER_AUTOMATION");
+}
+
+bool AutomationBridgeSettings::recordStartOutcome(bool ok, bool forced)
+{
+    if (forced) {
+        return enabled();  // not our opt-in to rewrite
+    }
+    setEnabled(ok);
+    return ok;
+}
 
 QString AutomationBridgeSettings::keychainService()
 {

@@ -7,7 +7,7 @@
 //     when a station identifies itself ("DE KI6BCJ KI6BCJ")
 //   • CallsignLookupService — QRZ.com XML client + 7-day on-disk cache
 //   • CallsignCard on the CW decode panel — the screen-pop
-//   • CallsignLookupDialog — View → Callsign Lookup manual lookups
+//   • CallsignLookupDialog — Tools → Callsign Lookup manual lookups
 //
 // The service is surface-agnostic: the future SSB voice-callsign decoder
 // pops the same card from its own detection path.

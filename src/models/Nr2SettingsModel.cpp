@@ -16,7 +16,6 @@ namespace {
 
 Q_LOGGING_CATEGORY(lcNr2Settings, "aether.nr2.settings")
 
-constexpr int kConfigVersion = 1;
 const QString kRootKey = QStringLiteral("NR2");
 
 const QString kLegacyEnabled = QStringLiteral("ClientNr2Enabled");
@@ -27,7 +26,9 @@ const QString kLegacyGainMax = QStringLiteral("NR2GainMax");
 const QString kLegacyGainFloor = QStringLiteral("NR2GainFloor");
 const QString kLegacyGainSmooth = QStringLiteral("NR2GainSmooth");
 const QString kLegacyQspp = QStringLiteral("NR2Qspp");
-const QString kLegacyGeometry = QStringLiteral("NR2UseOriginalGeometry");
+// Keep the retired flat key in migration cleanup so an old profile cannot
+// silently retain a comparison mode that no longer has a user-facing control.
+const QString kRetiredGeometry = QStringLiteral("NR2UseOriginalGeometry");
 
 const std::array<QString, 9> kLegacyKeys = {
     kLegacyEnabled,
@@ -38,7 +39,7 @@ const std::array<QString, 9> kLegacyKeys = {
     kLegacyGainFloor,
     kLegacyGainSmooth,
     kLegacyQspp,
-    kLegacyGeometry,
+    kRetiredGeometry,
 };
 
 bool settingIsTrue(const QVariant& value)
@@ -60,16 +61,17 @@ QJsonObject toJson(const Nr2SettingsModel::Config& config)
         {QStringLiteral("gainFloor"), config.gainFloor},
         {QStringLiteral("gainSmooth"), config.gainSmooth},
         {QStringLiteral("qspp"), config.qspp},
-        {QStringLiteral("legacyGeometryAndGainMapping"),
-         config.legacyGeometryAndGainMapping},
+        {QStringLiteral("post2Run"), config.post2Run},
+        {QStringLiteral("post2Factor"), config.post2Factor},
+        {QStringLiteral("post2Nlevel"), config.post2Nlevel},
+        {QStringLiteral("post2TaperHz"), config.post2TaperHz},
+        {QStringLiteral("post2DecaySeconds"), config.post2DecaySeconds},
     };
 }
 
 Nr2SettingsModel::Config fromJson(const QJsonObject& object)
 {
     Nr2SettingsModel::Config config = Nr2SettingsModel::defaults();
-    config.version = object.value(QStringLiteral("version"))
-                         .toInt(kConfigVersion);
     config.enabled = object.value(QStringLiteral("enabled"))
                          .toBool(config.enabled);
     config.gainMethod = object.value(QStringLiteral("gainMethod"))
@@ -86,9 +88,19 @@ Nr2SettingsModel::Config fromJson(const QJsonObject& object)
         object.value(QStringLiteral("gainSmooth")).toDouble(config.gainSmooth));
     config.qspp = static_cast<float>(
         object.value(QStringLiteral("qspp")).toDouble(config.qspp));
-    config.legacyGeometryAndGainMapping =
-        object.value(QStringLiteral("legacyGeometryAndGainMapping"))
-            .toBool(config.legacyGeometryAndGainMapping);
+    // Absent in a version-2 config written before the stage existed; each
+    // falls back to the member's default, which is upstream's.
+    config.post2Run =
+        object.value(QStringLiteral("post2Run")).toBool(config.post2Run);
+    config.post2Factor = static_cast<float>(
+        object.value(QStringLiteral("post2Factor")).toDouble(config.post2Factor));
+    config.post2Nlevel = static_cast<float>(
+        object.value(QStringLiteral("post2Nlevel")).toDouble(config.post2Nlevel));
+    config.post2TaperHz = static_cast<float>(
+        object.value(QStringLiteral("post2TaperHz")).toDouble(config.post2TaperHz));
+    config.post2DecaySeconds = static_cast<float>(
+        object.value(QStringLiteral("post2DecaySeconds"))
+            .toDouble(config.post2DecaySeconds));
     return config;
 }
 
@@ -125,6 +137,18 @@ Nr2SettingsModel::Config Nr2SettingsModel::normalized(Config config)
     config.gainSmooth = std::isfinite(config.gainSmooth)
         ? std::clamp(config.gainSmooth, 0.0f, 0.9999f)
         : fallback.gainSmooth;
+    config.post2Factor = std::isfinite(config.post2Factor)
+        ? std::clamp(config.post2Factor, 0.0f, 1.0f)
+        : fallback.post2Factor;
+    config.post2Nlevel = std::isfinite(config.post2Nlevel)
+        ? std::clamp(config.post2Nlevel, 0.0f, 1.0f)
+        : fallback.post2Nlevel;
+    config.post2TaperHz = std::isfinite(config.post2TaperHz)
+        ? std::clamp(config.post2TaperHz, 300.0f, 6000.0f)
+        : fallback.post2TaperHz;
+    config.post2DecaySeconds = std::isfinite(config.post2DecaySeconds)
+        ? std::clamp(config.post2DecaySeconds, 0.1f, 30.0f)
+        : fallback.post2DecaySeconds;
     config.qspp = std::isfinite(config.qspp)
         ? std::clamp(config.qspp, 1.0e-4f, 1.0f - 1.0e-4f)
         : fallback.qspp;
@@ -189,8 +213,6 @@ void Nr2SettingsModel::load()
     migrated.gainFloor = settings.value(kLegacyGainFloor, 0.0f).toFloat();
     migrated.gainSmooth = settings.value(kLegacyGainSmooth, 0.85f).toFloat();
     migrated.qspp = settings.value(kLegacyQspp, 0.20f).toFloat();
-    migrated.legacyGeometryAndGainMapping = settingIsTrue(
-        settings.value(kLegacyGeometry, QStringLiteral("False")));
     migrated = normalized(migrated);
 
     settings.setValue(
@@ -258,6 +280,41 @@ void Nr2SettingsModel::setAeFilter(bool enabled)
     setConfig(next);
 }
 
+void Nr2SettingsModel::setPost2Run(bool enabled)
+{
+    Config next = config();
+    next.post2Run = enabled;
+    setConfig(next);
+}
+
+void Nr2SettingsModel::setPost2Factor(float value)
+{
+    Config next = config();
+    next.post2Factor = value;
+    setConfig(next);
+}
+
+void Nr2SettingsModel::setPost2Nlevel(float value)
+{
+    Config next = config();
+    next.post2Nlevel = value;
+    setConfig(next);
+}
+
+void Nr2SettingsModel::setPost2TaperHz(float hz)
+{
+    Config next = config();
+    next.post2TaperHz = hz;
+    setConfig(next);
+}
+
+void Nr2SettingsModel::setPost2DecaySeconds(float seconds)
+{
+    Config next = config();
+    next.post2DecaySeconds = seconds;
+    setConfig(next);
+}
+
 void Nr2SettingsModel::setGainMax(float value)
 {
     Config next = config();
@@ -283,13 +340,6 @@ void Nr2SettingsModel::setQspp(float value)
 {
     Config next = config();
     next.qspp = value;
-    setConfig(next);
-}
-
-void Nr2SettingsModel::setLegacyGeometryAndGainMapping(bool enabled)
-{
-    Config next = config();
-    next.legacyGeometryAndGainMapping = enabled;
     setConfig(next);
 }
 

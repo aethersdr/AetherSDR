@@ -1,6 +1,9 @@
 #pragma once
 
 #include "QsoRecordStartPolicy.h"
+#include "PcmFrame.h"
+#include "QsoRecordingFormat.h"
+#include "QsoPcmConverter.h"
 
 #include <QAudio>
 #include <QAudioDevice>
@@ -18,16 +21,20 @@
 #include <optional>
 
 class QAudioSink;
+class QAudioFormat;
 
 namespace AetherSDR {
 
 class SliceModel;
 class TransmitModel;
+class QsoRecorderWriteErrorTestAccess;
+class QsoRecorderRatesTestAccess;
+class QsoRecorderPlaybackTestAccess;
 
 // Records QSO audio (both RX and TX sides) to WAV files.
 //
 // Usage:
-//   - Connect feedRxAudio() (float32 RX) to PanadapterStream::audioDataReady
+//   - Connect feedRxFrame() (typed RX) to RadioModel::rxDemodAudioReady
 //   - Connect feedTxAudio() (int16 post-limiter TX monitor) to
 //     AudioEngine::txFinalMonitorPcmReady — the source that carries SSB/phone TX
 //     (txRawPcmReady is RADE-only and would leave SSB recordings silent, #3556)
@@ -48,10 +55,15 @@ class TransmitModel;
 // a start succeeded; check isRecording() (this class lives below the UI seam
 // and cannot show a dialog itself, so the GUI owns the operator-facing message).
 //
-// Output: 24 kHz stereo int16 WAV (matches AudioEngine native format).
+// Output: immutable PCM16 stereo WAV, 24/48 kHz from current RX metadata at
+// start; legacy24 when none is available. Voice/CW remain fixed24 inputs.
 
 class QsoRecorder : public QObject {
     Q_OBJECT
+
+    friend class QsoRecorderWriteErrorTestAccess;
+    friend class QsoRecorderRatesTestAccess;
+    friend class QsoRecorderPlaybackTestAccess;
 
 public:
     explicit QsoRecorder(QObject* parent = nullptr);
@@ -127,18 +139,41 @@ public:
 public slots:
     // Manual control
     void startRecording();
-    void stopRecording();
+    // Finalized PCM duration, including the finite conversion tail; zero if idle.
+    int stopRecording();
 
     // Playback of last recording
     void startPlayback();
     void stopPlayback();
 
-    // Audio feeds — thread-safe, called from audio thread
+    // Serialized audio feeds. Fixed-format compatibility RX is float32 stereo
+    // 24 kHz; TX/CW are native int16 stereo 24 kHz with separate histories.
+    // feedRxAudio has NO production caller since typed RX landed — MainWindow
+    // wires rxDemodAudioReady straight to feedRxFrame. It is retained as the
+    // fixed-rate compatibility seam and is exercised by the recorder tests;
+    // the legacy-RX guard in feedFixedPcm is correct but no longer live.
     void feedRxAudio(const QByteArray& pcm);
     void feedTxAudio(const QByteArray& pcm);
+    // Observes current speaker metadata even while stopped or TX-gated. The
+    // observed block advances the replay cursor but is never replayed at start.
+    void feedRxFrame(const AetherSDR::PcmFrame& frame);
+    void feedCwAudio(const QByteArray& pcm);
 
     // TX state tracking (connect to TransmitModel::moxChanged)
     void onMoxChanged(bool mox);
+    // A CW over has started/finished, from AudioEngine::cwRecordingActiveChanged.
+    // Separate from onMoxChanged because break-in gives no MOX edge that spans the
+    // over: the interlock toggles once per ELEMENT (measured on a FLEX-8400 at
+    // 20 WPM: 47 edges in 15.8 s). Routing this through onMoxChanged let raw MOX
+    // shut the gate in every inter-element gap (#4281).
+    void setCwOverActive(bool active);
+
+private:
+    // Auto-record + idle-timer bookkeeping shared by a voice over (onMoxChanged)
+    // and a CW over (setCwOverActive). Split out so the CW path cannot write
+    // m_transmitting, which MOX alone owns (#4281).
+    void applyOverBookkeeping(bool overActive);
+public:
 
 signals:
     void recordingStarted(const QString& filePath);
@@ -175,19 +210,55 @@ private:
     std::optional<RecordStartDecision> m_lastAutoBlocked;
 
     void startFile();
-    void finalizeFile(FinalizeReport report = FinalizeReport::Diagnose);
+    int finalizeFile(FinalizeReport report = FinalizeReport::Diagnose);
+    void finalizeWriteFailure(quint64 generation);
     QString buildFilename() const;
     static QString sanitizeForPath(const QString& s);
-    void writeWavHeader();
-    void patchWavHeader();
-    bool preparePlaybackPcm(int sinkRateHz);
+    bool writeWavHeader();
+    bool patchWavHeader();
+    qint64 writeFile(const char* data, qint64 size);
+    bool seekFile(qint64 position);
+    bool flushFile();
+    void queueWriteFailure(const QString& detail);
+    bool preparePlaybackPcm(const QAudioFormat& sinkFormat, QString& error);
+    void startPlaybackWithFormat(const QAudioDevice& device, const QAudioFormat& format);
+    QAudio::Error startPlaybackSink(const QAudioDevice& device, const QAudioFormat& format);
+    void releasePlaybackSink(bool stop);
+
+    enum class PcmSource { None, TypedRx, LegacyRx, Voice, Cw };
+    void feedFixedPcm(const QByteArray& pcm, PcmSource source);
+    bool selectPcmSegment(PcmSource source, PcmFormat format,
+                          const PcmFrame& frame = {});
+    bool finishPcmSegment();
+    bool writeConvertedPcm(const QByteArray& pcm);
+
+    // All fields below share m_writeMutex, including idle metadata observation.
+    // The bounded observation retains at most one owning frame/epoch. Its gate
+    // persists across files so stop/start cannot admit replayed queued blocks.
+    PcmFrameGate m_rxGate;
+    PcmFrame m_rxObservation;
+    // Latches the 'ignoring a second speaker producer' warning to once per
+    // selected source, since RX frames arrive continuously.
+    bool     m_foreignSourceWarned{false};
+    std::optional<QsoRecordingFormat> m_fileFormat;
+    PcmSource m_pcmSource{PcmSource::None};
+    PcmFrame m_pcmEpoch;
+    quint64 m_nextRxSample{0};
+    std::unique_ptr<QsoPcmConverter> m_pcmConverter;
 
     // Recording state
     std::atomic<bool> m_recording{false};  // checked lock-free on the audio feed fast path
     std::atomic<bool> m_transmitting{false};  // MOX state; gates RX vs TX writes (#3556)
+    // True for the whole of a CW over that OUR keyer is sending. ORed with
+    // m_transmitting on both feed paths so an over survives the interlock
+    // toggling between elements under break-in (#4281).
+    std::atomic<bool> m_cwOverActive{false};
     QFile*      m_file{nullptr};
     QDateTime   m_startTime;
     quint32     m_dataBytes{0};    // PCM data bytes written (for WAV header patching)
+    std::atomic<bool> m_writeFailurePending{false};
+    std::atomic<quint64> m_recordingGeneration{0};
+    QString m_pendingWriteError;
 
     // Configuration
     QString     m_recordingDir;
@@ -211,23 +282,36 @@ private:
 
     // Playback
     bool         m_playing{false};
+    quint64      m_playbackGeneration{0};
     QString      m_lastRecordingPath;
     QAudioSink*  m_playSink{nullptr};
     QBuffer      m_playBuffer;
     QByteArray   m_playPcm;
     QAudioDevice m_outputDevice;
 
+    // Tests replace only sink operations after production format negotiation.
+    // File preparation, buffer lifetime, state and mute signals remain real.
+    std::function<QAudio::Error(QIODevice&, const QAudioFormat&)> m_startPlaybackSinkForTest;
+    std::function<void(bool)> m_releasePlaybackSinkForTest;
+
     // Thread safety for audio feed paths
     mutable std::mutex  m_writeMutex;
+
+    // Narrow deterministic seam for the recorder's real QFile operations.
+    // The test uses it to make a post-open write, seek, or flush fail without
+    // changing filename allocation or relying on a full filesystem. Production
+    // paths leave all three unset and call QFile directly.
+    std::function<qint64(QFile&, const char*, qint64)> m_writeForTest;
+    std::function<bool(QFile&, qint64)> m_seekForTest;
+    std::function<bool(QFile&)> m_flushForTest;
+    // Deterministic revocation point after conversion, before write admission.
+    // Installed before test threads start; unset in production.
+    std::function<void()> m_beforePcmWriteForTest;
 
     // See setBackendOwnsRxAudioProvider(). Null until MainWindow installs it,
     // and null reads as false — the Flex answer, and the safe one.
     std::function<bool()> m_backendOwnsRxAudio;
 
-    // WAV format constants (matching AudioEngine native format)
-    static constexpr int SAMPLE_RATE = 24000;
-    static constexpr int NUM_CHANNELS = 2;
-    static constexpr int BITS_PER_SAMPLE = 16;
     static constexpr int WAV_HEADER_SIZE = 44;
 };
 

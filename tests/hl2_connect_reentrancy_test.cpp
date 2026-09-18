@@ -15,6 +15,7 @@
 
 #include "core/backends/hl2/Hl2Backend.h"
 
+#include "SeamThreadAffinityProbe.h"
 #include "TestSettingsProfile.h"
 #include "TestDspBuildWait.h"
 
@@ -78,6 +79,11 @@ void disconnectCancelsTheQueuedConnect()
     TestSettingsProfile profile(QStringLiteral("hl2-reentrancy-disconnect"));
     Hl2Backend backend;
     BuildCounter builds(backend);
+    // IRadioBackend contract rule 2, on a family that is actually driven: the
+    // DSP build runs on the I/O thread and hands its result back, so anything
+    // it emits over the seam must still arrive on the backend's own thread.
+    test::SeamThreadAffinityProbe seam(&backend);
+    test::attachAllSeamSignals(seam);
 
     backend.connectRadio(request());   // build 1 starts on the I/O thread
     backend.connectRadio(request());   // cannot be served inline — queued
@@ -96,6 +102,12 @@ void disconnectCancelsTheQueuedConnect()
     check(builds.finished == 1,
           "a connect queued before the disconnect is NOT re-driven after it");
     check(!backend.isConnected(), "the backend stayed disconnected");
+    for (const QString& v : seam.violations())
+        std::fprintf(stderr, "  seam thread VIOLATION: %s\n", qPrintable(v));
+    std::fprintf(stderr, "  seam signals observed: %s\n",
+                 qPrintable(seam.observed().join(QStringLiteral(", "))));
+    check(seam.violations().isEmpty(),
+          "contract rule 2: every seam signal arrived on the backend's thread");
 }
 
 // The other half of the same guard: WITHOUT a disconnect, a connect that
@@ -107,6 +119,8 @@ void aQueuedConnectIsStillHonoured()
     TestSettingsProfile profile(QStringLiteral("hl2-reentrancy-queued"));
     Hl2Backend backend;
     BuildCounter builds(backend);
+    test::SeamThreadAffinityProbe seam(&backend);
+    test::attachAllSeamSignals(seam);
 
     backend.connectRadio(request());
     backend.connectRadio(request());
@@ -115,6 +129,12 @@ void aQueuedConnectIsStillHonoured()
                         [&] { return builds.finished >= 2; });
     check(builds.finished == 2,
           "the queued connect ran its own build once the first was released");
+    for (const QString& v : seam.violations())
+        std::fprintf(stderr, "  seam thread VIOLATION: %s\n", qPrintable(v));
+    std::fprintf(stderr, "  seam signals observed: %s\n",
+                 qPrintable(seam.observed().join(QStringLiteral(", "))));
+    check(seam.violations().isEmpty(),
+          "contract rule 2: every seam signal arrived on the backend's thread");
 }
 
 } // namespace

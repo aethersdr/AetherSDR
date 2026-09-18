@@ -1,4 +1,4 @@
-// RelayBar accessibility announcement contract (#4565).
+﻿// RelayBar accessibility announcement contract (#4565).
 //
 // RelayBar::setValue() is driven by TunerModel::stateChanged, which relays
 // TGXL hardware state pushes with no rate limiting on the wire — an ATU
@@ -75,6 +75,31 @@ int main(int argc, char** argv)
         QAccessible::installUpdateHandler(captureAccessibleValueUpdate);
     const bool wasAccessible = QAccessible::isActive();
     QAccessible::setActive(true);
+
+    // QAccessible::setActive(true) is a REQUEST, not an assignment: Qt gates it
+    // on the platform plugin having a live accessibility backend, and the
+    // headless plugins (offscreen, minimal) have none — isActive() reads false
+    // again immediately, with no warning and no error.
+    //
+    // Every announcement in this file is emitted behind an
+    // `if (!hasFocus() || !QAccessible::isActive()) return;` guard in the
+    // widget, so without a backend the widget is CORRECT to stay silent and
+    // every expectation below fails as `got []`. That is a property of the
+    // environment, not a defect in the code under test — so SKIP rather than
+    // fail, the same way crdv_quarantined_test does (ctest SKIP_RETURN_CODE 77).
+    //
+    // This is what took the ASan+UBSan sanitizer job red from 2026-07-20 (see
+    // issue #4360): that job is the only CI job that runs these tests at all,
+    // and it runs them under QT_QPA_PLATFORM=offscreen.
+    if (!QAccessible::isActive()) {
+        std::cerr << "SKIP: the platform plugin ("
+                  << QApplication::platformName().toStdString()
+                  << ") has no accessibility backend, so QAccessible::setActive(true) "
+                     "does not take — announcements cannot be observed here.\n";
+        QAccessible::installUpdateHandler(previousHandler);
+        QAccessible::setActive(wasAccessible);
+        return 77;
+    }
 
     // Mirrors the C1 relay indicator in TunerApplet.
     QWidget host;

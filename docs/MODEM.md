@@ -126,6 +126,14 @@ profile is selected.
 - Replay a saved capture against every profile/polarity in one pass:
   `ax25_libmodem_shim_test --replay-capture <mono-float32.wav>`. Use the
   window's **Capture 3m** button to record a real 2m session first.
+- **Capture 3m** records both directions for transport diagnosis. One
+  `ax25-rx-capture-<id>-float32.wav` contains the mono RX tap. Each transmitted
+  packet also produces `ax25-tx-generated-<id>-<nnn>-float32.wav` at the
+  modem's 24 kHz stereo output. On Icom radios, the matching
+  `ax25-tx-icom-post-resample-<id>-<nnn>-float32.wav` contains the 48 kHz mono
+  float samples immediately before RS-BA1 packetization, including the finite
+  resampler tail flushed after the final modem block. The shared ID and packet
+  number make the two TX stages directly comparable.
 - The Profile A+ slicer set is the fixed Dire Wolf `kVhf1200SpaceGains` series;
   the vendored demodulator and its parameters are documented in
   `third_party/direwolf_afsk/` (`AETHERSDR-PATCHES.md` + the source headers).
@@ -174,6 +182,8 @@ TX diagnostics in the `aether.ax25` category include packet source/destination,
 path, payload bytes, AX.25 frame bytes, bit count, waveform duration, RMS/peak,
 baud, mark/space, polarity, preamble/postamble flag counts, DAX TX stream id,
 PTT lead/tail timing, and paced chunk progress when debug is enabled.
+For Icom, completion also logs the drained resampler sample count and the
+silence bytes added to complete the last 20 ms RS-BA1 audio frame.
 
 ## KISS TNC (TCP)
 
@@ -267,8 +277,8 @@ in `AppSettings` (`AetherModemPms*` keys) across restarts; enabling the PMS turn
 the modem on. The bottom of the window is a slim status bar showing modem state,
 gain, and a compact packet-activity strip.
 
-These layers are intentionally split so the planned APRS/AX.25 **digipeater** can
-reuse `Ax25`/`Ax25Connection` and the heard list directly.
+These layers are intentionally split so the APRS/AX.25 **fill-in digipeater**
+can reuse `Ax25` and the heard list directly.
 
 ## Open Work
 
@@ -292,8 +302,21 @@ KISS-over-TCP, connected-mode AX.25, a Personal Mailbox System, and an **APRS
 client** (live station map, GPS beacon, two-way messaging on the AetherModem
 tab) are now implemented — see the sections above and the PSK Reporter map's
 shared Qt mapping engine, which the APRS map reuses. Out of scope remains
-**APRS-IS** (internet gateway) and a future **APRS/AX.25 digipeater**, which can
-reuse the `Ax25`/`Ax25Connection` primitives.
+**APRS-IS** (internet gateway). A **WIDE1-1 fill-in digipeater** now lives on the
+AetherModem **Digipeater** tab (`AprsDigipeaterModel`): it answers the first unused
+hop when it is `WIDE1-1` (optionally `MYCALL` or legacy `RELAY`), substitutes
+the station call with the H-bit set, and does not decrement `WIDE2-n`. The tab
+has a heard-message graph, a digipeat graph, a scrolling raw TNC-2 list, and
+configurable fill-in / beacon settings. Fill-in requires the shared **1200-baud
+VHF profile** and explicit arming each session. Configuration persists, but
+arming never restores from settings. Switching to 300 baud, disabling the modem,
+changing the attached slice, disconnecting, or application teardown disarms fill-in
+and cancels its queued and active TX. Other producers retain their own queued
+traffic when only fill-in is disabled. The shared queue admits at most 64 frames
+across all producers, dropping the oldest on overflow. Duplicate identity includes
+source/SSID, destination, and payload, independent of the received path.
+The counters describe repeat decisions, not proof of RF delivery. Wide-area
+`UITRACE WIDE` remains out of scope.
 
 PMS follow-ups worth tracking:
 

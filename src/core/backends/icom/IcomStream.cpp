@@ -1,7 +1,9 @@
 #include "core/backends/icom/IcomStream.h"
 
+#include <QAbstractSocket>
 #include <QLoggingCategory>
 #include <QRandomGenerator>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QUdpSocket>
 
@@ -41,13 +43,49 @@ bool IcomStream::start(const Config& config)
     return true;
 }
 
+namespace {
+
+// The three RS-BA1 streams fail independently and for different reasons, so a
+// failure that does not say which one failed sends the operator to the wrong
+// setting. Logged as a bare int() elsewhere in this file; a name costs nothing.
+const char* roleName(IcomStream::Role r)
+{
+    switch (r) {
+    case IcomStream::Role::Control: return "control";
+    case IcomStream::Role::Serial:  return "CI-V";
+    case IcomStream::Role::Audio:   return "audio";
+    }
+    return "?";
+}
+
+}  // namespace
+
 bool IcomStream::bindOnly(const Config& config)
 {
     stop();
     m_config = config;
+    m_counters = Counters{};
+    m_activityClock.start();
+    m_lastRxAtMs = -1;
+    m_lastTxAtMs = -1;
+    m_lastPayloadAtMs = -1;
+    m_lastPingReplyAtMs = -1;
 
     m_socket = new QUdpSocket(this);
+    connect(m_socket, &QAbstractSocket::errorOccurred, this,
+            [this](QAbstractSocket::SocketError) {
+                ++m_counters.socketErrors;
+                m_counters.lastSocketError = m_socket
+                    ? m_socket->errorString() : QStringLiteral("socket unavailable");
+                qCWarning(lcIcomStream) << "UDP socket error on the"
+                                        << roleName(m_config.role) << "stream:"
+                                        << m_counters.lastSocketError;
+            });
     if (!m_socket->bind(QHostAddress::AnyIPv4, config.localPort)) {
+        if (m_counters.socketErrors == 0) {
+            ++m_counters.socketErrors;
+        }
+        m_counters.lastSocketError = m_socket->errorString();
         emit failed(QStringLiteral("cannot bind local UDP port %1").arg(config.localPort));
         return false;
     }
@@ -78,7 +116,6 @@ bool IcomStream::bindOnly(const Config& config)
     m_gapPending = false;
     m_replay.clear();
     m_reorder.clear();
-    m_counters = Counters{};
     m_idleSince.start();
     return true;
 }
@@ -117,14 +154,59 @@ void IcomStream::beginHandshake()
                 // simply says nothing. A deadline is the only way to report it,
                 // and now it is a deadline the radio has been asked repeatedly
                 // to beat.
+                //
+                // Port mismatch leads the causes because custom port triplets
+                // shipped in #5230: the radio and this client can now disagree
+                // about the port while both are configured and reachable, and it
+                // is the one cause the old message never suggested. A raw probe
+                // to the default port can even answer while the radio listens for
+                // RS-BA1 somewhere else, which reads as proof the port is right.
+                // The control stream is the one that proves the session-wide
+                // conditions. Media streams only handshake from
+                // openMediaStreams(), which is reached after m_authOk AND a
+                // granted stream request -- so by then Network Control is
+                // demonstrably on, the credentials are demonstrably good, and
+                // nobody else holds the session. Repeating those causes for a
+                // CI-V or audio timeout would point the operator at three
+                // settings that are provably fine, which is the misdirection
+                // this message exists to remove.
+                const QString causes = (m_config.role == Role::Control)
+                    ? QStringLiteral(
+                        "Check the radio's Network menu: that its port for this "
+                        "stream matches the one above, that Network Control is "
+                        "ON, that the user/password are set, and that no other "
+                        "client holds the session")
+                    : QStringLiteral(
+                        "The control stream connected, so Network Control and "
+                        "the credentials are good — check that this stream's "
+                        "port on the radio matches the one above");
                 emit failed(QStringLiteral(
-                    "no answer from the radio after %1 attempts — check Network "
-                    "control is ON, the user/password are set, and no other "
-                    "client holds the session").arg(kHandshakeAttempts));
+                    "no answer from %1:%2 (%3 stream) after %4 attempts — the "
+                    "radio is not answering RS-BA1 on that port. %5")
+                        .arg(m_config.host.toString())
+                        .arg(m_config.remotePort)
+                        .arg(QString::fromLatin1(roleName(m_config.role)))
+                        .arg(kHandshakeAttempts)
+                        .arg(causes));
                 return;
             }
-            qCInfo(lcIcomStream) << "no IAmHere yet — retrying AreYouThere, attempt"
-                                 << (m_handshakeAttempts + 1) << "of" << kHandshakeAttempts;
+            // Name the target on every line. Six identical lines that do not say
+            // where they were sent read as an AetherSDR networking fault; the
+            // address and port are what turn them into a radio-side check.
+            //
+            // Deliberately still INF. A retry is not yet a failure -- a connect
+            // that succeeds on attempt 2 is a normal connect, and warning on
+            // each one would put up to 18 warnings on the log for a single
+            // failed connect across three streams. The terminal failure is the
+            // event worth the level, and IcomSession::fail already logs that at
+            // qCWarning. What was missing here was the TARGET, not the severity.
+            qCInfo(lcIcomStream)
+                << "no IAmHere from"
+                << QStringLiteral("%1:%2").arg(m_config.host.toString())
+                                          .arg(m_config.remotePort)
+                << "on the" << roleName(m_config.role) << "stream — retrying"
+                << "AreYouThere, attempt" << (m_handshakeAttempts + 1)
+                << "of" << kHandshakeAttempts;
             sendRawTwice(buildAreYouThere(m_localSid));
         });
     }
@@ -162,12 +244,19 @@ void IcomStream::stop()
 
 void IcomStream::sendRaw(std::span<const std::uint8_t> packet)
 {
+    if (m_testWriter) {
+        m_testWriter(packet);
+        return;
+    }
     if (!m_socket)
         return;
     const qint64 n = m_socket->write(reinterpret_cast<const char*>(packet.data()),
                                      static_cast<qint64>(packet.size()));
-    if (n > 0)
+    if (n > 0) {
         m_counters.txBytes += static_cast<quint64>(n);
+        ++m_counters.txPackets;
+        m_lastTxAtMs = m_activityClock.elapsed();
+    }
 }
 
 void IcomStream::flush()
@@ -185,7 +274,9 @@ void IcomStream::sendRawTwice(std::span<const std::uint8_t> packet)
     sendRaw(packet);
 }
 
-void IcomStream::retain(quint16 seq, const std::vector<std::uint8_t>& packet)
+void IcomStream::retain(quint16 seq, const std::vector<std::uint8_t>& packet,
+                        const std::optional<TxCoordinator::Context>& context,
+                        const std::optional<TxCoordinator::Command>& command)
 {
     // FIFO BY INSERTION, not by key.
     //
@@ -203,7 +294,7 @@ void IcomStream::retain(quint16 seq, const std::vector<std::uint8_t>& packet)
     // deliberately avoids; it bit here in the other direction.
     if (!m_replay.contains(seq))
         m_replayOrder.push_back(seq);
-    m_replay.insert(seq, packet);
+    m_replay.insert(seq, ReplayPacket{packet, context, command});
     while (m_replay.size() > kReplayDepth && !m_replayOrder.empty()) {
         m_replay.remove(m_replayOrder.front());
         m_replayOrder.pop_front();
@@ -215,10 +306,65 @@ void IcomStream::sendTracked(std::vector<std::uint8_t> packet)
     sendTrackedImpl(std::move(packet), true);
 }
 
-void IcomStream::sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayload)
+void IcomStream::sendTrackedTxAudio(std::vector<std::uint8_t> packet, const TxCoordinator::Context& context)
 {
+    sendTrackedImpl(std::move(packet), true, context);
+}
+
+void IcomStream::sendTrackedTxCommand(std::vector<std::uint8_t> packet, const TxCoordinator::Command& command)
+{
+    sendTrackedImpl(std::move(packet), true, {}, command);
+}
+
+void IcomStream::sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayload,
+                                std::optional<TxCoordinator::Context> context,
+                                std::optional<TxCoordinator::Command> command)
+{
+    // Created before dispatch guards so an entered writer leaves before the
+    // owner learns that its queue has consumed this command.
+    const auto consumed = qScopeGuard([command] {
+        if (command) {
+            command->completion.finish();
+        }
+    });
+    TxCoordinator::Dispatch dispatch;
+    TxCoordinator::Dispatch commandDispatch;
+    if (command) {
+        commandDispatch = command->beginDispatch(TxCoordinator::monotonicMs());
+        if (!commandDispatch) {
+            return;
+        }
+    }
+    if (context) {
+        dispatch = context->beginDispatch(TxCoordinator::monotonicMs());
+        if (!dispatch) {
+            return;
+        }
+    }
     if (packet.size() < kHeaderSize)
         return;
+    const std::size_t replayGroup = command ? static_cast<std::size_t>(command->replayGroup) : 0;
+    const bool replaceable = replayGroup > 0 && replayGroup < m_replayCommandGeneration.size();
+    if (replaceable) {
+        ++m_replayCommandGeneration[replayGroup];
+        if (!command->keying) {
+            ++m_replayCleanupGeneration[replayGroup];
+        }
+        // FIFO delivery is unchanged. Only retained retries are superseded:
+        // replaying an old unkey after a newer key must not stop its producer,
+        // and replaying old key/text after cleanup must not restart it.
+        // CW text appends within a batch; a new chunk supersedes only a prior
+        // abort, while an abort supersedes every older chunk in that group.
+        for (ReplayPacket& retained : m_replay) {
+            if (retained.command && retained.command->replayGroup == command->replayGroup
+                && (command->replayGroup != TxCoordinator::Command::ReplayGroup::CwText
+                    || !command->keying || !retained.command->keying)) {
+                retained.superseded = true;
+            }
+        }
+    }
+    const quint64 commandGeneration = m_replayCommandGeneration[replaceable ? replayGroup : 0];
+    const quint64 cleanupGeneration = m_replayCleanupGeneration[replaceable ? replayGroup : 0];
     const quint16 seq = m_txSeq++;
     // Stamp the header sequence here rather than trusting the caller: the
     // replay buffer is keyed by it, and a caller-allocated sequence could name
@@ -227,7 +373,16 @@ void IcomStream::sendTrackedImpl(std::vector<std::uint8_t> packet, bool isPayloa
     packet[0x06] = static_cast<std::uint8_t>(seq & 0xff);
     packet[0x07] = static_cast<std::uint8_t>((seq >> 8) & 0xff);
     sendRaw(packet);
-    retain(seq, packet);
+    retain(seq, packet, context, command);
+    if (replaceable) {
+        // An injected terminal writer (or nested loop) may have delivered a
+        // newer command before this older write returned and was retained.
+        const bool cwAppend = command->replayGroup == TxCoordinator::Command::ReplayGroup::CwText
+            && command->keying;
+        m_replay[seq].superseded = cwAppend
+            ? cleanupGeneration != m_replayCleanupGeneration[replayGroup]
+            : commandGeneration != m_replayCommandGeneration[replayGroup];
+    }
     // Only PAYLOAD resets the quiet clock. Letting the keepalive reset it would
     // make the stream permanently believe it had just sent something real, so
     // the relaxation to a 1 s cadence would never engage.
@@ -246,12 +401,13 @@ void IcomStream::onReadyRead()
         buf.resize(static_cast<qsizetype>(n));
         m_counters.rxBytes += static_cast<quint64>(n);
         ++m_counters.rxPackets;
+        m_lastRxAtMs = m_activityClock.elapsed();
         // EVERY inbound datagram, before any dispatch. On first contact with
         // real hardware the failure was a step that produced no reply at all,
         // and no amount of logging at the dispatch sites can distinguish "the
         // radio said nothing" from "we ignored what it said".
         if (!isPing(asSpan(buf))) {
-            qCDebug(lcIcomStream) << "role" << int(m_config.role) << "RX" << buf.size()
+            qCDebug(lcIcomStream) << "role" << roleName(m_config.role) << "RX" << buf.size()
                                   << "bytes:" << buf.left(64).toHex(' ');
         }
         handleDatagram(buf);
@@ -276,6 +432,7 @@ void IcomStream::handleDatagram(const QByteArray& datagram)
                 // Smooth it: a single sample on WiFi swings enough to make the
                 // readout unreadable, and this number is only ever displayed.
                 m_counters.rttMs = m_counters.rttMs < 0 ? rtt : (m_counters.rttMs + rtt) / 2;
+                m_lastPingReplyAtMs = m_activityClock.elapsed();
             }
         }
         return;
@@ -288,7 +445,7 @@ void IcomStream::handleDatagram(const QByteArray& datagram)
         if (parseIAmHere(pkt, remote)) {
             m_remoteSid = remote;
             m_gotRemoteSid = true;
-            qCInfo(lcIcomStream) << int(m_config.role) << "got i-am-here, remote sid"
+            qCInfo(lcIcomStream) << roleName(m_config.role) << "got i-am-here, remote sid"
                                  << Qt::hex << remote;
             sendRawTwice(buildAreYouReady(m_localSid, m_remoteSid));
         }
@@ -300,7 +457,7 @@ void IcomStream::handleDatagram(const QByteArray& datagram)
             m_ready = true;
             if (m_handshakeTimer)
                 m_handshakeTimer->stop();
-            qCInfo(lcIcomStream) << int(m_config.role) << "handshake complete on local port"
+            qCInfo(lcIcomStream) << roleName(m_config.role) << "handshake complete on local port"
                                  << m_boundPort;
 
             // NO PERIODIC IDLES ON THE AUDIO STREAM.
@@ -362,8 +519,17 @@ void IcomStream::handleRetransmitRequest(std::span<const std::uint8_t> pkt)
         quint16 s = r.first;
         for (int i = 0; i < r.count() && i <= kMaxRetransmitRun; ++i, ++s) {
             auto it = m_replay.find(s);
-            if (it != m_replay.end()) {
-                sendRaw(*it);
+            TxCoordinator::Dispatch dispatch;
+            TxCoordinator::Dispatch commandDispatch;
+            if (it != m_replay.end() && it->context) {
+                dispatch = it->context->beginDispatch(TxCoordinator::monotonicMs());
+            }
+            if (it != m_replay.end() && !it->superseded && it->command) {
+                commandDispatch = it->command->beginDispatch(TxCoordinator::monotonicMs());
+            }
+            if (it != m_replay.end() && !it->superseded && (!it->context || dispatch)
+                && (!it->command || commandDispatch)) {
+                sendRaw(it->bytes);
                 ++m_counters.retransmitsServed;
             } else {
                 // We no longer hold it. Sending an IDLE carrying the requested
@@ -463,7 +629,27 @@ void IcomStream::onReorderTick()
 
 void IcomStream::deliver(const QByteArray& packet)
 {
+    if (packet.size() > static_cast<qsizetype>(kHeaderSize)) {
+        m_lastPayloadAtMs = m_activityClock.elapsed();
+    }
     emit payloadReady(packet);
+}
+
+IcomStream::Counters IcomStream::counters() const
+{
+    Counters out = m_counters;
+    if (!m_activityClock.isValid()) {
+        return out;
+    }
+    const qint64 now = m_activityClock.elapsed();
+    const auto age = [now](qint64 atMs) {
+        return atMs >= 0 ? std::max<qint64>(0, now - atMs) : -1;
+    };
+    out.lastRxAgeMs = age(m_lastRxAtMs);
+    out.lastTxAgeMs = age(m_lastTxAtMs);
+    out.lastPayloadAgeMs = age(m_lastPayloadAtMs);
+    out.lastPingReplyAgeMs = age(m_lastPingReplyAtMs);
+    return out;
 }
 
 void IcomStream::onIdleTick()

@@ -37,7 +37,7 @@ signals:
     void nr2GainMethodChanged(int method);
     void nr2NpeMethodChanged(int method);
     void nr2AeFilterChanged(bool on);
-    void nr2UseOriginalGeometryChanged(bool useOriginal);
+    void nr2Post2SettingsChanged();
     // MNR parameter changes
     void mnrStrengthChanged(float value);
     // DFNR parameter changes

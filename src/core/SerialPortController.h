@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include "TxCoordinator.h"
 
 #if defined(HAVE_SERIALPORT) || defined(Q_OS_WIN)
 #include <QElapsedTimer>
@@ -50,6 +51,9 @@ public:
 
     explicit SerialPortController(QObject* parent = nullptr);
     ~SerialPortController() override;
+    // Trusted composition, before moveToThread/open. Immutable while the
+    // device watcher is running; raw input captures its request before queues.
+    void setTxProducer(const TxCoordinator::Producer& producer) { m_txProducer = producer; }
 
     bool open(const QString& portName, int baudRate = 9600,
               int dataBits = 8, int parity = 0, int stopBits = 1);
@@ -96,12 +100,28 @@ public slots:
     void setCwKeyDown(bool down);
 
 signals:
-    void externalPttChanged(bool active);
-    void cwKeyChanged(bool down);                   // straight key
-    void cwPaddleChanged(bool dit, bool dah);       // iambic paddle
+    void externalPttChanged(bool active, const TxCoordinator::Request& input);
+    void cwKeyChanged(bool down, const TxCoordinator::Request& input);
+    void cwPaddleChanged(bool dit, bool dah, const TxCoordinator::Request& input,
+                         const TxCoordinator::Request& straightKeyInput);
+    void txInputsCancelled();
     void errorOccurred(const QString& msg);
 
 private:
+    friend class TxOperationIntegrationTestAccess;
+    void publishPttInput(bool active, const TxCoordinator::Request& input = {});
+    void publishKeyInput(bool down, const TxCoordinator::Request& input = {});
+    void publishPaddleInput(bool dit, bool dah, const TxCoordinator::Request& input = {});
+    void retireTxInputs();
+    TxCoordinator::Producer m_txProducer;
+    TxCoordinator::Request m_pttInput;
+    TxCoordinator::Request m_keyInput;
+    TxCoordinator::Request m_paddleInput;
+    TxCoordinator::Request m_paddleKeyInput;
+    bool m_pttInputHeld{false};
+    bool m_keyInputHeld{false};
+    bool m_paddleInputHeld{false};
+    std::atomic<quint64> m_inputPortEpoch{0};
     void applyPin(PinFunction targetFn, bool active);
     void updatePolling();
 
@@ -146,7 +166,7 @@ private:
     void runWinWatcher();
 
 private slots:
-    void processWinPinChange(bool dsrRaw, bool ctsRaw, bool dcdRaw);
+    void processWinPinChange(bool dsrRaw, bool ctsRaw, bool dcdRaw, const TxCoordinator::Request& input);
 
 #elif defined(HAVE_SERIALPORT)
     // Non-Windows path: poll via QSerialPort timer

@@ -112,6 +112,14 @@ void MemoryBrowsePanel::setMemories(const QMap<int, MemoryEntry>& memories)
     populateTable();
 }
 
+void MemoryBrowsePanel::setWritable(bool writable)
+{
+    m_addBtn->setEnabled(writable);
+    m_addBtn->setToolTip(writable
+        ? QStringLiteral("Save the current slice on this panadapter as a memory.")
+        : QStringLiteral("Radio memories are read-only in this version."));
+}
+
 void MemoryBrowsePanel::focusClosestToFrequency(double frequencyMhz)
 {
     int closestMemoryIndex = -1;

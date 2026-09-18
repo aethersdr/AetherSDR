@@ -24,6 +24,25 @@ class SliceModel : public QObject {
     Q_PROPERTY(bool txSlice      READ isTxSlice  NOTIFY txSliceChanged)
 
 public:
+    struct ReceiveObservation {
+        std::optional<QString> mode;
+        std::optional<int> filterLowHz;
+        std::optional<int> filterHighHz;
+        std::optional<int> gain;
+        std::optional<bool> muted;
+        bool operator==(const ReceiveObservation&) const = default;
+    };
+    const ReceiveObservation& receiveObservation() const { return m_receiveObservation; }
+    // Records explicit filter intent without an optimistic value or a wire
+    // write. Adaptive filtering must still recognize a daemon operator edit.
+    void noteReceiveFilterIntent() { ++m_userFilterEpoch; }
+    // Conservative whole-MHz observation domain below JSON's 2^53-1 Hz
+    // integer limit. Keep target admission and MHz observation validation
+    // on this same bound; the general protocol integer domain is wider.
+    static constexpr qint64 kMaximumReportedFrequencyMhz = 9'007'199'254;
+    static constexpr qint64 kMaximumReportedFrequencyHz =
+        kMaximumReportedFrequencyMhz * 1'000'000;
+
     explicit SliceModel(int id, QObject* parent = nullptr);
     ~SliceModel() override;
 
@@ -39,6 +58,11 @@ public:
                                      : m_letter; }
     QString panId()      const { return m_panId; }       // e.g. "0x40000000"
     double  frequency()  const { return m_frequency; }   // MHz
+    // Separate from the optimistic desktop value. Only applyChanges writes
+    // this observation; a reused slice must wait for a fresh session report.
+    double reportedFrequency() const { return m_reportedFrequency; } // MHz
+    bool frequencyReportedKnown() const { return m_frequencyReportedKnown; }
+    void invalidateFrequencyObservation();
     QString mode()       const { return m_mode; }
     QStringList modeList() const { return m_modeList; }
     int     filterLow()  const { return m_filterLow; }   // Hz offset
@@ -108,6 +132,27 @@ public:
     int     receiveAgcThreshold() const { return m_externalReceiveAudioReplacement
                                               ? m_externalReceiveAgcThreshold
                                               : m_agcThreshold; }
+    // The AGC-T threshold's span on this slice: 0..100 on a Flex slice, the
+    // external receiver's dB span while it replaces the slice audio. Owned
+    // here so callers above the radio seam need no vendor header (#5384).
+    int     receiveAgcThresholdMinimum() const;
+    int     receiveAgcThresholdMaximum() const;
+    // The AGC-T knob on the controller surfaces (the MIDI/StreamDeck/Ulanzi
+    // parameter registry, the FlexControl/TMate2 wheel funnel, the keyboard
+    // steps) is ONE knob backed by TWO properties, selected by the receive-side
+    // AGC mode: agc_off_level while AGC is off, agc_threshold otherwise
+    // (FlexLib Slice.cs AGCOffLevel / AGCThreshold; docs/agc-t-calibration-
+    // design.md). The GUI slider has honoured that split since #1183; these
+    // members give the controller surfaces the same decision in one place
+    // (#5384). The calibrator, CAT, TCI, the bridge verb and band-snapshot
+    // restore address the two properties by name and do not route through
+    // here. Ranges: agc_off_level is 0..100 on every backend; the threshold
+    // keeps the span receiveAgcThresholdMinimum()/Maximum() report.
+    bool    agcTKnobUsesOffLevel() const;
+    int     agcTKnobMinimum() const;
+    int     agcTKnobMaximum() const;
+    int     agcTKnobLevel() const;
+    void    setAgcTKnobLevel(int value);
     int     agcOffLevel()  const { return m_agcOffLevel; }
     int     flexAgcOffLevel() const { return m_agcOffLevel; }
     int     receiveAgcOffLevel() const { return m_externalReceiveAudioReplacement
@@ -117,6 +162,9 @@ public:
                                       ? m_externalReceiveAudioMute
                                       : m_audioMute; }
     bool    flexAudioMute() const { return m_audioMute; }
+    // Only inbound reports establish current-session truth; local setters do not.
+    bool squelchStateKnown() const { return m_squelchOnKnown && m_squelchLevelKnown; }
+    void invalidateSquelchState() { m_squelchOnKnown = false; m_squelchLevelKnown = false; }
     bool    squelchOn()   const { return m_squelchOn; }
     bool    flexSquelchOn() const { return m_squelchOn; }
     bool    receiveSquelchOn() const { return m_externalReceiveAudioReplacement
@@ -167,7 +215,7 @@ public:
     // radio opinion to defer to, the host bank owns the channel, and a recalled
     // step would otherwise never take because the wire command that normally
     // round-trips it is dropped. Named for its one caller so the exception stays
-    // visible; see RadioModel::recallLocalMemory().
+    // visible; see RadioModel::recallCachedMemory().
     void    applyRecalledStepHz(int hz);
     QVector<int> stepList() const { return m_stepList; }
     int     daxChannel()  const { return m_daxChannel; }
@@ -185,6 +233,10 @@ public:
     // Getters — FM duplex/repeater
     QString fmToneMode()          const { return m_fmToneMode; }
     QString fmToneValue()         const { return m_fmToneValue; }
+    QString fmToneRxValue()       const { return m_fmToneRxValue; }
+    int     fmDtcsCode()          const { return m_fmDtcsCode; }
+    bool    fmDtcsTxReverse()     const { return m_fmDtcsTxReverse; }
+    bool    fmDtcsRxReverse()     const { return m_fmDtcsRxReverse; }
     QString repeaterOffsetDir()   const { return m_repeaterOffsetDir; }
     double  fmRepeaterOffsetFreq()const { return m_fmRepeaterOffsetFreq; }
     double  txOffsetFreq()        const { return m_txOffsetFreq; }
@@ -299,9 +351,24 @@ public:
     // Setters — FM duplex/repeater
     void setFmToneMode(const QString& mode);
     void setFmToneValue(const QString& value);
+    void setFmToneRxValue(const QString& value);
+    void setFmDtcs(int code, bool txReverse, bool rxReverse);
     void setRepeaterOffsetDir(const QString& dir);
     void setFmRepeaterOffsetFreq(double mhz);
+    void applyRecalledFmRepeater(const QString& direction, double offsetMhz,
+                                 const QString& toneMode, double toneHz);
+    void applyRecalledFmRepeaterState(const QString& direction, double offsetMhz,
+                                      const QString& toneMode, double toneValue,
+                                      double rxToneValue, int dtcsCode = -1,
+                                      bool dtcsTxReverse = false,
+                                      bool dtcsRxReverse = false);
     void setTxOffsetFreq(double mhz);
+    // The signed TX offset a repeater direction + unsigned magnitude imply.
+    // Direction and magnitude each send only their own key, so tx_offset_freq
+    // — the field that actually moves the transmitter — has to be written
+    // alongside them; every caller that sets duplex must send all three.
+    // One copy, because three hand-rolled ones is how this drifted (#5102).
+    static double txOffsetForDirection(const QString& dir, double magnitudeMhz);
     void setFmDeviation(int hz);
 
     // Apply a normalized, typed slice delta from the backend
@@ -322,6 +389,11 @@ public:
 signals:
     void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
+    // Supplemental observation notification when frequencyChanged does not
+    // fire (same-value reports, optimistic-value echoes, or invalidation).
+    void frequencyReported();
+    void receiveObservationChanged();
+    void receiveModeReported(); // including same-value reports after an intent
     // Emitted after a local setter has issued a frequency command. Unlike
     // frequencyChanged, radio-status application does not emit this signal.
     void frequencyCommandIssued(double mhz);
@@ -403,6 +475,7 @@ signals:
     void rxAntennaListChanged(const QStringList& ants);
     void txAntennaListChanged(const QStringList& ants);
     void lockedChanged(bool locked);
+    void lockCommandIssued(bool locked);
     void tuneBlockedByLock();
     void lockedFeedbackActiveChanged(bool active);
     void qskChanged(bool on);
@@ -453,10 +526,20 @@ signals:
     // FM duplex/repeater signals
     void fmToneModeChanged(const QString& mode);
     void fmToneValueChanged(const QString& value);
+    void fmToneRxValueChanged(const QString& value);
+    void fmDtcsChanged(int code, bool txReverse, bool rxReverse);
     void repeaterOffsetDirChanged(const QString& dir);
     void fmRepeaterOffsetFreqChanged(double mhz);
     void txOffsetFreqChanged(double mhz);
     void fmDeviationChanged(int hz);
+    void fmToneModeCommandIssued(const QString& mode);
+    void fmToneValueCommandIssued(double hz);
+    void fmToneRxValueCommandIssued(double hz);
+    void fmDtcsCommandIssued(int code, bool txReverse, bool rxReverse);
+    void repeaterOffsetDirCommandIssued(const QString& direction);
+    void fmRepeaterOffsetCommandIssued(double hz);
+    void fmRepeaterRecallCommandIssued(const QString& direction, double offsetHz,
+                                       const QString& toneMode, double toneHz);
 
     void modeListChanged(const QStringList& modes);
     void recordOnChanged(bool on);
@@ -488,12 +571,15 @@ private:
     QString m_letter;          // per-client display letter from `index_letter`
     QString m_panId;           // panadapter assignment (e.g. "0x40000000")
     double  m_frequency{0.0};
+    double  m_reportedFrequency{0.0};
+    bool    m_frequencyReportedKnown{false};
+    ReceiveObservation m_receiveObservation;
     QString m_mode{"USB"};
     QString m_modeBeforeDigitalVoice;
     QStringList m_modeList;
     int     m_filterLow{-1500};
     int     m_filterHigh{1500};
-    quint64 m_userFilterEpoch{0};   // bumped only by setFilterWidth() (RFC #3878)
+    quint64 m_userFilterEpoch{0};   // setFilterWidth() and daemon filter intent (RFC #3878)
     // Adaptive RX filter — client-side config + runtime state (RFC #3878).
     // The filter edges themselves stay radio-authoritative (never persisted);
     // only enabled + the two bounds are persisted by the GUI.
@@ -564,6 +650,8 @@ private:
     QString m_agcMode{"med"};
     int     m_agcThreshold{65};
     int     m_agcOffLevel{10};
+    bool m_squelchOnKnown{false};
+    bool m_squelchLevelKnown{false};
     bool    m_squelchOn{false};
     int     m_squelchLevel{20};
     int     m_manualSquelchLevel{20};
@@ -592,6 +680,12 @@ private:
     // FM duplex/repeater state
     QString m_fmToneMode{"off"};
     QString m_fmToneValue{"100.0"};
+    QString m_fmToneRxValue{"100.0"};
+    // -1 means the radio has not established this register yet. Do not invent
+    // a plausible 023/NN value while connect-time readback is outstanding.
+    int     m_fmDtcsCode{-1};
+    bool    m_fmDtcsTxReverse{false};
+    bool    m_fmDtcsRxReverse{false};
     QString m_repeaterOffsetDir{"simplex"};
     double  m_fmRepeaterOffsetFreq{0.0};
     double  m_txOffsetFreq{0.0};

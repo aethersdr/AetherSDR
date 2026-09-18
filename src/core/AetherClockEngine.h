@@ -9,7 +9,7 @@
 // classes. The wiring layer (GUI applet, tests, any future host) injects a
 // DAX-hold provider wrapping the CENTRAL
 // PanadapterStream::acquireDaxChannel/releaseDaxChannel(ch,
-// DaxConsumer::Clock) registry, and connects the stream's daxAudioReady to
+// DaxConsumer::Clock) registry, and connects the stream's daxPcmReady to
 // feedRxAudio(). That keeps the engine above the radio seam and
 // source-agnostic: any 24 kHz float32-stereo feed (Flex DAX today, other
 // backends tomorrow) drives it through the same two seams.
@@ -44,7 +44,7 @@ public:
     explicit AetherClockEngine(QObject* parent = nullptr);
     ~AetherClockEngine() override;
 
-    // DAX RX audio sample rate (Hz) — the daxAudioReady contract.
+    // DAX RX audio sample rate (Hz) — the daxPcmReady contract.
     static constexpr int kSampleRateHz = 24000;
 
     // Station presets. Listening dial = carrier − 1 kHz, USB.
@@ -116,7 +116,7 @@ public slots:
     void applyStationPreset(SliceModel* slice, ClockStation station,
                             double carrierMHz);
 
-    // PCM ingest — the daxAudioReady payload (float32 interleaved stereo,
+    // PCM ingest — the daxPcmReady payload (float32 interleaved stereo,
     // native-endian, 24 kHz). The wiring layer connects the audio source
     // here; it is also the test-harness seam and the future non-Flex source
     // seam. Samples whose channel differs from the bound slice's live

@@ -1,6 +1,9 @@
 #pragma once
 
 #include "PersistentDialog.h"
+#include "models/RadioModel.h"
+#include "models/TxController.h"
+#include <array>
 #include "core/tnc/AetherAx25LibmodemShim.h"
 
 #include <QByteArray>
@@ -8,7 +11,9 @@
 #include <QJsonObject>
 #include <QMetaObject>
 #include <QPointer>
+#include <QDateTime>
 #include <QQueue>
+#include <QSet>
 #include <QStringList>
 #include <QThread>
 
@@ -17,6 +22,7 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QPlainTextEdit;
 class QPushButton;
 class QRadioButton;
 class QSpinBox;
@@ -30,7 +36,9 @@ class QVBoxLayout;
 namespace AetherSDR {
 
 class AprsBeacon;
+class AprsDigipeaterModel;
 class AprsMessagesDialog;
+class AprsRateGraph;
 class AprsMessenger;
 class AprsStationList;
 class AudioEngine;
@@ -142,7 +150,16 @@ public:
     // the shipping path rather than a parallel one. `verb` is "modem" or "link";
     // `action` is already lowercased and trimmed by the server.
     QJsonObject automationCommand(const QString& verb, const QString& action,
-                                  const QString& value);
+                                  const QString& value,
+                                  const std::shared_ptr<TxController>& controller,
+                                  const TxController::Input& input);
+
+    // D-STAR in AetherModem is a SmartSDR waveform surface (ThumbDV helper +
+    // radio-side D-STAR waveform). Hide the tab when the connected radio
+    // cannot load waveforms, or when this build has no helper. True on
+    // disconnect (permissive) and when RadioCapabilities::hasWaveforms is
+    // true. Hiding also stops a running helper so it is not orphaned.
+    void setDstarTabAvailable(bool connected, bool hasWaveforms);
 
 protected:
     // Command history (Up/Down) on the terminal input line.
@@ -150,7 +167,27 @@ protected:
 
 private:
     void setModemProfile(Ax25ModemProfile profile, bool persist);
+    enum class TxProgram { Receive, Beacon, Digi, Pms, Terminal, Count };
+    struct ProgramInput {
+        std::shared_ptr<TxController> controller;
+        TxController::Input root;
+    };
+    bool m_tncNativeAuthority{true};
+    ProgramInput m_tncAuthority;
+    std::array<ProgramInput, static_cast<std::size_t>(TxProgram::Count)> m_txPrograms;
+    bool setTxProgram(TxProgram program, bool enabled,
+                      const std::shared_ptr<TxController>& controller = {},
+                      const TxController::Input& input = {});
+    void configureTxActions();
+    void setDigiEnabled(bool enabled, const std::shared_ptr<TxController>& controller = {},
+                        const TxController::Input& input = {});
+    void syncBaudRadios(Ax25ModemProfile profile);
+    QJsonObject digiAutomationStatus() const;
     void setDecodeEnabled(bool enabled);
+    void setDecodeEnabledForAutomation(bool enabled,
+        const std::shared_ptr<TxController>& controller, const TxController::Input& input);
+    void applyDecodeEnabled(bool enabled);
+    void enableDecodeForProgram(TxProgram program);
     // True when the backend runs the modulator on this host (HL2) rather than
     // taking modulator input from a Flex DAX stream. Such a radio has no DAX
     // TX stream to wait for and no `transmit dax` setting to change.
@@ -166,12 +203,19 @@ private:
     void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
     void startAudioCapture();
     void finishAudioCapture(bool save);
+    void captureGeneratedTxAudio(const Ax25TransmitResult& tx);
+    void finishIcomPostResampleCapture();
     void startTransmitFromUi();
     void startTransmit(const QString& text);
-    void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss);
+    void startTransmit(const QString& text, TxCoordinator::Request input);
+    void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss,
+                           TxCoordinator::Request input);
     void beginTransmitWhenReady();
+    void startTransmitAudioAfterPtt();
     void paceTransmitAudio();
-    void finishTransmit(bool aborted, const QString& reason);
+    void disconnectPttConfirmation();
+    void handleTxAudioFinished(quint64 token, int drainMs);
+    void finishTransmit(bool aborted, const QString& reason, bool preserveQueue = false);
 
     // APRS client (APRS tab): station table, timed beacon, messaging.
     void buildAprsUi(QWidget* page, QVBoxLayout* pageLayout);
@@ -191,15 +235,24 @@ private:
     void updateAprsEnvelopeButton();
     void handleGpsUpdate();
 
+    // Fill-in digipeater (Digi tab).
+    QWidget* buildDigiPage();
+    void applyDigiConfigFromUi(bool persist);
+    void appendDigiLog(const QString& kind, const QString& line);
+    void refreshDigiStatus();
+
     // Personal Mailbox System (PMS) tab + service wiring.
     QWidget* buildMailboxPage();
-    void setPmsEnabled(bool enabled, bool persist);
+    void setPmsEnabled(bool enabled, bool persist,
+                       const std::shared_ptr<TxController>& controller = {},
+                       const TxController::Input& input = {});
     void applyPmsConfigFromUi(bool persist);
     void refreshPmsStatus();
 
     // TNC Terminal tab: connected-mode AX.25 client (call out to a packet BBS).
     QWidget* buildTerminalPage();
     void submitTerminalInput();
+    void submitTerminalLine(const QString& line);
     void refreshTerminalStatus();
     void applyTerminalConfigFromUi(bool persist);
     // Push the active modem profile's air-interface timing into the terminal and
@@ -219,8 +272,11 @@ private:
     // KISS TNC tab + TCP server wiring.
     QWidget* buildKissTncPage();
     void setTncEnabled(bool enabled, bool persist);
+    void configureTncAuthority(bool native,
+        const std::shared_ptr<TxController>& controller = {}, const TxController::Input& input = {});
     void applyTncStartOnStartup();
-    void handleKissFrameFromClient(const QByteArray& ax25NoFcs);
+    void handleKissFrameFromClient(const QByteArray& ax25NoFcs,
+                                  const TxCoordinator::Request& input);
     void maybeStartNextKissTx();
     void refreshTncStatus();
     void appendFrame(const Ax25DecodedFrame& frame);
@@ -248,9 +304,11 @@ private:
     Ax25DemodConfig m_shimConfig;
     QStackedWidget* m_tabStack{nullptr};
     QAbstractButton* m_ax25Tab{nullptr};
+    QAbstractButton* m_digiTab{nullptr};
     QAbstractButton* m_kissTab{nullptr};
     QAbstractButton* m_dstarTab{nullptr};
     QWidget* m_aprsPage{nullptr};
+    QWidget* m_digiPage{nullptr};
     QWidget* m_terminalPage{nullptr};
     DStarModemPage* m_dstarPage{nullptr};
 #ifdef HAVE_MQTT
@@ -289,9 +347,12 @@ private:
     quint64 m_lastActivityHdlc{0};
     quint64 m_lastActivityAccepted{0};
     QByteArray m_capturePcm;
+    QString m_captureId;
     int m_captureSampleRate{0};
     qsizetype m_captureTargetBytes{0};
+    int m_captureTxSequence{0};
     bool m_captureActive{false};
+    bool m_captureIcomPostResampleActive{false};
     bool m_diagnosticsDebugEnabled{false};
     QByteArray m_txPcm;
     Ax25TransmitResult m_pendingTx;
@@ -300,10 +361,13 @@ private:
     int m_txChunkCount{0};
     // TX pacing health: detects GUI-thread stalls starving the 20 ms pacer.
     QElapsedTimer m_txPaceClock;
+    QElapsedTimer m_txPttClock;
     qint64 m_txPaceLastChunkMs{-1};
     qint64 m_txPaceMaxGapMs{0};
     int m_txPaceLateChunks{0};
     bool m_txActive{false};
+    bool m_txAudioStartArmed{false};
+    bool m_txAwaitingAudioFinish{false};
     bool m_txPendingStream{false};
     bool m_txRestoreAudioDaxMode{false};
     bool m_txRestoreTransmitDax{false};
@@ -313,6 +377,11 @@ private:
     // Identifies the current transmission so deferred work armed on its behalf
     // (the DAX stream-wait timeout) cannot act on a later one.
     quint64 m_txGeneration{0};
+    TxCoordinator::Producer m_txProducer;
+    TxCoordinator::Request m_txRequest;
+    TxCoordinator::Context m_txContext;
+    QMetaObject::Connection m_txPttConfirmConnection;
+    QMetaObject::Connection m_txPttConfirmedConnection;
 
     // KISS TNC server (TCP) and its controls.
     KissTncServer* m_kissServer{nullptr};
@@ -321,7 +390,7 @@ private:
     QSpinBox* m_tncPort{nullptr};
     QLabel* m_tncStatusDot{nullptr};
     QLabel* m_tncStatusValue{nullptr};
-    QQueue<QByteArray> m_kissTxQueue;
+    bool m_txFromDigi{false};
     // Number of 250 ms radio-busy retries currently elapsed on the head-of-
     // queue frame. Capped (kMaxKissTxBusyRetries) so a stuck-transmitting
     // radio can't spin maybeStartNextKissTx() forever and starve later
@@ -355,6 +424,31 @@ private:
     QLineEdit* m_aprsMsgText{nullptr};
     QPushButton* m_aprsMsgSend{nullptr};
     QPushButton* m_aprsEnvelope{nullptr};
+
+    // Fill-in digipeater (Digi tab).
+    AprsDigipeaterModel* m_digi{nullptr};
+    QRadioButton* m_digiHf300{nullptr};
+    QRadioButton* m_digiVhf1200{nullptr};
+    QCheckBox* m_digiEnable{nullptr};
+    QLineEdit* m_digiCall{nullptr};
+    QLineEdit* m_digiAlias{nullptr};
+    QCheckBox* m_digiAlsoMyCall{nullptr};
+    QCheckBox* m_digiAlsoRelay{nullptr};
+    QSpinBox* m_digiDupeSecs{nullptr};
+    QCheckBox* m_digiBeaconEnable{nullptr};
+    QSpinBox* m_digiBeaconInterval{nullptr};
+    QLineEdit* m_digiBeaconText{nullptr};
+    QLineEdit* m_digiBeaconPath{nullptr};
+    QComboBox* m_digiBeaconSymbol{nullptr};
+    QPushButton* m_digiBeaconNow{nullptr};
+    QComboBox* m_digiWindow{nullptr};
+    AprsRateGraph* m_digiHeardGraph{nullptr};
+    AprsRateGraph* m_digiRepeatGraph{nullptr};
+    AprsRateGraph* m_digiDropGraph{nullptr};
+    QPlainTextEdit* m_digiLog{nullptr};
+    QLabel* m_digiStatusValue{nullptr};
+    QSet<QString> m_digiUniqueSources;
+    QDateTime m_digiLastRepeatUtc;
 
     // TNC Terminal service (connected-mode AX.25 client) and its controls.
     TncTerminal* m_terminal{nullptr};

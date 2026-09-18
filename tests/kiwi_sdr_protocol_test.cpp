@@ -1095,5 +1095,85 @@ int main()
         return fail("dBm to S-unit conversion is wrong");
     }
 
+    // ---- Web-888 receiver family (docs/web888-cleanroom-design.md) ----
+
+    // Web-888 ships every server-to-client frame — MSG included — as binary
+    // WebSocket frames; the dispatch keys on the leading ASCII magic.
+    if (classifyInboundFrameTag(QByteArrayLiteral("MSG cfg_loaded=1"))
+            != InboundFrameTag::MsgText
+        || classifyInboundFrameTag(QByteArrayLiteral("SND")) != InboundFrameTag::Sound
+        || classifyInboundFrameTag(QByteArrayLiteral("W/F"))
+            != InboundFrameTag::Waterfall
+        || classifyInboundFrameTag(QByteArrayLiteral("EXT"))
+            != InboundFrameTag::Extension
+        || classifyInboundFrameTag(QByteArrayLiteral("\x00\x00\x00\x07"))
+            != InboundFrameTag::Unknown
+        || classifyInboundFrameTag(QByteArray()) != InboundFrameTag::Unknown) {
+        return fail("inbound frame classification is wrong");
+    }
+
+    // Family helpers round trip.
+    if (kiwiSdrReceiverFamilyId(KiwiSdrReceiverFamily::Kiwi)
+            != QStringLiteral("kiwi")
+        || kiwiSdrReceiverFamilyId(KiwiSdrReceiverFamily::Web888)
+            != QStringLiteral("web888")
+        || kiwiSdrReceiverFamilyName(KiwiSdrReceiverFamily::Kiwi)
+            != QStringLiteral("KiwiSDR")
+        || kiwiSdrReceiverFamilyName(KiwiSdrReceiverFamily::Web888)
+            != QStringLiteral("Web-888")
+        || kiwiSdrReceiverFamilyFromString(QStringLiteral("WEB888"))
+            != KiwiSdrReceiverFamily::Web888
+        || kiwiSdrReceiverFamilyFromString(QStringLiteral("web-888"))
+            != KiwiSdrReceiverFamily::Web888
+        || kiwiSdrReceiverFamilyFromString(QStringLiteral(" Web888 "))
+            != KiwiSdrReceiverFamily::Web888
+        || kiwiSdrReceiverFamilyFromString(QStringLiteral("kiwi"))
+            != KiwiSdrReceiverFamily::Kiwi
+        || kiwiSdrReceiverFamilyFromString(QString())
+            != KiwiSdrReceiverFamily::Kiwi
+        || kiwiSdrReceiverFamilyFromString(QStringLiteral("nonsense"))
+            != KiwiSdrReceiverFamily::Kiwi) {
+        return fail("receiver family helpers are wrong");
+    }
+
+    // Web-888 /status body: no ext_api line, 13 RX/waterfall channels. It
+    // must parse without a busy flag (4 of 13 users) and without an API
+    // policy, and the version must come from the fork's Server header while
+    // sw_version stays in the stable fields.
+    const ReceiverMetadata web888StatusMetadata = parseStatusPayload(
+        QByteArrayLiteral(
+            "sw_version=Web888_v2026.609\n"
+            "users=4\n"
+            "users_max=13\n"
+            "wf_chans=13\n"
+            "gps_good=1\n"
+            "adc_clipping=0\n"
+            "center_freq=15360000\n"
+            "bandwidth=30720000\n"
+            "zoom_max=11\n"
+            "wf_fft_size=1024\n"
+            "audio_rate=12000\n"),
+        QStringLiteral("ZynqSDR_Mongoose/2026.609"));
+    if (web888StatusMetadata.serverVersion != QStringLiteral("2026.609")
+        || web888StatusMetadata.serverHeader
+            != QStringLiteral("ZynqSDR_Mongoose/2026.609")
+        || web888StatusMetadata.hasBusy
+        || web888StatusMetadata.apiPolicy != ApiPolicy::Unknown
+        || web888StatusMetadata.usersMax != 13
+        || !web888StatusMetadata.hasWaterfallChannels
+        || web888StatusMetadata.waterfallChannels != 13
+        || !web888StatusMetadata.stableStatusFields.contains(
+            QStringLiteral("sw_version=Web888_v2026.609"))) {
+        return fail("Web-888 /status parsing is wrong");
+    }
+
+    // Variants that self-identify with a Web888_ marker parse the same way.
+    const ReceiverMetadata web888MarkerMetadata = parseStatusPayload(
+        QByteArrayLiteral("users=0\n"),
+        QStringLiteral("Web888_v2026.609/Mongoose"));
+    if (web888MarkerMetadata.serverVersion != QStringLiteral("v2026.609")) {
+        return fail("Web888_ server-header version parsing is wrong");
+    }
+
     return 0;
 }

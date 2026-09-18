@@ -3,7 +3,7 @@
 // QsoRecordStartPolicy — may a QSO recording start? (#4629)
 //
 // Client-Side recording captures RadioModel::rxDemodAudioReady, which on a Flex
-// is fed by PanadapterStream::audioDataReady — the `remote_audio_rx` VITA-49
+// is fed by PanadapterStream::pcmFrameReady — the `remote_audio_rx` VITA-49
 // stream. That stream is created ONLY when PC Audio is enabled
 // (RadioModel::scheduleRxAudioStreamEnsure, which returns early on
 // PcAudioEnabled=False and removes an already-owned stream). With PC Audio off

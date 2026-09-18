@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/PcmFrame.h"
+
 #include <QObject>
 #include <QAudioSink>
 #include <QAudioSource>
@@ -11,7 +13,10 @@
 #include <QUdpSocket>
 #include <QTimer>
 #include <QVector>
+#include "NnrControls.h"
+
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <QBuffer>
@@ -23,6 +28,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "CwRecordGate.h"
 #include "TxMicChannelNormalizer.h"
 #include "TxCaptureHealthTracker.h"
 #include "SpectralNR.h"
@@ -36,12 +42,16 @@ class QMediaDevices;
 #include <deque>
 #include <vector>
 #include <cstdint>
+#include "core/backends/TxAudioSource.h"
 
 namespace AetherSDR {
+
+struct RadioCapabilities;
 
 class SpecbleachFilter;
 class RNNoiseFilter;
 class DeepFilterFilter;
+class NnrFilter;
 class NvidiaAfxFilter;
 class Resampler;
 class TxVoiceProcessor;
@@ -55,6 +65,7 @@ class ClientPuduMonitor;
 class ClientReverb;
 class ClientFinalLimiter;
 class ClientTxTestTone;
+class RxClientEffects;
 class ClientQuindarTone;
 class WsprBeacon;
 class QuindarLocalSink;
@@ -66,11 +77,10 @@ class MacNRFilter;
 // AudioEngine handles audio playback (RX) and capture (TX).
 //
 // RX path:
-//   Audio PCM arrives via PanadapterStream::audioDataReady() — the radio sends
-//   VITA-49 IF-Data packets to the single "client udpport" socket owned by
-//   PanadapterStream. PanadapterStream strips the header and emits the raw PCM;
-//   connect that signal to feedAudioData() then call startRxStream() to open
-//   the QAudioSink.
+//   Typed producer PCM reaches feedPcmFrame() at its declared 24/48 kHz rate.
+//   Legacy byte input and auxiliary Kiwi routes remain 24 kHz. Per-source
+//   processing precedes stereo-preserving conversion to the negotiated sink.
+//   See docs/audio-engine-rate-domains.md for queue and epoch lifetimes.
 //
 // TX path:
 //   Captures mic/input audio via QAudioSource, frames it as VITA-49
@@ -133,6 +143,10 @@ public:
     // test tone as well, since the tone is injected inside that callback.
     Q_INVOKABLE void setHostModulation(bool on) { m_hostModulation = on; }
     bool hostModulation() const { return m_hostModulation; }
+    // Called on the audio thread for connection and capability revisions.
+    void applyBackendAudioCapabilities(bool connected, const RadioCapabilities& caps,
+                                       bool pcAudioEnabled, const QHostAddress& address);
+
     Q_INVOKABLE void stopTxStream();
 
     // Set the DAX TX stream ID (from radio's response to "stream create type=dax_tx")
@@ -175,13 +189,89 @@ public:
     void setMuted(bool m);
     bool isRxStreaming() const { return m_audioSink != nullptr; }
     bool isTxStreaming() const { return m_audioSource != nullptr; }
+    // Which producer currently owns the QSO recorder's TX slot (#2539,
+    // #4281). Both the mic monitor tap and the CW record pump reach
+    // QsoRecorder::feedTxAudio, so both ends ask this one question rather
+    // than each keeping its own idea of who is recording. See
+    // CwRecordGate.h for why mic-capture state is not an input.
+    TxRecorderSource txRecorderSource() const {
+        // The first input stays the RAW any-owner interlock, deliberately not
+        // cwOverTxActive: the Mic-vs-None distinction only matters while the
+        // recorder's MOX-gated TX gate is open, which a foreign transmission
+        // never opens — so narrowing it here would change nothing and would
+        // break the two-input contract the test pins (#4281).
+        return AetherSDR::txRecorderSource(
+            m_radioTransmitting.load(std::memory_order_acquire),
+            // "our CW over is in progress" = our keyer fired AND the radio has
+            // keyed during it. Not the raw latch: see m_cwOverHadTx.
+            m_cwKeyedThisOver.load(std::memory_order_acquire)
+                && m_cwOverHadTx.load(std::memory_order_acquire));
+    }
+    // Mirror of TransmitModel::cwSpeed, used only to size the CW over-hang.
+    void setCwWpm(int wpm) {
+        if (wpm > 0) {
+            m_cwWpm.store(wpm, std::memory_order_relaxed);
+        }
+    }
+    // Whether a Client-Side recording is open, so the CW record pump can skip
+    // rendering samples nothing will store (#4281). Orthogonal to ownership:
+    // that answers WHOSE audio belongs in the file, this answers whether there
+    // is a file. Stored from QsoRecorder's start/stop signals.
+    void setQsoRecordingActive(bool on) {
+        m_qsoRecordingActive.store(on, std::memory_order_release);
+    }
+    // Mirror of "the TX slice's mode is a CW mode" (VoiceModeGate isCwMode),
+    // pushed by MainWindow::updateKeyerAvailability() on every mode change and
+    // TX-slice reassignment. Gates the over latch: RadioModel::sendCwKey has
+    // no mode gate (TCI/MIDI/HID/serial key edges arrive in any mode), so
+    // without this a brushed paddle during an SSB over latches the CW over
+    // machinery and hands the rest of the voice over to the record pump
+    // (#4281). Leaving a CW mode ends any over in flight: both latches clear,
+    // and the pump's next tick sees ownership drop and closes the recorder's
+    // CW gate — so a voice over begun within the old hang records the mic.
+    void setTxModeCw(bool cw) {
+        const bool was = m_txModeIsCw.exchange(cw, std::memory_order_acq_rel);
+        if (was && !cw) {
+            m_cwKeyedThisOver.store(false, std::memory_order_release);
+            m_cwOverHadTx.store(false, std::memory_order_release);
+            m_cwOverWpm.store(0, std::memory_order_relaxed);
+        }
+    }
+    // Mirror of TransmitModel's tune state (optimistic-local, then status-
+    // reconciled). A tune carrier raises the interlock as an owned TX but is
+    // not a CW over; cwOverTxActive excludes it (#4281).
+    void setTuneActive(bool tuning) {
+        m_tuneActive.store(tuning, std::memory_order_release);
+    }
+    // A speed our keyer will send THIS over at, min-tracked into the over-hang
+    // (#4281): CWX keys at CwxModel's own per-segment wpm, independent of the
+    // TransmitModel::cwSpeed mirror, and a 15 WPM segment against a 30 WPM
+    // mirror would age the latch inside every 560 ms word gap (hang: 320 ms).
+    // All of a message's segments announce at send time, so min-tracking
+    // sizes the hang from the message's slowest speed; see
+    // cwOverHangMs(int, int).
+    void noteCwOverSpeed(int wpm) {
+        if (wpm <= 0) {
+            return;
+        }
+        int cur = m_cwOverWpm.load(std::memory_order_relaxed);
+        while ((cur == 0 || wpm < cur)
+               && !m_cwOverWpm.compare_exchange_weak(
+                      cur, wpm, std::memory_order_relaxed)) {
+        }
+    }
     bool kiwiSdrAudioTransmitMuted() const;
     bool hasKiwiSdrAudioSource(const QString& sourceId) const;
     int  txInputSampleRate() const { return m_txInputRate; }
     int  txInputChannelCount() const { return m_txInputChannels; }
+    QAudioFormat::SampleFormat txInputSampleFormat() const { return m_txInputFormat; }
+    // True when the mic hands us the host engine's float mix directly, so the
+    // 48 kHz float voice strip is fed without an Int16 round trip on ingress.
+    bool txInputIsFloat32() const { return m_txInputFormat == QAudioFormat::Float; }
+    int  txInputBytesPerSample() const { return txInputIsFloat32() ? 4 : 2; }
     bool txInputNormalizationTo48k() const;
     bool txRadeResamplingTo24k() const { return m_radeTxNeedsResample; }
-    bool rxOutputResamplingActive() const { return m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE; }
+    bool rxOutputResamplingActive() const { return m_rxOutputRate.load() != m_rxProducerRate.load(); }
     QJsonArray audioEndpointDiagnostics() const;
     QJsonObject startAutomationAudioCapture(int durationMs,
                                             const QStringList& points);
@@ -202,7 +292,13 @@ public:
     bool isRadeMode() const { return m_radeMode; }
 
     // Sends RADE modem output (float32 PCM) as VITA-49 packets via m_txSocket
-    void sendModemTxAudio(const QByteArray& float32pcm);
+    void sendModemTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
+    // Queue behind the last modem block. The token crosses the radio seam so a
+    // finite-stream backend can drain conversion state before PTT is released.
+    void finishModemTxAudio(quint64 token, const TxCoordinator::Context& context);
+    void setMicrophoneContext(const TxCoordinator::Context& context);
+    void setHostMicrophoneContext(const TxCoordinator::Context& context);
+    void setRawMicrophoneContext(const TxCoordinator::Context& context);
 
     // DAX TX: VirtualAudioBridge feeds float32 PCM for VITA-49 TX
     void setDaxTxMode(bool on);
@@ -212,9 +308,13 @@ public:
     void setDaxTxUseRadioRoute(bool on);
     bool daxTxUseRadioRoute() const { return m_daxTxUseRadioRoute.load(); }
     void setTransmitting(bool tx);
-    void setRadioTransmitting(bool tx);  // raw interlock state (regardless of TX ownership)
-    void clearTxAccumulators() { m_txAccumulator.clear(); m_txFloatAccumulator.clear(); m_daxPreTxBuffer.clear(); }
-    Q_INVOKABLE void feedDaxTxAudio(const QByteArray& float32pcm);
+    // Raw interlock state plus its tx_client_handle attribution, delivered as
+    // one snapshot (the parse stores ownership before emitting the signal).
+    void setRadioTransmitting(bool tx, bool ownedByUs);
+    // Self-marshals onto the AudioEngine thread; safe from any caller.
+    Q_INVOKABLE void clearTxAccumulators();
+    void discardTxMedia(const TxCoordinator::Context& context);
+    void feedDaxTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
     void feedDecodedSpeech(const QByteArray& pcm);
@@ -231,17 +331,17 @@ public:
     void setNr2GainMethod(int method);
     void setNr2NpeMethod(int method);
     void setNr2AeFilter(bool on);
+    // Push the post-processing controls from Nr2SettingsModel to every live
+    // NR2 instance. One entry point rather than four setters: the model is
+    // already where the UI writes, so this is the only direction that needs
+    // plumbing (#5702).
+    Q_INVOKABLE void applyNr2Post2Settings();
     QJsonObject nr2RuntimeDiagnostics() const;
     QJsonObject opusTxPacingDiagnostics() const;
-    Q_INVOKABLE void setNr2UseOriginalGeometry(bool useOriginal);
     // Tell the engine the main RX source is (or is not) the demo, so the main NR2
     // filter uses the original 256/2 geometry the demo's tiny frames need. Rebuilds
     // the active main NR2 filter if enabled so the change takes effect immediately.
     Q_INVOKABLE void setMainSourceLegacyNr2(bool legacy);
-    bool nr2UseOriginalGeometry() const
-    {
-        return m_nr2UseOriginalGeometry.load(std::memory_order_relaxed);
-    }
     // Client-side RN2 (RNNoise neural noise suppression)
     Q_INVOKABLE void setRn2Enabled(bool on);
     bool rn2Enabled() const { return m_rn2Enabled.load(); }
@@ -280,6 +380,23 @@ public:
     void setDfnrAttenLimit(float db);
     float dfnrAttenLimit() const;
     void setDfnrPostFilterBeta(float beta);
+
+    // Client-side NNR (WDSP 2.10 neural noise reduction, trained on HF).
+    // Unconditional, unlike DFNR/MNR/BNR: the models are compiled into the
+    // vendored WDSP, so there is no library to find and no GPU to require.
+    Q_INVOKABLE void setNnrEnabled(bool on);
+    bool nnrEnabled() const { return m_nnrEnabled.load(); }
+    // 0..100, mapped to WDSP's mask floor (-10..-50 dB). Higher is more
+    // suppression; see src/core/NnrControls.h.
+    void setNnrStrength(int strength);
+    int nnrStrength() const { return m_nnrStrength.load(); }
+    // 0 = Standard, 1 = Premium. Reports the slot WDSP actually selected.
+    void setNnrModel(int slot);
+    // Push the six undocumented tuning controls from NnrSettings to every live
+    // instance. One entry point rather than six setters: NnrSettings is the
+    // source of truth, so the UI writes there and calls this to make it live.
+    Q_INVOKABLE void applyNnrTuning();
+    int nnrModel() const { return m_nnrModel.load(); }
 
     // Optional NVIDIA Maxine AFX GPU denoiser (runtime-loaded; NVIDIA RTX/GeForce).
     Q_INVOKABLE void setNvAfxEnabled(bool on);
@@ -345,8 +462,9 @@ public:
     // on its own paced DAX/VITA-49 path, so speech processing and microphone
     // callback rates cannot distort or shorten the four-tone frame.
     WsprBeacon* wsprBeacon() { return m_wsprBeacon.get(); }
-    Q_INVOKABLE void startWsprPump();
+    void startWsprPump(const TxCoordinator::Context& context);
     Q_INVOKABLE void stopWsprPump();
+    void stopWsprPumpIfCurrent(const TxCoordinator::Context& context);
 
     // Quindar tone generator (#2262).  Sits AFTER the user DSP chain
     // and PC mic gain but BEFORE the final brickwall limiter, so the
@@ -523,6 +641,10 @@ public:
     QAudioDevice inputDevice()  const { return m_inputDevice; }
     qsizetype rxBufferBytes() const { return m_rxBufferBytes.load(); }
     qsizetype rxBufferPeakBytes() const { return m_rxBufferPeakBytes.load(); }
+    // Sum of queued durations across sources, excluding the device queue.
+    // Bytes span producer and device domains; no single rate converts them.
+    double rxBufferMs() const { return m_rxBufferMs.load(); }
+    double rxBufferPeakMs() const { return m_rxBufferPeakMs.load(); }
     quint64 rxBufferUnderrunCount() const { return m_rxBufferUnderrunCount.load(); }
     int rxBufferSampleRate() const { return m_rxBufferSampleRate.load(); }
     int rxPlaybackQueuedMs() const
@@ -549,7 +671,19 @@ public:
     // call so every local CW source (manual keyer, CWX macros, iambic paddle)
     // drives them in lockstep. The recorder copy is what lets a Client-Side QSO
     // recording capture the operator's own sent CW/CWX side-tone (#2539).
-    void setCwKeyDown(bool down);
+    // `when` is the edge's scheduled instant on the producer's element grid
+    // (#4890): keying sources with an exact schedule (iambic keyer) pass their
+    // grid deadline so the sidetone renders intended rhythm, not thread-wake
+    // rhythm; sources without one take the wall-clock default.
+    // Note the deliberate asymmetry with RadioModel::sendCwKeyEdge, whose
+    // `scheduledAt` uses a default-constructed (epoch) time_point as an
+    // explicit "no schedule" sentinel it tests for.  Here the sidetone needs a
+    // usable instant on every call, so "no schedule" is spelled now() and
+    // there is nothing to test for — passing {} would stamp the epoch rather
+    // than mean "unscheduled".
+    void setCwKeyDown(bool down,
+                      std::chrono::steady_clock::time_point when =
+                          std::chrono::steady_clock::now());
 
     // Start the CW-sidetone record pump (#2539). CW has no mic-driven
     // onTxAudioReady, so a free-running timer on the audio thread feeds the
@@ -582,8 +716,11 @@ public:
     }
 
 public slots:
-    // Receives stripped PCM from PanadapterStream::audioDataReady().
+    // Legacy internal/playback ingress: native float32 stereo at 24 kHz.
+    // Live producers use feedPcmFrame so validation survives queued delivery.
     void feedAudioData(const QByteArray& pcm);
+    void feedPcmFrame(const AetherSDR::PcmFrame& frame);
+    void feedKiwiPcmFrame(const QString& sourceId, const AetherSDR::PcmFrame& frame);
     // Receives decoded KiwiSDR PCM after a clean protocol decoder exists.
     // Same format as feedAudioData(): 24 kHz stereo float32.
     void feedKiwiSdrAudioData(const QByteArray& pcm24kStereoFloat);
@@ -609,22 +746,41 @@ signals:
     void rn2EnabledChanged(bool on);
     void rn2TxEnabledChanged(bool on);   // RN2 on the TX mic pre-amp (#2813)
     void dfnrEnabledChanged(bool on);
+    void nnrEnabledChanged(bool on);
     void nvAfxEnabledChanged(bool on);
-    void txRawPcmReady(const QByteArray& pcm);  // raw 24kHz stereo int16 PCM for RADEEngine
+    void txRawPcmReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
     // Post-final-limiter TX monitor PCM (24 kHz stereo int16) — the exact stream
     // packetised to the radio. Fires for all phone/SSB TX (unlike txRawPcmReady,
     // which is RADE-only), so it is the source for Client-Side TX recording:
     // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
     // receivers connect via Qt::AutoConnection (queued across threads).
     //
-    // `clientLeveled` is true when the frames came from an external TCI/DAX
-    // client (feedDaxTxAudio's markExternalSource) rather than the mic chain or
-    // the engine's own tone generators. Such a client owns its level — WSJT-X's
-    // Pwr slider attenuates the audio it streams — and a host-modulating
-    // backend must not run makeup gain over it (#4796). Slots that only record
-    // or meter the stream can ignore the flag (Qt permits connecting to a slot
-    // with fewer arguments).
-    void txFinalMonitorPcmReady(const QByteArray& int16Stereo, bool clientLeveled);
+    // `source` says WHERE the frames came from — TxAudioSource.h carries the
+    // contract. Which emitter sets what:
+    //
+    //   onTxAudioReady            → Microphone (the capture chain, through the
+    //                               full voice TX DSP)
+    //   feedDaxTxAudio            → ClientLeveled (external TCI/DAX; the client
+    //                               owns its level, #4796)
+    //   sendModemTxAudio          → Microphone (the AX.25 modem — its AFSK
+    //                               amplitude is a fixed constant and the packet
+    //                               dialog has no level control, so the mic
+    //                               slider is the only thing that can move it)
+    //   startWsprPump             → EngineGenerated (111.6 s unattended; the mic
+    //                               slider must not reach it)
+    //
+    // The tag is a claim about ORIGIN, not about treatment. Slots that only
+    // record or meter the stream can ignore it (Qt permits connecting to a slot
+    // with fewer arguments) — but a slot that ASSERTS on it must compare against
+    // the enum: QVariant::toBool() on this type reads both ClientLeveled and
+    // EngineGenerated as true, which silently retired a guard once already.
+    void txFinalMonitorPcmReady(const QByteArray& int16Stereo,
+                                TxAudioSource source);
+    // Same samples, separate transport authority. Recorder/monitor consumers
+    // remain on the unguarded local tap above.
+    void txTransportPcmReady(const QByteArray& int16Stereo, TxAudioSource source,
+                             const AetherSDR::TxCoordinator::Context& context);
+    void modemTxAudioFinished(quint64 token, const AetherSDR::TxCoordinator::Context& context);
     // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
     // stereo int16 — the recorder's native WAV format. Pumped on the audio
     // thread while the radio is keyed for CW (no mic-driven onTxAudioReady in
@@ -634,12 +790,12 @@ signals:
     // recorder opens its TX gate for CW the same way moxChanged does for voice.
     // Ownership-correct: driven by our local keyer, not any-owner interlock.
     void cwRecordingActiveChanged(bool active);
-    void txPacketReady(const QByteArray& vitaPacket);  // VITA-49 TX packet for PanadapterStream
+    void txPacketReady(const QByteArray& vitaPacket, const AetherSDR::TxCoordinator::Context& context);
     // Sidetone-tapped audio for the TX-side CW decoder (#2417).  Emitted
     // from the audio thread; receivers should connect via Qt::AutoConnection
     // (which becomes queued across threads) so feedAudio() lands on the
     // decoder's thread.  Format: 24 kHz stereo float32 — same as the
-    // RX panStream::audioDataReady() path so CwDecoder::feedAudio()
+    // RX panStream::pcmFrameReady() path so CwDecoder::feedAudio()
     // accepts it without a separate adapter.
     void txDecodeAudioReady(const QByteArray& pcm24kStereoFloat);
     // `channels` is carried explicitly (#4489) rather than left for a consumer
@@ -716,6 +872,9 @@ private:
 
     struct ExternalRxAudioSourceState {
         QString id;
+        std::optional<PcmFrame> pcmFrame;
+        PcmFrameGate pcmIngress;
+        std::unique_ptr<RxClientEffects> clientEffects;
         QByteArray rxBuffer;
         std::deque<QByteArray> rxPackets;
         QByteArray outputBuffer;
@@ -731,6 +890,7 @@ private:
 #ifdef HAVE_DFNR
         std::unique_ptr<DeepFilterFilter> dfnr;
 #endif
+        std::unique_ptr<NnrFilter> nnr;
 #ifdef HAVE_NVIDIA_AFX
         std::unique_ptr<NvidiaAfxFilter> nvAfx;
 #endif
@@ -771,7 +931,7 @@ private:
     float computeRMS(const QByteArray& pcm) const;
     QByteArray applyBoost(const QByteArray& pcm, float gain) const;
     QByteArray buildVitaTxPacket(const float* samples, int numStereoSamples);
-    void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId);
+    void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId, const TxCoordinator::Context& context);
     void emitScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitTxPostChainScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate);
@@ -817,29 +977,40 @@ private:
     void resetExternalKiwiDspState(ExternalRxAudioSourceState& source);
     void clearExternalKiwiDspState(ExternalRxAudioSourceState& source);
     std::unique_ptr<SpectralNR> createNr2Filter(
-        const QString& label, bool forceLegacyGeometry = false) const;
-    std::unique_ptr<RNNoiseFilter> createRn2Filter(const QString& label) const;
+        const QString& label, bool forceLegacyGeometry = false,
+        int producerRate = DEFAULT_SAMPLE_RATE) const;
+    std::unique_ptr<RNNoiseFilter> createRn2Filter(const QString& label,
+        int producerRate = DEFAULT_SAMPLE_RATE) const;
     RNNoiseFilter* rn2ForSource(RxDspSource source,
                                 ExternalRxAudioSourceState* externalSource) const;
 #ifdef HAVE_SPECBLEACH
-    std::unique_ptr<SpecbleachFilter> createNr4Filter(const QString& label) const;
+    std::unique_ptr<SpecbleachFilter> createNr4Filter(const QString& label,
+        int producerRate = DEFAULT_SAMPLE_RATE) const;
     SpecbleachFilter* nr4ForSource(
         RxDspSource source,
         ExternalRxAudioSourceState* externalSource) const;
 #endif
 #ifdef __APPLE__
-    std::unique_ptr<MacNRFilter> createMnrFilter(const QString& label) const;
+    std::unique_ptr<MacNRFilter> createMnrFilter(const QString& label,
+        int producerRate = DEFAULT_SAMPLE_RATE) const;
     MacNRFilter* mnrForSource(RxDspSource source,
                               ExternalRxAudioSourceState* externalSource) const;
 #endif
 #ifdef HAVE_DFNR
-    std::unique_ptr<DeepFilterFilter> createDfnrFilter(const QString& label) const;
+    std::unique_ptr<DeepFilterFilter> createDfnrFilter(const QString& label,
+        int producerRate = DEFAULT_SAMPLE_RATE) const;
     DeepFilterFilter* dfnrForSource(
         RxDspSource source,
         ExternalRxAudioSourceState* externalSource) const;
 #endif
+    std::unique_ptr<NnrFilter> createNnrFilter(const QString& label,
+        int producerRate = DEFAULT_SAMPLE_RATE) const;
+    NnrFilter* nnrForSource(
+        RxDspSource source,
+        ExternalRxAudioSourceState* externalSource) const;
 #ifdef HAVE_NVIDIA_AFX
-    std::unique_ptr<NvidiaAfxFilter> createNvAfxFilter(const QString& label) const;
+    std::unique_ptr<NvidiaAfxFilter> createNvAfxFilter(const QString& label,
+        int producerRate = DEFAULT_SAMPLE_RATE) const;
     NvidiaAfxFilter* nvAfxForSource(
         RxDspSource source,
         ExternalRxAudioSourceState* externalSource) const;
@@ -854,6 +1025,7 @@ private:
     void applyClientTubeRxFloat32(QByteArray& float32);
     // RX pudu operates on the post-Tube float32 stereo buffer.
     void applyClientPuduRxFloat32(QByteArray& float32);
+    void updateAuxiliaryClientEffectMeters(RxClientEffects& source);
 
     void accumulatePcMicMeterInt16Stereo(const QByteArray& int16stereo);
     void logTxInputChannelDiagnostics(const TxMicChannelNormalizer::Diagnostics& diagnostics,
@@ -864,9 +1036,23 @@ private:
     qint64 txCaptureNowMs() const;
     bool tciAudioFresh() const;
     void pumpWsprBeacon();
+    // `markExternalSource` arms the TCI active-audio timer (it means "a TCI/DAX
+    // client is feeding"); `source` is the origin tag forwarded to the backend.
+    // They are SEPARATE because they stopped agreeing: the AX.25 modem and the
+    // WSPR pump both feed with markExternalSource false, and only one of them is
+    // EngineGenerated. Deriving the tag from the flag is what put AX.25 in the
+    // beacon's bucket, and a beacon's bucket has no mic slider in it.
     void feedDaxTxAudioInternal(const QByteArray& float32pcm,
                                 bool markExternalSource,
-                                bool forceRadioDaxRoute);
+                                bool forceRadioDaxRoute,
+                                TxAudioSource source,
+                                const TxCoordinator::Context& context);
+    bool selectTxContext(const TxCoordinator::Context& context);
+    TxCoordinator::Context m_microphoneContext;
+    TxCoordinator::Context m_hostMicrophoneContext;
+    TxCoordinator::Context m_rawMicrophoneContext;
+    TxCoordinator::Context m_accumulatorContext;
+    TxCoordinator::Context m_wsprContext;
     void observeTxCaptureState(QAudio::State state);
     // Overload for callers that must sample the unread depth before draining it.
     void observeTxCaptureState(QAudio::State state, qint64 bufferedBytes);
@@ -921,12 +1107,30 @@ private:
     quint64            m_txLifecycleGeneration{0};
     QElapsedTimer      m_txCaptureHealthClock;
     TxCaptureHealthTracker m_txCaptureHealth;
-    // WASAPI silent-open watchdog (#2929): some USB PnP mics report mono-only
-    // capture but Qt accepts an unsupported stereo open and then delivers no
-    // bytes. The watchdog reopens as mono if no bytes arrive within ~1.5 s.
+    // WASAPI silent-open watchdog (#2929): some endpoints accept an open they
+    // cannot honour — Qt returns a non-null QIODevice that then delivers no
+    // bytes. The watchdog reopens along AudioFormatNegotiator::silentOpenLadder()
+    // if nothing arrives within ~1.5 s.
+    //
+    // The ladder walks channel count AND sample format. One bool could express
+    // "mono retry used up" while mono was the only recovery; it cannot express a
+    // position in a multi-rung ladder, which is why a Float-first capture could
+    // strand an Int16-capable mic (review of PR #5017).
     bool               m_txReceivedAnyBytes{false};
-    bool               m_txForceMonoOnNextOpen{false};
-    bool               m_txSilenceRetryDone{false};
+    // Set by the watchdog, consumed by the next startTxStream(): distinguishes a
+    // recovery reopen (advance the ladder) from a fresh start (reset to stage 0).
+    bool               m_txSilentOpenRetryArmed{false};
+    // Position in AudioFormatNegotiator::txOpenLadder(m_txSilentOpenInitialChannels),
+    // the ONE ordered rate x format x channels sequence. 0 == the initial,
+    // non-recovery open. Advanced by BOTH failure shapes — a null open moves
+    // it inline, a non-null/no-data open moves it from the watchdog — so the
+    // two can no longer disagree about which rung is open (round-3 review of
+    // PR #5017). Forward-only, which is what makes a tuple already observed
+    // silent unreachable rather than merely unlikely.
+    int                m_txOpenStage{0};
+    // Channel count of the stage-0 open, so the ladder stays stable across
+    // reopens even though fmt.channelCount() changes underneath it.
+    int                m_txSilentOpenInitialChannels{2};
 #ifdef Q_OS_MAC
     std::atomic<bool>  m_allowBluetoothTelephonyOutput{false};
 #endif
@@ -985,14 +1189,75 @@ private:
     std::unique_ptr<CwSidetoneGenerator> m_cwRecordSidetone;
     std::vector<float> m_cwRecordSidetoneScratch;       // int16<->float render scratch
     // CW record pump state (#2539). The pump free-runs on the audio thread;
-    // m_cwKeyedThisOver latches when our keyer fires (set in setCwKeyDown, reset
-    // on the radio TX→RX edge) so the pump excludes voice/DAX/tune overs that
-    // never key the sidetone. m_cwPumpElapsed drives wall-clock-accurate frame
-    // counts so morse timing in the recording matches real time.
+    // m_cwKeyedThisOver latches when our keyer fires in a CW mode (set in
+    // setCwKeyDown, aged out by the pump via cwLatchShouldAge — NOT reset on
+    // the radio TX→RX edge, which break-in drops in every inter-element gap,
+    // #4281) so the pump excludes voice/DAX/tune overs that never key the
+    // sidetone. m_cwPumpElapsed drives wall-clock-accurate frame counts so
+    // morse timing in the recording matches real time.
     QTimer*            m_cwRecordPump{nullptr};
     QElapsedTimer      m_cwPumpElapsed;
     bool               m_cwPumpActive{false};            // audio-thread only
     std::atomic<bool>  m_cwKeyedThisOver{false};
+    // Our keyer fired AND the radio actually keyed at some point in this over.
+    // The pump is free-running (startCwRecordPump is invoked once and never
+    // stopped), and ownership deliberately ignores the interlock so break-in
+    // gaps do not end the over — which together meant a key-down that never
+    // transmitted (TX-inhibited radio, disconnected, CWX local sidetone
+    // feedback) took the recorder's TX slot and could auto-start a recording.
+    // Latching the interlock rather than sampling it keeps gaps covered while
+    // requiring that a transmission happened at all (#4281).
+    std::atomic<bool>  m_cwOverHadTx{false};
+    // steady_clock ns of our last CW key EDGE — down or up. Written by every
+    // keyer path, read by the pump to age the latch out. 0 = never keyed.
+    // Both edges are stamped deliberately: stamping only key-down measured the
+    // element's own duration as part of the gap, so the over ran long by up to
+    // 3 units. See cwOverHangMs() and onCwRecordPump (#4281).
+    std::atomic<int64_t> m_cwLastKeyEdgeNs{0};
+    // The inputs cwOverTxActive() composes so the over machinery tracks OUR
+    // transmission, not the whole radio's (#4281): the interlock's
+    // tx_client_handle attribution (radios that report no handle parse as
+    // ours — RadioModel's permissive default, so the composite degrades to
+    // any-owner rather than dropping our own over), the TX slice's CW-mode
+    // mirror, and the tune-carrier mirror.
+    std::atomic<bool>  m_radioTxOwnedByUs{true};
+    std::atomic<bool>  m_txModeIsCw{false};
+    std::atomic<bool>  m_tuneActive{false};
+    // Local keyer speed, mirrored from TransmitModel::cwSpeed so the pump can
+    // size the over-hang in dit units rather than wall-clock milliseconds.
+    std::atomic<int>   m_cwWpm{20};
+    // How long after the last key edge the CW over is considered finished.
+    //
+    // It must outlast the longest silence WITHIN an over — the inter-word gap,
+    // 7 dit units — and no longer, because for its whole duration the recorder
+    // holds RX audio off (QsoRecorder::feedRxAudio) so the pump's silence is
+    // not interleaved with receive audio. Every extra millisecond here is a
+    // millisecond of the other station's reply missing from the recording, and
+    // in QSK they answer within 200-400 ms.
+    //
+    // 8 units = the inter-word gap plus one unit of margin for keyer jitter.
+    // At 20 WPM that is 480 ms; at 30 WPM, 320 ms. A fixed 1500 ms (the first
+    // version of this fix) cost 1.5 s of deafness after EVERY over at every
+    // speed, which is a regression against the recorder's own purpose.
+    //
+    // Known limitation: Farnsworth sending stretches word gaps beyond 7 units
+    // at the character speed this reports, so a Farnsworth over may split at a
+    // word boundary. That degrades to the pre-fix behaviour for one gap rather
+    // than losing audio.
+    //
+    // The arithmetic lives in CwRecordGate.h so it is pinned by the same test
+    // as the ownership rule.
+    int64_t cwOverHangMs() const {
+        return AetherSDR::cwOverHangMs(
+            m_cwWpm.load(std::memory_order_relaxed),
+            m_cwOverWpm.load(std::memory_order_relaxed));
+    }
+    // Slowest speed announced for the CURRENT over, 0 = none (a paddle over).
+    // Min-tracked by noteCwOverSpeed as CWX segments announce at send time;
+    // cleared by the pump when the over's latch ages out and on the CW-mode
+    // exit edge, so the next paddle over is back on the mirror alone (#4281).
+    std::atomic<int>   m_cwOverWpm{0};
+    std::atomic<bool>  m_qsoRecordingActive{false};   // a recording file is open
     // Atomic gate for the TX-side CW decode tap (#2417).  Flipped from
     // MainWindow on MOX / CwDecodeTxEnabled changes; checked on the
     // sidetone audio thread so the mirror lambda can return cheaply
@@ -1003,10 +1268,15 @@ private:
     bool  m_txInputMono{false};          // TX: legacy convenience mirror of m_txInputChannels == 1
     int   m_txInputChannels{2};          // TX: actual negotiated input channel count
     int   m_txInputRate{24000};          // TX: actual input sample rate
-    // TX: actual negotiated input sample format. Int16 is the first ladder rung
-    // for mic capture, but a Float32-only virtual driver legitimately lands on
-    // the Float fallback (#1090), so the support snapshot must report what was
-    // negotiated rather than assume the common case.
+    // TX: actual negotiated input sample format. Float32 now leads the mic
+    // ladder on Windows and Linux, so the 48 kHz float voice strip is fed
+    // without an Int16 round trip; Int16 remains the next rung there, and stays
+    // the macOS default — the macOS preferred-RATE rung leads with the per-OS
+    // format order rather than the device's preferred format, so CoreAudio
+    // reporting Float does not silently reorder it (AudioFormatNegotiator.cpp).
+    // A Float32-only virtual driver still lands on Float via the preferredFormat
+    // catch-all rung (#1090). The support snapshot must report what was
+    // negotiated rather than assume either case.
     QAudioFormat::SampleFormat m_txInputFormat{QAudioFormat::Int16};
     TxMicChannelNormalizer::ChannelMode m_txMicChannelMode{
         TxMicChannelNormalizer::ChannelMode::Auto};
@@ -1018,6 +1288,23 @@ private:
     QElapsedTimer m_lastDaxRadioChannelLog;
     std::unique_ptr<Resampler> m_txResampler;  // RADE e.g. 48k -> 24k (lazy init)
 
+    friend class AudioEngineRatesTestAccess;
+    void drainRxAudio(qsizetype freeBytes);
+    bool retireInvalidPcmSources();
+    void queueLegacyKiwiAudioData(const QByteArray& pcm24kStereoFloat);
+    void queueKiwiAudioData(const QString& sourceId, const QByteArray& pcm24kStereoFloat);
+    bool mainPcmSourceOwnsDisplay() const;
+    // rebuildDsp=false keeps the optional NR chain: it is built for the
+    // producer domain, so a device-rate change must not pay to recreate it.
+    void resetMainPcmState(int producerRate, bool rebuildDsp = true);
+    void flushRxDevice();
+    void setRxDeviceRate(int rate);
+    bool prepareMainPcmDsp();
+    std::optional<PcmFrame> m_mainPcmFrame;
+    std::optional<PcmFrame> m_legacyKiwiPcmFrame;
+    std::atomic<int> m_rxProducerRate{DEFAULT_SAMPLE_RATE};
+    std::unique_ptr<RxClientEffects> m_legacyKiwiClientEffects;
+
     // DSP lifecycle mutex: held during feedAudioData() DSP section AND
     // during enable/disable to prevent use-after-free (#502)
     mutable std::recursive_mutex m_dspMutex;
@@ -1027,11 +1314,10 @@ private:
     std::unique_ptr<SpectralNR> m_nr2;
     std::unique_ptr<SpectralNR> m_kiwiSdrNr2;
     std::atomic<bool> m_nr2Enabled{false};
-    std::atomic<bool> m_nr2UseOriginalGeometry{false};
     // Set true while the connected MAIN source is the demo (SimBackend), whose
     // 128-sample frames need the original 256/2 NR2 geometry (see createNr2Filter).
-    // Independent of the user-facing m_nr2UseOriginalGeometry setting, and scoped
-    // to the main filter only — real radios and Kiwi keep the 1024/4 geometry.
+    // This is scoped to the main filter only — real radios and Kiwi keep the
+    // 1024/4 geometry.
     std::atomic<bool> m_mainSourceLegacyNr2{false};
     // Client-side NR4 (libspecbleach)
 #ifdef HAVE_SPECBLEACH
@@ -1065,6 +1351,13 @@ private:
     std::unique_ptr<DeepFilterFilter> m_kiwiSdrDfnr;
 #endif
     std::atomic<bool> m_dfnrEnabled{false};
+
+    // Client-side NNR (WDSP 2.10). No build guard: the models ship in-tree.
+    std::unique_ptr<NnrFilter> m_nnr;
+    std::unique_ptr<NnrFilter> m_kiwiSdrNnr;
+    std::atomic<bool> m_nnrEnabled{false};
+    std::atomic<int>  m_nnrStrength{Nnr::kMaskFloorDefaultStrength};
+    std::atomic<int>  m_nnrModel{0};
 
     // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so
     // mutual-exclusion in the other NR setters compiles regardless of the build).
@@ -1235,6 +1528,8 @@ private:
     std::vector<std::unique_ptr<ExternalRxAudioSourceState>> m_externalKiwiSources;
     std::atomic<qsizetype> m_rxBufferBytes{0};
     std::atomic<qsizetype> m_rxBufferPeakBytes{0};
+    std::atomic<double>    m_rxBufferMs{0.0};
+    std::atomic<double>    m_rxBufferPeakMs{0.0};
     std::atomic<quint64>   m_rxBufferUnderrunCount{0};
     std::atomic<int>       m_rxBufferSampleRate{DEFAULT_SAMPLE_RATE};
     std::atomic<int>       m_rxPlaybackQueuedMs{0};
@@ -1275,6 +1570,12 @@ private:
     static constexpr quint16 FLEX_INFO_CLASS = 0x534C;
     static constexpr quint16 PCC_IF_NARROW = 0x03E3;
     static constexpr quint16 PCC_DAX_REDUCED = 0x0123;  // reduced BW DAX (24kHz int16 mono)
+
+private:
+    // Per-consumer replay cursors for the two typed PCM ingress slots. Data,
+    // not slots — kept out of the `private slots:` block above deliberately.
+    PcmFrameGate m_pcmIngress;
+    PcmFrameGate m_kiwiPcmIngress;
 };
 
 } // namespace AetherSDR

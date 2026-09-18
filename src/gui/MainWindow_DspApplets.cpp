@@ -80,6 +80,9 @@ QString MainWindow::activeAetherDspMethod() const
     if (m_audio->nvAfxEnabled()) {
         return QStringLiteral("BNR");
     }
+    if (m_audio->nnrEnabled()) {
+        return QStringLiteral("NNR");
+    }
     return {};
 }
 
@@ -106,6 +109,8 @@ void MainWindow::setAetherDspMethodEnabled(const QString& method, bool enabled)
             audio->setRn2Enabled(enabled);
         } else if (method == QStringLiteral("BNR")) {
             audio->setNvAfxEnabled(enabled);
+        } else if (method == QStringLiteral("NNR")) {
+            audio->setNnrEnabled(enabled);
         }
     });
 }
@@ -170,7 +175,7 @@ void MainWindow::wirePooDooTiles()
         // connected slot.
         struct DspState {
             bool nr2{false}, rn2{false}, nr4{false},
-                 dfnr{false}, mnr{false}, bnr{false};
+                 dfnr{false}, mnr{false}, bnr{false}, nnr{false};
         };
         auto dspState = std::make_shared<DspState>();
         auto pushDsp = [this, chain, dspState]() {
@@ -179,7 +184,8 @@ void MainWindow::wirePooDooTiles()
             // order as the audio-thread dispatcher so the displayed
             // label matches what's actually processing.
             QString label;
-            if      (dspState->bnr)  label = "BNR";
+            if      (dspState->nnr)  label = "NNR";
+            else if (dspState->bnr)  label = "BNR";
             else if (dspState->mnr)  label = "MNR";
             else if (dspState->dfnr) label = "DFNR";
             else if (dspState->nr4)  label = "NR4";
@@ -202,6 +208,8 @@ void MainWindow::wirePooDooTiles()
                 [dspState, pushDsp](bool on) { dspState->mnr = on; pushDsp(); });
         connect(m_audio, &AudioEngine::nvAfxEnabledChanged, chain,
                 [dspState, pushDsp](bool on) { dspState->bnr = on; pushDsp(); });
+        connect(m_audio, &AudioEngine::nnrEnabledChanged, chain,
+                [dspState, pushDsp](bool on) { dspState->nnr = on; pushDsp(); });
 
         // SPEAK — AudioEngine emits mutedChanged on every setMuted() flip.
         connect(m_audio, &AudioEngine::mutedChanged, this,
@@ -224,6 +232,7 @@ void MainWindow::wirePooDooTiles()
         dspState->dfnr = m_audio->dfnrEnabled();
         dspState->mnr  = m_audio->mnrEnabled();
         dspState->bnr  = m_audio->nvAfxEnabled();   // BNR == local AFX denoiser
+        dspState->nnr  = m_audio->nnrEnabled();
         pushDsp();
         chain->setRxOutputUnmuted(!m_audio->isMuted());
         if (m_aetherialStrip)
@@ -255,12 +264,65 @@ void MainWindow::wireDspApplets()
             }
         });
     }
-    connect(&m_radioModel.meterModel(), &MeterModel::swAlcChanged,
-            this, [this](float alc) {
+    connect(&m_radioModel.meterModel(), &MeterModel::alcValueChanged,
+            this, [this](float alc, const QString& unit) {
         // FLEX-8000 TX-chain meters can publish quiescent RX values near 0 dBFS.
         // Only show SW ALC while the radio interlock says RF is actually keyed.
-        m_appletPanel->phoneCwApplet()->updateAlc(
-            m_radioModel.isRadioTransmitting() ? alc : -20.0f);
+        m_appletPanel->phoneCwApplet()->setAlcMeterUnit(unit);
+        if (!unit.isEmpty() && m_radioModel.isRadioTransmitting()) {
+            m_appletPanel->phoneCwApplet()->updateAlc(alc);
+        } else {
+            m_appletPanel->phoneCwApplet()->resetAlc();
+        }
+    });
+    // The ALC's applied GAIN, beside the ALC's output level above. Gated the
+    // same way and additionally on the model having a SAMPLE: unity gain and
+    // "nothing has said what the ALC is doing" are the same 0 dB on the face,
+    // so without hasAlcGainValue() a cleared meter would render as a confident
+    // "the ALC is holding at unity" — the fabricated-reading failure §1.8
+    // describes, where a dead meter and a real reading of nothing look alike.
+    // WHETHER THE ROW EXISTS IS A DEFINITION QUESTION, and it is answered on
+    // the definition signals — never on the arrival of a value.
+    //
+    // It was answered inside the alcGainChanged handler below, and that is a
+    // value signal: submitTxAudio() returns early on !m_keyed, so alcGain never
+    // fires outside TX. The gauge was therefore absent during exactly the
+    // pre-transmission mic-gain setup it exists to inform, inserted itself into
+    // the panel mid-over, and in CW-only operation never appeared at all. The
+    // regime the meter earns its place in is the quiet-mic one — the ALC hits
+    // its makeup ceiling near -41.4 dBFS, below the Level gauge's -40 floor, so
+    // both existing gauges are pinned there and only this one can show the
+    // difference. Gating on a value hid it precisely there.
+    //
+    // applyCapabilitiesToUi() alone cannot cover it either: Hl2Backend calls
+    // defineMeters() from inside its own connected handler, AFTER RadioModel
+    // has published capabilities, so at the moment the panel is configured the
+    // meter does not exist yet. These three are the model's own account of
+    // which meters exist -- defined, removed, and the disconnect that drops
+    // them all (clear() emits only metersCleared, never a meterRemoved per
+    // index). Idempotent: setHasAlcGainMeter() early-returns on no change.
+    {
+        auto syncAlcGainRow = [this] {
+            m_appletPanel->phoneCwApplet()->setHasAlcGainMeter(
+                m_radioModel.meterModel().hasAlcGainMeter());
+        };
+        connect(&m_radioModel.meterModel(), &MeterModel::meterDefinitionChanged,
+                this, [syncAlcGainRow](int) { syncAlcGainRow(); });
+        connect(&m_radioModel.meterModel(), &MeterModel::meterRemoved,
+                this, [syncAlcGainRow](int) { syncAlcGainRow(); });
+        connect(&m_radioModel.meterModel(), &MeterModel::metersCleared,
+                this, syncAlcGainRow);
+    }
+    connect(&m_radioModel.meterModel(), &MeterModel::alcGainChanged,
+            this, [this](float gainDb) {
+        // READING ONLY. Presence is settled above, on the definition signals.
+        const bool live = m_radioModel.isRadioTransmitting()
+                       && m_radioModel.meterModel().hasAlcGainValue();
+        if (live) {
+            m_appletPanel->phoneCwApplet()->updateAlcGain(gainDb);
+        } else {
+            m_appletPanel->phoneCwApplet()->resetAlcGain();
+        }
     });
     // Client-side PC mic metering — radio CODEC meters only see hardware mics.
     // Apply VU-style ballistics: fast attack, slow decay (~20 dB/sec).

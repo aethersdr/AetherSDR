@@ -1,5 +1,7 @@
 #include "IambicKeyer.h"
 
+#include "ThreadName.h"
+
 #include <algorithm>
 
 namespace AetherSDR {
@@ -37,6 +39,11 @@ void IambicKeyer::setOnPaddleEvent(PaddleEventCallback cb)
     m_onPaddleEvent = std::move(cb);
 }
 
+void IambicKeyer::setOnRoutedKeyDownChange(RoutedKeyDownCallback cb)
+{
+    m_onRoutedKeyDownChange = std::move(cb);
+}
+
 void IambicKeyer::start()
 {
     if (m_running.exchange(true, std::memory_order_acq_rel))
@@ -57,7 +64,7 @@ void IambicKeyer::stop()
     m_cv.notify_all();
     if (m_thread.joinable())
         m_thread.join();
-    if (m_lastEmittedKeyDown) emitKeyDown(false);
+    if (m_lastEmittedKeyDown) emitKeyDown(false, std::chrono::steady_clock::now());
     if (m_lastEmittedDit || m_lastEmittedDah) emitPaddleEvent(false, false);
 }
 
@@ -78,15 +85,32 @@ void IambicKeyer::setSwapPaddles(bool swap) noexcept
 
 void IambicKeyer::setPaddleState(bool dit, bool dah) noexcept
 {
+    setPaddleInput(dit, dah, nullptr);
+}
+
+void IambicKeyer::setPaddleState(bool dit, bool dah, const TxCoordinator::Request& input) noexcept
+{
+    setPaddleInput(dit, dah, &input);
+}
+
+void IambicKeyer::setPaddleInput(bool dit, bool dah, const TxCoordinator::Request* input) noexcept
+{
     const bool swap = m_swap.load(std::memory_order_relaxed);
     const bool d = swap ? dah : dit;
     const bool h = swap ? dit : dah;
 
     {
         std::lock_guard<std::mutex> lk(m_mu);
-        if (m_ditPressed == d && m_dahPressed == h) return;
+        if (!d && !h && input && !input->sameRequest(m_input)) {
+            return; // another source's late release cannot end this squeeze
+        }
+        if (m_ditPressed == d && m_dahPressed == h
+            && (!input || input->sameRequest(m_input))) { return; }
         m_ditPressed = d;
         m_dahPressed = h;
+        if (d || h) {
+            m_input = input ? *input : TxCoordinator::Request{};
+        }
         m_paddleStateDirty = true;
     }
     m_cv.notify_all();
@@ -121,11 +145,14 @@ IambicKeyer::Element IambicKeyer::nextElementChoice(bool ditWanted,
     return justSent == Element::Dit ? Element::Dah : Element::Dit;
 }
 
-void IambicKeyer::emitKeyDown(bool down)
+void IambicKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point when)
 {
     if (down == m_lastEmittedKeyDown) return;
     m_lastEmittedKeyDown = down;
-    if (m_onKeyDownChange) m_onKeyDownChange(down);
+    if (m_onKeyDownChange) m_onKeyDownChange(down, when);
+    if (m_onRoutedKeyDownChange) {
+        m_onRoutedKeyDownChange(down, when, m_elementInput);
+    }
 }
 
 void IambicKeyer::emitPaddleEvent(bool dit, bool dah)
@@ -138,12 +165,19 @@ void IambicKeyer::emitPaddleEvent(bool dit, bool dah)
 
 void IambicKeyer::workerLoop()
 {
+    // A raw std::thread never passes through QThread::start(), so Qt cannot
+    // name it the way it names the QThread workers — without this the keyer
+    // shows up as an unnamed row in the System Info thread table (#2554), which
+    // is unhelpful for exactly the CW timing work that would consult it.
+    setCurrentThreadName("IambicKeyer");
+
     Element lastSent = Element::Dah;   // first paddle press emits whatever's wanted
     bool firstInSqueeze = true;        // resets each time we re-enter the active phase
 
     while (!m_stopRequested.load(std::memory_order_acquire)) {
         // ── Idle wait — block until paddle pressed ─────────────────────
         bool dit, dah;
+        TxCoordinator::Request input;
         {
             std::unique_lock<std::mutex> lk(m_mu);
             m_cv.wait(lk, [this]() {
@@ -153,6 +187,7 @@ void IambicKeyer::workerLoop()
             m_paddleStateDirty = false;
             dit = m_ditPressed;
             dah = m_dahPressed;
+            input = m_input;
         }
         // Always forward latest paddle state to the radio (even on
         // release events — the radio's iambic engine needs to see them).
@@ -243,7 +278,14 @@ void IambicKeyer::workerLoop()
             const auto markNow = std::chrono::steady_clock::now();
             if (grid + onDuration < markNow) grid = markNow;
             const auto onDeadline = grid + onDuration;
-            emitKeyDown(true);
+            // `grid` is this edge's scheduled instant — the callback runs at
+            // wake time but carries the exact deadline (#4890 wake scatter).
+            // Each element gets its own normal down/up queue lifetime, but
+            // only through the input captured before the keyer was started.
+            // Cancellation/reconnect cannot mint fresh authority here. Local
+            // monitor/recorder timing remains independent of RF admission.
+            m_elementInput = input.derive();
+            emitKeyDown(true, grid);
             {
                 std::unique_lock<std::mutex> lk(m_mu);
                 while (std::chrono::steady_clock::now() < onDeadline
@@ -263,7 +305,7 @@ void IambicKeyer::workerLoop()
             const auto gapNow = std::chrono::steady_clock::now();
             if (grid + offDuration < gapNow) grid = gapNow;
             const auto offDeadline = grid + offDuration;
-            emitKeyDown(false);
+            emitKeyDown(false, grid);
             if (m_stopRequested.load(std::memory_order_acquire)) break;
             {
                 std::unique_lock<std::mutex> lk(m_mu);
@@ -282,6 +324,15 @@ void IambicKeyer::workerLoop()
                 std::lock_guard<std::mutex> lk(m_mu);
                 wantDit = m_ditPressed;
                 wantDah = m_dahPressed;
+                if (m_input.valid() && !input.sameRequest(m_input)) {
+                    // A different input cannot inherit this squeeze's Mode-B
+                    // memory. Finish its current element, then start the new
+                    // input on the next outer iteration.
+                    m_ditMemory = false;
+                    m_dahMemory = false;
+                    m_paddleStateDirty = true;
+                    break;
+                }
             }
             emitPaddleEvent(wantDit, wantDah);
         }
@@ -289,7 +340,9 @@ void IambicKeyer::workerLoop()
         // Active phase ended; loop back to idle wait.
     }
 
-    emitKeyDown(false);
+    // Shutdown safety release — no grid exists here, so the wall clock is
+    // the honest scheduled time.
+    emitKeyDown(false, std::chrono::steady_clock::now());
     emitPaddleEvent(false, false);
 }
 

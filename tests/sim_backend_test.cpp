@@ -68,6 +68,7 @@ void testCapabilitiesAreReceiveOnly()
 {
     SimBackend sim;
     const RadioCapabilities caps = sim.capabilities();
+    report("demo does not advertise independent slice creation", !caps.canCreateSlices);
     report("capabilities family is 'sim'", caps.family == QStringLiteral("sim"));
     report("a demo radio cannot transmit (Principle VI)", !caps.canTransmit);
     report("TX power is zero when RX-only", caps.txPowerMaxWatts == 0.0);
@@ -143,8 +144,8 @@ void testKeyingIsAlwaysInert()
     // No transmit-related signal exists to fire; the contract is simply that
     // setKeying never drives a transmit path. This asserts it does not crash or
     // change connection state — the real TX guard lives above the seam.
-    sim.setKeying(true);
-    sim.setKeying(false);
+    sim.setKeying(true, {});
+    sim.setKeying(false, {});
     report("setKeying is a safe no-op on an RX-only sim", sim.isConnected());
 }
 
@@ -174,7 +175,7 @@ void testEmitsAudioWhenConnected()
     const int expectBytes =
         NoiseMixer::kFrameLen * 2 * static_cast<int>(sizeof(float));
     const auto lastArgs = audioSpy.constLast();
-    const int bytes = lastArgs.isEmpty() ? -1 : lastArgs.at(0).toByteArray().size();
+    const int bytes = lastArgs.isEmpty() ? -1 : lastArgs.at(0).value<AetherSDR::PcmFrame>().legacyStereo24().size();
     report("audio frame is 24 kHz stereo float32 sized", bytes == expectBytes);
 }
 
@@ -183,12 +184,12 @@ void testKeyingMutesAudio()
     SimBackend sim;
     sim.connectRadio({});
     QSignalSpy audioSpy(&sim, &SimBackend::audioFrameReady);
-    sim.setKeying(true);                     // muted while "keyed" (Principle VI)
+    sim.setKeying(true, {});                  // muted while "keyed" (Principle VI)
     pumpFrames(audioSpy, 60);
     // Frames still FLOW (stream stays alive) but are all-zero when keyed.
     bool allSilent = audioSpy.count() > 0;
     for (const auto& call : audioSpy) {
-        const QByteArray pcm = call.at(0).toByteArray();
+        const QByteArray pcm = call.at(0).value<AetherSDR::PcmFrame>().legacyStereo24();
         const auto* f = reinterpret_cast<const float*>(pcm.constData());
         const int n = pcm.size() / static_cast<int>(sizeof(float));
         for (int i = 0; i < n; ++i)

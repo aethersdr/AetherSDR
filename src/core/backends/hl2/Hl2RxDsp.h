@@ -4,14 +4,20 @@
 #include <QObject>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <numbers>
+#include <optional>
 #include <vector>
 
+#include "core/backends/hl2/Hl2AdcPairing.h"
 #include "core/backends/hl2/Hl2Spectrum.h"
 #include "core/dsp/WdspChannel.h"
+#include "core/dsp/WdspProcessTally.h"
 
 namespace AetherSDR::hl2 {
 
@@ -160,6 +166,117 @@ public:
         return m_nbAppliedLevel.load(std::memory_order_relaxed);
     }
 
+    // ── The POST-DDC half of the ADC pairing (HERMES.md §13 item 16) ──────
+    //
+    // WDSP's RXA_ADC_PK for this chain, in dB relative to WIRE full scale.
+    // RXA.c's adcmeter runs FIRST in xrxa — after the shift and the input
+    // half-band resampler, ahead of nbp0 — so it measures the IQ entering the
+    // RXA chain: this ONE slice, decimated to kWdspDspSampleRateHz, before any
+    // channel filtering, demodulation or AGC. That is a deliberately different
+    // question from the HL2's own pre-DDC overload flag, which watches the
+    // whole 0-38.4 MHz the converter sees. Hl2AdcPairing.h holds the reasoning
+    // and pairs the two; this is only the reading.
+    //
+    // NOT CALIBRATED. dBFS here is referred to the wire's full scale, not to
+    // anything at the antenna — see Hl2DbReference, whose fullScaleDbm is 0.0
+    // with isCalibrated() false.
+    //
+    // SAMPLED ON THE DSP THREAD, at the one instant the value means something:
+    // immediately after a block has been processed, in the same place the
+    // S-meter is read. A timer in the backend would call GetRXAMeter from the
+    // GUI thread against a channel another thread may be closing.
+    //
+    // ATOMIC for the same reason the applied-noise-blanker pair above is:
+    // Hl2Backend answers healthSnapshot() from the GUI thread while this object
+    // lives on the I/O thread. Relaxed is enough — nothing is ordered against
+    // them, and a torn pairing of value and timestamp costs at worst a
+    // millisecond of reported age.
+    //
+    // nullopt until a block has actually been processed. There is no number
+    // that honestly stands for "this chain's level has never been looked at",
+    // and 0.00 dBFS in particular would read as a hard clip.
+    [[nodiscard]] std::optional<double> adcPeakDbfs() const
+    {
+        const float v = m_adcPeakDbfs.load(std::memory_order_relaxed);
+        if (!std::isfinite(v)) {
+            return std::nullopt;
+        }
+        return static_cast<double>(v);
+    }
+    // How old that reading is. A number with no age on it invites being read as
+    // current, and this one stops advancing the moment the IQ stream does —
+    // or the moment the chain is muted for transmit.
+    //
+    // NOT ONLY A DISPLAY ROW. Hl2Backend feeds this age to Hl2AdcPairing.h's
+    // freshness input, which is what keeps the pairing verdict from combining
+    // a held slice peak with a live overload flag; see kSliceStaleMs. The
+    // value and this stamp are stored together or not at all, so an age here
+    // is always the age of the value adcPeakDbfs() returns.
+    // The same stamp, unreduced, for the one caller that must COMPARE it
+    // rather than display it. SliceSamplingGate holds the moment sampling was
+    // asked to resume and asks whether this reading is newer than that moment;
+    // an age in milliseconds cannot answer that, because the gate's own moment
+    // is not the same as "now". 0 means no block has ever been processed.
+    //
+    // Stored ONLY on the !m_audioMuted path in processBlock(), which is what
+    // makes the comparison a proof: a stamp later than the resume request can
+    // only have been written after the DSP thread applied the unmute.
+    [[nodiscard]] std::int64_t adcPeakObservedAtNs() const noexcept
+    {
+        return m_adcPeakAtNs.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::optional<std::int64_t> adcPeakObservedAgoMs() const
+    {
+        const std::int64_t at = m_adcPeakAtNs.load(std::memory_order_relaxed);
+        if (at == 0) {
+            return std::nullopt;
+        }
+        const std::int64_t ago = (steadyNowNs() - at) / 1'000'000;
+        return ago < 0 ? 0 : ago;
+    }
+
+    // ── What WDSP actually did with each block ────────────────────────────
+    //
+    // Every outcome processIq() can return, counted, since this object was
+    // constructed. The five non-`Ok` ones used to be one unannotated
+    // `continue`: a chain producing no audio because WDSP returned
+    // `EngineError` on every block looked, from everywhere outside this
+    // function, exactly like a chain whose pipeline was still filling.
+    //
+    // `Underrun` is kept in its own counter rather than summed with the
+    // faults, because it is the normal state while the asynchronous output
+    // side fills and a large non-zero number on a healthy connect is how a
+    // reader learns to ignore a row. See WdspProcessTally.h.
+    //
+    // MONOTONIC ACROSS A REBUILD. configure() does not clear this, and that is
+    // deliberate: a rate change or a span change destroys the channel and
+    // builds a new one, and a rebuild is exactly the moment a fault is most
+    // likely to have been caused. Zeroing the evidence there would hide it.
+    // The counts belong to the RECEIVER's lifetime, not the channel's.
+    //
+    // SAFE TO CALL FROM ANOTHER THREAD, like adcPeakDbfs() above and for the
+    // same reason: Hl2Backend::healthSnapshot() runs on the GUI thread while
+    // this object lives on the I/O thread.
+    [[nodiscard]] WdspProcessTally::Counts processTally() const noexcept
+    {
+        return m_processTally.snapshot();
+    }
+
+    // ── Panadapter integrity across a transport gap ───────────────────────
+    //
+    // Partial FFT windows discarded at a transport discontinuity, including
+    // accepted rewinds and duplicates. Empty windows do not increment it.
+    // Monotonic for this DSP object's lifetime: configure() replaces the
+    // spectrum but does not reset this counter. Read a delta across a run.
+    // Independent of droppedPackets: a rewind can discard without loss, and
+    // loss at an empty window can occur without a discard.
+    // Written on the I/O thread, polled on the GUI thread; this diagnostic
+    // orders no other state, so relaxed atomic access is sufficient.
+    [[nodiscard]] quint64 spectrumGapDiscards() const noexcept
+    {
+        return m_spectrumGapDiscards.load(std::memory_order_relaxed);
+    }
+
     // ── Manual notch filters ──────────────────────────────────────────────
     //
     // `index` is WDSP's POSITIONAL handle, and Hl2Backend is what maps stable
@@ -203,6 +320,22 @@ public:
     Q_INVOKABLE void setAudioMuted(bool muted);
     [[nodiscard]] bool isConfigured() const noexcept { return m_channel != nullptr; }
 
+    // What the WDSP channel was actually OPENED WITH, for the read-back verb.
+    //
+    // Forwarded from WdspChannel rather than mirrored here, for the same reason
+    // appliedNoiseBlankerEnabled() reads the applied value: a read-back that
+    // returned this class's own copy of the request would be certifying its own
+    // input. Null when no channel exists, which the caller must report as
+    // "not configured" rather than as zeros.
+    [[nodiscard]] const WdspChannel::Config* channelConfig() const noexcept
+    {
+        return m_channel ? &m_channel->config() : nullptr;
+    }
+    [[nodiscard]] std::size_t channelOutputBlockSize() const noexcept
+    {
+        return m_channel ? m_channel->outputBlockSize() : 0;
+    }
+
     // The WDSP channel id this chain was actually given, or -1 before configure().
     //
     // Ids come from a PROCESS-WIDE pool of 32 shared with the transmit chain and
@@ -211,7 +344,7 @@ public:
     // index-space map (Hl2Receivers.h) precisely so nothing has to derive it.
     [[nodiscard]] int wdspChannelId() const noexcept
     {
-        return m_channel ? m_channel->channelIdForTest() : -1;
+        return m_channel ? m_channel->channelId() : -1;
     }
 
     // Demodulated-audio DC blocker, one pole per channel.
@@ -304,6 +437,27 @@ public slots:
     // frame and audioReady/meterUpdate per completed WdspChannel block.
     void processIqBlock(const std::vector<std::complex<float>>& iq);
 
+    // An EP6 sequence gap preceded the NEXT block this stage will be handed.
+    // Hl2Backend fans MetisClient::rxSequenceGap out to every receiver's DSP
+    // here, by DirectConnection on the I/O thread this object already lives on
+    // -- the same thread and the same call chain that then delivers the block,
+    // so this is a plain call and introduces no cross-thread edge.
+    //
+    // WHAT IT DOES: discards the partial panadapter frame, so the next spectrum
+    // is built entirely from post-gap samples instead of being transformed
+    // across a time discontinuity. See Hl2Spectrum::reset() for why that is the
+    // only available answer.
+    //
+    // WHAT IT DELIBERATELY DOES NOT DO: touch the AUDIO path. m_iqBuffer is
+    // left alone and WdspChannel is not reset. A gap is already a discontinuity
+    // the demodulator will hear as a click; discarding the buffered samples
+    // would throw away sound the radio DID send and lengthen the hole, and
+    // resetting the channel would restart WDSP's filter and AGC state on a
+    // single lost datagram. The spectrum is different because it does not
+    // merely pass a discontinuity through -- it computes a phase-coherent
+    // transform ACROSS it and presents the result as a measurement.
+    void onSequenceGap();
+
 signals:
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
@@ -313,6 +467,7 @@ private:
     // True when the next panadapter frame may be computed. Stays true until one
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
+
 
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
@@ -325,6 +480,16 @@ private:
     int  m_nbLevel = 50;      // 0..100, the slice model's units
     std::atomic<bool> m_nbAppliedOn {false};
     std::atomic<int>  m_nbAppliedLevel {50};
+    // Latest RXA_ADC_PK and when it was taken; see adcPeakDbfs() above. NaN and
+    // 0 are the "never observed" sentinels, which is why neither is a value the
+    // accessors can return. A steady_clock stamp rather than a QElapsedTimer
+    // because a QElapsedTimer's members are not atomic and this is read from
+    // another thread.
+    std::atomic<float> m_adcPeakDbfs {std::numeric_limits<float>::quiet_NaN()};
+    std::atomic<std::int64_t> m_adcPeakAtNs {0};
+    // See spectrumGapDiscards(). Written on the I/O thread by onSequenceGap(),
+    // read from the GUI thread by Hl2Backend::healthSnapshot().
+    std::atomic<quint64> m_spectrumGapDiscards {0};
     Config m_config;
 
     // Notch set, mirrored so reconfigure() can replay it — see the note on
@@ -339,6 +504,10 @@ private:
     std::vector<Notch> m_notches;
     bool m_notchesEnabled = true;
     double m_notchTuneHz = 0.0;
+
+    // Per-outcome counters for m_channel->processIq(); see processTally().
+    // Written on the DSP thread in processIqBlock(), read from the GUI thread.
+    WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
     // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on

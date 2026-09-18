@@ -20,10 +20,9 @@ class Resampler;
 // from a downloaded/cached "pack" so the shipped app carries none of the
 // ~2 GB GPU runtime. Requires an NVIDIA RTX/GeForce GPU (Turing+).
 //
-// Mirrors DeepFilterFilter's contract: processes 24 kHz stereo float32 audio
-// (the RX DSP path's canonical format) by upsampling to 48 kHz mono, running
-// the AFX denoiser, and downsampling back to 24 kHz stereo. Returns the same
-// number of bytes as the input.
+// The immutable input/output domain is 24 or 48 kHz stereo float32. Legacy24
+// retains its SRC pair; native48 reaches the model without SRC. Both keep
+// the existing mono analysis/stereo level-balance policy and byte count.
 //
 // Thread-safe parameter setters (GUI thread writes atomics, audio thread reads).
 // dlopen + TensorRT engine build happen in the constructor (call OFF the audio
@@ -36,19 +35,20 @@ public:
     // bin/ (NVAudioEffects.dll + sibling CUDA/TensorRT/feature DLLs) and the
     // same features/denoiser/models/sm_XX model tree. If empty, the pack is
     // resolved from $AETHER_NVAFX_DIR then the app data cache dir.
-    explicit NvidiaAfxFilter(const QString& packDir = QString());
+    explicit NvidiaAfxFilter(const QString& packDir = QString(), int sampleRate = 24000);
+    int sampleRate() const { return m_sampleRate; }
     ~NvidiaAfxFilter();
 
     NvidiaAfxFilter(const NvidiaAfxFilter&) = delete;
     NvidiaAfxFilter& operator=(const NvidiaAfxFilter&) = delete;
 
-    // Process a block of 24 kHz stereo float32 PCM. Returns the processed block
+    // Process configured-rate stereo float32 PCM. Returns the processed block
     // (same format, same byte count). No-op passthrough until the engine is ready.
-    QByteArray process(const QByteArray& pcm24kStereo);
+    QByteArray process(const QByteArray& pcmStereo);
 
-    // Flush all carried state — the jitter accumulators and the resamplers — so
-    // the next process() starts clean. Call on any audio discontinuity (stream
-    // restart, RX source switch, TX→RX) to avoid replaying stale/pre-gap audio.
+    // Flush wrapper jitter accumulators, stereo balance and resamplers.
+    // This does not reset SDK recurrent state. Recreate the complete filter
+    // for a new source or discontinuity that requires a clean algorithm epoch.
     void reset();
 
     // True once the effect is created, model loaded, and the engine is ready.
@@ -62,6 +62,7 @@ public:
     float intensity() const { return m_intensity.load(); }
 
 private:
+    const int m_sampleRate;
     bool loadRuntime(const QString& packDir);   // dlopen the pack libs + dlsym API
     bool createDenoiser(const QString& packDir); // CreateEffect..Load
     void teardown();
@@ -81,7 +82,7 @@ private:
     QByteArray m_outAccum;                       // 24 kHz stereo float output
     int        m_outReadPos{0};                 // read cursor into m_outAccum
     MonoDspStereoAdapter m_stereoAdapter;
-    std::vector<float> m_mono24k;
+    std::vector<float> m_monoInput;
     std::vector<float> m_runScratch;            // reused NvAFX_Run output buffer
 
     std::atomic<float> m_intensity{1.0f};

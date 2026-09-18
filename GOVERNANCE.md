@@ -55,7 +55,6 @@ Current domain areas:
 |------|---------|-------|
 | Documentation | `resources/help/`, `docs/`, `*.md` | Help text, wiki, guides. Spans two CODEOWNERS tiers: `docs/` and `resources/help/` are Tier 3, bare `*.md` is Tier 2 |
 | Build / CI | `CMakeLists.txt`, `.github/` | Build system, CI pipelines |
-| Plugins | `plugins/` | Stream Deck, TCI plugins |
 | Platform: macOS | `src/platform/macos/` | macOS-specific code only |
 | Platform: Windows | `src/platform/windows/` | Windows-specific code only |
 
@@ -149,8 +148,8 @@ three tiers, broadest → most restrictive:
   under `docs/` are carved back to Tier 1 below, so "all of `docs/`" is the
   rule and not quite the whole story.
 - **Tier 2 — infrastructure** (`@aethersdr/infrastructure`): `*.md` outside
-  those directories (`README.md`, `CHANGELOG.md`, `ROADMAP.md`,
-  `plugins/*/README.md`, …), `CMakeLists.txt`, the routine CI
+  those directories (`README.md`, `CHANGELOG.md`, `ROADMAP.md`, …),
+  `CMakeLists.txt`, the routine CI
   workflows under `.github/workflows/`, and the AI-instruction files
   (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
   `.github/copilot-instructions.md`, `.claude/commands/`).

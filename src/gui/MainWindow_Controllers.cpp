@@ -20,6 +20,7 @@
 
 #include "FlexControlDialog.h"
 #include "MainWindowHelpers.h"
+#include "MidiTxDispatch.h"
 #include "VoiceModeGate.h"   // isCwMode() — one CW-mode list, not thirteen
 #include "SpectrumOverlayMenu.h"
 #include "core/AppSettings.h"
@@ -38,6 +39,7 @@
 #include "UlanziDialMapperDialog.h"
 #include "RxApplet.h"
 #include "SpectrumWidget.h"
+#include "PanadapterMessageOverlay.h"
 #include "TitleBar.h"
 #include "models/SliceModel.h"
 
@@ -50,10 +52,40 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 namespace AetherSDR {
 
 namespace {
+
+// Capture on the emitting device thread, before the first queued GUI hop.
+// No model/widget is read there; only the producer's atomic input fence is
+// copied. The typed scope is constructed and consumed on the model thread.
+template<class Sender, class... Args, class Handler>
+void connectDeviceInput(Sender* sender, void (Sender::*signal)(Args...), QObject* receiver,
+                        const std::shared_ptr<TxController>& source, Handler handler)
+{
+    QObject::connect(sender, signal, receiver, [receiver, source, handler](Args... args) {
+        const TxCoordinator::Request input = source->captureRawInput();
+        QMetaObject::invokeMethod(receiver, [source, handler, input, values = std::make_tuple(args...)] {
+            const auto scope = TxController::captureInputScope(source, input);
+            if (!scope || !scope->valid()) { return; }
+            std::apply([&](const auto&... value) { handler(value..., scope); }, values);
+        }, Qt::QueuedConnection);
+    }, Qt::DirectConnection);
+}
+
+template<class Sender, class... Args>
+void fenceDeviceDisconnect(Sender* sender, void (Sender::*signal)(bool, Args...), QObject* receiver,
+                           const std::shared_ptr<TxController>& source)
+{
+    QObject::connect(sender, signal, receiver, [receiver, source](bool connected, Args...) {
+        if (!connected) {
+            source->discardDeviceInputs();
+            QMetaObject::invokeMethod(receiver, [source] { source->cleanupDeviceInputs(); }, Qt::QueuedConnection);
+        }
+    }, Qt::DirectConnection);
+}
 
 constexpr int kTMate2DefaultOverlayDurationMs = 1500;
 
@@ -75,24 +107,25 @@ bool usesExternalReceiveControls(const SliceModel* slice)
     return slice && slice->externalReceiveReplacementActive();
 }
 
+// #5384: the AGC-T knob is agc_off_level while AGC is off (0..100 on every
+// backend) and agc_threshold otherwise; SliceModel's agcTKnob* members own
+// that decision, the helpers below only keep the controller's 0..100 scale
+// in step with it.
 int agcThresholdMinimumForSlice(const SliceModel* slice)
 {
-    return usesExternalReceiveControls(slice)
-        ? KiwiSdrProtocol::kAgcThresholdMinDb
-        : 0;
+    return slice ? slice->agcTKnobMinimum() : 0;
 }
 
 int agcThresholdMaximumForSlice(const SliceModel* slice)
 {
-    return usesExternalReceiveControls(slice)
-        ? KiwiSdrProtocol::kAgcThresholdMaxDb
-        : 100;
+    return slice ? slice->agcTKnobMaximum() : 100;
 }
 
 int controllerValueToAgcThreshold(const SliceModel* slice, float value)
 {
     const float clamped = std::clamp(value, 0.0f, 100.0f);
-    if (!usesExternalReceiveControls(slice)) {
+    if (!usesExternalReceiveControls(slice) || slice->agcTKnobUsesOffLevel()) {
+        // agc_off_level and a Flex agc_threshold are both 0..100: 1:1.
         return static_cast<int>(std::lround(clamped));
     }
     constexpr float kUiSpan = 100.0f;
@@ -108,8 +141,8 @@ float agcThresholdToControllerValue(const SliceModel* slice)
     if (!slice) {
         return 0.0f;
     }
-    if (!usesExternalReceiveControls(slice)) {
-        return static_cast<float>(slice->agcThreshold());
+    if (!usesExternalReceiveControls(slice) || slice->agcTKnobUsesOffLevel()) {
+        return static_cast<float>(slice->agcTKnobLevel());
     }
     constexpr float kUiSpan = 100.0f;
     const float agcSpan =
@@ -124,7 +157,7 @@ float agcThresholdToControllerValue(const SliceModel* slice)
 
 int agcThresholdOverlayValue(const SliceModel* slice, int threshold)
 {
-    if (!usesExternalReceiveControls(slice)) {
+    if (!usesExternalReceiveControls(slice) || slice->agcTKnobUsesOffLevel()) {
         return threshold;
     }
     return std::clamp(
@@ -230,13 +263,14 @@ QString flexControlButtonAction(int button, int action)
 
 void MainWindow::showFlexControlDialog()
 {
+    // No capability check: the knob is a host serial device (#5778).
     const bool wasFresh = !m_flexControlDialog;
     showOrRaisePersistent(m_flexControlDialog);
     if (wasFresh && m_flexControlDialog) {
         connect(m_flexControlDialog, &FlexControlDialog::virtualWheelSteps,
                 this, &MainWindow::handleVirtualFlexControlWheel);
         connect(m_flexControlDialog, &FlexControlDialog::virtualButtonPressed,
-                this, &MainWindow::handleFlexControlButton);
+                this, qOverload<int, int>(&MainWindow::handleFlexControlButton));
         connect(m_flexControlDialog, &FlexControlDialog::virtualButtonPressed,
                 this, [this](int button, int action) {
             if (m_flexControlDialog)
@@ -283,6 +317,16 @@ void MainWindow::showFlexControlDialog()
                 m_flexControlDialog->setPhysicalReady(false);
 #endif
         });
+#ifdef HAVE_SERIALPORT
+        connect(m_flexControlDialog, &FlexControlDialog::configureRequested,
+                this, [this] {
+            // Same deep-link pattern as Settings → USB Cables… (#4940), but
+            // scrolled onto the FlexControl Tuning Knob group itself rather
+            // than just landing on top of the page (PR #5157 review).
+            if (RadioSetupDialog* dlg = openRadioSetupPage())
+                dlg->revealFlexControlSettings();
+        });
+#endif
         connect(m_flexControlDialog, &FlexControlDialog::physicalDisconnectRequested,
                 this, [this] {
 #ifdef HAVE_SERIALPORT
@@ -402,6 +446,12 @@ void MainWindow::handleFlexControlTuneSteps(int steps)
 
 void MainWindow::handleFlexControlButton(int button, int action)
 {
+    handleFlexControlButton(button, action, TxController::captureInputScope(m_radioModel.localTxController()));
+}
+
+void MainWindow::handleFlexControlButton(int button, int action,
+                                        const std::shared_ptr<TxController>& controller)
+{
     // Knob press while a wheel function is active returns to frequency mode (#1354).
     if (button == 4 && action == 0 && m_flexWheelMode != FlexWheelMode::Frequency) {
         m_flexWheelMode = FlexWheelMode::Frequency;
@@ -423,12 +473,15 @@ void MainWindow::handleFlexControlButton(int button, int action)
     } else if (actionName == "StepDown") {
         if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepDown();
     } else if (actionName == "ToggleMox") {
-        m_radioModel.setTransmit(!m_radioModel.transmitModel().isTransmitting());
+        if (!controller || !controller->valid()) { return; }
+        const auto input = controller->capture(TxController::Activity::Mox);
+        if (m_radioModel.transmitModel().isTransmitting()) { input.stop(); }
+        else { (void)input.start(); }
     } else if (actionName == "ToggleTune") {
-        if (m_radioModel.transmitModel().isTuning())
-            m_radioModel.transmitModel().stopTune();
-        else
-            m_radioModel.transmitModel().startTune();
+        if (!controller || !controller->valid()) { return; }
+        const auto input = controller->capture(TxController::Activity::Tune);
+        if (m_radioModel.transmitModel().isTuning()) { input.stop(); }
+        else { (void)input.start(); }
     } else if (actionName == "ToggleMute") {
         if (m_audio) m_audio->setMuted(!m_audio->isMuted());
     } else if (actionName == "ToggleLock") {
@@ -490,6 +543,15 @@ void MainWindow::handleFlexControlButton(int button, int action)
         setFlexControlHardwareIndicator(button);
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
+            // Same gate the CwxF* macros carry below: split creates its TX
+            // slice with Flex wire text, which a backend with no command plane
+            // drops — a hardware button that silently does nothing. Refuse and
+            // log; the binding stays assignable (M0, #5263).
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "SplitActiveSlice ignored:"
+                                   << "this backend takes no Flex slice-create command";
+                return;
+            }
             if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
             auto* s = activeSlice();
             if (!s) return;
@@ -511,9 +573,10 @@ void MainWindow::handleFlexControlButton(int button, int action)
         // `cwx send` into a backend with no such verb is the "silently does
         // nothing" report, not a working control. The action stays assignable —
         // the binding is operator-scoped and outlives any one radio.
-        if (!m_radioModel.hasRadioSideCwKeyer()) {
+        if (!m_radioModel.hasRadioSideCwKeyer()
+            || !m_radioModel.hasCwTextStoredMacros()) {
             qCDebug(lcCw) << "CWX macro action" << actionName
-                          << "ignored: radio has no radio-side CW keyer";
+                          << "ignored: radio has no stored text-keyer macros";
         } else {
             bool ok = false;
             const int idx = actionName.mid(4).toInt(&ok);
@@ -891,7 +954,8 @@ void MainWindow::updateTMate2Indicators()
 // dialog if it is open. Called for both F1/F2 hold (from the timer) and
 // short-press (on release). (#3323)
 void MainWindow::dispatchHidAction(const QString& actionName,
-                                   const QString& gestureLabel)
+                                   const QString& gestureLabel,
+                                   const std::shared_ptr<TxController>& controller)
 {
     if (m_rc28MappingDialog && m_hidEncoder->isRC28Compatible())
         m_rc28MappingDialog->appendButtonEvent(gestureLabel, actionName);
@@ -923,14 +987,15 @@ void MainWindow::dispatchHidAction(const QString& actionName,
     } else if (actionName == "ClearXit") {
         if (auto* s = activeSlice()) s->setXit(s->xitOn(), 0);
     } else if (actionName == "ToggleMox") {
+        if (!controller || !controller->valid()) { return; }
         const bool next = !m_radioModel.transmitModel().isTransmitting();
-        m_radioModel.setTransmit(next);
+        const auto input = controller->capture(TxController::Activity::Mox);
+        if (next) { (void)input.start(); } else { input.stop(); }
     } else if (actionName == "ToggleTune") {
+        if (!controller || !controller->valid()) { return; }
         const bool next = !m_radioModel.transmitModel().isTuning();
-        if (!next)
-            m_radioModel.transmitModel().stopTune();
-        else
-            m_radioModel.transmitModel().startTune();
+        const auto input = controller->capture(TxController::Activity::Tune);
+        if (next) { (void)input.start(); } else { input.stop(); }
 #ifdef HAVE_HIDAPI
         triggerTMate2TextOverlay(next ? QStringLiteral("TUNE ON")
                                       : QStringLiteral("TUNE OFF"));
@@ -1009,6 +1074,14 @@ void MainWindow::dispatchHidAction(const QString& actionName,
         applyMasterVolume(next);
     } else if (actionName == "SplitActiveSlice") {
         if (!m_splitActive) {
+            // Same refusal as the FlexControl split above: no command plane,
+            // no Flex slice-create — refuse loudly instead of a dead hardware
+            // button (M0, #5263).
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "SplitActiveSlice (HID) ignored:"
+                                   << "this backend takes no Flex slice-create command";
+                return;
+            }
             auto* s = activeSlice();
             if (s && m_radioModel.slices().size() < m_radioModel.maxSlices()) {
                 QString panId = s->panId().isEmpty()
@@ -1421,14 +1494,12 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 #endif
     } else if (actionId == "WheelAgcT") {
         if (auto* s = activeSlice()) {
-            const int current = usesExternalReceiveControls(s)
-                ? s->receiveAgcThreshold()
-                : s->agcThreshold();
+            // #5384: with AGC off the knob is agc_off_level, as on the slider.
             const int next = std::clamp(
-                current + steps,
+                s->agcTKnobLevel() + steps,
                 agcThresholdMinimumForSlice(s),
                 agcThresholdMaximumForSlice(s));
-            s->setAgcThreshold(next);
+            s->setAgcTKnobLevel(next);
 #ifdef HAVE_HIDAPI
             triggerTMate2Overlay(
                 TMate2Overlay::Agc, agcThresholdOverlayValue(s, next));
@@ -1436,6 +1507,65 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         }
     } else if (actionId == "WheelApf") {
         if (auto* s = activeSlice()) {
+            // #4658: the level only reaches audio while the APF filter is in
+            // circuit. Writing apf_level into a disengaged filter — and showing
+            // an "APF 42" overlay that reads as the radio acknowledging it — is
+            // the controller-side twin of the GUI slider defect (#4658, fixed
+            // for the slider by #4660). No-op here and tell the operator why,
+            // mirroring the slider's greyed-with-reason treatment. The notice
+            // goes on the slice's panadapter as a transient card, NOT the
+            // status bar (#4649: a QStatusBar temporary message hides every
+            // permanent widget — TX indicator, PA temperature — for its whole
+            // duration, and a spinning dead knob would retrigger it
+            // continuously); the status bar is only the no-panadapter
+            // (null-pan) fallback. That reaches every controller family (FlexControl,
+            // RC-28, Ulanzi, the virtual wheel); a TMate 2 additionally gets
+            // it on its own display. Minimal mode shows neither surface —
+            // a slice-level signal consumed by the applet panel is the
+            // follow-up for that layout. ToggleApf remains the way in.
+            // APF is CW-only: the DSP grid does not even mount the button in
+            // other modes (VfoWidget hides m_apfBtn unless isCw), so a hint
+            // to "turn APF on" there would point at nothing. Stay silent.
+            if (!isCwMode(s->mode()))
+                return;
+            if (!s->apfOn()) {
+                // One notice per window, not one per detent: a timed card is
+                // not deduplicated by the overlay (its re-assert early-out is
+                // for untimed cards only), so each re-upsert would re-sort it
+                // to the top of the stack and relayout the others under a
+                // spinning knob — the #4649 objection, moved to a better
+                // surface. Show once, then stay quiet until it has expired.
+                constexpr int kApfOffHintMs = 1500;
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                if (nowMs < m_apfOffHintUntilMs)
+                    return;
+                m_apfOffHintUntilMs = nowMs + kApfOffHintMs;
+                if (SpectrumWidget* sw = spectrumForSlice(s)) {
+                    // Own id and Info tone: this is a control hint, not a
+                    // warning, and it must neither evict nor be evicted by
+                    // the TX-filter ("txfilter.audio-loss") or interlock
+                    // cards — re-keying only replaces an earlier APF hint.
+                    PanadapterOverlayMessage card;
+                    card.id = QStringLiteral("apf.level-off");
+                    card.title = QStringLiteral("APF level");
+                    card.detail = QStringLiteral("Turn APF on first");
+                    card.timeoutMs = kApfOffHintMs;
+                    card.dismissible = true;
+                    card.tone = PanadapterOverlayMessageTone::Info;
+                    sw->upsertOverlayMessage(std::move(card));
+                } else {
+                    // Null-pan edge only: spectrumForSlice() still returns a
+                    // (hidden) widget in minimal mode, so that layout lands in
+                    // the branch above with nothing on screen — see the
+                    // comment at the top of this block.
+                    statusBar()->showMessage(
+                        QStringLiteral("APF level: turn APF on first"), kApfOffHintMs);
+                }
+#ifdef HAVE_HIDAPI
+                triggerTMate2TextOverlay(QStringLiteral("APF OFF"));
+#endif
+                return;
+            }
             const int next = std::clamp(s->apfLevel() + steps, 0, 100);
             s->setApfLevel(next);
 #ifdef HAVE_HIDAPI
@@ -1741,6 +1871,15 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
 }
 
 #ifdef HAVE_MIDI
+bool MainWindow::dispatchScopedMidiTx(const QString& id, float value,
+                                     const std::shared_ptr<TxController>& controller)
+{
+    return dispatchMidiTxInput(id, value, m_radioModel, controller,
+        [this](const QString& action, bool press, const std::shared_ptr<TxController>& source) {
+            (void)handleScopedCwMomentaryShortcut(action, press, source, false);
+        });
+}
+
 void MainWindow::registerMidiParams()
 {
     using P = MidiParamType;
@@ -1774,7 +1913,8 @@ void MainWindow::registerMidiParams()
     reg("rx.agcThreshold", "AGC Threshold", "RX", P::Slider, 0, 100,
         [this](float v) {
             if (auto* s = activeSlice()) {
-                s->setAgcThreshold(controllerValueToAgcThreshold(s, v));
+                // #5384: agc_off_level while AGC is off, agc_threshold otherwise.
+                s->setAgcTKnobLevel(controllerValueToAgcThreshold(s, v));
             }
         },
         [this]() -> float {
@@ -2056,12 +2196,32 @@ void MainWindow::registerMidiParams()
     }
 
     // ── Global ──────────────────────────────────────────────────────────
+    // The mixer verbs drive the RADIO's lineout/headphone hardware outputs, a
+    // Flex command-plane feature — on a backend without one the command is
+    // dropped, which made a mapped MIDI volume knob silently dead. Refuse and
+    // log instead (M0, #5263). Rerouting these to the client-side master
+    // volume would change what the knob MEANS on Flex, so that stays an M4
+    // conversion decision, not a gate.
     reg("global.masterVolume", "Master Volume", "Global", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v))); },
+        [this](float v) {
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "global.masterVolume ignored:"
+                                   << "radio mixer verbs need a Flex command plane";
+                return;
+            }
+            m_radioModel.sendCommand(QString("mixer lineout gain %1").arg(static_cast<int>(v)));
+        },
         [this]() -> float { return m_radioModel.lineoutGain(); });
 
     reg("global.hpVolume", "Headphone Volume", "Global", P::Slider, 0, 100,
-        [this](float v) { m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v))); },
+        [this](float v) {
+            if (!m_radioModel.hasCommandPlane()) {
+                qCDebug(lcDevices) << "global.hpVolume ignored:"
+                                   << "radio mixer verbs need a Flex command plane";
+                return;
+            }
+            m_radioModel.sendCommand(QString("mixer headphone gain %1").arg(static_cast<int>(v)));
+        },
         [this]() -> float { return m_radioModel.headphoneGain(); });
 
     reg("global.masterMute", "Master Mute", "Global", P::Toggle, 0, 1,
@@ -2315,31 +2475,57 @@ void MainWindow::wireExternalControllers()
 
 #ifdef HAVE_SERIALPORT
     m_serialPort = new SerialPortController;  // no parent — moved to thread
+    const TxCoordinator::Producer serialProducer = m_radioModel.registerTxProducer(m_serialPort);
+    m_serialPort->setTxProducer(serialProducer);
     m_serialPort->moveToThread(m_extCtrlThread);
     m_flexControl = new FlexControlManager;
+    const auto flexController = TxController::forNativeDevice(&m_radioModel, m_flexControl);
     m_flexControl->moveToThread(m_extCtrlThread);
+    fenceDeviceDisconnect(m_flexControl, &FlexControlManager::connectionChanged, this, flexController);
 
     // Serial port signals (auto-queued from worker → main)
+    connect(m_serialPort, &SerialPortController::txInputsCancelled, this, [this, serialProducer] {
+        m_radioModel.abortTxProducerInputs(serialProducer, TransmitModel::PttSource::Mox);
+    });
     connect(m_serialPort, &SerialPortController::externalPttChanged,
-            this, [this](bool active) {
-        m_radioModel.setTransmit(active);
+            this, [this](bool active, const TxCoordinator::Request& input) {
+        (void)m_radioModel.setProducerTransmit(input, active, TransmitModel::PttSource::Mox);
     });
     connect(m_serialPort, &SerialPortController::cwKeyChanged,
-            this, [this](bool down) {
-        m_radioModel.sendCwKey(down);
+            this, [this](bool down, const TxCoordinator::Request& input) {
+        (void)m_radioModel.requestProducerCw(input, down, false, true, {}, QStringLiteral("serial:cwkey"));
     });
     connect(m_serialPort, &SerialPortController::cwPaddleChanged,
-            this, [this](bool dit, bool dah) {
+            this, [this](bool dit, bool dah, const TxCoordinator::Request& input,
+                          const TxCoordinator::Request& straightKeyInput) {
+        const bool held = dit || dah;
+        if (held) {
+            if (!input.valid()) {
+                return;
+            }
+            m_serialCwPaddleInput = input;
+        } else if (!input.sameRequest(m_serialCwPaddleInput)) {
+            return;
+        }
+        m_serialCwPaddleHeld = held;
         m_lastCwPaddleTraceId.store(0, std::memory_order_relaxed);
         m_lastCwPaddleSourceMs.store(0, std::memory_order_relaxed);
         // When the local iambic keyer is running, feed it the raw paddle
-        // state — it forwards to the radio AND drives the sidetone gate
-        // directly.  Otherwise pass straight through to the radio (radio's
-        // RF iambic is still authoritative for the on-air signal).
+        // state — it emits timed element edges AND drives the sidetone gate
+        // directly. Otherwise the paddle acts as a straight key. The backend
+        // decides whether those edges use a radio-side keyer or host IQ.
+        // No CW while TUNE is active (#5422): drop the press before the
+        // keyer starts; a release still flows. See pushCwPaddleState().
+        m_radioModel.setCwPaddleHeld(held || m_cwLeftPaddleActive || m_cwRightPaddleActive);
+        if ((dit || dah) && !m_radioModel.transmitModel().admitsCwKeyEdge(true)) {
+            qCWarning(lcCw) << "CW paddle press refused: TUNE is active (#5422) source=serial";
+            return;
+        }
         if (m_iambicKeyer && m_iambicKeyer->isRunning()) {
-            m_iambicKeyer->setPaddleState(dit, dah);
+            m_iambicKeyer->setPaddleState(dit, dah, input);
         } else {
-            m_radioModel.sendCwPaddle(dit, dah);
+            (void)m_radioModel.requestProducerCw(straightKeyInput, dit || dah, false, true, {},
+                                                QStringLiteral("serial:paddle"));
         }
     });
 
@@ -2347,8 +2533,10 @@ void MainWindow::wireExternalControllers()
     connect(m_flexControl, &FlexControlManager::tuneSteps,
             this, &MainWindow::handleFlexControlTuneSteps);
 
-    connect(m_flexControl, &FlexControlManager::buttonPressed,
-            this, &MainWindow::handleFlexControlButton);
+    connectDeviceInput(m_flexControl, &FlexControlManager::buttonPressed, this, flexController,
+        [this](int button, int action, const std::shared_ptr<TxController>& controller) {
+            handleFlexControlButton(button, action, controller);
+        });
     connect(m_flexControl, &FlexControlManager::buttonPressed,
             this, [this](int button, int action) {
 #ifdef HAVE_HIDAPI
@@ -2374,6 +2562,11 @@ void MainWindow::wireExternalControllers()
 
 #ifdef HAVE_MIDI
     m_midiControl = new MidiControlManager;
+    const auto midiController = TxController::forNativeDevice(&m_radioModel, m_midiControl);
+    m_midiControl->setTxInputCallbacks([midiController] { return midiController->captureRawInput(); },
+                                      [midiController] { midiController->discardDeviceInputs(); });
+    connect(m_midiControl, &MidiControlManager::portClosed, this,
+            [midiController] { midiController->cleanupDeviceInputs(); });
     m_midiControl->moveToThread(m_extCtrlThread);
     m_midiTuneIdleTimer.setSingleShot(true);
     m_midiTuneIdleTimer.setInterval(250);
@@ -2388,9 +2581,11 @@ void MainWindow::wireExternalControllers()
     // MIDI paramActionTrace signal: dispatches setter on main thread (#502)
     // and carries timing metadata for CW/netCW diagnostics.
     connect(m_midiControl, &MidiControlManager::paramActionTrace,
-            this, [this](const QString& paramId, float scaledValue,
+            this, [this, midiController](const QString& paramId, float scaledValue,
                          quint64 traceId, quint64 midiCallbackMs,
-                         quint64 midiDispatchMs) {
+                         quint64 midiDispatchMs, const TxCoordinator::Request& rawInput) {
+        const auto controller = TxController::captureInputScope(midiController, rawInput);
+        if (dispatchScopedMidiTx(paramId, scaledValue, controller)) { return; }
         auto it = m_midiSetters.find(paramId);
         if (it == m_midiSetters.end()) return;
         const quint64 mainMs = cwTraceNowMs();
@@ -2465,7 +2660,9 @@ void MainWindow::wireExternalControllers()
 
 #ifdef HAVE_HIDAPI
     m_hidEncoder = new HidEncoderManager;
+    const auto hidController = TxController::forNativeDevice(&m_radioModel, m_hidEncoder);
     m_hidEncoder->moveToThread(m_extCtrlThread);
+    fenceDeviceDisconnect(m_hidEncoder, &HidEncoderManager::connectionChanged, this, hidController);
     m_tmate2OverlayTimer.setSingleShot(true);
     connect(&m_tmate2OverlayTimer, &QTimer::timeout, this, [this] {
         m_tmate2Overlay = TMate2Overlay::None;
@@ -2496,7 +2693,7 @@ void MainWindow::wireExternalControllers()
             if (actionName.isEmpty() || actionName == "None") return;
             // Hold actions are latched toggles: each hold press flips the state and
             // it stays that way until the next hold press.
-            dispatchHidAction(actionName, QString("F%1 hold").arg(btn));
+            dispatchHidAction(actionName, QString("F%1 hold").arg(btn), m_rc28Inputs[btn - 1]);
         });
     }
 
@@ -2570,8 +2767,8 @@ void MainWindow::wireExternalControllers()
         applyFlexControlWheelAction(actionId, steps);
     });
 
-    connect(m_hidEncoder, &HidEncoderManager::buttonPressed,
-            this, [this](int button, int action) {
+    connectDeviceInput(m_hidEncoder, &HidEncoderManager::buttonPressed, this, hidController,
+            [this](int button, int action, const std::shared_ptr<TxController>& controller) {
 
         // ── RC-28 F1 / F2: deferred press + hold detection (#3323) ──────────
         // Per-key state (index 0=F1, 1=F2) so the two keys are independent.
@@ -2582,9 +2779,15 @@ void MainWindow::wireExternalControllers()
         if (m_hidEncoder->isRC28Compatible() && (button == 1 || button == 2)) {
             const int i = button - 1;
             if (action == 0) {
+                m_rc28Inputs[i] = controller;
                 m_rc28HoldConsumed[i] = false;
                 m_rc28HoldTimer[i]->start();
             } else {  // action == 1 (release)
+                if (!m_rc28Inputs[i] || !controller
+                    || !m_rc28Inputs[i]->captureProgram(TxController::Activity::Mox).request()
+                            .sameInputEpoch(controller->captureProgram(TxController::Activity::Mox).request())) {
+                    return;
+                }
                 m_rc28HoldTimer[i]->stop();
                 if (!m_rc28HoldConsumed[i]) {
                     // Short press — fire on release
@@ -2596,7 +2799,7 @@ void MainWindow::wireExternalControllers()
                         HidEncoderManager::rc28MappingField(pressField, dflt);
                     if (!actionName.isEmpty() && actionName != "None")
                         dispatchHidAction(actionName,
-                                          QString("F%1 press").arg(button));
+                                          QString("F%1 press").arg(button), m_rc28Inputs[i]);
                 }
                 m_rc28HoldConsumed[i] = false;
                 // Update the LEDs once the button is up. We never write LEDs
@@ -2647,14 +2850,16 @@ void MainWindow::wireExternalControllers()
         // "PTT" (e.g. StreamDeck+) always use momentary so they are not
         // affected by the RC-28 latched-PTT setting.
         if (actionName == QStringLiteral("PTT")) {
-            if (!m_radioModel.isConnected()) return;
+            if (!m_radioModel.isConnected() || !controller) return;
             const bool latched = m_hidEncoder->isRC28Compatible()
                 && HidEncoderManager::rc28MappingField("pttMode", "Momentary") == "Latched";
             if (latched) {
                 // Toggle on press only; ignore release.
                 if (action == 0) {
+                    if (!controller->valid()) { return; }
                     m_rc28PttLatched = !m_rc28PttLatched;
-                    m_radioModel.setTransmit(m_rc28PttLatched);
+                    const auto input = controller->capture(TxController::Activity::Mox);
+                    if (m_rc28PttLatched) { (void)input.start(); } else { input.stop(); }
                     if (m_rc28MappingDialog && m_hidEncoder->isRC28Compatible())
                         m_rc28MappingDialog->appendButtonEvent(
                             "TX bar press",
@@ -2662,7 +2867,9 @@ void MainWindow::wireExternalControllers()
                 }
             } else {
                 // Momentary: hold = TX on, release = TX off.
-                m_radioModel.setTransmit(action == 0);
+                const auto input = action == 0 ? controller->capture(TxController::Activity::Mox)
+                                               : controller->current(TxController::Activity::Mox);
+                if (action == 0) { (void)input.start(); } else { input.stop(); }
                 if (m_rc28MappingDialog && m_hidEncoder->isRC28Compatible())
                     m_rc28MappingDialog->appendButtonEvent(
                         "TX bar",
@@ -2676,7 +2883,7 @@ void MainWindow::wireExternalControllers()
 
         // All remaining actions share the same dispatch path used by
         // hold-detection and short-press-on-release.  (#3323)
-        dispatchHidAction(actionName, QString("key %1 press").arg(button));
+        dispatchHidAction(actionName, QString("key %1 press").arg(button), controller);
     });
 
     connect(m_hidEncoder, &HidEncoderManager::connectionChanged,
@@ -2705,7 +2912,8 @@ void MainWindow::wireExternalControllers()
                 // Safety: never leave the radio keyed if a latched-TX RC-28 is
                 // unplugged. Drop TX and clear the latch.
                 m_rc28PttLatched = false;
-                m_radioModel.setTransmit(false);
+                // The device's fenced cleanup owns its release; do not stop
+                // a keyboard/bridge transmission while clearing this UI latch.
             }
         } else {
             m_tmate2IdleTimer.stop();
@@ -2730,7 +2938,7 @@ void MainWindow::wireExternalControllers()
     connect(m_audio, &AudioEngine::mutedChanged,
             this, [this](bool) { updateRC28Leds(); });
 
-    // StreamDeck native integration removed — use TCI StreamController plugin instead.
+    // StreamDeck native integration removed — drive it over TCI instead.
 #endif
 
     // Ulanzi Dial backend.  One concrete implementation per platform —
@@ -2740,6 +2948,8 @@ void MainWindow::wireExternalControllers()
     // All three expose the same Qt signal contract via the
     // UlanziDialBackend alias.  See #3232 for design notes.
     m_dialBackend = new UlanziDialBackend;
+    const auto dialController = TxController::forNativeDevice(&m_radioModel, m_dialBackend);
+    fenceDeviceDisconnect(m_dialBackend, &UlanziDialBackend::connectionChanged, this, dialController);
 #ifndef Q_OS_MAC
     // macOS keeps the backend on the main thread: IOHIDManager schedules
     // its callbacks on a CFRunLoop, and only the main thread has one
@@ -2760,8 +2970,8 @@ void MainWindow::wireExternalControllers()
     // not on every access.
     UlanziDialMapperDialog::migrateLegacyMappings();
 
-    connect(m_dialBackend, &UlanziDialBackend::buttonEvent,
-            this, [this](const QString& signature, int action) {
+    connectDeviceInput(m_dialBackend, &UlanziDialBackend::buttonEvent, this, dialController,
+            [this](const QString& signature, int action, const std::shared_ptr<TxController>& controller) {
         // Look up which pill this hardware signature is bound to (the
         // signature ↔ pill mapping is immutable, in kPillSpecs).  Then
         // look up the user-chosen action for that pill in AppSettings.
@@ -2794,21 +3004,11 @@ void MainWindow::wireExternalControllers()
             // button carries no such ambiguity, and gating it would make the
             // hardware PTT stop working whenever a text field had focus.
             if (id == QLatin1String(kPttHoldActionId)) {
-                if (!m_radioModel.isConnected()) return;
-                if (action == 1 && !m_pttHoldActive) {
-                    m_pttHoldActive = true;
-                    m_dialPttHoldActive = true;
-                    m_radioModel.transmitModel().requestPttOn(TransmitModel::PttSource::Mox);
-                } else if (action == 0 && m_dialPttHoldActive) {
-                    // Release only what the dial itself keyed: a dial button
-                    // coming up must not drop a PTT the keyboard is still
-                    // holding down.  The fail-safe covers a lost dial release.
-                    m_dialPttHoldActive = false;
-                    if (m_pttHoldActive) {
-                        m_pttHoldActive = false;
-                        m_radioModel.transmitModel().requestPttOff(TransmitModel::PttSource::Mox);
-                    }
-                }
+                if (!m_radioModel.isConnected() || !controller) return;
+                const auto input = action == 1 ? controller->capture(TxController::Activity::Mox)
+                                               : controller->current(TxController::Activity::Mox);
+                if (action == 1) { (void)input.start(); }
+                else if (action == 0) { input.stop(); }
                 return;
             }
 
@@ -2817,16 +3017,7 @@ void MainWindow::wireExternalControllers()
                 id == QLatin1String(kCwRightPaddleActionId)) {
                 if (!m_radioModel.isConnected()) return;
                 if (action != 1 && action != 0) return;
-                const bool down = (action == 1);
-                const quint64 sourceMs = cwTraceNowMs();
-                const quint64 traceId = nextCwTraceId();
-                if (id == QLatin1String(kCwStraightKeyActionId)) {
-                    setCwStraightKeyState(down, QStringLiteral("ulanzi:cwkey"), traceId, sourceMs);
-                } else if (id == QLatin1String(kCwLeftPaddleActionId)) {
-                    setCwLeftPaddleState(down, QStringLiteral("ulanzi:cwdit"), traceId, sourceMs);
-                } else if (id == QLatin1String(kCwRightPaddleActionId)) {
-                    setCwRightPaddleState(down, QStringLiteral("ulanzi:cwdah"), traceId, sourceMs);
-                }
+                (void)handleScopedCwMomentaryShortcut(id, action == 1, controller, false);
                 return;
             }
 
@@ -2834,13 +3025,21 @@ void MainWindow::wireExternalControllers()
             if (action != 1) return;
 
             auto* a = m_shortcutManager.action(id);
-            if (a && a->handler) a->handler();
+            if (a && a->keysTx) { (void)fireShortcutAction(id, true, controller); }
+            else if (a && a->handler) { a->handler(); }
             else qDebug() << "Ulanzi Dial: unknown shortcut" << id;
         }
 #ifdef HAVE_MIDI
         else if (actionId.startsWith(QLatin1String("midi:"))) {
             const QString id = actionId.mid(QStringLiteral("midi:").size());
             const auto* p = m_midiControl ? m_midiControl->findParam(id) : nullptr;
+            if (p && (action == 1 || action == 0)) {
+                const float value = p->type == MidiParamType::Toggle ? -1.0f
+                    : action == 1 ? p->rangeMax : p->rangeMin;
+                if (p->type == MidiParamType::Gate || action == 1) {
+                    if (dispatchScopedMidiTx(id, value, controller)) { return; }
+                } else if (dispatchScopedMidiTx(id, 0.0f, {})) { return; }
+            }
             if (!p || !p->setter) {
                 qDebug() << "Ulanzi Dial: unknown MIDI param" << id;
             } else if (p->type == MidiParamType::Toggle) {
@@ -2885,7 +3084,8 @@ void MainWindow::wireExternalControllers()
                 }
             }
 #endif
-            failSafeMomentaryKeyingToRx("ulanzi disconnect");
+            // The device's captured inputs are fenced at disconnect above.
+            // Native keyboard holds are independent and remain untouched.
         }
     });
 

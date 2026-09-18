@@ -139,6 +139,70 @@ QByteArray processInBlocks(RNNoiseFilter& filter, const QByteArray& input,
     return output;
 }
 
+bool processNativeInBlocks(RNNoiseFilter& filter, const QByteArray& input,
+                           const std::vector<int>& blockFrames,
+                           QByteArray& output)
+{
+    constexpr int kStereoFrameBytes = 2 * static_cast<int>(sizeof(float));
+    const int totalFrames = input.size() / kStereoFrameBytes;
+    output.resize(0);
+    output.reserve(input.size());
+    QByteArray blockOutput;
+    int offsetFrames = 0;
+    int blockIndex = 0;
+    while (offsetFrames < totalFrames) {
+        const int requestedFrames = blockFrames[blockIndex % blockFrames.size()];
+        const int frames = std::min(requestedFrames, totalFrames - offsetFrames);
+        const QByteArray inputBlock = input.mid(
+            offsetFrames * kStereoFrameBytes, frames * kStereoFrameBytes);
+        const int outputFrames = filter.process48kStereo(inputBlock, blockOutput);
+        if (outputFrames != frames || blockOutput.size() != inputBlock.size()) {
+            return false;
+        }
+        output.append(blockOutput);
+        offsetFrames += frames;
+        ++blockIndex;
+    }
+    return true;
+}
+
+QByteArray makeStereoSine(int sampleRate, int frames, float rightGain)
+{
+    QByteArray block(frames * 2 * static_cast<int>(sizeof(float)),
+                     Qt::Uninitialized);
+    auto* samples = reinterpret_cast<float*>(block.data());
+    for (int frame = 0; frame < frames; ++frame) {
+        const float seconds = static_cast<float>(frame) / sampleRate;
+        const float left = 0.45f * std::sin(2.0f * kPi * 430.0f * seconds);
+        samples[frame * 2] = left;
+        samples[frame * 2 + 1] = rightGain * left;
+    }
+    return block;
+}
+
+bool hasAudibleLeftChannel(const QByteArray& samples, int startFrame, int frames)
+{
+    const auto* interleaved = reinterpret_cast<const float*>(samples.constData());
+    for (int frame = startFrame; frame < startFrame + frames; ++frame) {
+        if (std::abs(interleaved[frame * 2]) > 1.0e-4f) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int firstAudibleLeftFrame(const QByteArray& samples)
+{
+    const auto* interleaved = reinterpret_cast<const float*>(samples.constData());
+    const int frames = samples.size() / (2 * static_cast<int>(sizeof(float)));
+    for (int frame = 0; frame < frames; ++frame) {
+        if (std::abs(interleaved[frame * 2]) > 1.0e-4f) {
+            return frame;
+        }
+    }
+    return -1;
+}
+
 QByteArray makeUnequalStereoBlock(int blockIndex)
 {
     QByteArray block(kBlockFrames * 2 * static_cast<int>(sizeof(float)),
@@ -281,6 +345,144 @@ bool testProcessedMonoOutputIsDuplicated()
     if (!heardProcessedAudio) {
         std::printf("processed-mono output remained silent after startup\n");
         return false;
+    }
+    return true;
+}
+
+bool testIrregularPartitionsPreserveRnnoiseLatency()
+{
+    constexpr int kTotalFrames = 2 * kSampleRate;
+    constexpr int kLegacyFirstAudibleMin = 4500;
+    constexpr int kLegacyFirstAudibleMax = 4525;
+    constexpr int kNativeFirstAudibleMin = 1850;
+    constexpr int kNativeFirstAudibleMax = 1880;
+    const std::vector<int> partitions{73, 211, 17, 604, 91};
+
+    RNNoiseFilter legacyFilter;
+    legacyFilter.setDryMix(1.0f);
+    const QByteArray legacyInput = makeStereoSine(kSampleRate, kTotalFrames, 0.25f);
+    const QByteArray legacyOutput = processInBlocks(
+        legacyFilter, legacyInput, partitions);
+    const int legacyFirstAudible = firstAudibleLeftFrame(legacyOutput);
+    if (legacyOutput.size() != legacyInput.size()
+        || legacyFirstAudible < kLegacyFirstAudibleMin
+        || legacyFirstAudible > kLegacyFirstAudibleMax) {
+        std::printf("legacy RN2 irregular partitions changed output size or latency "
+                    "(first audible frame %d)\n", legacyFirstAudible);
+        return false;
+    }
+
+    RNNoiseFilter nativeFilter(
+        RNNoiseFilter::OutputMode::PreserveRxStereo,
+        RNNoiseFilter::RateDomain::Native48k);
+    nativeFilter.setDryMix(1.0f);
+    const QByteArray nativeInput = makeStereoSine(48000, kTotalFrames, 0.25f);
+    QByteArray nativeOutput;
+    const bool nativeProcessed = processNativeInBlocks(
+        nativeFilter, nativeInput, partitions, nativeOutput);
+    const int nativeFirstAudible = firstAudibleLeftFrame(nativeOutput);
+    if (!nativeProcessed
+        || nativeOutput.size() != nativeInput.size()
+        || nativeFirstAudible < kNativeFirstAudibleMin
+        || nativeFirstAudible > kNativeFirstAudibleMax) {
+        std::printf("native RN2 irregular partitions changed output size or latency "
+                    "(first audible frame %d)\n", nativeFirstAudible);
+        return false;
+    }
+    std::printf("RN2 irregular partition latency: legacy=%d native=%d frames\n",
+                legacyFirstAudible, nativeFirstAudible);
+    return true;
+}
+
+bool testNative48PreservesRxStereoIndependence()
+{
+    constexpr int kTotalFrames = 4 * kRnNoiseLatencyFrames;
+    RNNoiseFilter filter(
+        RNNoiseFilter::OutputMode::PreserveRxStereo,
+        RNNoiseFilter::RateDomain::Native48k);
+    filter.setDryMix(1.0f);
+
+    const QByteArray input = makeStereoSine(48000, kTotalFrames, 0.0f);
+    QByteArray output;
+    if (!processNativeInBlocks(filter, input, {91, 389, 27, 613}, output)
+        || output.size() != input.size()) {
+        std::printf("native RX stereo path did not preserve its output contract\n");
+        return false;
+    }
+
+    const auto* samples = reinterpret_cast<const float*>(output.constData());
+    for (int frame = kRnNoiseLatencyFrames; frame < kTotalFrames; ++frame) {
+        if (std::abs(samples[frame * 2 + 1]) > 1.0e-6f) {
+            std::printf("native RX stereo path mixed left into right at frame %d\n", frame);
+            return false;
+        }
+    }
+    if (!hasAudibleLeftChannel(
+            output, kRnNoiseLatencyFrames,
+            kTotalFrames - kRnNoiseLatencyFrames)) {
+        std::printf("native RX stereo path did not retain the left channel\n");
+        return false;
+    }
+    return true;
+}
+
+bool testNative48ProcessedMonoIrregularPartitionsPreserveFifo()
+{
+    constexpr int kTotalFrames = 2 * kSampleRate;
+    constexpr int kComparedFrames = 4096;
+    const QByteArray input = makeStereoSine(48000, kTotalFrames, -0.35f);
+
+    RNNoiseFilter alignedFilter(
+        RNNoiseFilter::OutputMode::ProcessedMono,
+        RNNoiseFilter::RateDomain::Native48k);
+    alignedFilter.setDryMix(1.0f);
+    QByteArray alignedOutput;
+    if (!processNativeInBlocks(alignedFilter, input, {480}, alignedOutput)) {
+        std::printf("native processed-mono aligned reference failed\n");
+        return false;
+    }
+
+    RNNoiseFilter irregularFilter(
+        RNNoiseFilter::OutputMode::ProcessedMono,
+        RNNoiseFilter::RateDomain::Native48k);
+    irregularFilter.setDryMix(1.0f);
+    QByteArray irregularOutput;
+    if (!processNativeInBlocks(
+            irregularFilter, input, {73, 211, 17, 604, 91}, irregularOutput)
+        || irregularOutput.size() != input.size()) {
+        std::printf("native processed-mono irregular output contract failed\n");
+        return false;
+    }
+
+    const auto* irregularSamples =
+        reinterpret_cast<const float*>(irregularOutput.constData());
+    for (int frame = 0; frame < kTotalFrames; ++frame) {
+        if (std::abs(irregularSamples[frame * 2]
+                     - irregularSamples[frame * 2 + 1]) > 1.0e-6f) {
+            std::printf("native processed-mono output diverged at frame %d\n", frame);
+            return false;
+        }
+    }
+
+    const int alignedStart = firstAudibleLeftFrame(alignedOutput);
+    const int irregularStart = firstAudibleLeftFrame(irregularOutput);
+    if (alignedStart < 0 || irregularStart < 0
+        || alignedStart + kComparedFrames > kTotalFrames
+        || irregularStart + kComparedFrames > kTotalFrames) {
+        std::printf("native processed-mono FIFO comparison lacked audible output\n");
+        return false;
+    }
+
+    const auto* alignedSamples =
+        reinterpret_cast<const float*>(alignedOutput.constData());
+    for (int frame = 0; frame < kComparedFrames; ++frame) {
+        const float aligned = alignedSamples[(alignedStart + frame) * 2];
+        const float irregular = irregularSamples[(irregularStart + frame) * 2];
+        if (std::abs(aligned - irregular) > 1.0e-6f) {
+            std::printf("native processed-mono FIFO changed at compared frame %d\n",
+                        frame);
+            return false;
+        }
     }
     return true;
 }
@@ -721,6 +923,9 @@ int main()
     if (!testSpectralDryMixUsesOneSynthesisTimeline()
         || !testDryMixDefaultsToFullSuppressionAndClamps()
         || !testProcessedMonoOutputIsDuplicated()
+        || !testIrregularPartitionsPreserveRnnoiseLatency()
+        || !testNative48PreservesRxStereoIndependence()
+        || !testNative48ProcessedMonoIrregularPartitionsPreserveFifo()
         || !testNoiseFloorDoesNotBreatheWithSpeech()
         || !testStereoChannelsStaySynchronizedWithConstantDryFloor()
         || !testBinauralPhaseDifferenceSurvivesDenoising()

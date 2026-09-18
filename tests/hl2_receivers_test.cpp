@@ -3,7 +3,7 @@
 // bug this type exists to prevent is code that derives one from another while
 // they happen to be equal and breaks when they stop being.
 //
-// HERMES.md §12.5, consolidated-backlog item 20.
+// docs/HERMES.md §12.5, consolidated-backlog item 20.
 
 #include "core/backends/hl2/Hl2Receivers.h"
 

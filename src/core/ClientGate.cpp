@@ -169,6 +169,14 @@ float ClientGate::gainReductionDb() const noexcept
 bool  ClientGate::gateOpen() const noexcept
 { return m_meters.gateOpen.load(std::memory_order_relaxed); }
 
+void ClientGate::copyMeteringFrom(const ClientGate& source) noexcept
+{
+    m_meters.inputPeakDb.store(source.inputPeakDb(), std::memory_order_relaxed);
+    m_meters.outputPeakDb.store(source.outputPeakDb(), std::memory_order_relaxed);
+    m_meters.gainReductionDb.store(source.gainReductionDb(), std::memory_order_relaxed);
+    m_meters.gateOpen.store(source.gateOpen(), std::memory_order_relaxed);
+}
+
 void ClientGate::recacheIfDirty() noexcept
 {
     const uint64_t v = m_atomics.version.load(std::memory_order_acquire);

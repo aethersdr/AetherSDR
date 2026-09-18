@@ -4,6 +4,7 @@
 #include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
+#include "ScopedChildWidget.h"
 
 #include <QCloseEvent>
 #include <QCheckBox>
@@ -19,6 +20,7 @@
 #include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QSignalBlocker>
 #include <QStandardPaths>
@@ -145,7 +147,13 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
             : QStringLiteral("Import sent. The radio accepted the package and profile lists are being refreshed.");
         setStatus(message);
         rememberProfileTransferDirectory(path);
-        QMessageBox::information(this, windowTitle(), message);
+        ScopedChildWidget<QMessageBox> boxOwner(this);
+        QMessageBox& box = *boxOwner.get();
+        box.setIcon(QMessageBox::Information);
+        box.setWindowTitle(windowTitle());
+        box.setText(message);
+        box.setStandardButtons(QMessageBox::Ok);
+        box.exec();
     });
     connect(m_transfer, &ProfileTransfer::failed, this,
             [this](ProfileTransfer::Operation, const QString& error) {
@@ -153,7 +161,13 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
         m_progress->setRange(0, 100);
         m_progress->setValue(0);
         setStatus(error);
-        QMessageBox::warning(this, windowTitle(), error);
+        ScopedChildWidget<QMessageBox> boxOwner(this);
+        QMessageBox& box = *boxOwner.get();
+        box.setIcon(QMessageBox::Warning);
+        box.setWindowTitle(windowTitle());
+        box.setText(error);
+        box.setStandardButtons(QMessageBox::Ok);
+        box.exec();
     });
 
     if (m_model) {
@@ -174,14 +188,24 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
 void ProfileImportExportDialog::closeEvent(QCloseEvent* event)
 {
     if (m_transfer && m_transfer->isBusy()) {
-        const auto choice = QMessageBox::question(
-            this, windowTitle(),
-            QStringLiteral("A profile transfer is still running. Cancel it and close this window?"));
+        const QPointer<ProfileImportExportDialog> self(this);
+        const QPointer<ProfileTransfer> transferGuard(m_transfer);
+        ScopedChildWidget<QMessageBox> boxOwner(this);
+        QMessageBox& box = *boxOwner.get();
+        box.setIcon(QMessageBox::Question);
+        box.setWindowTitle(windowTitle());
+        box.setText(QStringLiteral("A profile transfer is still running. Cancel it and close this window?"));
+        box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+        const int choice = box.exec();
+        if (!self || !transferGuard || self->m_transfer != transferGuard.data() || !boxOwner) {
+            event->ignore();
+            return;
+        }
         if (choice != QMessageBox::Yes) {
             event->ignore();
             return;
         }
-        m_transfer->cancel();
+        transferGuard->cancel();
     }
     PersistentDialog::closeEvent(event);
 }
@@ -369,7 +393,10 @@ bool ProfileImportExportDialog::confirmImport()
             .arg(exportVersion.toString(), radioVersion);
     }
 
-    QMessageBox box(this);
+    const QPointer<ProfileImportExportDialog> self(this);
+    const QPointer<RadioModel> modelGuard(m_model);
+    ScopedChildWidget<QMessageBox> boxOwner(this);
+    QMessageBox& box = *boxOwner.get();
     box.setIcon(QMessageBox::Warning);
     box.setWindowTitle(QStringLiteral("Confirm Profile Import"));
     box.setText(QStringLiteral("Import this .ssdr_cfg backup to the radio?"));
@@ -387,6 +414,10 @@ bool ProfileImportExportDialog::confirmImport()
     box.addButton(QMessageBox::Cancel);
     box.exec();
 
+    if (!self || !modelGuard || self->m_model != modelGuard.data() || !boxOwner) {
+        return false;
+    }
+
     if (box.clickedButton() == backupButton) {
         m_tabs->setCurrentIndex(0);
         startExport();
@@ -397,27 +428,33 @@ bool ProfileImportExportDialog::confirmImport()
 
 void ProfileImportExportDialog::chooseExportPath()
 {
+    const QPointer<ProfileImportExportDialog> self(this);
+    const QPointer<QLineEdit> exportPath(m_exportPath);
     QString initial = m_exportPath ? m_exportPath->text() : defaultExportPath();
     if (initial.trimmed().isEmpty())
         initial = defaultExportPath();
     const QString path = QFileDialog::getSaveFileName(
         this, QStringLiteral("Export Profile Backup"),
         initial, QStringLiteral("Profile Backup (*.ssdr_cfg)"));
-    if (path.isEmpty())
+    if (!self || !exportPath || self->m_exportPath != exportPath.data() || path.isEmpty()) {
         return;
-    m_exportPath->setText(path.endsWith(QStringLiteral(".ssdr_cfg"), Qt::CaseInsensitive)
+    }
+    exportPath->setText(path.endsWith(QStringLiteral(".ssdr_cfg"), Qt::CaseInsensitive)
                               ? path
                               : path + QStringLiteral(".ssdr_cfg"));
 }
 
 void ProfileImportExportDialog::chooseImportPath()
 {
+    const QPointer<ProfileImportExportDialog> self(this);
+    const QPointer<QLineEdit> importPath(m_importPath);
     const QString path = QFileDialog::getOpenFileName(
         this, QStringLiteral("Import Profile Backup"),
         profileTransferDirectory(), QStringLiteral("Profile Backup (*.ssdr_cfg)"));
-    if (path.isEmpty())
+    if (!self || !importPath || self->m_importPath != importPath.data() || path.isEmpty()) {
         return;
-    m_importPath->setText(path);
+    }
+    importPath->setText(path);
 }
 
 void ProfileImportExportDialog::startExport()
@@ -430,10 +467,12 @@ void ProfileImportExportDialog::startExport()
 
 void ProfileImportExportDialog::startImport()
 {
+    const QPointer<ProfileImportExportDialog> self(this);
     if (!m_importPath || m_importPath->text().trimmed().isEmpty()) {
         chooseImportPath();
-        if (!m_importPath || m_importPath->text().trimmed().isEmpty())
+        if (!self || !self->m_importPath || self->m_importPath->text().trimmed().isEmpty()) {
             return;
+        }
     }
     rememberProfileTransferDirectory(m_importPath->text());
     if (!confirmImport())

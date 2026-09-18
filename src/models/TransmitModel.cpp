@@ -3,6 +3,8 @@
 #include "core/LogManager.h"
 #include <QDebug>
 #include <QTimer>
+#include <QThread>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -10,13 +12,30 @@ TransmitModel::TransmitModel(QObject* parent)
     : QObject(parent)
 {}
 
+TransmitModel::~TransmitModel()
+{
+    invalidatePttRelease();
+}
+
 void TransmitModel::resetState()
 {
+    cancelPttRelease();
     m_apdEnabled = false;
     m_apdConfigurable = false;
     m_apdEqActive = false;
     m_apdSamplers.clear();
     m_rfPower = 100;
+    // The 100 above is a DEFAULT again, not a reported value: the session that
+    // could confirm it is over (#5518). Clearing this is what stops the MQTT
+    // radio-state topic republishing a dead session's drive as live on the next
+    // connect. Deliberately NOT emitting rfPowerChanged here — that signal drives
+    // a TCI `drive:` broadcast and the TX power-meter scale, and neither should be
+    // told the radio moved its power to 100 as it went away.
+    //
+    // Delegated so the disconnect path and RadioModel::teardownBackend()'s
+    // family-switch path can never disagree about what "nobody has reported this"
+    // means (#5733 review).
+    resetPowerProvenance();
     m_tunePower = 10;
     m_tune = false;
     m_mox = false;
@@ -24,10 +43,33 @@ void TransmitModel::resetState()
     m_maxPowerLevel = 100;
     m_atuEnabled = false;
     m_atuStatus = ATUStatus::None;
+    m_userAbortedAtu = false;
     m_memoriesEnabled = false;
     m_usingMemory = false;
     m_showTxInWaterfall = false;
     m_txSliceMode.clear();
+    setTuneAvailable(true);
+
+    // The committed break-in delay belonged to the session that just ended; drop
+    // it so setCwSpeed() does not re-assert a delay the operator never set in
+    // this one (#5288 review — cross-session leak). RadioModel::onDisconnected()
+    // is the only caller, so this fires on EVERY disconnect — a transient drop
+    // and reconnect to the same radio, not just a radio swap.
+    //
+    // The m_holdBreakInDelay opt-in is a client preference, not radio state, and
+    // is left untouched — PhoneCwApplet re-applies it from AppSettings. That
+    // asymmetry is deliberate but it leaves the feature on-but-unarmed, so say
+    // so out loud: the applet renders that state distinctly rather than showing
+    // one checked button for both (#5288 review, blocker 1).
+    // Clear BEFORE emitting: the applet's slot reads holdBreakInDelayArmed()
+    // synchronously, so emitting first hands it the state we are in the middle
+    // of leaving and the button keeps showing "holding 48 ms" after the delay is
+    // gone. (Caught driving the GUI, not in review.)
+    const bool wasArmed = (m_cwDelayHeld > 0);
+    m_cwDelayHeld = -1;   // also covers the 0 (deliberate QSK) case
+    if (wasArmed) {
+        emit holdBreakInDelayArmedChanged(false);
+    }
 
     emit apdStateChanged();
     emit transmittingChanged(false);
@@ -67,11 +109,27 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     bool phoneChanged = false;
     bool filterCutoffChanged = false;
     bool cwPitchChanged_ = false;
+    bool cwSpeedChanged_ = false;
 
     // ── Core transmit ──
     // rf_power / tune_power emit inline (like max_power_level below): the
     // radio restores per-band power on QSY, and TCI clients need that edge
     // distinctly, not folded into the catch-all stateChanged() (#4161).
+    // Latch on PRESENCE, not on change (#5518): a radio that reports 100% into a
+    // model already sitting at the 100 default makes assign() return false, and a
+    // latch keyed on that would never fire for exactly the value it most needs to
+    // confirm. The same case is why provenance gets its own signal below — the
+    // latch flipping IS the edge a mirror needs, and no value changed to carry it.
+    bool provenanceMoved = false;
+    if (d.rfPower) {
+        if (!m_haveTransmitStatus || !m_rfPowerFromRadio) provenanceMoved = true;
+        m_haveTransmitStatus = true;
+        m_rfPowerFromRadio = true;   // the radio said it, so it is confirmed now
+    }
+    if (d.maxPowerLevel && !m_haveMaxPowerLevel) {
+        m_haveMaxPowerLevel = true;
+        provenanceMoved = true;
+    }
     if (assign(d.rfPower, m_rfPower))   { changed = true; emit rfPowerChanged(m_rfPower); }
     if (assign(d.tunePower, m_tunePower)) { changed = true; emit tunePowerChanged(m_tunePower); }
     if (assign(d.tune, m_tune)) { changed = true; tuneChanged_ = true; }
@@ -88,7 +146,13 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     micChanged |= assign(d.micLevel, m_micLevel);
     micChanged |= assign(d.micAcc, m_micAcc);
     micChanged |= assign(d.speechProcEnable, m_speechProcEnable);
-    micChanged |= assign(d.speechProcLevel, m_speechProcLevel);
+    if (d.speechProcLevel) {
+        const int level = qBound(0, *d.speechProcLevel, m_speechProcLevelMaximum);
+        if (m_speechProcLevel != level) {
+            m_speechProcLevel = level;
+            micChanged = true;
+        }
+    }
     // compander/dexp are aliased: one wire value drives BOTH member pairs (the
     // compander → mic side and the dexp → phone side). Bespoke — one optional,
     // two members, two flags.
@@ -119,9 +183,14 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (assign(d.txFilterHigh, m_txFilterHigh)) { phoneChanged = true; filterCutoffChanged = true; }
 
     // ── CW ──
-    phoneChanged |= assign(d.cwSpeed, m_cwSpeed);
+    if (assign(d.cwSpeed, m_cwSpeed)) { phoneChanged = true; cwSpeedChanged_ = true; }
     if (assign(d.cwPitch, m_cwPitch)) { phoneChanged = true; cwPitchChanged_ = true; }
     phoneChanged |= assign(d.cwBreakIn, m_cwBreakIn);
+    // Radio status is authoritative on the live break-in delay: adopt it, full
+    // stop. The "hold" protection against SmartSDR's speed-linked QSK-floor
+    // walk lives on the operator-intent path (setCwSpeed), never here — a
+    // command issued from this status-apply path is the feedback loop
+    // Principle II forbids (#5288 review).
     phoneChanged |= assign(d.cwDelay, m_cwDelay);
     phoneChanged |= assign(d.cwSidetone, m_cwSidetone);
     phoneChanged |= assign(d.cwIambic, m_cwIambic);
@@ -133,6 +202,17 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
 
     // ── Misc TX (max_power_level / tx_slice_mode emit inline, like the old code) ──
     if (assign(d.maxPowerLevel, m_maxPowerLevel)) { changed = true; emit maxPowerLevelChanged(m_maxPowerLevel); }
+    // AFTER both power assigns, not beside the rfPower one (#5733 review).
+    // m_haveMaxPowerLevel latches at the top of this function but m_maxPowerLevel
+    // is not written until the line above, so emitting earlier handed a
+    // synchronous consumer haveMaxPowerLevel()==true with the ceiling still at
+    // the compiled-in 100 — the exact phantom the latch exists to prevent.
+    //
+    // Emitted even when rfPowerChanged/maxPowerLevelChanged already fired. Both
+    // ends of the only consumer feed one coalescing timer, so the duplicate costs
+    // nothing, and suppressing it would make the guarantee ("provenance moves are
+    // always announced") conditional on a value comparison.
+    if (provenanceMoved) emit powerProvenanceChanged();
     changed |= assign(d.tuneMode, m_tuneMode);
     changed |= assign(d.showTxInWaterfall, m_showTxInWaterfall);
     if (assign(d.txSliceMode, m_txSliceMode)) { changed = true; emit txSliceModeChanged(m_txSliceMode); }
@@ -154,13 +234,28 @@ void TransmitModel::applyChanges(const TransmitDelta& d)
     if (phoneChanged) emit phoneStateChanged();
     if (filterCutoffChanged) emit txFilterCutoffChanged(m_txFilterLow, m_txFilterHigh);
     if (cwPitchChanged_) emit cwPitchChanged(m_cwPitch);
+    if (cwSpeedChanged_) emit cwSpeedChanged(m_cwSpeed);
 
     // ── ATU (own emit; model owns the enum parse) ──
     {
         bool atuChanged = false;
         if (d.atuStatusRaw) {
+            const ATUStatus prevStatus = m_atuStatus;
             const ATUStatus s = parseAtuTuneStatus(*d.atuStatusRaw);
-            if (m_atuStatus != s) { m_atuStatus = s; atuChanged = true; }
+            if (m_atuStatus != s) {
+                m_atuStatus = s;
+                atuChanged = true;
+                if (prevStatus == ATUStatus::InProgress && !m_userAbortedAtu) {
+                    if (s == ATUStatus::FailBypass) {
+                        emit atuTuneFailed(s, tr("ATU tune failed — tuner was bypassed."));
+                    } else if (s == ATUStatus::Fail) {
+                        emit atuTuneFailed(s, tr("ATU tune failed to find a match."));
+                    }
+                }
+                if (s != ATUStatus::InProgress) {
+                    m_userAbortedAtu = false;
+                }
+            }
         }
         atuChanged |= assign(d.atuEnabled, m_atuEnabled);
         atuChanged |= assign(d.memoriesEnabled, m_memoriesEnabled);
@@ -270,14 +365,34 @@ void TransmitModel::setHasTuner(bool present)
     emit hasTunerChanged(present);
 }
 
+void TransmitModel::setHasTunerMemories(bool present)
+{
+    if (m_hasTunerMemories == present) {
+        return;
+    }
+    m_hasTunerMemories = present;
+    emit hasTunerMemoriesChanged(present);
+}
+
 void TransmitModel::setRfPower(int power)
 {
     power = qBound(0, power, 100);
+    // This is a REQUEST until the radio echoes it back (#5733 review). Recorded
+    // before the emit so any listener that reads rfPowerIsFromRadio() off
+    // rfPowerChanged sees the request, not the previous confirmed answer.
+    const bool wasFromRadio = m_rfPowerFromRadio;
+    m_rfPowerFromRadio = false;
     if (m_rfPower != power) {
         m_rfPower = power;
         emit rfPowerChanged(power);
         emit stateChanged();
     }
+    // UNCONDITIONAL on the value moving (#5733 review). A confirmed->request
+    // demotion is a provenance move whether or not the number changed, and
+    // powerProvenanceChanged is documented as THE provenance edge; gating it on
+    // the comparison meant an operator dragging 60->40 on a Flex demoted the
+    // value while a consumer subscribed to this signal alone never heard.
+    if (wasFromRadio) emit powerProvenanceChanged();
     emit commandReady(QString("transmit set rfpower=%1").arg(power));
     emit rfPowerCommandIssued(power);
 }
@@ -302,16 +417,54 @@ void TransmitModel::setTuneMode(const QString& mode)
     emit commandReady("transmit set tune_mode=" + mode);
 }
 
+void TransmitModel::setTuneAvailable(bool available)
+{
+    if (m_tuneAvailable == available) {
+        return;
+    }
+    m_tuneAvailable = available;
+    emit tuneAvailabilityChanged(available);
+}
+
 void TransmitModel::startTune(PttSource source)
 {
-    if (!runPttPreflight(source, false))
+    requestTune(source, false, {});
+}
+
+void TransmitModel::startTwoToneTune(PttSource source)
+{
+    requestTune(source, true, {});
+}
+
+void TransmitModel::requestTune(PttSource source, bool twoTone, const KeyingRoute& route)
+{
+    if (!m_tuneAvailable) {
         return;
+    }
+    if (!runPttPreflight(source, false)) {
+        return;
+    }
+    if (!tuneAdmitted()) {
+        return;
+    }
+    const KeyingPermit permit = route.admit ? route.admit(true)
+        : m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, true) : KeyingPermit{};
+    if ((route.admit || m_keyingAdmission) && (!permit || !permit())) {
+        return;
+    }
+    const quint64 intentEpoch = ++m_tuneIntentEpoch;
 
     // Tag the initiating source so the status-bar operator TX timer can exclude
     // local TUNE carriers as well as TCI/DAX-initiated tune (the radio reports
     // every software path as source=SW). Without this, tune inherits the stale
     // Mox tag and wrongly runs the operator-only timer. (#4131 review)
     m_activePttSource = source;
+    if (twoTone) {
+        setTuneMode(QStringLiteral("two_tone"));
+        if (intentEpoch != m_tuneIntentEpoch || (permit && !permit())) {
+            return;
+        }
+    }
 
     // Optimistic tune state, exactly as setMox() does for m_transmitting.
     //
@@ -325,23 +478,13 @@ void TransmitModel::startTune(PttSource source)
         m_tune = true;
         emit tuneChanged(true);
     }
-    emit commandReady("transmit tune 1");
-    emit tuneCommandIssued(true);
-}
-
-void TransmitModel::startTwoToneTune(PttSource source)
-{
-    if (!runPttPreflight(source, false))
-        return;
-
-    m_activePttSource = source;   // exclude local/TCI/DAX tune (see startTune, #4131)
-    setTuneMode("two_tone");
-    if (!m_tune) {
-        m_tune = true;
-        emit tuneChanged(true);
+    if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
+        if (route.dispatch) {
+            route.dispatch(true);
+        } else {
+            emit tuneCommandIssued(true);
+        }
     }
-    emit commandReady("transmit tune 1");
-    emit tuneCommandIssued(true);
 }
 
 void TransmitModel::toggleTwoToneTune()
@@ -361,25 +504,54 @@ void TransmitModel::toggleTwoToneTune()
 
 void TransmitModel::stopTune()
 {
+    stopTune({});
+}
+
+void TransmitModel::stopTune(const KeyingRoute& route)
+{
+    const KeyingPermit permit = route.admit ? route.admit(false)
+        : m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Tune, false) : KeyingPermit{};
+    if (route.admit && (!permit || !permit())) {
+        return;
+    }
+    const quint64 intentEpoch = ++m_tuneIntentEpoch;
     if (m_tune) {
         m_tune = false;
         emit tuneChanged(false);
     }
-    emit commandReady("transmit tune 0");
-    emit tuneCommandIssued(false);
+    if (intentEpoch == m_tuneIntentEpoch && (!permit || permit())) {
+        if (route.dispatch) {
+            route.dispatch(false);
+        } else {
+            emit tuneCommandIssued(false);
+        }
+    }
 }
 
 void TransmitModel::setMox(bool on)
 {
+    if (on && !runPttPreflight(m_activePttSource)) {
+        return;
+    }
+    const KeyingPermit permit = m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Mox, on) : KeyingPermit{};
+    if (on && m_keyingAdmission && (!permit || !permit())) {
+        return;
+    }
+    const quint64 intentEpoch = ++m_moxIntentEpoch;
+    invalidatePttRelease();
     // Optimistic MOX edge gating keeps UI/audio aligned with user intent.
     // Interlock status from the radio will still reconcile final state.
     if (m_transmitting != on) {
         m_transmitting = on;
         emit transmittingChanged(on);
+        if (intentEpoch != m_moxIntentEpoch || m_transmitting != on || (permit && !permit())) {
+            return;
+        }
         emit moxChanged(on);
     }
-    emit commandReady(QString("xmit %1").arg(on ? 1 : 0));
-    emit moxCommandIssued(on);
+    if (intentEpoch == m_moxIntentEpoch && (!permit || permit())) {
+        emit moxCommandIssued(on);
+    }
 }
 
 void TransmitModel::setTransmitting(bool tx)
@@ -387,6 +559,9 @@ void TransmitModel::setTransmitting(bool tx)
     if (tx == m_transmitting) return;
     m_transmitting = tx;
     emit transmittingChanged(tx);
+    if (m_transmitting != tx) {
+        return;
+    }
     // Keep moxChanged for backward compat — CW decoder gate and QSO recorder
     // currently gate on this signal and need interlock-driven TX edges too.
     emit moxChanged(tx);
@@ -394,14 +569,35 @@ void TransmitModel::setTransmitting(bool tx)
 
 void TransmitModel::atuStart()
 {
-    emit commandReady("atu start");
-    emit atuCommandIssued(true);
+    requestAtu(true, {});
 }
 
 void TransmitModel::atuBypass()
 {
-    emit commandReady("atu bypass");
-    emit atuCommandIssued(false);
+    requestAtu(false, {});
+}
+
+void TransmitModel::requestAtu(bool start, const KeyingRoute& route)
+{
+    const KeyingPermit permit = route.admit ? route.admit(start)
+        : start && m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Atu, true) : KeyingPermit{};
+    if ((route.admit || (start && m_keyingAdmission)) && (!permit || !permit())) {
+        return;
+    }
+    // Track a deliberate operator bypass of a running tune so applyChanges
+    // does not report "ATU tune failed" for an abort the operator asked for.
+    // Set after admission, on whichever route carries the command: a refused
+    // request never reached the ATU, so it must not claim an abort either.
+    if (start) {
+        m_userAbortedAtu = false;
+    } else if (m_atuStatus == ATUStatus::InProgress) {
+        m_userAbortedAtu = true;
+    }
+    if (route.dispatch) {
+        route.dispatch(start);
+    } else {
+        emit atuCommandIssued(start);
+    }
 }
 
 void TransmitModel::setAtuMemories(bool on)
@@ -495,18 +691,34 @@ void TransmitModel::setSpeechProcessorEnable(bool on)
 
 void TransmitModel::setSpeechProcessorLevel(int level)
 {
-    // NOR=0, DX=1, DX+=2 (pcap confirmed: speech_processor_level, not compander_level).
-    // Optimistic update: radio does not echo in incremental status.
-    level = qBound(0, level, 2);
+    // Flex uses NOR=0, DX=1, DX+=2 (pcap confirmed:
+    // speech_processor_level, not compander_level). A backend capability may
+    // widen the normalized domain for an evidenced continuous control.
+    // Optimistic update: Flex does not echo in incremental status.
+    level = qBound(0, level, m_speechProcLevelMaximum);
     m_speechProcLevel = level;
     emit micStateChanged();
     emit speechProcessorCommandIssued(m_speechProcEnable, m_speechProcLevel);
     emit commandReady(QString("transmit set speech_processor_level=%1").arg(level));
 }
 
+void TransmitModel::setSpeechProcessorLevelMaximum(int maximum)
+{
+    maximum = qBound(2, maximum, 100);
+    if (m_speechProcLevelMaximum == maximum) {
+        return;
+    }
+    m_speechProcLevelMaximum = maximum;
+    const int bounded = qBound(0, m_speechProcLevel, maximum);
+    if (bounded != m_speechProcLevel) {
+        m_speechProcLevel = bounded;
+        emit micStateChanged();
+    }
+}
+
 bool TransmitModel::applySpeechProcessorState(bool on, int level)
 {
-    level = qBound(0, level, 2);
+    level = qBound(0, level, m_speechProcLevelMaximum);
     if (m_speechProcEnable == on && m_speechProcLevel == level) {
         return false;
     }
@@ -655,18 +867,18 @@ void TransmitModel::setDexpLevel(int level)
 // command (Principle II).
 void TransmitModel::setTxFilterLow(int hz)
 {
-    setTxFilter(qBound(0, hz, 10000), m_txFilterHigh);
+    setTxFilter(qBound(kTxFilterMinHz, hz, kTxFilterMaxHz), m_txFilterHigh);
 }
 
 void TransmitModel::setTxFilterHigh(int hz)
 {
-    setTxFilter(m_txFilterLow, qBound(0, hz, 10000));
+    setTxFilter(m_txFilterLow, qBound(kTxFilterMinHz, hz, kTxFilterMaxHz));
 }
 
 void TransmitModel::setTxFilter(int lowHz, int highHz)
 {
-    lowHz = qBound(0, lowHz, 9950);
-    highHz = qBound(lowHz + 50, highHz, 10000);
+    lowHz  = qBound(kTxFilterMinHz, lowHz, kTxFilterMaxHz - kTxFilterMinWidthHz);
+    highHz = qBound(lowHz + kTxFilterMinWidthHz, highHz, kTxFilterMaxHz);
     if (m_txFilterLow != lowHz || m_txFilterHigh != highHz) {
         m_txFilterLow = lowHz;
         m_txFilterHigh = highHz;
@@ -683,11 +895,57 @@ void TransmitModel::setTxFilter(int lowHz, int highHz)
 void TransmitModel::setCwSpeed(int wpm)
 {
     wpm = qBound(5, wpm, 100);
-    if (m_cwSpeed != wpm) {
+    const bool speedChanged = (m_cwSpeed != wpm);
+    if (speedChanged) {
         m_cwSpeed = wpm;
         emit phoneStateChanged();
+        emit cwSpeedChanged(m_cwSpeed);
     }
+    emit cwSpeedCommandIssued(wpm);
     emit commandReady(QString("cw wpm %1").arg(wpm));
+
+    // Hold break-in delay (#5288, opt-in): SmartSDR re-pins break_in_delay to a
+    // WPM-derived QSK floor on a speed change and walks it down as WPM rises —
+    // on an inline amplifier that can't tolerate QSK that is silent
+    // hot-switching. This is the operator's own speed command, so re-asserting
+    // the delay they set is a request on the command path like any other setter
+    // — not the client overriding radio truth (which is why it is here and not
+    // in applyChanges). Ride it out right behind the `cw wpm` so the floor never
+    // takes lasting effect. If the radio rejects it as below the new floor it
+    // keeps its own larger value, the next status echo is adopted normally, and
+    // the amp still sees more delay than the operator asked for — safe. A set
+    // delay of 0 is deliberate QSK: m_cwDelayHeld is not > 0, nothing fires.
+    //
+    // Gated on a REAL speed change, not on the setter being called: the floor
+    // only moves when the speed does, and the knob paths clamp
+    // (MainWindow_Controllers.cpp's WheelCwSpeed, MainWindow_Shortcuts' +/-5)
+    // so a detent held against 5 or 100 would otherwise re-send on every tick.
+    //
+    // Note what this deliberately does NOT do: it does not write m_cwDelay. An
+    // earlier revision adopted the held value locally "so the slider does not
+    // dip between the two echoes", but it never achieved that — the radio's
+    // floor echo still arrives and applyChanges still adopts it, so the dip
+    // happens either way. What the local write did do was display a value the
+    // radio had refused: the floor is enforced on the write side too
+    // (`Parameter out of range`, #5519), and when a speed change does not move
+    // the floor the radio sends no break_in_delay status at all, so nothing
+    // ever corrected the model. m_cwDelay stays radio truth, full stop
+    // (#5288 review, blocker 2).
+    if (speedChanged && m_holdBreakInDelay && m_cwDelayHeld > 0) {
+        emit commandReady(QString("cw break_in_delay %1").arg(m_cwDelayHeld));
+        // Log only the real divergence — the radio's delay having actually moved
+        // off what the operator set — not every prophylactic re-send. qCWarning,
+        // not qCInfo: aether.transmit is a QtWarningMsg category, so Info would
+        // not reach a default support bundle, and a client value held against
+        // radio status is exactly the divergence Principle II's rationale says
+        // must be logged (#5288 review).
+        if (m_cwDelay != m_cwDelayHeld) {
+            qCWarning(lcTransmit).nospace()
+                << "TransmitModel: break-in delay had moved to " << m_cwDelay
+                << " ms; hold re-asserted the operator's " << m_cwDelayHeld
+                << " ms after CW speed -> " << wpm << " wpm";
+        }
+    }
 }
 
 void TransmitModel::setCwPitch(int hz)
@@ -698,6 +956,7 @@ void TransmitModel::setCwPitch(int hz)
         emit phoneStateChanged();
         emit cwPitchChanged(hz);
     }
+    emit cwPitchCommandIssued(hz);
     emit commandReady(QString("cw pitch %1").arg(hz));
 }
 
@@ -707,17 +966,42 @@ void TransmitModel::setCwBreakIn(bool on)
         m_cwBreakIn = on;
         emit phoneStateChanged();
     }
+    emit cwBreakInCommandIssued(on);
     emit commandReady(QString("cw break_in %1").arg(on ? 1 : 0));
 }
 
 void TransmitModel::setCwDelay(int ms)
 {
     ms = qBound(0, ms, 2000);
+    // The operator's explicit word on the break-in delay — the value the "hold"
+    // opt-in (#5288) re-asserts after a speed change. Recorded even when hold is
+    // off so enabling it later picks up the current delay with no surprise; a
+    // deliberate 0 (full QSK) is recorded too and simply never re-asserted.
+    const bool wasArmed = (m_cwDelayHeld > 0);
+    m_cwDelayHeld = ms;
+    if (wasArmed != (m_cwDelayHeld > 0)) {
+        emit holdBreakInDelayArmedChanged(m_cwDelayHeld > 0);
+    }
     if (m_cwDelay != ms) {
         m_cwDelay = ms;
         emit phoneStateChanged();
     }
     emit commandReady(QString("cw break_in_delay %1").arg(ms));
+}
+
+void TransmitModel::setHoldBreakInDelay(bool on)
+{
+    if (m_holdBreakInDelay == on) {
+        return;
+    }
+    m_holdBreakInDelay = on;
+    // Deliberately does NOT seed m_cwDelayHeld — that would capture whatever the
+    // radio last reported (or the construction default, if this is the settings
+    // restore firing before any radio data) and re-assert a value the operator
+    // never chose, the "authoritative but radio-seeded" flaw the first revision
+    // had. The hold protects the delay the operator SET (setCwDelay); until
+    // they set one this session there is simply nothing to hold.
+    emit holdBreakInDelayChanged(on);
 }
 
 void TransmitModel::setCwSidetone(bool on)
@@ -753,11 +1037,19 @@ void TransmitModel::setCwIambicMode(int mode)
 
 void TransmitModel::setCwSwapPaddles(bool on)
 {
+    if (m_cwSwapPaddles != on) {
+        m_cwSwapPaddles = on;
+        emit phoneStateChanged();
+    }
     emit commandReady(QString("cw swap %1").arg(on ? 1 : 0));
 }
 
 void TransmitModel::setCwlEnabled(bool on)
 {
+    if (m_cwlEnabled != on) {
+        m_cwlEnabled = on;
+        emit phoneStateChanged();
+    }
     emit commandReady(QString("cw cwl_enabled %1").arg(on ? 1 : 0));
 }
 
@@ -819,6 +1111,28 @@ void TransmitModel::setPttPreflight(PttPreflight preflight)
     m_pttPreflight = std::move(preflight);
 }
 
+void TransmitModel::setTuneAdmission(TuneAdmission admission)
+{
+    m_tuneAdmission = std::move(admission);
+}
+
+bool TransmitModel::tuneAdmitted()
+{
+    if (m_tune) {
+        return true;   // already tuning: a repeated start is not a new admission
+    }
+    if (!m_tuneAdmission) {
+        return true;
+    }
+    const QString message = m_tuneAdmission().trimmed();
+    if (message.isEmpty()) {
+        return true;
+    }
+    emit pttBlocked(message);
+    emit tuneChanged(m_tune);   // a TUNE toggle may have flipped before calling
+    return false;
+}
+
 void TransmitModel::setPttOffHook(PttOffHook hook)
 {
     m_pttOffHook = std::move(hook);
@@ -876,19 +1190,90 @@ void TransmitModel::cancelPendingQuindarOff()
     m_quindarOutroInFlight = false;
 }
 
-void TransmitModel::dispatchMoxOff()
+void TransmitModel::invalidatePttRelease()
 {
-    if (m_pttOffHook) {
-        m_pttOffHook();
+    const std::function<void()> abandoned = std::exchange(m_pttReleaseAbandoned, {});
+    if (m_pttReleaseFence) {
+        m_pttReleaseFence->store(false, std::memory_order_release);
+        m_pttReleaseFence.reset();
+    }
+    if (abandoned) {
+        abandoned();
+    }
+}
+
+void TransmitModel::cancelPttRelease()
+{
+    const quint64 intentEpoch = ++m_moxIntentEpoch;
+    ++m_tuneIntentEpoch;
+    invalidatePttRelease();
+    cancelPendingQuindarOff();
+    if (m_quindarTone) {
+        m_quindarTone->forceIdle();
+    }
+    emit quindarActiveChanged(false);
+    if (intentEpoch == m_moxIntentEpoch) {
+        emit pttReleaseCancelled();
+    }
+}
+
+TransmitModel::PttRelease TransmitModel::capturePttRelease(PttRelease release)
+{
+    invalidatePttRelease();
+    m_pttReleaseFence = std::make_shared<std::atomic<bool>>(true);
+    const std::shared_ptr<std::atomic<bool>> fence = m_pttReleaseFence;
+    m_pttReleaseAbandoned = std::move(release.abandoned);
+    return {[fence, current = std::move(release.isCurrent)] {
+                return fence->load(std::memory_order_acquire) && (!current || current());
+            },
+            [this, fence, finish = std::move(release.finish), ownerThread = thread()] {
+                if (QThread::currentThread() == ownerThread) {
+                    if (!fence->exchange(false, std::memory_order_acq_rel)) {
+                        return;
+                    }
+                    // Normal completion owns its queued unkey. Cancellation
+                    // must not retire that producer before the write returns.
+                    m_pttReleaseAbandoned = {};
+                    if (finish) {
+                        finish();
+                    } else {
+                        setMox(false);
+                    }
+                } else {
+                    qCWarning(lcProtocol) << "PTT release refused off the model owning thread";
+                }
+            }, {}};
+}
+
+void TransmitModel::dispatchMoxOff(const PttRelease& release)
+{
+    if (!release.current()) {
         return;
     }
-    setMox(false);
+    if (m_pttOffHook) {
+        m_pttOffHook(release);
+        return;
+    }
+    release.release();
 }
 
 void TransmitModel::requestPttOn(PttSource source)
 {
-    if (!runPttPreflight(source))
+    requestPttOn(source, {}, {});
+}
+
+void TransmitModel::requestPttOn(PttSource source, std::function<KeyingPermit()> admit,
+                                std::function<void()> engage)
+{
+    if (!runPttPreflight(source)) {
         return;
+    }
+    const KeyingPermit permit = admit ? admit()
+        : m_keyingAdmission ? m_keyingAdmission(KeyingIntent::Mox, true) : KeyingPermit{};
+    if ((admit || m_keyingAdmission) && (!permit || !permit())) {
+        return;
+    }
+    invalidatePttRelease();
 
     // Remember who asked to key so the status-bar TX timer can exclude
     // TCI-hardware and DAX transmits (both surface as source=SW at the radio).
@@ -910,6 +1295,9 @@ void TransmitModel::requestPttOn(PttSource source)
             // playing locally.  MOX is already true (we never sent
             // xmit 0); just bail.
             emit quindarActiveChanged(false);
+            if (engage && (!permit || permit())) {
+                engage(); // transfer the backend fence to this admitted producer
+            }
             return;
         }
     }
@@ -927,11 +1315,26 @@ void TransmitModel::requestPttOn(PttSource source)
             emit quindarActiveChanged(false);
         });
     }
-    setMox(true);
+    if (!permit || permit()) {
+        if (engage) {
+            engage();
+        } else {
+            setMox(true);
+        }
+    }
 }
 
-void TransmitModel::requestPttOff(PttSource /*source*/)
+void TransmitModel::requestPttOff(PttSource source)
 {
+    requestPttOff(source, {});
+}
+
+void TransmitModel::requestPttOff(PttSource /*source*/, PttRelease scopedRelease)
+{
+    if (m_pttReleaseFence && m_pttReleaseFence->load(std::memory_order_acquire)) {
+        return; // a duplicate release must not truncate an in-flight normal tail
+    }
+    const PttRelease release = capturePttRelease(std::move(scopedRelease));
     auto* tone = m_quindarTone;
 
     // No Quindar, no phone mode, or already shutting down → straight
@@ -941,7 +1344,7 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
         || tone->phase() == ClientQuindarTone::Phase::Idle
         || m_quindarOutroInFlight) {
         cancelPendingQuindarOff();
-        dispatchMoxOff();
+        dispatchMoxOff(release);
         return;
     }
 
@@ -949,22 +1352,29 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
     // tone gets transmitted before the radio unkeys.  Outro duration
     // is style-dependent and computed from current settings.
     tone->startOutro();
-    m_quindarOutroInFlight = true;
     emit quindarActiveChanged(true);
+    if (!release.current()) {
+        return;
+    }
     const int outroMs = std::max(50, tone->currentOutroDurationMs());
 
     cancelPendingQuindarOff();
+    m_quindarOutroInFlight = true;
     m_pendingMoxOffTimer = new QTimer(this);
     m_pendingMoxOffTimer->setSingleShot(true);
     m_pendingMoxOffTimer->setInterval(outroMs);
-    connect(m_pendingMoxOffTimer, &QTimer::timeout, this, [this]() {
+    connect(m_pendingMoxOffTimer, &QTimer::timeout, this, [this, release, timer = m_pendingMoxOffTimer]() {
         // If a re-engage happened during the outro window the timer
         // would have been cancelled; if we're here, the outro fully
         // completed and it's safe to flip MOX off.
+        timer->deleteLater();
+        if (timer != m_pendingMoxOffTimer) {
+            return;
+        }
         m_pendingMoxOffTimer = nullptr;
         m_quindarOutroInFlight = false;
         emit quindarActiveChanged(false);
-        dispatchMoxOff();
+        dispatchMoxOff(release);
     });
     m_pendingMoxOffTimer->start();
 }

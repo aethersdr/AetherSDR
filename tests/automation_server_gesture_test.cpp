@@ -6,12 +6,14 @@
 #include "models/RadioModel.h"
 #include "core/AutomationServer.h"
 #include "core/TxKeyingMarker.h"
+#include "gui/ModemReceiveAction.h"
 
 #include <QApplication>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocalSocket>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QVBoxLayout>
 
@@ -19,6 +21,18 @@
 #include <functional>
 
 using namespace AetherSDR;
+
+namespace AetherSDR {
+class AutomationServerTestAccess {
+public:
+    static QJsonObject request(AutomationServer& server, QJsonObject object,
+                              QLocalSocket* identity = nullptr)
+    {
+        object[QStringLiteral("token")] = QStringLiteral("test-token");
+        return server.handleLine(QJsonDocument(object).toJson(QJsonDocument::Compact), identity);
+    }
+};
+}
 
 namespace {
 
@@ -126,6 +140,21 @@ int main(int argc, char** argv)
     markTxKeying(&keyingButton);
     layout->addWidget(&keyingButton);
 
+    QCheckBox receiveButton(QStringLiteral("Enable Modem"));
+    receiveButton.setObjectName(QStringLiteral("receiveButton"));
+    layout->addWidget(&receiveButton);
+    int scopedReceiveCalls = 0;
+    int nativeReceiveCalls = 0;
+    bool receivedTxAuthority = false;
+    QObject::connect(&receiveButton, &QCheckBox::toggled, [&] { ++nativeReceiveCalls; });
+    registerModemReceiveAction(&receiveButton, [&](bool on,
+        const std::shared_ptr<TxController>& controller, const TxController::Input& input) {
+        ++scopedReceiveCalls;
+        receivedTxAuthority |= bool(controller) || input.valid();
+        const QSignalBlocker blocker(&receiveButton);
+        receiveButton.setChecked(on);
+    });
+
     window.show();
     waitUntil([&window]() { return window.isVisible(); });
 
@@ -141,7 +170,10 @@ int main(int argc, char** argv)
     const QString serverName = QStringLiteral("aether-gesture-%1")
                                    .arg(QCoreApplication::applicationPid());
 #endif
-    expect("server starts", server.start(serverName));
+    if (!server.start(serverName)) {
+        std::fprintf(stderr, "SKIP: own automation local socket could not bind\n");
+        return 77;
+    }
     qunsetenv("AETHER_AUTOMATION_TX_MAX_POWER");
 
     QLocalSocket gestureClient;
@@ -150,6 +182,34 @@ int main(int argc, char** argv)
            connectClient(&gestureClient, server.fullServerName()));
     expect("independent client connects",
            connectClient(&independentClient, server.fullServerName()));
+
+    // Inject authorization checks directly; no peer supplies these inputs.
+    const QJsonObject receiveInvoke = AutomationServerTestAccess::request(server, {
+        {QStringLiteral("cmd"), QStringLiteral("invoke")},
+        {QStringLiteral("target"), QStringLiteral("receiveButton")},
+        {QStringLiteral("action"), QStringLiteral("setChecked")},
+        {QStringLiteral("value"), QStringLiteral("true")},
+    });
+    expect("TX-disabled generic modem enable uses scoped RX action",
+        receiveInvoke.value(QStringLiteral("ok")).toBool()
+            && waitUntil([&] { return receiveButton.isChecked(); })
+            && scopedReceiveCalls == 1 && nativeReceiveCalls == 0 && !receivedTxAuthority);
+    QLocalSocket receiveIdentity; // inert lease identity: never opened/connected
+    const QJsonObject receiveBegin = AutomationServerTestAccess::request(server, {
+        {QStringLiteral("cmd"), QStringLiteral("gesture")},
+        {QStringLiteral("action"), QStringLiteral("begin")},
+        {QStringLiteral("target"), QStringLiteral("receiveButton")},
+        {QStringLiteral("value"), QStringLiteral("8 %1").arg(receiveButton.height() / 2)},
+    }, &receiveIdentity);
+    const QJsonObject receiveEnd = AutomationServerTestAccess::request(server, {
+        {QStringLiteral("cmd"), QStringLiteral("gesture")},
+        {QStringLiteral("action"), QStringLiteral("end")},
+    }, &receiveIdentity);
+    expect("TX-disabled modem pointer action never sends native toggle",
+        receiveBegin.value(QStringLiteral("ok")).toBool()
+            && receiveEnd.value(QStringLiteral("ok")).toBool()
+            && !receiveButton.isChecked() && scopedReceiveCalls == 2
+            && nativeReceiveCalls == 0 && !receivedTxAuthority);
 
     const QJsonObject badBegin = gesture(
         &gestureClient, QStringLiteral("begin"), QStringLiteral("phaseSlider"),

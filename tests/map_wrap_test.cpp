@@ -5,7 +5,9 @@
 #include <QGeoView/QGVProjection.h>
 
 #include <QApplication>
+#include <QNativeGestureEvent>
 #include <QPoint>
+#include <QPointingDevice>
 #include <QWheelEvent>
 #include <QtGlobal>
 
@@ -17,6 +19,13 @@ namespace {
 bool nearlyEqual(double lhs, double rhs)
 {
     return std::abs(lhs - rhs) < 1e-9;
+}
+
+bool withinPixels(const QPointF& lhs, const QPointF& rhs,
+                  double scale, double tolerance)
+{
+    const QPointF delta = lhs - rhs;
+    return std::hypot(delta.x(), delta.y()) * scale <= tolerance;
 }
 
 bool expect(bool condition, const char* message)
@@ -89,6 +98,26 @@ int main(int argc, char** argv)
     ok &= expect(centerErrorPixels <= 1.0,
                  "wide wrapped camera should reach the dateline without scene clamping");
 
+    // Horizontal repetition must not make the finite Web Mercator surface
+    // vertically pannable. At both poles the viewport edge should stop at the
+    // projection edge rather than exposing the empty QGraphicsScene canvas.
+    map.geoView()->setVerticalBoundsEnabled(true);
+    map.cameraTo(QGVCameraActions(&map)
+                     .scaleTo(wholeWorldScale * 2.0)
+                     .moveTo(QPointF(world.center().x(),
+                                     world.top() - world.height())),
+                 false);
+    QRectF boundedView = map.getCamera().projRect();
+    ok &= expect(boundedView.top() >= world.top() - 1.0,
+                 "northward pan must stop at the projection boundary");
+    map.cameraTo(QGVCameraActions(&map)
+                     .moveTo(QPointF(world.center().x(),
+                                     world.bottom() + world.height())),
+                 false);
+    boundedView = map.getCamera().projRect();
+    ok &= expect(boundedView.bottom() <= world.bottom() + 1.0,
+                 "southward pan must stop at the projection boundary");
+
     // Zoom symmetry: n notches in followed by n notches out must land back on
     // the scale we started from. Upstream's asymmetric in/out exponents lost
     // ~11% per round trip, so the operator drifted away from their own view
@@ -123,6 +152,46 @@ int main(int argc, char** argv)
     }
     ok &= expect(nearlyEqual(roundTrip / startScale, 1.0),
                  "equal wheel notches in and out should return the same scale");
+
+    // macOS and Wayland deliver trackpad pinches as native gestures, not wheel
+    // events. Each incremental value must adjust the fractional camera scale
+    // directly and keep the map coordinate beneath the pinch centroid fixed.
+    map.cameraTo(QGVCameraActions(&map).scaleTo(1.0), false);
+    app.processEvents();
+    const QPoint pinchPos(map.geoView()->viewport()->width() / 3,
+                          map.geoView()->viewport()->height() / 4);
+    const QPointF pinchGlobal =
+        map.geoView()->viewport()->mapToGlobal(pinchPos);
+    const QPointF anchorBefore = map.geoView()->mapToScene(pinchPos);
+    const auto pinch = [&](double value,
+                           Qt::NativeGestureType type = Qt::ZoomNativeGesture) {
+        QNativeGestureEvent event(type,
+                                  QPointingDevice::primaryPointingDevice(),
+                                  2, pinchPos, pinchPos, pinchGlobal,
+                                  value, QPointF());
+        QApplication::sendEvent(map.geoView()->viewport(), &event);
+        app.processEvents();
+    };
+
+    pinch(0.05);
+    const double pinchedScale = map.getCamera().scale();
+    const QPointF anchorAfter = map.geoView()->mapToScene(pinchPos);
+    ok &= expect(nearlyEqual(pinchedScale, 1.05),
+                 "a small pinch delta should produce a fractional scale, "
+                 "not a zoom step");
+    ok &= expect(withinPixels(anchorBefore, anchorAfter, pinchedScale, 1.0),
+                 "pinch zoom should keep its off-centre map anchor fixed");
+
+    // The inverse factor should return exactly to the starting scale. Equal
+    // signed deltas are not inverses under Qt's documented (1 + value) rule.
+    pinch((1.0 / 1.05) - 1.0);
+    ok &= expect(nearlyEqual(map.getCamera().scale(), 1.0),
+                 "inverse pinch factors should return to the starting scale");
+
+    const double beforeRotate = map.getCamera().scale();
+    pinch(15.0, Qt::RotateNativeGesture);
+    ok &= expect(nearlyEqual(map.getCamera().scale(), beforeRotate),
+                 "non-zoom native gestures must not change map scale");
 
     return ok ? 0 : 1;
 }

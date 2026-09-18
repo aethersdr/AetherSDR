@@ -1,7 +1,12 @@
 #include "AudioEngine.h"
+#include "RxClientEffects.h"
+#include <QSignalBlocker>
+#include "core/backends/RadioCapabilities.h"
 #include "AppSettings.h"
 #include "AudioSummaryLogger.h"
 #include "AudioDeviceNegotiator.h"
+#include "CwSidetoneBackendPolicy.h"
+#include "CwSidetoneStartPolicy.h"
 #include "TxCaptureBuffer.h"
 #include "ShutdownTrace.h"
 #include "ClientEq.h"
@@ -37,6 +42,8 @@
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
 #endif
+#include "NnrFilter.h"
+#include "NnrSettings.h"
 #ifdef HAVE_NVIDIA_AFX
 #include "NvidiaAfxFilter.h"
 #include "NvidiaBnrSettings.h"
@@ -69,12 +76,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStringList>
+#include <QVector>
 #include <QtGlobal>
 #include <QtConcurrent/QtConcurrentRun>
 #include <algorithm>
 #include <cstring>
 #include <functional>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 namespace AetherSDR {
@@ -201,14 +210,15 @@ qsizetype audioBytesForMsAtRate(int sampleRate, int ms)
         * static_cast<qsizetype>(sizeof(float)) * ms / 1000);
 }
 
-qsizetype rawEquivalentAudioBytes(qsizetype bytes, int sampleRate)
+qsizetype rawEquivalentAudioBytes(qsizetype bytes, int sampleRate,
+                                  int producerRate = AudioEngine::DEFAULT_SAMPLE_RATE)
 {
     if (bytes <= 0 || sampleRate <= 0) {
         return 0;
     }
 
     return alignedStereoFloatBytes(
-        bytes * AudioEngine::DEFAULT_SAMPLE_RATE / sampleRate);
+        bytes * producerRate / sampleRate);
 }
 
 qsizetype quietStereoFloatTrimPoint(const QByteArray& buffer,
@@ -293,13 +303,14 @@ void trimReceivePresentationBuffers(QByteArray& rawBuffer,
                                     std::deque<QByteArray>& rawPackets,
                                     QByteArray& outputBuffer,
                                     int outputRate,
-                                    qsizetype targetRawBytes)
+                                    qsizetype targetRawBytes,
+                                    int producerRate = AudioEngine::DEFAULT_SAMPLE_RATE)
 {
     targetRawBytes = alignedStereoFloatBytes(targetRawBytes);
     const auto totalRawBytes = [&]() {
         return alignedStereoFloatBytes(rawBuffer.size())
                + queuedAudioBytes(rawPackets)
-               + rawEquivalentAudioBytes(outputBuffer.size(), outputRate);
+               + rawEquivalentAudioBytes(outputBuffer.size(), outputRate, producerRate);
     };
 
     qsizetype excessRawBytes = totalRawBytes() - targetRawBytes;
@@ -312,7 +323,7 @@ void trimReceivePresentationBuffers(QByteArray& rawBuffer,
             outputRate > 0
                 ? alignedStereoFloatBytes(
                       excessRawBytes * outputRate
-                      / AudioEngine::DEFAULT_SAMPLE_RATE)
+                      / producerRate)
                 : excessRawBytes;
         dropAudioBufferFront(outputBuffer, outputDropBytes, outputRate);
         excessRawBytes = totalRawBytes() - targetRawBytes;
@@ -320,7 +331,7 @@ void trimReceivePresentationBuffers(QByteArray& rawBuffer,
 
     if (excessRawBytes > 0 && !rawBuffer.isEmpty()) {
         dropAudioBufferFront(rawBuffer, excessRawBytes,
-                             AudioEngine::DEFAULT_SAMPLE_RATE);
+                             producerRate);
         excessRawBytes = totalRawBytes() - targetRawBytes;
     }
 
@@ -330,7 +341,7 @@ void trimReceivePresentationBuffers(QByteArray& rawBuffer,
                 0,
                 targetRawBytes
                     - alignedStereoFloatBytes(rawBuffer.size())
-                    - rawEquivalentAudioBytes(outputBuffer.size(), outputRate));
+                    - rawEquivalentAudioBytes(outputBuffer.size(), outputRate, producerRate));
         trimAudioPacketQueue(rawPackets, packetBudget);
     }
 }
@@ -769,6 +780,11 @@ void AudioEngine::emitTncRxTapFromFloat32Stereo(const QByteArray& pcm, int sampl
 
 void AudioEngine::updateRxBufferStats()
 {
+    const int outputRate = std::max(1, m_rxOutputRate.load());
+    const auto durationMs = [](qsizetype bytes, int rate) {
+        return static_cast<double>(bytes) * 1000.0
+            / (std::max(1, rate) * 2.0 * sizeof(float));
+    };
     const qsizetype flexRawBytes =
         m_rxBuffer.size() + queuedAudioBytes(m_rxPackets);
     const qsizetype kiwiSdrRawBytes =
@@ -778,6 +794,7 @@ void AudioEngine::updateRxBufferStats()
     qsizetype externalTotal = 0;
     qsizetype externalRawBytes = 0;
     qsizetype externalOutputBytes = 0;
+    double externalDurationMs = 0.0;
     for (const auto& source : m_externalKiwiSources) {
         if (!source) {
             continue;
@@ -786,6 +803,8 @@ void AudioEngine::updateRxBufferStats()
             source->rxBuffer.size() + queuedAudioBytes(source->rxPackets);
         const qsizetype sourceOutputBytes = source->outputBuffer.size();
         externalTotal += sourceRawBytes + sourceOutputBytes;
+        externalDurationMs += durationMs(sourceRawBytes, DEFAULT_SAMPLE_RATE)
+            + durationMs(sourceOutputBytes, outputRate);
         if (externalKiwiSourceProcessing(*source)) {
             externalRawBytes = std::max(externalRawBytes, sourceRawBytes);
             externalOutputBytes =
@@ -799,12 +818,21 @@ void AudioEngine::updateRxBufferStats()
     m_rxBufferBytes.store(total);
     m_rxBufferPeakBytes.store(std::max(m_rxBufferPeakBytes.load(), total));
 
-    const int outputRate = std::max(1, m_rxOutputRate.load());
+    // Retain the aggregate byte counter as actual storage. Durations must be
+    // summed in each queue's domain, including every concurrent source. The
+    // historical peak duration is independent of peak bytes and later rates.
+    const double totalDurationMs =
+        durationMs(flexRawBytes, m_rxProducerRate.load())
+        + durationMs(kiwiSdrRawBytes, DEFAULT_SAMPLE_RATE)
+        + durationMs(flexOutputBytes + kiwiSdrOutputBytes + m_radeRxBuffer.size(), outputRate)
+        + externalDurationMs;
+    m_rxBufferMs.store(totalDurationMs);
+    m_rxBufferPeakMs.store(std::max(m_rxBufferPeakMs.load(), totalDurationMs));
     m_receivePresentationPlaybackQueuedMs.store(
         m_rxPlaybackQueuedMs.load(std::memory_order_relaxed),
         std::memory_order_relaxed);
     m_receivePresentationFlexRawBufferMs.store(
-        audioBytesToMs(flexRawBytes, DEFAULT_SAMPLE_RATE),
+        audioBytesToMs(flexRawBytes, m_rxProducerRate.load()),
         std::memory_order_relaxed);
     m_receivePresentationFlexOutputBufferMs.store(
         audioBytesToMs(flexOutputBytes, outputRate),
@@ -885,7 +913,8 @@ void AudioEngine::setReceivePresentationDelays(
     if (flexDelay < previousFlex) {
         trimReceivePresentationBuffers(
             m_rxBuffer, m_rxPackets, m_rxOutputBuffer, outputRate,
-            audioBytesForMsAtRate(DEFAULT_SAMPLE_RATE, flexDelay));
+            audioBytesForMsAtRate(m_rxProducerRate.load(), flexDelay),
+            m_rxProducerRate.load());
     }
     if (legacyKiwiDelay < previousKiwi) {
         const qsizetype targetBytes =
@@ -1016,12 +1045,14 @@ AudioEngine::externalKiwiSource(const QString& sourceId, bool create)
         id, m_externalKiwiReceivePresentationDelaySourceId,
         m_externalKiwiReceivePresentationDelayMs);
     source->prebuffering = true;
+    source->clientEffects = std::make_unique<RxClientEffects>();
     m_externalKiwiSources.push_back(std::move(source));
     return m_externalKiwiSources.back().get();
 }
 
 std::unique_ptr<SpectralNR>
-AudioEngine::createNr2Filter(const QString& label, bool forceLegacyGeometry) const
+AudioEngine::createNr2Filter(const QString& label, bool forceLegacyGeometry,
+                            int producerRate) const
 {
     // The demo (SimBackend) delivers native 128-sample frames — exactly one hop of
     // the ORIGINAL 256/2 geometry, but only half a hop of the improved 1024/4
@@ -1030,12 +1061,11 @@ AudioEngine::createNr2Filter(const QString& label, bool forceLegacyGeometry) con
     // key off NR2's output) go dead. So the MAIN-source filter uses the original
     // geometry when the connected source is the demo, while real radios and Kiwi
     // (larger, hop-aligned blocks) keep the improved 1024 geometry.
-    const bool useOriginal = forceLegacyGeometry
-        || m_nr2UseOriginalGeometry.load(std::memory_order_relaxed);
+    const bool useOriginal = forceLegacyGeometry;
     const int fftSize = useOriginal ? kNr2OriginalFftSize : kNr2FftSize;
     const int overlap = useOriginal ? kNr2OriginalOverlap : kNr2Overlap;
     auto filter = std::make_unique<SpectralNR>(
-        fftSize, DEFAULT_SAMPLE_RATE, overlap, useOriginal);
+        fftSize * producerRate / DEFAULT_SAMPLE_RATE, producerRate, overlap, useOriginal);
     if (filter->hasPlanFailed()) {
         qCWarning(lcAudio).noquote()
             << "AudioEngine: NR2 plan creation failed for" << label;
@@ -1045,9 +1075,12 @@ AudioEngine::createNr2Filter(const QString& label, bool forceLegacyGeometry) con
 }
 
 std::unique_ptr<RNNoiseFilter>
-AudioEngine::createRn2Filter(const QString& label) const
+AudioEngine::createRn2Filter(const QString& label, int producerRate) const
 {
-    auto filter = std::make_unique<RNNoiseFilter>();
+    auto filter = std::make_unique<RNNoiseFilter>(
+        RNNoiseFilter::OutputMode::PreserveRxStereo,
+        producerRate == 48000 ? RNNoiseFilter::RateDomain::Native48k
+                              : RNNoiseFilter::RateDomain::Legacy24k);
     if (!filter->isValid()) {
         qCWarning(lcAudio).noquote()
             << "AudioEngine: RN2 rnnoise_create() failed for" << label;
@@ -1060,9 +1093,9 @@ AudioEngine::createRn2Filter(const QString& label) const
 
 #ifdef HAVE_SPECBLEACH
 std::unique_ptr<SpecbleachFilter>
-AudioEngine::createNr4Filter(const QString& label) const
+AudioEngine::createNr4Filter(const QString& label, int producerRate) const
 {
-    auto filter = std::make_unique<SpecbleachFilter>();
+    auto filter = std::make_unique<SpecbleachFilter>(producerRate);
     if (!filter->isValid()) {
         qCWarning(lcAudio).noquote()
             << "AudioEngine: NR4 initialization failed for" << label;
@@ -1074,9 +1107,9 @@ AudioEngine::createNr4Filter(const QString& label) const
 
 #ifdef __APPLE__
 std::unique_ptr<MacNRFilter>
-AudioEngine::createMnrFilter(const QString& label) const
+AudioEngine::createMnrFilter(const QString& label, int producerRate) const
 {
-    auto filter = std::make_unique<MacNRFilter>();
+    auto filter = std::make_unique<MacNRFilter>(producerRate);
     if (!filter->isValid()) {
         qCWarning(lcAudio).noquote()
             << "AudioEngine: MNR vDSP setup failed for" << label;
@@ -1087,11 +1120,43 @@ AudioEngine::createMnrFilter(const QString& label) const
 }
 #endif
 
+std::unique_ptr<NnrFilter>
+AudioEngine::createNnrFilter(const QString& label, int producerRate) const
+{
+    auto filter = std::make_unique<NnrFilter>(producerRate);
+    if (!filter->isValid()) {
+        qCWarning(lcAudio).noquote()
+            << "AudioEngine: NNR create_nnr() failed for" << label;
+        return {};
+    }
+    filter->setStrength(m_nnrStrength.load());
+    // The persisted request, not m_nnrModel: that publishes the slot WDSP has
+    // live, which lags a pending switch by one audio block. Seeding from it
+    // made a sample-rate change rebuild on the superseded model (#5687).
+    filter->setModel(NnrSettings::model());
+    filter->setAlpha(NnrSettings::alpha());
+    filter->setAlphaKnee(NnrSettings::alphaKnee());
+    filter->setTau(NnrSettings::tau());
+    filter->setMaxGain(NnrSettings::maxGain());
+    filter->setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
+    return filter;
+}
+
+NnrFilter* AudioEngine::nnrForSource(
+    RxDspSource source,
+    ExternalRxAudioSourceState* externalSource) const
+{
+    if (externalSource) {
+        return externalSource->nnr.get();
+    }
+    return source == RxDspSource::KiwiSdr ? m_kiwiSdrNnr.get() : m_nnr.get();
+}
+
 #ifdef HAVE_DFNR
 std::unique_ptr<DeepFilterFilter>
-AudioEngine::createDfnrFilter(const QString& label) const
+AudioEngine::createDfnrFilter(const QString& label, int producerRate) const
 {
-    auto filter = std::make_unique<DeepFilterFilter>();
+    auto filter = std::make_unique<DeepFilterFilter>(producerRate);
     if (!filter->isValid()) {
         qCWarning(lcAudio).noquote()
             << "AudioEngine: DFNR df_create() failed for" << label;
@@ -1103,9 +1168,9 @@ AudioEngine::createDfnrFilter(const QString& label) const
 
 #ifdef HAVE_NVIDIA_AFX
 std::unique_ptr<NvidiaAfxFilter>
-AudioEngine::createNvAfxFilter(const QString& label) const
+AudioEngine::createNvAfxFilter(const QString& label, int producerRate) const
 {
-    auto filter = std::make_unique<NvidiaAfxFilter>();
+    auto filter = std::make_unique<NvidiaAfxFilter>(QString(), producerRate);
     if (!filter->isValid()) {
         qCWarning(lcAudio).noquote()
             << "AudioEngine: NVIDIA AFX denoiser unavailable for" << label
@@ -1130,6 +1195,7 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #ifdef HAVE_DFNR
     bool needDfnr = false;
 #endif
+    bool needNnr = false;
 #ifdef HAVE_NVIDIA_AFX
     bool needNvAfx = false;
 #endif
@@ -1154,6 +1220,8 @@ bool AudioEngine::ensureLegacyKiwiDspState()
         needDfnr = m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
             && !m_kiwiSdrDfnr;
 #endif
+        needNnr = m_nnrEnabled.load(std::memory_order_relaxed) && m_nnr
+            && !m_kiwiSdrNnr;
 #ifdef HAVE_NVIDIA_AFX
         needNvAfx = m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
             && !m_kiwiSdrNvAfx;
@@ -1168,6 +1236,7 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #ifdef HAVE_DFNR
             || needDfnr
 #endif
+            || needNnr
 #ifdef HAVE_NVIDIA_AFX
             || needNvAfx
 #endif
@@ -1190,6 +1259,7 @@ bool AudioEngine::ensureLegacyKiwiDspState()
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> dfnr;
 #endif
+    std::unique_ptr<NnrFilter> nnr;
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> nvAfx;
 #endif
@@ -1222,6 +1292,10 @@ bool AudioEngine::ensureLegacyKiwiDspState()
         ok = ok && static_cast<bool>(dfnr);
     }
 #endif
+    if (needNnr) {
+        nnr = createNnrFilter(QStringLiteral("legacy Kiwi"));
+        ok = ok && static_cast<bool>(nnr);
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (needNvAfx) {
         nvAfx = createNvAfxFilter(QStringLiteral("legacy Kiwi"));
@@ -1269,6 +1343,13 @@ bool AudioEngine::ensureLegacyKiwiDspState()
             m_kiwiSdrDfnr = std::move(dfnr);
         }
 #endif
+        // No settings copy: createNnrFilter() applies strength from the
+        // engine's atomic and the model from NnrSettings (the persisted
+        // request), so a fresh instance is already in sync. Previously read as
+        // the engine's own atomics, which are the source of truth for both.
+        if (needNnr && m_nnrEnabled && m_nnr && !m_kiwiSdrNnr) {
+            m_kiwiSdrNnr = std::move(nnr);
+        }
 #ifdef HAVE_NVIDIA_AFX
         if (needNvAfx && m_nvAfxEnabled && m_nvAfx && !m_kiwiSdrNvAfx) {
             if (nvAfx) {
@@ -1315,6 +1396,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #ifdef HAVE_DFNR
     bool needDfnr = false;
 #endif
+    bool needNnr = false;
 #ifdef HAVE_NVIDIA_AFX
     bool needNvAfx = false;
 #endif
@@ -1341,6 +1423,8 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
         needDfnr = m_dfnrEnabled.load(std::memory_order_relaxed) && m_dfnr
             && !source->dfnr;
 #endif
+        needNnr = m_nnrEnabled.load(std::memory_order_relaxed) && m_nnr
+            && !source->nnr;
 #ifdef HAVE_NVIDIA_AFX
         needNvAfx = m_nvAfxEnabled.load(std::memory_order_relaxed) && m_nvAfx
             && !source->nvAfx;
@@ -1355,6 +1439,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #ifdef HAVE_DFNR
             || needDfnr
 #endif
+            || needNnr
 #ifdef HAVE_NVIDIA_AFX
             || needNvAfx
 #endif
@@ -1377,6 +1462,7 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> dfnr;
 #endif
+    std::unique_ptr<NnrFilter> nnr;
 #ifdef HAVE_NVIDIA_AFX
     std::unique_ptr<NvidiaAfxFilter> nvAfx;
 #endif
@@ -1409,6 +1495,10 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
         ok = ok && static_cast<bool>(dfnr);
     }
 #endif
+    if (needNnr) {
+        nnr = createNnrFilter(QStringLiteral("external Kiwi %1").arg(id));
+        ok = ok && static_cast<bool>(nnr);
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (needNvAfx) {
         nvAfx = createNvAfxFilter(QStringLiteral("external Kiwi %1").arg(id));
@@ -1460,6 +1550,9 @@ bool AudioEngine::ensureExternalKiwiSourceDspState(
             source->dfnr = std::move(dfnr);
         }
 #endif
+        if (needNnr && m_nnrEnabled && m_nnr && !source->nnr) {
+            source->nnr = std::move(nnr);
+        }
 #ifdef HAVE_NVIDIA_AFX
         if (needNvAfx && m_nvAfxEnabled && m_nvAfx && !source->nvAfx) {
             if (nvAfx) {
@@ -1509,6 +1602,9 @@ void AudioEngine::scheduleAllKiwiDspStateInitialization()
 
 void AudioEngine::resetLegacyKiwiDspState()
 {
+    if (m_legacyKiwiClientEffects) {
+        m_legacyKiwiClientEffects->reset();
+    }
     if (m_nr2Enabled && m_kiwiSdrNr2) {
         m_kiwiSdrNr2->reset();
     }
@@ -1517,7 +1613,10 @@ void AudioEngine::resetLegacyKiwiDspState()
     }
 #ifdef HAVE_SPECBLEACH
     if (m_nr4Enabled && m_kiwiSdrNr4) {
-        m_kiwiSdrNr4->reset();
+        m_kiwiSdrNr4 = createNr4Filter(QStringLiteral("Kiwi epoch"));
+        if (m_kiwiSdrNr4) {
+            applyNr4SettingsFromAppSettings(*m_kiwiSdrNr4);
+        }
     }
 #endif
 #ifdef __APPLE__
@@ -1530,15 +1629,26 @@ void AudioEngine::resetLegacyKiwiDspState()
         m_kiwiSdrDfnr->reset();
     }
 #endif
+    if (m_nnrEnabled && m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->reset();
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (m_nvAfxEnabled && m_kiwiSdrNvAfx) {
-        m_kiwiSdrNvAfx->reset();
+        m_kiwiSdrNvAfx = createNvAfxFilter(QStringLiteral("Kiwi epoch"));
+        if (m_kiwiSdrNvAfx) {
+            m_kiwiSdrNvAfx->setIntensity(NvidiaBnrSettings::intensity());
+        }
     }
 #endif
 }
 
 void AudioEngine::clearLegacyKiwiDspState()
 {
+    m_kiwiSdrRxResampler.reset();
+    m_kiwiSdrRxResamplerR.reset();
+    if (m_legacyKiwiClientEffects) {
+        m_legacyKiwiClientEffects->reset();
+    }
     m_kiwiSdrNr2.reset();
     m_kiwiSdrNr2Output.clear();
     m_kiwiSdrRn2.reset();
@@ -1551,6 +1661,7 @@ void AudioEngine::clearLegacyKiwiDspState()
 #ifdef HAVE_DFNR
     m_kiwiSdrDfnr.reset();
 #endif
+    m_kiwiSdrNnr.reset();
 #ifdef HAVE_NVIDIA_AFX
     m_kiwiSdrNvAfx.reset();
 #endif
@@ -1558,6 +1669,9 @@ void AudioEngine::clearLegacyKiwiDspState()
 
 void AudioEngine::resetExternalKiwiDspState(ExternalRxAudioSourceState& source)
 {
+    if (source.clientEffects) {
+        source.clientEffects->reset();
+    }
     if (m_nr2Enabled && source.nr2) {
         source.nr2->reset();
     }
@@ -1566,7 +1680,10 @@ void AudioEngine::resetExternalKiwiDspState(ExternalRxAudioSourceState& source)
     }
 #ifdef HAVE_SPECBLEACH
     if (m_nr4Enabled && source.nr4) {
-        source.nr4->reset();
+        source.nr4 = createNr4Filter(QStringLiteral("Kiwi epoch"));
+        if (source.nr4) {
+            applyNr4SettingsFromAppSettings(*source.nr4);
+        }
     }
 #endif
 #ifdef __APPLE__
@@ -1579,15 +1696,26 @@ void AudioEngine::resetExternalKiwiDspState(ExternalRxAudioSourceState& source)
         source.dfnr->reset();
     }
 #endif
+    if (m_nnrEnabled && source.nnr) {
+        source.nnr->reset();
+    }
 #ifdef HAVE_NVIDIA_AFX
     if (m_nvAfxEnabled && source.nvAfx) {
-        source.nvAfx->reset();
+        source.nvAfx = createNvAfxFilter(QStringLiteral("Kiwi epoch"));
+        if (source.nvAfx) {
+            source.nvAfx->setIntensity(NvidiaBnrSettings::intensity());
+        }
     }
 #endif
 }
 
 void AudioEngine::clearExternalKiwiDspState(ExternalRxAudioSourceState& source)
 {
+    source.rxResampler.reset();
+    source.rxResamplerR.reset();
+    if (source.clientEffects) {
+        source.clientEffects->reset();
+    }
     source.nr2.reset();
     source.nr2Output.clear();
     source.rn2.reset();
@@ -1762,7 +1890,7 @@ AudioEngine::AudioEngine(QObject* parent)
                 return;
             if (frames <= 0 || sampleRateHz <= 0) return;
             // CwDecoder::feedAudio expects 24 kHz stereo float32 — the
-            // same shape PanadapterStream::audioDataReady() emits on
+            // same shape PanadapterStream::pcmFrameReady() carries on
             // the RX side.  Decimate 48→24 by averaging consecutive
             // pairs; the sidetone is a single sine well below 12 kHz
             // so the cheap two-tap LPF is sufficient for ggmorse.  For
@@ -1801,12 +1929,19 @@ AudioEngine::AudioEngine(QObject* parent)
 
     // RX remains radio-native at 24 kHz. TX voice is prepared below through
     // TxVoiceProcessor in its fixed 48 kHz float processing domain.
+    m_legacyKiwiClientEffects = std::make_unique<RxClientEffects>();
     m_clientEqRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientGateRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientCompRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientTubeRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientPuduRx->prepare(DEFAULT_SAMPLE_RATE);
     m_clientDeEssRx->prepare(DEFAULT_SAMPLE_RATE);
+    // txFinalMonitorPcmReady carries a TxAudioSource and this object lives on
+    // its own thread, so every connection to it is queued. A queued connection
+    // cannot marshal a type Qt has not been told about, and the failure is a
+    // runtime warning and a silently dropped signal — no transmit audio, no
+    // compile error to catch it.
+    qRegisterMetaType<AetherSDR::TxAudioSource>("AetherSDR::TxAudioSource");
     m_wsprBeacon->prepare(DEFAULT_SAMPLE_RATE);
 
     TxVoiceProcessor::Processors txProcessors;
@@ -1851,11 +1986,6 @@ AudioEngine::AudioEngine(QObject* parent)
 
     // Restore saved audio device selections
     auto& s = AppSettings::instance();
-    const Nr2SettingsModel::Config nr2Config =
-        Nr2SettingsModel::instance().config();
-    m_nr2UseOriginalGeometry.store(
-        nr2Config.legacyGeometryAndGainMapping,
-        std::memory_order_relaxed);
     QByteArray savedOutId = s.value("AudioOutputDeviceId", "").toByteArray();
     QByteArray savedInId  = s.value("AudioInputDeviceId",  "").toByteArray();
 
@@ -1884,9 +2014,10 @@ AudioEngine::AudioEngine(QObject* parent)
     connect(m_opusTxPaceTimer, &QTimer::timeout, this, [this]() {
         OpusTxPacer::DrainResult drain =
             m_opusTxPacer.takeDue(m_opusTxPaceClock.elapsed(),
+                                  TxCoordinator::monotonicMs(),
                                   m_txPacketCount);
-        for (const QByteArray& packet : drain.packets) {
-            emit txPacketReady(packet);
+        for (const OpusTxPacer::Packet& packet : drain.packets) {
+            emit txPacketReady(packet.payload, packet.context);
         }
     });
     m_opusTxPaceTimer->start();
@@ -1900,136 +2031,724 @@ AudioEngine::AudioEngine(QObject* parent)
     m_rxTimer->setTimerType(Qt::PreciseTimer);
     m_rxTimer->setInterval(10);
     connect(m_rxTimer, &QTimer::timeout, this, [this]() {
-        if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen() || m_audioSink->state() == QAudio::StoppedState) return;
-
-        // Cap buffer to bound latency. Default 100ms, user-adjustable for
-        // high-jitter connections (VPN, SmartLink) where drops cause choppy audio.
-        const int sampleRate = m_rxOutputRate.load();
-        const bool kiwiAudio = kiwiSdrAudioActive();
-        const bool externalKiwiAudio = anyExternalKiwiAudioEnabled();
-        const bool anyKiwiAudio = kiwiAudio || externalKiwiAudio;
-        const int configuredBufMs = m_rxBufferCapMs.load();
-        const int flexPresentationDelayMs =
-            m_flexReceivePresentationDelayMs.load(std::memory_order_relaxed);
-        const int kiwiPresentationDelayMs =
-            m_kiwiReceivePresentationDelayMs.load(std::memory_order_relaxed);
-        int externalKiwiPresentationDelayMs = 0;
-        for (const auto& source : m_externalKiwiSources) {
-            if (source && externalKiwiSourceProcessing(*source)) {
-                externalKiwiPresentationDelayMs =
-                    std::max(externalKiwiPresentationDelayMs,
-                             source->presentationDelayMs);
-            }
+        retireInvalidPcmSources();
+        if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen()
+            || m_audioSink->state() == QAudio::StoppedState) {
+            return;
         }
-        const int kiwiPresentationBufferMs =
-            anyKiwiAudio
-                ? std::max(kiwiPresentationDelayMs,
-                           externalKiwiPresentationDelayMs)
-                : 0;
-        const int presentationBufMs =
-            std::max(flexPresentationDelayMs, kiwiPresentationBufferMs);
-        const int effectiveBufMs =
-            std::max({configuredBufMs,
-                      anyKiwiAudio ? kKiwiSdrBufferCapMs : configuredBufMs,
-                      presentationBufMs > 0 ? presentationBufMs + 100 : 0});
-        const qsizetype sourceMaxBufBytes =
-            DEFAULT_SAMPLE_RATE * 2 * static_cast<qsizetype>(sizeof(float))
-            * effectiveBufMs / 1000;
-        const qsizetype outputMaxBufBytes =
-            sampleRate * 2 * static_cast<qsizetype>(sizeof(float))
-            * effectiveBufMs / 1000;
+        drainRxAudio(m_audioSink->bytesFree());
+    });
+    m_rxTimer->start();
+}
+
+// The device supplies a byte budget; the same queue, DSP and mix path can be
+// driven with an in-memory QIODevice without opening audio or radio hardware.
+void AudioEngine::drainRxAudio(qsizetype freeBytes)
+{
+    retireInvalidPcmSources();
+    if (!m_audioDevice || !m_audioDevice->isOpen()) {
+        return;
+    }
+
+    // Cap buffer to bound latency. Default 100ms, user-adjustable for
+    // high-jitter connections (VPN, SmartLink) where drops cause choppy audio.
+    const int sampleRate = m_rxOutputRate.load();
+    const bool kiwiAudio = kiwiSdrAudioActive();
+    const bool externalKiwiAudio = anyExternalKiwiAudioEnabled();
+    const bool anyKiwiAudio = kiwiAudio || externalKiwiAudio;
+    const int configuredBufMs = m_rxBufferCapMs.load();
+    const int flexPresentationDelayMs =
+        m_flexReceivePresentationDelayMs.load(std::memory_order_relaxed);
+    const int kiwiPresentationDelayMs =
+        m_kiwiReceivePresentationDelayMs.load(std::memory_order_relaxed);
+    int externalKiwiPresentationDelayMs = 0;
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && externalKiwiSourceProcessing(*source)) {
+            externalKiwiPresentationDelayMs =
+                std::max(externalKiwiPresentationDelayMs,
+                         source->presentationDelayMs);
+        }
+    }
+    const int kiwiPresentationBufferMs =
+        anyKiwiAudio
+            ? std::max(kiwiPresentationDelayMs,
+                       externalKiwiPresentationDelayMs)
+            : 0;
+    const int presentationBufMs =
+        std::max(flexPresentationDelayMs, kiwiPresentationBufferMs);
+    const int effectiveBufMs =
+        std::max({configuredBufMs,
+                  anyKiwiAudio ? kKiwiSdrBufferCapMs : configuredBufMs,
+                  presentationBufMs > 0 ? presentationBufMs + 100 : 0});
+    const qsizetype sourceMaxBufBytes =
+        DEFAULT_SAMPLE_RATE * 2 * static_cast<qsizetype>(sizeof(float))
+        * effectiveBufMs / 1000;
+    const qsizetype outputMaxBufBytes =
+        sampleRate * 2 * static_cast<qsizetype>(sizeof(float))
+        * effectiveBufMs / 1000;
+    trimReceivePresentationBuffers(
+        m_rxBuffer, m_rxPackets, m_rxOutputBuffer, sampleRate,
+        audioBytesForMsAtRate(m_rxProducerRate.load(), effectiveBufMs),
+        m_rxProducerRate.load());
+    trimReceivePresentationBuffers(
+        m_kiwiSdrRxBuffer, m_kiwiSdrRxPackets, m_kiwiSdrOutputBuffer,
+        sampleRate, sourceMaxBufBytes);
+    for (const auto& source : m_externalKiwiSources) {
+        if (!source) {
+            continue;
+        }
         trimReceivePresentationBuffers(
-            m_rxBuffer, m_rxPackets, m_rxOutputBuffer, sampleRate,
-            sourceMaxBufBytes);
-        trimReceivePresentationBuffers(
-            m_kiwiSdrRxBuffer, m_kiwiSdrRxPackets, m_kiwiSdrOutputBuffer,
+            source->rxBuffer, source->rxPackets, source->outputBuffer,
             sampleRate, sourceMaxBufBytes);
-        for (const auto& source : m_externalKiwiSources) {
-            if (!source) {
-                continue;
-            }
-            trimReceivePresentationBuffers(
-                source->rxBuffer, source->rxPackets, source->outputBuffer,
-                sampleRate, sourceMaxBufBytes);
-        }
-        if (m_radeRxBuffer.size() > outputMaxBufBytes) {
-            m_radeRxBuffer.remove(0, m_radeRxBuffer.size() - outputMaxBufBytes);
-        }
+    }
+    if (m_radeRxBuffer.size() > outputMaxBufBytes) {
+        m_radeRxBuffer.remove(0, m_radeRxBuffer.size() - outputMaxBufBytes);
+    }
 
-        const qsizetype freeBytes = m_audioSink->bytesFree();
-        if (freeBytes > 0 && m_rxBuffer.isEmpty()
-            && m_rxPackets.empty()
-            && m_kiwiSdrRxBuffer.isEmpty() && m_kiwiSdrRxPackets.empty()
-            && m_rxOutputBuffer.isEmpty()
-            && m_kiwiSdrOutputBuffer.isEmpty()
-            && m_radeRxBuffer.isEmpty()
-            && !anyExternalKiwiBufferQueued()) {
-            if (anyKiwiAudio) {
-                m_kiwiSdrPrebuffering.store(true, std::memory_order_relaxed);
-                for (const auto& source : m_externalKiwiSources) {
-                    if (source && externalKiwiSourceProcessing(*source)) {
-                        source->prebuffering = true;
-                    }
+    if (freeBytes > 0 && m_rxBuffer.isEmpty()
+        && m_rxPackets.empty()
+        && m_kiwiSdrRxBuffer.isEmpty() && m_kiwiSdrRxPackets.empty()
+        && m_rxOutputBuffer.isEmpty()
+        && m_kiwiSdrOutputBuffer.isEmpty()
+        && m_radeRxBuffer.isEmpty()
+        && !anyExternalKiwiBufferQueued()) {
+        if (anyKiwiAudio) {
+            m_kiwiSdrPrebuffering.store(true, std::memory_order_relaxed);
+            for (const auto& source : m_externalKiwiSources) {
+                if (source && externalKiwiSourceProcessing(*source)) {
+                    source->prebuffering = true;
                 }
-            } else {
-                m_rxBufferUnderrunCount.fetch_add(1);
             }
-            if (flexPresentationDelayMs > 0) {
-                m_rxPresentationPrebuffering.store(true,
-                                                   std::memory_order_relaxed);
-            }
+        } else {
+            m_rxBufferUnderrunCount.fetch_add(1);
         }
-
-        // Align to stereo float32 frame boundaries before any arithmetic.
-        const qsizetype floatBytes = static_cast<qsizetype>(sizeof(float));
-        const qsizetype frameBytes = 2 * floatBytes;
-        const qsizetype freeFrames = freeBytes / frameBytes;
-        const bool nr2PacketMode = m_nr2Enabled.load(std::memory_order_relaxed);
-        const qsizetype flexPrebufferBytes =
-            DEFAULT_SAMPLE_RATE * 2 * static_cast<qsizetype>(sizeof(float))
-            * flexPresentationDelayMs / 1000;
-        const qsizetype kiwiPresentationDelayBytes =
-            DEFAULT_SAMPLE_RATE * 2 * static_cast<qsizetype>(sizeof(float))
-            * kiwiPresentationDelayMs / 1000;
-        const auto externalKiwiPresentationDelayBytes =
-            [](const ExternalRxAudioSourceState& source) {
-                return DEFAULT_SAMPLE_RATE * 2
-                       * static_cast<qsizetype>(sizeof(float))
-                       * source.presentationDelayMs / 1000;
-            };
-        if (flexPresentationDelayMs <= 0) {
-            m_rxPresentationPrebuffering.store(false,
-                                               std::memory_order_relaxed);
-        } else if (m_rxPresentationPrebuffering.load(std::memory_order_relaxed)) {
-            const qsizetype flexQueuedBytes =
-                nr2PacketMode ? queuedAudioBytes(m_rxPackets) : m_rxBuffer.size();
-            if (flexQueuedBytes >= flexPrebufferBytes) {
-                m_rxPresentationPrebuffering.store(false,
-                                                   std::memory_order_relaxed);
-            }
-        } else if (m_rxBuffer.isEmpty() && m_rxPackets.empty()
-                   && m_rxOutputBuffer.isEmpty()) {
+        if (flexPresentationDelayMs > 0) {
             m_rxPresentationPrebuffering.store(true,
                                                std::memory_order_relaxed);
         }
-        const bool flexPresentationPrebuffering =
-            m_rxPresentationPrebuffering.load(std::memory_order_relaxed);
+    }
 
-        // Zombie sink watchdog: if we have data waiting but the sink reports
-        // zero bytes free for ~2 seconds, the WASAPI handle is likely stale
-        // (e.g. after screensaver/idle on Windows with USB audio). (#1361)
-        if (freeBytes == 0 && (!m_rxBuffer.isEmpty()
-                               || !m_rxPackets.empty()
-                               || !m_radeRxBuffer.isEmpty()
-                               || !m_kiwiSdrRxBuffer.isEmpty()
-                               || !m_kiwiSdrRxPackets.empty()
-                               || !m_rxOutputBuffer.isEmpty()
-                               || !m_kiwiSdrOutputBuffer.isEmpty()
-                               || anyExternalKiwiBufferQueued())) {
-            if (++m_rxZombieTickCount >= kZombieTickThreshold) {
-                m_rxZombieTickCount = 0;
-                qCWarning(lcAudio) << "AudioEngine: sink appears zombie (bytesFree stuck at 0 for"
-                                   << kZombieTickThreshold * 10 << "ms), restarting RX (#1361)";
+    // Align to stereo float32 frame boundaries before any arithmetic.
+    const qsizetype floatBytes = static_cast<qsizetype>(sizeof(float));
+    const qsizetype frameBytes = 2 * floatBytes;
+    const qsizetype freeFrames = freeBytes / frameBytes;
+    const bool nr2PacketMode = m_nr2Enabled.load(std::memory_order_relaxed);
+    const qsizetype flexPrebufferBytes =
+        m_rxProducerRate.load() * 2 * static_cast<qsizetype>(sizeof(float))
+        * flexPresentationDelayMs / 1000;
+    const qsizetype kiwiPresentationDelayBytes =
+        DEFAULT_SAMPLE_RATE * 2 * static_cast<qsizetype>(sizeof(float))
+        * kiwiPresentationDelayMs / 1000;
+    const auto externalKiwiPresentationDelayBytes =
+        [](const ExternalRxAudioSourceState& source) {
+            return DEFAULT_SAMPLE_RATE * 2
+                   * static_cast<qsizetype>(sizeof(float))
+                   * source.presentationDelayMs / 1000;
+        };
+    if (flexPresentationDelayMs <= 0) {
+        m_rxPresentationPrebuffering.store(false,
+                                           std::memory_order_relaxed);
+    } else if (m_rxPresentationPrebuffering.load(std::memory_order_relaxed)) {
+        const qsizetype flexQueuedBytes =
+            nr2PacketMode ? queuedAudioBytes(m_rxPackets) : m_rxBuffer.size();
+        if (flexQueuedBytes >= flexPrebufferBytes) {
+            m_rxPresentationPrebuffering.store(false,
+                                               std::memory_order_relaxed);
+        }
+    } else if (m_rxBuffer.isEmpty() && m_rxPackets.empty()
+               && m_rxOutputBuffer.isEmpty()) {
+        m_rxPresentationPrebuffering.store(true,
+                                           std::memory_order_relaxed);
+    }
+    const bool flexPresentationPrebuffering =
+        m_rxPresentationPrebuffering.load(std::memory_order_relaxed);
+
+    // Zombie sink watchdog: if we have data waiting but the sink reports
+    // zero bytes free for ~2 seconds, the WASAPI handle is likely stale
+    // (e.g. after screensaver/idle on Windows with USB audio). (#1361)
+    if (m_audioSink && freeBytes == 0 && (!m_rxBuffer.isEmpty()
+                           || !m_rxPackets.empty()
+                           || !m_radeRxBuffer.isEmpty()
+                           || !m_kiwiSdrRxBuffer.isEmpty()
+                           || !m_kiwiSdrRxPackets.empty()
+                           || !m_rxOutputBuffer.isEmpty()
+                           || !m_kiwiSdrOutputBuffer.isEmpty()
+                           || anyExternalKiwiBufferQueued())) {
+        if (++m_rxZombieTickCount >= kZombieTickThreshold) {
+            m_rxZombieTickCount = 0;
+            qCWarning(lcAudio) << "AudioEngine: sink appears zombie (bytesFree stuck at 0 for"
+                               << kZombieTickThreshold * 10 << "ms), restarting RX (#1361)";
+            QMetaObject::invokeMethod(this, [this]() {
+                if (!m_audioSink) return;
+                stopRxStream();
+                startRxStream();
+            }, Qt::QueuedConnection);
+            return;
+        }
+    } else {
+        m_rxZombieTickCount = 0;
+    }
+
+    // Audio liveness watchdog: if no audio data has arrived via
+    // feedAudioData() for ~15 seconds while the sink is still running,
+    // the audio backend may have silently stopped (CoreAudio after
+    // extended idle, or the radio stopped sending VITA-49 packets).
+    // Restart the sink to re-acquire a fresh handle. (#1411)
+    if (m_lastAudioFeedTime.isValid()
+        && m_lastAudioFeedTime.elapsed() > kAudioLivenessTimeoutMs
+        && m_rxBuffer.isEmpty()
+        && m_rxPackets.empty()
+        && m_rxOutputBuffer.isEmpty()
+        && m_radeRxBuffer.isEmpty()
+        && m_kiwiSdrOutputBuffer.isEmpty()
+        && m_kiwiSdrRxBuffer.isEmpty()
+        && m_kiwiSdrRxPackets.empty()
+        && !anyExternalKiwiBufferQueued()) {
+        qCWarning(lcAudio) << "AudioEngine: no audio data received for"
+                           << m_lastAudioFeedTime.elapsed() << "ms, restarting RX (#1411)";
+        m_lastAudioFeedTime.start();  // prevent repeated rapid restarts
+        QMetaObject::invokeMethod(this, [this]() {
+            if (!m_audioSink) return;
+            stopRxStream();
+            startRxStream();
+        }, Qt::QueuedConnection);
+        return;
+    }
+
+    if (nr2PacketMode) {
+        std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+        auto queuedRawEquivalent = [this, sampleRate](qsizetype rawBytes,
+                                                qsizetype outputBytes) {
+            return rawBytes
+                   + rawEquivalentAudioBytes(outputBytes, sampleRate, m_rxProducerRate.load());
+        };
+        while (!flexPresentationPrebuffering
+               && !m_rxPackets.empty()
+               && (m_rxOutputBuffer.size() / frameBytes) < freeFrames
+               && (flexPrebufferBytes <= 0
+                   || queuedRawEquivalent(queuedAudioBytes(m_rxPackets),
+                                         m_rxOutputBuffer.size())
+                          > flexPrebufferBytes)) {
+            QByteArray packet = std::move(m_rxPackets.front());
+            m_rxPackets.pop_front();
+            processMixedRxAudioData(packet, RxDspSource::Main);
+        }
+        while (kiwiAudio
+               && !m_kiwiSdrPrebuffering.load(std::memory_order_relaxed)
+               && !m_kiwiSdrRxPackets.empty()
+               && (m_kiwiSdrOutputBuffer.size() / frameBytes) < freeFrames
+               && queuedAudioBytes(m_kiwiSdrRxPackets)
+                      + rawEquivalentAudioBytes(m_kiwiSdrOutputBuffer.size(),
+                                                sampleRate)
+                      > kiwiPresentationDelayBytes) {
+            QByteArray packet = std::move(m_kiwiSdrRxPackets.front());
+            m_kiwiSdrRxPackets.pop_front();
+            processMixedRxAudioData(packet, RxDspSource::KiwiSdr);
+        }
+        for (const auto& source : m_externalKiwiSources) {
+            if (!source || !externalKiwiSourceProcessing(*source)) {
+                continue;
+            }
+            const qsizetype sourcePresentationDelayBytes =
+                externalKiwiPresentationDelayBytes(*source);
+            while (!source->prebuffering
+                   && !source->rxPackets.empty()
+                   && (source->outputBuffer.size() / frameBytes) < freeFrames
+                   && queuedAudioBytes(source->rxPackets)
+                          + rawEquivalentAudioBytes(source->outputBuffer.size(),
+                                                    sampleRate)
+                          > sourcePresentationDelayBytes) {
+                QByteArray packet = std::move(source->rxPackets.front());
+                source->rxPackets.pop_front();
+                processMixedRxAudioData(packet, RxDspSource::KiwiSdr, source.get());
+            }
+        }
+    }
+
+    if (kiwiAudio
+        && m_kiwiSdrPrebuffering.load(std::memory_order_relaxed)) {
+        // KiwiSDR uncompressed audio is observed as 512-sample 12 kHz
+        // blocks (~43 ms), but WebSocket delivery bunches frames with
+        // >100 ms gaps. Hold only the Kiwi jitter buffer before mixing;
+        // the normal Flex RX buffer must keep draining while Kiwi fills.
+        const int prebufferMs = std::min(
+            std::max(kKiwiSdrJitterTargetMs, kiwiPresentationDelayMs),
+            effectiveBufMs);
+        const qsizetype prebufferBytes =
+            DEFAULT_SAMPLE_RATE * 2 * static_cast<qsizetype>(sizeof(float))
+            * prebufferMs / 1000;
+        const qsizetype bufferedBytes =
+            nr2PacketMode
+                ? queuedAudioBytes(m_kiwiSdrRxPackets)
+                      + rawEquivalentAudioBytes(m_kiwiSdrOutputBuffer.size(),
+                                                sampleRate)
+                : m_kiwiSdrRxBuffer.size();
+        if (bufferedBytes >= prebufferBytes) {
+            m_kiwiSdrPrebuffering.store(false, std::memory_order_relaxed);
+        }
+    }
+    for (const auto& source : m_externalKiwiSources) {
+        if (!source || !externalKiwiSourceProcessing(*source)
+            || !source->prebuffering) {
+            continue;
+        }
+        const int prebufferMs = std::min(
+            std::max(kKiwiSdrJitterTargetMs,
+                     source->presentationDelayMs),
+            effectiveBufMs);
+        const qsizetype prebufferBytes =
+            DEFAULT_SAMPLE_RATE * 2 * static_cast<qsizetype>(sizeof(float))
+            * prebufferMs / 1000;
+        const qsizetype bufferedBytes =
+            nr2PacketMode
+                ? queuedAudioBytes(source->rxPackets)
+                      + rawEquivalentAudioBytes(source->outputBuffer.size(),
+                                                sampleRate)
+                : source->rxBuffer.size();
+        if (bufferedBytes >= prebufferBytes) {
+            source->prebuffering = false;
+        }
+    }
+
+    const bool kiwiNr2PacketMode = kiwiAudio && nr2PacketMode;
+    // Queued packets below the delay target are intentional delay growth,
+    // not an underrun; keep playback state live while the queue catches up.
+    if (kiwiNr2PacketMode
+        && !m_kiwiSdrPrebuffering.load(std::memory_order_relaxed)
+        && m_kiwiSdrOutputBuffer.isEmpty()
+        && m_kiwiSdrRxPackets.empty()) {
+        m_kiwiSdrPrebuffering.store(true, std::memory_order_relaxed);
+    }
+    const bool kiwiMixActive =
+        kiwiAudio && !kiwiNr2PacketMode
+        && !m_kiwiSdrPrebuffering.load(std::memory_order_relaxed);
+    for (const auto& source : m_externalKiwiSources) {
+        if (!source || !externalKiwiSourceProcessing(*source)
+            || source->prebuffering) {
+            continue;
+        }
+        // Same as the legacy Kiwi path: packets held for presentation delay
+        // should not flip an already-live source back into prebuffering.
+        const bool sourceEmpty =
+            nr2PacketMode
+                ? source->outputBuffer.isEmpty()
+                      && source->rxPackets.empty()
+                : source->rxBuffer.isEmpty();
+        if (sourceEmpty) {
+            source->prebuffering = true;
+        }
+    }
+    const qsizetype kiwiMixBytes =
+        kiwiMixActive
+            ? std::max<qsizetype>(
+                  0, m_kiwiSdrRxBuffer.size() - kiwiPresentationDelayBytes)
+            : 0;
+    // Fill each post-DSP FIFO independently. A prebuffered Kiwi FIFO must
+    // not make the timer skip Flex processing, otherwise Flex only leaks
+    // into the final mix when the Kiwi FIFO briefly drains.
+    const qsizetype queuedMainFrames = m_rxOutputBuffer.size() / frameBytes;
+    const qsizetype wantedMainOutputFrames =
+        freeFrames > queuedMainFrames ? freeFrames - queuedMainFrames : 0;
+    const qsizetype wantedMainNativeFrames =
+        sampleRate > 0
+            ? (wantedMainOutputFrames * m_rxProducerRate.load() + sampleRate - 1) / sampleRate
+            : wantedMainOutputFrames;
+    const qsizetype wantedMainNativeBytes = wantedMainNativeFrames * frameBytes;
+    const qsizetype availableMainBytes =
+        (!nr2PacketMode && !flexPresentationPrebuffering)
+            ? std::max<qsizetype>(0, m_rxBuffer.size() - flexPrebufferBytes)
+            : 0;
+    const qsizetype mainBytes =
+        (std::min(wantedMainNativeBytes, availableMainBytes) / frameBytes)
+        * frameBytes;
+    if (mainBytes > 0) {
+        const QByteArray mainPcm = m_rxBuffer.left(mainBytes);
+        m_rxBuffer.remove(0, mainBytes);
+        processMixedRxAudioData(mainPcm, RxDspSource::Main);
+    }
+
+    // NR2 regression guard:
+    // With NR2 enabled, Kiwi packets stay whole until this timer processes
+    // them through their Kiwi-only NR2 state into post-DSP Kiwi FIFOs.
+    // Do not chop raw Kiwi into timer-sized pieces and feed NR2 here; that
+    // reintroduced speech-correlated static. Raw Kiwi draining below is
+    // only used while NR2 is off.
+    const qsizetype queuedKiwiFrames = m_kiwiSdrOutputBuffer.size() / frameBytes;
+    const qsizetype wantedKiwiOutputFrames =
+        freeFrames > queuedKiwiFrames ? freeFrames - queuedKiwiFrames : 0;
+    const qsizetype wantedKiwiNativeFrames =
+        sampleRate > 0
+            ? (wantedKiwiOutputFrames * DEFAULT_SAMPLE_RATE) / sampleRate
+            : wantedKiwiOutputFrames;
+    const qsizetype wantedKiwiNativeBytes = wantedKiwiNativeFrames * frameBytes;
+    const qsizetype kiwiBytes =
+        (std::min(wantedKiwiNativeBytes, kiwiMixBytes) / frameBytes)
+        * frameBytes;
+    if (kiwiBytes > 0) {
+        const QByteArray kiwiPcm = m_kiwiSdrRxBuffer.left(kiwiBytes);
+        m_kiwiSdrRxBuffer.remove(0, kiwiBytes);
+        processMixedRxAudioData(kiwiPcm, RxDspSource::KiwiSdr);
+    }
+
+    // Managed Kiwi RX antennas must keep the same per-source output FIFO
+    // boundary with NR2 off as they do with NR2 on. If they are collapsed
+    // into the legacy applet Kiwi buffer here, the final mixer ignores
+    // them unless the applet-level Kiwi Audio toggle is also enabled.
+    if (!nr2PacketMode) {
+        for (const auto& source : m_externalKiwiSources) {
+            if (!source || !externalKiwiSourceProcessing(*source)
+                || source->prebuffering) {
+                continue;
+            }
+
+            const qsizetype queuedSourceFrames =
+                source->outputBuffer.size() / frameBytes;
+            const qsizetype wantedSourceOutputFrames =
+                freeFrames > queuedSourceFrames
+                    ? freeFrames - queuedSourceFrames
+                    : 0;
+            const qsizetype wantedSourceNativeFrames =
+                sampleRate > 0
+                    ? (wantedSourceOutputFrames * DEFAULT_SAMPLE_RATE) / sampleRate
+                    : wantedSourceOutputFrames;
+            const qsizetype wantedSourceNativeBytes =
+                wantedSourceNativeFrames * frameBytes;
+            const qsizetype availableSourceBytes =
+                std::max<qsizetype>(
+                    0,
+                    source->rxBuffer.size()
+                        - externalKiwiPresentationDelayBytes(*source));
+            const qsizetype sourceBytes =
+                (std::min(wantedSourceNativeBytes, availableSourceBytes)
+                 / frameBytes) * frameBytes;
+            if (sourceBytes <= 0) {
+                continue;
+            }
+
+            const QByteArray sourcePcm = source->rxBuffer.left(sourceBytes);
+            source->rxBuffer.remove(0, sourceBytes);
+            processMixedRxAudioData(
+                sourcePcm, RxDspSource::KiwiSdr, source.get());
+        }
+    }
+
+    const qsizetype kiwiOutputBytes =
+        (kiwiAudio
+         && !m_kiwiSdrPrebuffering.load(std::memory_order_relaxed))
+            ? m_kiwiSdrOutputBuffer.size()
+            : 0;
+    const qsizetype externalKiwiOutputBytes =
+        externalKiwiOutputBufferBytes();
+    const qsizetype aggregateKiwiOutputBytes =
+        std::max(kiwiOutputBytes, externalKiwiOutputBytes);
+    qsizetype len = (freeBytes / frameBytes) * frameBytes;
+    len = std::min(len, std::max({m_rxOutputBuffer.size(),
+                                  aggregateKiwiOutputBytes,
+                                  m_radeRxBuffer.size()}));
+    len = (len / frameBytes) * frameBytes;
+    if (len > 0)
+    {
+        QByteArray chunk;
+        // While the transmit gate silences every Kiwi source, pause the
+        // receive-presentation feed on BOTH sides (Flex and Kiwi), like
+        // the pre-warm-pipeline mute froze both correlator buffers. A
+        // TX-gated source's ramp-zeroed chunks (or a one-sided Flex feed
+        // against them) would pollute the GCC-PHAT delay estimate and
+        // drop the auto-assist confidence on every over. A source's gate
+        // stays held through its pending post-unkey resume hold ("Resume
+        // audio after TX delay"), so the pause must cover that window
+        // too; it lifts as soon as any source is audible through the
+        // gate (keepAudioDuringTx during TX, or a source with no pending
+        // hold after unkey).
+        const bool kiwiTxGateEngaged = kiwiSdrAudioTransmitMuted();
+        bool anyKiwiGateHeld = false;
+        bool anyKiwiAudibleThroughGate = false;
+        for (const auto& s : m_externalKiwiSources) {
+            if (!s || !externalKiwiSourceProcessing(*s)) {
+                continue;
+            }
+            const bool held = !s->keepAudioDuringTx
+                && (kiwiTxGateEngaged
+                    || !s->txResumeDeadline.hasExpired());
+            anyKiwiGateHeld = anyKiwiGateHeld || held;
+            anyKiwiAudibleThroughGate =
+                anyKiwiAudibleThroughGate || !held;
+        }
+        const bool presentationPausedForTx =
+            (kiwiTxGateEngaged || anyKiwiGateHeld)
+            && !anyKiwiAudibleThroughGate;
+        // Per-frame gate ramp step; depends only on the device rate, so
+        // compute it once for the Flex gate and every Kiwi source alike.
+        const float gateStep =
+            sampleRate > 0
+                ? 1000.0f
+                      / (static_cast<float>(kKiwiSdrTxGateRampMs)
+                         * static_cast<float>(sampleRate))
+                : 1.0f;
+        // Delayed-Flex transmit gate: with a Receive Sync delay applied,
+        // the Flex presentation buffer holds flexDelayMs of pre-key-down
+        // RX audio that would keep playing into the transmission — the
+        // radio's own TX-time zero-fill only reaches the speaker after
+        // the delay. Mirror the Kiwi design: buffers stay warm and
+        // aligned, only the mix contribution ramps. Inactive with no
+        // delay so undelayed TX monitor audio is untouched, and FDX
+        // never engages the TX mute in the first place.
+        const float flexGateTarget =
+            (kiwiTxGateEngaged && flexPresentationDelayMs > 0)
+                ? 0.0f : 1.0f;
+        bool flexGateApplied = false;
+        auto applyFlexTxGate = [this, flexGateTarget, gateStep,
+                                &flexGateApplied](QByteArray& pcm) {
+            flexGateApplied = true;
+            if (m_flexTxGateGain == 1.0f && flexGateTarget == 1.0f) {
+                return;
+            }
+            auto* samples = reinterpret_cast<float*>(pcm.data());
+            const qsizetype count =
+                pcm.size() / static_cast<qsizetype>(sizeof(float));
+            float gate = m_flexTxGateGain;
+            for (qsizetype i = 0; i + 1 < count; i += 2) {
+                if (gate < flexGateTarget) {
+                    gate = std::min(flexGateTarget, gate + gateStep);
+                } else if (gate > flexGateTarget) {
+                    gate = std::max(flexGateTarget, gate - gateStep);
+                }
+                samples[i] *= gate;
+                samples[i + 1] *= gate;
+            }
+            m_flexTxGateGain = gate;
+        };
+        auto emitOutputSource = [this, sampleRate, anyKiwiAudio](
+                                    const QString& source,
+                                    const QString& sourceId,
+                                    const QByteArray& pcm,
+                                    bool txGated = false) {
+            if (!pcm.isEmpty()) {
+                captureAutomationAudio(QStringLiteral("output"), source,
+                                       sourceId, pcm, sampleRate, 2);
+                if (!anyKiwiAudio || txGated) {
+                    m_receivePresentationOutputSignalSuppressedCount
+                        .fetch_add(1, std::memory_order_relaxed);
+                    return;
+                }
+
+                m_receivePresentationOutputSignalEmitCount.fetch_add(
+                    1, std::memory_order_relaxed);
+                emit receivePresentationOutputAudioReady(
+                    source, sourceId, pcm, sampleRate);
+            }
+        };
+        if (m_radeRxBuffer.isEmpty() && aggregateKiwiOutputBytes <= 0) {
+            // Fast path: no decoded overlay active -- write the
+            // already-processed RX output directly.
+            chunk = m_rxOutputBuffer.left(len);
+            m_rxOutputBuffer.remove(0, chunk.size());
+            applyFlexTxGate(chunk);
+            emitOutputSource(QStringLiteral("flex"), QString(), chunk,
+                             presentationPausedForTx);
+        } else if (m_rxOutputBuffer.isEmpty() && m_radeRxBuffer.isEmpty()
+                   && kiwiOutputBytes > 0 && externalKiwiOutputBytes <= 0) {
+            // Fast path: only Kiwi decoded audio is active.
+            chunk = m_kiwiSdrOutputBuffer.left(len);
+            m_kiwiSdrOutputBuffer.remove(0, chunk.size());
+            emitOutputSource(QStringLiteral("kiwi"), QString(), chunk,
+                             presentationPausedForTx);
+        } else {
+            // Mix path: add post-DSP Flex, every post-DSP Kiwi stream,
+            // and decoded RADE sample-wise at the output device rate.
+            chunk = QByteArray(len, '\0');
+            auto* out = reinterpret_cast<float*>(chunk.data());
+            int activeOutputSources = 0;
+            constexpr float kOutputSilenceThreshold = 1.0e-6f;
+
+            const qsizetype rxTake =
+                (std::min(len, m_rxOutputBuffer.size()) / floatBytes)
+                * floatBytes;
+            if (rxTake > 0) {
+                QByteArray rxChunk = m_rxOutputBuffer.left(rxTake);
+                applyFlexTxGate(rxChunk);
+                const auto* rx =
+                    reinterpret_cast<const float*>(rxChunk.constData());
+                const qsizetype rxSamples = rxTake / floatBytes;
+                bool sourceActive = false;
+                for (qsizetype i = 0; i < rxSamples; ++i) {
+                    sourceActive = sourceActive
+                        || std::fabs(rx[i]) > kOutputSilenceThreshold;
+                    out[i] += rx[i];
+                }
+                if (sourceActive) {
+                    ++activeOutputSources;
+                }
+                m_rxOutputBuffer.remove(0, rxTake);
+                emitOutputSource(QStringLiteral("flex"), QString(), rxChunk,
+                                 presentationPausedForTx);
+            }
+
+            const qsizetype kiwiTake =
+                (std::min(len, kiwiOutputBytes) / floatBytes)
+                * floatBytes;
+            if (kiwiTake > 0) {
+                const QByteArray kiwiChunk =
+                    m_kiwiSdrOutputBuffer.left(kiwiTake);
+                const auto* kiwi =
+                    reinterpret_cast<const float*>(kiwiChunk.constData());
+                const qsizetype kiwiSamples = kiwiTake / floatBytes;
+                bool sourceActive = false;
+                for (qsizetype i = 0; i < kiwiSamples; ++i) {
+                    sourceActive = sourceActive
+                        || std::fabs(kiwi[i]) > kOutputSilenceThreshold;
+                    out[i] += kiwi[i];
+                }
+                if (sourceActive) {
+                    ++activeOutputSources;
+                }
+                m_kiwiSdrOutputBuffer.remove(0, kiwiTake);
+                emitOutputSource(QStringLiteral("kiwi"), QString(), kiwiChunk,
+                                 presentationPausedForTx);
+            }
+
+            for (const auto& source : m_externalKiwiSources) {
+                if (!source) {
+                    continue;
+                }
+                // Transmit gate: the source keeps draining at real-time
+                // rate through TX so playback rejoins the live stream at
+                // unkey; only its mix contribution ramps to zero. The
+                // short ramp avoids a hard-mute click on both edges. A
+                // pending resume deadline extends the hold past unkey
+                // ("Resume audio after TX delay").
+                const bool gateOpen = source->keepAudioDuringTx
+                    || (!kiwiSdrAudioTransmitMuted()
+                        && source->txResumeDeadline.hasExpired());
+                const float gateTarget = gateOpen ? 1.0f : 0.0f;
+                if (!externalKiwiSourceProcessing(*source)
+                    || source->prebuffering) {
+                    // Silent while skipped: snap the gate DOWNWARD only —
+                    // a dry tick or prebuffer stretch spanning the unkey
+                    // edge holds the gate and finishes the up-ramp on
+                    // the next tick with data instead of hard-stepping
+                    // to full amplitude. Mid-TX entry with a stale
+                    // full-gain gate is closed at the source setters
+                    // (enable/unmute snap the gate to zero while the
+                    // transmit gate is engaged), since this loop never
+                    // runs for a lone prebuffering source.
+                    source->txGateGain =
+                        std::min(source->txGateGain, gateTarget);
+                    continue;
+                }
+                const qsizetype sourceTake =
+                    (std::min(len, source->outputBuffer.size()) / floatBytes)
+                    * floatBytes;
+                if (sourceTake <= 0) {
+                    source->txGateGain =
+                        std::min(source->txGateGain, gateTarget);
+                    continue;
+                }
+                QByteArray sourceChunk = source->outputBuffer.left(sourceTake);
+                const auto* kiwi =
+                    reinterpret_cast<const float*>(sourceChunk.constData());
+                auto* capturedKiwi =
+                    reinterpret_cast<float*>(sourceChunk.data());
+                const qsizetype kiwiSamples = sourceTake / floatBytes;
+                // Whole stereo frames only: len and every outputBuffer
+                // append are frame-aligned, so kiwiSamples is even and
+                // the unrolled per-frame writes below stay in bounds.
+                Q_ASSERT((kiwiSamples & 1) == 0);
+                float gate = source->txGateGain;
+                bool sourceActive = false;
+                for (qsizetype i = 0; i + 1 < kiwiSamples; i += 2) {
+                    if (gate < gateTarget) {
+                        gate = std::min(gateTarget, gate + gateStep);
+                    } else if (gate > gateTarget) {
+                        gate = std::max(gateTarget, gate - gateStep);
+                    }
+                    const float scale = source->gain * gate;
+                    const float s0 = kiwi[i] * scale;
+                    const float s1 = kiwi[i + 1] * scale;
+                    sourceActive = sourceActive
+                        || std::fabs(s0) > kOutputSilenceThreshold
+                        || std::fabs(s1) > kOutputSilenceThreshold;
+                    out[i] += s0;
+                    out[i + 1] += s1;
+                    capturedKiwi[i] = s0;
+                    capturedKiwi[i + 1] = s1;
+                }
+                source->txGateGain = gate;
+                if (sourceActive) {
+                    ++activeOutputSources;
+                }
+                source->outputBuffer.remove(0, sourceTake);
+                // Suppress the correlator feed exactly while the mix
+                // gate holds this source closed — including the
+                // post-unkey resume hold, when the chunks above were
+                // just ramped to zero.
+                emitOutputSource(QStringLiteral("kiwi"), source->id,
+                                 sourceChunk, !gateOpen);
+            }
+
+            const qsizetype radeTake = (std::min(len, m_radeRxBuffer.size()) / floatBytes) * floatBytes;
+            if (radeTake > 0) {
+                const auto* rade = reinterpret_cast<const float*>(m_radeRxBuffer.constData());
+                const qsizetype radeSamples = radeTake / floatBytes;
+                bool sourceActive = false;
+                for (qsizetype i = 0; i < radeSamples; ++i) {
+                    sourceActive = sourceActive
+                        || std::fabs(rade[i]) > kOutputSilenceThreshold;
+                    out[i] += rade[i];
+                }
+                if (sourceActive) {
+                    ++activeOutputSources;
+                }
+                m_radeRxBuffer.remove(0, radeTake);
+            }
+
+            // Single gain/clamp pass after all sources are mixed. Use
+            // strict 1/N active-source scaling here: 1/sqrt(N) preserves
+            // more loudness but still lets three speech streams hard-clip
+            // and sound like NR2 static.
+            const qsizetype totalSamples = len / floatBytes;
+            const float mixGain = activeOutputSources > 1
+                ? 1.0f / static_cast<float>(activeOutputSources)
+                : 1.0f;
+            for (qsizetype i = 0; i < totalSamples; ++i) {
+                out[i] = std::clamp(out[i] * mixGain, -1.0f, 1.0f);
+            }
+        }
+
+        if (!flexGateApplied) {
+            // Flex produced nothing this tick: snap its gate downward
+            // only, mirroring the per-source skip snap above.
+            m_flexTxGateGain = std::min(m_flexTxGateGain, flexGateTarget);
+        }
+
+        // Recheck after processing, before exposing a mixed chunk. If an epoch
+        // was revoked during DSP, none of that chunk may reach the device.
+        if (retireInvalidPcmSources() || !m_audioDevice) {
+            return;
+        }
+        len = m_audioDevice->write(chunk);
+        if (len > 0) {
+            const qsizetype capturedBytes =
+                alignedStereoFloatBytes(
+                    std::min<qsizetype>(len, chunk.size()));
+            if (capturedBytes > 0) {
+                captureAutomationAudio(
+                    QStringLiteral("final"), QStringLiteral("mix"),
+                    QString(), chunk.left(capturedBytes),
+                    sampleRate, 2);
+            }
+        }
+
+        // Stale session watchdog: if we're writing data but processedUSecs()
+        // hasn't advanced, the WASAPI session is silently discarding audio
+        // (e.g. after Teams/Zoom reconfigures the audio endpoint). (#1569)
+        qint64 processed = m_audioSink ? m_audioSink->processedUSecs() : m_lastProcessedUSecs + 1;
+        if (processed == m_lastProcessedUSecs) {
+            if (++m_rxStaleTickCount >= kStaleTickThreshold) {
+                m_rxStaleTickCount = 0;
+                qCWarning(lcAudio) << "AudioEngine: sink appears stale (processedUSecs stuck at"
+                                   << processed << "for" << kStaleTickThreshold * 10
+                                   << "ms), restarting RX (#1569)";
                 QMetaObject::invokeMethod(this, [this]() {
                     if (!m_audioSink) return;
                     stopRxStream();
@@ -2038,595 +2757,27 @@ AudioEngine::AudioEngine(QObject* parent)
                 return;
             }
         } else {
-            m_rxZombieTickCount = 0;
+            m_rxStaleTickCount = 0;
+            m_lastProcessedUSecs = processed;
         }
+    }
 
-        // Audio liveness watchdog: if no audio data has arrived via
-        // feedAudioData() for ~15 seconds while the sink is still running,
-        // the audio backend may have silently stopped (CoreAudio after
-        // extended idle, or the radio stopped sending VITA-49 packets).
-        // Restart the sink to re-acquire a fresh handle. (#1411)
-        if (m_lastAudioFeedTime.isValid()
-            && m_lastAudioFeedTime.elapsed() > kAudioLivenessTimeoutMs
-            && m_rxBuffer.isEmpty()
-            && m_rxPackets.empty()
-            && m_rxOutputBuffer.isEmpty()
-            && m_radeRxBuffer.isEmpty()
-            && m_kiwiSdrOutputBuffer.isEmpty()
-            && m_kiwiSdrRxBuffer.isEmpty()
-            && m_kiwiSdrRxPackets.empty()
-            && !anyExternalKiwiBufferQueued()) {
-            qCWarning(lcAudio) << "AudioEngine: no audio data received for"
-                               << m_lastAudioFeedTime.elapsed() << "ms, restarting RX (#1411)";
-            m_lastAudioFeedTime.start();  // prevent repeated rapid restarts
-            QMetaObject::invokeMethod(this, [this]() {
-                if (!m_audioSink) return;
-                stopRxStream();
-                startRxStream();
-            }, Qt::QueuedConnection);
-            return;
-        }
+    if (m_audioSink && sampleRate > 0) {
+        const qsizetype sinkBufferBytes = m_audioSink->bufferSize();
+        const qsizetype sinkFreeBytes = m_audioSink->bytesFree();
+        const qsizetype sinkQueuedBytes =
+            std::clamp(sinkBufferBytes - sinkFreeBytes,
+                       static_cast<qsizetype>(0),
+                       std::max<qsizetype>(0, sinkBufferBytes));
+        const int playbackQueuedMs =
+            qBound(0, audioBytesToMs(sinkQueuedBytes, sampleRate), 1000);
+        m_rxPlaybackQueuedMs.store(playbackQueuedMs,
+                                   std::memory_order_relaxed);
+    } else {
+        m_rxPlaybackQueuedMs.store(0, std::memory_order_relaxed);
+    }
 
-        if (nr2PacketMode) {
-            std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
-            auto queuedRawEquivalent = [sampleRate](qsizetype rawBytes,
-                                                    qsizetype outputBytes) {
-                return rawBytes
-                       + rawEquivalentAudioBytes(outputBytes, sampleRate);
-            };
-            while (!flexPresentationPrebuffering
-                   && !m_rxPackets.empty()
-                   && (m_rxOutputBuffer.size() / frameBytes) < freeFrames
-                   && (flexPrebufferBytes <= 0
-                       || queuedRawEquivalent(queuedAudioBytes(m_rxPackets),
-                                             m_rxOutputBuffer.size())
-                              > flexPrebufferBytes)) {
-                QByteArray packet = std::move(m_rxPackets.front());
-                m_rxPackets.pop_front();
-                processMixedRxAudioData(packet, RxDspSource::Main);
-            }
-            while (kiwiAudio
-                   && !m_kiwiSdrPrebuffering.load(std::memory_order_relaxed)
-                   && !m_kiwiSdrRxPackets.empty()
-                   && (m_kiwiSdrOutputBuffer.size() / frameBytes) < freeFrames
-                   && queuedAudioBytes(m_kiwiSdrRxPackets)
-                          + rawEquivalentAudioBytes(m_kiwiSdrOutputBuffer.size(),
-                                                    sampleRate)
-                          > kiwiPresentationDelayBytes) {
-                QByteArray packet = std::move(m_kiwiSdrRxPackets.front());
-                m_kiwiSdrRxPackets.pop_front();
-                processMixedRxAudioData(packet, RxDspSource::KiwiSdr);
-            }
-            for (const auto& source : m_externalKiwiSources) {
-                if (!source || !externalKiwiSourceProcessing(*source)) {
-                    continue;
-                }
-                const qsizetype sourcePresentationDelayBytes =
-                    externalKiwiPresentationDelayBytes(*source);
-                while (!source->prebuffering
-                       && !source->rxPackets.empty()
-                       && (source->outputBuffer.size() / frameBytes) < freeFrames
-                       && queuedAudioBytes(source->rxPackets)
-                              + rawEquivalentAudioBytes(source->outputBuffer.size(),
-                                                        sampleRate)
-                              > sourcePresentationDelayBytes) {
-                    QByteArray packet = std::move(source->rxPackets.front());
-                    source->rxPackets.pop_front();
-                    processMixedRxAudioData(packet, RxDspSource::KiwiSdr, source.get());
-                }
-            }
-        }
-
-        if (kiwiAudio
-            && m_kiwiSdrPrebuffering.load(std::memory_order_relaxed)) {
-            // KiwiSDR uncompressed audio is observed as 512-sample 12 kHz
-            // blocks (~43 ms), but WebSocket delivery bunches frames with
-            // >100 ms gaps. Hold only the Kiwi jitter buffer before mixing;
-            // the normal Flex RX buffer must keep draining while Kiwi fills.
-            const int prebufferMs = std::min(
-                std::max(kKiwiSdrJitterTargetMs, kiwiPresentationDelayMs),
-                effectiveBufMs);
-            const qsizetype prebufferBytes =
-                DEFAULT_SAMPLE_RATE * 2 * static_cast<qsizetype>(sizeof(float))
-                * prebufferMs / 1000;
-            const qsizetype bufferedBytes =
-                nr2PacketMode
-                    ? queuedAudioBytes(m_kiwiSdrRxPackets)
-                          + rawEquivalentAudioBytes(m_kiwiSdrOutputBuffer.size(),
-                                                    sampleRate)
-                    : m_kiwiSdrRxBuffer.size();
-            if (bufferedBytes >= prebufferBytes) {
-                m_kiwiSdrPrebuffering.store(false, std::memory_order_relaxed);
-            }
-        }
-        for (const auto& source : m_externalKiwiSources) {
-            if (!source || !externalKiwiSourceProcessing(*source)
-                || !source->prebuffering) {
-                continue;
-            }
-            const int prebufferMs = std::min(
-                std::max(kKiwiSdrJitterTargetMs,
-                         source->presentationDelayMs),
-                effectiveBufMs);
-            const qsizetype prebufferBytes =
-                DEFAULT_SAMPLE_RATE * 2 * static_cast<qsizetype>(sizeof(float))
-                * prebufferMs / 1000;
-            const qsizetype bufferedBytes =
-                nr2PacketMode
-                    ? queuedAudioBytes(source->rxPackets)
-                          + rawEquivalentAudioBytes(source->outputBuffer.size(),
-                                                    sampleRate)
-                    : source->rxBuffer.size();
-            if (bufferedBytes >= prebufferBytes) {
-                source->prebuffering = false;
-            }
-        }
-
-        const bool kiwiNr2PacketMode = kiwiAudio && nr2PacketMode;
-        // Queued packets below the delay target are intentional delay growth,
-        // not an underrun; keep playback state live while the queue catches up.
-        if (kiwiNr2PacketMode
-            && !m_kiwiSdrPrebuffering.load(std::memory_order_relaxed)
-            && m_kiwiSdrOutputBuffer.isEmpty()
-            && m_kiwiSdrRxPackets.empty()) {
-            m_kiwiSdrPrebuffering.store(true, std::memory_order_relaxed);
-        }
-        const bool kiwiMixActive =
-            kiwiAudio && !kiwiNr2PacketMode
-            && !m_kiwiSdrPrebuffering.load(std::memory_order_relaxed);
-        for (const auto& source : m_externalKiwiSources) {
-            if (!source || !externalKiwiSourceProcessing(*source)
-                || source->prebuffering) {
-                continue;
-            }
-            // Same as the legacy Kiwi path: packets held for presentation delay
-            // should not flip an already-live source back into prebuffering.
-            const bool sourceEmpty =
-                nr2PacketMode
-                    ? source->outputBuffer.isEmpty()
-                          && source->rxPackets.empty()
-                    : source->rxBuffer.isEmpty();
-            if (sourceEmpty) {
-                source->prebuffering = true;
-            }
-        }
-        const qsizetype kiwiMixBytes =
-            kiwiMixActive
-                ? std::max<qsizetype>(
-                      0, m_kiwiSdrRxBuffer.size() - kiwiPresentationDelayBytes)
-                : 0;
-        // Fill each post-DSP FIFO independently. A prebuffered Kiwi FIFO must
-        // not make the timer skip Flex processing, otherwise Flex only leaks
-        // into the final mix when the Kiwi FIFO briefly drains.
-        const qsizetype queuedMainFrames = m_rxOutputBuffer.size() / frameBytes;
-        const qsizetype wantedMainOutputFrames =
-            freeFrames > queuedMainFrames ? freeFrames - queuedMainFrames : 0;
-        const qsizetype wantedMainNativeFrames =
-            sampleRate > 0
-                ? (wantedMainOutputFrames * DEFAULT_SAMPLE_RATE) / sampleRate
-                : wantedMainOutputFrames;
-        const qsizetype wantedMainNativeBytes = wantedMainNativeFrames * frameBytes;
-        const qsizetype availableMainBytes =
-            (!nr2PacketMode && !flexPresentationPrebuffering)
-                ? std::max<qsizetype>(0, m_rxBuffer.size() - flexPrebufferBytes)
-                : 0;
-        const qsizetype mainBytes =
-            (std::min(wantedMainNativeBytes, availableMainBytes) / frameBytes)
-            * frameBytes;
-        if (mainBytes > 0) {
-            const QByteArray mainPcm = m_rxBuffer.left(mainBytes);
-            m_rxBuffer.remove(0, mainBytes);
-            processMixedRxAudioData(mainPcm, RxDspSource::Main);
-        }
-
-        // NR2 regression guard:
-        // With NR2 enabled, Kiwi packets stay whole until this timer processes
-        // them through their Kiwi-only NR2 state into post-DSP Kiwi FIFOs.
-        // Do not chop raw Kiwi into timer-sized pieces and feed NR2 here; that
-        // reintroduced speech-correlated static. Raw Kiwi draining below is
-        // only used while NR2 is off.
-        const qsizetype queuedKiwiFrames = m_kiwiSdrOutputBuffer.size() / frameBytes;
-        const qsizetype wantedKiwiOutputFrames =
-            freeFrames > queuedKiwiFrames ? freeFrames - queuedKiwiFrames : 0;
-        const qsizetype wantedKiwiNativeFrames =
-            sampleRate > 0
-                ? (wantedKiwiOutputFrames * DEFAULT_SAMPLE_RATE) / sampleRate
-                : wantedKiwiOutputFrames;
-        const qsizetype wantedKiwiNativeBytes = wantedKiwiNativeFrames * frameBytes;
-        const qsizetype kiwiBytes =
-            (std::min(wantedKiwiNativeBytes, kiwiMixBytes) / frameBytes)
-            * frameBytes;
-        if (kiwiBytes > 0) {
-            const QByteArray kiwiPcm = m_kiwiSdrRxBuffer.left(kiwiBytes);
-            m_kiwiSdrRxBuffer.remove(0, kiwiBytes);
-            processMixedRxAudioData(kiwiPcm, RxDspSource::KiwiSdr);
-        }
-
-        // Managed Kiwi RX antennas must keep the same per-source output FIFO
-        // boundary with NR2 off as they do with NR2 on. If they are collapsed
-        // into the legacy applet Kiwi buffer here, the final mixer ignores
-        // them unless the applet-level Kiwi Audio toggle is also enabled.
-        if (!nr2PacketMode) {
-            for (const auto& source : m_externalKiwiSources) {
-                if (!source || !externalKiwiSourceProcessing(*source)
-                    || source->prebuffering) {
-                    continue;
-                }
-
-                const qsizetype queuedSourceFrames =
-                    source->outputBuffer.size() / frameBytes;
-                const qsizetype wantedSourceOutputFrames =
-                    freeFrames > queuedSourceFrames
-                        ? freeFrames - queuedSourceFrames
-                        : 0;
-                const qsizetype wantedSourceNativeFrames =
-                    sampleRate > 0
-                        ? (wantedSourceOutputFrames * DEFAULT_SAMPLE_RATE) / sampleRate
-                        : wantedSourceOutputFrames;
-                const qsizetype wantedSourceNativeBytes =
-                    wantedSourceNativeFrames * frameBytes;
-                const qsizetype availableSourceBytes =
-                    std::max<qsizetype>(
-                        0,
-                        source->rxBuffer.size()
-                            - externalKiwiPresentationDelayBytes(*source));
-                const qsizetype sourceBytes =
-                    (std::min(wantedSourceNativeBytes, availableSourceBytes)
-                     / frameBytes) * frameBytes;
-                if (sourceBytes <= 0) {
-                    continue;
-                }
-
-                const QByteArray sourcePcm = source->rxBuffer.left(sourceBytes);
-                source->rxBuffer.remove(0, sourceBytes);
-                processMixedRxAudioData(
-                    sourcePcm, RxDspSource::KiwiSdr, source.get());
-            }
-        }
-
-        const qsizetype kiwiOutputBytes =
-            (kiwiAudio
-             && !m_kiwiSdrPrebuffering.load(std::memory_order_relaxed))
-                ? m_kiwiSdrOutputBuffer.size()
-                : 0;
-        const qsizetype externalKiwiOutputBytes =
-            externalKiwiOutputBufferBytes();
-        const qsizetype aggregateKiwiOutputBytes =
-            std::max(kiwiOutputBytes, externalKiwiOutputBytes);
-        qsizetype len = (freeBytes / frameBytes) * frameBytes;
-        len = std::min(len, std::max({m_rxOutputBuffer.size(),
-                                      aggregateKiwiOutputBytes,
-                                      m_radeRxBuffer.size()}));
-        len = (len / frameBytes) * frameBytes;
-        if (len > 0)
-        {
-            QByteArray chunk;
-            // While the transmit gate silences every Kiwi source, pause the
-            // receive-presentation feed on BOTH sides (Flex and Kiwi), like
-            // the pre-warm-pipeline mute froze both correlator buffers. A
-            // TX-gated source's ramp-zeroed chunks (or a one-sided Flex feed
-            // against them) would pollute the GCC-PHAT delay estimate and
-            // drop the auto-assist confidence on every over. A source's gate
-            // stays held through its pending post-unkey resume hold ("Resume
-            // audio after TX delay"), so the pause must cover that window
-            // too; it lifts as soon as any source is audible through the
-            // gate (keepAudioDuringTx during TX, or a source with no pending
-            // hold after unkey).
-            const bool kiwiTxGateEngaged = kiwiSdrAudioTransmitMuted();
-            bool anyKiwiGateHeld = false;
-            bool anyKiwiAudibleThroughGate = false;
-            for (const auto& s : m_externalKiwiSources) {
-                if (!s || !externalKiwiSourceProcessing(*s)) {
-                    continue;
-                }
-                const bool held = !s->keepAudioDuringTx
-                    && (kiwiTxGateEngaged
-                        || !s->txResumeDeadline.hasExpired());
-                anyKiwiGateHeld = anyKiwiGateHeld || held;
-                anyKiwiAudibleThroughGate =
-                    anyKiwiAudibleThroughGate || !held;
-            }
-            const bool presentationPausedForTx =
-                (kiwiTxGateEngaged || anyKiwiGateHeld)
-                && !anyKiwiAudibleThroughGate;
-            // Per-frame gate ramp step; depends only on the device rate, so
-            // compute it once for the Flex gate and every Kiwi source alike.
-            const float gateStep =
-                sampleRate > 0
-                    ? 1000.0f
-                          / (static_cast<float>(kKiwiSdrTxGateRampMs)
-                             * static_cast<float>(sampleRate))
-                    : 1.0f;
-            // Delayed-Flex transmit gate: with a Receive Sync delay applied,
-            // the Flex presentation buffer holds flexDelayMs of pre-key-down
-            // RX audio that would keep playing into the transmission — the
-            // radio's own TX-time zero-fill only reaches the speaker after
-            // the delay. Mirror the Kiwi design: buffers stay warm and
-            // aligned, only the mix contribution ramps. Inactive with no
-            // delay so undelayed TX monitor audio is untouched, and FDX
-            // never engages the TX mute in the first place.
-            const float flexGateTarget =
-                (kiwiTxGateEngaged && flexPresentationDelayMs > 0)
-                    ? 0.0f : 1.0f;
-            bool flexGateApplied = false;
-            auto applyFlexTxGate = [this, flexGateTarget, gateStep,
-                                    &flexGateApplied](QByteArray& pcm) {
-                flexGateApplied = true;
-                if (m_flexTxGateGain == 1.0f && flexGateTarget == 1.0f) {
-                    return;
-                }
-                auto* samples = reinterpret_cast<float*>(pcm.data());
-                const qsizetype count =
-                    pcm.size() / static_cast<qsizetype>(sizeof(float));
-                float gate = m_flexTxGateGain;
-                for (qsizetype i = 0; i + 1 < count; i += 2) {
-                    if (gate < flexGateTarget) {
-                        gate = std::min(flexGateTarget, gate + gateStep);
-                    } else if (gate > flexGateTarget) {
-                        gate = std::max(flexGateTarget, gate - gateStep);
-                    }
-                    samples[i] *= gate;
-                    samples[i + 1] *= gate;
-                }
-                m_flexTxGateGain = gate;
-            };
-            auto emitOutputSource = [this, sampleRate, anyKiwiAudio](
-                                        const QString& source,
-                                        const QString& sourceId,
-                                        const QByteArray& pcm,
-                                        bool txGated = false) {
-                if (!pcm.isEmpty()) {
-                    captureAutomationAudio(QStringLiteral("output"), source,
-                                           sourceId, pcm, sampleRate, 2);
-                    if (!anyKiwiAudio || txGated) {
-                        m_receivePresentationOutputSignalSuppressedCount
-                            .fetch_add(1, std::memory_order_relaxed);
-                        return;
-                    }
-
-                    m_receivePresentationOutputSignalEmitCount.fetch_add(
-                        1, std::memory_order_relaxed);
-                    emit receivePresentationOutputAudioReady(
-                        source, sourceId, pcm, sampleRate);
-                }
-            };
-            if (m_radeRxBuffer.isEmpty() && aggregateKiwiOutputBytes <= 0) {
-                // Fast path: no decoded overlay active -- write the
-                // already-processed RX output directly.
-                chunk = m_rxOutputBuffer.left(len);
-                m_rxOutputBuffer.remove(0, chunk.size());
-                applyFlexTxGate(chunk);
-                emitOutputSource(QStringLiteral("flex"), QString(), chunk,
-                                 presentationPausedForTx);
-            } else if (m_rxOutputBuffer.isEmpty() && m_radeRxBuffer.isEmpty()
-                       && kiwiOutputBytes > 0 && externalKiwiOutputBytes <= 0) {
-                // Fast path: only Kiwi decoded audio is active.
-                chunk = m_kiwiSdrOutputBuffer.left(len);
-                m_kiwiSdrOutputBuffer.remove(0, chunk.size());
-                emitOutputSource(QStringLiteral("kiwi"), QString(), chunk,
-                                 presentationPausedForTx);
-            } else {
-                // Mix path: add post-DSP Flex, every post-DSP Kiwi stream,
-                // and decoded RADE sample-wise at the output device rate.
-                chunk = QByteArray(len, '\0');
-                auto* out = reinterpret_cast<float*>(chunk.data());
-                int activeOutputSources = 0;
-                constexpr float kOutputSilenceThreshold = 1.0e-6f;
-
-                const qsizetype rxTake =
-                    (std::min(len, m_rxOutputBuffer.size()) / floatBytes)
-                    * floatBytes;
-                if (rxTake > 0) {
-                    QByteArray rxChunk = m_rxOutputBuffer.left(rxTake);
-                    applyFlexTxGate(rxChunk);
-                    const auto* rx =
-                        reinterpret_cast<const float*>(rxChunk.constData());
-                    const qsizetype rxSamples = rxTake / floatBytes;
-                    bool sourceActive = false;
-                    for (qsizetype i = 0; i < rxSamples; ++i) {
-                        sourceActive = sourceActive
-                            || std::fabs(rx[i]) > kOutputSilenceThreshold;
-                        out[i] += rx[i];
-                    }
-                    if (sourceActive) {
-                        ++activeOutputSources;
-                    }
-                    m_rxOutputBuffer.remove(0, rxTake);
-                    emitOutputSource(QStringLiteral("flex"), QString(), rxChunk,
-                                     presentationPausedForTx);
-                }
-
-                const qsizetype kiwiTake =
-                    (std::min(len, kiwiOutputBytes) / floatBytes)
-                    * floatBytes;
-                if (kiwiTake > 0) {
-                    const QByteArray kiwiChunk =
-                        m_kiwiSdrOutputBuffer.left(kiwiTake);
-                    const auto* kiwi =
-                        reinterpret_cast<const float*>(kiwiChunk.constData());
-                    const qsizetype kiwiSamples = kiwiTake / floatBytes;
-                    bool sourceActive = false;
-                    for (qsizetype i = 0; i < kiwiSamples; ++i) {
-                        sourceActive = sourceActive
-                            || std::fabs(kiwi[i]) > kOutputSilenceThreshold;
-                        out[i] += kiwi[i];
-                    }
-                    if (sourceActive) {
-                        ++activeOutputSources;
-                    }
-                    m_kiwiSdrOutputBuffer.remove(0, kiwiTake);
-                    emitOutputSource(QStringLiteral("kiwi"), QString(), kiwiChunk,
-                                     presentationPausedForTx);
-                }
-
-                for (const auto& source : m_externalKiwiSources) {
-                    if (!source) {
-                        continue;
-                    }
-                    // Transmit gate: the source keeps draining at real-time
-                    // rate through TX so playback rejoins the live stream at
-                    // unkey; only its mix contribution ramps to zero. The
-                    // short ramp avoids a hard-mute click on both edges. A
-                    // pending resume deadline extends the hold past unkey
-                    // ("Resume audio after TX delay").
-                    const bool gateOpen = source->keepAudioDuringTx
-                        || (!kiwiSdrAudioTransmitMuted()
-                            && source->txResumeDeadline.hasExpired());
-                    const float gateTarget = gateOpen ? 1.0f : 0.0f;
-                    if (!externalKiwiSourceProcessing(*source)
-                        || source->prebuffering) {
-                        // Silent while skipped: snap the gate DOWNWARD only —
-                        // a dry tick or prebuffer stretch spanning the unkey
-                        // edge holds the gate and finishes the up-ramp on
-                        // the next tick with data instead of hard-stepping
-                        // to full amplitude. Mid-TX entry with a stale
-                        // full-gain gate is closed at the source setters
-                        // (enable/unmute snap the gate to zero while the
-                        // transmit gate is engaged), since this loop never
-                        // runs for a lone prebuffering source.
-                        source->txGateGain =
-                            std::min(source->txGateGain, gateTarget);
-                        continue;
-                    }
-                    const qsizetype sourceTake =
-                        (std::min(len, source->outputBuffer.size()) / floatBytes)
-                        * floatBytes;
-                    if (sourceTake <= 0) {
-                        source->txGateGain =
-                            std::min(source->txGateGain, gateTarget);
-                        continue;
-                    }
-                    QByteArray sourceChunk = source->outputBuffer.left(sourceTake);
-                    const auto* kiwi =
-                        reinterpret_cast<const float*>(sourceChunk.constData());
-                    auto* capturedKiwi =
-                        reinterpret_cast<float*>(sourceChunk.data());
-                    const qsizetype kiwiSamples = sourceTake / floatBytes;
-                    // Whole stereo frames only: len and every outputBuffer
-                    // append are frame-aligned, so kiwiSamples is even and
-                    // the unrolled per-frame writes below stay in bounds.
-                    Q_ASSERT((kiwiSamples & 1) == 0);
-                    float gate = source->txGateGain;
-                    bool sourceActive = false;
-                    for (qsizetype i = 0; i + 1 < kiwiSamples; i += 2) {
-                        if (gate < gateTarget) {
-                            gate = std::min(gateTarget, gate + gateStep);
-                        } else if (gate > gateTarget) {
-                            gate = std::max(gateTarget, gate - gateStep);
-                        }
-                        const float scale = source->gain * gate;
-                        const float s0 = kiwi[i] * scale;
-                        const float s1 = kiwi[i + 1] * scale;
-                        sourceActive = sourceActive
-                            || std::fabs(s0) > kOutputSilenceThreshold
-                            || std::fabs(s1) > kOutputSilenceThreshold;
-                        out[i] += s0;
-                        out[i + 1] += s1;
-                        capturedKiwi[i] = s0;
-                        capturedKiwi[i + 1] = s1;
-                    }
-                    source->txGateGain = gate;
-                    if (sourceActive) {
-                        ++activeOutputSources;
-                    }
-                    source->outputBuffer.remove(0, sourceTake);
-                    // Suppress the correlator feed exactly while the mix
-                    // gate holds this source closed — including the
-                    // post-unkey resume hold, when the chunks above were
-                    // just ramped to zero.
-                    emitOutputSource(QStringLiteral("kiwi"), source->id,
-                                     sourceChunk, !gateOpen);
-                }
-
-                const qsizetype radeTake = (std::min(len, m_radeRxBuffer.size()) / floatBytes) * floatBytes;
-                if (radeTake > 0) {
-                    const auto* rade = reinterpret_cast<const float*>(m_radeRxBuffer.constData());
-                    const qsizetype radeSamples = radeTake / floatBytes;
-                    bool sourceActive = false;
-                    for (qsizetype i = 0; i < radeSamples; ++i) {
-                        sourceActive = sourceActive
-                            || std::fabs(rade[i]) > kOutputSilenceThreshold;
-                        out[i] += rade[i];
-                    }
-                    if (sourceActive) {
-                        ++activeOutputSources;
-                    }
-                    m_radeRxBuffer.remove(0, radeTake);
-                }
-
-                // Single gain/clamp pass after all sources are mixed. Use
-                // strict 1/N active-source scaling here: 1/sqrt(N) preserves
-                // more loudness but still lets three speech streams hard-clip
-                // and sound like NR2 static.
-                const qsizetype totalSamples = len / floatBytes;
-                const float mixGain = activeOutputSources > 1
-                    ? 1.0f / static_cast<float>(activeOutputSources)
-                    : 1.0f;
-                for (qsizetype i = 0; i < totalSamples; ++i) {
-                    out[i] = std::clamp(out[i] * mixGain, -1.0f, 1.0f);
-                }
-            }
-
-            if (!flexGateApplied) {
-                // Flex produced nothing this tick: snap its gate downward
-                // only, mirroring the per-source skip snap above.
-                m_flexTxGateGain = std::min(m_flexTxGateGain, flexGateTarget);
-            }
-
-            len = m_audioDevice->write(chunk);
-            if (len > 0) {
-                const qsizetype capturedBytes =
-                    alignedStereoFloatBytes(
-                        std::min<qsizetype>(len, chunk.size()));
-                if (capturedBytes > 0) {
-                    captureAutomationAudio(
-                        QStringLiteral("final"), QStringLiteral("mix"),
-                        QString(), chunk.left(capturedBytes),
-                        sampleRate, 2);
-                }
-            }
-
-            // Stale session watchdog: if we're writing data but processedUSecs()
-            // hasn't advanced, the WASAPI session is silently discarding audio
-            // (e.g. after Teams/Zoom reconfigures the audio endpoint). (#1569)
-            qint64 processed = m_audioSink->processedUSecs();
-            if (processed == m_lastProcessedUSecs) {
-                if (++m_rxStaleTickCount >= kStaleTickThreshold) {
-                    m_rxStaleTickCount = 0;
-                    qCWarning(lcAudio) << "AudioEngine: sink appears stale (processedUSecs stuck at"
-                                       << processed << "for" << kStaleTickThreshold * 10
-                                       << "ms), restarting RX (#1569)";
-                    QMetaObject::invokeMethod(this, [this]() {
-                        if (!m_audioSink) return;
-                        stopRxStream();
-                        startRxStream();
-                    }, Qt::QueuedConnection);
-                    return;
-                }
-            } else {
-                m_rxStaleTickCount = 0;
-                m_lastProcessedUSecs = processed;
-            }
-        }
-
-        if (m_audioSink && sampleRate > 0) {
-            const qsizetype sinkBufferBytes = m_audioSink->bufferSize();
-            const qsizetype sinkFreeBytes = m_audioSink->bytesFree();
-            const qsizetype sinkQueuedBytes =
-                std::clamp(sinkBufferBytes - sinkFreeBytes,
-                           static_cast<qsizetype>(0),
-                           std::max<qsizetype>(0, sinkBufferBytes));
-            const int playbackQueuedMs =
-                qBound(0, audioBytesToMs(sinkQueuedBytes, sampleRate), 1000);
-            m_rxPlaybackQueuedMs.store(playbackQueuedMs,
-                                       std::memory_order_relaxed);
-        } else {
-            m_rxPlaybackQueuedMs.store(0, std::memory_order_relaxed);
-        }
-
-        updateRxBufferStats();
-    });
-    m_rxTimer->start();
+    updateRxBufferStats();
 }
 
 AudioEngine::~AudioEngine()
@@ -2705,11 +2856,14 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     rx["sample_rate_hz"] = rxRunning ? QJsonValue(m_rxBufferSampleRate.load()) : QJsonValue();
     rx["channel_count"] = rxRunning ? QJsonValue(2) : QJsonValue();
     rx["sample_format"] = rxRunning ? QStringLiteral("Float") : QString();
-    rx["resampling_active"] = rxRunning ? QJsonValue(m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE) : QJsonValue();
+    rx["producer_sample_rate"] = m_rxProducerRate.load();
+    rx["resampling_active"] = rxRunning ? QJsonValue(m_rxOutputRate.load() != m_rxProducerRate.load()) : QJsonValue();
     rx["buffer_bytes"] = static_cast<double>(m_rxBufferBytes.load());
+    rx["buffer_ms"] = m_rxBufferMs.load();
     rx["buffer_capacity_bytes"] = rxRunning
         ? static_cast<double>(m_audioSink->bufferSize()) : 0.0;
     rx["buffer_peak_bytes"] = static_cast<double>(m_rxBufferPeakBytes.load());
+    rx["buffer_peak_ms"] = m_rxBufferPeakMs.load();
     rx["underrun_count"] = static_cast<double>(m_rxBufferUnderrunCount.load());
     QJsonObject presentation;
     presentation["flex_delay_ms"] =
@@ -2929,25 +3083,416 @@ constexpr int kAutomationDspProbeFrames = AudioEngine::DEFAULT_SAMPLE_RATE * 3;
 constexpr int kAutomationDspProbeDiscardFrames =
     AudioEngine::DEFAULT_SAMPLE_RATE + AudioEngine::DEFAULT_SAMPLE_RATE / 2;
 constexpr int kAutomationDspProbeBlockFrames = 960;
+constexpr int kAutomationRn2ProbeMaxBlockPartitions = 64;
+constexpr float kAutomationRn2ProbeDryMix = 1.0f;
 
-QByteArray makeAutomationDspStereoProbeInput()
+QByteArray makeAutomationDspStereoProbeInput(int sampleRate = AudioEngine::DEFAULT_SAMPLE_RATE)
 {
-    QByteArray input(kAutomationDspProbeFrames * 2 * static_cast<int>(sizeof(float)),
-                     Qt::Uninitialized);
+    const int frames = sampleRate * 3;
+    QByteArray input(frames * 2 * static_cast<int>(sizeof(float)), Qt::Uninitialized);
     auto* src = reinterpret_cast<float*>(input.data());
-    for (int i = 0; i < kAutomationDspProbeFrames; ++i) {
-        const double t = static_cast<double>(i) / AudioEngine::DEFAULT_SAMPLE_RATE;
-        const float envelope = static_cast<float>(
-            0.62 + 0.38 * std::sin(2.0 * std::numbers::pi * 4.2 * t));
-        const float signal = static_cast<float>(
-            envelope * (0.30 * std::sin(2.0 * std::numbers::pi * 720.0 * t)
-                      + 0.16 * std::sin(2.0 * std::numbers::pi * 1180.0 * t)
-                      + 0.08 * std::sin(2.0 * std::numbers::pi * 1740.0 * t))
-          + 0.03 * std::sin(2.0 * std::numbers::pi * 43.0 * t));
+    for (int i = 0; i < frames; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        const float envelope =
+            static_cast<float>(0.62 + 0.38 * std::sin(2.0 * std::numbers::pi * 4.2 * t));
+        const float signal =
+            static_cast<float>(envelope * (0.30 * std::sin(2.0 * std::numbers::pi * 720.0 * t) +
+                                           0.16 * std::sin(2.0 * std::numbers::pi * 1180.0 * t) +
+                                           0.08 * std::sin(2.0 * std::numbers::pi * 1740.0 * t)) +
+                               0.03 * std::sin(2.0 * std::numbers::pi * 43.0 * t));
         src[2 * i] = 0.80f * signal;
         src[2 * i + 1] = 0.20f * signal;
     }
     return input;
+}
+
+struct AutomationRn2ProbeOptions {
+    RNNoiseFilter::RateDomain rateDomain{RNNoiseFilter::RateDomain::Legacy24k};
+    RNNoiseFilter::OutputMode outputMode{RNNoiseFilter::OutputMode::PreserveRxStereo};
+    QVector<int> blockPartitions{kAutomationDspProbeBlockFrames};
+};
+
+QString rn2ProbeRateDomainName(RNNoiseFilter::RateDomain rateDomain)
+{
+    return rateDomain == RNNoiseFilter::RateDomain::Native48k ? QStringLiteral("Native48k")
+                                                              : QStringLiteral("Legacy24k");
+}
+
+QString rn2ProbeOutputModeName(RNNoiseFilter::OutputMode outputMode)
+{
+    return outputMode == RNNoiseFilter::OutputMode::ProcessedMono
+               ? QStringLiteral("ProcessedMono")
+               : QStringLiteral("PreserveRxStereo");
+}
+
+int rn2ProbeSampleRate(RNNoiseFilter::RateDomain rateDomain)
+{
+    return rateDomain == RNNoiseFilter::RateDomain::Native48k ? 48000
+                                                              : AudioEngine::DEFAULT_SAMPLE_RATE;
+}
+
+QStringList automationDspProbeTokens(const QString& request)
+{
+    QStringList tokens;
+    QString token;
+    const auto appendToken = [&tokens, &token]() {
+        if (!token.isEmpty()) {
+            tokens.append(token);
+            token.clear();
+        }
+    };
+
+    for (qsizetype i = 0; i < request.size(); ++i) {
+        const QChar character = request.at(i);
+        if (character.isSpace()) {
+            appendToken();
+            continue;
+        }
+        if (character == QLatin1Char(',')) {
+            // Commas retain the legacy "RN2,strict" spelling, except inside
+            // blocks= where they are the intentionally comma-separated frame list.
+            const bool nextIsFrame = i + 1 < request.size() && request.at(i + 1).isDigit();
+            if (token.startsWith(QStringLiteral("blocks="), Qt::CaseInsensitive) && nextIsFrame) {
+                token.append(character);
+            } else {
+                appendToken();
+            }
+            continue;
+        }
+        token.append(character);
+    }
+    appendToken();
+    return tokens;
+}
+
+QJsonObject stereoRmsRatio(const QByteArray& pcm, int startFrame);
+
+bool parseAutomationRn2ProbeOptions(const QStringList& optionTokens,
+                                    AutomationRn2ProbeOptions& options, QString& error)
+{
+    bool sawRate = false;
+    bool sawOutput = false;
+    bool sawBlocks = false;
+    for (const QString& token : optionTokens) {
+        const qsizetype separator = token.indexOf(QLatin1Char('='));
+        if (separator <= 0 || separator != token.lastIndexOf(QLatin1Char('='))) {
+            error = QStringLiteral("RN2 probe options must be key=value tokens");
+            return false;
+        }
+        const QString key = token.left(separator).trimmed().toLower();
+        const QString value = token.mid(separator + 1).trimmed();
+        if (key == QLatin1String("rate")) {
+            if (sawRate) {
+                error = QStringLiteral("RN2 probe option rate may appear only once");
+                return false;
+            }
+            sawRate = true;
+            if (value.compare(QStringLiteral("Legacy24k"), Qt::CaseInsensitive) == 0) {
+                options.rateDomain = RNNoiseFilter::RateDomain::Legacy24k;
+            } else if (value.compare(QStringLiteral("Native48k"), Qt::CaseInsensitive) == 0) {
+                options.rateDomain = RNNoiseFilter::RateDomain::Native48k;
+            } else {
+                error = QStringLiteral("RN2 probe rate must be Legacy24k or Native48k");
+                return false;
+            }
+        } else if (key == QLatin1String("output")) {
+            if (sawOutput) {
+                error = QStringLiteral("RN2 probe option output may appear only once");
+                return false;
+            }
+            sawOutput = true;
+            if (value.compare(QStringLiteral("PreserveRxStereo"), Qt::CaseInsensitive) == 0) {
+                options.outputMode = RNNoiseFilter::OutputMode::PreserveRxStereo;
+            } else if (value.compare(QStringLiteral("ProcessedMono"), Qt::CaseInsensitive) == 0) {
+                options.outputMode = RNNoiseFilter::OutputMode::ProcessedMono;
+            } else {
+                error =
+                    QStringLiteral("RN2 probe output must be PreserveRxStereo or ProcessedMono");
+                return false;
+            }
+        } else if (key == QLatin1String("blocks")) {
+            if (sawBlocks) {
+                error = QStringLiteral("RN2 probe option blocks may appear only once");
+                return false;
+            }
+            sawBlocks = true;
+            const QStringList frameTokens = value.split(QLatin1Char(','), Qt::KeepEmptyParts);
+            if (frameTokens.isEmpty() ||
+                frameTokens.size() > kAutomationRn2ProbeMaxBlockPartitions) {
+                error = QStringLiteral("RN2 probe blocks has an excessive partition count");
+                return false;
+            }
+            options.blockPartitions.clear();
+            for (const QString& frameToken : frameTokens) {
+                bool valid = false;
+                const int frames = frameToken.toInt(&valid);
+                if (!valid || frames <= 0) {
+                    error = QStringLiteral(
+                        "RN2 probe blocks must contain positive, bounded frame counts");
+                    return false;
+                }
+                options.blockPartitions.append(frames);
+            }
+        } else {
+            error = QStringLiteral("unknown RN2 probe option: ") + key;
+            return false;
+        }
+    }
+
+    // A rate token may follow blocks. Re-check once the final rate is known.
+    const int maxFrames = rn2ProbeSampleRate(options.rateDomain) * 3;
+    for (const int frames : options.blockPartitions) {
+        if (frames > maxFrames) {
+            error = QStringLiteral("RN2 probe blocks exceeds the selected three-second input");
+            return false;
+        }
+    }
+    return true;
+}
+
+struct AutomationRn2ProbeRun {
+    QByteArray output;
+    QJsonArray blockResults;
+    int inputCoverageFrames{0};
+    int outputCoverageFrames{0};
+    int firstOutputSizeMismatchBlock{-1};
+    bool outputSizeExact{true};
+};
+
+AutomationRn2ProbeRun runAutomationRn2Probe(RNNoiseFilter& filter, const QByteArray& input,
+                                            const QVector<int>& partitions,
+                                            RNNoiseFilter::RateDomain rateDomain)
+{
+    AutomationRn2ProbeRun run;
+    const int frameBytes = 2 * static_cast<int>(sizeof(float));
+    const int inputFrames = input.size() / frameBytes;
+    run.output.reserve(input.size());
+    int offsetFrames = 0;
+    int partitionIndex = 0;
+    int blockIndex = 0;
+    while (offsetFrames < inputFrames) {
+        const int requestedFrames = partitions.at(partitionIndex);
+        const int blockFrames = std::min(requestedFrames, inputFrames - offsetFrames);
+        const QByteArray block = input.mid(offsetFrames * frameBytes, blockFrames * frameBytes);
+        QByteArray blockOutput;
+        if (rateDomain == RNNoiseFilter::RateDomain::Native48k) {
+            filter.process48kStereo(block, blockOutput);
+        } else {
+            blockOutput = filter.process(block);
+        }
+        const int outputFrames = blockOutput.size() / frameBytes;
+        const bool exact = blockOutput.size() == block.size();
+        if (!exact && run.firstOutputSizeMismatchBlock < 0) {
+            run.firstOutputSizeMismatchBlock = blockIndex;
+        }
+        run.output.append(blockOutput);
+        run.inputCoverageFrames += blockFrames;
+        run.outputCoverageFrames += outputFrames;
+        run.outputSizeExact = run.outputSizeExact && exact;
+        run.blockResults.append(QJsonObject{
+            {QStringLiteral("inputFrames"), blockFrames},
+            {QStringLiteral("inputBytes"), block.size()},
+            {QStringLiteral("outputFrames"), outputFrames},
+            {QStringLiteral("outputBytes"), blockOutput.size()},
+            {QStringLiteral("outputSizeExact"), exact},
+        });
+        offsetFrames += blockFrames;
+        partitionIndex = (partitionIndex + 1) % partitions.size();
+        ++blockIndex;
+    }
+    run.outputSizeExact = run.outputSizeExact && run.output.size() == input.size();
+    return run;
+}
+
+int firstAudibleFrame(const QByteArray& pcm)
+{
+    constexpr float kAudibleEpsilon = 1.0e-7f;
+    const auto* samples = reinterpret_cast<const float*>(pcm.constData());
+    const int frames = pcm.size() / (2 * static_cast<int>(sizeof(float)));
+    for (int frame = 0; frame < frames; ++frame) {
+        if (std::fabs(samples[2 * frame]) > kAudibleEpsilon ||
+            std::fabs(samples[2 * frame + 1]) > kAudibleEpsilon) {
+            return frame;
+        }
+    }
+    return -1;
+}
+
+QJsonObject completedAutomationRn2Probe(const AutomationRn2ProbeOptions& options,
+                                        const QByteArray& input,
+                                        const AutomationRn2ProbeRun& selected,
+                                        const AutomationRn2ProbeRun& reference)
+{
+    constexpr double kMinOutputInputRmsRatio = 0.02;
+    constexpr float kSequenceTolerance = 1.0e-5f;
+    constexpr float kDuplicateTolerance = 1.0e-7f;
+    const int sampleRate = rn2ProbeSampleRate(options.rateDomain);
+    const int discardFrames = sampleRate + sampleRate / 2;
+    const QJsonObject inputRms = stereoRmsRatio(input, discardFrames);
+    const QJsonObject outputRms = stereoRmsRatio(selected.output, discardFrames);
+    const double inputRatio = inputRms.value(QStringLiteral("ratio")).toDouble();
+    const double outputRatio = outputRms.value(QStringLiteral("ratio")).toDouble();
+    const double ratioError = std::fabs(outputRatio - inputRatio);
+    const double leftLevelRatio =
+        outputRms.value(QStringLiteral("leftRms")).toDouble() /
+        std::max(inputRms.value(QStringLiteral("leftRms")).toDouble(), 1.0e-12);
+    const double rightLevelRatio =
+        outputRms.value(QStringLiteral("rightRms")).toDouble() /
+        std::max(inputRms.value(QStringLiteral("rightRms")).toDouble(), 1.0e-12);
+    const bool audible =
+        leftLevelRatio >= kMinOutputInputRmsRatio && rightLevelRatio >= kMinOutputInputRmsRatio;
+    const bool ratioPreserved = ratioError < 0.08 && audible;
+    const int selectedFirstAudible = firstAudibleFrame(selected.output);
+    const int referenceFirstAudible = firstAudibleFrame(reference.output);
+
+    const int selectedFrames = selected.output.size() / (2 * static_cast<int>(sizeof(float)));
+    const int referenceFrames = reference.output.size() / (2 * static_cast<int>(sizeof(float)));
+    int comparisonFrames = 0;
+    int firstSequenceMismatchFrame = -1;
+    int firstSequenceMismatchChannel = -1;
+    float maxSequenceError = -1.0f;
+    if (selectedFirstAudible >= 0 && referenceFirstAudible >= 0) {
+        comparisonFrames = std::min({sampleRate, selectedFrames - selectedFirstAudible,
+                                     referenceFrames - referenceFirstAudible});
+        maxSequenceError = 0.0f;
+        const auto* selectedSamples = reinterpret_cast<const float*>(selected.output.constData());
+        const auto* referenceSamples = reinterpret_cast<const float*>(reference.output.constData());
+        for (int frame = 0; frame < comparisonFrames; ++frame) {
+            for (int channel = 0; channel < 2; ++channel) {
+                const float error = std::fabs(
+                    selectedSamples[2 * (selectedFirstAudible + frame) + channel] -
+                    referenceSamples[2 * (referenceFirstAudible + frame) + channel]);
+                maxSequenceError = std::max(maxSequenceError, error);
+                if (error > kSequenceTolerance && firstSequenceMismatchFrame < 0) {
+                    firstSequenceMismatchFrame = frame;
+                    firstSequenceMismatchChannel = channel;
+                }
+            }
+        }
+    }
+    const bool sequenceEquivalent =
+        comparisonFrames == sampleRate && maxSequenceError <= kSequenceTolerance;
+    const bool startupLatencyMeasured =
+        selectedFirstAudible >= 0 && referenceFirstAudible >= 0;
+    const int startupLatencyDeltaFrames = startupLatencyMeasured
+        ? selectedFirstAudible - referenceFirstAudible
+        : -1;
+    const bool startupLatencyEquivalent =
+        startupLatencyMeasured && startupLatencyDeltaFrames == 0;
+    const bool fifoOrderPreserved = sequenceEquivalent;
+    const bool fifoSequenceEquivalent =
+        fifoOrderPreserved && startupLatencyEquivalent;
+
+    float leftRightMaxDelta = 0.0f;
+    const auto* outputSamples = reinterpret_cast<const float*>(selected.output.constData());
+    for (int frame = 0; frame < selectedFrames; ++frame) {
+        leftRightMaxDelta = std::max(
+            leftRightMaxDelta, std::fabs(outputSamples[2 * frame] - outputSamples[2 * frame + 1]));
+    }
+    const bool duplicated = leftRightMaxDelta <= kDuplicateTolerance;
+    const bool preserveRxStereo = options.outputMode == RNNoiseFilter::OutputMode::PreserveRxStereo;
+    const bool inputCoverageComplete =
+        selected.inputCoverageFrames == input.size() / (2 * static_cast<int>(sizeof(float)));
+    const bool outputCoverageComplete =
+        selected.outputCoverageFrames == input.size() / (2 * static_cast<int>(sizeof(float)));
+    const bool ok = preserveRxStereo
+                        ? audible && inputCoverageComplete && outputCoverageComplete &&
+                              selected.outputSizeExact && ratioPreserved &&
+                              startupLatencyMeasured && fifoOrderPreserved
+                        : audible && inputCoverageComplete && outputCoverageComplete &&
+                              selected.outputSizeExact && duplicated && startupLatencyMeasured &&
+                              fifoOrderPreserved;
+
+    QJsonArray partitions;
+    for (const int frames : options.blockPartitions) {
+        partitions.append(frames);
+    }
+    return QJsonObject{
+        {QStringLiteral("ok"), ok},
+        {QStringLiteral("mode"), QStringLiteral("RN2")},
+        {QStringLiteral("available"), true},
+        {QStringLiteral("skipped"), false},
+        {QStringLiteral("tested"), true},
+        {QStringLiteral("frames"), selectedFrames},
+        {QStringLiteral("discardFrames"), discardFrames},
+        {QStringLiteral("input"), inputRms},
+        {QStringLiteral("output"), outputRms},
+        {QStringLiteral("ratioError"), ratioError},
+        {QStringLiteral("leftLevelRatio"), leftLevelRatio},
+        {QStringLiteral("rightLevelRatio"), rightLevelRatio},
+        {QStringLiteral("minimumLevelRatio"), kMinOutputInputRmsRatio},
+        {QStringLiteral("audible"), audible},
+        {QStringLiteral("preserved"), ratioPreserved},
+        {QStringLiteral("ratioPreserved"), ratioPreserved},
+        {QStringLiteral("rateDomain"), rn2ProbeRateDomainName(options.rateDomain)},
+        {QStringLiteral("sampleRate"), sampleRate},
+        {QStringLiteral("outputMode"), rn2ProbeOutputModeName(options.outputMode)},
+        {QStringLiteral("probeDryMix"), kAutomationRn2ProbeDryMix},
+        {QStringLiteral("blockPartitions"), partitions},
+        {QStringLiteral("config"), QJsonObject{
+             {QStringLiteral("rateDomain"), rn2ProbeRateDomainName(options.rateDomain)},
+             {QStringLiteral("sampleRate"), sampleRate},
+             {QStringLiteral("outputMode"), rn2ProbeOutputModeName(options.outputMode)},
+             {QStringLiteral("blockPartitions"), partitions},
+         }},
+        {QStringLiteral("referenceBlockFrames"),
+         options.rateDomain == RNNoiseFilter::RateDomain::Native48k ? 480 : 960},
+        {QStringLiteral("inputFrames"),
+         input.size() / (2 * static_cast<int>(sizeof(float)))},
+        {QStringLiteral("inputBytes"), input.size()},
+        {QStringLiteral("outputFrames"), selectedFrames},
+        {QStringLiteral("outputBytes"), selected.output.size()},
+        {QStringLiteral("inputCoverage"), QJsonObject{
+             {QStringLiteral("frames"), selected.inputCoverageFrames},
+             {QStringLiteral("bytes"),
+              selected.inputCoverageFrames * 2 * static_cast<int>(sizeof(float))},
+             {QStringLiteral("complete"), inputCoverageComplete},
+         }},
+        {QStringLiteral("outputCoverage"), QJsonObject{
+             {QStringLiteral("frames"), selected.outputCoverageFrames},
+             {QStringLiteral("bytes"),
+              selected.outputCoverageFrames * 2 * static_cast<int>(sizeof(float))},
+             {QStringLiteral("complete"), outputCoverageComplete},
+         }},
+        {QStringLiteral("outputSizeExact"), selected.outputSizeExact},
+        {QStringLiteral("firstOutputSizeMismatchBlock"),
+         selected.firstOutputSizeMismatchBlock},
+        {QStringLiteral("inputCoverageComplete"), inputCoverageComplete},
+        {QStringLiteral("outputCoverageComplete"), outputCoverageComplete},
+        {QStringLiteral("inputCoverageFrames"), selected.inputCoverageFrames},
+        {QStringLiteral("inputCoverageBytes"),
+         selected.inputCoverageFrames * 2 * static_cast<int>(sizeof(float))},
+        {QStringLiteral("outputCoverageFrames"), selected.outputCoverageFrames},
+        {QStringLiteral("outputCoverageBytes"),
+         selected.outputCoverageFrames * 2 * static_cast<int>(sizeof(float))},
+        {QStringLiteral("blockOutput"), selected.blockResults},
+        {QStringLiteral("firstAudibleFrame"), selectedFirstAudible},
+        {QStringLiteral("firstAudibleMs"),
+         selectedFirstAudible < 0 ? -1.0
+                                  : 1000.0 * selectedFirstAudible / sampleRate},
+        {QStringLiteral("referenceFirstAudibleFrame"), referenceFirstAudible},
+        {QStringLiteral("referenceFirstAudibleMs"),
+         referenceFirstAudible < 0 ? -1.0
+                                   : 1000.0 * referenceFirstAudible / sampleRate},
+        {QStringLiteral("startupLatencyMeasured"), startupLatencyMeasured},
+        {QStringLiteral("startupLatencyDeltaFrames"), startupLatencyDeltaFrames},
+        {QStringLiteral("startupLatencyDeltaMs"),
+         startupLatencyMeasured
+             ? 1000.0 * startupLatencyDeltaFrames / sampleRate
+             : -1.0},
+        {QStringLiteral("startupLatencyEquivalent"), startupLatencyEquivalent},
+        {QStringLiteral("sequenceComparisonFrames"), comparisonFrames},
+        {QStringLiteral("sequenceComparisonCount"), comparisonFrames},
+        {QStringLiteral("sequenceMaxError"), maxSequenceError},
+        {QStringLiteral("sequenceFirstMismatchFrame"), firstSequenceMismatchFrame},
+        {QStringLiteral("sequenceFirstMismatchChannel"), firstSequenceMismatchChannel},
+        {QStringLiteral("sequenceEquivalent"), sequenceEquivalent},
+        {QStringLiteral("sequenceOrder"), QStringLiteral("firstAudibleAligned")},
+        {QStringLiteral("fifoOrderPreserved"), fifoOrderPreserved},
+        {QStringLiteral("fifoSequenceEquivalent"), fifoSequenceEquivalent},
+        {QStringLiteral("leftRightMaxDelta"), leftRightMaxDelta},
+        {QStringLiteral("duplicated"), duplicated},
+    };
 }
 
 QJsonObject stereoRmsRatio(const QByteArray& pcm, int startFrame)
@@ -3064,16 +3609,16 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
     }
 
     const QByteArray input = makeAutomationDspStereoProbeInput();
-    QString tokenText = mode.trimmed();
-    tokenText.replace(QLatin1Char(','), QLatin1Char(' '));
-    const QStringList requestTokens =
-        tokenText.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    const QStringList requestTokens = automationDspProbeTokens(mode.trimmed());
     QStringList modeTokens;
+    QStringList rn2OptionTokens;
     bool strictCoverage = false;
     for (const QString& token : requestTokens) {
         const QString normalizedToken = token.toUpper();
         if (normalizedToken == QLatin1String("STRICT")) {
             strictCoverage = true;
+        } else if (token.contains(QLatin1Char('='))) {
+            rn2OptionTokens.append(token);
         } else {
             modeTokens.append(normalizedToken);
         }
@@ -3088,8 +3633,24 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
     const QString normalizedMode = modeTokens.isEmpty()
         ? QStringLiteral("ALL")
         : modeTokens.constFirst();
+    if (!rn2OptionTokens.isEmpty() && normalizedMode != QLatin1String("RN2")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("RN2 probe options require probeDspStereo RN2")},
+        };
+    }
+    AutomationRn2ProbeOptions rn2Options;
+    QString rn2OptionError;
+    if (normalizedMode == QLatin1String("RN2") &&
+        !parseAutomationRn2ProbeOptions(rn2OptionTokens, rn2Options, rn2OptionError)) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"), rn2OptionError},
+        };
+    }
 
-    const auto probeOne = [this, &input](const QString& requestedMode) -> QJsonObject {
+    const auto probeOne = [this, &input, &rn2Options](const QString& requestedMode) -> QJsonObject {
         if (requestedMode == QLatin1String("NR2")) {
             std::unique_ptr<SpectralNR> nr2 = createNr2Filter(
                 QStringLiteral("automation probe"));
@@ -3113,8 +3674,11 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
         }
 
         if (requestedMode == QLatin1String("RN2")) {
-            RNNoiseFilter rn2;
+            const int sampleRate = rn2ProbeSampleRate(rn2Options.rateDomain);
+            const QByteArray rn2Input = makeAutomationDspStereoProbeInput(sampleRate);
+            RNNoiseFilter rn2(rn2Options.outputMode, rn2Options.rateDomain);
             applyRn2Settings(rn2);
+            rn2.setDryMix(kAutomationRn2ProbeDryMix);
             if (!rn2.isValid()) {
                 return QJsonObject{
                     {QStringLiteral("ok"), false},
@@ -3124,9 +3688,27 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
                     {QStringLiteral("error"), QStringLiteral("RN2 initialization failed")},
                 };
             }
-            const QByteArray output = processAutomationDspProbeBlocks(
-                input, [&rn2](const QByteArray& block) { return rn2.process(block); });
-            return completedAutomationDspProbe(requestedMode, input, output);
+            const AutomationRn2ProbeRun selected = runAutomationRn2Probe(
+                rn2, rn2Input, rn2Options.blockPartitions, rn2Options.rateDomain);
+
+            const int referenceBlockFrames =
+                rn2Options.rateDomain == RNNoiseFilter::RateDomain::Native48k ? 480 : 960;
+            RNNoiseFilter reference(rn2Options.outputMode, rn2Options.rateDomain);
+            applyRn2Settings(reference);
+            reference.setDryMix(kAutomationRn2ProbeDryMix);
+            if (!reference.isValid()) {
+                return QJsonObject{
+                    {QStringLiteral("ok"), false},
+                    {QStringLiteral("mode"), requestedMode},
+                    {QStringLiteral("available"), false},
+                    {QStringLiteral("skipped"), false},
+                    {QStringLiteral("error"),
+                     QStringLiteral("RN2 aligned-reference initialization failed")},
+                };
+            }
+            const AutomationRn2ProbeRun alignedReference = runAutomationRn2Probe(
+                reference, rn2Input, QVector<int>{referenceBlockFrames}, rn2Options.rateDomain);
+            return completedAutomationRn2Probe(rn2Options, rn2Input, selected, alignedReference);
         }
 
         if (requestedMode == QLatin1String("NR4")) {
@@ -3200,11 +3782,32 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
 #endif
         }
 
+        if (requestedMode == QLatin1String("NNR")) {
+            // No build guard, unlike its siblings: WDSP ships both trained
+            // models in-tree, so NNR is always compiled (CMakeLists CORE_SOURCES).
+            NnrFilter nnr;
+            if (!nnr.isValid()) {
+                return unavailableAutomationDspProbe(
+                    requestedMode, QStringLiteral("NNR/WDSP create_nnr() failed"));
+            }
+            nnr.setStrength(NnrSettings::strength());
+            nnr.setModel(NnrSettings::model());
+            nnr.setAlpha(NnrSettings::alpha());
+            nnr.setAlphaKnee(NnrSettings::alphaKnee());
+            nnr.setTau(NnrSettings::tau());
+            nnr.setMaxGain(NnrSettings::maxGain());
+            nnr.setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
+            const QByteArray output = processAutomationDspProbeBlocks(
+                input, [&nnr](const QByteArray& block) { return nnr.process(block); });
+            return completedAutomationDspProbe(requestedMode, input, output);
+        }
+
         return QJsonObject{
             {QStringLiteral("ok"), false},
             {QStringLiteral("mode"), requestedMode},
             {QStringLiteral("error"),
-             QStringLiteral("unknown DSP mode; use NR2, RN2, NR4, MNR, DFNR, BNR, or all")},
+             QStringLiteral(
+                 "unknown DSP mode; use NR2, RN2, NR4, MNR, DFNR, BNR, NNR, or all")},
         };
     };
 
@@ -3231,6 +3834,7 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
         QStringLiteral("MNR"),
         QStringLiteral("DFNR"),
         QStringLiteral("BNR"),
+        QStringLiteral("NNR"),
     };
     QJsonArray results;
     bool testedOk = true;
@@ -3424,6 +4028,8 @@ bool AudioEngine::startRxStream()
     }
     m_rxBufferBytes.store(0);
     m_rxBufferPeakBytes.store(0);
+    m_rxBufferMs.store(0.0);
+    m_rxBufferPeakMs.store(0.0);
     m_rxBufferUnderrunCount.store(0);
     m_rxBufferSampleRate.store(DEFAULT_SAMPLE_RATE);
     m_rxZombieTickCount = 0;
@@ -3542,7 +4148,7 @@ bool AudioEngine::startRxStream()
         if (io) {
             m_audioSink = sink;
             m_audioDevice = io;
-            m_rxOutputRate.store(candidate.sampleRate());
+            setRxDeviceRate(candidate.sampleRate());
             if (triedFloatRung) {
                 noteRxFallback(QStringLiteral("preferred RX format unavailable -> %1 Hz")
                                    .arg(candidate.sampleRate()));
@@ -3610,7 +4216,7 @@ bool AudioEngine::startRxStream()
     summary.sampleRate = m_rxOutputRate.load();
     summary.channelCount = 2;
     summary.sampleFormat = QAudioFormat::Float;
-    summary.resamplingActive = (m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE);
+    summary.resamplingActive = (m_rxOutputRate.load() != m_rxProducerRate.load());
     summary.fallbackOccurred = rxFallbackOccurred;
     summary.fallbackReason = rxFallbackReasons.join(QStringLiteral("; "));
     AudioSummaryLogger::logRxSink(summary);
@@ -3628,6 +4234,7 @@ void AudioEngine::stopRxStream()
 {
     stopSidetoneStream();
     stopQuindarLocalSink();
+    resetRxChainStateForSourceSwitch();
     m_rxBuffer.clear();
     m_rxPackets.clear();
     m_kiwiSdrRxBuffer.clear();
@@ -3649,6 +4256,8 @@ void AudioEngine::stopRxStream()
     }
     m_rxBufferBytes.store(0);
     m_rxBufferPeakBytes.store(0);
+    m_rxBufferMs.store(0.0);
+    m_rxBufferPeakMs.store(0.0);
     m_rxBufferSampleRate.store(DEFAULT_SAMPLE_RATE);
     m_rxPlaybackQueuedMs.store(0, std::memory_order_relaxed);
 
@@ -3687,19 +4296,41 @@ void AudioEngine::setMuted(bool muted)
         emit mutedChanged(muted);
 }
 
-// Pick the sidetone backend based on build flag + AppSettings override.
-// PortAudio when available (lower latency on Linux/macOS); QAudioSink
-// fallback otherwise or when explicitly requested by the user.
+// Pick the sidetone backend from the build flag, the platform and the
+// operator's AppSettings override. The rule — including why the default is
+// PortAudio on Linux/macOS but QAudioSink on Windows (#5713) — lives in
+// CwSidetoneBackendPolicy.h, where it is pinned by
+// tests/cw_sidetone_backend_policy_test.cpp.
 static std::unique_ptr<CwSidetoneSinkBackend> makeSidetoneBackend(QObject* qparent)
 {
-    const QString pref =
-        AppSettings::instance().value("CwSidetoneBackend", "PortAudio").toString();
+#ifdef HAVE_PORTAUDIO
+    constexpr bool kPortAudioBuilt = true;
+#else
+    constexpr bool kPortAudioBuilt = false;
+#endif
+#ifdef Q_OS_WIN
+    constexpr bool kPlatformIsWindows = true;
+#else
+    constexpr bool kPlatformIsWindows = false;
+#endif
+
+    // Held in a local: string_view does not own, and a temporary QByteArray
+    // would be gone before the policy read it.
+    const QByteArray saved =
+        AppSettings::instance().value("CwSidetoneBackend").toString().trimmed().toUtf8();
+    const SidetoneBackendChoice choice = sidetoneBackendChoice(
+        kPortAudioBuilt,
+        kPlatformIsWindows,
+        parseSidetoneBackendPreference(
+            std::string_view(saved.constData(), static_cast<std::size_t>(saved.size()))));
 
 #ifdef HAVE_PORTAUDIO
-    if (pref != "QAudioSink") {
+    if (choice == SidetoneBackendChoice::PortAudio) {
         return std::unique_ptr<CwSidetoneSinkBackend>(
             new CwSidetonePortAudioSink());
     }
+#else
+    Q_UNUSED(choice);
 #endif
     return std::unique_ptr<CwSidetoneSinkBackend>(
         new CwSidetoneQAudioSink(qparent));
@@ -3711,6 +4342,7 @@ bool AudioEngine::startSidetoneStream()
     if (!m_cwSidetone) return false;
 
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    bool explicitSelection = false;
     if (!m_outputDevice.isNull()) {
         const auto outputs = QMediaDevices::audioOutputs();
         for (const auto& d : outputs) {
@@ -3718,26 +4350,45 @@ bool AudioEngine::startSidetoneStream()
             // handles follow the selected endpoint after hotplug/default churn.
             if (d.id() == m_outputDevice.id()) { dev = d; break; }
         }
-        if (dev.id() != m_outputDevice.id()) {
-            qCWarning(lcAudio) << "AudioEngine: saved sidetone output device is unavailable, using the system default output instead";
+        explicitSelection = isExplicitSidetoneSelection(
+            /*savedDeviceSet*/ true, /*savedDeviceEnumerable*/ dev.id() == m_outputDevice.id());
+        if (!explicitSelection) {
+            qCWarning(lcAudio) << "AudioEngine: saved sidetone output device is unavailable, using the backend's default output instead";
         }
     }
 
     m_sidetoneSink = makeSidetoneBackend(this);
+    // When the effective selection is the system default, hand the PortAudio
+    // backend a null device so it resolves its own default output instead of
+    // name-matching Qt's description against PortAudio's device names — on
+    // Linux those come from different audio APIs (PulseAudio/PipeWire vs ALSA)
+    // and cannot coincide for analog/USB descriptions, which stranded boxes
+    // with no saved output selection on the QAudioSink fallback (#4978); a
+    // saved-but-unmatchable selection still falls back, pending the
+    // escape-hatch setting. The QAudioSink attempts keep the concrete device:
+    // that backend resolves a null itself but flags it as a fallback, which a
+    // deliberate default selection is not. The decision table lives in
+    // CwSidetoneStartPolicy.h, where it is pinned by
+    // tests/cw_sidetone_start_policy_test.cpp.
+    const bool sidetoneOnPortAudio =
+        qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0;
+    const QAudioDevice startDev =
+        sidetoneStartDevice(explicitSelection, sidetoneOnPortAudio)
+                == SidetoneStartDevice::BackendDefault
+            ? QAudioDevice()
+            : dev;
     bool sidetoneFallbackOccurred = false;
     QStringList sidetoneFallbackReasons;
     QStringList sidetoneAttempts;
     const QString portAudioAttempt = QStringLiteral("PortAudio 48000Hz 2ch Float, native-rate fallback if needed");
     const QString qAudioSinkAttempt = QStringLiteral("QAudioSink 48000Hz/44100Hz/24000Hz 2ch Float, then Int16");
-    sidetoneAttempts << (qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0
-        ? portAudioAttempt
-        : qAudioSinkAttempt);
-    if (!m_sidetoneSink->start(dev, 48000, m_cwSidetone.get())) {
+    sidetoneAttempts << (sidetoneOnPortAudio ? portAudioAttempt : qAudioSinkAttempt);
+    if (!m_sidetoneSink->start(startDev, 48000, m_cwSidetone.get())) {
         // Backend failed — try the other one before giving up.  Most likely
         // path: PortAudio init failed on a quirky device, fall back to Qt.
 #ifdef HAVE_PORTAUDIO
-        if (qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0) {
-            qCWarning(lcAudio) << "AudioEngine: PortAudio sidetone failed, falling back to QAudioSink";
+        if (sidetoneOnPortAudio) {
+            qCWarning(lcAudio) << "AudioEngine: PortAudio sidetone failed, falling back to QAudioSink — sidetone will run on the push-model timing path";
             sidetoneFallbackOccurred = true;
             sidetoneFallbackReasons << QStringLiteral("PortAudio failed -> QAudioSink");
             m_sidetoneSink.reset(new CwSidetoneQAudioSink(this));
@@ -3786,6 +4437,12 @@ bool AudioEngine::startSidetoneStream()
     summary.backend = QString::fromLatin1(m_sidetoneSink->name());
     summary.deviceDescription = m_sidetoneSink->deviceDescription();
     summary.sampleRate = m_sidetoneSink->actualRateHz();
+    // Name the timing consequence, not just the backend: pull = the audio
+    // system drains the generator on demand (PortAudio callback), push = the
+    // 2 ms-timer block writer QAudioSink uses (#4890's timing-race host).
+    summary.timingPath = qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0
+        ? QStringLiteral("pull")
+        : QStringLiteral("push");
     summary.fallbackOccurred = sidetoneFallbackOccurred;
     summary.fallbackReason = sidetoneFallbackReasons.join(QStringLiteral("; "));
     AudioSummaryLogger::logCwSidetone(summary);
@@ -3856,7 +4513,7 @@ static void applyRxPanInPlace(float* stereo, int nFrames, int pan)
     }
 }
 
-// Resample 24kHz stereo float32 → 48kHz stereo float32 via r8brain.
+// Resample producer-rate stereo float32 to the device rate via r8brain.
 // L and R are processed through separate Resampler instances so that any
 // per-channel difference (radio-applied audio_pan) is preserved.
 // processStereoToStereo() collapses L+R to mono — do NOT use it here.
@@ -3873,11 +4530,19 @@ QByteArray AudioEngine::resampleStereo(const QByteArray& pcm,
     std::unique_ptr<Resampler>& rightResampler = externalSource
         ? externalSource->rxResamplerR
         : (source == RxDspSource::KiwiSdr ? m_kiwiSdrRxResamplerR : m_rxResamplerR);
-    if (!leftResampler) {
-        leftResampler = std::make_unique<Resampler>(24000, m_rxOutputRate.load());
+    const int producerRate = source == RxDspSource::Main
+        ? m_rxProducerRate.load() : DEFAULT_SAMPLE_RATE;
+    const int deviceRate = m_rxOutputRate.load();
+    if (producerRate == deviceRate) {
+        return pcm;
     }
-    if (!rightResampler) {
-        rightResampler = std::make_unique<Resampler>(24000, m_rxOutputRate.load());
+    if (!leftResampler || leftResampler->srcRate() != producerRate
+        || leftResampler->dstRate() != deviceRate) {
+        leftResampler = std::make_unique<Resampler>(producerRate, deviceRate);
+    }
+    if (!rightResampler || rightResampler->srcRate() != producerRate
+        || rightResampler->dstRate() != deviceRate) {
+        rightResampler = std::make_unique<Resampler>(producerRate, deviceRate);
     }
 
     const int frames = pcm.size() / (2 * static_cast<int>(sizeof(float)));
@@ -3910,14 +4575,345 @@ QByteArray AudioEngine::resampleStereo(const QByteArray& pcm,
     return result;
 }
 
+void AudioEngine::flushRxDevice()
+{
+    if (!m_audioSink) {
+        return;
+    }
+    // QAudioSink contains an already mixed stream. It cannot retract just one
+    // source, so retirement flushes that short device queue as a whole; the
+    // other sources' application FIFOs remain intact.
+    {
+        const QSignalBlocker blocker(m_audioSink);
+        m_audioSink->reset();
+        m_audioDevice = m_audioSink->start();
+    }
+    m_rxPlaybackQueuedMs.store(0);
+    if (!m_audioDevice) {
+        qCWarning(lcAudio) << "AudioEngine: RX sink restart after PCM retirement failed"
+                          << m_audioSink->error();
+        // A failed restart must not leave a nonnull sink that makes a later
+        // startRxStream() report success while the timer has no device.
+        stopRxStream();
+    }
+}
+
+bool AudioEngine::prepareMainPcmDsp()
+{
+    const int rate = m_rxProducerRate.load();
+    m_nr2.reset();
+    m_rn2.reset();
+    if (m_nr2Enabled) {
+        m_nr2 = createNr2Filter(QStringLiteral("main RX"),
+            m_mainSourceLegacyNr2.load(), rate);
+        if (m_nr2) {
+            applyNr2Settings(*m_nr2);
+        }
+    }
+    if (m_rn2Enabled) {
+        m_rn2 = createRn2Filter(QStringLiteral("main RX"), rate);
+    }
+#ifdef HAVE_SPECBLEACH
+    m_nr4.reset();
+    if (m_nr4Enabled) {
+        m_nr4 = createNr4Filter(QStringLiteral("main RX"), rate);
+        if (m_nr4) {
+            applyNr4SettingsFromAppSettings(*m_nr4);
+        }
+    }
+#endif
+    // NnrFilter is bound to its rate at construction (WDSP re-plans its FFTs
+    // and re-reads both models on a rate change), so rebuild rather than reset.
+    m_nnr.reset();
+    m_kiwiSdrNnr.reset();
+    if (m_nnrEnabled) {
+        m_nnr = createNnrFilter(QStringLiteral("main RX"), rate);
+    }
+#ifdef HAVE_DFNR
+    m_dfnr.reset();
+    if (m_dfnrEnabled) {
+        m_dfnr = createDfnrFilter(QStringLiteral("main RX"), rate);
+        if (m_dfnr) {
+            applyDfnrSettingsFromAppSettings(*m_dfnr);
+        }
+    }
+#endif
+#ifdef HAVE_NVIDIA_AFX
+    m_nvAfx.reset();
+    if (m_nvAfxEnabled) {
+        m_nvAfx = createNvAfxFilter(QStringLiteral("main RX"), rate);
+        if (m_nvAfx) {
+            m_nvAfx->setIntensity(NvidiaBnrSettings::intensity());
+        }
+    }
+#endif
+#ifdef __APPLE__
+    m_mnr.reset();
+    if (m_mnrEnabled) {
+        m_mnr = createMnrFilter(QStringLiteral("main RX"), rate);
+    }
+#endif
+    return (!m_nr2Enabled || m_nr2) && (!m_rn2Enabled || m_rn2)
+#ifdef HAVE_SPECBLEACH
+        && (!m_nr4Enabled || m_nr4)
+#endif
+#ifdef HAVE_DFNR
+        && (!m_dfnrEnabled || m_dfnr)
+#endif
+#ifdef HAVE_NVIDIA_AFX
+        && (!m_nvAfxEnabled || m_nvAfx)
+#endif
+#ifdef __APPLE__
+        && (!m_mnrEnabled || m_mnr)
+#endif
+        ;
+}
+
+// Whether the main typed source owns the RX display right now. The EQ analyzer
+// tap and the auxiliary meter mirror must agree on this: testing only for a
+// non-null frame left a revoked-but-not-yet-retired frame counting as live for
+// up to one 10 ms drain tick, so the tap stayed suppressed after the meters had
+// already handed back to the auxiliary source.
+bool AudioEngine::mainPcmSourceOwnsDisplay() const
+{
+    return m_mainPcmFrame && m_mainPcmFrame->current();
+}
+
+void AudioEngine::resetMainPcmState(int producerRate, bool rebuildDsp)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    m_rxBuffer.clear();
+    m_rxPackets.clear();
+    m_rxOutputBuffer.clear();
+    m_nr2Output.clear();
+    m_rxResampler.reset();
+    m_rxResamplerR.reset();
+    m_rxProducerRate.store(producerRate);
+    m_clientEqRx->prepare(producerRate);
+    m_clientGateRx->prepare(producerRate);
+    m_clientCompRx->prepare(producerRate);
+    m_clientDeEssRx->prepare(producerRate);
+    m_clientTubeRx->prepare(producerRate);
+    m_clientPuduRx->prepare(producerRate);
+    {
+        std::lock_guard<std::mutex> tapLock(m_clientEqTapMutex);
+        std::fill(std::begin(m_clientEqTapRx), std::end(m_clientEqTapRx), 0.0f);
+        m_clientEqTapRxWrite = 0;
+    }
+    // Only a PRODUCER-rate change invalidates these filters — they are built
+    // for the producer domain and never see the device rate. Rebuilding costs a
+    // model load (DFNR measures ~450 ms), so a caller that has not moved the
+    // producer rate keeps them, history included: the stream behind them did
+    // not change, and dropping their state would inject an NR transient.
+    // Withholding on failed preparation is enforced per call in
+    // processMixedRxAudioData(), not by a flag here.
+    if (rebuildDsp && !prepareMainPcmDsp()) {
+        qCWarning(lcAudio) << "AudioEngine: enabled RX processing could not prepare at"
+                          << producerRate << "Hz; withholding this source";
+    }
+    m_rxPresentationPrebuffering.store(m_flexReceivePresentationDelayMs.load() > 0);
+    updateRxBufferStats();
+}
+
+bool AudioEngine::retireInvalidPcmSources()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    bool retired = false;
+    if (m_mainPcmFrame && !m_mainPcmFrame->current()) {
+        m_mainPcmFrame.reset();
+        resetMainPcmState(DEFAULT_SAMPLE_RATE);
+        retired = true;
+    }
+    if (m_legacyKiwiPcmFrame && !m_legacyKiwiPcmFrame->current()) {
+        m_legacyKiwiPcmFrame.reset();
+        m_kiwiSdrRxBuffer.clear();
+        m_kiwiSdrRxPackets.clear();
+        m_kiwiSdrOutputBuffer.clear();
+        m_kiwiSdrRxResampler.reset();
+        m_kiwiSdrRxResamplerR.reset();
+        resetLegacyKiwiDspState();
+        retired = true;
+    }
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->pcmFrame && !source->pcmFrame->current()) {
+            source->pcmFrame.reset();
+            source->rxBuffer.clear();
+            source->rxPackets.clear();
+            source->outputBuffer.clear();
+            source->nr2Output.clear();
+            source->rxResampler.reset();
+            source->rxResamplerR.reset();
+            resetExternalKiwiDspState(*source);
+            source->prebuffering = true;
+            retired = true;
+        }
+    }
+    if (retired) {
+        flushRxDevice();
+        updateRxBufferStats();
+    }
+    return retired;
+}
+
+void AudioEngine::setRxDeviceRate(int rate)
+{
+    // Called only after successful output negotiation. The producer rate is
+    // unchanged; old device-format bytes and every converter history expire.
+    //
+    // The optional NR chain is deliberately NOT rebuilt here. startRxStream()
+    // reaches this on every sink open — including the #1361 zombie-sink and
+    // #1411 liveness watchdogs, which fire on real hardware and run on the GUI
+    // thread — and those filters belong to the producer domain, which this call
+    // does not touch. Rebuilding them anyway put a model load on each of those
+    // recovery paths, freezing the UI at the exact moment the user is already
+    // hearing a glitch.
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    m_rxOutputRate.store(rate);
+    resetMainPcmState(m_rxProducerRate.load(), /*rebuildDsp=*/false);
+    m_radeRxBuffer.clear();
+    m_radeRxResampler.reset();
+    m_kiwiSdrRxBuffer.clear();
+    m_kiwiSdrRxPackets.clear();
+    m_kiwiSdrOutputBuffer.clear();
+    m_kiwiSdrRxResampler.reset();
+    m_kiwiSdrRxResamplerR.reset();
+    resetLegacyKiwiDspState();
+    for (const auto& source : m_externalKiwiSources) {
+        if (!source) {
+            continue;
+        }
+        source->rxBuffer.clear();
+        source->rxPackets.clear();
+        source->outputBuffer.clear();
+        source->nr2Output.clear();
+        source->rxResampler.reset();
+        source->rxResamplerR.reset();
+        resetExternalKiwiDspState(*source);
+        source->prebuffering = true;
+    }
+    updateRxBufferStats();
+}
+
+void AudioEngine::feedPcmFrame(const PcmFrame& frame)
+{
+    if (frame.stream().purpose != PcmPurpose::Speaker || !frame.current()
+        || !frame.stream().format.valid()) {
+        return;
+    }
+    // A speaker route has one producer. A second live producer must not
+    // alternate format/state with it; the route owner retires the old epoch.
+    if (m_mainPcmFrame && m_mainPcmFrame->current()
+        && m_mainPcmFrame->stream().source != frame.stream().source) {
+        return;
+    }
+    if (!m_pcmIngress.accept(frame)) {
+        return;
+    }
+    const bool transition = !m_mainPcmFrame
+        || m_mainPcmFrame->stream() != frame.stream() || frame.discontinuity();
+    if (transition) {
+        resetMainPcmState(frame.stream().format.sampleRateHz);
+        flushRxDevice();
+    }
+    m_mainPcmFrame = frame;
+    const int channels = frame.stream().format.channels();
+    QByteArray pcm(frame.frameCount() * 2 * sizeof(float), Qt::Uninitialized);
+    auto* output = reinterpret_cast<float*>(pcm.data());
+    for (qsizetype i = 0; i < frame.frameCount(); ++i) {
+        output[i * 2] = frame.samples()[i * channels];
+        output[i * 2 + 1] = frame.samples()[i * channels + channels - 1];
+    }
+    captureAutomationAudio(QStringLiteral("raw"), QStringLiteral("flex"),
+                           QString(), pcm, frame.stream().format.sampleRateHz, 2);
+    processRxAudioData(pcm, true);
+}
+
+void AudioEngine::feedKiwiPcmFrame(const QString& sourceId, const PcmFrame& frame)
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (frame.stream().purpose != PcmPurpose::Auxiliary
+        || frame.stream().format != PcmFormat{} || !frame.current()) {
+        return;
+    }
+    const QString id = sourceId.trimmed();
+    ExternalRxAudioSourceState* source = id.isEmpty() ? nullptr : externalKiwiSource(id, false);
+    if (!id.isEmpty() && !source) {
+        return; // removed/unregistered route cannot be recreated by queued PCM
+    }
+    std::optional<PcmFrame>& previous = source ? source->pcmFrame : m_legacyKiwiPcmFrame;
+    PcmFrameGate& ingress = source ? source->pcmIngress : m_kiwiPcmIngress;
+    // A producer belongs to one intended auxiliary route, even if a caller
+    // accidentally binds its signal to multiple profile IDs.
+    if ((m_legacyKiwiPcmFrame && !id.isEmpty()
+         && m_legacyKiwiPcmFrame->stream().source == frame.stream().source)) {
+        return;
+    }
+    for (const auto& other : m_externalKiwiSources) {
+        if (other && other.get() != source && other->pcmFrame
+            && other->pcmFrame->stream().source == frame.stream().source) {
+            return;
+        }
+    }
+    if (previous && previous->current()
+        && previous->stream().source != frame.stream().source) {
+        return;
+    }
+    if (!ingress.accept(frame)) {
+        return;
+    }
+    if (!previous || previous->stream() != frame.stream() || frame.discontinuity()) {
+        if (source) {
+            source->rxBuffer.clear();
+            source->rxPackets.clear();
+            source->outputBuffer.clear();
+            source->nr2Output.clear();
+            source->rxResampler.reset();
+            source->rxResamplerR.reset();
+            resetExternalKiwiDspState(*source);
+            source->prebuffering = true;
+        } else {
+            m_kiwiSdrRxBuffer.clear();
+            m_kiwiSdrRxPackets.clear();
+            m_kiwiSdrOutputBuffer.clear();
+            m_kiwiSdrRxResampler.reset();
+            m_kiwiSdrRxResamplerR.reset();
+            resetLegacyKiwiDspState();
+        }
+        flushRxDevice();
+    }
+    previous = frame;
+    if (id.isEmpty()) {
+        queueLegacyKiwiAudioData(frame.legacyStereo24());
+    } else {
+        queueKiwiAudioData(id, frame.legacyStereo24());
+    }
+}
+
 void AudioEngine::feedAudioData(const QByteArray& pcm)
 {
+    retireInvalidPcmSources();
+    if (m_mainPcmFrame && m_mainPcmFrame->current()) {
+        return; // typed producer already owns the intended speaker route
+    }
+    if (m_rxProducerRate.load() != DEFAULT_SAMPLE_RATE) {
+        resetMainPcmState(DEFAULT_SAMPLE_RATE);
+    }
     captureAutomationAudio(QStringLiteral("raw"), QStringLiteral("flex"),
                            QString(), pcm, DEFAULT_SAMPLE_RATE, 2);
     processRxAudioData(pcm, true);
 }
 
 void AudioEngine::feedKiwiSdrAudioData(const QByteArray& pcm24kStereoFloat)
+{
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    retireInvalidPcmSources();
+    if (m_legacyKiwiPcmFrame && m_legacyKiwiPcmFrame->current()) {
+        return;
+    }
+    queueLegacyKiwiAudioData(pcm24kStereoFloat);
+}
+
+void AudioEngine::queueLegacyKiwiAudioData(const QByteArray& pcm24kStereoFloat)
 {
     if (!m_kiwiSdrAudioEnabled.load(std::memory_order_relaxed)) {
         return;
@@ -3945,6 +4941,9 @@ void AudioEngine::feedKiwiSdrAudioData(const QByteArray& pcm24kStereoFloat)
     if (m_nr2Enabled.load(std::memory_order_relaxed)) {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
         m_kiwiSdrRxPackets.push_back(alignedPcm);
+        trimAudioPacketQueue(m_kiwiSdrRxPackets, audioBytesForMsAtRate(
+            DEFAULT_SAMPLE_RATE,
+            std::max(kKiwiSdrBufferCapMs, m_kiwiReceivePresentationDelayMs.load() + 100)));
         updateRxBufferStats();
         return;
     }
@@ -3954,6 +4953,18 @@ void AudioEngine::feedKiwiSdrAudioData(const QByteArray& pcm24kStereoFloat)
 
 void AudioEngine::feedKiwiSdrAudioData(const QString& sourceId,
                                        const QByteArray& pcm24kStereoFloat)
+{
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    retireInvalidPcmSources();
+    const ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, false);
+    if (source && source->pcmFrame && source->pcmFrame->current()) {
+        return;
+    }
+    queueKiwiAudioData(sourceId, pcm24kStereoFloat);
+}
+
+void AudioEngine::queueKiwiAudioData(const QString& sourceId,
+                                   const QByteArray& pcm24kStereoFloat)
 {
     std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
@@ -4235,6 +5246,9 @@ void AudioEngine::removeKiwiSdrAudioSource(const QString& sourceId)
         });
     if (it != m_externalKiwiSources.end()) {
         m_externalKiwiSources.erase(it, m_externalKiwiSources.end());
+        // Removal can precede the timer's revoked-lease check. Once erased,
+        // no retained lease remains to retire this source's submitted audio.
+        flushRxDevice();
         qCDebug(lcKiwiSdrAudio).noquote() << "Audio source removed" << id;
         updateRxBufferStats();
     }
@@ -4244,6 +5258,9 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
 {
     std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
 
+    if (m_legacyKiwiClientEffects) {
+        m_legacyKiwiClientEffects->reset();
+    }
     m_rxResampler.reset();
     m_rxResamplerR.reset();
     m_rxPackets.clear();
@@ -4306,7 +5323,10 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
         m_nr4->reset();
     }
     if (m_nr4Enabled && m_kiwiSdrNr4) {
-        m_kiwiSdrNr4->reset();
+        m_kiwiSdrNr4 = createNr4Filter(QStringLiteral("Kiwi epoch"));
+        if (m_kiwiSdrNr4) {
+            applyNr4SettingsFromAppSettings(*m_kiwiSdrNr4);
+        }
     }
 #endif
 #ifdef HAVE_DFNR
@@ -4316,6 +5336,14 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
     if (m_dfnrEnabled && m_kiwiSdrDfnr) {
         m_kiwiSdrDfnr->reset();
     }
+#endif
+    if (m_nnrEnabled && m_nnr) {
+        m_nnr->reset();
+    }
+    if (m_nnrEnabled && m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->reset();
+    }
+#ifdef HAVE_DFNR
 #endif
 #ifdef __APPLE__
     if (m_mnrEnabled && m_mnr) {
@@ -4330,7 +5358,10 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
         m_nvAfx->reset();
     }
     if (m_nvAfxEnabled && m_kiwiSdrNvAfx) {
-        m_kiwiSdrNvAfx->reset();
+        m_kiwiSdrNvAfx = createNvAfxFilter(QStringLiteral("Kiwi epoch"));
+        if (m_kiwiSdrNvAfx) {
+            m_kiwiSdrNvAfx->setIntensity(NvidiaBnrSettings::intensity());
+        }
     }
 #endif
 }
@@ -4338,15 +5369,15 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
 void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
                                      RxAudioBuffer targetBuffer)
 {
-    if (!m_audioSink) return;  // PC audio disabled
+    if (!m_audioDevice) return;  // PC audio disabled
     m_lastAudioFeedTime.start();  // reset liveness watchdog (#1411)
 
-    // Source callbacks queue native 24 kHz stereo PCM only. With NR2 enabled,
+    // Source callbacks queue stereo PCM at their declared producer rate. With NR2 enabled,
     // each receive source keeps whole packet-sized blocks until the timer
     // processes that source through its own NR2/output path. The speaker drain
     // mixes post-DSP output FIFOs at the sink.
     if (emitTncTap && m_tncRxTapEnabled.load(std::memory_order_relaxed)) {
-        emitTncRxTapFromFloat32Stereo(pcm, DEFAULT_SAMPLE_RATE);
+        emitTncRxTapFromFloat32Stereo(pcm, m_rxProducerRate.load());
     }
 
     constexpr qsizetype kFrameBytes = 2 * static_cast<qsizetype>(sizeof(float));
@@ -4358,10 +5389,19 @@ void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
     const QByteArray alignedPcm =
         alignedBytes == pcm.size() ? pcm : pcm.left(alignedBytes);
 
+    const int producerRate = targetBuffer == RxAudioBuffer::Main
+        ? m_rxProducerRate.load() : DEFAULT_SAMPLE_RATE;
+    const int presentationDelay = targetBuffer == RxAudioBuffer::Main
+        ? m_flexReceivePresentationDelayMs.load() : m_kiwiReceivePresentationDelayMs.load();
+    const qsizetype cap = audioBytesForMsAtRate(producerRate,
+        std::max({m_rxBufferCapMs.load(), presentationDelay + 100,
+            (targetBuffer == RxAudioBuffer::KiwiSdr || kiwiSdrAudioActive()
+             || anyExternalKiwiAudioEnabled()) ? kKiwiSdrBufferCapMs : 0}));
     if (targetBuffer == RxAudioBuffer::Main
         && m_nr2Enabled.load(std::memory_order_relaxed)) {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
         m_rxPackets.push_back(alignedPcm);
+        trimAudioPacketQueue(m_rxPackets, cap);
         updateRxBufferStats();
         return;
     }
@@ -4370,6 +5410,9 @@ void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,
         targetBuffer == RxAudioBuffer::KiwiSdr ? m_kiwiSdrRxBuffer
                                                : m_rxBuffer;
     target.append(alignedPcm);
+    if (target.size() > cap) {
+        dropAudioBufferFront(target, target.size() - cap, producerRate);
+    }
     updateRxBufferStats();
 }
 
@@ -4377,7 +5420,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                                           RxDspSource source,
                                           ExternalRxAudioSourceState* externalSource)
 {
-    if (!m_audioSink) return;  // PC audio disabled
+    if (!m_audioDevice) return;  // PC audio disabled
 
     const auto sourcePan = [this, externalSource]() {
         return externalSource ? externalSource->pan : m_rxPan.load();
@@ -4409,28 +5452,42 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
     // feedAudioData() handles all remote_audio_rx paths: SSB/CW/digital on any
     // pan, and the zero-filled frames the radio sends for muted slices
     // (audio_mute=1 zeroes the payload; it does NOT suppress packets).
-    // The caller supplies exactly one native 24 kHz stereo source stream:
+    // The caller supplies exactly one producer-rate stereo source stream:
     // Flex audio, the legacy Kiwi stream, or one virtual Kiwi antenna stream.
     // Stateful NR/output resamplers must never see alternating Flex/Kiwi or
     // different Kiwi endpoints on the same DSP state.
-    auto writeAudio = [this, source, externalSource, sourcePan,
+    RxClientEffects* auxiliaryEffects = externalSource
+        ? externalSource->clientEffects.get()
+        : (source == RxDspSource::KiwiSdr ? m_legacyKiwiClientEffects.get() : nullptr);
+    if (auxiliaryEffects) {
+        auxiliaryEffects->syncParametersFrom(*m_clientEqRx, *m_clientGateRx,
+            *m_clientCompRx, *m_clientDeEssRx, *m_clientTubeRx, *m_clientPuduRx);
+    }
+    auto writeAudio = [this, source, externalSource, sourcePan, auxiliaryEffects,
                        txPresentationGated, bypassRxChainForTx](
                           const QByteArray& data,
                           bool applyOutputPan = false) {
         if (!m_audioDevice || !m_audioDevice->isOpen()) return;
+        ClientEq* eq = auxiliaryEffects ? &auxiliaryEffects->eq() : m_clientEqRx.get();
+        ClientGate* gate = auxiliaryEffects ? &auxiliaryEffects->gate() : m_clientGateRx.get();
+        ClientComp* comp = auxiliaryEffects ? &auxiliaryEffects->comp() : m_clientCompRx.get();
+        ClientDeEss* deEss = auxiliaryEffects ? &auxiliaryEffects->deEss() : m_clientDeEssRx.get();
+        ClientTube* tube = auxiliaryEffects ? &auxiliaryEffects->tube() : m_clientTubeRx.get();
+        ClientPudu* pudu = auxiliaryEffects ? &auxiliaryEffects->pudu() : m_clientPuduRx.get();
 
-        // Client-side parametric EQ runs at the native 24 kHz rate, after
-        // any NR chain, before resample-to-48k and soft boost. Copy-then-
+
+        // Client-side parametric EQ runs at this source's producer rate, after
+        // any NR chain, before device-rate conversion and soft boost. Copy-then-
         // process because the caller owns `data`. Skip when disabled or
         // during TX (matches the NR-chain TX bypass policy) — except for
         // managed Kiwi sources, whose input stays live signal during TX.
         const QByteArray* eqSource = &data;
-        if (m_clientEqRx && m_clientEqRx->isEnabled()
+        if (eq && eq->isEnabled()
             && !bypassRxChainForTx) {
             m_clientEqRxScratch = data;
             const int frames = m_clientEqRxScratch.size()
                              / (2 * static_cast<int>(sizeof(float)));
-            m_clientEqRx->process(
+            eq->process(
                 reinterpret_cast<float*>(m_clientEqRxScratch.data()),
                 frames, 2);
             eqSource = &m_clientEqRxScratch;
@@ -4440,7 +5497,8 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         // analyzer. Runs whether EQ is active or bypassed — the tap shows
         // the signal actually heading to the sink at native 24 kHz.
         const int tapFrames = eqSource->size() / (2 * static_cast<int>(sizeof(float)));
-        if (tapFrames > 0 && !txPresentationGated) {
+        if (tapFrames > 0 && !txPresentationGated
+            && (!auxiliaryEffects || !mainPcmSourceOwnsDisplay())) {
             tapClientEqRxStereo(
                 reinterpret_cast<const float*>(eqSource->constData()),
                 tapFrames);
@@ -4451,54 +5509,65 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         // (matches the user's signal-flow expectation).  Skip during TX
         // for the same reason as EQ.
         const QByteArray* gateSource = eqSource;
-        if (m_clientGateRx && m_clientGateRx->isEnabled()
+        if (gate && gate->isEnabled()
             && !bypassRxChainForTx) {
             m_clientGateRxScratch = *eqSource;
-            applyClientGateRxFloat32(m_clientGateRxScratch);
+            gate->process(reinterpret_cast<float*>(m_clientGateRxScratch.data()),
+                m_clientGateRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
             gateSource = &m_clientGateRxScratch;
         }
 
         // RX chain stage: COMP — runs after GATE.  Same scratch-copy
         // pattern.
         const QByteArray* compSource = gateSource;
-        if (m_clientCompRx && m_clientCompRx->isEnabled()
+        if (comp && comp->isEnabled()
             && !bypassRxChainForTx) {
             m_clientCompRxScratch = *gateSource;
-            applyClientCompRxFloat32(m_clientCompRxScratch);
+            comp->process(reinterpret_cast<float*>(m_clientCompRxScratch.data()),
+                m_clientCompRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
             compSource = &m_clientCompRxScratch;
         }
 
         // RX chain stage: DESS — runs after COMP, before TUBE.  Same
         // scratch-copy pattern as the surrounding stages.
         const QByteArray* deEssSource = compSource;
-        if (m_clientDeEssRx && m_clientDeEssRx->isEnabled()
+        if (deEss && deEss->isEnabled()
             && !bypassRxChainForTx) {
             m_clientDeEssRxScratch = *compSource;
-            applyClientDeEssRxFloat32(m_clientDeEssRxScratch);
+            deEss->process(reinterpret_cast<float*>(m_clientDeEssRxScratch.data()),
+                m_clientDeEssRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
             deEssSource = &m_clientDeEssRxScratch;
         }
 
         // RX chain stage: TUBE — runs after DESS.
         const QByteArray* tubeSource = deEssSource;
-        if (m_clientTubeRx && m_clientTubeRx->isEnabled()
+        if (tube && tube->isEnabled()
             && !bypassRxChainForTx) {
             m_clientTubeRxScratch = *deEssSource;
-            applyClientTubeRxFloat32(m_clientTubeRxScratch);
+            tube->process(reinterpret_cast<float*>(m_clientTubeRxScratch.data()),
+                m_clientTubeRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
             tubeSource = &m_clientTubeRxScratch;
         }
 
         // RX chain stage: PUDU — runs after TUBE.
         const QByteArray* puduSource = tubeSource;
-        if (m_clientPuduRx && m_clientPuduRx->isEnabled()
+        if (pudu && pudu->isEnabled()
             && !bypassRxChainForTx) {
             m_clientPuduRxScratch = *tubeSource;
-            applyClientPuduRxFloat32(m_clientPuduRxScratch);
+            pudu->process(reinterpret_cast<float*>(m_clientPuduRxScratch.data()),
+                m_clientPuduRxScratch.size() / (2 * static_cast<int>(sizeof(float))), 2);
             puduSource = &m_clientPuduRxScratch;
+        }
+
+        if (auxiliaryEffects && !txPresentationGated && !bypassRxChainForTx
+            && !data.isEmpty()) {
+            updateAuxiliaryClientEffectMeters(*auxiliaryEffects);
         }
 
         const int scopeSampleRate = m_rxOutputRate.load();
         const QByteArray& resampled =
-            (m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE)
+            (m_rxOutputRate.load() != (source == RxDspSource::Main
+                    ? m_rxProducerRate.load() : DEFAULT_SAMPLE_RATE))
                 ? resampleStereo(*puduSource, source, externalSource)
                 : *puduSource;
         const QByteArray* output = &resampled;
@@ -4586,13 +5655,21 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             writeAudioAndLevel(pcm);
         } else if (m_rn2Enabled) {
             RNNoiseFilter* rn2 = rn2ForSource(source, externalSource);
-            if (!rn2) {
-                writeAudioAndLevel(pcm);
+            if (!rn2 || !rn2->isValid()) {
+                return; // enabled processor is still preparing or failed
+            }
+            QByteArray processed;
+            if (source == RxDspSource::Main && m_rxProducerRate.load() == 48000) {
+                rn2->process48kStereo(pcm, processed);
+            } else {
+                processed = rn2->process(pcm);
+            }
+            writeAudioAndLevel(processed);
+        } else if (m_nr2Enabled) {
+            if (!(externalSource ? externalSource->nr2.get()
+                  : (source == RxDspSource::KiwiSdr ? m_kiwiSdrNr2.get() : m_nr2.get()))) {
                 return;
             }
-            QByteArray processed = rn2->process(pcm);
-            writeAudioAndLevel(processed);
-        } else if (m_nr2Enabled && m_nr2) {
             processNr2(pcm, source, externalSource);
             const QByteArray& nr2Output = externalSource
                 ? externalSource->nr2Output
@@ -4603,9 +5680,8 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
 #ifdef HAVE_SPECBLEACH
         } else if (m_nr4Enabled) {
             SpecbleachFilter* nr4 = nr4ForSource(source, externalSource);
-            if (!nr4) {
-                writeAudioAndLevel(pcm);
-                return;
+            if (!nr4 || !nr4->isValid()) {
+                return; // enabled processor is still preparing or failed
             }
             QByteArray processed = nr4->process(pcm);
             writeAudioAndLevel(processed);
@@ -4613,19 +5689,37 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
 #ifdef HAVE_DFNR
         } else if (m_dfnrEnabled) {
             DeepFilterFilter* dfnr = dfnrForSource(source, externalSource);
-            if (!dfnr) {
-                writeAudioAndLevel(pcm);
-                return;
+            if (!dfnr || !dfnr->isValid()) {
+                return; // enabled processor is still preparing or failed
             }
             QByteArray processed = dfnr->process(pcm);
             writeAudioAndLevel(processed);
 #endif
+        } else if (m_nnrEnabled) {
+            NnrFilter* nnr = nnrForSource(source, externalSource);
+            if (!nnr || !nnr->isValid()) {
+                return; // enabled processor is still preparing or failed
+            }
+            QByteArray processed = nnr->process(pcm);
+            // process() applies a pending model switch on this thread, so this
+            // is the first point the selected slot is knowable. Republish it so
+            // nnrModel() converges instead of reporting whatever was live when
+            // setNnrModel() returned. Main RX only — the Kiwi and external
+            // filters are separate instances that do not own this property.
+            // Convergence is therefore bounded by RX audio actually flowing:
+            // with the radio disconnected, or no block reaching this filter,
+            // the previously published slot persists exactly as it used to.
+            // Nothing is emitted here either — a UI that samples nnrModel()
+            // only on nnrEnabledChanged still has to re-read to see the move.
+            if (!externalSource && source != RxDspSource::KiwiSdr) {
+                m_nnrModel.store(nnr->modelSlot(), std::memory_order_relaxed);
+            }
+            writeAudioAndLevel(processed);
 #ifdef HAVE_NVIDIA_AFX
         } else if (m_nvAfxEnabled) {
             NvidiaAfxFilter* nvAfx = nvAfxForSource(source, externalSource);
-            if (!nvAfx) {
-                writeAudioAndLevel(pcm);
-                return;
+            if (!nvAfx || !nvAfx->isValid()) {
+                return; // enabled processor is still preparing or failed
             }
             QByteArray processed = nvAfx->process(pcm);
             writeAudioAndLevel(processed);
@@ -4633,9 +5727,8 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
 #ifdef __APPLE__
         } else if (m_mnrEnabled) {
             MacNRFilter* mnr = mnrForSource(source, externalSource);
-            if (!mnr) {
-                writeAudioAndLevel(pcm);
-                return;
+            if (!mnr || !mnr->isValid()) {
+                return; // enabled processor is still preparing or failed
             }
             QByteArray processed = mnr->process(pcm);
             writeAudioAndLevel(processed);
@@ -4644,6 +5737,21 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             writeAudioAndLevel(pcm);
         }
     }
+}
+
+void AudioEngine::updateAuxiliaryClientEffectMeters(RxClientEffects& source)
+{
+    // The main source owns the RX display whenever its typed stream is live.
+    // With auxiliary-only playback, retain the existing last-presented-source
+    // meter behavior without redirecting UI parameter writes to a DSP replica.
+    if (mainPcmSourceOwnsDisplay()) {
+        return;
+    }
+    m_clientGateRx->copyMeteringFrom(source.gate());
+    m_clientCompRx->copyMeteringFrom(source.comp());
+    m_clientDeEssRx->copyMeteringFrom(source.deEss());
+    m_clientTubeRx->copyMeteringFrom(source.tube());
+    m_clientPuduRx->copyMeteringFrom(source.pudu());
 }
 
 namespace {
@@ -6181,6 +7289,11 @@ static void applyNr2Settings(SpectralNR& nr2)
     nr2.setGainMethod(config.gainMethod);
     nr2.setNpeMethod(config.npeMethod);
     nr2.setAeFilter(config.aeFilter);
+    nr2.setPost2Run(config.post2Run);
+    nr2.setPost2Factor(config.post2Factor);
+    nr2.setPost2Nlevel(config.post2Nlevel);
+    nr2.setPost2TaperHz(config.post2TaperHz);
+    nr2.setPost2DecaySeconds(config.post2DecaySeconds);
 }
 
 // RN2's only user-adjustable parameter. The TX (ProcessedMono) instance is
@@ -6200,6 +7313,11 @@ static void copyNr2Settings(const SpectralNR& source, SpectralNR& target)
     target.setGainMethod(source.gainMethod());
     target.setNpeMethod(source.npeMethod());
     target.setAeFilter(source.aeFilter());
+    target.setPost2Run(source.post2Run());
+    target.setPost2Factor(source.post2Factor());
+    target.setPost2Nlevel(source.post2Nlevel());
+    target.setPost2TaperHz(source.post2TaperHz());
+    target.setPost2DecaySeconds(source.post2DecaySeconds());
 }
 
 #ifdef HAVE_SPECBLEACH
@@ -6311,6 +7429,7 @@ void AudioEngine::setNr2Enabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         // Wisdom should already be generated by MainWindow::enableNr2WithWisdom().
         // Import only here: full wisdom generation can take minutes and must
@@ -6322,7 +7441,7 @@ void AudioEngine::setNr2Enabled(bool on)
 #endif
         m_nr2 = createNr2Filter(
             QStringLiteral("main RX"),
-            m_mainSourceLegacyNr2.load(std::memory_order_relaxed));
+            m_mainSourceLegacyNr2.load(std::memory_order_relaxed), m_rxProducerRate.load());
         if (!m_nr2) {
             emit nr2EnabledChanged(false);
             return;
@@ -6455,6 +7574,10 @@ QJsonObject AudioEngine::nr2RuntimeDiagnostics() const
             {QStringLiteral("gainSmooth"), filter->gainSmooth()},
             {QStringLiteral("qspp"), filter->qspp()},
             {QStringLiteral("fftSize"), filter->fftSize()},
+            {QStringLiteral("transientResetCount"),
+                static_cast<double>(filter->transientResetCount())},
+            {QStringLiteral("noiseEstimateResetCount"),
+                static_cast<double>(filter->noiseEstimateResetCount())},
             {QStringLiteral("legacyGainMethods"),
                 filter->usesLegacyGainMethods()},
         };
@@ -6489,26 +7612,27 @@ void AudioEngine::setNr2AeFilter(bool on)
     }
 }
 
-void AudioEngine::setNr2UseOriginalGeometry(bool useOriginal)
+void AudioEngine::applyNr2Post2Settings()
 {
-    const bool previous = m_nr2UseOriginalGeometry.exchange(
-        useOriginal, std::memory_order_relaxed);
-    if (previous == useOriginal) {
-        return;
+    const Nr2SettingsModel::Config config = Nr2SettingsModel::instance().config();
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    const auto push = [&config](SpectralNR* nr2) {
+        if (!nr2) {
+            return;
+        }
+        nr2->setPost2Run(config.post2Run);
+        nr2->setPost2Factor(config.post2Factor);
+        nr2->setPost2Nlevel(config.post2Nlevel);
+        nr2->setPost2TaperHz(config.post2TaperHz);
+        nr2->setPost2DecaySeconds(config.post2DecaySeconds);
+    };
+    push(m_nr2.get());
+    push(m_kiwiSdrNr2.get());
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nr2) {
+            push(source->nr2.get());
+        }
     }
-
-    qCInfo(lcAudio).noquote()
-        << "AudioEngine: NR2 comparison mode switched to"
-        << (useOriginal ? "original geometry/gain"
-                        : "1024/4 with WDSP gain mapping");
-    if (!m_nr2Enabled.load(std::memory_order_relaxed)) {
-        return;
-    }
-
-    // Re-enter through the normal lifecycle so every Flex/Kiwi NR2 instance,
-    // presentation buffer, and startup estimator is rebuilt together.
-    setNr2Enabled(false);
-    setNr2Enabled(true);
 }
 
 void AudioEngine::setMainSourceLegacyNr2(bool legacy)
@@ -6541,8 +7665,9 @@ void AudioEngine::setNr4Enabled(bool on)
         if (m_rn2Enabled)  setRn2Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
-        m_nr4 = createNr4Filter(QStringLiteral("Flex"));
+        m_nr4 = createNr4Filter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_nr4) {
             m_nr4.reset();
             emit nr4EnabledChanged(false);
@@ -6698,10 +7823,11 @@ void AudioEngine::setMnrEnabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         // Restore strength from settings (default 1.0 = full suppression)
         m_mnrStrength.store(std::clamp(
             AppSettings::instance().value("MnrStrength", "1.00").toFloat(), 0.0f, 1.0f));
-        m_mnr = createMnrFilter(QStringLiteral("Flex"));
+        m_mnr = createMnrFilter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_mnr) {
             m_mnr.reset();
             emit mnrEnabledChanged(false);
@@ -6763,8 +7889,9 @@ void AudioEngine::setRn2Enabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
-        m_rn2 = createRn2Filter(QStringLiteral("Flex"));
+        m_rn2 = createRn2Filter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_rn2) {
             m_rn2.reset();
             emit rn2EnabledChanged(false);
@@ -6787,6 +7914,122 @@ void AudioEngine::setRn2Enabled(bool on)
     }
     qCDebug(lcAudio) << "AudioEngine: RN2 (RNNoise)" << (on ? "enabled" : "disabled");
     emit rn2EnabledChanged(on);
+}
+
+// ─── NNR (WDSP 2.10 neural noise reduction) ──────────────────────────────────
+// Unconditional, unlike DFNR/MNR/BNR: both trained models are compiled into
+// the vendored WDSP, so there is no library to locate and no GPU to require.
+// It is a SPEECH model — a steady carrier is attenuated ~28 dB — so callers
+// must keep it away from CW, the digital modes and the data path.
+
+void AudioEngine::setNnrEnabled(bool on)
+{
+    if (m_nnrEnabled == on) return;
+    std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
+    ++m_dspConfigurationGeneration;
+    if (on) {
+        // Disable all other NR modes — they're mutually exclusive
+        if (m_nr2Enabled)  setNr2Enabled(false);
+        if (m_rn2Enabled)  setRn2Enabled(false);
+        if (m_nr4Enabled)  setNr4Enabled(false);
+        if (m_dfnrEnabled) setDfnrEnabled(false);
+        if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_mnrEnabled)  setMnrEnabled(false);
+        m_nnrStrength.store(NnrSettings::strength());
+        m_nnrModel.store(NnrSettings::model());
+        m_nnr = createNnrFilter(QStringLiteral("main RX"), m_rxProducerRate.load());
+        if (!m_nnr) {
+            m_nnr.reset();
+            emit nnrEnabledChanged(false);
+            return;
+        }
+        // WDSP reports the slot it actually selected, which differs from the
+        // request when a build has no model there.
+        m_nnrModel.store(m_nnr->modelSlot());
+        m_nnrEnabled = true;
+    } else {
+        m_nnrEnabled = false;
+        m_nnr.reset();
+        m_kiwiSdrNnr.reset();
+        for (const auto& source : m_externalKiwiSources) {
+            if (source) {
+                source->nnr.reset();
+            }
+        }
+    }
+    lock.unlock();
+    if (on) {
+        scheduleAllKiwiDspStateInitialization();
+    }
+    qCDebug(lcAudio) << "AudioEngine: NNR" << (on ? "enabled" : "disabled");
+    emit nnrEnabledChanged(on);
+}
+
+void AudioEngine::setNnrStrength(int strength)
+{
+    const int clamped = std::clamp(strength, 0, 100);
+    m_nnrStrength.store(clamped);
+    NnrSettings::setStrength(clamped);
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (m_nnr) {
+        m_nnr->setStrength(clamped);
+    }
+    if (m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->setStrength(clamped);
+    }
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nnr) {
+            source->nnr->setStrength(clamped);
+        }
+    }
+}
+
+void AudioEngine::applyNnrTuning()
+{
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    const auto push = [](NnrFilter* f) {
+        if (!f) {
+            return;
+        }
+        f->setAlpha(NnrSettings::alpha());
+        f->setAlphaKnee(NnrSettings::alphaKnee());
+        f->setTau(NnrSettings::tau());
+        f->setMaxGain(NnrSettings::maxGain());
+        f->setSmoothing(NnrSettings::smoothAttackMs(), NnrSettings::smoothReleaseMs());
+    };
+    push(m_nnr.get());
+    push(m_kiwiSdrNnr.get());
+    for (const auto& source : m_externalKiwiSources) {
+        if (source) {
+            push(source->nnr.get());
+        }
+    }
+}
+
+void AudioEngine::setNnrModel(int slot)
+{
+    const int requested = std::clamp(slot, 0, 1);
+    NnrSettings::setModel(requested);
+    std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
+    if (m_kiwiSdrNnr) {
+        m_kiwiSdrNnr->setModel(requested);
+    }
+    for (const auto& source : m_externalKiwiSources) {
+        if (source && source->nnr) {
+            source->nnr->setModel(requested);
+        }
+    }
+    if (m_nnr) {
+        m_nnr->setModel(requested);
+        // nnrModel() reports the slot in use, not the one wanted: WDSP can
+        // refuse a slot this build has no model for. The switch lands on the
+        // audio thread, so this still reads the previous slot here — the RX
+        // path republishes it after the next processed block, which is what
+        // makes the value converge rather than stay stale.
+        m_nnrModel.store(m_nnr->modelSlot());
+    } else {
+        m_nnrModel.store(requested);
+    }
 }
 
 // ─── RN2 — TX path (mic pre-amp) ──────────────────────────────────────────────
@@ -6868,7 +8111,8 @@ void AudioEngine::setDfnrEnabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
-        m_dfnr = createDfnrFilter(QStringLiteral("Flex"));
+        if (m_nnrEnabled)  setNnrEnabled(false);
+        m_dfnr = createDfnrFilter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_dfnr) {
             m_dfnr.reset();
             emit dfnrEnabledChanged(false);
@@ -6955,8 +8199,9 @@ void AudioEngine::setNvAfxEnabled(bool on)
         if (m_nr4Enabled)  setNr4Enabled(false);
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
+        if (m_nnrEnabled)  setNnrEnabled(false);
         if (m_mnrEnabled)  setMnrEnabled(false);
-        m_nvAfx = createNvAfxFilter(QStringLiteral("Flex"));
+        m_nvAfx = createNvAfxFilter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_nvAfx) {
             m_nvAfx.reset();
             emit nvAfxEnabledChanged(false);
@@ -7273,13 +8518,14 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 {
     if (m_audioSource) return true;  // already running
 
-    // WASAPI silent-open recovery (#2929). If the previous open was driven
-    // by the silence watchdog, m_txForceMonoOnNextOpen is true; consume it
-    // here. A fresh (non-watchdog) start re-enables the one-shot retry budget.
-    const bool isWatchdogRetry = m_txForceMonoOnNextOpen;
-    m_txForceMonoOnNextOpen = false;
+    // WASAPI silent-open recovery (#2929). If the previous open was driven by
+    // the silence watchdog, m_txSilentOpenRetryArmed is true; consume it here
+    // and stay on the ladder. A fresh (non-watchdog) start rewinds to stage 0,
+    // which re-enables the whole recovery budget.
+    const bool isWatchdogRetry = m_txSilentOpenRetryArmed;
+    m_txSilentOpenRetryArmed = false;
     if (!isWatchdogRetry) {
-        m_txSilenceRetryDone = false;
+        m_txOpenStage = 0;
     }
     m_txReceivedAnyBytes = false;
 
@@ -7290,8 +8536,12 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     m_txMicChannelState.reset();
     m_lastTxMicChannelLog.invalidate();
 
-    // TX mic capture uses Int16 — we convert to float32 after capture.
-    // (makeFormat() returns Float for the RX sink, but mic hardware is Int16.)
+    // Seed values only — every platform branch below overrides format, rate and
+    // channel count from its own ladder, so nothing here survives negotiation.
+    // Int16 is no longer the assumed mic format: Windows and Linux lead with
+    // Float32 so the 48 kHz float voice strip is fed without a round trip, and
+    // macOS keeps Int16 (AudioFormatNegotiator::formatOrder). The negotiated
+    // value is recorded in m_txInputFormat.
     QAudioFormat fmt;
     fmt.setSampleRate(DEFAULT_SAMPLE_RATE);
     fmt.setChannelCount(2);
@@ -7352,9 +8602,47 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     // migrating its mono-clamp onto the wrapper is a separate, soakable step.
     constexpr int preferredTxRate = 48000;
     fmt.setSampleRate(48000);
+    // Ask WASAPI for its own currency. The shared-mode mix is float32 by
+    // construction, so Int16 here makes the engine quantize on the way to us
+    // and TxVoiceProcessor widen it straight back. Probe-at-open applies as
+    // ever: if Float is refused, the fallback ladder below walks Int16.
+    //
+    // Rate, format and channel count all come from ONE ordered cursor
+    // (AudioFormatNegotiator::TxOpenCursor). It used to be two sequences: this
+    // (format, channels) recovery ladder at 48 kHz, plus a separate
+    // rate x channels x format loop further down entered only when
+    // QAudioSource::start() returned null. They could interleave into a
+    // permanently silent mic — at the recovery ladder's last stage a null open
+    // dropped into the other loop, which restarted at 48 kHz Float stereo, a
+    // tuple already observed silent, and accepted it with no watchdog budget
+    // left (round-3 review of PR #5017).
+    //
+    // Stage 0 is the normal open and records the maximumChannelCount() clamp
+    // the rest of the ladder derives from. BOTH failure shapes now advance the
+    // same cursor: a null open advances it inline (below), a non-null/no-data
+    // open advances it from the watchdog. The cursor only moves forward, so a
+    // tuple already observed silent can never be reached again.
     const int maxCh = dev.maximumChannelCount();
-    const int initialCh = (isWatchdogRetry || (maxCh > 0 && maxCh < 2)) ? 1 : 2;
-    fmt.setChannelCount(initialCh);
+    if (!isWatchdogRetry) {
+        m_txSilentOpenInitialChannels = (maxCh > 0 && maxCh < 2) ? 1 : 2;
+    }
+    AudioFormatNegotiator::TxOpenCursor txOpenCursor(
+        m_txSilentOpenInitialChannels, m_txOpenStage);
+    const auto seedAttempt = txOpenCursor.attempt();
+    fmt.setSampleRate(seedAttempt.rate);
+    fmt.setSampleFormat(
+        seedAttempt.fmt == AudioFormatNegotiator::SampleFmt::Int16
+            ? QAudioFormat::Int16
+            : QAudioFormat::Float);
+    fmt.setChannelCount(seedAttempt.channels);
+    if (txOpenCursor.stage() > 0) {
+        noteTxFallback(
+            QStringLiteral("TX open recovery stage %1 -> %2Hz %3ch %4 (#2929)")
+                .arg(txOpenCursor.stage())
+                .arg(seedAttempt.rate)
+                .arg(seedAttempt.channels)
+                .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat())));
+    }
     noteTxAttempt(fmt);
     formatFound = true;
 #else
@@ -7376,10 +8664,13 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     const int preferredTxRate = txLadder.isEmpty() ? 48000 : txLadder.first().sampleRate();
     for (int channels : {2, 1}) {
         for (const QAudioFormat& cand : txLadder) {
-            if (cand.sampleFormat() != QAudioFormat::Int16)
-                continue;   // mic is captured as Int16
+            // Honour the rung's sample format instead of forcing Int16. The
+            // ladder already ranks Float32 first for the TX voice strip on the
+            // platforms this is measured on; dropping every non-Int16 rung here
+            // is what previously made FormatPreference::Float32First unreachable.
             fmt.setChannelCount(channels);
             fmt.setSampleRate(cand.sampleRate());
+            fmt.setSampleFormat(cand.sampleFormat());
             noteTxAttempt(fmt);
             if (dev.isFormatSupported(fmt)) {
                 formatFound = true;
@@ -7409,24 +8700,33 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     }
 
     qCInfo(lcAudio) << "AudioEngine: selected TX input format:"
-        << fmt.sampleRate() << "Hz" << fmt.channelCount() << "ch";
+        << fmt.sampleRate() << "Hz" << fmt.channelCount() << "ch"
+        << AudioSummaryLogger::sampleFormatName(fmt.sampleFormat());
 
     // Record the negotiated device format. Voice normalizes directly to the
     // 48 kHz DSP island; the legacy 24 kHz resampler below is retained only
     // for the separate RADE branch.
-    m_txInputRate = fmt.sampleRate();
-    m_txInputChannels = fmt.channelCount();
-    m_txInputFormat = fmt.sampleFormat();
-    m_txInputMono = (m_txInputChannels == 1);
-    m_radeTxNeedsResample = (m_txInputRate != DEFAULT_SAMPLE_RATE);
+    // ONE place that turns a negotiated format into engine state. It used to
+    // be two — here, and again inside the Windows null-open fallback loop —
+    // and a rung reached by the fallback path has to end up in byte-identical
+    // state to the same rung reached by the initial open, or a watchdog
+    // restart lands somewhere subtly different from where it left off.
+    const auto applyNegotiatedFormat = [this](const QAudioFormat& f) -> bool {
+        m_txInputRate = f.sampleRate();
+        m_txInputChannels = f.channelCount();
+        m_txInputFormat = f.sampleFormat();
+        m_txInputMono = (m_txInputChannels == 1);
+        m_radeTxNeedsResample = (m_txInputRate != DEFAULT_SAMPLE_RATE);
+        // The RADE path's polyphase resampler for high-quality conversion.
+        if (m_radeTxNeedsResample) {
+            m_txResampler = std::make_unique<Resampler>(m_txInputRate, DEFAULT_SAMPLE_RATE, 16384);
+        } else {
+            m_txResampler.reset();
+        }
+        return m_txVoiceProcessor->prepare(m_txInputRate, 16384);
+    };
 
-    // Create the RADE path's polyphase resampler for high-quality conversion.
-    if (m_radeTxNeedsResample) {
-        m_txResampler = std::make_unique<Resampler>(m_txInputRate, DEFAULT_SAMPLE_RATE, 16384);
-    } else {
-        m_txResampler.reset();
-    }
-    if (!m_txVoiceProcessor->prepare(m_txInputRate, 16384)) {
+    if (!applyNegotiatedFormat(fmt)) {
         qCWarning(lcAudio) << "AudioEngine: failed to prepare 48 kHz TX voice processor"
                            << "for input rate" << m_txInputRate;
         return false;
@@ -7527,55 +8827,52 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
                            << "device:" << dev.description();
 #ifdef Q_OS_WIN
         // Windows: WASAPI may reject our negotiated format at open time.
-        // Try additional rates before giving up.
+        // Advance the SAME cursor the watchdog advances, rather than starting a
+        // second, independent rate ladder — that duplication is what let a null
+        // open at the recovery ladder's last stage restart at 48 kHz Float
+        // stereo, a tuple already observed silent, with no watchdog budget left
+        // (round-3 review of PR #5017). A null open and a no-data open are the
+        // same statement about a rung, so they take the same transition.
         delete m_audioSource; m_audioSource = nullptr;
-        bool txOpened = false;
-        constexpr int fallbackRates[] = {48000, 44100, 24000, 16000};
-        const int initialRate = fmt.sampleRate();
-        const int initialChannels = fmt.channelCount();
-        for (int rate : fallbackRates) {
-            for (int ch : {2, 1}) {
-                // Skip only the exact (rate, ch) combo that just failed —
-                // a mono-only 48 kHz USB mic needs a 48 kHz mono retry (#2929).
-                if (rate == initialRate && ch == initialChannels) continue;
-                fmt.setSampleRate(rate);
-                fmt.setChannelCount(ch);
-                noteTxAttempt(fmt);
-                m_audioSource = new QAudioSource(dev, fmt, this);
-                m_micDevice = m_audioSource->start();
-                if (m_micDevice) {
-                    qCInfo(lcAudio) << "AudioEngine: TX source opened at fallback"
-                                    << rate << "Hz" << ch << "ch";
-                    noteTxFallback(QStringLiteral("initial TX source open failed -> %1Hz %2ch")
-                                       .arg(rate)
-                                       .arg(ch));
-                    m_txInputRate = rate;
-                    m_txInputChannels = ch;
-                    m_txInputFormat = fmt.sampleFormat();
-                    m_txInputMono = (m_txInputChannels == 1);
-                    m_radeTxNeedsResample = (rate != DEFAULT_SAMPLE_RATE);
-                    if (m_radeTxNeedsResample) {
-                        m_txResampler = std::make_unique<Resampler>(rate, 24000, 16384);
-                    } else {
-                        m_txResampler.reset();
-                    }
-                    if (!m_txVoiceProcessor->prepare(rate, 16384)) {
-                        qCWarning(lcAudio)
-                            << "AudioEngine: failed to prepare 48 kHz TX voice processor"
-                            << "for fallback input rate" << rate;
-                        delete m_audioSource;
-                        m_audioSource = nullptr;
-                        m_micDevice = nullptr;
-                        continue;
-                    }
-                    txOpened = true;
-                    break;
-                }
+        while (txOpenCursor.advance()) {
+            const auto next = txOpenCursor.attempt();
+            fmt.setSampleRate(next.rate);
+            fmt.setChannelCount(next.channels);
+            fmt.setSampleFormat(
+                next.fmt == AudioFormatNegotiator::SampleFmt::Int16
+                    ? QAudioFormat::Int16
+                    : QAudioFormat::Float);
+            noteTxAttempt(fmt);
+            m_audioSource = new QAudioSource(dev, fmt, this);
+            m_micDevice = m_audioSource->start();
+            if (!m_micDevice) {
                 delete m_audioSource; m_audioSource = nullptr;
+                continue;
             }
-            if (txOpened) break;
+            if (!applyNegotiatedFormat(fmt)) {
+                // A rung that cannot prepare is a rung that does not work.
+                // Advance past it exactly as a null open does, so it can never
+                // be the one the watchdog is later told it is sitting on.
+                qCWarning(lcAudio)
+                    << "AudioEngine: failed to prepare 48 kHz TX voice processor"
+                    << "for fallback input rate" << next.rate;
+                delete m_audioSource;
+                m_audioSource = nullptr;
+                m_micDevice = nullptr;
+                continue;
+            }
+            qCInfo(lcAudio) << "AudioEngine: TX source opened at fallback stage"
+                            << txOpenCursor.stage()
+                            << next.rate << "Hz" << next.channels << "ch"
+                            << AudioSummaryLogger::sampleFormatName(fmt.sampleFormat());
+            noteTxFallback(QStringLiteral("initial TX source open failed -> stage %1: %2Hz %3ch %4")
+                               .arg(txOpenCursor.stage())
+                               .arg(next.rate)
+                               .arg(next.channels)
+                               .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat())));
+            break;
         }
-        if (!txOpened) {
+        if (!m_micDevice) {
             qCWarning(lcAudio) << "AudioEngine: all TX source formats failed";
             logAudioOpenFailure(QStringLiteral("TX source"),
                                 QStringLiteral("QAudioSource"),
@@ -7604,25 +8901,66 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     // native mono format but Qt's QAudioSource::start() returns a non-null
     // QIODevice for an unsupported stereo open, then delivers zero bytes.
     // The null-open fallback ladder above never sees this case (start did
-    // not return null). One-shot retry as mono if no bytes arrive in 1.5 s.
-    if (!m_txSilenceRetryDone) {
+    // not return null). Retry along the recovery ladder if no bytes arrive
+    // in 1.5 s, and arm only while the ladder has somewhere left to go.
+    //
+    // Recovery walks channel count AND sample format. Forcing Float-first
+    // capture made the format a way to open successfully and receive nothing,
+    // exactly as an unsupported stereo open already was: an Int16-capable
+    // endpoint that accepts a Float open must still reach Int16 rather than
+    // being left permanently silent (review of PR #5017).
+    //
+    // The cursor answers "is there anywhere left to go", and it is the SAME
+    // question the null-open walk above answers with advance(). Whichever path
+    // opened the device, the cursor is on the rung that is actually open, so
+    // the watchdog can no longer be told it is sitting on a rung the fallback
+    // walk moved off.
+    if (txOpenCursor.hasNext()) {
         const quint64 watchdogGen = m_txLifecycleGeneration;
         const QHostAddress watchdogAddr = m_txAddress;
         const quint16 watchdogPort = m_txPort;
-        QTimer::singleShot(1500, this, [this, watchdogGen, watchdogAddr, watchdogPort]() {
+        const int nextStage = txOpenCursor.stage() + 1;
+        const AudioFormatNegotiator::TxOpenAttempt nextAttempt =
+            txOpenCursor.ladder().at(nextStage);
+        QTimer::singleShot(1500, this,
+                           [this, watchdogGen, watchdogAddr, watchdogPort,
+                            nextStage, nextAttempt]() {
             if (!m_audioSource) return;
             if (watchdogGen != m_txLifecycleGeneration) return;
             if (m_audioSource->state() != QAudio::ActiveState) return;
             if (m_txReceivedAnyBytes) return;
             qCWarning(lcAudio) << "AudioEngine: TX source opened but produced no bytes in 1.5 s — "
-                                  "retrying as mono (likely WASAPI mono-only USB mic, #2929)"
-                               << "rate:" << m_txInputRate << "ch:" << m_txInputChannels;
-            m_txSilenceRetryDone = true;
-            m_txForceMonoOnNextOpen = true;
+                                  "retrying (WASAPI silent open, #2929)"
+                               << "rate:" << m_txInputRate
+                               << "ch:" << m_txInputChannels
+                               << "-> stage" << nextStage
+                               << nextAttempt.rate << "Hz"
+                               << AudioFormatNegotiator::toString(nextAttempt.fmt)
+                               << nextAttempt.channels << "ch";
+            m_txOpenStage = nextStage;
+            m_txSilentOpenRetryArmed = true;
             QMetaObject::invokeMethod(this, [this, watchdogAddr, watchdogPort]() {
                 stopTxStream();
                 startTxStream(watchdogAddr, watchdogPort);
             }, Qt::QueuedConnection);
+        });
+    } else {
+        // Terminal rung. The mic is open and may simply never speak, and until
+        // now that end state was completely silent in the logs too: no
+        // watchdog, no warning, a QAudioSource sitting in ActiveState
+        // delivering nothing. Say so once, so the failure is diagnosable
+        // instead of merely inaudible.
+        const quint64 exhaustedGen = m_txLifecycleGeneration;
+        QTimer::singleShot(1500, this, [this, exhaustedGen]() {
+            if (!m_audioSource) return;
+            if (exhaustedGen != m_txLifecycleGeneration) return;
+            if (m_txReceivedAnyBytes) return;
+            qCWarning(lcAudio)
+                << "AudioEngine: TX source produced no bytes in 1.5 s and the open "
+                   "ladder is exhausted — capture is silent, no retry left (#2929)"
+                << "rate:" << m_txInputRate
+                << "ch:" << m_txInputChannels
+                << "format:" << AudioSummaryLogger::sampleFormatName(m_txInputFormat);
         });
     }
 #endif
@@ -7711,17 +9049,46 @@ void AudioEngine::stopTxStream()
     m_txSourceStartTime.invalidate();
 }
 
-void AudioEngine::setCwKeyDown(bool down)
+void AudioEngine::setCwKeyDown(bool down, std::chrono::steady_clock::time_point when)
 {
     // Drive the audible sidetone and the recorder-sidetone generator together so
     // the recording's CW envelope matches what the operator hears/sends. Both
     // setKeyDown()s are lock-free atomics, safe to call from the keyer threads.
-    if (m_cwSidetone)       m_cwSidetone->setKeyDown(down);
-    if (m_cwRecordSidetone) m_cwRecordSidetone->setKeyDown(down);
-    // Latch that this TX over is a CW over (our keyer fired). The record pump
-    // gates on this so it captures CW but not voice/DAX/tune overs that never
-    // key the sidetone. Reset on the radio TX→RX edge (setRadioTransmitting).
-    if (down) m_cwKeyedThisOver.store(true, std::memory_order_release);
+    if (m_cwSidetone)       m_cwSidetone->setKeyDown(down, when);
+    if (m_cwRecordSidetone) m_cwRecordSidetone->setKeyDown(down, when);
+    // Latch that this TX over is a CW over (our keyer fired in a CW mode). The
+    // record pump gates on this so it captures CW but not voice/DAX/tune overs
+    // that never key the sidetone. Aged out by the pump (cwLatchShouldAge),
+    // NOT on the radio TX→RX edge — break-in drops that edge in every gap
+    // (#4281). The mode gate is load-bearing: sendCwKey has no mode gate, so
+    // key edges arrive here during voice overs too (a brushed paddle, a
+    // key-line glitch), and those must not claim the recorder.
+    if (down && m_txModeIsCw.load(std::memory_order_acquire)) {
+        m_cwKeyedThisOver.store(true, std::memory_order_release);
+        // If our transmission is already up — attributed to us and not a tune
+        // carrier — this over has transmitted. The other direction, the
+        // interlock rising after the first element, is handled in
+        // setRadioTransmitting, because the radio's edge lags the key by a few ms.
+        if (cwOverTxActive(m_radioTransmitting.load(std::memory_order_acquire),
+                           m_radioTxOwnedByUs.load(std::memory_order_acquire),
+                           m_tuneActive.load(std::memory_order_acquire))) {
+            m_cwOverHadTx.store(true, std::memory_order_release);
+        }
+    }
+    // Stamp BOTH edges. The over ends a fixed number of dit units after the last
+    // edge; timing that from key-down alone would add the element's own duration
+    // (up to 3 units for a dah) to every measurement and hold the over open that
+    // much longer, which costs receive audio (#4281). Stamp the SCHEDULED
+    // instant, not wall-clock delivery: both sidetone generators render this
+    // edge at `when` (#4890), so under GUI/audio-thread load — #3623's exact
+    // condition — a wake-time stamp lands late and silently stretches the hang
+    // past its 8-unit budget while the audio follows the schedule. Unscheduled
+    // callers default `when` to now() at the call site (see the declaration),
+    // so nothing changes for them.
+    m_cwLastKeyEdgeNs.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            when.time_since_epoch()).count(),
+        std::memory_order_release);
 }
 
 // ── CW-sidetone record pump (#2539) ──────────────────────────────────────────
@@ -7742,11 +9109,40 @@ void AudioEngine::startCwRecordPump()
 void AudioEngine::onCwRecordPump()
 {
     // Active only when WE are sending CW: the radio is keyed AND our keyer has
-    // fired this over. isTxStreaming() (mic capture) is never true in CW, so a
-    // voice over can't reach here even if mis-flagged.
-    const bool active = m_radioTransmitting.load(std::memory_order_acquire)
-                        && m_cwKeyedThisOver.load(std::memory_order_acquire)
-                        && !isTxStreaming();
+    // fired this over. Whether the PC mic capture stream is open is deliberately
+    // not part of this — it stays up across mode changes whenever mic_selection
+    // is "PC", so gating on it kept the pump off for the whole CW over (#4281).
+    // Age the CW-over latch: the over is finished once no element has been keyed
+    // for the over-hang AND no transmission of OURS is still up. The stopwatch
+    // runs on the pump's free-running tick rather than on the interlock edge
+    // because under break-in that edge falls in every inter-element gap (see
+    // setRadioTransmitting). The our-TX term — cwOverTxActive: attributed to
+    // us and not a tune carrier — stops the stopwatch ending the over while
+    // the radio still holds OUR TX (break-in off, or a break-in delay longer
+    // than the hang), which handed the slot to the mic tap mid-over. A foreign
+    // or tune transmission raised inside the hang no longer holds the over
+    // open. The rule and its residual are stated at cwLatchShouldAge (#4281).
+    if (m_cwKeyedThisOver.load(std::memory_order_acquire)) {
+        const int64_t lastNs = m_cwLastKeyEdgeNs.load(std::memory_order_acquire);
+        const int64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (lastNs != 0
+            && cwLatchShouldAge(
+                   cwOverTxActive(
+                       m_radioTransmitting.load(std::memory_order_acquire),
+                       m_radioTxOwnedByUs.load(std::memory_order_acquire),
+                       m_tuneActive.load(std::memory_order_acquire)),
+                   (nowNs - lastNs) / 1000000LL, cwOverHangMs())) {
+            m_cwKeyedThisOver.store(false, std::memory_order_release);
+            m_cwOverHadTx.store(false, std::memory_order_release);
+            // The over is finished, so its speed override dies with it: the
+            // next paddle over sizes the hang from the mirror alone (#4281).
+            m_cwOverWpm.store(0, std::memory_order_relaxed);
+        }
+    }
+
+    const TxRecorderSource src = txRecorderSource();
+    const bool active = cwRecordPumpOwnsRecorder(src);
 
     if (active != m_cwPumpActive) {
         m_cwPumpActive = active;
@@ -7757,6 +9153,18 @@ void AudioEngine::onCwRecordPump()
         if (!active) return;
     }
     if (!active) return;
+
+    // No open recording: QsoRecorder::feedTxAudio would discard every block, so
+    // render nothing. Deliberately BELOW the gate signal above, which must keep
+    // firing — onMoxChanged is what starts an auto-record, so suppressing it
+    // here would stop auto-record from ever triggering on a CW over. Restart the
+    // clock so the first render after a start measures its own tick rather than
+    // the whole skipped span.
+    if (!cwRecordPumpShouldRender(
+            src, m_qsoRecordingActive.load(std::memory_order_acquire))) {
+        m_cwPumpElapsed.restart();
+        return;
+    }
 
     // Frame count from elapsed wall-time so morse timing in the WAV tracks real
     // time despite timer jitter on a busy audio thread.
@@ -7823,10 +9231,24 @@ void AudioEngine::onTxAudioReady()
         // Discard one bounded block per callback so neither can accumulate.
         if (m_micDevice) {
             const TxCaptureBuffer::BoundedRead drained =
-                TxCaptureBuffer::readLatestBoundedInt16(m_micDevice.data(),
-                                                        m_txInputChannels);
-            if (!drained.block.isEmpty() || drained.discardedBytes > 0) {
+                TxCaptureBuffer::readLatestBounded(m_micDevice.data(),
+                                                   m_txInputChannels,
+                                                   txInputBytesPerSample());
+            if (drained.deliveredBytes()) {
                 m_txCaptureHealth.recordMicRead(txCaptureNowMs());
+                // These bytes are thrown away, and they are still proof the
+                // endpoint works -- which is the only question the WASAPI
+                // silent-open watchdog asks (#2929). Without this, a mic that
+                // is delivering normally reads as silent for as long as TCI
+                // owns TX audio: the watchdog walks the recovery ladder off a
+                // rung that was never broken, reopening a valid device up to
+                // 15 times and leaving local capture at the terminal
+                // 16 kHz/Int16/mono rung once TCI stops. On that terminal rung
+                // it also logs "capture is silent, no retry left", which would
+                // be just as wrong. Before this PR the same oversight could
+                // only trigger the single mono retry; the full ladder makes it
+                // materially worse (round-4 review of PR #5017).
+                m_txReceivedAnyBytes = true;
             }
             if (drained.discardedBytes > 0) {
                 noteTxCaptureBacklogDiscard(drained.discardedBytes);
@@ -7858,8 +9280,8 @@ void AudioEngine::onTxAudioReady()
     // as oversized and the whole thing would be dropped instead of the stale
     // part of it.
     {
-        const qint64 stale = TxCaptureBuffer::trimToLatestBoundedInt16(
-            data, m_txInputChannels);
+        const qint64 stale = TxCaptureBuffer::trimToLatestBounded(
+            data, m_txInputChannels, txInputBytesPerSample());
         if (stale > 0) {
             noteTxCaptureBacklogDiscard(stale);
         }
@@ -7871,13 +9293,21 @@ void AudioEngine::onTxAudioReady()
     // freshest block rather than walking a backlog of hours-old audio onto the
     // air 1.36 s at a time.
     const TxCaptureBuffer::BoundedRead micRead =
-        TxCaptureBuffer::readLatestBoundedInt16(m_micDevice.data(), m_txInputChannels);
+        TxCaptureBuffer::readLatestBounded(m_micDevice.data(), m_txInputChannels,
+                                          txInputBytesPerSample());
     if (micRead.discardedBytes > 0) {
         noteTxCaptureBacklogDiscard(micRead.discardedBytes);
     }
+    // One evidence rule, asked at every place this device is read: the
+    // suppressed drain above uses the same call. A read that only DISCARDED
+    // still proves the endpoint delivers, and returning early on an empty
+    // block before recording that would leave the same blind spot the
+    // suppressed branch had.
+    if (micRead.deliveredBytes()) {
+        m_txReceivedAnyBytes = true;  // disarms the WASAPI silent-open watchdog (#2929)
+    }
     QByteArray data = micRead.block;
     if (data.isEmpty()) return;
-    m_txReceivedAnyBytes = true;  // disarms the WASAPI silent-open watchdog (#2929)
 #endif
 
     m_txCaptureHealth.recordMicRead(txCaptureNowMs());
@@ -7886,13 +9316,22 @@ void AudioEngine::onTxAudioReady()
     // carried as stereo int16, so choose/average the real mic channel before
     // any resampling, RADE/DAX branch, test tone, DSP, gain, limiter, or meter.
     TxMicChannelNormalizer::Diagnostics channelDiagnostics;
-    data = TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo(
-        data,
-        m_txInputChannels,
-        m_txInputRate,
-        m_txMicChannelMode,
-        &m_txMicChannelState,
-        &channelDiagnostics);
+    const bool capturedFloat32 = txInputIsFloat32();
+    data = capturedFloat32
+        ? TxMicChannelNormalizer::canonicalizeFloat32ToMonoStereo(
+              data,
+              m_txInputChannels,
+              m_txInputRate,
+              m_txMicChannelMode,
+              &m_txMicChannelState,
+              &channelDiagnostics)
+        : TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo(
+              data,
+              m_txInputChannels,
+              m_txInputRate,
+              m_txMicChannelMode,
+              &m_txMicChannelState,
+              &channelDiagnostics);
     if (data.isEmpty()) {
         if (channelDiagnostics.inputRejected) {
             qCWarning(lcAudio) << "AudioEngine: rejected oversized TX mic block"
@@ -7909,6 +9348,24 @@ void AudioEngine::onTxAudioReady()
     // processStereoToStereo() here: that helper would average raw mic L/R and
     // reintroduce the one-sided-channel 6.02 dB loss.
     const bool radeMode = m_radeMode.load(std::memory_order_acquire);
+
+    // RADE is a separate fixed 24 kHz island with its own resampler, gain and
+    // metering, all Int16-typed. Rather than thread float through a path this
+    // change does not claim to improve, collapse to the canonical Int16 form
+    // once, here, and leave every RADE line below byte-identical. The SSB voice
+    // strip — the path the 48 kHz float domain exists for — keeps its float.
+    if (capturedFloat32 && radeMode) {
+        const auto* f = reinterpret_cast<const float*>(data.constData());
+        const int samples = data.size() / static_cast<int>(sizeof(float));
+        QByteArray i16(samples * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
+        auto* d = reinterpret_cast<int16_t*>(i16.data());
+        for (int i = 0; i < samples; ++i) {
+            d[i] = static_cast<int16_t>(
+                std::clamp(f[i] * 32768.0f, -32768.0f, 32767.0f));
+        }
+        data = i16;
+    }
+
     if (radeMode && m_radeTxNeedsResample && m_txResampler) {
         // Convert canonical duplicated int16 stereo → float32 mono for the
         // mono-to-stereo resampler.
@@ -7956,7 +9413,9 @@ void AudioEngine::onTxAudioReady()
         auto* fd = reinterpret_cast<float*>(f32.data());
         for (int i = 0; i < ns; ++i)
             fd[i] = i16[i] / 32768.0f;
-        emit txRawPcmReady(f32);
+        if (m_rawMicrophoneContext.permitsDispatch(TxCoordinator::monotonicMs())) {
+            emit txRawPcmReady(f32, m_rawMicrophoneContext);
+        }
         return;
     }
 
@@ -7977,7 +9436,11 @@ void AudioEngine::onTxAudioReady()
         m_txChainPacked.load(std::memory_order_acquire));
     m_txVoiceProcessor->setMicGain(m_pcMicGain.load());
     m_txVoiceProcessor->setRnnoiseEnabled(m_rn2TxEnabled.load());
-    const bool voiceProcessed = m_txVoiceProcessor->processCapturedInt16(data);
+    // Both routes return the same transport Int16 in `data`, so every tap,
+    // monitor, meter and the Opus encoder below are untouched by this branch.
+    const bool voiceProcessed = capturedFloat32
+        ? m_txVoiceProcessor->processCapturedFloat32(data)
+        : m_txVoiceProcessor->processCapturedInt16(data);
     if (m_txVoiceProcessor->egressRecoveryPending()
         && !m_txVoiceEgressRecoveryQueued) {
         m_txVoiceEgressRecoveryQueued = true;
@@ -8008,18 +9471,22 @@ void AudioEngine::onTxAudioReady()
     // ── Final-output monitor tap (+ local CW/CWX sidetone for recording) ──
     // Mirror the post-PUDU monitor at the chain's tail (post-limiter) for the
     // PUDU TX monitor and the Client-Side QSO recorder's VOICE tap (#3556).
-    // This path is mic-driven, so it only carries phone/SSB. Local CW/CWX
-    // sidetone has no mic stream and is fed to the recorder separately by the
-    // CW record pump (onCwRecordPump, #2539).
+    // This path is mic-driven and carries phone/SSB. It also keeps running
+    // during a CW over — mic capture is tied to mic_selection, not to mode —
+    // so the recorder edge of this signal is gated on the current TX-slot owner
+    // in MainWindow. Local CW/CWX sidetone is fed to the recorder separately by
+    // the CW record pump (onCwRecordPump, #2539, #4281).
     if (auto* mon = m_txFinalMonitor.load(std::memory_order_acquire)) {
         mon->feedTxPostDsp(data);
     }
     // Expose the post-limiter int16 stream so the QSO recorder captures voice TX
     // for Client-Side recording (#3556). Emitted unconditionally; the recorder
     // slot fast-returns when not recording / not transmitting, so this is cheap.
-    // Mic-chain audio: the level is ours to manage, so the backend's ALC stays
-    // in play.
-    emit txFinalMonitorPcmReady(data, /*clientLeveled=*/false);
+    // Mic-chain audio: the OPERATOR's level, set with the mic slider, with the
+    // operator present to hear the result. The backend's ALC stays in play as
+    // protection, and the slider applies — which is exactly what does NOT
+    // happen for the WSPR pump; see startWsprPump().
+    emit txFinalMonitorPcmReady(data, TxAudioSource::Microphone);
 
     // ── TX post-final-limiter scope tap ─────────────────────────
     // Sampled here, AFTER everything the strip can do to the audio
@@ -8032,6 +9499,26 @@ void AudioEngine::onTxAudioReady()
     accumulatePcMicMeterInt16Stereo(data);
 
     emitScopeFromInt16Stereo(data, DEFAULT_SAMPLE_RATE, true);
+
+    // Local monitor/recorder/meter delivery above is independent of transport
+    // authority. Retain the capture's context through buffering and pacing.
+    const TxCoordinator::Context context = m_hostModulation
+        ? m_hostMicrophoneContext : m_microphoneContext;
+    // The fence is absolute: no stamp, no transport delivery. There IS a
+    // window where a block can arrive unstamped — wireTxAudioAuthority posts
+    // setHostMicrophoneContext to this thread when localTransmitEngaged fires
+    // — but it is bounded to at most one block, and it is bounded by Qt's
+    // event ordering rather than by timing luck: that post and onTxAudioReady
+    // (a timer callback) are both events on THIS thread, delivered FIFO
+    // through one event loop. So every block after the install sees the stamp,
+    // and the only blocks that can miss it are those already queued ahead of
+    // it: one dspBlockSize, ~21 ms at 24 kHz, inside HL2 keying latency.
+    // Relaxing this would mean relaxing all five gates down to MetisClient's
+    // wire queue, which is not worth one block. (#5659 review)
+    if (!selectTxContext(context)) {
+        return;
+    }
+    emit txTransportPcmReady(data, TxAudioSource::Microphone, context);
 
     // ── Opus TX path: always active for remote_audio_tx ────────────────
     // Sends Opus during both RX (VOX/met_in_rx metering) and TX (voice).
@@ -8084,7 +9571,7 @@ void AudioEngine::onTxAudioReady()
             // The 10 ms pacer follows elapsed deadlines and drains a bounded
             // catch-up batch after a late timer event. Cap the queue to
             // ~200 ms if the producer still outruns that recovery.
-            if (m_opusTxPacer.enqueue(std::move(pkt))) {
+            if (m_opusTxPacer.enqueue({std::move(pkt), context})) {
                 ++m_opusTxDropsSinceLog;
                 if (!m_opusTxDropLogTimer.isValid()
                     || m_opusTxDropLogTimer.hasExpired(1000)) {
@@ -8113,7 +9600,7 @@ void AudioEngine::onTxAudioReady()
             floatBuf[i] = pcm[i] / 32768.0f;
 
         QByteArray packet = buildVitaTxPacket(floatBuf, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(packet);
+        emit txPacketReady(packet, context);
 
         m_txAccumulator.remove(0, TX_PCM_BYTES_PER_PACKET);
     }
@@ -8177,8 +9664,12 @@ QByteArray AudioEngine::buildVitaTxPacket(const float* samples, int numStereoSam
     return packet;
 }
 
-void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId)
+void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId,
+                                    const TxCoordinator::Context& context)
 {
+    if (!selectTxContext(context)) {
+        return;
+    }
     // Accumulate into a separate buffer for VOX/met_in_rx audio
     m_voxAccumulator.append(pcmData);
 
@@ -8195,7 +9686,7 @@ void AudioEngine::sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId)
         QByteArray packet = buildVitaTxPacket(floatBuf, TX_SAMPLES_PER_PACKET);
         m_txStreamId = savedId;
 
-        emit txPacketReady(packet);
+        emit txPacketReady(packet, context);
         m_voxAccumulator.remove(0, TX_PCM_BYTES_PER_PACKET);
     }
 }
@@ -8316,7 +9807,7 @@ void AudioEngine::setRadeMode(bool on)
     clearTxAccumulators();
 }
 
-void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
+void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context)
 {
     // A host-modulating backend (HL2) runs the modulator on THIS host and has
     // no Flex TX stream id — the AFSK belongs in the final-monitor tap, not in
@@ -8334,12 +9825,30 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     // interlock status a host-modulating radio never sends, so testing it would
     // discard everything.
     if (m_hostModulation) {
+        // Microphone, NOT EngineGenerated, and the distinction is a transmit
+        // level rather than a label. The only generator that reaches this
+        // branch on a host-modulating radio is the AX.25 modem — RADE needs DAX
+        // audio and activateRADE() refuses any radio that cannot provide it, so
+        // it is Flex-only and a Flex modulates on its own side.
+        //
+        // The AFSK amplitude is a compile-time constant (kTxAfskAmplitude =
+        // 0.35, -9.12 dBFS in AetherAx25LibmodemShim.cpp) and the packet dialog
+        // has no level control at all, so the mic slider is the ONLY thing in
+        // the product that can move an AX.25 frame. Tagging it EngineGenerated
+        // bypasses that slider and pins HF packet 7.71 dB under the ALC target
+        // (0.85, -1.41 dBFS) with nothing able to raise it. The beacon argument
+        // does not reach this far: the WSPR pump is the unattended source, it
+        // feeds from its own call site below, and #5651 sets its default.
         feedDaxTxAudioInternal(float32pcm, /*markExternalSource=*/false,
-                               /*forceRadioDaxRoute=*/true);
+                               /*forceRadioDaxRoute=*/true,
+                               TxAudioSource::Microphone, context);
         return;
     }
 
     if (m_txStreamId == 0) return;
+    if (!selectTxContext(context)) {
+        return;
+    }
 
     // Gate modem audio on PTT (prevents radio pre-buffer build-up)
     if (!m_transmitting) {
@@ -8359,9 +9868,77 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
     while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
         auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
         QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-        emit txPacketReady(pkt);
+        emit txPacketReady(pkt, context);
         m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
     }
+}
+
+void AudioEngine::finishModemTxAudio(quint64 token, const TxCoordinator::Context& context)
+{
+    // This method is queued onto the AudioEngine thread after every modem PCM
+    // block. Emitting from here creates an ordered barrier: cross-thread
+    // txFinalMonitorPcmReady deliveries are already ahead of this event.
+    // NOT fenced on permitsDispatch. This is a completion barrier, not a
+    // transmit command: it carries no audio and keys nothing. It is also the
+    // ONLY path that arms the AX.25 unkey timer
+    // (Ax25HfPacketDecodeDialog::handleTxAudioFinished), and there is no
+    // watchdog behind it — so fencing it here could leave PTT asserted with
+    // m_txAwaitingAudioFinish stuck true. The receiver already rejects a stale
+    // barrier by token, which is the check that actually belongs on it.
+    emit modemTxAudioFinished(token, context);
+}
+
+void AudioEngine::setMicrophoneContext(const TxCoordinator::Context& context)
+{
+    // Deliberately unguarded, unlike setHostMicrophoneContext and
+    // setRawMicrophoneContext: this setter is also the teardown path, and an
+    // empty context is how a caller revokes authority. A permitsDispatch()
+    // check here would make revocation a silent no-op. selectTxContext()
+    // re-validates on every block, so nothing downstream trusts this value.
+    if (!m_microphoneContext.sameContext(context)) {
+        clearTxAccumulators();
+        if (m_txVoiceProcessor) {
+            m_txVoiceProcessor->reset();
+        }
+    }
+    m_microphoneContext = context;
+}
+
+void AudioEngine::setHostMicrophoneContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (m_hostModulation && !m_hostMicrophoneContext.sameContext(context)) {
+        clearTxAccumulators();
+        if (m_txVoiceProcessor) {
+            m_txVoiceProcessor->reset();
+        }
+    }
+    m_hostMicrophoneContext = context;
+}
+
+void AudioEngine::setRawMicrophoneContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_rawMicrophoneContext.sameContext(context) && m_txResampler) {
+        m_txResampler->reset();
+    }
+    m_rawMicrophoneContext = context;
+}
+
+bool AudioEngine::selectTxContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return false;
+    }
+    if (!m_accumulatorContext.sameContext(context)) {
+        clearTxAccumulators();
+        m_accumulatorContext = context;
+    }
+    return true;
 }
 
 void AudioEngine::setDaxTxMode(bool on)
@@ -8375,27 +9952,65 @@ void AudioEngine::setDaxTxMode(bool on)
     }
 }
 
+void AudioEngine::discardTxMedia(const TxCoordinator::Context& context)
+{
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, [this, context] { discardTxMedia(context); }, Qt::QueuedConnection);
+        return;
+    }
+    if (m_accumulatorContext.sameContext(context)) {
+        clearTxAccumulators();
+    }
+}
+
+void AudioEngine::clearTxAccumulators()
+{
+    // Marshal: a foreign-thread clear can land mid-drain-loop and segfault (#5094).
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, &AudioEngine::clearTxAccumulators,
+                                   Qt::QueuedConnection);
+        return;
+    }
+    m_txAccumulator.clear();
+    m_txFloatAccumulator.clear();
+    m_daxPreTxBuffer.clear();
+    m_opusTxPacer.clear();
+    m_opusTxAccumulator.clear();
+    m_accumulatorContext = {};
+}
+
 void AudioEngine::setTransmitting(bool tx)
 {
     if (m_transmitting == tx) return;
     m_transmitting = tx;
 
-    if (!tx) {
-        // On unkey: drop any partial packet residue so next burst starts cleanly.
-        m_txAccumulator.clear();
-        m_txFloatAccumulator.clear();
-        m_daxPreTxBuffer.clear();
-        m_opusTxPacer.clear();
-    }
+    // On unkey: drop any partial packet residue so next burst starts cleanly.
+    if (!tx) clearTxAccumulators();
 }
 
-void AudioEngine::setRadioTransmitting(bool tx)
+void AudioEngine::setRadioTransmitting(bool tx, bool ownedByUs)
 {
+    // Attribution rides with the state: the interlock parse stores
+    // tx_client_handle ownership before emitting radioTransmittingChanged, so
+    // the two arrive here as one consistent snapshot (#4281).
+    m_radioTxOwnedByUs.store(ownedByUs, std::memory_order_release);
     const bool previous = m_radioTransmitting.exchange(tx);
     if (previous == tx)
         return;
 
     if (tx) {
+        // The radio really is transmitting OUR over — attributed to us and not
+        // a tune carrier — so if our keyer has fired this over it is a genuine
+        // CW over and the pump may own the recorder's TX slot. The interlock's
+        // rising edge lags the key by a few ms, which is why this is latched
+        // here as well as in setCwKeyDown (#4281). A foreign or tune
+        // transmission no longer validates the over: that defeated the had-TX
+        // guard (practice sidetone auto-recording off another client's TX).
+        if (m_cwKeyedThisOver.load(std::memory_order_acquire)
+            && cwOverTxActive(tx, ownedByUs,
+                              m_tuneActive.load(std::memory_order_acquire))) {
+            m_cwOverHadTx.store(true, std::memory_order_release);
+        }
         // radioTransmittingChanged originates on the UI thread while AudioEngine
         // owns its QAudioSource and health tracker on the audio thread. Preserve
         // the existing immediate atomic TX edge, but sample capture state only
@@ -8411,25 +10026,36 @@ void AudioEngine::setRadioTransmitting(bool tx)
 
     // Close the CW-record over on unkey so the next over re-arms cleanly (the
     // pump latches on our keyer, clears here). #2539.
-    if (!tx) m_cwKeyedThisOver.store(false, std::memory_order_release);
+    // NOT cleared here any more. Break-in drops the interlock between every CW
+    // element, so clearing on this edge destroyed the "this over" latch in every
+    // inter-element gap (#4281). The pump ages it out instead: kCwOverHangMs
+    // after the last key edge AND with this interlock down — the falling edge
+    // is necessary for the over to end, never sufficient (cwLatchShouldAge).
 
     // TX→RX edge: NR2 is bypassed entirely during TX (see the RX DSP chain
     // ~line 1512: raw PCM goes straight to writeAudio so the filter doesn't
     // adapt its internal state to TX silence, #367/#1505). But that leaves NR2
     // holding pre-TX state when RX resumes: a stale overlap-add ring (read out
     // as a faint whistle, #3340) and a maxed-out startup-ramp counter, so
-    // suppression slams to full-wet on a stale noise estimate that then takes
-    // ~3-4s to reconverge — the audio "gap" users hear with NR2 engaged
-    // (#1863). reset() flushes the OA ring, re-seeds the noise floor high
-    // (gentle suppression), and re-arms the ~1s dry→wet ramp so audio returns
-    // immediately on the dry signal and NR2 fades back in cleanly.
+    // suppression slams to full-wet the instant RX resumes. resetTransient()
+    // flushes exactly that — the OA ring, the gain masks, the AGC common-mode
+    // references — and re-arms the ~1s dry→wet ramp, while RETAINING the
+    // converged noise estimate. The full reset() used here previously also
+    // re-seeded the noise floor, forcing a fresh multi-second estimator
+    // convergence on every over, heard as un-suppressed band noise after
+    // unkey (#3821); with the profile retained, suppression is back at full
+    // depth as the ramp completes. If the band or the AGC level moved during
+    // TX the estimator adapts from the retained floor — quickly downward,
+    // and upward over the following minimum-statistics windows: measured
+    // settled by ~2.5 s in nr2_tx_rx_reset_test, no slower than the full
+    // convergence it replaced.
     //
     // Scoped to NR2 for now: it's the reported filter and this keeps testing
     // localized. RN2/NR4/DFNR/MNR share the same bypass + stale-state path and
     // can get the same flush as a follow-up once this is validated in the field.
     if (previous && !tx) {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
-        if (m_nr2Enabled && m_nr2) m_nr2->reset();
+        if (m_nr2Enabled && m_nr2) m_nr2->resetTransient();
     }
 
     emit radioTransmittingChanged(tx);
@@ -8440,8 +10066,7 @@ void AudioEngine::setDaxTxUseRadioRoute(bool on)
     if (m_daxTxUseRadioRoute == on) return;
     m_daxTxUseRadioRoute = on;
     // Switching route changes payload format; drop partial buffered samples.
-    m_txFloatAccumulator.clear();
-    m_daxPreTxBuffer.clear();
+    clearTxAccumulators();
     m_daxRadioTxChannelState.reset();
     m_lastDaxRadioChannelLog.invalidate();
     qCDebug(lcDax) << "AudioEngine: DAX TX route"
@@ -8449,7 +10074,7 @@ void AudioEngine::setDaxTxUseRadioRoute(bool on)
                    << "stream=0x" + QString::number(m_txStreamId, 16);
 }
 
-void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
+void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm, const TxCoordinator::Context& context)
 {
     // The built-in WSPR source owns the DAX TX stream for its one-shot frame.
     // Ignore concurrent external DAX/TCI samples instead of interleaving two
@@ -8457,12 +10082,14 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
     if (m_wsprBeacon && m_wsprBeacon->isActive()) {
         return;
     }
-    feedDaxTxAudioInternal(inPcm, true, false);
+    feedDaxTxAudioInternal(inPcm, true, false, TxAudioSource::ClientLeveled, context);
 }
 
 void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                                          bool markExternalSource,
-                                         bool forceRadioDaxRoute)
+                                         bool forceRadioDaxRoute,
+                                         TxAudioSource source,
+                                         const TxCoordinator::Context& context)
 {
     if (inPcm.isEmpty()) return;
     // A host-modulating backend (HL2) has no Flex TX stream id and never will —
@@ -8474,7 +10101,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
     // Mark TCI as the active TX-audio source. While this timer is fresh,
     // onTxAudioReady() suppresses the local mic capture path so the two
     // packet producers don't collide on the same UDP path to the radio.
-    if (markExternalSource) {
+    if (markExternalSource && context.permitsDispatch(TxCoordinator::monotonicMs())) {
         m_tciAudioTimer.start();
     }
 
@@ -8546,17 +10173,32 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
             dst[i] = static_cast<qint16>(
                 std::clamp(v * 32768.0f, -32768.0f, 32767.0f));
         }
-        // markExternalSource is the source split this tap needs (#4796): true
-        // for TCI/DAX client audio, whose sender owns its level and must not
-        // get ALC makeup gain; false for the engine's own pre-shaped audio
-        // (WSPR pump, AX.25 modem, RADE modem waveform — all reaching here
-        // via sendModemTxAudio or the WSPR pump with markExternalSource
-        // false), which the engine generates at a known level and which keeps
-        // the ALC so its on-air level does not change.
-        emit txFinalMonitorPcmReady(out, /*clientLeveled=*/markExternalSource);
+        // THE SPLIT THIS TAP NEEDS IS THREE-WAY, AND THE CALLER DECIDES IT.
+        //
+        // The tag used to be derived here, as `markExternalSource ?
+        // ClientLeveled : EngineGenerated`, which made "not a TCI client" mean
+        // "an unattended beacon" — and swept the AX.25 modem in with the WSPR
+        // pump. It is passed in now, so each entry point states its own origin
+        // and a reader does not have to reason backwards from a flag that
+        // means something else. See TxAudioSource.h.
+        //
+        // What rides on it: the HL2 backend bypasses the mic slider for
+        // EngineGenerated alone. That matters because the ALC's 40 dB of makeup
+        // is gone (#5646) — it used to normalise any generated level onto the
+        // modulator's target, so a beacon came out right whatever level it was
+        // generated at. Without it, a beacon generated at -20 dBFS transmits at
+        // -20 dBFS, and the mic slider was moving it by up to 40 dB. Measured:
+        // 18.58 dB down, a factor of 72 in power.
+        emit txFinalMonitorPcmReady(out, source);
+        if (selectTxContext(context)) {
+            emit txTransportPcmReady(out, source, context);
+        }
         return;
     }
 
+    if (!selectTxContext(context)) {
+        return;
+    }
     const bool useRadioDaxRoute = forceRadioDaxRoute || m_daxTxUseRadioRoute;
     if (!useRadioDaxRoute) {
         // Low-latency route: keep radio on mic path (dax=0) and packetize
@@ -8576,7 +10218,7 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
         while (m_txFloatAccumulator.size() >= FLOAT_BYTES_PER_PKT) {
             auto* samples = reinterpret_cast<const float*>(m_txFloatAccumulator.constData());
             QByteArray pkt = buildVitaTxPacket(samples, TX_SAMPLES_PER_PACKET);
-            emit txPacketReady(pkt);
+            emit txPacketReady(pkt, context);
             m_txFloatAccumulator.remove(0, FLOAT_BYTES_PER_PKT);
         }
         return;
@@ -8647,13 +10289,17 @@ void AudioEngine::feedDaxTxAudioInternal(const QByteArray& inPcm,
                     m_txFloatAccumulator.constData(), payloadBytes);
 
         m_txPacketCount = (m_txPacketCount + 1) & 0xF;
-        emit txPacketReady(pkt);
+        emit txPacketReady(pkt, context);
         m_txFloatAccumulator.remove(0, MONO_BYTES_PER_PKT);
     }
 }
 
-void AudioEngine::startWsprPump()
+void AudioEngine::startWsprPump(const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    m_wsprContext = context;
     // Suppress the local mic capture path for the whole frame. onTxAudioReady()
     // only bails out on m_daxTxMode; the WSPR feed passes
     // markExternalSource=false (it is not TCI, and claiming so would corrupt
@@ -8673,11 +10319,19 @@ void AudioEngine::startWsprPump()
     m_wsprPumpTimer->start();
 }
 
+void AudioEngine::stopWsprPumpIfCurrent(const TxCoordinator::Context& context)
+{
+    if (m_wsprContext.sameContext(context)) {
+        stopWsprPump();
+    }
+}
+
 void AudioEngine::stopWsprPump()
 {
     m_wsprPumpTimer->stop();
     m_wsprPumpClock.invalidate();
     m_wsprPumpedFrames = 0;
+    m_wsprContext = {};
     m_txFloatAccumulator.clear();
     // The forced WSPR feed buffers in the radio-native int16 route, so drop that
     // residue too — a stop mid-symbol otherwise leaves a partial packet to be
@@ -8695,7 +10349,8 @@ void AudioEngine::stopWsprPump()
 void AudioEngine::pumpWsprBeacon()
 {
     if (!m_wsprBeacon || !m_wsprBeacon->isActive()
-        || !m_wsprPumpClock.isValid()) {
+        || !m_wsprPumpClock.isValid()
+        || !m_wsprContext.permitsDispatch(TxCoordinator::monotonicMs())) {
         stopWsprPump();
         return;
     }
@@ -8743,13 +10398,16 @@ void AudioEngine::pumpWsprBeacon()
     m_wsprFloatScratch.fill('\0');
     m_wsprBeacon->process(
         reinterpret_cast<float*>(m_wsprFloatScratch.data()), frames, 2);
-    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true);
+    // The one EngineGenerated source in the tree: a WSPR frame keys for 111.6 s
+    // with nobody at the microphone, so the mic slider must not move it.
+    feedDaxTxAudioInternal(m_wsprFloatScratch, false, true,
+                           TxAudioSource::EngineGenerated, m_wsprContext);
     m_wsprPumpedFrames += frames;
 }
 
 void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
 {
-    if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen()) return;
+    if (!m_audioDevice || !m_audioDevice->isOpen()) return;
 
     // Decoded RADE speech goes into its own output-rate buffer. The drain
     // timer mixes it with m_rxOutputBuffer sample-wise so both are heard
@@ -8765,6 +10423,27 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
                 src, pcm.size() / (2 * static_cast<int>(sizeof(float)))));
     } else {
         m_radeRxBuffer.append(pcm);
+    }
+}
+
+void AudioEngine::applyBackendAudioCapabilities(
+    bool connected, const RadioCapabilities& caps, bool pcAudioEnabled,
+    const QHostAddress& address)
+{
+    const bool wasSeamAudio = m_hostModulation;
+    const bool seamAudio = connected && caps.takesTxAudioOverSeam && caps.canTransmit;
+    setHostModulation(seamAudio);
+    if (seamAudio && pcAudioEnabled) {
+        if (!isTxStreaming()) {
+            startTxStream(address, 4991);
+        }
+        if (caps.hostModulates && !isRxStreaming()) {
+            startRxStream();
+        }
+    } else if ((wasSeamAudio || seamAudio) && isTxStreaming()) {
+        // Capability withdrawal must close capture even though canTransmit is
+        // now false. Flex-owned streams retain their own lifecycle.
+        stopTxStream();
     }
 }
 

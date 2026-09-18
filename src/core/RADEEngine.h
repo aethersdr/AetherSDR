@@ -1,5 +1,6 @@
 #pragma once
 
+#include "TxCoordinator.h"
 #include <QObject>
 #include <QByteArray>
 #include <QString>
@@ -51,31 +52,32 @@ public slots:
     // channel is the DAX channel number (1-8), only processes channel 1.
     void feedRxAudio(int channel, const QByteArray& pcm);
 
-    // Feed mic audio (24kHz stereo int16) for encoding.
-    void feedTxAudio(const QByteArray& pcm);
+    // Feed mic audio (24kHz stereo float32) for encoding.
+    void feedTxAudio(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
 
     // Request End-of-Over (EOO) transmission. Once requested, the engine
     // will finish processing any queued voice audio, then append the EOO
     // frame and a short silence tail before stopping.
-    void setEooRequested(bool requested);
+    void setEooRequested(bool requested, quint64 requestId = 0);
 
     // Set the operator callsign to embed in the EOO frame. Must be called
     // before the first PTT press. Thread-safe: may be called from any thread.
     void setTxCallsign(const QString& callsign);
 
     // Flush TX encoder state (call on MOX release to prevent stale audio)
-    void resetTx();
+    void resetTx(const AetherSDR::TxCoordinator::Context& context = {});
 
 signals:
     void rxSpeechReady(const QByteArray& pcm);   // Decoded speech, 24kHz stereo int16
-    void txModemReady(const QByteArray& pcm);     // Encoded modem, 24kHz stereo int16
-    void eooFinished();                           // Emitted after EOO frame and silence tail sent
+    void txModemReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
+    void eooFinished(quint64 requestId); // original request, after EOO and silence tail
     void syncChanged(bool synced);
     void snrChanged(float snrDb);
     void freqOffsetChanged(float hz);
     void eooCallsignReceived(const QString& callsign);
 
 private:
+    TxCoordinator::Context m_txContext;
 #ifdef HAVE_RADE
     struct rade*         m_rade{nullptr};
     LPCNetEncState*      m_lpcnetEnc{nullptr};
@@ -84,6 +86,7 @@ private:
     bool                 m_synced{false};
 
     bool                 m_eooRequested{false};
+    quint64              m_eooRequestId{0};
     bool                 m_eooSent{false};
     bool                 m_eooFinished{false};
 

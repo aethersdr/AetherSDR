@@ -167,6 +167,40 @@ int main()
            VfoWidget::diversityPairOrderKey(false, false, -1, 3)
                < VfoWidget::diversityPairOrderKey(false, false, -1, 4));
 
+    expectDir("diversity order index 0 flag locks right",
+              VfoWidget::diversityPairFlagDir(0), VfoWidget::LockRight);
+    expectDir("diversity order index 1 flag locks left",
+              VfoWidget::diversityPairFlagDir(1), VfoWidget::LockLeft);
+
+    // Compose the ordering and the side map the way assignDiversityPairDirections
+    // does. When the radio reports roles, a parent sorts ahead of a child even
+    // when the child has the lower slice ID, so the parent (master, DIV-tagged)
+    // lands RIGHT and the child LEFT — the parent-goes-right guarantee the old
+    // inline literal left untested.
+    {
+        const int parentKey = VfoWidget::diversityPairOrderKey(true, false, -1, 7);
+        const int childKey = VfoWidget::diversityPairOrderKey(false, true, -1, 2);
+        const bool parentFirst = parentKey <= childKey;
+        report("diversity reported parent lands on the right",
+               VfoWidget::diversityPairFlagDir(parentFirst ? 0 : 1)
+                   == VfoWidget::LockRight);
+        report("diversity reported child lands on the left",
+               VfoWidget::diversityPairFlagDir(parentFirst ? 1 : 0)
+                   == VfoWidget::LockLeft);
+    }
+
+    // Metadata absent: the order key falls back to slice ID, so "index 0" is
+    // just the lower-numbered slice. The pair still splits to opposite sides —
+    // all the pre-metadata path ever promised.
+    {
+        const int loKey = VfoWidget::diversityPairOrderKey(false, false, -1, 3);
+        const int hiKey = VfoWidget::diversityPairOrderKey(false, false, -1, 9);
+        const bool loFirst = loKey <= hiKey;
+        report("diversity metadata-absent pair still splits opposite",
+               VfoWidget::diversityPairFlagDir(loFirst ? 0 : 1)
+                   != VfoWidget::diversityPairFlagDir(loFirst ? 1 : 0));
+    }
+
     std::printf("%s\n", g_failures == 0 ? "All tests passed." : "Test failures.");
     return g_failures == 0 ? 0 : 1;
 }

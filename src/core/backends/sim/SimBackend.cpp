@@ -3,6 +3,8 @@
 #include <QtEndian>
 #include <QThread>
 
+#include <cmath>
+
 #include "core/RadioConnection.h"
 #include "core/PanadapterStream.h"
 #include "core/backends/sim/SimSignalSource.h"
@@ -29,12 +31,16 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     // disconnected backend emits nothing (sim_backend_test pins it; the
     // unguarded forward was a latent flake that fired on the slower build).
     connect(m_signalSource, &SimSignalSource::audioFrameReady,
-            this, [this](const QByteArray& pcm) {
-                if (m_connected) emit audioFrameReady(pcm);
+            this, [this](const PcmFrame& frame) {
+                if (m_connected && frame.stream().session == pcmSession()) {
+                    publishLegacyAudio(frame.legacyStereo24());
+                }
             });
     connect(m_signalSource, &SimSignalSource::sliceAudioFrameReady,
-            this, [this](int sliceId, const QByteArray& pcm) {
-                if (m_connected) emit sliceAudioFrameReady(sliceId, pcm);
+            this, [this](int sliceId, const PcmFrame& frame) {
+                if (m_connected && frame.stream().session == pcmSession()) {
+                    publishLegacySliceAudio(sliceId, frame.legacyStereo24());
+                }
             });
     connect(m_signalSource, &SimSignalSource::spectrumFrameReady,
             this, [this](int panId, const QByteArray& bins) {
@@ -72,6 +78,27 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
 
+    // The synthetic wire's demo intents route back into THIS backend: ANF/NB
+    // to the audible mixer, and VFO/mode to the seam slice intents (the demo's
+    // SliceModel is materialised by the synthetic `slice 0 …` status, and that
+    // creation path wires frequency/mode intents to m_flexBackend, which is
+    // null in demo mode — so without this forward the birdie never moved and
+    // sideband never changed, in demo mode only). Wired HERE, in the ctor,
+    // because both ends are owned by this backend and die together — this
+    // used to live in MainWindow behind a dynamic_cast<SimBackend*>, rewired
+    // per backend swap (M0, #5263). Cross-thread (m_connection lives on its
+    // worker), so queued.
+    connect(m_connection, &RadioConnection::demoAnfChanged, this,
+            [this](bool on) { setDemoAnf(on); }, Qt::QueuedConnection);
+    connect(m_connection, &RadioConnection::demoNbChanged, this,
+            [this](bool on) { setDemoNb(on); }, Qt::QueuedConnection);
+    connect(m_connection, &RadioConnection::demoVfoChanged, this,
+            [this](double mhz) { setSliceFrequency(0, mhz * 1.0e6); },
+            Qt::QueuedConnection);
+    connect(m_connection, &RadioConnection::demoModeChanged, this,
+            [this](const QString& mode) { setSliceMode(0, mode); },
+            Qt::QueuedConnection);
+
     // RFC #4288 (the VFO=0 fix): on the live hybrid path the synthetic wire
     // connection delivers Flex-format pan/slice status, but RadioModel decodes
     // that wire status ONLY through FlexBackend (decodeSliceStatus /
@@ -91,7 +118,9 @@ SimBackend::SimBackend(QObject* parent) : IRadioBackend(parent)
         m_wirePanIds = QStringList{wirePanIdFor(0)};
         m_pansAwaitingGeometry.clear();
         pushPanIndicesToSource();
-        QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::start,
+        QMetaObject::invokeMethod(m_signalSource, [source = m_signalSource, session = pcmSession()] {
+            source->startSession(session);
+        },
                                   Qt::QueuedConnection);
         QTimer::singleShot(150, this, [this]() {
             if (m_connected) emitInitialState();
@@ -231,9 +260,38 @@ QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 RadioCapabilities SimBackend::capabilities() const
 {
     RadioCapabilities caps;
+    // Synthetic receiver: this is the API's bounded numeric domain, not an
+    // advertised hardware tuning range. Off-scene signals simply become silent.
+    caps.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
+                                  1, 1'000'000'000'000};
+    caps.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
+                                                {QStringLiteral("USB"), QStringLiteral("LSB")}};
+    caps.receiveFilterControl = std::nullopt; // demo passband setters only echo state
+    caps.receiveAudioControl = std::nullopt; // no independently controlled RX mixer yet
+    caps.receivePanCenterControl = std::nullopt; // spectrum remains anchored to the VFO
+    caps.receivePanBandwidthControl = std::nullopt; // fixed synthetic span
+    caps.canReboot = false;
+    caps.hasRemoteOnControl = false;
+    caps.canUpgradeFirmware = false;
+    caps.hasSmartLink = false;
+    caps.hasLicenseInfo = false;
+    caps.hasClientNetworkConfig = false;
+    caps.hasFlexControlIntegration = false;
+    caps.hasAudioCompression = false;
+    caps.hasSharpFilters = false;
+    caps.usesVita49Transport = false;
+    caps.hasNetworkConfigurationReadback = false;
+    caps.hasPrivateIpConnectionPolicy = false;
+    caps.txPowerBands = {};
+    caps.declaredBandRanges = {};
     caps.family = familyName();
+    // The demo cannot key at all (Principle VI), let alone synthesise tones.
+    caps.twoToneGenerator = std::nullopt;
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
+    caps.fmTonePresentation = FmTonePresentation::Legacy;
+    caps.fmDtcsCodes = {};
+    caps.canCreateSlices = false;
     caps.maxSlices = 1;          // Phase 1: a single slice. Phase 2 raises this.
     // Four receivers since #4887 phase 4 — enough to exercise the workspace
     // canvas's per-pan items and measure the multi-pan render budget in CI
@@ -245,25 +303,46 @@ RadioCapabilities SimBackend::capabilities() const
     // (Principle VI). TX stays off in the skeleton.
     caps.canTransmit = false;
     caps.txPowerMaxWatts = 0.0;
+    // Explicitly absent: the RX-only simulator publishes no forward power.
+    caps.forwardPowerRequiresSmoothing = false;
+    // transmitDriveControl stays ABSENT (#5518): the RX-only simulator has no
+    // transmitter, so there is no drive for anyone to own. Distinct from an
+    // Engine-authority backend that owns a register — this one has none, and an
+    // absent record is what keeps `drive_confirmed` off the wire entirely.
+
+    // Moot on a backend that cannot key at all — canTransmit=false refuses every
+    // mode already. Empty, not "all of them", because this field means "the
+    // exceptions", and a simulator has none.
+    caps.receiveOnlyModes = {};
+    caps.hasRadioDialLock = false;
     caps.hasTuner = false;
+    caps.hasTunerMemories = false;
     caps.hasAmplifier = false;
     caps.hasExtendedDsp = false;
     caps.hasLmsNoiseFilters = false;
+    caps.hasAudioPeakingFilter = false;
     caps.hasManualNotch = false;
+    caps.hasTransmitFrequencyCheck = false;
+    caps.hasDdcPanEdgeRolloff = false;   // synthetic scene, no real receive chain
     // The synthesised stream has no impulse noise in it, and the demo has no IQ
     // path this host demodulates — there is nothing to blank.
     caps.hasHostNoiseBlanker = false;
     // Synthesised signals come out exactly where the demo says they are; there
     // is no oscillator to be wrong about.
     caps.hostFrequencyCalibration = false;
+    caps.hostDroopCalibration = false;   // synthesised bins have no DDC to droop
     // The simulator has no profile store to list, load or save into.
     caps.hasProfiles = false;
     caps.hasSelectableMicInputs = false;
+    caps.hasDownwardExpander = false;
+    caps.hasAgcThreshold = true;
 
     // The demo has no transmitter and no radio to ship audio to.
     caps.takesTxAudioOverSeam = false;
+    caps.hasRadioPttReadback = false;
     // Continuous/unknown — the operator keeps their own width list.
     caps.rxFilterWidthsHz = {};
+    caps.hasTxFilterControls = false;   // RX-only; no transmit passband exists
     // Synthetic audio only; nothing to route to a virtual device.
     caps.hasDaxStreams = false;
     caps.hasRadioSideDsp = false;        // synthetic scene; no firmware DSP
@@ -276,6 +355,7 @@ RadioCapabilities SimBackend::capabilities() const
     caps.hasFullDuplex = false;
     caps.hasWaveforms = false;
     caps.hasMultiClientSessions = false;
+    caps.alwaysUseClientSideSpots = false;
     // No manual notch. The synthetic scene has an auto-notch in its mixer, but
     // nothing implements a placed, tracking null — so the +TNF button and the
     // panadapter's add-notch entries stay hidden here rather than appearing and
@@ -285,10 +365,25 @@ RadioCapabilities SimBackend::capabilities() const
     caps.notchMinWidthHz = 0.0;
     caps.notchMaxWidthHz = 0.0;
     caps.hasGpsLocation = false;         // synthetic radio has no position source
+    caps.hasGpsSatelliteTelemetry = false;
+    caps.hasGpsFrequencyReference = false;
+    caps.hasGpsTimeConfiguration = false;
+    caps.hasGpsHardware = false;
+    caps.gpsHardwareRequiresPresence = false;
     caps.hasSupplyVoltageTelemetry = false;   // synthetic scene; no PA rail
+    caps.hasPaTemperatureTelemetry = false;   // synthetic scene; no PA temperature
+    caps.hasPaCurrentTelemetry = false;       // synthetic scene; no PA current
+    caps.speechProcessorLevelMaximum = 2;
+    caps.speechProcessorLabel = QStringLiteral("PROC");
+    caps.hasMainFanTelemetry = false;         // synthetic scene; no hardware fan
     // The demo radio regenerates its synthetic scene on every connect; there
     // is no operating state worth resurrecting across sessions.
     caps.clientSettingsDomains = {};
+    // The "sim" namespace: fault injection (RFC #4288 #4) + the Demo Noise
+    // scene verbs (noise.*). Declared so clients can gate the Demo Noise
+    // applet on the HANDSHAKE instead of a dynamic_cast to this type — the
+    // first production reader of extensionNamespaces (M0, #5263).
+    caps.extensionNamespaces = {QStringLiteral("sim")};
     return caps;
 }
 
@@ -301,12 +396,15 @@ void SimBackend::connectRadio(const RadioConnectRequest& /*request*/)
     emit connected();
     emit capabilitiesChanged();
     emitInitialState();
-    QMetaObject::invokeMethod(m_signalSource, &SimSignalSource::start,
+    QMetaObject::invokeMethod(m_signalSource, [source = m_signalSource, session = pcmSession()] {
+            source->startSession(session);
+        },
                               Qt::QueuedConnection);   // synthetic RX begins
 }
 
 void SimBackend::disconnectRadio()
 {
+    retirePcmStreams();
     if (!m_connected) {
         return;
     }
@@ -474,8 +572,10 @@ void SimBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
                                    hz / 1.0e6, kDemoPanBandwidthMhz);
 }
 
-void SimBackend::setKeying(bool key)
+void SimBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    Q_UNUSED(operation);
+    Q_UNUSED(completion);
     // RX-only (capabilities().canTransmit == false): the engine TX guard above
     // the seam already denies keying. We DON'T transmit — but we do forward the
     // intent so the source mutes the synthetic RX while "keyed": the demo never
@@ -502,6 +602,123 @@ void SimBackend::invokeExtension(const QString& ns, const QString& verb,
         if (requestId != 0)
             emit extensionError(requestId,
                                 QStringLiteral("sim: not connected — connect the demo first"));
+        return;
+    }
+    // Demo Noise scene verbs (M0, #5263) — the DemoApplet's controls, routed
+    // through the seam instead of a dynamic_cast to this type. Compound args
+    // ride a QVariantMap; a preset is its bare name.
+    const auto rejectNoiseRequest = [this, requestId](const QString& reason) {
+        if (requestId != 0) {
+            emit extensionError(requestId, reason);
+        }
+    };
+    const auto readNoiseChannel = [&rejectNoiseRequest](const QVariantMap& values,
+                                                        QString* channel) {
+        if (!values.contains(QStringLiteral("ch"))) {
+            rejectNoiseRequest(QStringLiteral("sim: noise request is missing 'ch'"));
+            return false;
+        }
+        *channel = values.value(QStringLiteral("ch")).toString();
+        bool knownChannel = false;
+        NoiseMixer::fromName(*channel, &knownChannel);
+        if (!knownChannel) {
+            rejectNoiseRequest(
+                QStringLiteral("sim: unknown noise channel '%1'").arg(*channel));
+        }
+        return knownChannel;
+    };
+    const auto readFiniteNumber = [&rejectNoiseRequest](const QVariantMap& values,
+                                                        const QString& key,
+                                                        double* value) {
+        bool converted = false;
+        *value = values.value(key).toDouble(&converted);
+        if (!values.contains(key) || !converted || !std::isfinite(*value)) {
+            rejectNoiseRequest(
+                QStringLiteral("sim: noise request has invalid '%1'").arg(key));
+            return false;
+        }
+        return true;
+    };
+    if (verb == QLatin1String("noise.enable")) {
+        if (arg.metaType().id() != QMetaType::QVariantMap) {
+            rejectNoiseRequest(QStringLiteral("sim: noise.enable expects a map"));
+            return;
+        }
+        const QVariantMap m = arg.toMap();
+        QString channel;
+        if (!readNoiseChannel(m, &channel)) {
+            return;
+        }
+        if (!m.contains(QStringLiteral("on"))
+            || m.value(QStringLiteral("on")).metaType().id() != QMetaType::Bool) {
+            rejectNoiseRequest(QStringLiteral("sim: noise.enable has invalid 'on'"));
+            return;
+        }
+        setDemoNoiseEnabled(channel, m.value(QStringLiteral("on")).toBool());
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        }
+        return;
+    }
+    if (verb == QLatin1String("noise.level")) {
+        if (arg.metaType().id() != QMetaType::QVariantMap) {
+            rejectNoiseRequest(QStringLiteral("sim: noise.level expects a map"));
+            return;
+        }
+        const QVariantMap m = arg.toMap();
+        QString channel;
+        double levelDb = 0.0;
+        if (!readNoiseChannel(m, &channel)
+            || !readFiniteNumber(m, QStringLiteral("db"), &levelDb)) {
+            return;
+        }
+        setDemoNoiseLevel(channel, levelDb);
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        }
+        return;
+    }
+    if (verb == QLatin1String("noise.knob")) {
+        if (arg.metaType().id() != QMetaType::QVariantMap) {
+            rejectNoiseRequest(QStringLiteral("sim: noise.knob expects a map"));
+            return;
+        }
+        const QVariantMap m = arg.toMap();
+        QString channel;
+        const QString knob = m.value(QStringLiteral("knob")).toString();
+        static const QSet<QString> kNoiseKnobs{
+            QStringLiteral("hz"), QStringLiteral("rate"),
+            QStringLiteral("freq"), QStringLiteral("prf")};
+        double value = 0.0;
+        if (!readNoiseChannel(m, &channel)) {
+            return;
+        }
+        if (!m.contains(QStringLiteral("knob")) || !kNoiseKnobs.contains(knob)) {
+            rejectNoiseRequest(
+                QStringLiteral("sim: unknown noise knob '%1'").arg(knob));
+            return;
+        }
+        if (!readFiniteNumber(m, QStringLiteral("v"), &value)) {
+            return;
+        }
+        setDemoNoiseKnob(channel, knob, value);
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        }
+        return;
+    }
+    if (verb == QLatin1String("noise.preset")) {
+        const QString preset = arg.toString();
+        if (arg.metaType().id() != QMetaType::QString
+            || !NoiseMixer::allPresetNames().contains(preset)) {
+            rejectNoiseRequest(
+                QStringLiteral("sim: unknown noise preset '%1'").arg(preset));
+            return;
+        }
+        loadDemoNoisePreset(preset);
+        if (requestId != 0) {
+            emit extensionResult(requestId, QVariantMap{{QStringLiteral("applied"), true}});
+        }
         return;
     }
     const bool handled = applyFault(verb, arg);

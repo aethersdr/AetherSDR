@@ -41,14 +41,14 @@ typedef struct _nurbs
 	double* Ys;
 	double* Uout;
 	int fpts;
-	double* Xf; 
+	double* Xf;
 	double* Yf;
 	int max_cp;
 	int max_p;
 	int max_upts;
 	int max_fpts;
 	int max_knots;
-} nurbs, *NURBS;
+} nurbs, * NURBS;
 
 extern NURBS create_nurbs(int n, int p, int r, int umethod, int upts,
 	int max_cp, int max_deg, int max_upts, int max_fpts);

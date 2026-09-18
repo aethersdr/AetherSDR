@@ -1,6 +1,8 @@
 #pragma once
 
 #include "models/MeterModel.h"   // kMinForwardWattsForSwr — the keyed-RF floor
+#include "TxCoordinator.h"
+#include "models/TxController.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -29,7 +31,7 @@ class AudioEngine;
 //
 // WHAT IT IS BUILT FROM. Every stage exists because something in the
 // Hermes-Lite 2 bring-up failed silently at exactly that point. The stage list
-// is a transcription of HERMES.md section 14, and each result carries the
+// is a transcription of docs/HERMES.md section 14, and each result carries the
 // reference so a future agent lands on the write-up rather than re-deriving it:
 //
 //   - four separate defects each produced a correct-looking keyed transmission
@@ -99,17 +101,17 @@ public:
         int maxRfPowerPercent = -1;
     };
 
-    RadioCertification(RadioModel* radio, AudioEngine* audio);
+    RadioCertification(RadioModel* radio, AudioEngine* audio,
+                       std::shared_ptr<TxController> controller = {});
 
-    // Called on every key EDGE (true = keyed, false = unkeyed) so the caller can
-    // arm and disarm its own safety machinery per key.
-    //
-    // The automation server's force-unkey watchdog needs this: it disowns any
-    // transmission it finds unkeyed at poll time, so arming once around a
-    // diagnostic that unkeys between every stage left the rest of the run
-    // unpoliced, and timed the key limit against wall clock rather than
-    // continuous key time.
-    void setKeyObserver(std::function<void(bool)> observer);
+    // Called per key request (true = on, false = off or refused) so the caller
+    // can police the admitted operation. This is not qualified RF readback.
+    // A diagnostic may spend a long time idle between keys: arming once around
+    // the whole run would time the diagnostic, not an individual transmission.
+    // Key-on notification is after synchronous admission, before any event-loop
+    // wait. Previous identity/state let the observer reject an unrelated over.
+    using KeyObserver = std::function<void(bool, const TxCoordinator::Operation&, bool)>;
+    void setKeyObserver(KeyObserver observer);
 
     // Runs the whole sequence synchronously, spinning the event loop between
     // steps. Returns the report. Expect this to take tens of seconds and to key
@@ -118,12 +120,13 @@ public:
     QJsonObject run(const Options& options);
 
 private:
+    friend class RadioCertificationTestAccess;
     // One measurement, recorded whether or not it looked healthy.
     //
     // `concern` is the closest thing to a verdict: it is set when a value falls
     // outside what this radio has previously been observed to do, and it names
     // the suspicion rather than declaring failure. `reference` points at the
-    // HERMES.md section that explains the failure mode, so the next agent gets
+    // docs/HERMES.md section that explains the failure mode, so the next agent gets
     // the history rather than a bare number.
     //
     // `meterDependent` marks a conclusion that was drawn from meterSnapshot(),
@@ -150,7 +153,7 @@ private:
     //
     // These run FIRST when both phases are selected, and not by accident: the
     // wire's handedness is one fact that transmit and receive both consume, and
-    // transmit cannot be reasoned about until it is settled (HERMES.md 15.6).
+    // transmit cannot be reasoned about until it is settled (docs/HERMES.md 15.6).
     void stageConsumerAgreement(const Options& o);
     void stageZeroShift(const Options& o);
     void stageRxSidebands(const Options& o);
@@ -169,7 +172,7 @@ private:
     //
     // The automation bridge drives RadioModel and the MOX button drives
     // TransmitModel, and three separate bugs reached the operator through that
-    // gap (HERMES.md 14.5). A transmit diagnostic that keyed the way only the
+    // gap (docs/HERMES.md 14.5). A transmit diagnostic that keyed the way only the
     // bridge can would inherit exactly the blindness it exists to remove.
     //
     // Returns whether the radio reached the requested state. Keying can be
@@ -240,7 +243,9 @@ private:
     // Every stage already opens with a null check, so this costs nothing.
     QPointer<RadioModel> m_radio;
     QPointer<AudioEngine> m_audio;
-    std::function<void(bool)> m_onKey;
+    const std::shared_ptr<TxController> m_txController;
+    TxController::Input m_keyInput;
+    KeyObserver m_onKey;
     int m_keyRefusals = 0;   // keys the radio refused; reported, never ignored
     QJsonArray m_stages;
 

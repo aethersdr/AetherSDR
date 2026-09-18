@@ -26,6 +26,9 @@ SupportBundle::SystemInfo sampleSys()
     sys.kernelVersion = "1.2.3";
     sys.cpuArch       = "x86_64";
     sys.buildDate     = "Jan 1 2026";
+    sys.cpu           = "Test CPU 9000 (x86_64; SSE42 AVX AVX2)";
+    sys.ram           = "16384 MB";
+    sys.gpu           = "Test GPU (auto)";
     return sys;
 }
 
@@ -109,6 +112,27 @@ void testSnapshotSectionsPresent()
            && body.contains("SmartLink account names"));
 }
 
+// The bundle's system-info.json is the structured artifact that survives a
+// user editing the mail body, so the CPU/RAM facts that decide
+// hardware-dependent crash reports (#4986) must be pinned there — not only
+// in the email text.
+void testBundleSystemInfoJsonCarriesHardwareFacts()
+{
+    const QJsonObject obj = SupportBundle::systemInfoJson(sampleSys());
+    report("json cpu carries the full model+features summary",
+           obj.value("cpu").toString() == "Test CPU 9000 (x86_64; SSE42 AVX AVX2)");
+    report("json keeps the bare arch string",
+           obj.value("arch").toString() == "x86_64");
+    report("json carries total RAM",
+           obj.value("ram").toString() == "16384 MB");
+    report("json carries the render GPU decision",
+           obj.value("gpu").toString() == "Test GPU (auto)");
+    report("json keeps the pre-existing os/kernel/version fields",
+           obj.value("os").toString() == "Test OS"
+           && obj.value("kernel").toString() == "1.2.3"
+           && obj.value("aetherVersion").toString() == "26.7.3");
+}
+
 } // namespace
 
 int main(int, char**)
@@ -117,6 +141,7 @@ int main(int, char**)
     testRadioPiiScrubbedButPublicKept();
     testOmittedLogNote();
     testSnapshotSectionsPresent();
+    testBundleSystemInfoJsonCarriesHardwareFacts();
 
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASSED" : "FAILURES PRESENT");
     return g_failed == 0 ? 0 : 1;

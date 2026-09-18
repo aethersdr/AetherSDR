@@ -40,6 +40,53 @@ SerialPortController::~SerialPortController()
     close();
 }
 
+void SerialPortController::publishPttInput(bool active, const TxCoordinator::Request& input)
+{
+    if (active && !m_pttInputHeld) {
+        m_pttInput = input.derive();
+    }
+    m_pttInputHeld = active;
+    emit externalPttChanged(active, m_pttInput);
+}
+
+void SerialPortController::publishKeyInput(bool down, const TxCoordinator::Request& input)
+{
+    if (down && !m_keyInputHeld) {
+        m_keyInput = input.derive();
+    }
+    m_keyInputHeld = down;
+    emit cwKeyChanged(down, m_keyInput);
+}
+
+void SerialPortController::publishPaddleInput(bool dit, bool dah, const TxCoordinator::Request& input)
+{
+    if ((dit || dah) && !m_paddleInputHeld) {
+        m_paddleInput = input;
+        m_paddleKeyInput = input.derive();
+    }
+    m_paddleInputHeld = dit || dah;
+    emit cwPaddleChanged(dit, dah, m_paddleInput, m_paddleKeyInput);
+}
+
+void SerialPortController::retireTxInputs()
+{
+    // Fence before notifying the owner: even input already queued on another
+    // thread must not key after close. Original releases still clear held
+    // paddle state/TUNE exclusion (#5422) and straight-key sidetone.
+    ++m_inputPortEpoch;
+    m_txProducer.discardInputs();
+    emit txInputsCancelled();
+    if (m_pttInputHeld) {
+        publishPttInput(false);
+    }
+    if (m_keyInputHeld) {
+        publishKeyInput(false);
+    }
+    if (m_paddleInputHeld) {
+        publishPaddleInput(false, false);
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Windows implementation — Win32 WaitCommEvent
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,19 +198,15 @@ bool SerialPortController::open(const QString& portName, int baudRate,
 void SerialPortController::close()
 {
     if (!isOpen()) return;
+    retireTxInputs();
 
     HANDLE hPort = static_cast<HANDLE>(m_hWin);
-
-    // Emit PTT release before closing to avoid stuck TX
-    bool pttWasActive = (m_ctsFn == InputFunction::PttInput && m_lastCtsActive)
-                     || (m_dsrFn == InputFunction::PttInput && m_lastDsrActive)
-                     || (m_dcdFn == InputFunction::PttInput && m_lastDcdActive);
-    if (pttWasActive)
-        emit externalPttChanged(false);
 
     m_lastCtsActive = false;
     m_lastDsrActive = false;
     m_lastDcdActive = false;
+    m_lastDitActive = false;
+    m_lastDahActive = false;
 
     // Deassert configured output pins
     if (m_dtrFn != PinFunction::None)
@@ -221,6 +264,7 @@ void SerialPortController::updatePolling()
 void SerialPortController::runWinWatcher()
 {
     HANDLE hPort = static_cast<HANDLE>(m_hWin);
+    const quint64 portEpoch = m_inputPortEpoch.load(std::memory_order_acquire);
 
     qCDebug(lcDevices) << "SerialPortController: watcher thread started";
 
@@ -243,21 +287,25 @@ void SerialPortController::runWinWatcher()
         bool dsr = (modemStat & MS_DSR_ON)  != 0;
         bool cts = (modemStat & MS_CTS_ON)  != 0;
         bool dcd = (modemStat & MS_RLSD_ON) != 0;
+        const TxCoordinator::Request input = m_txProducer.request();
 
         qCDebug(lcDevices) << "SerialPortController: WaitCommEvent"
                            << Qt::hex << evtMask
                            << "DSR=" << dsr << "CTS=" << cts << "DCD=" << dcd;
 
         // Marshal the pin state back to this object's thread
-        QMetaObject::invokeMethod(this, [this, dsr, cts, dcd]() {
-            processWinPinChange(dsr, cts, dcd);
+        QMetaObject::invokeMethod(this, [this, dsr, cts, dcd, input, portEpoch]() {
+            if (portEpoch == m_inputPortEpoch.load(std::memory_order_acquire)) {
+                processWinPinChange(dsr, cts, dcd, input);
+            }
         }, Qt::QueuedConnection);
     }
 
     qCDebug(lcDevices) << "SerialPortController: watcher thread exiting";
 }
 
-void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw, bool dcdRaw)
+void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw, bool dcdRaw,
+                                              const TxCoordinator::Request& input)
 {
     if (!isOpen()) return;
     bool ctsActive = m_ctsActiveHigh ? ctsRaw : !ctsRaw;
@@ -271,19 +319,19 @@ void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw, bool dc
         qCDebug(lcDevices) << "SerialPortController: CTS PTT edge →" << ctsActive;
         m_lastCtsActive = ctsActive;
         m_debounceTimer.restart();
-        emit externalPttChanged(ctsActive);
+        publishPttInput(ctsActive, input);
     }
     if (m_dsrFn == InputFunction::PttInput && dsrActive != m_lastDsrActive && debounceOk) {
         qCDebug(lcDevices) << "SerialPortController: DSR PTT edge →" << dsrActive;
         m_lastDsrActive = dsrActive;
         m_debounceTimer.restart();
-        emit externalPttChanged(dsrActive);
+        publishPttInput(dsrActive, input);
     }
     if (m_dcdFn == InputFunction::PttInput && dcdActive != m_lastDcdActive && debounceOk) {
         qCDebug(lcDevices) << "SerialPortController: DCD PTT edge →" << dcdActive;
         m_lastDcdActive = dcdActive;
         m_debounceTimer.restart();
-        emit externalPttChanged(dcdActive);
+        publishPttInput(dcdActive, input);
     }
 
     // ── CW straight key ──────────────────────────────────────────────────
@@ -294,7 +342,7 @@ void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw, bool dc
     if (m_dcdFn == InputFunction::CwKeyInput) { keyDown = dcdActive; hasKey = true; }
     if (hasKey && keyDown != m_lastKeyDown) {
         m_lastKeyDown = keyDown;
-        emit cwKeyChanged(keyDown);
+        publishKeyInput(keyDown, input);
     }
 
     // ── CW paddle (dit/dah) ──────────────────────────────────────────────
@@ -317,7 +365,7 @@ void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw, bool dc
     if (hasPaddle && (ditActive != m_lastDitActive || dahActive != m_lastDahActive)) {
         m_lastDitActive = ditActive;
         m_lastDahActive = dahActive;
-        emit cwPaddleChanged(ditActive, dahActive);
+        publishPaddleInput(ditActive, dahActive, input);
     }
 }
 
@@ -394,15 +442,12 @@ void SerialPortController::close()
 #ifdef HAVE_SERIALPORT
     m_pollTimer.stop();
     if (m_port.isOpen()) {
-        bool pttWasActive = (m_ctsFn == InputFunction::PttInput && m_lastCtsActive)
-                         || (m_dsrFn == InputFunction::PttInput && m_lastDsrActive)
-                         || (m_dcdFn == InputFunction::PttInput && m_lastDcdActive);
-        if (pttWasActive)
-            emit externalPttChanged(false);
-
+        retireTxInputs();
         m_lastCtsActive = false;
         m_lastDsrActive = false;
         m_lastDcdActive = false;
+        m_lastDitActive = false;
+        m_lastDahActive = false;
 
         if (m_dtrFn != PinFunction::None)
             m_port.setDataTerminalReady(!m_dtrActiveHigh);
@@ -467,6 +512,7 @@ void SerialPortController::updatePolling()
 void SerialPortController::pollInputPins()
 {
     if (!m_port.isOpen()) return;
+    const TxCoordinator::Request input = m_txProducer.request();
 
     auto pinState = m_port.pinoutSignals();
 
@@ -522,19 +568,19 @@ void SerialPortController::pollInputPins()
         qCDebug(lcDevices) << "SerialPortController: CTS PTT edge →" << ctsActive;
         m_lastCtsActive = ctsActive;
         m_debounceTimer.restart();
-        emit externalPttChanged(ctsActive);
+        publishPttInput(ctsActive, input);
     }
     if (m_dsrFn == InputFunction::PttInput && dsrActive != m_lastDsrActive && debounceOk) {
         qCDebug(lcDevices) << "SerialPortController: DSR PTT edge →" << dsrActive;
         m_lastDsrActive = dsrActive;
         m_debounceTimer.restart();
-        emit externalPttChanged(dsrActive);
+        publishPttInput(dsrActive, input);
     }
     if (m_dcdFn == InputFunction::PttInput && dcdActive != m_lastDcdActive && debounceOk) {
         qCDebug(lcDevices) << "SerialPortController: DCD PTT edge →" << dcdActive;
         m_lastDcdActive = dcdActive;
         m_debounceTimer.restart();
-        emit externalPttChanged(dcdActive);
+        publishPttInput(dcdActive, input);
     }
 
     // ── CW straight key ──────────────────────────────────────────────────
@@ -545,7 +591,7 @@ void SerialPortController::pollInputPins()
     if (m_dcdFn == InputFunction::CwKeyInput) { keyDown = dcdActive; hasKey = true; }
     if (hasKey && keyDown != m_lastKeyDown) {
         m_lastKeyDown = keyDown;
-        emit cwKeyChanged(keyDown);
+        publishKeyInput(keyDown, input);
     }
 
     // ── CW paddle (dit/dah) ──────────────────────────────────────────────
@@ -567,7 +613,7 @@ void SerialPortController::pollInputPins()
     if (hasPaddle && (ditActive != m_lastDitActive || dahActive != m_lastDahActive)) {
         m_lastDitActive = ditActive;
         m_lastDahActive = dahActive;
-        emit cwPaddleChanged(ditActive, dahActive);
+        publishPaddleInput(ditActive, dahActive, input);
     }
 }
 #endif  // HAVE_SERIALPORT

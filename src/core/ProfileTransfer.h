@@ -3,12 +3,15 @@
 #include <QObject>
 #include <QByteArray>
 #include <QList>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QString>
 #include <QStringList>
 #include <QVersionNumber>
 
 #include <optional>
+#include <functional>
+#include <utility>
 
 class QFile;
 class QSaveFile;
@@ -19,6 +22,7 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
+class ProfileTransferTestAccess;
 
 struct MemoryGroupSelection {
     QString owner;
@@ -195,6 +199,8 @@ inline std::optional<quint16> parseTransferPort(const QString& replyBody)
 class ProfileTransfer : public QObject {
     Q_OBJECT
 
+    friend class ProfileTransferTestAccess;
+
 public:
     enum class Operation {
         ExportDatabase,
@@ -225,10 +231,22 @@ private:
         WaitingForImport
     };
 
-    void begin(Operation operation, Phase phase);
+    bool isCurrent(quint64 generation, Phase expectedPhase) const;
+    bool isCurrentSocket(quint64 generation, Phase expectedPhase,
+                         const QTcpSocket* expectedSocket) const;
+    quint64 nextAsyncId();
+    void invalidateOperation();
+    void startCommandTimeout(int timeoutMs, Phase expectedPhase);
+    void stopCommandTimeout();
+    void startIdleTimeout(Phase expectedPhase);
+    void stopIdleTimeout();
+
+    quint64 begin(Operation operation, Phase phase);
     void fail(const QString& error);
     void finish(QString path);
     void cleanup();
+    void destroySocket(bool abortConnection);
+    void destroyServer();
 
     ExportSelection expandSelection(ExportSelection selection) const;
     bool validateCommonPreconditions(Operation operation, QString* error) const;
@@ -237,22 +255,34 @@ private:
     bool validateImportFile(const QString& path, QString* error) const;
 
     void requestUploadPort(const QByteArray& payload, const QString& uploadKind);
-    void onUploadPortReceived(int code, const QString& body);
+    std::function<void(int, const QString&)> makeUploadPortCallback(
+        quint64 generation, Phase expectedPhase, quint64 requestId);
+    void handleUploadPortReceived(quint64 generation, Phase expectedPhase, quint64 requestId,
+                                  int code, const QString& body);
     void connectUploadSocket(quint16 port);
+    std::function<void()> makeUploadConnectCallback(quint64 generation, Phase expectedPhase,
+                                                    QTcpSocket* socket,
+                                                    std::function<void()> connectAction);
     void tryFallbackUploadPort();
-    void onUploadConnected();
-    void sendNextUploadChunk();
-    void onUploadBytesWritten(qint64 bytes);
-    void onUploadDisconnected();
-    void onUploadError();
+    void handleUploadConnected(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    void sendNextUploadChunk(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    void handleUploadBytesWritten(quint64 generation, Phase expectedPhase, QTcpSocket* socket,
+                                  qint64 bytes);
+    void handleUploadDisconnected(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    std::function<void()> makeMetadataSettleCallback(quint64 generation, Phase expectedPhase,
+                                                     std::function<void()> settleAction);
+    void handleUploadError(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
 
     void requestPackageDownload();
-    void onDownloadPortReceived(int code, const QString& body);
+    std::function<void(int, const QString&)> makeDownloadPortCallback(
+        quint64 generation, Phase expectedPhase, quint64 requestId);
+    void handleDownloadPortReceived(quint64 generation, Phase expectedPhase, quint64 requestId,
+                                    int code, const QString& body);
     void startDownloadServer(quint16 port);
-    void onDownloadConnection();
-    void onDownloadReadyRead();
-    void onDownloadDisconnected();
-    void onDownloadError();
+    void handleDownloadConnection(quint64 generation, Phase expectedPhase, QTcpServer* server);
+    void handleDownloadReadyRead(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    void handleDownloadDisconnected(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
+    void handleDownloadError(quint64 generation, Phase expectedPhase, QTcpSocket* socket);
 
     void waitForImportCompletion();
     void scheduleImportCompletion();
@@ -261,9 +291,18 @@ private:
     void handleTimeout();
     bool commitExportFile(QString* error);
 
-    RadioModel* m_model{nullptr};
+    QPointer<RadioModel> m_model;
     Operation m_operation{Operation::ExportDatabase};
     Phase m_phase{Phase::Idle};
+    quint64 m_operationGeneration{0};
+    quint64 m_nextAsyncId{0};
+    quint64 m_uploadPortRequestId{0};
+    quint64 m_downloadPortRequestId{0};
+    quint64 m_commandTimeoutGeneration{0};
+    quint64 m_idleTimeoutGeneration{0};
+    quint64 m_overallTimeoutGeneration{0};
+    Phase m_commandTimeoutPhase{Phase::Idle};
+    Phase m_idleTimeoutPhase{Phase::Idle};
     bool m_busy{false};
     bool m_cancelled{false};
     bool m_usedFallbackPort{false};
@@ -283,6 +322,7 @@ private:
     QTimer* m_timeout{nullptr};
     QTimer* m_idleTimer{nullptr};
     QTimer* m_overallTimer{nullptr};
+    QMetaObject::Connection m_importingChangedConnection;
 
     static constexpr int kUploadChunkSize = 64 * 1024;
     static constexpr int kCommandTimeoutMs = 10000;

@@ -1,4 +1,4 @@
-#include "TestSettingsProfile.h"
+﻿#include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/AnalogMeterFaceTheme.h"
 #include "gui/RadioSwrValidityFilter.h"
@@ -29,6 +29,11 @@
 namespace {
 
 int g_failures = 0;
+
+// True once the announcement section has actually run its checks. Reported in
+// the final pass line so a partial skip is visible in the ctest log — see the
+// note where it is printed.
+bool g_announcementsChecked = false;
 
 struct AccessibleValueUpdate {
     QObject* object{nullptr};
@@ -105,6 +110,30 @@ void testAccessibilityAnnouncements()
     const bool wasAccessible = QAccessible::isActive();
     QAccessible::setActive(true);
 
+    // setActive(true) is a request Qt refuses when the platform plugin has no
+    // accessibility backend — true of offscreen/minimal, which is what CI uses.
+    // The widget is then correct to stay silent and every announcement check
+    // below fails as `got []`. Skip rather than fail; see the longer note in
+    // relay_bar_a11y_test.cpp and issue #4360.
+    //
+    // NOTE this file is NOT only an accessibility test: the SWR hold/reset
+    // coverage further down asserts pure model state (txSwrHeld,
+    // txSwrMinimumForwardWatts) that has nothing to do with announcements and
+    // runs perfectly well headless. So this skips the announcement SECTION and
+    // lets the rest execute — returning 77 here would silently drop that SWR
+    // coverage, and since the sanitizer job is the only job that runs this
+    // test at all, "silently" would mean nothing watches it anywhere.
+    if (!QAccessible::isActive()) {
+        std::cerr << "SKIP (announcements only): the platform plugin ("
+                  << QApplication::platformName().toStdString()
+                  << ") has no accessibility backend, so QAccessible::setActive(true) "
+                     "does not take. The SWR coverage below still runs.\n";
+        QAccessible::installUpdateHandler(previousHandler);
+        QAccessible::setActive(wasAccessible);
+        g_accessibleValueUpdates = nullptr;
+        return;
+    }
+
     AetherSDR::SMeterWidget meter;
     meter.show();
     meter.activateWindow();
@@ -178,6 +207,7 @@ void testAccessibilityAnnouncements()
         QStringLiteral("return to receive transition"));
 
     meter.close();
+    g_announcementsChecked = true;
     QAccessible::installUpdateHandler(previousHandler);
     QAccessible::setActive(wasAccessible);
     g_accessibleValueUpdates = nullptr;
@@ -1158,7 +1188,17 @@ int main(int argc, char** argv)
     expect(changedPixelCount(enlargedRender) > 1000, "enlarged face renders");
 
     if (g_failures == 0) {
-        std::cout << "All standard S-meter geometry checks passed\n";
+        // SAY WHICH HALF RAN. Without this the binary exits 0 whether or not the
+        // announcement section executed, and ctest reports a bare "Passed" for
+        // both — so a platform that quietly stopped supporting accessibility
+        // would look identical to a full run. There is no ctest-visible signal
+        // for a partial skip (SKIP_RETURN_CODE is whole-binary), so the pass
+        // line carries it instead.
+        std::cout << (g_announcementsChecked
+                          ? "All standard S-meter geometry checks passed"
+                          : "S-meter geometry + SWR checks passed "
+                            "(announcement section SKIPPED — no a11y backend)")
+                  << "\n";
     }
     return g_failures == 0 ? 0 : 1;
 }

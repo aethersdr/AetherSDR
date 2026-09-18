@@ -68,8 +68,11 @@ QColor waveformColor()
 
 float waveformLineWidth()
 {
-    const float w = AppSettings::instance().value("DisplayFftLineWidth", "2.0").toFloat();
-    return std::clamp(w, 1.0f, 3.0f);
+    // Shares the panadapter's key, so it must accept every width the FFT Line
+    // slider can set: the floor is the slider's lowest non-Off step (RFC
+    // #5561 §E). The 3.0 ceiling is the scope's own.
+    const float w = AppSettings::instance().value("DisplayFftLineWidth", "1.0").toFloat();
+    return std::clamp(w, 0.5f, 3.0f);
 }
 
 bool showGrid()

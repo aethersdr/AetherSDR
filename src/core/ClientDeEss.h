@@ -28,6 +28,8 @@ public:
     ClientDeEss(const ClientDeEss&)            = delete;
     ClientDeEss& operator=(const ClientDeEss&) = delete;
 
+    // Audio owner only; never concurrently with process(). GUI rate reads
+    // and parameter setters remain safe while a new producer is prepared.
     void prepare(double sampleRate);
 
     void setEnabled(bool on) noexcept;
@@ -75,7 +77,12 @@ public:
     float sidechainPeakDb() const noexcept;         // HF-band sidechain peak
     float gainReductionDb() const noexcept;         // ≤ 0 dB
 
-    double sampleRate() const noexcept { return m_sampleRate; }
+    // Audio owner: mirror a presented auxiliary source into UI-facing meters.
+    // Copies atomic snapshots only; parameters and processing histories stay local.
+    void copyMeteringFrom(const ClientDeEss& source) noexcept;
+
+    double sampleRate() const noexcept
+    { return m_sampleRate.load(std::memory_order_relaxed); }
 
     // Public because the cpp-local biquad helper takes references to
     // these.  Not part of the user-facing API.
@@ -118,7 +125,8 @@ private:
     void recacheIfDirty() noexcept;
     float staticCurveGainDb(float envDb) const noexcept;
 
-    double m_sampleRate{24000.0};
+    // Audio owner writes in prepare(); UI reads the displayed processing rate.
+    std::atomic<double> m_sampleRate{24000.0};
     Atomics m_atomics;
     Cached  m_cached;
     Meters  m_meters;

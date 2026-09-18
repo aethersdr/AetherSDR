@@ -1,5 +1,7 @@
 #include "CwxLocalKeyer.h"
 
+#include "ThreadName.h"
+
 #include <QHash>
 
 namespace AetherSDR {
@@ -174,7 +176,15 @@ void CwxLocalKeyer::scheduleNext()
     }
     if (keyDownNext != m_currentlyDown) {
         m_currentlyDown = keyDownNext;
-        emitKeyDown(keyDownNext);
+        // This edge fires at the grid instant the wake was waiting for:
+        // m_nextEdgeMs is still the *current* deadline here and advances to
+        // the next one below.  On a run's first element the epoch has not
+        // been taken yet (startEpoch() runs after this block), so there is
+        // no schedule to carry and wall clock is the honest stamp — it is
+        // also what startEpoch() is about to record as the epoch. (#4977)
+        emitKeyDown(keyDownNext,
+                    m_epochValid ? m_epoch + std::chrono::milliseconds(m_nextEdgeMs)
+                                 : std::chrono::steady_clock::now());
     }
     // Drift-correct against an absolute clock: the next edge should land at
     // m_nextEdgeMs from the start of the run, not durationMs from now, so a
@@ -222,21 +232,30 @@ void CwxLocalKeyer::startEpoch()
     m_nextEdgeMs = 0;
 }
 
-void CwxLocalKeyer::emitKeyDown(bool down)
+void CwxLocalKeyer::emitKeyDown(bool down, std::chrono::steady_clock::time_point when)
 {
     if (down == m_lastEmittedKeyDown) return;
     m_lastEmittedKeyDown = down;
-    if (m_onKeyDownChange) m_onKeyDownChange(down);
+    if (m_onKeyDownChange) m_onKeyDownChange(down, when);
 }
 
 void CwxLocalKeyer::keyUpIfDown()
 {
     m_currentlyDown = false;
-    emitKeyDown(false);
+    // Stop / abort / drain — not a scheduled edge.  The operator's "stop
+    // sending" silences at the instant it is processed, not at a grid
+    // deadline that may still lie in the future. (#4977)
+    emitKeyDown(false, std::chrono::steady_clock::now());
 }
 
 void CwxLocalKeyer::workerLoop()
 {
+    // A raw std::thread never passes through QThread::start(), so Qt cannot
+    // name it the way it names the QThread workers — without this the keyer
+    // shows up as an unnamed row in the System Info thread table (#2554), which
+    // is unhelpful for exactly the CW timing work that would consult it.
+    setCurrentThreadName("CwxLocalKeyer");
+
     for (;;) {
         // ── Idle wait — park until there is text to send (or shutdown) ──
         {

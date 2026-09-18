@@ -3,7 +3,10 @@
 #include <QWidget>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QMetaObject>
+#include "models/TxController.h"
 
+class QMenu;
 class QPushButton;
 class QLabel;
 class QSlider;
@@ -45,6 +48,16 @@ public:
     void setRadioModel(RadioModel* radio);
     void setBandPlanManager(BandPlanManager* bandPlan);
 
+    // Building a context menu is split from showing it so the actions, their
+    // enabled state and their explanatory tooltips can be asserted without
+    // entering the modal QMenu::exec() loop. The show* slots build then exec.
+    // (#5510)
+    void buildAtuContextMenu(QMenu& menu);
+    void buildTuneContextMenu(QMenu& menu);
+    // Shared entry points for the ATU context menu and main Tools menu.
+    void openPreTuneDialog();
+    void confirmAndClearAtuMemories();
+
 public slots:
     void updateMeters(float fwdPower, float swr, bool swrValid);
     // Capture raw pre-smoothed FWDPWR for PEP peak-hold tick. (#2561)
@@ -56,6 +69,11 @@ public slots:
 
 private:
     void buildUI();
+    void configureTxActions();
+    TxController::Input localTxInput(TxController::Activity activity);
+    void requestTune(bool on, const TxController::Input& input);
+    void requestMox(bool on, const TxController::Input& input);
+    void requestAtu(const TxController::Input& input);
     void syncFromModel();
     void syncAtuIndicators();
     // Single owner of the ATU/MEM enabled state.
@@ -69,8 +87,6 @@ private:
     // Right-click menu on the ATU button — exposes Pre-tune Bands and
     // Clear ATU Memories. Pre-tune is grayed when MEM is off. (#2624)
     void showAtuContextMenu(const QPoint& pos);
-    void openPreTuneDialog();
-    void confirmAndClearAtuMemories();
     // Right-click menu on the TUNE button — picks the carrier shape for
     // the *next* tune cycle: "Mono Tone" (single_tone) or "Two Tone".
     // Nothing is persisted — selecting Two Tone is a transient one-shot
@@ -79,6 +95,7 @@ private:
 
     TransmitModel* m_model{nullptr};
     RadioModel*       m_radioModel{nullptr};
+    std::shared_ptr<TxController> m_txController;
     BandPlanManager*  m_bandPlanMgr{nullptr};
     AtuPreTuneDialog* m_preTuneDialog{nullptr};
 
@@ -89,10 +106,11 @@ private:
     // change between clicks falls back to "atu start". (#1993)
     double m_atuTunedFreqMhz{-1.0};
 
-    // Inputs to updateAtuAvailability(). Both default to the permissive value
-    // so an applet built before either model has reported looks exactly as it
-    // did before this gate existed.
+    // Capability inputs to updateAtuAvailability(). Matching and Flex-style
+    // memory operations are separate claims; both default permissive so an
+    // applet built before a model reports retains the disconnected presentation.
     bool m_radioHasTuner{true};
+    bool m_radioHasTunerMemories{true};
     bool m_tgxlOperate{false};
 
     // Gauges (HGauge*)
@@ -164,6 +182,9 @@ private:
     // across an un-key, so stopping the poller alone cannot prevent a late
     // non-zero sample from repainting an idle gauge.
     bool m_transmitting{false};
+    bool m_forwardPowerRequiresSmoothing{true};
+    bool m_forwardPowerScaleFollowsBandRating{false};
+    QMetaObject::Connection m_capabilitiesConnection;
 
     // PEP peak-hold for the FWDPWR gauge — mirrors the SMeterWidget RX
     // peak-hold pattern.  The peak captures the highest pre-smoothed FWDPWR

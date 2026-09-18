@@ -196,9 +196,16 @@ bool RADEEngine::isSynced() const
 #endif
 }
 
-void RADEEngine::resetTx()
+void RADEEngine::resetTx(const TxCoordinator::Context& context)
 {
+    m_txContext = context;
 #ifdef HAVE_RADE
+    if (m_down24to16) {
+        m_down24to16->reset();
+    }
+    if (m_up8to24) {
+        m_up8to24->reset();
+    }
     m_txAccum.clear();
     m_txFeatAccum.clear();
     m_eooRequested = false;
@@ -211,18 +218,20 @@ void RADEEngine::resetTx()
 #endif
 }
 
-void RADEEngine::setEooRequested(bool requested)
+void RADEEngine::setEooRequested(bool requested, quint64 requestId)
 {
 #ifdef HAVE_RADE
     if (m_eooRequested == requested) return;
     m_eooRequested = requested;
+    m_eooRequestId = requestId;
     if (requested) {
         qCDebug(lcRade) << "RADEEngine: EOO requested — draining pipeline...";
         // Trigger a feed with empty audio to kick the drain logic if no more mic audio is coming
-        feedTxAudio(QByteArray());
+        feedTxAudio(QByteArray(), m_txContext);
     }
 #else
     Q_UNUSED(requested);
+    Q_UNUSED(requestId);
 #endif
 }
 
@@ -242,8 +251,14 @@ void RADEEngine::setTxCallsign(const QString& callsign)
 #endif
 }
 
-void RADEEngine::feedTxAudio(const QByteArray& pcm)
+void RADEEngine::feedTxAudio(const QByteArray& pcm, const TxCoordinator::Context& context)
 {
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
+        return;
+    }
+    if (!m_txContext.sameContext(context)) {
+        resetTx(context);
+    }
 #ifdef HAVE_RADE
     if (!m_rade || !m_lpcnetEnc || m_eooFinished) return;
 
@@ -314,7 +329,7 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm)
         m_tapVoiceAccum.append(stereo24k);
         m_tap8kVoiceAccum.append(modem8k);
 #endif
-        emit txModemReady(stereo24k);
+        emit txModemReady(stereo24k, context);
     }
 
     // Final Stage: Generate EOO frame if requested and voice pipeline is empty
@@ -375,15 +390,15 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm)
                             << "eoo24k=" << eoo24k.size() << "bytes"
                             << "silence=" << silence.size() << "bytes"
                             << "— emitting both before eooFinished";
-            emit txModemReady(eoo24k);
-            emit txModemReady(silence);
+            emit txModemReady(eoo24k, context);
+            emit txModemReady(silence, context);
         } else {
             qCWarning(lcRade) << "RADEEngine: rade_tx_eoo returned" << n << "(no EOO samples generated)";
         }
 
         m_eooSent = true;
         m_eooFinished = true;
-        emit eooFinished();
+        emit eooFinished(m_eooRequestId);
         qCDebug(lcRade) << "RADEEngine: EOO transmission complete — eooFinished emitted";
     }
 #else

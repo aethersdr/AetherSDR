@@ -378,11 +378,11 @@ void BandStackSettings::ensureScopeMigrated(const RadioSettingsScope& scope)
 QVector<BandStackEntry> BandStackSettings::readEntries(const RadioSettingsScope& scope)
 {
     QVector<BandStackEntry> out;
-    // The class already decided an empty radioId is not a BandStack target
-    // (ensureScopeMigrated guards it); the readers/writers must agree, or a
-    // mutation landing before the serial is known would write one radio's
-    // bookmarks as the FAMILY-WIDE default row (PR #4621 review, Ozy311).
-    if (!scope.isValid() || scope.radioId().isEmpty()) {
+    // Unknown identity must still refuse reads/writes (PR #4621). A connected
+    // anonymous radio is explicitly marked by the model: RFC #5468 chooses a
+    // shared family row for it. Legacy migration still requires a nonempty ID,
+    // since no old locator-keyed section can establish an anonymous owner.
+    if (!scope.isValid() || !scope.hasRadioIdentity()) {
         return out;
     }
     const QJsonArray array =
@@ -397,7 +397,7 @@ QVector<BandStackEntry> BandStackSettings::readEntries(const RadioSettingsScope&
 bool BandStackSettings::writeEntries(const RadioSettingsScope& scope,
                                      const QVector<BandStackEntry>& entries)
 {
-    if (!scope.isValid() || scope.radioId().isEmpty()) {
+    if (!scope.isValid() || !scope.hasRadioIdentity()) {
         qWarning() << "BandStackSettings: refusing a bookmark write without a"
                       " radio identity (would create a family-wide row)";
         return false;

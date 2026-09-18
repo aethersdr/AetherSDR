@@ -69,6 +69,18 @@ QString formatTemp(float degC, bool fahrenheit)
         .arg(fahrenheit ? "F" : "C");
 }
 
+void setAccessibleNameAndNotify(QWidget* widget, const QString& name)
+{
+    if (widget->accessibleName() == name) {
+        return;
+    }
+    widget->setAccessibleName(name);
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(widget, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
+}
+
 // °C scale ticks and the corresponding °F values (toFahrenheit of each)
 static const QVector<HGauge::Tick> kCelsiusTicks = {
     {0.0f,   "0"},   {30.0f, "30"},   {55.0f,  "55"},
@@ -79,6 +91,18 @@ static const QVector<HGauge::Tick> kFahrenheitTicks = {
     {32.0f,  "32"},  {86.0f, "86"},  {131.0f, "131"},
     {158.0f, "158"}, {194.0f, "194"}, {248.0f, "248"}
 };
+
+static const QVector<HGauge::Tick> kPaCurrentTicks = {
+    {0.0f, "0"}, {5.0f, "5"}, {10.0f, "10"}, {15.0f, "15"}, {20.0f, "20"}
+};
+
+// The official IC-9700 Basic Manual specifies 18 A maximum current draw
+// (Specifications, p. 11-1). The calibrated CI-V face extends to 20 A, so the
+// evidenced 18 A hardware limit starts the warning region rather than treating
+// 18-20 A as normal operation.
+// https://www.icomamerica.com/api/download.php?post_id=2156&fl=JTJGdXBsb2FkcyUyRnN1cHBvcnQlMkZtYW51YWwlMkZJQy05NzAwX0VOR19CYXNpY18zLnBkZg==
+constexpr float kPaCurrentWarningAmps = 18.0f;
+constexpr float kPaCurrentRedlineAmps = 20.0f; // wfview IC-9700 table marks full scale red
 
 } // namespace
 
@@ -126,13 +150,15 @@ MeterApplet::MeterApplet(QWidget* parent)
     // ── PA Temp gauge ─────────────────────────────────────────────────────────
     m_paTempGauge = new HGauge(0.0f, 120.0f, 70.0f, "PA Temp", "",
         kCelsiusTicks, this, 55.0f);
+    m_paTempGauge->setObjectName(QStringLiteral("mtrPaTempGauge"));
     m_paTempGauge->setAccessibleName(tr("PA temperature"));
     vbox->addWidget(m_paTempGauge);
 
     // ── Supply voltage gauge ───────────────────────────────────────────────────
-    m_supplyGauge = new HGauge(10.0f, 16.0f, 15.0f, "+13.8V", "",
+    m_supplyGauge = new HGauge(10.0f, 16.0f, 15.0f, "Supply Voltage", "",
         {{10.5f, "10.5"}, {12, "12"}, {13.8f, "13.8"}, {15, "15"}},
         this, 14.1f);
+    m_supplyGauge->setObjectName(QStringLiteral("mtrSupplyVoltageGauge"));
     m_supplyGauge->setAccessibleName(tr("Supply voltage"));
     vbox->addWidget(m_supplyGauge);
 
@@ -154,7 +180,7 @@ void MeterApplet::setMeterModel(MeterModel* model)
 
     connect(model, &MeterModel::hwTelemetryChanged,
             this, [this](float paTemp, float supplyV) {
-        if (m_model->hasPaTemp()) {
+        if (m_paTemperatureAvailable && m_model->hasPaTemp()) {
             m_paTemp    = paTemp;
             m_hasPaTemp = true;
             const float dispTemp = m_tempFahrenheit ? toFahrenheit(paTemp) : paTemp;
@@ -162,14 +188,140 @@ void MeterApplet::setMeterModel(MeterModel* model)
             m_paTempGauge->setLabel(formatTemp(paTemp, m_tempFahrenheit));
         }
 
-        m_supplyGauge->setValue(supplyV);
-        m_supplyGauge->setLabel(QString("+%1V").arg(supplyV, 0, 'f', 2));
+        // hwTelemetryChanged carries PA temperature and supply voltage
+        // together. A temperature-only update must not format MeterModel's
+        // 0.0 V initialiser as though the radio reported it.
+        if (m_model->hasSupplyVoltage()) {
+            m_supplyGauge->setValue(supplyV);
+            m_supplyGauge->setLabel(QStringLiteral("+%1V").arg(supplyV, 0, 'f', 2));
+        }
     });
 
     connect(model, &MeterModel::meterUpdated,
             this, &MeterApplet::onMeterUpdated);
+    connect(model, &MeterModel::paCurrentChanged,
+            this, [this](float amps) {
+        if (!m_paCurrentAvailable || m_paTemperatureAvailable
+            || !m_transmitting) {
+            return;
+        }
+        m_paTempGauge->setValue(amps);
+        m_paTempGauge->setLabel(QStringLiteral("%1 A").arg(amps, 0, 'f', 1));
+    });
 
     resolveIndices();
+}
+
+void MeterApplet::setPaInstrumentTelemetryState(bool connected,
+                                                 bool temperatureAvailable,
+                                                 bool currentAvailable)
+{
+    // A reading belongs to one radio session. Do not let a capable radio's
+    // final PA instrument survive a disconnect or reappear after an
+    // intervening radio that does not expose the same telemetry.
+    if (m_paInstrumentConnected == connected
+        && m_paTemperatureAvailable == temperatureAvailable
+        && m_paCurrentAvailable == currentAvailable) {
+        return;
+    }
+    m_paInstrumentConnected = connected;
+    m_paTemperatureAvailable = temperatureAvailable;
+    m_paCurrentAvailable = currentAvailable;
+    if (!connected) {
+        m_transmitting = false;
+    }
+    updatePaInstrumentState();
+}
+
+void MeterApplet::updatePaInstrumentState()
+{
+    m_paTemp = 0.0f;
+    m_hasPaTemp = false;
+
+    if (m_paInstrumentConnected && m_paTemperatureAvailable) {
+        updatePaTempDisplay();
+        m_paTempGauge->setValueImmediate(m_tempFahrenheit ? 32.0f : 0.0f);
+        m_paTempGauge->setLabel(QStringLiteral("PA Temp"));
+        setAccessibleNameAndNotify(m_paTempGauge, tr("PA temperature"));
+        m_paTempGauge->setVisible(true);
+        m_tempUnitBtn->setVisible(true);
+        return;
+    }
+
+    if (m_paInstrumentConnected && m_paCurrentAvailable) {
+        m_paTempGauge->setRange(0.0f, 20.0f, kPaCurrentRedlineAmps,
+                                kPaCurrentTicks, kPaCurrentWarningAmps);
+        m_paTempGauge->setValueImmediate(0.0f);
+        m_paTempGauge->setLabel(QStringLiteral("PA Current"));
+        setAccessibleNameAndNotify(m_paTempGauge, tr("PA drain current"));
+        m_paTempGauge->setVisible(true);
+        m_tempUnitBtn->setVisible(false);
+        return;
+    }
+
+    updatePaTempDisplay();
+    m_paTempGauge->setValueImmediate(m_tempFahrenheit ? 32.0f : 0.0f);
+    m_paTempGauge->setLabel(QStringLiteral("PA Temp"));
+    setAccessibleNameAndNotify(m_paTempGauge, tr("PA temperature"));
+    m_paTempGauge->setVisible(!m_paInstrumentConnected);
+    m_tempUnitBtn->setVisible(!m_paInstrumentConnected);
+}
+
+void MeterApplet::setTransmitting(bool transmitting)
+{
+    if (m_transmitting == transmitting) {
+        return;
+    }
+    m_transmitting = transmitting;
+    if (!transmitting && m_paInstrumentConnected && m_paCurrentAvailable
+        && !m_paTemperatureAvailable) {
+        m_paTempGauge->setValueImmediate(0.0f);
+        m_paTempGauge->setLabel(QStringLiteral("PA Current"));
+    }
+}
+
+void MeterApplet::setSupplyVoltageTelemetryState(bool connected)
+{
+    // A reading belongs to one extant meter in one radio session.
+    // MeterModel::clear() and removeMeter() drop the sample-validity sentinel
+    // without a telemetry update, so restore the neutral label when the shared
+    // capability lifecycle reports either transition.
+    if (!connected || !m_model || !m_model->hasSupplyVoltage()) {
+        resetSupplyVoltageDisplay();
+    }
+}
+
+void MeterApplet::resetSupplyVoltageDisplay()
+{
+    m_supplyGauge->setValueImmediate(0.0f);
+    m_supplyGauge->setLabel(QStringLiteral("Supply Voltage"));
+}
+
+void MeterApplet::setMainFanTelemetryState(bool connected, bool available)
+{
+    // applyCapabilitiesToUi() also runs for mid-session oscillator and GPS
+    // updates. Those are not radio/capability edges and must not discard the
+    // live meter identity on every refresh.
+    if (m_hasMainFanTelemetryState
+        && m_mainFanConnected == connected
+        && m_mainFanAvailable == available) {
+        return;
+    }
+    m_hasMainFanTelemetryState = true;
+    m_mainFanConnected = connected;
+    m_mainFanAvailable = available;
+
+    // A reading and its meter index belong to one radio session. Do not let a
+    // capable radio's last fan speed survive a disconnect or get interpreted
+    // as another radio's unrelated meter at the same index.
+    m_fanIdx = -1;
+    m_resolved = false;
+    if (!connected || !available) {
+        m_fanGauge->setValueImmediate(0.0f);
+        m_fanGauge->setLabel(QStringLiteral("Main Fan"));
+    }
+
+    m_fanGauge->setVisible(!connected || available);
 }
 
 void MeterApplet::resolveIndices()
@@ -193,6 +345,10 @@ void MeterApplet::onMeterUpdated(int index, float value)
 
 void MeterApplet::updatePaTempDisplay()
 {
+    if (m_paInstrumentConnected && m_paCurrentAvailable
+        && !m_paTemperatureAvailable) {
+        return;
+    }
     // Apply the correct scale — snapping avoids animating the fill bar
     // across the °C→°F unit jump when the user toggles.
     if (m_tempFahrenheit) {

@@ -6,6 +6,8 @@
 
 #include <QContextMenuEvent>
 #include <QDateTime>
+#include <QFont>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -184,6 +186,37 @@ static const char* kTextStyle =
     "QTextEdit { background: #0a0a14; color: #c8d8e8; border: none; "
     "font-family: monospace; font-size: 13px; padding: 8px; }";
 
+int CwxPanel::macroRowMinimumHeight(const QFont& baseFont)
+{
+    // #4945: with 12 Expanding rows in one grid, a short window (the app's
+    // own 400px minimum height leaves this panel ~330px) squeezed every
+    // row well below one line of text -- Qt's layout protects FIXED-size
+    // siblings like m_textEdit under a deficit, but has nowhere else to
+    // take the shortfall from an Expanding one, so it shrunk the widget
+    // itself and clipped the glyph tops rather than just hiding overflow
+    // text. buildSetupView() puts this grid in a QScrollArea, which is
+    // what actually stops the squeeze (verified: removing just this floor
+    // while keeping the scroll area still passed). Kept anyway as an
+    // explicit floor -- readability shouldn't depend on QTextEdit's
+    // incidental natural size hint staying above one line across Qt
+    // versions/themes.
+    //
+    // Derived from font metrics, not a bare pixel count (review on #5125)
+    // -- the widget's own .font() isn't reliable here (styled while still
+    // unpolished/unshown, the same timing trap #4869 documents for
+    // Qt::WA_Hover), so this constructs an explicit QFont matching the
+    // stylesheet's declared "font-size: 11px" rather than trusting .font()
+    // to already reflect it.
+    QFont macroFont = baseFont;
+    macroFont.setPixelSize(11);
+    const int oneLine = QFontMetrics(macroFont).height();
+    // ~2 lines + 8px. That 8 is QTextDocument's default documentMargin
+    // (4px, top and bottom) -- not the stylesheet's "padding: 2px" above,
+    // which is a QTextEdit frame margin and a separate, smaller
+    // contributor (review on #5125, credit NF0T for the correction).
+    return oneLine * 2 + 8;
+}
+
 CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     : QWidget(parent), m_model(model)
 {
@@ -196,10 +229,10 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     vbox->setSpacing(0);
 
     // Title
-    auto* title = new QLabel("CWX");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(title, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
+    m_titleLabel = new QLabel("CWX");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleLabel, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
                          "padding: 6px 8px; background: {{color.background.0}}; }");
-    vbox->addWidget(title);
+    vbox->addWidget(m_titleLabel);
 
     // Stacked widget for Send/Live vs Setup
     m_stack = new QStackedWidget;
@@ -240,6 +273,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     barLayout->addWidget(speedLabel);
 
     m_speedSpin = new QSpinBox;
+    m_speedSpin->setObjectName(QStringLiteral("cwxSpeedSpin"));
     m_speedSpin->setRange(5, 100);
     m_speedSpin->setValue(20);
     m_speedSpin->setFixedWidth(50);
@@ -255,16 +289,20 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     // returns the panel to safe non-live typing without retransmitting text
     // that may already have been keyed character-by-character.
     connect(m_sendBtn, &QPushButton::clicked, this, [this]() {
-        const bool wasLive = m_model ? m_model->isLive()
-                                     : (m_liveBtn && m_liveBtn->isChecked());
-        if (m_model)
-            m_model->setLive(false);
-        else if (m_liveBtn)
-            m_liveBtn->setChecked(false);
-        m_setupBtn->setChecked(false);
-        showSendView();
-        if (!wasLive)
-            sendBuffer();
+        sendButtonClicked();
+    });
+    registerTxKeyingAction(m_sendBtn, [this](const std::shared_ptr<TxController>& controller,
+        const QString& action, const QString&) -> TxKeyingAction::Prepared {
+        if (!m_model || !m_textEdit
+            || (action != QLatin1String("click") && action != QLatin1String("toggle"))) {
+            return {};
+        }
+        const TxController::Input input = controller->capture(TxController::Activity::Cwx);
+        if (!input.belongsTo(m_model)) {
+            return {};
+        }
+        const QString text = m_textEdit->toPlainText().trimmed();
+        return [this, input, text] { sendButtonClicked(&input, text); };
     });
     connect(m_liveBtn, &QPushButton::clicked, this, [this](bool on) {
         m_setupBtn->setChecked(false);
@@ -301,18 +339,24 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
         sc->setEnabled(false);
         m_shortcuts.append(sc);
         connect(sc, &QShortcut::activated, this, [this, i]() {
+            const std::shared_ptr<TxController> controller = m_txControllerProvider ? m_txControllerProvider() : nullptr;
+            const TxController::Input input = controller ? controller->capture(TxController::Activity::Cwx)
+                                                        : TxController::Input{};
             if (!m_model) return;
             if (m_txModeProvider) {
                 const QString mode = m_txModeProvider();
                 if (!isCwMode(mode))
                     return;
             }
+            // TUNE active: the model would refuse the macro, so paint no
+            // bubble (it would latch m_pendingBubble against nothing). (#5422)
+            if (!m_model->canSend()) {
+                return;
+            }
             // Log the macro text to the history feed BEFORE firing the
             // command so the snapshot of m_model->sentIndex() lines up
             // with the chars about to be keyed for this bubble. (#3146)
-            const QString raw = m_model->macro(i);
-            appendHistoryBubble(raw);
-            m_model->sendMacro(i + 1);
+            sendMacro(i, controller ? &input : nullptr);
         });
     }
 
@@ -333,6 +377,50 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     });
 
     if (m_model) setModel(m_model);
+}
+
+void CwxPanel::setDisplayName(const QString& name)
+{
+    if (m_titleLabel)
+        m_titleLabel->setText(name);
+}
+
+QString CwxPanel::displayName() const
+{
+    return m_titleLabel ? m_titleLabel->text() : QString{};
+}
+
+void CwxPanel::configureTextKeyer(const QString& name, int minWpm, int maxWpm,
+                                  bool supportsLive, bool supportsStoredMacros)
+{
+    setDisplayName(name);
+    if (m_speedSpin) {
+        const QSignalBlocker blocker(m_speedSpin);
+        m_speedSpin->setRange(minWpm, maxWpm);
+        m_speedSpin->setValue(qBound(minWpm, m_model ? m_model->speed() : 20,
+                                     maxWpm));
+    }
+    if (m_liveBtn) {
+        m_liveBtn->setVisible(supportsLive);
+        if (!supportsLive) {
+            m_liveBtn->setChecked(false);
+            if (m_model) {
+                m_model->setLive(false);
+            }
+        }
+    }
+    if (m_setupBtn) {
+        m_setupBtn->setVisible(supportsStoredMacros);
+        if (!supportsStoredMacros) {
+            m_setupBtn->setChecked(false);
+            // Capability updates are radio-driven and may arrive while the
+            // operator is editing an unrelated control. Select the only
+            // supported page without showSendView()'s user-action focus grab.
+            if (m_stack->currentWidget() != m_sendPage) {
+                m_stack->setCurrentWidget(m_sendPage);
+            }
+        }
+    }
 }
 
 void CwxPanel::setModel(CwxModel* model)
@@ -509,6 +597,9 @@ void CwxPanel::buildSetupView()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_macroEdits[i], "QTextEdit { background: {{color.text.primary}}; color: {{color.background.spectrum}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 2px; padding: 2px; font-size: 11px; }");
         m_macroEdits[i]->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        // See macroRowMinimumHeight() above (#4945/#5121 review) for why
+        // this exists and why it's derived from font metrics.
+        m_macroEdits[i]->setMinimumHeight(macroRowMinimumHeight(m_macroEdits[i]->font()));
         m_macroEdits[i]->setPlaceholderText(QString("F%1 macro...").arg(i + 1));
         m_macroEdits[i]->setAcceptRichText(false);
         m_macroEdits[i]->setLineWrapMode(QTextEdit::WidgetWidth);
@@ -518,10 +609,20 @@ void CwxPanel::buildSetupView()
 
         // Click F-key label → log macro text to history, then send. (#3146)
         connect(label, &QPushButton::clicked, this, [this, i]() {
-            if (!m_model) return;
-            const QString raw = m_model->macro(i);
-            appendHistoryBubble(raw);
-            m_model->sendMacro(i + 1);
+            sendMacro(i);
+        });
+        registerTxKeyingAction(label, [this, i](const std::shared_ptr<TxController>& controller,
+            const QString& action, const QString&) -> TxKeyingAction::Prepared {
+            if (!m_model || action != QLatin1String("click")) { return {}; }
+            const TxController::Input input = controller->capture(TxController::Activity::Cwx);
+            if (!input.belongsTo(m_model)) { return {}; }
+            const QString text = m_model->macro(i);
+            return [this, input, text, i] {
+                const QPointer<CwxPanel> guard(this);
+                const auto admitted = [guard, text] { if (guard) { guard->appendHistoryBubble(text); } };
+                if (!text.isEmpty()) { (void)input.send(text, admitted); }
+                else { (void)input.sendMacro(i + 1, admitted); }
+            };
         });
 
         // Edit → save macro (debounced — save when focus leaves)
@@ -531,7 +632,17 @@ void CwxPanel::buildSetupView()
         });
     }
 
-    vbox->addWidget(macroWidget, 1);
+    // #4945: scroll the grid instead of letting the outer layout squeeze
+    // every row's height when the panel is shorter than 12 readable rows
+    // need. setWidgetResizable(true) lets macroWidget still grow to fill
+    // available width/height when there's room, matching the pre-fix look
+    // at a normal window size.
+    auto* macroScroll = new QScrollArea;
+    macroScroll->setWidget(macroWidget);
+    macroScroll->setWidgetResizable(true);
+    macroScroll->setFrameShape(QFrame::NoFrame);
+    macroScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    vbox->addWidget(macroScroll, 1);
 
     // Prosign + speed-modifier legend
     auto* legend = new QLabel(
@@ -554,11 +665,62 @@ void CwxPanel::showSetupView()
     m_stack->setCurrentWidget(m_setupPage);
 }
 
-void CwxPanel::sendBuffer()
+void CwxPanel::sendButtonClicked(const TxController::Input* input, const QString& capturedText)
 {
+    if (!input && m_txControllerProvider) {
+        const auto controller = m_txControllerProvider();
+        const TxController::Input native = controller ? controller->capture(TxController::Activity::Cwx)
+                                                     : TxController::Input{};
+        sendButtonClicked(&native, m_textEdit ? m_textEdit->toPlainText().trimmed() : QString{});
+        return;
+    }
+    const bool wasLive = m_model ? m_model->isLive() : (m_liveBtn && m_liveBtn->isChecked());
+    if (m_model) {
+        m_model->setLive(false);
+    } else if (m_liveBtn) {
+        m_liveBtn->setChecked(false);
+    }
+    m_setupBtn->setChecked(false);
+    showSendView();
+    if (!wasLive) {
+        sendBuffer(input, capturedText);
+    }
+}
+
+void CwxPanel::sendBuffer(const TxController::Input* input, const QString& capturedText)
+{
+    if (!input && m_txControllerProvider) {
+        const auto controller = m_txControllerProvider();
+        const TxController::Input native = controller ? controller->capture(TxController::Activity::Cwx)
+                                                     : TxController::Input{};
+        sendBuffer(&native, m_textEdit ? m_textEdit->toPlainText().trimmed() : QString{});
+        return;
+    }
     if (!m_model || !m_textEdit) return;
-    QString text = m_textEdit->toPlainText().trimmed();
+    const QString text = input ? capturedText : m_textEdit->toPlainText().trimmed();
     if (text.isEmpty()) return;
+    // TUNE active: the model would refuse the send, so touch nothing — the
+    // text stays in the editor and no "sent" bubble is painted. (#5422)
+    if (!m_model->canSend()) {
+        return;
+    }
+    if (input) {
+        if (!input->belongsTo(m_model)) {
+            return;
+        }
+        const QPointer<CwxPanel> guard(this);
+        (void)input->send(text, [guard, text] {
+            if (guard) {
+                // Commit the editor/history only after engine admission, but
+                // before send replies advance the global sent index.
+                guard->appendHistoryBubble(text);
+                if (guard->m_textEdit->toPlainText().trimmed() == text) {
+                    guard->m_textEdit->clear();
+                }
+            }
+        });
+        return;
+    }
 
     // appendHistoryBubble paints the modifier-stripped text (so the bubble's
     // char count matches the radio's sent=N counter) while retaining the raw
@@ -567,6 +729,29 @@ void CwxPanel::sendBuffer()
     m_textEdit->clear();
 
     m_model->send(text);
+}
+
+void CwxPanel::sendMacro(int index, const TxController::Input* input)
+{
+    if (!input && m_txControllerProvider) {
+        const auto controller = m_txControllerProvider();
+        const TxController::Input native = controller ? controller->capture(TxController::Activity::Cwx)
+                                                     : TxController::Input{};
+        sendMacro(index, &native);
+        return;
+    }
+    if (!m_model || index < 0 || index >= 12 || !m_model->canSend()) { return; }
+    const QString text = m_model->macro(index);
+    if (!input) {
+        appendHistoryBubble(text);
+        m_model->sendMacro(index + 1);
+        return;
+    }
+    if (!input->belongsTo(m_model)) { return; }
+    const QPointer<CwxPanel> guard(this);
+    const auto admitted = [guard, text] { if (guard) { guard->appendHistoryBubble(text); } };
+    if (!text.isEmpty()) { (void)input->send(text, admitted); }
+    else { (void)input->sendMacro(index + 1, admitted); }
 }
 
 void CwxPanel::appendHistoryBubble(const QString& rawText)
@@ -662,7 +847,12 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
                 if (ke->key() == Qt::Key_Backspace) {
                     m_model->erase(1);
                 } else {
-                    m_model->sendChar(text);
+                    if (m_txControllerProvider) {
+                        const auto controller = m_txControllerProvider();
+                        if (controller) { (void)controller->capture(TxController::Activity::Cwx).sendChar(text); }
+                    } else {
+                        m_model->sendChar(text);
+                    }
                 }
             }
             // Still let the text edit display the character
@@ -679,18 +869,34 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
     if (auto* bubble = dynamic_cast<CwxBubble*>(obj)) {
         if (event->type() == QEvent::ContextMenu) {
             auto* ce = static_cast<QContextMenuEvent*>(event);
-            QMenu menu(this);
-            AetherSDR::ThemeManager::instance().applyStyleSheet(&menu, "QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
+            // History can be cleared while the nested menu loop runs.
+            const QString resend = bubble->rawText();
+            const QPointer<CwxPanel> guard(this);
+            const auto controller = m_txControllerProvider ? m_txControllerProvider() : nullptr;
+            const TxController::Input input = controller ? controller->capture(TxController::Activity::Cwx)
+                                                        : TxController::Input{};
+            // Unparented scoped ownership survives deletion of the panel from
+            // the nested menu loop. All follow-up work checks its receiver.
+            auto menu = std::make_unique<QMenu>();
+            AetherSDR::ThemeManager::instance().applyStyleSheet(menu.get(), "QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
                 "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.spectrum}}; }"
                 "QMenu::separator { height: 1px; background: {{color.background.2}}; margin: 4px 8px; }");
-            QAction* resendAction = menu.addAction("Resend");
-            menu.addSeparator();
-            QAction* clearAction  = menu.addAction("Clear History");
-            QAction* chosen = menu.exec(ce->globalPos());
+            QAction* resendAction = menu->addAction("Resend");
+            menu->addSeparator();
+            QAction* clearAction  = menu->addAction("Clear History");
+            connect(this, &QObject::destroyed, menu.get(), &QMenu::close);
+            QAction* chosen = menu->exec(ce->globalPos());
+            if (!guard) { return true; }
             if (chosen == resendAction) {
                 // Resend the raw text (modifiers intact) so per-word speeds
                 // are preserved rather than re-keyed at base WPM. (#272)
-                resendText(bubble->rawText());
+                if (controller) {
+                    (void)input.send(resend, [guard, resend] {
+                        if (guard) { guard->appendHistoryBubble(resend); }
+                    });
+                } else {
+                    resendText(resend);
+                }
             } else if (chosen == clearAction) {
                 clearHistory();
             }
@@ -704,6 +910,7 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
 void AetherSDR::CwxPanel::resendText(const QString& text)
 {
     if (!m_model || !m_historyLayout || text.isEmpty()) { return; }
+    if (!m_model->canSend()) { return; }   // TUNE active (#5422)
     appendHistoryBubble(text);
     m_model->send(text);
 }

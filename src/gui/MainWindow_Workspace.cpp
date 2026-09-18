@@ -20,6 +20,7 @@
 #include "containers/ContainerManager.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "workspace/ClassicLayout.h"
 #include "workspace/WorkspaceCanvas.h"
 #include "workspace/WorkspaceController.h"
 #include "workspace/WorkspaceWindow.h"
@@ -409,6 +410,15 @@ void MainWindow::toggleWorkspaceCanvas(bool on, bool preserveEnabledPreference)
             return;
         }
         m_canvasWasOnBeforeMinimal = false;
+
+        // A layout selection may have been suspended while asynchronous pan
+        // creation/removal continued with canvas mode off. Resume only after
+        // enable() has replayed the document and rebuilt live slot membership.
+        if (!m_pendingCanvasPanLayoutId.isEmpty()
+            && m_pendingCanvasPanLayoutTarget >= 0) {
+            startCanvasPanLayoutSettle(m_pendingCanvasPanLayoutId,
+                                       m_pendingCanvasPanLayoutTarget);
+        }
 
         if (bandStackWasVisible) {
             m_workspaceController->setBandStackVisible(true);
@@ -971,6 +981,47 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
         return out;
     }
 
+    if (action == QLatin1String("pan-layout")) {
+        const QString layoutId = args.trimmed();
+        const int targetPanCount = panCellsForLayout(layoutId).size();
+        if (targetPanCount == 0) {
+            out[QStringLiteral("error")] = QStringLiteral(
+                "pan-layout wants a known layout id (1|2v|2h|2h1|12h|3v|2x2|4v|3h2|2x3|4h3|2x4)");
+            return out;
+        }
+        if (!m_radioModel.isConnected()) {
+            out[QStringLiteral("error")] = QStringLiteral("radio is disconnected");
+            return out;
+        }
+        const bool canvasEnabled = m_workspaceController->isEnabled();
+        const int beforeCount = canvasEnabled
+            ? m_workspaceController->activeMainPanIdsForLayout().size()
+            : (m_panStack ? m_panStack->count() : 0);
+        const int additionalPans = qMax(0, targetPanCount - beforeCount);
+        const int globalPanCount = m_panStack ? m_panStack->count() : 0;
+        if (globalPanCount + additionalPans > m_radioModel.maxPanadapters()) {
+            out[QStringLiteral("error")] = QStringLiteral(
+                "pan-layout needs %1 additional pan(s), but the radio has %2 of %3 panadapter slots in use")
+                .arg(additionalPans)
+                .arg(globalPanCount)
+                .arg(m_radioModel.maxPanadapters());
+            return out;
+        }
+        AppSettings::instance().setValue(QStringLiteral("PanadapterLayout"), layoutId);
+        AppSettings::instance().save();
+        applyPanLayout(layoutId);  // Same production path as the layout selector.
+        const int activeMainPanCount = canvasEnabled
+            ? m_workspaceController->activeMainPanIdsForLayout().size()
+            : (m_panStack ? m_panStack->count() : 0);
+        out[QStringLiteral("layout")] = layoutId;
+        out[QStringLiteral("targetPanCount")] = targetPanCount;
+        out[QStringLiteral("panCount")] = activeMainPanCount;
+        out[QStringLiteral("globalPanCount")] = m_panStack ? m_panStack->count() : 0;
+        out[QStringLiteral("settling")] = (beforeCount != targetPanCount);
+        out[QStringLiteral("canvasEnabled")] = canvasEnabled;
+        return out;
+    }
+
     if (action == QLatin1String("window")) {
         // window new [label] | list | open <id> | close <id> |
         //        remove <id> | rename <id> <label>
@@ -1204,7 +1255,7 @@ QVariantMap MainWindow::automationWorkspace(const QString& action,
 
     out[QStringLiteral("error")] =
         QStringLiteral("unknown workspace action: %1 (status|enable|disable|"
-                       "edit|place|list|switch|create|bind|import-floats|"
+                       "edit|place|list|switch|create|bind|import-floats|pan-layout|"
                        "palette|window|move|add)")
             .arg(action);
     return out;

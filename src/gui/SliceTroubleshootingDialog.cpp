@@ -356,8 +356,6 @@ QJsonObject buildClientDspSnapshot(const AudioEngine* audio)
     nr2["gain_floor"] = nr2Config.gainFloor;
     nr2["gain_smooth"] = nr2Config.gainSmooth;
     nr2["qspp"] = nr2Config.qspp;
-    nr2["legacy_geometry_and_gain_mapping"] =
-        nr2Config.legacyGeometryAndGainMapping;
 
     QJsonObject nr4;
     nr4["enabled"] = audio ? audio->nr4Enabled() : false;
@@ -379,12 +377,18 @@ QJsonObject buildClientDspSnapshot(const AudioEngine* audio)
     dfnr["atten_limit_db"] = settings.value("DfnrAttenLimit", "100").toFloat();
     dfnr["post_filter_beta"] = settings.value("DfnrPostFilterBeta", "0.0").toFloat();
 
+    QJsonObject nnr;
+    nnr["enabled"] = audio ? audio->nnrEnabled() : false;
+    nnr["strength"] = audio ? audio->nnrStrength() : 0;
+    nnr["model"] = audio ? audio->nnrModel() : 0;
+
     QJsonObject clientDsp;
     clientDsp["available"] = audio != nullptr;
     clientDsp["nr2"] = nr2;
     clientDsp["nr4"] = nr4;
     clientDsp["rn2"] = rn2;
     clientDsp["dfnr"] = dfnr;
+    clientDsp["nnr"] = nnr;
     return clientDsp;
 }
 

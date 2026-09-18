@@ -13,8 +13,12 @@ protocol bytes flow either way), plus a Peripherals settings row.
 Status/telemetry decode with model identification, Operate/Standby toggle,
 power-level cycle, TUNE, switch-off, the band/antenna/input keys, and remote
 power-ON (§4 — the one feature that needs the proxy in RFC 2217 telnet mode).
-No menu navigation (arrows/SET/DISPLAY), no manual L/C ATU stepping, no
-CAT-configuration mirror.
+The applet has two presentations (§10): the compact rail layout, and a
+floating window that adds a **live mirror of the amplifier's own LCD**
+(§11) plus the remaining front-panel keys (BAND±, SET, L±/C±) — menu
+navigation is deliberately available ONLY next to that mirror, never
+blind. No CAT-configuration mirror, no firmware operations (KTerm
+territory, spec §1).
 
 ---
 
@@ -124,9 +128,13 @@ GUI refreshes readouts at 10 Hz anyway, and the reference application's
 Network mode expects a ser2net proxy in **raw or telnet** mode — unlike the
 ACOM (raw-only), both are supported and telnet is verified on real
 hardware: the validation station's ser2net runs `accepter: telnet`. The
-parser's sync-run resync shrugs off telnet negotiation, and the rare status
-frame whose checksum byte is 0xFF (which telnet IAC-escapes) is dropped and
-re-polled 100 ms later — harmless in a polled protocol. Remote power-ON (§4)
+parser's sync-run resync shrugs off telnet negotiation. LCD frames are
+checksum-validated after accepting either byte-exact raw data or telnet's
+doubled-IAC representation, so a glyph/attribute byte of 0xFF cannot corrupt
+the mirror. The rare Status frame whose checksum byte is 0xFF is still dropped
+and re-polled 100 ms later — harmless in a polled protocol. RFC 2217 replies
+are scanned only while an explicit negotiation is pending, and an escaped
+`FF FF FE 2C` payload cannot be mistaken for `IAC DONT 2C`. Remote power-ON (§4)
 is the one feature that needs more than telnet framing: it drives the proxy's
 control lines via RFC 2217, so that port must be
 `accepter: telnet(rfc2217=true),<port>`. Everything else — polling,
@@ -152,9 +160,8 @@ transcribed in `SpeProtocol.cpp`).
 | TUNE | Yes | Explicit, user-initiated click — transmit-on-intent (Principle VI) is satisfied by it being a deliberate button, exactly like the amp's own front-panel key. The amp itself refuses to tune without drive ("Tuning with no power" warning). |
 | ANTENNA, INPUT | Yes | One-keystroke conveniences the status display fully reflects on the next poll. |
 | ◄/► arrow keys (▼/▲ buttons) | Yes | On the Expert these adjust the requested drive power from the radio over CAT — an operating-time control, not menu navigation. |
-| BAND± | No | The amp follows the radio's band via CAT/RF sensing on its own; a manual band override from a radio-control app invites disagreement between the two. Deferred, not rejected. |
+| BAND±, SET, L±/C± (FRONT PANEL group) | Floating only | Originally excluded because blind menu navigation without the amp's display is a foot-gun. The floating presentation's live LCD mirror (§11) removes the "blind": the operator navigates the amplifier's own menu while watching the amplifier's own screen, exactly as at the front panel. The compact rail keeps them hidden — the original reasoning still applies where the mirror is absent. DISPLAY stays unexposed (it only cycles the physical panel's pages). |
 | Backlight on/off | Builder only | `buildBacklightCommand()` exists in the protocol layer (it's free) but no GUI surface yet — deferred, not rejected. |
-| SET / DISPLAY (menu navigation), L±/C± manual ATU stepping | No | Blind menu navigation without the amp's display is a foot-gun; SPE reserves complex operations for their own KTerm application, and this integration respects that boundary. |
 | Remote power-ON (ON button) | Yes | Not a protocol command — the Expert powers on via a pulse on a hardware line of the serial connector. Over the network `SpeConnection::powerOn()` drives the proxy's DTR/RTS lines via **RFC 2217** COM-port-control (needs `accepter: telnet(rfc2217=true),<port>` — the Peripherals row's tooltip carries the reference `ser2net.yaml`); on a local COM port it drives the lines directly. The pulse sequence (DTR on 100 ms, DTR off + RTS on 1000 ms, DTR on + RTS off) is carried verbatim from the field-proven reference application, so **RTS carries the 1 s power pulse** and the sequence ends with RTS low. The ON button is the one control that stays enabled while the amp is silent — that is its entire purpose. Because a proxy that is not in RFC 2217 mode silently discards the SET-CONTROL frames, `powerOn()` reads the peer's answer to `WILL COM-PORT-OPTION` and reports what it actually agreed to — `DO`, `DONT`, or no answer at all (raw mode) — instead of claiming the pulse landed. The pulse itself is always sent: sending into a proxy that ignores COM-port control is harmless, so the gate is on the *reporting*, not on the attempt. |
 | Firmware upload, settings/antenna presets | **Never** | KTerm territory (spec §1); no legitimate use from a radio-control app. |
 
@@ -277,3 +284,150 @@ no entry — the manifest tracks `core/`/`models/` headers, not `gui/` files.
 - Whether the ACK for a keystroke should drive optimistic UI updates.
   v1 deliberately waits for the next status poll (≤300 ms) instead —
   radio-authoritative live state (Principle II) applied to a peripheral.
+
+---
+
+## 10. Two presentations: rail and window
+
+`SpeApplet::setFloating()` (driven by the container's `dockModeChanged`,
+same pattern as the PWR cross-needle) switches between:
+
+- **Docked** — the compact rail layout, unchanged from v1.
+- **Floating** — roomier margins and type scale, taller gauges, a
+  fixed-size status pill (left at the default size policy it inflated
+  into a block when the window handed the header row real height —
+  hardware-observed), content top-anchored via a trailing stretch, and
+  two additions the rail has no room for: the LCD mirror (§11) and the
+  FRONT PANEL key group (BAND±, SET, L±/C±). Every mode-dependent style
+  is a ThemeManager template, so theme changes re-resolve both
+  presentations.
+
+The presentation switch also gates the LCD polling
+(`SpeApplet::lcdPollingWanted` → `SpeConnection::setLcdPolling`): docked,
+the display is neither shown nor requested.
+
+## 11. The LCD mirror
+
+The spec's foreword advertises remote display copies ("a perfect copy of
+the display ... in less than 400 bytes") and documents nothing about
+them. The working mechanism — carried from the contributing author's v2
+control application and re-validated against the real 1.5K-FA (see
+`THIRD_PARTY_LICENSES` for the provenance chain, which ends at the
+MIT-licensed expert-amp-server project) — is:
+
+- **Request**: the standard keystroke-style packet with code `0x80`.
+  All request pacing is decided by `Spe::LcdScheduler` — a deterministic,
+  I/O-free state machine (`SpeLcdScheduler.h`) that keeps requests
+  **single-file**: at most one in flight and at most one timer armed,
+  with every trigger path — the idle cadence, a keystroke ACK, the
+  corrupted-frame retry, the lost-reply fallback — flowing through the
+  same gate. Its invariant is unit-tested in `spe_protocol_test`,
+  including an exhaustive event-sequence sweep, rather than asserted in
+  prose. Concretely: a request arms a 2 s lost-reply fallback; a decoded
+  reply arms the 250 ms idle gap (or immediately services a refresh an
+  ACK asked for while the request was in flight — pending work, never a
+  second in-flight request); a rejected frame supersedes the fallback
+  with the 80 ms retry pause. The effective cadence is therefore gap plus
+  round trip plus the link's own serialization time for the 371-byte
+  frame (~285 ms total at 115200; a 19200 proxy serial side stretches it
+  to ~450 ms on its own): the amplifier is never asked to interleave
+  display blocks, and a slow link stretches the cadence instead of
+  accumulating a request backlog.
+
+  The single-file property has exactly one documented exception, and the
+  protocol is why it cannot be closed. A round trip beyond the 2 s
+  fallback — five times the ~390 ms a 9600 baud serial side spends on
+  the frame alone — is misclassified as a lost reply and retried; when
+  the original reply then arrives, nothing can attribute it, because the
+  request is a fixed packet and the reply carries no sequence field. The
+  scheduler credits it to the retry, and **two requests stay on the wire
+  until the next `reset()`** (a disconnect, or a docked⇄floating
+  switch) rather than for one exchange. Counting orphans instead does
+  not help: a counter that swallows the late reply swallows a genuinely
+  retried one just as often, which freezes the mirror — strictly worse
+  than the overlap. The mitigation is the width of `kLcdLostReplyMs`,
+  which is why it is 2 s and not the round-trip-plus-margin it looks
+  like. Note the interaction with the 2.4 s freshness window below: a
+  retry at 2 s has ~400 ms to land a frame before the FRONT PANEL keys
+  gate, so a wholly VANISHED reply can brush the gate. Corrupted
+  replies — the field case — take the 80 ms retry path instead.
+
+  At a 9600 baud proxy serial side the 100 ms Status poll
+  alone consumes ~80% of the wire, so ser2net serial sides should be
+  configured at 57600 or above.
+- **Reply**: `AA AA AA | 6A 01` (16-bit payload length, 362) `| 95 FE |
+  ` 2-byte inverted flag word |` 320 character bytes (8 rows x 40
+  columns, row-major) + 40 attribute bytes (one per column, bit N =
+  inverse video on row N) + a 2-byte little-endian checksum over the
+  362-byte payload — 371 bytes total. Character data starts at offset 9.
+  The layout and checksum are pinned to a captured real Expert 1.3K-FA
+  response reproduced in `spe_protocol_test`.
+- **Parsing**: `Spe::FrameParser` recognises the display header before
+  the CNT plausibility check would reject `0x6A` as an implausible
+  count, accepts raw or telnet-IAC-escaped bytes, validates the checksum,
+  and hands the logical frame to a dedicated callback. Display replies
+  do not count as Status liveness: telemetry and its command gate still
+  go stale if Status stops while the LCD continues (§6).
+- **Rendering**: `SpeLcdWidget` maps character bytes into the
+  amplifier's own 256-glyph 6x8 font ROM (`SpeLcdFontRom.inc`,
+  mechanically generated), applies the inverse-video attributes, renders
+  at native 240x64 and integer-scales for crisp pixels. The glass keeps
+  the hardware's green-on-dark palette regardless of theme — it depicts
+  a physical display, the same rule the analog meter faces follow
+  (colours as numeric QColor components; the colour ratchet stays +0).
+
+With the mirror on screen, the FRONT PANEL keys stop being blind — the
+operator navigates the amplifier's menu watching the amplifier's screen,
+which is what unlocked the §4 ruling change. Those keys remain disabled
+until the first checksum-valid display arrives and are disabled again after
+2.4 s without one — an absolute window sized to cover a lost frame plus a
+retry even on a 9600 baud proxy serial side AND the amplifier's own quiet
+spells around OPERATE/STANDBY relay transitions, because routine events
+must read as a hiccup, not flap the gate. Each staleness transition is
+logged with its window so field reports can measure real gap lengths —
+but `lcTuner` is registered at `QtWarningMsg` and `LogManager` applies a
+blanket `aether.*.debug=false`, so those lines only appear once the
+reporter enables the **Tuner/AGM** category. Ask for that explicitly when
+requesting a log; a default capture will not contain them. A display frame that arrives
+complete but fails validation triggers a prompt re-request (80 ms pause;
+each retry is itself provoked by a full received-and-rejected frame, so
+the retry stream is self-limited by the link's serialization time, and is
+deliberately faster than the healthy cadence because the mirror needs
+only one clean frame to stay live): the
+field case is strong RF near the serial run mid-transmit, where the
+371-byte display reply dies to bit errors far more often than the 76-byte
+Status reply, and one clean frame every second or two is all the mirror
+needs to stay live through a transmission. Losing freshness changes
+nothing on the glass: the mirror holds its newest image at full
+brightness, exactly like the amplifier's own LCD holds its picture, and
+the disabled key group is the one and only not-live signal. (Both
+alternatives were field-tested and rejected: blanking the glass made the
+mirror blink in and out, and even a light dim read as the LCD switching
+off — display gaps of one to several seconds are ROUTINE on a
+best-effort link, in plain standby on a quiet band, so any visible
+staleness treatment fires constantly and punishes the operator without
+adding safety the key gate doesn't already provide.) The mirror only
+returns to the idle glass when the image is truly obsolete: the
+connection dropped, a docked⇄floating switch restarted the mirror, or
+the amplifier stopped answering Status polls altogether for ~3 s
+(`kSilentPollLimit`), which routes through `SpeApplet::clearTelemetry()`
+along with the rest of the readings. That last path is the one a ser2net
+operator meets when the amplifier is switched off under a live socket.
+Note what `clearTelemetry()` deliberately does NOT do: it never writes
+`m_lcdFresh`. Both of its callers have already forced the connected or
+responding flag false, which closes the FRONT PANEL gate on its own, and
+zeroing the applet's copy behind `SpeConnection`'s back would desync the
+two — `setLcdFresh()` returns early when the value is unchanged, so the
+keys would never be re-enabled beside a mirror that had stayed live
+throughout. Freshness has exactly one writer on the applet side. Every
+acknowledged keystroke requests a display refresh — immediately when the
+line is free, otherwise as pending work the scheduler services the moment
+the in-flight request resolves — and the cadence re-arms from each
+display *reply* rather than free-running: the original free-running
+600 ms period was an exact multiple of the 100 ms Status poll, and two
+such timers phase-lock with every display reply straddling a status poll
+on the wire, dropping display frames in bursts until clock drift walks
+the alignment out. Pacing from the reply folds the amplifier's variable
+response latency into the period, so no stable phase relationship can
+form — and it is also what makes the small 250 ms gap safe on slow links
+(see the request bullet above).

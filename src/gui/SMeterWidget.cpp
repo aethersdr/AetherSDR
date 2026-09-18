@@ -17,6 +17,12 @@
 
 namespace AetherSDR {
 
+// Radios at or below this declared output get an arc scaled to their own limit
+// instead of the 120 W one. Deliberately the SAME threshold the cross-needle
+// already uses (CrossNeedleMeterGeometry::rangeMultiplierFor), so a QRP radio
+// cannot end up with one gauge on a QRP scale and the other on a 120 W scale.
+constexpr int kQrpMaxWatts = 20;
+
 SMeterWidgetAccessible::SMeterWidgetAccessible(QWidget* widget)
     : QAccessibleWidget(widget, QAccessible::Indicator)
 {
@@ -1134,6 +1140,23 @@ void SMeterWidget::setPowerScale(int maxWatts, bool hasAmplifier)
     } else if (maxWatts > 100) {
         m_powerScaleMax = 600.0f;
         m_powerRedStart = 500.0f;
+    } else if (maxWatts > 0 && maxWatts <= kQrpMaxWatts) {
+        // QRP. Without this the smallest arc available was 120 W, so a 5 W
+        // Hermes-Lite 2 at full output moved the needle about four percent of
+        // its travel — a working meter that reads as a broken one. The
+        // cross-needle already had a low bucket
+        // (CrossNeedleMeterGeometry::rangeMultiplierFor, maxWatts <= 20); this
+        // is the S-meter's missing counterpart, keyed off the same threshold so
+        // the two gauges cannot end up on different scales for one radio.
+        //
+        // Derived from the radio's declared limit rather than another fixed
+        // arc, because "QRP" spans 1 W to 20 W and a single constant would be
+        // wrong at both ends. The 1.2x headroom and the red zone at the rated
+        // figure reproduce exactly the relationship the 100 W case already
+        // uses (120 max, red from 100), so the meter reads the same way at
+        // every power class.
+        m_powerScaleMax = static_cast<float>(maxWatts) * 1.2f;
+        m_powerRedStart = static_cast<float>(maxWatts);
     } else {
         m_powerScaleMax = 120.0f;
         m_powerRedStart = 100.0f;

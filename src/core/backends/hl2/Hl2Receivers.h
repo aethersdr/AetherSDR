@@ -12,7 +12,7 @@ namespace AetherSDR::hl2 {
 //
 // WHY THIS IS A TABLE AND NOT ARITHMETIC
 //
-// HERMES.md §12.5 and consolidated-backlog item 20 both say the same thing, and
+// docs/HERMES.md §12.5 and consolidated-backlog item 20 both say the same thing, and
 // this is the file that honours it: an HL2 receiver has FOUR distinct indices
 // and none of them may be computed from another.
 //

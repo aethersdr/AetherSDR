@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CwSidetoneSinkBackend.h"
+#include "CwSidetoneEdgeProbe.h"
 
 #include <QAudioFormat>
 #include <QByteArray>
@@ -45,6 +46,7 @@ private:
     QPointer<QIODevice>  m_device;
     QTimer*              m_timer{nullptr};
     CwSidetoneGenerator* m_generator{nullptr};
+    CwSidetoneEdgeProbe  m_edgeProbe;
     int                  m_actualRate{0};
     QString              m_deviceDescription;
     bool                 m_fallbackOccurred{false};

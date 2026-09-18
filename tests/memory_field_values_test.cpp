@@ -60,9 +60,15 @@ int main()
     // ── tone mode round-trips ───────────────────────────────────────────────
     ok &= expect(toneModeToWire("CTCSS_TX") == "ctcss_tx", "toneModeToWire ctcss_tx");
     ok &= expect(toneModeToWire("off") == "off", "toneModeToWire off");
+    ok &= expect(toneModeToWire("DTCS_TXRX") == "dtcs_txrx",
+                 "toneModeToWire dtcs_txrx");
+    ok &= expect(toneModeToWire("ctcss_tx_dtcs_rx") == "ctcss_tx_dtcs_rx",
+                 "toneModeToWire mixed tone mode");
     ok &= expect(toneModeToWire("bogus").isEmpty(),
                  "toneModeToWire empties an unrecognized tone mode");
     ok &= expect(toneModeToDisplay("ctcss_tx") == "CTCSS_TX", "toneModeToDisplay ctcss_tx");
+    ok &= expect(toneModeToDisplay("ctcss_rx") == "CTCSS_RX", "toneModeToDisplay ctcss_rx");
+    ok &= expect(toneModeToDisplay("dtcs_txrx") == "DTCS_TXRX", "toneModeToDisplay dtcs_txrx");
     ok &= expect(toneModeToDisplay("") == "OFF",
                  "toneModeToDisplay defaults blank to OFF");
 

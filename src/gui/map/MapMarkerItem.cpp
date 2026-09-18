@@ -12,6 +12,7 @@ namespace AetherSDR {
 namespace {
 constexpr double kDotRadius = 5.0;       // px
 constexpr double kHomeRadius = 7.0;      // px
+constexpr double kMonitorRadius = 7.0;   // px
 constexpr double kLabelOffset = 3.0;     // px gap between dot and label
 constexpr double kPulseMaxRadius = 26.0; // px, sonar ring sweep extent
 
@@ -21,6 +22,14 @@ QFont markerFont()
     f.setPointSizeF(9.0);
     f.setBold(true);
     return f;
+}
+
+double markerRadius(const MapView::Marker& marker)
+{
+    if (marker.isHome) {
+        return kHomeRadius;
+    }
+    return marker.isMonitor ? kMonitorRadius : kDotRadius;
 }
 } // namespace
 
@@ -96,7 +105,7 @@ QRectF MapMarkerItem::labelRect() const
     }
     const QFontMetricsF fm(markerFont());
     const QSizeF size = fm.size(Qt::TextSingleLine, m_marker.label);
-    const double r = m_marker.isHome ? kHomeRadius : kDotRadius;
+    const double r = markerRadius(m_marker);
     return { m_projPos.x() + r + kLabelOffset,
              m_projPos.y() - size.height() / 2.0,
              size.width(), size.height() };
@@ -104,7 +113,7 @@ QRectF MapMarkerItem::labelRect() const
 
 QPainterPath MapMarkerItem::projShape() const
 {
-    const double r = m_marker.isHome ? kHomeRadius : kDotRadius;
+    const double r = markerRadius(m_marker);
     QPainterPath path;
     path.addEllipse(m_projPos, r, r);
     if (m_marker.isHome) {
@@ -121,7 +130,7 @@ QPainterPath MapMarkerItem::projShape() const
 void MapMarkerItem::projPaint(QPainter* painter)
 {
     painter->setRenderHint(QPainter::Antialiasing);
-    const double r = m_marker.isHome ? kHomeRadius : kDotRadius;
+    const double r = markerRadius(m_marker);
 
     if (m_marker.isHome && m_pulsePhase >= 0.0) {
         // Sonar pulse: expanding, fading ring.
@@ -143,6 +152,17 @@ void MapMarkerItem::projPaint(QPainter* painter)
         painter->setBrush(m_marker.color);
         painter->setPen(Qt::NoPen);
         painter->drawEllipse(m_projPos, r / 2.5, r / 2.5);
+    } else if (m_marker.isMonitor) {
+        QColor outline = m_marker.color.darker(220);
+        outline.setAlpha(180);
+        painter->setPen(QPen(outline, 1.5));
+        painter->setBrush(m_marker.color);
+        painter->drawEllipse(m_projPos, r, r);
+        QColor center = m_marker.color.lighter(250);
+        center.setAlpha(210);
+        painter->setBrush(center);
+        painter->setPen(Qt::NoPen);
+        painter->drawEllipse(m_projPos, 2.0, 2.0);
     } else {
         painter->setPen(QPen(QColor(0, 0, 0, 160), 1.0));
         painter->setBrush(m_marker.color);
