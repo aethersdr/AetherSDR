@@ -3316,6 +3316,10 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
         // grid uses, and send it to the slice.
         // Dragging an edge on the EQ canvas retunes the receive filter, through
         // the same handler the docked applet and the floating editor use.
+        // The AetherNR checkbox restoring NR2: same FFTW-wisdom prep the
+        // method buttons inside the page already route through (#2275).
+        connect(m_rxDialog, &AetherRxDialog::nr2EnableWithWisdomRequested,
+                this, &MainWindow::enableNr2WithWisdom);
         connect(m_rxDialog, &AetherRxDialog::cutoffsDragRequested,
                 this, &MainWindow::onEqCutoffsDragRequested);
         connect(m_rxDialog, &AetherRxDialog::rxFilterWidthRequested,

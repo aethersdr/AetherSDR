@@ -13,13 +13,22 @@
 #include "StripWaveformPanel.h"
 
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QFrame>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
+#include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/ClientComp.h"
+#include "core/ClientEq.h"
+#include "core/ClientGate.h"
+#include "core/ClientPudu.h"
+#include "core/ClientTube.h"
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
@@ -163,6 +172,7 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     // for ever and never seen the new default. Bumping the key retires those
     // saved rectangles; the window persists its size again from here.
     : PersistentDialog("AetherRX", "AetherRxDialogGeometry2", parent)
+    , m_audio(audio)
 {
     theme::setContainer(this, QStringLiteral("dialog/aetherRx"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");
@@ -190,7 +200,8 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     // out of a knob's 76 px value editor. The AetherNR body applies the same
     // sheet to itself, so the only thing that loses by this is nothing.
     m_tabsFrame->setStyleSheet(ModemChrome::styleSheet(ModemChrome::Scale::Dialog));
-    m_tabsFrame->setFixedWidth(132);
+    // Wide enough for the longest label plus the checkbox in front of it.
+    m_tabsFrame->setFixedWidth(156);
     auto* tabsBox = new QVBoxLayout(m_tabsFrame);
     tabsBox->setContentsMargins(6, 6, 6, 6);
     tabsBox->setSpacing(2);
@@ -249,6 +260,11 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
 
     tabsBox->addStretch(1);
 
+    // Out has no box; give its label the same start as every other.
+    if (m_outIndent && m_stageChecks[Gate]) {
+        m_outIndent->setFixedWidth(m_stageChecks[Gate]->sizeHint().width());
+    }
+
     // Pin every panel to its RX engine instance. Without this the EQ canvas
     // has no engine to enumerate bands for and collapses to its "(no EQ
     // connected)" placeholder.
@@ -276,6 +292,16 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         first->setChecked(true);
     }
     m_stack->setCurrentIndex(Nr);
+
+    // The Client* stages are plain classes with no change signal, and the RX
+    // chain strip toggles the same flags from outside this window, so the
+    // boxes are polled rather than driven. Five times a second is far below
+    // what a human notices and nowhere near what six bool reads cost.
+    refreshStageChecks();
+    m_checkTimer = new QTimer(this);
+    m_checkTimer->setInterval(200);
+    connect(m_checkTimer, &QTimer::timeout,
+            this, &AetherRxDialog::refreshStageChecks);
 
     // Forward every parameter-change signal so existing connections to
     // AetherRxDialog::* keep working unchanged.
@@ -333,7 +359,36 @@ void AetherRxDialog::addStage(Stage stage, const QString& label, QWidget* page)
     tab->setObjectName(QStringLiteral("aetherRxTab") + label);
     tab->setAccessibleName(label + QStringLiteral(" receive stage"));
     m_tabGroup->addButton(tab, stage);
-    qobject_cast<QVBoxLayout*>(m_tabsFrame->layout())->addWidget(tab);
+
+    // One row: the stage's on/off box, then the tab that selects its page.
+    // Separate widgets on purpose — clicking the box must not also change
+    // pages, and clicking the tab must not switch the stage off.
+    auto* row = new QWidget;
+    auto* rowBox = new QHBoxLayout(row);
+    rowBox->setContentsMargins(0, 0, 0, 0);
+    rowBox->setSpacing(4);
+
+    if (stage == Output) {
+        // Nothing to bypass here, so no box — but the label still lines up
+        // with the others rather than starting a column of its own. Sized
+        // from a real checkbox once they all exist.
+        m_outIndent = new QWidget;
+        rowBox->addWidget(m_outIndent);
+    } else {
+        auto* box = new QCheckBox;
+        box->setObjectName(QStringLiteral("aetherRxEnable") + label);
+        box->setAccessibleName(label + QStringLiteral(" receive stage enabled"));
+        box->setToolTip(tr("Enable the %1 stage. Unchecked, the receive chain "
+                           "passes straight through it.").arg(label));
+        m_stageChecks[stage] = box;
+        connect(box, &QCheckBox::toggled, this, [this, stage](bool on) {
+            setStageEnabled(stage, on);
+        });
+        rowBox->addWidget(box);
+    }
+
+    rowBox->addWidget(tab, 1);
+    qobject_cast<QVBoxLayout*>(m_tabsFrame->layout())->addWidget(row);
 
     const int index = m_stack->addWidget(page);
     Q_ASSERT(index == stage);   // ids double as stack indices
@@ -354,6 +409,130 @@ void AetherRxDialog::showEvent(QShowEvent* event)
     if (size() != kLaunchSize) {
         resize(kLaunchSize);
     }
+    refreshStageChecks();
+    if (m_checkTimer) m_checkTimer->start();
+}
+
+void AetherRxDialog::hideEvent(QHideEvent* event)
+{
+    PersistentDialog::hideEvent(event);
+    if (m_checkTimer) m_checkTimer->stop();
+}
+
+bool AetherRxDialog::stageEnabled(Stage stage) const
+{
+    if (!m_audio) return false;
+    switch (stage) {
+        case Nr:
+            // Client-side NR is exclusive: the stage is on when any one of
+            // the seven methods is.
+            return m_audio->nr2Enabled()  || m_audio->nr4Enabled()
+                || m_audio->mnrEnabled()  || m_audio->dfnrEnabled()
+                || m_audio->rn2Enabled()  || m_audio->nvAfxEnabled()
+                || m_audio->nnrEnabled();
+        case Gate:
+            return m_audio->clientGateRx() && m_audio->clientGateRx()->isEnabled();
+        case Eq:
+            return m_audio->clientEqRx() && m_audio->clientEqRx()->isEnabled();
+        case Comp:
+            return m_audio->clientCompRx() && m_audio->clientCompRx()->isEnabled();
+        case Tube:
+            return m_audio->clientTubeRx() && m_audio->clientTubeRx()->isEnabled();
+        case Voice:
+            return m_audio->clientPuduRx() && m_audio->clientPuduRx()->isEnabled();
+        default:
+            return false;
+    }
+}
+
+void AetherRxDialog::setStageEnabled(Stage stage, bool on)
+{
+    if (!m_audio || m_syncingChecks) return;
+    switch (stage) {
+        case Nr: {
+            // The same gesture the chain strip's DSP tile makes: switching the
+            // stage off turns off whichever method is running, and switching it
+            // back on restores the last one AetherDspWidget saved.
+            if (!on) {
+                QMetaObject::invokeMethod(m_audio, [audio = m_audio]() {
+                    if (audio->nr2Enabled())    audio->setNr2Enabled(false);
+                    if (audio->nr4Enabled())    audio->setNr4Enabled(false);
+                    if (audio->mnrEnabled())    audio->setMnrEnabled(false);
+                    if (audio->dfnrEnabled())   audio->setDfnrEnabled(false);
+                    if (audio->rn2Enabled())    audio->setRn2Enabled(false);
+                    if (audio->nvAfxEnabled())  audio->setNvAfxEnabled(false);
+                    if (audio->nnrEnabled())    audio->setNnrEnabled(false);
+                });
+                break;
+            }
+            const QString name =
+                AppSettings::instance().value("LastClientNr", "").toString();
+            // Never been on, so there is nothing to restore; the next poll
+            // puts the box back where it was.
+            if (name.isEmpty()) break;
+            if (name == QLatin1String("NR2")) {
+                // NR2 needs the wisdom prep before the engine builds
+                // SpectralNR — straight through the setter can crash the
+                // next feedAudioData (#2275).
+                emit nr2EnableWithWisdomRequested();
+                break;
+            }
+            QMetaObject::invokeMethod(m_audio, [audio = m_audio, name]() {
+                if (name == QLatin1String("NR4"))       audio->setNr4Enabled(true);
+                else if (name == QLatin1String("MNR"))  audio->setMnrEnabled(true);
+                else if (name == QLatin1String("DFNR")) audio->setDfnrEnabled(true);
+                else if (name == QLatin1String("RN2"))  audio->setRn2Enabled(true);
+                else if (name == QLatin1String("BNR"))  audio->setNvAfxEnabled(true);
+                else if (name == QLatin1String("NNR"))  audio->setNnrEnabled(true);
+            });
+            break;
+        }
+        case Gate:
+            if (auto* g = m_audio->clientGateRx()) {
+                g->setEnabled(on);
+                m_audio->saveClientGateRxSettings();
+            }
+            break;
+        case Eq:
+            if (auto* e = m_audio->clientEqRx()) {
+                e->setEnabled(on);
+                m_audio->saveClientEqSettings();
+            }
+            break;
+        case Comp:
+            if (auto* c = m_audio->clientCompRx()) {
+                c->setEnabled(on);
+                m_audio->saveClientCompRxSettings();
+            }
+            break;
+        case Tube:
+            if (auto* t = m_audio->clientTubeRx()) {
+                t->setEnabled(on);
+                m_audio->saveClientTubeRxSettings();
+            }
+            break;
+        case Voice:
+            if (auto* p = m_audio->clientPuduRx()) {
+                p->setEnabled(on);
+                m_audio->saveClientPuduRxSettings();
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+void AetherRxDialog::refreshStageChecks()
+{
+    if (!m_audio) return;
+    m_syncingChecks = true;
+    for (int i = 0; i < StageCount; ++i) {
+        QCheckBox* box = m_stageChecks[i];
+        if (!box) continue;
+        const bool on = stageEnabled(static_cast<Stage>(i));
+        if (box->isChecked() != on) box->setChecked(on);
+    }
+    m_syncingChecks = false;
 }
 
 void AetherRxDialog::syncFromEngine()

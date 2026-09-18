@@ -3,10 +3,15 @@
 #include "ClientEqApplet.h"   // ClientEqApplet::Path
 #include "PersistentDialog.h"
 
+#include <array>
+
 class QButtonGroup;
+class QCheckBox;
+class QHideEvent;
 class QShowEvent;
 class QFrame;
 class QStackedWidget;
+class QTimer;
 
 namespace AetherSDR {
 
@@ -33,6 +38,12 @@ class StripWaveformPanel;
 // The AetherNR tab holds AetherDspWidget whole, including its own horizontal
 // method strip — the seven noise-reduction methods stay one click apart
 // rather than becoming seven more entries in this bar.
+//
+// Each tab carries a checkbox that enables or bypasses that stage, the same
+// flag the RX chain strip's click-to-bypass toggles — this window is where you
+// set a stage up, so it is where you should be able to switch it off. Out is
+// the exception: a meter and a waveform are not a stage and have nothing to
+// bypass, so that row is indented to the others' labels and carries no box.
 class AetherRxDialog : public PersistentDialog {
     Q_OBJECT
 
@@ -63,6 +74,11 @@ public:
     StripEqPanel* eqPanel() const { return m_eq; }
 
 signals:
+    // The AetherNR checkbox re-enabling NR2. Goes out rather than straight to
+    // the engine because NR2 needs MainWindow's FFTW-wisdom prep first (#2275)
+    // — the same reason AetherDspWidget and the chain strip both raise it.
+    void nr2EnableWithWisdomRequested();
+
     // A receive filter width button was pressed on the EQ page.
     void rxFilterWidthRequested(int widthHz);
 
@@ -98,15 +114,31 @@ signals:
 
 protected:
     void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
 private:
     QWidget* buildStagePage(QWidget* panel);
     void     addStage(Stage stage, const QString& label, QWidget* page);
 
+    // Commit a checkbox to the engine, and read the engine back into one.
+    void setStageEnabled(Stage stage, bool on);
+    bool stageEnabled(Stage stage) const;
+    // Pull every box from the engine. The Client* stages are plain classes
+    // with no change signal, and the chain strip can toggle the same flags
+    // behind this window's back, so the boxes are polled while it is visible.
+    void refreshStageChecks();
+
+    AudioEngine*        m_audio{nullptr};
     AetherDspWidget*    m_widget{nullptr};
     QFrame*             m_tabsFrame{nullptr};
     QButtonGroup*       m_tabGroup{nullptr};
     QStackedWidget*     m_stack{nullptr};
+    std::array<QCheckBox*, StageCount> m_stageChecks{};
+    QWidget*            m_outIndent{nullptr};
+    QTimer*             m_checkTimer{nullptr};
+    // Set while refreshStageChecks() is writing, so a box being brought in
+    // line with the engine does not turn round and write back to it.
+    bool                m_syncingChecks{false};
 
     StripGatePanel*     m_gate{nullptr};
     StripEqPanel*       m_eq{nullptr};
