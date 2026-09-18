@@ -333,11 +333,12 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     // the only thing that grows: without this it swallows every pixel the
     // window has, and 15% of a tall graph buys nothing a shorter one does not
     // already show. The other 15 goes to a spacer at the foot of the column.
-    // 88, not 85: the param row below grew by 8 px to stop clipping its
-    // readings, and that came out of the same pool. Nudging the split keeps
-    // the graph the height it was and takes the difference off the spacer,
-    // which is the one thing here with nothing to show.
-    constexpr int kCanvasStretch = 88;
+    // 94, not 85: the param row grew by 8 px to stop clipping its readings
+    // and the output fader moved under the graph for another 34, both out of
+    // this same pool. Nudging the split keeps the graph roughly the height it
+    // was and takes the difference off the spacer, which is the one thing
+    // here with nothing to show.
+    constexpr int kCanvasStretch = 94;
     constexpr int kSlackStretch = 100 - kCanvasStretch;
 
     m_canvas = new ClientEqEditorCanvas;
@@ -362,8 +363,13 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
 
     body->addLayout(eqColumn, 1);
 
-    // Output fader — vertical meter + slider + dB readout on the right.
+    // Output fader — level meter, gain handle and dB readout, running along
+    // the foot of the panel. Horizontal and below rather than vertical and
+    // beside, so the graph gets the window's whole width; the ~30 px it costs
+    // in height is the cheaper axis here, and it comes out of the column's
+    // slack rather than off the graph.
     m_outFader = new ClientEqOutputFader;
+    m_outFader->setOrientation(Qt::Horizontal);
     connect(m_outFader, &ClientEqOutputFader::gainChanged,
             this, [this](float linear) {
         ClientEq* eq = (m_path == ClientEqApplet::Path::Rx)
@@ -372,9 +378,8 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
         eq->setMasterGain(linear);
         if (m_audio) m_audio->saveClientEqSettings();
     });
-    body->addWidget(m_outFader);
-
     root->addLayout(body, 1);
+    root->addWidget(m_outFader);
 
     // Selection plumbing: any of the three views announcing a selection
     // change fans out to the other two, plus triggers a paint refresh.

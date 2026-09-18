@@ -2,11 +2,13 @@
 
 #include <QWidget>
 
+class QLabel;
 class QLineEdit;
+class QPainter;
 
 namespace AetherSDR {
 
-// Combined vertical fader + level meter.  One custom-painted bar shows
+// Combined fader + level meter, vertical or horizontal.  One custom-painted bar shows
 // the post-EQ peak level as a gradient fill rising from the bottom, with
 // a horizontal handle marker at the current output-gain position.  Drag
 // the handle up/down to change gain, double-click to reset to 0 dB,
@@ -20,6 +22,13 @@ class ClientEqOutputFader : public QWidget {
 
 public:
     explicit ClientEqOutputFader(QWidget* parent = nullptr);
+
+    // Vertical runs bottom-to-top beside the EQ; horizontal runs
+    // left-to-right beneath it, which is what lets the graph have the whole
+    // width of the window. Changing it rebuilds the label layout, so set it
+    // once after construction rather than per frame.
+    void setOrientation(Qt::Orientation orientation);
+    Qt::Orientation orientation() const { return m_orientation; }
 
     void setGainLinear(float linear);
     float gainLinear() const { return m_gain; }
@@ -41,9 +50,15 @@ protected:
 private:
     void refreshValueLabel();
     void commitValueEdit();
-    void setGainFromY(int y);
+    // Position along the strip, in whichever axis the orientation runs.
+    void setGainFromPos(QPoint pos);
+    void rebuildLabelLayout();
+    void paintVertical(QPainter& p);
+    void paintHorizontal(QPainter& p);
 
     QLineEdit* m_valueEdit{nullptr};
+    class QLabel* m_endLabel{nullptr};   // the "OUT" cap
+    Qt::Orientation m_orientation{Qt::Vertical};
     float   m_gain{1.0f};
     float   m_smoothedPeak{-120.0f};  // dB
     bool    m_dragging{false};
@@ -67,9 +82,10 @@ private:
     static constexpr int kStripBottomPad = 4;
 
     // Cached strip rect — recomputed in paintEvent.  Used by mouse handlers
-    // so they don't recompute geometry on every move.
-    int m_stripTop{0};
-    int m_stripH{0};
+    // so they don't recompute geometry on every move. Origin and length are
+    // along the strip's own axis, whichever that is.
+    int m_stripOrigin{0};
+    int m_stripLength{0};
 };
 
 } // namespace AetherSDR
