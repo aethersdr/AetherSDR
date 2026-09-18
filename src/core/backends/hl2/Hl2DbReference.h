@@ -161,11 +161,24 @@ public:
     // WITHDRAWN. DL1YCF's "-34 dBm clipping at +33 dB of gain" arithmetically
     // gives -1 dBm and was quoted here as agreeing "to the digit" -- with a
     // figure now known to be 4 dB out, which is the tell. It also assumes +33
-    // dB was DELIVERED; on this radio a commanded +33 is code 45, and the
-    // gateware's `code & 0x1F` makes that code 13, i.e. +1 dB applied (#5752).
-    // On that reading the same measurement gives -33 dBm. Commanded or applied
-    // cannot be established from the published figure, so it confirms nothing
-    // in either direction and is recorded here only so nobody re-derives it.
+    // dB was DELIVERED, and on one measured unit it was not: a commanded +33
+    // is code 45, and if that code folds `& 0x1F` it lands on 13, i.e. +1 dB
+    // applied, which makes the same measurement give -33 dBm instead.
+    //
+    // WHETHER IT FOLDS IS OPEN. #5752 looked at exactly this and declined to
+    // treat the fold as general: it clamped connect parameters without changing
+    // the native range, left -12..+48 and the +20 dB default standing, and
+    // recorded that the single-unit observation in softerhardware/Hermes-Lite2
+    // #177 "remains unresolved against the native bit-6-selected RTL path".
+    // So this cross-check is indeterminate for two independent reasons --
+    // commanded-versus-applied cannot be established from the published figure,
+    // and the fold that would decide it is itself unsettled. It confirms
+    // nothing in either direction and is recorded here only so nobody
+    // re-derives it.
+    //
+    // NONE OF WHICH TOUCHES THE DERIVATION BELOW. kFullScaleDbmAtZeroGain is a
+    // figure AT 0 dB LNA gain, taken from the AD9866 datasheet and the input
+    // network; it does not depend on what the gain register does above code 31.
     //
     // WHAT WOULD SETTLE IT is a bench measurement on this radio: a known level
     // into the antenna port at a known APPLIED gain, read against the ADC clip

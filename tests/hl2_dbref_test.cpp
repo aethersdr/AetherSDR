@@ -47,7 +47,8 @@ int main()
     // instead of adding it, and then quoted DL1YCF's "-34 dBm clipping at
     // +33 dB" as agreeing with the result to the digit. The agreement was the
     // tell, not the evidence: that figure also assumes +33 dB was delivered,
-    // and on this radio a commanded +33 folds to +1 applied (#5752).
+    // and IF the gain folds -- which #5752 left unresolved against the native
+    // bit-6-selected RTL path -- a commanded +33 would apply as +1.
     //
     // If this block ever fails again, the question to ask is not "has the
     // arithmetic drifted" but "has the DERIVATION been falsified" -- and the
@@ -86,14 +87,15 @@ int main()
               "`!= 0.0` predicate got this one wrong in the other direction");
     }
 
-    // P(dBm) = dBFS + fullScale - Glna, absolutely. At the class's own default
-    // gain of 0 dB that is dBFS + 3.
+    // P(dBm) = dBFS + fullScale - Glna, absolutely. The class's default gain is
+    // the radio's own +20 dB (kLnaDefaultGainDb), which #5752 left standing, so
+    // the offset there is 3 - 20 = -17 dB.
     ref.setLnaGainDb(Hl2DbReference::kDefaultLnaGainDb);
-    check(near(ref.offsetDb(), 3.0),
+    check(near(ref.offsetDb(), 3.0 - Hl2DbReference::kDefaultLnaGainDb),
           "offset at the default gain is fullScale - gain");
-    check(near(ref.toDbm(-73.0), -70.0),
-          "-73 dBFS at the default 0 dB of gain reads -70 dBm");
-    check(near(ref.toDbm(-120.0), -117.0),
+    check(near(ref.toDbm(-73.0), -90.0),
+          "-73 dBFS at the default +20 dB of gain reads -90 dBm");
+    check(near(ref.toDbm(-120.0), -137.0),
           "the displayed floor MOVES, to a derived figure rather than an arbitrary one");
 
     // AND AT 0 dB THE CONSTANT IS THE WHOLE OFFSET, which is what makes it
@@ -211,29 +213,48 @@ int main()
     agc.setFullScaleDbm(-60.0);
     check(near(agc.agcCeilingDb(kDefaultThresholdUnits), beforeCalibration),
           "calibrating the display does not move the AGC ceiling");
-    // The display offset is ABSOLUTE (fullScale - gain + trim), so at the
-    // default 0 dB of gain a -60 dBm full scale is simply -60. The assertion
-    // above is the one carrying the meaning here -- that calibrating the
-    // display leaves the AGC ceiling untouched -- and it still passes, which is
-    // the point: the two terms remain separate even though one of them changed
-    // form.
-    check(near(agc.offsetDb(), -60.0),
+    // The display offset is ABSOLUTE (fullScale - gain), so at the default
+    // +20 dB of gain a -60 dBm full scale is -80. The assertion above is the
+    // one carrying the meaning here -- that calibrating the display leaves the
+    // AGC ceiling untouched -- and it still passes, which is the point: the two
+    // terms remain separate even though one of them changed form.
+    check(near(agc.offsetDb(), -60.0 - Hl2DbReference::kDefaultLnaGainDb),
           "...while it does move the display offset");
 
-    // Compatibility: preserve the pre-change reference, offset and AGC
-    // ceiling for every documented stored gain, including values above +19.
+    // WHAT THIS CHANGE MOVES AND WHAT IT MUST NOT, across every stored gain the
+    // native range documents -- -12..+48, which #5752 left unchanged.
+    //
+    // The AGC ceiling MUST NOT MOVE. It is built on lnaOffsetDb(), which stayed
+    // RELATIVE to the reference gain precisely so that an operator's AGC-T does
+    // not shift the moment they connect. That is the compatibility guarantee
+    // this loop exists to hold.
+    //
+    // The display offset MUST MOVE, by exactly the derived full-scale figure.
+    // That is the whole change: the absolute term was 0.0 and is now +3 dBm at
+    // 0 dB gain, so every stored gain's display offset moves from the old
+    // relative (20 - stored) to the absolute (3 - stored) -- a uniform -17 dB
+    // shift of the displayed floor onto a number that can be checked against a
+    // signal generator.
     check(Hl2DbReference::kDefaultLnaGainDb == 20.0,
           "fresh profiles retain the existing +20 dB reference");
-    for (int stored = -12; stored <= 48; ++stored) {
+    for (int stored = AetherSDR::hl2::kLnaGainMinDb;
+         stored <= AetherSDR::hl2::kLnaGainMaxDb; ++stored) {
         Hl2DbReference after;
         const auto seed = AetherSDR::hl2::connectLna(
             true, true, stored, false, 0, AetherSDR::hl2::kLnaDefaultGainDb,
             AetherSDR::hl2::kLnaGainMinDb, AetherSDR::hl2::kLnaGainMaxDb);
         after.setLnaGainDb(seed.liveDb);
-        const double oldOffset = 20.0 - stored;
-        check(near(after.offsetDb(), oldOffset), "stored gain preserves the old display reference");
-        check(near(after.agcCeilingDb(65), 39.0 + oldOffset),
+
+        const double oldCeiling = 39.0 + (20.0 - stored);
+        check(near(after.agcCeilingDb(65), oldCeiling),
               "stored gain preserves the old AGC ceiling at 65");
+
+        check(near(after.offsetDb(),
+                   Hl2DbReference::kFullScaleDbmAtZeroGain - stored),
+              "stored gain moves the display offset onto the derived full scale");
+        check(near(after.offsetDb() - (20.0 - stored),
+                   Hl2DbReference::kFullScaleDbmAtZeroGain - 20.0),
+              "and moves it by the same -17 dB at every stored gain");
     }
 
     if (g_failures == 0)
