@@ -703,7 +703,7 @@ add_executable(anan_p2_protocol_test
 target_include_directories(anan_p2_protocol_test PRIVATE src)
 add_test(NAME anan_p2_protocol_test COMMAND anan_p2_protocol_test)
 
-# ANAN RX DSP — IQ -> WdspChannel demod + AnanSpectrum. Links aethercore
+# ANAN RX DSP — IQ -> WdspChannel demod + AnanPanAnalyzer (WDSP analyzer). Links aethercore
 # (WDSP+FFTW), unlike anan_p2_protocol_test above. *** READ HERMES.md §16
 # and this file's own header comment before touching expected values here —
 # the handedness pin is bench-confirmed (2026-08-21, radiocert rx +
