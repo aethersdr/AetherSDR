@@ -13,7 +13,7 @@ namespace {
 
 constexpr float kLevelMinDb = -60.0f;
 constexpr float kLevelMaxDb =   0.0f;
-constexpr float kGrMaxMag   =  20.0f;    // GR range 0..-20 dB
+constexpr float kGrMaxMag   =  40.0f;    // GR range 0..-40 dB
 constexpr int   kPeakHoldMs =  700;
 constexpr float kPeakDecayDbPer100Ms = 1.0f;
 
@@ -278,14 +278,14 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
 
         struct Tick { float db; const char* label; };
         // Level: 0 / -12 / -24 / -36 / -48 (matches THRESH fader).
-        // GR: 0 / -5 / -10 / -15 / -20 (matches GR display range).
+        // GR: 0 / -10 / -20 / -30 / -40 (matches GR display range).
         static constexpr Tick kLevelTicks[] = {
             {   0.0f,  "0" }, { -12.0f, "-12" }, { -24.0f, "-24" },
             { -36.0f, "-36" }, { -48.0f, "-48" }
         };
         static constexpr Tick kGrTicks[] = {
-            {   0.0f,  "0"  }, {  -5.0f,  "-5"  }, { -10.0f, "-10" },
-            { -15.0f, "-15" }, { -20.0f, "-20" }
+            {   0.0f,  "0"  }, { -10.0f, "-10" }, { -20.0f, "-20" },
+            { -30.0f, "-30" }, { -40.0f, "-40" }
         };
         const Tick* ticks = (m_mode == Mode::Level) ? kLevelTicks : kGrTicks;
         const int   nTicks = 5;

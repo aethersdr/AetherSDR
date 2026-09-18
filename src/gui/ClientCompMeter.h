@@ -16,7 +16,7 @@ namespace AetherSDR {
 //   - GainReduction: fills from the TOP downwards (amber).  A larger
 //     negative gainReductionDb pulls the fill further down.
 //
-// Range is fixed to dBFS [-60, 0] for Level and [-20, 0] for GR.  Bar
+// Range is fixed to dBFS [-60, 0] for Level and [-40, 0] for GR.  Bar
 // fill is smoothed with the same asymmetric attack/release ballistics
 // as HGauge (30ms attack, 180ms release, polled at 120 Hz) so the
 // motion reads smoothly instead of twitching on every audio block.
@@ -39,7 +39,7 @@ public:
 
     // Show dB ticks on the chosen side of the bar (mirrors the THRESH
     // fader's tick column). Level mode uses 0/-12/-24/-36/-48; GR
-    // uses 0/-5/-10/-15/-20.
+    // uses 0/-10/-20/-30/-40.
     void setTickSide(TickSide s);
 
     // Show the current dB value as a bottom-aligned numeric label
