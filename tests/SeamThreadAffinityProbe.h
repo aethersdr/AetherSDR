@@ -128,6 +128,7 @@ inline void attachAllSeamSignals(SeamThreadAffinityProbe& p)
     AETHER_SEAM_PROBE(sliceRemoved);
     AETHER_SEAM_PROBE(sliceLifecycleFailed);
     AETHER_SEAM_PROBE(meterUpdate);
+    AETHER_SEAM_PROBE(frontEndOverloadChanged);
     AETHER_SEAM_PROBE(transmitChanged);
     AETHER_SEAM_PROBE(keyingStateConfirmed);
     AETHER_SEAM_PROBE(amplifierChanged);

@@ -16,6 +16,8 @@ class QComboBox;
 class QSlider;
 class QLabel;
 class QCheckBox;
+class FrontEndOverloadIndicator;
+namespace AetherSDR { struct FrontEndOverload; }
 class QDoubleSpinBox;
 class QScrollArea;
 
@@ -111,6 +113,10 @@ public:
     // Reflect the armed state without emitting. Used by the settings restore
     // and by a backend that declined to arm.
     void setAutoRfGainEnabled(bool on);
+    // RFC #5535's visibility condition: what the front end is doing, and what
+    // the loop has done about it. No-op on a family that never showed the
+    // indicator.
+    void setFrontEndOverload(const AetherSDR::FrontEndOverload& state);
 
 private:
     // The RF Gain slider is a readout while the loop owns the gain. See the
@@ -378,6 +384,8 @@ private:
     // Born HIDDEN, like the front-end rows below: a control that has never
     // shipped must not appear on a family that does not claim it.
     QCheckBox*   m_autoRfGainCheck{nullptr};
+    // RFC #5535's condition. Born hidden with the checkbox above it.
+    FrontEndOverloadIndicator* m_frontEndIndicator{nullptr};
     // What the RF-gain readout appends. " dB" on a radio with a real gain
     // register, "%" on one whose gain is an opaque scale.
     QString      m_rfGainUnitSuffix{QStringLiteral(" dB")};

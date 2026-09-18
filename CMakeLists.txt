@@ -1162,6 +1162,7 @@ set(GUI_SOURCES
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumWidget_TimeMarkers.cpp
     src/gui/WaterfallHistoryBuffer.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/DssRenderer.cpp

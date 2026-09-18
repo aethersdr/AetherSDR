@@ -1034,6 +1034,30 @@ target_include_directories(hl2_rxdsp_async_rebuild_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_async_rebuild_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_async_rebuild_test COMMAND hl2_rxdsp_async_rebuild_test)
 
+# RFC #5535 approved the automatic RF-gain loop ON THE CONDITION that it is
+# visible -- the clipping AND the regulator's own action. This pins both, and
+# pins the rule that stops the second from making the radio unusable with a
+# screen reader. Pure functions of a struct: no widget, no socket, no clock.
+add_executable(front_end_overload_presentation_test
+    tests/front_end_overload_presentation_test.cpp)
+target_include_directories(front_end_overload_presentation_test PRIVATE src)
+target_link_libraries(front_end_overload_presentation_test PRIVATE Qt6::Core)
+add_test(NAME front_end_overload_presentation_test
+    COMMAND front_end_overload_presentation_test)
+
+# The latch is the only rule the indicator widget owns that the pure
+# presentation header cannot express, because it needs a clock.
+add_executable(front_end_overload_indicator_test
+    tests/front_end_overload_indicator_test.cpp
+    src/gui/FrontEndOverloadIndicator.cpp)
+target_include_directories(front_end_overload_indicator_test PRIVATE src)
+target_link_libraries(front_end_overload_indicator_test
+    PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+add_test(NAME front_end_overload_indicator_test
+    COMMAND front_end_overload_indicator_test)
+set_tests_properties(front_end_overload_indicator_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # WHICH RATE IS ON THE WIRE, as against the rate a crossing is attempting. A
 # pan-bandwidth change moves the backend's own m_sampleRateHz optimistically and
 # only writes the register when every chain has rebuilt, so for the length of a
@@ -5335,6 +5359,7 @@ set_tests_properties(spectrum_overlay_wheel_guard_test PROPERTIES
 add_executable(spectrum_overlay_band_highlight_test
     tests/spectrum_overlay_band_highlight_test.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
     src/gui/SpectrumOverlayWheelGuard.cpp
     src/gui/MemoryBrowsePanel.cpp
     src/gui/DragValuePopup.cpp

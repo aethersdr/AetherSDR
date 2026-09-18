@@ -1,4 +1,5 @@
 #include "SpectrumOverlayMenu.h"
+#include "FrontEndOverloadIndicator.h"
 #include "core/TxKeyingMarker.h"
 #include "DeclaredBandMenuPolicy.h"
 #include "DisplaySettings.h"
@@ -769,10 +770,21 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_autoRfGainCheck->setToolTip(
         "Automatic RF Gain — reduces gain when the radio's converter clips.\n"
         "The slider becomes the CEILING: this can only take gain away, never add.\n"
-        "Off by default. Does nothing while transmitting.");
+        "Armed by default (RFC #5535). Does nothing while transmitting.");
     m_autoRfGainCheck->setVisible(false);
     gainRow->addWidget(m_autoRfGainCheck);
     vbox->addLayout(gainRow);
+
+    // THE VISIBILITY HALF OF RFC #5535, and the reason the loop above is
+    // allowed to be armed by default at all. Its own row rather than squeezed
+    // into gainRow: the line has to fit "Clipping hard  -6 dB" without
+    // elliding, because a truncated warning is the failure this exists to
+    // prevent. Hidden with the checkbox -- a family that cannot observe its
+    // converter shows neither.
+    m_frontEndIndicator = new FrontEndOverloadIndicator(this);
+    m_frontEndIndicator->setObjectName(QStringLiteral("antennaFrontEndIndicator"));
+    m_frontEndIndicator->setVisible(false);
+    vbox->addWidget(m_frontEndIndicator);
 
     connect(m_autoRfGainCheck, &QCheckBox::toggled, this, [this](bool on) {
         if (m_updatingFromModel)
@@ -2916,6 +2928,16 @@ void SpectrumOverlayMenu::applyAutoRfGainToSlider(bool autoOn)
     }
     const bool armed = autoOn && m_autoRfGainCheck && m_autoRfGainCheck->isVisible();
     m_rfGainSlider->setEnabled(!armed);
+    // THE REASON ON THE ACCESSIBLE CHANNEL FIRST, then the tooltip. A disabled
+    // control is exactly where an operator most needs to be told WHY, and a
+    // tooltip is the one channel a screen-reader user never gets (#5262 M3a
+    // doctrine, #4896). tools/check_a11y.py enforces the pairing within 12
+    // lines, which the two multi-line calls only satisfy in this order.
+    m_rfGainSlider->setAccessibleDescription(
+        armed ? tr("Read-only while automatic RF gain is on. Shows what the "
+                   "radio is running: your setting minus whatever the "
+                   "automatic loop is holding down. Untick Auto to change it.")
+              : tr("RF gain, minus 8 to plus 32 dB in 8 dB steps."));
     m_rfGainSlider->setToolTip(
         armed ? QStringLiteral(
                     "RF Gain — read-only while Auto is on.\n"
@@ -2928,6 +2950,9 @@ void SpectrumOverlayMenu::applyAutoRfGainToSlider(bool autoOn)
 
 void SpectrumOverlayMenu::setAutoRfGainAvailable(bool available)
 {
+    if (m_frontEndIndicator) {
+        m_frontEndIndicator->setVisible(available);
+    }
     if (m_autoRfGainCheck) {
         m_autoRfGainCheck->setVisible(available);
     }
@@ -2936,6 +2961,13 @@ void SpectrumOverlayMenu::setAutoRfGainAvailable(bool available)
     // operator's only gain control dead with nothing on screen explaining it.
     if (!available) {
         applyAutoRfGainToSlider(false);
+    }
+}
+
+void SpectrumOverlayMenu::setFrontEndOverload(const AetherSDR::FrontEndOverload& state)
+{
+    if (m_frontEndIndicator) {
+        m_frontEndIndicator->setState(state);
     }
 }
 

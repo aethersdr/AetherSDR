@@ -1046,6 +1046,14 @@ private:
     bool m_autoRfGainWanted = false;
     AetherSDR::hl2::AutoGainState m_autoGainState;
     AetherSDR::hl2::AutoGainConfig m_autoGainConfig;
+
+    // RFC #5535 approved the loop on the condition that it is VISIBLE, so this
+    // is not a diagnostic: it is half of what makes the control shippable. See
+    // FrontEndOverload.h. Gated on change against the last published value,
+    // because the inputs move at 10 Hz and an indicator that repaints forever
+    // is a distraction rather than a signal.
+    void publishFrontEndOverload();
+    AetherSDR::FrontEndOverload m_lastFrontEndOverload;
     // The name of the configuration above, for the health row and for the
     // reset path. The config struct cannot answer "which law is this" -- it is
     // just numbers -- and inferring it back from the numbers would be a second

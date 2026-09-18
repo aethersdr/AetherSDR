@@ -5493,6 +5493,20 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             m->setAutoRfGainEnabled(autoGain && autoGain->isArmed());
         }
     });
+    // THE READOUT HALF. RFC #5535 approved the loop above on the condition that
+    // both the clipping and the loop's OWN ACTION are visible, so this is not
+    // optional decoration: without it the control is not the one that was
+    // approved. Pushed on change from the model rather than polled, and seeded
+    // immediately below so a panadapter opened after the radio has already
+    // spoken does not sit blank.
+    connect(&m_radioModel, &RadioModel::frontEndOverloadChanged,
+            menu, [sw](const AetherSDR::FrontEndOverload& state) {
+        if (auto* m = sw->overlayMenu()) {
+            m->setFrontEndOverload(state);
+        }
+    });
+    menu->setFrontEndOverload(m_radioModel.frontEndOverload());
+
     connect(menu, &SpectrumOverlayMenu::loopAToggled,
             this, [this, applet](bool on) {
         m_radioModel.sendCommand(

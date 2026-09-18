@@ -1285,6 +1285,16 @@ void RadioModel::setupBackend(const QString& family)
     // dropped on the floor — the HL2 S-meter was correct for a while before
     // anyone noticed it never reached the UI.
     //
+    // Straight through, and deliberately not stored beyond the last value: the
+    // indicator is a live readout of what the radio is doing NOW, and a stale
+    // copy surviving a disconnect would show a reassuring green for a radio
+    // that is no longer there. resetFrontEndOverload() below clears it.
+    connect(m_backend.get(), &IRadioBackend::frontEndOverloadChanged, this,
+            [this](const AetherSDR::FrontEndOverload& s) {
+        m_frontEndOverload = s;
+        emit frontEndOverloadChanged(s);
+    });
+
     // meterId is "SOURCE:NAME" (e.g. "TX:FWDPWR"), matching MeterDef's own
     // source/name pair rather than inventing a second naming scheme.
     connect(m_backend.get(), &IRadioBackend::meterUpdate, this,
@@ -1940,6 +1950,13 @@ void RadioModel::teardownBackend()
     }
     expirePendingCallbacks(QStringLiteral("the radio connection was replaced"));
     m_sliceLifecycleCommandSinkForTest = {};
+    // Back to "no reading" rather than whatever the last radio said. A lamp
+    // left showing Clean for a radio that is gone is worse than one showing
+    // nothing, because it answers a question nobody can currently ask.
+    if (m_frontEndOverload != AetherSDR::FrontEndOverload {}) {
+        m_frontEndOverload = {};
+        emit frontEndOverloadChanged(m_frontEndOverload);
+    }
     m_memoryRefreshActive = false;
     m_memoryImportFailures = 0;
     // Drop the backend and everything it owns (RadioConnection, PanadapterStream

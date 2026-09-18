@@ -7,6 +7,7 @@
 #include "core/backends/MemoryDelta.h"  // applyMemoryChanges payload (aetherd 2.3)
 #include "core/backends/ProfileDelta.h" // applyProfileChanges payload (aetherd 2.3)
 #include "core/backends/RadioDelta.h"   // applyRadioChanges payload (aetherd 2.3)
+#include "core/backends/FrontEndOverload.h"
 #include "core/backends/RadioCapabilities.h" // backendCapabilities() return type
 #include "core/backends/IRadioBackend.h"     // backendHealthSnapshot() return type
 #include "core/backends/OfflineHealthSource.h" // health that survives disconnection
@@ -61,6 +62,7 @@
 namespace AetherSDR {
 class TxController;
 class IAutoRfGainControl;
+
 
 inline bool wsprSeamAudioRouteReady(bool armed, const RadioCapabilities& capabilities)
 {
@@ -487,6 +489,15 @@ public:
     //
     // BORROWED, NEVER CACHED — the pointer dies with the backend.
     IAutoRfGainControl* autoRfGain() const;
+
+    // The last front-end state the backend published, for a view that is built
+    // or shown after the radio has already said something. Default-constructed
+    // (Unobserved) before any radio speaks and after a disconnect, which is the
+    // honest answer rather than a stale Clean.
+    [[nodiscard]] AetherSDR::FrontEndOverload frontEndOverload() const
+    {
+        return m_frontEndOverload;
+    }
     // The filter widths the radio declares, narrowest first, or an EMPTY list
     // when it declares none. Empty is the permissive answer here — it means
     // "use the operator's own presets", which is what every radio without a
@@ -1163,6 +1174,10 @@ public:
     void setPanNoiseFloorEnable(bool on);
 
 signals:
+    // RFC #5535's visibility condition, republished for the GUI. See
+    // core/backends/FrontEndOverload.h.
+    void frontEndOverloadChanged(const AetherSDR::FrontEndOverload& state);
+
     void infoChanged();
     void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
@@ -1952,6 +1967,7 @@ private:
     static constexpr int kBackendDefaultWfRate = 100;
     // Sub-models — value members on main thread (#502)
     MeterModel       m_meterModel;
+    AetherSDR::FrontEndOverload m_frontEndOverload;
     // Epoch ms of the last arrival of each class; 0 = never. Written on the
     // hot path, so they are plain scalars rather than anything that allocates.
     qint64 m_lastSpectrumMs{0};

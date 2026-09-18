@@ -5496,6 +5496,48 @@ const char* autoGainReasonText(AetherSDR::hl2::AutoGainReason r)
 }
 }  // namespace
 
+// RFC #5535's visibility condition, published. Emitted from the two places the
+// inputs move -- the 10 Hz telemetry window and the control tick -- and gated on
+// CHANGE, because an indicator that repaints at 10 Hz forever is a distraction
+// rather than a signal, and a screen reader driven at that rate is unusable.
+void Hl2Backend::publishFrontEndOverload()
+{
+    AetherSDR::FrontEndOverload s;
+
+    // LEVEL, from the family's own classifier rather than a second opinion.
+    // Hl2AutoGainPolicy already decides what "clipping occasionally" means on
+    // this front end, and two thresholds for one question is how a readout and
+    // a regulator end up disagreeing in front of an operator.
+    using W = AetherSDR::hl2::AutoGainWindow;
+    const W w = AetherSDR::hl2::classifyWindow(
+        m_adcWindowSamples, m_adcOverloadWindowSamples, m_autoGainConfig);
+    switch (w) {
+    case W::Void:     s.level = AetherSDR::FrontEndLevel::Unobserved; break;
+    case W::Clean:    s.level = AetherSDR::FrontEndLevel::Clean;      break;
+    case W::Marginal: s.level = AetherSDR::FrontEndLevel::Marginal;   break;
+    case W::Hot:      s.level = AetherSDR::FrontEndLevel::Hot;        break;
+    }
+
+    // AT FLOOR OUTRANKS THE WINDOW. Still clipping with the loop as deep as it
+    // is allowed to go is the one state no amount of gain management fixes, and
+    // it must not read as an ordinary Hot window that the regulator is busy
+    // handling -- it is precisely the case where it cannot.
+    if (m_autoGainReason == AetherSDR::hl2::AutoGainReason::AtFloor) {
+        s.level = AetherSDR::FrontEndLevel::AtFloor;
+    }
+
+    s.autoArmed = m_autoRfGainEnabled;
+    s.autoOffsetDb = m_autoGainState.offsetDb;
+    s.reason = QString::fromUtf8(autoGainReasonText(m_autoGainReason));
+
+    if (s == m_lastFrontEndOverload) {
+        return;
+    }
+    m_lastFrontEndOverload = s;
+    emit frontEndOverloadChanged(s);
+}
+
+
 IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 {
     HealthSnapshot h;
@@ -7113,6 +7155,7 @@ void Hl2Backend::stepAutoGain(const Hl2Telemetry& t)
     const AutoGainAction a = autoGainStep(m_autoGainState, obs, m_autoGainConfig);
     m_autoGainState = a.next;
     m_autoGainReason = a.reason;
+    publishFrontEndOverload();
     if (a.warnFloorOnce) {
         qWarning().noquote()
             << QStringLiteral(
@@ -7665,6 +7708,7 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
     m_adcWindowSamples = t.adcSamples;
     m_adcOverloadWindowSamples = t.adcOverloadSamples;
     m_adcWindowMs = t.adcWindowMs;
+    publishFrontEndOverload();
     if (t.adcSamples > 0) {
         m_adcTotalSamples += static_cast<quint64>(t.adcSamples);
         m_adcTotalOverloadSamples += static_cast<quint64>(t.adcOverloadSamples);
