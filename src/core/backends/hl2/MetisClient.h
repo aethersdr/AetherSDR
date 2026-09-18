@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "core/backends/hl2/Hl2ControlRequest.h"
-#include "core/backends/hl2/Hl2BandMemoryPolicy.h"  // the AD9866 gain range
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 class QUdpSocket;

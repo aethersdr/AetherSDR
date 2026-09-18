@@ -9,7 +9,7 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2AdcPairing.h"
-#include "core/backends/hl2/Hl2BandMemoryPolicy.h"  // the AD9866 gain range
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/Hl2CapabilityAnnouncer.h"
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
@@ -807,20 +807,6 @@ private:
     // much the UI would like them to be. Four panadapters on four bands share
     // one preamp setting and one filter selection; see applyBandFilter() for
     // what happens when they disagree.
-    // 0 dB, AND THE OLD +20 WAS NEVER DELIVERING +20.
-    //
-    // ccRxGain encodes +20 dB as code 32, and the gateware decodes
-    // `code & 0x1F` -- so code 32 replayed as code 0, which is -12 dB. A fresh
-    // connect with no stored gain asked for the top of the range and got the
-    // BOTTOM of it, with every readout reporting +20.
-    //
-    // So there is no "preserve the existing behaviour" option that is also
-    // honest: the existing behaviour was an accident of the fold. Restoring the
-    // stated intent (+19, the real ceiling) would raise receive gain by 31 dB
-    // on every fresh connect -- loud audio and a plausible ADC overload, for
-    // operators who changed nothing. 0 dB is chosen instead: a neutral start
-    // that is inside the range, means what it says, and leaves the loud
-    // direction to the operator or to an auto-gain loop.
     int m_lnaGainDb = hl2::kLnaDefaultGainDb;
     // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
     // rather than a real selection — kOcNone (0x00) is a legitimate value
@@ -944,7 +930,7 @@ private:
     RestoredRadioState m_restoredState;
     QMap<QString, int> m_lnaDbByBand;
     QMap<QString, int> m_driveByBand;
-    int m_lnaDefaultDb = hl2::kLnaDefaultGainDb;  // the same one constant
+    int m_lnaDefaultDb = hl2::kLnaDefaultGainDb;
     // The connect param pinned a gain that the start band did not have stored.
     // Live value honoured, persistence refused: see Hl2BandMemoryPolicy.h.
     // Cleared when the operator changes gain or leaves the start band.
@@ -1175,48 +1161,11 @@ private:
     // Centre of SliceModel's 0..100 balance range.
     static constexpr int kAudioPanCentre = 50;
 
-    // AD9866 LNA gain limits, in dB.
-    //
-    // THE CEILING IS THE GATEWARE'S, NOT THE REGISTER'S, and an earlier version
-    // of this comment had that exactly backwards: it said these were "the
-    // register's own limits rather than a policy choice". The C&C field
-    // ccRxGain() writes IS six bits (C4 = 0x40 | (dB + 12), so dB +48 encodes
-    // as code 60 and fits). The gateware that reads it is not.
-    //
-    // `ad9866.v`, and again `ad9866ctrl.v`'s CMD_RXGAIN, decode `code & 0x1F`.
-    // Codes 32..60 therefore REPLAY 0..28. Asking for +48 dB does not clip at
-    // the top of the range and does not fail: it silently delivers +16 dB, and
-    // the gain is NON-MONOTONIC in between — winding the slider up from +19
-    // walks the gain back DOWN through the bottom of its own range.
-    //
-    // This is design intent, not a defect: softerhardware, on
-    // softerhardware/Hermes-Lite2#177, "design intent to work with older
-    // protocol 1 software which only had 5 bits for gain". Measured on ON8ST's
-    // board (gateware 74.2) and filed there; the fold is confirmed, the board
-    // count is one.
-    //
-    // SO THE CEILING IS +19 dB — code 31, the last code before the fold. That
-    // is the whole of what this hardware can express, and stopping there makes
-    // the slider's travel mean what it says.
-    //
-    // WHY THIS IS NOT COSMETIC. Hl2Backend::applyLnaGainDb hands the REQUESTED
-    // value to Hl2DbReference::setLnaGainDb, and the dBm axis is corrected by
-    // `m_referenceLnaGainDb - m_lnaGainDb`. Above +19 dB requested, the applied
-    // gain is up to 32 dB lower than the value the correction uses, so every
-    // S-meter and panadapter reading in that region is wrong by that
-    // difference. With the ceiling here, requested and applied cannot diverge,
-    // and the reference is correct by construction rather than by luck.
-    //
-    // NOT CLAMPED TO +16. Codes 28..31 sit within 0.07 dB of one another on the
-    // one board measured, so the top 3 dB of this range is nearly flat — but it
-    // is monotonic and it is real, and discarding measurable range on a
-    // single-board measurement would be a policy choice dressed as a limit.
-    // The fold is the hardware's line; the flatness is a caveat for whoever
-    // sizes an AGC against it.
-    // ALIASES, not a second declaration. Hl2BandMemoryPolicy.h owns these so
-    // the suite can read the real values from a Qt-free header instead of
-    // re-typing them -- which is how hl2_band_memory_test went on exercising a
-    // ceiling of 48 after this one moved to 19 (#5752 review).
+    // AD9866 LNA gain limits, in dB. These are the range ccRxGain() encodes
+    // (C4 = 0x40 | (dB + 12), a 6-bit field), so they are the register's own
+    // limits rather than a policy choice — clamping anywhere else would let a
+    // value be silently truncated on the wire instead of stopping at the end of
+    // the slider's travel.
     static constexpr int kLnaGainMinDb  = hl2::kLnaGainMinDb;
     static constexpr int kLnaGainMaxDb  = hl2::kLnaGainMaxDb;
     static constexpr int kLnaGainStepDb = hl2::kLnaGainStepDb;

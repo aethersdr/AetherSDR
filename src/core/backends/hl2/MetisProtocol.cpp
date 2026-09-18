@@ -1,4 +1,5 @@
 #include "core/backends/hl2/MetisProtocol.h"
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 
 #include <cmath>
 
@@ -143,24 +144,9 @@ Cc ccRx1Freq(std::uint32_t hz) noexcept
 
 Cc ccRxGain(int db) noexcept
 {
-    // CLAMPED AT 31, NOT 60, AND THE DIFFERENCE IS THE WHOLE POINT. The field
-    // is six bits and 60 fits in it; the GATEWARE decodes `code & 0x1F`
-    // (ad9866.v, and again ad9866ctrl.v's CMD_RXGAIN), so codes 32..60 replay
-    // 0..28. A clamp at 60 does not limit the gain, it WRAPS it: the caller
-    // asks for more and silently gets less, non-monotonically.
-    //
-    // Design intent rather than a bug -- softerhardware/Hermes-Lite2#177,
-    // "design intent to work with older protocol 1 software which only had 5
-    // bits for gain" -- which is exactly why clamping belongs here rather than
-    // being treated as a fault to report.
-    //
-    // Hl2Backend::kLnaGainMaxDb is +19, the dB face of this same code 31, so a
-    // caller coming through the backend never reaches this clamp. It is kept
-    // because this function is reachable without that backend and a wrap is a
-    // far worse failure than a stop.
-    int code = db + 12;                                  // -12 dB -> 0, +19 dB -> 31
-    if (code < 0) code = 0;
-    if (code > 31) code = 31;
+    // Clamp before adding the bias, which would overflow for INT_MAX.
+    // Bit 6 selects the native six-bit path in ad9866.v (gateware 883a338).
+    const int code = clampDb(kLnaGainMinDb, db, kLnaGainMaxDb) - kLnaGainMinDb;
     return {kC0AdcGain, 0x00, 0x00, 0x00, static_cast<std::uint8_t>(0x40 | code)};
 }
 

@@ -35,71 +35,12 @@ constexpr int clampDb(int minDb, int v, int maxDb)
     return v < minDb ? minDb : (v > maxDb ? maxDb : v);
 }
 
-// ── THE AD9866's RANGE, DECLARED HERE AND NOWHERE ELSE ────────────────────
-//
-// Hl2Backend::kLnaGainMinDb/kLnaGainMaxDb/kLnaDefaultGainDb alias these rather
-// than restating them, and the suite reads THESE rather than a hand-typed copy.
-// That is not tidiness: hl2_band_memory_test carried its own `kMax = 48` and
-// went on passing when the backend's ceiling moved to 19, asserting a range the
-// hardware no longer has -- the exact failure this header's opening paragraph
-// names. Caught by aethersdr-agent on #5752.
-//
-// +19 is where the register stops meaning what it says. ccRxGain encodes dB as
-// `code = db + 12` and the gateware decodes five bits, so code 32 (which is
-// +20 dB asked for) is read as code 0 and delivers -12 dB. 31 is the last code
-// that survives the decode, and 31 - 12 = 19.
-constexpr int kLnaGainMinDb     = -12;
-constexpr int kLnaGainMaxDb     = 19;
-constexpr int kLnaGainStepDb    = 1;
-constexpr int kLnaDefaultGainDb = 0;
-
-// WHAT A STORED GAIN ABOVE THE CEILING MEANT WHEN IT WAS WRITTEN.
-//
-// Lowering the ceiling from 48 to 19 re-points every value an operator already
-// has on disk in 20..48, and CLAMPING them is the one option that changes what
-// the hardware does without telling anyone: a stored 20 was being applied as
-// -12 dB (code 32 folds to code 0), and clamping it to 19 would hand that
-// operator +31 dB on the first connect after an update -- precisely the "loud
-// audio and a plausible ADC overload, for operators who changed nothing" that
-// Hl2Backend.h gives as its reason for NOT restoring +19 as the fresh default.
-//
-// So a legacy value is MIGRATED to what the radio was actually doing with it,
-// through the old path exactly: clamp the code at 60 the way the old ccRxGain
-// did, fold it the way the gateware does, and read it back as dB. The result
-// is always inside [-12, 19] because `(code & 0x1F) - 12` is.
-//
-//   stored 20 -> code 32 -> 0  -> -12 dB      stored 32 -> code 44 -> 12 -> 0 dB
-//   stored 24 -> code 36 -> 4  ->  -8 dB      stored 48 -> code 60 -> 28 -> +16 dB
-//
-// The operator hears exactly what they heard before the update, and the slider
-// finally agrees with it. That is the migrate idiom the restore loader already
-// uses for the pre-#4914 CW passband, rather than the drop idiom it uses for an
-// out-of-range mic level -- dropping would be right if the stored value were
-// meaningless, and it is not: it is a faithful record of a number the radio
-// folded.
-constexpr int migrateStoredLnaDb(int storedDb)
-{
-    if (storedDb >= kLnaGainMinDb && storedDb <= kLnaGainMaxDb) {
-        return storedDb;
-    }
-    if (storedDb < kLnaGainMinDb) {
-        // Never reachable through the old encode -- codes are clamped at 0 --
-        // so there is nothing to reconstruct and the floor is the honest answer.
-        return kLnaGainMinDb;
-    }
-    // WIDENED BEFORE THE ADD, not clamped after it. `storedDb + 12` overflows
-    // for storedDb near INT_MAX, and signed overflow is undefined rather than
-    // wrapping -- so the clamp that looks like it bounds the input runs on a
-    // value the standard says does not exist. Reproduced under UBSan by
-    // aethersdr-agent on #5752 with migrateStoredLnaDb(INT_MAX).
-    //
-    // No stored document can hold INT_MAX; that is not the point. A pure
-    // function on an int should be total on an int, because the next caller is
-    // the one that will not have checked.
-    const long long raw = static_cast<long long>(storedDb) + 12;
-    const int oldCode = static_cast<int>(raw < 0 ? 0 : (raw > 60 ? 60 : raw));
-    return (oldCode & 0x1F) - 12;
-}
+// Native HL2 gain format: address 0x0a bit 6 selects the six-bit AD9866
+// code, covering -12..+48 dB. See Protocol.md and ad9866.v at 883a338.
+constexpr int kLnaGainMinDb = -12;
+constexpr int kLnaGainMaxDb = 48;
+constexpr int kLnaGainStepDb = 1;
+constexpr int kLnaDefaultGainDb = 20;
 
 // What a session comes up on for the start band.
 struct ConnectLna {
@@ -122,27 +63,11 @@ inline ConnectLna connectLna(bool haveRestoredState,
     // pins the gain outright, and a stored entry must not silently ignore what
     // the caller asked for. This header does not reverse it.
     if (paramPresent) {
-        // CLAMPED, WHICH IT WAS NOT. The comment here used to say "preserve the
-        // pre-existing explicit-parameter behavior; this PR changes
-        // persistence, not the connect parameter's range handling" -- a
-        // deliberate deferral, and harmless while the ceiling was +48, because
-        // ccRxGain's own clamp caught anything higher on the way to the wire.
-        //
-        // It stopped being harmless when the ceiling became +19 (the last code
-        // before the AD9866's `code & 0x1F` fold). An unclamped param then PINS
-        // a value the radio will never apply: connect with lnaGainDb=20 and the
-        // session pins 20 while the hardware runs 19, so the pinned value and
-        // the live value disagree for the whole session. An operator who then
-        // writes "the pinned value" writes something the pin does not
-        // recognise.
-        //
-        // Clamping here makes the pin a statement about the radio rather than
-        // about the request. The comparison below uses the CLAMPED value for
-        // the same reason: a param of +48 and a stored +19 are the same applied
-        // gain and must not be read as a divergence worth pinning.
+        // The reported gain and session pin must use the same bounded value
+        // as the wire encoder. Compare after clamping so an out-of-range
+        // request equal to the stored endpoint does not create a false pin.
         out.liveDb = clampDb(minDb, paramDb, maxDb);
-        out.sessionPin =
-            haveRestoredState && hasStoredEntry && out.liveDb != storedDb;
+        out.sessionPin = haveRestoredState && hasStoredEntry && out.liveDb != storedDb;
         return out;
     }
     if (haveRestoredState) {

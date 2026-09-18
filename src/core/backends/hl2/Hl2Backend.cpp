@@ -5512,8 +5512,8 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_haveRestoredState = false;
     m_lnaDbByBand.clear();
     m_driveByBand.clear();
-    m_lnaDefaultDb = AetherSDR::hl2::kLnaDefaultGainDb;
-    m_lnaGainDb    = AetherSDR::hl2::kLnaDefaultGainDb;
+    m_lnaDefaultDb = hl2::kLnaDefaultGainDb;
+    m_lnaGainDb = hl2::kLnaDefaultGainDb;
     m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default
@@ -5623,24 +5623,16 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // (RestoredRadioState.h). Values clamp to the hardware's own ranges.
     const QJsonObject rfGain =
         state.extension.value(QStringLiteral("rfGain")).toObject();
-    // MIGRATED, not clamped. A value stored above the new +19 ceiling was
-    // written when the ceiling was +48, and the radio was folding it: a stored
-    // 20 was applied as -12 dB. Clamping it to 19 would hand that operator
-    // +31 dB on their first connect after an update -- the exact harm
-    // Hl2Backend.h's m_lnaGainDb comment refuses to inflict on a fresh connect,
-    // delivered instead to everyone who already has a setting. See
-    // Hl2BandMemoryPolicy.h::migrateStoredLnaDb for the arithmetic; this is the
-    // same migrate idiom the CW passband above uses, on the same grounds -- the
-    // stored number is a faithful record of something the radio folded, not a
-    // meaningless one to drop.
     if (rfGain.contains(QStringLiteral("defaultDb")))
-        m_lnaDefaultDb = AetherSDR::hl2::migrateStoredLnaDb(
-            rfGain.value(QStringLiteral("defaultDb")).toInt());
+        m_lnaDefaultDb = qBound(kLnaGainMinDb,
+                                rfGain.value(QStringLiteral("defaultDb")).toInt(),
+                                kLnaGainMaxDb);
     const QJsonObject lnaByBand =
         rfGain.value(QStringLiteral("lnaDbByBand")).toObject();
     for (auto it = lnaByBand.constBegin(); it != lnaByBand.constEnd(); ++it)
-        m_lnaDbByBand.insert(
-            it.key(), AetherSDR::hl2::migrateStoredLnaDb(it.value().toInt()));
+        m_lnaDbByBand.insert(it.key(),
+                             qBound(kLnaGainMinDb, it.value().toInt(),
+                                    kLnaGainMaxDb));
 
     const QJsonObject txSetpoints =
         state.extension.value(QStringLiteral("txSetpoints")).toObject();

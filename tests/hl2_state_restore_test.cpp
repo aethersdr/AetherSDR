@@ -420,13 +420,7 @@ int main(int argc, char** argv)
                       .toObject()
                       .isEmpty(),
               "radio A's per-band LNA map does not survive the swap");
-        // 0, not 20. The property under test is that a same-family radio swap
-        // resets the default to whatever Hl2Backend constructs with -- the
-        // VALUE is incidental to that and moved when the constructed default
-        // did. It was +20, which ccRxGain encoded as code 32 and the gateware
-        // decoded as code 0 = -12 dB, so the old literal pinned a default that
-        // asked for the top of the range and delivered the bottom.
-        check(rfGain.value(QStringLiteral("defaultDb")).toInt() == 0,
+        check(rfGain.value(QStringLiteral("defaultDb")).toInt() == 20,
               "the LNA default resets to the virgin construction value");
         check(!snap.extension.value(QStringLiteral("txSetpoints"))
                        .toObject()

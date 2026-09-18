@@ -10,7 +10,6 @@
 // This asserts the property that matters: a signal of CONSTANT strength reports
 // a CONSTANT dBm across a gain change.
 
-#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/Hl2DbReference.h"
 
 #include <cmath>
@@ -56,11 +55,8 @@ int main()
     check(near(ref.toDbm(-13.0 - 12.0), reported),
           "a 12 dB gain cut does not move the reported dBm");
 
-    // COMMANDED 48, not 48 dB of gain: the AD9866 folds code & 0x1F above code
-    // 31, so this applies 16 dB on real hardware (upstream #177). What is
-    // asserted here is the ARITHMETIC — given the gain it is told about, the
-    // reference removes it exactly. The gap between the commanded code and the
-    // applied gain is a seam problem, named in the class header.
+    // The documented native range includes +48. This tests the commanded
+    // gain arithmetic; actual board response needs independent measurement.
     ref.setLnaGainDb(48.0);
     check(near(ref.toDbm(-13.0 + 48.0), reported),
           "the reference removes whatever gain it is told about, exactly");
@@ -116,9 +112,9 @@ int main()
     }
 
     // The commanded limits, where referring saturates. A negative ceiling would
-    // be the AGC attenuating a signal it was asked to amplify. 48 is a
-    // commanded code rather than 48 dB of gain (see above and the class
-    // header); the clamp is what is under test, not the board's response.
+    // be the AGC attenuating a signal it was asked to amplify. 48 is
+    // the maximum documented commanded gain; this tests the arithmetic clamp,
+    // not the board's analog response.
     agc.setLnaGainDb(48.0);
     check(agc.agcCeilingDb(kDefaultThresholdUnits) >= 0.0,
           "the referred ceiling never goes negative at full LNA gain");
@@ -128,12 +124,9 @@ int main()
     // Referring UPWARD past the slider's nominal 60 dB top is correct, not an
     // overrun: an operator 12 dB down on the LNA needs 12 dB more AGC gain to
     // hear the same signal at the same level.
-    // 12, not 32: the reference default is now 0 rather than 20, so the cut
-    // from the reference to the AD9866 floor is 12 dB. The old 32 came from a
-    // reference that no longer matches the backend -- blocker 2's own subject.
     agc.setLnaGainDb(-12.0);                            // the AD9866 floor, real
-    check(near(agc.agcCeilingDb(100), 60.0 + 12.0),
-          "a 12 dB LNA cut refers AGC-T 100 above the slider's nominal top");
+    check(near(agc.agcCeilingDb(100), 60.0 + 32.0),
+          "a 32 dB LNA cut refers AGC-T 100 above the slider's nominal top");
     check(agc.agcCeilingDb(100) <= Hl2DbReference::kAgcCeilingDbMax,
           "the referred ceiling stays inside WDSP's own maximum");
 
@@ -148,66 +141,20 @@ int main()
     check(near(agc.offsetDb(), -60.0),
           "...while it does move the display offset");
 
-    // ── #5752 blocker 2: the reference transition, owned HERE ─────────────
-    //
-    // TWO POPULATIONS MOVE, and they move for different reasons. Both were
-    // invisible until aethersdr-agent asked what the migration does to the
-    // things that READ the gain rather than to the gain itself.
-
-    // (a) EVERY FRESH CONNECT. kDefaultLnaGainDb seeds both the live and the
-    // reference gain, so if it diverges from Hl2Backend's own constructed
-    // default the offset is non-zero before the operator has touched anything.
-    {
-        Hl2DbReference fresh;
-        check(near(fresh.lnaOffsetDb(), 0.0),
-              "fresh: the reference and the live gain start equal, so the AGC "
-              "ceiling is the plain 0.6-per-unit map");
-        check(near(fresh.agcCeilingDb(kDefaultThresholdUnits), 39.0),
-              "fresh: AGC-T 65 is still the 39 dB measured clean on hardware");
-        check(near(static_cast<double>(AetherSDR::hl2::kLnaDefaultGainDb),
-                   Hl2DbReference::kDefaultLnaGainDb),
-              "fresh: the reference default IS the backend default, read from "
-              "the one constant rather than agreeing by coincidence");
-    }
-
-    // (b) AN OPERATOR WITH A STORED GAIN ABOVE +19, and this is the part the
-    // review framed as a regression and is in fact a CORRECTION.
-    //
-    // A stored 20 was COMMANDED as 20 and APPLIED as -12: code 32 folds to code
-    // 0, measured at -44.55 dB on this board (d103). Hl2DbReference subtracts
-    // the COMMANDED gain, so before the migration it subtracted 20 from a
-    // signal path carrying -12 -- the displayed dBm was wrong by 32 dB and the
-    // AGC chased 32 dB less far than the operator asked for.
-    //
-    // Migrating the stored value to what the hardware was doing does move both
-    // by 32 dB. It moves them onto the truth. What the PR owes is not a smaller
-    // step but an honest one: the step is asserted here so it cannot happen
-    // silently, and it is stated in the PR body.
-    {
-        const int stored = 20;
-        const int applied = AetherSDR::hl2::migrateStoredLnaDb(stored);
-        check(applied == -12,
-              "migrated: a stored +20 becomes the -12 dB the AD9866 was applying");
-
-        Hl2DbReference before;                 // what the operator saw yesterday
-        before.setLnaGainDb(static_cast<double>(stored));
-        Hl2DbReference after;                  // what they see after the update
-        after.setLnaGainDb(static_cast<double>(applied));
-
-        check(near(after.offsetDb() - before.offsetDb(), 32.0),
-              "migrated: the dBm axis moves +32 dB — the error it had been "
-              "carrying, not a new one");
-        check(near(after.agcCeilingDb(kDefaultThresholdUnits)
-                       - before.agcCeilingDb(kDefaultThresholdUnits), 32.0),
-              "migrated: the AGC ceiling moves by the same 32 dB, so the two "
-              "terms stay consistent with each other");
-
-        // AND NOBODY ELSE MOVES. An operator inside the honest range sees
-        // nothing change, which is what makes the step above attributable.
-        for (const int inRange : {-12, 0, 10, 19}) {
-            check(AetherSDR::hl2::migrateStoredLnaDb(inRange) == inRange,
-                  "migrated: a stored value inside the range is untouched");
-        }
+    // Compatibility: preserve the pre-change reference, offset and AGC
+    // ceiling for every documented stored gain, including values above +19.
+    check(Hl2DbReference::kDefaultLnaGainDb == 20.0,
+          "fresh profiles retain the existing +20 dB reference");
+    for (int stored = -12; stored <= 48; ++stored) {
+        Hl2DbReference after;
+        const auto seed = AetherSDR::hl2::connectLna(
+            true, true, stored, false, 0, AetherSDR::hl2::kLnaDefaultGainDb,
+            AetherSDR::hl2::kLnaGainMinDb, AetherSDR::hl2::kLnaGainMaxDb);
+        after.setLnaGainDb(seed.liveDb);
+        const double oldOffset = 20.0 - stored;
+        check(near(after.offsetDb(), oldOffset), "stored gain preserves the old display reference");
+        check(near(after.agcCeilingDb(65), 39.0 + oldOffset),
+              "stored gain preserves the old AGC ceiling at 65");
     }
 
     if (g_failures == 0)

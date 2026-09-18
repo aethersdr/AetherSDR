@@ -151,6 +151,24 @@ reference-comparison step up front would have skipped all of them.
 
 ## 4. Protocol facts (HPSDR Protocol 1 / Metis)
 
+### Native LNA gain and validation
+
+AetherSDR sets address `0x0a` bit 6 and uses the native six-bit gain code:
+`C4 = 0x40 | (gainDb + 12)`, from −12 dB (code 0) to +48 dB (code 60).
+The [gateware at 883a338](https://github.com/softerhardware/Hermes-Lite2/blob/883a338/gateware/rtl/ad9866.v#L134)
+selects all six bits in this mode. The connect parameter is clamped to this
+range before the live value, session pin, display reference and wire command
+are seeded; the encoder also clamps before adding the bias to avoid integer
+overflow. The existing default and reference remain +20 dB, and stored gains
+are not reinterpreted.
+
+A gain fold was reported on one unit in
+[upstream issue #177](https://github.com/softerhardware/Hermes-Lite2/issues/177).
+Its scope and mechanism remain unresolved against the native command path.
+That report does not establish a universal five-bit limit; a future workaround
+needs evidence identifying affected hardware and validation of both display
+calibration and AGC behavior.
+
 ### The C&C bank we were missing
 
 `MetisClient` sent three banks: config `0x00`, RX1 frequency `0x04`, LNA gain
