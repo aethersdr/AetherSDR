@@ -212,7 +212,7 @@ ChannelStripPresets::ChannelStripPresets(AudioEngine* engine,
     }
 }
 
-QString ChannelStripPresets::filePath() const
+QString ChannelStripPresets::legacyLibraryPath()
 {
     // Sibling of AetherSDR.settings under XDG_CONFIG_HOME.  GenericConfigLocation
     // + "/AetherSDR" matches the AppSettings convention and avoids the
@@ -222,6 +222,11 @@ QString ChannelStripPresets::filePath() const
         QStandardPaths::GenericConfigLocation) + "/AetherSDR";
     QDir().mkpath(dir);
     return dir + "/ChannelStrip.settings";
+}
+
+QString ChannelStripPresets::filePath() const
+{
+    return legacyLibraryPath();
 }
 
 bool ChannelStripPresets::loadFromDisk()
@@ -442,26 +447,10 @@ void ChannelStripPresets::applyPresetJson(const QJsonObject& preset)
         ChannelStripPresets::applyRxJson(m_engine, preset.value("rx").toObject());
     }
 
-    // Persist the new engine state back to AppSettings so the values
-    // survive an app restart.  Without this, the per-module setters
-    // above only update in-memory state — on next launch the engine
-    // would reload whatever AppSettings had BEFORE the preset was
-    // applied, making it look like the preset never stuck.
-    m_engine->saveClientGateSettings();
-    m_engine->saveClientEqSettings();
-    m_engine->saveClientCompSettings();
-    m_engine->saveClientDeEssSettings();
-    m_engine->saveClientTubeSettings();
-    m_engine->saveClientPuduSettings();
-    m_engine->saveClientReverbSettings();
-    m_engine->saveClientFinalLimiterSettings();
-    // RX-side persistence (#2425).  saveClientEqSettings above already
-    // handles both Rx and Tx EQ; the rest are independent.
-    m_engine->saveClientGateRxSettings();
-    m_engine->saveClientCompRxSettings();
-    m_engine->saveClientTubeRxSettings();
-    m_engine->saveClientPuduRxSettings();
-    m_engine->saveClientRxChainOrder();
+    // No save calls here: applyTxJson() and applyRxJson() each persist their
+    // own half at their tail, so repeating all thirteen wrote every module to
+    // the SQLite store twice for one preset recall. That duplication came in
+    // with the extraction of the two halves into shared functions.
 }
 
 // Capture and apply for the RX half of a preset, shared with the AetherRX

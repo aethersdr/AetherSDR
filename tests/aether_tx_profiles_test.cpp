@@ -5,6 +5,7 @@
 
 #include "TestSettingsProfile.h"
 #include "core/AetherTxProfiles.h"
+#include "core/ChannelStripPresets.h"
 #include "core/AudioEngine.h"
 #include "core/ClientComp.h"
 #include "core/AppSettings.h"
@@ -47,6 +48,9 @@ private slots:
     void theStoredCopyCarriesNoNameOfItsOwn();
     void aRefusedWriteKeepsTheLibraryAndReportsFailure();
     void roundTripsTheLiveTransmitChain();
+    void aReceiveExportIsRefusedByKind();
+    void legacyPresetsMigrateOnFirstOpen();
+    void migrationDoesNotUndoADeliberateDelete();
 
 private:
     QTemporaryDir m_home;
@@ -278,9 +282,102 @@ void AetherTxProfilesTest::roundTripsTheLiveTransmitChain()
     QCOMPARE(chain.at(1), AudioEngine::TxChainStage::Gate);
 }
 
+// The channel-strip library this store migrates from: both directions in one
+// preset, TX at the top level and RX nested under "rx".
+static bool writeLegacyLibrary(const QJsonObject& presets)
+{
+    QFile f(ChannelStripPresets::legacyLibraryPath());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
+    const QJsonObject root{ { "version", 1 }, { "presets", presets } };
+    f.write(QJsonDocument(root).toJson());
+    return true;
+}
+
+static void removeTxLibrary()
+{
+    QFile::remove(SettingsPaths::configDir() + "/AetherTxProfiles.json");
+}
+
+void AetherTxProfilesTest::aReceiveExportIsRefusedByKind()
+{
+    // The two windows' exports overlap almost completely — same stage keys,
+    // overlapping chain names — so the stage-sniffing that lets a hand-written
+    // file import would happily take a receive profile and write its values
+    // into the transmit chain. "kind" is what tells them apart.
+    const QString path = m_home.path() + "/rx-export.json";
+    QJsonObject rx = sampleProfile();
+    rx["kind"] = "AetherRX profile";
+    rx["name"] = "Quiet Band";
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write(QJsonDocument(rx).toJson());
+    f.close();
+
+    QString name, error;
+    const QJsonObject got = AetherTxProfiles::readFile(path, &name, &error);
+    QVERIFY(got.isEmpty());
+    QVERIFY2(error.contains("AetherRX profile"), qPrintable(error));
+
+    // A file with no "kind" at all still imports: that affordance is the
+    // reason the check is conditional rather than required.
+    QJsonObject bare = sampleProfile();
+    const QString barePath = m_home.path() + "/bare.json";
+    QFile b(barePath);
+    QVERIFY(b.open(QIODevice::WriteOnly));
+    b.write(QJsonDocument(bare).toJson());
+    b.close();
+    error.clear();
+    QVERIFY(!AetherTxProfiles::readFile(barePath, &name, &error).isEmpty());
+    QVERIFY(error.isEmpty());
+}
+
+void AetherTxProfilesTest::legacyPresetsMigrateOnFirstOpen()
+{
+    removeTxLibrary();
+    QJsonObject preset = sampleProfile(-33.0);
+    preset["rx"] = QJsonObject{ { "chain", QJsonArray{ "Gate" } },
+                                { "gate", QJsonObject{ { "enabled", false } } } };
+    QVERIFY(writeLegacyLibrary(QJsonObject{ { "Ragchew", preset } }));
+
+    AetherTxProfiles lib(nullptr);
+    QVERIFY2(lib.hasProfile("Ragchew"), qPrintable(lib.profileNames().join(',')));
+
+    // The transmit half only: the receive block is the other window's, and
+    // carrying it here is how a profile ends up changing both chains again.
+    const QString out = m_home.path() + "/migrated.json";
+    QVERIFY(lib.exportToFile("Ragchew", out));
+    QFile f(out);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QJsonObject got = QJsonDocument::fromJson(f.readAll()).object();
+    QVERIFY(!got.contains("rx"));
+    QCOMPARE(got.value("gate").toObject().value("thresholdDb").toDouble(), -33.0);
+
+    // The legacy file is read, never rewritten: if this migration is wrong,
+    // the original is still there to try again from.
+    QFile legacy(ChannelStripPresets::legacyLibraryPath());
+    QVERIFY(legacy.open(QIODevice::ReadOnly));
+    QVERIFY(QJsonDocument::fromJson(legacy.readAll()).object()
+                .value("presets").toObject().contains("Ragchew"));
+}
+
+void AetherTxProfilesTest::migrationDoesNotUndoADeliberateDelete()
+{
+    removeTxLibrary();
+    QVERIFY(writeLegacyLibrary(QJsonObject{ { "Ragchew", sampleProfile() } }));
+
+    AetherTxProfiles first(nullptr);
+    QVERIFY(first.hasProfile("Ragchew"));
+    QVERIFY(first.deleteProfile("Ragchew"));
+
+    // Re-importing what the operator has just thrown away would be worse than
+    // never importing at all, so the flag lives in the library file itself.
+    AetherTxProfiles second(nullptr);
+    QVERIFY(!second.hasProfile("Ragchew"));
+}
+
 int main(int argc, char** argv)
 {
-    TestSettingsProfile profile(QStringLiteral("aether-rx-profiles-test"));
+    TestSettingsProfile profile(QStringLiteral("aether-tx-profiles-test"));
     if (!profile.isValid()) {
         return 1;
     }

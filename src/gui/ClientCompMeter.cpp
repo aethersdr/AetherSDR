@@ -498,7 +498,15 @@ void ClientCompMeter::setMakeupControlEnabled(bool on)
             "Drag or wheel to set makeup, double-click for 0 dB.\n"
             "Left ticks are makeup; right ticks are output level."));
     } else {
+        // Put back everything the enable path set, not just the focus policy:
+        // a meter left advertising itself as "Makeup gain" to a screen reader
+        // would be worse than one that says nothing.
         setFocusPolicy(Qt::NoFocus);
+        setAccessibleName(QString());
+        setAccessibleDescription(QString());
+        setToolTip(QString());
+        unsetCursor();
+        m_dragging = false;
     }
     update();
 }

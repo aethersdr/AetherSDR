@@ -1330,6 +1330,23 @@ add_test(NAME modem_chrome_test COMMAND modem_chrome_test)
 set_tests_properties(modem_chrome_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(stage_tab_bar_drag_test
+    tests/stage_tab_bar_drag_test.cpp
+    src/gui/StageTabBar.cpp
+    src/gui/ModemChrome.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(stage_tab_bar_drag_test PRIVATE src)
+target_link_libraries(stage_tab_bar_drag_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
+add_test(NAME stage_tab_bar_drag_test COMMAND stage_tab_bar_drag_test)
+set_tests_properties(stage_tab_bar_drag_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(comp_makeup_fader_test
     tests/comp_makeup_fader_test.cpp
     src/gui/ClientCompMeter.cpp
@@ -6154,6 +6171,7 @@ set(AETHER_SETTINGS_CONSUMERS
     ulanzi_mapping_migration_test
     modem_chrome_test
     comp_makeup_fader_test
+    stage_tab_bar_drag_test
     aether_tx_profiles_test
     aether_rx_profiles_test
     theme_manager_test

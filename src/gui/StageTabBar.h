@@ -58,9 +58,20 @@ public:
     // hands it back. Order of calls is the initial top-to-bottom order.
     void addStage(int id, const QString& label, bool wantsCheckbox = true);
 
+    // Park a widget at the foot of the column, above the footer button. The
+    // bar takes no interest in what it is — the transmit window puts its MIC
+    // and TX indicators here.
+    void addFooterWidget(QWidget* w);
+
     // Add the footer button under the stretch — Settings, in both windows.
     void addFooterButton(const QString& label, const QString& objectName,
                          const QString& tooltip);
+
+    // The drag payload type this column emits and accepts. Private to the
+    // window: see the note in StageTabBar.cpp. Exposed so a test can cross
+    // the two bars' real types rather than a copy of the formula, which
+    // would pass whether or not they are actually distinct.
+    QString dragMimeType() const { return m_mime; }
 
     void setCurrentStage(int id);
     int  currentStage() const;
@@ -78,10 +89,14 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    void beginFooter();
     void dropStageAt(int movedId, int y);
     void relayoutRows();
 
     QString       m_prefix;
+    // Drag payload type, private to this window -- see stageMimeFor().
+    QString       m_mime;
+    bool          m_footerStarted{false};
     Host          m_host;
     QButtonGroup* m_group{nullptr};
     QVBoxLayout*  m_rows{nullptr};

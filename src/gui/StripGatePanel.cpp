@@ -233,6 +233,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
         toolbar->addSpacing(16);
         m_rn2Btn = new QPushButton(QStringLiteral("RN2"));
         m_rn2Btn->setObjectName(QStringLiteral("gateRn2"));
+        m_rn2Btn->setAccessibleName(tr("Microphone noise reduction"));
         m_rn2Btn->setCheckable(true);
         m_rn2Btn->setFixedHeight(22);
         m_rn2Btn->setVisible(false);  // flipped on by showForTx()

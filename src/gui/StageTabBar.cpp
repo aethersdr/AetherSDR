@@ -11,6 +11,7 @@
 #include <QDropEvent>
 #include <QHBoxLayout>
 #include <QMimeData>
+#include <utility>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -20,17 +21,32 @@ namespace AetherSDR {
 
 namespace {
 
-// Carried by a row drag: the stage id, as an int.
-constexpr const char* kStageMime = "application/x-aethersdr-stage";
+// Carried by a row drag: the stage id, as an int, under a MIME type private
+// to the window that started the drag.
+//
+// The type MUST be per-window. Both bars accept drops, both windows can be
+// open at once, and the payload is a bare id whose meaning depends entirely
+// on which chain it came from: RxChainStage{Eq=1,Gate=2,Comp=3,Tube=4,Pudu=5}
+// against TxChainStage{Gate=1,Eq=2,DeEss=3,Comp=4,Tube=5}. Every RX id is
+// also a valid TX id, so one shared type let a drag out of the AetherRX
+// column silently reorder the transmit chain -- dragging RX "Eq" (1) onto the
+// TX bar moved TX "Gate" (1). Before these two columns were one shared
+// widget they used different types by accident of having been written
+// separately; this keeps that separation on purpose.
+QString stageMimeFor(const QString& prefix)
+{
+    return QStringLiteral("application/x-aethersdr-stage.") + prefix;
+}
 
 // The grab handle at the left of a chain-stage row. Two columns of dots, the
 // conventional "this moves" mark, and the drag it starts carries a picture of
 // the whole row so what follows the cursor is what was grabbed.
 class StageGrip final : public QWidget {
 public:
-    explicit StageGrip(int stage, QWidget* parent = nullptr)
+    explicit StageGrip(int stage, QString mime, QWidget* parent = nullptr)
         : QWidget(parent)
         , m_stage(stage)
+        , m_mime(std::move(mime))
     {
         setCursor(Qt::OpenHandCursor);
         setFixedWidth(kGripWidth);
@@ -74,7 +90,7 @@ protected:
             return;
         }
         auto* mime = new QMimeData;
-        mime->setData(QLatin1String(kStageMime), QByteArray::number(m_stage));
+        mime->setData(m_mime, QByteArray::number(m_stage));
 
         auto* drag = new QDrag(this);
         drag->setMimeData(mime);
@@ -88,8 +104,9 @@ protected:
     }
 
 private:
-    int    m_stage;
-    QPoint m_press;
+    int     m_stage;
+    QString m_mime;
+    QPoint  m_press;
 };
 
 // One tab in the column. Same chrome as the method strip inside the AetherNR
@@ -113,6 +130,7 @@ QPushButton* makeStageTab(const QString& text)
 StageTabBar::StageTabBar(const QString& objectPrefix, QWidget* parent)
     : QFrame(parent)
     , m_prefix(objectPrefix)
+    , m_mime(stageMimeFor(objectPrefix))
 {
     setObjectName(objectPrefix + QStringLiteral("TabsFrame"));
     setAttribute(Qt::WA_StyledBackground, true);
@@ -168,7 +186,7 @@ void StageTabBar::addStage(int id, const QString& label, bool wantsCheckbox)
 
     const bool chainStage = m_host.isChainStage && m_host.isChainStage(id);
     if (chainStage) {
-        auto* grip = new StageGrip(id);
+        auto* grip = new StageGrip(id, m_mime);
         grip->setObjectName(m_prefix + QStringLiteral("Grip") + slug);
         grip->setAccessibleName(label + QStringLiteral(" chain position"));
         rowBox->addWidget(grip);
@@ -206,10 +224,34 @@ void StageTabBar::addStage(int id, const QString& label, bool wantsCheckbox)
     m_stages.append(entry);
 }
 
+void StageTabBar::beginFooter()
+{
+    // The stretch that pushes the footer to the bottom goes in once, however
+    // many things end up down there.
+    if (m_footerStarted) return;
+    m_rows->addStretch(1);
+    m_footerStarted = true;
+}
+
+void StageTabBar::addFooterWidget(QWidget* w)
+{
+    beginFooter();
+    // Indented to the column's one left edge, like every other row.
+    auto* row = new QWidget;
+    auto* box = new QHBoxLayout(row);
+    box->setContentsMargins(0, 0, 0, 0);
+    box->setSpacing(4);
+    auto* pad = new QWidget;
+    pad->setFixedWidth(StageGrip::kGripWidth);
+    box->addWidget(pad);
+    box->addWidget(w, 1);
+    m_rows->addWidget(row);
+}
+
 void StageTabBar::addFooterButton(const QString& label, const QString& objectName,
                                   const QString& tooltip)
 {
-    m_rows->addStretch(1);
+    beginFooter();
 
     auto* button = makeStageTab(label);
     button->setCheckable(false);
@@ -261,7 +303,7 @@ bool StageTabBar::eventFilter(QObject* watched, QEvent* event)
         case QEvent::DragEnter:
         case QEvent::DragMove: {
             auto* ev = static_cast<QDragMoveEvent*>(event);
-            if (ev->mimeData()->hasFormat(QLatin1String(kStageMime))) {
+            if (ev->mimeData()->hasFormat(m_mime)) {
                 ev->acceptProposedAction();
                 return true;
             }
@@ -269,8 +311,8 @@ bool StageTabBar::eventFilter(QObject* watched, QEvent* event)
         }
         case QEvent::Drop: {
             auto* ev = static_cast<QDropEvent*>(event);
-            if (!ev->mimeData()->hasFormat(QLatin1String(kStageMime))) break;
-            dropStageAt(ev->mimeData()->data(QLatin1String(kStageMime)).toInt(),
+            if (!ev->mimeData()->hasFormat(m_mime)) break;
+            dropStageAt(ev->mimeData()->data(m_mime).toInt(),
                         ev->position().toPoint().y());
             ev->acceptProposedAction();
             return true;

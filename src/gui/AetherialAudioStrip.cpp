@@ -307,6 +307,49 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         addStage(Output, QStringLiteral("Final Output"), page);
     }
 
+    // MIC and TX indicators. The old chain row carried these as coloured
+    // endpoint tiles: MIC green means the PC mic is selected and DAX is off,
+    // so the processing chain is genuinely in the transmit path rather than
+    // being bypassed without saying so; TX lights while we are keying our own
+    // slice. Both answer questions the settings in this window cannot -- a
+    // perfectly configured chain that nothing is feeding looks identical.
+    {
+        auto* status = new QWidget;
+        auto* row = new QHBoxLayout(status);
+        row->setContentsMargins(0, 2, 0, 2);
+        row->setSpacing(6);
+
+        const auto addDot = [&](QLabel*& dot, QLabel*& text, const QString& label,
+                                const QString& objectName, const QString& tip) {
+            dot = new QLabel;
+            dot->setObjectName(QStringLiteral("StatusDot"));
+            dot->setFixedSize(10, 10);
+            dot->setToolTip(tip);
+            text = new QLabel(label);
+            text->setObjectName(QStringLiteral("SectionLabel"));
+            text->setToolTip(tip);
+            // One accessible object for the pair: a bare dot announces
+            // nothing, and the label alone does not carry the state (#4896).
+            dot->setAccessibleName(label);
+            dot->setObjectName(objectName);
+            row->addWidget(dot);
+            row->addWidget(text);
+        };
+
+        addDot(m_micDot, m_micLabel, tr("MIC"),
+               QStringLiteral("aetherTxMicIndicator"),
+               tr("Lit when the PC microphone is selected and DAX is off, so "
+                  "this chain is actually in the transmit path."));
+        row->addSpacing(10);
+        addDot(m_txDot, m_txLabel, tr("TX"),
+               QStringLiteral("aetherTxActiveIndicator"),
+               tr("Lit while transmitting on your own slice."));
+        row->addStretch(1);
+
+        m_tabs->addFooterWidget(status);
+        refreshIndicators();
+    }
+
     m_tabs->addFooterButton(
         tr("Settings"), QStringLiteral("aetherTxSettingsButton"),
         tr("Profiles, bypass and the transmit monitor."));
@@ -497,9 +540,16 @@ void AetherialAudioStrip::showSettings()
     // chain, and letting that happen mid-drag on a stage page would be a
     // good way to lose track of what changed.
     AetherTxSettingsDialog dlg(m_audio, this);
+    // Tracked for the life of the dialog, not handed over once: a capture
+    // reaching its 30 s cap while the dialog is open has to move the buttons,
+    // or Record stays lit and Play stays disabled -- including its accessible
+    // description, which would go on saying "nothing has been recorded" after
+    // something had been.
+    m_settingsDlg = &dlg;
     dlg.setBypassed(m_audio && m_audio->isTxBypassed());
     dlg.setMonitorRecording(m_monRecording);
     dlg.setMonitorHasRecording(m_monHasRecording);
+    dlg.setMonitorPlaying(m_monPlaying);
     connect(&dlg, &AetherTxSettingsDialog::profileApplied, this, [this]() {
         refreshAllPanelsFromEngine();
         if (m_tabs) m_tabs->refreshFromHost();
@@ -511,6 +561,7 @@ void AetherialAudioStrip::showSettings()
     connect(&dlg, &AetherTxSettingsDialog::monitorPlayClicked,
             this, &AetherialAudioStrip::monitorPlayClicked);
     dlg.exec();
+    m_settingsDlg = nullptr;
 }
 
 AetherialAudioStrip::~AetherialAudioStrip() = default;
@@ -559,31 +610,62 @@ constexpr const char* kPlayActive = "QPushButton { color: #30d050;"
 
 void AetherialAudioStrip::setMonitorRecording(bool on)
 {
-    // Held rather than shown: the buttons live in Settings now, so the state
-    // is handed over when that dialog opens.
+    // Held for the next time Settings opens, and forwarded if it is open now.
     m_monRecording = on;
+    if (m_settingsDlg) m_settingsDlg->setMonitorRecording(on);
 }
 
 void AetherialAudioStrip::setMonitorPlaying(bool on)
 {
     m_monPlaying = on;
+    if (m_settingsDlg) m_settingsDlg->setMonitorPlaying(on);
 }
 
 void AetherialAudioStrip::setMonitorHasRecording(bool has)
 {
     m_monHasRecording = has;
+    if (m_settingsDlg) m_settingsDlg->setMonitorHasRecording(has);
 }
 
 void AetherialAudioStrip::setMicInputReady(bool ready)
 {
+    if (m_micReady == ready) return;
+    m_micReady = ready;
+    refreshIndicators();
 }
 
 void AetherialAudioStrip::setTxActive(bool active)
 {
+    if (m_txActive == active) return;
+    m_txActive = active;
+    refreshIndicators();
 }
 
 void AetherialAudioStrip::refreshChainPaint()
 {
+    // Engine state is the source of truth; this just pulls the column's
+    // checkboxes and order back from it after something else moved them.
+    if (m_tabs) m_tabs->refreshFromHost();
+}
+
+void AetherialAudioStrip::refreshIndicators()
+{
+    const auto paint = [](QLabel* dot, QLabel* text, bool on, const QString& colour) {
+        if (!dot || !text) return;
+        ThemeManager::instance().applyStyleSheet(dot, QStringLiteral(
+            "QLabel { background: %1; border-radius: 5px; border: 1px solid %2; }")
+            .arg(on ? colour : QStringLiteral("{{color.background.1}}"),
+                 on ? colour : QStringLiteral("{{color.border.strong}}")));
+        text->setEnabled(on);
+        // The state has to reach the accessible channel, not just the
+        // colour -- the whole point of the dot is that it is a state (#4896).
+        dot->setAccessibleDescription(
+            on ? QObject::tr("active") : QObject::tr("inactive"));
+    };
+    paint(m_micDot, m_micLabel, m_micReady,
+          QStringLiteral("{{color.accent.success}}"));
+    paint(m_txDot,  m_txLabel,  m_txActive,
+          QStringLiteral("{{color.accent.danger}}"));
 }
 
 void AetherialAudioStrip::saveGeometryToSettings()

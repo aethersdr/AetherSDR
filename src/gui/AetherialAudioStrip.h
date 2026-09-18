@@ -3,6 +3,7 @@
 #include "ClientEqApplet.h"   // ClientEqApplet::Path enum
 #include "core/AudioEngine.h" // AudioEngine::TxChainStage in signal sig
 
+#include <QPointer>
 #include <QWidget>
 
 class QPushButton;
@@ -13,6 +14,8 @@ class QTimer;
 class QVBoxLayout;
 
 namespace AetherSDR {
+
+class AetherTxSettingsDialog;
 
 class AudioEngine;
 class StageTabBar;
@@ -66,17 +69,16 @@ public:
     void setMonitorHasRecording(bool has);
 
 
-    // MIC endpoint goes green when PC mic is selected and DAX is off
-    // (i.e. PooDoo is actually in the TX signal path).  TX endpoint
-    // pulses red while the user is transmitting on their own slice.
-    // Both forward to the embedded StripChainWidget.
+    // MIC goes green when the PC mic is selected and DAX is off (i.e. this
+    // chain is actually in the TX signal path).  TX lights while the user is
+    // transmitting on their own slice.  Both drive the indicators at the foot
+    // of the stage column.
     void setMicInputReady(bool ready);
     void setTxActive(bool active);
 
-    // Repaint the embedded StripChainWidget — used by MainWindow when
-    // the docked Chain applet toggles a stage so the strip's tile
-    // visuals stay in sync.  Engine state is the source of truth; this
-    // just nudges the widget to repaint from it.
+    // Pull the stage column back from engine state — used by MainWindow when
+    // the docked Chain applet toggles a stage, so the two surfaces agree.
+    // Engine state is the source of truth; this just re-reads it.
     void refreshChainPaint();
 
     // Accessor for the embedded Final Output panel — MainWindow wires
@@ -113,6 +115,20 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
+    void refreshIndicators();
+
+    // The Settings dialog while it is open, so monitor state that changes
+    // underneath it still reaches its buttons. QPointer because the dialog is
+    // a stack local in showSettings().
+    QPointer<AetherTxSettingsDialog> m_settingsDlg;
+
+    QLabel* m_micDot{nullptr};
+    QLabel* m_micLabel{nullptr};
+    QLabel* m_txDot{nullptr};
+    QLabel* m_txLabel{nullptr};
+    bool    m_micReady{false};
+    bool    m_txActive{false};
+
     void saveGeometryToSettings();
     void restoreGeometryFromSettings();
 

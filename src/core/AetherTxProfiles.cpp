@@ -32,6 +32,7 @@ AetherTxProfiles::AetherTxProfiles(AudioEngine* engine, QObject* parent)
     m_root["version"]  = kSchemaVersion;
     m_root["profiles"] = QJsonObject{};
     loadFromDisk();
+    migrateLegacyPresets();
 }
 
 QString AetherTxProfiles::filePath() const
@@ -40,6 +41,48 @@ QString AetherTxProfiles::filePath() const
     const QString dir = SettingsPaths::configDir();
     QDir().mkpath(dir);
     return dir + "/AetherTxProfiles.json";
+}
+
+void AetherTxProfiles::migrateLegacyPresets()
+{
+    static const QString kFlag = QStringLiteral("migratedFromChannelStrip");
+    if (m_root.value(kFlag).toBool()) return;
+
+    QFile f(ChannelStripPresets::legacyLibraryPath());
+    if (!f.exists() || !f.open(QIODevice::ReadOnly)) {
+        // Nothing to import, but record that we looked: a preset file that
+        // appears later belongs to an older install, not to this one.
+        m_root[kFlag] = true;
+        return;
+    }
+    const auto doc = QJsonDocument::fromJson(f.readAll());
+    f.close();
+    if (!doc.isObject()) { m_root[kFlag] = true; return; }
+
+    const QJsonObject presets = doc.object().value(QStringLiteral("presets")).toObject();
+    QJsonObject candidate = m_root;
+    QJsonObject profiles  = candidate.value(QStringLiteral("profiles")).toObject();
+
+    int imported = 0;
+    for (auto it = presets.begin(); it != presets.end(); ++it) {
+        if (!it.value().isObject()) continue;
+        // A profile the operator already has under that name wins: this is a
+        // one-way import, not a restore.
+        if (profiles.contains(it.key())) continue;
+        const QJsonObject preset = it.value().toObject();
+        // The transmit half is the preset's top level; "rx" is the other
+        // window's business and must not travel with it.
+        QJsonObject profile = preset;
+        profile.remove(QStringLiteral("rx"));
+        profiles[it.key()] = profile;
+        ++imported;
+    }
+
+    candidate[QStringLiteral("profiles")] = profiles;
+    candidate[kFlag] = true;
+    if (!writeDocument(candidate)) return;   // try again next launch
+    m_root = candidate;
+    if (imported > 0) emit profilesChanged();
 }
 
 bool AetherTxProfiles::loadFromDisk()
@@ -56,11 +99,13 @@ bool AetherTxProfiles::loadFromDisk()
     return true;
 }
 
-// Atomic, and checked at every step (Constitution XIV). The previous version
-// opened the live library WriteOnly|Truncate, which destroys every saved
-// profile before a single replacement byte is written — an interrupted save
-// took the lot — and ignored the write result, so a full disk reported
-// success and the dialog said "Saved".
+// Atomic, and checked at every step (Constitution XIV). Written this way
+// because the store this one replaces is not: ChannelStripPresets::saveToDisk()
+// opens the live library WriteOnly|Truncate, which destroys every saved preset
+// before a single replacement byte is written — an interrupted save takes the
+// lot — and ignores the write result, so a full disk reports success and the
+// dialog says "Saved". This file has no "previous version" of its own; that
+// sibling is what the comparison is to.
 bool AetherTxProfiles::writeDocument(const QJsonObject& root) const
 {
     QSaveFile f(filePath());
@@ -190,6 +235,19 @@ QJsonObject AetherTxProfiles::readFile(const QString& path,
         return fail(QObject::tr("The file does not contain a JSON object."));
     }
     const QJsonObject root = doc.object();
+
+    // Honour "kind" when it is there. The sniffing below deliberately does not
+    // require it, so a hand-written file still imports -- but the two windows'
+    // exports overlap almost completely (same stage keys, overlapping chain
+    // names), so without this check an AetherRX export imports cleanly here and
+    // writes receive-side values into the transmit chain.
+    {
+        const QString kind = root.value(QStringLiteral("kind")).toString();
+        if (!kind.isEmpty() && kind != QStringLiteral("AetherTX profile")) {
+            return fail(QObject::tr("%1 holds a \u201c%2\u201d, not an AetherTX profile.")
+                            .arg(QFileInfo(path).fileName(), kind));
+        }
+    }
 
     // A library: take its first profile.
     if (root.value("profiles").isObject()) {
