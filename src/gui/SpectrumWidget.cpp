@@ -6289,26 +6289,19 @@ void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
 {
     const bool originalKiwiActive = m_kiwiSdrWaterfallActive;
 
-    // DSS-only crop, mirroring reprojectWaterfall()'s own internal one
-    // (rebuildWaterfallViewportForFrame() / the image-fallback branch) --
-    // computed here rather than inside reprojectWaterfall() itself since
-    // that function re-crops internally and would double-crop if handed
-    // already-cropped values. DssRenderer::pushRow() already receives
-    // cropped bins (see pushWaterfallRow()'s appendDssWaterfallRow() call),
-    // so its reprojection/rebuild target frame needs the same effective
-    // bandwidth or a stamped row and the viewport it's read against would
-    // disagree about what span it covers.
-    const double effOldDssBw = panEdgeCropActive()
-        ? oldBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : oldBandwidthMhz;
-    const double effNewDssBw = panEdgeCropActive()
-        ? newBandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction) : newBandwidthMhz;
     auto reprojectStream = [this, oldCenterMhz, oldBandwidthMhz,
-                            newCenterMhz, newBandwidthMhz,
-                            effOldDssBw, effNewDssBw](bool kiwiStream) {
+                            newCenterMhz, newBandwidthMhz](bool kiwiStream) {
         const bool visibleStream = beginWaterfallStreamWrite(kiwiStream);
         auto restoreStream = qScopeGuard([&] {
             endWaterfallStreamWrite(kiwiStream, visibleStream);
         });
+        // Resolve after selecting the stream: the diagnostic dual-stream pass
+        // must not apply the visible stream's crop to its inactive sibling.
+        // reprojectWaterfall() crops internally; DSS takes effective frames.
+        const double effOldDssBw = panDisplayBandwidthMhz(
+            oldBandwidthMhz, panEdgeCropActive());
+        const double effNewDssBw = panDisplayBandwidthMhz(
+            newBandwidthMhz, panEdgeCropActive());
         if (kiwiStream) {
             m_kiwiSdrLastWaterfallBins.clear();
         }
