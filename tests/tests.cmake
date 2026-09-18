@@ -5736,6 +5736,7 @@ add_executable(rx_applet_squelch_reconciliation_test
     tests/rx_applet_squelch_reconciliation_test.cpp
     src/gui/RxApplet.cpp
     src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/DragValuePopup.cpp
@@ -5763,6 +5764,7 @@ add_executable(gui_nested_lifetime_test
     tests/gui_nested_lifetime_test.cpp
     src/gui/RxApplet.cpp
     src/gui/VfoWidget.cpp
+    src/gui/ModeFilterPresets.cpp
     src/gui/VfoDisplayDefaults.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/DragValuePopup.cpp
