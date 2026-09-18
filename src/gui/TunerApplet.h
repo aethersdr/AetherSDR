@@ -91,7 +91,10 @@ public slots:
     // unmediated writer is the defect this path exists to remove, and it is
     // private for the same reason AmpApplet::setFwdPower is.
     void setRadioMeters(float fwdPower, float swr);
-    void setDeviceMeters(float fwdPower, float swr);
+    // fwdPeak is the TGXL's own peak reading. The radio-relayed path has no
+    // equivalent, so setRadioMeters falls back to peaking the instantaneous
+    // value -- see updateMeters.
+    void setDeviceMeters(float fwdPower, float swr, float fwdPeak);
 
     // The floor the panel may be shrunk to. Derived from the minimum scale,
     // not from the children's current sizes. Public because QWidget declares
@@ -107,7 +110,9 @@ private:
     // Applies a forward-power (W) / SWR pair to the gauges blind, without
     // consulting the source rule. Private precisely so it cannot be reached
     // from the wiring — both stamped entry points above end here.
-    void updateMeters(float fwdPower, float swr);
+    // fwdPeak < 0 means "no device peak available"; the peak tick then
+    // tracks fwdPower as it always did.
+    void updateMeters(float fwdPower, float swr, float fwdPeak = -1.0f);
 
     void buildUI();
     void buildExpandedUI(QVBoxLayout* vbox);
@@ -274,6 +279,8 @@ private:
     // Peak hold for fwd gauge
     QTimer* m_peakTimer{nullptr};
     float   m_peakFwd{0.0f};
+    // Throttles the numeric PWR/SWR text; the bar itself is not throttled.
+    QElapsedTimer m_readoutClock;
 
     // Relay values (updated from model)
     int m_relayC1{0};
