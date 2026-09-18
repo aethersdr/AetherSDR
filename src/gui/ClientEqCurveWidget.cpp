@@ -1,4 +1,5 @@
 #include "ClientEqCurveWidget.h"
+#include "PanelTick.h"
 #include "core/ClientEq.h"
 
 #include <QPainter>
@@ -108,17 +109,30 @@ void ClientEqCurveWidget::setFftBinsDb(const std::vector<float>& binsDb,
     m_fftBinsDb = binsDb;
     m_fftSampleRate = sampleRate > 0.0 ? sampleRate : 24000.0;
 
-    // Peak-hold trail: per-bin running max, decaying ~10 dB/sec at 25 Hz
-    // updates so recent resonances stay visible without permanent clutter.
-    // Frozen mode skips decay so the trace sticks at the max.  Operates on
-    // raw bins so peak-detection is sample-accurate; visual smoothing of
-    // the peak trace happens in applySmoothing() below.
-    constexpr float kPeakDecayDb = 0.5f;
+    // Peak-hold trail: per-bin running max, decaying so recent resonances
+    // stay visible without permanent clutter. Frozen mode skips decay so the
+    // trace sticks at the max.  Operates on raw bins so peak-detection is
+    // sample-accurate; visual smoothing of the peak trace happens in
+    // applySmoothing() below.
+    //
+    // Per second, not per update. It used to be a flat 0.5 dB a call, which
+    // made the rate a property of whichever timer happened to be driving the
+    // widget — 12.5 dB/s from the 25 Hz hosts it was written against, and two
+    // and a half times that the moment one of them sped up.
+    constexpr float kPeakDecayDbPerSec = 12.5f;
     constexpr float kPeakFloorDb = -100.0f;
+    // First frame, or a gap while the page was hidden: decay one nominal
+    // frame rather than the whole elapsed time, so the trail does not fall
+    // off a cliff on the way back.
+    const qint64 sinceMs = m_peakHoldClock.isValid()
+        ? std::clamp<qint64>(m_peakHoldClock.restart(), 1, 1000 / kPanelTickHz)
+        : (m_peakHoldClock.start(), 1000 / kPanelTickHz);
     if (m_peakHoldDb.size() != m_fftBinsDb.size()) {
         m_peakHoldDb.assign(m_fftBinsDb.size(), kPeakFloorDb);
     }
-    const float decayStep = m_peakHoldFrozen ? 0.0f : kPeakDecayDb;
+    const float decayStep = m_peakHoldFrozen
+        ? 0.0f
+        : kPeakDecayDbPerSec * float(sinceMs) / 1000.0f;
     for (size_t i = 0; i < m_fftBinsDb.size(); ++i) {
         const float decayed = m_peakHoldDb[i] - decayStep;
         m_peakHoldDb[i] = std::max(decayed, m_fftBinsDb[i]);

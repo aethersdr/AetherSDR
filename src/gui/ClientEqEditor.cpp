@@ -1,4 +1,5 @@
 #include "ClientEqEditor.h"
+#include "PanelTick.h"
 #include "ClientEqEditorCanvas.h"
 #include "ClientEqFftAnalyzer.h"
 #include "ClientEqIconRow.h"
@@ -356,7 +357,7 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
     // doesn't burn CPU while the editor is closed.
     m_fftAnalyzer = std::make_unique<ClientEqFftAnalyzer>();
     m_fftTimer = new QTimer(this);
-    m_fftTimer->setInterval(40);  // 25 Hz
+    m_fftTimer->setInterval(kPanelTickMs);
     connect(m_fftTimer, &QTimer::timeout,
             this, &ClientEqEditor::tickFftAnalyzer);
 

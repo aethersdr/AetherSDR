@@ -20,4 +20,8 @@ namespace AetherSDR {
 // reading the engine and stepping meters for something nobody can see.
 constexpr int kPanelTickMs = 16;
 
+// The same cadence as a frame rate, for widgets whose API takes fps
+// rather than an interval.
+constexpr int kPanelTickHz = 1000 / kPanelTickMs;
+
 } // namespace AetherSDR

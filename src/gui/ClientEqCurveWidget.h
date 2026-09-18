@@ -221,6 +221,9 @@ private:
     bool m_backgroundCacheValid{false};
     bool m_responseCacheValid{false};
     QElapsedTimer m_perfSince;
+    // Wall clock between peak-hold updates, so the decay is per second
+    // rather than per call — see setFftBinsDb().
+    QElapsedTimer m_peakHoldClock;
     PerfStats m_perfStats;
 };
 
