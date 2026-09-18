@@ -500,8 +500,15 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         // mean-square -- so the average tap is what the calibration means.
         // Meter ballistics are not lost: the backend already applies its own
         // attack/decay EMA to the dBm value before publishing.
-        emit meterUpdate(static_cast<float>(
-            m_channel->meter(WdspChannel::Meter::SignalAverage)));
+        //
+        // Not while muted: during a rate change's settle window the channel is
+        // fed zeros (see setAudioMuted()), and the meter would read that
+        // silence as a signal level -- the needle would drop to the floor on
+        // every zoom.
+        if (!m_audioMuted) {
+            emit meterUpdate(static_cast<float>(
+                m_channel->meter(WdspChannel::Meter::SignalAverage)));
+        }
     }
 
     if (consumed > 0)
