@@ -1980,6 +1980,7 @@ AudioEngine::AudioEngine(QObject* parent)
     loadClientQuindarSettings();       // restore persisted Quindar tone params
     loadClientRxChainOrder();    // restore persisted RX chain order (Phase 0+)
     loadAetherialTubePreampTxSettings(); // restore TX mic pre-amp toggles (#2813)
+    dropRetiredSettingsKeys();   // tidy keys no build reads any more
 
     // Restore saved audio device selections
     auto& s = AppSettings::instance();
@@ -5629,19 +5630,32 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
     // instances, and letting them publish here would make the reading flicker
     // between unrelated signals. A block too quiet to divide by reports the
     // previous gain rather than a meaningless 1.0.
+    //
+    // The ratio is against the RMS of the CURRENT input block, while an
+    // overlap-add method such as NR2 emits a block delayed by its own
+    // latency. On a speech onset the numerator and denominator are therefore
+    // not the same audio and the reading twitches for a block or two. It is a
+    // meter, the clamp keeps it bounded, and correcting it would mean
+    // carrying a per-method delay line for a cosmetic strip — so this is
+    // noted rather than fixed.
     const bool publishNrGain = (source == RxDspSource::Main) && !externalSource;
-    const float preNrRms = publishNrGain ? computeRMS(pcm) : 0.0f;
-    const auto writeNrAudioAndLevel = [this, publishNrGain, preNrRms,
+    // Computed on first use, not up front: the idle path below never reads it,
+    // and for an operator running no NR at all that was a full-buffer RMS pass
+    // on the audio thread for every block, thrown away.
+    float preNrRms = -1.0f;
+    const auto writeNrAudioAndLevel = [this, publishNrGain, &preNrRms, &pcm,
                                        &writeAudioAndLevel](
                                           const QByteArray& processed) {
         if (publishNrGain) {
+            if (preNrRms < 0.0f) preNrRms = computeRMS(pcm);
             if (preNrRms > 1.0e-6f) {
                 const float gain =
                     std::clamp(computeRMS(processed) / preNrRms, 0.0f, 1.0f);
                 m_nrGain.store(gain, std::memory_order_relaxed);
             }
             m_nrGainActive.store(true, std::memory_order_relaxed);
-            emit nrGainChanged(m_nrGain.load(std::memory_order_relaxed), true);
+            publishNrGainIfChanged(
+                m_nrGain.load(std::memory_order_relaxed), true);
         }
         writeAudioAndLevel(processed);
     };
@@ -5652,7 +5666,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
                                       const QByteArray& data) {
         if (publishNrGain) {
             m_nrGainActive.store(false, std::memory_order_relaxed);
-            emit nrGainChanged(1.0f, false);
+            publishNrGainIfChanged(1.0f, false);
         }
         writeAudioAndLevel(data);
     };
@@ -6111,6 +6125,14 @@ QString rxStageName(AudioEngine::RxChainStage s)
     return "";
 }
 
+// Stage names this build no longer has, but wrote itself in an earlier one.
+// Distinct from an unrecognised name: these are dropped from a stored chain
+// and the rest of the operator's order is kept.
+bool isRetiredRxStageName(const QString& name)
+{
+    return name.compare(QLatin1String("DeEss"), Qt::CaseInsensitive) == 0;
+}
+
 AudioEngine::RxChainStage rxStageFromName(const QString& name)
 {
     if (name == "Eq")    return AudioEngine::RxChainStage::Eq;
@@ -6374,24 +6396,81 @@ QVector<AudioEngine::RxChainStage> AudioEngine::rxChainStages() const
     return unpackRxChain(m_rxChainPacked.load(std::memory_order_acquire));
 }
 
+// Keys that were written by an earlier build and are read by nothing now.
+// Left in place they are harmless, but they accumulate: every operator's
+// settings file carries a de-esser that no longer exists and two attack values
+// no control can reach. Removed once, on the load that follows the upgrade.
+void AudioEngine::dropRetiredSettingsKeys()
+{
+    static const char* const kRetired[] = {
+        // The RX de-esser: the stage went, so its eight parameters went.
+        "ClientDeEssRxEnabled",     "ClientDeEssRxThresholdDb",
+        "ClientDeEssRxAmountDb",    "ClientDeEssRxFrequencyHz",
+        "ClientDeEssRxQ",           "ClientDeEssRxSlopeStages",
+        "ClientDeEssRxAttackMs",    "ClientDeEssRxReleaseMs",
+        // Gate and tube attack are fixed constants now — see
+        // ClientGate::kAttackMs and ClientTube::kAttackMs.
+        "ClientGateTxAttackMs",     "ClientGateRxAttackMs",
+        "ClientTubeTxAttackMs",     "ClientTubeRxAttackMs",
+    };
+    auto& s = AppSettings::instance();
+    bool removedAny = false;
+    for (const char* key : kRetired) {
+        const QString name = QString::fromLatin1(key);
+        if (s.value(name, QString()).toString().isEmpty()) continue;
+        s.remove(name);
+        removedAny = true;
+    }
+    if (removedAny) s.save();
+}
+
+void AudioEngine::publishNrGainIfChanged(float gain, bool active)
+{
+    // A hundredth of a dB-ish in linear terms: below anything the strip can
+    // draw, and far below anything an operator can see move.
+    constexpr float kEpsilon = 0.002f;
+    if (m_nrGainEverPublished
+        && active == m_lastPublishedNrActive
+        && std::fabs(gain - m_lastPublishedNrGain) < kEpsilon) {
+        return;
+    }
+    m_lastPublishedNrGain = gain;
+    m_lastPublishedNrActive = active;
+    m_nrGainEverPublished = true;
+    emit nrGainChanged(gain, active);
+}
+
 void AudioEngine::loadClientRxChainOrder()
 {
     auto& s = AppSettings::instance();
     QVector<RxChainStage> stages;
     bool sawUnknown = false;
+    bool droppedRetired = false;
     const QString stored = s.value("ClientRxChainStages", "").toString();
     if (!stored.isEmpty()) {
-        for (const QString& name : stored.split(',', Qt::SkipEmptyParts)) {
-            const auto stage = rxStageFromName(name.trimmed());
+        for (const QString& rawName : stored.split(',', Qt::SkipEmptyParts)) {
+            const QString name = rawName.trimmed();
+            // A stage this build has retired is not an unknown name. "DeEss"
+            // is one AetherSDR wrote itself, and every settings file that has
+            // ever held an RX chain order contains it — so treating it as
+            // foreign threw away the operator's whole ordering on first launch
+            // after the stage went, which is a poor welcome to a release that
+            // makes the chain drag-reorderable. Drop the entry, keep the rest
+            // in the order they were left in, exactly as the preset path
+            // already does through rxStageNameToEnum().
+            if (isRetiredRxStageName(name)) {
+                droppedRetired = true;
+                continue;
+            }
+            const auto stage = rxStageFromName(name);
             if (stage != RxChainStage::None) stages.append(stage);
             else                              sawUnknown = true;
         }
     }
-    // Any unknown name in the stored list is a strong signal that the
-    // settings file is from a different (or old) version of AetherSDR.
-    // Reset to the canonical default rather than silently filtering the
-    // unknown entries — that filtering shuffles the remaining stages
-    // into a misleading order.
+    // A name that is neither current nor knowingly retired is a strong signal
+    // that the settings file is from a different (or much older) build. Reset
+    // to the canonical default rather than silently filtering it out — that
+    // filtering shuffles the remaining stages into a misleading order.
     const bool resetFromStale = sawUnknown;
     if (sawUnknown || stages.isEmpty()) stages = defaultRxChain();
 
@@ -6402,9 +6481,10 @@ void AudioEngine::loadClientRxChainOrder()
     }
     m_rxChainPacked.store(packRxChain(stages), std::memory_order_release);
 
-    // Overwrite the stale value on disk so the user's settings file
-    // doesn't keep showing names from a previous build.
-    if (resetFromStale) {
+    // Overwrite the stored value when it no longer matches what was loaded:
+    // after a reset, and after a retired stage was dropped, so the name does
+    // not sit in the file for ever.
+    if (resetFromStale || droppedRetired) {
         QStringList names;
         for (auto st : stages) {
             const QString n = rxStageName(st);

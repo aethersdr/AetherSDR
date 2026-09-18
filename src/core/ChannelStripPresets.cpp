@@ -949,8 +949,11 @@ void ChannelStripPresets::applyRxJson(AudioEngine* engine, const QJsonObject& rx
     }
 
     // Persist what the setters above only put in memory, so the values
-    // survive a restart. RX only: a caller applying just this block must not
-    // write the TX modules back out.
+    // survive a restart. Only the RX modules are touched — with one honest
+    // exception: saveClientEqSettings() writes both the Rx and Tx key
+    // prefixes, so the TX EQ's current in-memory values are rewritten as they
+    // already stand. Nothing changes, but it is not the clean RX-only write
+    // the rest of this list is.
     engine->saveClientEqSettings();
     engine->saveClientGateRxSettings();
     engine->saveClientCompRxSettings();

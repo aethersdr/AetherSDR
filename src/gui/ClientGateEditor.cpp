@@ -184,7 +184,8 @@ ClientGateEditor::ClientGateEditor(AudioEngine* engine, QWidget* parent)
     m_levelView = new ClientGateLevelView;
     right->addWidget(m_levelView, 1);
 
-    // Bottom row: Attack, Hold, Release, Floor (small knobs).
+    // Bottom row: Hold, Release, Floor (small knobs). Attack is fixed at
+    // ClientGate::kAttackMs and has no control here.
     auto* bottom = new QHBoxLayout;
     bottom->setSpacing(8);
 
@@ -196,7 +197,6 @@ ClientGateEditor::ClientGateEditor(AudioEngine* engine, QWidget* parent)
         return k;
     };
 
-    // Attack: 0.1..100 ms exponential.
 
     // Hold: 0..500 ms linear.
     m_hold = makeBottomKnob("Hold");

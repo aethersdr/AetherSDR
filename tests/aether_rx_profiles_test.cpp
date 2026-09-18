@@ -7,6 +7,7 @@
 #include "core/AetherRxProfiles.h"
 #include "core/AudioEngine.h"
 #include "core/ClientComp.h"
+#include "core/AppSettings.h"
 #include "core/ClientGate.h"
 
 #include <QJsonDocument>
@@ -45,6 +46,9 @@ private slots:
     void deleteRemovesIt();
     void theStoredCopyCarriesNoNameOfItsOwn();
     void roundTripsTheLiveReceiveChain();
+    void aRetiredStageNameDoesNotDiscardTheStoredOrder();
+    void anUnknownStageNameStillResetsToTheDefault();
+    void retiredSettingsKeysAreDroppedOnLoad();
 
 private:
     QTemporaryDir m_home;
@@ -229,6 +233,82 @@ void AetherRxProfilesTest::roundTripsTheLiveReceiveChain()
     QVERIFY(chain.size() >= 2);
     QCOMPARE(chain.at(0), AudioEngine::RxChainStage::Comp);
     QCOMPARE(chain.at(1), AudioEngine::RxChainStage::Gate);
+}
+
+// A settings file written before the RX de-esser was retired still names it.
+// That is not a foreign file, and the operator's ordering has to survive it —
+// the load path used to treat any unrecognised name as evidence of a strange
+// settings file and reset the whole chain to the default, which would have
+// silently undone every reorder in the same release that made the chain
+// drag-reorderable.
+void AetherRxProfilesTest::aRetiredStageNameDoesNotDiscardTheStoredOrder()
+{
+    AppSettings::instance().setValue(
+        QStringLiteral("ClientRxChainStages"),
+        QStringLiteral("Pudu,DeEss,Tube,Comp,Eq,Gate"));
+
+    AudioEngine engine;
+    engine.loadClientRxChainOrder();
+
+    const QVector<AudioEngine::RxChainStage> got = engine.rxChainStages();
+    const QVector<AudioEngine::RxChainStage> want{
+        AudioEngine::RxChainStage::Pudu, AudioEngine::RxChainStage::Tube,
+        AudioEngine::RxChainStage::Comp, AudioEngine::RxChainStage::Eq,
+        AudioEngine::RxChainStage::Gate,
+    };
+    QCOMPARE(got, want);
+
+    // And the name is gone from the file, rather than waiting to be dropped
+    // again on every launch.
+    QVERIFY(!AppSettings::instance()
+                 .value(QStringLiteral("ClientRxChainStages"))
+                 .toString()
+                 .contains(QStringLiteral("DeEss")));
+}
+
+// A name from neither this build nor its retired list is still evidence of a
+// settings file worth distrusting, and still resets to the canonical order.
+void AetherRxProfilesTest::anUnknownStageNameStillResetsToTheDefault()
+{
+    AppSettings::instance().setValue(
+        QStringLiteral("ClientRxChainStages"),
+        QStringLiteral("Pudu,Flanger,Gate"));
+
+    AudioEngine engine;
+    engine.loadClientRxChainOrder();
+
+    // The canonical order, not the stored one: Pudu and Gate are discarded
+    // along with the name that could not be placed.
+    const QVector<AudioEngine::RxChainStage> got = engine.rxChainStages();
+    const QVector<AudioEngine::RxChainStage> canonical{
+        AudioEngine::RxChainStage::Gate, AudioEngine::RxChainStage::Eq,
+        AudioEngine::RxChainStage::Comp, AudioEngine::RxChainStage::Tube,
+        AudioEngine::RxChainStage::Pudu,
+    };
+    QCOMPARE(got, canonical);
+}
+
+// The de-esser's keys and the two fixed attack values are read by nothing
+// now; they should not keep riding along in every settings file.
+void AetherRxProfilesTest::retiredSettingsKeysAreDroppedOnLoad()
+{
+    auto& settings = AppSettings::instance();
+    settings.setValue(QStringLiteral("ClientDeEssRxEnabled"), QStringLiteral("True"));
+    settings.setValue(QStringLiteral("ClientDeEssRxThresholdDb"), QStringLiteral("-24.0"));
+    settings.setValue(QStringLiteral("ClientGateTxAttackMs"), QStringLiteral("0.5"));
+    settings.setValue(QStringLiteral("ClientTubeRxAttackMs"), QStringLiteral("5.0"));
+    // A key that is still live must survive the sweep.
+    settings.setValue(QStringLiteral("ClientGateTxHoldMs"), QStringLiteral("20.0"));
+
+    AudioEngine engine;   // its constructor runs the load sequence
+
+    for (const char* gone : {"ClientDeEssRxEnabled", "ClientDeEssRxThresholdDb",
+                             "ClientGateTxAttackMs", "ClientTubeRxAttackMs"}) {
+        QVERIFY2(settings.value(QLatin1String(gone), QString()).toString().isEmpty(),
+                 gone);
+    }
+    QCOMPARE(settings.value(QStringLiteral("ClientGateTxHoldMs")).toString(),
+             QStringLiteral("20.0"));
 }
 
 QTEST_MAIN(AetherRxProfilesTest)

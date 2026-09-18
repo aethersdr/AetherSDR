@@ -514,14 +514,29 @@ public:
         Tube  = 4,
         Pudu  = 5,
         // 6 was DeEss. Sibilance is a transmit problem; the RX stage only
-        // existed because this chain was built by mirroring the TX one, and
-        // the value is left unused rather than reassigned because chain order
-        // persists by number.
+        // existed because this chain was built by mirroring the TX one. The
+        // value stays reserved so a future stage does not inherit it and
+        // silently reinterpret an old packed chain.
+        //
+        // Order persists by NAME, not by number — saveClientRxChainOrder()
+        // writes "Eq,Gate,Comp,…" and packRxChain() never reaches disk. A
+        // stored list still naming DeEss is handled by
+        // isRetiredRxStageName(): the entry is dropped and the rest of the
+        // operator's order is kept.
     };
     static constexpr int kMaxRxChainStages = 8;  // packs into uint64_t
 
     void setRxChainStages(const QVector<RxChainStage>& stages);
     QVector<RxChainStage> rxChainStages() const;
+    // Emit nrGainChanged only when the reading has moved enough to see, or
+    // the active flag flipped. Audio thread.
+    void publishNrGainIfChanged(float gain, bool active);
+
+    // Drop settings keys for stages and parameters this build no longer has,
+    // so they stop riding along in every operator's settings file. Runs once
+    // at load, after the modules that might still have wanted them.
+    void dropRetiredSettingsKeys();
+
     void loadClientRxChainOrder();
     void saveClientRxChainOrder() const;
 
@@ -751,6 +766,12 @@ signals:
     // method shares, so it means the same thing for NR2, NR4, MNR, DFNR, RN2,
     // BNR and NNR. `active` is false when no method is running (or the chain is
     // bypassed for TX), which is not the same as a gain that happens to be 1.0.
+    //
+    // Emitted only when the reading actually moves — see
+    // publishNrGainIfChanged(). A block-rate signal that never changed value
+    // was ~100 queued cross-thread events a second for a strip that would
+    // paint the same pixels, and it kept arriving while AetherRX was closed,
+    // because PersistentDialog keeps the widget and its connection alive.
     void nrGainChanged(float gain, bool active);
     void nr2EnabledChanged(bool on);
     void nr4EnabledChanged(bool on);
@@ -1373,6 +1394,11 @@ private:
     // blocks. Written on the audio path, read from the GUI thread.
     std::atomic<float> m_nrGain{1.0f};
     std::atomic<bool>  m_nrGainActive{false};
+    // Last values actually emitted, so a block that reports the same reading
+    // costs nothing. Audio thread only.
+    float              m_lastPublishedNrGain{-1.0f};
+    bool               m_lastPublishedNrActive{false};
+    bool               m_nrGainEverPublished{false};
 
     // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so
     // mutual-exclusion in the other NR setters compiles regardless of the build).

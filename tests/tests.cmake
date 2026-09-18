@@ -6012,11 +6012,8 @@ set(AETHER_SETTINGS_CONSUMERS
     automation_bridge_start_outcome_test
     slice_label_test
     ulanzi_mapping_migration_test
-    compact_metrics_test
-    mode_filter_presets_test
     modem_chrome_test
     aether_rx_profiles_test
-    rx_stage_reorder_test
     theme_manager_test
     theme_seed_test
     panadapter_message_overlay_test
