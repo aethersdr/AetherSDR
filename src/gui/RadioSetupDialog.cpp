@@ -8180,10 +8180,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     [serialCombo, serialCustomEdit](int idx) {
                 serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
             });
-            // This row had NO refresh path at all: the combo was filled once,
-            // on a page that is built once, in a dialog that is never
-            // destroyed. Register a reseed so both the page's Refresh button
-            // and showEvent() can re-enumerate it.
+            // Refresh a retained page without discarding its current edits.
             auto reseed = [combo = QPointer<QComboBox>(serialCombo),
                            edit = QPointer<QLineEdit>(serialCustomEdit)]() {
                 if (!combo || !edit)
@@ -8413,10 +8410,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     [serialCombo, serialCustomEdit](int idx) {
                 serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
             });
-            // This row had NO refresh path at all: the combo was filled once,
-            // on a page that is built once, in a dialog that is never
-            // destroyed. Register a reseed so both the page's Refresh button
-            // and showEvent() can re-enumerate it.
+            // Refresh a retained page without discarding its current edits.
             auto reseed = [combo = QPointer<QComboBox>(serialCombo),
                            edit = QPointer<QLineEdit>(serialCustomEdit)]() {
                 if (!combo || !edit)
@@ -8842,10 +8836,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     [serialCombo, serialCustomEdit](int idx) {
                 serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
             });
-            // This row had NO refresh path at all: the combo was filled once,
-            // on a page that is built once, in a dialog that is never
-            // destroyed. Register a reseed so both the page's Refresh button
-            // and showEvent() can re-enumerate it.
+            // Refresh a retained page without discarding its current edits.
             auto reseed = [combo = QPointer<QComboBox>(serialCombo),
                            edit = QPointer<QLineEdit>(serialCustomEdit)]() {
                 if (!combo || !edit)

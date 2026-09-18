@@ -25,11 +25,9 @@ public:
     explicit MidiMappingDialog(MidiControlManager* manager, QWidget* parent = nullptr);
 
 protected:
-    // MainWindow keeps this dialog in a QPointer and only hides it
-    // (showOrRaisePersistent), so the widget tree is built once per process.
-    // Re-enumerate the ports on every show, or a controller plugged in while
-    // the window was closed can never appear. Same contract as
-    // RadioSetupDialog's m_calibrationReseed / m_droopReseed.
+    // Re-enumerate on show in case a retained instance was hidden while the
+    // device list changed. Normal MainWindow close deletes the dialog via
+    // WA_DeleteOnClose; the next open constructs a fresh instance.
     void showEvent(QShowEvent* event) override;
 
 private:

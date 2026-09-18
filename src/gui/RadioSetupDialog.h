@@ -285,15 +285,10 @@ private:
     // explicit Connect click so an unfinished value cannot leak in.
     QVector<std::function<void()>> m_peripheralRowSavers;
 
-    // Serial-port combos re-enumerate through these. Same reason as
-    // m_calibrationReseed: the page that owns each combo is built once per
-    // process and this dialog is only ever hidden, so a combo filled from
-    // QSerialPortInfo at build time would otherwise show that snapshot for the
-    // life of the process — a serial adapter plugged in afterwards never
-    // appears, and one unplugged is still offered. Appended by
-    // buildSerialTab() and buildPeripheralsTab() (three rows), run from
-    // showEvent() and from each page's Refresh button. Empty until the owning
-    // page is actually built, so nothing probes hardware early (#1776).
+    // Refresh already-built serial pages without rebuilding their controls.
+    // Each page is built once per dialog instance; normal close deletes the
+    // dialog. Used by showEvent and Refresh buttons, and empty until the
+    // owning page is built so enumeration remains deferred (#1776).
     QVector<std::function<void()>> m_serialPortReseeds;
 };
 
