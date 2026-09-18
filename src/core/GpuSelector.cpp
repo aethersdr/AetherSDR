@@ -262,6 +262,20 @@ void GpuSelector::applyAtStartup()
     } else if (qEnvironmentVariableIsSet("DRI_PRIME")) {
         vetoedBy = "DRI_PRIME";
     } else if (!wayland && qEnvironmentVariableIsSet("__GLX_VENDOR_LIBRARY_NAME")) {
+        // NB: `wayland` is a prediction from the environment, not the backend
+        // Qt ends up on. A later `-platform xcb` on the command line, or a
+        // Wayland plugin that fails to load and falls back through the
+        // `wayland;xcb` list, can still land us on GLX — and neither is
+        // knowable here, because this runs before QApplication parses argv.
+        //
+        // The cost of getting it wrong is one summary line naming a GPU we may
+        // not have got. It is not a rendering change: the Wayland branch never
+        // sets __GLX_VENDOR_LIBRARY_NAME, so the operator's own value still
+        // decides GLX dispatch exactly as it did before, __NV_PRIME_RENDER_
+        // OFFLOAD alone is inert for GLX against a mesa vendor, and DRI_PRIME
+        // is correct under either backend. Nothing here can re-arm the GLX
+        // BadValue this file's comment records — that needs us to SET the GLX
+        // variable under Wayland, which this path never does.
         vetoedBy = "__GLX_VENDOR_LIBRARY_NAME";
     }
     if (vetoedBy) {
