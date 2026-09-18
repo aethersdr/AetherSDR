@@ -1245,9 +1245,17 @@ add_test(NAME compact_metrics_test COMMAND compact_metrics_test)
 set_tests_properties(compact_metrics_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# ModemChrome::colour() resolves a token through ThemeManager, so the test
+# needs the theming stack behind it — same set theme_manager_test links.
 add_executable(modem_chrome_test
     tests/modem_chrome_test.cpp
     src/gui/ModemChrome.cpp
+    src/core/ThemeManager.cpp
+    src/core/ThemeSeedGenerated.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/gui/DragValuePopup.cpp
 )
 target_include_directories(modem_chrome_test PRIVATE src)
 target_link_libraries(modem_chrome_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
