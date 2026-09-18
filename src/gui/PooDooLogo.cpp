@@ -1,4 +1,5 @@
 #include "PooDooLogo.h"
+#include "PanelTick.h"
 #include "core/ClientPudu.h"
 
 #include <QFont>
@@ -27,15 +28,18 @@ PooDooLogo::PooDooLogo(QWidget* parent) : QWidget(parent)
     setAttribute(Qt::WA_OpaquePaintEvent, false);
 
     m_timer = new QTimer(this);
-    m_timer->setInterval(33);
+    m_timer->setInterval(kPanelTickMs);
     connect(m_timer, &QTimer::timeout, this, &PooDooLogo::tick);
 }
 
 void PooDooLogo::setPudu(ClientPudu* p)
 {
     m_pudu = p;
-    if (m_pudu) m_timer->start();
-    else        m_timer->stop();
+    // Only while on screen: see PanelTick.h. Binding a model to a widget
+    // that is not visible used to start a poll nothing would ever stop,
+    // because a never-shown widget gets no hideEvent.
+    if (m_pudu && isVisible()) m_timer->start();
+    else                         m_timer->stop();
     update();
 }
 
@@ -134,6 +138,19 @@ void PooDooLogo::paintEvent(QPaintEvent*)
     const float ux1 = r.left() + r.width() * 0.15f;
     const float ux2 = r.right() - r.width() * 0.15f;
     p.drawLine(QPointF(ux1, uy), QPointF(ux2, uy));
+}
+
+
+void PooDooLogo::showEvent(QShowEvent* ev)
+{
+    QWidget::showEvent(ev);
+    if (m_pudu && m_timer) m_timer->start();
+}
+
+void PooDooLogo::hideEvent(QHideEvent* ev)
+{
+    if (m_timer) m_timer->stop();
+    QWidget::hideEvent(ev);
 }
 
 } // namespace AetherSDR

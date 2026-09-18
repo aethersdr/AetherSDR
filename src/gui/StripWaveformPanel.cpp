@@ -125,6 +125,10 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
         connect(m_audio, &AudioEngine::txPostChainScopeReady,
                 m_waveform, [this](const QByteArray& mono, int sr) {
             if (m_side != Side::Tx || !m_waveform) return;
+            // Nothing to draw into while the page is stacked behind another
+            // tab, and the ring buffer would only be filled with history no
+            // one saw. The scope resumes from the moment it is looked at.
+            if (!m_waveform->isVisible()) return;
             m_waveform->appendScopeSamples(mono, sr, /*tx=*/true);
         });
         // RX-side tap: dedicated rxPostChainScopeReady — same 8 ms
@@ -134,6 +138,10 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
         connect(m_audio, &AudioEngine::rxPostChainScopeReady,
                 m_waveform, [this](const QByteArray& mono, int sr) {
             if (m_side != Side::Rx || !m_waveform) return;
+            // Nothing to draw into while the page is stacked behind another
+            // tab, and the ring buffer would only be filled with history no
+            // one saw. The scope resumes from the moment it is looked at.
+            if (!m_waveform->isVisible()) return;
             m_waveform->appendScopeSamples(mono, sr, /*tx=*/false);
         });
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PanelTick.h"
+
 #include <QColor>
 #include <QTimer>
 #include <QVector>
@@ -45,7 +47,7 @@ private:
     void resizeBuffers(int width);
     void advance();
 
-    static constexpr int kFrameMs = 50;
+    static constexpr int kFrameMs = kPanelTickMs;
     // Below this the step is drawn as floor rather than signal. Chosen to sit
     // under the gain a spectral method leaves on speech and above the gain it
     // leaves on the noise between syllables.

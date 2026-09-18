@@ -1,4 +1,5 @@
 #include "StripCompPanel.h"
+#include "PanelTick.h"
 #include "ClientCompEditorCanvas.h"
 #include "ClientCompKnob.h"
 #include "ClientCompLimiterButton.h"
@@ -317,7 +318,7 @@ StripCompPanel::StripCompPanel(AudioEngine* engine, QWidget* parent)
     syncControlsFromEngine();
 
     m_meterTimer = new QTimer(this);
-    m_meterTimer->setInterval(33);  // ~30 Hz
+    m_meterTimer->setInterval(kPanelTickMs);
     connect(m_meterTimer, &QTimer::timeout,
             this, &StripCompPanel::tickMeters);
 }
@@ -350,7 +351,11 @@ void StripCompPanel::showForTx()
     setWindowTitle(title);
     restoreGeometryFromSettings();
     syncControlsFromEngine();
-    if (m_meterTimer) m_meterTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
     show();
     raise();
     activateWindow();
@@ -379,7 +384,11 @@ void StripCompPanel::showForRx()
     setWindowTitle(title);
     restoreGeometryFromSettings();
     syncControlsFromEngine();
-    if (m_meterTimer) m_meterTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
     show();
     raise();
     activateWindow();

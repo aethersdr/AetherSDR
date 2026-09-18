@@ -1,4 +1,5 @@
 #include "ClientGateLevelView.h"
+#include "PanelTick.h"
 #include "core/ClientGate.h"
 
 #include <QPainter>
@@ -13,8 +14,8 @@ namespace AetherSDR {
 
 namespace {
 
-constexpr int kHistoryCount = 120;      // ~4 s at 30 Hz
-constexpr int kPollMs       = 33;
+constexpr int kHistoryCount = 240;      // ~4 s at kPanelTickMs
+constexpr int kPollMs       = kPanelTickMs;
 
 inline QColor kBgColor() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
 inline QColor kFrameColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
@@ -50,8 +51,11 @@ ClientGateLevelView::ClientGateLevelView(QWidget* parent) : QWidget(parent)
 void ClientGateLevelView::setGate(ClientGate* gate)
 {
     m_gate = gate;
-    if (m_gate) m_timer->start();
-    else        m_timer->stop();
+    // Only while on screen: see PanelTick.h. Binding a model to a widget
+    // that is not visible used to start a poll nothing would ever stop,
+    // because a never-shown widget gets no hideEvent.
+    if (m_gate && isVisible()) m_timer->start();
+    else                         m_timer->stop();
     update();
 }
 
@@ -214,6 +218,19 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
             p.fillRect(fill, kPeakColor());
         }
     }
+}
+
+
+void ClientGateLevelView::showEvent(QShowEvent* ev)
+{
+    QWidget::showEvent(ev);
+    if (m_gate && m_timer) m_timer->start();
+}
+
+void ClientGateLevelView::hideEvent(QHideEvent* ev)
+{
+    if (m_timer) m_timer->stop();
+    QWidget::hideEvent(ev);
 }
 
 } // namespace AetherSDR

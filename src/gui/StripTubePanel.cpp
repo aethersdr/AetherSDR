@@ -1,4 +1,5 @@
 #include "StripTubePanel.h"
+#include "PanelTick.h"
 #include "ClientCompKnob.h"
 #include "ClientLevelMeter.h"
 #include "ClientTubeCurveWidget.h"
@@ -316,7 +317,7 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
     syncControlsFromEngine();
 
     m_syncTimer = new QTimer(this);
-    m_syncTimer->setInterval(33);
+    m_syncTimer->setInterval(kPanelTickMs);
     connect(m_syncTimer, &QTimer::timeout,
             this, &StripTubePanel::syncControlsFromEngine);
 }
@@ -360,7 +361,11 @@ void StripTubePanel::showForTx()
     show();
     raise();
     activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
 }
 
 void StripTubePanel::showForRx()
@@ -380,7 +385,11 @@ void StripTubePanel::showForRx()
     show();
     raise();
     activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
 }
 
 void StripTubePanel::syncControlsFromEngine()
@@ -517,8 +526,17 @@ void StripTubePanel::moveEvent(QMoveEvent* ev)
 void StripTubePanel::resizeEvent(QResizeEvent* ev)
 { saveGeometryToSettings(); QWidget::resizeEvent(ev); }
 void StripTubePanel::showEvent(QShowEvent* ev)
-{ QWidget::showEvent(ev); }
+{
+    QWidget::showEvent(ev);
+    if (m_syncTimer) m_syncTimer->start();
+}
+
 void StripTubePanel::hideEvent(QHideEvent* ev)
-{ saveGeometryToSettings(); QWidget::hideEvent(ev); }
+{
+    saveGeometryToSettings();
+    // Stacked behind another tab, or the window closed: stop polling.
+    if (m_syncTimer) m_syncTimer->stop();
+    QWidget::hideEvent(ev);
+}
 
 } // namespace AetherSDR

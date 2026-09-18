@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QWidget>
+
+class QHideEvent;
+class QShowEvent;
 #include <vector>
 
 class QTimer;
@@ -34,6 +37,10 @@ public:
 
 protected:
     void paintEvent(QPaintEvent* ev) override;
+    // Polling stops while this widget is hidden — a stacked page behind
+    // another tab still gets its timer events, but not its repaints.
+    void showEvent(QShowEvent* ev) override;
+    void hideEvent(QHideEvent* ev) override;
 
 private:
     void tick();

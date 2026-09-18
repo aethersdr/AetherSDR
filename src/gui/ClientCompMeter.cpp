@@ -1,4 +1,5 @@
 #include "ClientCompMeter.h"
+#include "PanelTick.h"
 
 #include <QPainter>
 #include <QPaintEvent>
@@ -34,7 +35,7 @@ ClientCompMeter::ClientCompMeter(QWidget* parent) : QWidget(parent)
     m_peakHoldTimer.start();
 
     m_animTimer.setTimerType(Qt::PreciseTimer);
-    m_animTimer.setInterval(kMeterSmootherIntervalMs);
+    m_animTimer.setInterval(kPanelTickMs);
     connect(&m_animTimer, &QTimer::timeout, this, [this]() {
         const bool settled = !m_smooth.tick(m_animElapsed.restart());
         if (settled)

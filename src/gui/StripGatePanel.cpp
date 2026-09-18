@@ -1,4 +1,5 @@
 #include "StripGatePanel.h"
+#include "PanelTick.h"
 #include "ClientCompKnob.h"
 #include "ClientGateCurveWidget.h"
 #include "ClientGateLevelView.h"
@@ -378,7 +379,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     // here live, and vice versa.  30 Hz is cheap — each knob setValue
     // is a short clamp + repaint when values differ.
     m_syncTimer = new QTimer(this);
-    m_syncTimer->setInterval(33);
+    m_syncTimer->setInterval(kPanelTickMs);
     connect(m_syncTimer, &QTimer::timeout,
             this, &StripGatePanel::syncControlsFromEngine);
 }
@@ -415,7 +416,11 @@ void StripGatePanel::showForTx()
     show();
     raise();
     activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
 }
 
 void StripGatePanel::showForRx()
@@ -434,7 +439,11 @@ void StripGatePanel::showForRx()
     show();
     raise();
     activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
 }
 
 void StripGatePanel::syncControlsFromEngine()
@@ -604,11 +613,15 @@ void StripGatePanel::resizeEvent(QResizeEvent* ev)
 void StripGatePanel::showEvent(QShowEvent* ev)
 {
     QWidget::showEvent(ev);
+    if (m_syncTimer) m_syncTimer->start();
 }
 
 void StripGatePanel::hideEvent(QHideEvent* ev)
 {
     saveGeometryToSettings();
+    // Stacked behind another tab, or the window closed: stop reading the
+    // engine for something nobody can see.
+    if (m_syncTimer) m_syncTimer->stop();
     QWidget::hideEvent(ev);
 }
 
