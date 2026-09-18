@@ -1012,6 +1012,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     const bool connected = m_model->isConnected();
     const RadioCapabilities caps = m_model->backendCapabilities();
     // M3b: these legacy info-field hides await their scoped migration.
+    // This legacy radio/API status is distinct from the host knob settings.
     if (m_flexControlInfoField) {
         m_flexControlInfoField->setVisible(!connected || caps.hasFlexControlIntegration);
     }
@@ -1097,9 +1098,8 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (m_audioCompressionGroup) {
         m_audioCompressionGroup->setVisible(!connected || caps.hasAudioCompression);
     }
-    if (m_flexControlGroup) {
-        m_flexControlGroup->setVisible(!connected || caps.hasFlexControlIntegration);
-    }
+    // The host serial knob settings remain available for every radio (#5778).
+    // Only the legacy radio/API info field above follows radio capabilities.
     if (m_optionsLabel) {
         m_optionsLabel->setText(radioOptionsText(m_model));
     }
@@ -7243,8 +7243,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* group = new QGroupBox("FlexControl Tuning Knob");
         group->setStyleSheet(kGroupStyle);
         m_flexControlGroup = group;
-        group->setVisible(!m_model->isConnected()
-                          || m_model->backendCapabilities().hasFlexControlIntegration);
+        // Host peripheral, not a radio capability -- see updateRadioCapabilityVisibility (#5778).
+        group->setVisible(true);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -9098,11 +9098,7 @@ void RadioSetupDialog::selectTab(const QString& tabName)
 
 void RadioSetupDialog::revealFlexControlSettings()
 {
-    if (m_model->isConnected()
-        && !m_model->backendCapabilities().hasFlexControlIntegration) {
-        return;
-    }
-
+    // No capability check: the knob is a host serial device (#5778).
     selectTab(QStringLiteral("Serial & Controllers"));
     if (!m_flexControlGroup) {
         return;

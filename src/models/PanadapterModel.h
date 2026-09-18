@@ -108,6 +108,21 @@ public:
     // milliseconds Flex's `line_duration` wire name claims (core/WaterfallRate.h,
     // #4606).
     void setDisplayRates(int fps, int wfRate);
+
+    // The FFT average, applied LOCALLY and authoritatively.
+    //
+    // NOT setRequestedFftSettings(), and the difference is the whole reason
+    // this exists. That one records an INTENT awaiting the radio's echo and
+    // says so: "the next valid radio publication always supersedes this
+    // intent". On a backend that shapes its own display there is no such
+    // publication -- the client IS the authority -- so an intent flag would
+    // leave the value permanently marked as unconfirmed, waiting for an echo
+    // that cannot arrive.
+    //
+    // Mirrors setDisplayRates above, which solved the same problem for fps by
+    // emitting both Changed and Reported so the widget's existing Flex wiring
+    // picks it up with no special case.
+    void setLocalAverage(int average);
     // Flex-specific WNB extension applied from the backend's namespaced
     // extensionStatus("flex","panWnb",…). Applies only the keys present;
     // emits wnbChanged/wnbStateChanged when anything changes. (aetherd RFC 2.3

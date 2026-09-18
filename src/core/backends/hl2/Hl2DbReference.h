@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
+
 namespace AetherSDR::hl2 {
 
 // The single owner of everything that relates a raw dBFS number to a dBm one,
@@ -26,26 +28,16 @@ namespace AetherSDR::hl2 {
 // estimation. Within that range a gain change provably cannot move a reported
 // dBm value.
 //
-// ON THIS BOARD THAT RANGE ENDS AT +19 dB, and the limit is real. The AD9866
-// decode takes `code & 0x1F` (ad9866.v, and again ad9866ctrl.v's CMD_RXGAIN),
-// so codes 32..60 replay 0..28: a COMMANDED 48 dB applies 16 dB, and
-// subtracting 48 here over-corrects the display by 32 dB — the exact trace jump
-// this class exists to prevent, produced by the fix rather than by the gain.
-// Upstream softerhardware/Hermes-Lite2 #177 confirms it as design intent (P1
-// compatibility, 5 bits of gain), not a bug. Measured on ON8ST's board,
-// gateware 74.2, codes 28..31 also lie within 0.07 dB of each other, so the
-// usable span is about -12..+16 dB, not the -12..+48 the protocol advertises
-// and Hl2Backend::kLnaGainMaxDb still publishes.
+// A fold above code 31 was reported on one board in upstream issue #177.
+// Its scope is unresolved: ad9866.v at 883a338 passes all six gain bits when
+// the native-format flag is set, as AetherSDR sets it. Keep the documented
+// range and existing reference until the measured behavior is reconciled with
+// that command path; do not reinterpret stored gains from this observation.
+// https://github.com/softerhardware/Hermes-Lite2/issues/177
 //
-// NO CORRECTION IS APPLIED HERE, deliberately. This object is handed a
-// commanded gain and has no way to know what the board did with it; the fold
-// belongs wherever the commanded value is clamped and published
-// (kLnaGainMinDb/kLnaGainMaxDb and panRfGainInfoChanged), so that the operator
-// is never offered a gain the hardware cannot apply in the first place. Until
-// that lands, this is a known hole of up to 32 dB above +19 dB commanded,
-// stated rather than hidden — the same treatment fullScaleDbm gets below. It is
-// also why item 14's regulator must bound its own offset by the usable range:
-// the measured diurnal swing (22-28 dB) is larger than the control authority.
+// This object knows the commanded gain, not the analog response of a board.
+// Any future hardware-specific correction needs a qualified mapping shared
+// with the reported gain and separate validation of the display and AGC paths.
 //
 // The absolute term (fullScaleDbm -- what 0 dBFS corresponds to at the antenna
 // with 0 dB of LNA gain) is NOT calibrated here. It is a per-unit property of
@@ -125,7 +117,7 @@ namespace AetherSDR::hl2 {
 class Hl2DbReference {
 public:
     // Matches Hl2Backend/MetisClient's default LNA setting.
-    static constexpr double kDefaultLnaGainDb = 20.0;
+    static constexpr double kDefaultLnaGainDb = kLnaDefaultGainDb;
 
     // Operator AGC-T units (0..100) -> WDSP maximum-gain ceiling in dB. 0.6
     // spans 0..60 dB, which puts the default of 65 at 39 dB -- measured clean

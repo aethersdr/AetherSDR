@@ -55,11 +55,8 @@ int main()
     check(near(ref.toDbm(-13.0 - 12.0), reported),
           "a 12 dB gain cut does not move the reported dBm");
 
-    // COMMANDED 48, not 48 dB of gain: the AD9866 folds code & 0x1F above code
-    // 31, so this applies 16 dB on real hardware (upstream #177). What is
-    // asserted here is the ARITHMETIC — given the gain it is told about, the
-    // reference removes it exactly. The gap between the commanded code and the
-    // applied gain is a seam problem, named in the class header.
+    // The documented native range includes +48. This tests the commanded
+    // gain arithmetic; actual board response needs independent measurement.
     ref.setLnaGainDb(48.0);
     check(near(ref.toDbm(-13.0 + 48.0), reported),
           "the reference removes whatever gain it is told about, exactly");
@@ -115,9 +112,9 @@ int main()
     }
 
     // The commanded limits, where referring saturates. A negative ceiling would
-    // be the AGC attenuating a signal it was asked to amplify. 48 is a
-    // commanded code rather than 48 dB of gain (see above and the class
-    // header); the clamp is what is under test, not the board's response.
+    // be the AGC attenuating a signal it was asked to amplify. 48 is
+    // the maximum documented commanded gain; this tests the arithmetic clamp,
+    // not the board's analog response.
     agc.setLnaGainDb(48.0);
     check(agc.agcCeilingDb(kDefaultThresholdUnits) >= 0.0,
           "the referred ceiling never goes negative at full LNA gain");
@@ -143,6 +140,22 @@ int main()
           "calibrating the display does not move the AGC ceiling");
     check(near(agc.offsetDb(), -60.0),
           "...while it does move the display offset");
+
+    // Compatibility: preserve the pre-change reference, offset and AGC
+    // ceiling for every documented stored gain, including values above +19.
+    check(Hl2DbReference::kDefaultLnaGainDb == 20.0,
+          "fresh profiles retain the existing +20 dB reference");
+    for (int stored = -12; stored <= 48; ++stored) {
+        Hl2DbReference after;
+        const auto seed = AetherSDR::hl2::connectLna(
+            true, true, stored, false, 0, AetherSDR::hl2::kLnaDefaultGainDb,
+            AetherSDR::hl2::kLnaGainMinDb, AetherSDR::hl2::kLnaGainMaxDb);
+        after.setLnaGainDb(seed.liveDb);
+        const double oldOffset = 20.0 - stored;
+        check(near(after.offsetDb(), oldOffset), "stored gain preserves the old display reference");
+        check(near(after.agcCeilingDb(65), 39.0 + oldOffset),
+              "stored gain preserves the old AGC ceiling at 65");
+    }
 
     if (g_failures == 0)
         std::fprintf(stderr, "hl2_dbref_test: all checks passed\n");

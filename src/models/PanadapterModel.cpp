@@ -315,6 +315,23 @@ void PanadapterModel::setDisplayRates(int fps, int wfRate)
     }
 }
 
+void PanadapterModel::setLocalAverage(int average)
+{
+    if (average < 0 || average > 100) {
+        return;
+    }
+    // Authoritative, so the request flag is CLEARED rather than set: there is
+    // no echo coming and this value is not provisional.
+    m_averageIsRequest = false;
+    if (m_average != average) {
+        m_average = average;
+        emit averageChanged(average);
+    }
+    // Reported as well as Changed, like setDisplayRates' fps half, because the
+    // restore path reads the reported value when a pan is rebuilt.
+    emit averageReported(average);
+}
+
 void PanadapterModel::setRequestedFftSettings(int average, int fps)
 {
     // Only call after dispatch. Do not emit *Reported, persist, or schedule a

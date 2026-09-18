@@ -417,6 +417,35 @@ struct RadioCapabilities {
     // inclusive and expressed in Hz, matching the tuning fields above.
     QVector<TxPowerBand> txPowerBands;
 
+    // WHO OWNS THE DRIVE VALUE TransmitModel::rfPower() carries (#5518).
+    //
+    // Absent means this backend declares no drive at all — Sim and RTL have no
+    // transmitter, populate no TransmitDelta::rfPower, and nothing should
+    // publish drive for them. That is a third state, distinct from both answers
+    // below, which is why this is a record rather than a bool.
+    //
+    // Authority::Radio — the value is parsed back off the wire and is confirmed
+    // radio state. Flex reads `transmit rfpower=` off status; Icom reads the
+    // CI-V RF-power level (level::kRfPower).
+    //
+    // Authority::Engine — the HOST owns the drive register and rfPower() is
+    // operator intent, not applied power. The HL2 is the worked example:
+    // setTxPower() stores the requested percent BEFORE the transmit gate, and
+    // applyDrive() pins the hardware register at 0 for as long as TX is blocked,
+    // so rfPower() can read 100 with no RF leaving the radio. HL2's own
+    // diagnostics carry txDriveRegister/txDriveGated apart for that reason.
+    //
+    // Exported on the MQTT `aethersdr/radio/state` topic as `drive_confirmed`,
+    // ANDed with TransmitModel::rfPowerIsFromRadio() so the flag describes the
+    // value in that message rather than the backend in general — a backend that
+    // reads drive back still holds an unacknowledged REQUEST for one round trip
+    // after any local set (Principle II; #5733 review).
+    struct TransmitDriveControl {
+        SliceFrequencyControl::Authority authority{
+            SliceFrequencyControl::Authority::Unknown};
+    };
+    std::optional<TransmitDriveControl> transmitDriveControl;
+
     // Whether forward-power telemetry needs client-side attack/decay
     // ballistics. True preserves the established Flex presentation. A backend
     // whose telemetry already carries a stable indicated value can disable the

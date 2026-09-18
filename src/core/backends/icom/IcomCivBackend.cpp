@@ -382,6 +382,10 @@ RadioCapabilities IcomCivBackend::capabilities() const
     }
     c.forwardPowerRequiresSmoothing = profile.meters.powerConversion
         != MeterCalibrationProfile::PowerConversion::RelativePercentOfBandRating;
+    // rfPower() is filled from a CI-V RF-power level READ (level::kRfPower), not
+    // from what this client asked for, so it is confirmed radio state (#5518).
+    c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
+        SliceFrequencyControl::Authority::Radio};
 
     // THE MODES THIS RADIO RECEIVES BUT WILL NOT TRANSMIT IN — WFM on an
     // IC-705, which covers 76-108 MHz broadcast and whose transmitter does not

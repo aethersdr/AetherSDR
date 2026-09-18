@@ -35,6 +35,13 @@ constexpr int clampDb(int minDb, int v, int maxDb)
     return v < minDb ? minDb : (v > maxDb ? maxDb : v);
 }
 
+// Native HL2 gain format: address 0x0a bit 6 selects the six-bit AD9866
+// code, covering -12..+48 dB. See Protocol.md and ad9866.v at 883a338.
+constexpr int kLnaGainMinDb = -12;
+constexpr int kLnaGainMaxDb = 48;
+constexpr int kLnaGainStepDb = 1;
+constexpr int kLnaDefaultGainDb = 20;
+
 // What a session comes up on for the start band.
 struct ConnectLna {
     int liveDb = 0;
@@ -56,10 +63,11 @@ inline ConnectLna connectLna(bool haveRestoredState,
     // pins the gain outright, and a stored entry must not silently ignore what
     // the caller asked for. This header does not reverse it.
     if (paramPresent) {
-        // Preserve the pre-existing explicit-parameter behavior; this PR
-        // changes persistence, not the connect parameter's range handling.
-        out.liveDb = paramDb;
-        out.sessionPin = haveRestoredState && hasStoredEntry && paramDb != storedDb;
+        // The reported gain and session pin must use the same bounded value
+        // as the wire encoder. Compare after clamping so an out-of-range
+        // request equal to the stored endpoint does not create a false pin.
+        out.liveDb = clampDb(minDb, paramDb, maxDb);
+        out.sessionPin = haveRestoredState && hasStoredEntry && out.liveDb != storedDb;
         return out;
     }
     if (haveRestoredState) {
