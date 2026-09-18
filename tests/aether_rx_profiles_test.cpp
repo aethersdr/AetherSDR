@@ -1,0 +1,235 @@
+// The AetherRX profile library: the file store, the import reader and the
+// name collision rule. The dialog around it drives QFileDialog and
+// QInputDialog, which no headless run can click, so everything that decides
+// what lands on disk lives here where it can be checked.
+
+#include "TestSettingsProfile.h"
+#include "core/AetherRxProfiles.h"
+#include "core/AudioEngine.h"
+#include "core/ClientComp.h"
+#include "core/ClientGate.h"
+
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QtTest>
+
+using namespace AetherSDR;
+
+namespace {
+// A minimal profile of the shape captureRxJson() produces.
+QJsonObject sampleProfile(double threshold = -40.0)
+{
+    return QJsonObject{
+        { "chain", QJsonArray{ "Eq", "Gate", "Comp", "Tube", "Pudu" } },
+        { "gate",  QJsonObject{ { "enabled", true }, { "thresholdDb", threshold } } },
+        { "eq",    QJsonObject{ { "enabled", false } } },
+        { "rn2",   false },
+    };
+}
+} // namespace
+
+class AetherRxProfilesTest : public QObject {
+    Q_OBJECT
+
+private slots:
+    void initTestCase();
+    void storesAndListsByName();
+    void namesSortCaseInsensitively();
+    void exportWritesAStandaloneFileThatReadsBack();
+    void readFileTakesTheFirstProfileOutOfALibrary();
+    void readFileRejectsSomethingThatIsNotAProfile();
+    void readFileRejectsBrokenJson();
+    void uniqueNameStepsPastCollisions();
+    void deleteRemovesIt();
+    void theStoredCopyCarriesNoNameOfItsOwn();
+    void roundTripsTheLiveReceiveChain();
+
+private:
+    QTemporaryDir m_home;
+};
+
+void AetherRxProfilesTest::initTestCase()
+{
+    // Redirect GenericConfigLocation into the temp dir so the test writes its
+    // own library rather than the operator's.
+    QVERIFY(m_home.isValid());
+    qputenv("XDG_CONFIG_HOME", m_home.path().toUtf8());
+    QStandardPaths::setTestModeEnabled(false);
+}
+
+void AetherRxProfilesTest::storesAndListsByName()
+{
+    AetherRxProfiles lib(nullptr);
+    QVERIFY(lib.addProfile("Contest", sampleProfile()));
+    QVERIFY(lib.hasProfile("Contest"));
+    QVERIFY(lib.profileNames().contains("Contest"));
+
+    // A second library over the same file sees it — it went to disk, not
+    // just into memory.
+    AetherRxProfiles reopened(nullptr);
+    QVERIFY(reopened.hasProfile("Contest"));
+}
+
+void AetherRxProfilesTest::namesSortCaseInsensitively()
+{
+    AetherRxProfiles lib(nullptr);
+    lib.addProfile("zulu", sampleProfile());
+    lib.addProfile("Alpha", sampleProfile());
+    const QStringList names = lib.profileNames();
+    QVERIFY(names.indexOf("Alpha") < names.indexOf("zulu"));
+}
+
+void AetherRxProfilesTest::exportWritesAStandaloneFileThatReadsBack()
+{
+    AetherRxProfiles lib(nullptr);
+    QVERIFY(lib.addProfile("DX Weak Signal", sampleProfile(-52.5)));
+
+    const QString path = m_home.filePath("exported.json");
+    QVERIFY(lib.exportToFile("DX Weak Signal", path));
+
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    const QJsonObject o = QJsonDocument::fromJson(f.readAll()).object();
+    // The file names itself, so the importer has something to suggest.
+    QCOMPARE(o.value("name").toString(), QStringLiteral("DX Weak Signal"));
+    QCOMPARE(o.value("kind").toString(), QStringLiteral("AetherRX profile"));
+    QCOMPARE(o.value("gate").toObject().value("thresholdDb").toDouble(), -52.5);
+
+    QString suggested, error;
+    const QJsonObject back = AetherRxProfiles::readFile(path, &suggested, &error);
+    QVERIFY2(!back.isEmpty(), qPrintable(error));
+    QCOMPARE(suggested, QStringLiteral("DX Weak Signal"));
+    QCOMPARE(back.value("gate").toObject().value("thresholdDb").toDouble(), -52.5);
+}
+
+void AetherRxProfilesTest::readFileTakesTheFirstProfileOutOfALibrary()
+{
+    const QJsonObject library{
+        { "version",  1 },
+        { "profiles", QJsonObject{ { "Only One", sampleProfile(-33.0) } } },
+    };
+    const QString path = m_home.filePath("library.json");
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write(QJsonDocument(library).toJson());
+    f.close();
+
+    QString suggested, error;
+    const QJsonObject got = AetherRxProfiles::readFile(path, &suggested, &error);
+    QVERIFY2(!got.isEmpty(), qPrintable(error));
+    QCOMPARE(suggested, QStringLiteral("Only One"));
+    QCOMPARE(got.value("gate").toObject().value("thresholdDb").toDouble(), -33.0);
+}
+
+void AetherRxProfilesTest::readFileRejectsSomethingThatIsNotAProfile()
+{
+    const QString path = m_home.filePath("wrong.json");
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("{\"radio\":\"FLEX-8600\",\"slices\":3}");
+    f.close();
+
+    QString suggested, error;
+    QVERIFY(AetherRxProfiles::readFile(path, &suggested, &error).isEmpty());
+    QVERIFY(!error.isEmpty());
+}
+
+void AetherRxProfilesTest::readFileRejectsBrokenJson()
+{
+    const QString path = m_home.filePath("broken.json");
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("{ this is not json");
+    f.close();
+
+    QString suggested, error;
+    QVERIFY(AetherRxProfiles::readFile(path, &suggested, &error).isEmpty());
+    QVERIFY(error.contains("JSON"));
+}
+
+void AetherRxProfilesTest::uniqueNameStepsPastCollisions()
+{
+    AetherRxProfiles lib(nullptr);
+    QCOMPARE(lib.uniqueName("Fresh"), QStringLiteral("Fresh"));
+
+    lib.addProfile("Rain Static", sampleProfile());
+    QCOMPARE(lib.uniqueName("Rain Static"), QStringLiteral("Rain Static (2)"));
+    lib.addProfile("Rain Static (2)", sampleProfile());
+    QCOMPARE(lib.uniqueName("Rain Static"), QStringLiteral("Rain Static (3)"));
+
+    // An import whose file offered nothing still gets a name to land on.
+    QVERIFY(!lib.uniqueName(QString()).isEmpty());
+}
+
+void AetherRxProfilesTest::deleteRemovesIt()
+{
+    AetherRxProfiles lib(nullptr);
+    lib.addProfile("Scratch", sampleProfile());
+    QVERIFY(lib.deleteProfile("Scratch"));
+    QVERIFY(!lib.hasProfile("Scratch"));
+    QVERIFY(!lib.deleteProfile("Scratch"));   // second time is a no-op, not a crash
+}
+
+void AetherRxProfilesTest::theStoredCopyCarriesNoNameOfItsOwn()
+{
+    // The key is the name. A copy inside the object would be a second place
+    // for it to be wrong after a rename, so addProfile strips it.
+    AetherRxProfiles lib(nullptr);
+    QJsonObject withName = sampleProfile();
+    withName["name"] = QStringLiteral("Something Else");
+    QVERIFY(lib.addProfile("Canonical", withName));
+
+    const QString path = m_home.filePath("canonical.json");
+    QVERIFY(lib.exportToFile("Canonical", path));
+    QFile f(path);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    QCOMPARE(QJsonDocument::fromJson(f.readAll()).object().value("name").toString(),
+             QStringLiteral("Canonical"));
+}
+
+// The whole point of a profile: take the chain as it stands, change it, put
+// the profile back, and get what you had. This is also the only cover on the
+// captureRxJson/applyRxJson pair that ChannelStripPresets now shares with
+// this library — move either one and this notices.
+void AetherRxProfilesTest::roundTripsTheLiveReceiveChain()
+{
+    AudioEngine engine;
+    AetherRxProfiles lib(&engine, nullptr);
+
+    auto* gate = engine.clientGateRx();
+    auto* comp = engine.clientCompRx();
+    QVERIFY(gate && comp);
+
+    gate->setEnabled(true);
+    gate->setThresholdDb(-37.5f);
+    comp->setEnabled(false);
+    comp->setRatio(7.25f);
+    engine.setRxChainStages({ AudioEngine::RxChainStage::Comp,
+                              AudioEngine::RxChainStage::Gate });
+
+    QVERIFY(lib.saveFromCurrent("Round Trip"));
+
+    // Move everything the profile claims to hold.
+    gate->setEnabled(false);
+    gate->setThresholdDb(-5.0f);
+    comp->setEnabled(true);
+    comp->setRatio(1.5f);
+    engine.setRxChainStages({ AudioEngine::RxChainStage::Gate,
+                              AudioEngine::RxChainStage::Comp });
+
+    QVERIFY(lib.loadProfile("Round Trip"));
+
+    QCOMPARE(gate->isEnabled(), true);
+    QVERIFY(qAbs(gate->thresholdDb() - (-37.5f)) < 0.01f);
+    QCOMPARE(comp->isEnabled(), false);
+    QVERIFY(qAbs(comp->ratio() - 7.25f) < 0.01f);
+    const auto chain = engine.rxChainStages();
+    QVERIFY(chain.size() >= 2);
+    QCOMPARE(chain.at(0), AudioEngine::RxChainStage::Comp);
+    QCOMPARE(chain.at(1), AudioEngine::RxChainStage::Gate);
+}
+
+QTEST_MAIN(AetherRxProfilesTest)
+#include "aether_rx_profiles_test.moc"

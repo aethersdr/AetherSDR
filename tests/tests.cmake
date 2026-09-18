@@ -1221,6 +1221,13 @@ target_include_directories(mode_filter_presets_test PRIVATE src)
 target_link_libraries(mode_filter_presets_test PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
 add_test(NAME mode_filter_presets_test COMMAND mode_filter_presets_test)
 
+add_executable(aether_rx_profiles_test
+    tests/aether_rx_profiles_test.cpp
+)
+target_include_directories(aether_rx_profiles_test PRIVATE src)
+target_link_libraries(aether_rx_profiles_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME aether_rx_profiles_test COMMAND aether_rx_profiles_test)
+
 add_executable(rx_stage_reorder_test
     tests/rx_stage_reorder_test.cpp
 )
@@ -5998,6 +6005,7 @@ set(AETHER_SETTINGS_CONSUMERS
     compact_metrics_test
     mode_filter_presets_test
     modem_chrome_test
+    aether_rx_profiles_test
     rx_stage_reorder_test
     theme_manager_test
     theme_seed_test

@@ -1,5 +1,6 @@
 #include "AetherRxDialog.h"
 #include "AetherDspWidget.h"
+#include "AetherRxSettingsDialog.h"
 #include "ClientEqApplet.h"   // ClientEqApplet::Path
 #include "EditorFramelessTitleBar.h"
 #include "CompactMetrics.h"
@@ -376,6 +377,34 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     }
 
     tabsBox->addStretch(1);
+
+    // Settings sits under the stretch, at the foot of the column: it is not a
+    // stage, so it is not in the run of tabs, and the gap says so.
+    {
+        auto* settings = new QPushButton(tr("Settings"));
+        settings->setObjectName(QStringLiteral("aetherRxSettingsButton"));
+        settings->setAccessibleName(tr("AetherRX settings"));
+        settings->setToolTip(tr("Profiles: save, load, import and export the "
+                                "receive chain."));
+        settings->setFlat(true);
+        settings->setProperty("chrome", "tab");
+        settings->setStyleSheet(QStringLiteral("text-align: left;"));
+        settings->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        settings->setMinimumHeight(36);
+        connect(settings, &QPushButton::clicked,
+                this, &AetherRxDialog::showSettings);
+
+        // Indented like every other label, so the column has one left edge.
+        auto* row = new QWidget;
+        auto* rowBox = new QHBoxLayout(row);
+        rowBox->setContentsMargins(0, 0, 0, 0);
+        rowBox->setSpacing(4);
+        auto* pad = new QWidget;
+        pad->setFixedWidth(StageGrip::kGripWidth);
+        rowBox->addWidget(pad);
+        rowBox->addWidget(settings, 1);
+        tabsBox->addWidget(row);
+    }
 
     // Out has no box; give its label the same start as every other.
     if (m_outIndent && m_stageChecks[Gate]) {
@@ -769,6 +798,21 @@ void AetherRxDialog::refreshStageChecks()
         if (box->isChecked() != on) box->setChecked(on);
     }
     m_syncingChecks = false;
+}
+
+void AetherRxDialog::showSettings()
+{
+    // Modeless would let the operator load a profile while a stage page is
+    // mid-drag; modal keeps the chain still while it is being rewritten.
+    AetherRxSettingsDialog dlg(m_audio, this);
+    connect(&dlg, &AetherRxSettingsDialog::profileApplied, this, [this]() {
+        // A profile can reorder the chain and flip every enable, so the whole
+        // window re-reads the engine rather than waiting for the poll.
+        syncFromEngine();
+        refreshStageChecks();
+        relayoutStageRows();
+    });
+    dlg.exec();
 }
 
 void AetherRxDialog::syncFromEngine()
