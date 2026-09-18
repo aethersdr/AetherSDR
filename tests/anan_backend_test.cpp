@@ -16,6 +16,7 @@
 #include "core/backends/anan/AnanBackend.h"
 
 #include <QCoreApplication>
+#include <QSignalSpy>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -227,6 +228,25 @@ int main(int argc, char** argv)
         }
         check(!status.value(QStringLiteral("hasResult")).toBool(),
               "a disconnected backend stages no sweep result");
+    }
+
+    {
+        // S-meter: WDSP's dBFS reading is published as SLC:LEVEL in dBm with
+        // deskHPSDR's 0 dB ANAN offset, the first reading at once, later ones
+        // smoothed and throttled to the publish tick.
+        AnanBackend backend;
+        QSignalSpy spy(&backend, &IRadioBackend::meterUpdate);
+        backend.feedMeterForTest(-73.0f);
+        check(spy.count() == 1, "first S-meter reading is published at once");
+        if (spy.count() == 1) {
+            check(spy.at(0).at(0).toString() == QStringLiteral("SLC:LEVEL"),
+                  "S-meter is published as SLC:LEVEL");
+            check(qAbs(spy.at(0).at(1).toDouble() - (-73.0)) < 1e-9,
+                  "-73 dBFS reads -73 dBm (0 dB offset, as deskHPSDR ships for ANAN)");
+        }
+        backend.feedMeterForTest(-53.0f);
+        check(spy.count() == 1,
+              "a reading inside the 100 ms publish interval is smoothed, not published");
     }
 
     if (g_failures == 0)

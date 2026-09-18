@@ -5,6 +5,7 @@
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/P2Client.h"
 
+#include <QElapsedTimer>
 #include <QMap>
 #include <QString>
 #include <QThread>
@@ -112,6 +113,9 @@ public:
     // seam.
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
+    // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
+    // smoothing and publish tick can be tested without a live radio.
+    void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
 
 private:
     void beginDspSetup();
@@ -130,6 +134,19 @@ private:
     AnanRxDsp::Config m_pendingDspConfig;
     void emitSliceState();
     void emitPanState();
+    // Declares SLC:LEVEL to the meter seam; on every connect, before the
+    // first reading can arrive. See its definition.
+    void defineMeters();
+    // One WDSP S-meter reading (dBFS) -> dBm, smoothed, published on a tick.
+    void onDspMeter(float dbfs);
+    // HL2's ballistics (Hl2Backend.h), so the two receivers' needles move
+    // alike: smooth every reading, publish at most every 100 ms.
+    static constexpr qint64 kMeterPublishIntervalMs = 100;
+    static constexpr double kMeterAttackAlpha = 0.5;
+    static constexpr double kMeterDecayAlpha  = 0.15;
+    QElapsedTimer m_sMeterClock;
+    double m_sMeterDbm = 0.0;
+    bool m_haveSMeter = false;
     // Leading+trailing throttle around applyTuneToRadioAndPan() -- see
     // setSliceFrequency()'s comment for why an unthrottled click/drag-tune
     // gesture is a problem for this backend specifically.

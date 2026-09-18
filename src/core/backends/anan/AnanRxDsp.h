@@ -323,7 +323,7 @@ signals:
     void pcmReady(const AetherSDR::PcmFrame& frame);
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
-    // WDSP's own signal-strength meter (SignalPeak), NOT the RMS of the
+    // WDSP's own signal-strength meter (SignalAverage), NOT the RMS of the
     // demodulated audio -- the AGC holds audio level roughly constant, so an
     // audio-RMS meter would barely move with signal strength.
     void meterUpdate(float dbfs);
