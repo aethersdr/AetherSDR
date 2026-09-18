@@ -86,6 +86,18 @@ public:
         caps.canTransmit = canTransmit;
         caps.hasRadioSideCwKeyer = true;
         caps.hasTuner = true;
+        // #5516 refuses `txtest twotone` before keying unless the backend
+        // declares this, so without it the two-tone tune never starts and the
+        // watchdog cleanup below has nothing to stop. Two assertions go red:
+        // deadlineDoesNotRenew's cleanup check wants `tune:off`, and
+        // reentrantReplacementDuringCleanup needs `tuneWriter` to fire. Only
+        // the deadline-renewal check above it goes vacuous -- a refusal does
+        // not renew a deadline either. The string is fixture-local on purpose:
+        // `transmit set tune_mode=two_tone` is FlexBackend's real SmartSDR
+        // route, and a stub that cannot issue it must not be quotable as
+        // having done so. Nothing branches on it (RadioCapabilities.h).
+        caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{
+            QStringLiteral("recording backend two-tone route")};
         return caps;
     }
     bool isConnected() const override { return connected; }

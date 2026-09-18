@@ -1,5 +1,6 @@
 #include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
+#include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
 #include "RttyDecodeSettings.h"
 #include "ScopedChildWidget.h"
@@ -615,38 +616,23 @@ static void refreshOscillatorSourceCombo(QComboBox* combo, const RadioModel* mod
 }
 
 #ifdef HAVE_SERIALPORT
-// Populates a serial-port combo (real ports discovered via QSerialPortInfo,
-// plus a trailing "Custom..." sentinel) and selects the entry matching
-// savedPort. If none of the discovered ports match — the saved port isn't
-// currently plugged in, or it's a non-standard path (e.g. /dev/ttyUSB0 on
-// Linux, a symlinked TTY) — falls back to "Custom..." with customEdit
-// pre-filled, so the saved value is never silently dropped. Returns true if
-// the fallback (Custom) was selected. Shared by the CW/keying Port
-// Configuration group and the ACOM Peripherals row, which independently
-// re-implemented this match/fallback logic with a subtly different
-// isCustom computation before this was factored out.
+// Enumeration stays in the GUI's deferred page/show paths. The shared helper
+// accepts a port list so selection and signal behavior can be tested without
+// serial hardware.
 static bool populateSerialPortCombo(QComboBox* combo, QLineEdit* customEdit,
                                     const QString& savedPort)
 {
-    for (const auto& info : QSerialPortInfo::availablePorts())
-        combo->addItem(QString("%1 — %2").arg(info.portName(), info.description()),
-                        info.portName());
-    combo->addItem("Custom...", QStringLiteral("__custom__"));
-
-    bool isCustom = !savedPort.isEmpty();
-    for (int i = 0; i < combo->count() - 1; ++i) {
-        if (combo->itemData(i).toString() == savedPort) {
-            combo->setCurrentIndex(i);
-            isCustom = false;
-            break;
-        }
-    }
-    if (isCustom) {
-        combo->setCurrentIndex(combo->count() - 1);
-        if (customEdit) customEdit->setText(savedPort);
-    }
-    return isCustom;
+    return SerialPortCombo::populate(combo, customEdit, savedPort,
+                                     QSerialPortInfo::availablePorts());
 }
+
+static bool refreshSerialPortCombo(QComboBox* combo, QLineEdit* customEdit)
+{
+    return SerialPortCombo::refresh(combo, customEdit, [] {
+        return QSerialPortInfo::availablePorts();
+    });
+}
+
 #endif
 
 RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
@@ -977,6 +963,11 @@ void RadioSetupDialog::showEvent(QShowEvent* event)
     // removed while this dialog was hidden has to be picked up on show.
     if (m_audioDeviceReseed)
         m_audioDeviceReseed();
+    // Same reasoning, for every serial-port combo on a page that has been
+    // built: the platform's port list can have changed completely while the
+    // dialog was hidden, and there is no hotplug signal to tell us.
+    for (const auto& reseed : m_serialPortReseeds)
+        reseed();
 }
 
 bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
@@ -1025,6 +1016,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     const bool connected = m_model->isConnected();
     const RadioCapabilities caps = m_model->backendCapabilities();
     // M3b: these legacy info-field hides await their scoped migration.
+    // This legacy radio/API status is distinct from the host knob settings.
     if (m_flexControlInfoField) {
         m_flexControlInfoField->setVisible(!connected || caps.hasFlexControlIntegration);
     }
@@ -1110,9 +1102,8 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (m_audioCompressionGroup) {
         m_audioCompressionGroup->setVisible(!connected || caps.hasAudioCompression);
     }
-    if (m_flexControlGroup) {
-        m_flexControlGroup->setVisible(!connected || caps.hasFlexControlIntegration);
-    }
+    // The host serial knob settings remain available for every radio (#5778).
+    // Only the legacy radio/API info field above follows radio capabilities.
     if (m_optionsLabel) {
         m_optionsLabel->setText(radioOptionsText(m_model));
     }
@@ -3882,9 +3873,10 @@ void repopulateAudioDeviceCombo(QComboBox* combo,
     // enumerable, while audio ran somewhere else. A refill under
     // QSignalBlocker leaves no signal to reconcile that, so the pane would
     // have lied with no way back.
+    const QByteArray previousId = combo->currentData().toByteArray();
     QByteArray wantedId = engineDevice.id();
     if (wantedId.isEmpty())
-        wantedId = combo->currentData().toByteArray();
+        wantedId = previousId;
 
     QSignalBlocker blocker(combo);
     combo->clear();
@@ -3893,7 +3885,7 @@ void repopulateAudioDeviceCombo(QComboBox* combo,
 
     int idx = combo->findData(wantedId);
     if (idx < 0)
-        idx = combo->findData(combo->currentData().toByteArray());
+        idx = combo->findData(previousId);
     if (idx >= 0)
         combo->setCurrentIndex(idx);
 }
@@ -4183,6 +4175,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     };
     reseedAudioDeviceCombos();
 
+    std::function<void()> refreshAudioDeviceCombos;
     {
         // One QMediaDevices per built page, parented to the group box. That it
         // is constructed HERE and not in the dialog constructor is the whole
@@ -4195,8 +4188,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         // 750 ms settle: when a removal forces the engine back to the default
         // we want to show the device it ended up on, not the one that vanished.
         settle->setInterval(900);
-        connect(settle, &QTimer::timeout, this,
-                [settle, inCombo, outCombo, reseedAudioDeviceCombos] {
+        refreshAudioDeviceCombos = [settle, inCombo, outCombo, reseedAudioDeviceCombos] {
             // Never pull the list out from under an open dropdown. PipeWire can
             // churn device IDs continuously (#2864); a combo that rebuilds
             // while the user is reading it is worse than one that waits.
@@ -4207,7 +4199,8 @@ QWidget* RadioSetupDialog::buildAudioTab()
                 return;
             }
             reseedAudioDeviceCombos();
-        });
+        };
+        connect(settle, &QTimer::timeout, this, refreshAudioDeviceCombos);
         connect(audioDeviceMonitor, &QMediaDevices::audioInputsChanged,
                 settle, qOverload<>(&QTimer::start));
         connect(audioDeviceMonitor, &QMediaDevices::audioOutputsChanged,
@@ -4218,13 +4211,13 @@ QWidget* RadioSetupDialog::buildAudioTab()
         // hot-plug prompt and resetMissingAudioDevicesToDefault both re-point
         // the engine behind this pane's back. Queued across the audio thread.
         connect(m_audio, &AudioEngine::inputDeviceChanged, this,
-                reseedAudioDeviceCombos);
+                refreshAudioDeviceCombos);
         connect(m_audio, &AudioEngine::outputDeviceChanged, this,
-                reseedAudioDeviceCombos);
+                refreshAudioDeviceCombos);
     }
     // Same contract as m_calibrationReseed: re-read on every show, so a change
     // that landed while the dialog was hidden cannot survive a close and reopen.
-    m_audioDeviceReseed = reseedAudioDeviceCombos;
+    m_audioDeviceReseed = refreshAudioDeviceCombos;
 
     // Wire device changes to AudioEngine
     if (m_audio) {
@@ -7100,21 +7093,23 @@ QWidget* RadioSetupDialog::buildSerialTab()
             customEdit->setVisible(custom);
         });
 
-        connect(refreshBtn, &QPushButton::clicked, this, [portCombo, customEdit]() {
-            QString customText = customEdit->text();
-            int customIdx = portCombo->count() - 1;  // "Custom..." is last
-            bool wasCustom = (portCombo->currentIndex() == customIdx);
-            // Remove all but "Custom..."
-            while (portCombo->count() > 1)
-                portCombo->removeItem(0);
-            for (const auto& info : QSerialPortInfo::availablePorts())
-                portCombo->insertItem(portCombo->count() - 1,
-                    QString("%1 — %2").arg(info.portName(), info.description()),
-                    info.portName());
-            if (wasCustom) {
-                portCombo->setCurrentIndex(portCombo->count() - 1);
-            }
-        });
+        // Re-enumerate through the shared helper, which reselects by port NAME.
+        // The hand-rolled version this replaces removed every row but
+        // "Custom..." and then re-inserted ahead of it — leaving the selection
+        // parked on "Custom..." whatever it had been, so pressing Refresh with
+        // a real port chosen silently swapped the operator onto the manual-path
+        // entry and revealed the Path row.
+        auto reseedPorts = [combo = QPointer<QComboBox>(portCombo),
+                            label = QPointer<QLabel>(customLabel),
+                            edit = QPointer<QLineEdit>(customEdit)]() {
+            if (!combo || !edit)
+                return;
+            const bool custom = refreshSerialPortCombo(combo, edit);
+            if (label) label->setVisible(custom);
+            edit->setVisible(custom);
+        };
+        connect(refreshBtn, &QPushButton::clicked, this, reseedPorts);
+        m_serialPortReseeds.append(reseedPorts);
 
         // Baud rate
         grid->addWidget(new QLabel("Baud:"), 2, 0);
@@ -7371,8 +7366,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* group = new QGroupBox("FlexControl Tuning Knob");
         group->setStyleSheet(kGroupStyle);
         m_flexControlGroup = group;
-        group->setVisible(!m_model->isConnected()
-                          || m_model->backendCapabilities().hasFlexControlIntegration);
+        // Host peripheral, not a radio capability -- see updateRadioCapabilityVisibility (#5778).
+        group->setVisible(true);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
 
@@ -7993,6 +7988,14 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     auto* vbox = new QVBoxLayout(page);
     vbox->setSpacing(8);
 
+    // Reseeds for this page's serial-port combos (ACOM, SPE, LP-100A). Each
+    // row appends to both this and m_serialPortReseeds; this copy drives the
+    // page's own "Refresh serial ports" button, the member drives showEvent().
+    // shared_ptr because the rows are built by lambdas taking `this` by
+    // reference and the button outlives their scope.
+    [[maybe_unused]] auto serialReseeds =
+        std::make_shared<QVector<std::function<void()>>>();
+
     auto* group = new QGroupBox("External Devices — Manual IP Connection");
     group->setStyleSheet(kGroupStyle);
     auto* grid = new QGridLayout(group);
@@ -8300,6 +8303,15 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     [serialCombo, serialCustomEdit](int idx) {
                 serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
             });
+            // Refresh a retained page without discarding its current edits.
+            auto reseed = [combo = QPointer<QComboBox>(serialCombo),
+                           edit = QPointer<QLineEdit>(serialCustomEdit)]() {
+                if (!combo || !edit)
+                    return;
+                edit->setVisible(refreshSerialPortCombo(combo, edit));
+            };
+            m_serialPortReseeds.append(reseed);
+            serialReseeds->append(reseed);
             lay->addWidget(serialCombo, 1);
             lay->addWidget(serialCustomEdit, 1);
             serialPageIdx = addrStack->addWidget(serialPage);
@@ -8521,6 +8533,15 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     [serialCombo, serialCustomEdit](int idx) {
                 serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
             });
+            // Refresh a retained page without discarding its current edits.
+            auto reseed = [combo = QPointer<QComboBox>(serialCombo),
+                           edit = QPointer<QLineEdit>(serialCustomEdit)]() {
+                if (!combo || !edit)
+                    return;
+                edit->setVisible(refreshSerialPortCombo(combo, edit));
+            };
+            m_serialPortReseeds.append(reseed);
+            serialReseeds->append(reseed);
             lay->addWidget(serialCombo, 1);
             lay->addWidget(serialCustomEdit, 1);
             serialPageIdx = addrStack->addWidget(serialPage);
@@ -8938,6 +8959,15 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                     [serialCombo, serialCustomEdit](int idx) {
                 serialCustomEdit->setVisible(serialCombo->itemData(idx).toString() == "__custom__");
             });
+            // Refresh a retained page without discarding its current edits.
+            auto reseed = [combo = QPointer<QComboBox>(serialCombo),
+                           edit = QPointer<QLineEdit>(serialCustomEdit)]() {
+                if (!combo || !edit)
+                    return;
+                edit->setVisible(refreshSerialPortCombo(combo, edit));
+            };
+            m_serialPortReseeds.append(reseed);
+            serialReseeds->append(reseed);
             lay->addWidget(serialCombo, 1);
             lay->addWidget(serialCustomEdit, 1);
             serialPageIdx = addrStack->addWidget(serialPage);
@@ -9095,6 +9125,37 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         });
     }
 
+#ifdef HAVE_SERIALPORT
+    // One Refresh for the page rather than one per row: the three serial rows
+    // sit in the same QGridLayout as the network-only rows above them and a
+    // per-row button would have to claim a column those rows do not use.
+    // showEvent() runs the same reseeds, so this button is for a device
+    // plugged in while the operator is already looking at the page.
+    if (!serialReseeds->isEmpty()) {
+        auto* refreshRow = new QHBoxLayout;
+        auto* refreshBtn = new QPushButton("Refresh serial ports");
+        // Through ThemeManager, like every sibling button in this function
+        // (speBtn, vkampBtn, lpBtn). The colour ratchet counts setStyleSheet()
+        // CALL SITES rather than colours, so a direct call here costs a ratchet
+        // slot even though kBtnStyle is the same literal hex the siblings use.
+        // MidiMappingDialog's makeStyledButton() in this same change already
+        // says exactly that in its own comment -- the constraint was understood
+        // in one file and missed in the other.
+        AetherSDR::ThemeManager::instance().applyStyleSheet(refreshBtn, kBtnStyle);
+        refreshBtn->setAccessibleName(tr("Refresh serial port list"));
+        refreshBtn->setToolTip(
+            "Re-scan for serial ports. The list is also re-scanned every time "
+            "this window is opened.");
+        connect(refreshBtn, &QPushButton::clicked, this, [serialReseeds]() {
+            for (const auto& reseed : *serialReseeds)
+                reseed();
+        });
+        refreshRow->addWidget(refreshBtn);
+        refreshRow->addStretch();
+        vbox->addLayout(refreshRow);
+    }
+#endif
+
     note->setWordWrap(true);
     AetherSDR::ThemeManager::instance().applyStyleSheet(note, "QLabel { color: {{color.text.label}}; font-size: 11px; padding: 8px; }");
     vbox->addWidget(note);
@@ -9151,11 +9212,7 @@ void RadioSetupDialog::selectTab(const QString& tabName)
 
 void RadioSetupDialog::revealFlexControlSettings()
 {
-    if (m_model->isConnected()
-        && !m_model->backendCapabilities().hasFlexControlIntegration) {
-        return;
-    }
-
+    // No capability check: the knob is a host serial device (#5778).
     selectTab(QStringLiteral("Serial & Controllers"));
     if (!m_flexControlGroup) {
         return;

@@ -138,6 +138,7 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.canTransmit = false;
     c.txPowerMaxWatts = 0.0;
     c.hostModulates = false;  // CRITICAL: must not open mic on connect (#4449)
+    // transmitDriveControl absent: no transmitter, so no drive to own (#5518).
     c.hasRadioPttReadback = false;  // receive-only: nothing to key, nothing to read back
     c.hasFmRepeaterOffset = false;
     c.hasCwTune = false;

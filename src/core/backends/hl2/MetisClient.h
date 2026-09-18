@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "core/backends/hl2/Hl2ControlRequest.h"
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/MetisProtocol.h"
 
 class QUdpSocket;
@@ -50,7 +51,7 @@ public:
         // deliberate — an unconfigured receiver parked at 0 Hz would render a
         // panadapter of DC and look like a hardware fault.
         std::uint32_t rxFrequencyHz = 10'000'000;
-        int lnaGainDb = 20;
+        int lnaGainDb = kLnaDefaultGainDb;
         // How many receivers to actually RUN. Phase 1 runs one. This is the
         // value the config register must carry -- not the board's capability.
         int numRx = 1;

@@ -759,18 +759,25 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
 
 void Hl2Backend::publishLinkStats()
 {
+    // Fresh packets since the last tick — the transport-level proof of life the
+    // heartbeat runs on. Computed here rather than in linkStats() because the
+    // comparison CONSUMES the previous value, and linkStats() is a const getter
+    // any caller may poll at any rate.
+    //
+    // STORED ON m_link, not on the outgoing copy. It used to be written only to
+    // the local `s` that is emitted, so the SIGNAL path carried liveness and the
+    // GETTER path never did: linkStats() returned m_link.alive, which nothing
+    // had ever written, so every poller — the `liveness` automation verb among
+    // them — read a healthy radio as dead. Two paths, one of them silently
+    // wrong, and the wrong one is the one a diagnostic uses.
+    m_link.alive = m_connected && m_link.rxPackets != m_linkRxPacketsAtLastTick;
+    m_linkRxPacketsAtLastTick = m_link.rxPackets;
     LinkStats s = m_link;
     // The link is REPORTED from the moment we are connected, even before the
     // first counter snapshot has crossed from the I/O thread. Otherwise the
     // consumer's first tick sees reported=false, keeps its Flex sources, and
     // renders the blank readout this whole path exists to fix.
     s.reported = true;
-    // Fresh packets since the last tick — the transport-level proof of life the
-    // heartbeat runs on. Computed here rather than in linkStats() because the
-    // comparison CONSUMES the previous value, and linkStats() is a const getter
-    // any caller may poll at any rate.
-    s.alive = m_connected && m_link.rxPackets != m_linkRxPacketsAtLastTick;
-    m_linkRxPacketsAtLastTick = m_link.rxPackets;
     emit linkStatsUpdated(s);
 }
 
@@ -1926,6 +1933,13 @@ RadioCapabilities Hl2Backend::capabilities() const
     // HL2 publishes an instantaneous directional estimate; preserve the
     // established client-side PEP response above the backend seam.
     c.forwardPowerRequiresSmoothing = true;
+    // Drive here is OPERATOR INTENT, not a readback (#5518). setTxPower() records
+    // the requested percent before the transmit gate and applyDrive() holds the
+    // drive register at 0 while !m_txAllowed, so TransmitModel::rfPower() can read
+    // 100 with no RF leaving the radio. Consumers that act on drive must see that
+    // distinction rather than infer applied power from a request.
+    c.transmitDriveControl = RadioCapabilities::TransmitDriveControl{
+        SliceFrequencyControl::Authority::Engine};
     c.hasRadioDialLock = false;
     c.hasTuner = false;
     c.hasTunerMemories = false;
@@ -5859,8 +5873,8 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     m_haveRestoredState = false;
     m_lnaDbByBand.clear();
     m_driveByBand.clear();
-    m_lnaDefaultDb = 20;          // Hl2Backend.h: m_lnaGainDb's constructed default
-    m_lnaGainDb = 20;
+    m_lnaDefaultDb = hl2::kLnaDefaultGainDb;
+    m_lnaGainDb = hl2::kLnaDefaultGainDb;
     m_lnaSessionPin = false;
     m_driveDefaultPercent = -1;
     m_rfPowerPercent = 100;       // TransmitModel's session default

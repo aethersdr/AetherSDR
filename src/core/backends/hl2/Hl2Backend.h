@@ -9,6 +9,7 @@
 #include <QTimer>
 
 #include "core/backends/hl2/Hl2AdcPairing.h"
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 #include "core/backends/hl2/Hl2CapabilityAnnouncer.h"
 #include "core/backends/hl2/Hl2DbReference.h"
 #include "core/backends/hl2/Hl2IoBoardPolicy.h"
@@ -821,7 +822,7 @@ private:
     // much the UI would like them to be. Four panadapters on four bands share
     // one preamp setting and one filter selection; see applyBandFilter() for
     // what happens when they disagree.
-    int m_lnaGainDb = 20;
+    int m_lnaGainDb = hl2::kLnaDefaultGainDb;
     // Last J16 open-collector filter byte commanded. 0xFF is "nothing sent yet"
     // rather than a real selection — kOcNone (0x00) is a legitimate value
     // meaning "every relay released", so it cannot double as the sentinel.
@@ -951,7 +952,7 @@ private:
     RestoredRadioState m_restoredState;
     QMap<QString, int> m_lnaDbByBand;
     QMap<QString, int> m_driveByBand;
-    int m_lnaDefaultDb = 20;         // matches m_lnaGainDb's own default
+    int m_lnaDefaultDb = hl2::kLnaDefaultGainDb;
     // The connect param pinned a gain that the start band did not have stored.
     // Live value honoured, persistence refused: see Hl2BandMemoryPolicy.h.
     // Cleared when the operator changes gain or leaves the start band.
@@ -1187,9 +1188,9 @@ private:
     // limits rather than a policy choice — clamping anywhere else would let a
     // value be silently truncated on the wire instead of stopping at the end of
     // the slider's travel.
-    static constexpr int kLnaGainMinDb  = -12;
-    static constexpr int kLnaGainMaxDb  = 48;
-    static constexpr int kLnaGainStepDb = 1;
+    static constexpr int kLnaGainMinDb  = hl2::kLnaGainMinDb;
+    static constexpr int kLnaGainMaxDb  = hl2::kLnaGainMaxDb;
+    static constexpr int kLnaGainStepDb = hl2::kLnaGainStepDb;
 
     // The TX passband's ceiling: Nyquist of the TX AUDIO rate, which is
     // AudioEngine's 24 kHz — NOT of the 48 kHz EP2 rate. The modulator

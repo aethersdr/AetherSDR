@@ -1,4 +1,5 @@
 #include "core/backends/hl2/MetisProtocol.h"
+#include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 
 #include <cmath>
 
@@ -143,9 +144,9 @@ Cc ccRx1Freq(std::uint32_t hz) noexcept
 
 Cc ccRxGain(int db) noexcept
 {
-    int code = db + 12;                                  // -12 dB -> 0, +48 dB -> 60
-    if (code < 0) code = 0;
-    if (code > 60) code = 60;
+    // Clamp before adding the bias, which would overflow for INT_MAX.
+    // Bit 6 selects the native six-bit path in ad9866.v (gateware 883a338).
+    const int code = clampDb(kLnaGainMinDb, db, kLnaGainMaxDb) - kLnaGainMinDb;
     return {kC0AdcGain, 0x00, 0x00, 0x00, static_cast<std::uint8_t>(0x40 | code)};
 }
 

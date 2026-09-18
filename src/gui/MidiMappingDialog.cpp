@@ -11,6 +11,9 @@
 #include <QTimer>
 #include <memory>
 
+#include <QAbstractItemView>
+#include <QShowEvent>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -136,20 +139,10 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
             if (m_manager->isOpen()) {
                 m_manager->closePort();
                 m_connectBtn->setText("Connect");
-                m_statusLabel->setText("Disconnected");
-                AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+                setPortStatus(QStringLiteral("Disconnected"),
+                              QStringLiteral("{{color.text.label}}"));
             } else {
-                int idx = m_portCombo->currentIndex();
-                if (idx < 0) return;
-                if (m_manager->openPort(idx)) {
-                    m_connectBtn->setText("Disconnect");
-                    m_statusLabel->setText("Connected: " + m_manager->currentPortName());
-                    AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.success}}; font-size: 11px; }");
-                    // Save device preference
-                    auto& ms = MidiSettings::instance();
-                    ms.setLastDevice(m_manager->currentPortName());
-                    ms.save();
-                }
+                connectToSelectedPort();
             }
         });
         grid->addWidget(m_connectBtn, 0, 3);
@@ -580,11 +573,124 @@ void MidiMappingDialog::exportProfileToFile()
             .arg(QFileInfo(path).fileName()));
 }
 
+void MidiMappingDialog::setPortStatus(const QString& text, const QString& colorToken)
+{
+    if (!m_statusLabel)
+        return;
+    m_statusLabel->setText(text);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        m_statusLabel,
+        QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(colorToken));
+}
+
 void MidiMappingDialog::refreshPortList()
 {
+    if (!m_portCombo)
+        return;
+    // Never rebuild the list while its dropdown is open: the row under the
+    // operator's cursor would change identity mid-gesture.
+    if (m_portCombo->view() && m_portCombo->view()->isVisible())
+        return;
+
+    // Repopulating emits currentIndexChanged from clear(); block it so a
+    // refresh can never look like a selection the operator did not make.
+    const QSignalBlocker blocker(m_portCombo);
+
+    // Preserve the choice by NAME, not by row.  Precedence: what is selected
+    // now, else the port actually open, else the remembered device.
+    QString keep = m_portCombo->currentData().toString();
+    if (keep.isEmpty()) {
+        keep = m_manager->isOpen() ? m_manager->currentPortName()
+                                   : MidiSettings::instance().lastDevice();
+    }
+
     m_portCombo->clear();
+    // The name is the only identity RtMidi exposes; it goes in item data so
+    // every consumer resolves by it instead of by index.  See
+    // connectToSelectedPort() for why the index is not usable.
     for (const auto& port : m_manager->availablePorts())
-        m_portCombo->addItem(port);
+        m_portCombo->addItem(port, port);
+
+    int selected = keep.isEmpty() ? -1 : m_portCombo->findData(keep);
+    if (selected < 0 && !keep.isEmpty()) {
+        // A configured (or still-open) port the platform no longer lists.
+        // Keep it visible and labelled rather than silently sliding the
+        // operator's choice onto whatever now occupies row 0.
+        m_portCombo->insertItem(0, keep + " (not connected)", keep);
+        selected = 0;
+    }
+    if (m_portCombo->count() == 0) {
+        m_portCombo->addItem("No MIDI inputs found", QString());
+        selected = 0;
+    }
+    m_portCombo->setCurrentIndex(selected < 0 ? 0 : selected);
+}
+
+bool MidiMappingDialog::connectToSelectedPort()
+{
+    if (!m_portCombo)
+        return false;
+
+    // Resolve the STABLE IDENTITY held in item data, never m_portCombo's row.
+    // MidiControlManager::openPort(idx) indexes a FRESH RtMidi enumeration
+    // taken inside the call, while the combo holds whatever was enumerated at
+    // the last build or Refresh.  A device that arrived or vanished in between
+    // shifts every row below it, so passing the row through opens different
+    // hardware than the entry named on screen.
+    const QString wanted = m_portCombo->currentData().toString();
+    if (wanted.isEmpty())
+        return false;
+
+    const QStringList ports = m_manager->availablePorts();
+    const int idx = ports.indexOf(wanted);   // exact match, not a substring
+    if (idx < 0) {
+        setPortStatus(QStringLiteral("\"%1\" is no longer connected").arg(wanted),
+                      QStringLiteral("{{color.accent.warning}}"));
+        refreshPortList();
+        return false;
+    }
+
+    if (!m_manager->openPort(idx))
+        return false;   // openPort() already emitted portError()
+
+    // Catch a changed index-to-name mapping at the manager's name lookup.
+    // currentPortName() is cached before RtMidi opens the native endpoint;
+    // this narrows the race but cannot detect a later topology change inside
+    // the native open call. Duplicate names also remain indistinguishable.
+    if (m_manager->currentPortName() != wanted) {
+        m_manager->closePort();
+        setPortStatus(
+            QStringLiteral("Port list changed while connecting — press Refresh"),
+            QStringLiteral("{{color.accent.warning}}"));
+        refreshPortList();
+        return false;
+    }
+
+    m_connectBtn->setText("Disconnect");
+    setPortStatus("Connected: " + m_manager->currentPortName(),
+                  QStringLiteral("{{color.accent.success}}"));
+    // Save device preference
+    auto& ms = MidiSettings::instance();
+    ms.setLastDevice(m_manager->currentPortName());
+    ms.save();
+    return true;
+}
+
+void MidiMappingDialog::showEvent(QShowEvent* event)
+{
+    PersistentDialog::showEvent(event);
+    refreshPortList();
+    // The Connect button and status line are also built once and can be
+    // describing a connection state that changed while this window was
+    // hidden: MidiControlManager's 5 s hotplug timer re-opens a remembered
+    // port on its own (openPortByName) and nothing here listens for
+    // portOpened/portClosed. Re-read the manager rather than trusting them.
+    const bool open = m_manager->isOpen();
+    m_connectBtn->setText(open ? "Disconnect" : "Connect");
+    setPortStatus(open ? "Connected: " + m_manager->currentPortName()
+                       : QStringLiteral("Disconnected"),
+                  open ? QStringLiteral("{{color.accent.success}}")
+                       : QStringLiteral("{{color.text.label}}"));
 }
 
 void MidiMappingDialog::refreshBindingTable()

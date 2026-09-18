@@ -291,6 +291,12 @@ private:
     // → wipe the saved manual IP/port. New-IP edits still require an
     // explicit Connect click so an unfinished value cannot leak in.
     QVector<std::function<void()>> m_peripheralRowSavers;
+
+    // Refresh already-built serial pages without rebuilding their controls.
+    // Each page is built once per dialog instance; normal close deletes the
+    // dialog. Used by showEvent and Refresh buttons, and empty until the
+    // owning page is built so enumeration remains deferred (#1776).
+    QVector<std::function<void()>> m_serialPortReseeds;
 };
 
 } // namespace AetherSDR

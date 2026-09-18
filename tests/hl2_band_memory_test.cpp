@@ -41,9 +41,9 @@ void check(bool ok, const char* what)
 }
 
 // This station's clamp, from Hl2Backend's kLnaGainMinDb/kLnaGainMaxDb.
-constexpr int kMin = -12;
-constexpr int kMax = 48;
-constexpr int kDefault = 20;
+constexpr int kMin = AetherSDR::hl2::kLnaGainMinDb;
+constexpr int kMax = AetherSDR::hl2::kLnaGainMaxDb;
+constexpr int kDefault = AetherSDR::hl2::kLnaDefaultGainDb;
 
 }  // namespace
 
@@ -176,6 +176,28 @@ int main()
         check(bandMemoryWriteback(/*liveDb=*/6, /*sessionPin=*/false,
                                   /*hasStoredEntry=*/false, /*storedDb=*/0) == 6,
               "snapshot: an uncalibrated band still records through a capture");
+    }
+
+    // Explicit connect input uses the same bounds as the native wire path.
+    {
+        const auto high = connectLna(false, false, 0, true, 999, kDefault, kMin, kMax);
+        check(high.liveDb == 48 && !high.sessionPin, "connect clamps high without restore");
+        const auto low = connectLna(false, false, 0, true, -999, kDefault, kMin, kMax);
+        check(low.liveDb == -12 && !low.sessionPin, "connect clamps low without restore");
+        const auto sameHigh = connectLna(true, true, 48, true, 999, kDefault, kMin, kMax);
+        check(sameHigh.liveDb == 48 && !sameHigh.sessionPin,
+              "clamped request matching stored ceiling does not pin");
+        const auto sameLow = connectLna(true, true, -12, true, -999, kDefault, kMin, kMax);
+        check(sameLow.liveDb == -12 && !sameLow.sessionPin,
+              "clamped request matching stored floor does not pin");
+        const auto different = connectLna(true, true, 20, true, 999, kDefault, kMin, kMax);
+        check(different.liveDb == 48 && different.sessionPin,
+              "clamped request differing from stored gain still pins");
+        for (int stored = -12; stored <= 48; ++stored) {
+            const auto restored = connectLna(true, true, stored, false, 0, kDefault, kMin, kMax);
+            check(restored.liveDb == stored && !restored.sessionPin,
+                  "documented stored gains retain their value across connect");
+        }
     }
 
     if (g_failures == 0) {

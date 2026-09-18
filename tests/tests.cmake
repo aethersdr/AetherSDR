@@ -2293,6 +2293,26 @@ set_tests_properties(firmware_close_dialog_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 
+# #5778: production dialog with injected capability/connection state; no sockets or peers.
+add_executable(flex_control_visibility_test
+    tests/flex_control_visibility_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(flex_control_visibility_test PRIVATE src tests)
+target_link_libraries(flex_control_visibility_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME flex_control_visibility_test COMMAND flex_control_visibility_test)
+set_tests_properties(flex_control_visibility_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
     src/core/ZipArchive.cpp
@@ -2551,6 +2571,14 @@ target_include_directories(scoped_child_widget_test PRIVATE src)
 target_link_libraries(scoped_child_widget_test PRIVATE Qt6::Widgets)
 add_test(NAME scoped_child_widget_test COMMAND scoped_child_widget_test)
 set_tests_properties(scoped_child_widget_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# Socket-free serial selector refresh; injected port lists, real Qt widgets.
+add_executable(serial_port_combo_test tests/serial_port_combo_test.cpp)
+target_include_directories(serial_port_combo_test PRIVATE src)
+target_link_libraries(serial_port_combo_test PRIVATE Qt6::Widgets)
+add_test(NAME serial_port_combo_test COMMAND serial_port_combo_test)
+set_tests_properties(serial_port_combo_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(spectrum_preview_logic_test
@@ -3637,6 +3665,25 @@ add_executable(green_heron_protocol_test
 target_include_directories(green_heron_protocol_test PRIVATE src)
 target_link_libraries(green_heron_protocol_test PRIVATE Qt6::Core)
 add_test(NAME green_heron_protocol_test COMMAND green_heron_protocol_test)
+
+# aethersdr/radio/state payload shape + the drive-publish timing contract
+# (#5518). Links the real TransmitModel because the have-status latch and the
+# coalesce debounce are half the contract; MqttRadioState.cpp itself is pure.
+add_executable(mqtt_radio_state_test
+    tests/mqtt_radio_state_test.cpp
+    src/core/MqttRadioState.cpp
+    src/models/TransmitModel.cpp
+    src/core/ClientQuindarTone.cpp
+    ${AETHER_SETTINGS_SOURCES}
+    src/core/AsyncLogWriter.cpp
+    src/core/LogManager.cpp
+)
+target_include_directories(mqtt_radio_state_test PRIVATE src)
+target_link_libraries(mqtt_radio_state_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(mqtt_radio_state_test PRIVATE pthread)
+endif()
+add_test(NAME mqtt_radio_state_test COMMAND mqtt_radio_state_test)
 
 add_executable(mqtt_settings_test
     tests/mqtt_settings_test.cpp
@@ -5911,6 +5958,7 @@ set(AETHER_SETTINGS_CONSUMERS
     automation_nnr_probe_test
     pcm_compatibility_test
     firmware_close_dialog_test
+    flex_control_visibility_test
     atu_seam_gate_test
     backend_capability_revision_test
     radio_capacity_declaration_test
@@ -5965,6 +6013,7 @@ set(AETHER_SETTINGS_CONSUMERS
     shortcut_manager_test
     antenna_alias_test
     mqtt_settings_test
+    mqtt_radio_state_test
     ax25_libmodem_shim_test
     ax25_replay
     ax25_session_analyze

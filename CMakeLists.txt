@@ -152,8 +152,24 @@ option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 #       At 1 kHz the incumbent already reads 87 dB against EP2's ~96 dB
 #       signed-16-bit wire (MetisProtocol.cpp, ep2WriteTxIq), so TXA's
 #       advantage THERE is below the wire and unusable.
-# OFF — the in-tree phasing modulator, unchanged. The fallback, kept building
-#       and kept tested, for a machine or a report where TXA misbehaves.
+# OFF — the in-tree phasing modulator, unchanged. The fallback for a machine or
+#       a report where TXA misbehaves.
+#
+#       THIS LINE USED TO SAY "kept building and kept tested" AND THE FLIP
+#       BELOW MAKES THAT FALSE. `grep AETHER_HL2_TX_TXA .github/workflows/*.yml`
+#       returns nothing: no job sets the flag either way, so the DEFAULT is the
+#       only thing CI compiles. While the default was OFF that sentence was
+#       true for free. Flipping it means nothing in the tree builds OFF —
+#       hl2_txdsp_test's `#if !AETHER_HL2_TX_TXA` block stops compiling, its
+#       `#else` crest-factor assertion with it, and the phasing translation
+#       unit stops being syntax-checked at all.
+#
+#       THE WAY BACK EXISTS ONLY WHILE IT STILL COMPILES, AND NOTHING WOULD
+#       NOTICE WHEN IT STOPPED. That is this project's third instance of one
+#       failure class in a week: #5706 was aethercore not compiling with
+#       ENABLE_DFNR=OFF, #5767 is main not compiling without hidapi, and both
+#       are the same shape — an optional path that no job exercises. Naming it
+#       here rather than repeating it. Raised by aethersdr-agent on #5779.
 #
 # DEFAULT OFF, DELIBERATELY, AND NOT BECAUSE TXA IS DOUBTED. The approval on
 # #5678 was conditional: keep the phasing modulator behind a switch "until the
@@ -165,12 +181,35 @@ option(ENABLE_RTL "Enable the experimental receive-only RTL-SDR backend" ON)
 # 16-bit EP2 wire.
 #
 # Defaulting ON would have made the first person to key TXA on the air someone
-# who did not choose to. OFF costs the identical way back -- one cmake flag --
-# and makes that person a volunteer. Flip the default when an operator has keyed
-# it into a dummy load and then onto an antenna, and say in the commit who did.
+# who did not choose to. OFF cost the identical way back -- one cmake flag --
+# and made that person a volunteer.
+#
+# THE VOLUNTEER WAS ON8ST, AND THE CONDITION THIS COMMENT SET IS MET.
+# The line above used to end "flip the default when an operator has keyed it
+# into a dummy load and then onto an antenna, and say in the commit who did."
+# Stan Claes (ON8ST) did both on his Hermes-Lite 2, board id 6, gateware 74,
+# on 2026-09-17, against this exact code:
+#
+#   DUMMY LOAD  two overs of 5 s, 1 kHz tone, 40 % drive. Power up within
+#               ~270 ms, steady 0.47-0.50 W, SWR 1.00-1.13, ALC at 0 dB gain
+#               and -19.99 dBFS, clean unkey both times.
+#   ANTENNA     two overs of 5 s on 3.695 MHz USB through a fan dipole, after a
+#               spoken identification. Steady 0.49-0.52 W, SWR 1.57-1.69, clean
+#               unkey both times.
+#
+# THE SWR IS THE CORROBORATION, not the power. 1.6 on the antenna against 1.07
+# into the load is a real mismatch where a real mismatch belongs; the power
+# figures alone could not tell the two apart. In both runs the SECOND over was
+# indistinguishable from the first, which is the property the reset fix in this
+# same PR series is about.
+#
+# The hardware time that #5678's approval asked for -- and that
+# docs/hl2-txa-configuration-diff.md §7 recorded as absent, "No hardware. No
+# radio was keyed. No antenna port was observed." -- now exists, and it is named
+# rather than asserted.
 option(AETHER_HL2_TX_TXA
-       "Hermes-Lite 2 SSB transmit modulator: ON uses WDSP's TXA chain, OFF (default) the in-tree phasing modulator"
-       OFF)
+       "Hermes-Lite 2 SSB transmit modulator: ON (default) uses WDSP's TXA chain, OFF the in-tree phasing modulator"
+       ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 if(WIN32)
@@ -901,6 +940,7 @@ set(CORE_SOURCES
     src/core/PskReporterClient.cpp
     src/core/LocationAddressResolver.cpp
     src/core/MqttAntennaAlias.cpp
+    src/core/MqttRadioState.cpp
     src/core/MqttSettings.cpp
     src/core/AutomationBridgeSettings.cpp
     src/core/SpotCommandPolicy.cpp
