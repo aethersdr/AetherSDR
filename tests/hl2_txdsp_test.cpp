@@ -231,10 +231,29 @@ static double binPower(const std::vector<std::complex<float>>& iq, double hz,
 //
 // WHAT THAT MEANS FOR THE TXA BUILD. Every TXA figure in this file bar one
 // group -- 167 to 332 dB -- sits at or above that floor, and NONE OF THOSE IS
-// A MEASUREMENT OF THE MODULATOR. The instrument's own noise ADDS to the image
-// bin, so the measured image can only be larger than the real one: each figure
-// is a LOWER BOUND, TXA's true suppression is AT LEAST that, and this file
-// cannot say how much more. (The exception is the bottom of a WIDE passband,
+// A MEASUREMENT OF THE MODULATOR. Each is UNRESOLVED: the true suppression may
+// be higher or lower and this file cannot say which.
+//
+// AN EARLIER VERSION OF THIS COMMENT CALLED THEM LOWER BOUNDS. That was wrong,
+// and the error is worth keeping because it is seductive. The reasoning was
+// "the instrument's noise ADDS to the image bin, so the measured image can
+// only be larger than the real one". That is scalar thinking about a COMPLEX
+// quantity. The correlation error e is a complex vector added to the true
+// image I, and |I + e| < |I| whenever e opposes I -- which needs only
+// |e| < 2|I| and then happens for cos(theta) < -|e|/(2|I|), i.e. for 10% to
+// 47% of error phases across that range. The reported ratio then EXCEEDS the
+// true one.
+//
+// @jensenpat demonstrated it numerically on #5810 rather than arguing it: at
+// 48 kHz, a 1 kHz tone over 34992 float samples with a tiny imaginary
+// perturbation on sample zero, the double correlation reports 316.9406 dB
+// while a 60-digit DFT of THE SAME float samples reports 316.8410 dB. The
+// instrument overstated by 0.0996 dB. A bound that a counterexample exceeds is
+// not a bound.
+//
+// So these figures are floor-limited ESTIMATES with no error bar. Giving them
+// one would need a real uncertainty analysis of the correlation, which this
+// file does not have and does not pretend to. (The exception is the bottom of a WIDE passband,
 // where a TXA skirt is still resolvable and the sweep does measure it -- 59.37
 // dB at 100 Hz on {0, 4000}. That paragraph is in the sweep's own comment.)
 //
@@ -262,7 +281,7 @@ static constexpr double kInstrumentFloorDb = 158.0;
 static const char* floorMark(double suppDb)
 {
     return suppDb >= kInstrumentFloorDb
-        ? "  [>= instrument floor: LOWER BOUND, not a measurement]"
+        ? "  [>= instrument floor: UNRESOLVED, neither bound nor measurement]"
         : "";
 }
 
@@ -1123,7 +1142,9 @@ int main(int argc, char** argv)
     // of the five passbands whose low edge is 100 Hz or above prints a figure
     // at or above the numerical floor -- flagged as such in the table -- so
     // the shape of the curve THERE is this file's double arithmetic and not
-    // WDSP's filter, and those rows are lower bounds rather than a curve.
+    // WDSP's filter. Those rows are UNRESOLVED rather than a curve -- not
+    // lower bounds: the correlation error is complex and can oppose the image,
+    // so a floor-limited ratio can read high as easily as low.
     //
     // The exception is the 0 Hz low edge, where a TXA skirt is still
     // resolvable and this sweep measures it: on {0, 4000} the 100 Hz row reads
