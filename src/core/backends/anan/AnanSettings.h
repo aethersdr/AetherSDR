@@ -39,6 +39,13 @@ public:
     static bool bypassAdc1Filters();
     static void setBypassAdc1Filters(bool on);
 
+    // Receive step attenuation per ADC (0 or 1), 0-31 dB -- the operator's
+    // RF Gain slider, kept per radio family as deskHPSDR keeps it per ADC.
+    // Clamped on read and write; an unknown adcIndex reads 0 and writes
+    // nothing.
+    static int adcAttenuationDb(int adcIndex);
+    static void setAdcAttenuationDb(int adcIndex, int db);
+
     // Restore every field to its default.
     static void reset();
 

@@ -1,9 +1,12 @@
 #include "core/backends/anan/AnanSettings.h"
 
 #include "core/AppSettings.h"
+#include "core/backends/anan/P2Protocol.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
+
+#include <algorithm>
 
 namespace AetherSDR::anan {
 namespace {
@@ -11,7 +14,8 @@ namespace {
 // Single nested-JSON key holding this backend's config (Principle V).
 // Shape: {"ddc0RateKsps":int, "dither":bool,
 //         "random":bool, "ddc0AdcIndex":int, "bypassAdc0Filters":bool,
-//         "bypassAdc1Filters":bool}
+//         "bypassAdc1Filters":bool, "adc0AttenuationDb":int,
+//         "adc1AttenuationDb":int}
 const QString kRootKey = QStringLiteral("Anan");
 
 constexpr const char* kFieldDdc0RateKsps      = "ddc0RateKsps";
@@ -20,6 +24,15 @@ constexpr const char* kFieldRandom            = "random";
 constexpr const char* kFieldDdc0AdcIndex      = "ddc0AdcIndex";
 constexpr const char* kFieldBypassAdc0Filters = "bypassAdc0Filters";
 constexpr const char* kFieldBypassAdc1Filters = "bypassAdc1Filters";
+constexpr const char* kFieldAdc0AttenuationDb = "adc0AttenuationDb";
+constexpr const char* kFieldAdc1AttenuationDb = "adc1AttenuationDb";
+
+const char* attenuationField(int adcIndex)
+{
+    return adcIndex == 0 ? kFieldAdc0AttenuationDb
+         : adcIndex == 1 ? kFieldAdc1AttenuationDb
+                         : nullptr;
+}
 
 }  // namespace
 
@@ -113,6 +126,25 @@ void AnanSettings::setBypassAdc1Filters(bool on)
 {
     QJsonObject obj = readObj();
     obj[QLatin1String(kFieldBypassAdc1Filters)] = on;
+    writeObj(obj);
+}
+
+int AnanSettings::adcAttenuationDb(int adcIndex)
+{
+    const char* field = attenuationField(adcIndex);
+    if (!field)
+        return 0;
+    return std::clamp(readObj().value(QLatin1String(field)).toInt(0),
+                      0, kMaxStepAttenuationDb);
+}
+
+void AnanSettings::setAdcAttenuationDb(int adcIndex, int db)
+{
+    const char* field = attenuationField(adcIndex);
+    if (!field)
+        return;
+    QJsonObject obj = readObj();
+    obj[QLatin1String(field)] = std::clamp(db, 0, kMaxStepAttenuationDb);
     writeObj(obj);
 }
 

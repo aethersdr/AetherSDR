@@ -69,6 +69,9 @@ public:
     void setPanCenter(const QString& panId, double hz, PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanFrameRate(const QString& panId, int fps) override;
+    // The G2's receive step attenuator, presented as RF gain: -31..0 dB,
+    // where -12 means 12 dB of attenuation. See the definition.
+    void setPanRfGain(const QString& panId, int gainDb) override;
     void setCwPitch(int hz) override;
     void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) override;
     void invokeExtension(const QString& ns, const QString& verb,
@@ -112,6 +115,7 @@ public:
     // seam.
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
+    [[nodiscard]] int attenuationDbForTest() const noexcept { return m_attenuationDb; }
 
 private:
     void beginDspSetup();
@@ -204,6 +208,14 @@ private:
     // object's own thread (the GUI thread), not m_ioThread.
     static constexpr int kTuneThrottleMs = 33;   // ~30 Hz ceiling on real DDC0 retunes
     QTimer* m_tuneThrottleTimer = nullptr;
+    // Step attenuation on the ADC DDC0 listens to, 0-31 dB. Seeded from
+    // AnanSettings at connect, changed by setPanRfGain(), added back onto
+    // the panadapter levels. Saved on a debounce: a slider drag is dozens of
+    // steps and each AnanSettings write commits to disk.
+    int m_attenuationDb = 0;
+    QTimer* m_attenuationSaveTimer = nullptr;
+    static constexpr int kAttenuationSaveDebounceMs = 500;
+    void flushAttenuationSave();
     bool m_tunePendingApply = false;
 
     // setPanBandwidth() serialization: only one rate-change reconfigure runs
