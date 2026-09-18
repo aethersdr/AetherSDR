@@ -5902,10 +5902,28 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     RestoredRadioState valid;
     if (state.rfFrequencyHz >= 100'000.0 && state.rfFrequencyHz <= 38'400'000.0)
         valid.rfFrequencyHz = state.rfFrequencyHz;
+    // ACCEPTED, THEN RECONCILED — two steps, and the second one is #5755's
+    // review finding (jensenpat). isKnownModeString() answers "may the document
+    // say this"; canonicalOfferedMode() answers "which spelling does the menu
+    // carry for it". Doing only the first left a session saved in NFM restoring
+    // with the slice holding "NFM" while publishedModeStrings() no longer
+    // offers it, and both mode combos rebuild with findText(currentText) and
+    // move the selection only on a hit — so the operator was shown LSB with the
+    // receiver in FM. That is the fault #5580 exists to remove, arriving from
+    // the other direction.
+    //
+    // This drops nothing: NFM and FM are one WdspChannel mode (modeFromString
+    // branches on them together), so the operator keeps the mode they saved and
+    // only its spelling settles. It weakens no TX refusal either — every alias
+    // pair is on capabilities().receiveOnlyModes both ways or neither way, and
+    // hl2_mode_vocabulary_test pins that for every accepted spelling. It also
+    // does the uppercasing the old comment here was about: a "cw" from a
+    // hand-edited document must not round-trip into the UI.
+    //
+    // BEFORE the passband work below, which reads valid.mode through
+    // defaultPassbandForMode() and cwBfoOffsetHz().
     if (isKnownModeString(state.mode))
-        valid.mode = state.mode.toUpper();   // canonical casing — a "cw" from a
-                                             // hand-edited document must not
-                                             // round-trip into the UI
+        valid.mode = canonicalOfferedMode(state.mode);
     // A passband is kept only as a sane pair; mode+passband are applied
     // together in pushInitialState() (the #4484 reconciliation).
     if (state.filterLowHz < state.filterHighHz

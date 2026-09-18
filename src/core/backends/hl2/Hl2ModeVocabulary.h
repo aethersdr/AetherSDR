@@ -44,6 +44,50 @@
 // (it is FM); DSB and CWL arrive, both real, both distinct, both unreachable
 // from the combo before.
 //
+// AN ACCEPTED ALIAS MUST BE RECONCILED, NOT MERELY ACCEPTED (#5755 review,
+// jensenpat). Splitting the lists is only half a change: NFM was an ordinary
+// entry in the FlexRadio fallback combo this replaces, it is still accepted on
+// restore, and it is no longer offered -- so a session saved in NFM came back
+// with the slice holding "NFM" and the menu unable to show it. Both consumers
+// rebuild with clear()/addItems()/findText(currentText) and only move the
+// selection when findText() succeeds (RxApplet::connectSlice and
+// VfoWidget::setSlice, both on SliceModel::modeListChanged), so the combo fell
+// to index 0 -- "LSB" -- with signals blocked, while the receiver really was in
+// FM. Nothing downstream heals it: RxApplet's SliceModel::modeChanged handler
+// is written the same findText()-must-hit way, and VfoWidget's does not touch
+// the combo at all -- it only relabels the mode TAB, so that widget ends up
+// showing "NFM" on the tab and "LSB" in the combo at the same time. An operator
+// reading LSB while hearing FM is the exact fault #5580 exists to remove, so
+// introducing a fresh one here would be the change arguing against itself.
+//
+// canonicalOfferedMode() closes it at the restore boundary: the alias collapses
+// onto the spelling the menu carries BEFORE the mode reaches Receiver::mode, so
+// the menu and the model cannot disagree about a restored document.
+//
+// IT CANNOT WEAKEN A TX REFUSAL, and that is checked rather than asserted.
+// RadioCapabilities::modeIsReceiveOnly() is a case-insensitive MEMBERSHIP test,
+// not alias normalisation, and RadioModel::refuseKeyInReceiveOnlyMode() runs it
+// on what the slice holds. Every pair below is therefore listed BOTH WAYS in
+// Hl2Backend::capabilities()'s receiveOnlyModes (FM and NFM, WBFM and WFM) or
+// on NEITHER (CW and CWU both transmit correctly through the gateware keyer).
+// Collapsing one spelling onto the other moves nothing across that boundary --
+// hl2_mode_vocabulary_test pins the equivalence for every accepted spelling.
+// The duplicate entries stay: CAT, TCI and Hl2Backend::setSliceMode still put
+// either spelling on the slice at run time, and those entries are what refuse
+// the key when they do.
+//
+// modeFromString() maps both members of each pair onto ONE WdspChannel mode, so
+// the reconciliation is a no-op on the DSP: it renames what the operator is
+// shown, never what they hear. defaultPassbandForMode() and cwBfoOffsetHz()
+// carry both spellings in one branch for the same reason.
+//
+// TWO ACCEPTED MODES REMAIN UNDISPLAYABLE -- WBFM and DRM, which have no
+// offered twin to collapse onto. Neither is a regression of this PR: neither
+// was in the FlexRadio fallback either, so a slice holding one already showed
+// index 0 before this change. Reaching them at all needs CAT, TCI or a
+// hand-edited document. Said here rather than left for the next reader to
+// rediscover; see the residual set in hl2_mode_vocabulary_test.
+//
 // HEADER, NOT A .cpp-LOCAL LIST, for the reason tests/tests.cmake states beside
 // hl2_pan_limits_declaration_test: "a declaration must not be pinned only
 // inside something that does not build." The fake-radio fixture that would have
@@ -84,6 +128,24 @@ inline const QStringList& publishedModeStrings() noexcept
         QStringLiteral("DIGU"), QStringLiteral("DIGL"),
     };
     return kPublished;
+}
+
+// The OFFERED spelling of an accepted one -- uppercased, and with each alias
+// pair collapsed onto the member publishedModeStrings() carries.
+//
+// Total over every input: a spelling with no alias twin (and any string the
+// restore guard would have rejected anyway) comes back uppercased and
+// otherwise unchanged, so callers need no membership test before calling. The
+// three pairs are modeFromString()'s own, read off its NFM/FM, CWU/CW and
+// WFM/WBFM branches; adding a pair there means adding it here, which is why
+// hl2_mode_vocabulary_test walks knownModeStrings() rather than a retyped copy.
+inline QString canonicalOfferedMode(const QString& mode) noexcept
+{
+    const QString u = mode.toUpper();
+    if (u == QLatin1String("NFM")) return QStringLiteral("FM");
+    if (u == QLatin1String("CWU")) return QStringLiteral("CW");
+    if (u == QLatin1String("WFM")) return QStringLiteral("WBFM");
+    return u;
 }
 
 }  // namespace AetherSDR::hl2

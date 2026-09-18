@@ -5987,6 +5987,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_gain_restore_test
     hl2_tx_gate_test
     hl2_pan_limits_declaration_test
+    hl2_mode_vocabulary_test
     icom_identity_test
     icom_control_profile_test
     control_resource_service_test
