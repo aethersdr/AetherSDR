@@ -31,8 +31,8 @@ class StripWaveformPanel;
 // AetherRX — the receive chain in one window.
 //
 // Every client-side RX stage lives here, one per tab down the left-hand side
-// in signal order: noise reduction, gate, EQ, compressor, tube, voice
-// processor, and the output meter with its waveform. The tabs are the same
+// in signal order: noise reduction, gate, EQ, compressor, tube, exciter, and
+// the final output meter with its waveform. The tabs are the same
 // ModemChrome strip the AetherDSP body uses along its top, stood on end.
 //
 // This is the only RX surface: the Aetherial strip is AetherTX now and no

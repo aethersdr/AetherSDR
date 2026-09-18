@@ -110,10 +110,10 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
 
     // ── Logo (big in the editor) ────────────────────────────────
     m_logo = new PooDooLogo;
-    // No ™: "Exciter" names what the stage does — it synthesises harmonics
-    // that were not in the signal — rather than carrying a brand, and a
-    // trademark sign on a common noun reads as a mistake.
-    m_logo->setWordmark(QStringLiteral("Exciter"));
+    // The tab calls this stage what it is — an Exciter — and the mark keeps
+    // the name the product goes by. They are not in competition: one says
+    // where you are in the chain, the other is the badge on the panel.
+    m_logo->setWordmark(QString::fromUtf8("AetherVoice\xe2\x84\xa2"));
     m_logo->setMinimumHeight(80);
     // ...and a ceiling. Nothing else in this column can grow — the mode
     // buttons and the knobs are all fixed — so without one the logo took

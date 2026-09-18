@@ -373,7 +373,7 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         m_waveform = new StripWaveformPanel(audio, this);
         col->addWidget(m_output, 0, Qt::AlignTop);
         col->addWidget(m_waveform, 1);
-        addStage(Output, QStringLiteral("Out"), page);
+        addStage(Output, QStringLiteral("Final Output"), page);
     }
 
     tabsBox->addStretch(1);
@@ -822,14 +822,15 @@ void AetherRxDialog::syncFromEngine()
 
 void AetherRxDialog::selectTab(const QString& name)
 {
-    // Both spellings resolve. These stages were AGC-G, AGC-C and AetherVoice
-    // until the tabs were renamed, and callers elsewhere — plus anything
+    // Both spellings resolve. These stages were AGC-G, AGC-C, AetherVoice and
+    // Out until the tabs were renamed, and callers elsewhere — plus anything
     // driving this window through the automation bridge — still say those.
     static const struct { Stage stage; const char* label; } kStages[] = {
         {Nr, "AetherNR"},   {Gate, "Gate"},        {Eq, "EQ"},
         {Comp, "Compressor"}, {Tube, "Tube"},      {Voice, "Exciter"},
-        {Output, "Out"},
+        {Output, "Final Output"},
         {Gate, "AGC-G"},    {Comp, "AGC-C"},      {Voice, "AetherVoice"},
+        {Output, "Out"},
     };
     for (const auto& entry : kStages) {
         if (name.compare(QLatin1String(entry.label), Qt::CaseInsensitive) != 0) {

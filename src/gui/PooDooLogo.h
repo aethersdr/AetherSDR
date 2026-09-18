@@ -28,7 +28,7 @@ public:
     void setPudu(ClientPudu* p);
     // Override the rendered wordmark.  Default is "PooDoo™" (used by
     // the docked applet + floating editor).  The strip panel sets it
-    // to "Exciter" for the AetherRX page and the strip.
+    // to "AetherVoice™" for the strip and the AetherRX page.
     void setWordmark(const QString& mark);
 
 protected:
