@@ -341,7 +341,7 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
 
     // -- The RX chain, in the order the signal meets it ------------------
     m_gate = new StripGatePanel(audio, this);
-    addStage(Gate, QStringLiteral("AGC-G"), buildStagePage(m_gate));
+    addStage(Gate, QStringLiteral("Gate"), buildStagePage(m_gate));
 
     m_eq = new StripEqPanel(audio, this);
     // Straight through: the panel asks, MainWindow decides what a width means
@@ -353,7 +353,7 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     addStage(Eq, QStringLiteral("EQ"), buildStagePage(m_eq));
 
     m_comp = new StripCompPanel(audio, this);
-    addStage(Comp, QStringLiteral("AGC-C"), buildStagePage(m_comp));
+    addStage(Comp, QStringLiteral("Compressor"), buildStagePage(m_comp));
 
     m_tube = new StripTubePanel(audio, this);
     addStage(Tube, QStringLiteral("Tube"), buildStagePage(m_tube));
@@ -822,9 +822,14 @@ void AetherRxDialog::syncFromEngine()
 
 void AetherRxDialog::selectTab(const QString& name)
 {
+    // Both spellings resolve. The two stages were AGC-G and AGC-C until the
+    // tabs were renamed, and callers elsewhere — plus anything driving this
+    // window through the automation bridge — still say those.
     static const struct { Stage stage; const char* label; } kStages[] = {
-        {Nr, "AetherNR"}, {Gate, "AGC-G"},  {Eq, "EQ"},      {Comp, "AGC-C"},
-        {Tube, "Tube"},   {Voice, "AetherVoice"}, {Output, "Out"},
+        {Nr, "AetherNR"},   {Gate, "Gate"},        {Eq, "EQ"},
+        {Comp, "Compressor"}, {Tube, "Tube"},      {Voice, "AetherVoice"},
+        {Output, "Out"},
+        {Gate, "AGC-G"},    {Comp, "AGC-C"},
     };
     for (const auto& entry : kStages) {
         if (name.compare(QLatin1String(entry.label), Qt::CaseInsensitive) != 0) {

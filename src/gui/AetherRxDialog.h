@@ -73,7 +73,7 @@ public:
     void showSettings();
 
     // Jump to a named tab. Understands both this window's stage names
-    // ("AGC-G", "Tube") and the noise-reduction method names ("NR2", "MNR"),
+    // ("Gate", "Tube") and the noise-reduction method names ("NR2", "MNR"),
     // which select the AetherNR tab and then the method inside it — callers
     // that predate this window pass the latter.
     void selectTab(const QString& name);
