@@ -2553,6 +2553,14 @@ add_test(NAME scoped_child_widget_test COMMAND scoped_child_widget_test)
 set_tests_properties(scoped_child_widget_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Socket-free serial selector refresh; injected port lists, real Qt widgets.
+add_executable(serial_port_combo_test tests/serial_port_combo_test.cpp)
+target_include_directories(serial_port_combo_test PRIVATE src)
+target_link_libraries(serial_port_combo_test PRIVATE Qt6::Widgets)
+add_test(NAME serial_port_combo_test COMMAND serial_port_combo_test)
+set_tests_properties(serial_port_combo_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(spectrum_preview_logic_test
     tests/spectrum_preview_logic_test.cpp
 )

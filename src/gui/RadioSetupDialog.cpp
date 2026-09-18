@@ -1,5 +1,6 @@
 #include "core/DroopCalibration.h"
 #include "RadioSetupDialog.h"
+#include "SerialPortCombo.h"
 #include "models/CwDecodeSettings.h"
 #include "RttyDecodeSettings.h"
 #include "ScopedChildWidget.h"
@@ -615,89 +616,23 @@ static void refreshOscillatorSourceCombo(QComboBox* combo, const RadioModel* mod
 }
 
 #ifdef HAVE_SERIALPORT
-// Populates a serial-port combo (real ports discovered via QSerialPortInfo,
-// plus a trailing "Custom..." sentinel) and selects the entry matching
-// savedPort. If none of the discovered ports match — the saved port isn't
-// currently plugged in, or it's a non-standard path (e.g. /dev/ttyUSB0 on
-// Linux, a symlinked TTY) — falls back to "Custom..." with customEdit
-// pre-filled, so the saved value is never silently dropped. Returns true if
-// the fallback (Custom) was selected. Shared by the CW/keying Port
-// Configuration group and the ACOM Peripherals row, which independently
-// re-implemented this match/fallback logic with a subtly different
-// isCustom computation before this was factored out.
-//
-// Safe to call more than once on the same combo — see refreshSerialPortCombo
-// below, which is how every caller re-enumerates. It clears first and works
-// under a QSignalBlocker because clear() emits currentIndexChanged and every
-// caller wires that signal to a handler that shows/hides the custom-path
-// editor; on a refresh an unblocked clear() would fire it against a
-// half-built combo. Callers apply that visibility from the returned flag
-// instead, so the blocker costs them nothing. customEdit is blocked for the
-// same reason — buildSerialTab connects its textChanged to the settings
-// saver, and the Custom-fallback setText() below would otherwise make a
-// refresh look like an operator edit. (Both blockers mirror
-// WaveformsDialog::populateDStarSerialPorts.)
+// Enumeration stays in the GUI's deferred page/show paths. The shared helper
+// accepts a port list so selection and signal behavior can be tested without
+// serial hardware.
 static bool populateSerialPortCombo(QComboBox* combo, QLineEdit* customEdit,
                                     const QString& savedPort)
 {
-    const QSignalBlocker blocker(combo);
-    const QSignalBlocker editBlocker(customEdit);  // null-safe by construction
-    combo->clear();
-    for (const auto& info : QSerialPortInfo::availablePorts())
-        combo->addItem(QString("%1 — %2").arg(info.portName(), info.description()),
-                        info.portName());
-    combo->addItem("Custom...", QStringLiteral("__custom__"));
-
-    bool isCustom = !savedPort.isEmpty();
-    for (int i = 0; i < combo->count() - 1; ++i) {
-        if (combo->itemData(i).toString() == savedPort) {
-            combo->setCurrentIndex(i);
-            isCustom = false;
-            break;
-        }
-    }
-    if (isCustom) {
-        combo->setCurrentIndex(combo->count() - 1);
-        if (customEdit) customEdit->setText(savedPort);
-    }
-    return isCustom;
+    return SerialPortCombo::populate(combo, customEdit, savedPort,
+                                     QSerialPortInfo::availablePorts());
 }
 
-// Re-enumerate an already-populated serial-port combo in place.
-//
-// Why this exists: RadioSetupDialog pages are built ONCE per process
-// (buildDeferredTab erases the builder after first use, #1776) and the dialog
-// is a showOrRaisePersistent singleton that is hidden, never destroyed. So a
-// combo filled from QSerialPortInfo::availablePorts() at build time shows that
-// one snapshot forever, and closing and reopening Settings does not rebuild
-// it. Every serial combo therefore needs a path back to a live enumeration.
-//
-// Keeps the operator's choice by PORT NAME rather than by row: the ports
-// either side of it may have come or gone. A name that is no longer present
-// falls through populateSerialPortCombo's existing "Custom..." fallback with
-// the path pre-filled, which is this helper family's equivalent of the
-// "(not connected)" row DStarModemPage::refreshSerialDevices re-inserts —
-// deliberately NOT duplicated here, because __custom__ is the sentinel the
-// three save paths key on and a second representation of "configured but
-// absent" in the same combo would be ambiguous to them.
-//
-// Returns true if the combo ended up on "Custom...", i.e. the caller should
-// show its custom-path editor.
 static bool refreshSerialPortCombo(QComboBox* combo, QLineEdit* customEdit)
 {
-    if (!combo)
-        return false;
-    // Do not rebuild a list somebody is reading — the row under the cursor
-    // would change identity mid-gesture.
-    if (combo->view() && combo->view()->isVisible())
-        return combo->currentData().toString() == QLatin1String("__custom__");
-
-    QString keep = combo->currentData().toString();
-    if (keep.isEmpty() || keep == QLatin1String("__custom__"))
-        keep = customEdit ? customEdit->text().trimmed() : QString();
-
-    return populateSerialPortCombo(combo, customEdit, keep);
+    return SerialPortCombo::refresh(combo, customEdit, [] {
+        return QSerialPortInfo::availablePorts();
+    });
 }
+
 #endif
 
 RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,

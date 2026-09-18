@@ -653,10 +653,10 @@ bool MidiMappingDialog::connectToSelectedPort()
     if (!m_manager->openPort(idx))
         return false;   // openPort() already emitted portError()
 
-    // openPort() enumerated once more internally.  Confirm what it actually
-    // landed on — this is the only place that can still catch a device
-    // arriving inside that window, and opening the wrong MIDI port silently
-    // is precisely the failure this resolution exists to prevent.
+    // Catch a changed index-to-name mapping at the manager's name lookup.
+    // currentPortName() is cached before RtMidi opens the native endpoint;
+    // this narrows the race but cannot detect a later topology change inside
+    // the native open call. Duplicate names also remain indistinguishable.
     if (m_manager->currentPortName() != wanted) {
         m_manager->closePort();
         setPortStatus(
