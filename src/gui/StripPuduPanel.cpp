@@ -120,16 +120,16 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
     // every pixel the page had spare and drew itself at two and a half times
     // its designed size.
     m_logo->setMaximumHeight(200);
-    // Equal stretches either side, so whatever height is left over after the
-    // logo hits its ceiling is split evenly above and below it rather than
-    // being handed to whichever widget happens to lack a maximum.
+    // Two equal stretches: one above the logo, one at the very foot of the
+    // column (added after the knob grid below). Whatever height is left over
+    // once the logo reaches its ceiling is split evenly between them, rather
+    // than being handed to whichever widget happens to lack a maximum.
     root->addStretch(1);
     // A stretch factor far above the buffers' own, so the logo takes height
     // first and only what it cannot use — because it has hit the ceiling
     // above — reaches them. Give it the same factor as the buffers and it
     // shares the surplus three ways instead, landing well short of 200.
     root->addWidget(m_logo, 100);
-    root->addStretch(1);
 
     // ── Even / Odd mode toggle — centred in the gap between the
     // PooDoo™ wordmark and the Poo/Doo knob row.  Aphex generates
@@ -284,8 +284,12 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
         root->addLayout(grid);
     }
 
-    // No trailing stretch — let the cell size to the panel's natural
-    // content height instead of growing to fill whatever the grid gives.
+    // The second of the pair, under the controls rather than under the logo.
+    // A stretch item's own size hint is zero, so this does not change what the
+    // panel asks for — the strip cell still sizes to the natural content
+    // height it always did. It only decides where surplus goes when a host
+    // gives the panel more room than that, which is the AetherRX page.
+    root->addStretch(1);
 
     if (m_audio && pudu()) {
         m_logo->setPudu(pudu());
