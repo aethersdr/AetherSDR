@@ -263,20 +263,6 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
     connect(m_envelope, &ClientCompKnob::valueChanged,
             this, &StripTubePanel::applyEnvelope);
 
-    m_attack = makeKnob("Attack");
-    m_attack->setRange(0.1f, 30.0f);
-    m_attack->setDefault(5.0f);
-    m_attack->setValueFromNorm([](float n) {
-        return 0.1f * std::pow(300.0f, n);
-    });
-    m_attack->setNormFromValue([](float v) {
-        return std::log(std::max(0.1f, v) / 0.1f) / std::log(300.0f);
-    });
-    m_attack->setLabelFormat([](float v) {
-        return QString::number(v, 'f', v < 10.0f ? 2 : 1) + " ms";
-    });
-    connect(m_attack, &ClientCompKnob::valueChanged,
-            this, &StripTubePanel::applyAttack);
 
     m_release = makeKnob("Release");
     m_release->setRange(10.0f, 500.0f);
@@ -412,7 +398,6 @@ void StripTubePanel::syncControlsFromEngine()
     { QSignalBlocker b(m_output);   m_output->setValue(t->outputGainDb()); }
     setDryWetMix(t->dryWet());
     { QSignalBlocker b(m_envelope); m_envelope->setValue(t->envelopeAmount()); }
-    { QSignalBlocker b(m_attack);   m_attack->setValue(t->attackMs()); }
     { QSignalBlocker b(m_release);  m_release->setValue(t->releaseMs()); }
 
     if (m_outMeter) m_outMeter->setPeakDb(t->outputPeakDb());
@@ -486,12 +471,6 @@ void StripTubePanel::applyEnvelope(float v)
     saveTubeSettings();
 }
 
-void StripTubePanel::applyAttack(float ms)
-{
-    if (m_restoring || !m_audio) return;
-    tube()->setAttackMs(ms);
-    saveTubeSettings();
-}
 
 void StripTubePanel::applyRelease(float ms)
 {

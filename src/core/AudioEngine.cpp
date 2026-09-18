@@ -6765,8 +6765,8 @@ void AudioEngine::loadClientTubeSettings()
         s.value("ClientTubeTxDryWet", "1.0").toFloat());
     m_clientTubeTx->setEnvelopeAmount(
         s.value("ClientTubeTxEnvelope", "0.0").toFloat());
-    m_clientTubeTx->setAttackMs(
-        s.value("ClientTubeTxAttackMs", "5.0").toFloat());
+    // Fixed, not persisted — see ClientTube::kAttackMs.
+    m_clientTubeTx->setAttackMs(ClientTube::kAttackMs);
     m_clientTubeTx->setReleaseMs(
         s.value("ClientTubeTxReleaseMs", "35.0").toFloat());
 }
@@ -6791,8 +6791,6 @@ void AudioEngine::saveClientTubeSettings() const
         QString::number(m_clientTubeTx->dryWet()));
     s.setValue("ClientTubeTxEnvelope",
         QString::number(m_clientTubeTx->envelopeAmount()));
-    s.setValue("ClientTubeTxAttackMs",
-        QString::number(m_clientTubeTx->attackMs()));
     s.setValue("ClientTubeTxReleaseMs",
         QString::number(m_clientTubeTx->releaseMs()));
 }
@@ -6820,8 +6818,8 @@ void AudioEngine::loadClientTubeRxSettings()
         s.value("ClientTubeRxDryWet", "1.0").toFloat());
     m_clientTubeRx->setEnvelopeAmount(
         s.value("ClientTubeRxEnvelope", "0.0").toFloat());
-    m_clientTubeRx->setAttackMs(
-        s.value("ClientTubeRxAttackMs", "5.0").toFloat());
+    // Fixed, not persisted — see ClientTube::kAttackMs.
+    m_clientTubeRx->setAttackMs(ClientTube::kAttackMs);
     m_clientTubeRx->setReleaseMs(
         s.value("ClientTubeRxReleaseMs", "35.0").toFloat());
 }
@@ -6846,8 +6844,6 @@ void AudioEngine::saveClientTubeRxSettings() const
         QString::number(m_clientTubeRx->dryWet()));
     s.setValue("ClientTubeRxEnvelope",
         QString::number(m_clientTubeRx->envelopeAmount()));
-    s.setValue("ClientTubeRxAttackMs",
-        QString::number(m_clientTubeRx->attackMs()));
     s.setValue("ClientTubeRxReleaseMs",
         QString::number(m_clientTubeRx->releaseMs()));
 }

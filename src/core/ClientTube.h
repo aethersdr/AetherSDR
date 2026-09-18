@@ -75,6 +75,13 @@ public:
     // loud passages clean while adding harmonic warmth on quiet ones.
     void  setEnvelopeAmount(float v) noexcept;       // -1..+1
     float envelopeAmount() const noexcept;
+    // Fixed at kAttackMs — no surface offers it any more. It only shapes the
+    // envelope follower, and the follower only reaches the output through
+    // `envAmount * envLin`: at the default envelope amount of 0 this changed
+    // nothing at all, and when the modulation is turned up it is the release
+    // that carries the character. The setter stays for the per-slice mirror
+    // in RxClientEffects, which copies whatever the master holds.
+    static constexpr float kAttackMs = 5.0f;
     void  setAttackMs(float ms) noexcept;            // 0.1..30 ms
     float attackMs() const noexcept;
     void  setReleaseMs(float ms) noexcept;           // 10..500 ms
@@ -108,7 +115,7 @@ private:
         std::atomic<float>    outputGainDb{0.0f};
         std::atomic<float>    dryWet{1.0f};
         std::atomic<float>    envelopeAmount{0.0f};
-        std::atomic<float>    attackMs{5.0f};
+        std::atomic<float>    attackMs{kAttackMs};
         std::atomic<float>    releaseMs{35.0f};
         std::atomic<uint64_t> version{0};
     };

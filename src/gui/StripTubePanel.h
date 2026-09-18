@@ -63,7 +63,6 @@ private:
     void applyOutput(float db);
     void applyDryWet(float v);
     void applyEnvelope(float v);
-    void applyAttack(float ms);
     void applyRelease(float ms);
 
     // Drive the toolbar's dry/wet slider + its reading from a 0..1 mix.
@@ -82,7 +81,6 @@ private:
     ClientCompKnob*        m_tone{nullptr};
     ClientCompKnob*        m_bias{nullptr};
     ClientCompKnob*        m_envelope{nullptr};
-    ClientCompKnob*        m_attack{nullptr};
     ClientCompKnob*        m_release{nullptr};
     ClientLevelMeter*      m_outMeter{nullptr};
     // TX mic pre-amp RN2 toggle, in the toolbar with the other switches.

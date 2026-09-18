@@ -241,24 +241,6 @@ ClientTubeEditor::ClientTubeEditor(AudioEngine* engine, QWidget* parent)
             this, &ClientTubeEditor::applyEnvelope);
     right->addWidget(m_envelope, 0, Qt::AlignHCenter);
 
-    m_attack = new ClientCompKnob;
-    m_attack->setLabel("Attack");
-    m_attack->setCenterLabelMode(true);
-    m_attack->setRange(0.1f, 30.0f);
-    m_attack->setDefault(5.0f);
-    m_attack->setValueFromNorm([](float n) {
-        return 0.1f * std::pow(300.0f, n);
-    });
-    m_attack->setNormFromValue([](float v) {
-        return std::log(std::max(0.1f, v) / 0.1f) / std::log(300.0f);
-    });
-    m_attack->setLabelFormat([](float v) {
-        return QString::number(v, 'f', v < 10.0f ? 2 : 1) + " ms";
-    });
-    m_attack->setFixedSize(76, 76);
-    connect(m_attack, &ClientCompKnob::valueChanged,
-            this, &ClientTubeEditor::applyAttack);
-    right->addWidget(m_attack, 0, Qt::AlignHCenter);
 
     m_release = new ClientCompKnob;
     m_release->setLabel("Release");
@@ -368,7 +350,6 @@ void ClientTubeEditor::syncControlsFromEngine()
     { QSignalBlocker b(m_output);   m_output->setValue(t->outputGainDb()); }
     { QSignalBlocker b(m_dryWet);   m_dryWet->setValue(t->dryWet()); }
     { QSignalBlocker b(m_envelope); m_envelope->setValue(t->envelopeAmount()); }
-    { QSignalBlocker b(m_attack);   m_attack->setValue(t->attackMs()); }
     { QSignalBlocker b(m_release);  m_release->setValue(t->releaseMs()); }
 
     if (m_outMeter) m_outMeter->setPeakDb(t->outputPeakDb());
@@ -431,12 +412,6 @@ void ClientTubeEditor::applyEnvelope(float v)
     saveTubeSettings();
 }
 
-void ClientTubeEditor::applyAttack(float ms)
-{
-    if (m_restoring || !m_audio) return;
-    tube()->setAttackMs(ms);
-    saveTubeSettings();
-}
 
 void ClientTubeEditor::applyRelease(float ms)
 {

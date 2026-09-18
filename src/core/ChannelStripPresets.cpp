@@ -498,7 +498,6 @@ QJsonObject ChannelStripPresets::capturePresetJson() const
         o["outputGainDb"]   = t->outputGainDb();
         o["dryWet"]         = t->dryWet();
         o["envelopeAmount"] = t->envelopeAmount();
-        o["attackMs"]       = t->attackMs();
         o["releaseMs"]      = t->releaseMs();
         preset["tube"] = o;
     }
@@ -665,7 +664,6 @@ void ChannelStripPresets::applyPresetJson(const QJsonObject& preset)
         t->setOutputGainDb(jnum(o, "outputGainDb", t->outputGainDb()));
         t->setDryWet(jnum(o, "dryWet", t->dryWet()));
         t->setEnvelopeAmount(jnum(o, "envelopeAmount", t->envelopeAmount()));
-        t->setAttackMs(jnum(o, "attackMs", t->attackMs()));
         t->setReleaseMs(jnum(o, "releaseMs", t->releaseMs()));
     }
 
@@ -819,7 +817,6 @@ QJsonObject ChannelStripPresets::captureRxJson(AudioEngine* engine)
         o["outputGainDb"]   = t->outputGainDb();
         o["dryWet"]         = t->dryWet();
         o["envelopeAmount"] = t->envelopeAmount();
-        o["attackMs"]       = t->attackMs();
         o["releaseMs"]      = t->releaseMs();
         rx["tube"] = o;
     }
@@ -926,7 +923,6 @@ void ChannelStripPresets::applyRxJson(AudioEngine* engine, const QJsonObject& rx
         t->setOutputGainDb(jnum(o, "outputGainDb", t->outputGainDb()));
         t->setDryWet(jnum(o, "dryWet", t->dryWet()));
         t->setEnvelopeAmount(jnum(o, "envelopeAmount", t->envelopeAmount()));
-        t->setAttackMs(jnum(o, "attackMs", t->attackMs()));
         t->setReleaseMs(jnum(o, "releaseMs", t->releaseMs()));
     }
 
