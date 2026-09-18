@@ -10,7 +10,11 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include "SmartMtrGeometry.h"
+#include "SmartMtrStyle.h"
+
 #include <QHBoxLayout>
+#include <QPainterPath>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include <algorithm>
@@ -198,7 +202,7 @@ void ClientEqOutputFader::setOrientation(Qt::Orientation orientation)
         // Bar, plus the scale figures printed beneath it, plus a little air.
         setMinimumWidth(240);
         setMaximumWidth(QWIDGETSIZE_MAX);
-        setFixedHeight(kBarW + 18);
+        setFixedHeight(44);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     } else {
         setMinimumHeight(160);
@@ -249,80 +253,107 @@ void ClientEqOutputFader::paintEvent(QPaintEvent*)
     }
 }
 
-// Left to right under the graph: the strip runs between the two caps the
-// layout has already placed, the level fills from the left, the scale prints
-// beneath it and the handle is a vertical bar standing across the meter.
+// Left to right under the graph, in the SmartMTR control's clothes: a recessed
+// hole with rounded ends, the level as a red bar rising from the left with a
+// bright line at its head, and cyan scale ticks above it with their labels
+// above those. Colours and proportions come from SmartMtrStyle.h so this reads
+// as the same instrument as the meter in the VFO flag.
+//
+// The vertical proportions are SmartMTR's (hole 10 of 35 units, ticks and
+// labels in the 20 above it); the horizontal is stretched to whatever width the
+// panel has, because the point of moving this meter down here was to be as wide
+// as the graph. SmartMtrGeometry's uniform fit would letterbox it back to the
+// design's 250:35 instead.
 void ClientEqOutputFader::paintHorizontal(QPainter& p)
 {
+    using namespace SmartMtrUnits;
+
     const int gap = 8;
     const int left = (m_endLabel ? m_endLabel->geometry().right() : 0) + gap;
     const int right = (m_valueEdit ? m_valueEdit->geometry().left() : width())
                     - gap;
-    m_stripOrigin = left;
-    m_stripLength = std::max(1, right - left);
+    const int strip = std::max(1, right - left);
 
-    const int scaleH = 10;
-    const int barTop = (height() - scaleH - kBarW) / 2;
-    const QRect barR(left, barTop, m_stripLength, kBarW);
+    const double unitY = double(height()) / kControlH;
+    const QRectF holeR(left, kHoleMargY * unitY, strip, kHoleH * unitY);
+    m_stripOrigin = left + static_cast<int>(kScaleMin / kHoleW * strip);
+    m_stripLength = std::max(1, static_cast<int>((kScaleMax - kScaleMin) / kHoleW * strip));
 
-    p.fillRect(barR, QColor("#06111c"));
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const double radius = kHoleRadius * unitY;
 
+    // The recessed hole.
+    p.setPen(Qt::NoPen);
+    p.setBrush(SmartMtrColors::kBackground);
+    p.drawRoundedRect(holeR, radius, radius);
+
+    // Level, as a bar from the scale minimum.
     const float peakNorm = std::clamp(
         (m_smoothedPeak - kMeterMinDb) / (kMeterMaxDb - kMeterMinDb),
         0.0f, 1.0f);
-    const int fillW = static_cast<int>(peakNorm * m_stripLength);
-    if (fillW > 0) {
-        QLinearGradient grad(barR.left(), 0, barR.right(), 0);
-        grad.setColorAt(0.0, QColor("#2f9e6a"));   // green at the quiet end
-        grad.setColorAt(0.55, QColor("#6cc56a"));
-        grad.setColorAt(0.80, QColor("#e8b94c"));
-        grad.setColorAt(0.95, QColor("#e8553c"));
-        grad.setColorAt(1.0, QColor("#f2362a"));
-        p.fillRect(QRect(barR.x(), barR.y(), fillW, kBarW), grad);
+    if (peakNorm > 0.0f) {
+        QRectF barR(m_stripOrigin, holeR.top(),
+                    peakNorm * m_stripLength, holeR.height());
+        p.save();
+        QPainterPath clip;
+        clip.addRoundedRect(holeR, radius, radius);
+        p.setClipPath(clip);
+        p.setBrush(SmartMtrColors::kForeground);
+        p.drawRect(barR);
+        // The bright line at the head of the bar, right-aligned inside it so it
+        // never runs past the level it is reporting.
+        const double lineW = std::max(1.0, kIndicatorLine * unitY);
+        if (barR.width() >= lineW) {
+            p.setBrush(SmartMtrColors::kIndicator);
+            p.drawRect(QRectF(barR.right() - lineW, barR.top(),
+                              lineW, barR.height()));
+        }
+        p.restore();
     }
 
-    p.setPen(QPen(QColor("#243a4e"), 1));
-    p.setBrush(Qt::NoBrush);
-    p.drawRect(barR.adjusted(0, 0, -1, -1));
-
+    // Scale ticks above the hole, labels above those.
+    p.setRenderHint(QPainter::Antialiasing, false);
     QFont f = p.font();
-    f.setPixelSize(8);
+    f.setPixelSize(std::max(7, int(kLabelHeightNormal * unitY * 0.8)));
     p.setFont(f);
     const QFontMetrics fm(f);
 
-    struct Tick { float db; const char* label; };
+    struct Tick { float db; const char* label; bool high; };
     static constexpr Tick kTicks[] = {
-        { -40.0f, "-40" }, { -20.0f, "-20" }, { -12.0f, "-12" },
-        {  -6.0f,  "-6" }, {   0.0f,   "0" },
+        { -40.0f, "-40", false }, { -20.0f, "-20", false },
+        { -12.0f, "-12", false }, {  -6.0f,  "-6", true },
+        {   0.0f,   "0", true },
     };
     for (const auto& t : kTicks) {
         const float norm = (t.db - kMeterMinDb) / (kMeterMaxDb - kMeterMinDb);
-        const int x = left + static_cast<int>(norm * m_stripLength);
-        p.setPen(QColor("#405060"));
-        p.drawLine(x, barR.bottom() + 1, x, barR.bottom() + 3);
+        const double x = m_stripOrigin + norm * m_stripLength;
+        const double tickH = kMarkerLargeH * unitY;
+        const double tickW = std::max(1.0, kMarkerLargeW * unitY);
 
-        p.setPen(QColor("#7f93a5"));
+        p.fillRect(QRectF(x - tickW / 2.0, holeR.top() - tickH, tickW, tickH),
+                   t.high ? SmartMtrColors::kMarkerHigh
+                          : SmartMtrColors::kMarkerNormal);
+
         const QString label = QString::fromLatin1(t.label);
         const int tw = fm.horizontalAdvance(label);
-        // Clamped so the end figures stay inside the strip rather than
-        // hanging over the caps on either side.
-        const int tx = std::clamp(x - tw / 2, left, right - tw);
-        p.drawText(tx, barR.bottom() + 3 + fm.ascent(), label);
+        const int tx = std::clamp(int(x) - tw / 2, left, right - tw);
+        p.setPen(SmartMtrColors::kMarkerNormal);
+        p.drawText(tx, int(holeR.top() - tickH - kLabelGap * unitY), label);
     }
 
+    // The gain handle: the one thing here the VFO flag's meter has no need of,
+    // since that one only reports. White, full height of the hole, so it reads
+    // as a setting rather than as part of the level.
     const float gainDb = std::clamp(linearToDb(m_gain),
                                     kGainMinDb, kGainMaxDb);
     const float gainNorm = (gainDb - kGainMinDb) / (kGainMaxDb - kGainMinDb);
-    const int handleX = left + static_cast<int>(gainNorm * m_stripLength);
-    const QRect handleR(handleX - kHandleH / 2,
-                        barR.top() - kHandleOverhang,
-                        kHandleH,
-                        kBarW + kHandleOverhang * 2);
-    p.setPen(QPen(QColor("#0a1a28"), 1));
-    p.setBrush(QColor("#d7e7f2"));
-    p.drawRect(handleR);
-    p.setPen(QColor("#1a2a3a"));
-    p.drawLine(handleX, handleR.top() + 1, handleX, handleR.bottom() - 1);
+    const double handleX = m_stripOrigin + gainNorm * m_stripLength;
+    const double handleW = std::max(2.0, kMarkerLargeW * unitY);
+    p.fillRect(QRectF(handleX - handleW / 2.0,
+                      holeR.top() - kHandleOverhang,
+                      handleW,
+                      holeR.height() + kHandleOverhang * 2),
+               SmartMtrColors::kIndicator);
 }
 
 void ClientEqOutputFader::paintVertical(QPainter& p)
