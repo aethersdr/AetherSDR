@@ -68,15 +68,31 @@ struct FrequencyFrame {
     }
 };
 
+// A frequency frame the BACKEND actually echoed, as distinct from whatever is
+// currently on screen.
+//
+// This is a separate type and not a bare FrequencyFrame on purpose. The defect
+// this file exists to prevent is a row being stamped or laid out against an
+// on-screen zoom guess that the radio never took, and the two frames are the
+// same shape, so nothing but the type system stops one being passed where the
+// other is meant. Every function below that needs backend truth demands this
+// type, so reaching for SpectrumWidget's m_centerMhz/m_bandwidthMhz instead is
+// a compile error rather than a silent regression -- which matters because
+// SpectrumWidget.cpp is not compiled into any test target, so no test can
+// catch that substitution after the fact.
+struct ConfirmedFrame {
+    FrequencyFrame frame{};
+};
+
 // A history row is stamped with whatever frame the caller explicitly
 // supplied; callers that have no per-row frame of their own (the Legacy/2D
 // waterfall path) fall back to the last frame the backend actually
 // confirmed, never an on-screen zoom guess that might not become true --
-// see SpectrumWidget's m_confirmedCenterMhz/m_confirmedBandwidthMhz.
+// see SpectrumWidget's m_confirmed.
 [[nodiscard]] inline FrequencyFrame stampFrameForHistoryRow(
-    const FrequencyFrame& requested, const FrequencyFrame& confirmed) noexcept
+    const FrequencyFrame& requested, ConfirmedFrame confirmed) noexcept
 {
-    return requested.isValid() ? requested : confirmed;
+    return requested.isValid() ? requested : confirmed.frame;
 }
 
 // The frequency frame a native tile's PRIMARY waterfall row is laid out in,
@@ -107,10 +123,11 @@ struct FrequencyFrame {
 // it against whatever the viewport has since become -- which is what the
 // per-row frame stamp exists for.
 [[nodiscard]] inline FrequencyFrame primaryRowFrameForNativeTile(
-    const FrequencyFrame& viewport,
+    ConfirmedFrame confirmedViewport,
     double tileLowMhz,
     double tileHighMhz) noexcept
 {
+    const FrequencyFrame& viewport = confirmedViewport.frame;
     const double tileSpanMhz = tileHighMhz - tileLowMhz;
     if (!std::isfinite(tileLowMhz) || !std::isfinite(tileHighMhz)
         || tileSpanMhz <= 0.0) {
@@ -216,9 +233,9 @@ struct FrequencyFrame {
 // on-screen frame yet -- before the first geometry push, where bandwidth is
 // still zero -- which is what stampFrameForHistoryRow() would have done anyway.
 [[nodiscard]] inline FrequencyFrame fftDerivedRowFrame(
-    const FrequencyFrame& onScreen, const FrequencyFrame& confirmed) noexcept
+    const FrequencyFrame& onScreen, ConfirmedFrame confirmed) noexcept
 {
-    return onScreen.isValid() ? onScreen : confirmed;
+    return onScreen.isValid() ? onScreen : confirmed.frame;
 }
 
 // The frequency destination column `x` represents, in the frame that row is

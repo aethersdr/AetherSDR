@@ -697,7 +697,12 @@ bool MainWindow::snapCenterLockForSlice(SliceModel* slice, double mhz, bool send
     if (!centerDeferred && sw && bandwidthMhz > 0.0
         && (!qFuzzyCompare(sw->centerMhz(), targetCenterMhz)
             || !qFuzzyCompare(sw->bandwidthMhz(), bandwidthMhz))) {
-        sw->setFrequencyRangeImmediate(targetCenterMhz, bandwidthMhz);
+        // LOCAL, not confirmed -- same reasoning as
+        // centerActiveSliceInPanadapter(): requestPanCenter() reaching the wire
+        // is not the radio accepting the value, so this geometry may not become
+        // true and must not be stamped into waterfall history as though it had.
+        sw->setFrequencyRangeLocal(targetCenterMhz, bandwidthMhz,
+                                   /*animateSmallNudges=*/false);
         changed = true;
     }
 
@@ -5416,6 +5421,12 @@ void MainWindow::applyTuneCenteringWrite(PanadapterModel* pan,
             // Low edge stays >= 0 Hz, matching every other center writer
             // (snapCenterLockForSlice's kiwi branch, the gesture paths, and
             // dispatchPanCenterBandwidth on the flex side).
+            // Confirmed, deliberately. This branch is the KiwiSDR display,
+            // where PanRecenterPolicy has already ruled the widget owns the
+            // view (Write::WidgetLocal) and no radio echo is coming to
+            // confirm it later. Routing it through the local entry point
+            // would leave m_confirmed empty for the whole session, so every
+            // frame-less history row would fall back to an invalid frame.
             sw->setFrequencyRange(std::max(newCenterMhz, bwMhz / 2.0), bwMhz);
         }
         break;

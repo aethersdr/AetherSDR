@@ -1070,7 +1070,7 @@ int testStampFrameForHistoryRow()
 {
     using namespace AetherSDR;
     const FrequencyFrame requested{14.2, 0.1};
-    const FrequencyFrame confirmed{14.0, 0.2};
+    const ConfirmedFrame confirmed{FrequencyFrame{14.0, 0.2}};
 
     const FrequencyFrame withRequested =
         stampFrameForHistoryRow(requested, confirmed);
@@ -1090,12 +1090,26 @@ int testStampFrameForHistoryRow()
          {zeroBandwidth, negativeBandwidth, nonFiniteCenter}) {
         const FrequencyFrame stamped =
             stampFrameForHistoryRow(invalid, confirmed);
-        if (!nearlyEqual(stamped.centerMhz, confirmed.centerMhz)
-            || !nearlyEqual(stamped.bandwidthMhz, confirmed.bandwidthMhz)) {
+        if (!nearlyEqual(stamped.centerMhz, confirmed.frame.centerMhz)
+            || !nearlyEqual(stamped.bandwidthMhz, confirmed.frame.bandwidthMhz)) {
             return fail(
                 "an absent per-row frame must fall back to the confirmed frame");
         }
     }
+
+    // A widget that has never been told anything by the backend holds an EMPTY
+    // confirmed frame, not a plausible default -- so a frame-less row inherits
+    // an invalid frame and every consumer below can see that it is absent,
+    // rather than measuring against a fictitious viewport. This is what the
+    // {0.0, 0.0} seed in SpectrumWidget::m_confirmed buys.
+    const ConfirmedFrame neverEchoed{};
+    if (neverEchoed.frame.isValid())
+        return fail("a default-constructed ConfirmedFrame must read as absent");
+    const FrequencyFrame beforeAnyEcho =
+        stampFrameForHistoryRow(FrequencyFrame{0.0, 0.0}, neverEchoed);
+    if (beforeAnyEcho.isValid())
+        return fail("with nothing confirmed and no per-row frame, the stamp "
+                    "must stay absent rather than inventing geometry");
     return 0;
 }
 
@@ -1124,7 +1138,7 @@ int testPrimaryRowFrameForNativeTile()
     // This path must be untouched -- it is the one that works today.
     const FrequencyFrame flexViewport{14.200, 0.200};
     const FrequencyFrame flexClaim =
-        primaryRowFrameForNativeTile(flexViewport, 14.050, 14.350);
+        primaryRowFrameForNativeTile(ConfirmedFrame{flexViewport}, 14.050, 14.350);
     if (!nearlyEqual(flexClaim.centerMhz, flexViewport.centerMhz)
         || !nearlyEqual(flexClaim.bandwidthMhz, flexViewport.bandwidthMhz)) {
         return fail("an oversized tile must still be cropped to the viewport");
@@ -1137,7 +1151,7 @@ int testPrimaryRowFrameForNativeTile()
     // same answer; pin it so a steady Icom never rebases its rows.
     const FrequencyFrame steadyViewport{14.100, 0.100};
     const FrequencyFrame steadyClaim =
-        primaryRowFrameForNativeTile(steadyViewport, 14.050, 14.150);
+        primaryRowFrameForNativeTile(ConfirmedFrame{steadyViewport}, 14.050, 14.150);
     if (!nearlyEqual(steadyClaim.centerMhz, 14.100)
         || !nearlyEqual(steadyClaim.bandwidthMhz, 0.100)) {
         return fail("an exactly-matching tile must claim that same frame");
@@ -1155,7 +1169,7 @@ int testPrimaryRowFrameForNativeTile()
         const double lowMhz = sweepCenterMhz - 0.050;
         const double highMhz = sweepCenterMhz + 0.050;
         const FrequencyFrame claimed =
-            primaryRowFrameForNativeTile(frozenViewport, lowMhz, highMhz);
+            primaryRowFrameForNativeTile(ConfirmedFrame{frozenViewport}, lowMhz, highMhz);
         if (!claimStaysInsideTile(claimed, lowMhz, highMhz)) {
             return fail(
                 "a sweep that does not cover the viewport must not claim it");
@@ -1169,7 +1183,7 @@ int testPrimaryRowFrameForNativeTile()
     // A tile short on one side only is still short: partial overlap is the
     // case that zero-fills one edge and hides it behind a full-width claim.
     const FrequencyFrame partial =
-        primaryRowFrameForNativeTile(frozenViewport, 14.070, 14.140);
+        primaryRowFrameForNativeTile(ConfirmedFrame{frozenViewport}, 14.070, 14.140);
     if (!claimStaysInsideTile(partial, 14.070, 14.140)) {
         return fail("a partially overlapping tile must not claim the viewport");
     }
@@ -1177,11 +1191,12 @@ int testPrimaryRowFrameForNativeTile()
     // Degenerate producer extents: nothing better to offer than the viewport,
     // and the caller skips its rasterisation loop for these anyway.
     const FrequencyFrame emptyTile =
-        primaryRowFrameForNativeTile(frozenViewport, 14.100, 14.100);
+        primaryRowFrameForNativeTile(ConfirmedFrame{frozenViewport}, 14.100, 14.100);
     const FrequencyFrame invertedTile =
-        primaryRowFrameForNativeTile(frozenViewport, 14.150, 14.050);
+        primaryRowFrameForNativeTile(ConfirmedFrame{frozenViewport}, 14.150, 14.050);
     const FrequencyFrame nonFiniteTile = primaryRowFrameForNativeTile(
-        frozenViewport, std::numeric_limits<double>::quiet_NaN(), 14.150);
+        ConfirmedFrame{frozenViewport},
+        std::numeric_limits<double>::quiet_NaN(), 14.150);
     for (const FrequencyFrame& claimed :
          {emptyTile, invertedTile, nonFiniteTile}) {
         if (!nearlyEqual(claimed.centerMhz, frozenViewport.centerMhz)
@@ -1194,7 +1209,7 @@ int testPrimaryRowFrameForNativeTile()
     // Before the first backend echo the viewport frame is not yet meaningful;
     // the tile is the only real geometry available.
     const FrequencyFrame noViewport =
-        primaryRowFrameForNativeTile(FrequencyFrame{0.0, 0.0}, 14.050, 14.150);
+        primaryRowFrameForNativeTile(ConfirmedFrame{FrequencyFrame{0.0, 0.0}}, 14.050, 14.150);
     if (!nearlyEqual(noViewport.centerMhz, 14.100)
         || !nearlyEqual(noViewport.bandwidthMhz, 0.100)) {
         return fail("an invalid viewport must defer to the tile extent");
@@ -1243,7 +1258,7 @@ int testNativeTileDragSequenceNeverClaimsUncoveredSpan()
         const double lowMhz = sweep.centerMhz - sweep.spanMhz / 2.0;
         const double highMhz = sweep.centerMhz + sweep.spanMhz / 2.0;
         const FrequencyFrame rowFrame =
-            primaryRowFrameForNativeTile(frozenViewport, lowMhz, highMhz);
+            primaryRowFrameForNativeTile(ConfirmedFrame{frozenViewport}, lowMhz, highMhz);
 
         // The invariant. This is what failed before the fix: the row took the
         // frozen viewport frame regardless, zero-filled everything the sweep
@@ -1273,7 +1288,7 @@ int testNativeTileDragSequenceNeverClaimsUncoveredSpan()
     const double settledLow = settled.centerMhz - settled.bandwidthMhz / 2.0;
     const double settledHigh = settled.centerMhz + settled.bandwidthMhz / 2.0;
     const FrequencyFrame settledRow =
-        primaryRowFrameForNativeTile(settled, settledLow, settledHigh);
+        primaryRowFrameForNativeTile(ConfirmedFrame{settled}, settledLow, settledHigh);
     if (!nearlyEqual(settledRow.centerMhz, settled.centerMhz, 1.0e-9)
         || !nearlyEqual(settledRow.bandwidthMhz, settled.bandwidthMhz, 1.0e-9))
         return fail("the post-release row did not settle on the acknowledged centre");
@@ -1307,7 +1322,7 @@ int testNativeTileCoverageAcrossProducers()
         const double lowMhz = producer.centerMhz - producer.spanMhz / 2.0;
         const double highMhz = producer.centerMhz + producer.spanMhz / 2.0;
         const FrequencyFrame rowFrame =
-            primaryRowFrameForNativeTile(viewport, lowMhz, highMhz);
+            primaryRowFrameForNativeTile(ConfirmedFrame{viewport}, lowMhz, highMhz);
         if (!nativeTileRowIsFullyCovered(rowFrame, lowMhz, highMhz,
                                          kDestWidth, kBins))
             return fail("a producer's tile shape claims uncovered columns");
@@ -1325,7 +1340,7 @@ int testFftDerivedRowUsesOneFrameDuringDivergence()
     // is about, and the window in which the FFT-derived path used to stamp
     // history with confirmed geometry while laying its pixels out in on-screen
     // geometry (jensenpat, #5142 review).
-    const FrequencyFrame confirmed{14.200, 0.192};
+    const ConfirmedFrame confirmed{FrequencyFrame{14.200, 0.192}};
     const FrequencyFrame onScreen{14.235, 0.048};
 
     const FrequencyFrame rowFrame = fftDerivedRowFrame(onScreen, confirmed);
@@ -1347,7 +1362,7 @@ int testFftDerivedRowUsesOneFrameDuringDivergence()
             return fail("the TX mask and the history stamp disagree about "
                         "what frequency a column holds");
         const double fromConfirmed =
-            fftDerivedColumnFrequencyMhz(confirmed, x, kDestWidth);
+            fftDerivedColumnFrequencyMhz(confirmed.frame, x, kDestWidth);
         if (fromRowFrame == fromConfirmed)
             return fail("the divergence case is not actually divergent -- "
                         "this test would pass against the old behaviour");
@@ -1357,8 +1372,8 @@ int testFftDerivedRowUsesOneFrameDuringDivergence()
     // confirmed is the only answer, and it is what the old fallback gave.
     const FrequencyFrame unset{0.0, 0.0};
     const FrequencyFrame beforeFirstPush = fftDerivedRowFrame(unset, confirmed);
-    if (beforeFirstPush.centerMhz != confirmed.centerMhz
-        || beforeFirstPush.bandwidthMhz != confirmed.bandwidthMhz)
+    if (beforeFirstPush.centerMhz != confirmed.frame.centerMhz
+        || beforeFirstPush.bandwidthMhz != confirmed.frame.bandwidthMhz)
         return fail("with no on-screen frame yet, the row must fall back to "
                     "confirmed geometry");
     return 0;

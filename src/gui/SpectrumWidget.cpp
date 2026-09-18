@@ -5449,9 +5449,8 @@ void SpectrumWidget::appendHistoryRow(const quint8* intensityData,
     // Stamp the frequency frame this row was captured in, so the viewport can
     // remap it later regardless of how the center/bandwidth has since panned.
     const FrequencyFrame requestedFrame{frameCenterMhz, frameBandwidthMhz};
-    const FrequencyFrame stampFrame = stampFrameForHistoryRow(
-        requestedFrame,
-        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz});
+    const FrequencyFrame stampFrame =
+        stampFrameForHistoryRow(requestedFrame, m_confirmed);
     if (m_wfHistoryWriteRow >= 0 && m_wfHistoryWriteRow < m_wfHistoryRowCenterMhz.size()) {
         m_wfHistoryRowCenterMhz[m_wfHistoryWriteRow] = stampFrame.centerMhz;
         m_wfHistoryRowBwMhz[m_wfHistoryWriteRow] = stampFrame.bandwidthMhz;
@@ -7419,12 +7418,19 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
 
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 {
-    setFrequencyRangeInternal(centerMhz, bandwidthMhz, true);
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, true, /*confirmed=*/true);
 }
 
 void SpectrumWidget::setFrequencyRangeImmediate(double centerMhz, double bandwidthMhz)
 {
-    setFrequencyRangeInternal(centerMhz, bandwidthMhz, false);
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, false, /*confirmed=*/true);
+}
+
+void SpectrumWidget::setFrequencyRangeLocal(double centerMhz, double bandwidthMhz,
+                                            bool animateSmallNudges)
+{
+    setFrequencyRangeInternal(centerMhz, bandwidthMhz, animateSmallNudges,
+                              /*confirmed=*/false);
 }
 
 void SpectrumWidget::deferIncomingRange(double centerMhz, double bandwidthMhz)
@@ -7469,16 +7475,18 @@ void SpectrumWidget::applyDeferredRangeIfIdle()
 }
 
 void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
-                                               bool animateSmallNudges)
+                                               bool animateSmallNudges, bool confirmed)
 {
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz) {
-        // Still confirm even though nothing changes on-screen --
-        // appendHistoryRow()'s callers depend on m_confirmedCenterMhz/
-        // m_confirmedBandwidthMhz being current even in the common case
-        // where a zoom gesture's optimistic guess already matched what the
-        // backend just confirmed (ten9876, #5142 review, "Blocker 1").
-        m_confirmedCenterMhz    = centerMhz;
-        m_confirmedBandwidthMhz = bandwidthMhz;
+        // Still record it even though nothing changes on-screen --
+        // appendHistoryRow()'s callers depend on m_confirmed being current in
+        // the common case where a zoom gesture's optimistic guess already
+        // matched what the backend went on to confirm (ten9876, #5142 review,
+        // "Blocker 1"). A LOCAL request must not: it proves nothing about what
+        // the radio took, and the guess being already on screen is exactly the
+        // state this guard sees.
+        if (confirmed)
+            m_confirmed = ConfirmedFrame{FrequencyFrame{centerMhz, bandwidthMhz}};
         return;
     }
 
@@ -7544,8 +7552,12 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     // top of the function, which ran before all three of the guards above
     // despite their own comments claiming otherwise (ten9876, #5142 review,
     // "Blocker 1").
-    m_confirmedCenterMhz    = centerMhz;
-    m_confirmedBandwidthMhz = bandwidthMhz;
+    //
+    // A LOCAL request still advances the VISIBLE geometry below; it just does
+    // not get to claim the radio agreed. That is the whole distinction
+    // setFrequencyRangeLocal() exists to draw.
+    if (confirmed)
+        m_confirmed = ConfirmedFrame{FrequencyFrame{centerMhz, bandwidthMhz}};
 
     // Distinguish pan-follow nudges (#989) from large jumps (band change, click-to-tune).
     // Nudges shift center by ~10% of halfBw; 25% threshold comfortably separates the two.
@@ -8526,7 +8538,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     // out the row's ACTUAL pixel data, and it must always agree with the
     // stamp given to appendHistoryRow() below, or remapHistoryRowInto() will
     // show the wrong signal at the wrong frequency later, not just a black
-    // gap. See m_confirmedCenterMhz's own declaration comment.
+    // gap. See m_confirmed's own declaration comment.
     //
     // Cropping to that viewport is only legitimate where this tile actually
     // covers it -- true for a Flex tile, false for an exact-span sweep, and
@@ -8534,9 +8546,8 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     // rectangles into retained history. Where the tile falls short, its own
     // extent is authoritative and the row is laid out across the tile
     // instead. See primaryRowFrameForNativeTile().
-    const FrequencyFrame primaryFrame = primaryRowFrameForNativeTile(
-        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz},
-        lowFreqMhz, highFreqMhz);
+    const FrequencyFrame primaryFrame =
+        primaryRowFrameForNativeTile(m_confirmed, lowFreqMhz, highFreqMhz);
 
     QVector<quint8> levels(destWidth, 0);
     QVector<quint8> supplementalLevels(destWidth, 0);
@@ -12256,8 +12267,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     // frame and fall back to CONFIRMED geometry, labelling these guessed
     // pixels with a span they are not in. See fftDerivedRowFrame().
     const FrequencyFrame rowFrame = fftDerivedRowFrame(
-        FrequencyFrame{m_centerMhz, m_bandwidthMhz},
-        FrequencyFrame{m_confirmedCenterMhz, m_confirmedBandwidthMhz});
+        FrequencyFrame{m_centerMhz, m_bandwidthMhz}, m_confirmed);
 
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
     QVector<quint8> levels(destWidth, 0);
@@ -12326,12 +12336,12 @@ void SpectrumWidget::pushKiwiSdrWaterfallRow(const QVector<float>& bins,
     const int srcSize = bins.size();
     if (rowCenterMhz <= 0.0 || rowBandwidthMhz <= 0.0) {
         // Confirmed geometry, not the on-screen guess -- see
-        // m_confirmedCenterMhz's own declaration comment. No pixel-layout
+        // m_confirmed's own declaration comment. No pixel-layout
         // consistency concern here (unlike updateWaterfallRow()/
         // pushWaterfallRow() above): this function resamples bins onto
         // destWidth proportionally, independent of these values either way.
-        rowCenterMhz = m_confirmedCenterMhz;
-        rowBandwidthMhz = m_confirmedBandwidthMhz;
+        rowCenterMhz = m_confirmed.frame.centerMhz;
+        rowBandwidthMhz = m_confirmed.frame.bandwidthMhz;
     }
 
     const std::array<QRgb, 256> colorLut = waterfallHistoryColorLut();
