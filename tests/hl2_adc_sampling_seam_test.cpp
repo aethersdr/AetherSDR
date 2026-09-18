@@ -140,6 +140,30 @@ int main(int argc, char** argv)
     check(!feedUntilNewPeak(dsp, phase, frozen),
           "a muted chain holds its peak and its stamp for as long as it is fed");
 
+    // ── AND THE S-METER MUST FREEZE WITH IT ──────────────────────────────
+    //
+    // The muted branch of processIqBlock clocks the channel with literal zeros
+    // on purpose. The ADC peak above is guarded against that; the S-meter tap
+    // was not, so `avg` measured the silence this code fed it and published it
+    // as a level. Because the mute is the TRANSMIT mute, that dropped the
+    // needle to the floor on every key-down.
+    //
+    // Asserted on the same muted chain the peak assertion just used, so the two
+    // cannot disagree about what "muted" meant.
+    {
+        int meterEmissions = 0;
+        const auto conn = QObject::connect(&dsp, &Hl2RxDsp::meterUpdate,
+                                           &dsp, [&](float) { ++meterEmissions; });
+        for (int i = 0; i < kMaxBlocksForOneSample; ++i) {
+            feedOneBlock(dsp, phase);
+        }
+        app.processEvents();
+        QObject::disconnect(conn);
+        check(meterEmissions == 0,
+              "a muted chain publishes NO S-meter level — it is not a signal, "
+              "it is the silence we clocked in");
+    }
+
     // ── Key up, short. THE BUG. ──────────────────────────────────────────
     //
     // The held stamp is milliseconds old — this test keys up immediately, which
