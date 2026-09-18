@@ -8,9 +8,9 @@
 #include "core/AudioEngine.h"
 #include "core/ClientComp.h"
 #include "core/AppSettings.h"
+#include "core/SettingsPaths.h"
 #include "core/ClientGate.h"
 
-#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStandardPaths>
@@ -58,17 +58,25 @@ private:
 
 void AetherRxProfilesTest::initTestCase()
 {
-    // Redirect GenericConfigLocation into the temp dir so the test writes its
-    // own library rather than the operator's.
     QVERIFY(m_home.isValid());
-    qputenv("XDG_CONFIG_HOME", m_home.path().toUtf8());
-    QStandardPaths::setTestModeEnabled(false);
+    const QString isolatedDir = qEnvironmentVariable("AETHER_SETTINGS_DIR");
+    QVERIFY(!isolatedDir.isEmpty());
+    QCOMPARE(SettingsPaths::configDir(), isolatedDir);
+    QCOMPARE(SettingsPaths::databasePath(), isolatedDir + "/AetherSDR.db");
+    QVERIFY(QStandardPaths::isTestModeEnabled());
 }
 
 void AetherRxProfilesTest::storesAndListsByName()
 {
     AetherRxProfiles lib(nullptr);
     QVERIFY(lib.addProfile("Contest", sampleProfile()));
+    // Check the production path, not just a second instance using the same
+    // potentially incorrect location. No native settings path is writable
+    // by the test: main() installs the sandbox before Qt starts.
+    QFile stored(SettingsPaths::configDir() + "/AetherRxProfiles.json");
+    QVERIFY(stored.open(QIODevice::ReadOnly));
+    QVERIFY(QJsonDocument::fromJson(stored.readAll()).object()
+                .value("profiles").toObject().contains("Contest"));
     QVERIFY(lib.hasProfile("Contest"));
     QVERIFY(lib.profileNames().contains("Contest"));
 
@@ -322,19 +330,22 @@ void AetherRxProfilesTest::aRefusedWriteKeepsTheLibraryAndReportsFailure()
     AetherRxProfiles lib(nullptr);
     QVERIFY(lib.addProfile("Keep Me", sampleProfile(-11.0)));
 
-    // Make the directory unwritable so the atomic replace cannot commit.
-    const QString dir = QFileInfo(m_home.filePath("AetherSDR")).absoluteFilePath();
-    QFile dirFile(dir);
-    const QFileDevice::Permissions saved = dirFile.permissions();
-    QVERIFY(dirFile.setPermissions(QFileDevice::ReadOwner
-                                   | QFileDevice::ExeOwner));
-
+    // Point the store at a regular file temporarily. This refuses writes
+    // even under root and on Windows, without POSIX permissions or moving
+    // the directory containing AppSettings' open SQLite database.
+    const QByteArray savedDir = qgetenv("AETHER_SETTINGS_DIR");
+    const QString blockedDir = m_home.filePath("not-a-directory");
+    QFile obstruction(blockedDir);
+    QVERIFY(obstruction.open(QIODevice::WriteOnly));
+    obstruction.close();
+    qputenv("AETHER_SETTINGS_DIR", blockedDir.toUtf8());
     const bool refused = !lib.addProfile("Should Not Land", sampleProfile());
-    QVERIFY(dirFile.setPermissions(saved));   // restore before asserting
-
-    if (!refused) {
-        QSKIP("the filesystem allowed the write anyway (running as root?)");
-    }
+    const bool deleteRefused = !lib.deleteProfile("Keep Me");
+    const bool exportRefused = !lib.exportToFile("Keep Me", blockedDir + "/export.json");
+    qputenv("AETHER_SETTINGS_DIR", savedDir); // restore before any assertion
+    QVERIFY(refused);
+    QVERIFY(deleteRefused);
+    QVERIFY(exportRefused);
     // The refused name never entered the library...
     QVERIFY(!lib.hasProfile("Should Not Land"));
     // ...and the profile that was there is still there, on disk too.
@@ -344,5 +355,19 @@ void AetherRxProfilesTest::aRefusedWriteKeepsTheLibraryAndReportsFailure()
     QVERIFY(!reopened.hasProfile("Should Not Land"));
 }
 
-QTEST_MAIN(AetherRxProfilesTest)
+int main(int argc, char** argv)
+{
+    TestSettingsProfile profile(QStringLiteral("aether-rx-profiles-test"));
+    if (!profile.isValid()) {
+        return 1;
+    }
+    QCoreApplication app(argc, argv);
+    const QString expected = profile.path() + "/AetherSDR";
+    if (SettingsPaths::configDir() != expected
+        || SettingsPaths::databasePath() != expected + "/AetherSDR.db") {
+        return 1;
+    }
+    AetherRxProfilesTest test;
+    return QTest::qExec(&test, argc, argv);
+}
 #include "aether_rx_profiles_test.moc"

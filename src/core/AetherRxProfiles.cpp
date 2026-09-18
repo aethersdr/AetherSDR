@@ -1,6 +1,7 @@
 #include "AetherRxProfiles.h"
 #include "AudioEngine.h"
 #include "ChannelStripPresets.h"
+#include "SettingsPaths.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -9,7 +10,6 @@
 #include <QFile>
 #include <QSaveFile>
 #include <QJsonDocument>
-#include <QStandardPaths>
 
 #include <algorithm>
 
@@ -78,10 +78,8 @@ AetherRxProfiles::AetherRxProfiles(AudioEngine* engine, QObject* parent)
 
 QString AetherRxProfiles::filePath() const
 {
-    // Sibling of AetherSDR.settings and ChannelStrip.settings — same
-    // GenericConfigLocation convention, for the same reason.
-    const QString dir = QStandardPaths::writableLocation(
-        QStandardPaths::GenericConfigLocation) + "/AetherSDR";
+    // Share the settings store's cross-platform test/profile override.
+    const QString dir = SettingsPaths::configDir();
     QDir().mkpath(dir);
     return dir + "/AetherRxProfiles.json";
 }
