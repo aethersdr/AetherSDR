@@ -186,7 +186,9 @@ void tidyEmbeddedPanel(QWidget* panel, bool keepTitle = false)
         if (sheet.contains(QLatin1String("#08121d"))) {
             sheet.replace(QLatin1String("#08121d"),
                           QLatin1String(ModemChrome::Colour::Background));
-            w->setStyleSheet(sheet);
+            // Through the theme, not setStyleSheet(): the replacement is a
+            // {{token}} placeholder and nothing else would resolve it.
+            AetherSDR::ThemeManager::instance().applyStyleSheet(w, sheet);
         }
     };
     recolour(panel);

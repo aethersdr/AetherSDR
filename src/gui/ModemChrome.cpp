@@ -1,4 +1,5 @@
 #include "ModemChrome.h"
+#include "core/ThemeManager.h"
 
 namespace AetherSDR::ModemChrome {
 
@@ -298,6 +299,16 @@ QScrollBar::sub-line:vertical {
         .arg(handleSize)                           // 37
         .arg((handleSize - grooveHeight) / 2 + 1)  // 38
         .arg(handleSize / 2);                      // 39
+}
+
+
+QColor colour(const char* placeholder)
+{
+    QString token = QString::fromLatin1(placeholder);
+    if (token.startsWith(QLatin1String("{{")) && token.endsWith(QLatin1String("}}"))) {
+        token = token.mid(2, token.size() - 4);
+    }
+    return AetherSDR::ThemeManager::instance().color(token);
 }
 
 } // namespace AetherSDR::ModemChrome

@@ -209,9 +209,9 @@ protected:
         QPainter p(this);
         p.setRenderHint(QPainter::TextAntialiasing);
         p.setRenderHint(QPainter::Antialiasing);
-        QColor c(QLatin1String(ModemChrome::Colour::Section));
-        if (isDown())          c = QColor(QLatin1String(ModemChrome::Colour::GreenBright));
-        else if (underMouse()) c = QColor(QLatin1String(ModemChrome::Colour::TextBright));
+        QColor c = ModemChrome::colour(ModemChrome::Colour::Section);
+        if (isDown())          c = ModemChrome::colour(ModemChrome::Colour::GreenBright);
+        else if (underMouse()) c = ModemChrome::colour(ModemChrome::Colour::TextBright);
         p.setPen(c);
         QFont f = font();
         f.setPixelSize(std::min(18, qRound(height() * 0.58)));
@@ -545,7 +545,7 @@ void AetherDspWidget::refreshStatusStrip()
 
     // Grey is "nothing is running" — distinct from the green of a method that
     // is running but currently passing everything through.
-    const char* dotColour = ModemChrome::Colour::Green;
+    QColor dotColour = ModemChrome::colour(ModemChrome::Colour::Green);
     QString text;
     switch (active) {
     case NR2: {
@@ -598,7 +598,8 @@ void AetherDspWidget::refreshStatusStrip()
         break;
     }
     default:
-        dotColour = "#506174";
+        dotColour = ThemeManager::instance().color(
+            QStringLiteral("color.text.label"));
         text = QStringLiteral("No method running");
         break;
     }
@@ -609,7 +610,7 @@ void AetherDspWidget::refreshStatusStrip()
         QStringLiteral("QLabel#StatusDot { background: %1; border-radius: 6px; "
                        "min-width: 12px; max-width: 12px; min-height: 12px; "
                        "max-height: 12px; }")
-            .arg(QLatin1String(dotColour)));
+            .arg(dotColour.name(QColor::HexRgb)));
 }
 
 void AetherDspWidget::resetCurrentTab()
@@ -2027,7 +2028,7 @@ protected:
         // where it sits on top of the green fill, and a green-on-green tick
         // disappeared exactly where it matters — at a control left on its
         // default.
-        QColor c(QLatin1String(ModemChrome::Colour::Amber));
+        QColor c = ModemChrome::colour(ModemChrome::Colour::Amber);
         c.setAlpha(230);
         p.setPen(QPen(c, 2));
         // Above the groove rather than below it: the handle is 14 px here and

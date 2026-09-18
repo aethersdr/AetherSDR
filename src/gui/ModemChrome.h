@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QColor>
 #include <QString>
 
 namespace AetherSDR::ModemChrome {
@@ -63,5 +64,13 @@ inline constexpr const char* Amber        = "{{color.accent.warning}}";
 enum class Scale { Dialog, Compact };
 
 QString styleSheet(Scale scale);
+
+// Resolve one of the Colour placeholders to a real colour, for painting code.
+// The constants are {{token}} strings so a stylesheet can carry them through
+// ThemeManager::applyStyleSheet(); a QPainter cannot, and QColor given a
+// placeholder is simply invalid — it draws black, silently. One accessor so
+// both paths name the same token rather than keeping a second palette for the
+// half of the chrome that is painted by hand.
+QColor colour(const char* placeholder);
 
 } // namespace AetherSDR::ModemChrome
