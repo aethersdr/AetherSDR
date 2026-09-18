@@ -412,16 +412,19 @@ void ClientEqOutputFader::paintHorizontal(QPainter& p)
     p.setFont(f);
     const QFontMetrics fm(f);
 
+    // Labelled ticks carry the numbers an operator sets by; the unlabelled ones
+    // in between are for reading the level against. Everything from 0 up is
+    // red: past unity is the part worth noticing.
     struct Tick { float db; const char* label; bool high; };
     static constexpr Tick kTicks[] = {
-        { -60.0f, nullptr, false }, { -55.0f, nullptr, false },
-        { -50.0f, nullptr, false }, { -45.0f, nullptr, false },
-        { -40.0f,   "-40", false }, { -35.0f, nullptr, false },
-        { -30.0f, nullptr, false }, { -25.0f, nullptr, false },
-        { -20.0f,   "-20", false }, { -16.0f, nullptr, false },
-        { -12.0f,   "-12", false }, {  -9.0f, nullptr, true },
-        {  -6.0f,    "-6", true  }, {  -3.0f, nullptr, true },
-        {   0.0f,     "0", true  },
+        { -60.0f, nullptr, false }, { -50.0f, nullptr, false },
+        { -40.0f,   "-40", false }, { -30.0f, nullptr, false },
+        { -25.0f, nullptr, false }, { -20.0f,   "-20", false },
+        { -16.0f, nullptr, false }, { -12.0f,   "-12", false },
+        {  -9.0f, nullptr, false }, {  -6.0f,    "-6", false },
+        {  -3.0f, nullptr, false }, {   0.0f,     "0", true  },
+        {  +3.0f,    "+3", true  }, {  +6.0f,    "+6", true  },
+        {  +9.0f, nullptr, true  }, { +12.0f,   "+12", true  },
     };
     for (const auto& t : kTicks) {
         const double x = px(posUnitsForDb(t.db));
@@ -523,6 +526,8 @@ void ClientEqOutputFader::paintVertical(QPainter& p)
 
     struct Tick { float db; const char* label; };
     static constexpr Tick kTicks[] = {
+        { +12.0f,  "+12" },
+        {  +6.0f,  "+6" },
         {   0.0f,  "0" },
         {  -6.0f,  "-6" },
         { -12.0f,  "-12" },

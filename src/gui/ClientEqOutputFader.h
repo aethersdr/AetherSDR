@@ -87,7 +87,9 @@ private:
     static constexpr float kGainMinDb  = -36.0f;
     static constexpr float kGainMaxDb  = +12.0f;
     static constexpr float kMeterMinDb = -60.0f;
-    static constexpr float kMeterMaxDb =   0.0f;
+    // Above 0, not at it: the EQ can add gain and the operator needs to see how
+    // far past unity the output has gone, not just that it is pegged.
+    static constexpr float kMeterMaxDb = +12.0f;
 
     // Layout constants
     static constexpr int kLabelColW = 20;
