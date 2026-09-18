@@ -77,6 +77,15 @@ ClientEqOutputFader::ClientEqOutputFader(QWidget* parent) : QWidget(parent)
         "QLineEdit:focus { background: {{color.background.0}}; border: 1px solid {{color.accent}}; }");
     m_valueEdit->installEventFilter(this);
 
+    // The reading, for strips that report rather than set. Centred in its own
+    // cap so the digits sit still as the value changes width.
+    m_levelLabel = new QLabel;
+    m_levelLabel->setAlignment(Qt::AlignCenter);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_levelLabel,
+        "QLabel { color: {{color.text.primary}}; font-size: 10px; font-weight: bold;"
+        " background: transparent; border: none; }");
+    m_levelLabel->setVisible(false);
+
     rebuildLabelLayout();
 
     connect(m_valueEdit, &QLineEdit::returnPressed, this, [this] {
@@ -181,6 +190,7 @@ void ClientEqOutputFader::setPeakLinear(float peakLinear)
     m_extremes.tick(nowMs, dtMs, posUnitsForDb(m_smoothedPeak),
                     [this](double db) { return posUnitsForDb(db); });
 
+    refreshLevelLabel();
     update();
 }
 
@@ -192,6 +202,14 @@ double ClientEqOutputFader::posUnitsForDb(double db) const
     const double norm = std::clamp(
         (db - kMeterMinDb) / (kMeterMaxDb - kMeterMinDb), 0.0, 1.0);
     return kScaleMin + norm * (kScaleMax - kScaleMin);
+}
+
+void ClientEqOutputFader::refreshLevelLabel()
+{
+    if (!m_levelLabel || m_gainControl) return;
+    m_levelLabel->setText(m_smoothedPeak <= kMeterMinDb + 0.5f
+        ? QStringLiteral("-inf")
+        : QStringLiteral("%1 dB").arg(m_smoothedPeak, 0, 'f', 1));
 }
 
 void ClientEqOutputFader::refreshValueLabel()
@@ -230,9 +248,12 @@ void ClientEqOutputFader::setGainControlEnabled(bool enabled)
 
     if (m_valueEdit) {
         // Hidden rather than made read-only: a greyed field that cannot be
-        // typed into still reads as a control someone has taken away, and the
-        // room it frees goes to the meter.
+        // typed into still reads as a control someone has taken away.
         m_valueEdit->setVisible(enabled);
+    }
+    if (m_levelLabel) {
+        m_levelLabel->setVisible(!enabled);
+        refreshLevelLabel();
     }
     setCursor(Qt::ArrowCursor);
     setToolTip(enabled
@@ -280,6 +301,9 @@ void ClientEqOutputFader::rebuildLabelLayout()
         if (m_gainControl) {
             m_valueEdit->setFixedWidth(46);
             row->addWidget(m_valueEdit, 0, Qt::AlignVCenter);
+        } else {
+            m_levelLabel->setFixedWidth(56);
+            row->addWidget(m_levelLabel, 0, Qt::AlignVCenter);
         }
     } else {
         auto* col = new QVBoxLayout(this);
@@ -291,6 +315,8 @@ void ClientEqOutputFader::rebuildLabelLayout()
             m_valueEdit->setMinimumWidth(0);
             m_valueEdit->setMaximumWidth(QWIDGETSIZE_MAX);
             col->addWidget(m_valueEdit);
+        } else {
+            col->addWidget(m_levelLabel);
         }
     }
 }
@@ -330,8 +356,10 @@ QRectF ClientEqOutputFader::holeRect() const
 
     const int gap = 8;
     const int left = (m_endLabel ? m_endLabel->geometry().right() : 0) + gap;
-    const int right = ((m_gainControl && m_valueEdit)
-                           ? m_valueEdit->geometry().left() : width()) - gap;
+    const QWidget* cap = m_gainControl ? static_cast<QWidget*>(m_valueEdit)
+                                       : static_cast<QWidget*>(m_levelLabel);
+    const int right = ((cap && cap->isVisible()) ? cap->geometry().left()
+                                                 : width()) - gap;
     const double holeW = std::max(1, right - left);
     const double unitY = double(height()) / kControlH;
 
@@ -441,27 +469,30 @@ void ClientEqOutputFader::paintHorizontal(QPainter& p)
     // red: past unity is the part worth noticing.
     struct Tick { float db; const char* label; bool high; };
     static constexpr Tick kTicks[] = {
-        { -60.0f, nullptr, false }, { -50.0f, nullptr, false },
-        { -40.0f,   "-40", false }, { -30.0f, nullptr, false },
-        { -25.0f, nullptr, false }, { -20.0f,   "-20", false },
-        { -16.0f, nullptr, false }, { -12.0f,   "-12", false },
-        {  -9.0f, nullptr, false }, {  -6.0f,    "-6", false },
-        {  -3.0f, nullptr, false }, {   0.0f,     "0", true  },
-        {  +3.0f,    "+3", true  }, {  +6.0f,    "+6", true  },
-        {  +9.0f, nullptr, true  }, { +12.0f,   "+12", true  },
+        { -60.0f,   "-60", false }, { -55.0f, nullptr, false },
+        { -50.0f,   "-50", false }, { -45.0f, nullptr, false },
+        { -40.0f,   "-40", false }, { -35.0f, nullptr, false },
+        { -30.0f,   "-30", false }, { -25.0f, nullptr, false },
+        { -20.0f,   "-20", false }, { -16.0f, nullptr, false },
+        { -12.0f,   "-12", false }, {  -9.0f, nullptr, false },
+        {  -6.0f,    "-6", false }, {  -3.0f, nullptr, false },
+        {   0.0f,     "0", true  }, {  +3.0f, nullptr, true  },
+        {  +6.0f,    "+6", true  }, {  +9.0f, nullptr, true  },
+        { +12.0f,   "+12", true  },
     };
     for (const auto& t : kTicks) {
         const double x = px(posUnitsForDb(t.db));
         const bool large = (t.label != nullptr);
-        // Sub-ticks are half the height of a labelled one. The large tick keeps
-        // the flag's kMarkerLargeH, since that is what the label gap above is
+        // Sub-ticks are two thirds of a labelled one. The large tick keeps the
+        // flag's kMarkerLargeH, since that is what the label gap above is
         // budgeted against.
-        const double tickH = (large ? kMarkerLargeH : kMarkerLargeH / 2.0) * unitY;
+        const double tickH = (large ? kMarkerLargeH : kMarkerLargeH * 2.0 / 3.0) * unitY;
         // A pixel narrower than the design calls for, both kinds: at this
         // meter's width a unit is over two pixels, and the ladder reads better
         // finer than it does bolder.
         const double tickW = std::max(
-            1.0, (large ? kMarkerLargeW : kMarkerSmallW) * unitX - 1.0);
+            1.0, (large ? kMarkerLargeW * unitX - 2.0
+                        : kMarkerSmallW * unitX - 1.0));
         const QColor colour = t.high ? SmartMtrColors::kMarkerHigh
                                      : SmartMtrColors::kMarkerNormal;
 

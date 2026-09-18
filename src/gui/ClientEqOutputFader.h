@@ -62,6 +62,7 @@ protected:
 
 private:
     void refreshValueLabel();
+    void refreshLevelLabel();
     void commitValueEdit();
     // Position along the strip, in whichever axis the orientation runs.
     void setGainFromPos(QPoint pos);
@@ -78,6 +79,9 @@ private:
     void centreCapsOnHole();
 
     QLineEdit* m_valueEdit{nullptr};
+    // Live level readout, shown where the gain field would be on a strip that
+    // has no gain to set. Never both: one cap, one number.
+    class QLabel* m_levelLabel{nullptr};
     class QLabel* m_endLabel{nullptr};   // the "OUT" cap
     Qt::Orientation m_orientation{Qt::Vertical};
 
