@@ -11,7 +11,10 @@ TgxlConnection::TgxlConnection(QObject* parent)
     connect(&m_socket, &QTcpSocket::readyRead, this, &TgxlConnection::onReadyRead);
     connect(&m_socket, &QTcpSocket::errorOccurred, this, &TgxlConnection::onError);
 
-    m_pollTimer.setInterval(1000);
+    // Starts at the receive rate; status frames move it. See the header
+    // for where these two numbers come from -- both are measured, not
+    // chosen for comfort.
+    m_pollTimer.setInterval(kPollRxMs);
     connect(&m_pollTimer, &QTimer::timeout, this, &TgxlConnection::pollStatus);
 
     // Retries every 5s indefinitely until the device returns or the user disconnects.
@@ -148,8 +151,10 @@ void TgxlConnection::processLine(const QString& line)
                     if (eq > 0)
                         kvs.insert(part.left(eq), part.mid(eq + 1));
                 }
-                if (!kvs.isEmpty())
+                if (!kvs.isEmpty()) {
+                    applyPollRateFor(kvs);
                     emit statusUpdated(kvs);
+                }
             }
         }
         return;
@@ -185,10 +190,35 @@ void TgxlConnection::processLine(const QString& line)
         if (object == "state") {
             emit stateUpdated(kvs);
         } else if (object == "status") {
+            applyPollRateFor(kvs);
             emit statusUpdated(kvs);
         }
         return;
     }
+}
+
+// Either port keyed counts: the tuner is passing power on one of them, and
+// that is what the meter is reading.
+void TgxlConnection::applyPollRateFor(const QMap<QString, QString>& kvs)
+{
+    if (!kvs.contains("pttA") && !kvs.contains("pttB")) return;
+    const bool tx = kvs.value("pttA").toInt() != 0 || kvs.value("pttB").toInt() != 0;
+    setTransmitting(tx);
+}
+
+void TgxlConnection::setTransmitting(bool tx)
+{
+    if (m_transmitting == tx) return;
+    m_transmitting = tx;
+    const int interval = tx ? kPollTxMs : kPollRxMs;
+    if (m_pollTimer.interval() != interval) {
+        m_pollTimer.setInterval(interval);
+        // Restart so the new rate takes effect now rather than after the
+        // remainder of a 250 ms receive tick -- which is most of the first
+        // syllable.
+        if (m_pollTimer.isActive()) m_pollTimer.start();
+    }
+    qCDebug(lcTuner) << "TgxlConnection: poll rate ->" << interval << "ms (tx" << tx << ")";
 }
 
 quint32 TgxlConnection::sendCommand(const QString& cmd)

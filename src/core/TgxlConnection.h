@@ -48,6 +48,26 @@ public:
     // Send an arbitrary command to the TGXL (e.g. "activate ant=2")
     quint32 sendCommand(const QString& cmd);
 
+    // Poll fast only while the transmitter is keyed.
+    //
+    // Rates measured against a live TGXL on 1.2.17: the transport sustains
+    // 129 Hz request-response (7 ms median round trip), and the reported
+    // value changes every 17 ms median (~59 Hz), so ~60 Hz is the point
+    // past which polling returns duplicate frames. Receiving needs none of
+    // that -- nothing is moving -- so it drops to 4 Hz.
+    //
+    // Driven from the ptt fields in the device's own status frames, so it
+    // needs no wiring to the radio. The cost is that a transmission is
+    // noticed up to one RX poll late (250 ms); setTransmitting() lets a
+    // caller that already knows switch the rate up with no delay.
+    void setTransmitting(bool tx);
+    bool isTransmitting() const { return m_transmitting; }
+    // For tests: the interval currently in force.
+    int  pollIntervalMs() const { return m_pollTimer.interval(); }
+
+    static constexpr int kPollTxMs = 16;    // ~60 Hz
+    static constexpr int kPollRxMs = 250;   // 4 Hz
+
 signals:
     void connected();
     void disconnected();
@@ -68,10 +88,12 @@ private slots:
     void pollStatus();
 
 private:
+    void applyPollRateFor(const QMap<QString, QString>& kvs);
     void processLine(const QString& line);
 
     QTcpSocket m_socket;
-    QTimer     m_pollTimer;       // 1/sec status poll
+    QTimer     m_pollTimer;       // interval follows m_transmitting
+    bool       m_transmitting{false};
     QTimer     m_reconnectTimer;
     QByteArray m_readBuf;
     quint32    m_seq{0};
