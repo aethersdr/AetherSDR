@@ -100,9 +100,14 @@ completion in 75 minutes on a Radeon Pro 560X.
    the allocator also returns NULL when every tensor in the context was already
    allocated, so the helper repeats the allocator's own "needs allocation" test
    (`data == NULL && view_src == NULL`, non-zero size) rather than treating NULL
-   as the error. `whisper_init_with_params_no_state()` already handles a failed
-   load — it deletes the context and returns NULL — which is what lets
-   `WhisperAsrBackend::load()` latch the device and retry on CPU.
+   as the error. The patch also changes the failed-load cleanup in
+   `whisper_init_with_params_no_state()` from `delete ctx` to
+   `whisper_free(ctx)`: the model stores raw ggml context and buffer pointers,
+   so deleting the C++ context alone leaks them, including any weight buffers
+   allocated before a later group failed. The VAD allocation-failure path
+   similarly calls `whisper_vad_free(vctx)` before returning NULL. The returned
+   NULL lets `WhisperAsrBackend::load()` latch the device and retry on CPU
+   after the failed attempt's resources have been released.
 
    Checked upstream at the time of this patch (2026-09-16): both sites read the
    same on `ggml-org/whisper.cpp` `master`, so a `COMMIT` bump alone would not
@@ -140,7 +145,8 @@ since MSVC and non-Windows builds never exercise this branch.
 For the `src/whisper.cpp` allocation check, look at both
 `ggml_backend_alloc_ctx_tensors_from_buft()` call sites: if upstream now fails
 the load when the returned buffer is NULL, drop the local patch. Otherwise
-reapply it at both. There is no unit seam for it — forcing the failure needs a
+reapply it at both, including the full context cleanup on the failure paths.
+There is no unit seam for it — forcing the failure needs a
 GPU backend that is short of memory — so confirm on a GPU host by occupying
 device memory until the large tier cannot fit and enabling Copy Assist: the log
 must show `GPU model load failed ... retrying on CPU` and the process must

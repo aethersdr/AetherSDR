@@ -3759,7 +3759,10 @@ struct whisper_context * whisper_init_with_params_no_state(struct whisper_model_
     if (!model_loaded) {
         loader->close(loader->context);
         WHISPER_LOG_ERROR("%s: failed to load model\n", __func__);
-        delete ctx;
+        // AetherSDR local patch (#4972): the model owns raw ggml contexts and
+        // buffers, including successful allocations before a later failure.
+        // delete alone leaks them while the caller retries on CPU.
+        whisper_free(ctx);
         return nullptr;
     }
 
@@ -5025,6 +5028,7 @@ struct whisper_vad_context * whisper_vad_init_with_params(
             // AetherSDR local patch (#4972): same unchecked allocation as
             // whisper_model_load() above.
             WHISPER_LOG_ERROR("%s: failed to allocate %s buffer for the VAD model weights\n", __func__, ggml_backend_buft_name(buft));
+            whisper_vad_free(vctx);
             return nullptr;
         }
     }
