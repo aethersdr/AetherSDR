@@ -4,6 +4,7 @@
 #include "core/dsp/WdspChannel.h"
 
 #include <QElapsedTimer>
+#include <QPointer>
 #include <QString>
 #include <QThread>
 #include <QTimer>
@@ -16,6 +17,7 @@
 #include "core/backends/hl2/Hl2TelemetryCadence.h"  // Hl2LinkState (#15)
 #include "core/backends/hl2/Hl2TelemetryService.h"  // borrowed, owned by RadioModel
 #include "core/backends/hl2/Hl2TelemetrySource.h"   // the shared attribution rule
+#include "core/backends/hl2/Hl2RateCommit.h"
 #include "core/backends/hl2/Hl2Receivers.h"
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
@@ -304,7 +306,9 @@ private:
     // swapped them in. See applyPanBandwidth() for the three-thread split and
     // for why there is no roll-back to design.
     void finishRateChange(bool ok, quint64 generation, int targetRate,
-                          int previousRate, std::size_t failedIndex,
+                          int previousRate,
+                          const std::vector<QPointer<Hl2RxDsp>>& covered,
+                          std::size_t failedIndex,
                           const std::string& error);
     // Which rate change is current. An operator dragging a zoom produces
     // crossings back to back; a task that finishes after a newer one has
@@ -314,7 +318,13 @@ private:
     // ATOMIC because the I/O thread reads it too: the install step runs there
     // and must decide, at the last possible moment before it touches anything
     // live, whether this rebuild is still the one being asked for.
-    std::atomic<quint64> m_rateChangeGeneration {0};
+
+
+    // Which rate is on the wire, and which crossing is current. Both questions
+    // used to be answered by separate members, and the rate one was answered by
+    // m_sampleRateHz — which is the rate being ATTEMPTED, not the rate running.
+    // See Hl2RateCommit.h for the two bugs that came of the difference.
+    AetherSDR::hl2::RateCommitLedger m_rateLedger {48000};
 
     void beginDspSetup();
     void armDspSetupWatchdog();
@@ -508,6 +518,15 @@ private:
         bool audioMuted = false;
         float audioGain = 1.0f;
         int audioPanPercent = 50;
+
+        // The IQ rate this receiver's chain was actually BUILT for, or 0
+        // before it has one. Distinct from Hl2Backend::m_sampleRateHz, which is
+        // the rate this object is TRYING to reach and moves optimistically the
+        // moment a zoom is accepted. A receiver opened while a rate change is
+        // in flight is built for the rate the radio is really producing, so
+        // these two legitimately disagree for the length of a rebuild, and
+        // finishRateChange() reconciles the difference on the success path.
+        int configuredRateHz = 0;
 
         // Per-receiver S-meter ballistics. Deliberately NOT shared: a strong
         // signal on receiver 1 must not move receiver 3's needle, which is what
