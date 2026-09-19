@@ -50,8 +50,12 @@ void AetherTxProfiles::migrateLegacyPresets()
 
     QFile f(ChannelStripPresets::legacyLibraryPath());
     if (!f.exists() || !f.open(QIODevice::ReadOnly)) {
-        // Nothing to import, but record that we looked: a preset file that
-        // appears later belongs to an older install, not to this one.
+        // Nothing to import. The flag is set in memory only -- writing it
+        // would create an empty library file for every operator who never
+        // had a preset, to record an absence. The cost is that a launch
+        // with no legacy file re-checks, which is one stat() and is also
+        // the behaviour you want if a preset file is later restored from
+        // a backup.
         m_root[kFlag] = true;
         return;
     }

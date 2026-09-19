@@ -100,10 +100,12 @@ signals:
     void monitorPlayClicked();
 
 
-    // Re-emitted from the embedded StripChainWidget when the user
-    // single-clicks a stage tile to toggle its bypass.  MainWindow
-    // routes this to the same handler as ClientChainApplet's signal
-    // so the docked Chain applet's chain widget repaints in lock-step.
+    // Raised from setStageEnabled(), which the stage column's per-row
+    // checkbox drives through its host callback.  MainWindow routes this to
+    // the same handler as ClientChainApplet's signal so the docked Chain
+    // applet repaints in lock-step.  (It used to come from an embedded
+    // StripChainWidget; this window has no chain widget in it any more,
+    // though the docked applet still uses that class.)
     void stageEnabledChanged(AudioEngine::TxChainStage stage, bool enabled);
 
 protected:
