@@ -12,7 +12,7 @@
 #
 # Building from source — rather than apt-installing qtkeychain-qt6-dev —
 # guarantees the library matches the exact Qt the AppImage links (aqt Qt
-# 6.8.3 on x86_64), avoiding an ABI mismatch with the distro's Qt.
+# 6.12.0 on x86_64), avoiding an ABI mismatch with the distro's Qt.
 #
 # LIBSECRET_SUPPORT is OFF on purpose: that selects qtkeychain's pure
 # Qt-D-Bus Secret Service backend, which talks to KDE Wallet (kwalletd) and

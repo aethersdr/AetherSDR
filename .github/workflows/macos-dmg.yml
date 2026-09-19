@@ -23,9 +23,9 @@ jobs:
           # CMakeLists.txt gates the ASR Metal kernels on it (>= 14.0 builds
           # metal3.1 with bf16, below that metal3.0 with props.has_bfloat
           # clamped) and upstream ONNX Runtime 1.27.0 is built at exactly 14.0 —
-          # no Apple Silicon Mac is stuck below it. Intel goes to 12.0: nothing
-          # in that artifact needs a higher floor, and it exists to serve the
-          # aging hardware that cannot go higher (#4532).
+          # no Apple Silicon Mac is stuck below it. Intel goes to 13.0: Qt ≥ 6.10
+          # will not launch on Monterey, so the previous 12.0 floor (#4532) is
+          # unreachable once the binary pin is 6.12 (#5487).
           #
           # arch is the qtkeychain cache-key tag, kept separate from label so the
           # Apple Silicon key stays byte-identical to ci.yml's — that sharing is
@@ -37,13 +37,13 @@ jobs:
           - runner: macos-15-intel
             label: intel
             arch: x86_64
-            deploy_target: '12.0'
+            deploy_target: '13.0'
     runs-on: ${{ matrix.runner }}
 
     # One place each for the versions this workflow pins. ci.yml's check-macos
     # pins the same values and shares the qtkeychain cache key built from them.
     env:
-      QT_VERSION: '6.8.3'
+      QT_VERSION: '6.12.0'
       AQTINSTALL_VERSION: '3.3.0'
 
     steps:
@@ -55,7 +55,7 @@ jobs:
         run: |
           # No Homebrew Qt on either leg. Apple Silicon used to take qt@6 here,
           # which is a rolling formula — it shipped 6.11.1 while every other
-          # artifact pinned 6.8.3, so the most-downloaded macOS artifact linked
+          # artifact pinned 6.12.0, so the most-downloaded macOS artifact linked
           # a Qt no other build tested and could change between tags with no PR
           # (#4688 §1). Both legs now take the same pinned aqt Qt below.
           #
@@ -107,17 +107,15 @@ jobs:
           #   $ file .../QtCore.framework/Versions/A/QtCore
           #   Mach-O universal binary with 2 architectures: x86_64, arm64
           #   $ llvm-otool -l ... | grep -A4 LC_BUILD_VERSION
-          #   platform 1   sdk 14.4   minos 12.0
+          #   platform 1   sdk 14.4   minos 13.0   (Qt 6.12; 6.8.3 was minos 12.0)
           #
-          # minos 12.0 is what retires the Intel from-source build. #802 built Qt
-          # by hand because "Homebrew Qt bottles on macos-15-intel target macOS
-          # 14.0, breaking on 2017 iMacs stuck on Ventura" — a property of
-          # HOMEBREW's bottles, not of Qt. Qt's own binary reaches further back
-          # than the 13.0 we were hand-building for. The option was invisible at
-          # the time only because #711 had removed aqt from macOS the previous
-          # day, for the unrelated dual-Qt conflict.
+          # Qt ≥ 6.10 requires macOS 13, so the Intel DMG's previous 12.0 floor
+          # (#4532) cannot survive this pin. #802 built Qt by hand because
+          # "Homebrew Qt bottles on macos-15-intel target macOS 14.0, breaking
+          # on 2017 iMacs stuck on Ventura" — a property of HOMEBREW's bottles,
+          # not of Qt. The remaining Intel reach is Ventura.
           #
-          # `aqt list-qt mac desktop --arch 6.8.3` returns clang_64 alone, and
+          # `aqt list-qt mac desktop --arch 6.12.0` returns clang_64 alone, and
           # all four modules below are published for it.
           "$RUNNER_TEMP/aqtvenv/bin/aqt" install-qt mac desktop "$QT_VERSION" clang_64 \
             -m qtmultimedia qtwebsockets qtserialport qtshadertools \
