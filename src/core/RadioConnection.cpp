@@ -640,8 +640,9 @@ void RadioConnection::onReadyRead()
             line.chop(1);
         }
         m_readBuffer.remove(0, newlinePos + 1);
-        if (!line.isEmpty())
+        if (!QStringView(line).trimmed().isEmpty()) {
             processLine(line);
+        }
     }
 }
 

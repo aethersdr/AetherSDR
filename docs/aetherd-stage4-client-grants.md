@@ -62,6 +62,13 @@ before clients are admitted. Without the option, observe/control behavior is
 unchanged and `hello.auth` is still rejected. Credential verification alone
 does not enable any daemon TX methods.
 
+Authentication and control permission remain separate: explicitly selecting an
+authority without `--allow-local-control` permits credential verification and
+negotiation, not receive mutations or TX. `capabilities.get` describes only the
+session's existing grants; the credential itself adds no observe/control grant.
+The daemon's ordinary current-user observe permission remains in effect, and
+TX/admin services are constructed only with the separate TX/control opt-ins.
+
 Both serving and offline administration reserve the same current-user authority
 lock, independently of the socket name, for their complete lifetime. Stop the
 daemon before adding/removing credentials: a second endpoint cannot mutate the
@@ -118,7 +125,13 @@ producer is bound to that actor. Disconnect/revocation retires only the affected
 client's authority; radio reset invalidates every independent actor. Old handles
 cannot be reused after renewal, reconnect or reset.
 
-The manager accepts at most eight clients and one live grant per client.
+The manager accepts at most eight TX clients and one live grant per client.
+If those optional registrations are full, a valid credential hello still
+negotiates with its existing observe/control permissions, but no `tx.*` methods,
+TX client ID or grant. Freeing a slot does not automatically register that
+connection; a fresh connection/hello is required. Credential revocation still
+terminates the unregistered session. Administrator sessions consume no TX client
+slot and remain available to revoke grants or stop operations.
 Issuance requires explicit positive durations, bounded by internal ceilings:
 one hour per operation, 24 hours per grant and 60 seconds per keepalive interval.
 These are protocol ceilings, not defaults; all three durations are explicit.
@@ -193,10 +206,11 @@ dispatch after termination; final error delivery occurs after authority is
 retired. Tests inject byte-reader/writer callbacks into this same pump rather
 than substituting a radio peer or merely testing a second parser.
 
-Every credential-authenticated client connection binds its own manager lifetime
-at successful hello. Observer and administrator sessions do not acquire client
-actors. The lifecycle tests additionally inject terminal transport failures to
-prove synchronous owner-scoped retirement without opening a socket.
+Every credential-authenticated client connection admitted to TX registration
+binds its own manager lifetime at successful hello. Observer, overflow and
+administrator sessions do not acquire client actors. The lifecycle tests also
+inject terminal transport failures to prove synchronous owner-scoped retirement
+without opening a socket.
 
 ## Stop-attempt identity is not radio evidence
 
@@ -281,7 +295,10 @@ one client credential on two connections still creates distinct lifetimes.
 There is no automatic grant renewal, waiting queue, repeated-key result cache,
 startup grant, audio transport, TUNE/ATU/CW/CWX method, or physical-PTT adoption.
 RX mutations also refuse while the coordinator retains any ownership, including
-the acquired-but-not-keyed window and unconfirmed cleanup.
+the acquired-but-not-keyed window and unconfirmed cleanup. An unqualified stop
+therefore blocks these existing non-TX mutation paths as well as later TX
+acquisition; explicit transport disconnect/reconnect is the recovery boundary
+when no qualified completion arrives. A timeout never clears this fence.
 
 ### Operator grant administration
 

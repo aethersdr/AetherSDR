@@ -217,6 +217,58 @@ void strictFramesAndOwnership()
     check(unrelated.tracker.evidence(unrelated.now).valid(), "unrelated real status/replies do not stand in for transitions");
 }
 
+void partialInterlockBeforeArming()
+{
+    const QStringList deltas{
+        QStringLiteral("S0|interlock tx_allowed=0"),
+        QStringLiteral("S0|interlock tx_allowed=1"),
+        QStringLiteral("S0|interlock state=READY"),
+        QStringLiteral("S0|interlock source="),
+        QStringLiteral("S0|interlock reason="),
+        QStringLiteral("S0|interlock tx_client_handle=0x00000000")};
+    for (const QString& delta : deltas) {
+        Harness h;
+        h.feed(delta);
+        check(h.tracker.phase() == Phase::AwaitIdle && h.tracker.failure() == Failure::None,
+              "valid partial interlock withdraws idle without poisoning the session");
+        check(!h.tracker.begin(h.operation, 101, h.now), "partial idle never permits key admission");
+        h.feed(kIdle);
+        check(h.tracker.phase() == Phase::Idle, "later complete idle recovers without reconnect");
+        h.start();
+        h.complete();
+        check(h.tracker.evidence(h.now).valid(), "recovered session retains complete stop evidence requirements");
+
+        Harness active;
+        active.start();
+        active.feed(delta);
+        active.feed(kIdle);
+        check(active.tracker.phase() == Phase::Failed && !active.tracker.evidence(active.now).valid(),
+              "partial status during an armed lifecycle remains terminal and cannot certify stop");
+    }
+    FlexPttStopTracker fresh;
+    fresh.reset(1, 0x12345678);
+    quint64 ordinal = 0;
+    for (const QString& delta : deltas) {
+        fresh.observe({1, ++ordinal}, delta, 100);
+        check(fresh.phase() == Phase::AwaitIdle && fresh.failure() == Failure::None,
+              "initial partial updates never accumulate into complete idle evidence");
+    }
+    fresh.observe({1, ++ordinal}, kIdle, 100);
+    check(fresh.phase() == Phase::Idle, "complete idle after initial deltas admits readiness");
+
+    for (const QString& malformed : {
+             QStringLiteral("S0|interlock tx_allowed=garbage"),
+             QStringLiteral("S0|interlock tx_client_handle=garbage"),
+             QStringLiteral("S0|interlock tx_allowed=1 tx_allowed=0"),
+             QStringLiteral("S0|interlock state=READY junk")}) {
+        Harness h;
+        h.feed(malformed);
+        h.feed(kIdle);
+        check(h.tracker.failure() == Failure::InvalidInput,
+              "malformed fields still fail closed before arming");
+    }
+}
+
 void attemptIdentityAndReconnect()
 {
     Harness h;
@@ -321,6 +373,7 @@ int main(int argc, char** argv)
     enteredWriterBarrier();
     missingAndReorderedTransitions();
     strictFramesAndOwnership();
+    partialInterlockBeforeArming();
     attemptIdentityAndReconnect();
     failedWritesDeadlinesAndLateEvents();
     return failures == 0 ? 0 : 1;

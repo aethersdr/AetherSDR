@@ -80,6 +80,43 @@ public:
 class RadioConnectionSessionTest final : public QObject {
     Q_OBJECT
 private slots:
+    void whitespaceOnlyLinesAreIgnored()
+    {
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        QStringList writes;
+        RadioConnectionSessionTestAccess::beginPtt(connection, writes);
+        QSignalSpy messages(&connection, &RadioConnection::messageReceived);
+        RadioConnectionSessionTestAccess::feed(connection, *socket, "\n\r\n \n\t\r\n \t \n");
+        QCOMPARE(messages.count(), 0);
+        RadioConnectionSessionTestAccess::feed(connection, *socket,
+            "V1.4.0.0\nH12345678\nS0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1\n");
+        QVERIFY(connection.independentPttReady());
+        QCOMPARE(messages.count(), 3);
+        RadioConnectionSessionTestAccess::feed(connection, *socket, " \t \r\n");
+        QVERIFY(connection.independentPttReady());
+        QCOMPARE(messages.count(), 3);
+        QCOMPARE(socket->socketDescriptor(), qintptr(-1));
+    }
+    void partialInterlockRecoversWithoutReconnect()
+    {
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        QStringList writes;
+        RadioConnectionSessionTestAccess::beginPtt(connection, writes);
+        RadioConnectionSessionTestAccess::feed(connection, *socket,
+            "V1.4.0.0\nH12345678\nS0|interlock tx_allowed=0\n");
+        QVERIFY(!connection.independentPttReady());
+        const QByteArray idle = "S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1\n";
+        RadioConnectionSessionTestAccess::feed(connection, *socket, idle);
+        QVERIFY(connection.independentPttReady());
+        RadioConnectionSessionTestAccess::feed(connection, *socket, "S0|interlock tx_allowed=1\n");
+        QVERIFY(!connection.independentPttReady());
+        RadioConnectionSessionTestAccess::feed(connection, *socket, idle);
+        QVERIFY(connection.independentPttReady());
+        QVERIFY(writes.isEmpty());
+        QCOMPARE(socket->socketDescriptor(), qintptr(-1));
+    }
     void independentPttPrologue_data()
     {
         QTest::addColumn<QByteArray>("prologue");

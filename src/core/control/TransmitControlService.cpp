@@ -74,8 +74,11 @@ bool TransmitControlService::attach(ControlSession* session)
     if (m_clients.contains(session->sessionId())) {
         return true;
     }
-    if (m_clients.size() >= TxGrantManager::kMaximumClients) {
-        return false;
+    if (m_manager->clientCount() >= TxGrantManager::kMaximumClients) {
+        // TX registration is optional: capacity must not revoke the session's
+        // existing observe/control grants. Unregistered sessions get no tx.*
+        // methods; a later free slot requires a fresh connection/hello.
+        return true;
     }
     auto client = std::make_shared<Client>();
     client->id = freshId();

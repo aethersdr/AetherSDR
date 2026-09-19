@@ -180,11 +180,67 @@ void targetRetirement()
     check(error(h.invoke(h.a, "tx.status", {{"radioSession", "radio-1"}})) == "capability.unavailable",
           "retired adapter cannot advertise usable transmit state");
 }
+
+void clientCapacityPreservesNonTxSession()
+{
+    for (const bool engineClients : {false, true}) {
+        Harness h;
+        std::vector<std::unique_ptr<ControlSession>> clients;
+        std::vector<TxGrantManager::Client> directClients;
+        for (int i = h.target.manager.clientCount(); i < TxGrantManager::kMaximumClients; ++i) {
+            if (engineClients) {
+                directClients.push_back(h.target.manager.registerClient(QStringLiteral("trusted-engine")));
+            } else {
+                clients.push_back(std::make_unique<ControlSession>(&h.store, 65536, SessionAuthorization::Observer));
+                h.hello(*clients.back(), &h.clientRecord);
+            }
+        }
+        check(h.target.manager.clientCount() == TxGrantManager::kMaximumClients,
+              "capacity fixture fills all optional TX registrations");
+        ControlSession excess(&h.store, 65536, SessionAuthorization::ObserverController);
+        h.hello(excess, &h.clientRecord);
+        const auto capabilities = result(h.invoke(excess, "capabilities.get"));
+        check(excess.isNegotiated() && !excess.isRevoked() && excess.canObserve() && excess.canControl()
+              && capabilities.value("grants").toArray().contains("observe")
+              && capabilities.value("grants").toArray().contains("control")
+              && !capabilities.value("capabilities").toArray().contains("tx.status"),
+              "TX capacity preserves negotiation and existing observe/control without TX methods");
+        check(h.store.upsert({QStringLiteral("server"), {}, {}}, {{"name", "test"}}), "publish observable resource");
+        const auto observed = h.invoke(excess, "resource.get", {{"resource", QJsonObject{{"type", "server"}}}});
+        check(error(observed).isEmpty() && result(observed).value("value").toObject().value("name") == "test",
+              "excess TX client can still observe production resources");
+        check(error(h.invoke(excess, "tx.status", {{"radioSession", "radio-1"}})) == "auth.grant_denied"
+              && h.target.manager.clientCount() == TxGrantManager::kMaximumClients
+              && h.target.manager.grantCount() == 0 && h.target.writes == 0,
+              "unregistered connection gains no client ID, grant or keying authority");
+        const auto adminList = h.invoke(h.admin, "txAdmin.listClients");
+        check(error(adminList).isEmpty(), "administrator remains usable at TX client capacity");
+        const auto generation = result(adminList).value("radioGeneration");
+        for (const QString& method : {QStringLiteral("tx.acquire"), QStringLiteral("tx.setKeying"),
+                                     QStringLiteral("tx.release"), QStringLiteral("tx.cancel"),
+                                     QStringLiteral("tx.keepAlive")}) {
+            check(error(h.invoke(excess, method, {{"radioSession", "radio-1"},
+                  {"radioGeneration", generation}, {"grantId", QString(32, u'a')}})) == "auth.grant_denied",
+                  "overflow session cannot bypass TX registration by invoking an unadvertised method");
+        }
+        h.a.endAuthorization();
+        check(!result(h.invoke(excess, "capabilities.get")).value("capabilities").toArray().contains("tx.status"),
+              "a freed slot does not silently register an already-negotiated connection");
+        ControlSession replacement(&h.store, 65536, SessionAuthorization::Observer);
+        h.hello(replacement, &h.clientRecord);
+        check(error(h.invoke(replacement, "tx.status", {{"radioSession", "radio-1"}})).isEmpty()
+              && h.target.manager.clientCount() == TxGrantManager::kMaximumClients,
+              "fresh hello can use a released TX registration slot");
+        check(h.credentials.revoke(h.clientRecord.id) && excess.isRevoked() && replacement.isRevoked(),
+              "credential retirement also revokes overflow sessions without TX registration");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
     ownershipAndReplay(); deadlinesAndGeneration(); credentialRevocationAndEmergency(); targetRetirement();
+    clientCapacityPreservesNonTxSession();
     return failures ? 1 : 0;
 }

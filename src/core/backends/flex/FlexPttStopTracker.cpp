@@ -264,15 +264,23 @@ void FlexPttStopTracker::interlock(QStringView body)
         return; // unrelated interlock timing configuration
     }
     quint32 handle = 0;
-    if (malformed || present != 31 || !handleText.startsWith(u"0x") || handleText.size() != 10
-        || !number(handleText.mid(2), 16, handle) || (allowed != u"0" && allowed != u"1")) {
+    if (malformed || ((present & 4) != 0 && (!handleText.startsWith(u"0x") || handleText.size() != 10
+        || !number(handleText.mid(2), 16, handle)))
+        || ((present & 8) != 0 && allowed != u"0" && allowed != u"1")) {
         fail(Failure::InvalidInput);
         return;
     }
-    const bool idle = state == u"READY" && source.isEmpty() && handle == 0
+    const bool idle = present == 31 && state == u"READY" && source.isEmpty() && handle == 0
         && allowed == u"1" && reason.isEmpty();
     if (m_phase == Phase::AwaitIdle || m_phase == Phase::Idle) {
+        // FlexLib 4.2.18 ParseInterlockStatus consumes deltas. Before arming,
+        // a partial sample withdraws readiness, but a later complete idle can
+        // recover. Never combine fields across messages into stop evidence.
         m_phase = idle ? Phase::Idle : Phase::AwaitIdle;
+        return;
+    }
+    if (present != 31) {
+        fail(Failure::InvalidInput);
         return;
     }
     if ((handle != 0 && handle != m_clientHandle) || (!source.isEmpty() && source != u"SW")) {

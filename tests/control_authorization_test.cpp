@@ -99,6 +99,16 @@ bool testCredentialIdentityAndRetirement()
         if (!check(errorCode(invoke(service, a, method)) == QStringLiteral("request.unknown_method"),
                    "even verified admin credentials do not expose daemon TX")) { return false; }
     }
+    const ServiceReply identityOnlyCapabilities = invoke(service, credentialOnly, QStringLiteral("capabilities.get"));
+    const QJsonObject identityOnly = identityOnlyCapabilities.message.value(QStringLiteral("result")).toObject();
+    if (!check(errorCode(identityOnlyCapabilities).isEmpty()
+                   && identityOnly.value(QStringLiteral("grants")).toArray().isEmpty()
+                   && identityOnly.value(QStringLiteral("capabilities")).toArray().isEmpty()
+                   && errorCode(invoke(service, credentialOnly, QStringLiteral("resource.get")))
+                       == QStringLiteral("auth.grant_denied"),
+               "credential-only negotiation describes no grants and cannot read resources")) {
+        return false;
+    }
     QObject owner;
     int retirements = 0;
     int aborts = 0;

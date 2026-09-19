@@ -172,6 +172,9 @@ TxGrantManager::Admission TxGrantManager::acquire(const Client& client, const Gr
     const TxCoordinator::Intent intent = m_coordinator.beginRequest(state.input, state.operation, activity);
     if (!intent.pending()) {
         (void)m_coordinator.cancel(state.actor, state.operation);
+        // An unbound request stays valid after cancel; do not let it block
+        // every later fresh intent under this otherwise-live grant.
+        state.input = {};
         schedule();
         return {{}, {}, {}, Error::Capacity};
     }

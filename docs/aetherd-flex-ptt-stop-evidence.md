@@ -114,9 +114,16 @@ own-key sequence must nevertheless be observed before unkey-state proof.
 That request must belong to the same operation and coordinator. Only the full
 ordered sequence above yields the same original token as a candidate result.
 
-Relevant interlock observations must contain state, source, client handle,
-TX-allowed and reason together; fields are never carried forward across partial
-messages. Malformed numbers, duplicate fields, foreign ownership, physical keying,
+FlexLib 4.2.18.41174's `Radio.ParseInterlockStatus` updates each received key
+independently: valid partial interlock updates are ordinary protocol traffic.
+Before a lifecycle is armed (`AwaitIdle`/`Idle`), such an update withdraws
+readiness until a later complete eligible idle observation; it does not poison
+the connection. Fields are never carried forward across partial messages to
+manufacture an idle sample.
+
+During an armed lifecycle, relevant interlock observations must still contain
+state, source, client handle, TX-allowed and reason together. Partial evidence,
+malformed numbers, duplicate fields, foreign ownership, physical keying,
 missing/reordered transitions, failed/partial writes and failed replies reject
 the attempt. Timing-only and band-configuration messages are not state samples.
 In particular, the tolerant display parser's default-zero conversion is not

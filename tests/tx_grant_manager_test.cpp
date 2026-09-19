@@ -380,6 +380,41 @@ void realTimerWithoutRequests()
     check(active.accepted() && stops == 1 && !active.operation.permitsDispatch(TxCoordinator::monotonicMs()),
           "engine timer stops active operation with no subsequent protocol request");
 }
+
+void failedRequestCanRetry()
+{
+    qint64 now = 100;
+    bool crossDeadline = false;
+    TxCoordinator* current = nullptr;
+    TxCoordinator::StopRequest stop;
+    TxCoordinator coordinator([&](const auto& operation, auto) {
+        stop = current->requestStopConfirmation(operation);
+    }, [&] {
+        // Admission uses the earlier clock snapshot; beginRequest checks again
+        // after ownership exists. Expire only the operation, not the grant.
+        if (crossDeadline && current->hasOwnership()) {
+            now += 20;
+            crossDeadline = false;
+        }
+        return now;
+    });
+    current = &coordinator;
+    TxGrantManager grants(coordinator, [] { return kMox; });
+    const auto client = grants.registerClient(QStringLiteral("request-retry"));
+    const auto issued = grants.issue(client, {20, 10000, 5000, kMox});
+    check(issued.accepted(), "request-failure fixture issues a bounded grant");
+    crossDeadline = true;
+    const auto failed = grants.acquire(client, issued.grant, 1, Activity::Mox);
+    check(failed.error == TxGrantManager::Error::Capacity && !failed.input.valid()
+          && coordinator.recovering() && grants.isLive(client, issued.grant),
+          "deadline crossed at request binding cancels only the operation");
+    check(coordinator.confirmStopped(stop), "failed unbound request still requires exact stop confirmation");
+    check(grants.acquire(client, issued.grant, 1, Activity::Mox).error == TxGrantManager::Error::Replay,
+          "failed admission still consumes its original intent serial");
+    const auto retry = grants.acquire(client, issued.grant, 2, Activity::Mox);
+    check(retry.accepted() && retry.input.valid() && retry.operation.permitsDispatch(now),
+          "fresh intent reuses the live grant after a failed request without reissuing it");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -394,5 +429,6 @@ int main(int argc, char** argv)
     unsupportedCapacityAndResetChurn();
     deadlineSurvivesRescheduling();
     realTimerWithoutRequests();
+    failedRequestCanRetry();
     return failures == 0 ? 0 : 1;
 }
