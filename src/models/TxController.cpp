@@ -38,6 +38,20 @@ std::shared_ptr<TxController> TxController::forNativeDevice(RadioModel* radio, Q
     return std::make_shared<TxController>(NativeDeviceTag{}, radio, device);
 }
 
+TxController::Input TxController::fromGrantedPtt(RadioModel* radio,
+                                                const TxCoordinator::Request& request,
+                                                const TxCoordinator::Operation& operation)
+{
+    Input input;
+    if (radio && radio->canBindGrantedPtt(request, operation)) {
+        input.m_radio = radio;
+        input.m_request = request;
+        input.m_activity = Activity::Mox;
+        input.m_source = TransmitModel::PttSource::Mox;
+    }
+    return input;
+}
+
 TxCoordinator::Request TxController::captureRawInput() const
 {
     return m_nativeDevice ? m_producer.request() : TxCoordinator::Request{};

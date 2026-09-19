@@ -1,5 +1,8 @@
 #pragma once
 
+#include "core/TxGrantManager.h"
+#include "core/backends/IndependentTxControl.h"
+
 #include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
 #include "core/RadioSettingsScope.h"  // RFC #4603 radio-scoped feature documents
@@ -934,6 +937,13 @@ public:
     // Snapshot for engine-owned deferred release. This is not a credential or
     // an invitation to borrow whichever operation happens to be current later.
     TxCoordinator::Operation transmitOperation() const { return m_txOperation; }
+    // Trusted daemon composition, sharing the desktop arbiter. Radio-owned;
+    // authentication and explicit grant issuance remain the caller's job.
+    TxGrantManager* independentTxGrants();
+    bool independentTxReady() const;
+    bool transmitRecovering() const { return m_txCoordinator.recovering(); }
+    bool transmitOwnershipPending() const { return m_txCoordinator.hasOwnership(); }
+    void emergencyTransmitStop();
     // Trusted composition only. A producer is a lifetime, not an actor grant.
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
     // Plain engine protocol objects invalidate this handle in their destructor.
@@ -942,6 +952,10 @@ public:
     // keyboard/MIDI toggles share this producer; external clients must bring
     // their own lifetime instead of borrowing it.
     std::shared_ptr<TxController> localTxController();
+    // Trusted composition can wrap only an already acquired independent MOX
+    // input for this exact radio/operation. This neither grants nor keys TX.
+    bool canBindGrantedPtt(const TxCoordinator::Request& request,
+                           const TxCoordinator::Operation& operation) const;
     void setTxProducerAdmissionObserver(const TxCoordinator::Producer& producer,
                                         std::function<void()> observer);
     TxCoordinator::Context captureTxMedia(const TxCoordinator::Producer& producer) const;
@@ -1181,6 +1195,7 @@ signals:
     void infoChanged();
     void licenseFeaturesChanged();
     void connectionStateChanged(bool connected);
+    void transmitSessionInvalidated();
     // The connected backend's self-declared RadioCapabilities changed, or a
     // connect/disconnect changed which backend is answering. Relays
     // IRadioBackend::capabilitiesChanged and also fires on every
@@ -1975,12 +1990,14 @@ private:
     TunerModel       m_tunerModel;
     TransmitModel    m_transmitModel;
     // Transitional desktop actor: existing integrations still enter through
-    // the desktop methods. Per-client authority is a subsequent Stage 4 step;
-    // no daemon client can register or obtain this actor.
+    // the desktop methods. Independent daemon clients use separate granted
+    // actors on the same coordinator and cannot obtain this desktop actor.
     TxCoordinator m_txCoordinator;
     std::shared_ptr<TxController> m_localTxController;
     TxCoordinator::Actor m_desktopTxActor;
     TxCoordinator::Operation m_txOperation;
+    std::unique_ptr<TxGrantManager> m_independentTxGrants;
+    TxCoordinator::StopRequest m_independentStop;
     TxCoordinator::Producer m_backendTxProducer;
     using TxActivity = TxCoordinator::Activity;
     // One handle per existing compatibility entry point, not per client yet.
@@ -2014,6 +2031,8 @@ private:
     bool hasOtherPttHolds(const TxCoordinator::Operation& operation,
                           const TxCoordinator::Intent& excluded) const;
     void completeLocalTxIfDrained();
+    void requestIndependentTxStop(const TxCoordinator::Operation& operation);
+    void acknowledgeIndependentTxStop(const TxStopEvidence& evidence);
     void acknowledgeTxTransportTeardown(const TxCoordinator::Operation& operation);
     std::function<void()> trackTxDelivery(const TxCoordinator::Operation& operation);
     void sendTxKeyingCommand(const QString& command, const TxCoordinator::Command& fence);

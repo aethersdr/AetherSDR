@@ -517,10 +517,23 @@ are implemented; see `docs/aetherd-local-connection-control.md` for lifecycle,
 revision checks and limits. Clients cannot supply arbitrary endpoints or
 credentials. Every negotiated session, observer or controller, now shares a
 per-client request budget (100/s, burst 200, advertised in `limits`); exceeding
-it is terminal for that connection. The revocation hook
-discards pending observations and terminates local delivery; no wire or daemon
-path invokes it yet. Remote credential verification/provisioning and transmit
-grants are not implemented yet.
+it is terminal for that connection. Terminal session cleanup discards pending
+observations and synchronously retires bound authority before deferred socket
+cleanup; unrecoverable output failure also revokes the session. Local input
+processing yields after a bounded batch so a busy client cannot monopolize the
+engine thread. There is no wire credential-provisioning or revocation method.
+Explicit offline OS-vault setup and optional `--credential-authority` verification
+are implemented; credential roles do not arm or key a radio. Provisioning and
+serving share an authority reservation, and unavailable secure storage has no
+plaintext fallback. See `docs/aetherd-stage4-client-grants.md` for the current
+credential/lifetime contract. `--allow-local-tx` explicitly composes independent
+grants, private TX/admin methods and operation-bound stop proof; it requires the
+credential authority and local control, and starts disarmed. Initial backend
+support is narrowly scoped to FLEX-6700 firmware 4.2.18.41174 LAN software PTT.
+See `docs/aetherd-flex-ptt-stop-evidence.md` for the evidence envelope and
+complete-increment hardware verification requirements. Unsupported backends and
+activities cannot issue a grant. Receive mutations also refuse retained TX
+ownership, including acquired-but-not-keyed leases and unconfirmed cleanup.
 `slice.setFrequency` now dispatches a bounded, revision-checked intent for an
 existing owned slice, with explicit backend observation provenance and fail-closed
 TX-idle admission; see `docs/aetherd-local-slice-frequency-control.md`. It does
@@ -536,8 +549,8 @@ remains correct. New resource fields belong in the adapter and the versioned
 catalogue, never in a transport or via QObject reflection. No protocol TX
 method is advertised before the step-4 arbiter exists.
 
-Step 4 has an engine-owned `TxCoordinator` and a transitional desktop actor;
-this is not yet per-client TX authorization. Flex primary keying and CWX text
+Step 4 has one engine-owned `TxCoordinator`, independent grant-bound actors,
+and a transitional desktop actor. Flex primary keying and CWX text
 carry operation/batch fences to the original TCP writer. A queue-consumed
 callback ends local handoff only, never proves radio idle. Preserve normal
 operator reengagement, but use `finishLocalIntent()` rather than asserting a

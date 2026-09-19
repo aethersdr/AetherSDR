@@ -16,6 +16,8 @@ class CwxModel;
 // compatibility actor, not another arbiter or a remote transmit grant. Capture
 // an Input at the operator boundary and carry that value through queued work.
 // Neither a queued callback nor a reconnect can renew its authority.
+// The static fromGrantedPtt factory also wraps a separately admitted independent
+// Input; it does not construct a desktop controller or issue a grant.
 class TxController final {
     struct InputScopeTag {};
     struct NativeDeviceTag {};
@@ -67,6 +69,13 @@ public:
     // Trusted native-device composition. Only raw-input capture is worker-safe;
     // the resulting scope and all action dispatch remain on the model thread.
     static std::shared_ptr<TxController> forNativeDevice(RadioModel* radio, QObject* device);
+    // Trusted grant-manager composition only: wrap its captured MOX admission,
+    // never manufacture a producer or borrow desktop authority. The manager
+    // still owns the grant/operation lifetime. This does not key the backend;
+    // start() rechecks the normal model preflight and original input fences.
+    [[nodiscard]] static Input fromGrantedPtt(RadioModel* radio,
+                                             const TxCoordinator::Request& request,
+                                             const TxCoordinator::Operation& operation);
     [[nodiscard]] TxCoordinator::Request captureRawInput() const;
     void discardDeviceInputs() const;
     void cleanupDeviceInputs();

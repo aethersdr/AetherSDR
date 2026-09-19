@@ -166,6 +166,30 @@ bool ControlService::bindReceiveTarget(ReceiveControlTarget* target)
     return true;
 }
 
+bool ControlService::bindCredentials(ControlCredentials* credentials)
+{
+    if (m_resources->thread() != QThread::currentThread() || !credentials
+        || credentials->thread() != QThread::currentThread()
+        || m_credentialsBound || m_dispatchStarted) {
+        return false;
+    }
+    m_credentials = credentials;
+    m_credentialsBound = true;
+    return true;
+}
+
+bool ControlService::bindTransmitTarget(TransmitControlTarget* target)
+{
+    if (m_resources->thread() != QThread::currentThread() || !target
+        || target->thread() != QThread::currentThread() || !target->grants()
+        || target->grants()->thread() != QThread::currentThread()
+        || m_transmit || m_dispatchStarted || !m_credentials) {
+        return false;
+    }
+    m_transmit = std::make_unique<TransmitControlService>(target);
+    return true;
+}
+
 ServiceReply ControlService::handle(
     const QByteArray& bytes, ControlSession* session) const
 {
@@ -202,7 +226,17 @@ ServiceReply ControlService::handle(
 
     const ProtocolRequest& request = *parsed.request;
     if (!session->isNegotiated()) {
-        if (!session->isAuthenticated()) {
+        ControlCredentials::Principal principal;
+        QJsonObject helloParams = request.params;
+        if (request.isHello() && m_credentials && helloParams.contains(QStringLiteral("auth"))) {
+            principal = m_credentials->verify(helloParams.value(QStringLiteral("auth")));
+            if (!principal.valid()) {
+                return failure(request.id, {QStringLiteral("auth.invalid"),
+                    QStringLiteral("credential rejected"), {}, false}, true);
+            }
+            helloParams.remove(QStringLiteral("auth"));
+        }
+        if (!session->isAuthenticated() && !principal.valid()) {
             return failure(request.id,
                            {QStringLiteral("auth.required"),
                             QStringLiteral("authenticated transport context required"), {}, false},
@@ -215,10 +249,10 @@ ServiceReply ControlService::handle(
                            true);
         }
         if (const std::optional<ProtocolError> validationError =
-                validateHelloParams(request.params)) {
+                validateHelloParams(helloParams)) {
             return failure(request.id, *validationError, true);
         }
-        if (!acceptsVersionOne(request.params)) {
+        if (!acceptsVersionOne(helloParams)) {
             return failure(request.id,
                            {QStringLiteral("protocol.version_unsupported"),
                             QStringLiteral("no mutually supported protocol version"),
@@ -226,7 +260,16 @@ ServiceReply ControlService::handle(
                            true);
         }
 
+        if (principal.valid() && !session->bindPrincipal(principal)) {
+            return failure(request.id, {QStringLiteral("auth.invalid"),
+                QStringLiteral("credential binding failed"), {}, false}, true);
+        }
         session->completeNegotiation();
+        if (m_transmit && !m_transmit->attach(session)) {
+            session->endAuthorization();
+            return failure(request.id, {QStringLiteral("auth.grant_denied"),
+                QStringLiteral("client lifetime registration failed"), {}, false}, true);
+        }
         return {ControlProtocolCodec::successResponse(
                     request.id, capabilities(*session)), false};
     }
@@ -249,6 +292,10 @@ ServiceReply ControlService::handle(
         }
         return {ControlProtocolCodec::successResponse(
                     request.id, capabilities(*session)), false};
+    }
+    if (m_transmit && (request.method.startsWith(QLatin1String("tx."))
+        || request.method.startsWith(QLatin1String("txAdmin.")))) {
+        return {m_transmit->handle(request, session), false};
     }
     if (request.method == QStringLiteral("radio.connect")
         || request.method == QStringLiteral("radio.disconnect")) {
@@ -637,6 +684,11 @@ QJsonObject ControlService::capabilities(const ControlSession& session) const
             if (m_receiveTarget->available(operation)) {
                 available.append(QString::fromLatin1(method));
             }
+        }
+    }
+    if (m_transmit) {
+        for (const QJsonValue& method : m_transmit->methods(session)) {
+            available.append(method);
         }
     }
     return {

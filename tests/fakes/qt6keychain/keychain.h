@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QByteArray>
 #include <QString>
 
 namespace QKeychain {
@@ -29,6 +30,11 @@ public:
     void start() { started(); }
     void setAutoDelete(bool autoDelete) { m_autoDelete = autoDelete; }
     void setKey(const QString& key) { m_key = key; }
+    void setInsecureFallback(bool allowed) { m_insecureFallback = allowed; }
+    [[nodiscard]] bool insecureFallback() const { return m_insecureFallback; }
+    [[nodiscard]] bool autoDelete() const { return m_autoDelete; }
+    [[nodiscard]] QString service() const { return m_service; }
+    [[nodiscard]] QString key() const { return m_key; }
     [[nodiscard]] Error error() const { return m_error; }
     [[nodiscard]] QString errorString() const { return m_errorString; }
 
@@ -54,13 +60,17 @@ private:
     Error m_error{NoError};
     QString m_errorString;
     bool m_autoDelete{true};
+    bool m_insecureFallback{true};
 };
 
 class ReadPasswordJob;
+class WritePasswordJob;
 
 namespace TestControl {
 inline int readStartCount{0};
 inline ReadPasswordJob* pendingRead{nullptr};
+inline int writeStartCount{0};
+inline WritePasswordJob* pendingWrite{nullptr};
 
 void reset();
 void completeRead(const QString& value);
@@ -75,6 +85,13 @@ public:
     }
 
     [[nodiscard]] QString textData() const { return m_textData; }
+    [[nodiscard]] QByteArray binaryData() const { return m_binaryData; }
+
+    void completeBinary(const QByteArray& value)
+    {
+        m_binaryData = value;
+        complete(NoError, {});
+    }
 
     void completeRead(const QString& value)
     {
@@ -96,12 +113,24 @@ protected:
 
 private:
     QString m_textData;
+    QByteArray m_binaryData;
 };
 
 class WritePasswordJob : public Job {
 public:
     using Job::Job;
     void setTextData(const QString&) { }
+    void setBinaryData(const QByteArray& bytes) { m_binaryData = bytes; }
+    [[nodiscard]] QByteArray binaryData() const { return m_binaryData; }
+    void finish(Error error = NoError) { complete(error, {}); }
+protected:
+    void started() override
+    {
+        ++TestControl::writeStartCount;
+        TestControl::pendingWrite = this;
+    }
+private:
+    QByteArray m_binaryData;
 };
 
 class DeletePasswordJob : public Job {
@@ -113,6 +142,8 @@ inline void TestControl::reset()
 {
     readStartCount = 0;
     pendingRead = nullptr;
+    writeStartCount = 0;
+    pendingWrite = nullptr;
 }
 
 inline void TestControl::completeRead(const QString& value)

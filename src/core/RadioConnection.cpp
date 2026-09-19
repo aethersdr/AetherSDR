@@ -1,4 +1,5 @@
 #include "RadioConnection.h"
+#include "backends/flex/FlexPttWireSession.h"
 #include "LogManager.h"
 #include "core/backends/sim/SimBackend.h"
 
@@ -74,6 +75,15 @@ RadioConnection::~RadioConnection()
 
 void RadioConnection::init()
 {
+    m_independentPtt = std::make_unique<FlexPttWireSession>(
+        [this](quint32 seq, const QString& command) { return writeSocketCommand(seq, command); },
+        [this](const TxStopEvidence& evidence) { emit independentPttStopped(evidence); });
+    m_independentPttTimer = new QTimer(this);
+    m_independentPttTimer->setInterval(25);
+    connect(m_independentPttTimer, &QTimer::timeout, this, [this] {
+        m_independentPtt->poll(TxCoordinator::monotonicMs());
+        updateIndependentPttTimer();
+    });
     m_socket = new QTcpSocket(this);
     // LAN radio uses a proprietary CAT/VITA stream on port 4992; an OS or
     // application HTTP/SOCKS proxy can never tunnel it sensibly.  SmartSDR
@@ -284,6 +294,10 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 
 void RadioConnection::resetSessionState()
 {
+    if (m_independentPtt) {
+        m_independentPtt->disconnect();
+        updateIndependentPttTimer();
+    }
     // Partial lines and ping replies belong to exactly one TCP session.
     //
     // FlexLib does this explicitly too, and for the same reason: its
@@ -502,7 +516,53 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
         emit commandResponse(seq, 0, QString());
         return;
     }
-    if (!isConnected() || !m_socket) return;
+    if (m_independentPtt) {
+        m_independentPtt->otherCommand(command, TxCoordinator::monotonicMs());
+    }
+    (void)writeSocketCommand(seq, command);
+}
+
+bool RadioConnection::independentPttReady() const
+{
+    return isConnected() && !isSyntheticDemo() && m_independentPtt && m_independentPtt->ready();
+}
+
+void RadioConnection::writeIndependentPtt(quint32 seq, const TxCoordinator::Command& command)
+{
+    if (isConnected() && !isSyntheticDemo() && m_independentPtt) {
+        m_independentPtt->key(seq, command, TxCoordinator::monotonicMs());
+        updateIndependentPttTimer();
+    } else {
+        command.completion.finish();
+    }
+}
+
+void RadioConnection::stopIndependentPtt(quint32 seq, const TxCoordinator::Operation& operation,
+                                         const TxCoordinator::StopRequest& request)
+{
+    if (isConnected() && !isSyntheticDemo() && m_independentPtt) {
+        m_independentPtt->stop(seq, operation, request, TxCoordinator::monotonicMs());
+        updateIndependentPttTimer();
+    }
+}
+
+void RadioConnection::updateIndependentPttTimer()
+{
+    if (!m_independentPttTimer || !m_independentPtt) {
+        return;
+    }
+    if (!m_independentPtt->needsPolling()) {
+        m_independentPttTimer->stop();
+    } else if (!m_independentPttTimer->isActive()) {
+        m_independentPttTimer->start();
+    }
+}
+
+bool RadioConnection::writeSocketCommand(quint32 seq, const QString& command)
+{
+    if (!isConnected() || !m_socket || isSyntheticDemo()) {
+        return false;
+    }
 
     const QByteArray data = CommandParser::buildCommand(seq, command);
     if (command.startsWith("ping")) {
@@ -511,8 +571,9 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
     } else {
         qCDebug(lcConnection) << "TX:" << data.trimmed();
     }
-    m_socket->write(data);
+    const bool written = m_socket->write(data) == data.size();
     m_socket->flush();   // force immediate kernel send for keepalive reliability
+    return written;
 }
 
 void RadioConnection::onSocketConnected()
@@ -577,6 +638,10 @@ void RadioConnection::onHeartbeat()
 
 void RadioConnection::processLine(const QString& line)
 {
+    if (m_independentPtt && !isSyntheticDemo()) {
+        m_independentPtt->observe(line, TxCoordinator::monotonicMs());
+        updateIndependentPttTimer();
+    }
     // GPS coordinates are never useful in a support log. Drop the raw status
     // at the source; AsyncLogWriter also scrubs coordinate-shaped fields as a
     // defense against future logging paths.
@@ -605,6 +670,17 @@ void RadioConnection::processLine(const QString& line)
         break;
     case MessageType::Handle:
         m_handle = msg.handle;
+        if (m_independentPtt && !isSyntheticDemo()) {
+            // The evidence parser must not accept the presentation parser's
+            // default-zero or partially parsed identity.
+            bool ok = false;
+            const quint32 handle = line.mid(1).toUInt(&ok, 16);
+            if (ok && line.size() == 9 && handle != 0 && clientHandle() == handle) {
+                m_independentPtt->reset(m_sessionGeneration, handle);
+            } else {
+                m_independentPtt->disconnect();
+            }
+        }
         qCDebug(lcConnection) << "RadioConnection: assigned handle" << QString::number(m_handle, 16);
         setState(ConnectionState::Connected);
         if (m_heartbeat) m_heartbeat->start();
