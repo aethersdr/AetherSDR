@@ -3,6 +3,10 @@
 #include "MeterSmoother.h"
 
 #include <QWidget>
+
+class QKeyEvent;
+class QMouseEvent;
+class QWheelEvent;
 #include <QElapsedTimer>
 #include <QString>
 #include <QTimer>
@@ -62,13 +66,54 @@ public:
     void setLimiterCeilingDb(float db);
     void setLimiterGrDb(float db);
 
+    // Optional makeup-gain fader on the bar (Level mode only).  The
+    // compressor panel's Out meter doubles as its makeup control: a handle
+    // rides the bar at the current makeup gain, a detent line marks 0 dB,
+    // and makeup ticks run down the LEFT side so they cannot be mistaken
+    // for the level ticks on the right — the two scales measure different
+    // things and must not share a gutter.  Off by default, which leaves
+    // every other user of this widget a plain meter.
+    void setMakeupControlEnabled(bool on);
+    bool makeupControlEnabled() const { return m_makeupControl; }
+    void setMakeupDb(float db);
+    float makeupDb() const { return m_makeupDb; }
+
+    static constexpr float kMakeupMinDb     = -12.0f;
+    static constexpr float kMakeupMaxDb     =  24.0f;
+    static constexpr float kMakeupDefaultDb =   0.0f;
+
+signals:
+    void makeupChanged(float db);
+
 protected:
     void paintEvent(QPaintEvent* ev) override;
+    void mousePressEvent(QMouseEvent* ev) override;
+    void mouseMoveEvent(QMouseEvent* ev) override;
+    void mouseReleaseEvent(QMouseEvent* ev) override;
+    void mouseDoubleClickEvent(QMouseEvent* ev) override;
+    void wheelEvent(QWheelEvent* ev) override;
+    void keyPressEvent(QKeyEvent* ev) override;
 
 private:
     // Update m_targetFrac from the current mode + currentDb and start
     // the animation timer if the bar needs to move.
     void recomputeTarget();
+
+    // Makeup fader helpers.  commitMakeup() is the one place that clamps,
+    // repaints, announces to assistive tech and emits — every entry point
+    // (drag, wheel, keys, double-click) goes through it so they cannot
+    // drift apart.
+    void  commitMakeup(float db);
+    void  setMakeupFromY(int y);
+    float makeupNorm() const;
+
+    bool  m_makeupControl{false};
+    float m_makeupDb{kMakeupDefaultDb};
+    bool  m_dragging{false};
+    // Bar geometry cached by the last paint, so the hit-test maps a click
+    // against the strip the operator actually sees.
+    int   m_barTop{0};
+    int   m_barH{1};
 
     Mode m_mode{Mode::Level};
     QString m_label;

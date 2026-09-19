@@ -883,6 +883,7 @@ set(CORE_SOURCES
     src/core/TxVoiceProcessor.cpp
     src/core/ChannelStripPresets.cpp
     src/core/AetherRxProfiles.cpp
+    src/core/AetherTxProfiles.cpp
     src/core/Biquad.cpp
     src/core/StereoBiquad.cpp
     src/core/ClientEq.cpp
@@ -1192,7 +1193,10 @@ set(GUI_SOURCES
     src/gui/NetReminderBanner.cpp
     src/gui/SpotSettingsDialog.cpp
     src/gui/AetherRxDialog.cpp
+    src/gui/StagePage.cpp
+    src/gui/StageTabBar.cpp
     src/gui/AetherRxSettingsDialog.cpp
+    src/gui/AetherTxSettingsDialog.cpp
     src/gui/AetherDspWidget.cpp
     src/gui/CompactMetrics.cpp
     src/gui/ModeFilterPresets.cpp

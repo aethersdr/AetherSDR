@@ -149,6 +149,99 @@ inline AsrTierResolution asrReconcileDefaultTier(const QString& currentTier,
     return {currentTier, false};
 }
 
+// whisper.cpp and ggml report through one log callback, which by default writes
+// to stderr — so nothing they say reaches the log file or a support bundle.
+// AsrLibLogAssembler is the policy for routing that stream into the log file:
+// WARN and ERROR are forwarded, INFO and DEBUG are dropped (a single model load
+// prints dozens of INFO lines), and text arrives one callback per printf, so it
+// is split into whole lines. GGML_LOG_LEVEL_CONT ("continue the previous
+// message") is honoured by joining, though nothing in the vendored whisper/ggml
+// emits it — multi-part messages there repeat the level instead, and so stay
+// separate lines; the CONT branch is for a system libwhisper that does. Header-inline and
+// whisper-free, like the helpers above, so it is unit testable without linking
+// the vendored library; the level constants mirror ggml_log_level and the .cpp
+// static_asserts that they still match.
+//
+// Not thread-safe: the caller serialises feed() (whisper logs from the ASR
+// worker thread, discovery from a pool thread).
+class AsrLibLogAssembler {
+public:
+    static constexpr int kLevelWarn = 3;  // GGML_LOG_LEVEL_WARN
+    static constexpr int kLevelError = 4; // GGML_LOG_LEVEL_ERROR
+    static constexpr int kLevelCont = 5;  // GGML_LOG_LEVEL_CONT
+
+    struct Line {
+        bool error = false; // false = warning
+        QString text;
+    };
+
+    // Feed one callback invocation; returns the complete lines it finished that
+    // are to be forwarded (usually none or one).
+    std::vector<Line> feed(int level, const char* text)
+    {
+        std::vector<Line> out;
+        if (text == nullptr) {
+            return out;
+        }
+        if (level != kLevelCont) {
+            // A new message. whisper and ggml end every message with '\n', but
+            // do not depend on it: finish whatever the last one left open.
+            finishPending(out);
+            m_forward = (level == kLevelWarn || level == kLevelError);
+            m_error = (level == kLevelError);
+        }
+        if (!m_forward) {
+            return out;
+        }
+        m_pending += QString::fromUtf8(text);
+        qsizetype newline = -1;
+        while ((newline = m_pending.indexOf(QLatin1Char('\n'))) >= 0) {
+            emitLine(m_pending.left(newline), out);
+            m_pending.remove(0, newline + 1);
+        }
+        if (m_pending.size() > kMaxPendingChars) {
+            finishPending(out); // never grow without bound on a newline-free stream
+        }
+        return out;
+    }
+
+private:
+    static constexpr int kMaxPendingChars = 4096;
+
+    void emitLine(const QString& raw, std::vector<Line>& out) const
+    {
+        const QString line = raw.trimmed();
+        if (!line.isEmpty()) {
+            out.push_back({m_error, line});
+        }
+    }
+
+    void finishPending(std::vector<Line>& out)
+    {
+        if (m_forward) {
+            emitLine(m_pending, out);
+        }
+        m_pending.clear();
+    }
+
+    bool m_forward = false;
+    bool m_error = false;
+    QString m_pending;
+};
+
+// Route whisper/ggml WARN + ERROR into the log file (category
+// aether.asr.whisper) while leaving their stderr output as it was (see the
+// callback for the one subtlety: DEBUG lines stop after the first model load,
+// as they did before).
+// Called by the application, not from inside this library: a test or tool that
+// wants ggml's log for itself (asr_gpu_probe_test does) must keep it. Forwarded
+// lines are flushed to disk only while an AsrStageTrace is open — the window in
+// which a crash would otherwise lose them; decode-path warnings ride the
+// writer's normal timer. NOT reached by this: ggml-vulkan reports most of its
+// failures on std::cerr directly (e.g. "Device memory allocation of size N
+// failed"), which no log callback sees.
+void asrInstallLogRouting();
+
 // Whether a model tier of `tierSizeBytes` (the weights file) can be expected to
 // load on a device reporting this much memory. Gates only the AUTOMATIC raise
 // to the GPU-default tier: "a GPU exists" says nothing about room, and a 1.6 GB

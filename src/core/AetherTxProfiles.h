@@ -9,29 +9,29 @@ namespace AetherSDR {
 
 class AudioEngine;
 
-// JSON-backed profile library for the AetherRX window.
+// JSON-backed profile library for the AetherTX window.
 //
-// Stored at ~/.config/AetherSDR/AetherRxProfiles.json. Live working state
+// Stored at ~/.config/AetherSDR/AetherTxProfiles.json. Live working state
 // still lives in AetherSDR.settings through the per-module load/save paths;
 // this file is only what the operator explicitly saves into and recalls from.
 //
-// RX-only, deliberately. ChannelStripPresets already stores a whole strip —
-// both directions at once — so recalling one to change how the receiver
-// sounds would take the transmitter with it. A profile here carries the five
-// receive chain stages, their enables and their order, and which noise
-// reduction method is running; applying one writes nothing on the TX side.
+// TX-only, the mirror of AetherRxProfiles. ChannelStripPresets already stores
+// a whole strip — both directions at once — so recalling one to change how you
+// sound on air would take your receive chain with it. A profile here carries
+// the seven transmit chain stages, their enables and their order, and the
+// final limiter; applying one writes nothing on the RX side.
 //
 // Format:
 //   {
 //     "version": 1,
 //     "profiles": {
-//       "DX Weak Signal": {
+//       "Contest Punch": {
 //         "createdBy": "AetherSDR x.y.z",
 //         "createdAt": "ISO-8601",
-//         "nr":    { "method": "NR4" },
-//         "chain": ["Eq","Gate","Comp","Tube","Pudu"],
-//         "gate":  { … }, "eq": { … }, "comp": { … },
-//         "tube":  { … }, "pudu": { … }, "rn2": false
+//         "chain": ["Gate","Eq","DeEss","Comp","Tube","Enh","Reverb"],
+//         "gate":  { … }, "eq":     { … }, "deess": { … },
+//         "comp":  { … }, "tube":   { … }, "pudu":  { … },
+//         "reverb":{ … }, "finalLimiter": { … }
 //       }
 //     }
 //   }
@@ -39,20 +39,20 @@ class AudioEngine;
 // Export writes one profile at the top level with its "name" alongside, so a
 // file is readable on its own and easy to pass to someone else. Import
 // accepts that form or a whole library.
-class AetherRxProfiles : public QObject {
+class AetherTxProfiles : public QObject {
     Q_OBJECT
 
 public:
-    explicit AetherRxProfiles(AudioEngine* engine, QObject* parent = nullptr);
+    explicit AetherTxProfiles(AudioEngine* engine, QObject* parent = nullptr);
 
     QStringList profileNames() const;               // sorted, case-insensitive
     bool        hasProfile(const QString& name) const;
 
-    // Capture the current receive chain and store it under `name`,
+    // Capture the current transmit chain and store it under `name`,
     // overwriting any profile already using it.
     bool saveFromCurrent(const QString& name);
 
-    // Apply a stored profile to the engine's RX modules. False if absent.
+    // Apply a stored profile to the engine's TX modules. False if absent.
     bool loadProfile(const QString& name);
 
     bool deleteProfile(const QString& name);

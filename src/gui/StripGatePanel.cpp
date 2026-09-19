@@ -22,6 +22,7 @@
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <cmath>
@@ -223,6 +224,36 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
                 [this]() { applyMode(false); });
     }
 
+    // RN2 — the mic denoiser, which runs ahead of every chain stage so that
+    // noise is suppressed before the gate, compressor or saturator can amplify
+    // it.  It sat on the Tube panel, at the far end of the chain, which put the
+    // switch as far as the window could get from the point it acts on.  TX
+    // only; showForRx() hides it.  (#2813)
+    {
+        toolbar->addSpacing(16);
+        m_rn2Btn = new QPushButton(QStringLiteral("RN2"));
+        m_rn2Btn->setObjectName(QStringLiteral("gateRn2"));
+        m_rn2Btn->setAccessibleName(tr("Microphone noise reduction"));
+        m_rn2Btn->setCheckable(true);
+        m_rn2Btn->setFixedHeight(22);
+        m_rn2Btn->setVisible(false);  // flipped on by showForTx()
+        m_rn2Btn->setToolTip(tr(
+            "Toggle RNNoise neural denoiser on the mic input.  Runs before "
+            "any DSP chain stage so noise is suppressed before it can be "
+            "amplified by gate / compressor / saturator.  Voice modes only — "
+            "digital modes (RADE, DAX, RTTY, FT8, FDV, CW) bypass this stage.  "
+            "Saved per Channel Strip profile, and suppressed by the strip's "
+            "BYPASS button alongside every other voice stage."));
+        // Share the Mode pair's idiom so the toolbar's switches read alike.
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_rn2Btn, kFlipStyle);
+        connect(m_rn2Btn, &QPushButton::toggled, this, [this](bool on) {
+            if (m_audio) m_audio->setRn2TxEnabled(on);
+            // Direct setter call is the single source of truth — engine
+            // emits rn2TxEnabledChanged for any cross-widget observer.
+        });
+        toolbar->addWidget(m_rn2Btn);
+    }
+
     // Peek (lookahead) — a slider at the right-hand end of the toolbar rather
     // than a dropdown. Five stops, so it steps between them; the reading sits
     // beside it because a slider with no number cannot say "1.5 ms".
@@ -237,7 +268,14 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
         m_lookahead->setAccessibleName(QStringLiteral("Gate lookahead"));
         m_lookahead->setRange(0, int(kLookaheadOptions.size()) - 1);
         m_lookahead->setPageStep(1);
-        m_lookahead->setFixedWidth(120);
+        // Elastic, not fixed: the toolbar is at its width budget on TX, where
+        // RN2 joins the switches, and a fixed 120 px here pushed the Mode pair
+        // past the edge and clipped "Expander".  The slider is the one item
+        // that reads fine narrower, so it gives up the space — capped at 120
+        // so RX, which has no RN2 button, still shows it at full length.
+        m_lookahead->setMinimumWidth(80);
+        m_lookahead->setMaximumWidth(120);
+        m_lookahead->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         m_lookahead->setToolTip(
             "Lookahead: how far ahead of the threshold crossing the gate "
             "opens, so an attack is not clipped.");
@@ -400,6 +438,13 @@ void StripGatePanel::showForTx()
         if (m_levelView) m_levelView->setGate(gate());
         if (m_curveView) m_curveView->setGate(gate());
     }
+    if (m_rn2Btn) {
+        m_rn2Btn->setVisible(true);
+        if (m_audio) {
+            QSignalBlocker block(m_rn2Btn);
+            m_rn2Btn->setChecked(m_audio->rn2TxEnabled());
+        }
+    }
     const QString title = QString::fromUtf8("Aetherial Gate \xe2\x80\x94 TX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
@@ -423,6 +468,9 @@ void StripGatePanel::showForRx()
         if (m_levelView) m_levelView->setGate(gate());
         if (m_curveView) m_curveView->setGate(gate());
     }
+    // RX has its own RN2 toggle elsewhere (AetherDspWidget /
+    // ClientRxChainWidget).  Hide our copy.  (#2813)
+    if (m_rn2Btn) m_rn2Btn->setVisible(false);
     const QString title = QString::fromUtf8("Aetherial Gate \xe2\x80\x94 RX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
