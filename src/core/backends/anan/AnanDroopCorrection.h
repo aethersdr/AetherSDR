@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -48,6 +49,64 @@ inline void applyDroopCorrectionDb(std::vector<float>& binsDbfs,
         return;
     for (std::size_t i = 0; i < binsDbfs.size(); ++i)
         binsDbfs[i] += table[i];
+}
+
+// Value of a kDroopCorrectionFftSize-point curve at output point `i` of
+// `points`, by linear interpolation. Both grids run edge to edge over the
+// same span with their end points on the span's edges -- the analyzer's
+// point grid is laid out that way for any count -- so point i sits at
+// fraction i / (points - 1) of the span on either grid.
+inline float droopCurveAt(const DroopCorrectionTable& table, std::size_t i,
+                          std::size_t points) noexcept
+{
+    if (points < 2)
+        return table[kDroopCorrectionFftSize / 2];
+    const double x = static_cast<double>(i) * (kDroopCorrectionFftSize - 1)
+        / static_cast<double>(points - 1);
+    const auto j = std::min(static_cast<std::size_t>(x),
+                            static_cast<std::size_t>(kDroopCorrectionFftSize - 2));
+    const float frac = static_cast<float>(x - static_cast<double>(j));
+    return table[j] + frac * (table[j + 1] - table[j]);
+}
+
+// applyDroopCorrectionDb() for a point count that follows the panel width.
+// The tables stay at kDroopCorrectionFftSize points so stored calibrations
+// and the derived defaults need no re-sweep; the correction is a smooth
+// gain-versus-frequency curve, so reading it between its points is sound.
+// At exactly kDroopCorrectionFftSize points this is applyDroopCorrectionDb().
+inline void applyDroopCorrectionDbResampled(std::vector<float>& pointsDb,
+                                            const DroopCorrectionTable& table) noexcept
+{
+    const std::size_t n = pointsDb.size();
+    if (n == table.size()) {
+        applyDroopCorrectionDb(pointsDb, table);
+        return;
+    }
+    if (n < 2)
+        return;
+    for (std::size_t i = 0; i < n; ++i)
+        pointsDb[i] += droopCurveAt(table, i, n);
+}
+
+// The reverse direction, for the calibrator: a frame of any point count read
+// onto the kDroopCorrectionFftSize grid the tables are stored on. Each table
+// point takes the frame's value at the same fraction of the span, by linear
+// interpolation. Returns false, leaving `out` untouched, for a frame with
+// fewer than two points.
+inline bool resampleToDroopGrid(const std::vector<float>& pointsDb,
+                                DroopCorrectionTable& out) noexcept
+{
+    const std::size_t n = pointsDb.size();
+    if (n < 2)
+        return false;
+    for (std::size_t k = 0; k < kDroopCorrectionFftSize; ++k) {
+        const double x = static_cast<double>(k) * static_cast<double>(n - 1)
+            / (kDroopCorrectionFftSize - 1);
+        const auto j = std::min(static_cast<std::size_t>(x), n - 2);
+        const float frac = static_cast<float>(x - static_cast<double>(j));
+        out[k] = pointsDb[j] + frac * (pointsDb[j + 1] - pointsDb[j]);
+    }
+    return true;
 }
 
 // Cosmetic fade for the outermost `tailFraction` of bins on each side,

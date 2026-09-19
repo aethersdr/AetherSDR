@@ -1,5 +1,6 @@
 #include "core/backends/anan/AnanDroopCorrection.h"
 
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR::anan;
@@ -119,6 +120,83 @@ int testApplyEdgeFadeNoOpOnTooSmallAnArray()
     return 0;
 }
 
+
+// A straight ramp over the table, so the value at any fraction of the span
+// is known exactly: t[j] = 0.5 * j.
+DroopCorrectionTable rampTable()
+{
+    DroopCorrectionTable table{};
+    for (std::size_t j = 0; j < table.size(); ++j)
+        table[j] = 0.5f * static_cast<float>(j);
+    return table;
+}
+
+int testResampledApplyIsExactAtTheTableSize()
+{
+    const DroopCorrectionTable table = rampTable();
+    std::vector<float> exact(kDroopCorrectionFftSize, -10.0f);
+    std::vector<float> resampled = exact;
+    applyDroopCorrectionDb(exact, table);
+    applyDroopCorrectionDbResampled(resampled, table);
+    if (resampled != exact)
+        return fail("at kDroopCorrectionFftSize points the resampled apply must equal the exact one");
+    return 0;
+}
+
+int testResampledApplyFollowsTheCurveAtOtherCounts()
+{
+    // 1840 is a 2000-pixel panel's kept span; 3000 is wider than the table.
+    const DroopCorrectionTable table = rampTable();
+    for (const std::size_t n : {std::size_t{1840}, std::size_t{3000}, std::size_t{700}}) {
+        std::vector<float> points(n, 0.0f);
+        applyDroopCorrectionDbResampled(points, table);
+        for (std::size_t i = 0; i < n; ++i) {
+            const double want = 0.5 * static_cast<double>(i) * (kDroopCorrectionFftSize - 1)
+                / static_cast<double>(n - 1);
+            if (std::fabs(points[i] - want) > 1.0e-3)
+                return fail("a resampled correction must read the table at the same fraction of the span");
+        }
+        if (points.front() != table.front() || points.back() != table.back())
+            return fail("the resampled correction must pin both span edges to the table's ends");
+    }
+    return 0;
+}
+
+int testResampleToDroopGridReadsAnyCountOntoTheTableGrid()
+{
+    // A frame that is a straight line across the span, at a count that is
+    // not the table's: the table grid must see the same line.
+    const std::size_t n = 2500;
+    std::vector<float> frame(n);
+    for (std::size_t i = 0; i < n; ++i)
+        frame[i] = -100.0f + 50.0f * static_cast<float>(i) / static_cast<float>(n - 1);
+    DroopCorrectionTable out{};
+    if (!resampleToDroopGrid(frame, out))
+        return fail("resampleToDroopGrid must accept a 2500-point frame");
+    for (std::size_t k = 0; k < out.size(); ++k) {
+        const double want = -100.0 + 50.0 * static_cast<double>(k) / (kDroopCorrectionFftSize - 1);
+        if (std::fabs(out[k] - want) > 1.0e-3)
+            return fail("resampleToDroopGrid must read the frame at the same fraction of the span");
+    }
+
+    // At the table's own size it is a straight copy.
+    std::vector<float> same(kDroopCorrectionFftSize);
+    for (std::size_t i = 0; i < same.size(); ++i)
+        same[i] = static_cast<float>(i) * 0.25f - 7.0f;
+    if (!resampleToDroopGrid(same, out))
+        return fail("resampleToDroopGrid must accept a kDroopCorrectionFftSize frame");
+    for (std::size_t k = 0; k < out.size(); ++k) {
+        if (out[k] != same[k])
+            return fail("at kDroopCorrectionFftSize points resampleToDroopGrid must copy exactly");
+    }
+
+    // Too short to resample: refused, output untouched.
+    const DroopCorrectionTable before = out;
+    if (resampleToDroopGrid(std::vector<float>(1, 3.0f), out) || out != before)
+        return fail("a one-point frame must be refused and leave the output untouched");
+    return 0;
+}
+
 }  // namespace
 
 int main()
@@ -140,6 +218,12 @@ int main()
     if (const int result = testApplyEdgeFadeIsMonotonicTowardTheEdge(); result != 0)
         return result;
     if (const int result = testApplyEdgeFadeNoOpOnTooSmallAnArray(); result != 0)
+        return result;
+    if (const int result = testResampledApplyIsExactAtTheTableSize(); result != 0)
+        return result;
+    if (const int result = testResampledApplyFollowsTheCurveAtOtherCounts(); result != 0)
+        return result;
+    if (const int result = testResampleToDroopGridReadsAnyCountOntoTheTableGrid(); result != 0)
         return result;
     std::printf("anan_droop_correction_test: all checks passed\n");
     return 0;
