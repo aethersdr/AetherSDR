@@ -268,6 +268,27 @@ static QString kiwiSetupMetadataSummary(const KiwiSdrManager* manager,
     return parts.join(QStringLiteral(" · "));
 }
 
+// Hide/show a navigation row only when its state actually changes, then settle
+// the tree's layout on our own call stack.
+//
+// QTreeWidgetItem::setHidden() -> QTreeView::setRowHidden() schedules a delayed
+// layout even when the value is unchanged, and updateRadioCapabilityVisibility()
+// runs on every GPS / oscillator / capability status message from the radio. That
+// left a layout pending almost permanently. When macOS then asked for the focused
+// element, QAccessibleTableCell::state() -> rect() -> QTreeView::visualRect() ran
+// the pending QTreeView::doItemsLayout() from *inside* the cell's own method;
+// that layout emits QAccessible::TableModelChanged, which frees every accessible
+// cell (including the running one), and the next view->viewport() dereferenced
+// null (Qt 6.8.3: SIGSEGV at 0x8 in QAbstractScrollArea::viewport()).
+static void setNavigationItemHidden(QTreeWidgetItem* item, bool hidden)
+{
+    if (!item || item->isHidden() == hidden)
+        return;
+    item->setHidden(hidden);
+    if (QTreeWidget* tree = item->treeWidget())
+        tree->doItemsLayout();
+}
+
 // Wrap a tab page in a vertical QScrollArea so tabs whose stacked groups exceed
 // the dialog's visible height (Themes, Audio, Filters, Peripherals on small or
 // high-DPI displays) get a vertical scrollbar instead of forcing the dialog
@@ -775,9 +796,9 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("frequency calibration ppb ppm oscillator crystal clock error wwv gpsdo zero beat"),
         [this] { return buildCalibrationTab(); });
     m_calibrationPageIndex = m_pageIndexes.value(QStringLiteral("Calibration"));
-    calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+    setNavigationItemHidden(calItem, !m_model->backendCapabilities().hostFrequencyCalibration);
     connect(m_model, &RadioModel::connectionStateChanged, this, [this, calItem] {
-        calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+        setNavigationItemHidden(calItem, !m_model->backendCapabilities().hostFrequencyCalibration);
         // A different radio may now be connected — re-read its own calibration
         // so a later Trim press cannot commit the previous radio's number.
         if (m_calibrationReseed)
@@ -790,9 +811,9 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("droop calibration ddc0 panadapter spectrum sweep decimation edge cic"),
         [this] { return buildDroopCalibrationTab(); });
     m_droopCalibrationPageIndex = m_pageIndexes.value(QStringLiteral("Droop Correction"));
-    droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+    setNavigationItemHidden(droopItem, !droopCalibrationAvailable(m_model->backend()));
     connect(m_model, &RadioModel::connectionStateChanged, this, [this, droopItem] {
-        droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+        setNavigationItemHidden(droopItem, !droopCalibrationAvailable(m_model->backend()));
         if (m_droopReseed)
             m_droopReseed();
     });
@@ -805,10 +826,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     QTreeWidgetItem* apdItem = addPage(hardwareCategory, QStringLiteral("APD"),
         QStringLiteral("adaptive predistortion amplifier sampler linearization"), [this] { return buildApdTab(); });
     m_apdPageIndex = m_pageIndexes.value(QStringLiteral("APD"));
-    apdItem->setHidden(!m_model->transmitModel().apdConfigurable());
+    setNavigationItemHidden(apdItem, !m_model->transmitModel().apdConfigurable());
     connect(&m_model->transmitModel(), &TransmitModel::apdStateChanged,
             this, [this, apdItem] {
-        apdItem->setHidden(!m_model->transmitModel().apdConfigurable());
+        setNavigationItemHidden(apdItem, !m_model->transmitModel().apdConfigurable());
     });
     addPage(hardwareCategory, QStringLiteral("USB Cables"),
         QStringLiteral("usb cable gpio bit bcd amplifier tuner accessory"), [this] { return buildUsbCablesTab(); });
@@ -884,14 +905,14 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
                     || (droopRow && !droopCalibrationAvailable(m_model->backend()));
                 if (!gated) {
-                    item->setHidden(!matches);
+                    setNavigationItemHidden(item, !matches);
                 }
                 anyVisible = anyVisible || !item->isHidden();
                 if (!item->isHidden() && !firstVisible) {
                     firstVisible = item;
                 }
             }
-            category->setHidden(!anyVisible);
+            setNavigationItemHidden(category, !anyVisible);
             category->setExpanded(true);
         }
         // Stash the first match but do NOT make it current here: selecting it
@@ -1114,8 +1135,8 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
         if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
             const QString haystack = item->text(0) + QStringLiteral(" ")
                 + item->data(0, Qt::UserRole + 1).toString();
-            item->setHidden(!isCapabilityPageAvailable(item)
-                            || (!needle.isEmpty()
+            setNavigationItemHidden(item, !isCapabilityPageAvailable(item)
+                                    || (!needle.isEmpty()
                                 && !haystack.contains(needle, Qt::CaseInsensitive)));
         }
     }
@@ -1123,7 +1144,7 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (QTreeWidgetItem* gpsItem = m_pageItems.value(m_gpsPageIndex, nullptr)) {
         const QString haystack = gpsItem->text(0) + QStringLiteral(" ")
             + gpsItem->data(0, Qt::UserRole + 1).toString();
-        gpsItem->setHidden(!isGpsSetupAvailable()
+        setNavigationItemHidden(gpsItem, !isGpsSetupAvailable()
                            || (!needle.isEmpty()
                                && !haystack.contains(needle, Qt::CaseInsensitive)));
     }
