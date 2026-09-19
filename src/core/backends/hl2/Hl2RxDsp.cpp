@@ -690,8 +690,24 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         // mean-square -- so the average tap is what the calibration means.
         // Meter ballistics are not lost: the backend already applies its own
         // attack/decay EMA to the dBm value before publishing.
-        emit meterUpdate(static_cast<float>(
-            m_channel->meter(WdspChannel::Meter::SignalAverage)));
+        // NOT WHILE MUTED, for the same reason the ADC peak below is not
+        // sampled while muted -- and this site was the one of the two that
+        // forgot. The muted branch at the top of this loop clocks the channel
+        // with literal zeros on purpose, so `avg` is then measuring the silence
+        // this code fed it, not the band. The mute is the TRANSMIT mute
+        // (Hl2Backend queues setAudioMuted around an over), so an unguarded
+        // read drops the S-meter needle to the floor on every key-down and
+        // walks it back up on unkey: an artefact of our own muting, presented
+        // as a signal level.
+        //
+        // Found by cross-checking tropo1234's #5818, which fixes exactly this
+        // on the ANAN side of the same #5785 change. Their reasoning is the
+        // rate-change settle window; ours is T/R. Same tap, same mute, same
+        // needle.
+        if (!m_audioMuted) {
+            emit meterUpdate(static_cast<float>(
+                m_channel->meter(WdspChannel::Meter::SignalAverage)));
+        }
         // The POST-DDC half of §13 item 16's ADC pairing, sampled here because
         // this is the one instant it means something: a block has just gone
         // through, and RXA.c's adcmeter has just run on its input. Stored, not
