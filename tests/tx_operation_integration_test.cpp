@@ -8,7 +8,7 @@
 #include "models/SliceModel.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/ClientQuindarTone.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/RigctlProtocol.h"
 #include "core/SmartCatProtocol.h"
 #include "core/AudioEngine.h"

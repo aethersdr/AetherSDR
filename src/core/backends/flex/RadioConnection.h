@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CommandParser.h"
-#include "RadioDiscovery.h"
+#include "core/RadioDiscovery.h"
 
 #include <QObject>
 #include <QTcpSocket>

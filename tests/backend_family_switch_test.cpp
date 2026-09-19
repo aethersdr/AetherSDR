@@ -22,7 +22,7 @@
 // synthetic wire only.
 
 #include "TestSettingsProfile.h"
-#include "core/RadioConnection.h"
+#include "core/backends/flex/RadioConnection.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/SliceDelta.h"
 #include "core/backends/TransmitDelta.h"

@@ -38,8 +38,11 @@ void testConnectEmitsInitialState()
     QSignalSpy connectedSpy(&sim, &SimBackend::connected);
     QSignalSpy radioSpy(&sim, &SimBackend::radioChanged);
     QSignalSpy sliceSpy(&sim, &SimBackend::sliceChanged);
+    QSignalSpy waterfallSpy(&sim, &SimBackend::panWaterfallLineDurationChanged);
 
     report("starts disconnected", !sim.isConnected());
+    report("Demo serial remains compatible with saved selections",
+           SimBackend::demoSerial() == QStringLiteral("DEMO-0001"));
 
     sim.connectRadio(RadioConnectRequest{});
 
@@ -47,6 +50,13 @@ void testConnectEmitsInitialState()
     report("connect() reports connected", sim.isConnected());
     report("connect() emits a radio-global snapshot", radioSpy.count() == 1);
     report("connect() emits an initial slice", sliceSpy.count() == 1);
+    report("connect() emits one initial waterfall rate", waterfallSpy.count() == 1);
+    if (waterfallSpy.count() == 1) {
+        report("waterfall rate belongs to the initial Demo pan",
+               waterfallSpy.first().at(0).toString() == QStringLiteral("0x40000000"));
+        report("waterfall rate is 100, not the 48 ms row cadence",
+               waterfallSpy.first().at(1).toInt() == 100);
+    }
 
     if (radioSpy.count() == 1) {
         const auto delta = radioSpy.first().at(0).value<RadioDelta>();

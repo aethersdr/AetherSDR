@@ -149,8 +149,8 @@ def load_vendor_vocabulary():
     """Derive (stem -> family, {vendor TU rel-paths}) from the touchpoint audit.
 
     - stems: an include is a vendor include when the included header's basename
-      stem is a key here (so "core/RadioConnection.h", "RadioConnection.h",
-      "../core/RadioConnection.h", and <...> all resolve the same).
+      stem is a key here (so "core/backends/flex/RadioConnection.h", "RadioConnection.h",
+      "../core/backends/flex/RadioConnection.h", and <...> all resolve the same).
     - tu_paths: the EXACT rel-paths of the vendor translation units (each tagged
       header plus its sibling impl files). The below-seam exemption keys on these
       full paths, NOT a bare stem — so a *different* file that merely shares a
@@ -172,7 +172,7 @@ def load_vendor_vocabulary():
             continue
         family = tag[tag.find("(") + 1:tag.find(")")] if "(" in tag else "vendor"
         stems[Path(hdr).stem] = family
-        base = Path("src") / hdr           # e.g. "src/core/CommandParser.h"
+        base = Path("src") / hdr           # e.g. "src/core/backends/flex/CommandParser.h"
         for suf in ENGINE_SUFFIXES:         # header + sibling impl TUs
             tu_paths.add(base.with_suffix(suf).as_posix())
     missing = sorted(VENDOR_STEMS_PINNED - set(stems))

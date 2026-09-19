@@ -865,10 +865,10 @@ set(CORE_SOURCES
     src/core/OccupiedRegion.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
-    src/core/RadioConnection.cpp
+    src/core/backends/flex/RadioConnection.cpp
     src/core/NetworkPathResolver.cpp
     src/core/TgxlConnection.cpp
-    src/core/CommandParser.cpp
+    src/core/backends/flex/CommandParser.cpp
     src/core/AudioSummaryLogger.cpp
     src/core/AudioFormatNegotiator.cpp
     src/core/AudioDeviceNegotiator.cpp
@@ -907,7 +907,7 @@ set(CORE_SOURCES
     src/core/TxCoordinator.cpp
     src/core/SpectralNR.cpp
     src/core/MonoDspStereoAdapter.cpp
-    src/core/PanadapterStream.cpp
+    src/core/backends/flex/PanadapterStream.cpp
     src/core/TimeFrameVoter.cpp
     src/core/WwvDecoder.cpp
     src/core/WwvbDecoder.cpp
@@ -922,7 +922,7 @@ set(CORE_SOURCES
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
-    src/core/SmartLinkClient.cpp
+    src/core/backends/flex/SmartLinkClient.cpp
     src/core/KiwiSdrProtocol.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
     src/core/KiwiSdrCredentialStore.cpp
@@ -930,7 +930,7 @@ set(CORE_SOURCES
     src/core/KiwiSdrManager.cpp
     src/core/ReceivePresentationSync.cpp
     src/core/KiwiPublicDirectory.cpp
-    src/core/WanConnection.cpp
+    src/core/backends/flex/WanConnection.cpp
     src/core/DxClusterClient.cpp
     src/core/WsjtxClient.cpp
     src/core/SpotCollectorClient.cpp

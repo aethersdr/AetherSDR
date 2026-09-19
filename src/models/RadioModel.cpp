@@ -8,7 +8,7 @@
 #include "BandDefs.h"
 #include "BandSettings.h"
 #include "DeclaredBands.h"
-#include "core/CommandParser.h"
+#include "core/backends/flex/CommandParser.h"
 #include "core/backends/flex/FlexBackend.h"   // aetherd RFC 2.2 radio-facing seam
 #include "core/backends/sim/SimBackend.h"     // RFC #4288 demo-mode backend (Route A)
 #include "core/backends/hl2/Hl2Backend.h"      // aetherd Gap A — HL2 backend (family "hl2")

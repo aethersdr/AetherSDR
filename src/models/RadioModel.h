@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
+#include "core/backends/flex/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/GuiClientRegistrationState.h"
 #include "core/RadioSettingsScope.h"  // RFC #4603 radio-scoped feature documents
 #include "core/backends/GpsDelta.h"     // applyGpsChanges payload (aetherd 2.3)
@@ -13,9 +13,9 @@
 #include "core/backends/OfflineHealthSource.h" // health that survives disconnection
 
 #include <QHostAddress>
-#include "core/RadioConnection.h"
-#include "core/WanConnection.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/WanConnection.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/SleepInhibitor.h"
 #include "core/DaxTxPolicy.h"
 #include "core/LocalMemoryBank.h"   // memory channels for a radio that has none
