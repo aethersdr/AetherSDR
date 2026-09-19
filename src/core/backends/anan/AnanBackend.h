@@ -305,9 +305,12 @@ private:
     // Defaults match connectRadio()'s own connect-time defaults.
     int m_agcMode = 3;
     double m_agcCeilingDb = 60.0;
-    // Noise blanker as setSliceNoiseBlanker() last stored it, for the same
-    // reason as the AGC pair: connectRadio() and beginRateChange() build the
-    // DSP config from it. Defaults match AnanRxDsp::Config's.
+    // Noise blanker as setSliceNoiseBlanker() last stored it. Both
+    // connectRadio() and beginRateChange() build the DSP config from it. This
+    // differs from the AGC pair, which only beginRateChange() reads:
+    // connectRadio() re-defaults AGC, but carries the blanker across a
+    // reconnect so the DSP keeps agreeing with the slice's NB button, which
+    // also survives the disconnect. Defaults match AnanRxDsp::Config's.
     bool m_nbOn = false;
     int m_nbLevel = 50;
 

@@ -1588,7 +1588,7 @@ the slice model. Only meaningful on a radio that declares
 `hasHostNoiseBlanker` — today the HL2, whose blanker is WDSP's ANB running on
 this host, ahead of the demodulator, because the radio ships raw IQ and has no
 firmware DSP to switch on. The ANAN also declares it, but does not answer this
-query yet: it errors with "this backend does not implement nb.get".
+query yet: it errors with "ANAN: unknown extension verb 'hl2.nb.get'".
 
 ```json
 → {"cmd":"get","model":"hostnb"}
