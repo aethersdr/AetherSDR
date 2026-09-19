@@ -251,11 +251,12 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Qt6 components
-# Qt 6.8 minimum, matching the Qt every shipped artifact is built against:
-# the AppImage (both arches, .github/workflows/appimage.yml), the Windows
-# installer (check-windows pins 6.8.3 in ci.yml), and the Linux CI image
-# (.github/docker/Dockerfile installs 6.8.3 via aqt). One number, so a Qt API
-# that compiles in CI also compiles for a release build.
+# Qt 6.8 minimum (source floor). The binary pin is 6.12.0 (#5487): the
+# AppImage (both arches, .github/workflows/appimage.yml), the Windows
+# installer, check-windows/check-macos in ci.yml, and the Linux CI image
+# (.github/docker/Dockerfile) all install 6.12.0 via aqt. The floor stays
+# 6.8 so Debian Trixie / Pi OS Trixie keep building; 6.12-only APIs must
+# stay version-guarded until a floor-lane CI job compiles this tree on 6.8.
 #
 # Raised from 6.2 deliberately. The old floor was nominal — nothing tested it
 # after Ubuntu 22.04 left the matrix, and the only leg anywhere near it was the
@@ -288,7 +289,7 @@ if(Qt6_FOUND AND Qt6_VERSION VERSION_LESS 6.8)
         "Fedora 41+ and Arch all ship 6.8 or newer.\n"
         "To build on a distro below the floor, install Qt 6.8+ with aqtinstall "
         "or the Qt online installer and re-run with "
-        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 — see the README's "
+        "-DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/gcc_64 — see the README's "
         "\"Building from Source\" dependency section.")
 endif()
 
@@ -569,11 +570,11 @@ endif()
 if(AETHER_GPU_SPECTRUM)
     if(Qt6_VERSION VERSION_LESS "6.7")
         set(AETHER_GPU_SPECTRUM OFF)
-        # 6.8.3, not 6.7.x, in the suggested path: this guard is unreachable
+        # 6.12.0, not 6.7.x, in the suggested path: this guard is unreachable
         # while the floor is 6.8, so if it ever fires the floor has been
         # lowered — and pointing that reader at a 6.7 install would send them
         # to a Qt find_package still rejects.
-        message(STATUS "GPU spectrum rendering disabled (QRhiWidget requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.8.3/gcc_64 to use a newer Qt installation)")
+        message(STATUS "GPU spectrum rendering disabled (QRhiWidget requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.12.0/gcc_64 to use a newer Qt installation)")
     else()
         find_package(Qt6 REQUIRED COMPONENTS ShaderTools)
         # Qt6GuiPrivate provides QRhi headers needed for GPU rendering.
@@ -623,7 +624,7 @@ if(AETHER_GPU_SPECTRUM)
             # Qt6GuiPrivate CMake package at all, so nothing above finds them.
             #
             # This is not a hypothetical layout: pinning the Apple Silicon DMG
-            # to aqt Qt 6.8.3 (#4688 §1) moved that leg off Homebrew's Qt, which
+            # to aqt Qt (#4688 §1, #5487) moved that leg off Homebrew's Qt, which
             # *does* provide Qt6GuiPrivate — and AETHER_GPU_SPECTRUM promptly
             # turned itself OFF, with the CPU QPainter fallback compiled in and
             # the workflow green. Only the #4690 assertion caught it. Probe the
