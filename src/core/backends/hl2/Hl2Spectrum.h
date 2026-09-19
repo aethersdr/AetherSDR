@@ -25,6 +25,47 @@ public:
 
     [[nodiscard]] int fftSize() const noexcept { return m_fftSize; }
 
+    // How many frames the emitted spectrum integrates over. 1 (the default) is
+    // one un-averaged periodogram per frame — the behaviour this class has
+    // always had, and the behaviour it keeps until something sets this.
+    //
+    // THE INTEGRATION HAPPENS IN POWER, BEFORE THE LOG, and that is the whole
+    // point rather than an implementation choice. The arithmetic mean of
+    // logarithms is the logarithm of the GEOMETRIC mean, which sits below the
+    // arithmetic mean and biases low exactly where the display is noisiest.
+    // One bin, four frames, a burst in the last of them (-100, -100, -100,
+    // -40 dBFS): the power average is -46.0 dBFS and the dB average is -85.0,
+    // so 39 dB of a 60 dB event is thrown away, and it gets worse the harder
+    // the operator averages. A noise floor is biased too — per-bin power is
+    // exponentially distributed and E[ln X] = ln(mean) - gamma, a fixed
+    // -2.51 dB that never integrates away. A steady unmodulated carrier is the
+    // one case where the two agree, which is why nobody has reported it.
+    // (#5794; the full derivation is in RFC #5782 §3.)
+    //
+    // The estimator is an EMA with alpha = 1/frames, not an N-frame boxcar.
+    // #5794 leaves that choice open and states this as its default: it is one
+    // vector of state rather than a ring of N x fftSize doubles (512 kB at
+    // N=16, fftSize=4096), and it does not divide the display cadence by N —
+    // every frame still emits, which is not the operator's to lose.
+    //
+    // NOTHING CALLS THIS YET, DELIBERATELY. The operator-facing control is a
+    // 0..100 slider, and the mapping from that number to an integration depth
+    // is a behaviour decision RFC #5782 has not ruled on (q1), as is the seam
+    // that would carry it down (q2) and whether this accumulator should be
+    // shared with the ANAN and RTL families in src/core/dsp/ (q3). #5794 is
+    // the part of that work which is invariant under all three rulings, and
+    // this signature is in FRAMES precisely so it is not mistaken for the
+    // operator's number.
+    //
+    // Changing the depth DROPS the accumulated state: an exponential state
+    // built at one alpha does not mean anything at another, and carrying it
+    // would make the first frames after a change describe a blend of two
+    // estimators. Call it off the real-time path — it is a vector assign, not
+    // an allocation (the state is sized at construction), but the drop is a
+    // visible discontinuity on screen and belongs with the other setup.
+    void setAverageFrames(int frames) noexcept;
+    [[nodiscard]] int averageFrames() const noexcept { return m_averageFrames; }
+
     // Append IQ samples; each time a full frame accumulates, compute one
     // spectrum. `binsDbfs` is resized to fftSize (DC at index fftSize/2) and
     // holds the most recent frame. Returns the number of frames produced (a
@@ -74,6 +115,16 @@ public:
     // The RETURN VALUE is what makes "a gap arrived" distinguishable from "a gap
     // cost us a frame". A gap landing exactly on a frame boundary discards
     // nothing and corrupts nothing; see Hl2RxDsp::spectrumGapDiscards().
+    //
+    // THE AVERAGING STATE IS NOT DROPPED HERE, and that is a decision rather
+    // than an omission. A geometry change — a different FFT size or span —
+    // makes accumulated bins describe a different thing and must drop them,
+    // but a geometry change reconstructs this whole object (see the paragraph
+    // above), so it already does. What this function handles is a transport
+    // gap, and the frames integrated BEFORE a gap are still measurements of
+    // the same spectrum; throwing them away on every burst of packet loss
+    // would make the display oscillate between averaged and raw. Only the
+    // partial frame, whose samples would span the discontinuity, is discarded.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = m_acc.size();
@@ -88,6 +139,20 @@ private:
     std::vector<std::complex<float>> m_acc;   // accumulation buffer (< m_fftSize)
     std::vector<double> m_window;             // Hanning window
     double m_coherentGain = 1.0;              // sum(window) / 2
+    // The square of it, precomputed. computeFrame() divides POWER by this
+    // where it used to divide magnitude by m_coherentGain, and the two are the
+    // same normalisation: (mag/g)^2 == (re^2 + im^2)/g^2.
+    double m_coherentGainSq = 1.0;
+    int m_averageFrames = 1;                  // 1 = no averaging (the default)
+    // Per-bin EMA state in POWER, fftshifted the same way the emitted bins
+    // are. Sized once at construction so setAverageFrames() and computeFrame()
+    // never allocate — process() promises that in the header above.
+    std::vector<double> m_avgPower;
+    // Whether m_avgPower holds a frame yet. An EMA seeded at zero would show
+    // the operator roughly `frames` frames of an artificially low floor every
+    // time averaging is switched on or the geometry changes, so the first
+    // frame after a drop is TAKEN rather than blended into silence.
+    bool m_haveAverage = false;
     // Opaque FFTW handles (kept as void* so fftw3.h stays out of the header).
     void* m_in = nullptr;                     // fftw_complex[m_fftSize]
     void* m_out = nullptr;                     // fftw_complex[m_fftSize]
