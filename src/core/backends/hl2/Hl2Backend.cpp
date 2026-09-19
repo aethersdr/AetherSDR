@@ -6973,16 +6973,25 @@ void Hl2Backend::setAutoRfGain(bool on)
             // so a radio that declined to arm keeps the operator's on
             // recorded"; without this line nothing had recorded it.
             m_autoRfGainWanted = true;
-            qWarning().noquote()
-                << QStringLiteral(
-                       "Hl2Backend: auto RF gain declined — the RF Gain baseline is "
+            // COMPOSED ONCE AND KEPT, because the operator needs it more than
+            // the log does. Reading isArmed() back tells the GUI THAT this
+            // declined; only this sentence says why, and it already names the
+            // baseline, the ceiling and the remedy. Storing it is what lets the
+            // checkbox explain itself instead of springing back in silence
+            // (#5817).
+            m_autoRfGainRefusal = QStringLiteral(
+                       "Auto RF gain declined — the RF Gain baseline is "
                        "%1 dB and this radio's gain axis is not trusted above %2 dB "
                        "(#5354: +48 dB measures like +18 dB). Lower RF Gain to %2 dB "
                        "or below and try again. Your setting has not been changed.")
                        .arg(m_lnaGainDb)
                        .arg(kAutoRfGainMaxBaselineDb);
+            qWarning().noquote() << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal;
             return;
         }
+        // CLEARED ON SUCCESS. A reason that outlived the refusal it describes
+        // would be shown against a later, unrelated failure.
+        m_autoRfGainRefusal.clear();
         m_autoGainState = AetherSDR::hl2::AutoGainState{};
         m_autoGainBandKey = m_currentBandKey;
         m_autoGainBaselineDb = m_lnaGainDb;

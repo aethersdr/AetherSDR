@@ -59,6 +59,20 @@ public:
     virtual void setArmed(bool on) = 0;
     [[nodiscard]] virtual bool isArmed() const = 0;
 
+    // WHY IT DECLINED, in a sentence meant for the operator rather than a log.
+    //
+    // Reading `isArmed()` back tells a caller THAT the request did not take.
+    // It cannot tell them why, and without the why the operator sees a checkbox
+    // spring back to unticked with no explanation -- which on the HL2 is what
+    // every fresh install does on its first tick of Auto, because a stored gain
+    // is absent and the constructed baseline sits above the ceiling that gates
+    // arming (#5817).
+    //
+    // Empty when the last attempt succeeded, or when a backend has no reason to
+    // give. A caller shows it only after a readback has already shown the
+    // request failed; it is not a status line.
+    [[nodiscard]] virtual QString lastArmRefusalReason() const { return {}; }
+
     // How far below the operator's own gain the control may go, in dB. The
     // second of exactly two numbers the operator owns; the first is the switch.
     // Everything else about such a loop is a decision they have no evidence to

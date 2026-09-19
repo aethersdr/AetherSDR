@@ -436,6 +436,46 @@ int main(int argc, char** argv)
               "ever warn");
     }
 
+    // ---- A DECLINED ARM MUST BE ABLE TO EXPLAIN ITSELF (#5817) ----
+    //
+    // Reading isArmed() back tells a caller THAT the request failed. Until now
+    // the only account of WHY went to a qWarning, so the operator saw a
+    // checkbox spring back to unticked in silence -- and on a fresh install
+    // that is what the very first tick of Auto does, because no stored gain for
+    // the band leaves the constructed baseline above the ceiling that gates
+    // arming.
+    {
+        hl2::Hl2Backend fresh;
+        check(fresh.lastArmRefusalReason().isEmpty(),
+              "a backend that has not been asked to arm has no refusal to give");
+
+        fresh.setAutoRfGain(true);
+        const QString why = fresh.lastArmRefusalReason();
+        check(!fresh.autoRfGainEnabled(),
+              "arming from the constructed baseline is declined, as #5817 found");
+        check(!why.isEmpty(),
+              "and the refusal now carries a reason rather than only a log line");
+        // The sentence has to name the two numbers the operator needs, or it is
+        // not actionable: what their baseline is, and what it has to be below.
+        check(why.contains(QString::number(AetherSDR::hl2::kLnaDefaultGainDb)),
+              "the reason names the baseline that was refused");
+        check(why.contains(QString::number(hl2::Hl2Backend::kAutoRfGainMaxBaselineDb)),
+              "and the ceiling it has to be at or below");
+
+        // AND IT MUST NOT OUTLIVE THE REFUSAL IT DESCRIBES. Lower the baseline
+        // under the ceiling, arm for real, and the reason has to go -- otherwise
+        // a later unrelated failure would be shown this text.
+        fresh.setPanRfGain(QString(), hl2::Hl2Backend::kAutoRfGainMaxBaselineDb - 1);
+        fresh.setAutoRfGain(true);
+        if (fresh.autoRfGainEnabled()) {
+            check(fresh.lastArmRefusalReason().isEmpty(),
+                  "a successful arm clears the reason");
+        } else {
+            std::printf("  [skip] could not arm after lowering the baseline; "
+                        "the clear-on-success half is unexercised here\n");
+        }
+    }
+
     if (failures == 0) {
         std::printf("\nALL PASS\n");
         return 0;
