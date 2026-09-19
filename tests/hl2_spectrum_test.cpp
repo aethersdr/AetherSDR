@@ -218,6 +218,39 @@ int main()
         check(std::fabs(avgBins[peakBin] - refBins[peakBin]) < 0.02,
               "the first frame after a depth change is taken whole, not blended "
               "into the old estimator's state");
+
+        // A TRANSPORT GAP DOES NOT DROP THE AVERAGE, and that is a decision
+        // rather than an oversight -- so it gets an assertion instead of only a
+        // paragraph. reset()'s caller is a packet-loss gap; the frames already
+        // integrated still measure the same spectrum, and dropping on every
+        // burst of loss would make the display oscillate between averaged and
+        // raw. A geometry change is the case that MUST drop, and it does,
+        // because Hl2RxDsp::configure reconstructs the object outright.
+        //
+        // Built so it cannot pass vacuously: the state is loaded with the LOUD
+        // frame, reset() is called, and a QUIET frame follows. If reset() threw
+        // the average away, that quiet frame would be taken whole and read like
+        // the reference. It has to stay pulled up toward the burst instead.
+        avg.setAverageFrames(kDepth);
+        for (int i = 0; i < 6; ++i) {
+            avg.process(tone(N, kBin, kBurst), avgBins);
+        }
+        const double beforeGap = avgBins[peakBin];
+        check(avg.reset() == 0,
+              "positive control: the accumulator is empty on a frame boundary, "
+              "so this reset discards no partial frame and tests only the "
+              "averaging state");
+        Hl2Spectrum wholeFrame(N);
+        std::vector<float> wholeBins;
+        wholeFrame.process(tone(N, kBin, kQuiet), wholeBins);
+        check(avg.process(tone(N, kBin, kQuiet), avgBins) == 1,
+              "a frame after the gap");
+        check(avgBins[peakBin] > wholeBins[peakBin] + 20.0,
+              "the averaging state SURVIVES a transport gap: the quiet frame "
+              "after reset() is still pulled far above an unaveraged one");
+        check(avgBins[peakBin] < beforeGap,
+              "...and it is a blend rather than a freeze -- the quiet frame "
+              "still moves the estimator down");
     }
 
     if (g_failures == 0)

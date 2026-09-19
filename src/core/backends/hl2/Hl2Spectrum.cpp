@@ -184,6 +184,14 @@ void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
         // It exists for the same reason the old one did — log10(0) is -inf and
         // nothing downstream renders it — and is reached only by a bin that is
         // exactly zero, which is an all-zero input and not a quiet band.
+        //
+        // NOT AN EXACT TRANSLATION, and the -240 above is the only part that is.
+        // The old `20·log10(mag + 1e-12)` expands to
+        // `10·log10(mag² + 2e-12·mag + 1e-24)`; this drops the cross term. The
+        // two therefore disagree by up to 3 dB — but only for bins below about
+        // -234 dBFS, which is 140 dB beneath anything a converter produces and
+        // is not rendered by anything downstream. Recorded because the sentence
+        // above would otherwise read as an identity, and it is not one.
         binsDbfs[static_cast<std::size_t>(k)] =
             static_cast<float>(10.0 * std::log10(power + 1e-24));
     }
