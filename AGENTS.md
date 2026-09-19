@@ -449,7 +449,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
   the authoritative model + decision record (it exists because these formulas
   have churned when edited without a shared spec).
 
-**Threading:** up to 12 threads — see `docs/architecture/pipelines.md` for the
+**Threading:** up to 13 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
 
 **Design principle:** RadioModel owns all sub-models on the main thread.

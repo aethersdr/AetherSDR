@@ -385,6 +385,33 @@ public:
                 == QStringLiteral("capacity test");
     }
 
+    static bool chronoStallSnapshotIsIdle()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        const QJsonObject chrono =
+            server.routingSnapshot().value(QStringLiteral("chrono")).toObject();
+        return chrono.value(QStringLiteral("polls")).toInteger() == 0
+            && chrono.value(QStringLiteral("latePolls")).toInteger() == 0
+            && chrono.value(QStringLiteral("catchUpFrames")).toInteger() == 0
+            && chrono.value(QStringLiteral("active")).toBool() == false
+            && chrono.contains(QStringLiteral("periodMs"));
+    }
+
+    static bool chronoStallCountsCatchUpAndLatePolls()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        server.noteTxChronoPoll(5'000'000, 1);
+        server.noteTxChronoPoll(50'000'000, 3);
+        return server.m_txChronoPollCount == 2
+            && server.m_txChronoLatePolls == 1
+            && server.m_txChronoCatchUpBursts == 1
+            && server.m_txChronoCatchUpFrames == 2
+            && server.m_txChronoMaxCatchUp == 3
+            && server.m_txChronoMaxPollGapNs == 50'000'000;
+    }
+
     static bool disconnectSnapshotIsPayloadFreeAndUsesUnsetError()
     {
         RadioModel model;
@@ -2029,6 +2056,10 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::iqStreamRearmsAfterStopStartCycle();
     const bool iqClientScoped
         = AetherSDR::TciServerReviewTest::sharedIqSubscriptionIsClientScoped();
+    const bool chronoIdle
+        = AetherSDR::TciServerReviewTest::chronoStallSnapshotIsIdle();
+    const bool chronoCatchUp
+        = AetherSDR::TciServerReviewTest::chronoStallCountsCatchUpAndLatePolls();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -2099,6 +2130,10 @@ int main(int argc, char** argv)
                 iqRearms ? "PASS" : "FAIL");
     std::printf("%s  shared IQ subscriptions are client-scoped\n",
                 iqClientScoped ? "PASS" : "FAIL");
+    std::printf("%s  TX_CHRONO stall snapshot is idle before TX\n",
+                chronoIdle ? "PASS" : "FAIL");
+    std::printf("%s  TX_CHRONO stall counts late polls and catch-up bursts\n",
+                chronoCatchUp ? "PASS" : "FAIL");
 
     return validProfile && deferredAbort && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
@@ -2112,5 +2147,6 @@ int main(int argc, char** argv)
         && routeLogStaleCache && routeLogSampleOrder && routeLogSanitizes
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped
+        && chronoIdle && chronoCatchUp
         ? 0 : 1;
 }

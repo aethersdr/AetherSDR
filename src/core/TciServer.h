@@ -19,6 +19,7 @@
 #include <QSet>
 #include <QString>
 #include <QVector>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -57,6 +58,15 @@ struct TciClientInfo {
 // TCI WebSocket server — exposes radio state and audio over the TCI protocol.
 // Phase 1: text commands (VFO, mode, filter, TX, RIT/XIT, CW, spots)
 // Phase 2: binary RX/TX audio streaming
+//
+// Threading: the object may live on a dedicated worker thread (RadioSession
+// moves it there so WSJT-X audio/chrono keep running while the GUI thread is
+// stuck in a window-move/resize nested loop). QWebSocketServer is created in
+// start() and MUST run on this object's thread. Public start()/stop() hop
+// with BlockingQueuedConnection when called from another live thread; GUI
+// fire-and-forget methods hop queued. Tests that never call moveToThread()
+// keep the historical same-thread behaviour. isRunning()/port()/clientCount()
+// are atomic snapshots safe to read from the GUI.
 // ── TCI binary audio frame header (moved from TciServer.cpp so the
 // integration test can build a real frame rather than duplicate the wire
 // layout; #5659 review)
@@ -93,7 +103,7 @@ public:
 
     bool isRunning() const;
     quint16 port() const;
-    int clientCount() const { return m_clients.size(); }
+    int clientCount() const { return m_clientCount.load(std::memory_order_acquire); }
 
     // Automation-only diagnostics. This never changes protocol or radio state;
     // it projects the routing state machine and deferred work into JSON for the
@@ -196,6 +206,11 @@ private slots:
 private:
     struct ClientState;
 
+    // Close the WebSocket server, clients, and timers. Must run on this
+    // object's thread. Does not touch RadioModel (PTT abort / DAX release
+    // belong on the model's thread — see stop()).
+    void stopIo();
+
     // Rate-limited drive:/tune_drive: relay (#4161). queue* is the signal
     // entry point; broadcast* does the de-duped send.
     void queuePowerBroadcast();
@@ -267,6 +282,9 @@ private:
     void broadcastActualTxState(bool transmitting);
     void teardownTciRoute();
     void sendTxChronoFrame(QWebSocket* client);
+    void resetTxChronoStallStats();
+    void noteTxChronoPoll(qint64 gapNs, int framesSent);
+    QJsonObject txChronoStallSnapshot() const;
     void logTxAudioSummary(const char* reason);
     ClientState* clientStateFor(QWebSocket* socket);
     void noteClientTextTx(QWebSocket* socket, const QString& message);
@@ -376,6 +394,9 @@ private:
     QPointer<RadioModel> m_model;  // QPointer auto-clears when RadioModel is destroyed (#2385)
     AudioEngine*      m_audio{nullptr};
     QWebSocketServer* m_server{nullptr};
+    std::atomic<bool>    m_running{false};
+    std::atomic<quint16> m_boundPort{0};
+    std::atomic<int>     m_clientCount{0};
     QList<ClientState> m_clients;
     // Binary RX transport boundary, shared by native WebSocket delivery and
     // socket-free admission/encoding tests.
@@ -506,6 +527,16 @@ private:
     QElapsedTimer     m_txChronoSessionClock;
     qint64            m_txChronoAccumNs{0};
     qint64            m_txChronoRequestedFrames{0};
+    // TX_CHRONO cadence stall (TCI thread). Catch-up sends keep the frame
+    // count honest across a late poll, so effective48k can look fine while
+    // WSJT-X still saw a burst. These counters are the evenness measure.
+    // Logged only at qCDebug(lcCat) on the TX summary, never per tick.
+    qint64            m_txChronoPollCount{0};
+    qint64            m_txChronoMaxPollGapNs{0};
+    qint64            m_txChronoLatePolls{0};     // gap >= 2 chrono periods
+    qint64            m_txChronoCatchUpBursts{0}; // polls that sent >1 frame
+    qint64            m_txChronoCatchUpFrames{0}; // extra frames beyond one
+    int               m_txChronoMaxCatchUp{0};    // max frames in one poll
     bool              m_txUseRadioRoute{true};
     float             m_txGain{1.0f};
     OverflowMode      m_overflowMode{OverflowMode::Clip};

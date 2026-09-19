@@ -2848,6 +2848,8 @@ MainWindow::~MainWindow()
     // daxPcmReady cross-thread signals), m_radioModel is still alive (DAX
     // stream-remove commands reach the radio), and we null out TciApplet's raw
     // back-reference first so no dangling pointer remains in the widget tree.
+    // shutdownTciServer() also joins the TCI I/O thread and moves the server
+    // back onto this thread before delete.
     if (m_appletPanel && m_appletPanel->tciApplet())
         m_appletPanel->tciApplet()->setTciServer(nullptr);
     {

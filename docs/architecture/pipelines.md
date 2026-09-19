@@ -10,11 +10,12 @@ high-level routing overview; it intentionally omits many audio-stage details.
 
 ### Data Pipelines
 
-Multi-thread architecture — up to 12 threads depending on features enabled:
+Multi-thread architecture — up to 13 threads depending on features enabled:
 - **Main thread**: GUI rendering (paintEvent), RadioModel + all sub-models, user input
 - **Connection thread**: RadioConnection (TCP 4992 I/O, kernel TCP_INFO RTT)
 - **Audio thread**: AudioEngine (RX/TX audio; NR2/RN2/NR4/DFNR/BNR/MNR DSP, QAudioSink/Source)
 - **Network thread**: PanadapterStream (VITA-49 UDP parsing, FFT/waterfall/meter demux)
+- **TCI thread**: TciServer WebSocket I/O, RX audio send, and TX_CHRONO timer so WSJT-X is not stalled by a GUI window-move/resize nested loop
 - **ExtControllers thread**: FlexControl, MIDI, SerialPort (USB/serial I/O, RtMidi callbacks)
 - **Spot thread**: DxCluster, RBN, WSJT-X, POTA, FreeDV spot clients
 - **CwDecoder thread**: ggmorse decode loop (QThread::create, on-demand)
@@ -66,9 +67,10 @@ SpectrumWidget   SpectrumWidget  MeterModel     AudioEngine
                       ┌──────┴──────┐
                       │ DAX streams │
                       └──────┬──────┘
-                             ▼ MAIN
+                             ▼ MAIN / TCI
                      VirtualAudioBridge / PipeWireAudioBridge / TCI / RADE
-                     (virtual devices, digital apps, modem paths)
+                     (virtual devices, digital apps, modem paths;
+                      TCI WebSocket send lives on the TciServer thread)
 
 TX AUDIO ROUTING SUMMARY:                  ◄── AUDIO THREAD
   QAudioSource (PC mic) ──→ AudioEngine.onTxAudioReady()

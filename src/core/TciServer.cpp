@@ -26,6 +26,8 @@
 #include <QStringList>
 #include <QTimer>
 #include <QPointer>
+#include <QThread>
+#include <QMetaObject>
 #include <QFutureWatcher>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QtEndian>
@@ -34,6 +36,7 @@
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <type_traits>
 #include <utility>
 
 namespace AetherSDR {
@@ -57,6 +60,38 @@ constexpr int    kMaxClients        = 8;
 // throws happen. 10s gives ~3x margin; the cost of lingering after a genuine
 // quit is just an unconsumed stream + dax flag for a few extra seconds.
 constexpr int    kDaxReleaseGraceMs = 10000;
+
+bool onServerThread(const QObject* obj)
+{
+    return !obj
+        || QThread::currentThread() == obj->thread()
+        || !obj->thread()
+        || !obj->thread()->isRunning();
+}
+
+// RadioModel TX-gate methods refuse any thread but their own
+// (registerTxProducer returns {}, setProducerTransmit returns false).
+// Hop there with BlockingQueuedConnection. Never call this from a
+// TCI-thread path that the GUI thread is already BlockingQueued-waiting
+// on (stopIo is that path — keep RadioModel work out of it).
+template<typename Fn>
+auto callOnModelThread(RadioModel* model, Fn&& fn) -> decltype(fn())
+{
+    using R = decltype(fn());
+    if (!model || QThread::currentThread() == model->thread()
+        || !model->thread() || !model->thread()->isRunning()) {
+        return fn();
+    }
+    if constexpr (std::is_void_v<R>) {
+        QMetaObject::invokeMethod(model, std::forward<Fn>(fn),
+                                  Qt::BlockingQueuedConnection);
+    } else {
+        R result{};
+        QMetaObject::invokeMethod(model, [&]() { result = fn(); },
+                                  Qt::BlockingQueuedConnection);
+        return result;
+    }
+}
 }
 
 
@@ -556,13 +591,17 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             return;
         }
 
-        m_txChronoAccumNs += m_txChronoClock.nsecsElapsed();
+        const qint64 gapNs = m_txChronoClock.nsecsElapsed();
+        m_txChronoAccumNs += gapNs;
         m_txChronoClock.restart();
 
+        int framesSent = 0;
         while (m_txChronoAccumNs >= kTxChronoPeriodNs) {
             sendTxChronoFrame(client);
             m_txChronoAccumNs -= kTxChronoPeriodNs;
+            ++framesSent;
         }
+        noteTxChronoPoll(gapNs, framesSent);
     });
 }
 
@@ -573,8 +612,19 @@ TciServer::~TciServer()
 
 bool TciServer::start(quint16 port)
 {
-    if (m_server)
-        return m_server->isListening();
+    if (!onServerThread(this)) {
+        bool ok = false;
+        QMetaObject::invokeMethod(this, [this, port, &ok]() {
+            ok = start(port);
+        }, Qt::BlockingQueuedConnection);
+        return ok;
+    }
+
+    if (m_server) {
+        const bool listening = m_server->isListening();
+        m_running.store(listening, std::memory_order_release);
+        return listening;
+    }
 
     m_server = new QWebSocketServer(
         QStringLiteral("AetherSDR-TCI"),
@@ -585,6 +635,8 @@ bool TciServer::start(quint16 port)
                          << m_server->errorString();
         delete m_server;
         m_server = nullptr;
+        m_running.store(false, std::memory_order_release);
+        m_boundPort.store(0, std::memory_order_release);
         return false;
     }
 
@@ -592,26 +644,44 @@ bool TciServer::start(quint16 port)
             this, &TciServer::onNewConnection);
 
     m_meterTimer->start();
+    m_boundPort.store(m_server->serverPort(), std::memory_order_release);
+    m_running.store(true, std::memory_order_release);
     qCInfo(lcCat) << "TciServer: listening on port" << m_server->serverPort();
     return true;
 }
 
-void TciServer::stop()
+void TciServer::stopIo()
 {
-    m_meterTimer->stop();
-    if (m_daxReleaseTimer) m_daxReleaseTimer->stop();  // immediate teardown below
+    if (!onServerThread(this)) {
+        QMetaObject::invokeMethod(this, [this]() { stopIo(); },
+                                  Qt::BlockingQueuedConnection);
+        return;
+    }
+
+    if (m_meterTimer) {
+        m_meterTimer->stop();
+    }
+    if (m_daxReleaseTimer) {
+        m_daxReleaseTimer->stop();
+    }
+    if (m_powerRateTimer) {
+        m_powerRateTimer->stop();
+    }
     m_pendingTrxRequest.reset();
     m_pendingRouteCommands.clear();
     m_routeTransitionInFlight = false;
     ++m_routeTransitionGeneration;
-    abortTciPtt();
-    teardownTciRoute();
     stopTxChrono();
 
     for (ClientState& client : m_clients) {
         resetClientRx(client);
     }
-    if (!m_server) return;
+    if (!m_server) {
+        m_running.store(false, std::memory_order_release);
+        m_boundPort.store(0, std::memory_order_release);
+        m_clientCount.store(0, std::memory_order_release);
+        return;
+    }
 
     // Server shutdown bypasses onClientDisconnected(), so release every IQ
     // stream TCI created before throwing away the per-client subscriptions.
@@ -628,28 +698,47 @@ void TciServer::stop()
         resetClientRx(cs);
     }
     m_clients.clear();
-    releaseDaxForTci();
+    m_clientCount.store(0, std::memory_order_release);
     emit clientCountChanged(0);
 
     m_server->close();
     delete m_server;
     m_server = nullptr;
+    m_running.store(false, std::memory_order_release);
+    m_boundPort.store(0, std::memory_order_release);
 
     qCInfo(lcCat) << "TciServer: stopped";
 }
 
+void TciServer::stop()
+{
+    // I/O must die on this object's thread; RadioModel abort/DAX must run
+    // on the model's thread. When the GUI calls stop() it hops only stopIo()
+    // and then continues here — never nest BlockingQueued both ways.
+    stopIo();
+    abortTciPtt();
+    teardownTciRoute();
+    releaseDaxForTci();
+}
+
 bool TciServer::isRunning() const
 {
-    return m_server && m_server->isListening();
+    return m_running.load(std::memory_order_acquire);
 }
 
 quint16 TciServer::port() const
 {
-    return m_server ? m_server->serverPort() : 0;
+    return m_boundPort.load(std::memory_order_acquire);
 }
 
 void TciServer::broadcastMasterVolume(int pct)
 {
+    if (!onServerThread(this)) {
+        QMetaObject::invokeMethod(this, [this, pct]() {
+            broadcastMasterVolume(pct);
+        }, Qt::QueuedConnection);
+        return;
+    }
     if (pct < 0)   pct = 0;
     if (pct > 100) pct = 100;
     // Wire scale is dB (-60..0) per the TCI spec; pct is the internal
@@ -840,7 +929,14 @@ void TciServer::onNewConnection()
         protocol->setIqSampleRate(m_iqSampleRate);
 
         ClientState cs;
-        cs.txProducer = m_model->registerTxProducer(ws);
+        cs.txProducer = callOnModelThread(m_model, [model = m_model, ws]() {
+            return model->registerTxProducer(ws);
+        });
+        if (!cs.txProducer.valid()) {
+            qCWarning(lcCat) << "TciServer: TX producer registration failed for"
+                             << ws->peerAddress().toString()
+                             << "— TCI PTT will be refused (RadioModel thread hop)";
+        }
         cs.socket = ws;
         cs.protocol = protocol;
         cs.connectedAtMs = m_tciPttTelemetryClock.elapsed();
@@ -861,6 +957,7 @@ void TciServer::onNewConnection()
         qCInfo(lcCat) << "TciServer: client connected from"
                       << ws->peerAddress().toString();
         resolvePeerProcess(ws);
+        m_clientCount.store(m_clients.size(), std::memory_order_release);
         emit clientCountChanged(m_clients.size());
         emit clientsChanged();
 
@@ -970,6 +1067,7 @@ void TciServer::onClientDisconnected()
     // DIAG: qCWarning — a TCP-level client drop (WSJT-X threw a rig-control
     // error in do_stop()) is the trigger for the DAX RX teardown above. Always
     // log it so the cause of mid-session RX loss is visible.
+    m_clientCount.store(m_clients.size(), std::memory_order_release);
     qCWarning(lcCat) << "TciServer: client disconnected (TCP drop),"
                      << m_clients.size() << "remaining";
     if (!m_lastDisconnect.isEmpty()) {
@@ -992,6 +1090,14 @@ void TciServer::onClientDisconnected()
 
 QVector<TciClientInfo> TciServer::connectedClients() const
 {
+    if (!onServerThread(this)) {
+        QVector<TciClientInfo> out;
+        QMetaObject::invokeMethod(const_cast<TciServer*>(this), [this, &out]() {
+            out = connectedClients();
+        }, Qt::BlockingQueuedConnection);
+        return out;
+    }
+
     QVector<TciClientInfo> out;
     out.reserve(m_clients.size());
     for (const auto& cs : m_clients) {
@@ -1101,6 +1207,14 @@ QJsonObject TciServer::disconnectSnapshot(
 
 QJsonObject TciServer::routingSnapshot() const
 {
+    if (!onServerThread(this)) {
+        QJsonObject out;
+        QMetaObject::invokeMethod(const_cast<TciServer*>(this), [this, &out]() {
+            out = routingSnapshot();
+        }, Qt::BlockingQueuedConnection);
+        return out;
+    }
+
     const qint64 telemetryNow = m_tciPttTelemetryClock.isValid()
         ? m_tciPttTelemetryClock.elapsed() : -1;
     const auto age = [telemetryNow](qint64 atMs) {
@@ -1217,6 +1331,7 @@ QJsonObject TciServer::routingSnapshot() const
         {QStringLiteral("ptt"), ptt},
         {QStringLiteral("lastDisconnect"), lastDisconnect},
         {QStringLiteral("endpoints"), endpoints},
+        {QStringLiteral("chrono"), txChronoStallSnapshot()},
     };
 }
 
@@ -2391,11 +2506,15 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         if (!m_tciPttClient || m_tciPttClient != client) {
             // Close even an unbound request: a pending promote callback must
             // not key after this release merely because the socket survives.
-            m_model->setProducerTransmit(txRequest, false, TransmitModel::PttSource::TciHardware);
+            const bool transmitting = callOnModelThread(m_model, [model = m_model, txRequest]() {
+                model->setProducerTransmit(txRequest, false,
+                                           TransmitModel::PttSource::TciHardware);
+                return model->isRadioTransmitting();
+            });
             replyText(client,
                 QStringLiteral("trx:%1,%2;")
                     .arg(request.trx)
-                    .arg(m_model->isRadioTransmitting() ? "true" : "false"));
+                    .arg(transmitting ? "true" : "false"));
             return;
         }
         if (m_tciPttRequestedOn && !m_tciPttConfirmedOn) {
@@ -2577,6 +2696,10 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
             // HL2 transmitter move the backend declines. Report the actual
             // false state rather than going silent; silence is what WSJT-X
             // surfaces as "TCI failed to set ptt" with no cause.
+            if (!txRequest.valid()) {
+                qCWarning(lcCat) << "TCI PTT: trx" << request.trx
+                                 << "declined - TX producer request is invalid";
+            }
             if (socket) {
                 self->replyText(socket,
                     QStringLiteral("trx:%1,false;").arg(request.trx));
@@ -2596,15 +2719,23 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
         const quint64 generation = ++self->m_tciPttGeneration;
 
         bool admitted = false;
-        if (wantsAudio) {
-            self->prepareTxAudio();
-            admitted = self->m_model->setProducerTransmit(txRequest, true, TransmitModel::PttSource::Dax);
-        } else {
-            // Hardware-style TCI PTT shares the same preflight and Quindar
-            // coordinator as local controls. This remains a single xmit path:
-            // TciProtocol no longer keys independently.
-            admitted = self->m_model->requestProducerPttOn(txRequest, TransmitModel::PttSource::TciHardware);
-        }
+        TxCoordinator::Context media;
+        callOnModelThread(self->m_model, [self, wantsAudio, txRequest, &admitted, &media]() {
+            if (wantsAudio) {
+                self->prepareTxAudio();
+                admitted = self->m_model->setProducerTransmit(
+                    txRequest, true, TransmitModel::PttSource::Dax);
+            } else {
+                // Hardware-style TCI PTT shares the same preflight and Quindar
+                // coordinator as local controls. This remains a single xmit path:
+                // TciProtocol no longer keys independently.
+                admitted = self->m_model->requestProducerPttOn(
+                    txRequest, TransmitModel::PttSource::TciHardware);
+            }
+            if (admitted) {
+                media = self->m_model->captureTxMedia(txRequest);
+            }
+        });
         if (!admitted) {
             self->abortTciPtt();
             if (socket) {
@@ -2613,7 +2744,7 @@ void TciServer::handleTrxRequest(QWebSocket* client, const TciProtocol::TrxReque
             self->finishRouteTransition(transitionGeneration);
             return;
         }
-        self->m_tciTxContext = self->m_model->captureTxMedia(txRequest);
+        self->m_tciTxContext = std::move(media);
         // Do not carry a previous client's resampling residue into this over.
         if (self->m_txResampler) {
             self->m_txResampler->reset();
@@ -3336,6 +3467,15 @@ void TciServer::broadcastSliceFrequencies(SliceModel* slice)
 void TciServer::wireSlice(int trx, SliceModel* slice)
 {
     if (!slice) return;
+    if (!onServerThread(this)) {
+        QPointer<SliceModel> slicePtr(slice);
+        QMetaObject::invokeMethod(this, [this, trx, slicePtr]() {
+            if (slicePtr) {
+                wireSlice(trx, slicePtr);
+            }
+        }, Qt::QueuedConnection);
+        return;
+    }
     Q_UNUSED(trx);
 
     connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double) {
@@ -3589,6 +3729,13 @@ void TciServer::broadcastSpotClicked(const QString& callsign, long long frequenc
 
 void TciServer::notifySpotClicked(int spotIndex, SliceModel* slice)
 {
+    if (!onServerThread(this)) {
+        QPointer<SliceModel> slicePtr(slice);
+        QMetaObject::invokeMethod(this, [this, spotIndex, slicePtr]() {
+            notifySpotClicked(spotIndex, slicePtr);
+        }, Qt::QueuedConnection);
+        return;
+    }
     if (!m_model)
         return;
 
@@ -3620,6 +3767,11 @@ void TciServer::notifySpotClicked(int spotIndex, SliceModel* slice)
 
 void TciServer::wireSpotModel()
 {
+    if (!onServerThread(this)) {
+        QMetaObject::invokeMethod(this, [this]() { wireSpotModel(); },
+                                  Qt::QueuedConnection);
+        return;
+    }
     if (!m_model) return;
     connect(&m_model->spotModel(), &SpotModel::spotTriggered,
             this, [this](int index, const QString& panId) {
@@ -3730,6 +3882,7 @@ void TciServer::prepareTxAudio()
     }
     m_txChronoAccumNs = 0;
     m_txChronoRequestedFrames = 0;
+    resetTxChronoStallStats();
     m_txAudioBlocks = 0;
     m_txInputFrames = 0;
     m_txOutputFrames = 0;
@@ -3772,11 +3925,15 @@ void TciServer::requestTciPttOff()
     if (!m_model) {
         return;
     }
-    if (m_tciPttWantsAudio) {
-        m_model->setProducerTransmit(m_tciPttRequest, false, TransmitModel::PttSource::Dax);
-    } else {
-        m_model->requestProducerPttOff(m_tciPttRequest, TransmitModel::PttSource::TciHardware);
-    }
+    const TxCoordinator::Request request = m_tciPttRequest;
+    const bool wantsAudio = m_tciPttWantsAudio;
+    callOnModelThread(m_model, [model = m_model, request, wantsAudio]() {
+        if (wantsAudio) {
+            model->setProducerTransmit(request, false, TransmitModel::PttSource::Dax);
+        } else {
+            model->requestProducerPttOff(request, TransmitModel::PttSource::TciHardware);
+        }
+    });
 }
 
 void TciServer::abortTciPtt()
@@ -3792,9 +3949,13 @@ void TciServer::abortTciPtt()
 
     // Teardown paths fail closed and bypass optional PTT outro delays.
     if (m_model && hadSession) {
-        m_model->abortProducerPtt(m_tciPttRequest,
+        const TxCoordinator::Request request = m_tciPttRequest;
+        const TransmitModel::PttSource source =
             m_tciPttWantsAudio ? TransmitModel::PttSource::Dax
-                               : TransmitModel::PttSource::TciHardware);
+                               : TransmitModel::PttSource::TciHardware;
+        callOnModelThread(m_model, [model = m_model, request, source]() {
+            model->abortProducerPtt(request, source);
+        });
     }
     stopTxChrono();
     m_tciPttConfirmedOn = false;
@@ -3840,6 +4001,7 @@ void TciServer::startTxChrono(QWebSocket* client, int trx)
 
     m_txChronoClock.start();
     m_txChronoSessionClock.start();
+    resetTxChronoStallStats();
     m_txChronoTimer->start();
     sendTxChronoFrame(client);
     qCInfo(lcCat) << "TCI: TX_CHRONO started for TRX" << trx
@@ -3894,6 +4056,54 @@ void TciServer::sendTxChronoFrame(QWebSocket* client)
     m_txChronoRequestedFrames += kTxChronoStereoFrames;
 }
 
+void TciServer::resetTxChronoStallStats()
+{
+    m_txChronoPollCount = 0;
+    m_txChronoMaxPollGapNs = 0;
+    m_txChronoLatePolls = 0;
+    m_txChronoCatchUpBursts = 0;
+    m_txChronoCatchUpFrames = 0;
+    m_txChronoMaxCatchUp = 0;
+}
+
+void TciServer::noteTxChronoPoll(qint64 gapNs, int framesSent)
+{
+    ++m_txChronoPollCount;
+    if (gapNs > m_txChronoMaxPollGapNs) {
+        m_txChronoMaxPollGapNs = gapNs;
+    }
+    // Two chrono periods (~42.7 ms) is a missed TX_CHRONO slot before catch-up.
+    if (gapNs >= 2 * kTxChronoPeriodNs) {
+        ++m_txChronoLatePolls;
+    }
+    if (framesSent > m_txChronoMaxCatchUp) {
+        m_txChronoMaxCatchUp = framesSent;
+    }
+    if (framesSent > 1) {
+        ++m_txChronoCatchUpBursts;
+        m_txChronoCatchUpFrames += (framesSent - 1);
+    }
+}
+
+QJsonObject TciServer::txChronoStallSnapshot() const
+{
+    return QJsonObject{
+        {QStringLiteral("active"), m_txChronoTimer && m_txChronoTimer->isActive()},
+        {QStringLiteral("polls"), static_cast<qint64>(m_txChronoPollCount)},
+        {QStringLiteral("maxGapMs"),
+            static_cast<double>(m_txChronoMaxPollGapNs) / 1.0e6},
+        {QStringLiteral("latePolls"), static_cast<qint64>(m_txChronoLatePolls)},
+        {QStringLiteral("catchUpBursts"),
+            static_cast<qint64>(m_txChronoCatchUpBursts)},
+        {QStringLiteral("catchUpFrames"),
+            static_cast<qint64>(m_txChronoCatchUpFrames)},
+        {QStringLiteral("maxCatchUp"), m_txChronoMaxCatchUp},
+        {QStringLiteral("periodMs"),
+            static_cast<double>(kTxChronoPeriodNs) / 1.0e6},
+        {QStringLiteral("pollMs"), kTxChronoPollMs},
+    };
+}
+
 void TciServer::logTxAudioSummary(const char* reason)
 {
     if (m_txChronoRequestedFrames <= 0 && m_txAudioBlocks <= 0)
@@ -3923,6 +4133,19 @@ void TciServer::logTxAudioSummary(const char* reason)
         << " rms=" << rms
         << " clips=" << m_txClipSamples
         << " layout=" << (m_txSawDuplicatedStereo ? "duplicated-stereo" : "mono-or-stereo");
+
+    // Cadence evenness — diagnostic only. Catch-up keeps requested48k honest
+    // across a stall, so this line is what answers "did the TCI thread miss
+    // slots during a window drag?". One line per summary, never per poll.
+    qCDebug(lcCat).nospace()
+        << "TCI TX chrono stall reason=" << reason
+        << " polls=" << m_txChronoPollCount
+        << " maxGapMs=" << (static_cast<double>(m_txChronoMaxPollGapNs) / 1.0e6)
+        << " latePolls=" << m_txChronoLatePolls
+        << " catchUpBursts=" << m_txChronoCatchUpBursts
+        << " catchUpFrames=" << m_txChronoCatchUpFrames
+        << " maxCatchUp=" << m_txChronoMaxCatchUp
+        << " periodMs=" << (static_cast<double>(kTxChronoPeriodNs) / 1.0e6);
 }
 
 void TciServer::broadcastActualTxState(bool transmitting)
@@ -4584,6 +4807,11 @@ void TciServer::cancelDaxRelease()
 
 void TciServer::rearmDaxForProfileLoad()
 {
+    if (!onServerThread(this)) {
+        QMetaObject::invokeMethod(this, [this]() { rearmDaxForProfileLoad(); },
+                                  Qt::QueuedConnection);
+        return;
+    }
     if (!m_model || !m_model->isConnected()) {
         return;
     }

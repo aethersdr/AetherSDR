@@ -7,6 +7,8 @@
 
 #include <array>
 
+class QThread;
+
 namespace AetherSDR {
 
 // RadioSession — the aggregate that constitutes "a connected radio".
@@ -34,6 +36,12 @@ namespace AetherSDR {
 // MainWindow's shutdown path remains only for its *early* teardown
 // requirement (DAX stream-remove commands must reach the radio while
 // audio is already stopped) and now routes through shutdownTciServer().
+//
+// TciServer also owns a dedicated QThread (objectName "TciServer") so the
+// WebSocket, RX audio send, and TX_CHRONO timer are not starved when the
+// GUI thread is inside a native window-move/resize loop. shutdownTciServer()
+// stops I/O on that thread, moves the server back to the GUI thread, joins,
+// then deletes — RadioModel is still alive for DAX release.
 //
 // Planned v3+ scope (see #3445) — corrected after the v2 landing:
 //   • The wireDiscovery/wireRadioModel/wirePanLifecycle bodies do NOT
@@ -104,6 +112,7 @@ private:
     // i.e. strictly before m_radioModel destructs — both hold RadioModel*.
 #ifdef HAVE_WEBSOCKETS
     TciServer* m_tciServer{nullptr};
+    QThread*   m_tciThread{nullptr};
 #endif
     std::array<CatPort*, kCatPorts> m_catPorts{};
     int m_sessionId{0};
