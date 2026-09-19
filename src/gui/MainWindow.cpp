@@ -6271,10 +6271,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
         const bool bandSegmentZoomAvailable = connected && m_radioModel.usesFlexCommandPlane();
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
+        const bool backendAverages =
+            connected && m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
                 applet->spectrumWidget()->setBandSegmentZoomAvailable(bandSegmentZoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
+                applet->spectrumWidget()->setClientFftSmoothingEnabled(
+                    !backendAverages);
             }
         }
     }

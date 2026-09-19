@@ -301,6 +301,46 @@ void setTau_nnr(NNR a, double tau);
 void setMaxGain_nnr(NNR a, double gmax_db);
 void setSmooth_nnr(NNR a, double att_ms, double rel_ms);
 
+// ── Display analyzer (analyzer.c) ─────────────────────────────────────────
+//
+// WDSP's panadapter engine: windowed FFT, per-pixel detector, time averaging
+// and conversion to dB, computed on WDSP-owned worker threads. `disp` is a
+// slot in [0, 72) — its own namespace, not a channel id, though a host may
+// reuse one as the other.
+//
+// XCreateAnalyzer sizes the buffers for FFTs up to `maxSize`; the input ring is
+// 2 * maxSize samples, so `maxWriteahead` passed to SetAnalyzer must stay below
+// that, and `bufferSize` must divide it. SetAnalyzer plans with FFTW_PATIENT:
+// call it off any real-time thread and under the host's FFTW planner lock.
+//
+// Spectrum0 takes exactly `bufferSize` complex samples, INTERLEAVED DOUBLE,
+// and reads element 2i+1 as I and 2i as Q — the swap mirrors the spectrum.
+//
+// GetPixels copies `numPixels` floats (dB) into `pixels` and sets *flag = 1
+// when a frame newer than the last call exists, else sets *flag = 0.
+//
+// Detector modes: 0 peak, 1 Rosenfell, 2 average, 3 sample, 4 RMS.
+// Average modes: -1 peak hold, 0 none, 1 linear recursive, 2 linear window,
+// 3 log recursive.
+void XCreateAnalyzer(int disp, int* success, int maxSize, int maxNumFft,
+                     int maxStitch, char* appDataPath);
+void DestroyAnalyzer(int disp);
+void SetAnalyzer(int disp, int numPixout, int numFft, int complexInput,
+                 int* highSideLo, int fftSize, int bufferSize, int windowType,
+                 double kaiserPiAlpha, int overlap, int clipBins,
+                 double clipLowBins, double clipHighBins, int numPixels,
+                 int numStitch, int calibrationSet, double fMin, double fMax,
+                 int maxWriteahead);
+void Spectrum0(int run, int disp, int ss, int LO, double* pbuff);
+void GetPixels(int disp, int pixout, float* pixels, int* flag);
+void ResetPixelBuffers(int disp);
+void SetDisplayDetectorMode(int disp, int pixout, int mode);
+void SetDisplayAverageMode(int disp, int pixout, int mode);
+void SetDisplayNumAverage(int disp, int pixout, int num);
+void SetDisplayAvBackmult(int disp, int pixout, double mult);
+void SetDisplaySampleRate(int disp, int rate);
+void SetDisplayNormOneHz(int disp, int pixout, int norm);
+
 int GetWDSPVersion(void);
 
 uint64_t wdspPortAllocationSequence(void);
