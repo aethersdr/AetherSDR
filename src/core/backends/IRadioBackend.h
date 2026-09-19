@@ -1,5 +1,7 @@
 #pragma once
 
+#include "IndependentTxControl.h"
+
 #include "core/RadioSettingsIdentity.h"
 #include "core/TxCoordinator.h"
 #include "core/PcmFrame.h"
@@ -554,6 +556,14 @@ public:
     // (command verb, in-stream bit, hardware line). A backend whose
     // capabilities().canTransmit is false implements this as a no-op.
     virtual void setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion = {}) = 0;
+    virtual IndependentTxControl independentTxControl() const { return {}; }
+    virtual bool independentTxReady() const { return false; }
+    virtual void stopIndependentTx(const TxCoordinator::Operation& operation,
+                                   const TxCoordinator::StopRequest& request)
+    {
+        Q_UNUSED(operation);
+        Q_UNUSED(request);
+    }
 
     // Trusted engine composition supplies the admitted operation for backend-
     // owned producers (e.g. a TUNE tone). Copy it when starting that producer;
@@ -1049,6 +1059,7 @@ public:
                                  quint64 requestId, const QVariant& arg = {}) = 0;
 
 signals:
+    void independentTxStopped(const AetherSDR::TxStopEvidence& evidence);
     // ---- connection state UP ----
     void connected();
     void disconnected();

@@ -890,6 +890,12 @@ void RadioModel::setupBackend(const QString& family)
                    "was unavailable when AetherSDR was compiled."));
             return;
         }
+        connect(m_backend.get(), &IRadioBackend::independentTxStopped, this,
+                [this, generation](const TxStopEvidence& evidence) {
+            if (generation == m_backendReceiverGeneration && !m_txSessionClosing) {
+                acknowledgeIndependentTxStop(evidence);
+            }
+        });
         // Hand the backend the offline health source this model owns, if the
         // family declared one. A BORROW, not a transfer: the source must
         // outlive every backend, because its job is answering when there is no
@@ -920,6 +926,7 @@ void RadioModel::setupBackend(const QString& family)
                 sendSliceCommand(nullptr, cmd);   // guard looks up the slice from cmd
             });
             flex->setModelProvider([this]{ return m_model; });
+            flex->setIndependentTxSequenceProvider([this] { return m_seqCounter.fetch_add(1); });
             m_connection = flex->connection();   // non-owning; the backend owns it
             m_panStream  = flex->panStream();    // non-owning; the backend owns it
             m_flexBackend = flex;                // transitional alias (2.3)
@@ -2205,6 +2212,8 @@ RadioModel::RadioModel(QObject* parent)
     connect(this, &RadioModel::sliceRemoved, this, &RadioModel::updateTuneAvailability);
     connect(this, &RadioModel::capabilitiesChanged, this, &RadioModel::updateTuneAvailability);
     qRegisterMetaType<PcmFrame>();
+    qRegisterMetaType<TxCoordinator::StopRequest>();
+    qRegisterMetaType<TxStopEvidence>();
     qRegisterMetaType<SliceDelta>();
     qRegisterMetaType<TransmitDelta>();
     qRegisterMetaType<MeterDef>();
@@ -2839,6 +2848,7 @@ RadioModel::~RadioModel()
     blockSignals(true);
     m_transmitModel.blockSignals(true);
     m_cwxModel.blockSignals(true);
+    m_independentTxGrants.reset(); // stop while every model member is still alive
     if (m_backend) {
         if (activeTxActivities() & static_cast<unsigned>(TxActivity::Tune)) {
             m_backend->setTune(false, m_transmitModel.tunePower(), m_txCoordinator.cleanupFence());
@@ -5012,8 +5022,13 @@ bool RadioModel::setTransmitImpl(bool tx, TransmitModel::PttSource source,
             return true;
         }
     }
+    // Grant cancellation also arrives through the unscoped model stop route.
+    // Retain its original operation so the backend uses the qualified stop
+    // writer, not a legacy unkey that would invalidate the stop certificate.
     const TxCoordinator::Operation cleanup = tx ? TxCoordinator::Operation{}
-        : request ? m_txCoordinator.requestOperation(*request) : m_txCoordinator.cleanupFence();
+        : request ? m_txCoordinator.requestOperation(*request)
+        : m_txOperation.independent() && m_txOperation.permitsCleanup()
+            ? m_txOperation : m_txCoordinator.cleanupFence();
     if (tx) {
         // F2 (#4448): refuse keying on a backend that cannot transmit. The
         // guard is a capability test, not a family test — HL2 is TX-capable

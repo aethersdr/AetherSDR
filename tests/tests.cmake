@@ -157,12 +157,96 @@ add_executable(control_authorization_test
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlService.cpp
     src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp # no HAVE_KEYCHAIN: unavailable path, never opens OS vault
 )
 target_include_directories(control_authorization_test PRIVATE src)
 target_compile_definitions(control_authorization_test PRIVATE
     AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_authorization_test PRIVATE Qt6::Core)
 add_test(NAME control_authorization_test COMMAND control_authorization_test)
+
+# Production native-vault adapter with in-memory QtKeychain jobs: no OS vault,
+# sockets, settings or radio. Pins fallback prohibition and async lifetimes.
+# The fake models QtKeychain 0.17.0's job contract; its header documents the
+# upstream source and deliberate fault-injection differences to recheck on upgrades.
+add_executable(control_credential_vault_test
+    tests/control_credential_vault_test.cpp
+    src/aetherd/CredentialStartup.cpp
+    tests/fakes/qt6keychain/keychain.h
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp
+    src/core/control/ControlCredentialProvisioner.cpp
+    src/core/control/LocalCredentialHandshake.cpp
+)
+target_include_directories(control_credential_vault_test BEFORE PRIVATE tests/fakes src)
+target_compile_definitions(control_credential_vault_test PRIVATE HAVE_KEYCHAIN)
+target_link_libraries(control_credential_vault_test PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(control_credential_vault_test PRIVATE advapi32)
+endif()
+add_test(NAME control_credential_vault_test COMMAND control_credential_vault_test)
+
+# Socket-free production input pump and terminal session lifetime, coupled to
+# the real grant manager/coordinator with injected qualification. No firmware
+# peer, radio model, socket, settings or RF; injected callbacks transport bytes.
+add_executable(control_transport_lifecycle_test
+    tests/control_transport_lifecycle_test.cpp
+    src/core/control/RadioConnectionTarget.h
+    src/core/control/ControlProtocolCodec.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlInputPump.cpp
+    src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp
+)
+target_include_directories(control_transport_lifecycle_test PRIVATE src)
+target_compile_definitions(control_transport_lifecycle_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_transport_lifecycle_test PRIVATE Qt6::Core)
+add_test(NAME control_transport_lifecycle_test COMMAND control_transport_lifecycle_test)
+
+# Socket-free captured Flex PTT transitions and exact operation/stop identity.
+# No radio, simulator peer, socket, settings, or RF. Passing is NOT transport
+# qualification: real transport/firmware convergence is checked separately.
+add_executable(flex_ptt_stop_tracker_test
+    tests/flex_ptt_stop_tracker_test.cpp
+    src/core/backends/flex/FlexPttStopTracker.cpp
+    src/core/TxCoordinator.cpp
+)
+target_include_directories(flex_ptt_stop_tracker_test PRIVATE src)
+target_link_libraries(flex_ptt_stop_tracker_test PRIVATE Qt6::Core)
+add_test(NAME flex_ptt_stop_tracker_test COMMAND flex_ptt_stop_tracker_test)
+
+# Socket-free production terminal-write composition; captured status inputs,
+# injected writer only. No socket or simulated firmware peer.
+add_executable(flex_ptt_wire_session_test
+    tests/flex_ptt_wire_session_test.cpp
+    src/core/backends/flex/FlexPttWireSession.cpp
+    src/core/backends/flex/FlexPttStopTracker.cpp
+    src/core/TxCoordinator.cpp)
+target_include_directories(flex_ptt_wire_session_test PRIVATE src)
+target_link_libraries(flex_ptt_wire_session_test PRIVATE Qt6::Core)
+add_test(NAME flex_ptt_wire_session_test COMMAND flex_ptt_wire_session_test)
+
+# Socket-free protocol -> real grants/coordinator -> injected typed target.
+add_executable(control_transmit_service_test
+    tests/control_transmit_service_test.cpp
+    src/core/control/RadioConnectionTarget.h
+    src/core/control/TransmitControlTarget.h
+    src/core/control/TransmitControlService.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlProtocolCodec.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp)
+target_include_directories(control_transmit_service_test PRIVATE src)
+target_compile_definitions(control_transmit_service_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_transmit_service_test PRIVATE Qt6::Core)
+add_test(NAME control_transmit_service_test COMMAND control_transmit_service_test)
 
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
@@ -198,6 +282,7 @@ add_executable(radio_catalogue_test
     src/core/control/RadioCatalogue.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
@@ -215,6 +300,7 @@ add_executable(control_connection_test
     src/core/control/RadioCatalogue.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
@@ -222,6 +308,18 @@ target_include_directories(control_connection_test PRIVATE src)
 target_compile_definitions(control_connection_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_connection_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME control_connection_test COMMAND control_connection_test)
+
+# Each lightweight service fixture includes the same socket-free TX dispatch
+# kernel, without linking the production model/backend or opening transports.
+foreach(control_fixture control_authorization_test control_transport_lifecycle_test
+                        radio_catalogue_test control_connection_test)
+    target_sources(${control_fixture} PRIVATE
+        src/core/control/TransmitControlTarget.h
+        src/core/control/TransmitControlService.cpp)
+endforeach()
+foreach(control_fixture control_authorization_test radio_catalogue_test control_connection_test)
+    target_sources(${control_fixture} PRIVATE src/core/TxCoordinator.cpp src/core/TxGrantManager.cpp)
+endforeach()
 
 # #5594 (M1): backends announce capability revisions. Socket-free — FlexBackend's
 # radio-status decode is driven directly, and the RTL case asserts the opposite
@@ -5111,6 +5209,17 @@ add_executable(tx_coordinator_test
 target_include_directories(tx_coordinator_test PRIVATE src)
 target_link_libraries(tx_coordinator_test PRIVATE Qt6::Core)
 add_test(NAME tx_coordinator_test COMMAND tx_coordinator_test)
+
+# Socket-free: independent grants, injected monotonic clock and stop evidence.
+# No firmware peer; injected confirmations do not qualify a production backend.
+add_executable(tx_grant_manager_test
+    tests/tx_grant_manager_test.cpp
+    src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp
+)
+target_include_directories(tx_grant_manager_test PRIVATE src)
+target_link_libraries(tx_grant_manager_test PRIVATE Qt6::Core)
+add_test(NAME tx_grant_manager_test COMMAND tx_grant_manager_test)
 
 # Socket-free: production models with injected backend command recorders.
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)

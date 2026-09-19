@@ -4,9 +4,11 @@
 #include "TxTestAuthority.h"
 #include "models/RadioModel.h"
 #include "models/TxController.h"
+#include "core/TxGrantManager.h"
 #include "core/SerialPortController.h"
 #include "models/SliceModel.h"
 #include "core/backends/flex/FlexBackend.h"
+#include "core/backends/flex/FlexPttWireSession.h"
 #include "core/ClientQuindarTone.h"
 #include "core/PanadapterStream.h"
 #include "core/RigctlProtocol.h"
@@ -20,6 +22,7 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QEventLoop>
+#include <QScopeGuard>
 #include <QTimer>
 #include <cstdio>
 #include <memory>
@@ -31,6 +34,16 @@ using namespace AetherSDR;
 namespace AetherSDR {
 class TxOperationIntegrationTestAccess {
 public:
+    static void flexPrologue(FlexBackend& backend, const QString& version)
+    {
+        RadioConnection* connection = backend.connection();
+        QMetaObject::invokeMethod(connection, [connection, version] {
+            connection->resetSessionState();
+            connection->m_state.store(ConnectionState::Connecting);
+            connection->processLine(QStringLiteral("V") + version);
+            connection->processLine(QStringLiteral("H12345678"));
+        }, Qt::BlockingQueuedConnection);
+    }
     static void serialPtt(SerialPortController& source, bool down, const TxCoordinator::Request& input = {})
     {
         source.publishPttInput(down, input);
@@ -82,6 +95,10 @@ public:
     static bool txSessionClosing(const RadioModel& radio) { return radio.m_txSessionClosing; }
     static qsizetype pendingReplies(const RadioModel& radio) { return radio.m_pendingCallbacks.size(); }
     static TxCoordinator& coordinator(RadioModel& radio) { return radio.m_txCoordinator; }
+    static void stopEvidence(RadioModel& radio, const TxStopEvidence& evidence)
+    {
+        radio.acknowledgeIndependentTxStop(evidence);
+    }
     static TxCoordinator::Intent moxIntent(const RadioModel& radio)
     {
         return radio.m_localTxIntents.value(RadioModel::TxActivity::Mox);
@@ -201,6 +218,7 @@ public:
     Writer keyingWriter;
     Writer tuneWriter;
     Writer atuWriter;
+    std::function<void(const TxCoordinator::Operation&, const TxCoordinator::StopRequest&)> stopWriter;
     std::function<void(const TxCoordinator::Operation&)> cwTextWriter;
     Writer cwTextQueueWriter;
     QStringList* commands;
@@ -211,9 +229,19 @@ public:
         caps.hasTuner = true;
     }
     int txAudioFrames{0};
+    TxCoordinator::Context capturedTransmitContext() const { return transmitContext(); }
     void submitTxAudio(const QByteArray&, int, TxAudioSource,
                        const TxCoordinator::Context&) override { ++txAudioFrames; }
     RadioCapabilities capabilities() const override { return caps; }
+    IndependentTxControl independentTxControl() const override { return {1}; }
+    bool independentTxReady() const override { return connected; }
+    void stopIndependentTx(const TxCoordinator::Operation& operation,
+                           const TxCoordinator::StopRequest& request) override
+    {
+        if (stopWriter) {
+            stopWriter(operation, request);
+        }
+    }
     bool isConnected() const override { return connected; }
     void connectRadio(const RadioConnectRequest&) override {}
     void disconnectRadio() override {}
@@ -270,6 +298,13 @@ struct Fixture {
         auto owned = std::make_unique<RecordingBackend>(commands);
         backend = owned.get();
         radio.setBackendForTest(std::move(owned), QStringLiteral("test"));
+        installTxSlice();
+        backend->connected = true;
+        radio.transmitModel().setTxModeGetter([] { return QStringLiteral("USB"); });
+        commands.clear();
+    }
+    void installTxSlice()
+    {
         if (!radio.automationApplySliceFixture(0, QStringLiteral("A")) || !radio.slice(0)) {
             qFatal("Could not install the disconnected slice fixture");
         }
@@ -278,11 +313,273 @@ struct Fixture {
         delta.mode = QStringLiteral("USB");
         delta.panId = QStringLiteral("0x40000000");
         radio.slice(0)->applyChanges(delta);
-        backend->connected = true;
-        radio.transmitModel().setTxModeGetter([] { return QStringLiteral("USB"); });
-        commands.clear();
     }
 };
+
+struct GrantedFixture : Fixture {
+    static constexpr unsigned kMox = static_cast<unsigned>(TxCoordinator::Activity::Mox);
+    TxCoordinator& coordinator{TxOperationIntegrationTestAccess::coordinator(radio)};
+    // Qualification is injected for model/gate testing only. No production
+    // backend, network transport or firmware evidence is involved.
+    TxGrantManager grants{coordinator, [] { return kMox; }};
+    TxGrantManager::Client a{grants.registerClient(QStringLiteral("verified-A"))};
+    TxGrantManager::Client b{grants.registerClient(QStringLiteral("verified-B"))};
+    TxGrantManager::Issuance ga{grants.issue(a, {10000, 20000, 20000, kMox})};
+    TxGrantManager::Issuance gb{grants.issue(b, {10000, 20000, 20000, kMox})};
+
+    GrantedFixture()
+    {
+        check(ga.accepted() && gb.accepted(), "model fixture has two injected independent grants");
+    }
+};
+
+void grantedModelBindingAndHandoff()
+{
+    GrantedFixture f;
+    const TxGrantManager::Admission a = f.grants.acquire(f.a, f.ga.grant, 1, TxCoordinator::Activity::Mox);
+    const TxController::Input input = TxController::fromGrantedPtt(&f.radio, a.input, a.operation);
+    check(a.accepted() && input.valid() && f.commands.isEmpty(),
+          "acquiring and wrapping a granted operation cannot key the backend");
+    check(!TxController::fromGrantedPtt(&f.radio, a.input, {}).valid(),
+          "granted wrapper requires the captured matching operation");
+    Fixture otherRadio;
+    check(!TxController::fromGrantedPtt(&otherRadio.radio, a.input, a.operation).valid(),
+          "granted input cannot be wrapped for a different radio");
+    const auto local = otherRadio.radio.localTxController()->capture(TxController::Activity::Mox);
+    check(local.start() && !TxController::fromGrantedPtt(&otherRadio.radio, local.request(),
+              otherRadio.radio.transmitOperation()).valid(),
+          "desktop authority cannot be relabeled as an independent grant");
+
+    check(input.start() && f.commands == QStringList{"mox:on"},
+          "granted PTT traverses the production model preflight and typed keying seam");
+    const TxCoordinator::Context backendMedia = f.backend->capturedTransmitContext();
+    check(backendMedia.permitsDispatch(TxCoordinator::monotonicMs())
+          && backendMedia.sameContext(input.media()),
+          "backend-generated media carries the independent input rather than desktop authority");
+    check(!input.derive().valid(), "an acquired grant input cannot manufacture a fresh program intent");
+    check(f.grants.acquire(f.b, f.gb.grant, 1, TxCoordinator::Activity::Mox).refusal
+              == TxCoordinator::Refusal::Busy,
+          "another granted client cannot take the active model operation");
+    f.commands.clear();
+    check(f.grants.release(f.a, f.ga.grant, a.operation), "owner release requests production-model stop");
+    check(f.commands.contains("mox:off") && !backendMedia.permitsDispatch(TxCoordinator::monotonicMs())
+          && !input.start(), "release unkeys the model and fences retained input/media");
+    emit f.backend->keyingStateConfirmed(false);
+    check(f.grants.acquire(f.b, f.gb.grant, 2, TxCoordinator::Activity::Mox).refusal
+              == TxCoordinator::Refusal::Recovering,
+          "plain idle telemetry cannot authorize model handoff");
+    // Only the test supplies this evidence. It does not qualify a real radio.
+    check(f.coordinator.confirmStopped(f.coordinator.requestStopConfirmation(a.operation)),
+          "injected matching stop evidence releases the model operation");
+    const TxGrantManager::Admission b = f.grants.acquire(f.b, f.gb.grant, 3, TxCoordinator::Activity::Mox);
+    const TxController::Input replacement = TxController::fromGrantedPtt(&f.radio, b.input, b.operation);
+    check(b.accepted() && replacement.start(), "fresh B input starts after injected qualified handoff");
+    f.commands.clear();
+    input.stop();
+    input.abort();
+    f.grants.disconnectClient(f.a);
+    check(f.commands.isEmpty() && replacement.valid() && replacement.media().permitsDispatch(TxCoordinator::monotonicMs()),
+          "late A cleanup and disconnect cannot unkey or feed B's operation");
+    const auto replacementMedia = replacement.media();
+    f.grants.disconnectClient(f.b);
+    check(f.commands.contains("mox:off") && !replacementMedia.permitsDispatch(TxCoordinator::monotonicMs()),
+          "B disconnect synchronously fences its backend media and requests model unkey");
+}
+
+void flexSharedProtocolEligibility()
+{
+    FlexBackend backend;
+    quint32 sequence = 100;
+    backend.setIndependentTxSequenceProvider([&sequence] { return ++sequence; });
+    for (QStringView model : {u"FLEX-6300", u"FLEX-6400", u"FLEX-6400M", u"FLEX-6500",
+             u"FLEX-6600", u"FLEX-6600M", u"FLEX-6700", u"FLEX-8400", u"FLEX-8400M",
+             u"FLEX-8600", u"FLEX-8600M"}) {
+        const QString name = model.toString();
+        backend.setModelProvider([name] { return name; });
+        for (const QString& version : {QStringLiteral("1.4.0.0"), QStringLiteral("1.4.9.123")}) {
+            TxOperationIntegrationTestAccess::flexPrologue(backend, version);
+            check(backend.independentTxControl().activities == static_cast<unsigned>(TxCoordinator::Activity::Mox),
+                  "real Flex backend selects shared API support, not model or firmware build");
+            check(!backend.independentTxReady(), "compatible API alone never certifies transmitter readiness");
+        }
+    }
+    TxOperationIntegrationTestAccess::flexPrologue(backend, QStringLiteral("2.0.0.0"));
+    check(backend.independentTxControl().activities == 0, "unknown TCP API has no independent backend TX activity");
+    TxOperationIntegrationTestAccess::flexPrologue(backend, QStringLiteral("1.4.0.0"));
+    backend.setIndependentTxSequenceProvider({});
+    check(backend.independentTxControl().activities == 0, "shared command sequence provider is still required");
+}
+
+void grantedModelWireStopIdentity()
+{
+    // Inject only the terminal writer. These raw observations were captured
+    // from FLEX-6700 4.2.18.41174; no synthetic firmware/socket peer runs here.
+    for (int scenario = 0; scenario < 6; ++scenario) {
+        GrantedFixture f;
+        QStringList writes;
+        quint32 sequence = 100;
+        quint32 keySequence = 0;
+        quint32 stopSequence = 0;
+        TxStopEvidence proof;
+        FlexPttWireSession wire([&](quint32, const QString& command) {
+            writes.append(command);
+            return true;
+        }, [&](const TxStopEvidence& evidence) { proof = evidence; });
+        const auto feed = [&](QStringView line) {
+            wire.observe(line, TxCoordinator::monotonicMs());
+        };
+        constexpr QStringView idle = u"S0|interlock tx_client_handle=0x00000000 state=READY reason= source= tx_allowed=1 amplifier=";
+        wire.reset(1, 0x12345678);
+        feed(idle);
+        f.backend->keyingWriter = [&](bool on, const TxCoordinator::Operation& operation,
+                                       const TxCoordinator::Completion& completion) {
+            if (operation.independent()) {
+                if (on) {
+                    keySequence = ++sequence;
+                    wire.key(keySequence, {operation, true, completion}, TxCoordinator::monotonicMs());
+                } else {
+                    completion.finish(); // qualified stop owns the wire unkey
+                }
+            } else {
+                // Same fail-closed legacy-writer boundary as RadioConnection.
+                const QString command = on ? QStringLiteral("xmit 1") : QStringLiteral("xmit 0");
+                wire.otherCommand(command, TxCoordinator::monotonicMs());
+                writes.append(command);
+                completion.finish();
+            }
+        };
+        f.backend->stopWriter = [&](const TxCoordinator::Operation& operation,
+                                    const TxCoordinator::StopRequest& request) {
+            stopSequence = ++sequence;
+            wire.stop(stopSequence, operation, request, TxCoordinator::monotonicMs());
+        };
+        const auto detach = qScopeGuard([&] {
+            f.backend->keyingWriter = {};
+            f.backend->stopWriter = {};
+        });
+        const auto keyReadback = [&] {
+            feed(QStringLiteral("R%1|0|").arg(keySequence));
+            feed(u"S0|interlock tx_client_handle=0x12345678 state=PTT_REQUESTED reason= source=SW tx_allowed=1 amplifier=");
+            feed(u"S0|interlock tx_client_handle=0x12345678 state=TRANSMITTING reason= source=SW tx_allowed=1 amplifier=");
+        };
+        const auto a = f.grants.acquire(f.a, f.ga.grant, 1, TxCoordinator::Activity::Mox);
+        const auto input = TxController::fromGrantedPtt(&f.radio, a.input, a.operation);
+        check(a.accepted() && input.start(), "granted model operation reaches injected terminal key writer");
+        if (scenario != 1) {
+            keyReadback();
+        }
+        if (scenario <= 1) {
+            check(f.grants.release(f.a, f.ga.grant, a.operation), "explicit grant release starts model cleanup");
+        } else if (scenario == 2) {
+            input.stop();
+        } else if (scenario == 3) {
+            f.grants.disconnectClient(f.a);
+        } else if (scenario == 4) {
+            f.radio.emergencyTransmitStop();
+        } else {
+            f.coordinator.expire(TxCoordinator::monotonicMs() + 10000);
+        }
+        check(writes == QStringList{"xmit 1", "xmit 0"},
+              "model cleanup retains independent identity and sends only the qualified unkey");
+        if (scenario == 1) {
+            keyReadback();
+        }
+        feed(QStringLiteral("R%1|0|").arg(stopSequence));
+        feed(u"S0|interlock tx_client_handle=0x12345678 state=UNKEY_REQUESTED reason= source= tx_allowed=1 amplifier=");
+        feed(u"S0|interlock tx_client_handle=0x12345678 state=READY reason= source= tx_allowed=1 amplifier=");
+        check(!proof.valid() && f.coordinator.hasOwnership(), "owned READY cannot release model ownership");
+        feed(idle);
+        check(proof.valid(), "complete terminal stop trace produces original model stop evidence");
+        // setBackendForTest deliberately skips production signal wiring;
+        // inject into the same receiver, preserving its exact-token checks.
+        TxOperationIntegrationTestAccess::stopEvidence(f.radio, proof);
+        check(!f.coordinator.hasOwnership() && !f.coordinator.recovering(),
+              "production model consumes qualified evidence after each cleanup route");
+        const auto b = f.grants.acquire(f.b, f.gb.grant, 1, TxCoordinator::Activity::Mox);
+        const auto replacement = TxController::fromGrantedPtt(&f.radio, b.input, b.operation);
+        check(b.accepted() && replacement.start() && writes.size() == 3 && writes.last() == "xmit 1",
+              "fresh client reaches terminal writer after complete model-to-wire handoff");
+    }
+}
+
+void grantedModelPreflightAndCancellation()
+{
+    for (int scenario = 0; scenario < 5; ++scenario) {
+        GrantedFixture f;
+        const auto admission = f.grants.acquire(f.a, f.ga.grant, 1, TxCoordinator::Activity::Mox);
+        const auto input = TxController::fromGrantedPtt(&f.radio, admission.input, admission.operation);
+        if (scenario == 0) {
+            f.backend->caps.canTransmit = false;
+        } else if (scenario == 1) {
+            f.backend->caps.receiveOnlyModes = {QStringLiteral("WFM")};
+            SliceDelta mode;
+            mode.mode = QStringLiteral("WFM");
+            f.radio.slice(0)->applyChanges(mode);
+        } else if (scenario == 2) {
+            f.grants.disconnectClient(f.a);
+        } else if (scenario == 3) {
+            f.radio.setPanTransmitInhibited(QStringLiteral("0x40000000"), true,
+                                            QStringLiteral("Injected receive-only panadapter"));
+        } else {
+            QObject::connect(&f.radio, &RadioModel::localTransmitEngaged, &f.radio, [&] {
+                f.grants.disconnectClient(f.a);
+            });
+        }
+        check(!input.start() && !f.commands.contains("mox:on"),
+              "granted PTT cannot bypass capability, mode, disconnect, inhibit or reentrant-revocation checks");
+        check(!input.valid() && !input.media().permitsDispatch(TxCoordinator::monotonicMs()),
+              "a refused granted input is retired rather than retried when conditions change");
+    }
+
+    GrantedFixture f;
+    const auto admission = f.grants.acquire(f.a, f.ga.grant, 1, TxCoordinator::Activity::Mox);
+    const auto input = TxController::fromGrantedPtt(&f.radio, admission.input, admission.operation);
+    bool accepted = true;
+    QMetaObject::invokeMethod(&f.radio, [&] { accepted = input.start(); }, Qt::QueuedConnection);
+    f.grants.disconnectClient(f.a);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(!accepted && !f.commands.contains("mox:on"),
+          "disconnect before queued model dispatch cannot admit the captured granted input");
+}
+
+void grantedModelSessionAndActivityBoundaries()
+{
+    GrantedFixture f;
+    const auto admission = f.grants.acquire(f.a, f.ga.grant, 1, TxCoordinator::Activity::Mox);
+    const auto input = TxController::fromGrantedPtt(&f.radio, admission.input, admission.operation);
+    check(input.start(), "granted operation keys before backend replacement");
+    const TxCoordinator::Context oldMedia = f.backend->capturedTransmitContext();
+    auto replacement = std::make_unique<RecordingBackend>(f.commands);
+    f.backend = replacement.get();
+    f.radio.setBackendForTest(std::move(replacement), QStringLiteral("replacement"));
+    f.installTxSlice();
+    f.backend->connected = true;
+    f.commands.clear();
+    check(!input.valid() && !input.start()
+          && !TxController::fromGrantedPtt(&f.radio, admission.input, admission.operation).valid()
+          && !oldMedia.permitsDispatch(TxCoordinator::monotonicMs())
+          && !f.grants.acquire(f.a, f.ga.grant, 2, TxCoordinator::Activity::Mox).accepted(),
+          "backend replacement cannot inherit a grant, input or backend media authority");
+    const auto desktop = f.radio.localTxController()->capture(TxController::Activity::Mox);
+    check(desktop.start(), "fresh desktop intent still works after independent session retirement");
+    f.commands.clear();
+    input.stop();
+    input.abort();
+    f.grants.disconnectClient(f.a);
+    check(f.commands.isEmpty() && desktop.active(),
+          "stale grant cleanup cannot cancel the replacement session's desktop operation");
+
+    Fixture other;
+    constexpr unsigned tune = static_cast<unsigned>(TxCoordinator::Activity::Tune);
+    TxGrantManager grants(TxOperationIntegrationTestAccess::coordinator(other.radio), [] { return tune; });
+    const auto client = grants.registerClient(QStringLiteral("verified-tune"));
+    const auto issued = grants.issue(client, {10000, 20000, 20000, tune});
+    const auto tuning = grants.acquire(client, issued.grant, 1, TxCoordinator::Activity::Tune);
+    check(tuning.accepted()
+          && !TxController::fromGrantedPtt(&other.radio, tuning.input, tuning.operation).valid()
+          && other.commands.isEmpty(),
+          "PTT wrapper cannot relabel another independently admitted activity");
+}
 
 void scopedWsprRoutes()
 {
@@ -2033,6 +2330,7 @@ int main(int argc, char** argv)
     cwTuneMutualExclusion();
     delayedReleaseAndReplacement();
     flexEncoding();
+    flexSharedProtocolEligibility();
     queuedPrimaryKeying();
     teardownAdmission();
     pendingCallbackDisconnectExpiry();
@@ -2058,6 +2356,10 @@ int main(int argc, char** argv)
     cwxCallbackLifetimes();
     serialInputQueueLifetimes();
     testInjectionReopensAdmission();
+    grantedModelBindingAndHandoff();
+    grantedModelWireStopIdentity();
+    grantedModelPreflightAndCancellation();
+    grantedModelSessionAndActivityBoundaries();
     protocolProducerLifetimes();
     producerNormalTails();
     producerTuneAndAtu();
