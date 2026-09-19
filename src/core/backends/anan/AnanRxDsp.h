@@ -83,6 +83,13 @@ public:
         // output block (deterministic for an offline/burst feed -- what the
         // handedness test uses).
         bool blockForOutput = false;
+        // WDSP's impulse noise blanker (ANB), run on the raw IQ ahead of the
+        // channel -- see WdspChannel::setNoiseBlanker(). In Config so a
+        // rate-change rebuild opens the new channel with the operator's
+        // blanker, the same way it carries mode, filter and AGC. Level is
+        // 0..100 in the slice model's units.
+        bool noiseBlankerEnabled = false;
+        int noiseBlankerLevel = 50;
     };
 
     // Synchronous convenience used by deterministic tests. Production first
@@ -161,6 +168,9 @@ public:
     // RX frequency shift in Hz relative to the NCO -- how a single-DDC
     // backend tunes the slice inside the passband without moving the DDC.
     Q_INVOKABLE void setShift(double shiftHz);
+    // Noise blanker on/off and level (0..100). Deferred like setMode() while a
+    // rebuild is in flight; installChannel() re-applies it at the swap.
+    Q_INVOKABLE void setNoiseBlanker(bool on, int level);
     // Cap how often a panadapter frame is produced, in frames per second.
     // See Hl2RxDsp::setSpectrumRateFps's comment for why this is done HERE
     // (skipping the FFT entirely when a frame is not due) rather than by

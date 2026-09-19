@@ -66,6 +66,7 @@ public:
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;
     void setSliceAgc(int sliceId, const QString& mode, int thresholdDb) override;
+    void setSliceNoiseBlanker(int sliceId, bool on, int level) override;
     void setPanCenter(const QString& panId, double hz, PanCenterIntent intent) override;
     void setPanBandwidth(const QString& panId, double hz) override;
     void setPanFrameRate(const QString& panId, int fps) override;
@@ -112,6 +113,8 @@ public:
     // seam.
     [[nodiscard]] int agcModeForTest() const noexcept { return m_agcMode; }
     [[nodiscard]] double agcCeilingDbForTest() const noexcept { return m_agcCeilingDb; }
+    [[nodiscard]] bool noiseBlankerOnForTest() const noexcept { return m_nbOn; }
+    [[nodiscard]] int noiseBlankerLevelForTest() const noexcept { return m_nbLevel; }
 
 private:
     void beginDspSetup();
@@ -302,6 +305,14 @@ private:
     // Defaults match connectRadio()'s own connect-time defaults.
     int m_agcMode = 3;
     double m_agcCeilingDb = 60.0;
+    // Noise blanker as setSliceNoiseBlanker() last stored it. Both
+    // connectRadio() and beginRateChange() build the DSP config from it. This
+    // differs from the AGC pair, which only beginRateChange() reads:
+    // connectRadio() re-defaults AGC, but carries the blanker across a
+    // reconnect so the DSP keeps agreeing with the slice's NB button, which
+    // also survives the disconnect. Defaults match AnanRxDsp::Config's.
+    bool m_nbOn = false;
+    int m_nbLevel = 50;
 
     // Fixed identifiers -- Phase 1b is exactly one slice, one pan.
     static constexpr int kSliceId = 0;
