@@ -1318,6 +1318,21 @@ void MainWindow::buildMenuBar()
             m_appletPanel->txApplet()->confirmAndClearAtuMemories();
         }
     });
+    // Discoverability mitigation for AGC-T calibration's right-click-only
+    // entry point (docs/agc-t-calibration-design.md §0 flags this exact
+    // tension and prescribes a mitigation — this is the Tools-menu half of
+    // it, additive to the slider's right-click menu, not a replacement).
+    // Requested by Larry, KE2ET. Targets the active slice, same as the
+    // right-click path (RxApplet.cpp) — "the currently selected panadapter."
+    // No kTxKeyingProperty: calibration listens to the noise floor, it does
+    // not key the transmitter like the two sweeps above it.
+    auto* agcTCalibrationAction = toolsMenu->addAction(
+        "Calibrate AGC-T...", this, [this] {
+        if (auto* s = activeSlice()) {
+            showAgcCalibrationDialog(s->sliceId());
+        }
+    });
+    m_agcTCalibrationMenuAction = agcTCalibrationAction;
 
     toolsMenu->addSeparator();
     viewMenu->removeAction(callsignLookupAct);
@@ -1395,19 +1410,6 @@ void MainWindow::buildMenuBar()
     auto* gpsDashboardAction = toolsMenu->addAction("GPS Dashboard...", this, [this] {
         showGpsLocationDialog();
     });
-    // Discoverability mitigation for AGC-T calibration's right-click-only
-    // entry point (docs/agc-t-calibration-design.md §0 flags this exact
-    // tension and prescribes a mitigation — this is the Tools-menu half of
-    // it, additive to the slider's right-click menu, not a replacement).
-    // Requested by Larry, KE2ET. Targets the active slice, same as the
-    // right-click path (RxApplet.cpp) — "the currently selected panadapter."
-    auto* agcTCalibrationAction = toolsMenu->addAction(
-        "Calibrate AGC-T Against Noise Floor...", this, [this] {
-        if (auto* s = activeSlice()) {
-            showAgcCalibrationDialog(s->sliceId());
-        }
-    });
-    m_agcTCalibrationMenuAction = agcTCalibrationAction;
     toolsMenu->addAction(networkAction);
     toolsMenu->addAction("Runtime Monitor...", this, [this] {
         showSystemInfoDialog();
