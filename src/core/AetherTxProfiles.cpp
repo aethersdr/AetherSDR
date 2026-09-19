@@ -1,4 +1,4 @@
-#include "AetherRxProfiles.h"
+#include "AetherTxProfiles.h"
 #include "AudioEngine.h"
 #include "ChannelStripPresets.h"
 #include "SettingsPaths.h"
@@ -19,55 +19,13 @@ namespace {
 
 constexpr int kSchemaVersion = 1;
 
-// Which noise-reduction method is running. The cluster is exclusive, so this
-// is one name or none — the per-module tuning stays in AppSettings, because a
-// profile is about how the chain is arranged, not a second copy of every
-// slider in the app.
-QString activeNrMethod(AudioEngine* e)
-{
-    if (!e) return {};
-    if (e->nr2Enabled())    return QStringLiteral("NR2");
-    if (e->nr4Enabled())    return QStringLiteral("NR4");
-    if (e->mnrEnabled())    return QStringLiteral("MNR");
-    if (e->dfnrEnabled())   return QStringLiteral("DFNR");
-    if (e->rn2Enabled())    return QStringLiteral("RN2");
-    if (e->nvAfxEnabled())  return QStringLiteral("BNR");
-    if (e->nnrEnabled())    return QStringLiteral("NNR");
-    return QStringLiteral("Off");
-}
-
-// Switch the cluster to one method, or all of it off. Each setter handles the
-// mutual exclusion itself, so turning the wanted one on is enough — but a
-// profile that says "Off" has to say so explicitly.
-void applyNrMethod(AudioEngine* e, const QString& method)
-{
-    if (!e || method.isEmpty()) return;
-    const auto off = [e]() {
-        if (e->nr2Enabled())   e->setNr2Enabled(false);
-        if (e->nr4Enabled())   e->setNr4Enabled(false);
-        if (e->mnrEnabled())   e->setMnrEnabled(false);
-        if (e->dfnrEnabled())  e->setDfnrEnabled(false);
-        if (e->rn2Enabled())   e->setRn2Enabled(false);
-        if (e->nvAfxEnabled()) e->setNvAfxEnabled(false);
-        if (e->nnrEnabled())   e->setNnrEnabled(false);
-    };
-    if (method.compare(QLatin1String("Off"), Qt::CaseInsensitive) == 0) {
-        off();
-        return;
-    }
-    off();
-    if (method == QLatin1String("NR2"))       e->setNr2Enabled(true);
-    else if (method == QLatin1String("NR4"))  e->setNr4Enabled(true);
-    else if (method == QLatin1String("MNR"))  e->setMnrEnabled(true);
-    else if (method == QLatin1String("DFNR")) e->setDfnrEnabled(true);
-    else if (method == QLatin1String("RN2"))  e->setRn2Enabled(true);
-    else if (method == QLatin1String("BNR"))  e->setNvAfxEnabled(true);
-    else if (method == QLatin1String("NNR"))  e->setNnrEnabled(true);
-}
+// Nothing here needs the noise-reduction cluster: RN2 on the mic path is a TX
+// setting, but it lives with the tube pre-amp toggles rather than in the chain,
+// and ChannelStripPresets already carries it.
 
 } // namespace
 
-AetherRxProfiles::AetherRxProfiles(AudioEngine* engine, QObject* parent)
+AetherTxProfiles::AetherTxProfiles(AudioEngine* engine, QObject* parent)
     : QObject(parent)
     , m_engine(engine)
 {
@@ -77,15 +35,15 @@ AetherRxProfiles::AetherRxProfiles(AudioEngine* engine, QObject* parent)
     migrateLegacyPresets();
 }
 
-QString AetherRxProfiles::filePath() const
+QString AetherTxProfiles::filePath() const
 {
     // Share the settings store's cross-platform test/profile override.
     const QString dir = SettingsPaths::configDir();
     QDir().mkpath(dir);
-    return dir + "/AetherRxProfiles.json";
+    return dir + "/AetherTxProfiles.json";
 }
 
-void AetherRxProfiles::migrateLegacyPresets()
+void AetherTxProfiles::migrateLegacyPresets()
 {
     static const QString kFlag = QStringLiteral("migratedFromChannelStrip");
     if (m_root.value(kFlag).toBool()) return;
@@ -116,16 +74,10 @@ void AetherRxProfiles::migrateLegacyPresets()
         // one-way import, not a restore.
         if (profiles.contains(it.key())) continue;
         const QJsonObject preset = it.value().toObject();
-        // The receive half is the nested block. A preset saved before the
-        // RX chain existed has none, and simply does not migrate.
-        if (!preset.contains(QStringLiteral("rx"))
-            || !preset.value(QStringLiteral("rx")).isObject()) {
-            continue;
-        }
-        QJsonObject profile = preset.value(QStringLiteral("rx")).toObject();
-        for (const auto& k : {QStringLiteral("createdBy"), QStringLiteral("createdAt")}) {
-            if (preset.contains(k) && !profile.contains(k)) profile[k] = preset.value(k);
-        }
+        // The transmit half is the preset's top level; "rx" is the other
+        // window's business and must not travel with it.
+        QJsonObject profile = preset;
+        profile.remove(QStringLiteral("rx"));
         profiles[it.key()] = profile;
         ++imported;
     }
@@ -137,7 +89,7 @@ void AetherRxProfiles::migrateLegacyPresets()
     if (imported > 0) emit profilesChanged();
 }
 
-bool AetherRxProfiles::loadFromDisk()
+bool AetherTxProfiles::loadFromDisk()
 {
     QFile f(filePath());
     if (!f.exists() || !f.open(QIODevice::ReadOnly)) return false;
@@ -151,12 +103,14 @@ bool AetherRxProfiles::loadFromDisk()
     return true;
 }
 
-// Atomic, and checked at every step (Constitution XIV). The previous version
-// opened the live library WriteOnly|Truncate, which destroys every saved
-// profile before a single replacement byte is written — an interrupted save
-// took the lot — and ignored the write result, so a full disk reported
-// success and the dialog said "Saved".
-bool AetherRxProfiles::writeDocument(const QJsonObject& root) const
+// Atomic, and checked at every step (Constitution XIV). Written this way
+// because the store this one replaces is not: ChannelStripPresets::saveToDisk()
+// opens the live library WriteOnly|Truncate, which destroys every saved preset
+// before a single replacement byte is written — an interrupted save takes the
+// lot — and ignores the write result, so a full disk reports success and the
+// dialog says "Saved". This file has no "previous version" of its own; that
+// sibling is what the comparison is to.
+bool AetherTxProfiles::writeDocument(const QJsonObject& root) const
 {
     QSaveFile f(filePath());
     if (!f.open(QIODevice::WriteOnly)) return false;
@@ -169,7 +123,7 @@ bool AetherRxProfiles::writeDocument(const QJsonObject& root) const
     return f.commit();
 }
 
-QStringList AetherRxProfiles::profileNames() const
+QStringList AetherTxProfiles::profileNames() const
 {
     QStringList names = m_root.value("profiles").toObject().keys();
     std::sort(names.begin(), names.end(), [](const QString& a, const QString& b) {
@@ -178,24 +132,22 @@ QStringList AetherRxProfiles::profileNames() const
     return names;
 }
 
-bool AetherRxProfiles::hasProfile(const QString& name) const
+bool AetherTxProfiles::hasProfile(const QString& name) const
 {
     return m_root.value("profiles").toObject().contains(name);
 }
 
-bool AetherRxProfiles::saveFromCurrent(const QString& name)
+bool AetherTxProfiles::saveFromCurrent(const QString& name)
 {
     if (name.trimmed().isEmpty() || !m_engine) return false;
 
-    QJsonObject p = ChannelStripPresets::captureRxJson(m_engine);
+    QJsonObject p = ChannelStripPresets::captureTxJson(m_engine);
     p["createdBy"] = QStringLiteral("AetherSDR ") + QCoreApplication::applicationVersion();
     p["createdAt"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    p["nr"] = QJsonObject{{ QStringLiteral("method"), activeNrMethod(m_engine) }};
-
     return addProfile(name.trimmed(), p);
 }
 
-bool AetherRxProfiles::addProfile(const QString& name, const QJsonObject& profile)
+bool AetherTxProfiles::addProfile(const QString& name, const QJsonObject& profile)
 {
     if (name.trimmed().isEmpty()) return false;
     QJsonObject profiles = m_root.value("profiles").toObject();
@@ -217,21 +169,17 @@ bool AetherRxProfiles::addProfile(const QString& name, const QJsonObject& profil
     return true;
 }
 
-bool AetherRxProfiles::loadProfile(const QString& name)
+bool AetherTxProfiles::loadProfile(const QString& name)
 {
     const QJsonObject profiles = m_root.value("profiles").toObject();
     if (!profiles.contains(name) || !m_engine) return false;
     const QJsonObject p = profiles.value(name).toObject();
 
-    ChannelStripPresets::applyRxJson(m_engine, p);
-    if (p.value("nr").isObject()) {
-        applyNrMethod(m_engine, p.value("nr").toObject()
-                                 .value("method").toString());
-    }
+    ChannelStripPresets::applyTxJson(m_engine, p);
     return true;
 }
 
-bool AetherRxProfiles::deleteProfile(const QString& name)
+bool AetherTxProfiles::deleteProfile(const QString& name)
 {
     QJsonObject profiles = m_root.value("profiles").toObject();
     if (!profiles.contains(name)) return false;
@@ -245,7 +193,7 @@ bool AetherRxProfiles::deleteProfile(const QString& name)
     return true;
 }
 
-bool AetherRxProfiles::exportToFile(const QString& name, const QString& filePath) const
+bool AetherTxProfiles::exportToFile(const QString& name, const QString& filePath) const
 {
     const QJsonObject profiles = m_root.value("profiles").toObject();
     if (!profiles.contains(name)) return false;
@@ -254,7 +202,7 @@ bool AetherRxProfiles::exportToFile(const QString& name, const QString& filePath
     // A standalone file says what it is and what it was called, so the
     // importer has something to suggest and a reader can tell at a glance.
     out["name"]    = name;
-    out["kind"]    = QStringLiteral("AetherRX profile");
+    out["kind"]    = QStringLiteral("AetherTX profile");
     out["version"] = kSchemaVersion;
 
     // Same contract as the library write: an export that fails must not leave
@@ -269,7 +217,7 @@ bool AetherRxProfiles::exportToFile(const QString& name, const QString& filePath
     return f.commit();
 }
 
-QJsonObject AetherRxProfiles::readFile(const QString& path,
+QJsonObject AetherTxProfiles::readFile(const QString& path,
                                        QString* suggestedName,
                                        QString* error)
 {
@@ -295,12 +243,12 @@ QJsonObject AetherRxProfiles::readFile(const QString& path,
     // Honour "kind" when it is there. The sniffing below deliberately does not
     // require it, so a hand-written file still imports -- but the two windows'
     // exports overlap almost completely (same stage keys, overlapping chain
-    // names), so without this check an AetherTX export imports cleanly here and
+    // names), so without this check an AetherRX export imports cleanly here and
     // writes receive-side values into the transmit chain.
     {
         const QString kind = root.value(QStringLiteral("kind")).toString();
-        if (!kind.isEmpty() && kind != QStringLiteral("AetherRX profile")) {
-            return fail(QObject::tr("%1 holds a \u201c%2\u201d, not an AetherRX profile.")
+        if (!kind.isEmpty() && kind != QStringLiteral("AetherTX profile")) {
+            return fail(QObject::tr("%1 holds a \u201c%2\u201d, not an AetherTX profile.")
                             .arg(QFileInfo(path).fileName(), kind));
         }
     }
@@ -318,7 +266,8 @@ QJsonObject AetherRxProfiles::readFile(const QString& path,
 
     // A single exported profile. Recognised by carrying at least one stage,
     // rather than by its "kind", so a hand-written file still imports.
-    static const char* kStageKeys[] = { "gate", "eq", "comp", "tube", "pudu" };
+    static const char* kStageKeys[] = { "gate", "eq", "deess", "comp",
+                                        "tube", "pudu", "reverb" };
     const bool looksLikeProfile =
         root.contains(QStringLiteral("chain"))
         || std::any_of(std::begin(kStageKeys), std::end(kStageKeys),
@@ -327,8 +276,8 @@ QJsonObject AetherRxProfiles::readFile(const QString& path,
                        });
     if (!looksLikeProfile) {
         return fail(QObject::tr(
-            "This does not look like an AetherRX profile — it has no chain "
-            "and no receive stages in it."));
+            "This does not look like an AetherTX profile — it has no chain "
+            "and no transmit stages in it."));
     }
     if (suggestedName) {
         *suggestedName = root.value("name").toString(
@@ -337,7 +286,7 @@ QJsonObject AetherRxProfiles::readFile(const QString& path,
     return root;
 }
 
-QString AetherRxProfiles::uniqueName(const QString& desired) const
+QString AetherTxProfiles::uniqueName(const QString& desired) const
 {
     const QString base = desired.trimmed().isEmpty()
         ? QObject::tr("Imported profile")

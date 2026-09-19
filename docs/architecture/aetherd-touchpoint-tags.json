@@ -23,6 +23,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/AetherTxProfiles.h": {
+  "tag": "universal",
+  "note": "Named-profile save/recall/import-export for the transmit DSP chain; operates on core-profile DSP state only. Mirror of core/AetherRxProfiles.h, and shares ChannelStripPresets' TX capture/apply.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AetherRxProfiles.h": {
   "tag": "universal",
   "note": "Named-profile save/recall/import-export for the receive DSP chain; operates on core-profile DSP state only, same precedent as core/ChannelStripPresets.h, whose RX capture/apply it shares.",

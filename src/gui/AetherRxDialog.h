@@ -7,13 +7,8 @@
 
 #include <array>
 
-class QButtonGroup;
-class QCheckBox;
-class QEvent;
 class QHideEvent;
-class QObject;
 class QShowEvent;
-class QFrame;
 class QStackedWidget;
 class QTimer;
 
@@ -21,6 +16,7 @@ namespace AetherSDR {
 
 class AudioEngine;
 class AetherDspWidget;
+class StageTabBar;
 class StripCompPanel;
 class StripEqPanel;
 class StripGatePanel;
@@ -130,9 +126,6 @@ signals:
 protected:
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
-    // Drag-and-drop for the tab column: the grips start the drag, the frame
-    // takes the drop, and this is where the frame's events are intercepted.
-    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     QWidget* buildStagePage(QWidget* panel);
@@ -141,34 +134,13 @@ private:
     // Commit a checkbox to the engine, and read the engine back into one.
     void setStageEnabled(Stage stage, bool on);
     bool stageEnabled(Stage stage) const;
-    // Pull every box from the engine. The Client* stages are plain classes
-    // with no change signal, and the chain strip can toggle the same flags
-    // behind this window's back, so the boxes are polled while it is visible.
-    void refreshStageChecks();
 
-    // A row was dropped at `y` within the tab column: work out where it
-    // landed, commit the new order to the engine, and relay the rows out.
-    void dropStageAt(Stage moved, int y);
-    // Order the rows to match AudioEngine's RX chain: AetherNR first, the
-    // chain stages in engine order, Out last. No-op when they already match,
-    // so the poll can call it every tick.
-    void relayoutStageRows();
 
     AudioEngine*        m_audio{nullptr};
     AetherDspWidget*    m_widget{nullptr};
-    QFrame*             m_tabsFrame{nullptr};
-    QButtonGroup*       m_tabGroup{nullptr};
+    StageTabBar*        m_tabs{nullptr};
     QStackedWidget*     m_stack{nullptr};
-    std::array<QCheckBox*, StageCount> m_stageChecks{};
-    std::array<QWidget*, StageCount>   m_stageRows{};
-    // The chain-stage order the rows are currently laid out in, so the poll
-    // can tell whether the engine has been reordered from somewhere else.
-    QVector<int>        m_rowOrder;
-    QWidget*            m_outIndent{nullptr};
     QTimer*             m_checkTimer{nullptr};
-    // Set while refreshStageChecks() is writing, so a box being brought in
-    // line with the engine does not turn round and write back to it.
-    bool                m_syncingChecks{false};
 
     StripGatePanel*     m_gate{nullptr};
     StripEqPanel*       m_eq{nullptr};
