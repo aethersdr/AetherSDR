@@ -1198,19 +1198,29 @@ void TunerApplet::cycleOperateState()
 
 void TunerApplet::setRadioMeters(float fwdPower, float swr)
 {
-    m_radioMeters.restart();
+    // Yields to the tuner's own status while that is arriving. Which source
+    // wins used to be the other way round, and was right when it was written:
+    // both ran at about 1 Hz, and the relay was the steadier of the two.
+    //
+    // The direct path is now 60 Hz while keyed and carries the device's peak
+    // field, which the relay does not have at all -- so the relay became the
+    // stale one. It still suppressed the direct path for 1500 ms per sample,
+    // which meant the gauge ran at the relay's rate on any station whose
+    // radio relays TGXL meters, and none of the faster polling reached the
+    // screen there.
+    if (m_deviceMeters.isValid()
+            && m_deviceMeters.elapsed() < kRelayMeterFreshnessMs) {
+        return;
+    }
     updateMeters(fwdPower, swr);
 }
 
 void TunerApplet::setDeviceMeters(float fwdPower, float swr, float fwdPeak)
 {
-    // Discarded, not applied-then-overwritten, while the relay is live. Two
-    // sources writing one gauge at different rates is last-writer-wins, and
-    // the slower one kept dragging the bar back to a stale sample.
-    if (m_radioMeters.isValid()
-            && m_radioMeters.elapsed() < kRelayMeterFreshnessMs) {
-        return;
-    }
+    // The authority whenever it is connected. The relay above takes over
+    // within kRelayMeterFreshnessMs of this going quiet, so a station with no
+    // direct connection, or one that drops, still gets a meter.
+    m_deviceMeters.restart();
     updateMeters(fwdPower, swr, fwdPeak);
 }
 

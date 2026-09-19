@@ -11,6 +11,8 @@
 // the discrete STBY/BYP keys, content scaling) is not asserted here; those are
 // the UI surface and are expected to differ.
 
+#include "gui/AccessoryPanelWidgets.h"
+#include "gui/HGauge.h"
 #include "gui/TunerApplet.h"
 #include "models/TunerModel.h"
 #include "core/backends/TunerDelta.h"
@@ -340,6 +342,72 @@ int main(int argc, char** argv)
 
         // And it takes itself down: there is no device clear on this path.
         CHECK(spin([&] { return !overlay->isVisible(); }, 5000));
+    }
+
+    // ── Which meter source drives the gauge ──────────────────────────
+    //
+    // The tuner reports forward power twice: relayed by the radio, and on its
+    // own port-9010 status. Only one can drive the gauge.
+    //
+    // The direct path must win. It polls at 60 Hz while keyed and carries the
+    // device's `peak` field; the relay has neither, and fires only when its
+    // value changes. The arbitration used to run the other way -- correct
+    // when both sources were ~1 Hz, wrong once the direct one got fast,
+    // because one relayed sample suppressed the direct path for 1500 ms and
+    // the gauge ran at the relay's rate on any station whose radio relays
+    // TGXL meters.
+    {
+        TunerApplet applet;
+        // HGauge has no Q_OBJECT, so findChildren<HGauge*> will not compile
+        // and qobject_cast cannot see it either.
+        HGauge* gauge = nullptr;
+        for (auto* w : applet.findChildren<QWidget*>()) {
+            if (auto* g = dynamic_cast<HGauge*>(w);
+                g && g->accessibleName() == QLatin1String("Forward power")) {
+                gauge = g;
+            }
+        }
+        CHECK(gauge != nullptr);
+        if (gauge) {
+            // A direct sample, then a relayed one on its heels. This is the
+            // case that was broken: the relay overwrote it.
+            applet.setDeviceMeters(100.0f, 1.2f, 100.0f);
+            CHECK(qFuzzyCompare(gauge->value(), 100.0f));
+            applet.setRadioMeters(10.0f, 1.2f);
+            CHECK(qFuzzyCompare(gauge->value(), 100.0f));
+
+            // Direct keeps winning for as long as it keeps arriving.
+            applet.setDeviceMeters(120.0f, 1.2f, 120.0f);
+            applet.setRadioMeters(10.0f, 1.2f);
+            CHECK(qFuzzyCompare(gauge->value(), 120.0f));
+        }
+    }
+    {
+        // A station with no direct connection, or one that drops mid-session,
+        // still needs a meter: direct winning must not mean the relay is dead.
+        TunerApplet applet;
+        // HGauge has no Q_OBJECT, so findChildren<HGauge*> will not compile
+        // and qobject_cast cannot see it either.
+        HGauge* gauge = nullptr;
+        for (auto* w : applet.findChildren<QWidget*>()) {
+            if (auto* g = dynamic_cast<HGauge*>(w);
+                g && g->accessibleName() == QLatin1String("Forward power")) {
+                gauge = g;
+            }
+        }
+        CHECK(gauge != nullptr);
+        if (gauge) {
+            // Nothing direct has ever arrived: the relay drives it.
+            applet.setRadioMeters(42.0f, 1.5f);
+            CHECK(qFuzzyCompare(gauge->value(), 42.0f));
+
+            // And again once a direct sample ages past the freshness window.
+            applet.setDeviceMeters(100.0f, 1.2f, 100.0f);
+            CHECK(qFuzzyCompare(gauge->value(), 100.0f));
+            settle(AetherSDR::kRelayMeterFreshnessMs + 150);
+            applet.setRadioMeters(42.0f, 1.5f);
+            CHECK(qFuzzyCompare(gauge->value(), 42.0f));
+        }
     }
 
     if (g_failures == 0) {

@@ -84,8 +84,9 @@ public:
 public slots:
     // The tuner reports forward power and SWR twice — as radio-relayed AMP
     // meters and on its own port-9010 status. Same measurement, different
-    // rate, so these stamp their arrival and the relay wins while it is
-    // fresh. See kRelayMeterFreshnessMs.
+    // rate, so these stamp their arrival and the DIRECT reading wins while it
+    // is fresh: it polls at 60 Hz while keyed and carries the device's peak
+    // field, neither of which the relay has. See kRelayMeterFreshnessMs.
     //
     // Callers use these, never updateMeters(), which applies blind: a second
     // unmediated writer is the defect this path exists to remove, and it is
@@ -269,9 +270,10 @@ private:
     QWidget*     m_antContainer{nullptr};
 
     // Meter values (updated by updateMeters)
-    // When the radio relay last delivered a meter sample. See setDeviceMeters().
+    // When the tuner's own status last delivered a meter sample. The relay
+    // in setRadioMeters() yields to it while it is fresh.
     // Monotonic: a wall-clock gate wedges shut across a backwards clock step.
-    QElapsedTimer m_radioMeters;
+    QElapsedTimer m_deviceMeters;
 
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
