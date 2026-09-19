@@ -141,12 +141,14 @@ public:
         if (qFuzzyCompare(m_peakValue, v)) return;
         m_peakValue = v;
         m_peakEnabled = true;
+        publishAutomationState();
         update();
     }
 
     void clearPeak() {
         if (!m_peakEnabled) return;
         m_peakEnabled = false;
+        publishAutomationState();
         update();
     }
 
@@ -466,6 +468,14 @@ private:
         for (const auto& t : m_ticks)
             tickLabels << t.label;
         setProperty("gaugeTicks", tickLabels.join(QLatin1Char(',')));
+        // The peak-hold marker. Published because it is the one part of a
+        // power meter a driver cannot infer: gaugeValue is the instant, and
+        // on a speech envelope the instant is mostly silence -- the tick is
+        // what the operator actually reads a PEP off. Enabled is separate
+        // from the value because "no peak held" and "peak held at 0" are
+        // different states and the tick is absent in only one of them.
+        setProperty("gaugePeak", m_peakValue);
+        setProperty("gaugePeakEnabled", m_peakEnabled);
     }
 
     QString hoverValueText() const {
