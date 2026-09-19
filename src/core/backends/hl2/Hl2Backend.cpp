@@ -6373,11 +6373,27 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     };
     put("adcPeakDbfs", QStringLiteral("ADC peak (uncalibrated pre-DDC dBFS)"),
         dbfs(peak));
-    put("adcRmsDbfs", QStringLiteral("ADC RMS (uncalibrated pre-DDC dBFS)"),
+    // AC: the deviation about the block's own mean, not about zero, so a
+    // converter DC offset is not counted as signal. The row is labelled for it
+    // because the two numbers above and below it are absolute and this one is
+    // not — a reader comparing adcPeakDbfs with adcRmsDbfs is comparing two
+    // different references, and the label is the only place that says so.
+    // (#5802.)
+    put("adcRmsDbfs", QStringLiteral("ADC RMS, AC (uncalibrated pre-DDC dBFS)"),
         dbfs(rms));
     // Peak-to-RMS, which is the one figure here that IS scale-free: it
     // survives the missing calibration intact, because both terms carry the
     // same unknown offset and it cancels.
+    //
+    // It is what separates a broadband floor from a discrete carrier — 11-12
+    // dB over 2048 Gaussian samples against ~3 dB for a sinusoid — and that
+    // separation is exactly what an about-zero RMS destroyed: a DC pedestal
+    // inflated the denominator and dragged the reading toward the carrier end
+    // whatever the antenna was doing. With the RMS now AC-referred and the
+    // peak still absolute, a large crest means EITHER a peaky signal OR a
+    // large DC offset under a quiet band; #5802 leaves surfacing the offset
+    // itself (an adcDcDbfs row) open, and until it exists this row cannot tell
+    // those two apart.
     put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"), dbfs(peak - rms));
     // Counted with ad9866.v's OWN two thresholds — rxclipp at +2047 and
     // rxclipn at -2048 — and not a symmetric |code| >= 2048, which can
