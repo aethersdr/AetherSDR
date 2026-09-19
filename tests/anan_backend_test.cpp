@@ -13,9 +13,12 @@
 // on the bench once this backend is actually reachable from the GUI
 // (commit 5).
 
+#include "TestSettingsProfile.h"
+
 #include "core/backends/anan/AnanBackend.h"
 
 #include <QCoreApplication>
+#include <QSignalSpy>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -36,6 +39,10 @@ static void check(bool cond, const char* what)
 
 int main(int argc, char** argv)
 {
+    // BEFORE QCoreApplication and before the first AppSettings touch: the
+    // backend reads and writes AnanSettings (step attenuation), and this
+    // keeps those off the developer's real settings file.
+    TestSettingsProfile profile(QStringLiteral("anan-backend-test"));
     QCoreApplication app(argc, argv);
 
     // ---- mode string parsing ----
@@ -227,6 +234,24 @@ int main(int argc, char** argv)
         }
         check(!status.value(QStringLiteral("hasResult")).toBool(),
               "a disconnected backend stages no sweep result");
+    }
+
+    {
+        // RF Gain drives the G2's step attenuator: gain -12 dB = 12 dB of
+        // attenuation, clamped to the spec's 0-31 dB, and echoed back as the
+        // gain actually applied.
+        AnanBackend backend;
+        QSignalSpy spy(&backend, &IRadioBackend::panRfGainChanged);
+        backend.setPanRfGain(QStringLiteral("anan-0"), -12);
+        check(backend.attenuationDbForTest() == 12, "RF gain -12 dB -> 12 dB attenuation");
+        check(spy.count() == 1 && spy.at(0).at(1).toInt() == -12,
+              "the applied gain (-12) is echoed on panRfGainChanged");
+        backend.setPanRfGain(QStringLiteral("anan-0"), -40);
+        check(backend.attenuationDbForTest() == 31, "below -31 dB clamps to 31 dB attenuation");
+        check(spy.count() == 2 && spy.at(1).at(1).toInt() == -31,
+              "the clamped gain (-31), not the request, is echoed");
+        backend.setPanRfGain(QStringLiteral("anan-0"), 8);
+        check(backend.attenuationDbForTest() == 0, "positive gain clamps to 0 dB attenuation");
     }
 
     if (g_failures == 0)

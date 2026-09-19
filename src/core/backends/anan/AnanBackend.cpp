@@ -150,6 +150,12 @@ AnanBackend::AnanBackend(QObject* parent)
     m_client = new P2Client(nullptr);   // nullptr parent: moveToThread requires it
     m_dsp = new AnanRxDsp(nullptr);
 
+    m_attenuationSaveTimer = new QTimer(this);
+    m_attenuationSaveTimer->setSingleShot(true);
+    connect(m_attenuationSaveTimer, &QTimer::timeout, this, [this] {
+        AnanSettings::setAdcAttenuationDb(m_pendingParams.ddc0AdcIndex, m_attenuationDb);
+    });
+
     // Leading+trailing throttle for setSliceFrequency()'s expensive side
     // effects -- see scheduleTuneApply()'s comment. Lives on this object
     // (the GUI thread), same as the backend itself; not moved to m_ioThread.
@@ -224,6 +230,10 @@ AnanBackend::AnanBackend(QObject* parent)
         emit panBandwidthLimitsChanged(kPanId,
                                       kDdc0RatesKsps.front() * 1000.0 / 1.0e6,
                                       kDdc0RatesKsps.back() * 1000.0 / 1.0e6);
+        // The RF Gain slider IS the step attenuator: -31..0 dB in 1 dB steps.
+        // Same every linkUp, for the same reason as the limits above.
+        emit panRfGainInfoChanged(kPanId, -kMaxStepAttenuationDb, 0, 1);
+        emit panRfGainChanged(kPanId, -m_attenuationDb);
         if (wasRateChange) {
             // Audio was muted in beginRateChange(), BEFORE this session's
             // session even started -- see that function's comment for why
@@ -327,8 +337,12 @@ AnanBackend::AnanBackend(QObject* parent)
     });
     connect(m_dsp, &AnanRxDsp::spectrumReady, this, [this](const std::vector<float>& binsDbfs) {
         std::vector<float> dbm(binsDbfs.size());
+        // Attenuation added back, as deskHPSDR does for its panadapter: a
+        // signal keeps its level when the operator attenuates, and only the
+        // part of the floor that was the ADC overloading actually drops.
+        const float attenuation = static_cast<float>(m_attenuationDb);
         for (std::size_t i = 0; i < binsDbfs.size(); ++i)
-            dbm[i] = binsDbfs[i] + kUncalibratedDbfsToDbmOffset;
+            dbm[i] = binsDbfs[i] + kUncalibratedDbfsToDbmOffset + attenuation;
         m_droopCalibrator.onSpectrumFrame(dbm);
         emit spectrumFrameReady(kSliceId, floatBytes(dbm));
     });
@@ -339,6 +353,7 @@ AnanBackend::AnanBackend(QObject* parent)
 
 AnanBackend::~AnanBackend()
 {
+    flushAttenuationSave();
     m_droopCalibrator.stop(false);
     ++m_connectGeneration;   // orphan any in-flight finishDspSetup/rebuild callback
 
@@ -568,12 +583,20 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
         request.params.value(QStringLiteral("anan.bypassAdc0Filters"), true).toBool();
     m_pendingParams.bypassAdc1Filters =
         request.params.value(QStringLiteral("anan.bypassAdc1Filters"), true).toBool();
+    // The operator's last attenuation, per ADC. Live, unlike the options
+    // above: setPanRfGain() changes it mid-session.
+    m_pendingParams.adc0AttenuationDb = AnanSettings::adcAttenuationDb(0);
+    m_pendingParams.adc1AttenuationDb = AnanSettings::adcAttenuationDb(1);
+    m_attenuationDb = m_pendingParams.ddc0AdcIndex == 1
+        ? m_pendingParams.adc1AttenuationDb
+        : m_pendingParams.adc0AttenuationDb;
 
     // The frequency this session comes up on. Mirrors Hl2Backend's own
     // startFreqHz fallback (10 MHz -- WWV, a live signal on any HF antenna,
     // useful for exactly this kind of first-connect bring-up test) minus the
     // restored-state branch: capabilities().clientSettingsDomains is empty
-    // for this backend (Phase 1b persists nothing), so applyRestoredState()
+    // for this backend (it restores no operating state; only AnanSettings'
+    // connect options and the step attenuation persist), so applyRestoredState()
     // is never called and there is no prior session to prefer. Without this,
     // m_sliceFreqHz stays at its 0.0 member default, finishDspSetup()'s
     // `m_sliceFreqHz > 0.0` guard never fires, and DDC0 stays parked at the
@@ -715,6 +738,7 @@ void AnanBackend::startP2ClientSession(quint64 generation)
 
 void AnanBackend::disconnectRadio()
 {
+    flushAttenuationSave();
     retirePcmStreams();
     m_droopCalibrator.stop(false);
     m_droopCalibrator.setLandedRate(0);
@@ -1137,6 +1161,44 @@ void AnanBackend::setPanFrameRate(const QString& panId, int fps)
     if (m_dsp)
         QMetaObject::invokeMethod(m_dsp, "setSpectrumRateFps", Qt::QueuedConnection,
                                   Q_ARG(int, fps));
+}
+
+void AnanBackend::setPanRfGain(const QString& panId, int gainDb)
+{
+    Q_UNUSED(panId);   // one pan in this phase
+    // The G2 has no gain stage the host drives, only the step attenuator in
+    // front of each ADC (spec p.17, High Priority bytes 1442/1443). deskHPSDR
+    // offers it as a 0-31 dB attenuation control; here it rides the RF Gain
+    // slider, negated, so "more gain" still means "slider right". Clamped
+    // rather than refused, per the seam's contract.
+    const int attenuation = std::clamp(-gainDb, 0, kMaxStepAttenuationDb);
+    m_attenuationDb = attenuation;
+    // Kept in the params too: a rate change that restarts the session
+    // resends everything from m_pendingParams.
+    if (m_pendingParams.ddc0AdcIndex == 1)
+        m_pendingParams.adc1AttenuationDb = attenuation;
+    else
+        m_pendingParams.adc0AttenuationDb = attenuation;
+    if (m_client)
+        QMetaObject::invokeMethod(m_client, "setStepAttenuationDb", Qt::QueuedConnection,
+                                  Q_ARG(int, m_pendingParams.ddc0AdcIndex),
+                                  Q_ARG(int, attenuation));
+    // Saved only for a live session: the next connect reloads the saved
+    // value into m_pendingParams, so a move with no radio attached changes
+    // nothing worth keeping.
+    if (m_connected)
+        m_attenuationSaveTimer->start(kAttenuationSaveDebounceMs);
+    emit panRfGainChanged(kPanId, -attenuation);
+}
+
+void AnanBackend::flushAttenuationSave()
+{
+    // A slider move inside the debounce window must not be lost to a
+    // disconnect or an app close.
+    if (m_attenuationSaveTimer && m_attenuationSaveTimer->isActive()) {
+        m_attenuationSaveTimer->stop();
+        AnanSettings::setAdcAttenuationDb(m_pendingParams.ddc0AdcIndex, m_attenuationDb);
+    }
 }
 
 void AnanBackend::setCwPitch(int hz)
