@@ -13,6 +13,8 @@
 // on the bench once this backend is actually reachable from the GUI
 // (commit 5).
 
+#include "TestSettingsProfile.h"
+
 #include "core/backends/anan/AnanBackend.h"
 
 #include <QCoreApplication>
@@ -37,6 +39,10 @@ static void check(bool cond, const char* what)
 
 int main(int argc, char** argv)
 {
+    // BEFORE QCoreApplication and before the first AppSettings touch: the
+    // backend reads and writes AnanSettings (step attenuation), and this
+    // keeps those off the developer's real settings file.
+    TestSettingsProfile profile(QStringLiteral("anan-backend-test"));
     QCoreApplication app(argc, argv);
 
     // ---- mode string parsing ----

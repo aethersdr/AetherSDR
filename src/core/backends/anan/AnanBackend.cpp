@@ -150,15 +150,15 @@ AnanBackend::AnanBackend(QObject* parent)
     m_client = new P2Client(nullptr);   // nullptr parent: moveToThread requires it
     m_dsp = new AnanRxDsp(nullptr);
 
-    // Leading+trailing throttle for setSliceFrequency()'s expensive side
-    // effects -- see scheduleTuneApply()'s comment. Lives on this object
-    // (the GUI thread), same as the backend itself; not moved to m_ioThread.
     m_attenuationSaveTimer = new QTimer(this);
     m_attenuationSaveTimer->setSingleShot(true);
     connect(m_attenuationSaveTimer, &QTimer::timeout, this, [this] {
         AnanSettings::setAdcAttenuationDb(m_pendingParams.ddc0AdcIndex, m_attenuationDb);
     });
 
+    // Leading+trailing throttle for setSliceFrequency()'s expensive side
+    // effects -- see scheduleTuneApply()'s comment. Lives on this object
+    // (the GUI thread), same as the backend itself; not moved to m_ioThread.
     m_tuneThrottleTimer = new QTimer(this);
     m_tuneThrottleTimer->setSingleShot(true);
     connect(m_tuneThrottleTimer, &QTimer::timeout, this, [this] {
@@ -595,7 +595,8 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     // startFreqHz fallback (10 MHz -- WWV, a live signal on any HF antenna,
     // useful for exactly this kind of first-connect bring-up test) minus the
     // restored-state branch: capabilities().clientSettingsDomains is empty
-    // for this backend (Phase 1b persists nothing), so applyRestoredState()
+    // for this backend (it restores no operating state; only AnanSettings'
+    // connect options and the step attenuation persist), so applyRestoredState()
     // is never called and there is no prior session to prefer. Without this,
     // m_sliceFreqHz stays at its 0.0 member default, finishDspSetup()'s
     // `m_sliceFreqHz > 0.0` guard never fires, and DDC0 stays parked at the
@@ -1184,8 +1185,7 @@ void AnanBackend::setPanRfGain(const QString& panId, int gainDb)
                                   Q_ARG(int, attenuation));
     // Saved only for a live session: the next connect reloads the saved
     // value into m_pendingParams, so a move with no radio attached changes
-    // nothing worth keeping (and a unit test must not write the operator's
-    // settings file).
+    // nothing worth keeping.
     if (m_connected)
         m_attenuationSaveTimer->start(kAttenuationSaveDebounceMs);
     emit panRfGainChanged(kPanId, -attenuation);

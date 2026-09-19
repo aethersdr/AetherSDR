@@ -727,7 +727,7 @@ add_test(NAME anan_rxdsp_handedness_test COMMAND anan_rxdsp_handedness_test)
 # radio: capabilities() defaults, mode-string parsing, CW BFO math, and the
 # passband-reset-only-on-actual-mode-change idempotence rule.
 add_executable(anan_backend_test tests/anan_backend_test.cpp)
-target_include_directories(anan_backend_test PRIVATE src)
+target_include_directories(anan_backend_test PRIVATE src tests)
 target_link_libraries(anan_backend_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME anan_backend_test COMMAND anan_backend_test)
 
