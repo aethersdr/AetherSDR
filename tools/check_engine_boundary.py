@@ -104,7 +104,7 @@ KNOWN_WIDGETS_LEGACY = {
 VENDOR_TAGS_JSON = REPO / "docs" / "architecture" / "aetherd-touchpoint-tags.json"
 # The audit is the source of truth for what IS vendor; this set is the ratchet
 # on what may STOP being vendor. A bare count floor could not do that job: the
-# live vocabulary spans 33 stems across seven families, so a floor conservative
+# original vocabulary spanned 33 stems across seven families, so a floor conservative
 # enough to survive a deliberate reclassification (the old 15) left roughly
 # eighteen headers that could be retagged `mixed(...)`/`peripheral(...)` one at
 # a time, each silently un-gating that header for every file above the seam on
@@ -141,7 +141,7 @@ VENDOR_STEMS_PINNED = frozenset({
     # rtl
     "RtlSdrDiscovery",
     # sim
-    "NoiseMixer", "SimBackend",
+    "DemoRadioConstants", "NoiseMixer", "SimBackend",
 })
 
 
