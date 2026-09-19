@@ -5489,8 +5489,25 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // that stayed ticked over a control that is not running would be the
         // #5395 defect exactly: a UI reporting one state while the radio is in
         // another. So ask the control rather than assuming the request took.
+        const bool armed = autoGain && autoGain->isArmed();
         if (auto* m = sw->overlayMenu()) {
-            m->setAutoRfGainEnabled(autoGain && autoGain->isArmed());
+            m->setAutoRfGainEnabled(armed);
+        }
+        // AND SAY WHY IT DID NOT TAKE. The readback above stops the UI lying
+        // about the state; on its own it still leaves the operator with a
+        // checkbox that springs back to unticked and no explanation. On the HL2
+        // that is what EVERY fresh install does on its first tick of Auto: no
+        // stored gain for the band means the constructed baseline sits above
+        // the ceiling that gates arming, and the only account of it goes to a
+        // log nobody opens (#5817).
+        //
+        // The status bar, NOT a dialog. #4227 is stacked unclosable message
+        // boxes; a refusal the operator asked for by clicking is not worth one.
+        if (on && !armed && autoGain) {
+            const QString why = autoGain->lastArmRefusalReason();
+            if (!why.isEmpty() && statusBar()) {
+                statusBar()->showMessage(why, 15000);
+            }
         }
     });
     // THE READOUT HALF. RFC #5535 approved the loop above on the condition that
