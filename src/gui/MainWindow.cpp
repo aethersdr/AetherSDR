@@ -2381,8 +2381,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
             this, [this](bool) { updatePaTempLabel(); });
 
-    // Raise the TGXL poll rate the moment we key, rather than waiting for a
-    // ptt field to come back in a status frame. The connection can work that
+    // Raise the TGXL and PGXL poll rates the moment we key, rather than
+    // waiting for a ptt/state field to come back in a status frame. The connection can work that
     // out for itself, but only one receive poll later -- 250 ms, which is
     // most of the first syllable and exactly where the peak we are trying to
     // catch lives. TUNE counts as well: it is a carrier through the same
@@ -2390,7 +2390,10 @@ MainWindow::MainWindow(QWidget* parent)
     // high long enough to catch the tail of the last syllable.
     {
         const auto raiseTgxlRate = [this](bool on) {
-            if (on) m_tgxlConn.setTransmitting(true);
+            if (on) {
+                m_tgxlConn.setTransmitting(true);
+                m_pgxlConn.setTransmitting(true);
+            }
         };
         connect(&m_radioModel.transmitModel(), &TransmitModel::transmittingChanged,
                 this, raiseTgxlRate);

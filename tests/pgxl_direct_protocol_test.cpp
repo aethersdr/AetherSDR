@@ -424,6 +424,54 @@ int main(int argc, char** argv)
         CHECK(model.alert() == QLatin1String("PA OVERTEMP"));
     }
 
+    // ── Poll rate follows the key ────────────────────────────────────
+    //
+    // The amplifier's meter produces ~10 Hz of DISTINCT values however fast
+    // it is asked. Measured on the hardware with a two-tone into a dummy
+    // load over four parallel connections: 32.9 Hz of frames carried 10.2 Hz
+    // of new readings, sockets reading within 10 ms of each other always
+    // agreed, and identical-run length was 3.20 across 4 sockets (1.0 would
+    // mean independent sampling). So extra connections and faster polling
+    // buy frames, not information, and 10 Hz is the rate worth asking for --
+    // against the tuner's ~59 Hz, which is why these constants differ from
+    // TgxlConnection's rather than being copied from them.
+    {
+        // Earlier frames in this test already drove TRANSMIT_A/B, so establish
+        // a known baseline rather than assuming one.
+        peer->write("S0|state state=IDLE vac=246 vdd=0.0 id=0.0 "
+                    "fwd=30.0 peakfwd=44.7 swr=-60.0 temp=23.1\n");
+        peer->flush();
+        CHECK(spin([&] { return !conn.isTransmitting(); }));
+        CHECK(conn.pollIntervalMs() == PgxlConnection::kPollRxMs);
+
+        // Either PA keyed counts.
+        peer->write("S0|state state=TRANSMIT_B vac=246 vdd=52.1 id=3.2 "
+                    "fwd=44.5 peakfwd=44.7 swr=-30.0 temp=23.1\n");
+        peer->flush();
+        CHECK(spin([&] { return conn.isTransmitting(); }));
+        CHECK(conn.pollIntervalMs() == PgxlConnection::kPollTxMs);
+
+        peer->write("S0|state state=IDLE vac=246 vdd=0.0 id=0.0 "
+                    "fwd=30.0 peakfwd=44.7 swr=-60.0 temp=23.1\n");
+        peer->flush();
+        CHECK(spin([&] { return !conn.isTransmitting(); }));
+        CHECK(conn.pollIntervalMs() == PgxlConnection::kPollRxMs);
+
+        // An unfamiliar state must not pin the rate high forever.
+        peer->write("S0|state state=SOMETHING_NEW vac=246 fwd=30.0 "
+                    "peakfwd=44.7 swr=-60.0 temp=23.1\n");
+        peer->flush();
+        spin([&] { return conn.isTransmitting(); }, 400);
+        CHECK(!conn.isTransmitting());
+        CHECK(conn.pollIntervalMs() == PgxlConnection::kPollRxMs);
+
+        // The radio can raise it without waiting for a frame.
+        conn.setTransmitting(true);
+        CHECK(conn.pollIntervalMs() == PgxlConnection::kPollTxMs);
+        conn.setTransmitting(false);
+        CHECK(conn.pollIntervalMs() == PgxlConnection::kPollRxMs);
+    }
+
     // Losing the amplifier drops the readings rather than freezing them. A
     // band or a bias left standing claims the amplifier is set up a way we
     // have stopped being told about, and a fault banner that outlives the

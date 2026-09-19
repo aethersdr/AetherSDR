@@ -11,7 +11,9 @@ PgxlConnection::PgxlConnection(QObject* parent)
     connect(&m_socket, &QTcpSocket::readyRead, this, &PgxlConnection::onReadyRead);
     connect(&m_socket, &QTcpSocket::errorOccurred, this, &PgxlConnection::onError);
 
-    m_pollTimer.setInterval(200);  // 5 Hz for responsive metering
+    // Starts at the receive rate; status frames move it. See the header for
+    // where the two numbers come from -- both measured on this amplifier.
+    m_pollTimer.setInterval(kPollRxMs);
     connect(&m_pollTimer, &QTimer::timeout, this, &PgxlConnection::pollStatus);
 
     // Retries every 5s indefinitely until the device returns or the user disconnects.
@@ -181,6 +183,7 @@ void PgxlConnection::processLine(const QString& line)
                         m_setupReadSeq = 0;
                         emit setupRead(kvs);
                     } else {
+                        applyPollRateFor(kvs);
                         emit statusUpdated(kvs);
                     }
                 }
@@ -213,9 +216,35 @@ void PgxlConnection::processLine(const QString& line)
             if (eq > 0)
                 kvs.insert(part.left(eq), part.mid(eq + 1));
         }
-        if (!kvs.isEmpty())
+        if (!kvs.isEmpty()) {
+            applyPollRateFor(kvs);
             emit statusUpdated(kvs);
+        }
         return;
+    }
+}
+
+// TRANSMIT_A / TRANSMIT_B are the amplifier's keyed states; IDLE, STANDBY and
+// POWERUP are not. Anything unrecognised is treated as not transmitting, so a
+// new state string cannot pin the poll rate high forever.
+void PgxlConnection::applyPollRateFor(const QMap<QString, QString>& kvs)
+{
+    if (!kvs.contains(QStringLiteral("state"))) return;
+    const QString st = kvs.value(QStringLiteral("state"));
+    setTransmitting(st == QLatin1String("TRANSMIT_A")
+                    || st == QLatin1String("TRANSMIT_B"));
+}
+
+void PgxlConnection::setTransmitting(bool tx)
+{
+    if (m_transmitting == tx) return;
+    m_transmitting = tx;
+    const int interval = tx ? kPollTxMs : kPollRxMs;
+    if (m_pollTimer.interval() != interval) {
+        m_pollTimer.setInterval(interval);
+        // Restart so the new rate applies now rather than after the remainder
+        // of a 250 ms receive tick.
+        if (m_pollTimer.isActive()) m_pollTimer.start();
     }
 }
 
