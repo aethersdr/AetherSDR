@@ -4,9 +4,12 @@ Tracking: #3849 and #5690. The local-only implementation composes credentials,
 explicit live grants, the existing arbiter, and operation-bound backend stop
 evidence. It is disabled unless `--allow-local-tx`, `--allow-local-control` and
 `--credential-authority` are all selected. Startup never arms a client. Existing
-desktop operation remains under its compatibility actor. The initial PTT path
-is restricted to FLEX-6700 firmware 4.2.18.41174 over LAN; complete-increment
-hardware and cross-platform qualification must be recorded before publication.
+desktop operation remains under its compatibility actor. The software-PTT path
+supports compatible Flex radios over LAN using SmartSDR TCP API 1.4 and complete
+live interlock evidence; it is not restricted to a model or firmware build.
+Hardware verification was performed on FLEX-6700 firmware 4.2.18.41174, not on
+every compatible model. See the separate support contract and evidence record
+in [Flex PTT stop evidence](aetherd-flex-ptt-stop-evidence.md).
 
 ## Authority and lifetime
 
@@ -202,7 +205,10 @@ captured sequence now feeds the socket-free `FlexPttStopTracker` tests, includin
 the third capture's NOT_READY/out-of-band owner-clear refusal. The tracker
 now has a production terminal-write adapter. See
 [the evidence contract and remaining gaps](aetherd-flex-ptt-stop-evidence.md).
-Socket-free or Demo tests do not substitute for complete hardware qualification.
+Socket-free or Demo tests do not substitute for hardware evidence. The shared
+API's documented semantics, rather than a per-model hardware allowlist, ground
+broader compatibility; missing or contradictory release evidence still blocks
+handoff on every model.
 
 `FlexPttWireSession` stamps raw input and actual complete socket writes on the
 existing connection thread. A queued certificate has an atomic validity fence,

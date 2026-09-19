@@ -139,21 +139,18 @@ void FlexBackend::setModelProvider(std::function<QString()> provider)
     m_modelProvider = std::move(provider);
 }
 
-void FlexBackend::setIndependentTxProviders(std::function<QString()> firmware,
-                                             std::function<quint32()> sequence)
+void FlexBackend::setIndependentTxSequenceProvider(std::function<quint32()> sequence)
 {
-    m_firmwareProvider = std::move(firmware);
     m_sequenceProvider = std::move(sequence);
 }
 
 IndependentTxControl FlexBackend::independentTxControl() const
 {
-    // Qualification is evidence-scoped, not inferred from the Flex family.
-    // SmartLink uses another transport; it has no certificate on this path.
-    if (!m_connection || !m_connection->isConnected() || m_connection->isSyntheticDemo()
-        || !m_modelProvider || m_modelProvider() != QLatin1String("FLEX-6700")
-        || !m_firmwareProvider || m_firmwareProvider() != QLatin1String("4.2.18.41174")
-        || !m_sequenceProvider) {
+    // Shared SmartSDR protocol eligibility, not a model/firmware allowlist.
+    // Actual admission also requires complete, TX-allowed live idle readback;
+    // every handoff still needs the original operation's ordered stop proof.
+    // SmartLink uses another transport and remains unavailable on this path.
+    if (!m_connection || !m_connection->independentPttSupported() || !m_sequenceProvider) {
         return {};
     }
     return {static_cast<unsigned>(TxCoordinator::Activity::Mox)};

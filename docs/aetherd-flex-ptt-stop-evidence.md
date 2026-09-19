@@ -51,9 +51,49 @@ frequency then produced owner-clear in `NOT_READY / OUT_OF_BAND`. The tracker
 deliberately rejects that as an eligible handoff even though the radio reports
 receiving. Receive frequency and mic gain were restored and RF power left at 10.
 
-These traces cover one model, firmware, LAN session and software-keying path.
-They do not qualify FLEX-8600, WAN/SmartLink, physical PTT, VOX, external clients,
-CW/CWX, ATU, TUNE, audio transport, or arbitrary firmware versions.
+These traces are hardware evidence for one model, firmware, LAN session and
+software-keying path, not hardware tests of other models. Broader model
+eligibility follows the shared TCP API contract below; it does not relabel these
+captures as FLEX-8600 evidence. WAN/SmartLink, physical PTT, VOX, external clients,
+CW/CWX, ATU, TUNE and audio transport remain outside this implementation.
+
+## Shared protocol eligibility, separate from hardware coverage
+
+Flex's [API overview](https://www.flexradio.com/api) describes the common
+SmartSDR interface for the FLEX-6000 and FLEX-8000 series. FlexLib
+4.2.18.41174's `Radio.Mox` setter sends `xmit` without a model branch, and its
+`ParseInterlockStatus` parser reads `state`, `source`, `tx_allowed`, `reason`
+and `tx_client_handle` without a model branch. `TXClientHandle` explicitly
+defines zero as no transmitting client. Together with the xmit transitions
+and TCP status-ordering rule cited above, these provide the protocol basis for
+applying the same stop recognizer across compatible models. That extrapolation
+is a compatibility inference, not a separate hardware measurement per model.
+
+Eligibility is therefore **LAN software PTT using SmartSDR TCP API 1.4**, not
+an exact model or firmware-build allowlist. The TCP prologue's `V1.4.a.b` is an
+interface version, distinct from the firmware reported in discovery/radio
+metadata. The official TCP API documentation explicitly says the last two
+components are developer-controlled and should not select compatibility.
+Canonical four-component decimal versions with major/minor 1.4 are accepted;
+missing, malformed and other major/minor versions are unavailable pending
+protocol review. A firmware update that retains this contract does not need a
+new model/build whitelist entry.
+
+The transport must observe a fresh supported V line followed by its nonzero
+client handle on **this connection**. Duplicate/late prologue records cannot
+renegotiate authority, and disconnect clears eligibility. This check also runs
+at the terminal key writer. A protocol contradiction invalidates queued stop
+evidence but preserves the original operation's authorized unkey path.
+
+Protocol eligibility alone neither arms nor keys a radio. Key admission still
+requires a complete live READY observation with `tx_allowed=1`, empty reason
+and source, and no TX client owner. A receive-only, inhibited, externally keyed,
+or incomplete-status radio cannot key through this path. Each subsequent
+handoff still requires the full operation-bound stop sequence below. Firmware
+that omits or reorders those observations remains in recovery; there is no
+timeout-as-idle fallback and no automatic retry. Existing desktop support is
+unchanged. The 6000/8000 model matrix tests exercise this software policy only;
+actual hardware coverage remains the FLEX-6700 record above and below.
 
 ## Candidate recognition contract
 
@@ -104,10 +144,10 @@ transport's connection generation, and records complete writes from the common
 terminal socket writer. It does not use model notifications or queue completion
 as receipts. Sequences come from the existing shared command counter.
 
-`FlexBackend::independentTxControl()` restricts this implementation to MOX on
-FLEX-6700 firmware 4.2.18.41174 with a connected non-synthetic LAN transport.
-Other models/firmware, WAN, other families and other activities return no
-qualification. A failed/ambiguous sequence still attempts authorized unkey,
+`FlexBackend::independentTxControl()` selects MOX on a connected non-synthetic
+LAN transport with the supported TCP API prologue. Model/firmware metadata is
+not an eligibility input. Unsupported API versions, WAN, other families and
+other activities remain unavailable. A failed/ambiguous sequence still attempts authorized unkey,
 but does not acknowledge stop; recovery requires an explicit operator action.
 
 A queued canceled key command records the exact operation without entering a
@@ -145,5 +185,7 @@ An earlier attempt sent a second anonymous legacy unkey and correctly remained
 in recovery. Preserving the original independent operation in model cleanup
 fixed that cause; the recognizer was not loosened. Mac/Linux/Windows native
 builds, focused tests and isolated Demo/MCP/native-vault checks are recorded in
-the PR with their tested revisions. These results do not expand the qualified
-model, firmware, transport or activity envelope described above.
+the PR with their tested revisions. The later shared-API eligibility update
+removes the model/build restriction, not any stop-recognition requirement.
+That update's tests are recorded separately in the PR; this earlier hardware
+run is not represented as a test of the updated binary or additional radios.

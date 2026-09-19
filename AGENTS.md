@@ -529,9 +529,11 @@ plaintext fallback. See `docs/aetherd-stage4-client-grants.md` for the current
 credential/lifetime contract. `--allow-local-tx` explicitly composes independent
 grants, private TX/admin methods and operation-bound stop proof; it requires the
 credential authority and local control, and starts disarmed. Initial backend
-support is narrowly scoped to FLEX-6700 firmware 4.2.18.41174 LAN software PTT.
-See `docs/aetherd-flex-ptt-stop-evidence.md` for the evidence envelope and
-complete-increment hardware verification requirements. Unsupported backends and
+support covers compatible Flex LAN software PTT on SmartSDR TCP API 1.4 with
+complete live interlock evidence, not a model/firmware-build allowlist. Hardware
+coverage is FLEX-6700 firmware 4.2.18.41174; do not claim other models were tested.
+See `docs/aetherd-flex-ptt-stop-evidence.md` for the shared protocol contract and
+the separate hardware evidence record. Unsupported backends and
 activities cannot issue a grant. Receive mutations also refuse retained TX
 ownership, including acquired-but-not-keyed leases and unconfirmed cleanup.
 `slice.setFrequency` now dispatches a bounded, revision-checked intent for an

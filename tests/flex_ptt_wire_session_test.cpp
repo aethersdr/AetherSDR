@@ -62,6 +62,43 @@ void noDispatch()
     check(acquiredOnly.commands.isEmpty() && acquiredOnly.evidence.valid(acquiredOnly.now), "release without any key request is locally provable");
 }
 
+void protocolEligibility()
+{
+    for (QStringView version : {u"1.4.0.0", u"1.4.9.12345", u"1.4.2147483647.0"}) {
+        check(FlexPttWireSession::supportsProtocol(version),
+              "API 1.4 accepts developer-version changes without a firmware/model allowlist");
+    }
+    for (QStringView version : {u"", u"1.4", u"1.4.0", u"1.4.0.0.1", u"1.4.0.0beta",
+             u"1.4.0.-1", u"1.4.0.+1", u"1.4.0.01", u"1.4.0.2147483648",
+             u"1.4.0.999999999999999999999999999999999999", u" 1.4.0.0", u"1.4.0.0 ",
+             u"1.3.0.0", u"1.5.0.0", u"2.4.0.0", u"4.2.18.41174"}) {
+        check(!FlexPttWireSession::supportsProtocol(version),
+              "unknown/malformed API and firmware-as-protocol remain unsupported");
+    }
+}
+
+void protocolLossRetainsStop()
+{
+    Harness h;
+    h.key();
+    h.keyReadback();
+    h.wire.rejectProtocol();
+    check(!h.wire.ready(), "changed protocol immediately removes readiness");
+    h.cancel();
+    h.stopWire();
+    h.stopReadback();
+    check(h.commands == QStringList{"xmit 1", "xmit 0"}
+          && !h.evidence.valid(h.now) && h.coordinator.recovering(),
+          "changed protocol preserves authorized unkey but cannot prove handoff");
+
+    Harness queued;
+    queued.key(); queued.keyReadback(); queued.cancel(); queued.stopWire(); queued.stopReadback();
+    const TxStopEvidence proof = queued.evidence;
+    check(proof.valid(queued.now), "complete stop produces evidence before protocol contradiction");
+    queued.wire.rejectProtocol();
+    check(!proof.valid(queued.now), "protocol contradiction invalidates already queued stop evidence");
+}
+
 void rapidReleaseAndHandoff()
 {
     Harness h;
@@ -115,6 +152,8 @@ void partialAndStale()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    protocolEligibility();
+    protocolLossRetainsStop();
     noDispatch();
     rapidReleaseAndHandoff();
     partialAndStale();

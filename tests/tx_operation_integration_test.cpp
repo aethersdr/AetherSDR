@@ -34,6 +34,16 @@ using namespace AetherSDR;
 namespace AetherSDR {
 class TxOperationIntegrationTestAccess {
 public:
+    static void flexPrologue(FlexBackend& backend, const QString& version)
+    {
+        RadioConnection* connection = backend.connection();
+        QMetaObject::invokeMethod(connection, [connection, version] {
+            connection->resetSessionState();
+            connection->m_state.store(ConnectionState::Connecting);
+            connection->processLine(QStringLiteral("V") + version);
+            connection->processLine(QStringLiteral("H12345678"));
+        }, Qt::BlockingQueuedConnection);
+    }
     static void serialPtt(SerialPortController& source, bool down, const TxCoordinator::Request& input = {})
     {
         source.publishPttInput(down, input);
@@ -374,6 +384,30 @@ void grantedModelBindingAndHandoff()
     f.grants.disconnectClient(f.b);
     check(f.commands.contains("mox:off") && !replacementMedia.permitsDispatch(TxCoordinator::monotonicMs()),
           "B disconnect synchronously fences its backend media and requests model unkey");
+}
+
+void flexSharedProtocolEligibility()
+{
+    FlexBackend backend;
+    quint32 sequence = 100;
+    backend.setIndependentTxSequenceProvider([&sequence] { return ++sequence; });
+    for (QStringView model : {u"FLEX-6300", u"FLEX-6400", u"FLEX-6400M", u"FLEX-6500",
+             u"FLEX-6600", u"FLEX-6600M", u"FLEX-6700", u"FLEX-8400", u"FLEX-8400M",
+             u"FLEX-8600", u"FLEX-8600M"}) {
+        const QString name = model.toString();
+        backend.setModelProvider([name] { return name; });
+        for (const QString& version : {QStringLiteral("1.4.0.0"), QStringLiteral("1.4.9.123")}) {
+            TxOperationIntegrationTestAccess::flexPrologue(backend, version);
+            check(backend.independentTxControl().activities == static_cast<unsigned>(TxCoordinator::Activity::Mox),
+                  "real Flex backend selects shared API support, not model or firmware build");
+            check(!backend.independentTxReady(), "compatible API alone never certifies transmitter readiness");
+        }
+    }
+    TxOperationIntegrationTestAccess::flexPrologue(backend, QStringLiteral("2.0.0.0"));
+    check(backend.independentTxControl().activities == 0, "unknown TCP API has no independent backend TX activity");
+    TxOperationIntegrationTestAccess::flexPrologue(backend, QStringLiteral("1.4.0.0"));
+    backend.setIndependentTxSequenceProvider({});
+    check(backend.independentTxControl().activities == 0, "shared command sequence provider is still required");
 }
 
 void grantedModelWireStopIdentity()
@@ -2296,6 +2330,7 @@ int main(int argc, char** argv)
     cwTuneMutualExclusion();
     delayedReleaseAndReplacement();
     flexEncoding();
+    flexSharedProtocolEligibility();
     queuedPrimaryKeying();
     teardownAdmission();
     pendingCallbackDisconnectExpiry();

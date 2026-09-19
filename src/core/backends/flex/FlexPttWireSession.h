@@ -14,8 +14,12 @@ public:
     using EvidenceSink = std::function<void(const TxStopEvidence&)>;
     FlexPttWireSession(Writer writer, EvidenceSink sink);
     ~FlexPttWireSession();
+    // TCP API version, not the firmware build or model. See the evidence doc.
+    [[nodiscard]] static bool supportsProtocol(QStringView version);
     void reset(quint64 session, quint32 handle);
     void disconnect();
+    // Reject changed/malformed prologue without losing the original unkey path.
+    void rejectProtocol();
     void key(quint32 sequence, const TxCoordinator::Command& command, qint64 now);
     void stop(quint32 sequence, const TxCoordinator::Operation& operation,
               const TxCoordinator::StopRequest& request, qint64 now);

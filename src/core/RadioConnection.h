@@ -41,6 +41,7 @@ public:
     quint32 clientHandle() const        { return m_handle; }
     bool isSyntheticDemo() const        { return m_syntheticDemo; }  // RFC #4288
     bool isConnected() const            { return m_state.load() == ConnectionState::Connected; }
+    bool independentPttSupported() const;
     bool independentPttReady() const;
     QHostAddress radioAddress() const   { return m_radioAddr; }
     QHostAddress localAddress() const   { return m_localAddr; }
@@ -143,6 +144,10 @@ private:
 
     std::atomic<ConnectionState> m_state{ConnectionState::Disconnected};
     std::atomic<quint32> m_handle{0};
+    // Current transport's prologue only; never inherited from model/discovery
+    // metadata. Rejected remains terminal until resetSessionState().
+    enum class PttProtocol { Unknown, Supported, Rejected };
+    std::atomic<PttProtocol> m_pttProtocol{PttProtocol::Unknown};
     // Written on the connection thread, read from the GUI and network threads
     // (PanadapterStream::start, isSyntheticDemo callers) — so it needs the same
     // treatment as its m_state/m_handle siblings above, which are atomic for

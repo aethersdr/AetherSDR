@@ -3,6 +3,7 @@
 #include "LogManager.h"
 #include "core/backends/sim/SimBackend.h"
 
+#include <algorithm>
 #include <QEventLoop>
 #include <QNetworkProxy>
 #include <QTimer>
@@ -294,6 +295,7 @@ void RadioConnection::connectToHost(const QHostAddress& address,
 
 void RadioConnection::resetSessionState()
 {
+    m_pttProtocol.store(PttProtocol::Unknown);
     if (m_independentPtt) {
         m_independentPtt->disconnect();
         updateIndependentPttTimer();
@@ -522,14 +524,20 @@ void RadioConnection::writeCommand(quint32 seq, const QString& command)
     (void)writeSocketCommand(seq, command);
 }
 
+bool RadioConnection::independentPttSupported() const
+{
+    return isConnected() && !isSyntheticDemo()
+        && m_pttProtocol.load() == PttProtocol::Supported;
+}
+
 bool RadioConnection::independentPttReady() const
 {
-    return isConnected() && !isSyntheticDemo() && m_independentPtt && m_independentPtt->ready();
+    return independentPttSupported() && m_independentPtt && m_independentPtt->ready();
 }
 
 void RadioConnection::writeIndependentPtt(quint32 seq, const TxCoordinator::Command& command)
 {
-    if (isConnected() && !isSyntheticDemo() && m_independentPtt) {
+    if (independentPttSupported() && m_independentPtt) {
         m_independentPtt->key(seq, command, TxCoordinator::monotonicMs());
         updateIndependentPttTimer();
     } else {
@@ -625,7 +633,12 @@ void RadioConnection::onReadyRead()
     }
     int newlinePos;
     while ((newlinePos = m_readBuffer.indexOf('\n')) >= 0) {
-        const QString line = QString::fromUtf8(m_readBuffer.left(newlinePos)).trimmed();
+        // Strip the line terminator only. The evidence path must see malformed
+        // whitespace; CommandParser separately trims for legacy presentation.
+        QString line = QString::fromUtf8(m_readBuffer.left(newlinePos));
+        if (line.endsWith(u'\r')) {
+            line.chop(1);
+        }
         m_readBuffer.remove(0, newlinePos + 1);
         if (!line.isEmpty())
             processLine(line);
@@ -665,20 +678,39 @@ void RadioConnection::processLine(const QString& line)
     emit messageReceived(msg);
 
     switch (msg.type) {
-    case MessageType::Version:
+    case MessageType::Version: {
+        // Inspect the raw prologue, not the tolerant presentation parser's
+        // trimmed value. A duplicate/late V cannot renegotiate TX authority.
+        const bool supported = m_pttProtocol.load() == PttProtocol::Unknown
+            && !isConnected() && clientHandle() == 0 && line.startsWith(u'V')
+            && FlexPttWireSession::supportsProtocol(QStringView(line).mid(1));
+        m_pttProtocol.store(supported ? PttProtocol::Supported : PttProtocol::Rejected);
+        if (!supported && m_independentPtt) {
+            m_independentPtt->rejectProtocol();
+        }
         emit versionReceived(msg.object);
         break;
-    case MessageType::Handle:
+    }
+    case MessageType::Handle: {
+        const bool firstHandle = clientHandle() == 0;
         m_handle = msg.handle;
         if (m_independentPtt && !isSyntheticDemo()) {
             // The evidence parser must not accept the presentation parser's
             // default-zero or partially parsed identity.
             bool ok = false;
             const quint32 handle = line.mid(1).toUInt(&ok, 16);
-            if (ok && line.size() == 9 && handle != 0 && clientHandle() == handle) {
+            const QStringView digits = QStringView(line).mid(1);
+            const bool hexOnly = digits.size() == 8 && std::all_of(digits.begin(), digits.end(), [](QChar ch) {
+                return (ch >= u'0' && ch <= u'9') || (ch >= u'a' && ch <= u'f')
+                    || (ch >= u'A' && ch <= u'F');
+            });
+            if (m_pttProtocol.load() == PttProtocol::Supported && firstHandle
+                && ok && line.size() == 9 && line.startsWith(u'H')
+                && hexOnly && handle != 0 && clientHandle() == handle) {
                 m_independentPtt->reset(m_sessionGeneration, handle);
             } else {
-                m_independentPtt->disconnect();
+                m_pttProtocol.store(PttProtocol::Rejected);
+                m_independentPtt->rejectProtocol();
             }
         }
         qCDebug(lcConnection) << "RadioConnection: assigned handle" << QString::number(m_handle, 16);
@@ -686,6 +718,7 @@ void RadioConnection::processLine(const QString& line)
         if (m_heartbeat) m_heartbeat->start();
         emit connected();
         break;
+    }
     case MessageType::Response:
         emit commandResponse(msg.sequence, msg.resultCode, msg.object);
         break;

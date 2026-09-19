@@ -1,6 +1,7 @@
 #include "FlexPttWireSession.h"
 
 #include <limits>
+#include <QVersionNumber>
 
 namespace AetherSDR {
 
@@ -12,6 +13,31 @@ FlexPttWireSession::FlexPttWireSession(Writer writer, EvidenceSink sink)
 FlexPttWireSession::~FlexPttWireSession()
 {
     invalidateEvidence();
+}
+
+bool FlexPttWireSession::supportsProtocol(QStringView version)
+{
+    // SmartSDR's TCP prologue identifies the interface independently of the
+    // firmware. Its last two components are explicitly not compatibility
+    // selectors. The source-backed contract here is API 1.4, across models;
+    // another major/minor needs protocol review, not a per-radio test allowlist.
+    if (version.size() > 32) {
+        return false;
+    }
+    qsizetype suffix = 0;
+    const QVersionNumber parsed = QVersionNumber::fromString(version, &suffix);
+    return suffix == version.size() && parsed.segmentCount() == 4
+        && parsed.majorVersion() == 1 && parsed.minorVersion() == 4
+        && parsed.toString() == version;
+}
+
+void FlexPttWireSession::rejectProtocol()
+{
+    m_ready.store(false, std::memory_order_release);
+    invalidateEvidence();
+    m_tracker.disconnect();
+    // Retain m_session/m_operation/m_enteredKeyWrite: an already-entered key
+    // still needs authorized unkey. Loss of qualification is not a teardown.
 }
 
 void FlexPttWireSession::invalidateEvidence()
