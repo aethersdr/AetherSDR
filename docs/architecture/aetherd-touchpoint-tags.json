@@ -179,6 +179,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/DemoRadioConstants.h": {
+  "tag": "vendor(sim)",
+  "note": "Backend-only Demo identity and synthetic Flex waterfall rate; shared compatibility data, not a general engine API.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/CommandParser.h": {
   "tag": "vendor(flex)",
   "note": "Stateless parser/builder for SmartSDR TCP wire lines (V/H/C/R/S/M, FlexLib semantics) — pure Flex protocol.",

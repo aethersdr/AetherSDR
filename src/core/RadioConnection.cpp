@@ -1,6 +1,6 @@
 #include "RadioConnection.h"
 #include "LogManager.h"
-#include "core/backends/sim/SimBackend.h"
+#include "core/backends/DemoRadioConstants.h"
 
 #include <QEventLoop>
 #include <QNetworkProxy>
@@ -112,7 +112,7 @@ void RadioConnection::connectToRadio(const RadioInfo& info)
 
 bool RadioConnection::isDemoTarget(const RadioInfo& info)
 {
-    return info.serial == SimBackend::demoSerial();
+    return info.serial == DemoRadio::serial();
 }
 
 void RadioConnection::startSyntheticDemoConnect()
@@ -186,7 +186,7 @@ void RadioConnection::startSyntheticDemoConnect()
                 "SDE300001|display waterfall 0x42000000 client_handle=0xDE300001 "
                 "panadapter=0x40000000 line_duration=%1 auto_black=1 "
                 "black_level=15 color_gain=50")
-                .arg(AetherSDR::SimBackend::kWaterfallRate));
+                .arg(DemoRadio::kWaterfallRate));
             emitSyntheticStatus(QStringLiteral(
                 "SDE300001|slice 0 client_handle=0xDE300001 pan=0x40000000 "
                 "RF_frequency=14.100000 mode=USB filter_lo=100 filter_hi=2900 "

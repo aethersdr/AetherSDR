@@ -254,7 +254,7 @@ void SimBackend::setDemoNb(bool on)
 }
 
 QString SimBackend::demoModelName() { return QStringLiteral("AetherSDR Demo"); }
-QString SimBackend::demoSerial()    { return QStringLiteral("DEMO-0001"); }
+QString SimBackend::demoSerial()    { return DemoRadio::serial(); }
 QString SimBackend::familyName()    { return QStringLiteral("sim"); }
 
 RadioCapabilities SimBackend::capabilities() const

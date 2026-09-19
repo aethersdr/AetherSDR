@@ -72,6 +72,61 @@ public:
 class RadioConnectionSessionTest final : public QObject {
     Q_OBJECT
 private slots:
+    void demoIdentitySelectsSyntheticConnection()
+    {
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        QSignalSpy connected(&connection, &RadioConnection::connected);
+        QSignalSpy statuses(&connection, &RadioConnection::statusReceived);
+        RadioInfo info;
+        // Independent compatibility expectation: do not obtain the input from
+        // the production constant, which would hide an accidental serial change.
+        info.serial = QStringLiteral("DEMO-0001");
+        info.address = QHostAddress(QHostAddress::LocalHost);
+        connection.connectToRadio(info);
+        QTRY_COMPARE_WITH_TIMEOUT(connected.size(), 1, 1000);
+        QTRY_VERIFY_WITH_TIMEOUT(statuses.size() >= 4, 1000);
+        QCOMPARE(socket->connectAttempts, 0);
+        QCOMPARE(socket->socketDescriptor(), qintptr(-1));
+        QVERIFY(connection.isSyntheticDemo());
+
+        int waterfalls = 0;
+        for (const QList<QVariant>& status : statuses) {
+            if (status.at(0).toString().startsWith(QStringLiteral("display waterfall "))) {
+                const QMap<QString, QString> fields = status.at(1).value<QMap<QString, QString>>();
+                // 100 is a rate; replacing it with Demo's 48 ms cadence must fail.
+                QCOMPARE(fields.value(QStringLiteral("line_duration")), QStringLiteral("100"));
+                ++waterfalls;
+            }
+        }
+        QCOMPARE(waterfalls, 1);
+        connection.disconnectFromRadio();
+    }
+
+    void nonDemoIdentityUsesInjectedTransport_data()
+    {
+        QTest::addColumn<QString>("serial");
+        QTest::newRow("empty") << QString();
+        QTest::newRow("different-demo") << QStringLiteral("DEMO-0002");
+        QTest::newRow("case-sensitive") << QStringLiteral("demo-0001");
+        QTest::newRow("other-radio") << QStringLiteral("TEST-RADIO");
+    }
+
+    void nonDemoIdentityUsesInjectedTransport()
+    {
+        QFETCH(QString, serial);
+        RadioConnection connection;
+        MemorySocket* socket = RadioConnectionSessionTestAccess::attach(connection);
+        RadioInfo info;
+        info.serial = serial;
+        info.address = QHostAddress(QHostAddress::LocalHost);
+        connection.connectToRadio(info);
+        QCOMPARE(socket->connectAttempts, 1);
+        QCOMPARE(socket->socketDescriptor(), qintptr(-1));
+        QVERIFY(!connection.isSyntheticDemo());
+        connection.disconnectFromRadio();
+    }
+
     void partialLineAcrossDisconnect_data()
     {
         QTest::addColumn<QByteArray>("partial");

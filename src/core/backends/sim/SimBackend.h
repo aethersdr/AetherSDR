@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QVector>
 
+#include "core/backends/DemoRadioConstants.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/sim/NoiseMixer.h"
 #include "core/backends/sim/SimSignalSource.h"
@@ -221,7 +222,7 @@ public:
     // every kWaterfallRowIntervalMs (48 ms), so the first ~1 s of scroll is 17%
     // fast before measurement takes over. Visible only on the demo rig, and
     // preferable to re-declaring a rate that would re-gate the stream.
-    static constexpr int kWaterfallRate = 100;
+    static constexpr int kWaterfallRate = DemoRadio::kWaterfallRate;
 
 private:
     static constexpr int kPanId = 0;
