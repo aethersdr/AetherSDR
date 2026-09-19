@@ -143,6 +143,20 @@ QPushButton[chrome="tab"] {
     font-size: %28px;
     font-weight: 400;
 }
+/* A checkable QPushButton had no checked state in this sheet at all -- only
+   the tab variant below did -- so BYPASS, Record and Play rendered identically
+   latched and unlatched, and the operator could not tell whether the voice
+   chain was bypassed. This is the same amber the gate's Mode pair and the
+   compressor's makeup handle use for "this is on and doing something".
+   Tokens, not literals: every caller of this sheet routes it through
+   ThemeManager::applyStyleSheet(), which substitutes them. The tab rule below
+   is an attribute selector and therefore more specific, so tabs are
+   unaffected. */
+QPushButton:checked {
+    color: {{color.meter.gainReduction}};
+    background: {{color.background.tx}};
+    border: 1px solid {{color.meter.gainReduction}};
+}
 QPushButton[chrome="tab"]:checked {
     color: #d4deea;
     border-color: %18;
