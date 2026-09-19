@@ -113,6 +113,11 @@ public:
     // Reflect the armed state without emitting. Used by the settings restore
     // and by a backend that declined to arm.
     void setAutoRfGainEnabled(bool on);
+    // Carry WHY a tick was refused on a channel AT clients read. A transient
+    // card and a status-bar message are both effectively invisible to a screen
+    // reader, and the operator who cannot see the panadapter is the one least
+    // able to guess why the box sprang back. Empty clears it.
+    void setAutoRfGainRefusalDescription(const QString& why);
     // RFC #5535's visibility condition: what the front end is doing, and what
     // the loop has done about it. No-op on a family that never showed the
     // indicator.

@@ -2972,6 +2972,18 @@ void SpectrumOverlayMenu::setFrontEndOverload(const AetherSDR::FrontEndOverload&
     }
 }
 
+void SpectrumOverlayMenu::setAutoRfGainRefusalDescription(const QString& why)
+{
+    if (!m_autoRfGainCheck) {
+        return;
+    }
+    // The accessible DESCRIPTION rather than the name: the name is what the
+    // control is, this is what just happened to it. Cleared by an empty string
+    // so a stale reason cannot be read out after a later successful arm.
+    m_autoRfGainCheck->setAccessibleDescription(why);
+    m_autoRfGainCheck->setToolTip(why);
+}
+
 void SpectrumOverlayMenu::setAutoRfGainEnabled(bool on)
 {
     if (!m_autoRfGainCheck) {

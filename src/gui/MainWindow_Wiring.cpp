@@ -5501,12 +5501,41 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // the ceiling that gates arming, and the only account of it goes to a
         // log nobody opens (#5817).
         //
-        // The status bar, NOT a dialog. #4227 is stacked unclosable message
-        // boxes; a refusal the operator asked for by clicking is not worth one.
+        // ON THE PANADAPTER, NOT THE STATUS BAR, and not a dialog either.
+        //
+        // Not a dialog because #4227 is stacked unclosable message boxes, and a
+        // refusal the operator asked for by clicking does not warrant one.
+        //
+        // Not the status bar because of #4649, which this file demonstrates
+        // twenty lines up: any non-empty temporary message hides
+        // m_statusBarContainer wholesale for its whole duration, taking the TX
+        // indicator, PA temperature and supply voltage with it. An earlier
+        // revision of this hunk put a 15 s message there and would have blanked
+        // that telemetry for fifteen seconds to explain a checkbox.
+        // MainWindow.cpp and MainWindow_Controllers.cpp both route away from it
+        // for the same reason and in nearly the same words.
+        //
+        // The click happened ON the panadapter's overlay menu, so the card
+        // appears where the operator is already looking. The status bar stays
+        // as the fallback for the case where no panadapter can be resolved, so
+        // the reason is never simply dropped.
         if (on && !armed && autoGain) {
             const QString why = autoGain->lastArmRefusalReason();
-            if (!why.isEmpty() && statusBar()) {
-                statusBar()->showMessage(why, 15000);
+            if (!why.isEmpty()) {
+                if (sw) {
+                    sw->showInterlockNotification(why,
+                                                  QStringLiteral("hl2-autogain-refused"),
+                                                  10000);
+                } else if (statusBar()) {
+                    statusBar()->showMessage(why, 10000);
+                }
+                // AND ON A CHANNEL A SCREEN READER ACTUALLY READS. Neither a
+                // transient card nor a status-bar message is reliably announced
+                // by AT clients, and the operator who cannot see the panadapter
+                // is the one least able to guess why a checkbox sprang back.
+                if (auto* m = sw ? sw->overlayMenu() : nullptr) {
+                    m->setAutoRfGainRefusalDescription(why);
+                }
             }
         }
     });
