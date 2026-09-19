@@ -350,6 +350,8 @@ int main(int argc, char** argv)
         cfg.agcMode = 3;
         cfg.maximumAgcGainDb = 40.0;
         cfg.blockForOutput = true;
+        cfg.noiseBlankerEnabled = true;
+        cfg.noiseBlankerLevel = 50;
 
         AnanRxDsp dsp;
         dsp.beginInitialBuild(cfg);
@@ -367,6 +369,9 @@ int main(int argc, char** argv)
                   && dsp.channelForTest()->config().maximumAgcGainDb
                          == cfg.maximumAgcGainDb,
               "first-connect preserves the requested startup AGC ceiling");
+        check(dsp.channelForTest()->noiseBlankerEnabled()
+                  && dsp.channelForTest()->config().noiseBlankerLevel == 50,
+              "first-connect opens the channel with the requested noise blanker");
         const int firstId = dsp.channelForTest()->channelIdForTest();
 
         // Operator changes mode/filter/AGC on the FIRST channel -- this is
@@ -388,6 +393,9 @@ int main(int argc, char** argv)
               "a failed install does not disturb the operator's mode change either");
 
         dsp.beginRebuild();
+        // The operator moves the NB button WHILE the background build runs.
+        // Deferred, not pushed: the swap below has to apply it.
+        dsp.setNoiseBlanker(false, 80);
 
         // buildChannel() is static and thread-agnostic -- built here from a
         // config that does NOT reflect the operator's LSB/filter/AGC change
@@ -411,6 +419,16 @@ int main(int argc, char** argv)
         check(installed->config().agcMode == 2
               && installed->config().maximumAgcGainDb == 25.0,
               "installRebuiltChannel() re-applies the operator's CURRENT AGC setting");
+        check(!installed->noiseBlankerEnabled()
+                  && installed->config().noiseBlankerLevel == 80,
+              "installRebuiltChannel() re-applies a noise blanker change made "
+              "during the build, not buildChannel()'s (stale) NB-on snapshot");
+
+        // Live, with no rebuild in flight, the change reaches the channel.
+        dsp.setNoiseBlanker(true, 120);
+        check(dsp.channelForTest()->noiseBlankerEnabled()
+                  && dsp.channelForTest()->config().noiseBlankerLevel == 100,
+              "setNoiseBlanker() reaches the live channel, level clamped to 100");
     }
 
     // ---- Group 5: droop-correction insertion point ----

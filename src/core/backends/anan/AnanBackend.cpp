@@ -456,6 +456,7 @@ RadioCapabilities AnanBackend::capabilities() const
     c.hasAmplifier = false;
     c.hasRadioSideDsp = false;     // DSP is engine-side (AnanRxDsp), not firmware
     c.hasAudioPeakingFilter = false; // no firmware APF verb on this path
+    c.hasHostNoiseBlanker = true;  // WDSP ANB on the raw IQ, in AnanRxDsp
     c.radioOwnsDbmScale = false;   // client computes it from raw IQ
     c.hasDdcPanEdgeRolloff = true; // see RadioCapabilities.h's own comment
     c.persistsMemories = false;    // default; stated explicitly
@@ -603,6 +604,10 @@ void AnanBackend::connectRadio(const RadioConnectRequest& request)
     // raising the default does not risk clipping a loud signal the way a
     // fixed gain increase would.
     m_pendingDspConfig.maximumAgcGainDb = 60.0;
+    // The slice model outlives a disconnect, and so does this object, so the
+    // NB button's state carries into the next session.
+    m_pendingDspConfig.noiseBlankerEnabled = m_nbOn;
+    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
 
     ++m_connectGeneration;
     beginDspSetup();
@@ -857,6 +862,17 @@ void AnanBackend::setSliceAgc(int sliceId, const QString& mode, int thresholdDb)
     emitSliceState();
 }
 
+void AnanBackend::setSliceNoiseBlanker(int sliceId, bool on, int level)
+{
+    Q_UNUSED(sliceId);   // one slice in this phase
+    m_nbOn = on;
+    m_nbLevel = std::clamp(level, 0, 100);
+    if (m_dsp) {
+        QMetaObject::invokeMethod(m_dsp, "setNoiseBlanker", Qt::QueuedConnection,
+            Q_ARG(bool, m_nbOn), Q_ARG(int, m_nbLevel));
+    }
+}
+
 void AnanBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent intent)
 {
     Q_UNUSED(panId);   // one pan in this phase
@@ -993,6 +1009,8 @@ void AnanBackend::beginRateChange(int newRateKsps)
     m_pendingDspConfig.filterHighHz = static_cast<double>(m_filterHighHz) + cwBfoHz();
     m_pendingDspConfig.agcMode = m_agcMode;
     m_pendingDspConfig.maximumAgcGainDb = m_agcCeilingDb;
+    m_pendingDspConfig.noiseBlankerEnabled = m_nbOn;
+    m_pendingDspConfig.noiseBlankerLevel = m_nbLevel;
 
     m_rateChanging = true;
     ++m_connectGeneration;   // orphans any in-flight prior connect/reconfigure/rebuild
