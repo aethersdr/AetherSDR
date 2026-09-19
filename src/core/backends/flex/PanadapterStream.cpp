@@ -1,12 +1,12 @@
 #include "PanadapterStream.h"
-#include "AppSettings.h"
-#include "AudioEngine.h"
-#include "LogManager.h"
-#include "NetworkSettings.h"
-#include "OpusCodec.h"
-#include "PerfTelemetry.h"
+#include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/LogManager.h"
+#include "core/NetworkSettings.h"
+#include "core/OpusCodec.h"
+#include "core/PerfTelemetry.h"
 #include "RadioConnection.h"
-#include "VitaTileFrequency.h"
+#include "core/VitaTileFrequency.h"
 
 #include <QNetworkDatagram>
 #include <QHostAddress>

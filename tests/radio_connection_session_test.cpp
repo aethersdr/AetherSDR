@@ -1,6 +1,6 @@
 // Production line assembly with in-memory transport injection. No descriptor,
 // listener, network peer, discovery, or radio is used by this test.
-#include "core/RadioConnection.h"
+#include "core/backends/flex/RadioConnection.h"
 
 #include <QSignalSpy>
 #include <QtTest>

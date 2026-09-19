@@ -1,5 +1,5 @@
 #include "RadioConnection.h"
-#include "LogManager.h"
+#include "core/LogManager.h"
 #include "core/backends/DemoRadioConstants.h"
 
 #include <QEventLoop>

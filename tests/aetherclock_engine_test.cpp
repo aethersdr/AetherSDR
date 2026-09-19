@@ -16,7 +16,7 @@
 // second edge can be compared against a known skew.
 
 #include "core/AetherClockEngine.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/TimeFrameVoter.h"
 #include "models/SliceModel.h"
 

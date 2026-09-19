@@ -5,8 +5,8 @@
 
 #include <cmath>
 
-#include "core/RadioConnection.h"
-#include "core/PanadapterStream.h"
+#include "core/backends/flex/RadioConnection.h"
+#include "core/backends/flex/PanadapterStream.h"
 #include "core/backends/sim/SimSignalSource.h"
 
 namespace AetherSDR {
