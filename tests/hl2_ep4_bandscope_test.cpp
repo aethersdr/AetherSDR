@@ -385,6 +385,14 @@ int main()
         constexpr int kSmallAc = 100;
         constexpr int kBigDc   = 1200;
         const auto swamped = ep4Stats(makeEp4(0, {kSmallAc + kBigDc, -kSmallAc + kBigDc}));
+        // Guarded like the three fixtures above it. Without this a regression
+        // that made ep4Stats return nullopt would CRASH here instead of
+        // printing [FAIL], and a crash in a test is a worse diagnostic than a
+        // failure -- it loses every check that would have run after it.
+        check(swamped.has_value(), "the swamped fixture parses");
+        if (!swamped.has_value()) {
+            return g_failures == 0 ? 0 : 1;
+        }
         check(swamped->peakDbfs() - aboutZeroDbfs(*swamped) < 1.0,
               "about zero, a pedestal twelve times the excursion reads as under 1 dB of crest");
         check(swamped->peakDbfs() - swamped->rmsDbfs() > 10.0,

@@ -771,9 +771,22 @@ double Ep4Stats::rmsDbfs() const noexcept
     // pedestal the converter sits on. (#5802.)
     const double mean = sum / static_cast<double>(samples);
     // Clamped at zero because the difference of two positives is only
-    // non-negative in exact arithmetic: a DC-only record has m^2 == the mean
-    // square and can land a few ULPs below it. std::sqrt of that is NaN, and a
-    // NaN in a health row renders as "nan" forever after.
+    // non-negative in exact arithmetic, and NOT REACHABLE FROM THE PRODUCTION
+    // PATH -- the earlier wording claimed it was, and that was wrong.
+    //
+    // Codes are integers, so with samples <= 2048 and |code| <= 2048 both `sum`
+    // (<= 4.19e6) and `sumSquares` (<= 8.59e9) are exact in a double. merge()
+    // only ever publishes 512/1024/1536/2048 samples, and a partial block is
+    // DISCARDED rather than published (MetisClient re-arms on a phase or drop
+    // mismatch), so in practice `samples` is a power of two -- which makes
+    // sumSquares/n and mean*mean exact dyadic rationals with numerators under
+    // 2^53, and their difference exact. No ULP excursion exists there.
+    //
+    // The clamp stays for the callers that are NOT on that path: tests build
+    // records with arbitrary sample counts, and nothing in the signature
+    // promises a power of two. std::sqrt of a negative is NaN, and a NaN in a
+    // health row renders as "nan" and stays there for the session -- cheap
+    // insurance against a caller this function cannot see.
     const double var = std::max(0.0, sumSquares / static_cast<double>(samples)
                                          - mean * mean);
     const double rms = std::sqrt(var);
