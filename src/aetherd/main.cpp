@@ -18,18 +18,23 @@ int main(int argc, char* argv[])
 #ifdef Q_OS_MAC
     // QtKeychain's Apple backend delivers completions on the native main
     // dispatch queue. Qt's default QCoreApplication UNIX dispatcher does not
-    // service that queue; select its CoreFoundation dispatcher without a GUI.
-    // Scope the setting to the main dispatcher, preserving worker defaults.
+    // service that queue. Select CoreFoundation only for credential runs;
+    // ordinary observe/control runs and worker threads keep their defaults.
+    const bool credentialDispatcher = AetherSDR::aetherd::credentialDispatcherRequested(argc, argv);
     const bool hadDispatcherSetting = qEnvironmentVariableIsSet("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
     const QByteArray dispatcherSetting = qgetenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
-    qputenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION", "1");
+    if (credentialDispatcher) {
+        qputenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION", "1");
+    }
 #endif
     QCoreApplication app(argc, argv);
 #ifdef Q_OS_MAC
-    if (hadDispatcherSetting) {
-        qputenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION", dispatcherSetting);
-    } else {
-        qunsetenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
+    if (credentialDispatcher) {
+        if (hadDispatcherSetting) {
+            qputenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION", dispatcherSetting);
+        } else {
+            qunsetenv("QT_EVENT_DISPATCHER_CORE_FOUNDATION");
+        }
     }
 #endif
     QCoreApplication::setApplicationName(QStringLiteral("aetherd"));

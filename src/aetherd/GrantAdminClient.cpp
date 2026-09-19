@@ -204,6 +204,9 @@ int runGrantAdmin(const QCommandLineParser& parser)
         [&socket] { return socket.state() == QLocalSocket::ConnectedState
             && control::localServerIsCurrentUser(socket.socketDescriptor()); },
         [&socket](const QJsonObject& request) { return exchange(socket, request); });
+    // Shorten this reference's lifetime, not secure erasure: Qt's JSON/socket
+    // buffers and the native vault job also hold copies. See the credential
+    // memory limits in docs/aetherd-stage4-client-grants.md.
     secret.clear();
     const QString sessionId = hello ? hello->value(QStringLiteral("sessionId")).toString() : QString{};
     if (!hello || QUuid(sessionId).isNull()

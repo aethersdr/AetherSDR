@@ -11,6 +11,7 @@
 #include <QTimer>
 
 #include <cstdio>
+#include <initializer_list>
 #include <memory>
 
 using namespace AetherSDR::control;
@@ -34,6 +35,36 @@ void finishWrite(QKeychain::Error error = QKeychain::NoError)
     QKeychain::TestControl::pendingWrite = nullptr;
     check(job != nullptr, "missing injected write job");
     if (job) { job->finish(error); }
+}
+
+void testDispatcherSelection()
+{
+    struct Case {
+        std::initializer_list<const char*> arguments;
+        bool expected;
+    };
+    const Case cases[] = {
+        {{"aetherd"}, false},
+        {{"aetherd", "--discover-sim", "--allow-local-control"}, false},
+        {{"aetherd", "--allow-local-tx"}, false},
+        {{"aetherd", "--initialize-credentials"}, true},
+        {{"aetherd", "--credential-authority", "authority"}, true},
+        {{"aetherd", "--credential-authority=authority", "--tx-admin", "list"}, true},
+        {{"aetherd", "--credential-authority-extra=authority"}, false},
+        {{"aetherd", "--", "--initialize-credentials"}, false},
+        {{"aetherd", "--", "--credential-authority=authority"}, false},
+        {{"aetherd", "--socket", "--initialize-credentials"}, false},
+        {{"aetherd", "-s", "--credential-authority=authority"}, false},
+        {{"aetherd", "--s", "--initialize-credentials"}, false},
+        {{"aetherd", "--socket=--initialize-credentials"}, false},
+        {{"aetherd", "--socket", "--", "--initialize-credentials"}, true},
+        {{"aetherd", "-s", "socket", "--initialize-credentials"}, true},
+    };
+    for (const Case& test : cases) {
+        check(AetherSDR::aetherd::credentialDispatcherRequested(
+                  static_cast<int>(test.arguments.size()), test.arguments.begin()) == test.expected,
+              "only credential options before -- and outside socket values select the dispatcher");
+    }
 }
 
 void testProvisioning()
@@ -128,6 +159,7 @@ void testStartup()
         parser.addOption({QStringLiteral("discover-local"), QStringLiteral("test")});
         parser.addOption({QStringLiteral("discover-sim"), QStringLiteral("test")});
         parser.addOption({QStringLiteral("allow-local-control"), QStringLiteral("test")});
+        parser.addOption({QStringLiteral("allow-local-tx"), QStringLiteral("test")});
         AetherSDR::aetherd::addCredentialOptions(parser);
         check(parser.parse(QStringList{QStringLiteral("aetherd")} + arguments), "test CLI arguments must parse");
         return AetherSDR::aetherd::credentialOptions(parser);
@@ -146,6 +178,19 @@ void testStartup()
           "selected serving authority must be read-only startup, not bootstrap");
     const auto add = parse(selected + QStringList{QStringLiteral("--add-credential"), QStringLiteral("client")});
     check(add.error.isEmpty() && add.operation == Operation::AddClient, "explicit client role must remain a client");
+    const auto txServe = parse(selected + QStringList{QStringLiteral("--allow-local-control"), QStringLiteral("--allow-local-tx")});
+    check(txServe.error.isEmpty() && !txServe.operation && txServe.authorityId == authority,
+          "serving TX options remain separate from offline credential actions");
+    for (const QStringList& action : {
+            QStringList{QStringLiteral("--initialize-credentials")},
+            QStringList{QStringLiteral("--list-credentials")},
+            QStringList{QStringLiteral("--add-credential"), QStringLiteral("client")},
+            QStringList{QStringLiteral("--remove-credential"), QString(32, u'd')}}) {
+        const auto invalid = parse(selected + action + QStringList{QStringLiteral("--allow-local-tx")});
+        check(invalid.error == QStringLiteral("credential administration must be a single offline action without discovery/control/TX")
+                  && !invalid.operation,
+              "every offline action with TX must return the specific exclusivity diagnostic before vault access");
+    }
     for (const QStringList& invalid : {
             QStringList{QStringLiteral("--add-credential"), QStringLiteral("client")},
             selected + selected,
@@ -211,6 +256,7 @@ void testCredentialRecipient()
 
 int main(int argc, char** argv)
 {
+    testDispatcherSelection(); // Must work before constructing QCoreApplication.
     QCoreApplication app(argc, argv);
     using Error = ControlCredentialVault::Error;
     using Result = ControlCredentialVault::Result;

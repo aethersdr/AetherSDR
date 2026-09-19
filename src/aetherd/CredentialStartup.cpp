@@ -5,9 +5,33 @@
 #include <QTimer>
 #include <QUuid>
 
+#include <string_view>
 #include <utility>
 
 namespace AetherSDR::aetherd {
+
+bool credentialDispatcherRequested(int argc, const char* const argv[])
+{
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view argument(argv[i]);
+        if (argument == "--") {
+            break;
+        }
+        // --socket/-s (also --s) takes a value in ordinary runs.
+        // Its value may itself look like a credential option. Equals-form
+        // values cannot match the exact option names below.
+        if (argument == "--socket" || argument == "-s" || argument == "--s") {
+            ++i;
+            continue;
+        }
+        if (argument == "--initialize-credentials"
+            || argument == "--credential-authority"
+            || argument.starts_with("--credential-authority=")) {
+            return true;
+        }
+    }
+    return false;
+}
 
 void addCredentialOptions(QCommandLineParser& parser)
 {
@@ -38,8 +62,9 @@ CredentialOptions credentialOptions(const QCommandLineParser& parser)
         if (parser.optionNames().count(name) > 1) { options.error = QStringLiteral("duplicate credential option"); return options; }
     }
     if (operations > 1 || (operations != 0 && (parser.isSet(QStringLiteral("discover-local"))
-        || parser.isSet(QStringLiteral("discover-sim")) || parser.isSet(QStringLiteral("allow-local-control"))))) {
-        options.error = QStringLiteral("credential administration must be a single offline action without discovery/control");
+        || parser.isSet(QStringLiteral("discover-sim")) || parser.isSet(QStringLiteral("allow-local-control"))
+        || parser.isSet(QStringLiteral("allow-local-tx"))))) {
+        options.error = QStringLiteral("credential administration must be a single offline action without discovery/control/TX");
         return options;
     }
     if (initialize && !parser.isSet(QStringLiteral("credential-authority"))) {

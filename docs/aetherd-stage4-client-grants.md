@@ -52,7 +52,7 @@ one. Subsequent actions require the selected authority; IDs and roles are the
 only output. Secrets are never accepted in argv or exported to stdout, ordinary
 settings or files. The initial local-client integration will retrieve its selected
 credential through the native-vault adapter; no token export command is provided.
-Combining an offline action with discovery/control or another action is rejected
+Combining an offline action with discovery/control/TX or another action is rejected
 before storage access or radio construction.
 
 Serving with `--credential-authority <authority-id>` only loads existing records
@@ -78,6 +78,30 @@ write is submitted but confirmation/readback fails, its durable outcome may be
 uncertain: inspect with `--list-credentials` after resolving the storage problem;
 the tool does not blindly roll back. Closing a native credential prompt or
 terminating setup never creates a live TX grant.
+
+### Credential memory limits
+
+Credential persistence is restricted to the native vault with insecure fallback
+disabled; this increment does **not** guarantee secure erasure of process memory.
+Vault records, QtKeychain jobs, bearer-token strings, JSON serialization and local
+socket buffers can retain raw secrets or encoded tokens in transient heap copies.
+`QByteArray::clear()` releases a reference, not a guaranteed zeroization. Clearing
+one visible buffer would not erase those other copies. The serving verifier keeps
+digests, but loading and authenticating still materialize transient secret bytes.
+
+Comprehensive memory scrubbing, locked/nonpageable secret buffers and protection
+against process-memory/crash-dump inspection are outside this increment's scope.
+Treat dumps of credential-using processes as potentially secret-bearing; do not
+publish them unredacted. This limit does not permit credentials in application
+logs, ordinary settings, exported support data or a plaintext storage fallback.
+
+On macOS, only runs requesting credential initialization or a credential
+authority select the CoreFoundation main-loop dispatcher needed by QtKeychain.
+Ordinary observe/control runs retain their default dispatcher. The temporary
+selection is restored after application construction so worker defaults and an
+existing dispatcher environment setting are preserved.
+
+### Credential and grant retirement
 
 Credential retirement invalidates atomic principal handles **before** notifying
 sessions. Each granted actor captures that immutable credential fence, so worker

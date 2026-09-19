@@ -1,5 +1,14 @@
 #pragma once
 
+// Test double for the QtKeychain 0.17.0 job contract (not an OS-vault emulator):
+// https://github.com/frankosterfeld/qtkeychain/tree/0.17.0/qtkeychain
+// Models error values, finished(Job*) delivery and auto-delete cleanup. Recheck
+// those contracts against keychain.h/keychain.cpp when upgrading QtKeychain.
+// Deliberate differences: tests control completion, start() records immediately,
+// and insecureFallback starts TRUE (upstream defaults false), so the test proves
+// the adapter explicitly disables fallback rather than relying on a default.
+// Native scheduling, prompts, storage and backend availability are not modeled.
+
 #include <QObject>
 #include <QByteArray>
 #include <QString>

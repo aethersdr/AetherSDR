@@ -30,6 +30,8 @@ ControlCredentialVault::ControlCredentialVault(QString authorityId, QObject* par
 std::optional<QByteArray> ControlCredentialVault::encode(const QList<ControlCredentials::Record>& records)
 {
     if (!ControlCredentials::validRecords(records)) { return {}; }
+    // Sensitive transient serialization, not a scrubbed/locked buffer. The
+    // native vault job holds its own copy; see the Stage 4 memory-limit docs.
     QByteArray bytes(kMagic);
     bytes.append(static_cast<char>(records.size()));
     for (const auto& record : records) {

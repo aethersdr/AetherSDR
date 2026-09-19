@@ -168,6 +168,8 @@ add_test(NAME control_authorization_test COMMAND control_authorization_test)
 
 # Production native-vault adapter with in-memory QtKeychain jobs: no OS vault,
 # sockets, settings or radio. Pins fallback prohibition and async lifetimes.
+# The fake models QtKeychain 0.17.0's job contract; its header documents the
+# upstream source and deliberate fault-injection differences to recheck on upgrades.
 add_executable(control_credential_vault_test
     tests/control_credential_vault_test.cpp
     src/aetherd/CredentialStartup.cpp
