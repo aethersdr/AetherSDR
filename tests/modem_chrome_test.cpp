@@ -13,6 +13,7 @@
 //     drops along with the rest of that rule.
 
 #include "gui/ModemChrome.h"
+#include "core/ThemeManager.h"
 
 #include <QRegularExpression>
 #include <QString>
@@ -28,6 +29,7 @@ private slots:
     void tabsAreSelectedByPropertyNotObjectName();
     void everyPlaceholderIsSubstituted();
     void compactIsSmallerButNotADifferentPalette();
+    void everyThemeTokenInTheSheetResolves();
 };
 
 namespace {
@@ -57,6 +59,9 @@ void ModemChromeTest::bothScalesCarryEveryStructuralSelector()
         QStringLiteral("QLabel#StatusValue"),
         QStringLiteral("QLabel#StatusDot"),
         QStringLiteral("QPushButton#IconButton"),
+        // A checkable button with no checked rule reads as unlatched however
+        // it is set -- which is how BYPASS shipped with no visual feedback.
+        QStringLiteral("QPushButton:checked"),
         QStringLiteral("QRadioButton::indicator"),
         QStringLiteral("QCheckBox::indicator"),
         QStringLiteral("QSlider::groove:horizontal"),
@@ -123,6 +128,30 @@ void ModemChromeTest::compactIsSmallerButNotADifferentPalette()
         const QString hex = QString::fromLatin1(colour);
         QVERIFY2(dialog.contains(hex) && compact.contains(hex), colour);
     }
+}
+
+void ModemChromeTest::everyThemeTokenInTheSheetResolves()
+{
+    // A {{token}} this sheet names but the theme does not define resolves to
+    // transparent and paints nothing -- no error, no fallback, just an
+    // invisible control. That has already happened once in this codebase
+    // (color.accent.ok / color.accent.error, neither of which exists; the
+    // real names are success / danger), and it was caught by eye rather than
+    // by anything automatic.
+    static const QRegularExpression tokenRe(QStringLiteral("\\{\\{([^}]+)\\}\\}"));
+    int checked = 0;
+    for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
+        const QString sheet = ModemChrome::styleSheet(scale);
+        auto it = tokenRe.globalMatch(sheet);
+        while (it.hasNext()) {
+            const QString token = it.next().captured(1).trimmed();
+            const QColor c = AetherSDR::ThemeManager::instance().color(token);
+            QVERIFY2(c.isValid() && c.alpha() > 0,
+                     qPrintable(QStringLiteral("unresolved theme token: %1").arg(token)));
+            ++checked;
+        }
+    }
+    QVERIFY2(checked > 0, "no tokens found -- has the sheet stopped using them?");
 }
 
 QTEST_MAIN(ModemChromeTest)
