@@ -126,10 +126,10 @@ int main(int argc, char** argv)
                  "#506070");
 
     // ── Gradient tokens survive the emit → QVariant → ThemeGradient round trip ──
-    // All six waterfall colormaps were unseeded before the generator; a missing
-    // one gives the operator a blank waterfall with no diagnostic.
+    // All seven waterfall colormaps were unseeded before the generator; a
+    // missing one gives the operator a blank waterfall with no diagnostic.
     for (const char* map : {"default", "fire", "plasma", "purple",
-                            "blueGreen", "grayscale"}) {
+                            "blueGreen", "grayscale", "glacier"}) {
         const ThemeGradient g =
             tm.gradient(QStringLiteral("color.waterfall.colormap.")
                         + QLatin1String(map));
