@@ -82,6 +82,19 @@ public:
         // pihpsdr runs 8192 by comparison.
         int filterTaps = 2048;
         bool minimumPhase = false;
+        // FM detector deviation in Hz — the receiver's ASSUMPTION about how
+        // wide the incoming signal is deviated, not a filter width. WDSP turns
+        // it into an inverse audio gain (again = rate / (deviation * TWOPI)),
+        // so this scales recovered audio and narrows nothing; see the block
+        // above SetRXAFMDeviation in aether_wdsp.h. 5000 is what RXA.c builds
+        // the stage with, so the default changes nothing on its own.
+        //
+        // IN Config RATHER THAN ONLY A SETTER, for the same reason the noise
+        // blanker is: reconfigure() closes and reopens the channel, which frees
+        // the fmd stage and everything set on it. A deviation held only in a
+        // runtime setter would revert to 5 kHz on the next sample-rate or
+        // block-size change, silently and with nothing to read that says so.
+        double fmDeviationHz = 5000.0;
         bool blockForOutput = false;
         // Impulse noise blanker — see the setNoiseBlanker() block below. Kept
         // in Config, not just as a runtime setter, so that reconfigure() (a
@@ -284,6 +297,21 @@ public:
     // already in flight. Control-path work, guarded exactly like setMode(); it
     // must not be called from the processIq() callback.
     bool setAgc(int agcMode, double maximumGainDb) noexcept;
+    // Runtime FM detector deviation, in Hz. Receive channels only.
+    //
+    // Applies in every mode but is only AUDIBLE in FM and WBFM: RXA builds one
+    // fmd stage per channel and runs it only when the mode selects it, so this
+    // is accepted and stored on an SSB channel and takes effect if and when the
+    // mode becomes FM. That is deliberate — refusing by mode would make the
+    // value depend on the order the caller sets mode and deviation in.
+    //
+    // Returns false on a transmit channel (SetRXAFMDeviation has no TX
+    // counterpart; TX deviation is SetTXAFMDeviation on a different stage), on
+    // a non-finite or non-positive value — WDSP divides by it, so 0 would make
+    // the audio gain infinite — or if a control operation is already in flight.
+    // Control-path work, guarded exactly like setMode(); it must not be called
+    // from the processIq() callback.
+    bool setFmDeviation(double deviationHz) noexcept;
     // ── Impulse noise blanker ─────────────────────────────────────────────
     //
     // WDSP's ANB (nob.c), run on the RAW IQ ahead of the channel. It has to be

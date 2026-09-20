@@ -629,6 +629,26 @@ bool WdspChannel::setFilter(double lowHz, double highHz) noexcept
     return true;
 }
 
+bool WdspChannel::setFmDeviation(double deviationHz) noexcept
+{
+    // Non-positive is refused rather than clamped: WDSP computes
+    // again = rate / (deviation * TWOPI), so zero is a division by zero and a
+    // negative value inverts the recovered audio. Neither is a deviation a
+    // caller can have meant.
+    if (m_config.direction != Direction::Receive || !std::isfinite(deviationHz) ||
+        deviationHz <= 0.0 || !beginControlOperation()) {
+        return false;
+    }
+    {
+        const std::scoped_lock setupLock(g_setupMutex);
+        SetRXAFMDeviation(m_channelId, deviationHz);
+    }
+    // Stored so open() can re-push it: reconfigure() frees the fmd stage.
+    m_config.fmDeviationHz = deviationHz;
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setAgc(int agcMode, double maximumGainDb) noexcept
 {
     // RX-only: SetRXAAGC* has no transmit counterpart, and a TX channel has no
@@ -877,6 +897,12 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         setError(error, "WDSP TX does not define a WBFM mode");
         return false;
     }
+    // Refused here as well as in setFmDeviation(), because open() pushes the
+    // Config value straight into SetRXAFMDeviation, which divides by it.
+    if (!std::isfinite(config.fmDeviationHz) || config.fmDeviationHz <= 0.0) {
+        setError(error, "WDSP FM deviation must be a positive, finite value");
+        return false;
+    }
     return true;
 }
 
@@ -999,6 +1025,10 @@ void WdspChannel::open() noexcept
         // work — safe here inside open(), never from processIq().
         RXASetNC(m_channelId, m_config.filterTaps);
         RXASetMP(m_channelId, m_config.minimumPhase ? 1 : 0);
+        // The fmd stage is built by create_rxa with a hard 5000.0 and freed
+        // again by close(), so this has to be re-pushed on every open or a
+        // reconfigure() silently returns the operator to a 5 kHz assumption.
+        SetRXAFMDeviation(m_channelId, m_config.fmDeviationHz);
     } else {
         SetTXAMode(m_channelId, wdspMode(m_config.mode));
         SetTXABandpassFreqs(m_channelId, m_config.filterLowHz, m_config.filterHighHz);

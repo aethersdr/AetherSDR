@@ -77,6 +77,27 @@ void fillComplexTone(std::span<float> i, std::span<float> q,
     }
 }
 
+// A CONSTANT-ENVELOPE FM SIGNAL at baseband: a carrier on the tuned frequency
+// whose phase carries a single audio tone. exp(j * beta * sin(2*pi*fa*t)) with
+// beta = peakDeviation / audioHz, which is the textbook modulation index — so
+// the instantaneous frequency swings +/- peakDeviationHz about zero at the
+// audio rate, and the amplitude never moves. Phase is a function of the
+// absolute sample index, so successive blocks join without a discontinuity;
+// a per-block phase reset would put a click at every block boundary and the
+// detector would demodulate the clicks.
+void fillFmTone(std::span<float> i, std::span<float> q, int sampleRate,
+                double audioHz, double peakDeviationHz, std::size_t offset)
+{
+    const double index = peakDeviationHz / audioHz;
+    for (std::size_t sample = 0; sample < i.size(); ++sample) {
+        const double t = static_cast<double>(offset + sample) /
+                         static_cast<double>(sampleRate);
+        const double phase = index * std::sin(2.0 * std::numbers::pi * audioHz * t);
+        i[sample] = static_cast<float>(0.5 * std::cos(phase));
+        q[sample] = static_cast<float>(0.5 * std::sin(phase));
+    }
+}
+
 void fillAudioTone(std::span<float> left, std::span<float> right,
                    int sampleRate, double frequencyHz, std::size_t offset)
 {
@@ -2625,6 +2646,194 @@ bool runTransmitZerosCensusTest()
 
 } // namespace
 
+// FM DEVIATION IS AN AUDIO GAIN, AND THIS MEASURES IT AS ONE.
+//
+// The row this closes said "FM deviation not settable; runs on create_rxa's
+// 5 kHz default", and the risk in closing it is the defect class this lab filed
+// twice in one evening (#5829, #5859): a setter that is called, returns true,
+// and changes nothing. An API-only test — call it, read it back — cannot tell
+// those apart, because the value it reads back is the one it just stored.
+//
+// So this drives a real FM signal through a real channel and measures the
+// recovered audio. WDSP's detector emits `again * (fil_out - fmdc)` with
+// `again = rate / (deviation * TWOPI)` (upstream/fmd.c), and `fil_out` is the
+// PLL's instantaneous frequency in radians per sample — so for a signal
+// deviated by D_sig and a detector told to assume D_set, recovered audio comes
+// out proportional to D_sig / D_set. EVERYTHING ELSE IN THE PATH CANCELS: the
+// de-emphasis curve, the audio bandpass, its afgain, and the bp1 gain are all
+// linear and identical between the two measurements, and SetRXAMode turns the
+// AGC OFF in FM (RXA.c, case RXA_FM: `agc.p->run = 0`) so nothing claws the
+// level back. The prediction is therefore not a direction but a NUMBER:
+// halving the assumed deviation doubles the audio, exactly.
+//
+// MEASURED ON THE SAME CHANNEL INSTANCE, never on two channels configured
+// differently. Two channels would differ by their FFTW plans and their settle
+// history as well as by the deviation, and the comparison would prove only
+// that two things are not identical. One channel, one signal, one setter call
+// between the measurements.
+//
+// BOTH DIRECTIONS, because a setter that only ever moves one way is half
+// broken and reads as working: 5000 -> 2500 doubles the audio and 2500 -> 5000
+// must bring it back to where it started.
+//
+// AND ACROSS A reconfigure(), which is the failure this would otherwise have
+// shipped with. create_rxa builds the fmd stage with a hard 5000.0 and close()
+// frees it, so a deviation held only in the runtime setter reverts to 5 kHz on
+// the next sample-rate or block-size change — silently, with the stored value
+// still reading 2500 and nothing an operator could see. WdspChannel carries it
+// in Config and open() re-pushes it; the third measurement is what says so.
+bool runFmDeviationTest()
+{
+    WdspChannel::Config config;
+    config.inputBlockSize = 256;
+    config.dspBlockSize = 256;
+    config.inputSampleRate = 48000;
+    config.dspSampleRate = 48000;
+    config.outputSampleRate = 48000;
+    config.mode = WdspChannel::Mode::Fm;
+    // Symmetric about the carrier, and deliberately so: it comfortably passes
+    // the modulated signal (Carson bandwidth here is 2*(2500+1000) = 7 kHz),
+    // and a symmetric passband is immune to the sideband-handedness trap that
+    // runNotchAttenuationTest has to reason about. Nothing in this measurement
+    // should depend on which way round the spectrum sits.
+    config.filterLowHz = -8000.0;
+    config.filterHighHz = 8000.0;
+    // Belt and braces. RXA_FM already clears agc.p->run, but open() calls
+    // applyRxAgc AFTER SetRXAMode and would switch it straight back on.
+    config.agcMode = 0;
+    config.agcFixedGainDb = 0.0;
+    config.blockForOutput = true;
+
+    constexpr double kAudioHz = 1000.0;
+    constexpr double kSignalDeviationHz = 2500.0;
+
+    std::string error;
+    auto channel = WdspChannel::create(config, &error);
+    if (!require(channel != nullptr, "FM deviation test failed to open a channel")) {
+        return false;
+    }
+
+    // Long enough to flush the 2048-tap de-emphasis and audio FIRs, which hold
+    // ~8 blocks of history at the PREVIOUS gain after a deviation change, plus
+    // the channel's mute ramp and the PLL's own acquisition on the first run.
+    constexpr std::size_t kSettleBlocks = 60;
+    constexpr std::size_t kTotalBlocks = 140;
+    std::size_t clock = 0;
+    const auto measure = [&](WdspChannel& ch) -> double {
+        std::vector<float> inputI(ch.config().inputBlockSize);
+        std::vector<float> inputQ(ch.config().inputBlockSize);
+        std::vector<float> outputLeft(ch.outputBlockSize());
+        std::vector<float> outputRight(ch.outputBlockSize());
+        double energy = 0.0;
+        for (std::size_t block = 0; block < kTotalBlocks; ++block) {
+            fillFmTone(inputI, inputQ, ch.config().inputSampleRate,
+                       kAudioHz, kSignalDeviationHz, clock);
+            clock += inputI.size();
+            if (ch.processIq(inputI, inputQ, outputLeft, outputRight) !=
+                WdspChannel::ProcessResult::Ok) {
+                return -1.0;
+            }
+            if (block >= kSettleBlocks) {
+                energy += rms(outputLeft);
+            }
+        }
+        return energy / static_cast<double>(kTotalBlocks - kSettleBlocks);
+    };
+
+    const double atDefault = measure(*channel);
+    if (!require(atDefault > 1.0e-4,
+                 "the FM detector produced no audio at the default deviation")) {
+        return false;
+    }
+
+    if (!require(channel->setFmDeviation(kSignalDeviationHz),
+                 "setFmDeviation(2500) was refused on a receive channel")) {
+        return false;
+    }
+    const double atHalf = measure(*channel);
+
+    if (!require(channel->setFmDeviation(5000.0),
+                 "setFmDeviation(5000) was refused")) {
+        return false;
+    }
+    const double restored = measure(*channel);
+
+    if (!require(atHalf > 0.0 && restored > 0.0,
+                 "an FM deviation measurement failed to run")) {
+        return false;
+    }
+
+    const double ratio = atHalf / atDefault;
+    const double restoredRatio = restored / atDefault;
+    std::cout << "FM deviation: assumed 5000 Hz -> " << atDefault
+              << ", assumed 2500 Hz -> " << atHalf
+              << ", back to 5000 Hz -> " << restored
+              << "  (ratio " << ratio << ", expected 2, restored "
+              << restoredRatio << ", expected 1)\n";
+
+    // 5% either side. The prediction is exact arithmetic, not a fit, so the
+    // tolerance is for the settle tail and float output quantisation and
+    // nothing else -- it is deliberately far too tight for a no-op setter
+    // (which would give 1.0) to slip through.
+    bool ok = true;
+    ok = require(ratio > 1.90 && ratio < 2.10,
+                 "halving the assumed FM deviation did not double the recovered "
+                 "audio -- SetRXAFMDeviation is not reaching the detector") && ok;
+    ok = require(restoredRatio > 0.95 && restoredRatio < 1.05,
+                 "restoring the FM deviation did not restore the audio level -- "
+                 "the setter moves one way only") && ok;
+
+    // Across a rebuild. A DIFFERENT block size, so this is a real close-and-
+    // reopen rather than a no-op, and the Config carries the deviation the
+    // operator chose.
+    WdspChannel::Config rebuilt = config;
+    rebuilt.inputBlockSize = 512;
+    rebuilt.dspBlockSize = 512;
+    rebuilt.fmDeviationHz = kSignalDeviationHz;
+    if (!require(channel->reconfigure(rebuilt, &error),
+                 "FM channel failed to reconfigure")) {
+        return false;
+    }
+    const double afterRebuild = measure(*channel);
+    const double rebuiltRatio = afterRebuild / atDefault;
+    std::cout << "FM deviation across reconfigure(): " << afterRebuild
+              << "  (ratio " << rebuiltRatio << ", expected 2)\n";
+    ok = require(rebuiltRatio > 1.90 && rebuiltRatio < 2.10,
+                 "reconfigure() lost the FM deviation -- the rebuilt fmd stage "
+                 "is back on create_rxa's 5 kHz default") && ok;
+
+    // Refusals. Zero and negative matter because WDSP divides by this value.
+    ok = require(!channel->setFmDeviation(0.0),
+                 "a zero FM deviation was accepted -- WDSP divides by it") && ok;
+    ok = require(!channel->setFmDeviation(-2500.0),
+                 "a negative FM deviation was accepted") && ok;
+    ok = require(!channel->setFmDeviation(
+                     std::numeric_limits<double>::quiet_NaN()),
+                 "a non-finite FM deviation was accepted") && ok;
+    ok = require(channel->config().fmDeviationHz == kSignalDeviationHz,
+                 "a refused setFmDeviation() still overwrote the stored value") && ok;
+
+    // USB rather than FM, and the filter edges a transmitter actually uses:
+    // the assertion here is about DIRECTION, and giving it an exotic TX mode
+    // would only add a way for it to fail for an unrelated reason.
+    WdspChannel::Config transmit = config;
+    transmit.direction = WdspChannel::Direction::Transmit;
+    transmit.mode = WdspChannel::Mode::Usb;
+    transmit.filterLowHz = 300.0;
+    transmit.filterHighHz = 2700.0;
+    auto txChannel = WdspChannel::create(transmit, &error);
+    ok = require(txChannel && !txChannel->setFmDeviation(kSignalDeviationHz),
+                 "setFmDeviation() was accepted on a transmit channel, which "
+                 "has no RXA detector to set") && ok;
+
+    WdspChannel::Config invalidDeviation = config;
+    invalidDeviation.fmDeviationHz = 0.0;
+    ok = require(WdspChannel::create(invalidDeviation, &error) == nullptr,
+                 "a Config carrying a zero FM deviation was accepted") && ok;
+
+    return ok;
+}
+
 bool runTransmitDiscardTest()
 {
     WdspChannel::Config config = liveTransmitConfig(WdspChannel::Mode::Usb, 300.0, 2700.0);
@@ -2701,6 +2910,7 @@ int main()
     check(runLeakChecked("notch attenuation test", runNotchAttenuationTest));
     check(runLeakChecked("minimum-phase workspace test",
                          runMinimumPhaseWorkspaceTest));
+    check(runLeakChecked("FM deviation test", runFmDeviationTest));
     // LAST, and deliberately so: see the ordering note above. Anything added
     // later belongs ABOVE this line, not below it.
     check(runLeakChecked("close-after-stopped-clocking test",
