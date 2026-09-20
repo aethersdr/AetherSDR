@@ -420,6 +420,52 @@ with C&C **before** `metis-start`. (The earlier `CONFIG_MERCURY` diagnosis was
 wrong — HL2 gateware never decodes that bit; ordering was the real cause. Both
 the design note and `docs/archive/hl2-phase0-spike.md` carry the correction.)
 
+### The EP6 mic word runs at 12 kHz, not at the DDC rate
+
+Each EP6 round is *N* receivers' IQ followed by one 2-byte mic word, so the mic
+word is **delivered** once per round — that is, at the DDC sample rate. It does
+not follow that the mic word *changes* at that rate, and it does not.
+
+**Measured 2026-09-20** against a SquareSDR 2 (an HL2-compatible board, gateware
+7.5), receive-only, never keyed — every `C0` byte even so MOX stays clear. Each
+value is repeated for exactly `ddcRate / 12000` consecutive rounds:
+
+| DDC rate | dominant run length | implied update rate |
+|---|---|---|
+| 48 kHz  | 4  (21 728 of ~23 800 runs) | 12 kHz |
+| 96 kHz  | 8  (21 682 runs)            | 12 kHz |
+| 192 kHz | 16 (21 623 runs)            | 12 kHz |
+
+Idle values sat at DC ≈ −1430 with roughly ±50 counts of variation.
+
+**What this is NOT evidence of.** That the slot carries an actual microphone.
+A DC bias with a little noise on it looks identical whether it is an idle codec
+input or some unrelated internal signal the gateware parks there. The test that
+would settle it — watch the level about the mean while making noise near the
+radio — was not run. "It is the codec's mic input" is the likely reading and
+should be labelled as such until somebody measures it.
+
+**Why it matters, and where the reference client is wrong.** deskHPSDR computes
+`mic_sample_divisor = rate / 48000` and takes every *N*-th sample, under the
+comment `// reduce to 48000`. That describes something that is not happening:
+the stream is not at the DDC rate, so nothing is being reduced. It is harmless
+there — a zero-order hold preserves the fundamental, so the pitch comes out
+right anyway — but the description should not be inherited.
+
+For any future radio-mic transmit path here, the consequence is that **no
+anti-alias filter is needed**. The source is bandlimited to 6 kHz, so
+decimating the round stream by `ddcRate / 24000` to reach the 24 kHz that
+`Hl2Backend::submitTxAudio()` requires is safe on its own; the hold's images sit
+at ≥12 kHz, where the transmit filter removes them. The naive decimation that
+would be wrong for a genuine DDC-rate stream is exactly right for this one.
+
+**Not yet consumed.** `kRoundMicBytes` has no reader — it appears only in
+`ep6RoundBytes()`, as stride. `ep6DecodeRounds()` walks past the word with the
+comment *"the round's trailing 2 mic bytes are ignored"*. The capability comment
+at `Hl2Backend::capabilities()` saying `no on-radio mic jacks` is true of a bare
+HL2 and false of the HL2+ and SquareSDR 2 variants; it should be corrected by
+whatever change first reads this word.
+
 ---
 
 ## 5. WDSP configuration facts
