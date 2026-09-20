@@ -27,6 +27,33 @@ int bandGain(const RestoredRadioState& state, const QString& band)
         .value(QStringLiteral("lnaDbByBand")).toObject().value(band).toInt(999);
 }
 
+// THE OPERATOR'S AUTOMATIC-GAIN PREFERENCE, as it will be written to disk.
+// `m_autoRfGainWanted` is private and correctly has no accessor -- what it
+// means is only observable where it acts, which is the document
+// currentOperatingState() produces and applyRestoredState() reads back. Absent
+// reads as false, matching applyRestoredState's own `toBool(false)`.
+bool autoGainWanted(const RestoredRadioState& state)
+{
+    return state.extension.value(QStringLiteral("rfGain")).toObject()
+        .value(QStringLiteral("autoEnabled")).toBool(false);
+}
+
+// A profile with no per-band gains, so the connect baseline comes from
+// `defaultDb` and each leg below can set the baseline it needs explicitly.
+RestoredRadioState autoGainProfile(bool wanted)
+{
+    RestoredRadioState state;
+    state.rfFrequencyHz = 14'074'000.0;
+    state.sampleRateHz = 48'000;
+    state.extensionSchemaVersion = 1;
+    QJsonObject rfGain{{QStringLiteral("defaultDb"), 20}};
+    if (wanted) {
+        rfGain.insert(QStringLiteral("autoEnabled"), true);
+    }
+    state.extension = QJsonObject{{QStringLiteral("rfGain"), rfGain}};
+    return state;
+}
+
 RestoredRadioState rememberedGain()
 {
     RestoredRadioState state;
@@ -214,6 +241,72 @@ int main(int argc, char** argv)
               "ANAN startup preserves per-radio attenuation despite stale family display gain");
         check(backend.currentOperatingState().extension == state.extension,
               "legacy display restore leaves both ANAN ADC values intact");
+    }
+    // A REFUSED ARM MUST NOT SWALLOW THE OPERATOR'S LATER "OFF" (#5828).
+    //
+    // setAutoRfGain's opening guard compares against the RUNNING flag, and a
+    // declined arm leaves the loop off with the wish recorded -- so an explicit
+    // "off" from there used to match the guard and return before the disarm
+    // branch that clears the wish. The profile kept `autoEnabled: true` and the
+    // next connect from a baseline the loop trusts armed a control the operator
+    // had switched off.
+    //
+    // THE SHIPPED DEFAULT IS WHAT MAKES THIS THE COMMON PATH: the constructed
+    // LNA default is kLnaDefaultGainDb (+20 dB) and kAutoRfGainMaxBaselineDb is
+    // +19, so the first tick on a radio nobody has retuned lands in the refusal.
+    //
+    // Asserted on the persisted document rather than on a flag, because the
+    // harm is not the flag -- it is the next session, which leg three shows.
+    {
+        constexpr int kCeiling = hl2::Hl2Backend::kAutoRfGainMaxBaselineDb;
+        constexpr int kUntrusted = kCeiling + 1;  // +20 dB: the shipped default
+        constexpr int kTrusted = kCeiling;        // +19 dB: the highest it takes
+        {
+            GainSession session(autoGainProfile(false));
+            session.backend.setPanRfGain(session.panId, kUntrusted);
+            check(!autoGainWanted(session.backend.currentOperatingState()),
+                  "nothing is wanted before the operator asks");
+            session.backend.setAutoRfGain(true);
+            check(!session.backend.autoRfGainEnabled(),
+                  "the radio declines to arm from the shipped default baseline");
+            check(autoGainWanted(session.backend.currentOperatingState()),
+                  "and the asking survives the refusal, which is the documented intent");
+            session.backend.setAutoRfGain(false);
+            check(!session.backend.autoRfGainEnabled(),
+                  "the switch still reports itself off after the withdrawal");
+            check(!autoGainWanted(session.backend.currentOperatingState()),
+                  "the withdrawal after a refusal reaches the profile");
+        }
+        // THE POSITIVE CONTROL, and it is not optional. The assertion above
+        // could pass because the key was never written, because the extension
+        // object is empty, because the session failed to build. Running the
+        // same assertion against the path that works is what makes the first
+        // leg evidence rather than an absence.
+        {
+            GainSession session(autoGainProfile(false));
+            session.backend.setPanRfGain(session.panId, kTrusted);
+            session.backend.setAutoRfGain(true);
+            check(session.backend.autoRfGainEnabled(),
+                  "positive control: a trusted baseline does arm");
+            check(autoGainWanted(session.backend.currentOperatingState()),
+                  "positive control: and the arm is recorded");
+            session.backend.setAutoRfGain(false);
+            check(!session.backend.autoRfGainEnabled(),
+                  "positive control: it disarms");
+            check(!autoGainWanted(session.backend.currentOperatingState()),
+                  "positive control: the withdrawal reaches the profile by this path");
+        }
+        // WHY THE FIRST LEG IS A DEFECT AND NOT BOOKKEEPING. A stranded `true`
+        // is read at the next connect and the linkUp handler arms on it.
+        // Arming from a restored preference is correct in itself; it is the
+        // harm only when leg one is what put the `true` there.
+        {
+            GainSession session(autoGainProfile(true));
+            session.backend.setPanRfGain(session.panId, kTrusted);
+            session.backend.setAutoRfGain(true);
+            check(session.backend.autoRfGainEnabled(),
+                  "a profile carrying autoEnabled:true arms once the baseline allows it");
+        }
     }
     // Cross-family compatibility at the exact display-restore seam. No Flex or
     // Icom backend is instantiated or changed; their current domain is empty.

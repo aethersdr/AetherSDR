@@ -6984,6 +6984,31 @@ void Hl2Backend::setLnaAutoOffsetDb(int offsetDb)
 void Hl2Backend::setAutoRfGain(bool on)
 {
     if (on == m_autoRfGainEnabled) {
+        // A DECLINED ARM IS A THIRD STATE, and the guard above can only see
+        // two. After a refusal the loop is off and the wish is recorded
+        // (m_autoRfGainWanted true, m_autoRfGainEnabled false), so an explicit
+        // "off" from there matches the running flag and returns here -- and the
+        // disarm branch below, the only writer of m_autoRfGainWanted = false,
+        // is never reached. currentOperatingState() persists the WISH, so the
+        // withdrawal never reaches the profile and the next connect from a
+        // baseline the loop trusts arms a control the operator switched off.
+        //
+        // NOT A CONTRADICTION OF THE DISARM BRANCH'S COMMENT. That comment is
+        // about the REFUSAL ITSELF not reaching the disarm branch, which is
+        // correct and is what keeps the asking alive across a decline. A later
+        // explicit off is a different event: the operator withdrawing the wish.
+        //
+        // HANDLED HERE RATHER THAN BY WIDENING THE GUARD. Falling through to
+        // the disarm branch would run applyBandscopeForAutoGain(), reset
+        // m_autoGainState and log "disarmed, baseline ... restored" for a loop
+        // that never ran. setLnaAutoOffsetDb(0) is safe from any state, so
+        // widening is not incorrect -- it just puts an untrue sentence in the
+        // log. Nothing is running, so nothing needs disarming.
+        if (!on && m_autoRfGainWanted) {
+            m_autoRfGainWanted = false;
+            qCInfo(lcHl2) << "HL2 auto RF gain: request withdrawn (the arm was "
+                             "declined earlier; the loop was not running)";
+        }
         return;
     }
     if (on) {
