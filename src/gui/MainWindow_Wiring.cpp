@@ -5516,24 +5516,38 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // for the same reason and in nearly the same words.
         //
         // The click happened ON the panadapter's overlay menu, so the card
-        // appears where the operator is already looking. The status bar stays
-        // as the fallback for the case where no panadapter can be resolved, so
-        // the reason is never simply dropped.
+        // appears where the operator is already looking.
+        //
+        // No status-bar fallback: `sw` is dereferenced unconditionally at the
+        // top of wirePanadapter and again four lines above this, so a "if no
+        // panadapter can be resolved" branch here could not run. An earlier
+        // revision had one and it was dead code describing a case this lambda
+        // does not have.
+        //
+        // THE CARD GETS ITS OWN ID rather than riding on the interlock's, which
+        // is pinned to "interlock.active" latest-wins -- a gain refusal must not
+        // evict a live "Transmit disabled" card, nor be evicted by one.
         if (on && !armed && autoGain) {
             const QString why = autoGain->lastArmRefusalReason();
             if (!why.isEmpty()) {
-                if (sw) {
-                    sw->showInterlockNotification(why,
-                                                  QStringLiteral("hl2-autogain-refused"),
-                                                  10000);
-                } else if (statusBar()) {
-                    statusBar()->showMessage(why, 10000);
-                }
+                sw->showNoticeCard(why,
+                                   QStringLiteral("autorfgain.refused"),
+                                   10000);
                 // AND ON A CHANNEL A SCREEN READER ACTUALLY READS. Neither a
                 // transient card nor a status-bar message is reliably announced
                 // by AT clients, and the operator who cannot see the panadapter
                 // is the one least able to guess why a checkbox sprang back.
-                if (auto* m = sw ? sw->overlayMenu() : nullptr) {
+                //
+                // ONLY SET HERE. The matching CLEAR is inside
+                // SpectrumOverlayMenu::setAutoRfGainEnabled(true) -- the call
+                // the readback makes a few lines up -- because two of the three
+                // routes to a successful arm --
+                // the connect-time restore in Hl2Backend and MainWindow's
+                // capability push -- never reach this lambda at all. A clear
+                // written here would have covered none of them, and on the
+                // operator's own retry the description would have outlived the
+                // refusal it describes and been read out against a running loop.
+                if (auto* m = sw->overlayMenu()) {
                     m->setAutoRfGainRefusalDescription(why);
                 }
             }

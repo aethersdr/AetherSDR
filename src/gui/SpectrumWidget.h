@@ -239,6 +239,16 @@ public:
     void showInterlockNotification(const QString& message,
                                    const QString& key = QString(),
                                    int durationMs = 5000);
+    // Transient card for something that is neither a TX block nor a swallowed
+    // TX filter -- a control that refused to arm, say. Takes its OWN card id
+    // for the reason showTxFilterNotification took one: showInterlockNotification
+    // pins every card it raises to "interlock.active" on a latest-wins rule, so
+    // routing an unrelated notice through it evicts a live "Transmit disabled"
+    // card in place, and is evicted by the next one. `id` must be non-empty and
+    // stable, so re-raising the same notice replaces it rather than stacking.
+    void showNoticeCard(const QString& detail,
+                        const QString& id,
+                        int durationMs = 5000);
 
     // Feed a new FFT frame. bins are scaled dBm values.
     void updateSpectrum(const QVector<float>& binsDbm);

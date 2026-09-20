@@ -6979,14 +6979,23 @@ void Hl2Backend::setAutoRfGain(bool on)
             // baseline, the ceiling and the remedy. Storing it is what lets the
             // checkbox explain itself instead of springing back in silence
             // (#5817).
-            m_autoRfGainRefusal = QStringLiteral(
+            //
+            // tr(), AND WITHOUT THE ISSUE NUMBER, because this sentence stopped
+            // being a log line the moment it was kept: it is shown on the
+            // panadapter and read out by a screen reader. "#5354" is provenance
+            // for us and noise to an operator, so it stays on the qWarning --
+            // which is where the next person debugging this actually looks --
+            // and the operator gets the baseline, the ceiling and the remedy.
+            m_autoRfGainRefusal = tr(
                        "Auto RF gain declined — the RF Gain baseline is "
-                       "%1 dB and this radio's gain axis is not trusted above %2 dB "
-                       "(#5354: +48 dB measures like +18 dB). Lower RF Gain to %2 dB "
-                       "or below and try again. Your setting has not been changed.")
+                       "%1 dB and this radio's gain axis is not trusted above "
+                       "%2 dB. Lower RF Gain to %2 dB or below and try again. "
+                       "Your setting has not been changed.")
                        .arg(m_lnaGainDb)
                        .arg(kAutoRfGainMaxBaselineDb);
-            qWarning().noquote() << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal;
+            qWarning().noquote()
+                << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal
+                     + QStringLiteral(" (#5354: +48 dB measures like +18 dB)");
             return;
         }
         // CLEARED ON SUCCESS. A reason that outlived the refusal it describes

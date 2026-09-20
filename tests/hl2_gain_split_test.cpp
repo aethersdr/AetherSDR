@@ -461,6 +461,12 @@ int main(int argc, char** argv)
               "the reason names the baseline that was refused");
         check(why.contains(QString::number(hl2::Hl2Backend::kAutoRfGainMaxBaselineDb)),
               "and the ceiling it has to be at or below");
+        // AND NOTHING THE OPERATOR CANNOT USE. This sentence stopped being a
+        // log line when it started being shown on the panadapter and read out
+        // by a screen reader; an issue number is provenance for us and noise to
+        // them. The citation stays on the qWarning, where it is still useful.
+        check(!why.contains(QLatin1Char('#')),
+              "and cites no issue number at the operator");
 
         // AND IT MUST NOT OUTLIVE THE REFUSAL IT DESCRIBES. Lower the baseline
         // under the ceiling, arm for real, and the reason has to go -- otherwise

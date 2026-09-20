@@ -7166,6 +7166,32 @@ void SpectrumWidget::showInterlockNotification(const QString& message,
     upsertOverlayMessage(std::move(overlay));
 }
 
+void SpectrumWidget::showNoticeCard(const QString& detail,
+                                    const QString& id,
+                                    int durationMs)
+{
+    const QString text = detail.trimmed();
+    if (text.isEmpty() || id.trimmed().isEmpty()) {
+        return;
+    }
+    PanadapterOverlayMessage overlay;
+    // THE CALLER'S ID, not "interlock.active". That fixed id exists so the
+    // radio's authoritative denial can supersede a local preflight of the SAME
+    // refusal in place (#3999). A notice about something else is not the same
+    // thing: it must neither evict a live "Transmit disabled" card nor be
+    // evicted by one -- exactly the argument showTxFilterNotification already
+    // made for taking an id of its own.
+    overlay.id = id.trimmed();
+    // Never "Transmit disabled". Nothing here is refusing to key, and a card
+    // that says otherwise teaches the operator to distrust the one that means it.
+    overlay.title = tr("Notice");
+    overlay.detail = text;
+    overlay.timeoutMs = qMax(1, durationMs);
+    overlay.dismissible = true;
+    overlay.tone = PanadapterOverlayMessageTone::Warning;
+    upsertOverlayMessage(std::move(overlay));
+}
+
 void SpectrumWidget::showTxFilterNotification(const QString& title,
                                               const QString& detail,
                                               int durationMs)
