@@ -55,7 +55,7 @@ instead of being scored.
 |---|---|
 | `W` | **works / reachable** — the control reaches the backend and the backend acts |
 | `D` | **dead** — the control exists but the path terminates (e.g. the base is `Q_UNUSED`) |
-| `P` | **phantom** — reports success without the radio moving; reads back cached state |
+| `P` | **phantom** — reports success without the radio moving; reads back cached state. Two grounds, and they are different repairs — see below |
 | `R` | **refuses visibly** — the user is told no |
 | `H` | **hidden** — the GUI gates the control away on a capability |
 | `U` | **unverified** — the generator could not decide |
@@ -65,11 +65,30 @@ instead of being scored.
 
 Four of these are worth a sentence each, because the distinctions do work.
 
-**`D` and `P` are the same experience and different repairs.** A `P` cell is a
-backend that never assigned a field and silently took a permissive default; the
-fix is one assignment. A `D` cell is a control whose seam verb nobody
-implemented. Collapsing them would hide the fact that some of this list is
-nearly free to fix.
+**`D` and `P` are the same experience and different repairs, and the
+discriminator is PROVENANCE — not the value of any field.** The question is
+*did this backend ask for this control?*
+
+- It **asked** — it assigned the gating capability itself — and did not
+  implement the verb: that is a bug in that backend, and the cell is **`D`**.
+- It **never asked** — it does not mention the field at all, and a permissive
+  default offered the control on its behalf: that is a gap in the default, one
+  assignment repairs it, and the cell is **`P`**.
+- It asked for the control to be **off**, or inherited an off default: the
+  operator sees nothing either way, and the cell is **`H`**.
+
+Reading a field's *value* as the discriminator gets the FM rows right by
+accident and will be wrong on the next backend that writes a permissive value
+down on purpose. `FmTonePresentation` defaults to `Hidden`, and `Legacy` is what
+turns the tone controls **on**; the HL2 assigns `Legacy` explicitly, so it asked,
+and its unimplemented tone verbs are `D`. `hasFmRepeaterOffset` defaults to
+`true` and the HL2 never mentions it, so it never asked, and the repeater rows
+one line below are `P`. Two adjacent rows, opposite verdicts, and only
+provenance separates them.
+
+The generator enforces exactly this: `PERMISSIVE` is reachable only from
+`DEFAULT_TRUE`, which is returned only when `capabilities()` carries no
+assignment for the field at all.
 
 **`R` is kept apart from `D`** although both mean *you cannot do this*. Turning
 a `D` into an `R` removes the entire operator harm — they stop being lied to —
@@ -398,6 +417,32 @@ CWR is CW. An unknown mode returns with no error, no log and no `sliceChanged`.
 unconditionally, included by its own `.cpp` and its test and nothing else — the
 prepared foundation for RFC #5468 multi-RX. `docs/HERMES.md` says so: *"has no
 production caller today"*.
+
+---
+
+## The seven `P` cells, by provenance
+
+`P` has two grounds. Both satisfy the definition — the control reports success,
+the radio does not move, and a readback confirms the value the operator set —
+but they are different findings for a contributor, so the checker labels each
+one and prints the split rather than a single tally.
+
+| ground | cells | what it is | repair |
+|---|---|---|---|
+| **inherited default** | `fm/repeater-dir` and `fm/repeater-offset` on HL2, ANAN and Demo (6) | The backend never mentions `hasFmRepeaterOffset`, which is declared `= true`. Both readers spell the gate `!connected \|\| caps.hasFmRepeaterOffset`, so the control is offered unless a *connected* radio actively denies it. **Nobody decided to offer it.** On the HL2 it is a claim the same `capabilities()` body contradicts a few lines away, where `FM`, `NFM`, `WBFM` and `WFM` sit on `receiveOnlyModes`; on the ANAN it is a repeater duplex control on a radio with no transmitter. | One assignment per backend: `c.hasFmRepeaterOffset = false;` |
+| **cached readback** | `rx/filter` on RTL (1) | The backend **did** ask: `RtlSdrBackend::setSliceFilter` validates the edges, stores them, pushes them to `RtlSdrDdc::setSliceFilter`, and echoes a `SliceDelta`. The DDC stores them into two atomics that **nothing in the tree reads**. The edges round-trip through `currentOperatingState()`/`applyRestoredState()`, so they survive a reconnect and the GUI shows exactly what the operator set — and never affect a sample. | Real work in `RtlSdrDdc`: consume the edges, or stop claiming them |
+
+The second ground is why `P` is not simply "the permissive-default class". A
+backend that asked and did not implement is `D`; a backend that asked,
+implemented a store, and confirms it back to the operator is the more
+misleading case, and the vocabulary's *"reads back cached state"* clause is
+there for exactly it.
+
+ANAN's four **tone** rows are `H`, not `P`, and the reason is the same rule read
+the other way: `AnanBackend` does not mention `fmTonePresentation` anywhere, and
+that field's default is `Hidden`. A default the backend never requested is only
+a phantom when it is **permissive**; an off default hides the control, the app
+and the radio agree, and the cell is honest.
 
 ---
 

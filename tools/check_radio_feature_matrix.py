@@ -37,7 +37,13 @@ THE STATES, which are ON8ST's vocabulary and not this tool's:
 
   W  works / reachable   — the control reaches the backend and the backend acts
   D  dead                — the control exists but the path terminates
-  P  phantom             — reports success without the radio moving
+  P  phantom             — reports success without the radio moving; reads back
+                           cached state. TWO GROUNDS, and they are different
+                           repairs: an inherited permissive default the backend
+                           never asked for (one assignment), or a control the
+                           backend DID ask for whose stored value nothing ever
+                           reads (real work). A backend that asked and simply
+                           did not implement is D, not P — see gate_state()
   R  refuses visibly     — the user is told no
   H  hidden              — the GUI gates the control away on a capability
   U  unverified          — the generator could not decide
@@ -421,6 +427,35 @@ class Source:
         OR semantics, because that is what the GUI does: VfoWidget's noise
         blanker gate is `m_hasRadioSideDsp || m_hasHostNoiseBlanker`, so a
         radio that declines the first and declares the second keeps the button.
+
+        THE THREE STATES ANSWER TWO DIFFERENT QUESTIONS, and conflating them is
+        the mistake this comment exists to prevent.
+
+          * VALUE decides whether the control is on screen at all. HIDDEN means
+            every gating field is effectively false — and it does not matter
+            whether the backend wrote that false or inherited it, because the
+            operator sees the same nothing either way. That is `H`.
+          * PROVENANCE decides P against D, and ONLY provenance. PERMISSIVE is
+            `DEFAULT_TRUE`, which by construction means THE BACKEND NEVER
+            ASSIGNED THE FIELD: `effective()` returns DEFAULT_* only when the
+            capabilities() body carries no assignment at all. An explicit
+            assignment — to any value, permissive or not — yields TRUE or
+            DYNAMIC, never DEFAULT_TRUE, so it can never produce a P.
+
+        Stated as the question a contributor should ask: DID THIS BACKEND ASK
+        FOR THIS CONTROL? If it asked and did not implement it, that is a bug
+        in that backend and the cell is D. If it never mentioned the field and
+        a permissive default offered the control on its behalf, that is a gap
+        in the default and the cell is P — repairable with one assignment.
+
+        The live pair makes the distinction concrete and they are one row apart.
+        FmTonePresentation defaults to `Hidden` and `Legacy` is what turns the
+        tone controls ON; HL2 assigns `Legacy` EXPLICITLY, so it asked, and its
+        unimplemented tone verbs are D. hasFmRepeaterOffset defaults to `true`
+        and HL2 never mentions it, so it never asked, and the repeater rows are
+        P. Reading the ENUM VALUE as the discriminator would get both right here
+        by luck and be wrong on the next backend that writes a permissive value
+        down on purpose.
         """
         if not fields:
             return "OPEN"
@@ -563,8 +598,9 @@ class Source:
                     return "U", (f"the record claims {phantom.get('member')} is written and "
                                  f"never read, and the checker cannot find it at all")
                 if unread:
-                    return "P", (f"the override stores {phantom['member']} and nothing in "
-                                 f"{phantom['scope']} reads it back")
+                    return "P", (f"P/cached-readback: the backend ASKED for this control and "
+                                 f"the override stores {phantom['member']}, which nothing in "
+                                 f"{phantom['scope']} reads back. Real work repairs it")
                 return "W", (f"{phantom['member']} is now read somewhere in "
                              f"{phantom['scope']}; the phantom claim no longer holds")
             return "W", "backend overrides the seam verb"
@@ -593,8 +629,9 @@ class Source:
             return "U", "base forwards to another seam verb; reachable but not this control"
         if base == "NOOP":
             if gate == "PERMISSIVE":
-                return "P", ("backend never assigns the gating capability and inherits a "
-                             "permissive default, so the control is offered by nobody's decision")
+                return "P", ("P/inherited-default: the backend never mentions the gating "
+                             "capability, so a permissive default offered the control on its "
+                             "behalf — it never asked. One assignment repairs it")
             return "D", "no override; base body discards the intent"
         return "U", f"base body classified {base}"
 
@@ -812,6 +849,7 @@ def main() -> int:
     notices: list[str] = []
     tally: dict[str, int] = {}
     reasons: dict[str, list[str]] = {}
+    grounds: dict[str, list[str]] = {}
     cell_count = 0
 
     named_caps: set[str] = set()
@@ -904,6 +942,8 @@ def main() -> int:
             tally[committed] = tally.get(committed, 0) + 1
             if derived == "U":
                 reasons.setdefault(reason, []).append(f"{rid}/{fam}")
+            if derived == "P":
+                grounds.setdefault(reason.split(":", 1)[0], []).append(f"{rid}/{fam}")
 
             if committed not in STATES:
                 errors.append(f"::error file={where},title=feature-matrix-vocabulary::"
@@ -1016,6 +1056,11 @@ def main() -> int:
         print(line)
 
     shape = " ".join(f"{k}={tally.get(k, 0)}" for k in "WDPRHUV")
+    if grounds:
+        print("radio-feature-matrix: the P cells, by provenance — the split is the "
+              "repair, not a nuance:")
+        for ground, where in sorted(grounds.items()):
+            print(f"  {len(where):3d}  {ground}  ({', '.join(where)})")
     print(f"radio-feature-matrix: {len(matrix)} feature(s) x {len(BACKEND_ORDER)} "
           f"backend(s) = {cell_count} cell(s); {shape}; "
           f"{len(errors)} disagreement(s) with the source"

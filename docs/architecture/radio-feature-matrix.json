@@ -114,7 +114,7 @@
     "shows": "S-meter -108.52 -> -99.15 dBm across a commanded 500->3000 Hz passband, noise density flat, slope 0.219 dB/dB against a 0.40 bound, forward and reverse legs agreeing"
    }
   },
-  "note": "Pure virtual. RTL overrides it and the DDC stores the edges without ever reading them back — see the phantom note on that cell."
+  "note": "Pure virtual. RTL overrides it and the DDC stores the edges without ever reading them back: the backend ASKED for this control, so it is not the inherited-default phantom but the cached-readback one, and the repair is real work rather than one assignment."
  },
  "rx/filter-preset": {
   "control": "stored RX filter preset (FIL1/FIL2/FIL3)",
@@ -1453,7 +1453,7 @@
   },
   "headless": {},
   "verified": {},
-  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset — the tone controls and the repeater-offset controls have different gates and only the second inherits a permissive default."
+  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
  },
  "fm/tone-tx": {
   "control": "TX tone frequency",
@@ -1482,7 +1482,7 @@
   },
   "headless": {},
   "verified": {},
-  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset — the tone controls and the repeater-offset controls have different gates and only the second inherits a permissive default."
+  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
  },
  "fm/tone-rx": {
   "control": "RX tone frequency",
@@ -1505,7 +1505,7 @@
   },
   "headless": {},
   "verified": {},
-  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset — the tone controls and the repeater-offset controls have different gates and only the second inherits a permissive default."
+  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
  },
  "fm/dtcs": {
   "control": "DTCS code and reverse flags",
@@ -1528,7 +1528,7 @@
   },
   "headless": {},
   "verified": {},
-  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset — the tone controls and the repeater-offset controls have different gates and only the second inherits a permissive default."
+  "note": "Gated on fmTonePresentation, NOT on hasFmRepeaterOffset. The two gates differ in PROVENANCE, which is what separates D from P here: fmTonePresentation defaults to Hidden and Legacy is what turns these controls ON, so a backend that offers them assigned Legacy itself and asked for them. hasFmRepeaterOffset defaults to true, so a backend that offers the repeater rows may never have mentioned the field at all."
  },
  "fm/repeater-dir": {
   "control": "repeater shift direction",
@@ -1557,7 +1557,7 @@
   },
   "headless": {},
   "verified": {},
-  "note": "hasFmRepeaterOffset is declared = true in RadioCapabilities.h and both readers spell the gate !connected || caps.hasFmRepeaterOffset, so the control is available unless a CONNECTED radio actively denies it."
+  "note": "hasFmRepeaterOffset is declared = true in RadioCapabilities.h and both readers spell the gate !connected || caps.hasFmRepeaterOffset, so the control is offered unless a CONNECTED radio actively denies it. A backend that never mentions the field never asked for this control - that is the inherited-default ground for P, and one assignment repairs it."
  },
  "fm/repeater-offset": {
   "control": "repeater offset (Hz)",
