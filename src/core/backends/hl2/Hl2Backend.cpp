@@ -5913,10 +5913,16 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 
     // DRIVE: WHAT WAS ASKED FOR, AND WHAT WAS WRITTEN (#4912).
     //
-    // Nothing anywhere reported the APPLIED drive. `get transmit` has rfPower
-    // and `get radio` has txPower, but both read TransmitModel — the operator's
-    // request — which is exactly the readback-shares-the-failure problem this
-    // section exists to solve. Worse, applyDrive()'s transmit gate forces the
+    // Nothing anywhere reported the APPLIED drive. `get transmit` has rfPower,
+    // which reads TransmitModel — the operator's request — which is exactly
+    // the readback-shares-the-failure problem this section exists to solve.
+    // (This used to name `get radio`.txPower alongside it as a second reader of
+    // TransmitModel. It was neither: it read a RadioModel member nothing in the
+    // tree assigned, so it was worse than the readback this paragraph warns
+    // about. It now carries the measured forward power, qualified — see
+    // AutomationServer's radioSnapshot, #5499 item 1.)
+    //
+    // Worse, applyDrive()'s transmit gate forces the
     // register to 0 while the requested percent reads back untouched, so
     // "commanded but never applied" was invisible to automation in the one area
     // where it is safety-adjacent.

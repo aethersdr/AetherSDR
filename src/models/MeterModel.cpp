@@ -474,7 +474,6 @@ void MeterModel::clear()
     m_tgxlSwr = 1.0f;
     m_lastTgxlFwdPowerUpdateMs = 0;
     m_lastTgxlSwrUpdateMs = 0;
-    m_sLevel = -130.0f;
     m_fwdPower = 0.0f;
     m_fwdPowerInstant = 0.0f;
     m_reflectedPower = 0.0f;
@@ -778,6 +777,51 @@ std::optional<float> MeterModel::swrIfLive() const
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     return swrSampleLive(now, kTxMeterStaleMs) ? std::optional<float>(m_swr)
                                                : std::nullopt;
+}
+
+std::optional<float> MeterModel::sLevelForSlice(int sliceIndex) const
+{
+    const auto it = m_sLevelIdxBySlice.constFind(sliceIndex);
+    if (it == m_sLevelIdxBySlice.constEnd()) {
+        return std::nullopt;      // this receiver declares no LEVEL meter
+    }
+    const int index = it.value();
+    // DECLARED IS NOT FED AND FED IS NOT CURRENT. m_sLevelIdxBySlice is
+    // populated by the meter DEFINITION, so gating on the index alone would
+    // publish the m_values default for a meter no packet has ever carried —
+    // the fabricated-reading failure this whole issue is about, in a new
+    // place. vitalIsFresh is the predicate `get radio` already runs over
+    // PATEMP (#5516), reused here so one window governs both rather than a
+    // third literal appearing next to two existing ones. At the ~100 Hz the
+    // SLC:LEVEL row is fed while receiving, kVitalsFreshMs is 150 packets of
+    // slack; it bites only when the stream has actually stopped.
+    if (!vitalIsFresh(m_valueUpdatedMs.value(index, 0) > 0, valueAgeMs(index))) {
+        return std::nullopt;
+    }
+    return m_values.value(index, 0.0f);
+}
+
+std::optional<float> MeterModel::sLevelIfLive() const
+{
+    // One receiver, one answer. See the header: with two LEVEL meters declared
+    // there is no single "the" S-level, and resolving it by recency would
+    // reintroduce #155 through the back door.
+    if (m_sLevelIdxBySlice.size() != 1) {
+        return std::nullopt;
+    }
+    return sLevelForSlice(m_sLevelIdxBySlice.constBegin().key());
+}
+
+std::optional<float> MeterModel::fwdPowerIfLive() const
+{
+    if (m_fwdPwrIdx < 0 || m_lastFwdPowerUpdateMs <= 0) {
+        return std::nullopt;      // undeclared, or declared and never fed
+    }
+    const qint64 age = QDateTime::currentMSecsSinceEpoch() - m_lastFwdPowerUpdateMs;
+    if (age < 0 || age > kTxMeterStaleMs) {
+        return std::nullopt;
+    }
+    return m_fwdPower;
 }
 
 bool MeterModel::hasRecentTxMeters(qint64 maxAgeMs) const

@@ -4185,6 +4185,26 @@ target_compile_definitions(meter_surfaces_test PRIVATE
 target_link_libraries(meter_surfaces_test PRIVATE Qt6::Core)
 add_test(NAME meter_surfaces_test COMMAND meter_surfaces_test)
 
+# #5499 item 2: socket-free rigctl STRENGTH. Two slice fixtures, two SLC:LEVEL
+# meters carrying different values, and an injected backend that only reports a
+# connection state — nothing is bound, opened or keyed.
+add_executable(rigctl_strength_slevel_test tests/rigctl_strength_slevel_test.cpp)
+target_include_directories(rigctl_strength_slevel_test PRIVATE src tests)
+target_link_libraries(rigctl_strength_slevel_test PRIVATE
+    aethercore Qt6::Core Qt6::Network)
+add_test(NAME rigctl_strength_slevel_test COMMAND rigctl_strength_slevel_test)
+
+# #5499 item 3: the noise-blanker hold invariant, read out of WdspChannel.cpp as
+# TEXT (same limitation, and same reason, as meter_surfaces_test above — the
+# facts never meet at compile time). Links nothing but Qt6::Core: it opens the
+# source file, it does not run the DSP.
+add_executable(wdsp_nb_hold_invariant_test tests/wdsp_nb_hold_invariant_test.cpp)
+target_include_directories(wdsp_nb_hold_invariant_test PRIVATE src)
+target_compile_definitions(wdsp_nb_hold_invariant_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(wdsp_nb_hold_invariant_test PRIVATE Qt6::Core)
+add_test(NAME wdsp_nb_hold_invariant_test COMMAND wdsp_nb_hold_invariant_test)
+
 add_executable(health_applet_test
     tests/health_applet_test.cpp
     src/gui/HealthApplet.cpp

@@ -99,11 +99,46 @@ public:
     QJsonArray allMeters() const;
     QJsonArray metersForSource(const QString& source, int sourceIndex = -1) const;
 
-    // Convenience: S-meter (slice LEVEL meter) in dBm.
-    float sLevel() const { return m_sLevel; }
+    // Convenience: the S-meter (slice LEVEL meter) reading for ONE slice, in
+    // dBm — std::nullopt when that slice declares no LEVEL meter, when none has
+    // ever been fed, or when the last sample has fallen outside the shared
+    // vitals window.
+    //
+    // THIS REPLACES A SCALAR sLevel() THAT NOTHING WROTE. m_sLevel was assigned
+    // in exactly one place in the tree — clear(), to -130.0f — because #155
+    // moved the S-meter onto m_sLevelIdxBySlice (correctly: the single
+    // m_sLevelIdx made every slice show the newest slice's signal) and deleted
+    // the scalar's store in the same hunk. The getter and its two callers were
+    // left pointing at a member with no writer, so `get meters`.sLevel answered
+    // -130 dBm for 1304 consecutive samples and rigctl's `get_level STRENGTH`
+    // answered -57.0 dB to every hamlib client on every backend, forever
+    // (#5499 item 2).
+    //
+    // Per-slice BY CONSTRUCTION rather than by convention: the caller has to
+    // name a receiver, so there is no radio-wide scalar left for a future
+    // reader to resolve as "whichever slice updated last".
+    std::optional<float> sLevelForSlice(int sliceIndex) const;
+
+    // The radio-wide S-meter reading — what `get meters` publishes as a scalar
+    // — WHEN THERE IS ONE. Exactly one slice declaring a LEVEL meter is the
+    // only case in which "the" S-level has a single answer; with two receivers
+    // this declines rather than picking one, because picking the most recently
+    // updated one is precisely the bug #155 fixed. A client that wants a named
+    // receiver reads it out of the per-meter `all` array, which carries a row
+    // per slice.
+    std::optional<float> sLevelIfLive() const;
 
     // Convenience: forward power in watts.
     float fwdPower() const { return m_fwdPower; }
+    // Forward power when the forward-power SAMPLE ITSELF is live, std::nullopt
+    // when it is not. Judged on its own timestamp rather than on the aggregate
+    // TX stamp, and against kTxMeterStaleMs — the same shape, and the same
+    // reason, as swrIfLive() (#4536): a radio that keeps streaming SWR but
+    // stops streaming FWDPWR must not report minutes-old watts as current.
+    // Sharing the constant with `get meters`.txMetersFresh is what keeps
+    // "the TX meters are fresh" and "here is the power" from drifting apart as
+    // two different literals.
+    std::optional<float> fwdPowerIfLive() const;
     float fwdPowerInstant() const { return m_fwdPowerInstant; }
     float reflectedPower() const { return m_reflectedPower; }
     float tgxlFwdPower() const { return m_tgxlFwdPwr; }
@@ -488,7 +523,6 @@ private:
     qint64 m_lastTgxlSwrUpdateMs{0};
 
     // Cached values
-    float m_sLevel{-130.0f};
     float m_fwdPower{0.0f};
     float m_fwdPowerInstant{0.0f};
     float m_reflectedPower{0.0f};
