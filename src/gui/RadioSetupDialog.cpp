@@ -121,21 +121,35 @@ static const QString kLabelStyle =
 static const QString kValueStyle =
     "QLabel { color: #00c8ff; font-size: 12px; font-weight: bold; }";
 
-// ONE call site for the shared value style, where the file had eighteen.
+// kValueStyle's colour, as the token it is a copy of. AGENTS.md: "every colour
+// resolves through a ThemeManager token ... never hardcode a colour literal",
+// and tools/migrate_colours.py already maps both #00c8ff and the token's own
+// #00c8f0 to color.accent.bright. Only ThemeManager::applyStyleSheet registers
+// a widget for re-resolution on themeChanged; a plain setStyleSheet does not,
+// so a label carrying the literal keeps its dark-theme cyan after View > Theme
+// switches to Default Light, where color.accent.bright is #0098c0.
+static const QString kValueStyleTemplate =
+    "QLabel { color: {{color.accent.bright}}; font-size: 12px; font-weight: bold; }";
+
+// The shared value style, paired with its QLabel once. The four Radio
+// Information fields -- Serial:, Region:, HW Version:, Options: -- route
+// through here, which is what makes them byte-identical to each other: the
+// invariant #5507 item 2 is about, and the one the test asserts.
 //
-// Every "Radio Information" field is a QLabel carrying kValueStyle, and each
-// repeated `new QLabel(...)` followed by `->setStyleSheet(kValueStyle)`.
-// Folding the pair into a helper says once what was said eighteen times.
+// This is NOT a whole-file fold. 14 direct setStyleSheet(kValueStyle) sites and
+// two applyStyleSheet(..., kValueStyle) sites elsewhere in this file still carry
+// the literal, untouched on purpose -- migrating them is a file-wide change that
+// does not belong in a fix for one field.
 //
-// It also answers tools/audit_colours.py's ratchet in the terms the tool
-// itself asks for -- "style via an existing setStyleSheet() site rather than
-// a new call". Moving Region: off a bespoke ThemeManager stylesheet onto this
-// shared constant is the direction that ratchet exists to encourage, but the
-// counter sees only call sites and read the move as a regression.
+// It also answers tools/audit_colours.py's ratchet, which counts setStyleSheet()
+// CALL SITES and not colours. The bespoke ThemeManager template Region: used to
+// carry was never counted, so replacing it with a counted setStyleSheet() read
+// as +1 even though no colour moved. Folding four fields onto one applyStyleSheet
+// retires three counted sites and adds none.
 static QLabel* makeValueLabel(const QString& text)
 {
     auto* label = new QLabel(text);
-    label->setStyleSheet(kValueStyle);
+    ThemeManager::instance().applyStyleSheet(label, kValueStyleTemplate);
     return label;
 }
 
@@ -1328,34 +1342,35 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // displayOrDash, not a fabricated default. This read
         //     new QLabel(m_model->region().isEmpty() ? "USA" : m_model->region())
         // and RadioModel::m_region is written in exactly two places, both Flex:
-        // the `info` reply key/value chain and applyRadioChanges' RadioDelta,
-        // fed by FlexBackend::decodeRadioStatus. Hl2Backend builds no delta
-        // carrying a region and Hl2Discovery sets no RadioInfo::turfRegion, so
-        // on a Hermes-Lite 2 region() is UNCONDITIONALLY empty and that ternary
-        // always rendered "USA" — an invented value for a radio that has no
-        // region, in the styling of a reading. The app contradicted itself
-        // about it with no hardware in the loop: troubleshootingSnapshot
+        // the `info` reply key/value chain and applyRadioChanges' RadioDelta.
+        // Hl2Backend builds no delta carrying a region and Hl2Discovery sets no
+        // RadioInfo::turfRegion, so on a Hermes-Lite 2 region() is
+        // UNCONDITIONALLY empty and that ternary always rendered "USA" — an
+        // invented value in the styling of a reading. The app contradicted
+        // itself about it with no hardware in the loop: troubleshootingSnapshot
         // publishes the same m_region and SliceTroubleshootingDialog renders it
-        // through orPlaceholder as "n/a", so the support bundle said n/a while
-        // this dialog said USA. The bundle was right. Serial:, HW Version:,
-        // Options:, the IP/mask/MAC/gateway/network-name row and all four
-        // License Info fields already answer an empty value with the em-dash;
-        // Region: was the only field in this dialog that answered it with
-        // content. (#5507 item 1)
+        // through orPlaceholder as "n/a". Every other value in this dialog
+        // already answers an empty field with the em-dash. (#5507 item 1)
         m_regionLabel = makeValueLabel(displayOrDash(m_model->region()));
-        // kValueStyle — a status label, like HW Version: beside it. What was
-        // here instead was a ThemeManager stylesheet carrying kToggleStyle's box
-        // metrics (1px border, border-radius 3px, font-size 11px, bold, padding
-        // 3px 10px) plus setAlignment(Qt::AlignCenter): a centred bordered
-        // accent box sitting in the column that makeToggle builds Remote On: and
-        // multiFLEX: in. It reads as pressable, it is a QLabel with no event
-        // handling of any kind, and an operator clicked it and reported that it
-        // offered no options. The FlexControl: comment a few fields below
-        // already cites "Region:/HW Version: above" as its model of what a
-        // status label is — the classification was right, the styling had never
-        // been brought into line with it. (#5507 item 2)
-        grid->addWidget(makeInfoField(QStringLiteral("Region:"), m_regionLabel,
-                                      kInfoRightLabelWidth),
+        // makeValueLabel and makeCopyableInfoField — a status label, like
+        // HW Version: beside it. What was here instead was a ThemeManager
+        // stylesheet carrying kToggleStyle's box metrics (1px border,
+        // border-radius 3px, font-size 11px, bold, padding 3px 10px) plus
+        // setAlignment(Qt::AlignCenter): a centred bordered accent box sitting
+        // in the column that makeToggle builds Remote On: and multiFLEX: in. It
+        // reads as pressable, it is a QLabel with no event handling of any kind,
+        // and an operator clicked it and reported that it offered no options.
+        //
+        // Styling alone left one half of the claim unmade. Region: was also the
+        // only one of this group's four values that was neither mouse-selectable
+        // nor carried a CopyValueButton, so an operator gathering details for a
+        // bug report could copy Serial:, HW Version: and Options: and not this
+        // one. That asymmetry was invisible while Region: looked like a
+        // different kind of widget and conspicuous the moment it stopped. Same
+        // classification, same affordances. (#5507 item 2)
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("Region"),
+                                              QStringLiteral("Region:"),
+                                              m_regionLabel, kInfoRightLabelWidth),
                         0, 1);
 
         m_hwVersionLabel = makeValueLabel(prefixedVersion(m_model->version()));
@@ -1470,12 +1485,10 @@ QWidget* RadioSetupDialog::buildRadioTab()
                 m_hwVersionLabel->setText(prefixedVersion(m_model->version()));
             }
             // Region: was missing from this lambda — m_regionLabel had no
-            // setText anywhere in the file, so it froze at whatever was true
-            // when buildRadioTab ran. Its three neighbours here refreshed and it
-            // did not, and RadioModel::disconnectFromRadio clears m_region
-            // alongside m_callsign/m_nickname, so even on a Flex the label went
-            // on showing the PREVIOUS radio's region after a disconnect — the
-            // honest-direction form of the same defect. (#5507 item 3)
+            // setText anywhere in the file, so it froze at construction while
+            // its three neighbours here refreshed. RadioModel::disconnectFromRadio
+            // clears m_region, so even on a Flex the label went on showing the
+            // PREVIOUS radio's region after a disconnect. (#5507 item 3)
             if (m_regionLabel) {
                 m_regionLabel->setText(displayOrDash(m_model->region()));
             }

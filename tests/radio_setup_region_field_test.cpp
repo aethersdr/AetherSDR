@@ -25,6 +25,7 @@
 // injected backend cannot deliver one.)
 
 #include "TestSettingsProfile.h"
+#include "core/ThemeManager.h"
 #include "core/backends/IRadioBackend.h"
 #include "core/backends/RadioDelta.h"
 #include "gui/RadioSetupDialog.h"
@@ -32,6 +33,7 @@
 
 #include <QApplication>
 #include <QLabel>
+#include <QToolButton>
 #include <QtTest>
 
 namespace AetherSDR {
@@ -134,13 +136,33 @@ private slots:
         // never connected, the Options: assertion fails too and the failure is
         // about the harness rather than about Region:. Region: failing ALONE is
         // the defect.
+        //
+        // No processEvents() anywhere below, deliberately: every hop on this
+        // path is a direct same-thread call — radioChanged is emitted from this
+        // thread to a RadioModel living on it, applyRadioChanges emits
+        // infoChanged inline, and the dialog's lambda runs inline off that. A
+        // processEvents() here would pass while implying a queued delivery this
+        // path does not have, and would keep passing if the delivery ever
+        // became queued and broken.
         RadioDelta arrived;
         arrived.region       = QStringLiteral("Japan");
         arrived.radioOptions = QStringLiteral("ATU");
         emit backend->radioChanged(arrived);
-        QCoreApplication::processEvents();
         QCOMPARE(options->text(), QStringLiteral("ATU"));   // control
         QCOMPARE(region->text(),  QStringLiteral("Japan")); // the fix
+
+        // Region: ALONE. RadioDelta is present-only (std::optional per field),
+        // so leaving radioOptions unset is a delta that names region and
+        // nothing else — which is the shape a real region change arrives in.
+        // Without this step the Region: label is only ever observed moving in
+        // company, and a lambda that refreshed Region: by reading the Options:
+        // string, or one that only ran when radioOptions was present, would
+        // pass. Here Options: is a NEGATIVE control: it must hold still.
+        RadioDelta regionOnly;
+        regionOnly.region = QStringLiteral("Europe");
+        emit backend->radioChanged(regionOnly);
+        QCOMPARE(region->text(),  QStringLiteral("Europe")); // the fix, alone
+        QCOMPARE(options->text(), QStringLiteral("ATU"));    // negative control
 
         // And back the other way. RadioModel::disconnectFromRadio clears
         // m_region alongside m_callsign/m_nickname, so a label that only ever
@@ -151,7 +173,6 @@ private slots:
         cleared.region       = QString();
         cleared.radioOptions = QString();
         emit backend->radioChanged(cleared);
-        QCoreApplication::processEvents();
         QCOMPARE(options->text(), placeholder);   // control
         QCOMPARE(region->text(),  placeholder);   // the fix
     }
@@ -185,6 +206,79 @@ private slots:
         QCOMPARE(region->styleSheet(), hwVersion->styleSheet());
         // Centre alignment was the other half of the control look.
         QCOMPARE(region->alignment(), hwVersion->alignment());
+    }
+
+    // Item 2, the interaction half. Styling made Region: look like HW Version:;
+    // this pins that it BEHAVES like it too. Region: was the only value in the
+    // Radio Information group built with makeInfoField rather than
+    // makeCopyableInfoField, so it was the one field of the four an operator
+    // assembling a bug report could not select or copy.
+    //
+    // Asserted against the neighbour for the same reason as the stylesheet
+    // above: retyping Qt::TextSelectableByMouse or the literal 1 here would let
+    // the test agree with itself if makeCopyableInfoField ever changed what it
+    // grants. The controls make sure neither comparison is between two nothings.
+    void regionIsSelectableAndCopyableLikeItsNeighbour()
+    {
+        RadioModel model;
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        QLabel* region    = RadioSetupDialogTestAccess::regionLabel(dialog);
+        QLabel* hwVersion = RadioSetupDialogTestAccess::hwVersionLabel(dialog);
+        QVERIFY(region);
+        QVERIFY(hwVersion);
+
+        // CONTROL: the neighbour really is selectable, so the compare below is
+        // not NoTextInteraction against NoTextInteraction.
+        QVERIFY(hwVersion->textInteractionFlags() & Qt::TextSelectableByMouse);
+        QCOMPARE(region->textInteractionFlags(), hwVersion->textInteractionFlags());
+
+        // The copy affordance. Each value label sits in the field wrapper its
+        // make*InfoField built, and CopyValueButton is the only QToolButton in
+        // either wrapper.
+        auto copyButtons = [](QLabel* value) {
+            QWidget* field = value->parentWidget();
+            return field ? int(field->findChildren<QToolButton*>().size()) : -1;
+        };
+        // CONTROL: the neighbour has exactly one, so the compare is not 0 == 0.
+        QCOMPARE(copyButtons(hwVersion), 1);
+        QCOMPARE(copyButtons(region), copyButtons(hwVersion));
+    }
+
+    // The colour of these four values resolves through a ThemeManager token
+    // rather than being pasted in as a literal. This is the one property the
+    // old Region: stylesheet had that the rest of the group did not, and losing
+    // it while fixing the box metrics would have been a silent trade: only
+    // ThemeManager::applyStyleSheet registers a widget for re-resolution on
+    // themeChanged, so a literal survives a switch to Default Light unchanged.
+    //
+    // Asserted against the token's own resolved value, which is not something
+    // the test can satisfy by agreeing with itself — the file still carries the
+    // literal #00c8ff in kValueStyle for its other sites, and the control below
+    // pins that the two are distinguishable.
+    void valueLabelsResolveTheirColourThroughTheThemeToken()
+    {
+        RadioModel model;
+        RadioSetupDialog dialog(&model);
+        dialog.show();
+        QLabel* region    = RadioSetupDialogTestAccess::regionLabel(dialog);
+        QLabel* hwVersion = RadioSetupDialogTestAccess::hwVersionLabel(dialog);
+        QVERIFY(region);
+        QVERIFY(hwVersion);
+
+        const QColor token =
+            ThemeManager::instance().color(region, QStringLiteral("color.accent.bright"));
+        QVERIFY(token.isValid());
+        // CONTROL: the token does not resolve to the literal this file's
+        // kValueStyle still carries elsewhere, so the assertion below can tell a
+        // tokenised label from a hardcoded one. If these ever converge this
+        // fails loudly rather than passing vacuously.
+        QVERIFY(token.name().compare(QStringLiteral("#00c8ff"), Qt::CaseInsensitive) != 0);
+
+        QVERIFY2(region->styleSheet().contains(token.name(), Qt::CaseInsensitive),
+                 qPrintable(region->styleSheet()));
+        QVERIFY2(hwVersion->styleSheet().contains(token.name(), Qt::CaseInsensitive),
+                 qPrintable(hwVersion->styleSheet()));
     }
 };
 
