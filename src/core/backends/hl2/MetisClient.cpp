@@ -9,6 +9,7 @@
 #include <QtGlobal>
 
 #include <QDebug>
+#include <QLoggingCategory>
 
 #include <algorithm>
 #include <cmath>
@@ -26,6 +27,14 @@
 #endif
 
 namespace AetherSDR::hl2 {
+
+// Same category string as Hl2TxDsp's lcTxMod and Hl2Backend's lcHl2Tx:
+// "aether.hl2.tx", off by default and documented in LogManager as high-rate
+// and as a SEPARATE toggle from "Hermes-Lite 2". A starvation is reported
+// from HERE rather than from Hl2Backend's telemetry handler because the
+// counters are incremented by the EP2 pacer on the I/O thread; reading them
+// from the telemetry handler would be a cross-thread read of a plain integer.
+static Q_LOGGING_CATEGORY(lcTxFifo, "aether.hl2.tx")
 
 namespace {
 
@@ -1053,8 +1062,13 @@ void MetisClient::queueTxIq(std::span<const std::complex<float>> iq, const TxCoo
     for (const auto& s : iq)
         m_txIq.push_back(s);
     // Drop the OLDEST on overflow: stale transmit audio is worse than a gap.
-    while (m_txIq.size() > kTxQueueMax)
+    // COUNTED, because the drop is a discontinuity in the middle of an
+    // envelope and nothing else on the wire or in the telemetry records that
+    // it happened -- see txOverflowSamples().
+    while (m_txIq.size() > kTxQueueMax) {
         m_txIq.pop_front();
+        ++m_txOverflowSamples;
+    }
 }
 
 void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation)
@@ -1072,6 +1086,30 @@ void MetisClient::setTxTestTone(double offsetHz, double amplitude, const TxCoord
 void MetisClient::flushTxIq()
 {
     m_txIq.clear();
+    // A flush is how an over ends, so it is also where a starvation that ran
+    // to the end of that over stops. Without this the run would sit unreported
+    // until the NEXT transmission happened to emit a full packet, and would
+    // then be attributed to it.
+    reportTxUnderflowRun();
+}
+
+void MetisClient::reportTxUnderflowRun()
+{
+    if (m_txUnderflowRunPackets == 0)
+        return;
+    qCDebug(lcTxFifo) << "HL2 tx fifo: HOST queue starved for"
+                      << m_txUnderflowRunPackets << "EP2 packet(s),"
+                      << m_txUnderflowRunSamples
+                      << "sample(s) of substituted silence on the air"
+                      << "(session totals: underflow" << m_txUnderflowPackets
+                      << "packets /" << m_txUnderflowSamples << "samples, overflow"
+                      << m_txOverflowSamples << "samples)."
+                      << "This is the CLIENT's queue, not the radio's DSIQ FIFO:"
+                      << "the EP2 frame went out full size on schedule, so the"
+                      << "gateware's fill and pacingFault readings are unaffected"
+                      << "by it and cannot be used to rule it out.";
+    m_txUnderflowRunPackets = 0;
+    m_txUnderflowRunSamples = 0;
 }
 
 std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
@@ -1194,7 +1232,14 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
         while (m_tonePhase > 2.0 * 3.14159265358979323846)
             m_tonePhase -= 2.0 * 3.14159265358979323846;
         ep2WriteTxIq(pkt, block);
-    } else if (keyed && !m_txIq.empty()) {
+    } else if (keyed && !m_cwMode && m_toneAmp <= 0.0) {
+        // THE QUEUED-IQ PATH, and the only one that can starve: CW and the
+        // test tone above synthesise a whole block per packet, so they always
+        // fill. The empty queue is folded in here rather than left to fall off
+        // the end of the chain, because a packet of pure silence is not a
+        // lesser fault than a short one -- it is the largest one this FIFO can
+        // produce, and leaving it uncounted was the shape of the original
+        // defect.
         std::vector<std::complex<float>> block;
         const std::size_t n = std::min<std::size_t>(kTxSamplesPerPacket, m_txIq.size());
         block.reserve(n);
@@ -1202,7 +1247,32 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
             block.push_back(m_txIq.front());
             m_txIq.pop_front();
         }
-        ep2WriteTxIq(pkt, block);   // a short block leaves the rest as silence
+        if (n < static_cast<std::size_t>(kTxSamplesPerPacket)) {
+            // Count the SILENCE, not the samples: the figure that matters is
+            // how much of this envelope the radio was handed as zeros.
+            const auto shortBy = static_cast<std::uint64_t>(kTxSamplesPerPacket) - n;
+            ++m_txUnderflowPackets;
+            m_txUnderflowSamples += shortBy;
+            ++m_txUnderflowRunPackets;
+            m_txUnderflowRunSamples += shortBy;
+        } else {
+            // A full packet ends whatever run was in progress.
+            reportTxUnderflowRun();
+        }
+        if (n > 0)
+            ep2WriteTxIq(pkt, block);   // a short block leaves the rest as silence
+        // n == 0 needs no write at all: ep2Packet already zero-filled the
+        // payload, which is the same bytes ep2WriteTxIq would produce for an
+        // empty span. Skipping it keeps the wire identical to before this
+        // change -- the counters observe, they do not alter.
+    } else {
+        // UNKEYED. Silence here is the design, not a fault, so nothing is
+        // counted -- but the key having gone up is also the end of any
+        // starvation that was still running when it did, and the pacer reaches
+        // this branch within one EP2 interval of the unkey. That makes this
+        // the backstop for every way an over can end, including the paths that
+        // clear m_txIq without going through flushTxIq().
+        reportTxUnderflowRun();
     }
     return pkt;
 }

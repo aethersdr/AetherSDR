@@ -7762,11 +7762,27 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
                          << "-> fwd" << directionalWatts(*t.forwardPowerRaw) << "W"
                          << "(uncalibrated reference curve)";
     }
-    // TX IQ FIFO — a queue-fed transmission can starve the radio's buffer in a
-    // way a per-packet generated tone never can, so this is what distinguishes
-    // "the audio is wrong" from "the audio never arrived". `fill` is the top 7
-    // bits of the level, 0-127, not a sample count; `pacingFault` is the one
-    // flag the gateware sends for both underrun and blocked writes.
+    // TX IQ FIFO — THE RADIO'S, not ours. `fill` is the top 7 bits of the
+    // gateware's DSIQ level, 0-127, not a sample count; `pacingFault` is the
+    // one flag the gateware sends for both underrun and blocked writes.
+    //
+    // WHAT THIS PAIR CANNOT TELL YOU, corrected here because the comment that
+    // stood in this place said the opposite and a healthy reading was being
+    // taken as evidence against a defect it is structurally blind to:
+    // it does NOT report a starvation of the CLIENT's queue
+    // (MetisClient::m_txIq). That queue running dry does not drop an EP2
+    // packet or shorten one — MetisClient::onEp2PacerTick emits a full-size
+    // frame off the wall clock either way and ep2WriteTxIq zero-fills the
+    // samples that were not supplied — so the radio is handed an unbroken
+    // 48 kHz sample stream whose CONTENT is partly silence, and its FIFO fill
+    // is identical in both cases. The host-side fault has its own counters:
+    // MetisClient::txUnderflowPackets, ::txUnderflowSamples and
+    // ::txOverflowSamples, logged under this same category from the I/O
+    // thread that owns them.
+    //
+    // So these two readings answer "did the audio reach the radio late or in
+    // bursts", and the client's counters answer "was there any audio to send".
+    // A fault in either one is invisible to the other.
     if (m_keyed && t.txFifoFillMsbs)
         qCDebug(lcHl2Tx) << "HL2 fifo: fill" << *t.txFifoFillMsbs << "/127"
                          << "pacingFault" << t.txFifoRecovery.value_or(false);

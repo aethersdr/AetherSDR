@@ -672,6 +672,19 @@ int main()
         // Sample 1 lands in the next 8-byte slot; the rest is transmit silence.
         check(pay[12] == 0x00 && pay[13] == 0x00, "sample 1 I = 0");
         check(pay[14] == 0x3F && pay[15] == 0xFF, "sample 1 Q = 0.5 -> 16383");
+        // KEPT AS AN ASSERTION, deliberately, against the reading that it
+        // "pins a defect as correct". ep2WriteTxIq is a pure function over a
+        // span: zero-filling the slots the span does not reach is the only
+        // thing it can do, it is what makes the EP2 frame a fixed 1032 bytes
+        // at a fixed cadence, and changing it here would change every unkeyed
+        // frame too.
+        //
+        // The defect S3 row 3.3 names is one layer UP -- MetisClient::
+        // buildNextControlPacket choosing to hand this function a short span
+        // when the TX IQ FIFO has starved, and nothing recording that it did.
+        // That is where the amendment belongs and where it was made:
+        // MetisClient::txUnderflowPackets / ::txUnderflowSamples, asserted in
+        // hl2_tx_gate_test with a negative control on a clean transmission.
         check(pay[20] == 0 && pay[21] == 0 && pay[22] == 0 && pay[23] == 0,
               "unsupplied samples are transmit silence");
     }
