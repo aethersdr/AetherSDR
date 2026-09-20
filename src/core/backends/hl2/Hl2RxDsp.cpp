@@ -399,6 +399,11 @@ void Hl2RxDsp::installChannel(RebuildResult result)
     // deliberately does NOT mute across a rate change (see finishRateChange in
     // Hl2Backend), so without this a sample-rate change publishes the dive with
     // no mute anywhere near it.
+    armMeterSettle();
+}
+
+void Hl2RxDsp::armMeterSettle()
+{
     m_meterSettleBlocks = sMeterSettleBlocks(m_config.inputSampleRateHz,
                                              m_config.dspBlockSize);
 }
@@ -474,8 +479,7 @@ void Hl2RxDsp::setAudioMuted(bool muted)
     // afterwards look wrong. The blanker can be held because the stage is ours
     // to skip. The meter cannot, so it is WAITED OUT instead.
     if (m_audioMuted && !muted)
-        m_meterSettleBlocks = sMeterSettleBlocks(m_config.inputSampleRateHz,
-                                                 m_config.dspBlockSize);
+        armMeterSettle();
     m_audioMuted = muted;
     // The mute path clocks the channel with ZEROS, and the noise blanker
     // triggers on a RATIO — magnitude against a running average magnitude — so

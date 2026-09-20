@@ -581,6 +581,10 @@ private:
     // their results cannot drift apart — this class re-applies SIX things across
     // a rebuild and a second copy of that list would lose one of them.
     void installChannel(RebuildResult result);
+    // Arm m_meterSettleBlocks from the current geometry. One site for the
+    // arithmetic, called on the mute's release edge and on a channel install so
+    // the two cannot drift apart. DSP thread only.
+    void armMeterSettle();
 
     // May a control verb push at m_channel right now? False while a background
     // rebuild is outstanding — see beginRebuild() for why pushing then would

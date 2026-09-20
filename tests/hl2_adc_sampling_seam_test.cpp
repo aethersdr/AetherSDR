@@ -354,14 +354,19 @@ int main(int argc, char** argv)
             feedOneBlock(dsp, phase);
         app.processEvents();
         check(meterEmissions > 0, "and publishing resumes after the over");
-        std::printf("  S-meter across an over: %.1f dBFS before, %.1f dBFS on the "
-                    "first reading after (%+.1f dB)\n",
-                    static_cast<double>(beforeTheOver),
-                    static_cast<double>(firstMeterDbfs),
-                    static_cast<double>(firstMeterDbfs - beforeTheOver));
-        check(std::fabs(firstMeterDbfs - beforeTheOver) <= kMeterResumeToleranceDb,
-              "THE FIRST READING AFTER AN OVER IS A READING OF THE BAND, not of "
-              "the silence we clocked into WDSP's average while we transmitted");
+        // Only once it has resumed: firstMeterDbfs is whatever the recorder
+        // last captured, so comparing it after a failed resume would print a
+        // reading nothing published and turn one cause into two failures.
+        if (meterEmissions > 0) {
+            std::printf("  S-meter across an over: %.1f dBFS before, %.1f dBFS on the "
+                        "first reading after (%+.1f dB)\n",
+                        static_cast<double>(beforeTheOver),
+                        static_cast<double>(firstMeterDbfs),
+                        static_cast<double>(firstMeterDbfs - beforeTheOver));
+            check(std::fabs(firstMeterDbfs - beforeTheOver) <= kMeterResumeToleranceDb,
+                  "THE FIRST READING AFTER AN OVER IS A READING OF THE BAND, not of "
+                  "the silence we clocked into WDSP's average while we transmitted");
+        }
     }
 
     if (g_failures == 0) {
