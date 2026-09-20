@@ -1313,13 +1313,30 @@ void RadioModel::setupBackend(const QString& family)
 
     // meterId is "SOURCE:NAME" (e.g. "TX:FWDPWR"), matching MeterDef's own
     // source/name pair rather than inventing a second naming scheme.
+    //
+    // A backend with SEVERAL of the same meter — an HL2 running more than one
+    // receiver publishes an S-meter per receiver — needs a third field, the
+    // sourceIndex, and this signal has no room for one. Until it does, the
+    // index rides on the source token as trailing digits and
+    // MeterModel::splitMeterId takes it back off. That is the honest shape of
+    // it: a source index smuggled through a name, because the alternative is a
+    // signature change to IRadioBackend.
+    //
+    // WITHOUT the index this is worse than a dropped reading. findMeter()
+    // treats sourceIndex -1 as match-any and returns the FIRST definition with
+    // that source and name, so every receiver's level would land on the lowest
+    // one — a plausible wrong number in place of an honest absence. An id with
+    // no digits still resolves match-any, which is what every single-instance
+    // meter ("TX:FWDPWR", "RAD:PATEMP") has always relied on.
     connect(m_backend.get(), &IRadioBackend::meterUpdate, this,
             [this](const QString& meterId, double value) {
-        const int colon = meterId.indexOf(QLatin1Char(':'));
-        if (colon <= 0)
+        QString source;
+        QString name;
+        int sourceIndex = -1;
+        if (!MeterModel::splitMeterId(meterId, &source, &name, &sourceIndex))
             return;
-        m_meterModel.updateValueByName(meterId.left(colon), meterId.mid(colon + 1),
-                                       static_cast<float>(value));
+        m_meterModel.updateValueByName(source, name,
+                                       static_cast<float>(value), sourceIndex);
     });
 
     // aetherd RFC 2.3: TransmitModel touchpoint. The backend decodes the five

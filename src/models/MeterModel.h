@@ -63,6 +63,25 @@ public:
     bool updateValueByName(const QString& source, const QString& name,
                            float converted, int sourceIndex = -1);
 
+    // Split a backend's "SOURCE:NAME" meter id into the triple that actually
+    // identifies a meter here: source, name and sourceIndex.
+    //
+    // IRadioBackend::meterUpdate carries a single string, so a backend with more
+    // than one of the same meter has no field to say WHICH one. The convention
+    // this parses is that trailing decimal digits on the source token are the
+    // sourceIndex — "SLC1:LEVEL" is source "SLC", sourceIndex 1 — which is what
+    // Hl2Backend::sliceMeterName already emits for its second receiver.
+    //
+    // A source with no trailing digit yields sourceIndex -1, findMeter()'s
+    // match-any, exactly as before this existed: "TX:FWDPWR" must keep
+    // resolving against a definition whose sourceIndex is whatever the backend
+    // chose. Returns false if the id has no colon or either half is empty.
+    //
+    // This lives here rather than in RadioModel because the naming scheme is
+    // MeterDef's, not the transport's — see RadioModel's meterUpdate handler.
+    static bool splitMeterId(const QString& meterId, QString* source,
+                             QString* name, int* sourceIndex);
+
     // Lookup a meter definition by index.
     const MeterDef* meterDef(int index) const;
 

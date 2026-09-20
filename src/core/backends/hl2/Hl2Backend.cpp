@@ -1113,6 +1113,13 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
             emit meterUpdate(sliceMeterName(ui), *out);
     });
 
+    // The name the lambda above publishes under has to EXIST as a definition or
+    // MeterModel has nowhere to put the value. Declared here rather than in
+    // defineMeters() because this runs once per receiver, at both connect and
+    // add, so the catalogue describes the receivers that are actually running.
+    // A no-op for receiver 0, whose meter defineMeters() owns.
+    defineSliceLevelMeter(ui);
+
     // Recorded, not published. m_rx is this thread's, so this is a plain store;
     // the sample path sees nothing until the caller calls publishIoDsps().
     r->dsp = dsp;
@@ -1367,6 +1374,12 @@ bool Hl2Backend::removePanadapter(const QString& panId)
 
     const QString removedPanId = ids->panId;
     const int removedUi = ids->uiNumber;
+
+    // Withdraw this receiver's S-meter before its DSP goes, so nothing is left
+    // describing a receiver that has stopped producing readings. UI numbers are
+    // not renumbered by the removal below, so the surviving meters keep their
+    // identities.
+    withdrawSliceLevelMeter(removedUi);
 
     // Tear the DSP down BEFORE the wire shrinks, so nothing is left consuming a
     // slot the radio has stopped sending. The reverse order feeds the surviving
@@ -3282,6 +3295,46 @@ QString Hl2Backend::sliceMeterName(int uiNumber)
     // that did not exist before get a suffix.
     return uiNumber == 0 ? QStringLiteral("SLC:LEVEL")
                          : QStringLiteral("SLC%1:LEVEL").arg(uiNumber);
+}
+
+int Hl2Backend::sliceLevelMeterIndex(int uiNumber)
+{
+    return uiNumber == 0 ? 1 : kSliceLevelMeterBase + uiNumber;
+}
+
+void Hl2Backend::defineSliceLevelMeter(int uiNumber)
+{
+    // Receiver 0's is defineMeters()' business — see the header. Declaring it
+    // here as well would allocate a SECOND "SLC"/"LEVEL" definition for slice 0
+    // and MeterModel's per-slice cache keeps the last one, so the bare
+    // "SLC:LEVEL" updates would start resolving to whichever index won.
+    if (uiNumber <= 0)
+        return;
+    MeterDef d;
+    d.index = sliceLevelMeterIndex(uiNumber);
+    d.source = QStringLiteral("SLC");
+    // THE FIELD THAT WAS MISSING. The suffix in sliceMeterName() is a transport
+    // detail; this is the identity. MeterModel::defineMeter keys its per-slice
+    // cache on source == "SLC" exactly, so a definition calling itself "SLC1"
+    // would be accepted, appear in allMeters(), and still never key the cache —
+    // it would look fixed and change nothing.
+    d.sourceIndex = uiNumber;
+    d.name = QStringLiteral("LEVEL");
+    d.unit = QStringLiteral("dBm");
+    d.low = -140.0;
+    d.high = 0.0;
+    d.description = QStringLiteral("Receive signal level, receiver %1").arg(uiNumber + 1);
+    emit meterDefined(d);
+}
+
+void Hl2Backend::withdrawSliceLevelMeter(int uiNumber)
+{
+    if (uiNumber <= 0)
+        return;
+    // MeterModel::removeMeter purges m_sLevelIdxBySlice for this index, so a
+    // closed receiver stops appearing in the meter list instead of freezing at
+    // its last reading.
+    emit meterRemoved(sliceLevelMeterIndex(uiNumber));
 }
 
 void Hl2Backend::setSliceFrequency(int sliceId, double hz)

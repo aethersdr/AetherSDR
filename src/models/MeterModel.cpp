@@ -415,6 +415,40 @@ float MeterModel::convertRaw(const MeterDef& def, qint16 raw) const
     return static_cast<float>(raw);
 }
 
+bool MeterModel::splitMeterId(const QString& meterId, QString* source,
+                              QString* name, int* sourceIndex)
+{
+    const int colon = meterId.indexOf(QLatin1Char(':'));
+    if (colon <= 0 || colon + 1 >= meterId.size())
+        return false;
+
+    QString src = meterId.left(colon);
+
+    // Trailing digits are the source index. Consumed from the END so a source
+    // whose NAME contains a digit is untouched, and only when at least one
+    // non-digit remains — a token that is all digits is not a source with an
+    // index, it is a malformed id, and stripping it would leave nothing to
+    // match on.
+    int firstDigit = src.size();
+    while (firstDigit > 0 && src.at(firstDigit - 1).isDigit())
+        --firstDigit;
+
+    int index = -1;
+    if (firstDigit > 0 && firstDigit < src.size()) {
+        bool ok = false;
+        const int parsed = src.mid(firstDigit).toInt(&ok);
+        if (ok) {
+            index = parsed;
+            src.truncate(firstDigit);
+        }
+    }
+
+    if (source) *source = src;
+    if (name) *name = meterId.mid(colon + 1);
+    if (sourceIndex) *sourceIndex = index;
+    return true;
+}
+
 bool MeterModel::updateValueByName(const QString& source, const QString& name,
                                    float converted, int sourceIndex)
 {
