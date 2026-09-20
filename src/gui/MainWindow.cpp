@@ -48,6 +48,7 @@
 #include "core/MemoryRecallPolicy.h"
 #include "core/StreamStatus.h"
 #include "models/PanadapterModel.h"
+#include "models/PanZoomModeGate.h"
 #include "models/RadioStatusOwnership.h"
 #include "models/Nr2SettingsModel.h"
 #include "SpectrumWidget.h"
@@ -5383,7 +5384,8 @@ void MainWindow::buildUI()
             return;
         }
         applet->spectrumWidget()->setBandSegmentZoomAvailable(
-            m_radioModel.isConnected() && m_radioModel.usesFlexCommandPlane());
+            bandSegmentZoomAvailable(m_radioModel.isConnected(),
+                                     m_radioModel.usesFlexCommandPlane()));
         // The two capability switches onConnectionStateChanged() applies for
         // the same reason: a pan created after connect would otherwise keep
         // the widget defaults (no edge crop, client EMA on) until the next
@@ -6450,14 +6452,18 @@ void MainWindow::onConnectionStateChanged(bool connected)
     // connect and disconnect, since usesFlexCommandPlane()/
     // backendCapabilities() only know the CURRENTLY connected radio.
     if (m_panStack) {
-        const bool bandSegmentZoomAvailable = connected && m_radioModel.usesFlexCommandPlane();
+        // One predicate with the command paths in MainWindow_Shortcuts.cpp, so
+        // "the button is grey" and "the keystroke is refused" cannot drift
+        // apart on the capability (PanZoomModeGate.h).
+        const bool zoomAvailable = AetherSDR::bandSegmentZoomAvailable(
+            connected, m_radioModel.usesFlexCommandPlane());
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =
             connected && m_radioModel.backendCapabilities().backendPanAveraging.has_value();
         for (auto* applet : m_panStack->allApplets()) {
             if (applet && applet->spectrumWidget()) {
-                applet->spectrumWidget()->setBandSegmentZoomAvailable(bandSegmentZoomAvailable);
+                applet->spectrumWidget()->setBandSegmentZoomAvailable(zoomAvailable);
                 applet->spectrumWidget()->setPanEdgeTaperEnabled(edgeTaperEnabled);
                 applet->spectrumWidget()->setClientFftSmoothingEnabled(
                     !backendAverages);

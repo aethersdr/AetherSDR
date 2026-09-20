@@ -4126,8 +4126,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // Band/Segment Zoom toggle off the pan's radio-authoritative model state
     // (togglePanZoomModeForPan) — shared with the keyboard/MIDI shortcuts
     // (MainWindow_Shortcuts.cpp) and the RC28/FlexControl paths
-    // (MainWindow_Controllers.cpp), and per-pan by construction. This right-click
-    // menu targets THIS applet's pan, not the active slice's. (#4057)
+    // (MainWindow_Controllers.cpp), and per-pan by construction. These are the
+    // "B"/"S" BUTTONS in the waterfall corner -- the only emitters of these two
+    // signals, and the only band/segment-zoom surface the capability gate used
+    // to reach. An earlier wording here called them a right-click menu; there
+    // is no such path, and reading it as one is how the other six surfaces went
+    // uncounted. They target THIS applet's pan, not the active slice's. (#4057)
     connect(sw, &SpectrumWidget::bandZoomRequested,
             this, [this, applet]() {
         togglePanZoomModeForPan(applet->panId(), /*segmentZoom=*/false);
