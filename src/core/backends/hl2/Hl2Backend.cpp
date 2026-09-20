@@ -6390,10 +6390,10 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // separation is exactly what an about-zero RMS destroyed: a DC pedestal
     // inflated the denominator and dragged the reading toward the carrier end
     // whatever the antenna was doing. With the RMS now AC-referred and the
-    // peak still absolute, a large crest means EITHER a peaky signal OR a
-    // large DC offset under a quiet band; #5802 leaves surfacing the offset
-    // itself (an adcDcDbfs row) open, and until it exists this row cannot tell
-    // those two apart.
+    // peak still absolute (ruled on PR #5832), a large crest means EITHER a
+    // peaky signal OR a large DC offset under a quiet band; surfacing the
+    // offset itself (an adcDcDbfs row) is #5856, and until it exists this row
+    // cannot tell those two apart.
     //
     // NOT REPORTED, rather than fabricated, when either term is at or below
     // the floor: that constant is a sentinel meaning "below the smallest code
