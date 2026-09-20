@@ -771,18 +771,20 @@ double Ep4Stats::rmsDbfs() const noexcept
     // pedestal the converter sits on. (#5802.)
     const double mean = sum / static_cast<double>(samples);
     // Clamped at zero because the difference of two positives is only
-    // non-negative in exact arithmetic, and NOT REACHABLE FROM THE PRODUCTION
-    // PATH -- the earlier wording claimed it was, and that was wrong.
+    // non-negative in exact arithmetic. On the production path it IS exact,
+    // so the clamp is defensive there rather than load-bearing.
     //
-    // Codes are integers, so with samples <= 2048 and |code| <= 2048 both `sum`
-    // (<= 4.19e6) and `sumSquares` (<= 8.59e9) are exact in a double. merge()
-    // only ever publishes 512/1024/1536/2048 samples, and a partial block is
-    // DISCARDED rather than published (MetisClient re-arms on a phase or drop
-    // mismatch), so in practice `samples` is a power of two -- which makes
-    // sumSquares/n and mean*mean exact dyadic rationals with numerators under
-    // 2^53, and their difference exact. No ULP excursion exists there.
+    // Codes are integers, so with |code| <= 2048 both `sum` (<= 4.2e6) and
+    // `sumSquares` (<= 8.6e9) are exact in a double. Exactly two producers
+    // reach here: ep4Stats(), which always yields 512 samples, and a complete
+    // block assembled by MetisClient, which is always 2048 -- it emits only at
+    // m_bsPhase == kEp4PacketsPerBlock and DISCARDS a partial block on a phase
+    // or drop mismatch rather than publishing it. Both counts are powers of
+    // two, so sumSquares/n and mean*mean are exact dyadic rationals with
+    // numerators under 2^53 and their difference is exact. No ULP excursion
+    // exists there.
     //
-    // The clamp stays for the callers that are NOT on that path: tests build
+    // The clamp stays for the callers that are NOT those two: tests build
     // records with arbitrary sample counts, and nothing in the signature
     // promises a power of two. std::sqrt of a negative is NaN, and a NaN in a
     // health row renders as "nan" and stays there for the session -- cheap
@@ -796,6 +798,21 @@ double Ep4Stats::rmsDbfs() const noexcept
     if (rms <= 0.0)
         return kEp4FloorDbfs;
     return 20.0 * std::log10(rms / static_cast<double>(kEp4FullScale));
+}
+
+std::optional<double> Ep4Stats::crestDb() const noexcept
+{
+    // Both terms must be real levels. peakDbfs() and rmsDbfs() return
+    // kEp4FloorDbfs EXACTLY when they have nothing to report, so testing
+    // against it is exact rather than an epsilon judgement. The test is `<=`
+    // and not `==` so that it also rejects an RMS computed BELOW the floor,
+    // for the same reason it rejects the sentinel: a deviation under half a
+    // code is not a quantity to take a ratio against. See the header.
+    const double peak = peakDbfs();
+    const double rms  = rmsDbfs();
+    if (peak <= kEp4FloorDbfs || rms <= kEp4FloorDbfs)
+        return std::nullopt;
+    return peak - rms;
 }
 
 void Ep4Stats::merge(const Ep4Stats& other) noexcept

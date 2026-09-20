@@ -6394,7 +6394,24 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // large DC offset under a quiet band; #5802 leaves surfacing the offset
     // itself (an adcDcDbfs row) open, and until it exists this row cannot tell
     // those two apart.
-    put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"), dbfs(peak - rms));
+    //
+    // NOT REPORTED, rather than fabricated, when either term is at or below
+    // the floor: that constant is a sentinel meaning "below the smallest code
+    // this converter has", and subtracting it invents the level it exists to
+    // refuse. See Ep4Stats::crestDb(), which owns the predicate so it can be
+    // tested without Qt.
+    //
+    // An invalid variant here is the SAME "nothing to say" this row and its
+    // two neighbours already use before the first block arrives: put() keeps
+    // the key in `order` and `labels` and only withholds the value, so the row
+    // stays in place and reads as a dash rather than the list changing shape
+    // under a reader — which was tried and reverted once already (PR #5650
+    // review round 3). On the bridge it lands as a JSON null, exactly as the
+    // pre-block case does, and not as a fabricated number.
+    const std::optional<double> crest =
+        haveBlock ? m_bandscopeBlock.crestDb() : std::nullopt;
+    put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"),
+        crest ? QVariant(QString::number(*crest, 'f', 2)) : QVariant());
     // Counted with ad9866.v's OWN two thresholds — rxclipp at +2047 and
     // rxclipn at -2048 — and not a symmetric |code| >= 2048, which can
     // never fire on a positive clip because +2048 is not a code a 12-bit

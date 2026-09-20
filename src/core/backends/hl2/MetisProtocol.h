@@ -1229,9 +1229,10 @@ struct Ep4Stats {
     //
     // Signed and not magnitude: a magnitude sum is not the mean and would
     // remove nothing. Plain `double` for the same reason sumSquares is one —
-    // 2048 codes of at most 2048 accumulate to ~8.6e9, five orders inside a
-    // double's exact-integer range, so the variance difference below cannot
-    // cancel catastrophically at any level a 12-bit converter can produce.
+    // 2048 codes of at most 2048 accumulate to ~4.2e6 (their SQUARES to
+    // ~8.6e9), and both are exact integers far inside a double's exact-integer
+    // range, so the variance difference below cannot cancel catastrophically
+    // at any level a 12-bit converter can produce.
     double sum            = 0.0;
     // Codes at either converter rail, counted with the gateware's OWN
     // predicate rather than a symmetric one: ad9866.v fires rxclipp at
@@ -1255,6 +1256,27 @@ struct Ep4Stats {
     // here should be read as having answered it.
     [[nodiscard]] double peakDbfs() const noexcept;
     [[nodiscard]] double rmsDbfs()  const noexcept;
+    // Peak-to-RMS in dB, or nullopt when the record cannot support one.
+    //
+    // kEp4FloorDbfs is a SENTINEL and not a level: it exists to say "below the
+    // smallest code this converter has" WITHOUT inventing one. Subtracting it
+    // invents one anyway, and the subtraction is the whole of adcCrestDb.
+    //
+    // Before the RMS became AC-referred the case could not arise: an
+    // about-zero RMS is at the floor only when the peak is too, and the
+    // difference was a harmless zero. Now a record can have a large, real,
+    // absolute peak and NO representable AC deviation at all — a DC pedestal
+    // with a wobble under half a code — and peak - floor would publish sixty
+    // to ninety dB of "crest" for a record whose crest is undefined. That is
+    // the reading a script thresholding "crest > 10 dB means broadband noise"
+    // gets exactly backwards.
+    //
+    // So the predicate is that BOTH terms are real levels, which also covers
+    // an RMS computed below the floor: a deviation smaller than half a code is
+    // quantisation residue, not a measurement to take a ratio against. The
+    // peak and RMS rows still report what they each computed; only the derived
+    // ratio declines to exist. (#5802, and the floor nit on PR #5832.)
+    [[nodiscard]] std::optional<double> crestDb() const noexcept;
     // Fold another packet's statistics in. Peak takes the max, everything else
     // sums — which is what makes a block's stats the same shape as a packet's.
     // `sum` sums for exactly the reason sumSquares does: both are linear in

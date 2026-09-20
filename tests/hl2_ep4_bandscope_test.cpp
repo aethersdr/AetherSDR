@@ -337,8 +337,16 @@ int main()
         const auto ac   = ep4Stats(makeEp4(0, {kAc, -kAc}));
         const auto acDc = ep4Stats(makeEp4(0, {kAc + kDc, -kAc + kDc}));
         const auto pure = ep4Stats(makeEp4(0, {kDc}));       // pedestal, no AC
+        // Guarded HERE, where the dereferencing starts, and for all of them at
+        // once. A guard further down protects nothing: the first unguarded
+        // dereference is the one that crashes, and a crash loses every check
+        // that would have run after it -- a worse diagnostic than the failure
+        // it replaces.
         check(ac.has_value() && acDc.has_value() && pure.has_value(),
               "the DC fixtures parse");
+        if (!ac.has_value() || !acDc.has_value() || !pure.has_value()) {
+            return 1;
+        }
 
         // THE PROPERTY. Same AC excursion, one of them sitting on a pedestal:
         // the RMS is a statement about the excursion and must not move.
@@ -385,28 +393,123 @@ int main()
         constexpr int kSmallAc = 100;
         constexpr int kBigDc   = 1200;
         const auto swamped = ep4Stats(makeEp4(0, {kSmallAc + kBigDc, -kSmallAc + kBigDc}));
-        // Guarded like the three fixtures above it. Without this a regression
-        // that made ep4Stats return nullopt would CRASH here instead of
-        // printing [FAIL], and a crash in a test is a worse diagnostic than a
-        // failure -- it loses every check that would have run after it.
         check(swamped.has_value(), "the swamped fixture parses");
         if (!swamped.has_value()) {
-            return g_failures == 0 ? 0 : 1;
+            // Not `g_failures == 0 ? 0 : 1`: the check above has just failed,
+            // so that expression is only ever 1 written the long way.
+            return 1;
         }
         check(swamped->peakDbfs() - aboutZeroDbfs(*swamped) < 1.0,
               "about zero, a pedestal twelve times the excursion reads as under 1 dB of crest");
         check(swamped->peakDbfs() - swamped->rmsDbfs() > 10.0,
               "about the mean, the same record is nowhere near a carrier's crest");
 
-        // Mean removal belongs to the BLOCK, not to the packet. If ep4Stats
-        // subtracted per packet, merge() would be summing four already-centred
-        // records and this would drift.
+        // Mean removal belongs to the BLOCK, not to the packet. Each packet
+        // carries its OWN pedestal, because that is the only way the two
+        // answers differ: with one pedestal shared by all four, centring per
+        // packet and centring over the concatenation give the SAME variance
+        // and the check passes either way. Verified by mutation — with
+        // ep4Stats() patched to subtract its own mean, the shared-pedestal
+        // form still passed while claiming to catch exactly that.
+        //
+        // With distinct pedestals the block's variance is the AC variance plus
+        // the variance of the four pedestals, and a per-packet subtraction
+        // reports the AC variance alone.
         Ep4Stats block;
-        for (int p = 0; p < kEp4PacketsPerBlock; ++p)
-            block.merge(*ep4Stats(makeEp4(static_cast<std::uint32_t>(p), {kAc + kDc, -kAc + kDc})));
+        double dcSum = 0.0;
+        double dcSumSquares = 0.0;
+        for (int p = 0; p < kEp4PacketsPerBlock; ++p) {
+            const int dc = kDc * (p + 1);
+            const auto pkt =
+                ep4Stats(makeEp4(static_cast<std::uint32_t>(p), {kAc + dc, -kAc + dc}));
+            check(pkt.has_value(), "the per-packet pedestal fixtures parse");
+            if (!pkt.has_value()) {
+                return 1;
+            }
+            block.merge(*pkt);
+            dcSum += dc;
+            dcSumSquares += static_cast<double>(dc) * static_cast<double>(dc);
+        }
+        const double packets = static_cast<double>(kEp4PacketsPerBlock);
+        const double dcVar =
+            dcSumSquares / packets - (dcSum / packets) * (dcSum / packets);
+        check(dcVar > 0.0, "the four pedestals really do differ");
+        const double expectedRms =
+            std::sqrt(static_cast<double>(kAc) * static_cast<double>(kAc) + dcVar);
         check(block.samples == kEp4BlockSamples, "four offset packets make a block");
-        check(approx(block.rmsDbfs(), acDc->rmsDbfs(), 1e-9),
-              "the mean is removed once, over the merged block");
+        check(approx(block.rmsDbfs(),
+                     20.0 * std::log10(expectedRms / static_cast<double>(kEp4FullScale)),
+                     1e-9),
+              "the mean is removed once, over the merged block, not per packet");
+    }
+
+    // ---- 11 · crestDb() declines to exist rather than subtracting a sentinel
+    //            (#5802; the floor nit on PR #5832) ----
+    //
+    // adcCrestDb is peak - rms, and kEp4FloorDbfs is not a level: it is the
+    // marker this type uses to say "below the smallest code this converter
+    // has" WITHOUT inventing one. Making the RMS AC-referred is what made the
+    // pairing reachable — before it, an about-zero RMS sat at the floor only
+    // when the peak did too, and the difference was a harmless zero. Now a DC
+    // pedestal has a real peak and no representable deviation, and the naive
+    // subtraction publishes tens of dB of "crest" for a record that has none.
+    {
+        constexpr int kDc = 1200;
+
+        // A normal record: crest exists and is exactly the two rows'
+        // difference, so this is a guard and not a reinterpretation.
+        const auto ac = ep4Stats(makeEp4(0, {400, -400}));
+        check(ac.has_value(), "the AC fixture parses");
+        if (!ac.has_value()) {
+            return 1;
+        }
+        const std::optional<double> acCrest = ac->crestDb();
+        check(acCrest.has_value(), "a record with AC content has a crest");
+        check(acCrest.has_value()
+                  && approx(*acCrest, ac->peakDbfs() - ac->rmsDbfs(), 1e-12),
+              "...and it is peak - rms, unchanged");
+
+        // PURE PEDESTAL. The peak is real and large; there is no AC at all.
+        const auto pure = ep4Stats(makeEp4(0, {kDc}));
+        check(pure.has_value(), "the pedestal fixture parses");
+        if (!pure.has_value()) {
+            return 1;
+        }
+        check(approx(pure->rmsDbfs(), kEp4FloorDbfs), "the pedestal's RMS is the floor");
+        check(pure->peakDbfs() > kEp4FloorDbfs + 40.0,
+              "...while its peak is a real level tens of dB above the floor");
+        check(!pure->crestDb().has_value(),
+              "a pedestal with no AC content has no crest to report");
+        // POSITIVE CONTROL: the number the naive subtraction would have
+        // published, derived here rather than retyped, so the assertion above
+        // is measured against the size of the error it prevents.
+        check(pure->peakDbfs() - pure->rmsDbfs() > 60.0,
+              "peak - floor would have fabricated over 60 dB of crest");
+
+        // SUB-FLOOR AC. One code of wobble on a 512-sample pedestal is a
+        // deviation of sqrt(511)/512 ~ 0.044 codes — under half a code, so
+        // below the floor rather than at it. A ratio against quantisation
+        // residue is not a measurement.
+        std::vector<int> wobble(kEp4SamplesPerPacket, kDc);
+        wobble[0] = kDc + 1;
+        const auto lsb = ep4Stats(makeEp4(0, wobble));
+        check(lsb.has_value(), "the one-LSB-wobble fixture parses");
+        if (!lsb.has_value()) {
+            return 1;
+        }
+        check(lsb->rmsDbfs() < kEp4FloorDbfs,
+              "a sub-half-code deviation computes BELOW the floor, not at it");
+        check(!lsb->crestDb().has_value(),
+              "and it has no crest either, for the same reason");
+
+        // An all-zero block: both terms are the floor. The naive form gives a
+        // harmless zero, so this one is about the rule, not the damage.
+        const auto silent = ep4Stats(makeEp4(0, {0}));
+        check(silent.has_value(), "the all-zero fixture parses");
+        if (!silent.has_value()) {
+            return 1;
+        }
+        check(!silent->crestDb().has_value(), "an all-zero block reports no crest");
     }
 
     if (g_failures == 0)
