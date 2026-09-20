@@ -4095,15 +4095,21 @@ The dialog is gated on elapsed time (1500 ms), not on a cold-cache predicate —
 that imports cleanly may still lack plans for these geometries and would report
 "warm" while the open measured regardless. See `MainWindow::armWdspSetupDialog`.
 
-### 22.4 Still open: two paths that still block the GUI thread
+### 22.4 Two paths blocked the GUI thread; one still does
 
-#### Backend teardown waits out an in-flight build
+#### Still open: backend teardown waits out an in-flight build
 
 `~Hl2Backend()` stops the wire through a `Qt::BlockingQueuedConnection` before
 joining the I/O thread, and `beginDspSetup()`'s opens are a single event on that
 thread's loop. So a teardown during a cold connect — a **family switch**
 (`RadioModel::connectToRadio` → `teardownBackend()`) or an **app quit** — blocks
 the GUI thread for whatever is left of the planning.
+
+Since #5783 the destructor joins `m_dspBuildThread` first, before the I/O thread
+it posts back to, so the same stall now also covers a teardown during a **rate
+change**: `OpenChannel` cannot be cancelled there either. The order is
+deliberate — a build in flight hands its finished channels to the I/O thread's
+loop, and joining that loop first would race the post.
 
 Splitting the connect is what made this reachable, and that is not an argument
 against the split: before it, the connect itself held the UI, so nobody could
@@ -4114,15 +4120,52 @@ state over the teardown or a backend that can be abandoned rather than joined �
 and the second one also has to replace the `QPointer` guard in
 `beginDspSetup()`, which is sound today *because* teardown blocks.
 
-#### The span change rebuilds every receiver
+#### Landed in #5783: the span change builds off the I/O thread
 
-`applyPanBandwidth()` has the same shape the connect used to have. Crossing one
-of the four rate boundaries rebuilds **every** receiver (the rate register is
-radio-wide) through `Qt::BlockingQueuedConnection`, and each receiver costs an
-open (40–175 ms, per §22.3) plus a close, which flushes and is bounded by WDSP's
-own 100 ms timeout. Four panadapters open is roughly **0.6–1.1 s of frozen UI
-per boundary crossing** — the "chunky zoom" operators describe, layered on top
-of two things that are not bugs:
+This subsection used to describe the span change as the second path still
+blocking the GUI thread, and left the fix as a follow-up. #5783 landed it on
+2026-09-18; what follows is what the code does now.
+
+`applyPanBandwidth()` used to have the same shape the connect had: crossing one
+of the four rate boundaries rebuilt **every** receiver (the rate register is
+radio-wide) inline, through `Qt::BlockingQueuedConnection`. The diagnosis
+recorded here was incomplete in a way worth keeping — moving that wait off the
+GUI thread would have kept the *window* alive, but the work sat on the I/O
+thread, which is the wire's and every receiver's. `MetisClient` paces EP2 from a
+2 ms timer on it, and `iqBlocksReady` is a `Qt::DirectConnection` running
+`Hl2RxDsp::processIqBlock()` inline on it, so a rebuild holding that thread
+starved every receiver's audio and stopped EP2 — at which point the gateware
+watchdog halts the stream (§20.8). A zoom did not merely freeze the UI; it
+silenced the radio.
+
+The operation now spans three threads, each for a stated reason:
+
+- **GUI thread** — snapshot every per-receiver `Config`. `m_rx` is
+  GUI-thread-only, so every decision that needs it is made and copied here.
+- **Build thread** (`m_dspBuildThread`) — construct a **complete set of N** new
+  chains while the old set keeps running and keeps producing audio. N rather
+  than one because the DDC rate register is radio-wide; that is the single way
+  this differs from `AnanBackend`, which has one DDC and one chain to rebuild.
+- **I/O thread** — if all N built, swap them in and write the rate register, in
+  one turn. The swap is pointer writes.
+
+**The roll-back this subsection called the hard part was not solved — it ceased
+to exist.** Until every one of the N builds has succeeded the register is
+unwritten and no published chain has been touched, so the failure path is
+"destroy the new set and return", with the radio and every receiver exactly as
+they were. The roll-back was only ever needed because the old code changed live
+state before it knew whether it could.
+
+What did need new machinery is the receiver a crossing never knew about. The
+snapshot is taken on the GUI thread and the build then runs for some hundreds of
+milliseconds; a receiver opened inside that window is not in the covered set,
+and was deliberately built for the rate the radio was still producing. A
+`Hl2RateCommit` ledger records the *committed* rate as distinct from the
+*attempted* one, and `Hl2Backend::finishRateChange()` reconciles any such chain
+afterwards. `hl2_rate_commit_test` and `hl2_rxdsp_async_rebuild_test` cover
+both, socket-free.
+
+Two things this was never about are unchanged, and both are still not bugs:
 
 - **The span IS the sample rate.** Four rates only, snapped log-nearest, so the
   boundaries sit near 68 / 136 / 272 kHz. Zoom within a rate is free display
@@ -4131,11 +4174,28 @@ of two things that are not bugs:
 - **A 150 ms coalescing throttle** (`kBandwidthThrottleMs`, #4470), because a
   drag delivers ~30 span changes a second and each one is a full rebuild.
 
-The three-phase split from §22.2 is directly reusable here, but the rate change
-has ordering constraints the connect does not: the DSP must expect the new rate
-before EP6 starts delivering at it, and a partial failure has to roll every
-receiver back to a single rate. Left as a follow-up rather than bolted onto the
-connect fix.
+**The 0.6–1.1 s figure is derived, not observed.** This subsection used to state
+that four panadapters open cost "roughly 0.6–1.1 s of frozen UI per boundary
+crossing". That number is arithmetic over §22.3 — four receivers × (an open of
+40–175 ms, which *is* measured, plus a close bounded by WDSP's own 100 ms
+timeout) gives 560–1100 ms — and the end-to-end freeze it describes was never
+measured directly. No run, no radio and no operator is attached to it anywhere.
+It is repeated widely enough to be worth labelling here rather than propagating
+quietly.
+
+Post-#5783 it is not a freeze at all: the same span of wall clock is now a
+background build on `m_dspBuildThread` while the old chains keep producing
+audio, and nobody has re-derived it for the new threading. `Hl2Backend.cpp` says
+as much at the rebuild site, and that wording is the one to trust — *"Nothing
+here is measured. The 0.6-1.1 s figure is docs/HERMES.md §22.4's, from the
+blocking-on-the-GUI-thread era, and whether the audio actually stays clean
+across a crossing needs a radio, four panadapters and a zoom drag."* #5783 was
+filed with that gap named rather than with a number behind it: its own A/B came
+back VOID on its positive control, and nothing from it was quoted.
+
+So treat 0.6–1.1 s as an order-of-magnitude build duration inherited from a
+superseded design. Whether a zoom now keeps the audio clean is **open**, and
+closing it needs hardware.
 
 The opt-in TXA modulator and its offline evidence are described in
 [HL2 TXA configuration and lifecycle](hl2-txa-configuration-diff.md).
