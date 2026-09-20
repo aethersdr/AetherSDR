@@ -1251,9 +1251,18 @@ struct Ep4Stats {
     // mean. Their difference is therefore a crest measured from the DC
     // pedestal to the excursion, which is what makes a rail-ward peak legible
     // while still refusing to let a converter offset masquerade as signal.
-    // Whether peakAbs should become mean-referred too is a question about what
-    // adcCrestDb is FOR and is left open upstream (#5802, question 1); nothing
-    // here should be read as having answered it.
+    // MIXED REFERENCE ON PURPOSE, and RULED: the maintainer settled #5802
+    // question 1 on 2026-09-20 -- peakAbs STAYS absolute. So this pairing is a
+    // decision, not an omission, and nothing here should be read as having
+    // pre-empted it. A signed pedestal row to sit beside these is tracked at
+    // #5856, which is where a reader should go next rather than to #5802.
+    //
+    // Note for whoever picks #5856 up: on ON8ST's bench the pedestal is NOT a
+    // converter offset. Across 31 dB of commanded LNA the removed mean spread
+    // 26.66 dB against the AC part's 26.89 dB -- it tracks the analog gain and
+    // runs about 4x the AC content, where a converter offset sits after the
+    // gain and would hold a constant number of codes. Measured A-B-A with the
+    // two control legs agreeing to 0.11 dB; see #5802's correction comment.
     [[nodiscard]] double peakDbfs() const noexcept;
     [[nodiscard]] double rmsDbfs()  const noexcept;
     // Peak-to-RMS in dB, or nullopt when the record cannot support one.
