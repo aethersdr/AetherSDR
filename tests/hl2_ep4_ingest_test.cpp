@@ -25,6 +25,8 @@
 #include "core/backends/hl2/MetisProtocol.h"
 #include "core/backends/hl2/Hl2Backend.h"
 #include "core/backends/hl2/Hl2BandscopeHeadroom.h"
+#include "core/backends/hl2/Hl2TelemetryService.h"
+#include "core/backends/HealthSnapshotMerge.h"
 #include "core/AppSettings.h"
 
 #include "Hl2Ep4ArrivalsD94.h"
@@ -431,6 +433,80 @@ int main(int argc, char** argv)
               "the age row outlives the values it expired");
         check(value(stale, "adcObservedAgoMs").toLongLong() > kHeadroomMaxAgeMs,
               "...reporting an age past the expiry, which is why they are gone");
+
+        // ---- THE MERGE MUST NOT PUT BACK WHAT THE EXPIRY TOOK OUT ----
+        //
+        // A GUARD AGAINST A FUTURE EDIT, NOT A PROOF OF TODAY'S BEHAVIOUR, and
+        // the distinction is the reason it is an assertion rather than a
+        // comment.
+        //
+        // Neither consumer reads healthSnapshot() on its own. RadioHealthDialog
+        // and AutomationServer::doHealth both call
+        // mergeHealthSnapshots(offlineRows, backendSnapshot), whose one
+        // load-bearing rule is the exact inverse of the expiry above: "a key
+        // the winner declares but leaves OUT of `values` means 'not reported',
+        // and must not erase a value the base does have." A withheld row is
+        // therefore BACK-FILLED from the offline base if the base has one.
+        //
+        // That is correct for the rows the rule was written for -- the in-band
+        // path going quiet is exactly when the stream-free source should own
+        // temperatureC -- and it would silently undo this expiry. The four rows
+        // here have no stream-free twin: there is no second sensor that can
+        // answer "what did the converter see" while the gate that answers it is
+        // stopped, so a value arriving from the base could only be a staler
+        // copy of the one just withheld.
+        //
+        // It is safe today because Hl2TelemetryService::healthRows() declares
+        // none of the four. Nothing enforced that, and nothing about the merge
+        // would complain: add `adcPeakDbfs` to the offline source and every
+        // other assertion in this file stays green while the expiry stops
+        // reaching either consumer. This is the assertion that goes red
+        // instead.
+        {
+            // No target, so the poller has nowhere to send and holds no socket
+            // -- this file's socket-free promise survives.
+            Hl2TelemetryService offline;
+            const AetherSDR::IRadioBackend::HealthSnapshot offlineRows =
+                offline.offlineHealthRows();
+            const AetherSDR::IRadioBackend::HealthSnapshot merged =
+                AetherSDR::mergeHealthSnapshots(offlineRows, stale);
+
+            // POSITIVE CONTROL FIRST. An offline source that published nothing
+            // would satisfy every check below while proving none of them, and
+            // an empty base is exactly what a constructor change could produce.
+            check(offlineRows.values.contains(QStringLiteral("telemetrySource")),
+                  "the offline source really does publish values to merge from");
+            check(merged.values.contains(QStringLiteral("telemetrySource")),
+                  "...and the merge carries the base's values through");
+            // And that the merge is genuinely capable of back-filling a key the
+            // winner withheld -- otherwise the guard below is asserting against
+            // a mechanism that is not armed.
+            {
+                AetherSDR::IRadioBackend::HealthSnapshot base;
+                base.order.push_back(QStringLiteral("probeKey"));
+                base.labels.insert(QStringLiteral("probeKey"), QStringLiteral("probe"));
+                base.values.insert(QStringLiteral("probeKey"), QVariant(7));
+                AetherSDR::IRadioBackend::HealthSnapshot winner;
+                winner.order.push_back(QStringLiteral("probeKey"));
+                winner.labels.insert(QStringLiteral("probeKey"), QStringLiteral("probe"));
+                // declared, deliberately valueless -- the withheld shape
+                const auto back = AetherSDR::mergeHealthSnapshots(base, winner);
+                check(back.values.value(QStringLiteral("probeKey")).toInt() == 7,
+                      "the merge DOES back-fill a withheld key, so the guard "
+                      "below is guarding something live");
+            }
+
+            for (const char* key : {"adcPeakDbfs", "adcRmsDbfs",
+                                    "adcCrestDb", "adcClippedPerBlock"}) {
+                const QString k = QString::fromLatin1(key);
+                check(!offlineRows.values.contains(k),
+                      "Hl2TelemetryService must not publish a converter row the "
+                      "backend expires -- there is no stream-free sensor for it, "
+                      "and the merge would back-fill the expired value");
+                check(!merged.values.contains(k),
+                      "...so the expiry survives the merge both consumers do");
+            }
+        }
 
         // NOT A LATCH: a new block restores the rows.
         blk.peakAbs = 1024;
