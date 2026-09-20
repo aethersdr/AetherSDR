@@ -299,11 +299,19 @@ public:
     bool setAgc(int agcMode, double maximumGainDb) noexcept;
     // Runtime FM detector deviation, in Hz. Receive channels only.
     //
-    // Applies in every mode but is only AUDIBLE in FM and WBFM: RXA builds one
-    // fmd stage per channel and runs it only when the mode selects it, so this
-    // is accepted and stored on an SSB channel and takes effect if and when the
+    // Applies in every mode but is only AUDIBLE in FM: RXA builds one fmd stage
+    // per channel and runs it only when the mode selects it, so this is
+    // accepted and stored on an SSB channel and takes effect if and when the
     // mode becomes FM. That is deliberate — refusing by mode would make the
     // value depend on the order the caller sets mode and deviation in.
+    //
+    // NOT WBFM. Broadcast FM is a different demodulator, not this one with a
+    // wider number: SetRXAMode clears setFMDRun() for every mode and its
+    // case RXA_WBFM raises wbfm.p->run WITHOUT putting fmd back, so xfmd's
+    // if (a->run) never fires and the value this writes is inert. wbfm.c runs
+    // an atan2 quadrature discriminator whose scale is fixed at construction
+    // (disc_gain_comp = rate / (TWOPI * 75000.0)), create_wbfm() takes no
+    // deviation argument, and WDSP exposes no SetRXAWBFMDeviation to reach it.
     //
     // Returns false on a transmit channel (SetRXAFMDeviation has no TX
     // counterpart; TX deviation is SetTXAFMDeviation on a different stage), on
