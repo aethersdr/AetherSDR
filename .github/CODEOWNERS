@@ -46,7 +46,9 @@
 #         legal/compliance tracking (THIRD_PARTY_LICENSES).
 #         NOT tests/ — that is source code and sits at Tier 3.
 #         ALSO the AI-instruction files (AGENTS.md, CLAUDE.md,
-#         GEMINI.md, .github/copilot-instructions.md, .claude/commands/).
+#         GEMINI.md, .github/copilot-instructions.md, .claude/commands/)
+#         and the two release skills (.claude/skills/release-prep/,
+#         .claude/skills/tag-release/), claimed whole.
 #         Those are operational documentation — architecture, build
 #         steps, style guide, protocol notes — not policy. The policy
 #         they must not contradict is CONSTITUTION.md / GOVERNANCE.md,
@@ -155,6 +157,18 @@ tests/                       @aethersdr/reviewers
 # would fall through to the `*` line — i.e. Tier 3, which is BROADER than
 # where it started. Keep this line even if the directory only holds .md today.
 .claude/commands/            @aethersdr/infrastructure
+
+# Release skills. /release-prep edits the six release files and /tag-release
+# tags main, publishes the release and drives the signing and Store
+# workflows behind it — a wrong step in either changes what ships under the
+# project's name. Each directory is claimed WHOLE, scripts and agent stanza
+# included, so the roster matches the files the skills act on (*.md,
+# CMakeLists.txt, .github/workflows/ — all Tier 2) instead of the SKILL.md
+# landing at Tier 2 via *.md while its scripts fall through to `*`. The
+# other skills under .claude/skills/ (fb, papercuts, pr-review, pr-land) are
+# deliberately NOT here: they open PRs, they do not publish anything.
+.claude/skills/release-prep/ @aethersdr/infrastructure
+.claude/skills/tag-release/  @aethersdr/infrastructure
 
 # GitHub-specific tooling
 # Routine CI workflow definitions live at Tier 2 to unblock day-to-day CI
