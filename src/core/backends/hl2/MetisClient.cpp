@@ -406,9 +406,132 @@ void MetisClient::onWatchdogTick()
     if (!m_running || !m_linkUp)
         return;
     if (m_sinceLastEp6.isValid() && m_sinceLastEp6.elapsed() > kSilenceTimeoutMs) {
+        const qint64 silentMs = m_sinceLastEp6.elapsed();
+        // ---- STAGE 1: ASK THE RADIO AGAIN BEFORE GIVING UP ON IT ----
+        //
+        // Until this existed, an established link that went quiet had NO
+        // recovery at the protocol level. This tick cleared m_linkUp and could
+        // not then fire again FOR AS LONG AS THE LINK STAYED DOWN -- its own
+        // first line returns on !m_linkUp, and the only thing that sets m_linkUp
+        // back to true is an EP6 packet reaching handleDatagram, which is
+        // precisely what does not happen once the gateware has halted its
+        // stream. (A link that recovers on its own does re-arm the watchdog;
+        // that was never the stuck case.) Meanwhile
+        // m_startRetryTimer was armed by exactly two paths -- start() and
+        // setReceiverCount() -- neither of which is this one. The only recovery
+        // in the product was a layer up: RadioModel's reconnect timer re-driving
+        // connectRadio five seconds after disconnected(), which closes and
+        // reopens every WDSP channel. The protocol-level answer is one 64-byte
+        // datagram.
+        //
+        // This matters most in the case the client cannot otherwise get out of:
+        // if the gateware halted its stream because EP2 stopped arriving, then
+        // EP2 resuming does NOT restart it. The radio needs a new run command,
+        // and nothing was sending one.
+        //
+        // THE WIRE ACT HERE IS NOT NEW. metisRunCommand to a radio whose run
+        // state we cannot observe, repeated on m_startRetryTimer, is exactly
+        // what start() and setReceiverCount() already do on every connect and
+        // every receiver-count change: a lost start and a slow one are
+        // indistinguishable, so that retry has always been willing to re-send
+        // to a radio that may already be streaming. What is new is a third path
+        // arming it.
+        //
+        // AND THE GATEWARE SAYS IT IS SAFE, which is worth having written down
+        // because "commanding a radio that thinks it is already streaming" is
+        // the obvious objection. dsopenhpsdr1.v decodes the run byte in ONE
+        // state, RUNSTOP, as a plain level assignment with no edge detection:
+        //     run_next = eth_data[0];  wide_spectrum_next = eth_data[1];
+        // It sets no state_next, flushes no FIFO, resets no DDC and clears no
+        // counter. A second start while run is already 1 re-writes 1 over 1 and
+        // nothing downstream sees an edge; every consumer in hermeslite_core.v
+        // takes run as a level. The duplicate also re-latches wide_spectrum
+        // from bit 1 and watchdog_disable from bit 7, which is precisely why
+        // this sends metisRunCommand with the LIVE bandscope and watchdog state
+        // rather than metisStart() -- metisStart() hard-codes bit 1 clear and
+        // would silently drop the bandscope mid-capture. (Same reason the
+        // start-retry lambda above does not use metisStart() either.)
+        //
+        // One more thing the gateware settles: its own anti-wedge watchdog
+        // (dsopenhpsdr1.v, watchdog_cnt, tripping at &watchdog_cnt to
+        // `run <= 0`) is cleared by EP2 ARRIVALS -- watchdog_clr, asserted in
+        // SEQNO0, the state an EP2 data packet enters -- and advances while
+        // watchdog_up is high. watchdog_up is TOGGLED in usopenhpsdr1.v and
+        // sampled here as a LEVEL, so it is not one count per EP6 frame and no
+        // timing figure is claimed from it. So the failure it produces is the one with
+        // no client-side recovery before this: EP2 stops, EP6 keeps flowing so
+        // our silence timer never runs, the gateware eventually sets run to 0,
+        // EP6 stops, and only THEN does this watchdog fire -- at which point
+        // resuming EP2 cannot restart the radio and only a run command can.
+        //
+        // NO metis-stop, and NO sendPrimingBurst(). setReceiverCount() uses both
+        // because it is changing the EP6 payload layout and needs a hard edge;
+        // here the layout is unchanged and there is nothing to re-prime. It also
+        // matters that sendPrimingBurst() spends 20 ms in QThread::msleep on
+        // THIS thread -- two msleep(10) calls per invocation, and
+        // setReceiverCount() invokes it twice, so ~40 ms there -- on the thread
+        // pacing EP2, and stalling the pacer is a plausible cause of the very
+        // silence being recovered from.
+        //
+        // m_linkUp DELIBERATELY STAYS TRUE for the length of the attempt. The
+        // start-retry's own comment gives the reason and setReceiverCount()
+        // relies on it: clearing it makes a stream that comes back re-emit
+        // linkUp(), and Hl2Backend republishes its entire initial state on that,
+        // over the operator's live panes. A recovery that succeeded should be
+        // invisible except in the counters.
+        if (!m_silenceRecoveryArmed && m_socket && m_startRetryTimer) {
+            m_silenceRecoveryArmed = true;
+            ++m_silenceRecoveryAttempts;
+            qInfo() << "MetisClient: no EP6 for" << silentMs
+                    << "ms — re-sending the run command before declaring link loss"
+                       " (attempt budget" << kMaxStartAttempts << "at"
+                    << kStartRetryMs << "ms)";
+            // SEQUENCE TRACKING IS DELIBERATELY LEFT ALONE, which is the one
+            // place this path must NOT copy setReceiverCount(). That path
+            // resets m_haveRxSeq because it sends metisStop first, and the
+            // gateware zeroes ep6_seq_no on ~run (usopenhpsdr1.v, ep6_seq_no:
+            // `if (~run) ep6_seq_no <= 20'h0`) -- so there, the sequence really
+            // does restart. ~run is not the ONLY reset -- the START state also
+            // zeroes ep6_seq_no_next on stall_req -- but a duplicate run command
+            // takes neither path, which is the claim that matters here. It
+            // matters that the PREMISE be "no path a duplicate start takes
+            // resets the sequence" rather than "only ~run resets it", because
+            // the second is false and would fall over on the next reader who
+            // checks. Here there is no stop, and the two outcomes want
+            // opposite handling:
+            //   - the radio never halted (the silence was ours): the stream
+            //     kept counting, the gap across it is REAL, and resetting would
+            //     erase a genuine loss of ~760 packets at 48 kHz / 1 RX;
+            //   - the radio halted and this command restarts it: ep6_seq_no
+            //     begins at zero, and the existing backward-gap guard below
+            //     (`gap < 0x80000000u`) already declines to score that as loss.
+            // Doing nothing is therefore correct in BOTH, and resetting is
+            // correct in only one. The recovery itself is counted instead.
+            countTx(sendTo(*m_socket,
+                           metisRunCommand(m_bsState != BandscopeState::Idle,
+                                           m_watchdogEnabled),
+                           m_host, m_port));
+            m_startAttempts = 1;
+            m_startRetryTimer->start(kStartRetryMs);
+            return;
+        }
+        // ---- STAGE 2: the attempt had its window and the stream is still gone ----
+        //
+        // The retry disarms itself the moment EP6 flows (its recency test on
+        // m_sinceLastEp6), so an ACTIVE timer here means the budget is still
+        // running and the radio has not answered yet. Waiting costs at most
+        // kMaxStartAttempts * kStartRetryMs = 1500 ms of additional delay before
+        // link loss is declared, against the 5000 ms full teardown it can save.
+        // That trade is deliberate and it is a real regression in the case where
+        // recovery FAILS -- worst case to a rebuilt link goes from ~7.0 s to
+        // ~8.5 s. It buys the case where recovery succeeds costing nothing at all.
+        if (m_startRetryTimer && m_startRetryTimer->isActive())
+            return;
+
         // Socket still open but the radio went quiet — surface it as link loss
         // rather than sitting in a permanently "connected" state.
         m_linkUp = false;
+        m_silenceRecoveryArmed = false;
         // And drop the outstanding request with the link, exactly as stop()
         // does. Hl2ControlRequest::reset()'s own doc says "for a link that went
         // down", and this is that; leaving the machine Awaiting here made the
@@ -489,6 +612,10 @@ void MetisClient::stop()
         m_socket = nullptr;
     }
     m_running = false;
+    // Any silence recovery in flight ends with the session. The COUNTERS do
+    // not: they are a session-life record and a stop is not a reason to forget
+    // that a recovery happened.
+    m_silenceRecoveryArmed = false;
     // metisStop() is 0x00, which clears wide_spectrum as well as run. The gate
     // has nothing left to sample and its intent ends with the session.
     resetBandscopeGate();
@@ -1346,6 +1473,17 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
     // recently the stream produced anything, which both the silence watchdog
     // and the start-retry read.
     m_sinceLastEp6.restart();
+    if (m_silenceRecoveryArmed) {
+        // The stream is back and m_linkUp never dropped, so nothing downstream
+        // saw this happen. The counter is the only record that it did, which is
+        // the point: a recovery that is invisible to the operator must not also
+        // be invisible to whoever asks later why the audio had a hole in it.
+        m_silenceRecoveryArmed = false;
+        ++m_silenceRecoveriesCompleted;
+        qInfo() << "MetisClient: EP6 resumed after a silence recovery ("
+                << m_silenceRecoveriesCompleted << "of" << m_silenceRecoveryAttempts
+                << "attempts recovered) — no teardown was needed";
+    }
     if (!m_linkUp) {
         m_linkUp = true;
         if (m_connectWatchdog)

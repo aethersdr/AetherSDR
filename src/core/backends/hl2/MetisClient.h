@@ -467,6 +467,15 @@ public:
     Q_INVOKABLE void flushTxIq();
     [[nodiscard]] std::size_t txQueueDepth() const noexcept { return m_txIq.size(); }
 
+    // ---- Silence recovery (S3 row 3.4) ----
+    //
+    // How many times the EP6 silence watchdog re-sent the run command instead
+    // of declaring the link down, and how many of those the stream came back
+    // from. Attempts without completions is the shape that says this recovery
+    // is not the right one for whatever is actually failing.
+    [[nodiscard]] std::uint64_t silenceRecoveryAttempts() const noexcept { return m_silenceRecoveryAttempts; }
+    [[nodiscard]] std::uint64_t silenceRecoveriesCompleted() const noexcept { return m_silenceRecoveriesCompleted; }
+
     // A baseband test tone, offsetHz from the TX carrier, amplitude 0..1.
     // amplitude <= 0 disables it. Takes precedence over queued IQ.
     //
@@ -703,6 +712,18 @@ private:
     int     m_startAttempts = 0;          // start datagrams sent this connect
     QElapsedTimer m_ep2Clock;             // pacer reference clock
     QElapsedTimer m_sinceLastEp6;         // silence detection
+    // A recovery is in flight for the CURRENT silence. Set when the watchdog
+    // re-sends the run command, cleared by the EP6 packet that ends the
+    // silence -- so it is per-silence, not per-session, and a link that goes
+    // quiet twice gets two recoveries rather than one.
+    bool m_silenceRecoveryArmed = false;
+    std::uint64_t m_silenceRecoveryAttempts = 0;
+    std::uint64_t m_silenceRecoveriesCompleted = 0;
+    // No test seam here on purpose. hl2_receiver_count_restart_test already
+    // owns a fake radio that gates EP6 on its own run state, which is the exact
+    // shape of the failure this recovers from, so the silence path is driven
+    // through a real (loopback) socket and a real 2 s wall clock rather than
+    // through an override that would let the production reading rot untested.
     // Free-running from construction and never restarted: the RQST/ACK floor
     // differences it, so it must not be reset under an outstanding request the
     // way m_sinceLastEp6 is per packet.

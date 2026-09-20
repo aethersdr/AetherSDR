@@ -179,6 +179,81 @@ int main(int argc, char** argv)
     check(upSpy.count() == 1, "still exactly one linkUp for the whole session");
     check(downSpy.count() == 0, "still no linkDown");
 
+    // ---- S3 row 3.4: an ESTABLISHED link that goes quiet re-starts itself ----
+    //
+    // The failure this recovers from is the one the client used to have no
+    // answer to at all. dsopenhpsdr1.v's anti-wedge watchdog is cleared by EP2
+    // ARRIVALS and eventually sets `run <= 0`, so the radio stops streaming on
+    // its own, without being asked and without any stop from us. Before this,
+    // onWatchdogTick() cleared m_linkUp, emitted linkDown and could then never
+    // fire again -- m_startRetryTimer was armed by start() and setReceiverCount()
+    // and by nothing else -- so resuming EP2 could not restart the radio and the
+    // only recovery was RadioModel tearing the whole backend down five seconds
+    // later and rebuilding every WDSP channel.
+    //
+    // The fake radio models exactly that: `streaming` goes false with no stop
+    // datagram, and only a run command brings it back.
+    //
+    // NEGATIVE CONTROL FIRST. Everything above this point was a healthy session
+    // plus two deliberate restarts. If the silence recovery can be provoked by
+    // any of that, the positive result below is worthless.
+    check(client.silenceRecoveryAttempts() == 0,
+          "NEGATIVE CONTROL: a healthy session and two clean restarts trip no silence recovery");
+    check(client.silenceRecoveriesCompleted() == 0,
+          "NEGATIVE CONTROL: and complete none");
+
+    {
+        const int startsBeforeSilence = startsSeen;
+        const int stopsBeforeSilence  = stopsSeen;
+        const int upsBefore   = upSpy.count();
+        const int downsBefore = downSpy.count();
+
+        // The radio wedges: it stops streaming and never says so.
+        streaming = false;
+        blocksSeen = 0;
+        spin(1500);   // inside kSilenceTimeoutMs (2000) -- nothing should happen yet
+        check(client.silenceRecoveryAttempts() == 0,
+              "no recovery before the silence timeout expires");
+        check(blocksSeen == 0, "and no EP6, because the radio really has stopped");
+
+        spin(1500);   // now past 2000 ms of silence, plus room for the run command
+        check(client.silenceRecoveryAttempts() == 1,
+              "the silence watchdog re-sent the run command instead of declaring link loss");
+        check(startsSeen == startsBeforeSilence + 1,
+              "exactly one run command went out for the silence");
+        check(stopsSeen == stopsBeforeSilence,
+              "and NO metis-stop -- the payload layout did not change, so there is "
+              "no hard edge to make and nothing to re-prime");
+        check(blocksSeen > 0, "EP6 resumed: the radio was restarted by the run command");
+        check(client.silenceRecoveriesCompleted() == 1,
+              "and the recovery is recorded as completed, not merely attempted");
+
+        // A recovery that worked must be INVISIBLE above the protocol layer.
+        // Hl2Backend republishes its entire initial state on linkUp, over the
+        // operator's live panes, and RadioModel starts a five-second teardown on
+        // the disconnected() that follows linkDown. Emitting either here would
+        // have cost more than the fault did.
+        check(downSpy.count() == downsBefore, "a recovered silence emits no linkDown");
+        check(upSpy.count() == upsBefore, "and no linkUp, so nothing republishes");
+    }
+
+    {
+        // ---- and a link that is genuinely gone is still declared gone ----
+        //
+        // The recovery must not become a way of never reporting link loss. With
+        // every run command ignored, the retry budget runs out and the watchdog
+        // falls through to exactly the teardown it always did.
+        const int downsBefore = downSpy.count();
+        startsToDrop = 99;      // the radio ignores every start from here on
+        streaming = false;
+        spin(5000);             // 2000 silence + 1500 retry budget + margin
+        check(client.silenceRecoveryAttempts() == 2, "a second silence gets its own recovery");
+        check(client.silenceRecoveriesCompleted() == 1,
+              "which does NOT complete, because the radio never came back");
+        check(downSpy.count() == downsBefore + 1,
+              "an unrecoverable silence still reports link loss");
+    }
+
     client.stop();
 
     if (g_failures == 0)
