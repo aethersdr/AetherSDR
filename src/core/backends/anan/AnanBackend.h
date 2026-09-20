@@ -116,6 +116,11 @@ public:
     // Drives the S-meter path as AnanRxDsp::meterUpdate would, so the
     // smoothing and publish tick can be tested without a live radio.
     void feedMeterForTest(float dbfs) { onDspMeter(dbfs); }
+    // The smoothed value itself, whether or not the publish tick has come
+    // round. Without this the ballistics can only be observed through the
+    // tick, which makes the assertion depend on wall-clock timing and lets a
+    // test pass with the smoothing replaced by a plain assignment.
+    [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeterDbm; }
 
 private:
     void beginDspSetup();
