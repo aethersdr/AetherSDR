@@ -347,6 +347,55 @@ int main(int argc, char** argv)
         Hl2UnkeyHoldTestAccess::tearDown(backend);
     }
 
+    // ── TURNING THE MONITOR OFF MUST NOT CANCEL AN ARMED HOLD ──────────────
+    //
+    // Found in review, and it was a real defect in the first version of this
+    // change: setTxAudioMonitor's else branch is taken for (keyed, monitor on)
+    // AND for (UNKEYED, monitor off), and the second is exactly the state an
+    // unkey has just left behind with the hold running and the PA still up.
+    // Cancelling it there unmutes inside the T/R turnaround -- the defect this
+    // whole change removes, re-entering through another door.
+    //
+    // NOT HYPOTHETICAL: RadioCertification's run() epilogue calls
+    // keyViaOperatorPath(false) and then setTxAudioMonitor(false) in the same
+    // synchronous unwind, which is the one path in the tree that deliberately
+    // listens to its own transmitter.
+    {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+
+        backend.setKeying(true, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "monitor-off: keyed and muted");
+
+        backend.setKeying(false, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "monitor-off: the unkey armed the hold and we are still muted");
+
+        // The call under test. The monitor was never on; this is the epilogue
+        // shape, not an operator asking to hear anything.
+        backend.setTxAudioMonitor(false);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "monitor-off does NOT cancel an armed hold");
+        check(Hl2UnkeyHoldTestAccess::mixerGateClosed(backend),
+              "...and the mixer gate stays shut with it");
+
+        // POSITIVE CONTROL. Without this, "still muted" is also what a
+        // setTxAudioMonitor that does nothing at all would produce, and what a
+        // hold that never expires would produce. Wait the hold out: it must
+        // release on its own, which proves the timer was still running rather
+        // than merely that nothing unmuted.
+        pumpFor(Hl2UnkeyHoldTestAccess::holdMs(backend) + 40);
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "POSITIVE CONTROL: the hold was still RUNNING and expires on its "
+              "own -- so the assertion above measured a live hold, not a dead "
+              "call");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+
     std::printf("\n  %s\n\n", g_failures == 0 ? "all checks passed" : "FAILURES");
     return g_failures == 0 ? 0 : 1;
 }

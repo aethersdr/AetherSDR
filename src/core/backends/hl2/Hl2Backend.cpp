@@ -4908,6 +4908,22 @@ void Hl2Backend::setTxAudioMonitor(bool on)
         if (m_unkeyUnmuteTimer)
             m_unkeyUnmuteTimer->stop();
         applyRxAudioMute(true);
+    } else if (!m_keyed && m_unkeyUnmuteTimer && m_unkeyUnmuteTimer->isActive()) {
+        // AN ARMED HOLD IS NOT AN OVERTAKEN ONE, and this branch used to treat
+        // it as such. It is taken for (keyed, monitor on) AND for (UNKEYED,
+        // monitor off) -- and the second is exactly the state an unkey has just
+        // left behind, with the hold running and the PA still up.
+        //
+        // Cancelling it there unmutes inside the T/R turnaround: the defect
+        // this whole change exists to remove, let back in through another door.
+        // Not hypothetical -- RadioCertification's run() epilogue calls
+        // keyViaOperatorPath(false) and then setTxAudioMonitor(false) in the
+        // same synchronous unwind, which is the one path in the tree that
+        // deliberately listens to its own transmitter.
+        //
+        // So: leave the timer running and stay muted. The monitor is already
+        // off, the operator is asking for nothing, and the hold expires on its
+        // own a few tens of milliseconds later.
     } else {
         applyRxAudioMute(false);
         if (m_unkeyUnmuteTimer)

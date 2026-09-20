@@ -871,8 +871,13 @@ private:
 
     // THE RECEIVE-AUDIO HOLD, as two calls rather than as open-coded loops.
     //
-    // applyRxAudioMute() is the ONLY writer of m_rxAudioMuted and the only site
-    // that queues setAudioMuted to the receivers. Everything that wants the
+    // applyRxAudioMute() is the ONLY writer of m_rxAudioMuted. It is NOT the
+    // only site that queues setAudioMuted -- pushInitialState()'s link-up loop
+    // re-asserts it per receiver as each one is opened, and that is deliberate:
+    // a receiver created after the mute was applied has to be told. It agrees
+    // with this flag because applyRxAudioMute() runs later in the same function.
+    // Saying "the only site" here would be an invariant a future reader relies
+    // on and the tree does not keep. Everything that wants the
     // demodulator silenced goes through it, so the mixer's gate and the
     // demodulator's mute can no longer drift apart -- which they did, and the
     // skew was 70 ms wide by construction on the unkey edge.
