@@ -125,6 +125,11 @@ public:
     // clear by hand -- setAutoRfGainEnabled(true) and
     // setAutoRfGainAvailable(false) both do it.
     void setAutoRfGainRefusalDescription(const QString& why);
+    // Speak the refusal now, once. A description is read on arrival at the
+    // control; on a refused tick the operator is already on it, so without
+    // this the sentence sits unread until they leave and come back. No-op
+    // when no AT client is active or `why` is empty.
+    void announceAutoRfGainRefusal(const QString& why);
     // RFC #5535's visibility condition: what the front end is doing, and what
     // the loop has done about it. No-op on a family that never showed the
     // indicator.

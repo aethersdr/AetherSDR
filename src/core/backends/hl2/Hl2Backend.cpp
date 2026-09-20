@@ -6425,6 +6425,11 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // A radio swap ends the session, and an automatic control armed about radio
     // A's antenna has nothing to say about radio B's.
     m_autoRfGainEnabled = false;
+    // Nor does a refusal composed about radio A's baseline: the interface
+    // promises an empty reason from a backend that has not been asked, and
+    // radio B has not been. Left standing, any reader other than the toggle
+    // lambda would surface radio A's number as radio B's.
+    m_autoRfGainRefusal.clear();
     m_autoGainState = AetherSDR::hl2::AutoGainState{};
     m_autoGainConfig = AetherSDR::hl2::AutoGainConfig{};
     m_autoGainMode = QStringLiteral("ramp");
@@ -6996,6 +7001,10 @@ void Hl2Backend::setAutoRfGain(bool on)
             qWarning().noquote()
                 << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal
                      + QStringLiteral(" (#5354: +48 dB measures like +18 dB)");
+            // SETTLED AS NOT ARMED, and said so. A refusal that only the
+            // caller's own readback could discover was invisible on the two
+            // routes that have no readback: the restore below and the bridge.
+            emit autoRfGainArmSettled(false);
             return;
         }
         // CLEARED ON SUCCESS. A reason that outlived the refusal it describes
@@ -7016,6 +7025,7 @@ void Hl2Backend::setAutoRfGain(bool on)
         applyBandscopeForAutoGain();
         qCInfo(lcHl2) << "HL2 auto RF gain: ARMED at baseline" << m_lnaGainDb
                       << "dB, floor" << m_autoGainConfig.maxOffsetDb << "dB below";
+        emit autoRfGainArmSettled(true);
     } else {
         m_autoRfGainEnabled = false;
         // The operator turning it OFF is a preference, and is persisted as one.
@@ -7031,6 +7041,7 @@ void Hl2Backend::setAutoRfGain(bool on)
         setLnaAutoOffsetDb(0);
         qCInfo(lcHl2) << "HL2 auto RF gain: disarmed, baseline" << m_lnaGainDb
                       << "dB restored";
+        emit autoRfGainArmSettled(false);
     }
 }
 

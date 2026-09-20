@@ -11399,10 +11399,16 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         }
         const QString v = raw.toLower();
         if (v.isEmpty()) {
-            return QJsonObject{{QStringLiteral("ok"), true},
+            auto* status = radio->autoRfGain();
+            QJsonObject report{{QStringLiteral("ok"), true},
                                {QStringLiteral("pan"), QStringLiteral("autorfgain")},
-                               {QStringLiteral("available"), radio->autoRfGain() != nullptr},
+                               {QStringLiteral("available"), status != nullptr},
                                {QStringLiteral("requested"), false}};
+            if (status) {
+                report.insert(QStringLiteral("armed"), status->isArmed());
+                report.insert(QStringLiteral("refusal"), status->lastArmRefusalReason());
+            }
+            return report;
         }
         const bool on = (v == QLatin1String("on") || v == QLatin1String("true")
                          || v == QLatin1String("1"));
@@ -11418,13 +11424,16 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
                 "pan autorfgain: this radio has no automatic RF gain control"));
         }
         ag->setArmed(on);
-        // DELIBERATELY NOT AN ECHO OF THE ARMED STATE. The backend may decline
-        // to arm and log why; reporting "requested" rather than "on" keeps this
-        // verb honest about the difference. Read `health` for what actually
-        // happened -- that is the row that comes from the backend.
+        // `requested` is what was asked and `armed` is what the backend did;
+        // they differ when it declined, and `refusal` then carries the same
+        // sentence the GUI shows (#5817). The verb used to report only the
+        // request, so a headless caller had to scrape the log to learn the
+        // arm never took.
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("pan"), QStringLiteral("autorfgain")},
-                           {QStringLiteral("requested"), on}};
+                           {QStringLiteral("requested"), on},
+                           {QStringLiteral("armed"), ag->isArmed()},
+                           {QStringLiteral("refusal"), ag->lastArmRefusalReason()}};
     }
 
     if (action == QLatin1String("float") || action == QLatin1String("dock")) {

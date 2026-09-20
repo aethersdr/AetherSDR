@@ -976,6 +976,12 @@ public:
     static void toggleStarstruckMode();
 
 private:
+    // The one builder behind showInterlockNotification, showTxFilterNotification
+    // and showNoticeCard. The three differ only in how they choose the id and
+    // the title; everything a warning card IS -- dismissible, Warning tone, a
+    // floor of 1 ms -- is decided here once.
+    void raiseWarningCard(const QString& id, const QString& title,
+                          const QString& detail, int durationMs);
     void setFrequencyRangeInternal(double centerMhz, double bandwidthMhz,
                                    bool animateSmallNudges);
     double effectiveGridStepMhz(int widgetWidth) const;

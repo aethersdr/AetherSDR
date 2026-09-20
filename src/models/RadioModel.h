@@ -1177,6 +1177,10 @@ signals:
     // RFC #5535's visibility condition, republished for the GUI. See
     // core/backends/FrontEndOverload.h.
     void frontEndOverloadChanged(const AetherSDR::FrontEndOverload& state);
+    // IRadioBackend::autoRfGainArmSettled, republished for the GUI: an arm
+    // request on autoRfGain() settled -- armed, refused, or disarmed -- from
+    // whichever route asked.
+    void autoRfGainArmSettled(bool armed);
 
     void infoChanged();
     void licenseFeaturesChanged();

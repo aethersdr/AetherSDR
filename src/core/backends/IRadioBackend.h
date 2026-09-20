@@ -1119,6 +1119,16 @@ signals:
     // behaves strangely. See FrontEndOverload.h.
     void frontEndOverloadChanged(const AetherSDR::FrontEndOverload& state);
 
+    // AN ARM REQUEST ON autoRfGainControl() HAS SETTLED: `armed` is what the
+    // control is now doing. Emitted after EVERY outcome of setArmed() --
+    // refused (armed stays false; lastArmRefusalReason() says why), armed, and
+    // disarmed -- and not for a request that changed nothing. This is how a
+    // view learns about an arm it did not ask for: the connect-time restore
+    // inside the backend and a bridge `pan autorfgain on` both settle without
+    // passing through any GUI click, and a checkbox that only read isArmed()
+    // back after its own click reported the wrong state on both (#5817).
+    void autoRfGainArmSettled(bool armed);
+
     // Normalized transmit-status delta (aetherd RFC 2.3 — TransmitModel
     // touchpoint). Typed + compiler-checked; the backend populates only the
     // fields the wire reported (across the transmit / interlock / ATU / APD /

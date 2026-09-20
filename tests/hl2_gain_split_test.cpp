@@ -473,13 +473,45 @@ int main(int argc, char** argv)
         // a later unrelated failure would be shown this text.
         fresh.setPanRfGain(QString(), hl2::Hl2Backend::kAutoRfGainMaxBaselineDb - 1);
         fresh.setAutoRfGain(true);
-        if (fresh.autoRfGainEnabled()) {
-            check(fresh.lastArmRefusalReason().isEmpty(),
-                  "a successful arm clears the reason");
-        } else {
-            std::printf("  [skip] could not arm after lowering the baseline; "
-                        "the clear-on-success half is unexercised here\n");
-        }
+        // ASSERTED, NOT SKIPPED. A guarded "[skip]" here would let a later
+        // change that stops an unconnected backend from arming turn the
+        // clear-on-success half green without ever running it.
+        check(fresh.autoRfGainEnabled(),
+              "lowering the baseline under the ceiling arms for real");
+        check(fresh.lastArmRefusalReason().isEmpty(),
+              "a successful arm clears the reason");
+
+        // AND A RADIO SWAP TAKES IT WITH IT. applyRestoredState() is the reset
+        // every new radio's document runs through; a reason composed about
+        // radio A's baseline must not be what radio B's control reports before
+        // it has been asked anything.
+        hl2::Hl2Backend swapped;
+        swapped.setAutoRfGain(true);
+        check(!swapped.lastArmRefusalReason().isEmpty(),
+              "precondition: the previous radio declined and said why");
+        swapped.applyRestoredState(RestoredRadioState{});
+        check(swapped.lastArmRefusalReason().isEmpty(),
+              "a radio swap clears a reason composed about the previous radio");
+
+        // AND EVERY OUTCOME IS ANNOUNCED. A view that only reads isArmed() back
+        // after its own click never hears about the connect-time restore or a
+        // bridge verb; autoRfGainArmSettled is what lets one handler cover all
+        // three. Counted, so a no-op request is seen NOT to fire.
+        hl2::Hl2Backend spoken;
+        int settled = 0;
+        bool lastArmed = true;
+        QObject::connect(&spoken, &IRadioBackend::autoRfGainArmSettled,
+                         [&](bool armed) { ++settled; lastArmed = armed; });
+        spoken.setAutoRfGain(true);
+        check(settled == 1 && !lastArmed,
+              "a refusal settles the request as not armed, so a view hears it");
+        spoken.setPanRfGain(QString(), hl2::Hl2Backend::kAutoRfGainMaxBaselineDb - 1);
+        spoken.setAutoRfGain(true);
+        check(settled == 2 && lastArmed, "an arm settles as armed");
+        spoken.setAutoRfGain(false);
+        check(settled == 3 && !lastArmed, "a disarm settles as not armed");
+        spoken.setAutoRfGain(false);
+        check(settled == 3, "a request that changes nothing settles nothing");
     }
 
     if (failures == 0) {

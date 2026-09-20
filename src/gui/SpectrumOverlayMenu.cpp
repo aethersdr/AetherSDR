@@ -23,6 +23,8 @@
 #include <QStandardItemModel>
 #include <QSlider>
 #include <QLabel>
+#include <QAccessible>
+#include <QAccessibleEvent>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QGridLayout>
@@ -3004,6 +3006,29 @@ void SpectrumOverlayMenu::setAutoRfGainRefusalDescription(const QString& why)
     // because a checkbox with no tooltip at all is not the pre-refusal state.
     m_autoRfGainCheck->setAccessibleDescription(why);
     m_autoRfGainCheck->setToolTip(why.isEmpty() ? autoRfGainHelpToolTip() : why);
+}
+
+void SpectrumOverlayMenu::announceAutoRfGainRefusal(const QString& why)
+{
+    if (!m_autoRfGainCheck || why.isEmpty() || !QAccessible::isActive()) {
+        return;
+    }
+    // SAID OUT LOUD, AT THE MOMENT IT HAPPENS. A description is what a screen
+    // reader reads when the operator ARRIVES at the control. On a refused tick
+    // they are already on it -- they just pressed Space -- and no major AT
+    // client announces a description changing under focus, so the sentence
+    // would sit there unread until they left and came back. The clipping
+    // indicator beside this box (FrontEndOverloadIndicator) raises the same
+    // event for the same reason. Polite, so it queues behind whatever the
+    // operator asked to hear rather than cutting it off.
+    //
+    // Separate from setAutoRfGainRefusalDescription on purpose: the control is
+    // radio-wide and every pan carries a copy, so the description is written
+    // on all of them, and an announcement per copy would say the same sentence
+    // N times. MainWindow announces once, on the active pan.
+    QAccessibleAnnouncementEvent ev(m_autoRfGainCheck, why);
+    ev.setPoliteness(QAccessible::AnnouncementPoliteness::Polite);
+    QAccessible::updateAccessibility(&ev);
 }
 
 void SpectrumOverlayMenu::setAutoRfGainEnabled(bool on)

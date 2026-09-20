@@ -56,6 +56,12 @@ public:
     // A backend may DECLINE to arm — the HL2 refuses above a baseline where its
     // gain axis is not trustworthy — so a caller must read `isArmed()` back
     // rather than assuming the request took.
+    //
+    // AND THE BACKEND MUST EMIT IRadioBackend::autoRfGainArmSettled after every
+    // outcome, refusal included. A reader that polls isArmed() only after its
+    // own click never learns about an arm settled elsewhere -- the backend's
+    // own connect-time restore, a bridge verb -- and reports a control as off
+    // while it holds the operator's gain down (#5817).
     virtual void setArmed(bool on) = 0;
     [[nodiscard]] virtual bool isArmed() const = 0;
 
