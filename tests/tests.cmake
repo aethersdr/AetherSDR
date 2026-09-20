@@ -990,6 +990,16 @@ target_include_directories(hl2_rxdsp_test PRIVATE src)
 target_link_libraries(hl2_rxdsp_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME hl2_rxdsp_test COMMAND hl2_rxdsp_test)
 
+# #5498 — does pre-mute audio emerge after an unmute, and for how long? Measures
+# it with a tone detector instead of a listening judgement, and prints the number
+# in BOTH mute implementations (clock-with-zeros and hold). Asserts only its own
+# positive/negative controls; the milliseconds are reported, never compared to a
+# retyped copy of kRxFilterTaps.
+add_executable(hl2_rxdsp_unmute_staleness_test tests/hl2_rxdsp_unmute_staleness_test.cpp)
+target_include_directories(hl2_rxdsp_unmute_staleness_test PRIVATE src)
+target_link_libraries(hl2_rxdsp_unmute_staleness_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME hl2_rxdsp_unmute_staleness_test COMMAND hl2_rxdsp_unmute_staleness_test)
+
 # The host-side impulse noise blanker (WDSP ANB) ahead of the demodulator. The
 # HL2 runs no firmware DSP, so this stage is the only noise blanker the radio
 # has and there is no wire traffic to assert against — the test measures the
