@@ -98,7 +98,6 @@ public:
 
 signals:
     void outputReady();
-    void outputOverflow();
     void authorizationRevoked();
 
 private:

@@ -447,11 +447,7 @@ void ControlSession::requireResync()
     if (frame.size() > m_maxQueuedOutputBytes) {
         // Terminal overflow must fence engine authority now, not on a queued
         // socket abort that could lose to already queued keying work.
-        const QPointer<ControlSession> guard(this);
         revokeAuthorization();
-        if (guard) {
-            emit outputOverflow();
-        }
         return;
     }
     m_pending.append(PendingMessage{QString(), std::nullopt, frame, m_sequence});
