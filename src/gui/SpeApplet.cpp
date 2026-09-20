@@ -107,6 +107,7 @@ SpeApplet::SpeApplet(QWidget* parent)
     m_pwrLabel->setText("PWR");
     m_pwrGauge = new HGauge(0.0f, 1600.0f, 1500.0f, "", "",
         evenTicks(1600.0f), this, 1450.0f);
+    m_pwrGauge->setWindowPeakEnabled(true);
     m_pwrGauge->setAccessibleName(tr("Output power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setSpacing(4);

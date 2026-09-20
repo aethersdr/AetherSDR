@@ -407,6 +407,7 @@ int main(int argc, char** argv)
             settle(AetherSDR::kRelayMeterFreshnessMs + 150);
             applet.setRadioMeters(42.0f, 1.5f);
             CHECK(qFuzzyCompare(gauge->value(), 42.0f));
+            CHECK(gauge->peakValue() < 90.0f); // stale device peak was retired
         }
     }
 

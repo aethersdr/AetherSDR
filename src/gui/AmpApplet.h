@@ -283,7 +283,6 @@ private:
 
     // 100 ms timer — updates label text independently of gauge fill rate
     QTimer   m_labelTimer;
-    // Peak hold: white tick on fwd gauge, cleared 2.5 s after last new peak
 
     // When the radio relay last delivered a power/SWR sample. See
     // setDeviceMeters() for the rule it decides. Monotonic on purpose: an

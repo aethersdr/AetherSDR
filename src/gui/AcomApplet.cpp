@@ -141,6 +141,7 @@ AcomApplet::AcomApplet(QWidget* parent)
     m_pwrLabel->setText("PWR");
     m_pwrGauge = new HGauge(0.0f, 700.0f, 600.0f, "", "",
         evenTicks(700.0f), this);
+    m_pwrGauge->setWindowPeakEnabled(true);
     m_pwrGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setSpacing(4);

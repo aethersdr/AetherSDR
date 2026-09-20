@@ -762,12 +762,10 @@ void TxApplet::syncAtuIndicators()
 void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
 {
     if (!m_transmitting) {
-        m_smoothedPower = 0.0f;
         static_cast<HGauge*>(m_fwdGauge)->setValueImmediate(0.0f);
         static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
         return;
     }
-    m_smoothedPower = fwdPower;
     HGauge* powerGauge = static_cast<HGauge*>(m_fwdGauge);
     if (m_forwardPowerRequiresSmoothing) {
         powerGauge->setValue(fwdPower);
@@ -782,12 +780,13 @@ void TxApplet::updateMeters(float fwdPower, float swr, bool swrValid)
 
 void TxApplet::updatePeakPower(float fwdPowerInstant)
 {
-    if (!m_transmitting)
+    if (!m_transmitting) {
         return;
-    // The radio's PEP is a measured peak, not something to re-derive from
-    // the bar: hand it to the gauge's extremes engine, which glides to it at
-    // SmartMTR's fast external-peak slew (canon).
-    static_cast<HGauge*>(m_fwdGauge)->setExternalPeak(fwdPowerInstant);
+    }
+    // This is a raw FWDPWR sample, not a separately measured peak. Feed the
+    // gauge's sliding window without changing the already-smoothed bar; the
+    // window derives the readable PEP marker from the instantaneous stream.
+    static_cast<HGauge*>(m_fwdGauge)->recordWindowPeakSample(fwdPowerInstant);
 }
 
 void TxApplet::setTransmitting(bool tx)
@@ -797,8 +796,6 @@ void TxApplet::setTransmitting(bool tx)
         // Clear BOTH the live readings and peak-hold immediately. Merely
         // stopping meter polling leaves the last power sample painted forever,
         // and an already-in-flight reply may still arrive after this edge.
-        m_smoothedPower = 0.0f;
-        m_peakPower = 0.0f;
         static_cast<HGauge*>(m_fwdGauge)->setValueImmediate(0.0f);
         // clearPeak() drops the gauge's sliding window as well, so nothing
         // survives the unkey edge to be glided back into view.

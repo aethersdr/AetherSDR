@@ -128,8 +128,6 @@ TunerApplet::TunerApplet(QWidget* parent)
         m_swrLabel->setText("SWR");
     });
 
-    // Peak hold: clear the white tick 2.5 s after the last new peak.
-
     // Relay-only completion notice. The first timer waits for the settled SWR
     // to arrive after the tune ends — the meters lag the tuning edge — and the
     // second takes the banner down again, because on this path there is no
@@ -245,6 +243,7 @@ void TunerApplet::buildUI()
     m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "", "",
         {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
         this, 80.0f);
+    static_cast<HGauge*>(m_fwdGauge)->setWindowPeakEnabled(true);
     m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
@@ -722,6 +721,12 @@ void TunerApplet::setRadioConnected(bool connected)
 {
     if (m_radioConnected == connected) return;
     m_radioConnected = connected;
+    if (!connected) {
+        auto* gauge = static_cast<HGauge*>(m_fwdGauge);
+        gauge->setWindowPeakEnabled(true);
+        gauge->setValueImmediate(0.0f);
+        gauge->clearPeak();
+    }
     updatePortRows();
 }
 
@@ -1034,7 +1039,14 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // applet is first built and decides which row is outlined.
     connect(m_model, &TunerModel::stateChanged, this, &TunerApplet::updateActivePort);
     connect(m_model, &TunerModel::directConnectionChanged, this,
-            [this](bool) { updatePortRows(); });
+            [this](bool connected) {
+                if (!connected) {
+                    auto* gauge = static_cast<HGauge*>(m_fwdGauge);
+                    gauge->setWindowPeakEnabled(true);
+                    gauge->clearPeak();
+                }
+                updatePortRows();
+            });
 
     connect(m_model, &TunerModel::alertChanged, this, &TunerApplet::setAlertText);
     setAlertText(m_model->alert());
@@ -1219,7 +1231,11 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
 {
     m_fwdPower = fwdPower;
     m_swr = swr;
-    static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
+    auto* powerGauge = static_cast<HGauge*>(m_fwdGauge);
+    if (fwdPeak < 0.0f) {
+        powerGauge->setWindowPeakEnabled(true);
+    }
+    powerGauge->setValue(fwdPower);
     // TGXL sends swr=0.0000 (return loss = 0 dB) at idle — no incident signal
     // to measure against. The model converts that to rho=1.0 → ratio=99.9, which
     // pegs the gauge. Snap to 1.0 (empty) whenever forward power is below the
@@ -1237,12 +1253,13 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
     // transmission `fwd` sat at 0.14 W in roughly three samples out of four
     // while the TGXL's `peak` read up to 82 W. The radio-relayed path has no
     // peak field and keeps the old behaviour.
-    // The peak marker is HGauge's own, fed from the values above: it runs
-    // SmartMTR's sliding window and constant glide (project canon). The
-    // device's own peak, when the tuner reports one, is the better sample to
-    // feed that window -- fwd alone reads the gaps between syllables.
-    if (fwdPeak >= 0.0f)
-        static_cast<HGauge*>(m_fwdGauge)->setExternalPeak(fwdPeak);
+    // The device's own peak is a separately measured statistic, so it owns
+    // the external-peak mode while direct telemetry is present. The relay
+    // path above switches back to a window over fwdPower when no device peak
+    // is available.
+    if (fwdPeak >= 0.0f) {
+        powerGauge->setExternalPeak(fwdPeak);
+    }
     updateValueLabels();
 }
 

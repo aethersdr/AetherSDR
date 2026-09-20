@@ -64,7 +64,7 @@ public:
             // window sample can expire and slide the marker with the needle
             // already at rest.
             bool markerMoving = false;
-            if (m_extremesDriven) {
+            if (m_peakSource != PeakSource::Disabled) {
                 m_nowMs += dt;
                 // The PAINTED needle, not the raw target: the engine clamps
                 // the marker to sit at or above the needle, so handing it the
@@ -145,13 +145,35 @@ public:
     // compression bar) the mapping is inverted at paint time — min means FULL —
     // so the painted width there is 1.0f - filledFraction(). Assert
     // accordingly; the fraction itself is always value-normalised.
-    // Drive the peak marker from a separately measured peak (TxApplet's PEP)
+    // Opt into a sliding-window marker driven by the values passed to
+    // setValue(). Ordinary gauges remain marker-free; only readings for which
+    // an extremum is meaningful (forward power today) enable this mode.
+    void setWindowPeakEnabled(bool enabled) {
+        selectPeakSource(enabled ? PeakSource::Window : PeakSource::Disabled,
+                         enabled);
+        publishAutomationState();
+        update();
+    }
+
+    // Feed a separate raw sample into the sliding window without changing the
+    // bar. TxApplet uses this because its bar receives a smoothed reading while
+    // txPeakChanged carries the raw FWDPWR sample from which PEP is derived.
+    void recordWindowPeakSample(float v) {
+        selectPeakSource(PeakSource::Window, false);
+        m_extremes.record(double(qBound(m_min, v, m_max)), m_nowMs);
+        m_peakEnabled = true;
+        armPeakTimer();
+    }
+
+    // Drive the peak marker from a separately measured peak (TGXL `peak`)
     // instead of this gauge's own sliding window. The marker then tracks that
-    // value at SmartMTR's fast peak slew.
+    // value at SmartMTR's fast peak slew. Switching source resets the old
+    // window so record() and external-peak mode can never coexist.
     void setExternalPeak(float v) {
+        selectPeakSource(PeakSource::External, false);
         m_extremes.setExternalPeak(double(qBound(m_min, v, m_max)));
         m_peakEnabled = true;
-        if (!m_animTimer.isActive()) { m_animElapsed.restart(); m_animTimer.start(); }
+        armPeakTimer();
     }
 
     float value() const { return m_value; }
@@ -165,7 +187,9 @@ public:
     void setValue(float v) {
         if (qFuzzyCompare(m_value, v)) return;
         m_value = v;
-        if (m_extremesDriven) m_extremes.record(double(v), m_nowMs);
+        if (m_peakSource == PeakSource::Window && m_recordGaugeValuesForPeak) {
+            m_extremes.record(double(v), m_nowMs);
+        }
         m_smooth.setTarget(fractionFor(v));
         if (!m_smooth.needsAnimation() && !m_peakEnabled) {
             if (m_animTimer.isActive()) m_animTimer.stop();
@@ -189,6 +213,10 @@ public:
     }
 
     void setPeakValue(float v) {
+        // Legacy/manual callers own the marker value directly. In particular,
+        // PhoneCwApplet supplies the radio's MICPEAK immediately after
+        // setValue(); a window tick must not overwrite that measurement.
+        selectPeakSource(PeakSource::Disabled, false);
         if (qFuzzyCompare(m_peakValue, v)) return;
         m_peakValue = v;
         m_peakEnabled = true;
@@ -200,6 +228,7 @@ public:
         // Park: drop the window too, or the engine keeps sliding a marker
         // for a gauge the caller has just said has nothing to show.
         m_extremes.reset();
+        m_peakValue = static_cast<float>(m_extremes.floorPos());
         if (!m_peakEnabled) return;
         m_peakEnabled = false;
         publishAutomationState();
@@ -217,6 +246,10 @@ public:
         MeterSmoother::Ballistics ballistics = m_smooth.ballistics();
         std::swap(ballistics.attackSeconds, ballistics.releaseSeconds);
         m_smooth.setBallistics(ballistics);
+        m_extremes.setReversed(rev);
+        m_extremes.reset();
+        m_peakValue = static_cast<float>(m_extremes.floorPos());
+        m_peakEnabled = false;
         update();
     }
     // Anchor the fill bar to the right edge instead of the left.  Unlike
@@ -279,7 +312,6 @@ public:
         // pairing is now belt-and-braces rather than load-bearing: both
         // update() calls coalesce into one repaint, so the intermediate
         // fraction never reaches the screen.
-        applyExtremesScale();
         m_smooth.setTarget(fractionFor(m_value));
         m_smooth.snapToTarget();
         // Belt-and-braces: the smoother is at target, so the animation
@@ -483,6 +515,32 @@ protected:
     }
 
 private:
+
+    enum class PeakSource {
+        Disabled,
+        Window,
+        External,
+    };
+
+    void selectPeakSource(PeakSource source, bool recordGaugeValues) {
+        const bool recordValues = source == PeakSource::Window && recordGaugeValues;
+        if (m_peakSource == source
+            && m_recordGaugeValuesForPeak == recordValues) {
+            return;
+        }
+        m_extremes.reset();
+        m_peakSource = source;
+        m_recordGaugeValuesForPeak = recordValues;
+        m_peakValue = static_cast<float>(m_extremes.floorPos());
+        m_peakEnabled = false;
+    }
+
+    void armPeakTimer() {
+        if (!m_animTimer.isActive()) {
+            m_animElapsed.restart();
+            m_animTimer.start();
+        }
+    }
 
     // SmartMTR slews its markers at a constant 60 UNITS/s over a 220-UNIT bar
     // -- a marker crosses the full scale in ~3.7 s, deliberately lazy against
@@ -688,7 +746,8 @@ private:
     // peak on a hold-then-decay timer. The window expiring is what retires
     // the marker, so there is no hold phase to tune.
     MeterExtremes m_extremes;
-    bool   m_extremesDriven{true};
+    PeakSource m_peakSource{PeakSource::Disabled};
+    bool   m_recordGaugeValuesForPeak{false};
     qint64 m_nowMs{0};          // monotonic tick clock for the window
     float m_peakValue{0.0f};
     bool  m_peakEnabled{false};

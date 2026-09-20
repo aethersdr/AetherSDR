@@ -137,6 +137,7 @@ VkampApplet::VkampApplet(QWidget* parent)
     m_pwrLabel->setText("PWR");
     m_pwrGauge = new HGauge(0.0f, Vkamp::meterFullScaleWatts(m_variant), Vkamp::ratedWatts(m_variant),
         "", "", evenTicks(Vkamp::meterFullScaleWatts(m_variant)), this);
+    m_pwrGauge->setWindowPeakEnabled(true);
     m_pwrGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setSpacing(4);

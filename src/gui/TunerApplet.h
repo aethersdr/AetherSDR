@@ -278,7 +278,6 @@ private:
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
 
-    // Peak hold for fwd gauge
     // Throttles the numeric PWR/SWR text; the bar itself is not throttled.
     QElapsedTimer m_readoutClock;
 

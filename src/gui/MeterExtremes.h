@@ -39,10 +39,15 @@ public:
 
     void setTuning(const Tuning& t)
     {
+        const bool scaleChanged = t.scaleMin != m_tuning.scaleMin
+                                  || t.scaleMax != m_tuning.scaleMax;
         m_tuning = t;
         // A scale change invalidates the marker positions: they are stored in
         // the old scale's units and would otherwise sit off the new bar.
-        if (!m_hasData) { m_minPos = floorPos(); m_maxPos = floorPos(); }
+        if (scaleChanged || !m_hasData) {
+            m_minPos = floorPos();
+            m_maxPos = floorPos();
+        }
     }
     const Tuning& tuning() const { return m_tuning; }
 

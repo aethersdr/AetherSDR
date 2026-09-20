@@ -277,7 +277,7 @@ void AmpApplet::buildUI()
     m_fwdGauge = new HGauge(0.0f, 2000.0f, 1500.0f, "", "",
         {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1.5K"}, {2000, "2K"}},
         this, 1000.0f);
-    // Slow release: bar rises quickly on RF bursts but decays over ~800 ms
+    m_fwdGauge->setWindowPeakEnabled(true);
     m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     // Zero margins, like every other nested layout here. A QLayout that is
