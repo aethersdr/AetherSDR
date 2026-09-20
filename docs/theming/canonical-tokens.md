@@ -100,8 +100,8 @@ single-use colours snap to the nearest canonical neighbour.
 | Token | Canonical | Notes |
 |---|---|---|
 | `color.spectrum.trace` | `#00b4d8` | live FFT trace |
-| `color.spectrum.peakHold` | `#ffb84d` | peak-hold overlay |
-| `color.spectrum.average` | `#8ea8c0` | averaged trace |
+| `color.spectrum.peakHold` | `#ffb84d` | **RESERVED — nothing paints this.** There is no peak-hold overlay: no hold state, no draw pass, no control. The token entered in #3080 as one of 51 generated under theming RFC #3076, which locked the token vocabulary and assumed the overlay as a region to colour — it never proposed building one. The only design work is @ten9876's 2026-03-29 decomposition of #333 (item 4, *FFT Peak Hold / Max Hold*), explicitly deferred to community interest. Painting it needs an approved RFC first (GOVERNANCE.md: *"Any change to visual design"*); #5561, which ruled on the existing trace's LINE WIDTH, is the bar |
+| `color.spectrum.average` | `#8ea8c0` | **RESERVED — nothing paints this.** Same provenance as the row above. There is no client-drawn averaged trace on any backend; `SpectrumWidget::setFftAverage` stores a number no render path reads, and where averaging should live is still open — see #5782 and #5794. Do not read this row as describing a feature |
 | `color.spectrum.grid` | `#1a2330` | dB/frequency grid lines |
 | `color.waterfall.colormap` | (gradient — Phase 2 gradient support) | the 8-stop RF colormap |
 | `color.spectrum.zoomButton.disabled.background` | `#5a0f0f1a` | disabled state of the waterfall zoom / band-segment buttons |
