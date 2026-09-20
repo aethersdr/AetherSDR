@@ -1,6 +1,8 @@
 #include "TestSettingsProfile.h"
 #include "core/AppSettings.h"
 #include "gui/AmpApplet.h"
+#include <QDateTime>
+#include <QtTest>
 #include "gui/HGauge.h"
 
 #include <QAbstractItemView>
@@ -246,6 +248,15 @@ QString rowLabel(const AmpApplet& applet, const QString& prefix)
 
 // The gauges take their value synchronously; the row LABELS are refreshed by
 // a 100 ms timer, so a test that reads a number wants the gauge.
+HGauge* gaugeNamed(const AmpApplet& applet, const QString& accessibleName)
+{
+    for (QWidget* w : applet.findChildren<QWidget*>()) {
+        if (w->accessibleName() != accessibleName) continue;
+        if (auto* g = dynamic_cast<HGauge*>(w)) return g;
+    }
+    return nullptr;
+}
+
 float gaugeValue(const AmpApplet& applet, const QString& accessibleName)
 {
     // HGauge declares no Q_OBJECT, so findChildren cannot select it directly;
@@ -608,6 +619,45 @@ void testReadoutWidthIsStable()
 
 } // namespace
 
+// The marker must fall, not vanish. TxApplet holds for 2 s then decays at
+// full-scale/2.5 s (#2561, matching SmartSDR's peak-hold bar); this gauge
+// held 2.5 s and then snapped the peak to zero. Three power meters share a
+// screen and should behave alike.
+void testPeakMarkerDecaysInsteadOfVanishing()
+{
+    resetSettings();
+    AmpApplet applet;
+    HGauge* g = gaugeNamed(applet, QStringLiteral("Forward power"));
+    report("the forward-power gauge exists", g != nullptr, QString());
+    if (!g) return;
+
+    applet.setDeviceMeters(1000.0f, 1.2f);
+    report("a new peak arms the marker", qFuzzyCompare(g->peakValue(), 1000.0f),
+           QString::number(g->peakValue()));
+
+    // Inside the hold window the marker does not move.
+    applet.setDeviceMeters(100.0f, 1.2f);
+    QTest::qWait(900);
+    report("the marker holds through the hold window",
+           qFuzzyCompare(g->peakValue(), 1000.0f), QString::number(g->peakValue()));
+
+    // Past it, strictly between the peak and the live reading -- decaying.
+    QTest::qWait(1600);
+    const float mid = g->peakValue();
+    report("the marker decays rather than snapping away",
+           mid < 1000.0f && mid > 100.0f, QString::number(mid));
+
+    // It comes to rest on the live reading, not at zero.
+    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 5000;
+    while (g->peakValue() > 100.5f
+           && QDateTime::currentMSecsSinceEpoch() < deadline) {
+        QTest::qWait(50);
+    }
+    report("the marker settles on the live reading",
+           g->peakValue() <= 100.5f && g->peakValue() >= 99.5f && g->peakHeld(),
+           QString::number(g->peakValue()));
+}
+
 int main(int argc, char** argv)
 {
     TestSettingsProfile settingsProfile(QStringLiteral("aether-amp-applet-test"));
@@ -640,6 +690,7 @@ int main(int argc, char** argv)
     testWithdrawnDriveHidesTheRow();
     testFanControlStaysOperableWithoutTheSetupGroup();
     testRelayedMeffaReadsOutButStaysInert();
+    testPeakMarkerDecaysInsteadOfVanishing();
 
     std::printf("\n%s\n",
                 g_failed == 0

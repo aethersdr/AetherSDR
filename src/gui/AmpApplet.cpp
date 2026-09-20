@@ -540,13 +540,31 @@ void AmpApplet::buildUI()
     connect(&m_labelTimer, &QTimer::timeout, this, &AmpApplet::updateValueLabels);
     m_labelTimer.start();
 
-    // Peak hold: clear the white tick 2.5 s after the last new peak.
-    m_peakTimer = new QTimer(this);
-    m_peakTimer->setSingleShot(true);
-    m_peakTimer->setInterval(2500);
-    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
-        m_peakFwd = 0.0f;
-        m_fwdGauge->clearPeak();
+    // Peak-hold ballistics matching TxApplet and TunerApplet (#2561): hold,
+    // then decay toward the live reading rather than snapping the marker
+    // away. Three power meters on one screen should behave alike.
+    m_peakTick = new QTimer(this);
+    m_peakTick->setInterval(50);
+    connect(m_peakTick, &QTimer::timeout, this, [this]() {
+        if (!m_peakHoldRunning) { m_peakTick->stop(); return; }
+        const qint64 elapsedMs = m_peakHoldTimer.elapsed();
+        if (elapsedMs <= kPeakHoldMs) return;
+        const float decaySecs = static_cast<float>(elapsedMs - kPeakHoldMs) / 1000.0f;
+        const float decayed = m_peakDecayStart - kPeakDecayWattsPerSec * decaySecs;
+        if (decayed <= m_fwdWatts) {
+            m_peakFwd = m_fwdWatts;
+            m_peakHoldRunning = false;
+            m_peakTick->stop();
+            // At the floor the marker goes away entirely, as it did before.
+            if (m_fwdWatts <= 0.05f) {
+                m_peakFwd = 0.0f;
+                m_fwdGauge->clearPeak();
+                return;
+            }
+        } else {
+            m_peakFwd = decayed;
+        }
+        m_fwdGauge->setPeakValue(m_peakFwd);
     });
 
     applyDensityAtScale(1.0);
@@ -1141,8 +1159,11 @@ void AmpApplet::setFwdPower(float watts)
         m_swrGauge->setValue(m_swrVal); // power resumed — restore cached value
     if (watts > m_peakFwd) {
         m_peakFwd = watts;
+        m_peakDecayStart = watts;
+        m_peakHoldTimer.restart();
+        m_peakHoldRunning = true;
+        if (!m_peakTick->isActive()) m_peakTick->start();
         m_fwdGauge->setPeakValue(watts);
-        m_peakTimer->start();  // restart hold window on each new peak
     }
     // Label text is updated by the 100 ms timer (updateValueLabels).
 }

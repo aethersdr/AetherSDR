@@ -390,17 +390,13 @@ protected:
         if (m_peakEnabled) {
             float peakFrac = qBound(0.0f, (m_peakValue - m_min) / (m_max - m_min), 1.0f);
             int peakX = barX + static_cast<int>(peakFrac * barW);
-            if (m_reversed) {
-                // In reversed mode, peak is the lowest value (most compression)
-                if (peakX > barX && peakX < barX + barW - 1) {
-                    p.setPen(QColor(0xff, 0xff, 0xff));
-                    p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
-                }
-            } else {
-                if (peakX > barX && peakX < barX + barW - 1) {
-                    p.setPen(QColor(0xff, 0xff, 0xff));
-                    p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
-                }
+            // Two pixels, not one: a single hairline is easy to lose against
+            // the bar's own gradient, especially while it is decaying.
+            // Reversed mode reads the peak as the lowest value (most
+            // compression) but draws the same marker.
+            if (peakX > barX && peakX < barX + barW - 1) {
+                p.setPen(QPen(QColor(0xff, 0xff, 0xff), kPeakMarkerW));
+                p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
             }
         }
 
@@ -615,6 +611,7 @@ private:
 
     float m_min, m_max, m_redStart, m_yellowStart;
     float m_value{0.0f};
+    static constexpr int kPeakMarkerW = 2;   // pixels
     float m_peakValue{0.0f};
     bool  m_peakEnabled{false};
     bool  m_reversed{false};

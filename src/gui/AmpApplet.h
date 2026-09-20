@@ -284,8 +284,16 @@ private:
     // 100 ms timer — updates label text independently of gauge fill rate
     QTimer   m_labelTimer;
     // Peak hold: white tick on fwd gauge, cleared 2.5 s after last new peak
-    QTimer*  m_peakTimer{nullptr};
+    // Peak-hold ballistics, the same shape TxApplet and TunerApplet use
+    // (#2561): hold, then decay at full-scale/2.5 s so the marker falls
+    // rather than vanishing. This gauge is fixed at 2 kW full scale.
+    QTimer*  m_peakTick{nullptr};
     float    m_peakFwd{0.0f};
+    float    m_peakDecayStart{0.0f};
+    bool     m_peakHoldRunning{false};
+    QElapsedTimer m_peakHoldTimer;
+    static constexpr qint64 kPeakHoldMs = 2000;
+    static constexpr float  kPeakDecayWattsPerSec = 2000.0f / 2.5f;
 
     // When the radio relay last delivered a power/SWR sample. See
     // setDeviceMeters() for the rule it decides. Monotonic on purpose: an
