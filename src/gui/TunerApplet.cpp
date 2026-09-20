@@ -1260,10 +1260,10 @@ void TunerApplet::updateValueLabels()
     if (m_fwdPower >= 5.0f) {
         m_labelClearTimer->stop();
         m_labelShowing = true;
-        // The bar animates at the full rate; the digits do not. At a 50 ms
-        // poll the text would change 20 times a second, which is not
-        // readable -- same reason the client meters throttle their readout
-        // to kMeterReadoutUpdateMs.
+        // The bar animates at the full rate; the digits do not. At the
+        // transmit poll rate the text would change tens of times a second,
+        // which is not readable -- same reason the client meters throttle
+        // their readout to kMeterReadoutUpdateMs.
         if (m_readoutClock.isValid()
             && m_readoutClock.elapsed() < kMeterReadoutUpdateMs) {
             return;

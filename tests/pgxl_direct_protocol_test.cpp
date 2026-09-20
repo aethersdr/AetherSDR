@@ -438,30 +438,41 @@ int main(int argc, char** argv)
     {
         // Earlier frames in this test already drove TRANSMIT_A/B, so establish
         // a known baseline rather than assuming one.
-        peer->write("S0|state state=IDLE vac=246 vdd=0.0 id=0.0 "
-                    "fwd=30.0 peakfwd=44.7 swr=-60.0 temp=23.1\n");
+        //
+        // These use the verbatim statusReply() helpers above -- the same
+        // captured frame shape the rest of this file asserts against -- and
+        // the R<seq>|0|... reply form, which is what a poll actually gets
+        // back. The S push is exercised separately below; production reads
+        // both, and wiring only one would leave the rate stuck for whichever
+        // firmware used the other.
+        peer->write(statusReply("200", "IDLE"));
         peer->flush();
         CHECK(spin([&] { return !conn.isTransmitting(); }));
         CHECK(conn.pollIntervalMs() == PgxlConnection::kPollRxMs);
 
-        // Either PA keyed counts.
-        peer->write("S0|state state=TRANSMIT_B vac=246 vdd=52.1 id=3.2 "
-                    "fwd=44.5 peakfwd=44.7 swr=-30.0 temp=23.1\n");
+        // Keyed, via the R reply path.
+        peer->write(transmittingStatusReply("201"));
         peer->flush();
         CHECK(spin([&] { return conn.isTransmitting(); }));
         CHECK(conn.pollIntervalMs() == PgxlConnection::kPollTxMs);
 
-        peer->write("S0|state state=IDLE vac=246 vdd=0.0 id=0.0 "
-                    "fwd=30.0 peakfwd=44.7 swr=-60.0 temp=23.1\n");
+        // Unkeyed again, still via R: this is the drop-back production uses.
+        peer->write(statusReply("202", "IDLE"));
         peer->flush();
         CHECK(spin([&] { return !conn.isTransmitting(); }));
         CHECK(conn.pollIntervalMs() == PgxlConnection::kPollRxMs);
 
-        // An unfamiliar state must not pin the rate high forever.
-        peer->write("S0|state state=SOMETHING_NEW vac=246 fwd=30.0 "
-                    "peakfwd=44.7 swr=-60.0 temp=23.1\n");
+        // The S push carries the same field and must move the rate too.
+        peer->write("S0|state state=TRANSMIT_B vac=246 vdd=51.9 id=7.5 "
+                    "fwd=42.2 peakfwd=43.6 swr=-60.0 temp=43.9\n");
         peer->flush();
-        spin([&] { return conn.isTransmitting(); }, 400);
+        CHECK(spin([&] { return conn.isTransmitting(); }));
+        CHECK(conn.pollIntervalMs() == PgxlConnection::kPollTxMs);
+
+        // An unfamiliar state must not pin the rate high forever.
+        peer->write(statusReply("203", "SOMETHING_NEW"));
+        peer->flush();
+        spin([&] { return !conn.isTransmitting(); }, 600);
         CHECK(!conn.isTransmitting());
         CHECK(conn.pollIntervalMs() == PgxlConnection::kPollRxMs);
 

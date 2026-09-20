@@ -36,6 +36,7 @@ void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
     m_reconnectTimer.stop();
     // Abort any pending or active connection before starting a new one (#1039)
     m_pollTimer.stop();
+    m_pollInFlight = false;
     m_connected = false;
     m_gotVersion = false;
     m_version.clear();
@@ -51,6 +52,7 @@ void TgxlConnection::disconnect()
     m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
     m_pollTimer.stop();
+    m_pollInFlight = false;
     m_connected = false;
     m_socket.disconnectFromHost();
 }
@@ -65,6 +67,7 @@ void TgxlConnection::onDisconnected()
 {
     qCDebug(lcTuner) << "TgxlConnection: disconnected";
     m_pollTimer.stop();
+    m_pollInFlight = false;
     m_connected = false;
     emit disconnected();
     if (!m_deliberateDisconnect && m_autoReconnect && !m_lastHost.isEmpty()) {
@@ -152,6 +155,7 @@ void TgxlConnection::processLine(const QString& line)
                         kvs.insert(part.left(eq), part.mid(eq + 1));
                 }
                 if (!kvs.isEmpty()) {
+                    m_pollInFlight = false;   // reply landed
                     applyPollRateFor(kvs);
                     emit statusUpdated(kvs);
                 }
@@ -190,7 +194,8 @@ void TgxlConnection::processLine(const QString& line)
         if (object == "state") {
             emit stateUpdated(kvs);
         } else if (object == "status") {
-            applyPollRateFor(kvs);
+            m_pollInFlight = false;   // reply landed
+                    applyPollRateFor(kvs);
             emit statusUpdated(kvs);
         }
         return;
@@ -246,8 +251,14 @@ void TgxlConnection::requestAutotune()
 
 void TgxlConnection::pollStatus()
 {
-    if (m_connected)
-        sendCommand("status");
+    if (!m_connected) return;
+    if (m_pollInFlight && m_pollSent.isValid()
+        && m_pollSent.elapsed() < kPollStaleMs) {
+        return;   // previous poll still outstanding
+    }
+    m_pollInFlight = true;
+    m_pollSent.restart();
+    sendCommand("status");
 }
 
 } // namespace AetherSDR

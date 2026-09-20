@@ -36,6 +36,7 @@ void PgxlConnection::connectToPgxl(const QString& host, quint16 port)
     if (m_connected) {
         m_deliberateDisconnect = true;
         m_pollTimer.stop();
+    m_pollInFlight = false;
         m_connected = false;
         m_socket.abort();  // synchronous — onDisconnected will not fire
         m_deliberateDisconnect = false;
@@ -54,6 +55,7 @@ void PgxlConnection::disconnect()
     m_deliberateDisconnect = true;
     m_reconnectTimer.stop();
     m_pollTimer.stop();
+    m_pollInFlight = false;
     m_connected = false;
     m_socket.disconnectFromHost();
 }
@@ -67,6 +69,7 @@ void PgxlConnection::onDisconnected()
 {
     qCDebug(lcTuner) << "PgxlConnection: disconnected";
     m_pollTimer.stop();
+    m_pollInFlight = false;
     m_connected = false;
     emit disconnected();
     if (!m_deliberateDisconnect && m_autoReconnect && !m_lastHost.isEmpty()) {
@@ -183,7 +186,8 @@ void PgxlConnection::processLine(const QString& line)
                         m_setupReadSeq = 0;
                         emit setupRead(kvs);
                     } else {
-                        applyPollRateFor(kvs);
+                        m_pollInFlight = false;   // reply landed
+                    applyPollRateFor(kvs);
                         emit statusUpdated(kvs);
                     }
                 }
@@ -217,7 +221,8 @@ void PgxlConnection::processLine(const QString& line)
                 kvs.insert(part.left(eq), part.mid(eq + 1));
         }
         if (!kvs.isEmpty()) {
-            applyPollRateFor(kvs);
+            m_pollInFlight = false;   // reply landed
+                    applyPollRateFor(kvs);
             emit statusUpdated(kvs);
         }
         return;
@@ -259,8 +264,14 @@ quint32 PgxlConnection::sendCommand(const QString& cmd)
 
 void PgxlConnection::pollStatus()
 {
-    if (m_connected)
-        sendCommand("status");
+    if (!m_connected) return;
+    if (m_pollInFlight && m_pollSent.isValid()
+        && m_pollSent.elapsed() < kPollStaleMs) {
+        return;   // previous poll still outstanding
+    }
+    m_pollInFlight = true;
+    m_pollSent.restart();
+    sendCommand("status");
 }
 
 } // namespace AetherSDR

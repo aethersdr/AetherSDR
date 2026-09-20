@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QTcpSocket>
+#include <QElapsedTimer>
 #include <QTimer>
 #include <QMap>
 #include <QString>
@@ -94,6 +95,15 @@ private:
     QTcpSocket m_socket;
     QTimer     m_pollTimer;       // interval follows m_transmitting
     bool       m_transmitting{false};
+    // One status poll in flight at a time. The transmit interval assumes the
+    // round trip fits inside it; on a congested LAN it may not, and an
+    // unconditional write would queue requests the device answers late and
+    // we never asked for. Self-limiting instead: skip a tick while one is
+    // outstanding, and give up on it after kPollStaleMs so a dropped reply
+    // cannot wedge polling for good.
+    bool          m_pollInFlight{false};
+    QElapsedTimer m_pollSent;
+    static constexpr int kPollStaleMs = 1000;
     QTimer     m_reconnectTimer;
     QByteArray m_readBuf;
     quint32    m_seq{0};

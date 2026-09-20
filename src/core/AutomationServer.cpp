@@ -4152,9 +4152,6 @@ QJsonObject AutomationServer::doGrab(const QString& target, const QString& path)
     return saveWidgetGrab(w, target, path);
 }
 
-// Full document for one resolved text view. dumpTree carries only a capped
-// prefix (see widgetValue); this is the full-fidelity read a transcript
-// assertion needs. Read-only: nothing is set and nothing is keyed. (#5078)
 // One JSON object per gauge. gaugeValue is what was last set; gaugeFraction
 // is what is actually painted, and the two disagree for the whole length of a
 // ballistics animation -- a monitor that reads only the former will report a
@@ -4219,6 +4216,9 @@ QJsonObject AutomationServer::doGauge(const QString& target) const
                        {QStringLiteral("gauges"), all}};
 }
 
+// Full document for one resolved text view. dumpTree carries only a capped
+// prefix (see widgetValue); this is the full-fidelity read a transcript
+// assertion needs. Read-only: nothing is set and nothing is keyed. (#5078)
 QJsonObject AutomationServer::doGetText(const QString& target) const
 {
     QWidget* w = resolveWidget(target);
