@@ -17,6 +17,7 @@
 #include "core/backends/hl2/Hl2AdcPairing.h"
 #include "core/backends/hl2/Hl2Spectrum.h"
 #include "core/dsp/WdspChannel.h"
+#include "core/dsp/WdspProcessTally.h"
 
 namespace AetherSDR::hl2 {
 
@@ -81,9 +82,114 @@ public:
         bool blockForOutput = false;
     };
 
-    // (Re)build the WdspChannel + Hl2Spectrum for this config. Returns false (and
-    // sets error, if given) when the WDSP channel cannot be created.
+    // (Re)build the WdspChannel + Hl2Spectrum for this config, SYNCHRONOUSLY on
+    // this object's own thread. Returns false (and sets error, if given) when the
+    // WDSP channel cannot be created.
+    //
+    // STILL THE CONNECT PATH'S ENTRY POINT (Hl2Backend::beginDspSetup) and the
+    // add-a-panadapter path's (createPanadapter), where nothing is streaming yet
+    // and blocking the I/O thread costs nothing. A LIVE rate change must NOT use
+    // it — see buildChannel()/installRebuiltChannel() below and
+    // Hl2Backend::applyPanBandwidth().
     Q_INVOKABLE bool configure(const Config& config, std::string* error = nullptr);
+
+    // ── The asynchronous rebuild: build off-thread, swap on-thread ─────────
+    //
+    // WHY THIS EXISTS. Hl2Backend runs MetisClient AND every Hl2RxDsp on ONE
+    // I/O thread. MetisClient paces EP2 from a 2 ms timer on it and drains EP6
+    // on it, and the EP6 sample path is a DirectConnection straight into
+    // processIqBlock(). So a configure() on that thread does not merely stall
+    // ONE receiver's audio: it stalls EVERY receiver and it stops EP2, which
+    // docs/HERMES.md §20.8 says the gateware watchdog answers by halting the
+    // stream. Splitting the build off the I/O thread is what keeps the audio
+    // alive across a rate change; splitting it off the GUI thread only kept the
+    // WINDOW alive.
+    //
+    // The precedent is AnanRxDsp's identical trio (buildChannel /
+    // beginRebuild / installRebuiltChannel) and its comment states the
+    // principle this copies: build first, disturb the session second. Moving
+    // the build to another thread alone would do nothing if the old
+    // stop-before-build ordering were kept.
+
+    // What buildChannel() produced. Move-only (owns two unique_ptrs) and free
+    // of any reference to the Hl2RxDsp it will be installed into, which is what
+    // makes it safe to carry between threads.
+    struct RebuildResult {
+        std::unique_ptr<WdspChannel> channel;
+        std::unique_ptr<Hl2Spectrum> spectrum;
+        std::size_t outputBlockSize = 0;
+        // The Config this was actually built for. installRebuiltChannel() takes
+        // the GEOMETRY from here (rate, block size, FFT size) because that is
+        // what the new channel physically is, and leaves the operator-facing
+        // fields to m_config, which may have moved while the build ran.
+        Config built;
+        // The noise-blanker request the channel was OPENED with, so
+        // installRebuiltChannel() can tell whether the operator moved it
+        // mid-build and needs a live push after the swap.
+        bool builtNbOn = false;
+        int builtNbLevel = 50;
+        std::string error;   // set iff channel == nullptr
+    };
+
+    // The slow half of configure() — WdspChannel::create()'s OpenChannel and
+    // FFTW planning — with nothing of `this` in it. Static on purpose: the whole
+    // point is that it may run on a thread that is not this object's while the
+    // CURRENTLY installed channel keeps producing audio on the one that is.
+    //
+    // `noiseBlankerEnabled`/`noiseBlankerLevel` are passed in rather than read
+    // from members because the channel is OPENED with the blanker (see
+    // configure()'s own note): a chain that had to be re-armed after the swap
+    // would be briefly deaf to impulses. The caller snapshots them on this
+    // object's thread inside beginRebuild()'s turn.
+    [[nodiscard]] static RebuildResult buildChannel(const Config& config,
+                                                   bool noiseBlankerEnabled,
+                                                   int noiseBlankerLevel);
+
+    // Marks a rebuild in flight, and seeds the operator-facing half of m_config
+    // from the snapshot the build is about to run with. Must be called on this
+    // object's own thread BEFORE the build starts.
+    //
+    // WHAT IT BUYS. Every control verb below that would otherwise reach WDSP
+    // takes WDSP's PROCESS-WIDE setup mutex (WdspChannel.cpp's g_setupMutex),
+    // which the background build holds for the whole of OpenChannel. Pushing
+    // through during a build would therefore block THIS thread — the I/O thread
+    // — for however long the build has left, reproducing the exact starvation
+    // this mechanism exists to remove. While a rebuild is in flight those verbs
+    // update this object's own mirrors ONLY, and installRebuiltChannel()
+    // re-applies every one of them to the new channel at the swap, so nothing
+    // the operator asked for is lost.
+    //
+    // DELIBERATELY NOT TOUCHING THE GEOMETRY FIELDS of m_config
+    // (inputSampleRateHz, dspBlockSize, fftSize, audioSampleRateHz) — unlike
+    // AnanRxDsp::beginInitialBuild(), which assigns the whole Config. Those
+    // describe the channel that is STILL RUNNING until the swap actually
+    // happens, and a build that fails must leave this object describing the
+    // chain it really has.
+    //
+    // COUNTED, not a flag: an operator dragging a zoom can have two rebuilds
+    // outstanding at once, and a flag cleared by the first would un-defer the
+    // control verbs while the second build still held the mutex.
+    Q_INVOKABLE void beginRebuild(const Config& config);
+
+    // Give up on a rebuild that will never be installed — it failed, or a newer
+    // one superseded it. Balances beginRebuild(); touches nothing else, so the
+    // running channel and every mirror are exactly as they were.
+    Q_INVOKABLE void abandonRebuild();
+
+    // Swap an already-built RebuildResult in as the active channel. Must run on
+    // this object's own thread; it is the only step that touches live state, and
+    // it is pointer writes plus the re-application below, not a build.
+    //
+    // NOT Q_INVOKABLE, for the same reason AnanRxDsp::installRebuiltChannel()
+    // is not: RebuildResult is move-only, and moc's generated dispatch
+    // copy-constructs by-value arguments out of a void** array, which does not
+    // compile for a move-only type. Every call site reaches it directly from a
+    // lambda already running on this object's thread.
+    //
+    // Returns false — leaving the current channel untouched — if result.channel
+    // is null. Always balances beginRebuild().
+    bool installRebuiltChannel(RebuildResult result);
+
     Q_INVOKABLE void setMode(WdspChannel::Mode mode);
     Q_INVOKABLE void setFilter(double lowHz, double highHz);
     // Runtime AGC change. agcMode is the WDSP RXA AGC mode; maximumGainDb is
@@ -177,8 +283,9 @@ public:
     // and pairs the two; this is only the reading.
     //
     // NOT CALIBRATED. dBFS here is referred to the wire's full scale, not to
-    // anything at the antenna — see Hl2DbReference, whose fullScaleDbm is 0.0
-    // with isCalibrated() false.
+    // anything at the antenna — see Hl2DbReference, whose isCalibrated() is
+    // false. Its fullScaleDbm is a DERIVED +3 dBm rather than 0.0 now, but it
+    // refers the DISPLAY path and is not applied to this reading at all.
     //
     // SAMPLED ON THE DSP THREAD, at the one instant the value means something:
     // immediately after a block has been processed, in the same place the
@@ -232,6 +339,48 @@ public:
         }
         const std::int64_t ago = (steadyNowNs() - at) / 1'000'000;
         return ago < 0 ? 0 : ago;
+    }
+
+    // ── What WDSP actually did with each block ────────────────────────────
+    //
+    // Every outcome processIq() can return, counted, since this object was
+    // constructed. The five non-`Ok` ones used to be one unannotated
+    // `continue`: a chain producing no audio because WDSP returned
+    // `EngineError` on every block looked, from everywhere outside this
+    // function, exactly like a chain whose pipeline was still filling.
+    //
+    // `Underrun` is kept in its own counter rather than summed with the
+    // faults, because it is the normal state while the asynchronous output
+    // side fills and a large non-zero number on a healthy connect is how a
+    // reader learns to ignore a row. See WdspProcessTally.h.
+    //
+    // MONOTONIC ACROSS A REBUILD. configure() does not clear this, and that is
+    // deliberate: a rate change or a span change destroys the channel and
+    // builds a new one, and a rebuild is exactly the moment a fault is most
+    // likely to have been caused. Zeroing the evidence there would hide it.
+    // The counts belong to the RECEIVER's lifetime, not the channel's.
+    //
+    // SAFE TO CALL FROM ANOTHER THREAD, like adcPeakDbfs() above and for the
+    // same reason: Hl2Backend::healthSnapshot() runs on the GUI thread while
+    // this object lives on the I/O thread.
+    [[nodiscard]] WdspProcessTally::Counts processTally() const noexcept
+    {
+        return m_processTally.snapshot();
+    }
+
+    // ── Panadapter integrity across a transport gap ───────────────────────
+    //
+    // Partial FFT windows discarded at a transport discontinuity, including
+    // accepted rewinds and duplicates. Empty windows do not increment it.
+    // Monotonic for this DSP object's lifetime: configure() replaces the
+    // spectrum but does not reset this counter. Read a delta across a run.
+    // Independent of droppedPackets: a rewind can discard without loss, and
+    // loss at an empty window can occur without a discard.
+    // Written on the I/O thread, polled on the GUI thread; this diagnostic
+    // orders no other state, so relaxed atomic access is sufficient.
+    [[nodiscard]] quint64 spectrumGapDiscards() const noexcept
+    {
+        return m_spectrumGapDiscards.load(std::memory_order_relaxed);
     }
 
     // ── Manual notch filters ──────────────────────────────────────────────
@@ -301,7 +450,7 @@ public:
     // index-space map (Hl2Receivers.h) precisely so nothing has to derive it.
     [[nodiscard]] int wdspChannelId() const noexcept
     {
-        return m_channel ? m_channel->channelIdForTest() : -1;
+        return m_channel ? m_channel->channelId() : -1;
     }
 
     // Demodulated-audio DC blocker, one pole per channel.
@@ -394,6 +543,27 @@ public slots:
     // frame and audioReady/meterUpdate per completed WdspChannel block.
     void processIqBlock(const std::vector<std::complex<float>>& iq);
 
+    // An EP6 sequence gap preceded the NEXT block this stage will be handed.
+    // Hl2Backend fans MetisClient::rxSequenceGap out to every receiver's DSP
+    // here, by DirectConnection on the I/O thread this object already lives on
+    // -- the same thread and the same call chain that then delivers the block,
+    // so this is a plain call and introduces no cross-thread edge.
+    //
+    // WHAT IT DOES: discards the partial panadapter frame, so the next spectrum
+    // is built entirely from post-gap samples instead of being transformed
+    // across a time discontinuity. See Hl2Spectrum::reset() for why that is the
+    // only available answer.
+    //
+    // WHAT IT DELIBERATELY DOES NOT DO: touch the AUDIO path. m_iqBuffer is
+    // left alone and WdspChannel is not reset. A gap is already a discontinuity
+    // the demodulator will hear as a click; discarding the buffered samples
+    // would throw away sound the radio DID send and lengthen the hole, and
+    // resetting the channel would restart WDSP's filter and AGC state on a
+    // single lost datagram. The spectrum is different because it does not
+    // merely pass a discontinuity through -- it computes a phase-coherent
+    // transform ACROSS it and presents the result as a measurement.
+    void onSequenceGap();
+
 signals:
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
@@ -404,6 +574,31 @@ private:
     // actually completes, since a frame spans several EP6 blocks.
     bool spectrumFrameDue();
 
+    // The shared install step: resize the scratch buffers, recompute the DC
+    // blocker, re-apply everything Config does not carry (shift, the notch set,
+    // the noise blanker, the blanker hold) and take ownership of the new
+    // channel/spectrum. configure() and installRebuiltChannel() both end here so
+    // their results cannot drift apart — this class re-applies SIX things across
+    // a rebuild and a second copy of that list would lose one of them.
+    void installChannel(RebuildResult result);
+
+    // May a control verb push at m_channel right now? False while a background
+    // rebuild is outstanding — see beginRebuild() for why pushing then would
+    // block this object's thread on WDSP's process-wide setup mutex.
+    //
+    // TRUE AGAIN INSIDE installChannel(), even with a further rebuild still
+    // outstanding, because the install IS the re-application: the notch replay
+    // and the mode/filter/AGC push below go through these same verbs, and a
+    // gate that swallowed them would swap in a channel with the operator's
+    // notches silently missing. Unreachable from Hl2Backend, whose generation
+    // guard abandons a superseded build rather than installing it, so this is
+    // the contract being honest rather than a case that occurs.
+    [[nodiscard]] bool canPushToChannel() const noexcept
+    {
+        return m_channel && (m_installing || m_rebuildsInFlight == 0);
+    }
+    int m_rebuildsInFlight = 0;
+    bool m_installing = false;
 
     std::unique_ptr<WdspChannel> m_channel;
     std::unique_ptr<Hl2Spectrum> m_spectrum;
@@ -423,6 +618,9 @@ private:
     // another thread.
     std::atomic<float> m_adcPeakDbfs {std::numeric_limits<float>::quiet_NaN()};
     std::atomic<std::int64_t> m_adcPeakAtNs {0};
+    // See spectrumGapDiscards(). Written on the I/O thread by onSequenceGap(),
+    // read from the GUI thread by Hl2Backend::healthSnapshot().
+    std::atomic<quint64> m_spectrumGapDiscards {0};
     Config m_config;
 
     // Notch set, mirrored so reconfigure() can replay it — see the note on
@@ -437,6 +635,10 @@ private:
     std::vector<Notch> m_notches;
     bool m_notchesEnabled = true;
     double m_notchTuneHz = 0.0;
+
+    // Per-outcome counters for m_channel->processIq(); see processTally().
+    // Written on the DSP thread in processIqBlock(), read from the GUI thread.
+    WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
     // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on

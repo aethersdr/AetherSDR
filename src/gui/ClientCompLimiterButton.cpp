@@ -11,7 +11,8 @@ namespace {
 
 // Three-state colour palette:
 //   - Disarmed (limiter disabled) — dim, grey, clearly "off"
-//   - Armed (limiter enabled, not firing) — dark green body, bright green text
+//   - Armed (limiter enabled, not firing) — a dark, near-transparent wash
+//     of green, bright green text, full-strength green border
 //   - Active (firing, held 500 ms) — red body + halo, white text
 inline QColor kBgArmed() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
 inline QColor kBgDisarmed() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
@@ -69,7 +70,15 @@ void ClientCompLimiterButton::paintEvent(QPaintEvent*)
         border = kBorderHit();
         textColor = kTextActive();
     } else if (isChecked()) {
-        bg = kBgArmed();
+        // A near-transparent wash of the accent, not a slab of it. The label
+        // is the same accent at full strength, so filling the body with the
+        // undimmed colour put the two within a shade of each other and the
+        // word LIMIT effectively disappeared. Darkened and dropped to a low
+        // alpha, the body is barely more than a tint over whatever is behind
+        // it and the text has the whole contrast range to itself; the border
+        // stays at full strength, so "armed" still reads at a glance.
+        bg = kBgArmed().darker(300);
+        bg.setAlpha(60);
         border = kBorderArm();
         textColor = kTextArmed();
     } else {

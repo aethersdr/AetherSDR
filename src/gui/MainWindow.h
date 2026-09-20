@@ -161,7 +161,8 @@ struct MemoryEntry;
 class PropDashboardDialog;
 class UpdateChecker;
 class TxBandDialog;
-class AetherDspDialog;
+class BandscopeDialog;
+class AetherRxDialog;
 class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
@@ -253,6 +254,8 @@ public:
     // actions registered keysTx (the caller decides policy; the registration
     // site declares the data). Returns a ShortcutFire* code.
     Q_INVOKABLE int fireShortcutAction(const QString& id, bool allowTx);
+    int fireShortcutAction(const QString& id, bool allowTx,
+                            const std::shared_ptr<TxController>& controller);
     // injectKeyEventForAutomation result codes (plain ints, same reason as
     // above). Delivers a real KeyPress/KeyRelease through the application
     // event filter so the momentary family (PTT hold, CW momentary keys),
@@ -264,6 +267,8 @@ public:
     static constexpr int KeyInjectTxOk        = 4;  // keysTx press delivered and consumed
     static constexpr int KeyInjectUnbound     = 5;  // known action id with no key binding
     Q_INVOKABLE int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx);
+    int injectKeyEventForAutomation(const QString& spec, bool press, bool allowTx,
+                                    const std::shared_ptr<TxController>& controller);
     // Workspace-canvas bridge hook (RFC #4887 phase 4): status / enable /
     // disable / place, driven by the `workspace` automation verb.  Returns
     // an error key instead of throwing, like the other automation hooks.
@@ -450,6 +455,8 @@ private:
     //
     // Flex keeps the unsuffixed key so existing settings survive untouched.
     QString rfGainSettingsKey(SpectrumWidget* sw) const;
+    // The Auto RF Gain switch's settings key, family-scoped the same way and
+    // for the same reason: an HL2's automatic gain control is not a Flex's.
     static const char* tuneIntentName(TuneIntent intent);
     bool panFollowEnabled() const;
     BandStackPreselectResult preselectBandStackForTune(SliceModel* slice, double mhz,
@@ -561,6 +568,7 @@ private:
     // handlers in MainWindow.cpp. (PR #4537 review.)
     bool m_rxMutedForPlayback{false};
     void wirePanStreamTxSink();               // MainWindow_Session.cpp
+    void wireTxAudioAuthority();              // MainWindow_Session.cpp
     void wirePanStreamTciSinks();             // MainWindow_Session.cpp
     void wirePanStreamDaxIqSink();            // MainWindow_Session.cpp
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
@@ -842,16 +850,16 @@ private:
     // duplicating; on first construction wires them once, on subsequent calls
     // just raises the existing instance.  Returns nullptr only if construction
     // failed (e.g. allocation failure).
-    AetherDspDialog* ensureAetherDspDialog();
+    AetherRxDialog* ensureAetherRxDialog();
 
     // Toggle helper for the AetherDSP Settings dialog: open it when hidden,
     // close it when visible.  Gives the per-slice DSP-tab ADSP button the same
     // press-to-open / press-again-to-close semantics as its sibling AetherVoice
     // button (#3877).  close() deletes the WA_DeleteOnClose dialog and clears
     // the QPointer, so the next press re-creates and re-wires via
-    // ensureAetherDspDialog()'s wasFresh path.  Only the DSP-tab button toggles;
+    // ensureAetherRxDialog()'s wasFresh path.  Only the DSP-tab button toggles;
     // the menu action and chain/strip launchers keep pure open semantics.
-    void toggleAetherDspDialog();
+    void toggleAetherRxDialog();
 
     // Wire the txBandSettingsRequested, serialSettingsChanged (HAVE_SERIALPORT),
     // sliceLetterDisplayModeChanged, and QDialog::finished handlers on a freshly-
@@ -923,6 +931,7 @@ private:
     void showMqttSettingsDialog();
     void publishCwDecodeMqtt(const QString& text, float cost, bool rx);
     void publishRadioStateMqtt();
+    void refreshRadioStateDriveAuthority();
 #endif
     void applyPanLayout(const QString& layoutId);
     void startCanvasPanLayoutSettle(const QString& layoutId, int expectedPanCount);
@@ -943,7 +952,9 @@ private:
     Ax25HfPacketDecodeDialog* ensureAx25HfPacketDecodeDialog();
     // Agent automation bridge entry point for the `modem` and `link` verbs.
     QJsonObject automationModemCommand(const QString& verb, const QString& action,
-                                       const QString& value);
+                                       const QString& value,
+                                       const std::shared_ptr<TxController>& controller,
+                                       const TxController::Input& input);
 #ifdef AETHER_ASR_ENABLED
     void showCopyAssist();
 #endif
@@ -954,6 +965,7 @@ private:
     void showFlexControlDialog();
     void handleFlexControlTuneSteps(int steps);
     void handleFlexControlButton(int button, int action);
+    void handleFlexControlButton(int button, int action, const std::shared_ptr<TxController>& controller);
     void handleVirtualFlexControlWheel(const QString& actionId, int steps);
     void applyFlexControlWheelAction(const QString& actionId, int steps);
     void syncFlexControlDialog();
@@ -1036,6 +1048,13 @@ private:
     void pushCwPaddleState(const QString& source = {},
                            quint64 traceId = 0, quint64 sourceMs = 0);
     bool handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    bool handleScopedCwMomentaryShortcut(const QString& action, bool press,
+                                         const std::shared_ptr<TxController>& controller,
+                                         bool keyboard = true);
+    std::shared_ptr<TxController> m_scopedPaddleController;
+    TxCoordinator::Request m_scopedPaddleInput;
+    bool m_scopedDit{false};
+    bool m_scopedDah{false};
     // PTT (Hold) shortcut: resolve the bound key via ShortcutManager (not a
     // hardcoded Qt::Key_Space) so a reassigned PTT-hold key actually keys the
     // radio. Returns true when the bound key was consumed (#3879).
@@ -1168,6 +1187,11 @@ private:
     QMetaObject::Connection m_radioStateFreqConn;
     QMetaObject::Connection m_radioStateModeConn;
     QTimer                  m_radioStateCoalesceTimer;
+    // Cached RadioCapabilities::transmitDriveControl authority == Radio, refreshed
+    // on the connect and backend-rebuild edges. publishRadioStateMqtt() runs on
+    // every PTT transition and backendCapabilities() builds the whole struct by
+    // value, so reading it per publish allocated a band table per CW element.
+    bool                    m_radioStateDriveIsReadback = false;
     QMetaObject::Connection m_cwStatsConn;
     QMetaObject::Connection m_cwxSpeedRestoreConn;
     int               m_cwxSavedWpm{0};
@@ -1284,7 +1308,8 @@ private:
     void refreshStreamDeckLabels();
     void updateRC28Leds();
     bool rc28HoldActionActive(const QString& action) const;
-    void dispatchHidAction(const QString& actionName, const QString& gestureLabel);
+    void dispatchHidAction(const QString& actionName, const QString& gestureLabel,
+                           const std::shared_ptr<TxController>& controller);
     QMetaObject::Connection m_sdRitConn;
     QMetaObject::Connection m_sdXitConn;
     // RC-28 F-key LED refresh, rewired to the active slice on each slice change
@@ -1295,6 +1320,7 @@ private:
     // held independently without clobbering each other. Index 0 = F1, 1 = F2. (#3323)
     QTimer* m_rc28HoldTimer[2]{nullptr, nullptr};
     bool    m_rc28HoldConsumed[2]{false, false};
+    std::shared_ptr<TxController> m_rc28Inputs[2];
     // RC-28 stateful action flags
     bool    m_rc28PttLatched{false};
     uint8_t m_lastRC28LedByte{0xFF};  // last byte sent; 0xFF forces first write
@@ -1317,15 +1343,6 @@ private:
     // cached so updateTMate2Display/Indicators() can re-send without signal args.
     float   m_tmate2SmeterDbm{-140.0f};
     float   m_tmate2TxWatts{0.0f};
-
-    // The amplifier's forward power and SWR reach the S-Meter, the cross-needle
-    // and the TMate2 from TWO sources — the radio-relayed AMP meters and the
-    // amplifier's own port-9008 status. They are the same measurement, so the
-    // choice is rate, not truth, and the rule has to be the same one the
-    // applet gauges use or the shared meters go back to last-writer-wins.
-    // See applyAmpTxMeters() and kRelayMeterFreshnessMs.
-    QElapsedTimer m_ampRelayTxStamp;
-    void applyAmpTxMeters(float watts, float swr, bool fromRelay);
     bool tmate2OverlayActive() const;
     QString tmate2OverlayName() const;
     int tmate2IdleTimeoutMs() const;
@@ -1344,6 +1361,15 @@ private:
     QMetaObject::Connection m_tmate2RitConn;
     QMetaObject::Connection m_tmate2XitConn;
 #endif
+
+    // The amplifier's forward power and SWR reach the S-Meter, the cross-needle
+    // and the TMate2 from TWO sources — the radio-relayed AMP meters and the
+    // amplifier's own port-9008 status. They are the same measurement, so the
+    // choice is rate, not truth, and the rule has to be the same one the
+    // applet gauges use or the shared meters go back to last-writer-wins.
+    // See applyAmpTxMeters() and kRelayMeterFreshnessMs.
+    QElapsedTimer m_ampRelayTxStamp;
+    void applyAmpTxMeters(float watts, float swr, bool fromRelay);
 #ifdef Q_OS_LINUX
     EvdevEncoderManager*       m_dialBackend{nullptr};
 #elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
@@ -1362,6 +1388,8 @@ private:
     QTimer               m_midiTuneIdleTimer;
     double               m_midiTuneTargetMhz{-1.0};
     void registerMidiParams();
+    bool dispatchScopedMidiTx(const QString& id, float value,
+                               const std::shared_ptr<TxController>& controller);
     struct MidiActionTrace {
         QString paramId;
         quint64 traceId{0};
@@ -1490,6 +1518,10 @@ private:
     QPointer<AgcCalibrationDialog> m_agcCalibrationDialog;
     QPointer<PropDashboardDialog> m_propDashboardDialog;
     QPointer<TxBandDialog> m_txBandDialog;
+    // The wideband converter view (View menu). Gated on a CAPABILITY, never on
+    // a family: the window asks RadioCapabilities::widebandConverterView and
+    // invokes the verb that record names.
+    QPointer<BandscopeDialog> m_bandscopeDialog;
     QPointer<MemoryDialog> m_memoryDialog;
     QPointer<NetSchedulerDialog> m_netSchedulerDialog;
     NetScheduler* m_netScheduler{nullptr};
@@ -1506,7 +1538,7 @@ private:
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<ContributeDialog> m_contributeDialog;
-    QPointer<AetherDspDialog> m_dspDialog;
+    QPointer<AetherRxDialog> m_rxDialog;
     QPointer<QDialog> m_nr2WisdomDialog;
 #ifdef HAVE_MQTT
     QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
@@ -1550,6 +1582,7 @@ private:
     QAction*         m_cwKeyerAction{nullptr};
     QAction*         m_copyAssistAction{nullptr};
     QAction*         m_gpsDashboardAction{nullptr};
+    QAction*         m_agcTCalibrationMenuAction{nullptr};
     // Single owner of every Tools ▸ enable/visible/tooltip decision. Called from
     // applyCapabilitiesToUi() *and* the menu's aboutToShow, because the
     // automation bridge reaches menu-bar actions without popping the menu
@@ -1710,7 +1743,7 @@ private:
     class ClientPuduEditor* ensureClientPuduEditor();
 
     // Wire AetherDspWidget parameter signals to AudioEngine setters.  Used
-    // by both the modeless AetherDspDialog and the docked ClientRxDspApplet
+    // by both the modeless AetherRxDialog and the docked ClientRxDspApplet
     // so they push every change into the engine identically.
     void wireAetherDspWidget(class AetherDspWidget* widget);
     void updateAetherDspModePolicy();
@@ -1763,8 +1796,16 @@ private:
     qint64 m_bsConnectGraceUntilMs{0};   // suppress auto-save right after connect
     bool m_keyboardShortcutsEnabled{false}; // global enable for keyboard shortcuts (Settings menu)
     bool m_pttHoldActive{false};           // true while the PTT-hold key is held (#3879)
+    TxController::Input m_pttHoldInput;
     bool m_cwStraightKeyActive{false};
+    TxController::Input m_cwStraightKeyInput;
     bool m_cwLeftPaddleActive{false};
+    std::shared_ptr<TxController> m_cwPaddleController;
+    TxCoordinator::Request m_cwPaddleInput;
+    bool m_cwPaddleInputHeld{false};
+    TxCoordinator::Request m_serialCwPaddleInput;
+    bool m_serialCwPaddleHeld{false};
+    void captureLocalCwPaddleInput(bool held);
     bool m_cwRightPaddleActive{false};
     QPointer<QWidget> m_sliderShortcutLease;
     QTimer m_sliderShortcutLeaseTimer;
@@ -1857,6 +1898,7 @@ private:
     QMetaObject::Connection m_clockSliceAudioConn;  // seam per-slice audio feed — same lifetime
     void setupAetherClock();
 
+    TxCoordinator::Producer m_microphoneTxProducer;
 #ifdef HAVE_RADE
     RADEEngine* m_radeEngine{nullptr};
     QThread*    m_radeThread{nullptr};

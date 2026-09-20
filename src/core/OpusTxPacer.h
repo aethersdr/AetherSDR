@@ -1,5 +1,6 @@
 #pragma once
 
+#include "TxCoordinator.h"
 #include <QByteArray>
 #include <QVector>
 
@@ -22,14 +23,20 @@ public:
     // VITA-49 ExtDataWithStream header AudioEngine prepends to every payload.
     static constexpr int kVitaHeaderBytes = 28;
 
+    struct Packet {
+        QByteArray payload;
+        TxCoordinator::Context context;
+    };
     struct DrainResult {
-        QVector<QByteArray> packets;
+        QVector<Packet> packets;
         int catchUpPackets{0};
     };
 
     // Returns true when the oldest queued packet had to be dropped.
-    bool enqueue(QByteArray packet);
-    DrainResult takeDue(qint64 nowMs, quint8& packetCount);
+    bool enqueue(Packet packet);
+    // Pacing is relative to the audio timer; authority uses the coordinator's
+    // monotonic clock. Never compare an operation deadline to timer elapsed().
+    DrainResult takeDue(qint64 nowMs, qint64 authorityNowMs, quint8& packetCount);
     void clear();
 
     int queueDepth() const { return static_cast<int>(m_queue.size()); }
@@ -41,7 +48,7 @@ public:
 private:
     static void stampPacketCount(QByteArray& packet, quint8 packetCount);
 
-    QVector<QByteArray> m_queue;
+    QVector<Packet> m_queue;
     qint64 m_nextSendDeadlineMs{-1};
     int m_maxQueueDepth{0};
     quint64 m_packetsSent{0};

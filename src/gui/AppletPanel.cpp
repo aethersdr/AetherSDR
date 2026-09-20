@@ -1913,7 +1913,6 @@ void AppletPanel::setRxDspChainOrder(
             case AudioEngine::RxChainStage::Comp:  return "cmp-rx";
             case AudioEngine::RxChainStage::Tube:  return "tube-rx";
             case AudioEngine::RxChainStage::Pudu:  return "pudu-rx";
-            case AudioEngine::RxChainStage::DeEss: return {};  // no RX applet yet
             case AudioEngine::RxChainStage::None:  return {};
         }
         return {};

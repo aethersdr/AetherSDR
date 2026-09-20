@@ -89,7 +89,7 @@ public:
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     // Deliberately inert. This test never calls it, and there is no wire behind
     // it if it did.
-    void setKeying(bool) override {}
+    void setKeying(bool, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override {}
     void invokeExtension(const QString&, const QString&, quint64,
                          const QVariant&) override {}
 

@@ -693,6 +693,149 @@ int main(int argc, char** argv)
                "disabling drops the backlog instead of transcribing all of it");
     }
 
+    // ---- Backlog ceiling (#5730): the shape of the bound ------------------
+    // Twice the decode buffer, never below 10 s; pure so the three regimes
+    // (floor, exactly at the knee, scaling above it) can't drift silently.
+    {
+        expect(asrBacklogHighWaterMs(1000) == 10000,
+               "ceiling: a 1 s decode buffer gets the 10 s floor");
+        expect(asrBacklogHighWaterMs(5000) == 10000,
+               "ceiling: a 5 s decode buffer sits exactly at the floor");
+        expect(asrBacklogHighWaterMs(20000) == 40000,
+               "ceiling: the default 20 s decode buffer scales to 40 s");
+        expect(asrBacklogHighWaterMs(0) == 10000,
+               "ceiling: a nonsense buffer still yields the floor");
+    }
+
+    // ---- Backlog ceiling (#5730): pushAudio drops above it, resumes below --
+    // A backend slower than real time with audio arriving faster than it can be
+    // decoded: without the bound every chunk queues and the backlog reads the
+    // whole push. With it, readings plateau at the ceiling, the excess is
+    // counted as dropped, and once the worker drains below half the ceiling a
+    // fresh push is accepted again (after a discontinuity mark to the worker).
+    // Fixtures: CONSTRUCTED synthetic tone/silence pairs — exercise the
+    // accounting only, never a claim about field audio.
+    {
+        constexpr int kDelayMs = 400;   // one transcribe() per 900 ms pair → ~0.44× realtime
+        constexpr int kPairs = 20;      // 18 s pushed at once, against a 10 s ceiling
+        constexpr double kCeilingS = 10.0;
+        AsrEngine engine(slowFactory(kDelayMs));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "ceiling test: engine ready");
+        engine.setDecodeBufferMs(1000); // ceiling = the 10 s floor, resume below 5 s
+        engine.setEnabled(true);
+
+        QSignalSpy backlogSpy(&engine, &AsrEngine::backlogChanged);
+        QSignalSpy droppedSpy(&engine, &AsrEngine::droppedAudioChanged);
+        QSignalSpy gapSpy(&engine, &AsrEngine::requestMarkDiscontinuity);
+        for (int i = 0; i < kPairs; ++i) {
+            engine.pushAudio(tone(500), kSrcRate);
+            engine.pushAudio(silence(400), kSrcRate);
+        }
+        double maxLag = 0.0;
+        for (const auto& args : backlogSpy) {
+            maxLag = std::max(maxLag, args.at(0).toDouble());
+        }
+        // One chunk (≤ 0.5 s) may be admitted just under the ceiling.
+        expect(maxLag <= kCeilingS + 0.5,
+               "ceiling: backlog readings never exceed the ceiling (+ one chunk)");
+        expect(maxLag >= kCeilingS - 1.0,
+               "ceiling: the backlog actually reached the ceiling (test drove it)");
+        expect(!droppedSpy.isEmpty()
+                   && droppedSpy.last().at(0).toDouble() >= 6.0,
+               "ceiling: the audio above the ceiling is counted as dropped");
+        expect(gapSpy.isEmpty(), "ceiling: no discontinuity while still dropping");
+
+        // Hysteresis: inside (half, ceiling) the gate must still be dropping.
+        // Wait for the worker to take the backlog under 9 s (steps are ≥ 0.4 s,
+        // so it then sits in [8.5, 9.0) — well above the 5 s resume point).
+        QElapsedTimer band;
+        band.start();
+        while (band.elapsed() < 15000) {
+            QCoreApplication::processEvents();
+            if (!backlogSpy.isEmpty() && backlogSpy.last().at(0).toDouble() < 9.0) {
+                break;
+            }
+            QThread::msleep(20);
+        }
+        const int droppedInBand = droppedSpy.count();
+        engine.pushAudio(tone(500), kSrcRate); // still above half the ceiling: dropped
+        expect(droppedSpy.count() == droppedInBand + 1,
+               "ceiling: a chunk pushed between half and the ceiling is still dropped");
+        expect(gapSpy.isEmpty(), "ceiling: no resume inside the hysteresis band");
+
+        // Let the worker drain below half the ceiling (≤ ~11 pairs × 400 ms).
+        QElapsedTimer drain;
+        drain.start();
+        while (drain.elapsed() < 15000) {
+            QCoreApplication::processEvents();
+            if (!backlogSpy.isEmpty() && backlogSpy.last().at(0).toDouble() < kCeilingS / 2.0) {
+                break;
+            }
+            QThread::msleep(20);
+        }
+        const int droppedBeforeResume = droppedSpy.count();
+        engine.pushAudio(tone(500), kSrcRate); // first chunk after the drain: accepted
+        QCoreApplication::processEvents();
+        expect(gapSpy.count() == 1,
+               "ceiling: resuming marks a discontinuity to the worker exactly once");
+        expect(droppedSpy.count() == droppedBeforeResume,
+               "ceiling: a chunk pushed after the drain is not dropped");
+        expect(backlogSpy.last().at(0).toDouble() > 0.0,
+               "ceiling: the accepted chunk is counted in the backlog again");
+
+        // reset() clears the ceiling state with the meter it belongs to.
+        engine.reset();
+        expect(droppedSpy.last().at(0).toDouble() == 0.0,
+               "ceiling: reset() zeroes the dropped total");
+    }
+
+    // ---- Backlog ceiling (#5730): reset() with audio still queued ----------
+    // A retune calls reset() while the worker still holds queued chunks; each of
+    // those is reported as processed AFTER the counters were zeroed. Without the
+    // stale-queue accounting that drives processed past pushed, the lag reads
+    // negative, and the ceiling is effectively raised by the stale amount —
+    // the unbounded growth this change exists to remove, back through the side
+    // door. Fixtures: CONSTRUCTED synthetic tone/silence pairs.
+    {
+        constexpr int kDelayMs = 300;
+        constexpr int kStalePairs = 8;  // 7.2 s queued at the reset
+        constexpr int kPairs = 20;      // 18 s pushed afterwards, 10 s ceiling
+        AsrEngine engine(slowFactory(kDelayMs));
+        QSignalSpy readySpy(&engine, &AsrEngine::ready);
+        engine.setModelPath(QStringLiteral("/does/not/matter"));
+        expect(readySpy.wait(5000), "stale-reset test: engine ready");
+        engine.setDecodeBufferMs(1000); // ceiling = 10 s
+        engine.setEnabled(true);
+        for (int i = 0; i < kStalePairs; ++i) {
+            engine.pushAudio(tone(500), kSrcRate);
+            engine.pushAudio(silence(400), kSrcRate);
+        }
+        QThread::msleep(50);   // the worker is inside the first transcribe
+        engine.reset();        // retune: counters zeroed, 7.2 s still queued
+        // Let every stale chunk report back (8 × 300 ms plus slack).
+        QElapsedTimer settle;
+        settle.start();
+        while (settle.elapsed() < kStalePairs * kDelayMs + 1500) {
+            QCoreApplication::processEvents();
+            QThread::msleep(20);
+        }
+
+        // The meter and the gate read the same lag, so a leak would not show
+        // as a higher reading — it shows as the gate firing LATER: with ~7 s
+        // of stale reports mis-credited, only ~0.8 s of the 18 s would be
+        // dropped instead of ~7.6 s.
+        QSignalSpy droppedSpy(&engine, &AsrEngine::droppedAudioChanged);
+        for (int i = 0; i < kPairs; ++i) {
+            engine.pushAudio(tone(500), kSrcRate);
+            engine.pushAudio(silence(400), kSrcRate);
+        }
+        expect(!droppedSpy.isEmpty() && droppedSpy.last().at(0).toDouble() >= 6.0,
+               "stale-reset: the ceiling still bites at 10 s of NEW audio after a reset "
+               "with audio queued (stale reports do not raise it)");
+    }
+
     // ---- Context-carry control reaches the backend (RFC #4818) ------------
     // The engine must marshal setContextCarryEnabled() to the backend, flush its
     // context on a long idle-silence gap, and flush again on clearContext()

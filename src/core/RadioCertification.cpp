@@ -1,4 +1,5 @@
 #include "core/RadioCertification.h"
+#include "core/backends/AutoRfGainControl.h"
 
 #include "core/RadioCertificationMath.h"
 #include "core/AppSettings.h"
@@ -129,8 +130,9 @@ constexpr MeterSpec kMeterTable[] = {
 
 }  // namespace
 
-RadioCertification::RadioCertification(RadioModel* radio, AudioEngine* audio)
-    : m_radio(radio), m_audio(audio) {}
+RadioCertification::RadioCertification(RadioModel* radio, AudioEngine* audio,
+                                       std::shared_ptr<TxController> controller)
+    : m_radio(radio), m_audio(audio), m_txController(std::move(controller)) {}
 
 void RadioCertification::spin(int ms)
 {
@@ -161,7 +163,7 @@ void RadioCertification::record(const QString& id, const QString& title,
     m_stages.append(stage);
 }
 
-void RadioCertification::setKeyObserver(std::function<void(bool)> observer)
+void RadioCertification::setKeyObserver(KeyObserver observer)
 {
     m_onKey = std::move(observer);
 }
@@ -178,15 +180,25 @@ bool RadioCertification::keyViaOperatorPath(bool on)
 {
     if (!m_radio)
         return false;
-    // Tell the observer BEFORE keying and AFTER the radio has ACTUALLY unkeyed,
-    // so the caller's safety window always encloses the transmission rather than
-    // trailing it.
-    if (on && m_onKey)
-        m_onKey(true);
+    const TxCoordinator::Operation previous = m_radio->transmitOperation();
+    const bool keyedBefore = keyedNow();
 
-    auto& tx = m_radio->transmitModel();
     if (on) {
-        tx.requestPttOn(TransmitModel::PttSource::Mox);
+        // The authorization controller is captured once for the diagnostic,
+        // never fetched anew after one of its nested event-loop waits.
+        if (!m_txController || !m_txController->valid()
+            || !m_txController->belongsTo(m_radio)) {
+            ++m_keyRefusals;
+            return false;
+        }
+        m_keyInput = m_txController->capture(TxController::Activity::Mox);
+        if (!m_keyInput.start()) {
+            ++m_keyRefusals;
+            return false;
+        }
+        if (m_onKey) {
+            m_onKey(true, previous, keyedBefore);
+        }
 
         // CONFIRM THE KEY REACHED THE RADIO. requestPttOn returns void and
         // silently does nothing when runPttPreflight() refuses — a band-limit
@@ -196,16 +208,16 @@ bool RadioCertification::keyViaOperatorPath(bool on)
         // modulator", "the transmitter is not producing RF". The diagnostic
         // would blame the chain for a refusal it never noticed.
         spin(250);
-        if (!keyedNow()) {
+        if (!m_keyInput.valid() || !keyedNow()) {
             ++m_keyRefusals;
             if (m_onKey)
-                m_onKey(false);
+                m_onKey(false, previous, keyedBefore);
             return false;
         }
         return true;
     }
 
-    tx.requestPttOff(TransmitModel::PttSource::Mox);
+    m_keyInput.stop();
 
     // WAIT FOR THE RADIO TO ACTUALLY UNKEY BEFORE DISARMING THE WATCHDOG.
     //
@@ -219,7 +231,7 @@ bool RadioCertification::keyViaOperatorPath(bool on)
         spin(100);
 
     if (m_onKey)
-        m_onKey(false);
+        m_onKey(false, previous, keyedBefore);
     return !keyedNow();
 }
 
@@ -510,6 +522,28 @@ void RadioCertification::stageControlEffect(const Options& o)
             "no active panadapter, so the route the operator's RF Gain slider "
             "actually uses does not exist to be driven");
     } else {
+        // DISARM ANY AUTOMATIC GAIN CONTROL FOR THE DURATION.
+        //
+        // This exercise moves RF gain 8 dB, spins 1.2 s twice for the S-meter's
+        // EMA to settle, and puts the gain back. That is roughly 2.8 s of live
+        // event loop, and a backend loop moving the gain inside it would make
+        // `echoed != target` and fire the one hard finding this stage has --
+        // "the RF Gain control did not reach the backend" -- which is exactly
+        // the permanent false positive this stage was rewritten to eliminate.
+        // It would also invalidate startGain and therefore the restore.
+        //
+        // Restored afterwards on every path out of this block, because a
+        // certification run must not leave the operator's radio in a different
+        // state from the one it found.
+        // The ARMED state, not merely the presence of the control. A radio that
+        // has the feature but never had it switched on must not have it
+        // switched ON by a certification run.
+        auto* autoGain = m_radio->autoRfGain();
+        const bool autoGainWasOn = autoGain && autoGain->isArmed();
+        if (autoGainWasOn) {
+            autoGain->setArmed(false);
+            spin(200);
+        }
         const int startGain = pan->rfGain();
         const int low = pan->rfGainLow();
         const int high = pan->rfGainHigh();
@@ -546,6 +580,23 @@ void RadioCertification::stageControlEffect(const Options& o)
         const int agcTAfter = agcSlice ? agcSlice->agcThreshold() : -1;
         m_radio->setPanRfGainFor(panId, startGain);   // leave it where we found it
         spin(400);
+        // Re-arm AFTER the gain is back where it was, so the loop's first
+        // window is about the operator's own setting rather than this stage's
+        // probe value.
+        //
+        // RE-FETCHED, NOT REUSED. The pointer taken above is borrowed and valid
+        // only for the call that obtained it (AutoRfGainControl.h), and between
+        // there and here spin() has run a real QEventLoop for 200 + 1200 + 1200
+        // + 400 ms. A link drop inside any of those reaches RadioModel's
+        // teardown and m_backend.reset(), which destroys the object behind it --
+        // leaving the old pointer non-null and dangling, so a null guard would
+        // not have caught it. Asking again returns nullptr in exactly that case.
+        if (autoGainWasOn) {
+            if (auto* ag = m_radio->autoRfGain()) {
+                ag->setArmed(true);
+            }
+        }
+        m[QStringLiteral("autoRfGainSuspended")] = autoGainWasOn;
 
         const bool haveLevels = before > -998.0 && after > -998.0;
         const double delta = after - before;

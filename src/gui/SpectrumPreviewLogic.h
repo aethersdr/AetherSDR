@@ -68,6 +68,51 @@ struct FrequencyFrame {
     }
 };
 
+// Fraction of the panadapter cropped from EACH side when the backend reports
+// hasDdcPanEdgeRolloff (ANAN only). Display-only: croppedBinsForDisplay()
+// drops these bins from the trace, waterfall and 3D surface, and
+// effectiveBandwidthMhz() narrows mhzToX()/xToMhz() to match. The bandwidth
+// requested from and reported to the backend is never narrowed.
+//
+// 0.04, not the 0.09 fade it replaces. The shipped DDC0 droop defaults
+// (AnanDroopDefaults) are non-zero only in the outer 88 of 1024 bins per side
+// (~8.6%), all of which a 0.09 margin hid. At 0.04 the corrected 4-8.6% band
+// is on screen, and only the outermost 4% -- the steepest part of the DDC
+// FIR's transition band, where the correction climbs to its 90 dB clamp --
+// is dropped.
+//
+// NOTE for anyone lowering this further: AnanRxDsp's applyEdgeFade() rewrites
+// the outer 3% of every frame (tailFraction 0.03), and that is only invisible
+// because it sits inside this crop. Below 0.03 it would show on screen.
+inline constexpr double kEdgeTaperFraction = 0.04;
+
+// A Kiwi overlay shares the native radio's widget/capabilities but supplies
+// its own uncropped stream. Capability alone must not crop that overlay.
+inline bool panEdgeCropApplies(bool capabilityEnabled, bool kiwiStream)
+{
+    return capabilityEnabled && !kiwiStream;
+}
+
+// Keep display geometry separate from the full bandwidth sent to the radio.
+inline double panDisplayBandwidthMhz(double bandwidthMhz, bool edgeCropEnabled)
+{
+    return edgeCropEnabled
+        ? bandwidthMhz * (1.0 - 2.0 * kEdgeTaperFraction)
+        : bandwidthMhz;
+}
+
+// No explicit frame when cropping is off: preserve each existing writer's
+// fallback, especially DSS's preview-base resolution on Flex/Icom.
+inline std::optional<FrequencyFrame> edgeCroppedWaterfallFrame(
+    const FrequencyFrame& onScreen, bool edgeCropEnabled)
+{
+    if (!edgeCropEnabled) {
+        return std::nullopt;
+    }
+    return FrequencyFrame{onScreen.centerMhz,
+                          panDisplayBandwidthMhz(onScreen.bandwidthMhz, true)};
+}
+
 // A native waterfall tile supplies two independently calibrated rows: the
 // viewport row and the full-tile supplemental row. A blanked row must keep
 // their capture frames paired with the matching pixels.
@@ -114,6 +159,18 @@ inline double centerForAnchoredBandwidth(double anchorMhz,
                                          double bandwidthMhz)
 {
     return anchorMhz - anchorFraction * bandwidthMhz;
+}
+
+// Both the old cursor anchor and the new viewport must use display spans.
+// The caller still sends the unmodified bandwidth request to the backend.
+inline double centerForAnchoredPanBandwidth(double anchorMhz,
+                                            double anchorFraction,
+                                            double bandwidthMhz,
+                                            bool edgeCropEnabled)
+{
+    return centerForAnchoredBandwidth(
+        anchorMhz, anchorFraction,
+        panDisplayBandwidthMhz(bandwidthMhz, edgeCropEnabled));
 }
 
 inline FrequencyPreviewTransform frequencyPreviewTransform(

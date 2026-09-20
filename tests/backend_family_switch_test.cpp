@@ -25,9 +25,11 @@
 #include "core/RadioConnection.h"
 #include "core/RadioDiscovery.h"
 #include "core/backends/SliceDelta.h"
+#include "core/backends/TransmitDelta.h"
 #include "core/backends/sim/SimBackend.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -331,6 +333,44 @@ int main(int argc, char** argv)
                   QStringLiteral("inject: one sliceAdded (%1)").arg(added.count()));
             check(model.slices().size() == 1,
                   QStringLiteral("inject: exactly one slice model exists (%1)").arg(model.slices().size()));
+        }
+
+        // 6b. The TX power latches do not survive a family switch (#5733).
+        //     TransmitModel::resetState() is what says "this session's radio has
+        //     not reported its drive", and onDisconnected() is its only other
+        //     caller — a path a family switch provably never takes, which is why
+        //     teardownBackend() has to make the same call. Without it the MQTT
+        //     radio-state topic published the OUTGOING radio's drive as the
+        //     INCOMING radio's confirmed state, for a radio that had said nothing.
+        std::printf("-- power latches across a family switch\n");
+        {
+            TransmitModel& tx = model.transmitModel();
+
+            // Stand in for the outgoing radio having reported its drive.
+            TransmitDelta reported;
+            reported.rfPower = 100;          // the value identical to the default
+            reported.maxPowerLevel = 500;    // a 500 W ceiling, unlike the default
+            tx.applyChanges(reported);
+            check(tx.haveTransmitStatus() && tx.rfPowerIsFromRadio(),
+                  QStringLiteral("latch: outgoing radio's drive is confirmed"));
+            check(tx.haveMaxPowerLevel() && tx.maxPowerLevel() == 500,
+                  QStringLiteral("latch: outgoing radio's 500 W ceiling is reported"));
+
+            switchTo(model, QStringLiteral("sim"), rebuilt);
+
+            check(!tx.haveTransmitStatus(),
+                  QStringLiteral("latch: drive is unreported again after a family switch"));
+            check(!tx.haveMaxPowerLevel(),
+                  QStringLiteral("latch: the ceiling is unreported again after a family switch"));
+            check(!tx.rfPowerIsFromRadio(),
+                  QStringLiteral("latch: drive is not confirmed after a family switch"));
+            // The VALUES deliberately survive: teardownBackend() uses the
+            // signal-free resetPowerProvenance(), because it also runs from
+            // ~RadioModel() where resetState()'s six TX emissions would reach
+            // half-destroyed consumers. Nothing publishes an unvouched-for value,
+            // so clearing the provenance is the whole of what has to cross here.
+            check(tx.maxPowerLevel() == 500,
+                  QStringLiteral("latch: the stale value survives, unvouched-for"));
         }
 
         // 7. Destroy the model with a backend attached (the app-exit path). The

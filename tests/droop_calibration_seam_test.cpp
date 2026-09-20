@@ -38,7 +38,7 @@ public:
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
     void setPanBandwidth(const QString&, double) override { ++bandwidthWrites; }
-    void setKeying(bool) override {}
+    void setKeying(bool, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override {}
     void invokeExtension(const QString& ns, const QString& verb, quint64 id, const QVariant&) override
     {
         ++calls;

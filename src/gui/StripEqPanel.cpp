@@ -1,4 +1,5 @@
 #include "StripEqPanel.h"
+#include "PanelTick.h"
 #include "ClientEqEditorCanvas.h"
 #include "ClientEqFftAnalyzer.h"
 #include "ClientEqIconRow.h"
@@ -13,6 +14,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QHBoxLayout>
+#include <QLayoutItem>
 #include <QHideEvent>
 #include <QLabel>
 #include <QMoveEvent>
@@ -56,6 +58,49 @@ const QString kBypassStyle = QStringLiteral(
     "}"
     "QPushButton:checked:hover { background: #4a3a1e; }");
 
+
+// The interaction hint is prose, and at 460 px it is the widest single thing
+// in this panel -- 45% of a header row whose 1021 px minimum is what stops the
+// panel fitting a small window. It elides instead of forcing that width; the
+// full sentence stays one hover away, and the icons it describes say the same
+// thing in their own tooltips.
+class ElidingLabel final : public QLabel {
+public:
+    explicit ElidingLabel(const QString& text, QWidget* parent = nullptr)
+        : QLabel(parent)
+        , m_full(text)
+    {
+        setToolTip(text);
+        setAccessibleDescription(text);
+        // Ignored, so the row may take the width back; without it a QLabel's
+        // size hint is its whole text and the elision never gets a chance.
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+        setMinimumWidth(0);
+        applyElision();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override
+    {
+        QLabel::resizeEvent(event);
+        applyElision();
+    }
+
+private:
+    void applyElision()
+    {
+        const QString shown =
+            fontMetrics().elidedText(m_full, Qt::ElideRight, width());
+        // Only when it changed: setText() inside a resize otherwise posts a
+        // layout request that resizes it again.
+        if (shown != text()) {
+            setText(shown);
+        }
+    }
+
+    QString m_full;
+};
+
 } // namespace
 
 StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
@@ -86,10 +131,10 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(8);
-        auto* hint = new QLabel(
+        auto* hint = new ElidingLabel(QStringLiteral(
             "Drag peak/shelf = freq + gain · "
             "drag HP/LP = freq + Q · Shift + drag for Q · "
-            "click icon to cycle type");
+            "click icon to cycle type"));
         AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "QLabel { color: {{color.background.3}}; font-size: 10px; }");
         row->addWidget(hint, 1);
 
@@ -183,7 +228,11 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
         AetherSDR::ThemeManager::instance().applyStyleSheet(peakHoldBtn, "QPushButton {"
             "  background: {{color.background.0}}; color: {{color.text.primary}};"
             "  border: 1px solid {{color.background.1}}; border-radius: 3px;"
-            "  padding: 2px 12px; font-size: 11px; font-weight: bold;"
+            // No horizontal padding. The row is tight enough on this page that
+            // the layout squeezes this button below the width its own label
+            // needs, and the padding was taken out of the text rather than the
+            // button: "Peak Hold" rendered as "?eak Hol".
+            "  padding: 2px 0px; font-size: 11px; font-weight: bold;"
             "}"
             "QPushButton:hover { background: {{color.background.1}}; }"
             "QPushButton:checked {"
@@ -281,10 +330,25 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     eqColumn->setContentsMargins(0, 0, 0, 0);
     eqColumn->setSpacing(6);
 
+    // Receive filter widths for the current mode. Between the toolbar above and
+    // the filter-type icons below: it belongs with the controls rather than
+    // with the graph, and the widths it offers change with the mode.
+    m_filterRow = new QWidget;
+    m_filterRowLayout = new QHBoxLayout(m_filterRow);
+    m_filterRowLayout->setContentsMargins(0, 0, 0, 0);
+    m_filterRowLayout->setSpacing(4);
+    m_filterRow->setVisible(false);   // until a ladder arrives
+    eqColumn->addWidget(m_filterRow);
+
     m_iconRow = new ClientEqIconRow;
     m_iconRow->setAudioEngine(m_audio);
     eqColumn->addWidget(m_iconRow);
 
+    // The graph takes 85 of the column's 100 stretch rather than all of it.
+    // The icon row and the param row below are fixed height, so the canvas is
+    // the only thing that grows: without this it swallows every pixel the
+    // window has, and 15% of a tall graph buys nothing a shorter one does not
+    // already show. The other 15 goes to a spacer at the foot of the column.
     m_canvas = new ClientEqEditorCanvas;
     m_canvas->setObjectName(QStringLiteral("stripEqCanvas"));
     m_canvas->setAudioEngine(m_audio);
@@ -293,7 +357,16 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     // but the canvas needed to be constructed before this push could land.
     m_canvas->setSmoothingOctaveFraction(m_savedSmoothingFraction);
     m_canvas->setReferenceCurvePreset(m_savedReferenceCurvePreset);
+    // Every spare pixel in the column goes to the graph: the icon row, the
+    // width row and the param row are fixed height, and a spacer holding
+    // height back from the one thing that can use it was only ever a way of
+    // making the graph shorter.
+    //
+    // 4 px of air top and bottom, so the trace and the band dots are not drawn
+    // hard against the icon row above or the band plan below.
+    eqColumn->addSpacing(4);
     eqColumn->addWidget(m_canvas, 1);
+    eqColumn->addSpacing(4);
     // Forward cutoff-line drag events as a path-tagged signal so MainWindow
     // can dispatch to TransmitModel (TX) or the active SliceModel (RX).
     connect(m_canvas, &ClientEqEditorCanvas::cutoffsDragged,
@@ -306,8 +379,13 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
 
     body->addLayout(eqColumn, 1);
 
-    // Output fader — vertical meter + slider + dB readout on the right.
+    // Output fader — level meter, gain handle and dB readout, running along
+    // the foot of the panel. Horizontal and below rather than vertical and
+    // beside, so the graph gets the window's whole width; the ~30 px it costs
+    // in height is the cheaper axis here, and it comes out of the column's
+    // slack rather than off the graph.
     m_outFader = new ClientEqOutputFader;
+    m_outFader->setOrientation(Qt::Horizontal);
     connect(m_outFader, &ClientEqOutputFader::gainChanged,
             this, [this](float linear) {
         ClientEq* eq = (m_path == ClientEqApplet::Path::Rx)
@@ -316,9 +394,8 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
         eq->setMasterGain(linear);
         if (m_audio) m_audio->saveClientEqSettings();
     });
-    body->addWidget(m_outFader);
-
     root->addLayout(body, 1);
+    root->addWidget(m_outFader);
 
     // Selection plumbing: any of the three views announcing a selection
     // change fans out to the other two, plus triggers a paint refresh.
@@ -358,7 +435,7 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     // doesn't burn CPU while the editor is closed.
     m_fftAnalyzer = std::make_unique<ClientEqFftAnalyzer>();
     m_fftTimer = new QTimer(this);
-    m_fftTimer->setInterval(40);  // 25 Hz
+    m_fftTimer->setInterval(kPanelTickMs);
     connect(m_fftTimer, &QTimer::timeout,
             this, &StripEqPanel::tickFftAnalyzer);
 
@@ -433,6 +510,19 @@ void StripEqPanel::showForPath(ClientEqApplet::Path path)
     m_canvas->setEq(eq);
     if (m_iconRow)  m_iconRow->setEq(eq);
     if (m_paramRow) m_paramRow->setEq(eq);
+    // Receive runs the EQ's master gain at unity and shows the strip as a meter
+    // only: on that side the band gains are where the level is set, and a
+    // second gain stage sharing the meter's axis was one control too many. The
+    // transmit side keeps the fader.
+    const bool rx = (path == ClientEqApplet::Path::Rx);
+    if (m_outFader) m_outFader->setGainControlEnabled(!rx);
+    rebuildFilterRow();
+    if (eq && rx && std::abs(eq->masterGain() - 1.0f) > 1e-4f) {
+        // Unity from here on, including for anyone upgrading with a gain
+        // already stored: nothing in the UI could return it to 1.0 afterwards.
+        eq->setMasterGain(1.0f);
+        if (m_audio) m_audio->saveClientEqSettings();
+    }
     if (m_outFader && eq) m_outFader->setGainLinear(eq->masterGain());
     if (m_familyCombo && eq) {
         QSignalBlocker b(m_familyCombo);
@@ -482,6 +572,66 @@ void StripEqPanel::setRxFilterCutoffs(int audioLowHz, int audioHighHz)
     m_rxFilterHighCutHz = audioHighHz;
     if (m_canvas && m_path == ClientEqApplet::Path::Rx)
         m_canvas->setFilterCutoffs(audioLowHz, audioHighHz);
+}
+
+void StripEqPanel::setRxFilterPresets(const QVector<int>& widthsHz,
+                                      int currentWidthHz)
+{
+    if (m_filterWidths == widthsHz && m_currentFilterWidth == currentWidthHz) {
+        return;
+    }
+    m_filterWidths = widthsHz;
+    m_currentFilterWidth = currentWidthHz;
+    rebuildFilterRow();
+}
+
+void StripEqPanel::rebuildFilterRow()
+{
+    if (!m_filterRow || !m_filterRowLayout) return;
+
+    // Transmit has its own filter controls on the radio side; this row is the
+    // receive filter, so it only appears on the receive path.
+    const bool show = (m_path == ClientEqApplet::Path::Rx)
+                   && !m_filterWidths.isEmpty();
+    m_filterRow->setVisible(show);
+    if (!show) return;
+
+    while (QLayoutItem* item = m_filterRowLayout->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+
+    for (int widthHz : m_filterWidths) {
+        // 1.8k, 2.4k, 20k -- the labels the ladder is known by. Below a
+        // kilohertz the figure is plain Hz, which is how CW and RTTY widths
+        // are spoken.
+        const QString label = widthHz >= 1000
+            ? QStringLiteral("%1k").arg(widthHz / 1000.0, 0, 'g', 2)
+            : QString::number(widthHz);
+
+        auto* b = new QPushButton(label, m_filterRow);
+        // The running width has to read as chosen. The panel's own sheet has no
+        // :checked rule for a plain button, so without this the active preset
+        // looks exactly like the seven that are not.
+        AetherSDR::ThemeManager::instance().applyStyleSheet(b,
+            "QPushButton { background: {{color.background.1}}; color: {{color.text.secondary}};"
+            "  border: 1px solid {{color.border.strong}}; border-radius: 3px;"
+            "  font-size: 11px; font-weight: bold; padding: 2px 4px; }"
+            "QPushButton:hover { color: {{color.text.primary}}; border-color: {{color.accent}}; }"
+            "QPushButton:checked { background: {{color.background.tx}};"
+            "  color: {{color.accent.warning}}; border: 1px solid {{color.accent.warning}}; }");
+        b->setObjectName(QStringLiteral("eqRxFilter%1").arg(widthHz));
+        b->setAccessibleName(
+            QStringLiteral("Receive filter %1 Hz").arg(widthHz));
+        b->setCheckable(true);
+        b->setChecked(widthHz == m_currentFilterWidth);
+        b->setFixedHeight(24);
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        connect(b, &QPushButton::clicked, this, [this, widthHz]() {
+            emit rxFilterWidthRequested(widthHz);
+        });
+        m_filterRowLayout->addWidget(b);
+    }
 }
 
 void StripEqPanel::refreshFromEngine()

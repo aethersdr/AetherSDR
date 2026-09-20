@@ -24,8 +24,22 @@ class MidiMappingDialog : public PersistentDialog {
 public:
     explicit MidiMappingDialog(MidiControlManager* manager, QWidget* parent = nullptr);
 
+protected:
+    // Re-enumerate on show in case a retained instance was hidden while the
+    // device list changed. Normal MainWindow close deletes the dialog via
+    // WA_DeleteOnClose; the next open constructs a fresh instance.
+    void showEvent(QShowEvent* event) override;
+
 private:
+    // Repopulates m_portCombo from a live enumeration, carrying each port's
+    // NAME in Qt::UserRole item data and reselecting by that name rather than
+    // by row.  Safe to call repeatedly.
     void refreshPortList();
+    // Opens the port the combo currently NAMES, resolving that name against a
+    // fresh enumeration at click time.  Returns false (and reports why) when
+    // the named port is no longer there.
+    bool connectToSelectedPort();
+    void setPortStatus(const QString& text, const QString& colorToken);
     void refreshBindingTable();
     void refreshProfileList();
     // Manual add/edit form (#4760). One form serves both the "Manual…" button

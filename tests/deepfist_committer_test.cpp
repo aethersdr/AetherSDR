@@ -1,9 +1,18 @@
 #include "core/deepfist/DeepFistCommitter.h"
 #include <cstdio>
 using AetherSDR::DeepFistCommitter;
+namespace {
+// A committer that has published nothing owes no word separator.
+bool freshCommitterIsIdle()
+{
+    AetherSDR::DeepFistCommitter fresh;
+    return fresh.process({}, true, 1.0, 5.0, false).isEmpty();
+}
+}
 int main()
 {
     using Token = DeepFistCommitter::Token;
+    if (!freshCommitterIsIdle()) { return 9; }
     // Recorded TT failure: two windows agree on the pending second T, then
     // activity closes before it reaches the normal publication cutoff.
     for (bool carry : {false, true}) {

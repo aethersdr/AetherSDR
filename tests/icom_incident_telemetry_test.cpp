@@ -40,6 +40,19 @@ struct IcomCivBackendTestAccess {
         backend.onCivFrame(frame, generation);
     }
 
+    static QVariantMap freshness(const IcomCivBackend& backend, bool withValues = true)
+    {
+        return backend.stateFreshness(withValues);
+    }
+    static void age(IcomCivBackend& backend, const QString& key)
+    {
+        backend.m_confirmedState[key].atMs = backend.nowMs() - 6000;
+    }
+    static void intent(IcomCivBackend& backend, const std::vector<std::uint8_t>& frame)
+    {
+        backend.queueWrite(frame, {}, IcomCivScheduler::Priority::Operator, true, true);
+    }
+    static void identify(IcomCivBackend& backend) { backend.m_civReported = 0xA4; }
     static QVariantMap incident(const IcomCivBackend& backend)
     {
         return backend.m_lastIncident;
@@ -99,6 +112,17 @@ struct IcomCivBackendTestAccess {
     static std::string lastCompletedKey(const IcomCivBackend& backend)
     {
         return backend.m_civScheduler.stats().lastCompletedKey;
+    }
+
+    // Connected and identified, with NOTHING in flight -- so a frame arriving
+    // here is Observation::Unmatched rather than Accepted.
+    static void prepareIdleSession(IcomCivBackend& backend,
+                                   const IcomModel& model,
+                                   std::uint64_t sessionGeneration)
+    {
+        backend.m_model = &model;
+        backend.m_connected = true;
+        backend.m_sessionGeneration = sessionGeneration;
     }
 
     static void prepareAcceptedPttRead(IcomCivBackend& backend,
@@ -429,5 +453,221 @@ int main(int argc, char** argv)
               "when it fires, not the one it held at FA time");
     }
 
+    IcomCivBackend freshBackend;
+    IcomCivBackendTestAccess::prepareAcceptedPttRead(freshBackend, *ic705, kGeneration);
+    IcomCivBackendTestAccess::identify(freshBackend);
+    const auto snapshot = [&]() { return IcomCivBackendTestAccess::freshness(freshBackend); };
+    const auto field = [&](const char* name) {
+        return snapshot().value("fields").toMap().value(QLatin1String(name)).toMap();
+    };
+    check(!snapshot().value("trackedStateReady").toBool()
+              && field("squelchPercent").value("status") == "never-confirmed",
+          "transport and identity do not bless construction defaults");
+    const auto deliver = [&](std::uint8_t command, bool hasSub, std::uint8_t sub,
+                             std::vector<std::uint8_t> data, std::uint64_t generation = 1) {
+        IcomCivBackendTestAccess::deliver(freshBackend,
+            CivFrame{kControllerAddress, ic705->civAddress, command, hasSub, sub, data}, generation);
+    };
+    deliver(0x14, true, 0x03, {0xFA});
+    deliver(0x14, true, 0x03, {0x00, 0x50}, 99);
+    check(field("squelchPercent").value("status") == "never-confirmed",
+          "malformed and previous-session frames cannot establish freshness");
+    deliver(0x14, true, 0x03, {0x00, 0x51});
+    check(field("squelchPercent").value("value").toInt() == 20
+              && field("squelchPercent").value("status") == "confirmed",
+          "decoded SQL reply confirms the radio value");
+    IcomCivBackendTestAccess::age(freshBackend, QStringLiteral("civ.20.3"));
+    check(field("squelchPercent").value("status") == "stale",
+          "unchanged values still age out");
+    deliver(0x14, true, 0x03, {0x00, 0x51});
+    check(field("squelchPercent").value("status") == "confirmed",
+          "unchanged valid replies refresh their own field");
+    IcomCivBackendTestAccess::intent(freshBackend, cmdSetLevel(ic705->civAddress, level::kSquelch, 60));
+    // PENDING IS ITS OWN AXIS. The write is in flight, so `pending` is true and
+    // readiness is withheld -- but `status` keeps telling the truth about the
+    // last confirmed value's age instead of being masked. Ranking `pending`
+    // above every other branch let squelch, the one tracked key nothing
+    // re-polls off the MK2 profile, latch `pending` for a whole session.
+    check(field("squelchPercent").value("pending").toBool()
+              && field("squelchPercent").value("status") == "confirmed",
+          "write intent cannot masquerade as radio confirmation");
+    deliver(0xFB, false, 0, {});
+    check(field("squelchPercent").value("pending").toBool(),
+          "generic ACK cannot confirm a state value");
+    IcomCivBackendTestAccess::age(freshBackend, QStringLiteral("civ.20.3"));
+    check(field("squelchPercent").value("pending").toBool()
+              && field("squelchPercent").value("status") == "stale",
+          "an unanswered write does not stop its field ageing out");
+    deliver(0x14, true, 0x03, {0x00, 0x60});
+    deliver(0x03, false, 0, {0x00, 0x00, 0x20, 0x07, 0x00});
+    deliver(0x26, true, 0, {0x01, 0x00, 0x01});
+    deliver(0x16, true, 0x12, {0x02});
+    deliver(0x14, true, 0x0A, {0x00, 0x13});
+    deliver(0x1C, true, 0, {0});
+    check(snapshot().value("trackedStateReady").toBool(),
+          "all six decoded fields establish bounded diagnostic readiness");
+    deliver(0x26, true, 0, {0x02, 0x00, 0x01});
+    check(!snapshot().value("trackedStateReady").toBool()
+              && field("agcCode").value("status") == "previous-context",
+          "radio-originated mode change invalidates old-context controls");
+    deliver(0x16, true, 0x12, {0xFF});
+    check(field("agcCode").value("status") == "previous-context",
+          "out-of-range AGC cannot refresh the context");
+    IcomCivBackendTestAccess::intent(freshBackend,
+        buildFrameSub(ic705->civAddress, 0x07, 0x01));
+    check(field("modeDataFilter").value("status") == "previous-context",
+          "outgoing VFO selection invalidates even an identical mode and frequency");
+    IcomCivBackend neverConfirmed;
+    IcomCivBackendTestAccess::intent(neverConfirmed,
+        cmdSetLevel(ic705->civAddress, level::kSquelch, 60));
+    const QVariantMap unknownSql = IcomCivBackendTestAccess::freshness(neverConfirmed)
+        .value("fields").toMap().value("squelchPercent").toMap();
+    check(unknownSql.value("pending").toBool()
+              && unknownSql.value("status") == "never-confirmed"
+              && !unknownSql.value("value").isValid(),
+          "a first write records pending intent without inventing a confirmed value");
+    check(!snapshot().value("backendInstanceId").toString().isEmpty()
+        && snapshot().value("backendInstanceId") != IcomCivBackendTestAccess::freshness(neverConfirmed).value("backendInstanceId"),
+          "backend replacement in one process has a distinct diagnostic ID namespace");
+
+    // ---- SQUELCH IS REPORTED BUT DOES NOT GATE READINESS -------------------
+    //
+    // level::kSquelch is re-read periodically only under the profile flag
+    // pollCwSquelchAndTxBandwidth, which only the IC-7300MK2 sets. On this
+    // IC-705 nothing reconciles it after connect, so an aggregate that required
+    // it went false about five seconds in and stayed there for the session.
+    // Its own backend: the checks above deliberately invalidate the context.
+    IcomCivBackend readinessBackend;
+    IcomCivBackendTestAccess::prepareAcceptedPttRead(readinessBackend, *ic705, kGeneration);
+    IcomCivBackendTestAccess::identify(readinessBackend);
+    const auto readySnapshot = [&]() {
+        return IcomCivBackendTestAccess::freshness(readinessBackend);
+    };
+    const auto readyField = [&](const char* name) {
+        return readySnapshot().value("fields").toMap().value(QLatin1String(name)).toMap();
+    };
+    const auto feed = [&](std::uint8_t command, bool hasSub, std::uint8_t sub,
+                          std::vector<std::uint8_t> data) {
+        IcomCivBackendTestAccess::deliver(readinessBackend,
+            CivFrame{kControllerAddress, ic705->civAddress, command, hasSub, sub, data},
+            kGeneration);
+    };
+    feed(0x14, true, 0x03, {0x00, 0x60});
+    feed(0x03, false, 0, {0x00, 0x00, 0x20, 0x07, 0x00});
+    feed(0x26, true, 0, {0x01, 0x00, 0x01});
+    feed(0x16, true, 0x12, {0x02});
+    feed(0x14, true, 0x0A, {0x00, 0x13});
+    feed(0x1C, true, 0, {0});
+    check(readySnapshot().value("trackedStateReady").toBool(),
+          "the gating fields alone establish bounded diagnostic readiness");
+    IcomCivBackendTestAccess::age(readinessBackend, QStringLiteral("civ.20.3"));
+    check(readyField("squelchPercent").value("status") == "stale"
+              && !readyField("squelchPercent").value("gatesReadiness").toBool()
+              && readySnapshot().value("trackedStateReady").toBool(),
+          "an unpolled squelch ages out without latching readiness false");
+    IcomCivBackendTestAccess::age(readinessBackend, QStringLiteral("civ.22.18"));
+    check(readyField("agcCode").value("gatesReadiness").toBool()
+              && !readySnapshot().value("trackedStateReady").toBool(),
+          "a field that IS reconciled still gates readiness when it goes stale");
+
+    // ---- A MODEL WITH NO 0x26 ROUTE CAN STILL CONFIRM ITS MODE -------------
+    //
+    // confirmState("mode", ...) used to live only in the 0x26 decode, so a
+    // model without IcomFeature::VfoMode — which is what onLinkTick polls with
+    // 04 instead — could never reach `confirmed` on the mode field, and
+    // trackedStateReady was unreachable for its whole session.
+    const IcomModel* ic7300 = modelForName("IC-7300");
+    check(ic7300 != nullptr && !profileFor(*ic7300).supports(IcomFeature::VfoMode),
+          "the IC-7300 resolves and is the no-VfoMode case this pins");
+    if (ic7300) {
+        IcomCivBackend noVfoMode;
+        IcomCivBackendTestAccess::prepareAcceptedPttRead(noVfoMode, *ic7300, kGeneration);
+        IcomCivBackendTestAccess::identify(noVfoMode);
+        const auto modeStatus = [&]() {
+            return IcomCivBackendTestAccess::freshness(noVfoMode).value("fields")
+                .toMap().value("modeDataFilter").toMap().value("status").toString();
+        };
+        check(modeStatus() == "never-confirmed", "no mode publication yet");
+        IcomCivBackendTestAccess::deliver(noVfoMode,
+            CivFrame{kControllerAddress, ic7300->civAddress, cmd::kReadMode,
+                     false, 0, {0x01, 0x02}}, kGeneration);
+        check(modeStatus() == "confirmed",
+              "an 04 mode publication confirms on a model with no 26 route");
+    }
+
+    // ---- AN OFF-SHAPE PTT FRAME PUBLISHES BUT NEVER CONFIRMS ---------------
+    //
+    // 1C 00 answers one byte, 00 or 01. A payload we cannot parse is not
+    // evidence — but it is not "unkeyed" either, and this is the fail-closed
+    // path for a radio that reports KEYED after an unkey request, so it must
+    // still reach the publish logic (Constitution VI).
+    IcomCivBackend pttShape;
+    IcomCivBackendTestAccess::prepareAcceptedPttRead(pttShape, *ic705, kGeneration);
+    IcomCivBackendTestAccess::identify(pttShape);
+    const auto pttField = [&]() {
+        return IcomCivBackendTestAccess::freshness(pttShape)
+            .value("fields").toMap().value("ptt").toMap();
+    };
+    std::vector<bool> shapeKeying;
+    QObject::connect(&pttShape, &IRadioBackend::transmitChanged, &pttShape,
+                     [&](const TransmitDelta& d) {
+                         if (d.mox) { shapeKeying.push_back(*d.mox); }
+                     });
+    IcomCivBackendTestAccess::deliver(pttShape,
+        CivFrame{kControllerAddress, ic705->civAddress, cmd::kControl, true,
+                 control::kPtt, {0x01, 0x00}}, kGeneration);
+    check(pttField().value("status") == "never-confirmed",
+          "a two-byte PTT payload cannot become a confirmation");
+    check(shapeKeying.size() == 1 && shapeKeying.front(),
+          "...but an unparseable frame that says KEYED is still published");
+    IcomCivBackendTestAccess::prepareAcceptedPttRead(pttShape, *ic705, kGeneration);
+    IcomCivBackendTestAccess::deliver(pttShape,
+        CivFrame{kControllerAddress, ic705->civAddress, cmd::kControl, true,
+                 control::kPtt, {0x00}}, kGeneration);
+    check(pttField().value("status") == "confirmed"
+              && pttField().value("value").toBool() == false,
+          "a well-formed PTT-off readback does confirm");
+    // ...and says it was an ACCEPTED observation, which is what the TX harness
+    // requires before it will call a radio unkeyed. The one frame that can land
+    // here Stale -- a stale reply agreeing with a pending unkey intent -- still
+    // publishes (Constitution VI) but reports accepted:false, and
+    // tools/test_tx_meter_test.py pins that the gate refuses it.
+    check(pttField().value("accepted").toBool(),
+          "an accepted PTT readback is labelled as one");
+    check(!pttField().value("pending").toBool(),
+          "a confirmed PTT field carries no outstanding write");
+
+    // UNMATCHED IS STILL AUTHORITATIVE. An unsolicited front-panel PTT frame,
+    // and a reply slower than the scheduler's read wait, both arrive as
+    // Observation::Unmatched -- this file says so at the CI-V recovery gate:
+    // "Unmatched but still authoritative; Stale is the sole outcome that proves
+    // a newer semantic generation replaced it." Labelling those accepted:false
+    // would make the TX harness reject a real unkey on a loaded bus.
+    IcomCivBackend unsolicited;
+    IcomCivBackendTestAccess::prepareIdleSession(unsolicited, *ic705, kGeneration);
+    IcomCivBackendTestAccess::identify(unsolicited);
+    IcomCivBackendTestAccess::deliver(unsolicited,
+        CivFrame{kControllerAddress, ic705->civAddress, cmd::kControl, true,
+                 control::kPtt, {0x00}}, kGeneration);
+    const QVariantMap unsolicitedPtt = IcomCivBackendTestAccess::freshness(unsolicited)
+        .value("fields").toMap().value("ptt").toMap();
+    check(unsolicitedPtt.value("status") == "confirmed"
+              && unsolicitedPtt.value("accepted").toBool(),
+          "an unmatched but authoritative PTT readback still counts as accepted");
+
+    // THE INCIDENT SNAPSHOT REACHES THE DEFAULT LOG, so it carries statuses and
+    // ages but not the operator's dial frequency. recordIncident() qCWarnings
+    // this whole structure, and IcomCivScheduler's payload-free rule is about
+    // that log, not only about the transaction ring.
+    const QVariantMap redacted = IcomCivBackendTestAccess::freshness(freshBackend, false);
+    const QVariantMap openFreq = snapshot().value("fields").toMap()
+        .value("frequencyHz").toMap();
+    const QVariantMap hiddenFreq = redacted.value("fields").toMap()
+        .value("frequencyHz").toMap();
+    check(openFreq.value("value").isValid() && !hiddenFreq.value("value").isValid()
+              && hiddenFreq.value("valuesRedacted").toBool()
+              && hiddenFreq.value("status") == openFreq.value("status")
+              && hiddenFreq.value("semanticKey") == openFreq.value("semanticKey"),
+          "a redacted snapshot keeps the diagnostic and drops the dial frequency");
     return failures == 0 ? 0 : 1;
 }

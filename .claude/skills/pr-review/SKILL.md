@@ -154,8 +154,26 @@ the shape the bullet above routes a simulator closed loop to — see
   check the branch out in a **new scratch worktree** if you need to build.
 - CI: note failing/passing checks and whether CI ran against a stale merge
   base. Check the workflow trigger before drawing conclusions: a
-  `pull_request` trigger tests the *merge* result, so a green check already
-  includes current main; a `push`-triggered check on the branch does not.
+  `pull_request` trigger tests the *merge* result — `main` + this PR **as
+  `main` stood when that run was created**, which is not the same as current
+  `main`; a `push`-triggered check on the branch never included `main` at all.
+  Creation, not job start: `github.sha` is frozen when the run is created
+  (`static-checks.yml:297`) and no checkout overrides it, so a job that sat in
+  the queue still built the older tree. Compare the **earliest run creation**
+  on the head against `main`'s tip:
+
+  ```sh
+  gh api --paginate \
+    "repos/aethersdr/AetherSDR/actions/runs?head_sha=<headOid>" \
+    --jq '.workflow_runs[] | "\(.created_at)\t\(.name)"' | sort | head -1
+  gh api repos/aethersdr/AetherSDR/commits/main --jq .commit.committer.date
+  ```
+
+  If `main` is newer, the green describes a merge that no longer exists, and
+  any conclusion you draw from it inherits that. `main` has `strict: false`, so
+  nothing forces a rerun to close the gap — say so in the report rather than
+  reporting the checks as green without qualification. /pr-land turns the same
+  comparison into a gate before it arms auto-merge.
 
 ## 2. Linked issue → does the PR actually solve it?
 
@@ -303,6 +321,38 @@ Read the diff against each of these; cite the specific rule when flagging:
 - **CMake contract** — any target compiling `AppSettings.cpp` uses
   `${AETHER_SETTINGS_SOURCES}` and joins `AETHER_SETTINGS_CONSUMERS`; tests
   isolate via `TestSettingsProfile.h` (`AETHER_SETTINGS_DIR`).
+- **AGENTS.md § "In-flight: aetherd engine/UI decoupling"** — the migration
+  ratchets, which the settings and capability rules above do not reach:
+  EB1/EB2/EB3 (`tools/check_engine_boundary.py`), the capability-record and
+  command-plane freezes, the build-target link rules (`aethercore` never
+  `gui/` or QtWidgets, `aetherd` never QtWidgets), the routing table for
+  radio-facing code, and the THREADING AND LIFETIME CONTRACT at the top of
+  `IRadioBackend.h`. Read the whole section on the PR's head; it moves as the
+  RFC's staged order advances. **A green `Static checks` is not this audit** —
+  findings against tracked EB2/EB3 baselines only warn (about a hundred ride
+  on a green run), and EB2 is a per-file count, so a lateral swap inside a
+  tracked file passes flat. Run the gates on the merge base and on the head
+  and diff the per-file findings, and diff the touchpoint manifest too: a new
+  `gui/`→engine include only makes `--check` red until it is regenerated, so
+  the grown burndown then rides green with nothing flagging the added
+  touchpoint. On the baselines, read the **direction**. A PR that *shrinks*
+  one — drops a stem whose coupling it removed, deletes an emptied row, lowers
+  `FROZEN_BOOL_COUNT` because a bool became a record, lowers a converted
+  file's command-plane count — is doing what canon demands of a conversion;
+  verify the coupling really went and pass it. A PR that *grows* one, or
+  retags a header in `docs/architecture/aetherd-touchpoint-tags.json`, is
+  weakening the enforcement rather than passing it — EB3 derives its vendor
+  vocabulary from that file at runtime, and a de-classification also has to
+  release the stem from `VENDOR_STEMS_PINNED`, so a PR touching both is
+  telling you exactly what it did — and that is a blocker unless it is
+  one of canon's two documented carveouts: a vocabulary reclassification with
+  merge-base proof and explicit maintainer review, or a `FROZEN_BOOL_COUNT`
+  raise on a maintainer ruling.
+  Also walk the #5554 notice at the top of § "AI Agent Guidelines" when the PR
+  touches `src/core/backends/`, `RadioModel`, `RadioSession`, `TransmitModel`,
+  `ConnectionPanel`, discovery or `RadioCapabilities`; most of its items — a
+  new family-string branch, a `dynamic_cast` to a concrete backend, a
+  capability with no verb behind it — are invisible to every checker.
 - **docs/style/dialog-patterns.md** — new dialogs ride `PersistentDialog`
   (#2605); geometry base64; frameless propagation.
 - **docs/a11y.md** — accessible names on interactive widgets, throttled
@@ -466,8 +516,13 @@ AETHER_SETTINGS_DIR="$SCRATCH/settings" \
 AETHER_AUTOMATION_IDENTITY=pr-<PR>-review \
 AETHER_AUTOMATION_SOCKET=aethersdr-pr<PR> \
 AETHER_AUTOMATION_NO_TX=1 \
-setsid nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
+nohup ./build/AetherSDR >"$SCRATCH/app.log" 2>&1 &
 ```
+
+Detach so a shell exit cannot `SIGHUP` the instance — prefix `setsid` on Linux,
+where it exists. On macOS the binary is inside the bundle,
+`./build/AetherSDR.app/Contents/MacOS/AetherSDR`; `docs/automation-bridge.md`
+gives both paths.
 
 Then, before anything else, confirm where you are pointed and attach the demo:
 
@@ -530,9 +585,11 @@ from being confirmed or refuted.
 
 Non-negotiable operating rules:
 
-- **`pgrep -a AetherSDR` first.** Instances that are not yours — especially
+- **`pgrep -lf AetherSDR` first.** Instances that are not yours — especially
   any launched from the shared checkout — are the operator's session. Never
-  drive, close, or kill one.
+  drive, close, or kill one. `-lf` is the portable spelling: BSD and macOS
+  read a bare `-a` as "include ancestors" and print no command line to judge
+  by.
 - **Always pass an explicit socket.** The discovery file
   `<temp>/aethersdr-automation.json` is last-writer-wins and will happily
   point you at another agent's instance.

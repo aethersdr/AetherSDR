@@ -72,6 +72,58 @@ int testCursorAnchoredZoom()
     return 0;
 }
 
+int testEdgeCropGateAndZoomAnchor()
+{
+    using namespace AetherSDR;
+    if (panEdgeCropApplies(false, false) || panEdgeCropApplies(false, true)
+        || panEdgeCropApplies(true, true) || !panEdgeCropApplies(true, false)) {
+        return fail("only the native stream of an edge-crop radio may be cropped");
+    }
+    const FrequencyFrame raw{14.2, 0.192};
+    const FrequencyFrame previewBase{14.1, 0.384};
+    for (const bool enabled : {false, true}) {
+        const std::optional<FrequencyFrame> row =
+            edgeCroppedWaterfallFrame(raw, enabled);
+        if (row.has_value() != enabled) {
+            return fail("only edge-crop radios may override waterfall row frames");
+        }
+        if (row && (!nearlyEqual(row->centerMhz, raw.centerMhz)
+                    || !nearlyEqual(row->bandwidthMhz, 0.17664))) {
+            return fail("cropped live/history/DSS rows must cover the same 92% span");
+        }
+        const FrequencyFrame dssFrame = resolvedUntaggedDssFrame(
+            row.value_or(FrequencyFrame{}), raw, previewBase, true);
+        const FrequencyFrame expected = enabled ? *row : previewBase;
+        if (!nearlyEqual(dssFrame.centerMhz, expected.centerMhz)
+            || !nearlyEqual(dssFrame.bandwidthMhz, expected.bandwidthMhz)) {
+            return fail("the disabled crop gate must preserve DSS preview-base resolution");
+        }
+        const FrequencyFrame display{
+            raw.centerMhz, panDisplayBandwidthMhz(raw.bandwidthMhz, enabled)};
+        if (!enabled && display.bandwidthMhz != raw.bandwidthMhz) {
+            return fail("non-crop radios must retain the exact original bandwidth");
+        }
+        // Include unchanged bandwidth: starting a drag must not jump the center.
+        for (const double requestedBw : {0.048, 0.192, 0.384, 1.536}) {
+            for (const double fraction : {-0.5, -0.31, 0.0, 0.25, 0.5}) {
+                const double anchor = frequencyAtFraction(display, fraction);
+                const double center = centerForAnchoredPanBandwidth(
+                    anchor, fraction, requestedBw, enabled);
+                const FrequencyFrame zoomed{
+                    center, panDisplayBandwidthMhz(requestedBw, enabled)};
+                if (!nearlyEqual(frequencyAtFraction(zoomed, fraction), anchor)) {
+                    return fail("cursor frequency moved when zooming a cropped pan");
+                }
+                if (!enabled && center != centerForAnchoredBandwidth(
+                        anchor, fraction, requestedBw)) {
+                    return fail("non-crop zoom must preserve the original center calculation");
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 int testFrequencyFrameMapping()
 {
     using namespace AetherSDR;
@@ -1130,6 +1182,9 @@ int main()
     }
     if (const int result = testDssSupplementalCoverageCalibration();
         result != 0) {
+        return result;
+    }
+    if (const int result = testEdgeCropGateAndZoomAnchor(); result != 0) {
         return result;
     }
     return testStablePresentationAnchor();

@@ -1,240 +1,569 @@
-// Ownership rules for the automation TX watchdog (#3646).
-//
-// The watchdog is a runaway-script backstop, not an operator transmit limit, so
-// it must police only transmissions the bridge itself started. Two ways that
-// goes wrong, one test each:
-//
-//   1. It polls the transmit model, so with the bridge enabled — a persisted
-//      setting, therefore on in ordinary sessions — the operator's own MOX and
-//      TUNE were force-unkeyed at exactly 20 s, mid-sentence. Fixed on main by
-//      m_txBridgeInitiated.
-//   2. A TX-capable bridge action that runs while an unrelated transmission is
-//      already up claims that transmission, because the claim is made after the
-//      action was issued and the key verbs update TransmitModel optimistically.
-//      Fixed here by sampling the transmitter before dispatch (#4435 review).
+// Socket-free watchdog tests: real engine admission, injected terminal recorder.
+// No radio, listener, discovery, audio device or RF.
+#include "TestSettingsProfile.h"
 #include "core/AudioEngine.h"
 #include "core/QsoRecorder.h"
 #include "core/AutomationServer.h"
+#include "core/RadioCertification.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
-#include <QStringList>
-
-#include <algorithm>
 #include <cstdio>
+#include <memory>
 
-using AetherSDR::AutomationServer;
-using AetherSDR::RadioModel;
+using namespace AetherSDR;
 
 namespace AetherSDR {
-
-class AutomationServerTestAccess
-{
+class AutomationServerTestAccess {
 public:
-    static void setMaxKeyMs(AutomationServer& server, int value)
+    static QJsonObject request(AutomationServer& server, const QByteArray& command)
     {
-        server.m_txMaxKeyMs = value;
+        return server.handleLine(command, nullptr);
     }
-    // Stand in for handleLine()'s pre-dispatch sample, so a test can express
-    // "a bridge request arrived while the radio was already keyed" without a
-    // socket round-trip.
-    static void setKeyedAtRequestStart(AutomationServer& server, bool keyed)
+    static void setMaxKeyMs(AutomationServer& server, int ms) { server.m_txMaxKeyMs = ms; }
+    static qint64 elapsed(const AutomationServer& server) { return server.m_txKeyClock.elapsed(); }
+    static bool claimed(const AutomationServer& server) { return server.m_txBridgeInitiated; }
+    static bool owns(const AutomationServer& server) { return server.txBridgeOwnsCurrentTransmit(); }
+    static void poll(AutomationServer& server) { server.onTxWatchdog(); }
+    static void release(AutomationServer& server) { server.releaseEdgeHandsBackPolicing(); }
+    static void observeKey(AutomationServer& server, bool on,
+                           const TxCoordinator::Operation&, bool)
     {
-        server.m_txKeyedAtRequestStart = keyed;
+        if (on) {
+            server.markTxBridgeInitiated();
+        } else {
+            server.releaseEdgeHandsBackPolicing();
+        }
     }
-    static void markTxBridgeInitiated(AutomationServer& server)
+    static std::shared_ptr<TxController> controller(AutomationServer& server)
     {
-        server.markTxBridgeInitiated();
+        return server.txController();
     }
-    static bool bridgeInitiated(const AutomationServer& server)
+    static void defer(AutomationServer& server, std::function<void(TxController::Input)> action,
+                       TxController::Activity activity = TxController::Activity::Mox)
     {
-        return server.m_txBridgeInitiated;
-    }
-    static void releaseEdge(AutomationServer& server)
-    {
-        server.releaseEdgeHandsBackPolicing();
+        const TxController::Input input = server.txController()->capture(activity);
+        server.deferInvokeAction([input, action = std::move(action)] { action(input); }, true);
     }
 };
-
+class RadioCertificationTestAccess {
+public:
+    static bool key(RadioCertification& cert, bool on) { return cert.keyViaOperatorPath(on); }
+};
 } // namespace AetherSDR
 
 namespace {
-
 int failures = 0;
-
 void check(bool condition, const char* message)
 {
-    if (!condition) {
-        std::fprintf(stderr, "FAIL: %s\n", message);
-        ++failures;
-    }
+    std::printf("[%s] %s\n", condition ? "PASS" : "FAIL", message);
+    failures += !condition;
 }
-
-// Pump the event loop so the 500 ms watchdog timer gets to run.
 void pump(int ms)
 {
-    QElapsedTimer timer;
-    timer.start();
-    while (timer.elapsed() < ms) {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    QElapsedTimer clock;
+    clock.start();
+    do {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    } while (clock.elapsed() < ms);
+}
+
+class RecordingBackend final : public IRadioBackend {
+public:
+    QStringList& commands;
+    bool connected{false};
+    bool canTransmit{true};
+    std::function<void(bool)> keyingWriter;
+    std::function<void(bool)> tuneWriter;
+    TxCoordinator::Operation lastKeyOn;
+    explicit RecordingBackend(QStringList& record) : commands(record) {}
+    RadioCapabilities capabilities() const override
+    {
+        RadioCapabilities caps;
+        caps.canTransmit = canTransmit;
+        caps.hasRadioSideCwKeyer = true;
+        caps.hasTuner = true;
+        // #5516 refuses `txtest twotone` before keying unless the backend
+        // declares this, so without it the two-tone tune never starts and the
+        // watchdog cleanup below has nothing to stop. Two assertions go red:
+        // deadlineDoesNotRenew's cleanup check wants `tune:off`, and
+        // reentrantReplacementDuringCleanup needs `tuneWriter` to fire. Only
+        // the deadline-renewal check above it goes vacuous -- a refusal does
+        // not renew a deadline either. The string is fixture-local on purpose:
+        // `transmit set tune_mode=two_tone` is FlexBackend's real SmartSDR
+        // route, and a stub that cannot issue it must not be quotable as
+        // having done so. Nothing branches on it (RadioCapabilities.h).
+        caps.twoToneGenerator = RadioCapabilities::TwoToneGenerator{
+            QStringLiteral("recording backend two-tone route")};
+        return caps;
+    }
+    bool isConnected() const override { return connected; }
+    void connectRadio(const RadioConnectRequest&) override {}
+    void disconnectRadio() override {}
+    void setSliceFrequency(int, double) override {}
+    void setSliceMode(int, const QString&) override {}
+    void setSliceFilter(int, int, int) override {}
+    void setSliceAgc(int, const QString&, int) override {}
+    void setPanCenter(const QString&, double, PanCenterIntent) override {}
+    void setKeying(bool on, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion&) override
+    {
+        if (on) {
+            lastKeyOn = operation;
+        }
+        commands << (on ? "mox:on" : "mox:off");
+        if (keyingWriter) {
+            keyingWriter(on);
+        }
+    }
+    void setTune(bool on, int, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override
+    {
+        commands << (on ? "tune:on" : "tune:off");
+        if (tuneWriter) {
+            tuneWriter(on);
+        }
+    }
+    void setAtu(bool on, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { commands << (on ? "atu:on" : "atu:off"); }
+    void setCwKeying(bool on, bool, int, const AetherSDR::TxCoordinator::Operation&, const AetherSDR::TxCoordinator::Completion&) override { commands << (on ? "cw:on" : "cw:off"); }
+    void abortCwText(const TxCoordinator::Operation&, const TxCoordinator::Completion&) override { commands << "cwx:abort"; }
+    void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
+};
+
+struct Fixture {
+    QStringList commands;
+    RadioModel radio;
+    AutomationServer bridge;
+    RecordingBackend* backend;
+    Fixture()
+    {
+        auto owned = std::make_unique<RecordingBackend>(commands);
+        backend = owned.get();
+        radio.setBackendForTest(std::move(owned), QStringLiteral("test"));
+        if (!radio.automationApplySliceFixture(0, QStringLiteral("A")) || !radio.slice(0)) {
+            qFatal("Could not install disconnected slice fixture");
+        }
+        SliceDelta delta;
+        delta.txSlice = true;
+        delta.mode = QStringLiteral("USB");
+        delta.panId = QStringLiteral("0x40000000");
+        radio.slice(0)->applyChanges(delta);
+        backend->connected = true;
+        radio.transmitModel().setTxModeGetter([] { return QStringLiteral("USB"); });
+        bridge.setRadioModel(&radio);
+        bridge.setTxAllowed(true);
+        commands.clear();
+    }
+    QJsonObject request(const QByteArray& command)
+    {
+        return AutomationServerTestAccess::request(bridge, command);
+    }
+};
+
+void manualTransmitIsNotPoliced()
+{
+    Fixture f;
+    f.radio.setTransmit(true);
+    AutomationServerTestAccess::setMaxKeyMs(f.bridge, 0);
+    f.commands.clear();
+    AutomationServerTestAccess::poll(f.bridge);
+    f.bridge.setTxAllowed(false);
+    check(f.commands.isEmpty() && f.radio.transmitModel().isTransmitting(),
+          "enabled watchdog and permission revocation leave operator TX alone");
+}
+
+void actionsCannotAdoptExistingOperation()
+{
+    for (const QByteArray command : {QByteArray("txtest twotone"), QByteArray("atu start")}) {
+        Fixture f;
+        f.radio.setTransmit(true);
+        check(!f.request(command).value("ok").toBool(),
+              "carrier request cannot borrow a different producer's PTT latch");
+        check(!AutomationServerTestAccess::claimed(f.bridge),
+              "typed bridge action cannot adopt an existing operator operation");
+        f.commands.clear();
+        f.bridge.setTxAllowed(false);
+        check(f.commands.isEmpty(), "revocation does not stop an unclaimed operation");
+    }
+    Fixture f;
+    // Keep the engine operation through an RX readback gap, as during QSK.
+    f.radio.setTransmit(true);
+    f.radio.transmitModel().setTransmitting(false);
+    check(f.request("key ptt on").value("ok").toBool(),
+          "compatible bridge PTT holds its own contribution during a readback gap");
+    f.commands.clear();
+    f.bridge.setTxAllowed(false);
+    check(f.commands.isEmpty(), "revocation leaves the earlier operator contribution intact");
+}
+
+void deadlineDoesNotRenew()
+{
+    Fixture f;
+    f.request("key ptt on");
+    check(AutomationServerTestAccess::owns(f.bridge), "accepted bridge key owns its original operation");
+    pump(35);
+    const qint64 before = AutomationServerTestAccess::elapsed(f.bridge);
+    f.request("key ptt on");
+    f.request("txtest twotone");
+    f.request("atu start");
+    check(AutomationServerTestAccess::elapsed(f.bridge) >= before,
+          "repeated key, two-tone and ATU cannot renew the monotonic deadline");
+    AutomationServerTestAccess::setMaxKeyMs(f.bridge, 1);
+    f.commands.clear();
+    AutomationServerTestAccess::poll(f.bridge);
+    check(f.commands.contains("mox:off") && f.commands.contains("tune:off")
+              && f.commands.contains("atu:off") && !f.commands.contains("cwx:abort"),
+          "expired original operation receives watchdog cleanup");
+}
+
+void productionTimerExpiresOriginalOperation()
+{
+    for (bool reenable : {false, true}) {
+        Fixture f;
+        if (reenable) {
+            f.bridge.setTxAllowed(false);
+            f.bridge.setTxAllowed(true);
+        }
+        AutomationServerTestAccess::setMaxKeyMs(f.bridge, 10);
+        f.request("key ptt on");
+        f.commands.clear();
+        QElapsedTimer elapsed;
+        elapsed.start();
+        // Exercise the production 500 ms timer, not the direct poll seam.
+        // A bounded wait makes a missing/disconnected timer fail promptly.
+        while (!f.commands.contains("mox:off") && elapsed.elapsed() < 2'000) {
+            pump(10);
+        }
+        check(f.commands.contains("mox:off")
+                  && !AutomationServerTestAccess::claimed(f.bridge),
+              "production timer expires owned TX after initial enable or re-enable");
     }
 }
 
-bool sawForceUnkey(const QStringList& commands)
+void staleWatchdogCannotStopReplacement()
 {
-    return std::ranges::any_of(commands, [](const QString& command) {
-        return command == QStringLiteral("intent:mox:off")
-            || command == QStringLiteral("intent:tune:off");
+    for (bool revoke : {false, true}) {
+        Fixture f;
+        f.request("key ptt on");
+        const TxCoordinator::Operation original = f.radio.transmitOperation();
+        // Entire handoff happens between polls; old bridge claim is still set.
+        f.request("key ptt off");
+        f.radio.setTransmit(true);
+        check(!original.sameOperation(f.radio.transmitOperation()), "replacement has a distinct operation");
+        f.commands.clear();
+        AutomationServerTestAccess::setMaxKeyMs(f.bridge, 0);
+        if (revoke) {
+            f.bridge.setTxAllowed(false);
+        } else {
+            AutomationServerTestAccess::poll(f.bridge);
+        }
+        check(f.commands.isEmpty() && f.radio.transmitModel().isTransmitting(),
+              "stale watchdog/revocation cannot stop a replacement operator over");
+    }
+}
+
+void releaseAndReadbackGaps()
+{
+    Fixture f;
+    f.request("key ptt on");
+    AutomationServerTestAccess::release(f.bridge);
+    check(AutomationServerTestAccess::claimed(f.bridge), "refused release keeps policing");
+    f.radio.transmitModel().setTransmitting(false);
+    AutomationServerTestAccess::poll(f.bridge);
+    check(AutomationServerTestAccess::claimed(f.bridge), "active operation survives readback RX gap");
+    f.request("key ptt off");
+    AutomationServerTestAccess::release(f.bridge);
+    check(!AutomationServerTestAccess::claimed(f.bridge), "completed release hands policing back");
+}
+
+void refusedAndNestedRequests()
+{
+    Fixture f;
+    f.backend->canTransmit = false;
+    f.request("key ptt on");
+    check(!AutomationServerTestAccess::claimed(f.bridge), "engine-refused key cannot arm watchdog");
+    f.bridge.setTxAllowed(false);
+    f.request("key ptt on");
+    check(!AutomationServerTestAccess::claimed(f.bridge), "refused key-on cannot arm watchdog");
+
+    Fixture nested;
+    nested.backend->keyingWriter = [&](bool on) {
+        if (on) {
+            nested.request("not-a-verb");
+        }
+    };
+    nested.request("key ptt on");
+    check(AutomationServerTestAccess::owns(nested.bridge),
+          "nested request restores outer pre-key sample before claim");
+}
+
+void deferredActions()
+{
+    Fixture f;
+    AutomationServerTestAccess::defer(f.bridge, [](TxController::Input input) { (void)input.start(); });
+    check(!AutomationServerTestAccess::claimed(f.bridge), "queued widget action does not claim TX early");
+    pump(1);
+    check(AutomationServerTestAccess::owns(f.bridge), "deferred action claims after engine admission");
+    f.request("key ptt off");
+    AutomationServerTestAccess::poll(f.bridge);
+
+    int calls = 0;
+    AutomationServerTestAccess::defer(f.bridge, [&](TxController::Input) { ++calls; });
+    f.bridge.setTxAllowed(false);
+    f.bridge.setTxAllowed(true);
+    pump(1);
+    check(calls == 0, "revoked queued action stays cancelled after permission re-enabled");
+
+    AutomationServerTestAccess::defer(f.bridge, [&](TxController::Input) { ++calls; });
+    f.bridge.stop();
+    pump(1);
+    check(calls == 0, "bridge stop fences deferred TX actions");
+
+    AutomationServerTestAccess::defer(f.bridge, [&](TxController::Input) { ++calls; });
+    f.bridge.setReadOnly(true);
+    f.bridge.setReadOnly(false);
+    pump(1);
+    check(calls == 0, "observe-only transition permanently fences queued TX action");
+
+    AutomationServerTestAccess::defer(f.bridge, [](TxController::Input input) { (void)input.start(); });
+    f.radio.setTransmit(true);
+    pump(1);
+    f.commands.clear();
+    f.bridge.setTxAllowed(false);
+    check(f.commands.isEmpty() && f.radio.transmitModel().isTransmitting(),
+          "deferred scoped action never releases an intervening operator contribution");
+
+    Fixture revoked;
+    AutomationServerTestAccess::defer(revoked.bridge, [&](TxController::Input input) {
+        revoked.bridge.setTxAllowed(false);
+        (void)input.start();
     });
+    pump(1);
+    check(!revoked.radio.transmitModel().isTransmitting()
+              && !AutomationServerTestAccess::claimed(revoked.bridge),
+          "revocation during a deferred callback cannot leave later keying unpoliced");
 }
 
-void recordKeyingIntents(RadioModel& radio, QStringList& commands)
+void cwAndAtuAreStopped()
 {
-    QObject::connect(&radio.transmitModel(), &AetherSDR::TransmitModel::moxCommandIssued,
-                     &radio, [&commands](bool on) { commands << (on ? "intent:mox:on" : "intent:mox:off"); });
-    QObject::connect(&radio.transmitModel(), &AetherSDR::TransmitModel::tuneCommandIssued,
-                     &radio, [&commands](bool on) { commands << (on ? "intent:tune:on" : "intent:tune:off"); });
+    Fixture cw;
+    AutomationServerTestAccess::defer(cw.bridge, [](TxController::Input input) { (void)input.start(); },
+                                      TxController::Activity::CwKey);
+    pump(1);
+    check(AutomationServerTestAccess::owns(cw.bridge), "CW key with no MOX flag is policed");
+    AutomationServerTestAccess::setMaxKeyMs(cw.bridge, 0);
+    cw.commands.clear();
+    AutomationServerTestAccess::poll(cw.bridge);
+    check(cw.commands.contains("cw:off"), "watchdog releases straight-key carrier");
+
+    Fixture atu;
+    atu.request("atu start");
+    check(AutomationServerTestAccess::owns(atu.bridge), "ATU operation is policed without MOX flag");
+    AutomationServerTestAccess::setMaxKeyMs(atu.bridge, 0);
+    atu.commands.clear();
+    AutomationServerTestAccess::poll(atu.bridge);
+    check(atu.commands.contains("atu:off"), "watchdog bypasses an owned internal ATU cycle");
 }
 
-// (1) TX permission enabled, but a local feature (WSPR in production) keys
-// without any bridge command. The bridge must leave it alone.
-void testEnabledBridgeDoesNotUnkeyManualTransmit()
+void reentrantReplacementDuringCleanup()
 {
-    RadioModel radio;
-    QStringList commands;
-    recordKeyingIntents(radio, commands);
-    QObject::connect(&radio.transmitModel(),
-                     &AetherSDR::TransmitModel::commandReady,
-                     [&commands](const QString& command) {
-                         commands.push_back(command);
-                     });
-
-    AutomationServer server;
-    server.setRadioModel(&radio);
-    AetherSDR::AutomationServerTestAccess::setMaxKeyMs(server, 100);
-    server.setTxAllowed(true);
-
-    radio.transmitModel().setTransmitting(true);
-    pump(1'200);
-    server.setTxAllowed(false);
-
-    check(!sawForceUnkey(commands),
-          "enabled bridge does not force-unkey manual TX it never started");
+    Fixture f;
+    f.request("txtest twotone");
+    f.backend->tuneWriter = [&](bool on) {
+        if (!on) {
+            // Backend completion still retains the old contribution here.
+            // Post fresh operator input after that terminal write returns.
+            QMetaObject::invokeMethod(&f.radio, [&] { f.radio.setTransmit(true); }, Qt::QueuedConnection);
+        }
+    };
+    AutomationServerTestAccess::setMaxKeyMs(f.bridge, 0);
+    f.commands.clear();
+    AutomationServerTestAccess::poll(f.bridge);
+    pump(1);
+    check(f.commands.contains("mox:on") && !f.commands.contains("mox:off"),
+          "watchdog cleanup rechecks identity after synchronous replacement");
 }
 
-// (2) A TX-capable bridge action arms while an unrelated transmission is
-// already up. It must not adopt it — otherwise the operator's (or the WSPR
-// beacon's) transmission dies at m_txMaxKeyMs.
-void testBridgeActionDoesNotAdoptPreExistingTransmit()
+void voiceTimeoutPreservesTuner()
 {
-    RadioModel radio;
-    QStringList commands;
-    recordKeyingIntents(radio, commands);
-    QObject::connect(&radio.transmitModel(),
-                     &AetherSDR::TransmitModel::commandReady,
-                     [&commands](const QString& command) {
-                         commands.push_back(command);
-                     });
-
-    AutomationServer server;
-    server.setRadioModel(&radio);
-    AetherSDR::AutomationServerTestAccess::setMaxKeyMs(server, 100);
-    server.setTxAllowed(true);
-
-    // Something else is already transmitting when the request arrives.
-    radio.transmitModel().setTransmitting(true);
-    AetherSDR::AutomationServerTestAccess::setKeyedAtRequestStart(server, true);
-    AetherSDR::AutomationServerTestAccess::markTxBridgeInitiated(server);
-
-    check(!AetherSDR::AutomationServerTestAccess::bridgeInitiated(server),
-          "a transmission that predates the request is not claimed");
-
-    commands.clear();
-    pump(1'200);   // well past the 100 ms limit
-    check(!sawForceUnkey(commands),
-          "the unclaimed transmission is not force-unkeyed at the limit");
-
-    server.setTxAllowed(false);
-    check(!sawForceUnkey(commands),
-          "revoking TX permission does not end a transmission the bridge "
-          "never started");
+    Fixture f;
+    f.request("key ptt on");
+    AutomationServerTestAccess::setMaxKeyMs(f.bridge, 0);
+    f.commands.clear();
+    AutomationServerTestAccess::poll(f.bridge);
+    check(f.commands.contains("mox:off") && !f.commands.contains("atu:off"),
+          "voice timeout does not bypass an operator tuner it did not start");
 }
 
-// The ordinary case must still be policed: an idle radio, then a bridge action
-// that keys it.
-void testBridgeActionOnIdleRadioIsPoliced()
+void diagnosticObserverCapturesAdmission()
 {
-    RadioModel radio;
-    QStringList commands;
-    recordKeyingIntents(radio, commands);
-    QObject::connect(&radio.transmitModel(),
-                     &AetherSDR::TransmitModel::commandReady,
-                     [&commands](const QString& command) {
-                         commands.push_back(command);
-                     });
-
-    AutomationServer server;
-    server.setRadioModel(&radio);
-    AetherSDR::AutomationServerTestAccess::setMaxKeyMs(server, 100);
-    server.setTxAllowed(true);
-
-    // Idle at request time; the action itself keys the radio.
-    AetherSDR::AutomationServerTestAccess::setKeyedAtRequestStart(server, false);
-    radio.transmitModel().setTransmitting(true);
-    AetherSDR::AutomationServerTestAccess::markTxBridgeInitiated(server);
-
-    check(AetherSDR::AutomationServerTestAccess::bridgeInitiated(server),
-          "a transmission this request started is claimed");
-
-    commands.clear();
-    pump(1'200);
-    check(sawForceUnkey(commands),
-          "a bridge-started transmission is force-unkeyed past the limit");
+    Fixture f;
+    RadioCertification cert(&f.radio, nullptr, AutomationServerTestAccess::controller(f.bridge));
+    int acceptedEdges = 0;
+    cert.setKeyObserver([&](bool on, const TxCoordinator::Operation& previous, bool keyedBefore) {
+        AutomationServerTestAccess::observeKey(f.bridge, on, previous, keyedBefore);
+        if (on) {
+            ++acceptedEdges;
+            check(!keyedBefore && !previous.sameOperation(f.radio.transmitOperation())
+                      && AutomationServerTestAccess::owns(f.bridge),
+                  "diagnostic observer receives pre-key identity after engine admission");
+        }
+    });
+    check(RadioCertificationTestAccess::key(cert, true), "injected diagnostic key changes local intent");
+    check(RadioCertificationTestAccess::key(cert, false), "injected diagnostic release ends local intent");
+    check(acceptedEdges == 1 && !AutomationServerTestAccess::claimed(f.bridge),
+          "diagnostic per-key observer brackets one operation, not an entire run");
 }
 
+void laterCompatibleProducerSurvives()
+{
+    for (bool release : {false, true}) {
+        Fixture f;
+        f.request("key ptt on");
+        const TxCoordinator::Operation original = f.radio.transmitOperation();
+        const TxCoordinator::Producer cat = f.radio.registerTxProducer();
+        const TxCoordinator::Request input = cat.request();
+        check(f.radio.requestProducerPttOn(input, TransmitModel::PttSource::Dax)
+                  && original.sameOperation(f.radio.transmitOperation()),
+              "later CAT-equivalent input has its own hold in the shared operation");
+        f.commands.clear();
+        if (release) {
+            f.request("key ptt off");
+        } else {
+            AutomationServerTestAccess::setMaxKeyMs(f.bridge, 0);
+            AutomationServerTestAccess::poll(f.bridge);
+        }
+        check(f.commands.isEmpty() && f.radio.transmitModel().isTransmitting()
+                  && f.backend->lastKeyOn.permitsDispatch(TxCoordinator::monotonicMs()),
+              "bridge release/watchdog does not unkey or cancel a later CAT contribution");
+        check(!AutomationServerTestAccess::owns(f.bridge)
+                  && !AutomationServerTestAccess::claimed(f.bridge),
+              "completed bridge hold cannot retain watchdog ownership of another producer's carrier");
+        f.radio.requestProducerPttOff(input, TransmitModel::PttSource::Dax);
+        check(f.commands.contains("mox:off"), "last compatible producer still performs normal release");
+    }
+}
+
+void authorizationLifetimeFencesCapturedWork()
+{
+    for (bool readOnly : {false, true}) {
+        Fixture f;
+        const std::shared_ptr<TxController> original = AutomationServerTestAccess::controller(f.bridge);
+        const TxController::Input queued = original->capture(TxController::Activity::Mox);
+        int calls = 0;
+        AutomationServerTestAccess::defer(f.bridge, [&](TxController::Input) { ++calls; });
+        if (readOnly) {
+            f.bridge.setReadOnly(true);
+            f.bridge.setReadOnly(false);
+        } else {
+            f.bridge.setAuthToken(QStringLiteral("rotated-test-authorization"));
+            f.bridge.setAuthToken({});
+        }
+        pump(1);
+        check(calls == 0 && !queued.start() && !original->valid() && f.commands.isEmpty(),
+              "authorization rotation/observe-only fences input permanently, even before admission");
+        check(f.request("key ptt on").value("ok").toBool(),
+              "a fresh request can use the new authorization lifetime");
+        const TxCoordinator::Operation queuedCommand = f.backend->lastKeyOn;
+        f.bridge.setReadOnly(true);
+        check(!queuedCommand.permitsDispatch(TxCoordinator::monotonicMs())
+                  && f.commands.contains("mox:off"),
+              "revocation fences the original queued command before scoped cleanup");
+    }
+}
+
+void policingPrecedesBackendReentry()
+{
+    Fixture f;
+    f.backend->keyingWriter = [&](bool on) {
+        if (on) {
+            check(AutomationServerTestAccess::owns(f.bridge),
+                  "watchdog is armed before backend dispatch can enter a nested event loop");
+            f.bridge.setReadOnly(true);
+        }
+    };
+    f.request("key ptt on");
+    check(!f.backend->lastKeyOn.permitsDispatch(TxCoordinator::monotonicMs())
+              && f.commands.contains("mox:off") && !AutomationServerTestAccess::claimed(f.bridge),
+          "reentrant authorization revocation releases and fences the original input");
+}
+
+void diagnosticCannotRenewAuthorization()
+{
+    Fixture f;
+    const std::shared_ptr<TxController> controller = AutomationServerTestAccess::controller(f.bridge);
+    RadioCertification cert(&f.radio, nullptr, controller);
+    check(RadioCertificationTestAccess::key(cert, true), "diagnostic uses its captured controller");
+    f.bridge.setReadOnly(true);
+    f.bridge.setReadOnly(false);
+    f.commands.clear();
+    check(!RadioCertificationTestAccess::key(cert, true) && f.commands.isEmpty(),
+          "a continuing diagnostic cannot adopt replacement authorization between stages");
+}
+
+void cleanupCanDestroyBridge()
+{
+    for (int action = 0; action < 7; ++action) {
+        Fixture f;
+        auto bridge = std::make_unique<AutomationServer>();
+        bridge->setRadioModel(&f.radio);
+        bridge->setTxAllowed(true);
+        const auto input = AutomationServerTestAccess::controller(*bridge)->capture(TxController::Activity::Mox);
+        check(input.start(), "lifetime fixture owns an admitted bridge input");
+        f.backend->keyingWriter = [&](bool on) {
+            if (!on) { bridge.reset(); }
+        };
+        switch (action) {
+        case 0: bridge->setTxAllowed(false); break;
+        case 1: bridge->setReadOnly(true); break;
+        case 2: bridge->setAuthToken(QStringLiteral("replacement-test-token")); break;
+        case 3: bridge->setRadioModel(nullptr); break;
+        case 4: bridge->stop(); break;
+        case 5:
+            AutomationServerTestAccess::setMaxKeyMs(*bridge, 0);
+            AutomationServerTestAccess::poll(*bridge);
+            break;
+        case 6:
+            // Leave the controller with its original, now cancelled session
+            // input. Refreshing it still retires its unconfirmed local tail.
+            f.backend->keyingWriter = {};
+            f.radio.cancelLocalTransmit();
+            f.backend->keyingWriter = [&](bool on) {
+                if (!on) { bridge.reset(); }
+            };
+            check(!AutomationServerTestAccess::controller(*bridge),
+                  "controller refresh stops if retiring its predecessor destroys the bridge");
+            break;
+        }
+        check(!bridge && !input.valid(), "unkey callback may destroy bridge during authorization cleanup");
+    }
+}
 } // namespace
-
-// keyevent (#5079): a release edge hands policing back only when the
-// transmitter is actually down. A release that did not un-key (handler
-// declined it, or TX is up from another source) must leave the watchdog armed.
-void testReleaseEdgeKeepsWatchdogArmedWhileKeyed()
-{
-    RadioModel radio;
-    AutomationServer server;
-    server.setRadioModel(&radio);
-    server.setTxAllowed(true);
-
-    // Bridge press keyed the radio and armed the watchdog.
-    radio.transmitModel().setTransmitting(false);
-    AetherSDR::AutomationServerTestAccess::setKeyedAtRequestStart(server, false);
-    AetherSDR::AutomationServerTestAccess::markTxBridgeInitiated(server);
-    radio.transmitModel().setTransmitting(true);
-    check(AetherSDR::AutomationServerTestAccess::bridgeInitiated(server),
-          "a bridge press that keyed the radio arms the watchdog");
-
-    // A release that did NOT un-key (still transmitting): stay armed.
-    AetherSDR::AutomationServerTestAccess::releaseEdge(server);
-    check(AetherSDR::AutomationServerTestAccess::bridgeInitiated(server),
-          "a release edge while the transmitter is still keyed does not disarm the watchdog");
-
-    // The release that actually dropped TX: hand policing back.
-    radio.transmitModel().setTransmitting(false);
-    AetherSDR::AutomationServerTestAccess::releaseEdge(server);
-    check(!AetherSDR::AutomationServerTestAccess::bridgeInitiated(server),
-          "a release edge with the transmitter down hands policing back");
-}
 
 int main(int argc, char** argv)
 {
-    QCoreApplication app(argc, argv);
-    testEnabledBridgeDoesNotUnkeyManualTransmit();
-    testReleaseEdgeKeepsWatchdogArmedWhileKeyed();
-    testBridgeActionDoesNotAdoptPreExistingTransmit();
-    testBridgeActionOnIdleRadioIsPoliced();
-    if (failures == 0) {
-        std::puts("Automation TX watchdog tests passed");
+    TestSettingsProfile settings(QStringLiteral("automation-tx-watchdog"));
+    if (!settings.isValid()) {
+        return 1;
     }
+    QCoreApplication app(argc, argv);
+    manualTransmitIsNotPoliced();
+    actionsCannotAdoptExistingOperation();
+    deadlineDoesNotRenew();
+    productionTimerExpiresOriginalOperation();
+    staleWatchdogCannotStopReplacement();
+    releaseAndReadbackGaps();
+    refusedAndNestedRequests();
+    deferredActions();
+    cwAndAtuAreStopped();
+    reentrantReplacementDuringCleanup();
+    voiceTimeoutPreservesTuner();
+    diagnosticObserverCapturesAdmission();
+    laterCompatibleProducerSurvives();
+    authorizationLifetimeFencesCapturedWork();
+    policingPrecedesBackendReentry();
+    diagnosticCannotRenewAuthorization();
+    cleanupCanDestroyBridge();
     return failures == 0 ? 0 : 1;
 }

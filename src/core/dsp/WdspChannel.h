@@ -259,6 +259,11 @@ public:
     // today it cannot fail — the attribute is there to make it a compile error
     // rather than a mystery if that ownership ever moves off that thread.
     [[nodiscard]] bool setRunning(bool running) noexcept;
+    // TX only: discard queued samples and filter history without clocking a fade.
+    // Leaves the channel stopped, retaining its plans/configuration. Control-path
+    // operation: uses existing channel locks and refreshes the output semaphore.
+    // Refuses while a callback or an asynchronous fade/flush is outstanding.
+    [[nodiscard]] bool discardTransmitData() noexcept;
     [[nodiscard]] bool isRunning() const noexcept
     {
         return m_running.load(std::memory_order_relaxed);
@@ -408,7 +413,19 @@ public:
 
     [[nodiscard]] const Config& config() const noexcept { return m_config; }
     [[nodiscard]] std::size_t outputBlockSize() const noexcept;
-    [[nodiscard]] int channelIdForTest() const noexcept { return m_channelId; }
+    // The WDSP channel number this object owns.
+    //
+    // A PRODUCTION ACCESSOR, despite the alias below. Two log lines read it --
+    // Hl2RxDsp::stop and AnanRxDsp's equivalent, both naming the channel in a
+    // warning an operator is expected to act on -- and a name ending in
+    // ForTest is precisely what a cleanup strips or wraps in an ifdef, which
+    // would take those log lines with it. Renamed on #5738 after
+    // aethersdr-agent noticed the two non-test callers.
+    [[nodiscard]] int channelId() const noexcept { return m_channelId; }
+
+    // Retained so the existing test call sites keep compiling. New code wants
+    // channelId(); this spelling says only "a test wrote it first".
+    [[nodiscard]] int channelIdForTest() const noexcept { return channelId(); }
 
     static uint64_t allocationSequenceForTest() noexcept;
     static uint64_t outstandingAllocationsForTest() noexcept;

@@ -33,14 +33,13 @@ RxClientEffects::RxClientEffects(int sampleRate)
     m_eq.prepare(sampleRate);
     m_gate.prepare(sampleRate);
     m_comp.prepare(sampleRate);
-    m_deEss.prepare(sampleRate);
     m_tube.prepare(sampleRate);
     m_pudu.prepare(sampleRate);
 }
 
 void RxClientEffects::syncParametersFrom(
     const ClientEq& eq, const ClientGate& gate, const ClientComp& comp,
-    const ClientDeEss& deEss, const ClientTube& tube, const ClientPudu& pudu) noexcept
+    const ClientTube& tube, const ClientPudu& pudu) noexcept
 {
     syncParameter(m_eq, eq, &ClientEq::isEnabled, &ClientEq::setEnabled);
     syncParameter(m_eq, eq, &ClientEq::masterGain, &ClientEq::setMasterGain);
@@ -78,14 +77,6 @@ void RxClientEffects::syncParametersFrom(
     syncParameter(m_comp, comp, &ClientComp::driveDb, &ClientComp::setDriveDb);
     syncParameter(m_comp, comp, &ClientComp::phaseRotatorStages, &ClientComp::setPhaseRotatorStages);
 
-    syncParameter(m_deEss, deEss, &ClientDeEss::isEnabled, &ClientDeEss::setEnabled);
-    syncParameter(m_deEss, deEss, &ClientDeEss::frequencyHz, &ClientDeEss::setFrequencyHz);
-    syncParameter(m_deEss, deEss, &ClientDeEss::q, &ClientDeEss::setQ);
-    syncParameter(m_deEss, deEss, &ClientDeEss::thresholdDb, &ClientDeEss::setThresholdDb);
-    syncParameter(m_deEss, deEss, &ClientDeEss::amountDb, &ClientDeEss::setAmountDb);
-    syncParameter(m_deEss, deEss, &ClientDeEss::attackMs, &ClientDeEss::setAttackMs);
-    syncParameter(m_deEss, deEss, &ClientDeEss::releaseMs, &ClientDeEss::setReleaseMs);
-    syncParameter(m_deEss, deEss, &ClientDeEss::slopeStages, &ClientDeEss::setSlopeStages);
 
     syncParameter(m_tube, tube, &ClientTube::isEnabled, &ClientTube::setEnabled);
     syncParameter(m_tube, tube, &ClientTube::model, &ClientTube::setModel);
@@ -113,7 +104,6 @@ void RxClientEffects::reset() noexcept
     m_eq.reset();
     m_gate.reset();
     m_comp.reset();
-    m_deEss.reset();
     m_tube.reset();
     m_pudu.reset();
 }

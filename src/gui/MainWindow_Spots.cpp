@@ -18,6 +18,7 @@
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
 #include "core/N1MMSpotClient.h"
+#include "models/TransmitModel.h"
 #include "core/N1MMSpotParser.h"
 #include "core/SpotCommandPolicy.h"
 #ifdef HAVE_MQTT
@@ -45,6 +46,24 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+
+namespace {
+// Normalizes a callsign before a "calling me?" comparison. Applied to BOTH
+// the message token and the configured/radio callsign so portable suffixes
+// (/P, /QRP, /M …) and angle-bracket hashed calls (<K1ABC>) match correctly
+// on both sides. Without this, a configured callsign like VE3ABC/P would stop
+// matching after stripping only the message side (#5823 review blocker).
+QString normalizeCallForMatch(QString c)
+{
+    c = c.trimmed();
+    if (c.size() > 2 && c.startsWith(QLatin1Char('<')) && c.endsWith(QLatin1Char('>')))
+        c = c.mid(1, c.size() - 2);
+    const int slash = c.indexOf(QLatin1Char('/'));
+    if (slash > 0)
+        c = c.left(slash);
+    return c;
+}
+} // namespace
 
 namespace AetherSDR {
 
@@ -100,6 +119,45 @@ void MainWindow::wireSpotSubsystem()
             this, &MainWindow::publishRadioStateMqtt);
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool) { publishRadioStateMqtt(); });
+    // RF drive and the max-power ceiling it scales against (#5518). Without these
+    // the fields would publish once and then sit stale until the next retune or
+    // PTT — the topic has no other drive-change edge. rfPowerChanged rather than
+    // the catch-all stateChanged() because the radio restores per-band power on
+    // QSY, so drive moves on its own and that edge must stay distinguishable.
+    // Through the coalesce timer, not a direct publish: dragging the drive slider
+    // emits per step, exactly the reason freq/mode already go through it.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::rfPowerChanged,
+            this, [this](int) { m_radioStateCoalesceTimer.start(); });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::maxPowerLevelChanged,
+            this, [this](int) { m_radioStateCoalesceTimer.start(); });
+    // The provenance edge, which no value-change signal can carry (#5733 review).
+    // A radio reporting its drive as 100 into a model already holding the 100
+    // default emits nothing — assign() returns false — so without this the very
+    // first status of a session went unpublished and an operator running full
+    // drive never saw `drive` on the topic at all. Also covers drive crossing
+    // between radio-confirmed and operator-requested at an unchanged value.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::powerProvenanceChanged,
+            this, [this] { m_radioStateCoalesceTimer.start(); });
+    // Connect/disconnect edges. On disconnect this is the message that retires the
+    // session's power: TransmitModel::resetState() has already cleared its
+    // have-status latch by the time this fires (RadioModel::onDisconnected calls
+    // it well before emitting connectionStateChanged(false)), so the payload drops
+    // drive/max_power_level and carries connected:false instead of leaving a dead
+    // radio's drive on the topic for the next session to inherit. Direct publish,
+    // not coalesced — an interlock should not wait 150 ms to learn the radio is
+    // gone.
+    connect(&m_radioModel, &RadioModel::connectionStateChanged,
+            this, [this](bool) { refreshRadioStateDriveAuthority(); publishRadioStateMqtt(); });
+    // A family switch rebuilds the backend without a disconnect edge, so the
+    // cached authority has to follow it or the next radio publishes under the
+    // previous one's answer (#5733 review).
+    // …and publish, not merely re-cache. teardownBackend() clears the latches
+    // through the deliberately signal-free resetPowerProvenance(), so without a
+    // publish here nothing retires the OUTGOING radio's drive from the topic: a
+    // switch whose following connect stalls leaves a last-known-value subscriber
+    // holding the previous radio's 100% indefinitely (#5733 review).
+    connect(&m_radioModel, &RadioModel::backendRebuilt,
+            this, [this] { refreshRadioStateDriveAuthority(); publishRadioStateMqtt(); });
     // Debounce timer for end-of-CWX detection (queueEmpty unreliable with sync_cwx=0).
     // Fires 1 s after the last tx:false with no intervening tx:true = transmission done.
     m_cwxTxEndTimer.setSingleShot(true);
@@ -655,10 +713,21 @@ void MainWindow::wireSpotSubsystem()
         bool isPOTA = msg.contains("CQ POTA");
         bool isCallingMe = false;
         {
-            QString myCall = as.value("DxClusterCallsign").toString();
+            // Prefer the explicit cluster login callsign; fall back to the
+            // radio's own callsign so operators who never configure a DX
+            // cluster login still get "calling me" spots (#5823).
+            // RadioModel::callsign() already trims, so no .trimmed() needed.
+            QString myCall = as.value("DxClusterCallsign").toString().trimmed();
+            if (myCall.isEmpty())
+                myCall = m_radioModel.callsign();
+            // Normalize BOTH sides through the same helper before comparing so
+            // a configured call like VE3ABC/P matches the stripped message token
+            // VE3ABC, and a hashed <K1ABC> in the decode matches K1ABC on file.
+            myCall = normalizeCallForMatch(myCall);
             if (!myCall.isEmpty()) {
                 QStringList parts = msg.split(' ', Qt::SkipEmptyParts);
-                if (parts.size() >= 2 && parts[0] == myCall)
+                if (parts.size() >= 2 &&
+                    normalizeCallForMatch(parts[0]).compare(myCall, Qt::CaseInsensitive) == 0)
                     isCallingMe = true;
             }
         }

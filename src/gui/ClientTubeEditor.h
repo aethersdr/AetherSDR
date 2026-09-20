@@ -60,7 +60,6 @@ private:
     void applyOutput(float db);
     void applyDryWet(float v);
     void applyEnvelope(float v);
-    void applyAttack(float ms);
     void applyRelease(float ms);
 
     AudioEngine*           m_audio{nullptr};
@@ -75,7 +74,6 @@ private:
     ClientCompKnob*        m_tone{nullptr};
     ClientCompKnob*        m_bias{nullptr};
     ClientCompKnob*        m_envelope{nullptr};
-    ClientCompKnob*        m_attack{nullptr};
     ClientCompKnob*        m_release{nullptr};
     ClientLevelMeter*      m_outMeter{nullptr};
     QPushButton*           m_modelA{nullptr};

@@ -13,6 +13,7 @@
 #include "core/backends/hl2/Hl2ControlRequest.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
+#include "TxTestAuthority.h"
 
 #include <QCoreApplication>
 
@@ -285,16 +286,17 @@ static void testRequestReachesTheWireExactlyOnce()
 
 static void testARequestCannotKeyAKeyedRadioAnyHarder()
 {
+    TxTestAuthority authority;
     // With the transmit gate CLOSED and a key request standing, the existing
     // invariant (hl2_tx_gate_test) is that no frame carries C0 bit 0. A request
     // bank is a new kind of frame, so it is checked against the same law.
     MetisClient c;
     MetisClientTestAccess::setStreaming(c);
-    c.setMox(true);                                   // refused: gate closed
+    c.setMox(true, authority.operation);                                   // refused: gate closed
     check(!c.isKeyed(), "the gate is closed");
     check(c.requestRegister(0x0E, 0), "armed");
     for (int i = 0; i < 32; ++i) {
-        c.setMox(true);
+        c.setMox(true, authority.operation);
         check(!anyFrameKeyed(sendPacket(c)),
               "a request frame is not a way past the transmit gate");
     }

@@ -76,6 +76,8 @@ qint64 MapProviderRetryPolicy::now() const
 QString MapProviderRetryPolicy::provider(const QUrl& url)
 {
     const QString host = url.host().toLower();
+    if (host == QStringLiteral("geo.weather.gc.ca") || host == QStringLiteral("api.meteogate.eu")
+        || host == QStringLiteral("s3.waw3-1.cloudferro.com") || host == QStringLiteral("api.librewxr.net")) { return host; }
     if (host == QLatin1String("gibs.earthdata.nasa.gov")
         || host == QLatin1String("gibs-a.earthdata.nasa.gov")
         || host == QLatin1String("gibs-b.earthdata.nasa.gov")
@@ -186,6 +188,9 @@ QNetworkReply* MapProviderNetworkAccessManager::sendRequest(Operation operation,
 QNetworkReply* MapProviderNetworkAccessManager::createRequest(Operation operation,
     const QNetworkRequest& request, QIODevice* outgoingData)
 {
+    if (operation == GetOperation && (request.url().scheme() == QStringLiteral("libre-radar") || request.url().scheme() == QStringLiteral("opera-radar") || request.url().scheme() == QStringLiteral("radar-composite")) && radarRequestHandler) {
+        if (QNetworkReply* reply = radarRequestHandler(request, this)) { return reply; }
+    }
     if (operation != GetOperation || MapProviderRetryPolicy::provider(request.url()).isEmpty()) {
         return sendRequest(operation, request, outgoingData);
     }

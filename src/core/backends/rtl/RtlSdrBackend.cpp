@@ -138,9 +138,11 @@ RadioCapabilities RtlSdrBackend::capabilities() const
     c.canTransmit = false;
     c.txPowerMaxWatts = 0.0;
     c.hostModulates = false;  // CRITICAL: must not open mic on connect (#4449)
+    // transmitDriveControl absent: no transmitter, so no drive to own (#5518).
     c.hasRadioPttReadback = false;  // receive-only: nothing to key, nothing to read back
     c.hasFmRepeaterOffset = false;
     c.hasCwTune = false;
+    c.twoToneGenerator = std::nullopt;  // receive only; there is no transmitter.
     c.hasAmCarrierLevel = false;
     c.hasVoxDelay = false;
     c.hasAgcThreshold = false;
@@ -708,8 +710,10 @@ void RtlSdrBackend::setPanRfGain(const QString& panId, int gainDb)
 // IRadioBackend — transmit (guarded — RX-only)
 // ──────────────────────────────────────────────────────────────────────────────
 
-void RtlSdrBackend::setKeying(bool key)
+void RtlSdrBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    Q_UNUSED(operation);
+    Q_UNUSED(completion);
     Q_UNUSED(key);
     // RTL-SDR is receive-only. This is a no-op.
     // The bridge TX gate (AETHER_AUTOMATION_ALLOW_TX) is the real guard.

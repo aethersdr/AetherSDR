@@ -4,6 +4,9 @@
 #include <QVector>
 #include <QWidget>
 
+class QHideEvent;
+class QShowEvent;
+
 class QTimer;
 
 namespace AetherSDR {
@@ -38,6 +41,10 @@ public:
 
 protected:
     void paintEvent(QPaintEvent* ev) override;
+    // Polling stops while this widget is hidden — a stacked page behind
+    // another tab still gets its timer events, but not its repaints.
+    void showEvent(QShowEvent* ev) override;
+    void hideEvent(QHideEvent* ev) override;
 
     float dbToX(float db) const;
     float dbToY(float db) const;

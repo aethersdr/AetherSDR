@@ -329,7 +329,8 @@ void ShortcutManager::registerAction(const QString& id, const QString& displayNa
         }
     }
     m_actions.append({id, displayName, category, defaultKey, defaultKey,
-                      std::move(handler), autoRepeat, /*persisted=*/false, keysTx});
+                      std::move(handler), autoRepeat, /*persisted=*/false, keysTx,
+                      TxController::Activity::Mox, {}});
 }
 
 void ShortcutManager::setBinding(const QString& actionId, const QKeySequence& key)

@@ -2,8 +2,10 @@
 
 #include <QWidget>
 
+class QLabel;
 class QPushButton;
 class QButtonGroup;
+class QSlider;
 class QTimer;
 
 namespace AetherSDR {
@@ -14,18 +16,16 @@ class ClientLevelMeter;
 class ClientTubeCurveWidget;
 
 // Floating editor for the client-side dynamic tube saturator.
-// Layout mirrors Ableton's Dynamic Tube device:
+// Laid out like the gate and compressor editors: a toolbar of switches
+// along the top, the display filling everything under it, and every knob
+// in one row at the foot.
 //
-//   ┌─ bypass ──────────────────── × ┐
-//   │ ┌──────┐ ┌─────────┐ ┌──────┐ │
-//   │ │DryWet│ │  curve  │ │ ENV  │ │
-//   │ │      │ │         │ │      │ │
-//   │ │ Out  │ │         │ │ ATK  │ │
-//   │ │      │ │ [A B C] │ │      │ │
-//   │ │Drive │ │  Tone   │ │ REL  │ │
-//   │ │      │ │  Bias   │ │      │ │
-//   │ └──────┘ └─────────┘ └──────┘ │
-//   └────────────────────────────────┘
+//   ┌─ Model: [A][B][C] ─────────── Dry/Wet: ──●── 100 % ─┐
+//   │                                              │ OUT │
+//   │              transfer curve                  │     │
+//   ├──────────────────────────────────────────────┴─────┤
+//   │ (Drive)(Tone)(Bias)(Envelope)(Attack)(Release)(Out) │
+//   └────────────────────────────────────────────────────┘
 class StripTubePanel : public QWidget {
     Q_OBJECT
 
@@ -63,8 +63,10 @@ private:
     void applyOutput(float db);
     void applyDryWet(float v);
     void applyEnvelope(float v);
-    void applyAttack(float ms);
     void applyRelease(float ms);
+
+    // Drive the toolbar's dry/wet slider + its reading from a 0..1 mix.
+    void setDryWetMix(float mix);
 
     AudioEngine*           m_audio{nullptr};
     Side                   m_side{Side::Tx};
@@ -72,20 +74,15 @@ private:
     class ClientTube*      tube() const;
     void                   saveTubeSettings() const;
     ClientTubeCurveWidget* m_curve{nullptr};
-    ClientCompKnob*        m_dryWet{nullptr};
+    QSlider*               m_dryWet{nullptr};
+    QLabel*                m_dryWetValue{nullptr};
     ClientCompKnob*        m_output{nullptr};
     ClientCompKnob*        m_drive{nullptr};
     ClientCompKnob*        m_tone{nullptr};
     ClientCompKnob*        m_bias{nullptr};
     ClientCompKnob*        m_envelope{nullptr};
-    ClientCompKnob*        m_attack{nullptr};
     ClientCompKnob*        m_release{nullptr};
     ClientLevelMeter*      m_outMeter{nullptr};
-    // TX mic pre-amp RN2 toggle.  Created in ctor as hidden; flipped
-    // visible (and m_outMeter is shortened) only when showForTx() runs.
-    // RX side keeps the full-height meter and no RN2 control here —
-    // RX already has its own RN2 toggle elsewhere.  (#2813)
-    QPushButton*           m_rn2Btn{nullptr};
     QPushButton*           m_modelA{nullptr};
     QPushButton*           m_modelB{nullptr};
     QPushButton*           m_modelC{nullptr};

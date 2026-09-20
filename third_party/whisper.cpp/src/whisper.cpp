@@ -1471,6 +1471,20 @@ static ggml_backend_buffer_type_t select_weight_buft(const whisper_hparams & hpa
     return nullptr;
 }
 
+// AetherSDR local patch (see ../AETHERSDR-PATCHES.md, #4972): true when `ctx`
+// still holds a tensor with no backing buffer. ggml_backend_alloc_ctx_tensors_from_buft()
+// returns NULL both when the allocation failed AND when there was nothing left
+// to allocate, so a NULL alone is not a failure — an unbacked tensor is. The
+// test mirrors the allocator's own "needs allocation" condition (ggml-alloc.c).
+static bool whisper_ctx_has_unallocated_tensor(struct ggml_context * ctx) {
+    for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->data == nullptr && t->view_src == nullptr && ggml_nbytes(t) > 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // load the model from a ggml file
 //
 // file format:
@@ -1855,6 +1869,14 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
 
             size_t size_main = ggml_backend_buffer_get_size(buf);
             WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
+        } else if (whisper_ctx_has_unallocated_tensor(ctx)) {
+            // AetherSDR local patch (#4972): upstream ignores this failure and
+            // goes on to upload weights into tensors with no buffer — a null
+            // dereference in the backend's set_tensor (SIGSEGV on a GPU that is
+            // short of memory). Fail the load instead; the caller frees the
+            // context and returns NULL.
+            WHISPER_LOG_ERROR("%s: failed to allocate %s buffer for the model weights\n", __func__, ggml_backend_buft_name(buft));
+            return false;
         }
     }
 
@@ -3737,7 +3759,10 @@ struct whisper_context * whisper_init_with_params_no_state(struct whisper_model_
     if (!model_loaded) {
         loader->close(loader->context);
         WHISPER_LOG_ERROR("%s: failed to load model\n", __func__);
-        delete ctx;
+        // AetherSDR local patch (#4972): the model owns raw ggml contexts and
+        // buffers, including successful allocations before a later failure.
+        // delete alone leaks them while the caller retries on CPU.
+        whisper_free(ctx);
         return nullptr;
     }
 
@@ -4999,6 +5024,12 @@ struct whisper_vad_context * whisper_vad_init_with_params(
 
             size_t size_main = ggml_backend_buffer_get_size(buf);
             WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
+        } else if (whisper_ctx_has_unallocated_tensor(ctx)) {
+            // AetherSDR local patch (#4972): same unchecked allocation as
+            // whisper_model_load() above.
+            WHISPER_LOG_ERROR("%s: failed to allocate %s buffer for the VAD model weights\n", __func__, ggml_backend_buft_name(buft));
+            whisper_vad_free(vctx);
+            return nullptr;
         }
     }
 

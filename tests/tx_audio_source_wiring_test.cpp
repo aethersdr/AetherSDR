@@ -105,9 +105,27 @@ int main()
     // an explicit argument is also the thing a reader can check at the call
     // site. If this ever reads Microphone or ClientLeveled, a WSPR beacon goes
     // back to being moved by the mic slider.
-    check(engine.contains(QLatin1String(
-              "feedDaxTxAudioInternal(m_wsprFloatScratch, false, true, "
-              "TxAudioSource::EngineGenerated)")),
+    // NOT anchored on the closing paren: the call carries a
+    // TxCoordinator::Context too (#5659), and a source-text assertion that pins
+    // the whole argument list fires on every signature change while the
+    // behaviour it guards is untouched. What must stay true is that THIS call
+    // site -- identified by m_wsprFloatScratch, which no other
+    // feedDaxTxAudioInternal() caller passes -- names EngineGenerated
+    // explicitly. Arguments AFTER the tag are deliberately unconstrained.
+    // `engine` is already whitespace-collapsed by flat() above, so a reflow of
+    // the call does not fire this either.
+    //
+    // The tag must still match as a WHOLE TOKEN. A bare prefix match would
+    // accept a future sibling enumerator -- EngineGeneratedBeacon, say -- and
+    // go green while the WSPR pump's tag had silently changed, which is the one
+    // thing this file exists to pin. So require the delimiter that ends the
+    // argument, accepting either a following argument or the end of the call.
+    // That terminates the token without constraining what comes after it.
+    const QLatin1String wsprCall(
+        "feedDaxTxAudioInternal(m_wsprFloatScratch, false, true, "
+        "TxAudioSource::EngineGenerated");
+    check(engine.contains(QString(wsprCall) + QLatin1Char(','))
+              || engine.contains(QString(wsprCall) + QLatin1Char(')')),
           "the WSPR pump feeds TxAudioSource::EngineGenerated");
 
     // NOBODY DERIVES THE TAG FROM markExternalSource AGAIN. That flag means "a

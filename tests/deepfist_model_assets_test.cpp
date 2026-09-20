@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QTemporaryDir>
 #include <QElapsedTimer>
+#include <algorithm>
 #include <cstdio>
 #include <memory>
 using namespace AetherSDR;
@@ -155,6 +156,45 @@ void progressLifetime(bool finishOnly, bool destroy)
         }
     }
 }
+
+// A server that hands back MORE bytes than the manifest declares must be cut
+// off mid-stream, not written out in full and rejected at the end. The final
+// size+hash check would catch the result either way; the streaming guard is
+// what stops an unbounded write to the cache directory first.
+void oversizeIsRefusedMidStream()
+{
+    QTemporaryDir dir;
+    const QByteArray payload(4096, 'z');
+    QVector<DeepFistModelAssets::Asset> manifest{
+        {"oversize.bin", payload.size(),
+         QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex()}};
+
+    DeepFistTestNetwork network;
+    network.files.insert("oversize.bin", {payload + QByteArray(4096, 'z'), 200,
+                                          QNetworkReply::NoError, true});
+
+    DeepFistModelAssets assets(dir.path(), "https://example.invalid/models/",
+                               manifest, &network);
+    bool failed = false;
+    QObject::connect(&assets, &DeepFistModelAssets::failed, [&](const QString&) { failed = true; });
+    bool ready = false;
+    QObject::connect(&assets, &DeepFistModelAssets::ready, [&] { ready = true; });
+    // The end-of-transfer size+hash check rejects an oversize body too, so
+    // asserting only "it failed" does not distinguish the streaming guard from
+    // it. Watch the byte counter instead: with the guard the transfer is cut
+    // off, without it every extra byte is written and reported first.
+    qint64 highWater = 0;
+    QObject::connect(&assets, &DeepFistModelAssets::progress,
+                     [&](qint64 done, qint64) { highWater = std::max(highWater, done); });
+    assets.ensure();
+    wait([&] { return failed || ready; });
+
+    expect(failed && !ready, "oversize download is refused");
+    expect(highWater <= payload.size(),
+           "oversize download is cut off rather than written out in full");
+    expect(!QFile::exists(QDir(dir.path()).filePath("oversize.bin")),
+           "oversize download leaves no file behind");
+}
 }
 int main(int argc, char** argv)
 {
@@ -166,6 +206,7 @@ int main(int argc, char** argv)
     successAndCancel();
     for (int i = 0; i < 5; ++i) { rejection(i); }
     lifecycle();
+    oversizeIsRefusedMidStream();
     for (bool finishOnly : {false, true}) {
         progressLifetime(finishOnly, true);
         progressLifetime(finishOnly, false);

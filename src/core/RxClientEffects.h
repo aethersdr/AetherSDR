@@ -23,14 +23,13 @@ public:
     explicit RxClientEffects(int sampleRate = 24000);
 
     void syncParametersFrom(const ClientEq& eq, const ClientGate& gate,
-                            const ClientComp& comp, const ClientDeEss& deEss,
+                            const ClientComp& comp,
                             const ClientTube& tube, const ClientPudu& pudu) noexcept;
     void reset() noexcept;
 
     ClientEq& eq() noexcept { return m_eq; }
     ClientGate& gate() noexcept { return m_gate; }
     ClientComp& comp() noexcept { return m_comp; }
-    ClientDeEss& deEss() noexcept { return m_deEss; }
     ClientTube& tube() noexcept { return m_tube; }
     ClientPudu& pudu() noexcept { return m_pudu; }
 
@@ -38,7 +37,6 @@ private:
     ClientEq m_eq;
     ClientGate m_gate;
     ClientComp m_comp;
-    ClientDeEss m_deEss;
     ClientTube m_tube;
     ClientPudu m_pudu;
 };

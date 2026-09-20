@@ -500,6 +500,49 @@ int main(int argc, char** argv)
            shortcutSource.open(QIODevice::ReadOnly));
     report("keyboard shortcut retains deliberate toggle behavior",
            shortcutSource.readAll().contains("toggleConnectionDialog();"));
+
+    // #5788: a parented Qt::Dialog does not follow its parent into a
+    // full-screen Space on macOS, because
+    // NSWindowCollectionBehaviorMoveToActiveSpace moves a window on
+    // order-front rather than on parent-follow. MainWindow::changeEvent
+    // re-asserts the panel across a full-screen crossing so that it is
+    // ordered front on the Space that is now active.
+    //
+    // The Cocoa behavior itself is not reachable from here, and no Linux or
+    // CI configuration can reach it. What this pins is the shape of the
+    // guard, which is what a later edit would erode: dropping the hook,
+    // widening it to fire on any window-state change, or letting it reach a
+    // panel the operator has closed. MainWindow is deliberately not linked
+    // into this target (see above), so the check is on source text, scoped to
+    // changeEvent so a coincidental match elsewhere in the file cannot
+    // satisfy it.
+    const qsizetype changeEventStart =
+        mainWindowText.indexOf("void MainWindow::changeEvent(");
+    const qsizetype changeEventEnd =
+        changeEventStart < 0
+            ? -1
+            : mainWindowText.indexOf("\nvoid MainWindow::", changeEventStart + 1);
+    const bool changeEventFound =
+        changeEventStart >= 0 && changeEventEnd > changeEventStart;
+    report("connection dialog test can inspect MainWindow::changeEvent",
+           changeEventFound);
+    // Empty when the function could not be delimited, so every assertion below
+    // fails loudly rather than passing on a slice of the wrong function.
+    const QByteArray changeEventBody =
+        changeEventFound
+            ? mainWindowText.mid(changeEventStart, changeEventEnd - changeEventStart)
+            : QByteArray();
+
+    report("full-screen crossing re-asserts the connection panel",
+           changeEventBody.contains("showConnectionDialog();"));
+    report("re-assert reads the pre-change state from the event",
+           changeEventBody.contains(
+               "wse->oldState().testFlag(Qt::WindowFullScreen)"));
+    report("re-assert fires on a crossing, not on any window-state change",
+           changeEventBody.contains("wasFull != nowFull"));
+    report("re-assert only touches a panel that is already open",
+           changeEventBody.contains("m_connPanel->isVisible()"));
+
     AppSettings::instance().load();
     std::printf("ConnectionPanel screen-fit test harness (#4515)\n\n");
 

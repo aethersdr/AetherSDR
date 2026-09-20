@@ -151,6 +151,24 @@ reference-comparison step up front would have skipped all of them.
 
 ## 4. Protocol facts (HPSDR Protocol 1 / Metis)
 
+### Native LNA gain and validation
+
+AetherSDR sets address `0x0a` bit 6 and uses the native six-bit gain code:
+`C4 = 0x40 | (gainDb + 12)`, from −12 dB (code 0) to +48 dB (code 60).
+The [gateware at 883a338](https://github.com/softerhardware/Hermes-Lite2/blob/883a338/gateware/rtl/ad9866.v#L134)
+selects all six bits in this mode. The connect parameter is clamped to this
+range before the live value, session pin, display reference and wire command
+are seeded; the encoder also clamps before adding the bias to avoid integer
+overflow. The existing default and reference remain +20 dB, and stored gains
+are not reinterpreted.
+
+A gain fold was reported on one unit in
+[upstream issue #177](https://github.com/softerhardware/Hermes-Lite2/issues/177).
+Its scope and mechanism remain unresolved against the native command path.
+That report does not establish a universal five-bit limit; a future workaround
+needs evidence identifying affected hardware and validation of both display
+calibration and AGC behavior.
+
 ### The C&C bank we were missing
 
 `MetisClient` sent three banks: config `0x00`, RX1 frequency `0x04`, LNA gain
@@ -432,8 +450,10 @@ ruling things out quickly.
 
 ### Sideband selection — the mode does NOT choose it
 
-Two facts that took a full session to establish, and that no amount of reading
-WDSP's headers would have given us. Both measured against WWV on live hardware.
+Facts that took a full session to establish, and that no amount of reading
+WDSP's headers would have given us. The first two bullets were measured against
+WWV on live hardware; the last two are read off the vendored WDSP 2.10 sources
+in `third_party/wdsp/upstream/` and were **not** confirmed on the air.
 
 - **RX: the passband edges select the sideband, not the mode.** `SetRXAMode`
   rebuilds the NBP stage from its own per-mode notion of the passband, so any
@@ -445,16 +465,46 @@ WDSP's headers would have given us. Both measured against WWV on live hardware.
   independently by `hl2_rxdsp_test` and `hl2_shift_test`. This is the single
   least intuitive fact in the whole backend and everything in §15 follows from
   it.
-- **TX is the mirror image: the MODE selects the sideband and the bandpass is an
-  audio-domain magnitude.** `SetTXABandpassFreqs` wants **positive** edges for
-  every mode. Handing TX the RX table's signed pairs put LSB and DIGL on the
-  upper sideband — caught by `hl2_txdsp_test` before it shipped, which is why
-  `Hl2Backend` keeps two separate tables (`defaultPassbandForMode` signed for RX,
+- **TX — in `Hl2TxDsp` — is the mirror image: the MODE selects the sideband and
+  the bandpass is an audio-domain magnitude.** `Hl2TxDsp` filters with one real
+  bandpass plus a Hilbert pair built from **positive** edges, and chooses the
+  sideband in `isLowerSideband()`, which negates Q. Handing it the RX table's
+  signed pairs put LSB and DIGL on the upper sideband — caught by
+  `hl2_txdsp_test` before it shipped, which is why `Hl2Backend` keeps two
+  separate tables (`defaultPassbandForMode` signed for RX,
   `defaultTxPassbandForMode` positive for TX).
+- **That positive-edges rule is `Hl2TxDsp`'s and NOT WDSP's —
+  `SetTXABandpassFreqs` is signed, exactly like RXA.** `TXA.c`'s
+  `TXASetupBPFilters` handles `TXA_LSB` and `TXA_USB` in the *same* fall-through
+  case, with one identical `CalcBandpassFilter (…, f_low, f_high, 2.0)`; no
+  per-mode sideband branch exists outside `TXA_AM_LSB` / `TXA_AM_USB`, which
+  themselves only pick a *sign* for `f_high`. And `create_txa` defaults to
+  `TXA_LSB` with `f_low = -5000.0`, `f_high = -100.0` — negative, which would be
+  meaningless if the mode chose the sideband. So `SetTXABandpassFreqs(ch, +300,
+  +2700)` builds the same filter for LSB as for USB: **feeding TXA this table's
+  positive pairs transmits LSB on the upper sideband.**
+- **Why the signed rule is counter-intuitive: `fir_bandpass` is inverted.**
+  `fir.c` builds the complex prototype as `+coef * cos (pos * w_osc)` for I and
+  **`-coef * sin (pos * w_osc)`** for Q — that is `exp(-j·w_osc·pos)` — so a
+  **positive** signed band selects the **negative** baseband half. RXA's NBP and
+  TXA's bandpass both reach it through `CalcBandpassFilter`/`fir_bandpass` with
+  `rtype = 1`, so this one function is the mechanism behind both the RX bullet
+  above and the TX correction here.
 
-The trap: RX and TX use **opposite conventions**, and both look plausible. A
-table written for one and reused for the other is silently wrong on exactly half
-the modes.
+The trap: RXA and `Hl2TxDsp` use **opposite conventions**, and both look
+plausible. A table written for one and reused for the other is silently wrong on
+exactly half the modes. The second trap is assuming the first one describes
+WDSP's transmit path: it does not.
+
+> **Forward note — not an instruction, and nothing here changes behaviour.**
+> Whether transmit should move from `Hl2TxDsp` onto a real TXA channel is the
+> open question in **#5678**; nothing has been decided. An **unfiled** analysis
+> behind that issue argues such a migration should drop `Hl2TxDsp`'s wire
+> conjugation and feed TXA *signed* RX-style edges rather than
+> `defaultTxPassbandForMode`. It is unfiled deliberately — there is no artifact
+> to cite and no number to follow, so treat the arrangement as unestablished. It
+> is a code change for a migration PR to settle and measure, not a claim this
+> section makes.
 
 ### CW has no BFO unless you build one
 
@@ -807,9 +857,13 @@ sub-actions, so action-level drift is invisible to CI.
 1. ~~**Read back what the DSP was actually configured with.**~~ **DONE.**
    `get_state model=dsp` now carries a `backend` object alongside the
    client-side chain: `family`, and a `chains` list. Each entry names its
-   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive and a
-   hand-written phasing modulator on transmit, whose config is a different
-   struct) and its `level`, because "read-back" is used loosely and the
+   `chain` (`rx-wdsp` or `hl2-tx` — this radio runs WDSP on receive, and
+   optionally a WDSP TXA channel on transmit whose config is a different struct;
+   `modulator` on that entry names the transmit modulator the binary was built
+   with: `wdsp-txa` on a fresh default configure or with `-DAETHER_HL2_TX_TXA=ON`,
+   and `phasing` with `-DAETHER_HL2_TX_TXA=OFF`. Existing build caches retain
+   their configured choice, and there is no runtime switch between them) and
+   its `level`, because "read-back" is used loosely and the
    difference decides what a mismatch proves: `channel-config` is what
    `WdspChannel` was OPENED with after clamping or refusal, `dsp-config` is the
    DSP's own state, and `not-configured` marks an unavailable configuration.
@@ -1416,7 +1470,7 @@ Audited against this branch's merge base, `6f46eea7`.
 | ~~9b~~ | ~~`WdspChannel::close`'s `SetChannelState(0, 1)` always burns its full 100 ms~~ | ours, from 9 | **DONE.** First, the mechanism as written here was one hop off: the flush flag is NOT cleared by `fexchange2`. `fexchange0`/`fexchange2` run the down-slew and release the channel's `Sem_Flush` when it completes (the `ReleaseSemaphore` calls at the tail of each); WDSP's per-channel `flushChannel` thread wakes on that semaphore and clears `flushflag` (the tail of `flushChannel`). The conclusion survives: only a host still calling `fexchange*` can satisfy the wait, and `close()` runs behind the control fence, so it always ran to the 100 ms timeout. Two changes. (a) `close()` now takes `g_setupMutex` only for `CloseChannel`, not across the wait — `SetChannelState` touches nothing but `ch[channel]`/`ch[channel].iob`, and no `fftw_plan`/`fftw_destroy_plan` is reachable from `flush_main` either, so the planner lock was never protecting it. (b) The owners stop the channel BEFORE they let it go — `Hl2RxDsp`'s destructor and pre-swap in `configure()`, `AnanRxDsp`'s destructor and `installChannel()` — so `SetChannelState` no-ops at close and the wait is skipped. WHICH PATHS BENEFIT: the rate change (every receiver, from the GUI thread through a `BlockingQueuedConnection` — the visible one, see §22.4), `removePanadapter`, `releaseReceiverDsps` on connect, and the backend destructor. WHAT IS NOT BOUGHT: a clean down-slew. Every one of those paths has already withdrawn the chain from the sample fan-out, or the wire was never started, so nothing feeds the channel and WDSP's ramp does not run — the saving is the skipped wait only. The drain needs 9a. **AND THAT "NOTHING FEEDS THE CHANNEL" IS A CORRECTNESS PRECONDITION, NOT A PERFORMANCE NOTE** — it was written here and in both destructors as the reason the ramp does not run, and it was also, unremarked, the only thing keeping these paths off a use-after-free. Skipping the 100 ms removes a barrier as well as a wait: a stop that IS clocked out wakes WDSP's `flushChannel` thread, and nothing in `CloseChannel` waited for it. The three owner paths above are safe because they clock nothing after the stop; the T/R mute of 9a would not have been. Fixed in the vendored tree as AetherSDR patch 9 so the barrier is explicit and covers every caller — see 9a for the measurement, and note that the RTL backend's `WdspReceiver` (`src/core/backends/rtl/RtlReceiverRegistry.cpp`) is a THIRD `WdspChannel` owner that this row's change does not cover: it retires a bank on the registry's executor thread rather than on the thread that drives `processIq()`, so the fence argument does not carry across and it still pays the 100 ms per channel. Raised by ten9876 in review of #5628. Pinned by `runCloseSetupLockTest` (no stopwatch: the run flag is observed clearing while the test holds the setup lock), `runStoppedCloseTest` and `runCloseAfterStoppedClockingTest`. The "~0.4 s of serialised disconnect for four receivers" this row used to claim was always an INFERENCE from the 100 ms constant, never a measurement, and nothing here has been measured on hardware | XS |
 | ~~10~~ | ~~RADE null-deref at `MainWindow_DigitalModes.cpp:461`~~ **DONE** | ours, gap 9 | Fixed, and §18.3 already records it. `activateRADE()` guards `panStream()` at its top and declines with a message; the bare `connect` further down is inside that guarded region | — |
 | 11 | ~~`AETHER_AUTOMATION_NO_AUTOCONNECT` not honoured~~ | ours, gap 10 | **Withdrawn.** The variable was removed application-wide; nothing reads it. See gap 10 and the §10 recipe | — |
-| ~~12~~ | ~~One dB-reference object per slice (LNA + calibration + AGC threshold)~~ **DONE** — but **NOT per slice**, see below | A2 §A3 | `Hl2DbReference` now owns all three terms. The display half (LNA + calibration) was already built; what landed here is the AGC-T half, which the operator HEARS rather than sees. **The row's "per slice" was wrong on this radio**: the LNA is one AD9866 field in front of all four DDCs and `fullScaleDbm` is a property of the board, so two of the three terms physically cannot differ between slices and N copies of them would be the very drift the class exists to prevent. Only the AGC-T is per receiver; it stays in `Receiver::agcThresholdDb` and is an ARGUMENT to `agcCeilingDb()`, not a copy inside it. Calibration is still an honest hole — `isCalibrated()` is false and no constant was invented. **One caveat the row could not know:** the reference subtracts the COMMANDED gain, and the AD9866 folds `code & 0x1F` above code 31 (upstream #177, design intent), so above +19 dB commanded the correction over-shoots by up to 32 dB. Named in the class header; the fix belongs at the clamp (`kLnaGainMaxDb` still publishes +48), not in the reference | — |
+| ~~12~~ | ~~One dB-reference object per slice (LNA + calibration + AGC threshold)~~ **DONE** — but **NOT per slice**, see below | A2 §A3 | `Hl2DbReference` now owns all three terms. The display half (LNA + calibration) was already built; what landed here is the AGC-T half, which the operator HEARS rather than sees. **The row's "per slice" was wrong on this radio**: the LNA is one AD9866 field in front of all four DDCs and `fullScaleDbm` is a property of the board, so two of the three terms physically cannot differ between slices and N copies of them would be the very drift the class exists to prevent. Only the AGC-T is per receiver; it stays in `Receiver::agcThresholdDb` and is an ARGUMENT to `agcCeilingDb()`, not a copy inside it. **One of this row's two remaining holes is closed and the other is narrowed.** The absolute term WAS simply absent — `fullScaleDbm` 0.0, no constant invented — and it is now DERIVED rather than per-unit: full scale is +3 dBm at 0 dB LNA gain, from the AD9866 datasheet and the HL2's own input network, so the displayed floor sits on a figure that can be checked instead of on an arbitrary zero. **`isCalibrated()` is still false, deliberately.** It reports whether a MEASUREMENT was applied — `setFullScaleDbm` has no caller in `src/` — and a datasheet derivation does not earn `PanAmplitudeModel::calibratedDbm`, which is the licence to compare this radio's levels with another station's. What would close it is a known level into the antenna port at a known APPLIED gain, read against the ADC clip counter; receive-only, and it wants a calibrated source this station does not have. **The caveat this row named is still open, and this change does not close it.** The row warned that the reference subtracts the COMMANDED gain while the AD9866 may fold `code & 0x1F` above code 31, over-shooting the correction by up to 32 dB. #5752 examined exactly that and declined to treat the fold as general: it clamped connect parameters without changing the native range, left −12…+48 and the +20 dB default standing, and recorded that the single-unit observation in softerhardware/Hermes-Lite2 #177 **remains unresolved against the native bit-6-selected RTL path**. `kLnaGainMaxDb` is therefore still +48. One board measured here at gateware 74 does fold (code 31 at −53.20 dBFS, code 32 at −97.75, all seven wrapped codes on their mod-32 twins within 0.52 dB), but one board is not the family, and the evidence bar #5752 set — reconcile against the RTL, or replicate on a second unit — is the right one. **The derivation in this row does not rest on it either way**: `kFullScaleDbmAtZeroGain` is a figure at 0 dB LNA gain, where no fold is in play | — |
 | ~~12a~~ | ~~Seam verb for RF/LNA gain~~ **DONE** | §15.7 | `IRadioBackend::setPanRfGain` carries the ANT panel's RF Gain slider to the AD9866. Measured on hardware: a commanded 20 dB step moved the wire noise floor 19.8 dB | — |
 | 12b | Automation verbs `pan span`, `pan rate`, `perf` | §15.7 | Proving §15 needed span driven by repeated `pan_zoom_in`, the FPS slider reached through a menu, and frame rates scraped from a log file the chatter in 6a nearly buried | S |
 
@@ -2632,7 +2686,7 @@ on:
 Every consumer is hard-wired to exactly one bus at `connect()` time. Speaker
 audio and TCI were each ported to bus C individually, as separate patches
 (`MainWindow_Session.cpp`, the `wireDiscovery` relay and the
-`backendAudioFrameReady → onDaxAudioReady(1, …)` bridge). Nothing else was, so
+`backendSliceAudioFrameReady → onSlicePcmReady(...)` bridge). Nothing else was, so
 everything else on bus A or B binds to a null stream and silently does nothing.
 
 **This is gap-class 15 in §6's terms, and it is the single largest one left.**
@@ -4082,3 +4136,6 @@ has ordering constraints the connect does not: the DSP must expect the new rate
 before EP6 starts delivering at it, and a partial failure has to roll every
 receiver back to a single rate. Left as a follow-up rather than bolted onto the
 connect fix.
+
+The opt-in TXA modulator and its offline evidence are described in
+[HL2 TXA configuration and lifecycle](hl2-txa-configuration-diff.md).

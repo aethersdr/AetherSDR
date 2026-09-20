@@ -179,7 +179,6 @@ struct Fixture {
         engine.clientEqRx()->setEnabled(false);
         engine.clientGateRx()->setEnabled(false);
         engine.clientCompRx()->setEnabled(false);
-        engine.clientDeEssRx()->setEnabled(false);
         engine.clientTubeRx()->setEnabled(false);
         engine.clientPuduRx()->setEnabled(false);
     }
@@ -266,7 +265,6 @@ void rateMatrix()
             check(fixture.engine.clientEqRx()->sampleRate() == producerRate
                   && fixture.engine.clientGateRx()->sampleRate() == producerRate
                   && fixture.engine.clientCompRx()->sampleRate() == producerRate
-                  && fixture.engine.clientDeEssRx()->sampleRate() == producerRate
                   && fixture.engine.clientTubeRx()->sampleRate() == producerRate
                   && fixture.engine.clientPuduRx()->sampleRate() == producerRate,
                   "every main client effect is prepared in the producer domain");

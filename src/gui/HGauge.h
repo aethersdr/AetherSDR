@@ -111,6 +111,11 @@ public:
     // accordingly; the fraction itself is always value-normalised.
     float value() const { return m_value; }
     float filledFraction() const { return m_smooth.value(); }
+    // The peak-hold marker. peakHeld() is separate from the value because
+    // "no peak" and "peak at 0" are different states and the tick is absent
+    // in only one of them.
+    float peakValue() const { return m_peakValue; }
+    bool  peakHeld()  const { return m_peakEnabled; }
 
     void setValue(float v) {
         if (qFuzzyCompare(m_value, v)) return;
@@ -141,12 +146,14 @@ public:
         if (qFuzzyCompare(m_peakValue, v)) return;
         m_peakValue = v;
         m_peakEnabled = true;
+        publishAutomationState();
         update();
     }
 
     void clearPeak() {
         if (!m_peakEnabled) return;
         m_peakEnabled = false;
+        publishAutomationState();
         update();
     }
 
@@ -383,17 +390,13 @@ protected:
         if (m_peakEnabled) {
             float peakFrac = qBound(0.0f, (m_peakValue - m_min) / (m_max - m_min), 1.0f);
             int peakX = barX + static_cast<int>(peakFrac * barW);
-            if (m_reversed) {
-                // In reversed mode, peak is the lowest value (most compression)
-                if (peakX > barX && peakX < barX + barW - 1) {
-                    p.setPen(QColor(0xff, 0xff, 0xff));
-                    p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
-                }
-            } else {
-                if (peakX > barX && peakX < barX + barW - 1) {
-                    p.setPen(QColor(0xff, 0xff, 0xff));
-                    p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
-                }
+            // Two pixels, not one: a single hairline is easy to lose against
+            // the bar's own gradient, especially while it is decaying.
+            // Reversed mode reads the peak as the lowest value (most
+            // compression) but draws the same marker.
+            if (peakX > barX && peakX < barX + barW - 1) {
+                p.setPen(QPen(QColor(0xff, 0xff, 0xff), kPeakMarkerW));
+                p.drawLine(peakX, barY + 1, peakX, barY + barH - 2);
             }
         }
 
@@ -466,6 +469,14 @@ private:
         for (const auto& t : m_ticks)
             tickLabels << t.label;
         setProperty("gaugeTicks", tickLabels.join(QLatin1Char(',')));
+        // The peak-hold marker. Published because it is the one part of a
+        // power meter a driver cannot infer: gaugeValue is the instant, and
+        // on a speech envelope the instant is mostly silence -- the tick is
+        // what the operator actually reads a PEP off. Enabled is separate
+        // from the value because "no peak held" and "peak held at 0" are
+        // different states and the tick is absent in only one of them.
+        setProperty("gaugePeak", m_peakValue);
+        setProperty("gaugePeakEnabled", m_peakEnabled);
     }
 
     QString hoverValueText() const {
@@ -600,6 +611,7 @@ private:
 
     float m_min, m_max, m_redStart, m_yellowStart;
     float m_value{0.0f};
+    static constexpr int kPeakMarkerW = 2;   // pixels
     float m_peakValue{0.0f};
     bool  m_peakEnabled{false};
     bool  m_reversed{false};

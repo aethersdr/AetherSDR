@@ -346,7 +346,12 @@ private:
 ClientEqParamRow::ClientEqParamRow(QWidget* parent) : QWidget(parent)
 {
     m_layout = new QHBoxLayout(this);
-    m_layout->setContentsMargins(0, 0, 0, 0);
+    // Right margin, which walks every column left by up to that much. The row
+    // wants more width than a small window can give it, so it hangs over the
+    // right edge and the top band's label -- "12.00 kHz" -- loses its tail to
+    // the panel boundary. 8 px was not enough to clear it (the "z" still went);
+    // 16 is, measured on the narrowest window this panel appears in.
+    m_layout->setContentsMargins(0, 0, 16, 0);
     // Matches ClientEqIconRow spacing so param column i sits directly
     // beneath icon column i (a single visual strip across the editor).
     m_layout->setSpacing(10);
@@ -355,7 +360,10 @@ ClientEqParamRow::ClientEqParamRow(QWidget* parent) : QWidget(parent)
     // sitting just above this row.
     setAttribute(Qt::WA_StyledBackground, false);
     setStyleSheet("background: transparent;");
-    setFixedHeight(58);
+    // Three stacked readings -- frequency, gain, Q -- and at 58 the middle one
+    // sat hard against both neighbours with its descenders touching. 66 gives
+    // each line its leading back.
+    setFixedHeight(66);
 }
 
 void ClientEqParamRow::setEq(ClientEq* eq)

@@ -170,6 +170,7 @@ bool PipeWireAudioBridge::open(int activeChannels)
 
 void PipeWireAudioBridge::close()
 {
+    m_txContext = {};
     // Tell the audio fast path we're shutting down before we tear down
     // the native sources it might still be writing into.
     m_open.store(false, std::memory_order_release);
@@ -518,6 +519,35 @@ void PipeWireAudioBridge::feedSilenceToAllPipes()
     }
 }
 
+void PipeWireAudioBridge::setTxContext(const TxCoordinator::Context& context)
+{
+    if (!context.permitsDispatch(TxCoordinator::monotonicMs()) || m_txContext.sameContext(context)) {
+        return;
+    }
+    // The nonblocking kernel FIFO is an input buffer, not a TX-intent queue.
+    // Bound the drain even if an external writer never stops producing.
+    if (m_tx.fd >= 0) {
+        char discarded[4096];
+        bool drained = false;
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            const ssize_t count = ::read(m_tx.fd, discarded, sizeof(discarded));
+            if (count == 0 || (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))) {
+                drained = true;
+                break;
+            }
+            if (count < 0 && errno != EINTR) {
+                break;
+            }
+        }
+        if (!drained) {
+            m_txContext = {};
+            qCWarning(lcDax) << "DAX TX input did not drain at the intent boundary; fresh intent required";
+            return;
+        }
+    }
+    m_txContext = context;
+}
+
 void PipeWireAudioBridge::readTxPipe()
 {
     if (m_tx.fd < 0) return;
@@ -526,6 +556,7 @@ void PipeWireAudioBridge::readTxPipe()
     // Reading in a loop avoids bufferbloat when the timer fires late.
     char buf[4096];
     for (;;) {
+        const TxCoordinator::Context context = m_txContext;
         ssize_t n = ::read(m_tx.fd, buf, sizeof(buf));
         if (n <= 0) break;
 
@@ -540,7 +571,7 @@ void PipeWireAudioBridge::readTxPipe()
             dst[i * 2 + 1] = v;  // right (duplicate)
         }
 
-        emit txAudioReady(out);
+        emit txAudioReady(out, context);
 
         // TX level meter (every ~100ms)
         static int txMeterCount = 0;

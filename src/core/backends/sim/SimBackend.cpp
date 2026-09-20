@@ -285,6 +285,8 @@ RadioCapabilities SimBackend::capabilities() const
     caps.txPowerBands = {};
     caps.declaredBandRanges = {};
     caps.family = familyName();
+    // The demo cannot key at all (Principle VI), let alone synthesise tones.
+    caps.twoToneGenerator = std::nullopt;
     caps.manufacturer = QStringLiteral("AetherSDR");
     caps.model  = demoModelName();
     caps.fmTonePresentation = FmTonePresentation::Legacy;
@@ -303,6 +305,11 @@ RadioCapabilities SimBackend::capabilities() const
     caps.txPowerMaxWatts = 0.0;
     // Explicitly absent: the RX-only simulator publishes no forward power.
     caps.forwardPowerRequiresSmoothing = false;
+    // transmitDriveControl stays ABSENT (#5518): the RX-only simulator has no
+    // transmitter, so there is no drive for anyone to own. Distinct from an
+    // Engine-authority backend that owns a register — this one has none, and an
+    // absent record is what keeps `drive_confirmed` off the wire entirely.
+
     // Moot on a backend that cannot key at all — canTransmit=false refuses every
     // mode already. Empty, not "all of them", because this field means "the
     // exceptions", and a simulator has none.
@@ -565,8 +572,10 @@ void SimBackend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
                                    hz / 1.0e6, kDemoPanBandwidthMhz);
 }
 
-void SimBackend::setKeying(bool key)
+void SimBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    Q_UNUSED(operation);
+    Q_UNUSED(completion);
     // RX-only (capabilities().canTransmit == false): the engine TX guard above
     // the seam already denies keying. We DON'T transmit — but we do forward the
     // intent so the source mutes the synthetic RX while "keyed": the demo never

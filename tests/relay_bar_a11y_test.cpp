@@ -13,6 +13,7 @@
 // Modelled on tests/s_meter_geometry_test.cpp::testAccessibilityAnnouncements().
 
 #include "gui/HGauge.h"
+#include "TestWindowActivation.h"
 
 #include <QAccessible>
 #include <QApplication>
@@ -110,7 +111,7 @@ int main(int argc, char** argv)
     sibling->setFocusPolicy(Qt::StrongFocus);
     layout->addWidget(sibling);
     host.show();
-    host.activateWindow();
+    activateForTest(host);
     bar->setFocus(Qt::OtherFocusReason);
     QApplication::processEvents();
     expect(bar->hasFocus(), QStringLiteral("announcement fixture receives focus"));

@@ -59,7 +59,7 @@ This menu contains configuration that changes station behavior, control surfaces
 - `multiFLEX...`: opens the multi-operator dashboard.
 - `TX Band Settings...`: opens band-specific transmit settings such as RF power, tune power, and inhibit or interlock choices.
 - `Inhibit during TUNE` selects which integrations are held while the radio is tuning.
-- `AetherDSP Settings...` opens full noise-reduction and DSP configuration.
+- `AetherRX...` opens the receive chain: noise reduction, gate, EQ, compressor, tube, voice processor and output.
 - `Settings Browser...` exposes the stored application settings.
 - Autostart items for CAT, TCI, and DAX let you decide which services should come up automatically.
 - `Keyboard Shortcuts` enables or disables shortcut handling, and `Configure Shortcuts...` opens the shortcut editor.

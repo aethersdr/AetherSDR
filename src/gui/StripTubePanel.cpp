@@ -1,8 +1,10 @@
 #include "StripTubePanel.h"
+#include "PanelTick.h"
 #include "ClientCompKnob.h"
 #include "ClientLevelMeter.h"
 #include "ClientTubeCurveWidget.h"
 #include "EditorFramelessTitleBar.h"
+#include "Theme.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientTube.h"
@@ -18,7 +20,9 @@
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QSlider>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <cmath>
 
 namespace AetherSDR {
@@ -90,46 +94,104 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
         if (checked) applyModel(id);
     });
 
+    // The page reads the way the gate and compressor editors' do: a toolbar
+    // of switches along the top, the display filling everything under it, and
+    // every knob in one row at the foot. The old shape — a knob column down
+    // each side of the curve, with Tone, Bias and a vertical A/B/C stack
+    // crammed into a strip beneath it — pinched the curve from both sides and
+    // still had no room left for the knob labels.
+    auto* toolbar = new QHBoxLayout;
+    toolbar->setSpacing(8);
+
+    toolbar->addWidget(new QLabel("Model:"));
+    {
+        const auto addModelBtn = [&](const QString& label, int idx) {
+            auto* btn = new QPushButton(label);
+            btn->setObjectName(QStringLiteral("tubeModel") + label);
+            btn->setCheckable(true);
+            btn->setStyleSheet(kModelStyle);
+            btn->setFixedHeight(22);
+            m_modelGroup->addButton(btn, idx);
+            toolbar->addWidget(btn);
+            return btn;
+        };
+        m_modelA = addModelBtn("A", 0);
+        m_modelB = addModelBtn("B", 1);
+        m_modelC = addModelBtn("C", 2);
+    }
+
+    toolbar->addStretch(1);
+
+    // Dry/Wet is the mix, not a shaping control: it reads as a slider at the
+    // right-hand end of the toolbar, where the gate puts Peek and the
+    // compressor its ceiling. The reading sits beside it because a slider
+    // cannot say "100 %".
+    toolbar->addWidget(new QLabel("Dry/Wet:"));
+
+    m_dryWet = new QSlider(Qt::Horizontal);
+    m_dryWet->setObjectName(QStringLiteral("tubeDryWetSlider"));
+    m_dryWet->setAccessibleName(QStringLiteral("Tube dry/wet mix"));
+    m_dryWet->setRange(0, 100);
+    m_dryWet->setPageStep(10);
+    // Twice the gate's Peek width: Peek has five stops, this has a hundred,
+    // so it earns the travel.
+    m_dryWet->setFixedWidth(240);
+    m_dryWet->setToolTip(
+        "Dry/Wet: how much of the saturated signal is blended back over "
+        "the clean one. 100 % is fully saturated.");
+    applyPrimarySliderStyle(m_dryWet);
+    toolbar->addWidget(m_dryWet);
+
+    m_dryWetValue = new QLabel;
+    m_dryWetValue->setFixedWidth(42);
+    m_dryWetValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    toolbar->addWidget(m_dryWetValue);
+
+    // Seed before wiring: setValue() during construction would otherwise
+    // write the default straight back into the engine and persist it.
+    m_dryWet->setValue(100);
+    m_dryWetValue->setText(QStringLiteral("100 %"));
+
+    connect(m_dryWet, &QSlider::valueChanged, this, [this](int pct) {
+        if (m_dryWetValue)
+            m_dryWetValue->setText(QString::number(pct) + " %");
+        applyDryWet(float(pct) / 100.0f);
+    });
+
+    // ── Body: curve | output meter ──────────────────────────────────
     auto* body = new QHBoxLayout;
     body->setSpacing(12);
 
-    // ── Left column: Dry/Wet, Output, Drive ─────────────────────────
-    auto* left = new QVBoxLayout;
-    left->setSpacing(10);
+    m_curve = new ClientTubeCurveWidget;
+    m_curve->setCompactMode(false);
+    m_curve->setMinimumHeight(180);
+    body->addWidget(m_curve, 1);
 
-    m_dryWet = new ClientCompKnob;
-    m_dryWet->setLabel("Dry/Wet");
-    m_dryWet->setCenterLabelMode(true);
-    m_dryWet->setRange(0.0f, 1.0f);
-    m_dryWet->setDefault(1.0f);
-    m_dryWet->setValueFromNorm([](float n) { return n; });
-    m_dryWet->setNormFromValue([](float v) { return v; });
-    m_dryWet->setLabelFormat([](float v) {
-        return QString::number(static_cast<int>(v * 100.0f + 0.5f)) + " %";
-    });
-    m_dryWet->setFixedSize(76, 76);
-    connect(m_dryWet, &ClientCompKnob::valueChanged,
-            this, &StripTubePanel::applyDryWet);
-    left->addWidget(m_dryWet, 0, Qt::AlignHCenter);
+    // Output level meter — far-right column, mirrors the EQ editor. It keeps
+    // its default Expanding policy and fills the full column on both sides.
+    m_outMeter = new ClientLevelMeter;
+    {
+        auto* meterCol = new QVBoxLayout;
+        meterCol->setContentsMargins(0, 0, 0, 0);
+        meterCol->setSpacing(4);
+        meterCol->addWidget(m_outMeter, 1);
+        body->addLayout(meterCol);
+    }
 
-    m_output = new ClientCompKnob;
-    m_output->setLabel("Output");
-    m_output->setCenterLabelMode(true);
-    m_output->setRange(-24.0f, 12.0f);
-    m_output->setDefault(0.0f);
-    m_output->setValueFromNorm([](float n) { return -24.0f + n * 36.0f; });
-    m_output->setNormFromValue([](float v) { return (v + 24.0f) / 36.0f; });
-    m_output->setLabelFormat([](float v) {
-        return QString::number(v, 'f', 2) + " dB";
-    });
-    m_output->setFixedSize(76, 76);
-    connect(m_output, &ClientCompKnob::valueChanged,
-            this, &StripTubePanel::applyOutput);
-    left->addWidget(m_output, 0, Qt::AlignHCenter);
+    // ── Foot: every knob in one row ─────────────────────────────────
+    auto* knobs = new QHBoxLayout;
+    knobs->setSpacing(8);
 
-    m_drive = new ClientCompKnob;
-    m_drive->setLabel("Drive");
-    m_drive->setCenterLabelMode(true);
+    const auto makeKnob = [&](const QString& label) {
+        auto* k = new ClientCompKnob;
+        k->setCenterLabelMode(true);
+        k->setLabel(label);
+        k->setFixedSize(76, 76);
+        knobs->addWidget(k, 0, Qt::AlignHCenter);
+        return k;
+    };
+
+    m_drive = makeKnob("Drive");
     m_drive->setRange(0.0f, 24.0f);
     m_drive->setDefault(0.0f);
     m_drive->setValueFromNorm([](float n) { return n * 24.0f; });
@@ -137,97 +199,32 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
     m_drive->setLabelFormat([](float v) {
         return QString::number(v, 'f', 2) + " dB";
     });
-    m_drive->setFixedSize(76, 76);
     connect(m_drive, &ClientCompKnob::valueChanged,
             this, &StripTubePanel::applyDrive);
-    left->addWidget(m_drive, 0, Qt::AlignHCenter);
 
-    left->addStretch();
-    body->addLayout(left, 0);
+    m_tone = makeKnob("Tone");
+    m_tone->setRange(-1.0f, 1.0f);
+    m_tone->setDefault(0.0f);
+    m_tone->setValueFromNorm([](float n) { return -1.0f + n * 2.0f; });
+    m_tone->setNormFromValue([](float v) { return (v + 1.0f) / 2.0f; });
+    m_tone->setLabelFormat([](float v) {
+        return QString::number(v, 'f', 2);
+    });
+    connect(m_tone, &ClientCompKnob::valueChanged,
+            this, &StripTubePanel::applyTone);
 
-    // ── Centre column: curve + model buttons + Tone/Bias ────────────
-    auto* center = new QVBoxLayout;
-    center->setSpacing(6);
+    m_bias = makeKnob("Bias");
+    m_bias->setRange(0.0f, 1.0f);
+    m_bias->setDefault(0.0f);
+    m_bias->setValueFromNorm([](float n) { return n; });
+    m_bias->setNormFromValue([](float v) { return v; });
+    m_bias->setLabelFormat([](float v) {
+        return QString::number(static_cast<int>(v * 100.0f + 0.5f)) + " %";
+    });
+    connect(m_bias, &ClientCompKnob::valueChanged,
+            this, &StripTubePanel::applyBias);
 
-    m_curve = new ClientTubeCurveWidget;
-    m_curve->setCompactMode(false);
-    m_curve->setMinimumHeight(180);
-    center->addWidget(m_curve, 1);
-
-    // Model A / B / C selector now lives in the header row so it
-    // doesn't eat vertical space from the curve.  See the header block
-    // above for where the buttons are actually inserted.
-
-    // Tone + Bias row
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(12);
-        row->addStretch();
-
-        m_tone = new ClientCompKnob;
-        m_tone->setLabel("Tone");
-        m_tone->setCenterLabelMode(true);
-        m_tone->setRange(-1.0f, 1.0f);
-        m_tone->setDefault(0.0f);
-        m_tone->setValueFromNorm([](float n) { return -1.0f + n * 2.0f; });
-        m_tone->setNormFromValue([](float v) { return (v + 1.0f) / 2.0f; });
-        m_tone->setLabelFormat([](float v) {
-            return QString::number(v, 'f', 2);
-        });
-        m_tone->setFixedSize(76, 76);
-        connect(m_tone, &ClientCompKnob::valueChanged,
-                this, &StripTubePanel::applyTone);
-        row->addWidget(m_tone, 0, Qt::AlignHCenter);
-
-        // A / B / C model selector — narrow vertical stack sitting
-        // between Tone and Bias.  Buttons live in m_modelGroup created
-        // earlier so the change handler stays wired.
-        {
-            auto* modelCol = new QVBoxLayout;
-            modelCol->setSpacing(3);
-            auto addModelBtn = [&](const QString& label, int idx) {
-                auto* btn = new QPushButton(label);
-                btn->setCheckable(true);
-                btn->setStyleSheet(kModelStyle);
-                btn->setFixedSize(22, 20);
-                m_modelGroup->addButton(btn, idx);
-                modelCol->addWidget(btn);
-                return btn;
-            };
-            m_modelA = addModelBtn("A", 0);
-            m_modelB = addModelBtn("B", 1);
-            m_modelC = addModelBtn("C", 2);
-            row->addLayout(modelCol, 0);
-        }
-
-        m_bias = new ClientCompKnob;
-        m_bias->setLabel("Bias");
-        m_bias->setCenterLabelMode(true);
-        m_bias->setRange(0.0f, 1.0f);
-        m_bias->setDefault(0.0f);
-        m_bias->setValueFromNorm([](float n) { return n; });
-        m_bias->setNormFromValue([](float v) { return v; });
-        m_bias->setLabelFormat([](float v) {
-            return QString::number(static_cast<int>(v * 100.0f + 0.5f)) + " %";
-        });
-        m_bias->setFixedSize(76, 76);
-        connect(m_bias, &ClientCompKnob::valueChanged,
-                this, &StripTubePanel::applyBias);
-        row->addWidget(m_bias, 0, Qt::AlignHCenter);
-
-        row->addStretch();
-        center->addLayout(row);
-    }
-
-    body->addLayout(center, 1);
-
-    // ── Right column: Envelope / Attack / Release ───────────────────
-    auto* right = new QVBoxLayout;
-    right->setSpacing(10);
-
-    m_envelope = new ClientCompKnob;
-    m_envelope->setLabel("Envelope");
-    m_envelope->setCenterLabelMode(true);
+    m_envelope = makeKnob("Envelope");
     m_envelope->setRange(-1.0f, 1.0f);
     m_envelope->setDefault(0.0f);
     m_envelope->setValueFromNorm([](float n) { return -1.0f + n * 2.0f; });
@@ -236,33 +233,11 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
         const int pct = static_cast<int>(v * 100.0f + (v >= 0 ? 0.5f : -0.5f));
         return QString::number(pct) + " %";
     });
-    m_envelope->setFixedSize(76, 76);
     connect(m_envelope, &ClientCompKnob::valueChanged,
             this, &StripTubePanel::applyEnvelope);
-    right->addWidget(m_envelope, 0, Qt::AlignHCenter);
 
-    m_attack = new ClientCompKnob;
-    m_attack->setLabel("Attack");
-    m_attack->setCenterLabelMode(true);
-    m_attack->setRange(0.1f, 30.0f);
-    m_attack->setDefault(5.0f);
-    m_attack->setValueFromNorm([](float n) {
-        return 0.1f * std::pow(300.0f, n);
-    });
-    m_attack->setNormFromValue([](float v) {
-        return std::log(std::max(0.1f, v) / 0.1f) / std::log(300.0f);
-    });
-    m_attack->setLabelFormat([](float v) {
-        return QString::number(v, 'f', v < 10.0f ? 2 : 1) + " ms";
-    });
-    m_attack->setFixedSize(76, 76);
-    connect(m_attack, &ClientCompKnob::valueChanged,
-            this, &StripTubePanel::applyAttack);
-    right->addWidget(m_attack, 0, Qt::AlignHCenter);
 
-    m_release = new ClientCompKnob;
-    m_release->setLabel("Release");
-    m_release->setCenterLabelMode(true);
+    m_release = makeKnob("Release");
     m_release->setRange(10.0f, 500.0f);
     m_release->setDefault(35.0f);
     m_release->setValueFromNorm([](float n) {
@@ -272,56 +247,27 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
         return std::log(std::max(10.0f, v) / 10.0f) / std::log(50.0f);
     });
     m_release->setLabelFormat([](float v) {
-        return QString::number(v, 'f', v < 100.0f ? 2 : 1) + " ms";
+        // One decimal, not two: "35.00 ms" is wider than the knob and lost
+        // its leading digit to the clip. Same rule the gate's release uses.
+        return QString::number(v, 'f', v < 100.0f ? 1 : 0) + " ms";
     });
-    m_release->setFixedSize(76, 76);
     connect(m_release, &ClientCompKnob::valueChanged,
             this, &StripTubePanel::applyRelease);
-    right->addWidget(m_release, 0, Qt::AlignHCenter);
 
-    right->addStretch();
-    body->addLayout(right, 0);
-
-    // ── Output level meter — far-right column, mirrors EQ editor ────
-    // In the strip, the TX-side instance shortens the meter and tucks
-    // a small RN2 toggle directly beneath it.  RX-side keeps the
-    // default full-height meter (no button).  (#2813)
-    m_outMeter = new ClientLevelMeter;
-
-    m_rn2Btn = new QPushButton("RN2", this);
-    m_rn2Btn->setCheckable(true);
-    // Match the A/B/C model-button footprint so the toggle visually
-    // belongs to the same family of compact panel buttons.  (#2813)
-    m_rn2Btn->setFixedSize(22, 20);
-    m_rn2Btn->setVisible(false);  // flipped on by showForTx()
-    m_rn2Btn->setToolTip(tr(
-        "Toggle RNNoise neural denoiser on the mic input.  Runs before "
-        "any DSP chain stage so noise is suppressed before it can be "
-        "amplified by gate / compressor / saturator.  Voice modes only — "
-        "digital modes (RADE, DAX, RTTY, FT8, FDV, CW) bypass this stage.  "
-        "Saved per Channel Strip profile, and suppressed by the strip's "
-        "BYPASS button alongside every other voice stage."));
-    // Reuse the A/B/C model-button stylesheet so all four compact
-    // buttons in this panel share one visual idiom.  (#2813)
-    m_rn2Btn->setStyleSheet(kModelStyle);
-    connect(m_rn2Btn, &QPushButton::toggled, this, [this](bool on) {
-        if (m_audio) m_audio->setRn2TxEnabled(on);
-        // Direct setter call is the single source of truth — engine
-        // emits rn2TxEnabledChanged for any cross-widget observer.
+    m_output = makeKnob("Output");
+    m_output->setRange(-24.0f, 12.0f);
+    m_output->setDefault(0.0f);
+    m_output->setValueFromNorm([](float n) { return -24.0f + n * 36.0f; });
+    m_output->setNormFromValue([](float v) { return (v + 24.0f) / 36.0f; });
+    m_output->setLabelFormat([](float v) {
+        return QString::number(v, 'f', 2) + " dB";
     });
+    connect(m_output, &ClientCompKnob::valueChanged,
+            this, &StripTubePanel::applyOutput);
 
-    // Meter stretches to fill all available vertical space; RN2 button
-    // sits flush at the bottom, horizontally centered.  Stretch factor 1
-    // on the meter, 0 on the button so the meter absorbs all surplus
-    // height when the panel grows.  (#2813)
-    auto* meterCol = new QVBoxLayout;
-    meterCol->setContentsMargins(0, 0, 0, 0);
-    meterCol->setSpacing(4);
-    meterCol->addWidget(m_outMeter, 1);
-    meterCol->addWidget(m_rn2Btn, 0, Qt::AlignHCenter);
-    body->addLayout(meterCol);
-
-    root->addLayout(body);
+    root->addLayout(toolbar);
+    root->addLayout(body, 1);
+    root->addLayout(knobs);
 
     if (m_audio && tube()) {
         m_curve->setTube(tube());
@@ -330,7 +276,7 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
     syncControlsFromEngine();
 
     m_syncTimer = new QTimer(this);
-    m_syncTimer->setInterval(33);
+    m_syncTimer->setInterval(kPanelTickMs);
     connect(m_syncTimer, &QTimer::timeout,
             this, &StripTubePanel::syncControlsFromEngine);
 }
@@ -360,22 +306,16 @@ void StripTubePanel::showForTx()
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
-    // RN2 toggle is TX-only.  Meter keeps its default Expanding policy
-    // so it absorbs all column height except the 20 px the RN2 button
-    // plus the 4 px gap occupy at the bottom.  (#2813)
-    if (m_rn2Btn) {
-        m_rn2Btn->setVisible(true);
-        if (m_audio) {
-            QSignalBlocker block(m_rn2Btn);
-            m_rn2Btn->setChecked(m_audio->rn2TxEnabled());
-        }
-    }
     syncControlsFromEngine();
     restoreGeometryFromSettings();
     show();
     raise();
     activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
 }
 
 void StripTubePanel::showForRx()
@@ -387,16 +327,16 @@ void StripTubePanel::showForRx()
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
-    // RX side has its own RN2 toggle elsewhere (AetherDspWidget /
-    // ClientRxChainWidget).  Hide our copy — meter keeps its default
-    // Expanding policy so it fills the full column.  (#2813)
-    if (m_rn2Btn) m_rn2Btn->setVisible(false);
     syncControlsFromEngine();
     restoreGeometryFromSettings();
     show();
     raise();
     activateWindow();
-    if (m_syncTimer) m_syncTimer->start();
+    // Deliberately does not start the poll: showEvent does that, and only
+    // when the widget is actually on screen. Starting it here ran it from
+    // construction for a panel that was never shown — and a widget that has
+    // never been shown never gets a hideEvent to stop it again (see
+    // PanelTick.h).
 }
 
 void StripTubePanel::syncControlsFromEngine()
@@ -417,14 +357,24 @@ void StripTubePanel::syncControlsFromEngine()
     { QSignalBlocker b(m_bias);     m_bias->setValue(t->biasAmount()); }
     { QSignalBlocker b(m_tone);     m_tone->setValue(t->tone()); }
     { QSignalBlocker b(m_output);   m_output->setValue(t->outputGainDb()); }
-    { QSignalBlocker b(m_dryWet);   m_dryWet->setValue(t->dryWet()); }
+    setDryWetMix(t->dryWet());
     { QSignalBlocker b(m_envelope); m_envelope->setValue(t->envelopeAmount()); }
-    { QSignalBlocker b(m_attack);   m_attack->setValue(t->attackMs()); }
     { QSignalBlocker b(m_release);  m_release->setValue(t->releaseMs()); }
 
     if (m_outMeter) m_outMeter->setPeakDb(t->outputPeakDb());
 
     m_restoring = false;
+}
+
+void StripTubePanel::setDryWetMix(float mix)
+{
+    if (!m_dryWet) return;
+    const int pct = std::clamp(static_cast<int>(std::lround(mix * 100.0f)), 0, 100);
+    if (m_dryWet->value() == pct) return;
+    QSignalBlocker b(m_dryWet);
+    m_dryWet->setValue(pct);
+    // A blocked setValue() skips the lambda that owns the reading.
+    if (m_dryWetValue) m_dryWetValue->setText(QString::number(pct) + " %");
 }
 
 void StripTubePanel::applyModel(int idx)
@@ -482,12 +432,6 @@ void StripTubePanel::applyEnvelope(float v)
     saveTubeSettings();
 }
 
-void StripTubePanel::applyAttack(float ms)
-{
-    if (m_restoring || !m_audio) return;
-    tube()->setAttackMs(ms);
-    saveTubeSettings();
-}
 
 void StripTubePanel::applyRelease(float ms)
 {
@@ -522,8 +466,17 @@ void StripTubePanel::moveEvent(QMoveEvent* ev)
 void StripTubePanel::resizeEvent(QResizeEvent* ev)
 { saveGeometryToSettings(); QWidget::resizeEvent(ev); }
 void StripTubePanel::showEvent(QShowEvent* ev)
-{ QWidget::showEvent(ev); }
+{
+    QWidget::showEvent(ev);
+    if (m_syncTimer) m_syncTimer->start();
+}
+
 void StripTubePanel::hideEvent(QHideEvent* ev)
-{ saveGeometryToSettings(); QWidget::hideEvent(ev); }
+{
+    saveGeometryToSettings();
+    // Stacked behind another tab, or the window closed: stop polling.
+    if (m_syncTimer) m_syncTimer->stop();
+    QWidget::hideEvent(ev);
+}
 
 } // namespace AetherSDR

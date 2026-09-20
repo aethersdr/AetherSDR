@@ -9,7 +9,7 @@ class AetherDspWidget;
 
 // RX-side DSP applet — embeds AetherDspWidget as a docked tile inside the
 // Aetherial Audio (PooDoo) container.  Same control set and persistence as
-// the modeless AetherDspDialog (Settings menu); both views write to the
+// the modeless AetherRxDialog (Settings menu); both views write to the
 // same AppSettings keys, so changes in one update the other on next
 // syncFromEngine().
 class ClientRxDspApplet : public QWidget {

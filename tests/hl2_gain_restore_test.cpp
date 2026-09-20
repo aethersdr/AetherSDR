@@ -166,6 +166,31 @@ int main(int argc, char** argv)
         check(session.liveGain() == 20,
               "the confirmed value survives a band round trip instead of reverting to -12");
     }
+    // Existing stored gains above +19 retain their meaning and survive capture.
+    for (const int gain : {20, 24, 32, 48}) {
+        RestoredRadioState state = rememberedGain();
+        QJsonObject rfGain = state.extension.value(QStringLiteral("rfGain")).toObject();
+        rfGain.insert(QStringLiteral("defaultDb"), gain);
+        QJsonObject bands = rfGain.value(QStringLiteral("lnaDbByBand")).toObject();
+        bands.insert(QStringLiteral("20m"), gain);
+        rfGain.insert(QStringLiteral("lnaDbByBand"), bands);
+        state.extension.insert(QStringLiteral("rfGain"), rfGain);
+        GainSession session(state);
+        const RestoredRadioState captured = session.backend.currentOperatingState();
+        check(session.liveGain() == gain,
+              "stored native gain seeds the live snapshot without folding");
+        check(bandGain(captured, QStringLiteral("20m")) == gain
+                  && captured.extension.value(QStringLiteral("rfGain")).toObject()
+                         .value(QStringLiteral("defaultDb")).toInt() == gain,
+              "capture preserves the stored band and default gain");
+    }
+    {
+        GainSession session(rememberedGain(), 999);
+        check(session.liveGain() == 48,
+              "out-of-range connect gain seeds the same ceiling as the wire");
+        check(bandGain(session.backend.currentOperatingState(), QStringLiteral("20m")) == -12,
+              "clamped connect override still preserves stored gain while pinned");
+    }
     // Cross-family compatibility at the exact display-restore seam. No Flex or
     // Icom backend is instantiated or changed; their current domain is empty.
     for (const QString& family : {QStringLiteral("flex"), QStringLiteral("icom"),

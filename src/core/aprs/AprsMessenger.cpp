@@ -10,6 +10,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLoggingCategory>
+#include <QPointer>
+#include <algorithm>
 
 namespace AetherSDR {
 
@@ -55,6 +57,7 @@ void AprsMessenger::setPersistencePath(const QString& path)
 
 void AprsMessenger::onPacket(const aprs::Packet& packet)
 {
+    const QPointer<AprsMessenger> self(this);
     if (!m_myAddress.isValid())
         return;
     // Ignore our own frames coming back around a digipeater.
@@ -71,10 +74,12 @@ void AprsMessenger::onPacket(const aprs::Packet& packet)
                 && m.counterpart.compare(packet.source, Qt::CaseInsensitive) == 0
                 && (m.state == State::Sent || m.state == State::Pending)) {
                 m.state = acked ? State::Acked : State::Rejected;
+                m.input = {}; // History no longer owns a live retry program.
                 emit activity(QStringLiteral("APRS message %1 to %2 %3.")
                                   .arg(m.msgNo, m.counterpart,
                                        acked ? QStringLiteral("acknowledged")
                                              : QStringLiteral("rejected")));
+                if (!self) { return; }
                 scheduleSave();
                 emit messagesChanged();
                 return;
@@ -90,8 +95,10 @@ void AprsMessenger::onPacket(const aprs::Packet& packet)
 
     // Always (re-)ack a numbered message — the sender retries until the ack
     // gets through, and a duplicate means our previous ack was lost.
-    if (!packet.messageNo.isEmpty())
-        transmitText(aprs::encodeAck(packet.source, packet.messageNo));
+    if (!packet.messageNo.isEmpty()) {
+        transmitText(aprs::encodeAck(packet.source, packet.messageNo), m_receiveProgram);
+        if (!self) { return; }
+    }
 
     // Duplicate detection: same station re-sending the same message within a
     // few minutes. APRS clients reuse small message numbers freely (often
@@ -129,13 +136,17 @@ void AprsMessenger::onPacket(const aprs::Packet& packet)
 
     emit activity(QStringLiteral("APRS message from %1: %2")
                       .arg(msg.counterpart, msg.text));
+    if (!self) { return; }
     scheduleSave();
     emit messageReceived(msg);
+    if (!self) { return; }
     emit messagesChanged();
+    if (!self) { return; }
     emit unreadCountChanged(unreadCount());
 }
 
-bool AprsMessenger::sendMessage(const QString& to, const QString& text)
+bool AprsMessenger::sendMessage(const QString& to, const QString& text,
+                                const TxCoordinator::Request& input)
 {
     if (!m_myAddress.isValid())
         return false;
@@ -145,6 +156,7 @@ bool AprsMessenger::sendMessage(const QString& to, const QString& text)
 
     Message msg;
     msg.counterpart = dest->toString();
+    msg.input = input;
     msg.text = text.trimmed();
     msg.utc = QDateTime::currentDateTimeUtc();
     msg.outgoing = true;
@@ -156,58 +168,96 @@ bool AprsMessenger::sendMessage(const QString& to, const QString& text)
     msg.nextTryUtc = msg.utc.addSecs(kRetryIntervalSecs);
     m_messages.append(msg);
 
-    transmitText(aprs::encodeMessage(msg.counterpart, msg.text, msg.msgNo));
-    emit activity(QStringLiteral("APRS message %1 to %2 sent: %3")
-                      .arg(msg.msgNo, msg.counterpart, msg.text));
-
     if (!m_retryTimer.isActive())
         m_retryTimer.start();
     scheduleSave();
+    const QPointer<AprsMessenger> self(this);
+    transmitText(aprs::encodeMessage(msg.counterpart, msg.text, msg.msgNo), msg.input);
+    if (!self) { return true; }
+    emit activity(QStringLiteral("APRS message %1 to %2 sent: %3")
+                      .arg(msg.msgNo, msg.counterpart, msg.text));
+    if (!self) { return true; }
     emit messagesChanged();
     return true;
 }
 
-void AprsMessenger::transmitText(const QString& infoText)
+void AprsMessenger::transmitText(const QString& infoText, const TxCoordinator::Request& input)
 {
     Address dest;
     dest.call = kTocall;
     const Frame frame =
         Frame::makeUI(dest, m_myAddress, m_path, infoText.toLatin1());
-    emit transmitFrame(frame.encode());
+    emit transmitFrame(frame.encode(), input.derive());
 }
 
 void AprsMessenger::serviceRetries()
 {
+    if (m_servicingRetries) { return; }
+    m_servicingRetries = true;
+    const QPointer<AprsMessenger> self(this);
     const QDateTime now = QDateTime::currentDateTimeUtc();
     bool changed = false;
-    bool anyOutstanding = false;
-    for (Message& m : m_messages) {
-        if (!m.outgoing || m.state != State::Sent)
-            continue;
-        if (m.nextTryUtc > now) {
-            anyOutstanding = true;
-            continue;
-        }
-        if (m.tries >= kMaxTries) {
-            m.state = State::Failed;
-            emit activity(QStringLiteral("APRS message %1 to %2 failed (no ack after %3 tries).")
-                              .arg(m.msgNo, m.counterpart)
-                              .arg(m.tries));
-            changed = true;
+    // Delivery can synchronously ack, clear, append, cancel or destroy us.
+    // Snapshot the due work, then re-find each still-pending record; never
+    // retain a vector reference or iterator across an application callback.
+    const QVector<Message> pending = m_messages;
+    for (const Message& candidate : pending) {
+        if (!candidate.outgoing || candidate.state != State::Sent || candidate.nextTryUtc > now) {
             continue;
         }
-        m.tries += 1;
-        m.nextTryUtc = now.addSecs(kRetryIntervalSecs);
-        transmitText(aprs::encodeMessage(m.counterpart, m.text, m.msgNo));
-        emit activity(QStringLiteral("APRS message %1 to %2 retry %3/%4.")
-                          .arg(m.msgNo, m.counterpart)
-                          .arg(m.tries)
-                          .arg(kMaxTries));
-        anyOutstanding = true;
+        Message attempt;
+        {
+            const auto found = std::find_if(m_messages.begin(), m_messages.end(), [&candidate](const Message& m) {
+                return m.outgoing && m.state == State::Sent && m.msgNo == candidate.msgNo
+                    && m.counterpart == candidate.counterpart && m.utc == candidate.utc
+                    && m.tries == candidate.tries && m.nextTryUtc == candidate.nextTryUtc;
+            });
+            if (found == m_messages.end()) { continue; }
+            if (found->tries >= kMaxTries) {
+                found->state = State::Failed;
+                found->input = {};
+            } else {
+                ++found->tries;
+                found->nextTryUtc = now.addSecs(kRetryIntervalSecs);
+            }
+            attempt = *found;
+        }
         changed = true;
+        if (attempt.state == State::Failed) {
+            emit activity(QStringLiteral("APRS message %1 to %2 failed (no ack after %3 tries).")
+                              .arg(attempt.msgNo, attempt.counterpart).arg(attempt.tries));
+        } else {
+            transmitText(aprs::encodeMessage(attempt.counterpart, attempt.text, attempt.msgNo), attempt.input);
+            if (!self) { return; }
+            emit activity(QStringLiteral("APRS message %1 to %2 retry %3/%4.")
+                              .arg(attempt.msgNo, attempt.counterpart).arg(attempt.tries).arg(kMaxTries));
+        }
+        if (!self) { return; }
     }
-    if (!anyOutstanding)
+    const bool anyOutstanding = std::any_of(m_messages.cbegin(), m_messages.cend(), [](const Message& m) {
+        return m.outgoing && m.state == State::Sent;
+    });
+    if (!anyOutstanding) {
         m_retryTimer.stop();
+    }
+    m_servicingRetries = false;
+    if (changed) {
+        scheduleSave();
+        emit messagesChanged();
+    }
+}
+
+void AprsMessenger::cancelPendingTransmissions()
+{
+    m_retryTimer.stop();
+    bool changed = false;
+    for (Message& message : m_messages) {
+        if (message.outgoing && (message.state == State::Sent || message.state == State::Pending)) {
+            message.state = State::Failed;
+            message.input = {};
+            changed = true;
+        }
+    }
     if (changed) {
         scheduleSave();
         emit messagesChanged();

@@ -1,0 +1,5 @@
+<RCC><qresource prefix="/radar">
+<file alias="noaa-stations.json">radar/noaa-stations.json</file>
+<file alias="opera-stations.json">radar/opera-stations.json</file>
+<file alias="legends.json">radar/legends.json</file>
+</qresource></RCC>

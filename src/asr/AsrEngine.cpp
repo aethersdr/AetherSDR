@@ -332,52 +332,7 @@ void AsrWorker::processAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
 
-    for (AsrSegmenter::ClosedSegment& seg : segments) {
-        QString error;
-        const AsrTranscript result = m_backend->transcribe(seg.samples, &error);
-        if (!error.isEmpty()) {
-            emit errorOccurred(error);
-            // A failed decode yields no tail — same as an empty one below: drop
-            // the reference so the next continuation doesn't de-dup against a
-            // stale, pre-failure segment.
-            m_prevSegmentText.clear();
-            continue;
-        }
-        if (result.text.isEmpty()) {
-            // Nothing decoded. Clear the tail so the NEXT continuation (whose
-            // carried audio overlaps THIS segment, not the one before it) doesn't
-            // de-dup against a two-segments-old tail — m_prevSegmentText must
-            // always mirror the immediately-preceding segment.
-            m_prevSegmentText.clear();
-            continue;
-        }
-        // Segment overlap (RFC #4821): when this segment was seeded with audio
-        // carried across the previous cap-forced close, its leading words repeat
-        // that segment's tail — strip them so nothing is emitted twice.
-        QString emitText = result.text;
-        if (seg.continuesPrevious && !m_prevSegmentText.isEmpty()) {
-            // Use the window captured when THIS segment closed, not the live
-            // slider — a mid-backlog slider move must not re-scope a queued strip.
-            emitText = stripOverlapWords(m_prevSegmentText, result.text, seg.overlapMs);
-        }
-        m_prevSegmentText = result.text; // full decode is the tail source for the next continuation
-        if (emitText.isEmpty()) {
-            continue; // the whole segment was overlap (rare) — nothing new to emit
-        }
-        // Speaker label (A/B/C…) from the utterance's embedding, when enabled.
-        // Known limitation (RFC #4821): for a continuation segment this embeds the
-        // whole buffer, including the carried overlap prefix that also fed the
-        // previous segment's embedding — a small same-speaker weighting bias
-        // (never a different voice), only material when speaker labeling AND
-        // overlap are both on with a small decode buffer. Not corrected here; a
-        // fix would thread the carried-sample count through to skip the prefix.
-        int speaker = -1;
-        if (m_speakerLabelingEnabled && m_embedder) {
-            speaker = m_clusterer.assign(
-                m_embedder->embed(seg.samples.data(), static_cast<int>(seg.samples.size())));
-        }
-        emit segmentText(emitText, result.confidence, speaker);
-    }
+    decodeSegments(segments);
 
     // Apply the long-gap flush now, after this feed's own (pre-gap) segments have
     // been decoded with the context they should have had — so the pause only
@@ -431,6 +386,74 @@ void AsrWorker::clearContext()
     }
 }
 
+void AsrWorker::decodeSegments(std::vector<AsrSegmenter::ClosedSegment>& segments)
+{
+    for (AsrSegmenter::ClosedSegment& seg : segments) {
+        QString error;
+        const AsrTranscript result = m_backend->transcribe(seg.samples, &error);
+        if (!error.isEmpty()) {
+            emit errorOccurred(error);
+            // A failed decode yields no tail — same as an empty one below: drop
+            // the reference so the next continuation doesn't de-dup against a
+            // stale, pre-failure segment.
+            m_prevSegmentText.clear();
+            continue;
+        }
+        if (result.text.isEmpty()) {
+            // Nothing decoded. Clear the tail so the NEXT continuation (whose
+            // carried audio overlaps THIS segment, not the one before it) doesn't
+            // de-dup against a two-segments-old tail — m_prevSegmentText must
+            // always mirror the immediately-preceding segment.
+            m_prevSegmentText.clear();
+            continue;
+        }
+        // Segment overlap (RFC #4821): when this segment was seeded with audio
+        // carried across the previous cap-forced close, its leading words repeat
+        // that segment's tail — strip them so nothing is emitted twice.
+        QString emitText = result.text;
+        if (seg.continuesPrevious && !m_prevSegmentText.isEmpty()) {
+            // Use the window captured when THIS segment closed, not the live
+            // slider — a mid-backlog slider move must not re-scope a queued strip.
+            emitText = stripOverlapWords(m_prevSegmentText, result.text, seg.overlapMs);
+        }
+        m_prevSegmentText = result.text; // full decode is the tail source for the next continuation
+        if (emitText.isEmpty()) {
+            continue; // the whole segment was overlap (rare) — nothing new to emit
+        }
+        // Speaker label (A/B/C…) from the utterance's embedding, when enabled.
+        // Known limitation (RFC #4821): for a continuation segment this embeds the
+        // whole buffer, including the carried overlap prefix that also fed the
+        // previous segment's embedding — a small same-speaker weighting bias
+        // (never a different voice), only material when speaker labeling AND
+        // overlap are both on with a small decode buffer. Not corrected here; a
+        // fix would thread the carried-sample count through to skip the prefix.
+        int speaker = -1;
+        if (m_speakerLabelingEnabled && m_embedder) {
+            speaker = m_clusterer.assign(
+                m_embedder->embed(seg.samples.data(), static_cast<int>(seg.samples.size())));
+        }
+        emit segmentText(emitText, result.confidence, speaker);
+    }
+}
+
+void AsrWorker::markDiscontinuity()
+{
+    // The engine dropped audio after the last chunk it handed us, so nothing
+    // that follows continues this utterance. Close out what is buffered and
+    // decode it now (the silence that would have closed it was dropped, so it
+    // would otherwise be discarded unheard), never carrying overlap or a de-dup
+    // tail across the gap — the same treatment as a long silent gap.
+    std::vector<AsrSegmenter::ClosedSegment> segments = m_segmenter.flush();
+    if (!segments.empty() && !m_cancelPending.load(std::memory_order_relaxed)
+        && m_backend != nullptr && m_backend->isLoaded()) {
+        decodeSegments(segments);
+    }
+    m_prevSegmentText.clear();
+    if (m_backend) {
+        m_backend->resetContext();
+    }
+}
+
 void AsrWorker::reset()
 {
     m_segmenter.reset();
@@ -456,6 +479,7 @@ AsrEngine::AsrEngine(AsrBackendFactory factory, QObject* parent)
 AsrEngine::AsrEngine(AsrBackendFactory factory, const AsrSegmenter::Config& segConfig,
                      QObject* parent, AsrSpeakerEmbedderFactory speakerEmbedderFactory)
     : QObject(parent)
+    , m_decodeBufferMs(std::max(0, segConfig.maxSegmentMs)) // ceiling input (#5730)
 {
     startThread(std::move(factory), segConfig, std::move(speakerEmbedderFactory));
 }
@@ -491,6 +515,7 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
     connect(this, &AsrEngine::requestSetSpeakerThreshold, m_worker, &AsrWorker::setSpeakerThreshold);
     connect(this, &AsrEngine::requestSetContextCarryEnabled, m_worker, &AsrWorker::setContextCarryEnabled);
     connect(this, &AsrEngine::requestClearContext, m_worker, &AsrWorker::clearContext);
+    connect(this, &AsrEngine::requestMarkDiscontinuity, m_worker, &AsrWorker::markDiscontinuity);
     connect(this, &AsrEngine::requestReset, m_worker, &AsrWorker::reset);
 
     // Worker -> engine (queued back to the main thread).
@@ -517,6 +542,14 @@ void AsrEngine::startThread(AsrBackendFactory factory, const AsrSegmenter::Confi
                 emit finalText(text, confidence, m_speakerLabelingEnabled ? speaker : -1);
             });
     connect(m_worker, &AsrWorker::processedMs, this, [this](double ms) {
+        // Reports for chunks that were queued at the last reset() arrive after
+        // the counters were zeroed; they belong to the stale queue, not to the
+        // audio pushed since (see m_staleMs).
+        if (m_staleMs > 0.0) {
+            const double stale = std::min(ms, m_staleMs);
+            m_staleMs -= stale;
+            ms -= stale;
+        }
         m_processedMs += ms;
         updateBacklog();
     });
@@ -599,7 +632,44 @@ void AsrEngine::pushAudio(const QVector<float>& monoSamples, int sampleRate)
         return;
     }
     const int rate = sampleRate > 0 ? sampleRate : kAsrRate;
-    m_pushedMs += 1000.0 * static_cast<double>(monoSamples.size()) / rate;
+    const double chunkMs = 1000.0 * static_cast<double>(monoSamples.size()) / rate;
+
+    // Backlog ceiling (#5730). Every queued chunk is a deep copy in the worker's
+    // mailbox and each closed segment is a blocking transcribe, so a decoder
+    // slower than real time would otherwise grow the queue for as long as the
+    // audio lasts. Drop-newest with hysteresis: the transcript trails by at most
+    // the ceiling while saturated, and resumes on contiguous audio only after
+    // the worker has drained to half of it. Warnings fire on the state edges
+    // only, never per chunk.
+    const double lagMs = m_pushedMs - m_processedMs;
+    const double highMs = asrBacklogHighWaterMs(m_decodeBufferMs);
+    if (m_dropping) {
+        if (lagMs > highMs / 2.0) {
+            m_droppedMs += chunkMs;
+            updateDropped();
+            return;
+        }
+        m_dropping = false;
+        qCWarning(lcAsrEngine,
+                  "ASR: backlog drained to %.1f s — resuming; %.1f s of audio dropped "
+                  "while above the %.1f s ceiling (%.1f s since the last reset)",
+                  lagMs / 1000.0, (m_droppedMs - m_droppedAtEntryMs) / 1000.0,
+                  highMs / 1000.0, m_droppedMs / 1000.0);
+        emit requestMarkDiscontinuity();
+    } else if (lagMs >= highMs) {
+        m_dropping = true;
+        m_droppedAtEntryMs = m_droppedMs;
+        qCWarning(lcAsrEngine,
+                  "ASR: backlog reached %.1f s (ceiling %.1f s for a %d ms decode buffer) "
+                  "— the model is slower than real time; dropping incoming audio until "
+                  "it drains below %.1f s",
+                  lagMs / 1000.0, highMs / 1000.0, m_decodeBufferMs, highMs / 2000.0);
+        m_droppedMs += chunkMs;
+        updateDropped();
+        return;
+    }
+
+    m_pushedMs += chunkMs;
     updateBacklog();
     emit requestProcess(monoSamples, sampleRate);
 }
@@ -614,8 +684,18 @@ void AsrEngine::updateBacklog()
     }
 }
 
+void AsrEngine::updateDropped()
+{
+    const double tenths = std::floor(m_droppedMs / 100.0 + 0.5); // 0.1 s resolution
+    if (tenths != m_lastDroppedTenths) {
+        m_lastDroppedTenths = tenths;
+        emit droppedAudioChanged(tenths / 10.0);
+    }
+}
+
 void AsrEngine::setDecodeBufferMs(int ms)
 {
+    m_decodeBufferMs = std::max(0, ms); // mirrored for the backlog ceiling (#5730)
     emit requestSetMaxSegmentMs(ms);
 }
 
@@ -652,10 +732,19 @@ void AsrEngine::setContextCarryEnabled(bool on)
 void AsrEngine::reset()
 {
     // A retune/clear drops buffered work; zero the backlog meter so it doesn't
-    // carry a stale lag across the reset (late worker reports just clamp to 0).
+    // carry a stale lag across the reset. Whatever is still queued on the worker
+    // will be reported as processed later — remember it so those reports don't
+    // count against the new audio (a negative lag would raise the ceiling).
+    m_staleMs += std::max(0.0, m_pushedMs - m_processedMs);
     m_pushedMs = 0.0;
     m_processedMs = 0.0;
     updateBacklog();
+    // The ceiling state goes with it: a fresh start is not "still dropping",
+    // and the dropped total is per session like the backlog it belongs to.
+    m_dropping = false;
+    m_droppedMs = 0.0;
+    m_droppedAtEntryMs = 0.0;
+    updateDropped();
     emit requestReset();
 }
 

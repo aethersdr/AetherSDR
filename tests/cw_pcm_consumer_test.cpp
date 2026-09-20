@@ -49,7 +49,8 @@ public:
     void setSliceFilter(int, int, int) override {}
     void setSliceAgc(int, const QString&, int) override {}
     void setPanCenter(const QString&, double, PanCenterIntent) override {}
-    void setKeying(bool) override {}
+    void setKeying(bool, const TxCoordinator::Operation&,
+                   const TxCoordinator::Completion&) override {} // no TX transport
     void invokeExtension(const QString&, const QString&, quint64, const QVariant&) override {}
     bool live = false;
 };

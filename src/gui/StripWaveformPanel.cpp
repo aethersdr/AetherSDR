@@ -1,4 +1,5 @@
 #include "StripWaveformPanel.h"
+#include "PanelTick.h"
 
 #include "EditorFramelessTitleBar.h"
 #include "Theme.h"
@@ -110,7 +111,10 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     // QRhi-backed and shares the GUI/render thread with the panadapter; the
     // previous 90 Hz target starved waterfall rendering as this panel widened
     // (#4616).
-    m_waveform->setRefreshRateHz(25);
+    // The scope coalesces its own repaints — the scope tap pushes at ~125 Hz
+    // and this decides how much of that reaches the screen. It was 25, so the
+    // waveform ran at a fifth of the rate of the meters beside it.
+    m_waveform->setRefreshRateHz(kPanelTickHz);
     // Default render path — pinned TX in the constructor so the
     // initial paint is consistent.  showForRx() flips the pin and
     // re-wires the source tap to the RX-side scope signal.
@@ -125,6 +129,10 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
         connect(m_audio, &AudioEngine::txPostChainScopeReady,
                 m_waveform, [this](const QByteArray& mono, int sr) {
             if (m_side != Side::Tx || !m_waveform) return;
+            // Nothing to draw into while the page is stacked behind another
+            // tab, and the ring buffer would only be filled with history no
+            // one saw. The scope resumes from the moment it is looked at.
+            if (!m_waveform->isVisible()) return;
             m_waveform->appendScopeSamples(mono, sr, /*tx=*/true);
         });
         // RX-side tap: dedicated rxPostChainScopeReady — same 8 ms
@@ -134,6 +142,10 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
         connect(m_audio, &AudioEngine::rxPostChainScopeReady,
                 m_waveform, [this](const QByteArray& mono, int sr) {
             if (m_side != Side::Rx || !m_waveform) return;
+            // Nothing to draw into while the page is stacked behind another
+            // tab, and the ring buffer would only be filled with history no
+            // one saw. The scope resumes from the moment it is looked at.
+            if (!m_waveform->isVisible()) return;
             m_waveform->appendScopeSamples(mono, sr, /*tx=*/false);
         });
     }

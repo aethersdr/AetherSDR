@@ -1,4 +1,5 @@
 #include "ClientGateCurveWidget.h"
+#include "PanelTick.h"
 #include "core/ClientGate.h"
 
 #include <QPainter>
@@ -36,7 +37,7 @@ ClientGateCurveWidget::ClientGateCurveWidget(QWidget* parent) : QWidget(parent)
     setMinimumHeight(80);
     setAttribute(Qt::WA_OpaquePaintEvent, false);
     m_pollTimer = new QTimer(this);
-    m_pollTimer->setInterval(33);
+    m_pollTimer->setInterval(kPanelTickMs);
     connect(m_pollTimer, &QTimer::timeout, this, [this]() {
         if (!m_gate) return;
         const float target = m_gate->inputPeakDb();
@@ -48,8 +49,11 @@ ClientGateCurveWidget::ClientGateCurveWidget(QWidget* parent) : QWidget(parent)
 void ClientGateCurveWidget::setGate(ClientGate* gate)
 {
     m_gate = gate;
-    if (m_gate) m_pollTimer->start();
-    else        m_pollTimer->stop();
+    // Only while on screen: see PanelTick.h. Binding a model to a widget
+    // that is not visible used to start a poll nothing would ever stop,
+    // because a never-shown widget gets no hideEvent.
+    if (m_gate && isVisible()) m_pollTimer->start();
+    else                         m_pollTimer->stop();
     update();
 }
 
@@ -243,6 +247,19 @@ void ClientGateCurveWidget::drawBall(QPainter& p, const QRectF& /* r */) const
     p.setBrush(kBallCoreColor());
     p.drawEllipse(pt, m_compact ? 2.5 : 3.5, m_compact ? 2.5 : 3.5);
     p.restore();
+}
+
+
+void ClientGateCurveWidget::showEvent(QShowEvent* ev)
+{
+    QWidget::showEvent(ev);
+    if (m_gate && m_pollTimer) m_pollTimer->start();
+}
+
+void ClientGateCurveWidget::hideEvent(QHideEvent* ev)
+{
+    if (m_pollTimer) m_pollTimer->stop();
+    QWidget::hideEvent(ev);
 }
 
 } // namespace AetherSDR

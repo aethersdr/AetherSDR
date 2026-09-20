@@ -84,14 +84,18 @@ public:
 public slots:
     // The tuner reports forward power and SWR twice — as radio-relayed AMP
     // meters and on its own port-9010 status. Same measurement, different
-    // rate, so these stamp their arrival and the relay wins while it is
-    // fresh. See kRelayMeterFreshnessMs.
+    // rate, so these stamp their arrival and the DIRECT reading wins while it
+    // is fresh: it polls at 60 Hz while keyed and carries the device's peak
+    // field, neither of which the relay has. See kRelayMeterFreshnessMs.
     //
     // Callers use these, never updateMeters(), which applies blind: a second
     // unmediated writer is the defect this path exists to remove, and it is
     // private for the same reason AmpApplet::setFwdPower is.
     void setRadioMeters(float fwdPower, float swr);
-    void setDeviceMeters(float fwdPower, float swr);
+    // fwdPeak is the TGXL's own peak reading. The radio-relayed path has no
+    // equivalent, so setRadioMeters falls back to peaking the instantaneous
+    // value -- see updateMeters.
+    void setDeviceMeters(float fwdPower, float swr, float fwdPeak);
 
     // The floor the panel may be shrunk to. Derived from the minimum scale,
     // not from the children's current sizes. Public because QWidget declares
@@ -107,7 +111,9 @@ private:
     // Applies a forward-power (W) / SWR pair to the gauges blind, without
     // consulting the source rule. Private precisely so it cannot be reached
     // from the wiring — both stamped entry points above end here.
-    void updateMeters(float fwdPower, float swr);
+    // fwdPeak < 0 means "no device peak available"; the peak tick then
+    // tracks fwdPower as it always did.
+    void updateMeters(float fwdPower, float swr, float fwdPeak = -1.0f);
 
     void buildUI();
     void buildExpandedUI(QVBoxLayout* vbox);
@@ -264,16 +270,30 @@ private:
     QWidget*     m_antContainer{nullptr};
 
     // Meter values (updated by updateMeters)
-    // When the radio relay last delivered a meter sample. See setDeviceMeters().
+    // When the tuner's own status last delivered a meter sample. The relay
+    // in setRadioMeters() yields to it while it is fresh.
     // Monotonic: a wall-clock gate wedges shut across a backwards clock step.
-    QElapsedTimer m_radioMeters;
+    QElapsedTimer m_deviceMeters;
 
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
 
     // Peak hold for fwd gauge
-    QTimer* m_peakTimer{nullptr};
+    // Peak-hold ballistics, the same shape TxApplet uses (#2561): hold, then
+    // decay at a rate scaled to the gauge full-scale so the visual feel is
+    // ~2.5 s from peak to floor on every range. This gauge used to hold for
+    // 2.5 s and then snap the marker to zero, which reads as the peak being
+    // lost rather than falling, and did not match the TX Controls applet
+    // sitting next to it.
+    QTimer* m_peakTick{nullptr};
     float   m_peakFwd{0.0f};
+    float   m_peakDecayStart{0.0f};
+    float   m_peakDecayWattsPerSec{80.0f};   // 200 W gauge / 2.5 s
+    bool    m_peakHoldRunning{false};
+    QElapsedTimer m_peakHoldTimer;
+    static constexpr qint64 kPeakHoldMs = 2000;
+    // Throttles the numeric PWR/SWR text; the bar itself is not throttled.
+    QElapsedTimer m_readoutClock;
 
     // Relay values (updated from model)
     int m_relayC1{0};

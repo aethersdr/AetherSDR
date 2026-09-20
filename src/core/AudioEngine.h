@@ -3,6 +3,8 @@
 #include "core/PcmFrame.h"
 
 #include <QObject>
+#include "RxChainRunner.h"
+
 #include <QAudioSink>
 #include <QAudioSource>
 #include <QAudioDevice>
@@ -292,10 +294,13 @@ public:
     bool isRadeMode() const { return m_radeMode; }
 
     // Sends RADE modem output (float32 PCM) as VITA-49 packets via m_txSocket
-    void sendModemTxAudio(const QByteArray& float32pcm);
+    void sendModemTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
     // Queue behind the last modem block. The token crosses the radio seam so a
     // finite-stream backend can drain conversion state before PTT is released.
-    Q_INVOKABLE void finishModemTxAudio(quint64 token);
+    void finishModemTxAudio(quint64 token, const TxCoordinator::Context& context);
+    void setMicrophoneContext(const TxCoordinator::Context& context);
+    void setHostMicrophoneContext(const TxCoordinator::Context& context);
+    void setRawMicrophoneContext(const TxCoordinator::Context& context);
 
     // DAX TX: VirtualAudioBridge feeds float32 PCM for VITA-49 TX
     void setDaxTxMode(bool on);
@@ -310,7 +315,8 @@ public:
     void setRadioTransmitting(bool tx, bool ownedByUs);
     // Self-marshals onto the AudioEngine thread; safe from any caller.
     Q_INVOKABLE void clearTxAccumulators();
-    Q_INVOKABLE void feedDaxTxAudio(const QByteArray& float32pcm);
+    void discardTxMedia(const TxCoordinator::Context& context);
+    void feedDaxTxAudio(const QByteArray& float32pcm, const TxCoordinator::Context& context);
 
     // Plays RADE decoded speech (int16 stereo 24kHz) bypassing m_radeMode block
     void feedDecodedSpeech(const QByteArray& pcm);
@@ -333,6 +339,10 @@ public:
     // plumbing (#5702).
     Q_INVOKABLE void applyNr2Post2Settings();
     QJsonObject nr2RuntimeDiagnostics() const;
+    // Last value published by nrGainChanged, for a view that subscribes after
+    // the fact and would otherwise draw an empty strip until the next block.
+    float nrGain() const { return m_nrGain.load(std::memory_order_relaxed); }
+    bool  nrGainActive() const { return m_nrGainActive.load(std::memory_order_relaxed); }
     QJsonObject opusTxPacingDiagnostics() const;
     // Tell the engine the main RX source is (or is not) the demo, so the main NR2
     // filter uses the original 256/2 geometry the demo's tiny frames need. Rebuilds
@@ -423,7 +433,6 @@ public:
     // broadband attenuation (capped at amountDb) is applied when
     // sibilant energy crosses threshold.
     ClientDeEss* clientDeEssTx() { return m_clientDeEssTx.get(); }
-    ClientDeEss* clientDeEssRx() { return m_clientDeEssRx.get(); }
 
     // Client-side TX dynamic tube saturator (#1661 Phase 4).  Three
     // selectable curves, bipolar envelope-driven drive, tilt tone
@@ -458,8 +467,9 @@ public:
     // on its own paced DAX/VITA-49 path, so speech processing and microphone
     // callback rates cannot distort or shorten the four-tone frame.
     WsprBeacon* wsprBeacon() { return m_wsprBeacon.get(); }
-    Q_INVOKABLE void startWsprPump();
+    void startWsprPump(const TxCoordinator::Context& context);
     Q_INVOKABLE void stopWsprPump();
+    void stopWsprPumpIfCurrent(const TxCoordinator::Context& context);
 
     // Quindar tone generator (#2262).  Sits AFTER the user DSP chain
     // and PC mic gain but BEFORE the final brickwall limiter, so the
@@ -505,12 +515,30 @@ public:
         Comp  = 3,
         Tube  = 4,
         Pudu  = 5,
-        DeEss = 6,
+        // 6 was DeEss. Sibilance is a transmit problem; the RX stage only
+        // existed because this chain was built by mirroring the TX one. The
+        // value stays reserved so a future stage does not inherit it and
+        // silently reinterpret an old packed chain.
+        //
+        // Order persists by NAME, not by number — saveClientRxChainOrder()
+        // writes "Eq,Gate,Comp,…" and packRxChain() never reaches disk. A
+        // stored list still naming DeEss is handled by
+        // isRetiredRxStageName(): the entry is dropped and the rest of the
+        // operator's order is kept.
     };
     static constexpr int kMaxRxChainStages = 8;  // packs into uint64_t
 
     void setRxChainStages(const QVector<RxChainStage>& stages);
     QVector<RxChainStage> rxChainStages() const;
+    // Emit nrGainChanged only when the reading has moved enough to see, or
+    // the active flag flipped. Audio thread.
+    void publishNrGainIfChanged(float gain, bool active);
+
+    // Drop settings keys for stages and parameters this build no longer has,
+    // so they stop riding along in every operator's settings file. Runs once
+    // at load, after the modules that might still have wanted them.
+    void dropRetiredSettingsKeys();
+
     void loadClientRxChainOrder();
     void saveClientRxChainOrder() const;
 
@@ -569,8 +597,6 @@ public:
     void loadClientDeEssSettings();
     void saveClientDeEssSettings() const;
     // RX-side counterpart (#2425).
-    void loadClientDeEssRxSettings();
-    void saveClientDeEssRxSettings() const;
 
     // Client-side TX dynamic tube — persistence.
     void loadClientTubeSettings();
@@ -735,6 +761,20 @@ signals:
     void rxStarted();
     void rxStopped();
     void levelChanged(float rms);  // audio level for VU meter, 0.0–1.0
+    // How much the active client noise-reduction stage is actually taking out
+    // of the main RX path, as the linear ratio of post-NR to pre-NR block RMS
+    // (1.0 = passing everything through, 0.0 = fully suppressed). Emitted per
+    // processed block alongside levelChanged, from the one dispatch point every
+    // method shares, so it means the same thing for NR2, NR4, MNR, DFNR, RN2,
+    // BNR and NNR. `active` is false when no method is running (or the chain is
+    // bypassed for TX), which is not the same as a gain that happens to be 1.0.
+    //
+    // Emitted only when the reading actually moves — see
+    // publishNrGainIfChanged(). A block-rate signal that never changed value
+    // was ~100 queued cross-thread events a second for a strip that would
+    // paint the same pixels, and it kept arriving while AetherRX was closed,
+    // because PersistentDialog keeps the widget and its connection alive.
+    void nrGainChanged(float gain, bool active);
     void nr2EnabledChanged(bool on);
     void nr4EnabledChanged(bool on);
     void mnrEnabledChanged(bool on);
@@ -743,7 +783,7 @@ signals:
     void dfnrEnabledChanged(bool on);
     void nnrEnabledChanged(bool on);
     void nvAfxEnabledChanged(bool on);
-    void txRawPcmReady(const QByteArray& pcm);  // raw 24kHz stereo int16 PCM for RADEEngine
+    void txRawPcmReady(const QByteArray& pcm, const AetherSDR::TxCoordinator::Context& context);
     // Post-final-limiter TX monitor PCM (24 kHz stereo int16) — the exact stream
     // packetised to the radio. Fires for all phone/SSB TX (unlike txRawPcmReady,
     // which is RADE-only), so it is the source for Client-Side TX recording:
@@ -771,7 +811,11 @@ signals:
     // EngineGenerated as true, which silently retired a guard once already.
     void txFinalMonitorPcmReady(const QByteArray& int16Stereo,
                                 TxAudioSource source);
-    void modemTxAudioFinished(quint64 token);
+    // Same samples, separate transport authority. Recorder/monitor consumers
+    // remain on the unguarded local tap above.
+    void txTransportPcmReady(const QByteArray& int16Stereo, TxAudioSource source,
+                             const AetherSDR::TxCoordinator::Context& context);
+    void modemTxAudioFinished(quint64 token, const AetherSDR::TxCoordinator::Context& context);
     // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
     // stereo int16 — the recorder's native WAV format. Pumped on the audio
     // thread while the radio is keyed for CW (no mic-driven onTxAudioReady in
@@ -781,7 +825,7 @@ signals:
     // recorder opens its TX gate for CW the same way moxChanged does for voice.
     // Ownership-correct: driven by our local keyer, not any-owner interlock.
     void cwRecordingActiveChanged(bool active);
-    void txPacketReady(const QByteArray& vitaPacket);  // VITA-49 TX packet for PanadapterStream
+    void txPacketReady(const QByteArray& vitaPacket, const AetherSDR::TxCoordinator::Context& context);
     // Sidetone-tapped audio for the TX-side CW decoder (#2417).  Emitted
     // from the audio thread; receivers should connect via Qt::AutoConnection
     // (which becomes queued across threads) so feedAudio() lands on the
@@ -922,7 +966,7 @@ private:
     float computeRMS(const QByteArray& pcm) const;
     QByteArray applyBoost(const QByteArray& pcm, float gain) const;
     QByteArray buildVitaTxPacket(const float* samples, int numStereoSamples);
-    void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId);
+    void sendVoiceTxPacket(const QByteArray& pcmData, quint32 streamId, const TxCoordinator::Context& context);
     void emitScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitTxPostChainScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate);
@@ -1011,7 +1055,6 @@ private:
     // RX gate operates on the post-EQ float32 stereo buffer.
     void applyClientGateRxFloat32(QByteArray& float32);
     // RX de-esser operates on the post-Comp float32 stereo buffer (#2425).
-    void applyClientDeEssRxFloat32(QByteArray& float32);
     // RX tube operates on the post-Comp float32 stereo buffer.
     void applyClientTubeRxFloat32(QByteArray& float32);
     // RX pudu operates on the post-Tube float32 stereo buffer.
@@ -1036,7 +1079,14 @@ private:
     void feedDaxTxAudioInternal(const QByteArray& float32pcm,
                                 bool markExternalSource,
                                 bool forceRadioDaxRoute,
-                                TxAudioSource source);
+                                TxAudioSource source,
+                                const TxCoordinator::Context& context);
+    bool selectTxContext(const TxCoordinator::Context& context);
+    TxCoordinator::Context m_microphoneContext;
+    TxCoordinator::Context m_hostMicrophoneContext;
+    TxCoordinator::Context m_rawMicrophoneContext;
+    TxCoordinator::Context m_accumulatorContext;
+    TxCoordinator::Context m_wsprContext;
     void observeTxCaptureState(QAudio::State state);
     // Overload for callers that must sample the unread depth before draining it.
     void observeTxCaptureState(QAudio::State state, qint64 bufferedBytes);
@@ -1045,11 +1095,6 @@ private:
     void logTxCaptureHealthEvent(TxCaptureHealthTracker::Event event);
     void logTxCaptureHealthSummary(const QString& reason, bool anomaly);
 
-    // Apply the whole RX DSP chain in the configured order.  Phase 0
-    // ships the dispatcher with no implemented stages — every entry is
-    // a no-op until its class lands.  Plays float32 stereo (the native
-    // RX format after NR).
-    void applyClientRxDspFloat32(QByteArray& float32);
 
     // RX
     QAudioSink*   m_audioSink{nullptr};
@@ -1342,6 +1387,15 @@ private:
     std::atomic<bool> m_nnrEnabled{false};
     std::atomic<int>  m_nnrStrength{Nnr::kMaskFloorDefaultStrength};
     std::atomic<int>  m_nnrModel{0};
+    // Last published NR gain, so nrGain()/nrGainActive() can answer between
+    // blocks. Written on the audio path, read from the GUI thread.
+    std::atomic<float> m_nrGain{1.0f};
+    std::atomic<bool>  m_nrGainActive{false};
+    // Last values actually emitted, so a block that reports the same reading
+    // costs nothing. Audio thread only.
+    float              m_lastPublishedNrGain{-1.0f};
+    bool               m_lastPublishedNrActive{false};
+    bool               m_nrGainEverPublished{false};
 
     // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so
     // mutual-exclusion in the other NR setters compiles regardless of the build).
@@ -1362,7 +1416,6 @@ private:
     std::unique_ptr<ClientGate> m_clientGateRx;
     // Client-side TX de-esser.
     std::unique_ptr<ClientDeEss> m_clientDeEssTx;
-    std::unique_ptr<ClientDeEss> m_clientDeEssRx;
     // Client-side TX tube saturator.
     std::unique_ptr<ClientTube> m_clientTubeTx;
     std::unique_ptr<ClientTube> m_clientTubeRx;
@@ -1420,12 +1473,10 @@ private:
     bool m_rxBypassSnapshotRn2{false};
     bool m_rxBypassActive{false};
     // Scratch buffer for in-place EQ on the RX path (avoids per-call alloc).
-    QByteArray m_clientEqRxScratch;
-    QByteArray m_clientCompRxScratch;
-    QByteArray m_clientGateRxScratch;
-    QByteArray m_clientDeEssRxScratch;
-    QByteArray m_clientTubeRxScratch;
-    QByteArray m_clientPuduRxScratch;
+    // One scratch buffer per RX stage, reused block after block. Grouped
+    // because runRxChain() takes them together — the stages run in the
+    // operator's order, so no one buffer belongs to a fixed position.
+    RxChainScratch m_rxChainScratch;
     // Post-EQ analyzer tap. One ring per path, mono (L+R averaged).
     // Audio thread writes via tapClientEqRxStereo() / tapClientEqTxFloat32();
     // UI thread snapshots via the public

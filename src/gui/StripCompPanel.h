@@ -4,6 +4,7 @@
 
 class QLabel;
 class QPushButton;
+class QSlider;
 class QTimer;
 
 namespace AetherSDR {
@@ -20,17 +21,30 @@ class ClientCompThresholdFader;
 // binds it to AudioEngine::clientCompTx().  Geometry persists via
 // AppSettings (`StripCompPanelGeometry` key).
 //
-// Layout (Ableton-inspired, extended for limiter + chain order):
-//   ┌─ bypass │ CMP→EQ | EQ→CMP ──────────────────── × ┐
-//   │  ratio  │  [Thresh] [transfer curve]  │GR│Out│L│M│
-//   │  attack │                             │  │  │ │a│
-//   │  rlease │                             │  │  │ │k│
-//   │  knee   │                             │  │  │ │e│
-//   └─────────────────────────────────────────────────┘
+// Layout, matching the gate editor's: a toolbar of switches along the
+// top, the display filling everything under it, and every knob in one
+// row at the foot.
+//   ┌─ Limiter: [ON] ──────────── Ceiling: ──●── -1.0 dB ─┐
+//   │ │Th│        [transfer curve + live ball]      │GR│Out│
+//   │ │  │                                          │  │◄─│ makeup
+//   ├──────────────────────────────────────────────────────┤
+//   │ (Ratio) (Attack) (Release) (Knee) …                  │
+//   └──────────────────────────────────────────────────────┘
 //
-// The canvas (center column) owns the threshold slider + curve + live
-// ball.  Meter strips and limiter controls are separate child widgets
-// wired to the same ClientComp via signals.
+// Makeup is not a knob: it is a fader on the Out meter, -12 dB at the
+// foot of the bar through a 0 dB detent to +24 dB at the top, with its
+// own tick scale in the left gutter.  It is an output-side gain, so it
+// belongs where the output level is read, and the foot row was too full
+// to hold it legibly.
+//
+// The canvas (center) owns the threshold chevron + curve + live ball.
+// Meter strips and limiter controls are separate child widgets wired to
+// the same ClientComp via signals.
+//
+// Drive and Phase (#2887) close the foot row on TX only.  They are
+// pre-compressor PAPR conditioning for the transmit path — there is no
+// power amplifier downstream of the RX chain to protect — so showForRx()
+// hides them and forces both to bypass on the RX ClientComp.
 class StripCompPanel : public QWidget {
     Q_OBJECT
 
@@ -68,6 +82,9 @@ private:
     // Refresh meter widgets from the latest ClientComp snapshot.
     void tickMeters();
 
+    // Drive the toolbar's ceiling slider + its reading from a dB value.
+    void setCeilingDb(float db);
+
     // Commit a parameter change to the AudioEngine's ClientComp and
     // persist via AppSettings.  All knob/canvas signals land here.
     void applyThreshold(float db);
@@ -91,8 +108,8 @@ private:
     ClientCompKnob*          m_attack{nullptr};
     ClientCompKnob*          m_release{nullptr};
     ClientCompKnob*          m_knee{nullptr};
-    ClientCompKnob*          m_makeup{nullptr};
-    ClientCompKnob*          m_ceiling{nullptr};
+    QSlider*                 m_ceiling{nullptr};
+    QLabel*                  m_ceilingValue{nullptr};
     ClientCompKnob*          m_drive{nullptr};
     ClientCompKnob*          m_phase{nullptr};
     ClientCompThresholdFader* m_threshFader{nullptr};

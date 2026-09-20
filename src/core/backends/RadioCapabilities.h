@@ -180,6 +180,45 @@ struct PanAmplitudeModel {
     bool binsAbsolute = false;
 };
 
+// THE WIDEBAND CONVERTER VIEW: the radio delivers the raw output of its
+// analogue-to-digital converter, before the DDC, spanning the converter's whole
+// first Nyquist zone rather than a tuned slice.
+//
+// Absence is the honest default and is what every backend in this tree but one
+// reports today. It is NOT "this is the Hermes-Lite": it is a property of the
+// wire protocol, and the reason it reads as HL2-only here is that the HL2 is
+// the only openHPSDR protocol 1 radio we implement.
+//
+//   * The ANAN backend speaks openHPSDR protocol 2. Protocol 2 is BELIEVED to
+//     carry a wideband stream in its specification and the hardware shares the
+//     HL2's lineage, but our P2Protocol.h defines no such endpoint and nobody
+//     here has measured one. So ANAN declares nothing — "not implemented",
+//     which is what absence means, and not "cannot".
+//   * A Flex delivers a panadapter the RADIO has already computed. There is no
+//     raw converter stream on the host to build a wideband view from at all, so
+//     for that family absence is structural rather than unfinished.
+//
+// A consumer must therefore ask for this record and never for a family name.
+struct WidebandConverterView {
+    // The converter's own sample rate, in Hz. The view spans DC to half of it.
+    double sampleRateHz{0.0};
+    // Samples in one delivered record. Contiguous in CONVERTER time, which is
+    // the only continuity that matters: a record's samples may be assembled
+    // from several datagrams that arrived milliseconds apart.
+    int blockSamples{0};
+    // The extension verb that delivers ONE record, named here so the consumer
+    // does not have to know which family answered. Invoked with a non-zero
+    // requestId; the record comes back on extensionResult as a map with a
+    // `samples` QList<float> normalised to [-1, 1), a `sampleRateHz`, and a
+    // `calibrated` flag. A failure comes back on extensionError with a reason.
+    //
+    // ON DEMAND BY CONSTRUCTION. There is deliberately no "subscribe" here: a
+    // continuous consumer of a converter-rate stream is a cost that has to be
+    // measured on the family that would pay it, and no such measurement exists.
+    QString frameNamespace;
+    QString frameVerb;
+};
+
 // A stable, radio-owned receive-filter preset. `id` is the identity used on
 // the wire (for example Icom FIL1/FIL2/FIL3); widthHz is mutable content of
 // that preset and must never be used as its identity.
@@ -327,6 +366,9 @@ struct RadioCapabilities {
     std::optional<ReceiveAudioControl> receiveAudioControl;
     std::optional<ReceivePanRangeControl> receivePanCenterControl;
     std::optional<ReceivePanRangeControl> receivePanBandwidthControl;
+    // Engaged when the radio can deliver a wideband converter view; see the
+    // struct above for why absence is the right default and what it means.
+    std::optional<WidebandConverterView> widebandConverterView;
 
     // Optional per-band native coverage. Empty means "not reported" and keeps
     // canonical band labels. This is distinct from txPowerBands: receive-only
@@ -375,6 +417,35 @@ struct RadioCapabilities {
     // inclusive and expressed in Hz, matching the tuning fields above.
     QVector<TxPowerBand> txPowerBands;
 
+    // WHO OWNS THE DRIVE VALUE TransmitModel::rfPower() carries (#5518).
+    //
+    // Absent means this backend declares no drive at all — Sim and RTL have no
+    // transmitter, populate no TransmitDelta::rfPower, and nothing should
+    // publish drive for them. That is a third state, distinct from both answers
+    // below, which is why this is a record rather than a bool.
+    //
+    // Authority::Radio — the value is parsed back off the wire and is confirmed
+    // radio state. Flex reads `transmit rfpower=` off status; Icom reads the
+    // CI-V RF-power level (level::kRfPower).
+    //
+    // Authority::Engine — the HOST owns the drive register and rfPower() is
+    // operator intent, not applied power. The HL2 is the worked example:
+    // setTxPower() stores the requested percent BEFORE the transmit gate, and
+    // applyDrive() pins the hardware register at 0 for as long as TX is blocked,
+    // so rfPower() can read 100 with no RF leaving the radio. HL2's own
+    // diagnostics carry txDriveRegister/txDriveGated apart for that reason.
+    //
+    // Exported on the MQTT `aethersdr/radio/state` topic as `drive_confirmed`,
+    // ANDed with TransmitModel::rfPowerIsFromRadio() so the flag describes the
+    // value in that message rather than the backend in general — a backend that
+    // reads drive back still holds an unacknowledged REQUEST for one round trip
+    // after any local set (Principle II; #5733 review).
+    struct TransmitDriveControl {
+        SliceFrequencyControl::Authority authority{
+            SliceFrequencyControl::Authority::Unknown};
+    };
+    std::optional<TransmitDriveControl> transmitDriveControl;
+
     // Whether forward-power telemetry needs client-side attack/decay
     // ballistics. True preserves the established Flex presentation. A backend
     // whose telemetry already carries a stable indicated value can disable the
@@ -417,6 +488,36 @@ struct RadioCapabilities {
     bool hasFmRepeaterOffset = true;
     // Some audio-tone tune implementations cannot key a CW carrier.
     bool hasCwTune = true;
+
+    // The radio can generate a genuine TWO-TONE test signal, not merely a tune
+    // carrier. A RECORD rather than a bool, per #5262 M2, for the FIRST of that
+    // milestone's two reasons only: the interesting part is not the yes/no but
+    // the route, and `selectionCommand` carries it. Absent refuses the verb.
+    //
+    // It does NOT buy the second reason. An engaged-or-not optional has no
+    // tri-state, so an explicit `= std::nullopt` and a backend that never
+    // mentions the field are byte-identical: a seventh backend added later
+    // would be indistinguishable from the five that declare absence
+    // deliberately. The ADDING A FIELD rule above is what actually covers that
+    // — set it explicitly in every backend, which all six do (#5516 review).
+    //
+    // This is a capability and not a family check because the question is about
+    // the tune generator behind the verb, not the vendor: a Flex takes
+    // `transmit set tune_mode=two_tone` and synthesises two tones on-radio,
+    // while every other backend today drives the same button into a single
+    // carrier — the HL2's built-in test tone at zero offset, Icom's setTune().
+    //
+    // Absent makes `txtest twotone` REFUSE rather than key. That refusal exists
+    // for evidence integrity, not RF safety: a single carrier recorded as a
+    // two-tone run is an IMD/ALC measurement of a waveform that was never on
+    // the air, and it outlives the run in whatever report cites it (#5516).
+    struct TwoToneGenerator {
+        // The command that SELECTS the waveform, recorded because that route —
+        // not the act of keying — is what separates a real two-tone from a tune
+        // carrier. Diagnostic: nothing branches on the string.
+        QString selectionCommand;
+    };
+    std::optional<TwoToneGenerator> twoToneGenerator;
     FmTonePresentation fmTonePresentation = FmTonePresentation::Hidden;
     QStringList fmToneModes;
     QList<int> fmDtcsCodes;
@@ -854,7 +955,7 @@ struct RadioCapabilities {
     // it is the only automatic floor the operator has.
     bool hasRadioSideWaterfallAutoBlack = false;
 
-    // The DDC's own CIC/half-band decimation chain rolls off amplitude
+    // The DDC's own decimation filter chain rolls off amplitude
     // toward the extreme edges of the panadapter bandwidth -- real,
     // bench-measured attenuation baked into the sampled data itself, not a
     // display artifact. True for ANAN-G2, the first (and so far only) DDC-
@@ -863,7 +964,7 @@ struct RadioCapabilities {
     // rather than a family-string check at the one call site
     // (MainWindow::onConnectionStateChanged(), which drives
     // SpectrumWidget::setPanEdgeTaperEnabled()) so a future DDC backend
-    // gets the same cosmetic edge fade automatically instead of needing
+    // gets the same display-only edge crop automatically instead of needing
     // its own family added to a hardcoded list.
     bool hasDdcPanEdgeRolloff = false;
 

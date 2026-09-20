@@ -173,12 +173,15 @@ void DeepFistCwModel::feed(const PcmFrame& frame)
 }
 void DeepFistCwModel::run(quint64 runId, const QString& directory)
 {
-    if (!matches(QDir(directory).filePath("deepfist.onnx"), 13051998,
-            "6d2d4e3d66f9001d15e21a1b38b79150eae19ead86a310202900ee69d672b94d")
-        || !matches(QDir(directory).filePath("deepfist.onnx.json"), 1257,
-            "840ceb8dba9d46d04495547a8a3789968b1acd2f8ac3a3a5c631f84008ac2217")) {
-        postStatus(runId, tr("Model unavailable"), true);
-        return;
+    // One manifest, owned by DeepFistModelAssets. Re-declaring the sizes and
+    // hashes here let a model bump update one copy and not the other, which
+    // downloads and verifies clean and then reports "Model unavailable" forever.
+    for (const DeepFistModelAssets::Asset& asset : DeepFistModelAssets::manifest()) {
+        if (asset.name == QLatin1String("LICENSE")) { continue; }
+        if (!matches(QDir(directory).filePath(asset.name), asset.bytes, asset.sha256)) {
+            postStatus(runId, tr("Model unavailable"), true);
+            return;
+        }
     }
     lyra::dsp::DeepFistModel model;
     if (!model.load(directory.toStdString())) {

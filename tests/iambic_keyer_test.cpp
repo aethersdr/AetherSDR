@@ -1,6 +1,7 @@
 #include "core/IambicKeyer.h"
 
 #include <atomic>
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <mutex>
@@ -530,6 +531,66 @@ void testStartIsIdempotent()
     report("start() is idempotent (no crash on second call)", true);
 }
 
+void testCapturedInputSurvivesNormalTailButNotCancel()
+{
+    TxCoordinator coordinator([](const auto&, auto) {});
+    const TxCoordinator::Producer producer = coordinator.registerProducer();
+    const TxCoordinator::Request input = producer.request();
+    Recorder rec;
+    IambicKeyer keyer;
+    std::mutex mutex;
+    std::vector<TxCoordinator::Request> downs;
+    std::vector<TxCoordinator::Request> ups;
+    keyer.setWpm(kTestWpm);
+    keyer.setMode(IambicKeyer::Mode::IambicB);
+    keyer.setOnKeyDownChange([&](bool down, auto when) { rec.onKeyDownChange(down, when); });
+    keyer.setOnRoutedKeyDownChange([&](bool down, auto, const auto& request) {
+        std::lock_guard<std::mutex> lock(mutex);
+        (down ? downs : ups).push_back(request);
+    });
+    keyer.start();
+    keyer.setPaddleState(true, true, input);
+    waitForNthDown(rec, 1);
+    keyer.setPaddleState(false, false, input);
+    waitForNthDown(rec, 2);
+    keyer.stop();
+    report("scoped Mode-B release keeps both original-input elements", downs.size() == 2 && ups.size() == 2
+        && downs[0].valid() && downs[1].valid() && !downs[0].sameRequest(downs[1])
+        && downs[0].sameRequest(ups[0]) && downs[1].sameRequest(ups[1]));
+    coordinator.discardCapturedRequests();
+    report("operator cancel fences captured elements and prevents new derived input",
+        !downs.empty() && !downs.front().valid() && !input.derive().valid());
+
+    Recorder cancelled;
+    keyer.setOnKeyDownChange([&](bool down, auto when) { cancelled.onKeyDownChange(down, when); });
+    downs.clear();
+    ups.clear();
+    keyer.start();
+    keyer.setPaddleState(true, false, input);
+    waitForNthDown(cancelled, 2);
+    keyer.setPaddleState(false, false, input);
+    keyer.stop();
+    report("cancelled paddle still drives local monitor without minting RF input",
+        downs.size() >= 2 && std::none_of(downs.begin(), downs.end(), [](const auto& request) { return request.valid(); }));
+
+    Recorder held;
+    const TxCoordinator::Request current = producer.request();
+    const TxCoordinator::Request unrelated = producer.request();
+    keyer.setMode(IambicKeyer::Mode::IambicA);
+    keyer.setOnKeyDownChange([&](bool down, auto when) { held.onKeyDownChange(down, when); });
+    keyer.setOnRoutedKeyDownChange([&](bool down, auto, const auto&) {
+        if (down) {
+            keyer.setPaddleState(false, false, unrelated);
+        }
+    });
+    keyer.start();
+    keyer.setPaddleState(true, false, current);
+    const bool retained = waitForNthDown(held, 2);
+    keyer.setPaddleState(false, false, current);
+    keyer.stop();
+    report("another input's release cannot stop the current paddle squeeze", retained);
+}
+
 } // namespace
 
 int main()
@@ -546,6 +607,7 @@ int main()
     testModeBSimultaneousReleaseDuringDahAddsDit();
     testModeASimultaneousReleaseAddsNothing();
     testStartIsIdempotent();
+    testCapturedInputSurvivesNormalTailButNotCancel();
     testScheduledStampsAreGridExact();
     std::cout << "iambic_keyer_test: done, failures=" << g_failures << '\n';
     return g_failures == 0 ? 0 : 1;

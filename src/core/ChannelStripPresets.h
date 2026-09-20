@@ -81,6 +81,23 @@ public:
     // of the first preset imported (empty string on failure).
     QString importPresetFromFile(const QString& filePath);
 
+    // The RX half of a preset, on its own. AetherRxProfiles stores exactly
+    // this object as a profile, so both libraries read and write one schema.
+    // applyRxJson persists the RX modules it touched and nothing else.
+    // Where the legacy channel-strip library lives. Public and static so the
+    // per-direction profile stores can migrate it once without owning an
+    // instance — see AetherTxProfiles::migrateLegacyPresets().
+    static QString legacyLibraryPath();
+
+    static QJsonObject captureRxJson(AudioEngine* engine);
+    static void        applyRxJson(AudioEngine* engine, const QJsonObject& rx);
+
+    // The TX half, likewise. Unlike the RX block these fields sit loose at the
+    // top level of a preset, so capture returns them unwrapped and apply reads
+    // them from wherever the caller keeps them.
+    static QJsonObject captureTxJson(AudioEngine* engine);
+    static void        applyTxJson(AudioEngine* engine, const QJsonObject& tx);
+
 signals:
     void presetsChanged();
 

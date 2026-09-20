@@ -23,8 +23,14 @@ public:
     explicit SpeLcdWidget(QWidget* parent = nullptr);
 
     void setFrame(const Spe::Lcd::Frame& frame);
-    // Back to the idle glass (dim "no display data" hint) — used when the
-    // amplifier goes silent or the connection drops.
+    // Back to the idle glass ("waiting for display…" hint) — used only
+    // when the held image is truly obsolete: the connection dropped, or a
+    // presentation switch started the mirror over. While connected, the
+    // widget keeps its newest frame at full brightness no matter how old
+    // it is — display frames routinely pause for seconds (link stalls,
+    // the amp's relay transitions, RF mid-transmit), and marking those
+    // moments on the glass field-tested as the mirror "switching off";
+    // staleness gates the applet's menu keys, never this glass.
     void clear();
 
     QSize minimumSizeHint() const override;

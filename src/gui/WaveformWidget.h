@@ -19,6 +19,7 @@
 #define WAVEFORM_BASE_CLASS QWidget
 #endif
 
+#include "SpectrumRhiFailureState.h"
 #include "WaveformScopeModel.h"
 
 class QMouseEvent;
@@ -206,6 +207,11 @@ private:
     bool m_transmitting{false};
     int m_windowMs{100};
     int m_refreshRateHz{24};
+#ifdef AETHER_GPU_SPECTRUM
+    // Latches the first renderFailed so the warning is logged once, not per
+    // frame. Same state object the panadapter uses.
+    SpectrumRhiFailureState m_rhiFailure;
+#endif
     float m_amplitudeZoom{1.7f};
     ViewMode m_viewMode{ViewMode::Graph};
 

@@ -23,6 +23,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/AetherTxProfiles.h": {
+  "tag": "universal",
+  "note": "Named-profile save/recall/import-export for the transmit DSP chain; operates on core-profile DSP state only. Mirror of core/AetherRxProfiles.h, and shares ChannelStripPresets' TX capture/apply.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/AetherRxProfiles.h": {
+  "tag": "universal",
+  "note": "Named-profile save/recall/import-export for the receive DSP chain; operates on core-profile DSP state only, same precedent as core/ChannelStripPresets.h, whose RX capture/apply it shares.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/AdaptiveFilterEngine.h": {
   "tag": "universal",
   "note": "GUI-thread adaptive RX passband coordinator over SliceModel/spectrum frames; canonical radio state, no vendor ties.",
@@ -383,6 +395,12 @@
   "split": "",
   "confidence": "high"
  },
+ "core/MqttRadioState.h": {
+  "tag": "ui-support",
+  "note": "Pure payload builder for the MQTT aethersdr/radio/state topic; external integration plumbing, not radio state",
+  "split": "",
+  "confidence": "high"
+ },
  "core/MqttSettings.h": {
   "tag": "ui-support",
   "note": "Settings store for the MQTT broker bridge (conn config, topics, buttons, keychain); external integration plumbing",
@@ -632,6 +650,12 @@
  "core/ThemeManager.h": {
   "tag": "ui-support",
   "note": "Qt token-based theming singleton (colors/fonts/QSS, theme files, editor hooks) — pure client GUI plumbing, no radio state.",
+  "split": "",
+  "confidence": "high"
+ },
+ "models/TxController.h": {
+  "tag": "universal",
+  "note": "Engine-owned producer input controller: captures original intent and routes typed TX operations through RadioModel and TxCoordinator, with no widget or vendor dependency.",
   "split": "",
   "confidence": "high"
  },
@@ -1115,6 +1139,18 @@
   "split": "",
   "confidence": "high"
  },
+ "core/backends/FrontEndOverload.h": {
+  "tag": "universal",
+  "note": "What the receive front end is doing, as seam vocabulary: an already-classified level, whether an automatic loop is armed, how far below the operator's setting it is holding, and the backend's own words for why. Universal because no family name and no wire concept appear above the seam \u2014 a family that cannot observe its converter never emits frontEndOverloadChanged and the indicator never appears, the same shape as autoRfGainControl() returning nullptr. Carries the ANSWER rather than the evidence: deciding when a converter is clipping 'occasionally' rather than 'most of the time' depends on what the flag means on a particular front end (on the HL2 a three-event threshold sampled at 10 Hz, not a rate), so that judgement stays in the family beside the register it reads. Exists because RFC #5535 approved an automatic RF-gain loop only on the condition that both the clipping and the regulator's own action are visible.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/backends/AutoRfGainControl.h": {
+  "tag": "universal",
+  "note": "A backend's own automatic receive-gain control, as seam vocabulary — the switch, the floor bound, and the choice of law. Universal because no family name appears above the seam: a family that has such a control returns one from IRadioBackend::autoRfGainControl(), a family that does not returns nullptr and never learns the concept exists. Carries no wire concept at all, deliberately; the moment it carried one it would be describing a particular front end. An interface rather than a RadioCapabilities bool because that population is frozen shrink-only (#5262 M2) and because a bool fissions — the first GUI to draw the control needs the bound and the law set too.",
+  "split": "",
+  "confidence": "high"
+ },
  "core/backends/hl2/Hl2Discovery.h": {
   "tag": "vendor(hl2)",
   "note": "HPSDR Protocol 1 ('Metis') discovery for the Hermes-Lite 2, shaped to emit RadioInfo with family=\"hl2\" so the existing picker slots consume it unchanged. Family wire code that belongs below the seam; reached today from ConnectionPanel.cpp, MainWindow.h and RadioSetupDialog.cpp. Pre-existing coupling, frozen into the EB3 baseline — the fix is a family-neutral discovery aggregator behind IRadioBackend, not a wider baseline.",
@@ -1358,6 +1394,12 @@
  "core/backends/NoiseFloorAutoAdjustGate.h": {
   "tag": "universal",
   "note": "The ONE predicate deciding whether the noise-floor auto-adjust may move the display reference level, as an OR over two backend-neutral properties (a real dBm-range echo, or absolute spectrum bins). Deliberately free of Qt and of RadioCapabilities so the widget and its test read the same function rather than two copies; the UI reaching it is the seam working, not coupling. Family backends populate the capability it is called with.",
+  "split": "",
+  "confidence": "high"
+ },
+ "core/weather/OperaRadarImage.h": {
+  "tag": "ui-support",
+  "note": "Bounded OPERA CIRRUS byte decoder placed in aethercore with existing zlib under RFC #5630 condition B; no radio state or widget dependency.",
   "split": "",
   "confidence": "high"
  },

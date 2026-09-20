@@ -46,6 +46,54 @@ public:
 
     // ── Transmit getters ────────────────────────────────────────────────────
     int     rfPower()       const { return m_rfPower; }
+
+    // Whether rfPower() has ever been filled from a backend TransmitDelta in
+    // THIS session, or is still the class default (#5518).
+    //
+    // m_rfPower{100} is indistinguishable from a radio that genuinely reports
+    // 100%, so a consumer acting on drive before the first transmit status has
+    // arrived would act on a phantom. resetState() clears this on every
+    // disconnect, so it answers per-session, not per-process. Distinct from
+    // RadioCapabilities::transmitDriveControl, which is per-BACKEND: that says
+    // whether this value CAN be confirmed, this says whether it HAS been
+    // reported yet.
+    bool    haveTransmitStatus() const { return m_haveTransmitStatus; }
+
+    // The same question for maxPowerLevel(), asked SEPARATELY (#5733 review).
+    //
+    // Only FlexBackend populates TransmitDelta::maxPowerLevel; Icom and HL2
+    // never do, and their ceiling arrives later (or not at all) through
+    // setMaxPowerLevel() from the band tables or slice status. Gating it on the
+    // drive latch therefore published m_maxPowerLevel{100} — a compiled-in
+    // default — as a reported ceiling on a 10 W IC-705, which is the same
+    // phantom haveTransmitStatus() exists to prevent and worse, because
+    // drive_confirmed vouched for it.
+    bool    haveMaxPowerLevel() const { return m_haveMaxPowerLevel; }
+
+    // Whether the CURRENT rfPower() value came from the radio or from us
+    // (#5733 review). setRfPower() writes the model optimistically and emits
+    // rfPowerChanged before the radio has seen the command, so on a backend
+    // that does read drive back, the value is still a REQUEST for one round
+    // trip. Principle II: radio status is truth, client commands are requests —
+    // so `drive_confirmed` is this ANDed with the backend's authority, and goes
+    // false the moment we ask for something until the radio echoes it.
+    bool    rfPowerIsFromRadio() const { return m_rfPowerFromRadio; }
+
+    // Forget who reported the power, WITHOUT the rest of resetState().
+    //
+    // For the backend-teardown path (#5733 review). resetState() emits six TX
+    // signals — transmittingChanged, moxChanged, tuneChanged, apdStateChanged,
+    // micStateChanged, holdBreakInDelayArmedChanged — and one of
+    // RadioModel::teardownBackend()'s three call sites is ~RadioModel(), where
+    // emitting into half-destroyed consumers is a hazard rather than a courtesy.
+    // Only the provenance needs to cross that seam: the VALUES are harmless once
+    // nothing vouches for them, because every publisher gates on these latches.
+    // Emits nothing, on purpose.
+    void    resetPowerProvenance() {
+        m_haveTransmitStatus = false;
+        m_haveMaxPowerLevel = false;
+        m_rfPowerFromRadio = false;
+    }
     int     tunePower()     const { return m_tunePower; }
     bool    isTuning()      const { return m_tune; }
     // CW admission while TUNE is active (#5422). Measured on a FLEX-8400 fw
@@ -136,7 +184,15 @@ public:
     int     accTxReqPolarity() const { return m_accTxReqPolarity; }
     int     rcaTxReqPolarity() const { return m_rcaTxReqPolarity; }
     int     maxPowerLevel()  const { return m_maxPowerLevel; }
-    void    setMaxPowerLevel(int w) { if (m_maxPowerLevel != w) { m_maxPowerLevel = w; emit maxPowerLevelChanged(w); } }
+    // Latches haveMaxPowerLevel() on PRESENCE, not on change: a radio reporting
+    // 100 into a model already at the 100 default must still count as reported,
+    // for the same reason applyChanges() latches the drive side that way.
+    void    setMaxPowerLevel(int w) {
+        const bool firstReport = !m_haveMaxPowerLevel;
+        m_haveMaxPowerLevel = true;
+        if (m_maxPowerLevel != w) { m_maxPowerLevel = w; emit maxPowerLevelChanged(w); }
+        else if (firstReport) emit powerProvenanceChanged();
+    }
     QString tuneMode()        const { return m_tuneMode; }
     QString txSliceMode()     const { return m_txSliceMode; }
     bool tuneAvailable() const { return m_tuneAvailable; }
@@ -272,7 +328,19 @@ public:
     // keying signal; a standalone model has no transport to authorize.
     using KeyingPermit = std::function<bool()>;
     using KeyingAdmission = std::function<KeyingPermit(KeyingIntent, bool)>;
+    // A trusted engine controller binds a producer before entering the model.
+    // These callbacks preserve the model's preflight and optimistic UI path
+    // without installing an ambient caller identity around a widget callback.
+    struct KeyingRoute {
+        std::function<KeyingPermit(bool)> admit;
+        std::function<void(bool)> dispatch;
+    };
+    void requestTune(PttSource source, bool twoTone, const KeyingRoute& route);
+    void stopTune(const KeyingRoute& route);
+    void requestAtu(bool start, const KeyingRoute& route);
     void setKeyingAdmission(KeyingAdmission admission) { m_keyingAdmission = std::move(admission); }
+    void requestPttOn(PttSource source, std::function<KeyingPermit()> admit,
+                      std::function<void()> engage);
 
     // A deferred release owns its original cancellation fence. A new key-on,
     // explicit stop, reset or destruction invalidates it, including on audio
@@ -280,9 +348,11 @@ public:
     struct PttRelease {
         std::function<bool()> isCurrent;
         std::function<void()> finish;
+        std::function<void()> abandoned;
         bool current() const { return isCurrent && isCurrent(); }
         void release() const { if (current() && finish) { finish(); } }
     };
+    void requestPttOff(PttSource source, PttRelease release);
     using PttOffHook = std::function<void(PttRelease)>;
     void setPttOffHook(PttOffHook hook);
     void clearPttOffHook();
@@ -457,6 +527,13 @@ signals:
     // listener cannot tell that apart from any other TX field moving.
     void rfPowerChanged(int watts);
     void tunePowerChanged(int watts);
+    // The PROVENANCE of the power fields moved without the value moving
+    // (#5733 review): a latch flipping on first report, or drive crossing
+    // between radio-reported and operator-requested. A value-change signal
+    // cannot carry these — a radio reporting 100 into a model already at 100
+    // makes assign() return false — so a mirror that publishes what the radio
+    // has confirmed needs this edge or it never learns.
+    void powerProvenanceChanged();
     // Emitted when the radio reports the TX slice mode (e.g. "FDVU", "FDVL", "USB").
     // Value is empty string until the first transmit status is received.
     void txSliceModeChanged(const QString& mode);
@@ -477,7 +554,7 @@ private:
     bool tuneAdmitted();   // #5422: false (pttBlocked emitted, toggle resynced) while CW is keyed
     void cancelPendingQuindarOff();
     void dispatchMoxOff(const PttRelease& release);
-    PttRelease capturePttRelease();
+    PttRelease capturePttRelease(PttRelease release);
 
     // PTT coordinator state (#2262)
     class ClientQuindarTone* m_quindarTone{nullptr};
@@ -489,6 +566,7 @@ private:
     bool                     m_quindarOutroInFlight{false};
     PttOffHook               m_pttOffHook;
     std::shared_ptr<std::atomic<bool>> m_pttReleaseFence;
+    std::function<void()> m_pttReleaseAbandoned;
     quint64 m_moxIntentEpoch{0};
     quint64 m_tuneIntentEpoch{0};
 
@@ -500,6 +578,9 @@ private:
 
     // Transmit state
     int    m_rfPower{100};
+    bool   m_haveTransmitStatus{false};  // see haveTransmitStatus() (#5518)
+    bool   m_haveMaxPowerLevel{false};   // see haveMaxPowerLevel() (#5733)
+    bool   m_rfPowerFromRadio{false};    // see rfPowerIsFromRadio() (#5733)
     bool   m_hostModulation{false};
     bool   m_hasTuner{true};
     bool   m_hasTunerMemories{true};

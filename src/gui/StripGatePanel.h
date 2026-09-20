@@ -5,6 +5,7 @@
 class QComboBox;
 class QLabel;
 class QPushButton;
+class QSlider;
 class QStackedWidget;
 class QTimer;
 
@@ -71,7 +72,6 @@ private:
     void applyThreshold(float db);
     void applyReturn(float db);
     void applyRatio(float ratio);
-    void applyAttack(float ms);
     void applyHold(float ms);
     void applyRelease(float ms);
     void applyFloor(float db);
@@ -88,16 +88,28 @@ private:
     ClientGateLevelView*    m_levelView{nullptr};
     ClientGateCurveWidget*  m_curveView{nullptr};
     QStackedWidget*         m_viewStack{nullptr};
-    QPushButton*            m_viewToggle{nullptr};
+    // Level / Curve, and Gate / Expander: four buttons, both pairs always on
+    // screen. A single button that renamed itself said what you would get if
+    // you pressed it, which is the opposite of what a control's label should
+    // say, and left the other state invisible until you did.
+    QPushButton*            m_viewLevelBtn{nullptr};
+    QPushButton*            m_viewCurveBtn{nullptr};
     ClientCompKnob*       m_threshold{nullptr};
     ClientCompKnob*       m_returnKnob{nullptr};
     ClientCompKnob*       m_ratio{nullptr};
-    ClientCompKnob*       m_attack{nullptr};
     ClientCompKnob*       m_hold{nullptr};
     ClientCompKnob*       m_release{nullptr};
     ClientCompKnob*       m_floor{nullptr};
-    QPushButton*          m_flip{nullptr};
-    QComboBox*            m_lookahead{nullptr};
+    // TX mic pre-amp RN2 toggle.  It denoises the mic ahead of every
+    // chain stage, so it lives on the gate — the default head of the
+    // chain — rather than on the tube at the far end of it.  Created
+    // hidden; only showForTx() reveals it, because RX has its own RN2
+    // toggle elsewhere.  (#2813)
+    QPushButton*          m_rn2Btn{nullptr};
+    QPushButton*          m_gateBtn{nullptr};
+    QPushButton*          m_expanderBtn{nullptr};
+    QSlider*              m_lookahead{nullptr};
+    QLabel*               m_lookaheadValue{nullptr};
     QPushButton*          m_bypass{nullptr};
     QTimer*               m_syncTimer{nullptr};   // mirror engine → knobs
     bool                  m_restoring{false};

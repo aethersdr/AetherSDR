@@ -72,6 +72,7 @@ public:
     void setCwInputHint(const QString& hint, const QString& reason);
     void clearCwText();
 #ifdef HAVE_DEEPFIST
+    bool deepFistEngineSelected() const;
     void setCwBackendState(const QString& key, bool tuning, const QString& status, bool preparing,
                          bool canRetry, const QString& detail);
     void appendUnscoredCwText(const QString& text);

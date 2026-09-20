@@ -67,6 +67,8 @@ public:
     void setCityLightsBrightness(int percent);
     void setCityLightsFaintLights(int percent);
     void setCityLightsWarmth(int percent);
+    void setRadarSites(const QVector<RadarSite>& sites, bool visible);
+    void setDetailedAttributionVisible(bool visible);
     void setWeatherRadarVisible(bool visible);
     bool weatherRadarVisible() const { return m_weatherRadarVisible; }
     int pendingWeatherRadarRequests() const;
@@ -89,6 +91,7 @@ signals:
     void imageOverlayViewChanged();
     void markerClicked(const GlobeMapView::Marker& marker);
     void rendererUnavailable(const QString& reason);
+    void weatherRadarProvidersChanged(int providers);
     void weatherRadarFrameLoaded(const QDateTime& frameTime);
     void weatherRadarPlaybackPresented(quint64 presentationSequence);
     void weatherRadarPlaybackFramePreloaded(const QDateTime& frameTime);
@@ -160,6 +163,7 @@ private:
     void cancelTileRequests();
     void cleanupOpenGlResources();
     void drawCityLights(const QMatrix4x4& matrix);
+    void drawRadarCoverage(const QMatrix4x4& matrix);
     void updateMapAttribution();
     void reportRendererUnavailable(const QString& reason,
                                    const QString& detail = {});
@@ -212,6 +216,10 @@ private:
     float m_cityLightsWarmth{CityLightsShading::kDefaultWarmth / 100.0F};
     std::unique_ptr<QOpenGLShaderProgram> m_program;
     std::unique_ptr<QOpenGLShaderProgram> m_radarProgram;
+    std::unique_ptr<QOpenGLShaderProgram> m_radarCoverageProgram;
+    QOpenGLBuffer m_radarCoverageBuffer{QOpenGLBuffer::VertexBuffer};
+    QVector<QVector3D> m_radarCoverageVertices;
+    bool m_radarCoverageDirty{false};
     std::unique_ptr<QOpenGLTexture> m_texture;
     std::unique_ptr<QOpenGLTexture> m_radarTexture;
     std::unique_ptr<QOpenGLTexture> m_previousRadarTexture;
@@ -222,6 +230,9 @@ private:
     int m_indexCount{0};
 
     QImage m_atlas;
+    void publishWeatherRadarProviders();
+    QHash<int, int> m_weatherRadarAtlasProviders;
+    QHash<int, int> m_pendingWeatherRadarAtlasProviders;
     QImage m_weatherRadarAtlas;
     QImage m_pendingCurrentPlaybackRadarAtlas;
     QImage m_preloadedWeatherRadarAtlas;
@@ -270,6 +281,8 @@ private:
     bool m_rendererUnavailableReported{false};
     bool m_cleaningOpenGlResources{false};
 
+    QVector<RadarSite> m_radarSites;
+    bool m_radarCoverageVisible{false};
     QVector<Marker> m_markers;
     QVector<ProjectedMarker> m_projectedMarkers;
     int m_hoverMarker{-1};
@@ -296,6 +309,7 @@ private:
     QVariantAnimation* m_weatherRadarTransition{nullptr};
 
     QLabel* m_attribution{nullptr};
+    bool m_detailedAttributionVisible{true};
     QWidget* m_vectorOverlay{nullptr};
     QLabel* m_legend{nullptr};
     QLabel* m_hoverCard{nullptr};

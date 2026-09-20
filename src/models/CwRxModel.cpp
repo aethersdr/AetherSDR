@@ -6,6 +6,8 @@
 #endif
 namespace AetherSDR {
 namespace {
+// Not advertised; see StubRxBackend below.
+constexpr auto kTestBackendKey = "stub";
 class GgmorseRxBackend final : public CwRxBackend {
 public:
     ~GgmorseRxBackend() override { stop(); }
@@ -64,9 +66,26 @@ private:
     DeepFistCwModel m_decoder;
 };
 #endif
+// Inert second backend. The facade's lock-retention and no-overlap invariants
+// are properties of CwRxModel, not of DeepFist, but asserting them needs SOME
+// second entry in the catalog — and without one they could only be compiled
+// with the optional DeepFist experiment enabled, which no CI job does.
+// Selectable by key so a test can switch to it; deliberately absent from
+// availableBackends() so no UI can ever offer it to an operator.
+class StubRxBackend final : public CwRxBackend {
+public:
+    void start() override { m_running = true; emit statusChanged(); }
+    void stop() override { m_running = false; }
+    void reset() override {}
+    void feed(const PcmFrame&) override {}
+    bool isRunning() const override { return m_running; }
+private:
+    bool m_running{false};
+};
 std::shared_ptr<CwRxBackend> makeBackend(const QString& key)
 {
     if (key == "ggmorse") { return std::make_shared<GgmorseRxBackend>(); }
+    if (key == kTestBackendKey) { return std::make_shared<StubRxBackend>(); }
 #ifdef HAVE_DEEPFIST
     if (key == "deepfist") { return std::make_shared<DeepFistRxBackend>(); }
 #endif

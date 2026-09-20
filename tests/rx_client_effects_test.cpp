@@ -24,13 +24,13 @@ void check(bool condition, const char* message)
     }
 }
 
-// Independent reference uses the six original effect classes directly in the
+// Independent reference uses the five original effect classes directly in the
 // shipped playback order; it does not call the helper's parameter copier.
+// There is no de-esser here: the RX chain does not have one.
 struct ReferenceEffects {
     ClientEq eq;
     ClientGate gate;
     ClientComp comp;
-    ClientDeEss deEss;
     ClientTube tube;
     ClientPudu pudu;
 
@@ -44,7 +44,6 @@ struct ReferenceEffects {
         eq.prepare(sampleRate);
         gate.prepare(sampleRate);
         comp.prepare(sampleRate);
-        deEss.prepare(sampleRate);
         tube.prepare(sampleRate);
         pudu.prepare(sampleRate);
     }
@@ -54,7 +53,6 @@ struct ReferenceEffects {
         eq.reset();
         gate.reset();
         comp.reset();
-        deEss.reset();
         tube.reset();
         pudu.reset();
     }
@@ -65,7 +63,6 @@ struct ReferenceEffects {
         eq.process(audio.data(), frames, 2);
         gate.process(audio.data(), frames, 2);
         comp.process(audio.data(), frames, 2);
-        deEss.process(audio.data(), frames, 2);
         tube.process(audio.data(), frames, 2);
         pudu.process(audio.data(), frames, 2);
     }
@@ -107,14 +104,6 @@ void configure(ReferenceEffects& effects, int variant)
     effects.comp.setDriveDb(6.0f);
     effects.comp.setPhaseRotatorStages(4);
 
-    effects.deEss.setEnabled(true);
-    effects.deEss.setFrequencyHz(5500.0f);
-    effects.deEss.setQ(1.3f);
-    effects.deEss.setThresholdDb(-43.0f);
-    effects.deEss.setAmountDb(-10.0f);
-    effects.deEss.setAttackMs(2.0f);
-    effects.deEss.setReleaseMs(40.0f);
-    effects.deEss.setSlopeStages(3);
 
     effects.tube.setEnabled(true);
     effects.tube.setModel(variant == 0 ? ClientTube::Model::C : ClientTube::Model::B);
@@ -140,7 +129,7 @@ void configure(ReferenceEffects& effects, int variant)
 void sync(RxClientEffects& effects, const ReferenceEffects& source)
 {
     effects.syncParametersFrom(source.eq, source.gate, source.comp,
-                               source.deEss, source.tube, source.pudu);
+                               source.tube, source.pudu);
 }
 
 void process(RxClientEffects& effects, std::vector<float>& audio)
@@ -149,7 +138,6 @@ void process(RxClientEffects& effects, std::vector<float>& audio)
     effects.eq().process(audio.data(), frames, 2);
     effects.gate().process(audio.data(), frames, 2);
     effects.comp().process(audio.data(), frames, 2);
-    effects.deEss().process(audio.data(), frames, 2);
     effects.tube().process(audio.data(), frames, 2);
     effects.pudu().process(audio.data(), frames, 2);
 }
@@ -323,7 +311,7 @@ void checkConcurrentRateReaders()
     std::thread reader([&]() {
         while (!finished.load(std::memory_order_acquire)) {
             for (const double rate : {main.eq.sampleRate(), main.gate.sampleRate(),
-                                     main.comp.sampleRate(), main.deEss.sampleRate(),
+                                     main.comp.sampleRate(),
                                      main.tube.sampleRate(), main.pudu.sampleRate()}) {
                 if (rate != 24000.0 && rate != 48000.0) {
                     valid.store(false, std::memory_order_relaxed);
@@ -355,7 +343,6 @@ void checkMeterCopies()
     }
     main.gate.copyMeteringFrom(presented.gate);
     main.comp.copyMeteringFrom(presented.comp);
-    main.deEss.copyMeteringFrom(presented.deEss);
     main.tube.copyMeteringFrom(presented.tube);
     main.pudu.copyMeteringFrom(presented.pudu);
     check(main.gate.inputPeakDb() == presented.gate.inputPeakDb()
@@ -367,9 +354,6 @@ void checkMeterCopies()
           && main.comp.gainReductionDb() == presented.comp.gainReductionDb()
           && main.comp.limiterGrDb() == presented.comp.limiterGrDb()
           && main.comp.limiterActive() == presented.comp.limiterActive()
-          && main.deEss.inputPeakDb() == presented.deEss.inputPeakDb()
-          && main.deEss.sidechainPeakDb() == presented.deEss.sidechainPeakDb()
-          && main.deEss.gainReductionDb() == presented.deEss.gainReductionDb()
           && main.tube.inputPeakDb() == presented.tube.inputPeakDb()
           && main.tube.outputPeakDb() == presented.tube.outputPeakDb()
           && main.tube.driveAppliedDb() == presented.tube.driveAppliedDb()

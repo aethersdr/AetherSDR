@@ -4,6 +4,7 @@
 #include "gui/RadioSwrValidityFilter.h"
 #include "gui/SMeterGeometry.h"
 #include "gui/SMeterWidget.h"
+#include "TestWindowActivation.h"
 
 #include <QApplication>
 #include <QAccessible>
@@ -136,7 +137,7 @@ void testAccessibilityAnnouncements()
 
     AetherSDR::SMeterWidget meter;
     meter.show();
-    meter.activateWindow();
+    activateForTest(meter);
     meter.setFocus(Qt::OtherFocusReason);
     QApplication::processEvents();
     expect(meter.hasFocus(), "accessibility announcement fixture receives focus");

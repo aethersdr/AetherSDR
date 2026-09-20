@@ -2,6 +2,9 @@
 
 #include <QWidget>
 
+class QHideEvent;
+class QShowEvent;
+
 class QTimer;
 
 namespace AetherSDR {
@@ -25,11 +28,15 @@ public:
     void setPudu(ClientPudu* p);
     // Override the rendered wordmark.  Default is "PooDoo™" (used by
     // the docked applet + floating editor).  The strip panel sets it
-    // to "AetherExciter™" for the rebranded final-stage version.
+    // to "AetherVoice™" for the strip and the AetherRX page.
     void setWordmark(const QString& mark);
 
 protected:
     void paintEvent(QPaintEvent* ev) override;
+    // Polling stops while this widget is hidden — a stacked page behind
+    // another tab still gets its timer events, but not its repaints.
+    void showEvent(QShowEvent* ev) override;
+    void hideEvent(QHideEvent* ev) override;
 
 private:
     void tick();

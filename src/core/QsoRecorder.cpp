@@ -3,7 +3,7 @@
 #include "CwRecordGate.h"
 #include "AudioDeviceNegotiator.h"
 #include "LogManager.h"
-#include "Resampler.h"
+#include "QsoWavPlayback.h"
 #include "../models/SliceModel.h"
 
 #include <QAudioDevice>
@@ -17,8 +17,9 @@
 #include <QtEndian>
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 #include <memory>
-#include <vector>
 
 namespace AetherSDR {
 
@@ -58,6 +59,7 @@ QsoRecorder::QsoRecorder(QObject* parent)
 
 QsoRecorder::~QsoRecorder()
 {
+    stopPlayback();
     // Finalize so an in-flight recording still gets a valid WAV header, but
     // stay SILENT: this runs during teardown, and the zero-capture diagnostic
     // below is wired to a modal dialog. Popping one while the window is being
@@ -96,8 +98,11 @@ void QsoRecorder::setSlice(SliceModel* slice)
 
 int QsoRecorder::recordingDurationSecs() const
 {
-    if (!m_recording) return 0;
-    return static_cast<int>(m_startTime.secsTo(QDateTime::currentDateTimeUtc()));
+    std::lock_guard<std::mutex> lock(m_writeMutex);
+    if (!m_recording || !m_fileFormat) {
+        return 0;
+    }
+    return static_cast<int>(m_dataBytes / m_fileFormat->byteRate());
 }
 
 // ── Manual control ──────────────────────────────────────────────────────────
@@ -169,96 +174,213 @@ void QsoRecorder::beginRecording(StartTrigger trigger)
     startFile();
 }
 
-void QsoRecorder::stopRecording()
+int QsoRecorder::stopRecording()
 {
     if (!m_recording && !m_writeFailurePending) {
-        return;
+        return 0;
     }
     m_idleTimer->stop();
-    finalizeFile();
+    return finalizeFile();
 }
 
 // ── Audio feeds ─────────────────────────────────────────────────────────────
 
-// Convert float32 stereo PCM to int16 stereo PCM for WAV output.
-static QByteArray float32ToInt16(const QByteArray& pcm)
+namespace {
+bool validFixedPcm(const QByteArray& pcm, bool floating)
 {
-    const int numFloats = pcm.size() / static_cast<int>(sizeof(float));
-    QByteArray out(numFloats * static_cast<int>(sizeof(qint16)), Qt::Uninitialized);
-    const float* src = reinterpret_cast<const float*>(pcm.constData());
-    qint16* dst = reinterpret_cast<qint16*>(out.data());
-    for (int i = 0; i < numFloats; ++i) {
-        float clamped = std::clamp(src[i], -1.0f, 1.0f);
-        dst[i] = static_cast<qint16>(clamped * 32767.0f);
+    const qsizetype sampleBytes = floating ? sizeof(float) : sizeof(qint16);
+    const qsizetype frameBytes = sampleBytes * 2;
+    if (pcm.isEmpty() || pcm.size() % frameBytes != 0
+        || pcm.size() / frameBytes > QsoPcmConverter::kMaxInputFrames) {
+        // #5648: a recording must not lose audio quietly. No producer wired
+        // today can emit either shape, so this is the "impossible" case
+        // reporting itself rather than a block disappearing without a trace.
+        qCWarning(lcAudio) << "QsoRecorder: dropped a malformed fixed-rate block —"
+                           << pcm.size() << "bytes, frame size" << frameBytes;
+        return false;
     }
-    return out;
+    if (floating) {
+        for (qsizetype offset = 0; offset < pcm.size(); offset += sizeof(float)) {
+            float sample;
+            std::memcpy(&sample, pcm.constData() + offset, sizeof(sample));
+            if (!std::isfinite(sample)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+} // namespace
+
+void QsoRecorder::feedRxFrame(const PcmFrame& frame)
+{
+    if (!frame.current() || frame.stream().purpose != PcmPurpose::Speaker) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(m_writeMutex);
+    // Select one normalized speaker source before touching its replay cursor.
+    // A different current producer is not an implicit source-switch request.
+    if (!frame.current()) {
+        return;
+    }
+    if (m_rxObservation.current() && m_rxObservation.stream() != frame.stream()) {
+        // One file, one source, deliberately -- a different current producer is
+        // not an implicit switch request. Say it once, though: if the selected
+        // epoch is ever live but no longer producing, this silently locks out
+        // the replacement and RX recording just stops with nothing logged.
+        if (!m_foreignSourceWarned) {
+            m_foreignSourceWarned = true;
+            qCWarning(lcAudio)
+                << "QsoRecorder: ignoring a second speaker producer; recording "
+                   "stays on the first while its epoch is live";
+        }
+        return;
+    }
+    if (!m_rxGate.accept(frame)) {
+        return;
+    }
+    const bool sourceChanged = m_rxObservation.stream() != frame.stream();
+    m_rxObservation = frame;
+    if (sourceChanged) {
+        m_foreignSourceWarned = false;
+    }
+    if (!m_recording || !m_file || m_transmitting || m_cwOverActive) {
+        return;
+    }
+    if (!selectPcmSegment(PcmSource::TypedRx, frame.stream().format, frame)) {
+        return;
+    }
+    const QByteArrayView input(reinterpret_cast<const char*>(frame.samples().constData()),
+                              frame.samples().size() * sizeof(float));
+    QByteArray converted;
+    if (!m_pcmConverter->process(input, converted)) {
+        queueWriteFailure(QStringLiteral("RX PCM conversion failed"));
+        return;
+    }
+    m_nextRxSample = frame.firstSample() + frame.frameCount();
+    writeConvertedPcm(converted);
 }
 
 void QsoRecorder::feedRxAudio(const QByteArray& pcm)
 {
-    // Lock-free fast path off the real-time audio thread: skip the mutex when
-    // we're not recording an RX over, so a GUI thread holding m_writeMutex
-    // during finalize/stop can't stall audio. The post-lock check stays
-    // authoritative (m_recording/m_transmitting can flip after this read).
-    if (!m_recording.load(std::memory_order_acquire)
-        || m_transmitting.load(std::memory_order_acquire)
-        || m_cwOverActive.load(std::memory_order_acquire))
-        return;
-    std::lock_guard<std::mutex> lock(m_writeMutex);
-    // While transmitting the radio mutes RX (this stream would be silence), and
-    // the TX monitor is recorded instead — skip RX so the two don't double-write
-    // and the file stays a clean time-interleaved RX/TX stream (#3556).
-    if (!m_recording || !m_file
-        || m_transmitting.load(std::memory_order_acquire)
-        || m_cwOverActive.load(std::memory_order_acquire)) return;
-    QByteArray converted = float32ToInt16(pcm);
-    if (converted.isEmpty()) {
-        return;
-    }
-    const qint64 requested = converted.size();
-    const qint64 written = writeFile(converted.constData(), requested);
-    const qint64 accepted = std::clamp(written, qint64{0}, requested);
-    m_dataBytes += static_cast<quint32>(accepted);
-    if (accepted != requested) {
-        const QString deviceError = m_file->errorString();
-        queueWriteFailure(QStringLiteral("RX audio write failed")
-                          + (deviceError.isEmpty() ? QString{} : QStringLiteral(": ") + deviceError));
-    }
+    feedFixedPcm(pcm, PcmSource::LegacyRx);
 }
 
-void QsoRecorder::feedTxAudio(const QByteArray& int16Stereo)
+void QsoRecorder::feedTxAudio(const QByteArray& pcm)
 {
-    // Lock-free fast path: the CW record pump calls this ~100×/s from the
-    // real-time audio thread. Skip the mutex when we're not recording a TX over
-    // so a GUI thread holding m_writeMutex during finalize/stop can't stall
-    // audio (xrun). The post-lock check stays authoritative.
-    // "Transmitting" here means the over, not the element: under break-in the
-    // interlock is low in every inter-element gap, and gating on it alone
-    // discarded the record pump's blocks in all of them (#4281).
-    if (!m_recording.load(std::memory_order_acquire)
-        || !(m_transmitting.load(std::memory_order_acquire)
-             || m_cwOverActive.load(std::memory_order_acquire)))
-        return;
-    std::lock_guard<std::mutex> lock(m_writeMutex);
-    // Only capture the TX monitor while actually transmitting (the tap can fire
-    // whenever mic capture runs), so RX and TX never both write.
-    if (!m_recording || !m_file
-        || !(m_transmitting.load(std::memory_order_acquire)
-             || m_cwOverActive.load(std::memory_order_acquire))) return;
-    // The post-limiter TX monitor is already 24 kHz stereo int16 — the WAV's
-    // native format — so write it directly, no float32 conversion (#3556).
-    if (int16Stereo.isEmpty()) {
+    feedFixedPcm(pcm, PcmSource::Voice);
+}
+
+void QsoRecorder::feedCwAudio(const QByteArray& pcm)
+{
+    feedFixedPcm(pcm, PcmSource::Cw);
+}
+
+void QsoRecorder::feedFixedPcm(const QByteArray& pcm, PcmSource source)
+{
+    const bool rx = source == PcmSource::LegacyRx;
+    const auto admitted = [this, rx]() {
+        const bool txOver = m_transmitting.load(std::memory_order_acquire)
+            || m_cwOverActive.load(std::memory_order_acquire);
+        return m_recording.load(std::memory_order_acquire) && (rx ? !txOver : txOver);
+    };
+    // Keep fixed-rate real-time callers off the mutex while capture is inactive.
+    if (!admitted()) {
         return;
     }
-    const qint64 requested = int16Stereo.size();
-    const qint64 written = writeFile(int16Stereo.constData(), requested);
-    const qint64 accepted = std::clamp(written, qint64{0}, requested);
+    std::lock_guard<std::mutex> lock(m_writeMutex);
+    if (!admitted() || !m_file || (rx && m_rxObservation.current())
+        || !validFixedPcm(pcm, rx)) {
+        return;
+    }
+    if (!selectPcmSegment(source, PcmFormat{})) {
+        return;
+    }
+    QByteArray converted;
+    if (!m_pcmConverter->process(pcm, converted)) {
+        queueWriteFailure(QStringLiteral("Fixed-rate PCM conversion failed"));
+        return;
+    }
+    writeConvertedPcm(converted);
+}
+
+bool QsoRecorder::selectPcmSegment(PcmSource source, PcmFormat format,
+                                   const PcmFrame& frame)
+{
+    const bool change = source != m_pcmSource
+        || (source == PcmSource::TypedRx
+            && (m_pcmEpoch.stream() != frame.stream() || frame.discontinuity()
+                || frame.firstSample() != m_nextRxSample));
+    if (change || !m_pcmConverter) {
+        if (!finishPcmSegment()) {
+            return false;
+        }
+        const bool floating = source == PcmSource::TypedRx || source == PcmSource::LegacyRx;
+        const QsoPcmConverter::Configuration configuration{
+            format.sampleRateHz, format.channels(),
+            floating ? QsoPcmConverter::InputEncoding::Float32Native
+                     : QsoPcmConverter::InputEncoding::Int16Native,
+            m_fileFormat->sampleRateHz(), 2,
+            QsoPcmConverter::OutputEncoding::Int16LittleEndian};
+        m_pcmConverter = std::make_unique<QsoPcmConverter>(configuration);
+        m_pcmSource = source;
+        if (!m_pcmConverter->isValid()) {
+            queueWriteFailure(QStringLiteral("Unsupported recording PCM format"));
+            return false;
+        }
+    }
+    m_pcmEpoch = frame;
+    return true;
+}
+
+bool QsoRecorder::finishPcmSegment()
+{
+    if (m_pcmConverter && !m_writeFailurePending
+        && (m_pcmSource != PcmSource::TypedRx || m_pcmEpoch.current())) {
+        QByteArray tail;
+        if (!m_pcmConverter->finish(tail)) {
+            queueWriteFailure(QStringLiteral("Recording PCM tail conversion failed"));
+        } else {
+            writeConvertedPcm(tail);
+        }
+    }
+    // Revoked delayed samples are abandoned; already accepted file bytes stay.
+    m_pcmConverter.reset();
+    m_pcmSource = PcmSource::None;
+    m_pcmEpoch = {};
+    m_nextRxSample = 0;
+    return !m_writeFailurePending;
+}
+
+bool QsoRecorder::writeConvertedPcm(const QByteArray& pcm)
+{
+    if (m_beforePcmWriteForTest) {
+        m_beforePcmWriteForTest();
+    }
+    // Final acquire-load is the PCM write-admission point. A revocation that
+    // precedes it rejects pending converted output; one after it cannot undo
+    // bytes accepted by QFile. Stop and file replacement share this mutex.
+    if (m_pcmSource == PcmSource::TypedRx && !m_pcmEpoch.current()) {
+        m_pcmConverter->discard();
+        return true;
+    }
+    if (pcm.isEmpty()) {
+        return true;
+    }
+    if (static_cast<quint64>(pcm.size()) > QsoRecordingFormat::kMaxDataBytes - m_dataBytes) {
+        queueWriteFailure(QStringLiteral("Recording reached the RIFF size limit"));
+        return false;
+    }
+    const qint64 requested = pcm.size();
+    const qint64 accepted = std::clamp(writeFile(pcm.constData(), requested), qint64{0}, requested);
     m_dataBytes += static_cast<quint32>(accepted);
     if (accepted != requested) {
         const QString deviceError = m_file->errorString();
-        queueWriteFailure(QStringLiteral("TX audio write failed")
-                          + (deviceError.isEmpty() ? QString{} : QStringLiteral(": ") + deviceError));
+        queueWriteFailure(QStringLiteral("PCM audio write failed")
+            + (deviceError.isEmpty() ? QString{} : QStringLiteral(": ") + deviceError));
+        return false;
     }
+    return true;
 }
 
 // ── TX state tracking ───────────────────────────────────────────────────────
@@ -274,7 +396,14 @@ void QsoRecorder::onMoxChanged(bool mox)
     // length of the hang — long enough that a voice over started inside that
     // window had m_transmitting forced false underneath it and the rest of the
     // over was dropped, with no further MOX edge to repair it.
-    m_transmitting.store(mox, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(m_writeMutex);
+        const bool wasOver = m_transmitting || m_cwOverActive;
+        m_transmitting.store(mox, std::memory_order_release);
+        if (wasOver != (mox || m_cwOverActive)) {
+            finishPcmSegment();
+        }
+    }
     applyOverBookkeeping(mox);
 }
 
@@ -311,7 +440,19 @@ void QsoRecorder::applyOverBookkeeping(bool overActive)
 void QsoRecorder::setCwOverActive(bool active)
 {
     // Set before delegating so both feed slots see the over immediately.
-    m_cwOverActive.store(active, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(m_writeMutex);
+        const bool wasActive = m_cwOverActive;
+        const bool wasOver = m_transmitting || wasActive;
+        m_cwOverActive.store(active, std::memory_order_release);
+        // A delayed CW edge can arrive during a MOX-admitted voice over.
+        // Keep that voice filter continuous; actual incoming CW PCM retires
+        // it in selectPcmSegment. A CW segment still drains at its own edge.
+        if (wasActive != active
+            && (wasOver != (m_transmitting || active) || m_pcmSource == PcmSource::Cw)) {
+            finishPcmSegment();
+        }
+    }
     // A CW over must still start an auto-record and run the idle timer exactly
     // as a voice over does — but it must NOT write m_transmitting, which MOX
     // owns. See onMoxChanged for what went wrong when it did.
@@ -322,10 +463,12 @@ void QsoRecorder::setCwOverActive(bool active)
 
 void QsoRecorder::startFile()
 {
+    std::unique_lock<std::mutex> lock(m_writeMutex);
     Q_ASSERT(!m_file);
     // QDir("") resolves to the working directory. A missing configured path
     // must fail visibly rather than silently putting recordings there.
     if (m_recordingDir.isEmpty()) {
+        lock.unlock();
         emit recordingError(QStringLiteral("Cannot create recording directory: path is empty"));
         return;
     }
@@ -341,11 +484,16 @@ void QsoRecorder::startFile()
 
     m_startTime = QDateTime::currentDateTimeUtc();
     m_dataBytes = 0;
+    m_fileFormat.emplace(m_rxObservation);
+    m_pcmConverter.reset();
+    m_pcmSource = PcmSource::None;
+    m_pcmEpoch = {};
 
     // Ensure directory exists
     QDir dir(m_recordingDir);
     if (!dir.exists()) {
         if (!dir.mkpath(".")) {
+            lock.unlock();
             emit recordingError("Cannot create recording directory: " + m_recordingDir);
             return;
         }
@@ -390,6 +538,7 @@ void QsoRecorder::startFile()
             ? QStringLiteral("all %1 filename candidates are occupied")
                   .arg(kMaxFilenameAttempts)
             : openError;
+        lock.unlock();
         emit recordingError(QStringLiteral("Cannot create recording file: ") + suffix);
         return;
     }
@@ -397,25 +546,24 @@ void QsoRecorder::startFile()
     if (!writeWavHeader()) {
         const QString error = QStringLiteral("Cannot initialize recording file: ")
                               + m_file->errorString();
-        {
-            std::lock_guard<std::mutex> lock(m_writeMutex);
-            m_file->close();
-            m_file->deleteLater();
-            m_file = nullptr;
-            m_lastRecordingPath.clear();
-        }
+        m_file->close();
+        m_file->deleteLater();
+        m_file = nullptr;
+        m_lastRecordingPath.clear();
+        lock.unlock();
         emit recordingError(error);
         return;
     }
 
     m_recordingGeneration.fetch_add(1, std::memory_order_acq_rel);
     m_recording = true;
+    lock.unlock();
 
     qCInfo(lcAudio) << "QsoRecorder: started recording to" << filePath;
     emit recordingStarted(filePath);
 }
 
-void QsoRecorder::finalizeFile(FinalizeReport report)
+int QsoRecorder::finalizeFile(FinalizeReport report)
 {
     bool writeFailed = false;
     bool finalized = false;
@@ -423,21 +571,24 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
     QString finalizeError;
     QString filePath;
     int durationSecs = 0;
+    qint64 elapsedSecs = 0;
     quint32 dataBytes = 0;
     {
         std::lock_guard<std::mutex> lock(m_writeMutex);
         m_recording = false;
+        finishPcmSegment();
         writeFailed = m_writeFailurePending.exchange(false, std::memory_order_acq_rel);
         writeFailure = m_pendingWriteError;
         m_pendingWriteError.clear();
         if (!m_file) {
-            return;
+            return 0;
         }
 
         finalized = patchWavHeader();
         finalizeError = m_file->errorString();
         filePath = m_file->fileName();
-        durationSecs = static_cast<int>(m_startTime.secsTo(QDateTime::currentDateTimeUtc()));
+        durationSecs = static_cast<int>(m_dataBytes / m_fileFormat->byteRate());
+        elapsedSecs = m_startTime.secsTo(QDateTime::currentDateTimeUtc());
         dataBytes = m_dataBytes;
 
         m_file->close();
@@ -462,7 +613,11 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
 
     qCInfo(lcAudio) << "QsoRecorder: stopped recording," << durationSecs << "seconds,"
                      << dataBytes << "bytes" << (finalized && !writeFailed ? "" : "(write failed)");
+    const QPointer<QsoRecorder> guard(this);
     emit recordingStopped(filePath, durationSecs);
+    if (!guard) {
+        return durationSecs;
+    }
 
     if (!finalized || writeFailed) {
         if (report == FinalizeReport::Diagnose) {
@@ -473,7 +628,7 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
             emit recordingError(QStringLiteral("Recording write failed: %1\n\n%2")
                                     .arg(detail, filePath));
         }
-        return;
+        return durationSecs;
     }
 
     // A recording that captured NOTHING is the #4629 symptom, and until now it
@@ -490,7 +645,7 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
     // recording that captured nothing is silently accepted — but that case
     // yields no usable audio either way, whereas a false alarm on every quick
     // tap trains the operator to dismiss this dialog unread.
-    if (dataBytes == 0 && durationSecs >= 1 && report == FinalizeReport::Diagnose) {
+    if (dataBytes == 0 && elapsedSecs >= 1 && report == FinalizeReport::Diagnose) {
         qCWarning(lcAudio) << "QsoRecorder: recording captured no audio:" << filePath;
         emit recordingError(
             QStringLiteral("Recording captured no audio — the file contains only a "
@@ -498,6 +653,7 @@ void QsoRecorder::finalizeFile(FinalizeReport report)
                            "started. Check that the radio is still connected and "
                            "that PC Audio is enabled.\n\n") + filePath);
     }
+    return durationSecs;
 }
 
 QString QsoRecorder::buildFilename() const
@@ -597,33 +753,10 @@ void QsoRecorder::queueWriteFailure(const QString& detail)
 
 bool QsoRecorder::writeWavHeader()
 {
-    // Write a placeholder WAV header (44 bytes). The data size fields
-    // will be patched in finalizeFile() once we know the total size.
-    char header[WAV_HEADER_SIZE] = {};
-
-    const int byteRate = SAMPLE_RATE * NUM_CHANNELS * (BITS_PER_SAMPLE / 8);
-    const int blockAlign = NUM_CHANNELS * (BITS_PER_SAMPLE / 8);
-
-    // RIFF header
-    memcpy(header + 0, "RIFF", 4);
-    // header[4..7] = file size - 8 (patched later)
-    memcpy(header + 8, "WAVE", 4);
-
-    // fmt sub-chunk
-    memcpy(header + 12, "fmt ", 4);
-    qToLittleEndian<quint32>(16, header + 16);               // sub-chunk size
-    qToLittleEndian<quint16>(1, header + 20);                 // audio format (1 = PCM)
-    qToLittleEndian<quint16>(NUM_CHANNELS, header + 22);      // channels
-    qToLittleEndian<quint32>(SAMPLE_RATE, header + 24);       // sample rate
-    qToLittleEndian<quint32>(byteRate, header + 28);          // byte rate
-    qToLittleEndian<quint16>(blockAlign, header + 32);        // block align
-    qToLittleEndian<quint16>(BITS_PER_SAMPLE, header + 34);   // bits per sample
-
-    // data sub-chunk
-    memcpy(header + 36, "data", 4);
-    // header[40..43] = data size (patched later)
-
-    if (writeFile(header, WAV_HEADER_SIZE) != WAV_HEADER_SIZE) {
+    // Format is selected before the first published header. Later writes only
+    // patch accepted byte lengths; no source transition can relabel this file.
+    const std::optional<QByteArray> header = m_fileFormat->wavHeader(0);
+    if (!header || writeFile(header->constData(), header->size()) != header->size()) {
         return false;
     }
     return flushFile();
@@ -658,49 +791,22 @@ bool QsoRecorder::patchWavHeader()
 
 // ── Playback ───────────────────────────────────────────────────────────────
 
-bool QsoRecorder::preparePlaybackPcm(int sinkRateHz)
+bool QsoRecorder::preparePlaybackPcm(const QAudioFormat& sinkFormat, QString& error)
 {
-    QFile f(m_lastRecordingPath);
-    if (!f.open(QIODevice::ReadOnly)) return false;
-    f.seek(WAV_HEADER_SIZE);
-    QByteArray raw = f.readAll();
-    f.close();
-    if (raw.isEmpty()) return false;
-
-    if (sinkRateHz == SAMPLE_RATE) {
-        m_playPcm = std::move(raw);
-        return true;
+    m_playPcm.clear();
+    QFile file(m_lastRecordingPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        error = file.errorString();
+        qCWarning(lcAudio) << "QsoRecorder: cannot open recording for playback:"
+                           << file.errorString();
+        return false;
     }
-
-    // Resample L and R independently to preserve stereo image.
-    static constexpr int kBytesPerFrame = NUM_CHANNELS * (BITS_PER_SAMPLE / 8);
-    const int srcFrames = raw.size() / kBytesPerFrame;
-    if (srcFrames <= 0) return false;
-
-    std::vector<float> lIn(srcFrames), rIn(srcFrames);
-    const auto* s16 = reinterpret_cast<const qint16*>(raw.constData());
-    for (int i = 0; i < srcFrames; ++i) {
-        lIn[i] = s16[i * 2]     / 32768.0f;
-        rIn[i] = s16[i * 2 + 1] / 32768.0f;
+    std::optional<QByteArray> pcm = prepareQsoWavPlayback(file, sinkFormat, &error);
+    if (!pcm) {
+        qCWarning(lcAudio) << "QsoRecorder: cannot prepare recording for playback:" << error;
+        return false;
     }
-
-    Resampler lResampler(SAMPLE_RATE, sinkRateHz, srcFrames + 16);
-    Resampler rResampler(SAMPLE_RATE, sinkRateHz, srcFrames + 16);
-    const QByteArray lOut = lResampler.process(lIn.data(), srcFrames);
-    const QByteArray rOut = rResampler.process(rIn.data(), srcFrames);
-
-    const int outFrames = std::min(lOut.size() / static_cast<int>(sizeof(float)),
-                                   rOut.size() / static_cast<int>(sizeof(float)));
-    if (outFrames <= 0) return false;
-
-    m_playPcm.resize(outFrames * kBytesPerFrame);
-    auto* dst = reinterpret_cast<qint16*>(m_playPcm.data());
-    const auto* lf = reinterpret_cast<const float*>(lOut.constData());
-    const auto* rf = reinterpret_cast<const float*>(rOut.constData());
-    for (int i = 0; i < outFrames; ++i) {
-        dst[i * 2]     = static_cast<qint16>(std::clamp(lf[i] * 32768.0f, -32768.0f, 32767.0f));
-        dst[i * 2 + 1] = static_cast<qint16>(std::clamp(rf[i] * 32768.0f, -32768.0f, 32767.0f));
-    }
+    m_playPcm = std::move(*pcm);
     return true;
 }
 
@@ -721,18 +827,20 @@ void QsoRecorder::startPlayback()
             if (d.id() == m_outputDevice.id()) { dev = d; break; }
         }
     }
-    if (dev.isNull()) return;
+    if (dev.isNull()) {
+        emit recordingError(tr("Cannot play this recording: no audio output device is available."));
+        return;
+    }
 
     // Negotiate the playback format via the shared factory (#3306, Phase 6b).
     // The recording is Int16, so prefer Int16 (no conversion on a normal device)
-    // and fall back to Float for Float-only WASAPI mixers — the Int16->Float
-    // conversion below handles that (#3231). The factory supplies the per-OS
+    // and fall back to Float for Float-only WASAPI mixers. The WAV helper
+    // converts directly to that sink format (#3231). The factory supplies the per-OS
     // preferred rate (Win/Mac 48k to dodge the WASAPI 24k resampler artifacts
     // #2120; Linux native 24k) plus the 44.1k and preferredFormat fallbacks.
     // Previously QSO playback bailed on a Float-only device; now it works.
     // Walk with isFormatSupported (trusted), mirroring ClientPuduMonitor.
     QAudioFormat fmt;
-    int sinkRate = SAMPLE_RATE;
     bool haveFormat = false;
     const QList<QAudioFormat> ladder = AudioDeviceNegotiator::formatLadder(
         dev, AudioFormatNegotiator::Direction::Output,
@@ -741,83 +849,135 @@ void QsoRecorder::startPlayback()
         AudioFormatNegotiator::kInternalRate,
         /*bluetoothHfp=*/false, /*preferredRateOverride=*/0,
         AudioFormatNegotiator::FormatPreference::Int16First);
-    for (const QAudioFormat& cand : ladder) {
-        QAudioFormat c = cand;
-        c.setChannelCount(NUM_CHANNELS);
-        if (dev.isFormatSupported(c)) {
-            fmt = c;
-            sinkRate = c.sampleRate();
-            haveFormat = true;
+    // Preserve the existing stereo preference across the complete ladder.
+    // A mono-only output can consume the helper's explicit stereo downmix.
+    for (const int channels : {2, 1}) {
+        for (const QAudioFormat& candidate : ladder) {
+            QAudioFormat format = candidate;
+            format.setChannelCount(channels);
+            if (dev.isFormatSupported(format)) {
+                fmt = format;
+                haveFormat = true;
+                break;
+            }
+        }
+        if (haveFormat) {
             break;
         }
     }
-    if (!haveFormat) return;
+    if (!haveFormat) {
+        emit recordingError(tr("Cannot play this recording: the audio output has no supported format."));
+        return;
+    }
+    startPlaybackWithFormat(dev, fmt);
+}
 
-    if (!preparePlaybackPcm(sinkRate)) return;
-
-    // Float-only WASAPI mixers reject Int16 — convert the Int16 playback PCM to
-    // Float32 to match the negotiated sink format (#3231 / Phase 6b), mirroring
-    // ClientPuduMonitor. Only Float32 is handled (the only non-Int16 format
-    // preferredFormat() returns in practice on WASAPI/CoreAudio).
-    if (fmt.sampleFormat() == QAudioFormat::Float) {
-        const int samples = m_playPcm.size() / static_cast<int>(sizeof(int16_t));
-        QByteArray floatPcm(samples * static_cast<int>(sizeof(float)), '\0');
-        const auto* src = reinterpret_cast<const int16_t*>(m_playPcm.constData());
-        auto*       dst = reinterpret_cast<float*>(floatPcm.data());
-        for (int i = 0; i < samples; ++i) dst[i] = src[i] / 32768.0f;
-        m_playPcm = std::move(floatPcm);
+void QsoRecorder::startPlaybackWithFormat(const QAudioDevice& device,
+                                         const QAudioFormat& format)
+{
+    if (m_playing || m_lastRecordingPath.isEmpty()) {
+        return;
+    }
+    QString preparationError;
+    if (!preparePlaybackPcm(format, preparationError)) {
+        // The local file has closed before observers may retry or destroy us.
+        emit recordingError(tr("Cannot play this recording: %1").arg(preparationError));
+        return;
     }
 
     m_playBuffer.close();
     m_playBuffer.setBuffer(&m_playPcm);
-    if (!m_playBuffer.open(QIODevice::ReadOnly)) return;
+    if (!m_playBuffer.open(QIODevice::ReadOnly)) {
+        emit recordingError(tr("Cannot open the recording playback buffer."));
+        return;
+    }
 
-    m_playSink = new QAudioSink(dev, fmt, this);
-    // 300 ms ring buffer: absorbs Windows WASAPI jitter (default ~40 ms starves
-    // on event-loop hiccups and inserts silence).  Backend may clamp to its
-    // period granularity; not an error if the effective size differs.
-    m_playSink->setBufferSize(fmt.bytesForDuration(300'000));
-    connect(m_playSink, &QAudioSink::stateChanged,
-            this, &QsoRecorder::onPlaybackSinkState);
-    m_playSink->start(&m_playBuffer);
-
-    // Detect an immediate open failure (e.g. a WASAPI/CoreAudio device that
-    // false-positives isFormatSupported() then refuses at start()) BEFORE we
-    // mute live RX. If start() failed synchronously, the stateChanged handler
-    // already ran stopPlayback() but it no-op'd (m_playing was still false), so
-    // we must clean up here. Crucially we return *before* emitting
-    // muteRxRequested(true), so a failed playback can never strand live RX in a
-    // muted state (#3230 invariant) — mirrors ClientPuduMonitor::startPlayback().
-    if (m_playSink->state() == QAudio::StoppedState
-        && m_playSink->error() != QAudio::NoError) {
+    // Synchronous sink failure must be retired BEFORE muting live RX. A
+    // synchronous StoppedState callback is harmless while m_playing is false.
+    const QAudio::Error error = startPlaybackSink(device, format);
+    if (error != QAudio::NoError) {
         qCWarning(lcAudio) << "QsoRecorder: playback sink failed to start (error"
-                           << m_playSink->error() << ") — aborting, RX left live";
-        m_playSink->disconnect(this);
-        m_playSink->deleteLater();
-        m_playSink = nullptr;
-        if (m_playBuffer.isOpen()) m_playBuffer.close();
+                           << error << ") — aborting, RX left live";
+        releasePlaybackSink(false);
+        m_playBuffer.close();
+        emit recordingError(tr("Cannot start the recording audio output (error %1).")
+                                .arg(static_cast<int>(error)));
         return;
     }
 
     m_playing = true;
+    const quint64 generation = ++m_playbackGeneration;
+    const QPointer<QsoRecorder> guard(this);
     emit muteRxRequested(true);
+    // Direct signal observers may stop, replace, or destroy this playback.
+    if (!guard || !m_playing || m_playbackGeneration != generation) {
+        return;
+    }
     emit playbackStarted();
+}
+
+QAudio::Error QsoRecorder::startPlaybackSink(const QAudioDevice& device,
+                                            const QAudioFormat& format)
+{
+    if (m_startPlaybackSinkForTest) {
+        return m_startPlaybackSinkForTest(m_playBuffer, format);
+    }
+    m_playSink = new QAudioSink(device, format, this);
+    // 300 ms ring buffer: absorbs Windows WASAPI jitter (default ~40 ms starves
+    // on event-loop hiccups and inserts silence).  Backend may clamp to its
+    // period granularity; not an error if the effective size differs.
+    m_playSink->setBufferSize(format.bytesForDuration(300'000));
+    connect(m_playSink, &QAudioSink::stateChanged,
+            this, &QsoRecorder::onPlaybackSinkState);
+    m_playSink->start(&m_playBuffer);
+
+    if (m_playSink->state() == QAudio::StoppedState) {
+        return m_playSink->error();
+    }
+    return QAudio::NoError;
+}
+
+void QsoRecorder::releasePlaybackSink(bool stop)
+{
+    if (m_releasePlaybackSinkForTest) {
+        m_releasePlaybackSinkForTest(stop);
+        return;
+    }
+    if (m_playSink) {
+        if (stop) {
+            m_playSink->stop();
+        }
+        m_playSink->disconnect(this);
+        // deleteLater(), NOT a direct delete, and it must stay that way:
+        // onPlaybackSinkState() is a DIRECT connection from
+        // QAudioSink::stateChanged, so a natural end-of-file arrives here with
+        // the sink's own emission still on the stack. Destroying it there frees
+        // the sender mid-emit; disconnect(this) severs the connection but does
+        // not unwind that frame.
+        //
+        // The cost is that ~QsoRecorder cannot run the deferred delete, so the
+        // sink falls to ~QObject instead -- after m_playBuffer and m_playPcm
+        // have gone as members. That is safe because stop() above has already
+        // halted the pull, and it stays safe only while this order holds.
+        m_playSink->deleteLater();
+        m_playSink = nullptr;
+    }
 }
 
 void QsoRecorder::stopPlayback()
 {
     if (!m_playing) return;
     m_playing = false;
+    const quint64 generation = ++m_playbackGeneration;
 
-    if (m_playSink) {
-        m_playSink->stop();
-        m_playSink->disconnect(this);
-        m_playSink->deleteLater();
-        m_playSink = nullptr;
-    }
+    releasePlaybackSink(true);
     if (m_playBuffer.isOpen()) m_playBuffer.close();
 
+    const QPointer<QsoRecorder> guard(this);
     emit muteRxRequested(false);
+    if (!guard || m_playing || m_playbackGeneration != generation) {
+        return;
+    }
     emit playbackStopped();
 }
 

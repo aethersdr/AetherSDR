@@ -181,6 +181,83 @@ int main(int argc, char** argv)
     CHECK(model.portB().source == QLatin1String("FLEX-8600"));
     CHECK(qFuzzyCompare(model.portB().freqKhz + 1.0, 1.0));
 
+    // ── Poll rate follows the key ────────────────────────────────────
+    //
+    // The poll rate IS the meter's data rate: the device pushes nothing of
+    // its own. Fast enough to see a speech envelope is ~60 Hz (the reported
+    // value changes every 17 ms median on live hardware), but there is
+    // nothing to watch while receiving, so the rate follows ptt.
+    {
+        CHECK(!conn.isTransmitting());
+        CHECK(conn.pollIntervalMs() == TgxlConnection::kPollRxMs);
+
+        // Either port keyed is enough -- power is passing through the tuner.
+        peer->write("S240|status fwd=46.19 peak=49.15 max=62.43 swr=-29.1009 "
+                    "pttA=1 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
+                    "bypassA=0 bypassRxA=0 antA=0 "
+                    "pttB=0 bandB=0 modeB=0 flexB=FLEX-8600 freqB=0.000 "
+                    "bypassB=0 bypassRxB=0 antB=0 "
+                    "state=1 active=1 tuning=0 bypass=0 ag=0 "
+                    "relayC1=44 relayL=12 relayC2=8\n");
+        peer->flush();
+        CHECK(spin([&] { return conn.isTransmitting(); }));
+        CHECK(conn.pollIntervalMs() == TgxlConnection::kPollTxMs);
+
+        // Unkeying drops it back, so an idle station is not polled 60 times
+        // a second forever.
+        peer->write("S241|status fwd=21.42 peak=21.42 max=62.43 swr=-60.0000 "
+                    "pttA=0 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
+                    "bypassA=0 bypassRxA=0 antA=0 "
+                    "pttB=0 bandB=0 modeB=0 flexB=FLEX-8600 freqB=0.000 "
+                    "bypassB=0 bypassRxB=0 antB=0 "
+                    "state=1 active=1 tuning=0 bypass=0 ag=0 "
+                    "relayC1=44 relayL=12 relayC2=8\n");
+        peer->flush();
+        CHECK(spin([&] { return !conn.isTransmitting(); }));
+        CHECK(conn.pollIntervalMs() == TgxlConnection::kPollRxMs);
+
+        // The radio can raise it without waiting for a frame -- that 250 ms
+        // is most of the first syllable.
+        conn.setTransmitting(true);
+        CHECK(conn.pollIntervalMs() == TgxlConnection::kPollTxMs);
+        conn.setTransmitting(false);
+    }
+
+    // ── `peak`, and why the gauge cannot be driven from `fwd` ────────
+    //
+    // `fwd` is a single instant, sampled well below the speech envelope rate.
+    // Measured against a live voice transmission at 4 Hz, roughly three
+    // samples in four read 21.4 dBm -- 0.14 W, the idle noise floor -- while
+    // the same frames' `peak` reached 49.15 dBm (82 W) and the operator's
+    // exciter drive showed 60 W+. Peaking `fwd` therefore holds the loudest
+    // silence. These are real frames from that capture.
+    {
+        QSignalSpy meters(&model, &TunerModel::metersChanged);
+
+        // Mid-syllable: fwd is near the floor, peak is carrying the envelope.
+        peer->write("S231|status fwd=21.83 peak=49.15 max=62.43 swr=-60.0000 "
+                    "pttA=1 bandA=6 modeA=1 flexA=FLEX-8600 freqA=14161.500 "
+                    "bypassA=0 bypassRxA=0 antA=0 "
+                    "pttB=0 bandB=0 modeB=0 flexB=FLEX-8600 freqB=0.000 "
+                    "bypassB=0 bypassRxB=0 antB=0 "
+                    "state=1 active=1 tuning=0 bypass=0 ag=0 "
+                    "relayC1=44 relayL=12 relayC2=8\n");
+        peer->flush();
+        CHECK(spin([&] { return meters.count() >= 1; }));
+
+        const auto args = meters.takeLast();
+        const double fwdW  = args.at(0).toDouble();
+        const double peakW = args.at(2).toDouble();
+
+        // 21.83 dBm is 0.15 W; 49.15 dBm is 82 W. The gauge reading the first
+        // of these while the operator is speaking is the reported fault.
+        CHECK(fwdW < 1.0);
+        CHECK(peakW > 70.0 && peakW < 95.0);
+        // The whole point: they are not the same number, and the peak is the
+        // one that corresponds to what the radio's PEP meter shows.
+        CHECK(peakW > fwdW * 100.0);
+    }
+
     // ── `tuning`, off the direct wire ─────────────────────────────────
     //
     // Both direct frames carry it, and abortTune() is gated on it — on this

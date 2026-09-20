@@ -238,19 +238,52 @@ void GpuSelector::applyAtStartup()
     }
 
 #if defined(Q_OS_LINUX)
-    // Honour an explicit user override of any GPU-selection env.
-    if (qEnvironmentVariableIsSet("__NV_PRIME_RENDER_OFFLOAD")
-            || qEnvironmentVariableIsSet("__GLX_VENDOR_LIBRARY_NAME")
-            || qEnvironmentVariableIsSet("DRI_PRIME")) {
-        s_appliedSummary = QStringLiteral("'%1' requested, but __NV_PRIME/__GLX/DRI_PRIME env already set — left as-is")
-                               .arg(chosen->name);
-        return;
-    }
     // The right lever differs by windowing system: __GLX_VENDOR_LIBRARY_NAME only
     // applies under X11/XWayland (GLX).  Under Wayland the app uses EGL, where it
     // is useless and =nvidia can raise GLX BadValue, so set only the
     // windowing-agnostic offload hints.
     const bool wayland = willUseWayland();
+
+    // Honour an explicit user override of the GPU-selection env — but only a
+    // variable that means something for the windowing system in play.
+    //
+    // __GLX_VENDOR_LIBRARY_NAME=nvidia is in every hybrid-graphics recipe on
+    // the web, so it is exported by a great many sessions, and under Wayland it
+    // selects nothing at all: the app is on EGL, glvnd never reads it, and
+    // rendering stays on the integrated GPU. Vetoing the operator's choice on
+    // account of it meant that on a Wayland desktop that had followed any of
+    // that advice, picking the discrete GPU in the menu did nothing and said so
+    // only in a log line nobody reads. Under X11 it is a real override and is
+    // still honoured. (Reported on an RTX 4090 laptop under Hyprland: selected
+    // NVIDIA, kept getting Intel.)
+    const char* vetoedBy = nullptr;
+    if (qEnvironmentVariableIsSet("__NV_PRIME_RENDER_OFFLOAD")) {
+        vetoedBy = "__NV_PRIME_RENDER_OFFLOAD";
+    } else if (qEnvironmentVariableIsSet("DRI_PRIME")) {
+        vetoedBy = "DRI_PRIME";
+    } else if (!wayland && qEnvironmentVariableIsSet("__GLX_VENDOR_LIBRARY_NAME")) {
+        // NB: `wayland` is a prediction from the environment, not the backend
+        // Qt ends up on. A later `-platform xcb` on the command line, or a
+        // Wayland plugin that fails to load and falls back through the
+        // `wayland;xcb` list, can still land us on GLX — and neither is
+        // knowable here, because this runs before QApplication parses argv.
+        //
+        // The cost of getting it wrong is one summary line naming a GPU we may
+        // not have got. It is not a rendering change: the Wayland branch never
+        // sets __GLX_VENDOR_LIBRARY_NAME, so the operator's own value still
+        // decides GLX dispatch exactly as it did before, __NV_PRIME_RENDER_
+        // OFFLOAD alone is inert for GLX against a mesa vendor, and DRI_PRIME
+        // is correct under either backend. Nothing here can re-arm the GLX
+        // BadValue this file's comment records — that needs us to SET the GLX
+        // variable under Wayland, which this path never does.
+        vetoedBy = "__GLX_VENDOR_LIBRARY_NAME";
+    }
+    if (vetoedBy) {
+        s_appliedSummary =
+            QStringLiteral("'%1' requested, but %2 is already set in the environment — left as-is")
+                .arg(chosen->name, QString::fromLatin1(vetoedBy));
+        return;
+    }
     if (chosen->name.contains(QLatin1String("NVIDIA"))) {
         qputenv("__NV_PRIME_RENDER_OFFLOAD", "1");        // GLX + EGL offload hint
         qputenv("__VK_LAYER_NV_optimus", "NVIDIA_only");  // Vulkan offload hint

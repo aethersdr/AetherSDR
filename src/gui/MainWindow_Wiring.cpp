@@ -19,6 +19,7 @@
 
 #include "MainWindow.h"
 #include "models/CwDecodeSettings.h"
+#include "core/backends/AutoRfGainControl.h"
 #include "core/ClientDisplaySettings.h"
 #include "core/backends/NoiseFloorAutoAdjustGate.h"
 #include <QHBoxLayout>
@@ -5465,6 +5466,47 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(rfGainSettingsKey(sw), QString::number(gain));
         s.save();
     });
+
+    // AUTO RF GAIN. Through the model, for the same reason the gain itself is:
+    // a backend that owns the loop in its own state is the only thing that can
+    // arm it, and there is no wire text for this on any family.
+    //
+    // NOTHING IS PERSISTED HERE, unlike the RF Gain slider immediately above.
+    // The switch is the BACKEND's to remember, in its own operating state --
+    // docs/HERMES.md asks that a value the radio cannot store be persisted in
+    // the family's OperatingState path and "never in a flat AppSettings key",
+    // and a preference recorded per-family in shared GUI settings was exactly
+    // that. So this lambda commands and reflects, and owns no storage.
+    connect(menu, &SpectrumOverlayMenu::autoRfGainChanged,
+            this, [this, sw](bool on) {
+        auto* autoGain = m_radioModel.autoRfGain();
+        if (autoGain) {
+            autoGain->setArmed(on);
+        }
+        // READ BACK WHAT ACTUALLY HAPPENED. The backend may DECLINE to arm --
+        // the HL2 refuses from a gain baseline inside the register region where
+        // #5354 measured +48 dB reading identically to +18 dB -- and a checkbox
+        // that stayed ticked over a control that is not running would be the
+        // #5395 defect exactly: a UI reporting one state while the radio is in
+        // another. So ask the control rather than assuming the request took.
+        if (auto* m = sw->overlayMenu()) {
+            m->setAutoRfGainEnabled(autoGain && autoGain->isArmed());
+        }
+    });
+    // THE READOUT HALF. RFC #5535 approved the loop above on the condition that
+    // both the clipping and the loop's OWN ACTION are visible, so this is not
+    // optional decoration: without it the control is not the one that was
+    // approved. Pushed on change from the model rather than polled, and seeded
+    // immediately below so a panadapter opened after the radio has already
+    // spoken does not sit blank.
+    connect(&m_radioModel, &RadioModel::frontEndOverloadChanged,
+            menu, [sw](const AetherSDR::FrontEndOverload& state) {
+        if (auto* m = sw->overlayMenu()) {
+            m->setFrontEndOverload(state);
+        }
+    });
+    menu->setFrontEndOverload(m_radioModel.frontEndOverload());
+
     connect(menu, &SpectrumOverlayMenu::loopAToggled,
             this, [this, applet](bool on) {
         m_radioModel.sendCommand(
@@ -5864,6 +5906,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         // Initial-header failures never emit recordingStopped.
         w->setRecordOn(m_qsoRecorder->isRecording());
         w->setPlayEnabled(m_qsoRecorder->hasLastRecording());
+        w->setPlayOn(m_qsoRecorder->isPlaying());
     });
     // Client-side playback
     connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
@@ -5878,8 +5921,11 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 sl->setPlayOn(on);
         }
     });
-    connect(m_qsoRecorder, &QsoRecorder::playbackStopped, w, [w]() {
-        w->setPlayOn(false);
+    connect(m_qsoRecorder, &QsoRecorder::playbackStarted, w, [this, w]() {
+        w->setPlayOn(m_qsoRecorder->isPlaying());
+    });
+    connect(m_qsoRecorder, &QsoRecorder::playbackStopped, w, [this, w]() {
+        w->setPlayOn(m_qsoRecorder->isPlaying());
     });
     connect(s, &SliceModel::recordOnChanged, w, &VfoWidget::setRecordOn);
     connect(s, &SliceModel::playOnChanged, w, &VfoWidget::setPlayOn);
@@ -6053,12 +6099,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     // setup beside daxIqChannelChanged), not the flag — no connect here. (#3853)
 
     // AetherDSP button on the per-slice DSP tab — toggles the modeless
-    // m_dspDialog (press to open, press again to close) so it matches its
+    // m_rxDialog (press to open, press again to close) so it matches its
     // sibling AetherVoice button instead of being a one-way launcher (#3877).
     // The Settings menu action and the RX chain double-click keep pure open
-    // semantics by calling ensureAetherDspDialog() directly.
+    // semantics by calling ensureAetherRxDialog() directly.
     connect(w, &VfoWidget::aetherDspRequested, this, [this] {
-        toggleAetherDspDialog();
+        toggleAetherRxDialog();
     });
 
     // Accent the ADSP launcher whenever any client-side NR module is active, so
@@ -6169,8 +6215,8 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 void MainWindow::wireModemAudioCompletion()
 {
     connect(m_audio, &AudioEngine::modemTxAudioFinished,
-            this, [this](quint64 token) {
-        m_radioModel.finishTxAudio(token);
+            this, [this](quint64 token, const TxCoordinator::Context& context) {
+        m_radioModel.finishTxAudio(token, context);
     });
 }
 
