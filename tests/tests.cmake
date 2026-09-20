@@ -1126,6 +1126,10 @@ add_test(NAME hl2_receivers_test COMMAND hl2_receivers_test)
 add_executable(hl2_spectrum_test tests/hl2_spectrum_test.cpp)
 target_include_directories(hl2_spectrum_test PRIVATE src ${FFTW3_INCLUDE_DIRS})
 target_link_libraries(hl2_spectrum_test PRIVATE aethercore Qt6::Core ${FFTW3_LIBRARIES})
+# The fftwSetupLock() coverage runs a second thread against a held lock.
+if(UNIX)
+    target_link_libraries(hl2_spectrum_test PRIVATE pthread)
+endif()
 add_test(NAME hl2_spectrum_test COMMAND hl2_spectrum_test)
 
 # Transport discontinuities must invalidate partial FFTs before IQ delivery.
