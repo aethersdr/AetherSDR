@@ -1974,9 +1974,29 @@ private:
     // bin per frame for no gain the operator can see.
     //
     // It is also correctness, not just load: the widget scales its time axis
-    // from line_duration, so a row must actually represent line_duration of
-    // time. Unpaced, rows arrived at the full frame rate and the visible
-    // history was several times shorter than the axis claimed.
+    // from line_duration, so a row must actually ARRIVE every line_duration.
+    // Unpaced, rows arrived at the full frame rate and the visible history was
+    // several times shorter than the axis claimed.
+    //
+    // What the gate fixes is the CADENCE, and only the cadence. It does not
+    // make a row represent its interval, and an earlier wording here claimed it
+    // did -- which is why the remaining gap has been easy to miss. Each emitted
+    // row is still the single frame that happened to land on the gate: one FFT
+    // window out of the whole localRowIntervalMs. At 384 kHz that window is
+    // 1024/384000 = 2.67 ms (docs/HERMES.md 15.2.1 states the same thing as
+    // 375 fps; fftSize is Hl2RxDsp.h's 1024). At rate 10,
+    // localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 -- 0.66 % --
+    // and a signal shorter than the gap between frames is absent from the
+    // history entirely, not merely attenuated. The frames in between are
+    // dropped, never accumulated.
+    //
+    // The interval a row SHOULD integrate is not an open question:
+    // WaterfallRate::localRowIntervalMs(rate) is already the span of time the
+    // row occupies on screen, and WaterfallTimeMarkers labels the axis on that
+    // basis. The open question is which LAYER owns the accumulation and in
+    // which domain, because averaging dBFS is averaging logarithms -- see
+    // upstream #5782, which names this row and rules the above-the-seam variant
+    // out in its Option C. Do not add an accumulator here until that lands.
     QHash<int, qint64> m_backendWfLastRowNs;
     // Covers only the window before MainWindow seeds the pan model from the
     // operator's sliders. 100 is the top of the 1..100 rate control and matches
