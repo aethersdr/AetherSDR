@@ -1426,5 +1426,11 @@
   "note": "Selected-receiver fixed24 decoder PCM and bounded delivery, independent of speaker controls. Native ingress uses normalized typed slice frames; the compatibility DAX lane uses RadioModel's existing stream and holder registry.",
   "split": "Core: receiver selection, epochs, bounded backlog, rate conversion and decoder resets. Flex compatibility: DAX channel selection and central consumer holds; no wire commands are generated here.",
   "confidence": "high"
+ },
+ "models/PanZoomModeGate.h": {
+  "tag": "mixed(flex)",
+  "note": "The ONE predicate admitting a band_zoom=/segment_zoom= write, and the same function the B/S buttons enable from. Universal in what it asks \u2014 a refusal ladder over connected / command-plane / pan-known that any family needs \u2014 family-specific in one rung: those are FlexLib verbs on `display pan set`, so the middle test is usesFlexCommandPlane (RadioModel::usesFlexCommandPlane(), a family() == \"flex\" check) and the enum names PanZoomModeRefusal::NoFlexCommandPlane. Same shape as ModelCapabilities.h: a universal question answered by family-specific means. Not vendor(...) \u2014 it is no wire surface. Zero includes, no Flex type, no command string; Qt-free constexpr so MainWindow, the button enable and the test read one function instead of three copies.",
+  "split": "Flex: the usesFlexCommandPlane rung and the NoFlexCommandPlane refusal. Core: the ladder itself and bandSegmentZoomAvailable(). Splitting is a rename, not a move \u2014 when a second family gains a zoom verb the rung becomes a declared capability the backend populates and the header is universal with its body unchanged.",
+  "confidence": "high"
  }
 }
