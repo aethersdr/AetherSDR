@@ -15,9 +15,14 @@
 #include "gui/ModemChrome.h"
 #include "core/ThemeManager.h"
 
+#include "TestSettingsProfile.h"
+
+#include <QApplication>
 #include <QRegularExpression>
 #include <QString>
 #include <QtTest>
+
+#include <cstdio>
 
 using namespace AetherSDR;
 
@@ -30,6 +35,7 @@ private slots:
     void everyPlaceholderIsSubstituted();
     void compactIsSmallerButNotADifferentPalette();
     void everyThemeTokenInTheSheetResolves();
+    void checkedLosesToDisabled();
 };
 
 namespace {
@@ -154,5 +160,49 @@ void ModemChromeTest::everyThemeTokenInTheSheetResolves()
     QVERIFY2(checked > 0, "no tokens found -- has the sheet stopped using them?");
 }
 
-QTEST_MAIN(ModemChromeTest)
+void ModemChromeTest::checkedLosesToDisabled()
+{
+    // QPushButton:checked and QPushButton:disabled tie on specificity -- one
+    // pseudo-class each on the same type -- so which one paints a button that
+    // is both comes down to source order, and the later rule wins. A disabled
+    // control must not render as "on and doing something", so :checked has to
+    // stay above :disabled. Nothing about that ordering is self-evident when
+    // reading the sheet, which is why it is asserted rather than commented.
+    for (const auto scale : {ModemChrome::Scale::Dialog, ModemChrome::Scale::Compact}) {
+        const QString sheet = ModemChrome::styleSheet(scale);
+        const int checkedAt = sheet.indexOf(QStringLiteral("QPushButton:checked {"));
+        const int disabledAt = sheet.indexOf(QStringLiteral("QPushButton:disabled {"));
+        QVERIFY2(checkedAt >= 0, "QPushButton:checked rule is gone");
+        QVERIFY2(disabledAt >= 0, "QPushButton:disabled rule is gone");
+        QVERIFY2(checkedAt < disabledAt,
+                 "QPushButton:checked must precede :disabled, or a disabled "
+                 "checked button paints as latched");
+    }
+}
+
+// Not QTEST_MAIN: ThemeManager is a singleton that reads ActiveTheme from
+// AppSettings on construction and writes it back (ThemeManager.cpp:367 and
+// :669-670). Without an isolated profile the run would mutate the real
+// settings database of whoever executes it, and -- the part that breaks the
+// assertions -- everyThemeTokenInTheSheetResolves would resolve tokens
+// against whatever theme that store happens to name. A user theme missing
+// color.meter.gainReduction would fail the test for reasons unrelated to the
+// sheet, and one defining a token the shipped themes lack would mask exactly
+// the class of bug the test exists to catch. The profile therefore has to
+// exist before the first instance() call, which means before qExec.
+int main(int argc, char** argv)
+{
+    TestSettingsProfile settingsProfile(QStringLiteral("aether-modem-chrome-test"));
+    if (!settingsProfile.isValid()) {
+        std::fprintf(stderr, "FAIL could not create isolated settings profile\n");
+        return 1;
+    }
+    QApplication app(argc, argv);
+    // Pin the baseline explicitly rather than relying on the empty profile
+    // falling back to it, so the tokens are checked against a theme this test
+    // names.
+    ThemeManager::instance().setActiveTheme(QStringLiteral("Default Dark"));
+    ModemChromeTest tc;
+    return QTest::qExec(&tc, argc, argv);
+}
 #include "modem_chrome_test.moc"
