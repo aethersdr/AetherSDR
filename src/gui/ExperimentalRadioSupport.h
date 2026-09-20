@@ -11,11 +11,28 @@ struct ExperimentalRadioDescriptor {
     QString noticeSettingKey;
 };
 
+inline bool experimentalRadioIdentityPending(const QString& family, const QString& model)
+{
+    return family.trimmed().compare(QLatin1String("icom"), Qt::CaseInsensitive) == 0
+        && (model.trimmed().isEmpty()
+            || model.trimmed().compare(
+                   QLatin1String("Unknown Icom"), Qt::CaseInsensitive) == 0);
+}
+
 inline std::optional<ExperimentalRadioDescriptor> experimentalRadioDescriptor(
-    const QString& family)
+    const QString& family, const QString& model = {})
 {
     const QString normalized = family.trimmed().toLower();
     if (normalized == QLatin1String("icom")) {
+        // The backend derives this canonical model name from the radio's
+        // verified CI-V 19 00 model ID (0xB6). Keep the CI-V byte and its
+        // mapping below the radio seam; the GUI consumes only the normalized
+        // capability identity. Other and unknown Icom models remain
+        // experimental.
+        if (model.trimmed().compare(
+                QLatin1String("IC-7300MK2"), Qt::CaseInsensitive) == 0) {
+            return std::nullopt;
+        }
         return ExperimentalRadioDescriptor{
             QStringLiteral("Icom"),
             QStringLiteral("ShowExperimentalRadioNoticeIcomV1")};

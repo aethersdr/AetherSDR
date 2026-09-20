@@ -1867,7 +1867,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // state via DAX2 — matches SmartSDR Console behavior. (#2315)
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         m_audio->setDaxTxMode(isDigital);
-        if (!profileLoadRadioStateWritesHeld()) {
+        // `transmit dax` and DAX TX streams belong to Flex's command plane.
+        // Icom and the other typed-seam backends carry their audio through the
+        // backend itself; pushing the Flex reset on connect is both inert and
+        // an operator-facing unsupported-control warning.
+        if (m_radioModel.hasCommandPlane() && !profileLoadRadioStateWritesHeld()) {
             m_radioModel.transmitModel().setDax(isDigital);
             if (isDigital) {
                 m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
@@ -2765,7 +2769,12 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId,
     // call requestPanDimensionsForRadio() instead so profile loads can defer
     // these writes; sending xpixels/ypixels while the radio is rebuilding a
     // profile can make the radio autosave a partial GUIClient slice layout.
-    if (panId.isEmpty() || !sw || !panPixelDimensionsReady(sw)) {
+    // xpixels/ypixels is a Flex command-plane contract. In-process and CI-V
+    // backends publish their own fixed frame geometry; sending this text to
+    // them can only be dropped, which used to surface an unsupported-command
+    // status-bar warning during an otherwise successful Icom connect.
+    if (panId.isEmpty() || !sw || !panPixelDimensionsReady(sw)
+        || !m_radioModel.hasCommandPlane()) {
         return;
     }
 
