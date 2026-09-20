@@ -1851,6 +1851,21 @@ QJsonObject vfoFlagSnapshot(QWidget* vfo, RadioModel* radio)
     return flag;
 }
 
+// EVALUATE THE OPTIONAL ONCE. Both …IfLive() accessors read the clock INSIDE
+// themselves and compare against a staleness window, so calling one twice --
+// once to test it, once to dereference it -- can find it engaged and then
+// disengaged, and dereferencing a disengaged optional is undefined behaviour.
+//
+// The window is sub-microsecond and was reasoned from the code rather than
+// observed. That is precisely the kind of race that is cheaper to remove than
+// to argue about, and a caller cannot be expected to know the accessor reads a
+// clock. (#5499 review)
+template <typename T>
+static QJsonValue jsonOrNull(std::optional<T> v)
+{
+    return v ? QJsonValue(*v) : QJsonValue();
+}
+
 QJsonObject radioSnapshot(const RadioModel* r)
 {
     // Multi-Flex slot occupancy across the radio's whole slice capacity: each
@@ -1901,9 +1916,7 @@ QJsonObject radioSnapshot(const RadioModel* r)
         // claims to be this one. Same freshness rule and same constant as
         // `get meters`.txMetersFresh, so the two surfaces cannot disagree
         // about whether there is power. (#5499 item 1)
-        {QStringLiteral("txPower"),
-         r->meterModel().fwdPowerIfLive()
-             ? QJsonValue(*r->meterModel().fwdPowerIfLive()) : QJsonValue()},
+        {QStringLiteral("txPower"), jsonOrNull(r->meterModel().fwdPowerIfLive())},
         // Qualified, not the scalar: an absent or stale sensor reads null here
         // exactly as it does in `get meters`.
         //
@@ -2402,8 +2415,7 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         // -83.9. sLevelIfLive() declines when more than one receiver declares a
         // LEVEL meter, because then the scalar has no single answer and `all`
         // is where a client names the receiver it means. (#5499 item 2)
-        {QStringLiteral("sLevel"),
-         m->sLevelIfLive() ? QJsonValue(*m->sLevelIfLive()) : QJsonValue()},  // dBm
+        {QStringLiteral("sLevel"), jsonOrNull(m->sLevelIfLive())},           // dBm
         // Same constant the SWR gate uses, so "the TX meters are fresh" and "the
         // SWR is live" cannot drift apart as two different literals.
         {QStringLiteral("txMetersFresh"),
