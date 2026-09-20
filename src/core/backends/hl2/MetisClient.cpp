@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <span>
+#include <vector>
 
 #ifdef Q_OS_WIN
 // winsock2.h pulls in windows.h, whose min/max function-like macros otherwise
@@ -114,7 +116,8 @@ MetisClient::MetisClient(QObject* parent) : QObject(parent) {
     // At least one frequency bank ALWAYS exists, so the rotation length is
     // never zero and buildNextControlPacket() has something real to send from
     // the first call.
-    m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte);
+    m_ccConfig = ccConfig(m_params.sampleRate, 1, m_params.ocFilterByte,
+                          m_params.ditherBit, m_params.randomBit);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
     m_ccRxFreq.assign(1, ccRxFreq(0, m_params.rxFrequencyHz));
     m_ccTxFreq = ccTxFreq(m_params.rxFrequencyHz);
@@ -252,7 +255,8 @@ bool MetisClient::start(const Params& params)
     m_params = params;
     m_host = params.host;
     m_port = params.port;
-    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte);
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), m_params.ocFilterByte,
+                          m_params.ditherBit, m_params.randomBit);
     m_ccGain = ccRxGain(m_params.lnaGainDb);
     // Every receiver starts on RX1's frequency; Hl2Backend moves the rest as it
     // brings each slice up. The BANK COUNT is fixed here and never re-derived
@@ -282,6 +286,13 @@ bool MetisClient::start(const Params& params)
     m_bsBlocks = 0;
     m_bsTimeouts = 0;
     m_bsConsecutiveTimeouts = 0;
+    // Speaker audio belongs to a session: a block queued before the link went
+    // down describes a moment that has passed, and playing it into the new
+    // session's codec is a quarter-second of the previous connection.
+    m_speakerAudio.clear();
+    // The ATU request cannot survive a connect either. The radio boots with the
+    // bit clear, and re-asserting a tune nobody asked for would start one.
+    m_atuTune = false;
     // A CONNECT is where the gate's standing intent is cleared, and one of only
     // two places: a receiver-count restart CARRIES it (Params::bandscope), a
     // stop ends the session it belonged to. Cleared after `m_params = params`
@@ -372,6 +383,20 @@ bool MetisClient::start(const Params& params)
     m_connectWatchdog->start(kConnectTimeoutMs);
     m_startAttempts = 1;
     m_startRetryTimer->start(kStartRetryMs);
+
+    // EVERY CONNECT IS A CHANGE for the reference clock. The HL2 powers up on
+    // its own crystal whatever it was doing when we last let go of it, so an
+    // operator running a GPSDO into CL1 needs the VersaClock reprogrammed here
+    // and not only when they tick the box. Queued AFTER the priming burst so
+    // the stream is already up and the twenty-four banks ride ordinary EP2
+    // frames rather than the burst's hand-sent packets.
+    //
+    // Queued unconditionally, both ways: sending the "off" table to a radio
+    // that is already on its crystal is twenty-four harmless writes, and NOT
+    // sending it would leave a radio that had been switched to CL1 in a
+    // previous session — by us or by another client — running from a reference
+    // that may no longer be connected.
+    queueCl1Sequence(m_params.cl1RefClock);
     return true;
 }
 
@@ -501,6 +526,15 @@ void MetisClient::stop()
             && bank[2] == (kI2cStopAtEnd | kIoBoardI2cAddr);
     });
     m_ioBoardTxFreqSent = false;
+    // Same rule, higher stakes: a half-sent VersaClock sequence finishing in
+    // the NEXT session would configure the part from the middle of a table
+    // whose earlier writes never happened — that is not a wrong band relay,
+    // it is a converter with no usable clock. start() re-queues the whole
+    // sequence, so nothing is lost by dropping the remainder here.
+    dropQueuedCl1Banks();
+    // Whatever was still queued for the speaker describes a session that has
+    // ended, and on a radio with no codec the same bytes would be EADDR writes.
+    m_speakerAudio.clear();
     // The radio's response register does not survive a metis-stop, and neither
     // does the quarantine's reason for existing: nothing the next stream
     // delivers can be a reply to a request from this one.
@@ -550,7 +584,8 @@ void MetisClient::setSampleRate(SampleRate rate)
     // register has to be carried through every rebuild of it; anything a
     // rebuild re-defaults gets silently dropped the next time an unrelated
     // control changes — a zoom would have released the band relays.
-    m_ccConfig = ccConfig(rate, effectiveNumRx(), m_params.ocFilterByte);
+    m_ccConfig = ccConfig(rate, effectiveNumRx(), m_params.ocFilterByte,
+                          m_params.ditherBit, m_params.randomBit);
 }
 
 void MetisClient::setReceiverCount(int count)
@@ -576,7 +611,8 @@ void MetisClient::setReceiverCount(int count)
 
     if (!m_running || !m_socket) {
         // Not streaming: just restate the banks. There is no layout to race.
-        m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte);
+        m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte,
+                              m_params.ditherBit, m_params.randomBit);
         m_ccRxFreq.assign(static_cast<std::size_t>(after),
                           ccRxFreq(0, m_params.rxFrequencyHz));
         for (int i = 0; i < after; ++i) {
@@ -596,7 +632,8 @@ void MetisClient::setReceiverCount(int count)
     // that could be decoded against the wrong layout.
     countTx(sendTo(*m_socket, metisStop(m_watchdogEnabled), m_host, m_port));
 
-    m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte);
+    m_ccConfig = ccConfig(m_params.sampleRate, after, m_params.ocFilterByte,
+                          m_params.ditherBit, m_params.randomBit);
     m_ccRxFreq.clear();
     for (int i = 0; i < after; ++i) {
         const std::uint32_t hz = (static_cast<std::size_t>(i) < keptHz.size())
@@ -699,7 +736,8 @@ void MetisClient::setBandFilter(int ocFilterByte)
     if (oc == m_params.ocFilterByte)
         return;                       // relays already where they belong
     m_params.ocFilterByte = oc;
-    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), oc);
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(), oc,
+                          m_params.ditherBit, m_params.randomBit);
     // NOTHING IS QUEUED HERE, and that is deliberate rather than an omission.
     //
     // buildNextControlPacket() puts LIVE m_ccConfig in bank A of EVERY EP2
@@ -715,6 +753,102 @@ void MetisClient::setBandFilter(int ocFilterByte)
     // that frame on the old one. Bank A re-asserted the truth on the following
     // frame, so it was ~1 ms of stale rate: small, real, and intended by
     // nothing. (aethersdr/AetherSDR#4579)
+}
+
+void MetisClient::setDitherRandomBits(bool dither, bool random)
+{
+    if (dither == m_params.ditherBit && random == m_params.randomBit)
+        return;
+    m_params.ditherBit = dither;
+    m_params.randomBit = random;
+    m_ccConfig = ccConfig(m_params.sampleRate, effectiveNumRx(),
+                          m_params.ocFilterByte, dither, random);
+    // NOTHING IS QUEUED, for the reason setBandFilter() spells out at length:
+    // live m_ccConfig rides bank A of every EP2 frame, so this is on the wire
+    // within ~2.6 ms at 48 kHz, and a queued COPY would be a snapshot that
+    // could re-assert a stale sample rate behind a later change.
+}
+
+void MetisClient::setLocalCodec(bool present)
+{
+    if (present == m_params.hasCodec)
+        return;
+    m_params.hasCodec = present;
+    if (!present) {
+        // DROPPED, not left to drain. With no codec declared the audio slot is
+        // EADDR again, so every queued sample would be an extended-address
+        // write rather than sound — see ep2WriteTxAudio().
+        m_speakerAudio.clear();
+    }
+}
+
+void MetisClient::submitSpeakerAudio(const QByteArray& interleavedInt16)
+{
+    if (!m_params.hasCodec)
+        return;                       // the slot is EADDR on this radio
+    const auto n = static_cast<std::size_t>(interleavedInt16.size()) / sizeof(std::int16_t);
+    if (n == 0)
+        return;
+    const char* raw = interleavedInt16.constData();
+    for (std::size_t i = 0; i < n; ++i) {
+        std::int16_t v = 0;
+        std::memcpy(&v, raw + i * sizeof(std::int16_t), sizeof(v));
+        m_speakerAudio.push_back(v);
+    }
+    // DROP THE OLDEST, not the newest. This queue is a speaker feed: falling
+    // behind and then playing a quarter-second-old block is worse than a short
+    // gap, and keeping the newest is what lets the stream recover on its own
+    // after a stall instead of staying permanently late.
+    //
+    // Trimmed to an EVEN count so the drop cannot land between a left and a
+    // right sample — an odd trim would swap the channels of everything after
+    // it, and stay swapped, because the offset carries into the next block.
+    while (m_speakerAudio.size() > kSpeakerAudioCapSamples)
+        m_speakerAudio.pop_front();
+    if (m_speakerAudio.size() % 2 != 0)
+        m_speakerAudio.pop_front();
+}
+
+void MetisClient::setCl1RefClock(bool externalRef)
+{
+    m_params.cl1RefClock = externalRef;
+    if (!m_running)
+        return;        // start() re-sends the sequence; see its call site
+    queueCl1Sequence(externalRef);
+}
+
+void MetisClient::queueCl1Sequence(bool externalRef)
+{
+    // Replace rather than append. Two sequences in the queue would apply the
+    // older one LAST — an operator who toggled the setting twice would end on
+    // the state they toggled away from.
+    dropQueuedCl1Banks();
+    for (const Cc& bank : versaClockCl1Banks(externalRef))
+        m_oneShot.push_back(bank);
+    qCInfo(lcHl2) << "HL2: CL1 reference clock ->"
+                  << (externalRef ? "external 10 MHz" : "onboard crystal")
+                  << "— queued" << kVersaClockCl1Banks << "VersaClock writes";
+}
+
+void MetisClient::dropQueuedCl1Banks()
+{
+    std::erase_if(m_oneShot, [](const Cc& bank) {
+        return bank[0] == kC0I2c1 && bank[1] == kI2cCookieWrite
+            && bank[2] == (kI2cStopAtEnd | kVersaClockI2cAddr);
+    });
+}
+
+void MetisClient::setAtuTuneRequest(bool request)
+{
+    if (request == m_atuTune)
+        return;
+    m_atuTune = request;
+    // 0x09 carries the drive level and the PA enable alongside this bit, so the
+    // whole bank is restated. Reading the level back out of m_ccTxDrive keeps
+    // the PA-enable rule in setTxDriveLevel()'s hands — there is exactly one
+    // place that decides whether the amplifier is on, and this is not it.
+    m_ccTxDrive = ccTxDrive(m_ccTxDrive[1], m_ccTxDrive[1] > 0, m_atuTune);
+    m_oneShot.push_back(m_ccTxDrive);
 }
 
 void MetisClient::setIoBoardTxFrequencyHz(quint64 hz)
@@ -999,7 +1133,9 @@ void MetisClient::setTxDriveLevel(int level)
     // transmit-blocked session. (#4449 review — complements the Hl2Backend guard)
     if (!m_txAllowed)
         level = 0;
-    m_ccTxDrive = ccTxDrive(level, level > 0);
+    // The ATU request is re-asserted, not re-decided: it shares this register,
+    // so rebuilding the bank without it would clear a tune in progress.
+    m_ccTxDrive = ccTxDrive(level, level > 0, m_atuTune);
     m_oneShot.push_back(m_ccTxDrive);
 }
 
@@ -1203,6 +1339,35 @@ std::array<std::uint8_t, kUsbPacketSize> MetisClient::buildNextControlPacket()
             m_txIq.pop_front();
         }
         ep2WriteTxIq(pkt, block);   // a short block leaves the rest as silence
+    }
+
+    // ---- the audio slot, for a radio that actually has a codec ----
+    //
+    // AFTER the IQ branches and outside them, both deliberately. Outside,
+    // because speaker audio plays on RECEIVE — that is the whole point of the
+    // codec, and gating it on `keyed` would mute the radio except while
+    // transmitting. After, because the two write disjoint halves of the same
+    // eight-byte sample and doing the audio first would only invite someone to
+    // "simplify" them into one pass that has to know about both.
+    //
+    // THE GATE IS NOT OPTIONAL. On a bare HL2 these four bytes are EADDR and
+    // writing a sample there is a register command, not a wasted write. That is
+    // why the condition is a DECLARED codec and not "do we happen to have audio
+    // queued" — a queue that filled by mistake must still not reach the wire.
+    if (m_params.hasCodec && !m_speakerAudio.empty()) {
+        // Whole stereo frames only. An odd count would swap the channels of
+        // everything after it, and the swap would carry into the next packet.
+        const std::size_t want = static_cast<std::size_t>(kTxSamplesPerPacket) * 2;
+        const std::size_t take = std::min(want, m_speakerAudio.size()) & ~std::size_t{1};
+        if (take > 0) {
+            std::vector<std::int16_t> block(m_speakerAudio.begin(),
+                                            m_speakerAudio.begin()
+                                                + static_cast<std::ptrdiff_t>(take));
+            m_speakerAudio.erase(m_speakerAudio.begin(),
+                                 m_speakerAudio.begin()
+                                     + static_cast<std::ptrdiff_t>(take));
+            ep2WriteTxAudio(pkt, block);
+        }
     }
     return pkt;
 }

@@ -132,6 +132,20 @@ private:
     // Mirrors buildCalibrationTab()'s own shape (gated on the capability, not
     // the family; a m_droopReseed lambda re-synced the same two ways).
     QWidget* buildDroopCalibrationTab();
+    // Which Hermes-Lite 2 variant is on the other end: local audio codec, the
+    // dither bit's three incompatible meanings, the companion filter board, the
+    // CL1 reference clock and the gateware ATU. Protocol 1 exposes none of it,
+    // so the operator is the only source — see Hl2HardwareOptions.
+    //
+    // Gated on the FAMILY and not on a capability, unlike the two pages above,
+    // and that is the honest gate here: "does this radio have an AK4951
+    // companion board" is not something any backend can answer, so there is no
+    // capability to key off. Every control writes through the hl2 extension
+    // namespace, which refuses anything else.
+    QWidget* buildHl2HardwareTab();
+    // True when the connected radio is a Hermes-Lite 2 (or an HL2-compatible
+    // board such as the SquareSDR 2, which is indistinguishable on the wire).
+    bool isHl2Family() const;
     QWidget* buildAudioTab();
     QWidget* buildFiltersTab();
     QWidget* buildXvtrTab();
@@ -273,6 +287,12 @@ private:
     // commit that stale number to whichever radio is connected now.
     std::function<void()>     m_calibrationReseed;
     int                       m_droopCalibrationPageIndex{-1};
+    int                       m_hl2HardwarePageIndex{-1};
+    // Same reason as m_calibrationReseed: the page is built once per process
+    // and the dialog is a persistent singleton, so a different HL2 connected
+    // later would otherwise be shown — and written — with the first one's
+    // hardware options.
+    std::function<void()>     m_hl2HardwareReseed;
     // Same reason as m_calibrationReseed above, for the Droop Correction page.
     std::function<void()>     m_droopReseed;
     // Re-fills the Audio page's PC Input/Output combos from a LIVE device

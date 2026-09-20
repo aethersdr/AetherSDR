@@ -13,6 +13,7 @@
 #include "core/AutomationBridgeSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
+#include "core/backends/hl2/Hl2HardwareOptions.h" // which HL2 variant (HL2 Hardware page)
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -818,6 +819,23 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         if (m_calibrationReseed)
             m_calibrationReseed();
     });
+    // HL2 Hardware page — which variant of the board is actually connected.
+    // Gated on the FAMILY, not on a capability: "is there an AK4951 companion
+    // board in this box" is not something the wire can be asked, which is the
+    // whole reason these are settings. See buildHl2HardwareTab().
+    QTreeWidgetItem* hwItem = addPage(radioCategory, QStringLiteral("HL2 Hardware"),
+        QStringLiteral("hermes lite hl2 squaresdr square sdr codec ak4951 dither band volts "
+                       "speaker random filter board n2adr hpf cl1 reference clock gpsdo atu tuner"),
+        [this] { return buildHl2HardwareTab(); });
+    m_hl2HardwarePageIndex = m_pageIndexes.value(QStringLiteral("HL2 Hardware"));
+    setNavigationItemHidden(hwItem, !isHl2Family());
+    connect(m_model, &RadioModel::connectionStateChanged, this, [this, hwItem] {
+        settleNavigationLayout(m_navigation, setNavigationItemHidden(hwItem, !isHl2Family()));
+        // A different HL2 may now be connected — re-read ITS options, or the
+        // next click would write the previous radio's board into this one.
+        if (m_hl2HardwareReseed)
+            m_hl2HardwareReseed();
+    });
     // Droop Correction page — mirrors the Calibration page immediately above:
     // gated on the CAPABILITY (RadioCapabilities::hostDroopCalibration, the
     // ANAN-G2 today), with the ANAN namespace enforced at the request boundary.
@@ -914,13 +932,15 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                 const bool apdRow = item == m_pageItems.value(m_apdPageIndex);
                 const bool calRow = item == m_pageItems.value(m_calibrationPageIndex);
                 const bool droopRow = item == m_pageItems.value(m_droopCalibrationPageIndex);
+                const bool hl2HwRow = item == m_pageItems.value(m_hl2HardwarePageIndex);
                 const bool gated =
                     (isFlexOnlyPage(item) && !isCapabilityPageAvailable(item))
                     || (isGpsPage(item)
                         && !isGpsSetupAvailable())
                     || (apdRow && !m_model->transmitModel().apdConfigurable())
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
-                    || (droopRow && !droopCalibrationAvailable(m_model->backend()));
+                    || (droopRow && !droopCalibrationAvailable(m_model->backend()))
+                    || (hl2HwRow && !isHl2Family());
                 if (!gated) {
                     navigationChanged |= setNavigationItemHidden(item, !matches);
                 }
@@ -998,6 +1018,8 @@ void RadioSetupDialog::showEvent(QShowEvent* event)
         m_calibrationReseed();
     if (m_droopReseed)
         m_droopReseed();
+    if (m_hl2HardwareReseed)
+        m_hl2HardwareReseed();
     // Same reason, for the PC audio device lists: a headset connected or
     // removed while this dialog was hidden has to be picked up on show.
     if (m_audioDeviceReseed)
@@ -1007,6 +1029,15 @@ void RadioSetupDialog::showEvent(QShowEvent* event)
     // dialog was hidden, and there is no hotplug signal to tell us.
     for (const auto& reseed : m_serialPortReseeds)
         reseed();
+}
+
+bool RadioSetupDialog::isHl2Family() const
+{
+    // Case-insensitive because the family string is compared against what the
+    // backend registered, and nothing in the seam promises its casing — the
+    // extension namespace this page writes to is the lowercase "hl2".
+    return m_model
+        && m_model->family().compare(QLatin1String("hl2"), Qt::CaseInsensitive) == 0;
 }
 
 bool RadioSetupDialog::isFlexOnlyPage(const QTreeWidgetItem* item) const
@@ -3669,6 +3700,381 @@ QWidget* RadioSetupDialog::buildCalibrationTab()
         refreshReadout();
     };
     m_calibrationReseed();
+
+    vbox->addStretch(1);
+    return page;
+}
+
+// ── HL2 Hardware tab ────────────────────────────────────────────────────────
+//
+// WHAT THIS PAGE IS FOR. A Hermes-Lite 2, an HL2 with the AK4951 companion
+// board, and a SquareSDR 2 are the SAME RADIO on the wire: the same discovery
+// reply, the same gateware version, no board ID anywhere in Protocol 1. They
+// are not the same hardware, and the differences are not cosmetic — the config
+// register's dither bit drives a band-voltage output on one, is a mandatory
+// "codec present" flag on the second, and switches the loudspeaker on the
+// third. The operator is the only party who knows which is on the bench, so
+// every control here is a DECLARATION about the hardware, not a preference.
+//
+// Nothing on this page is read back from the radio, because nothing here CAN
+// be: Protocol 1 has no readback for any of it. Every control therefore shows
+// what was stored for this radio and what is consequently going out on the
+// wire — see Hl2HardwareOptions.
+QWidget* RadioSetupDialog::buildHl2HardwareTab()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    auto& theme = AetherSDR::ThemeManager::instance();
+    auto themed = [&theme](QWidget* w, const QString& tpl) { theme.applyStyleSheet(w, tpl); };
+
+    static const QString kLabel =
+        QStringLiteral("QLabel { color: {{color.text.primary}}; font-size: 12px; }");
+    static const QString kHint =
+        QStringLiteral("QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    static const QString kGroup =
+        QStringLiteral("QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 4px; "
+                       "margin-top: 8px; padding-top: 12px; font-weight: bold; "
+                       "color: {{color.text.secondary}}; }"
+                       "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+
+    // Collected so the reseed lambda can dim the whole page in one pass when
+    // there is no radio identity to store against — same shape, and the same
+    // reason, as the Calibration page's calControls.
+    auto controls = std::make_shared<QVector<QPointer<QWidget>>>();
+
+    // The write path for the page. ONE function, so no control can persist a
+    // change without also pushing it, and the backend stays the only thing that
+    // decides what a change means on the wire.
+    //
+    // Sends only the fields the caller names: hw.set is deliberately partial,
+    // so a checkbox cannot clobber a combo the operator set a moment ago.
+    auto apply = [this](const QVariantMap& fields) {
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+                                        QStringLiteral("hw.set"), 0, fields);
+    };
+
+    auto* noRadioLbl = new QLabel(
+        "Connect the radio first. These settings describe one physical radio and are "
+        "stored against its identity, which does not exist until it has been connected.");
+    themed(noRadioLbl, QStringLiteral(
+        "QLabel { color: {{color.accent.danger}}; font-size: 12px; font-weight: bold; }"));
+    noRadioLbl->setWordWrap(true);
+    noRadioLbl->setVisible(false);
+    vbox->addWidget(noRadioLbl);
+
+    // ── Local audio codec ────────────────────────────────────────────────────
+    auto* codecGroup = new QGroupBox("Local Audio");
+    themed(codecGroup, kGroup);
+    auto* cvb = new QVBoxLayout(codecGroup);
+    cvb->setSpacing(6);
+
+    auto* codecIntro = new QLabel(
+        "A plain Hermes-Lite 2 has no audio codec: the slot the HPSDR protocol reserves for "
+        "headphone audio is used by the gateware as an extended-address register, so nothing "
+        "may be written there. Two variants do have a codec and do accept audio.");
+    themed(codecIntro, kHint);
+    codecIntro->setWordWrap(true);
+    cvb->addWidget(codecIntro);
+
+    auto* codecRow = new QHBoxLayout;
+    auto* codecLbl = new QLabel("Codec:");
+    themed(codecLbl, kLabel);
+    auto* codecCombo = new QComboBox;
+    codecCombo->setObjectName(QStringLiteral("hl2HwCodec"));
+    AetherSDR::applyComboStyle(codecCombo);
+    codecCombo->addItem(QStringLiteral("None — plain Hermes-Lite 2"), 0);
+    codecCombo->addItem(QStringLiteral("AK4951 — HL2+ companion board"), 1);
+    codecCombo->addItem(QStringLiteral("SquareSDR 2 — codec on the mainboard"), 2);
+    codecCombo->setAccessibleName(QStringLiteral("Local audio codec"));
+    codecCombo->setToolTip(QStringLiteral(
+        "Which local audio codec this board has.\n\n"
+        "None: a plain Hermes-Lite 2. Receive audio plays on the computer only.\n\n"
+        "AK4951: the HL2+ companion board. The dither bit is held high — the\n"
+        "gateware reads it as \"a codec is present\" — so the Dither control below\n"
+        "is taken out of your hands.\n\n"
+        "SquareSDR 2: the codec is on the mainboard. Here the dither bit switches\n"
+        "the internal loudspeaker instead, so it stays yours to set below."));
+    codecRow->addWidget(codecLbl);
+    codecRow->addWidget(codecCombo);
+    codecRow->addStretch(1);
+    cvb->addLayout(codecRow);
+    controls->append(codecCombo);
+    vbox->addWidget(codecGroup);
+
+    // ── The dither bit ───────────────────────────────────────────────────────
+    //
+    // ITS OWN GROUP, not a checkbox tacked onto the codec row, because it is
+    // the one control on this page whose MEANING changes with another control.
+    // The label and the hint below are rewritten from the selected codec, which
+    // is the only way an operator can be expected to know what they are
+    // switching.
+    auto* ditherGroup = new QGroupBox("Dither Bit");
+    themed(ditherGroup, kGroup);
+    auto* dvb = new QVBoxLayout(ditherGroup);
+    dvb->setSpacing(6);
+
+    auto* ditherChk = new QCheckBox("Dither bit");
+    ditherChk->setObjectName(QStringLiteral("hl2HwDither"));
+    themed(ditherChk, QStringLiteral(
+        "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }"));
+    dvb->addWidget(ditherChk);
+    controls->append(ditherChk);
+
+    auto* ditherHint = new QLabel;
+    themed(ditherHint, kHint);
+    ditherHint->setWordWrap(true);
+    dvb->addWidget(ditherHint);
+
+    auto* randomChk = new QCheckBox("Random bit");
+    randomChk->setObjectName(QStringLiteral("hl2HwRandom"));
+    themed(randomChk, QStringLiteral(
+        "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }"));
+    randomChk->setToolTip(QStringLiteral(
+        "The companion of the dither bit on the original openHPSDR hardware.\n"
+        "No Hermes-Lite 2 variant is known to use it for anything; offered for\n"
+        "parity with other HPSDR clients."));
+    dvb->addWidget(randomChk);
+    controls->append(randomChk);
+    vbox->addWidget(ditherGroup);
+
+    // Rewrites the dither control from the codec: three meanings, one bit.
+    auto refreshDither = [ditherChk, ditherHint, codecCombo] {
+        const int codec = codecCombo->currentData().toInt();
+        switch (codec) {
+        case 1:   // AK4951
+            ditherChk->setText(QStringLiteral("Dither bit — held high for the codec"));
+            ditherChk->setChecked(true);
+            // DIMMED WITH A STATED REASON, never hidden: the control still
+            // describes what is on the wire, and the reason it cannot be moved
+            // is the interesting part. The reason reaches a screen reader
+            // through accessibleDescription, because a tooltip is a mouse
+            // affordance and is never announced (AGENTS.md, three-state controls).
+            ditherChk->setEnabled(false);
+            ditherChk->setAccessibleDescription(QStringLiteral(
+                "Unavailable: the HL2+ gateware reads this bit as \"an audio codec "
+                "is present\", so it is held high and cannot be changed."));
+            ditherHint->setText(QStringLiteral(
+                "The HL2+ gateware reads this bit as \"an audio codec is present\". "
+                "It is held high for as long as the AK4951 is selected."));
+            break;
+        case 2:   // SquareSDR 2
+            ditherChk->setText(QStringLiteral("Internal loudspeaker"));
+            ditherChk->setEnabled(true);
+            ditherChk->setAccessibleDescription(QStringLiteral(
+                "Switches the SquareSDR 2's internal loudspeaker on or off."));
+            ditherHint->setText(QStringLiteral(
+                "On the SquareSDR 2 this bit switches the internal loudspeaker. "
+                "It is the same bit a Hermes-Lite 2 uses for its band-voltage output."));
+            break;
+        default:  // bare HL2
+            ditherChk->setText(QStringLiteral("Band voltage output"));
+            ditherChk->setEnabled(true);
+            ditherChk->setAccessibleDescription(QStringLiteral(
+                "Enables the Hermes-Lite 2's band-voltage output on the CL2 jack."));
+            ditherHint->setText(QStringLiteral(
+                "The Hermes-Lite 2 gateware uses this bit, undocumented, to drive a "
+                "band-dependent DC level on the CL2 jack — the \"band volts\" output."));
+            break;
+        }
+    };
+
+    // ── Companion filter board ───────────────────────────────────────────────
+    auto* filterGroup = new QGroupBox("Companion Filter Board");
+    themed(filterGroup, kGroup);
+    auto* fvb = new QVBoxLayout(filterGroup);
+    fvb->setSpacing(6);
+
+    auto* filterIntro = new QLabel(
+        "The Hermes-Lite 2 has no filters of its own — it drives seven open-collector "
+        "outputs that a board on J16 decodes. Where that board sits in the signal path "
+        "decides whether receive is filtered too.");
+    themed(filterIntro, kHint);
+    filterIntro->setWordWrap(true);
+    fvb->addWidget(filterIntro);
+
+    auto* filterRow = new QHBoxLayout;
+    auto* filterLbl = new QLabel("Board:");
+    themed(filterLbl, kLabel);
+    auto* filterCombo = new QComboBox;
+    filterCombo->setObjectName(QStringLiteral("hl2HwFilterBoard"));
+    AetherSDR::applyComboStyle(filterCombo);
+    filterCombo->addItem(QStringLiteral("None — nothing on J16"), 0);
+    filterCombo->addItem(QStringLiteral("N2ADR — receive and transmit"), 1);
+    filterCombo->addItem(QStringLiteral("N2ADR — transmit only"), 2);
+    filterCombo->setAccessibleName(QStringLiteral("Companion filter board"));
+    filterCombo->setToolTip(QStringLiteral(
+        "None: no board fitted. Every relay is released and the front end is bare.\n\n"
+        "Receive and transmit: the usual boxed Hermes-Lite 2 — the band's low-pass\n"
+        "and the AM-broadcast high-pass are ahead of the ADC as well as after the PA.\n\n"
+        "Transmit only: the low-pass bank is in the transmit path alone. This is the\n"
+        "SquareSDR 2's arrangement, and also an HL2 whose filter board sits between\n"
+        "the PA and the antenna. Receive then sees the bare front end unless you add\n"
+        "the 3 MHz high-pass below."));
+    filterRow->addWidget(filterLbl);
+    filterRow->addWidget(filterCombo);
+    filterRow->addStretch(1);
+    fvb->addLayout(filterRow);
+    controls->append(filterCombo);
+
+    auto* hpfChk = new QCheckBox("Receive through the N2ADR 3 MHz high-pass");
+    hpfChk->setObjectName(QStringLiteral("hl2HwN2adrHpf"));
+    themed(hpfChk, QStringLiteral(
+        "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }"));
+    hpfChk->setToolTip(QStringLiteral(
+        "Engages the board's AM-broadcast high-pass on receive only, on 80 m through\n"
+        "10 m. It stays out on 160 m — the radio's own switching supply couples spurs\n"
+        "into that filter — and below 1.6 MHz, where it would remove what you are\n"
+        "listening to."));
+    fvb->addWidget(hpfChk);
+    controls->append(hpfChk);
+    vbox->addWidget(filterGroup);
+
+    // The high-pass belongs to the transmit-only wiring: with the board in the
+    // receive path the filter rides the per-band pattern and this control
+    // decides nothing. Dimmed with a reason rather than hidden.
+    auto refreshHpf = [hpfChk, filterCombo] {
+        const bool txOnly = filterCombo->currentData().toInt() == 2;
+        hpfChk->setEnabled(txOnly);
+        hpfChk->setAccessibleDescription(
+            txOnly ? QStringLiteral("Adds the board's 3 MHz high-pass to the receive path.")
+                   : QStringLiteral(
+                         "Unavailable: this only applies when the filter board is in the "
+                         "transmit path alone. With the board on receive as well, the "
+                         "high-pass already rides the per-band filter selection."));
+    };
+
+    // ── Clock and tuner ──────────────────────────────────────────────────────
+    auto* miscGroup = new QGroupBox("Reference Clock and Tuner");
+    themed(miscGroup, kGroup);
+    auto* mvb = new QVBoxLayout(miscGroup);
+    mvb->setSpacing(6);
+
+    auto* cl1Chk = new QCheckBox("External 10 MHz reference at CL1");
+    cl1Chk->setObjectName(QStringLiteral("hl2HwCl1"));
+    themed(cl1Chk, QStringLiteral(
+        "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }"));
+    cl1Chk->setToolTip(QStringLiteral(
+        "Reprograms the on-board VersaClock to lock to a 10 MHz reference fed into\n"
+        "the CL1 jack — a GPSDO, typically — instead of the radio's own crystal.\n\n"
+        "The radio boots on its crystal every time, so this is re-sent on every\n"
+        "connect. With a reference locked, the frequency calibration on the\n"
+        "Calibration page should be zero."));
+    mvb->addWidget(cl1Chk);
+    controls->append(cl1Chk);
+
+    auto* atuChk = new QCheckBox("Antenna tuner driven by the HL2 gateware");
+    atuChk->setObjectName(QStringLiteral("hl2HwAtu"));
+    themed(atuChk, QStringLiteral(
+        "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }"));
+    atuChk->setToolTip(QStringLiteral(
+        "Raises the gateware's tune request while TUNE is running, for an ATU wired\n"
+        "to the AH-4 protocol pins.\n\n"
+        "Leave this off for a tuner driven over I2C from the N2ADR IO board — with\n"
+        "both enabled, two tuners are asked to start at once. Expect a short delay\n"
+        "before the carrier appears while the tuner is detected."));
+    mvb->addWidget(atuChk);
+    controls->append(atuChk);
+    vbox->addWidget(miscGroup);
+
+    // ── One read path, one write path ────────────────────────────────────────
+    //
+    // Every control writes through `apply` and every control is filled from
+    // `reseed`, so the page cannot get into a state where what is shown and
+    // what was stored disagree. Connections are made AFTER the first reseed
+    // below, or filling the widgets would fire their own change signals and
+    // persist the values we just read.
+    // A QPointer for the guard, exactly as the Calibration page holds one: this
+    // lambda is a member of a dialog that outlives nothing here today, but it
+    // is called from showEvent() and from a connectionStateChanged handler, and
+    // a raw pointer would turn any future change in page lifetime into a crash
+    // rather than into a no-op.
+    const QPointer<QComboBox> codecGuard(codecCombo);
+    m_hl2HardwareReseed = [this, codecGuard, codecCombo, ditherChk, randomChk,
+                           filterCombo, hpfChk, cl1Chk, atuChk, noRadioLbl,
+                           controls, refreshDither, refreshHpf] {
+        if (!codecGuard)
+            return;
+        const AetherSDR::Hl2HardwareOptions opts =
+            AetherSDR::Hl2HardwareOptions::load(m_model->settingsScope());
+        {
+            const QSignalBlocker b1(codecCombo);
+            const QSignalBlocker b2(ditherChk);
+            const QSignalBlocker b3(randomChk);
+            const QSignalBlocker b4(filterCombo);
+            const QSignalBlocker b5(hpfChk);
+            const QSignalBlocker b6(cl1Chk);
+            const QSignalBlocker b7(atuChk);
+            codecCombo->setCurrentIndex(
+                codecCombo->findData(static_cast<int>(opts.codec)));
+            ditherChk->setChecked(opts.ditherBit);
+            randomChk->setChecked(opts.randomBit);
+            filterCombo->setCurrentIndex(
+                filterCombo->findData(static_cast<int>(opts.filterBoard)));
+            hpfChk->setChecked(opts.n2adrHpf);
+            cl1Chk->setChecked(opts.cl1RefClock);
+            atuChk->setChecked(opts.atuGateware);
+            // Inside the blockers: refreshDither forces the box checked on an
+            // AK4951, and that write must not be mistaken for the operator.
+            refreshDither();
+            refreshHpf();
+        }
+        // No radio identity, no write — Hl2HardwareOptions::save() refuses
+        // without one rather than writing the family-wide row, which every
+        // other HL2 would then inherit. Leaving the controls live would be a
+        // page that reports success while nothing persists.
+        //
+        // ONE-WAY, and deliberately so: refreshDither() and refreshHpf() above
+        // have already set each control's own availability, so this only ever
+        // takes availability AWAY. Re-enabling here would undo them — the
+        // dither box on an AK4951 would become clickable again, and moving it
+        // would ask the gateware to stop believing there is a codec.
+        const bool haveRadio = !m_model->settingsScope().radioId().isEmpty();
+        if (!haveRadio) {
+            for (const QPointer<QWidget>& w : *controls) {
+                if (w)
+                    w->setEnabled(false);
+            }
+        }
+        if (noRadioLbl)
+            noRadioLbl->setVisible(!haveRadio);
+    };
+    m_hl2HardwareReseed();
+
+    connect(codecCombo, &QComboBox::currentIndexChanged, this,
+            [apply, codecCombo, ditherChk, refreshDither](int) {
+        refreshDither();
+        // The codec and the dither bit go out TOGETHER. Selecting the AK4951
+        // forces the bit high in the same instant, and two calls would leave
+        // one frame in which the codec is declared and the bit is not yet set —
+        // which is precisely the state the gateware reads as "no codec".
+        apply(QVariantMap{
+            {QStringLiteral("codec"), codecCombo->currentData().toInt()},
+            {QStringLiteral("ditherBit"), ditherChk->isChecked()},
+        });
+    });
+    connect(ditherChk, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QVariantMap{{QStringLiteral("ditherBit"), on}});
+    });
+    connect(randomChk, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QVariantMap{{QStringLiteral("randomBit"), on}});
+    });
+    connect(filterCombo, &QComboBox::currentIndexChanged, this,
+            [apply, filterCombo, refreshHpf](int) {
+        refreshHpf();
+        apply(QVariantMap{
+            {QStringLiteral("filterBoard"), filterCombo->currentData().toInt()}});
+    });
+    connect(hpfChk, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QVariantMap{{QStringLiteral("n2adrHpf"), on}});
+    });
+    connect(cl1Chk, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QVariantMap{{QStringLiteral("cl1RefClock"), on}});
+    });
+    connect(atuChk, &QCheckBox::toggled, this, [apply](bool on) {
+        apply(QVariantMap{{QStringLiteral("atuGateware"), on}});
+    });
 
     vbox->addStretch(1);
     return page;

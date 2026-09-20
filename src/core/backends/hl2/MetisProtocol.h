@@ -266,6 +266,24 @@ inline constexpr std::uint8_t kConfigMercury = 0x40;  // C1 bit6: ADC-as-DDC-sou
 inline constexpr std::uint8_t kConfigDuplex = 0x04;   // C4 bit2: pihpsdr sets this
                                                       // unconditionally. No-op on HL2.
 
+// C3 bits — DATA[11] and DATA[12]. On genuine openHPSDR hardware these drive
+// the LT2208's dither generator and its output randomiser. The HL2 has no
+// LT2208, and UNLIKE the two no-ops above, the dither bit is NOT inert here:
+// the HL2 gateware hijacked it, undocumented, to drive the BAND VOLTAGE output
+// on the CL2 jack (softerhardware/Hermes-Lite2 wiki, "Band-Volts"), the HL2+
+// companion board reads it as "an audio codec is present", and the SquareSDR 2
+// uses it to switch its internal loudspeaker.
+//
+// Three incompatible meanings for one bit is why nothing here decides what it
+// should be. That decision is Hl2HardwareOptions::ditherBitOnWire(), which
+// knows which board is on the other end; this header only names the bit.
+//
+// The random bit has no such second life on any HL2 variant known to us and is
+// carried for completeness — and so that a caller who sets it is setting a
+// named thing rather than a magic number.
+inline constexpr std::uint8_t kConfigDither = 0x08;   // C3 bit3 = DATA[11]
+inline constexpr std::uint8_t kConfigRandom = 0x10;   // C3 bit4 = DATA[12]
+
 enum class SampleRate : std::uint8_t { R48k = 0, R96k = 1, R192k = 2, R384k = 3 };
 int sampleRateHz(SampleRate rate) noexcept;
 
@@ -332,7 +350,8 @@ using Cc = std::array<std::uint8_t, 5>;
 // (they land in DATA[23:17]). Bit 7 is the RX-antenna bit and lives elsewhere in
 // the register, so it is masked off here rather than silently switching antennas
 // on a caller who passed a full I2C byte.
-Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone) noexcept;
+Cc ccConfig(SampleRate rate, int numRx = 1, std::uint8_t ocFilterByte = kOcNone,
+            bool dither = false, bool random = false) noexcept;
 // NCO frequency in Hz (32-bit big-endian across C1..C4) for receiver `rxIndex`,
 // zero-based: RX1 is index 0 at register 0x02, up to RX7 at 0x08. Clamped to
 // that run — see the note in the .cpp about why RX8..RX12 are not reachable by
@@ -361,7 +380,17 @@ Cc ccTxFreq(std::uint32_t hz) noexcept;
 //
 // Defaulted OFF so that enabling the power amplifier is always something a
 // caller did on purpose.
-Cc ccTxDrive(int level, bool paEnable = false) noexcept;
+//
+// ATU TUNE IS 0x09[20], i.e. C2 bit 4, and it is a REQUEST rather than a state:
+// the HL2 gateware's AH-4 handler starts a tune cycle while the bit is held and
+// the radio is keyed. It belongs on this bank because the gateware reads the
+// whole of 0x09 at once, and holding it in a separate register write would let
+// a drive change in between clear it.
+//
+// Defaulted OFF for the same reason paEnable is: starting an antenna tuner is
+// never something a caller should get by omission. An ATU driven over I2C from
+// the N2ADR IO board must leave this clear — see Hl2HardwareOptions::atuGateware.
+Cc ccTxDrive(int level, bool paEnable = false, bool atuTune = false) noexcept;
 
 // ---- Direct I2C writes (companion devices on the external bus) ----
 //
@@ -462,6 +491,42 @@ inline constexpr std::uint8_t kIoBoardRegTxFreqLsb = 4;   // DATA bits  7:0, COM
 // wiki advises for forward compatibility.
 Cc ccI2c2Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept;
 
+// The same, on the INTERNAL bus (I2C1, addr 0x3c). Different bus, different
+// hazard: I2C2 reaches a companion board that can be absent, while I2C1
+// reaches the board's own VersaClock — the part that clocks the AD9866. A
+// wrong write here does not fail to switch a relay, it stops the radio
+// sampling. There is exactly one caller, versaClockCl1Banks() below.
+Cc ccI2c1Write(std::uint8_t chip, std::uint8_t reg, std::uint8_t data) noexcept;
+
+// ---- CL1 external 10 MHz reference (VersaClock 5P49V6901, I2C1 chip 0x6A) ----
+//
+// WHAT THIS IS. The HL2 runs from a 38.4 MHz crystal multiplied to 76.8 MHz by
+// an on-board VersaClock. Feeding a GPSDO into the CL1 jack does not switch
+// anything by itself: the VersaClock has to be REPROGRAMMED to take its
+// reference from that input instead of the crystal, and going back means
+// reprogramming it again. There is no single "external reference" bit.
+//
+// THE TABLES ARE NOT DERIVED AND CANNOT BE. They are the register/value pairs
+// piHPSDR and deskHPSDR both carry verbatim, which in turn came from the
+// Hermes-Lite 2 project; the 5P49V6901's PLL dividers, input mux and
+// feedback configuration are a solved layout for this one board and nothing
+// in the datasheet would let a reader re-derive these twenty-four pairs
+// without the board's schematic and its loop filter. They are reproduced
+// rather than re-computed for exactly that reason, and they are the reason
+// this is a fixed table rather than a function of anything.
+//
+// SENT ON CHANGE AND ON CONNECT, never re-asserted. The radio boots on its
+// crystal every time, so connecting is a change; and twenty-four banks in the
+// one-shot queue at every rotation would starve the NCO refresh.
+//
+// ORDER MATTERS. The pairs configure the input mux before the PLL that locks
+// to it; sending them out of order can leave the part running from a reference
+// that is not there yet. They go out in the order given, one bank per EP2
+// frame, which is ~63 ms for the whole sequence at 48 kHz.
+inline constexpr std::uint8_t kVersaClockI2cAddr = 0x6A;
+inline constexpr std::size_t kVersaClockCl1Banks = 24;
+std::array<Cc, kVersaClockCl1Banks> versaClockCl1Banks(bool externalRef) noexcept;
+
 // The five C&C banks that write `hz` into the IO board's transmit-frequency
 // registers, ALREADY IN THE ORDER THEY MUST BE SENT: most significant byte
 // first, LSB last because that write is what commits the value.
@@ -527,6 +592,29 @@ inline Cc withMox(Cc cc, bool keyed) noexcept
 // remainder as transmit silence.
 void ep2WriteTxIq(std::array<std::uint8_t, kUsbPacketSize>& pkt,
                   std::span<const std::complex<float>> iq) noexcept;
+
+// Write 16-bit stereo speaker audio into the SLOT ep2WriteTxIq() deliberately
+// leaves alone — FOR A RADIO THAT HAS A CODEC, AND ONLY FOR ONE.
+//
+// READ ep2WriteTxIq's note first. On a bare Hermes-Lite 2 that slot is not
+// audio: its first word per 512-byte frame is EADDR, the extended-address
+// register, and writing a sample there is not a wasted write but a command.
+// This function therefore has a precondition that no signature can express —
+// the radio must be an HL2+ (AK4951 companion board) or a SquareSDR 2, whose
+// gateware routes the slot to a real codec and does not use EADDR. The caller
+// that knows is MetisClient, gated on Hl2HardwareOptions::hasLocalCodec().
+//
+// Layout is the Hermes original: 32 bits of audio (16-bit left, 16-bit right,
+// big-endian) ahead of the 16-bit I and Q of the same sample, 63 samples per
+// frame, two frames per packet — the same 126 samples ep2WriteTxIq fills, at
+// the same fixed 48 kHz. `audio` is INTERLEAVED L,R, so it holds twice as many
+// int16s as there are samples.
+//
+// A short span leaves the remaining slots at whatever the packet already held,
+// which after ep2Packet's zero fill is silence. Underrun therefore sounds like
+// a gap rather than like the previous block repeating.
+void ep2WriteTxAudio(std::array<std::uint8_t, kUsbPacketSize>& pkt,
+                     std::span<const std::int16_t> audio) noexcept;
 
 // Transmit samples carried per EP2 packet (63 per frame, two frames).
 inline constexpr int kTxSamplesPerPacket = 126;

@@ -1,0 +1,351 @@
+// HL2 hardware-variant options — the policy that decides what a bare
+// Hermes-Lite 2, an HL2+ (AK4951 companion board) and a SquareSDR 2 each get
+// on the wire, plus the three wire encodings those choices reach.
+//
+// WHY THIS TEST EXISTS. The three radios are indistinguishable over Protocol 1
+// and NONE of what this file pins is readable back from any of them: the
+// dither bit, the open-collector filter byte, the ATU request and the
+// VersaClock sequence are all write-only. A wrong value is therefore not a
+// failed command that reports itself — it is a loudspeaker nailed on, a codec
+// the gateware stops believing in, a receive path with relays engaged that are
+// not in it, or a converter with no usable clock. There is no runtime evidence
+// to fall back on, so the evidence has to be here.
+//
+// The reference values are deskHPSDR's, which carries them from piHPSDR and
+// the Hermes-Lite 2 project. They are compared against, not re-derived: the
+// N2ADR band groupings and the twenty-four VersaClock pairs are properties of
+// those boards and nothing in a datasheet would let a reader recompute them.
+//
+// Pure policy and pure wire — no Qt, no sockets, no hardware.
+
+#include "core/backends/hl2/Hl2HardwareOptions.h"
+#include "core/backends/hl2/MetisProtocol.h"
+
+#include <complex>
+#include <cstdint>
+#include <cstdio>
+#include <vector>
+
+using AetherSDR::Hl2HardwareOptions;
+using namespace AetherSDR::hl2;
+
+static int g_failures = 0;
+static void check(bool cond, const char* what)
+{
+    if (!cond) {
+        std::fprintf(stderr, "FAIL: %s\n", what);
+        ++g_failures;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The dither bit: one bit, three meanings.
+// ---------------------------------------------------------------------------
+static void testDitherMeaning()
+{
+    Hl2HardwareOptions o;
+
+    // Bare HL2: the operator owns it — it is the band-voltage output.
+    o.codec = Hl2HardwareOptions::Codec::None;
+    o.ditherBit = false;
+    check(!o.ditherBitOnWire(), "bare HL2: dither follows the operator (off)");
+    o.ditherBit = true;
+    check(o.ditherBitOnWire(), "bare HL2: dither follows the operator (on)");
+    check(!o.hasLocalCodec(), "bare HL2 has no local codec");
+
+    // HL2+: FORCED HIGH whatever the operator asked for. The gateware reads the
+    // bit as "a codec is present"; clearing it silently kills the codec, which
+    // is why the operator's own value is overridden rather than merely ignored.
+    o.codec = Hl2HardwareOptions::Codec::Ak4951;
+    o.ditherBit = false;
+    check(o.ditherBitOnWire(), "HL2+: dither forced high even when the operator cleared it");
+    o.ditherBit = true;
+    check(o.ditherBitOnWire(), "HL2+: dither high when the operator set it too");
+    check(o.hasLocalCodec(), "HL2+ has a local codec");
+
+    // SquareSDR 2: the operator owns it again, because here it is the speaker.
+    // Forcing it as for the HL2+ would nail the loudspeaker on.
+    o.codec = Hl2HardwareOptions::Codec::SquareSdr2;
+    o.ditherBit = false;
+    check(!o.ditherBitOnWire(), "SquareSDR 2: speaker off stays off (NOT forced)");
+    o.ditherBit = true;
+    check(o.ditherBitOnWire(), "SquareSDR 2: speaker on");
+    check(o.hasLocalCodec(), "SquareSDR 2 has a local codec");
+
+    // The operator's own choice must SURVIVE a round trip through a codec that
+    // overrides it — otherwise turning the HL2+ selection off again would leave
+    // the band-voltage output on for a radio whose operator never asked for it.
+    o.codec = Hl2HardwareOptions::Codec::Ak4951;
+    o.ditherBit = false;
+    check(o.ditherBitOnWire(), "HL2+ overrides");
+    o.codec = Hl2HardwareOptions::Codec::None;
+    check(!o.ditherBitOnWire(), "the operator's cleared bit is intact after the override ends");
+}
+
+// ---------------------------------------------------------------------------
+// The open-collector filter byte, receive and transmit.
+// ---------------------------------------------------------------------------
+static void testFilterBoard()
+{
+    // deskHPSDR's n2adr_oc_settings(), verbatim: 160 m = 1 (no HPF), and
+    // 80 m..10 m = the band's low-pass bit ORed with 64, the AM-broadcast
+    // high-pass. Transcribed as the decimal values that file uses so the
+    // comparison is against the source rather than against our own constants.
+    struct Band { double hz; unsigned oc; const char* name; };
+    static const Band kN2adr[] = {
+        {  1'900'000.0,  1, "160 m" },
+        {  3'700'000.0, 66, "80 m"  },
+        {  5'350'000.0, 68, "60 m"  },
+        {  7'100'000.0, 68, "40 m"  },
+        { 10'120'000.0, 72, "30 m"  },
+        { 14'100'000.0, 72, "20 m"  },
+        { 18'100'000.0, 80, "17 m"  },
+        { 21'200'000.0, 80, "15 m"  },
+        { 24'930'000.0, 96, "12 m"  },
+        { 28'500'000.0, 96, "10 m"  },
+    };
+
+    // ---- the default: receive and transmit, the boxed HL2 ----
+    //
+    // THE DEFAULT IS LOAD-BEARING. This backend drove exactly this pattern
+    // unconditionally before any of these options existed, so a default of
+    // anything else would silently change the front end of every HL2 already
+    // on the air.
+    Hl2HardwareOptions rxtx;
+    check(rxtx.filterBoard == Hl2HardwareOptions::FilterBoard::N2adrRxTx,
+          "default filter board is N2ADR receive+transmit");
+    for (const Band& b : kN2adr) {
+        check(rxtx.ocReceiveByteForHz(b.hz) == b.oc, b.name);
+        check(rxtx.ocTransmitByteForHz(b.hz) == b.oc, b.name);
+        // ...and identical to the unconditional rule this replaced.
+        check(rxtx.ocReceiveByteForHz(b.hz) == ocFilterByteForHz(b.hz),
+              "receive byte matches the historical unconditional rule");
+    }
+
+    // ---- no board: every relay released, both directions ----
+    Hl2HardwareOptions none;
+    none.filterBoard = Hl2HardwareOptions::FilterBoard::None;
+    none.n2adrHpf = true;             // must not resurrect anything
+    for (const Band& b : kN2adr) {
+        check(none.ocReceiveByteForHz(b.hz) == kOcNone, "no board: receive released");
+        check(none.ocTransmitByteForHz(b.hz) == kOcNone, "no board: transmit released");
+    }
+
+    // ---- transmit only: the SquareSDR 2's wiring ----
+    //
+    // TRANSMIT IS UNCHANGED. The low-pass is what keeps harmonics off the air,
+    // so it is not the operator's convenience to decline — only declaring the
+    // board absent releases it.
+    Hl2HardwareOptions txOnly;
+    txOnly.filterBoard = Hl2HardwareOptions::FilterBoard::N2adrTxOnly;
+    txOnly.n2adrHpf = false;
+    for (const Band& b : kN2adr) {
+        check(txOnly.ocTransmitByteForHz(b.hz) == b.oc, "transmit-only: transmit unchanged");
+        check(txOnly.ocReceiveByteForHz(b.hz) == kOcNone,
+              "transmit-only, HPF off: receive is bare");
+    }
+
+    // With the high-pass on, receive gets the HPF ALONE — deskHPSDR's
+    // n2adr_oc_settings_tx() sets OCrx to 64 on 80 m..10 m and 0 on 160 m.
+    txOnly.n2adrHpf = true;
+    for (const Band& b : kN2adr) {
+        const unsigned want = (b.hz < 2'500'000.0) ? 0u : 64u;
+        check(txOnly.ocReceiveByteForHz(b.hz) == want,
+              "transmit-only, HPF on: receive is the high-pass alone (160 m excepted)");
+        check(txOnly.ocTransmitByteForHz(b.hz) == b.oc,
+              "transmit-only, HPF on: transmit still the full pattern");
+    }
+
+    // The two frequencies where the high-pass must stay out are NOT restated in
+    // the transmit-only path — they are masked out of the per-band pattern — so
+    // pin that the inherited exceptions really are inherited.
+    check(txOnly.ocReceiveByteForHz(900'000.0) == kOcNone,
+          "transmit-only: no high-pass below 1.6 MHz (it would remove the signal)");
+    check(txOnly.ocReceiveByteForHz(1'900'000.0) == kOcNone,
+          "transmit-only: no high-pass on 160 m (supply spurs couple into it)");
+    check(txOnly.ocReceiveByteForHz(50'000'000.0) == kOcNone,
+          "transmit-only: nothing above 30 MHz, the board has no filter there");
+}
+
+// ---------------------------------------------------------------------------
+// Clamping a round-tripped settings document.
+// ---------------------------------------------------------------------------
+static void testClamps()
+{
+    check(Hl2HardwareOptions::clampCodec(0) == Hl2HardwareOptions::Codec::None, "codec 0");
+    check(Hl2HardwareOptions::clampCodec(1) == Hl2HardwareOptions::Codec::Ak4951, "codec 1");
+    check(Hl2HardwareOptions::clampCodec(2) == Hl2HardwareOptions::Codec::SquareSdr2, "codec 2");
+    // A value from a newer build, a hand-edited file, or a truncated write
+    // falls back to the BARE BOARD — the answer that cannot write into EADDR.
+    check(Hl2HardwareOptions::clampCodec(3) == Hl2HardwareOptions::Codec::None, "codec 3 -> None");
+    check(Hl2HardwareOptions::clampCodec(-1) == Hl2HardwareOptions::Codec::None, "codec -1 -> None");
+
+    check(Hl2HardwareOptions::clampFilterBoard(0) == Hl2HardwareOptions::FilterBoard::None,
+          "filter board 0");
+    check(Hl2HardwareOptions::clampFilterBoard(1) == Hl2HardwareOptions::FilterBoard::N2adrRxTx,
+          "filter board 1");
+    check(Hl2HardwareOptions::clampFilterBoard(2) == Hl2HardwareOptions::FilterBoard::N2adrTxOnly,
+          "filter board 2");
+    // NOTE THE DIFFERENT FALLBACK, and it is the point of this pair of checks:
+    // an unrecognised filter board must NOT become "no board". That would
+    // release the relays on a radio that has one, leaving the receiver hearing
+    // the whole of HF through a bypassed front end.
+    check(Hl2HardwareOptions::clampFilterBoard(7) == Hl2HardwareOptions::FilterBoard::N2adrRxTx,
+          "filter board 7 -> receive+transmit, NOT None");
+    check(Hl2HardwareOptions::clampFilterBoard(-4) == Hl2HardwareOptions::FilterBoard::N2adrRxTx,
+          "filter board -4 -> receive+transmit, NOT None");
+}
+
+// ---------------------------------------------------------------------------
+// The config register's C3.
+// ---------------------------------------------------------------------------
+static void testConfigDitherRandom()
+{
+    check(ccConfig(SampleRate::R48k, 1, kOcNone, false, false)[3] == 0x00, "C3 clear");
+    check(ccConfig(SampleRate::R48k, 1, kOcNone, true, false)[3] == 0x08, "C3 dither = 0x08");
+    check(ccConfig(SampleRate::R48k, 1, kOcNone, false, true)[3] == 0x10, "C3 random = 0x10");
+    check(ccConfig(SampleRate::R48k, 1, kOcNone, true, true)[3] == 0x18, "C3 both");
+
+    // The default is CLEAR, so every existing caller that omits the arguments
+    // keeps the byte this encoder emitted before the parameters existed.
+    check(ccConfig(SampleRate::R48k, 1, kOcNone)[3] == 0x00, "C3 defaults clear");
+
+    // And it must disturb NOTHING else in the register — the sample rate, the
+    // receiver count and the filter byte share it, and a dither change that
+    // moved any of them would be a band change or a DDC-rate change nobody
+    // asked for.
+    const Cc off = ccConfig(SampleRate::R192k, 4, kOcLpf30_20, false, false);
+    const Cc on  = ccConfig(SampleRate::R192k, 4, kOcLpf30_20, true, true);
+    check(off[0] == on[0] && off[1] == on[1] && off[2] == on[2] && off[4] == on[4],
+          "dither/random touch C3 only");
+}
+
+// ---------------------------------------------------------------------------
+// The ATU tune request on the drive register.
+// ---------------------------------------------------------------------------
+static void testAtuBit()
+{
+    // PA enable is 0x09[19] = C2 bit 3; the tune request is 0x09[20] = C2 bit 4.
+    check(ccTxDrive(120, false, false)[2] == 0x00, "no PA, no tune");
+    check(ccTxDrive(120, true,  false)[2] == 0x08, "PA only");
+    check(ccTxDrive(120, false, true)[2]  == 0x10, "tune only");
+    check(ccTxDrive(120, true,  true)[2]  == 0x18, "PA and tune");
+    // Defaulted off: starting an antenna tuner is never something a caller
+    // should get by omission.
+    check(ccTxDrive(120, true)[2] == 0x08, "tune defaults off");
+    // DATA[18] — "an external tuner is in charge" — must stay clear, or two
+    // tuners are asked to start at once.
+    check((ccTxDrive(120, true, true)[2] & 0x04) == 0, "DATA[18] stays clear");
+    // The drive level is untouched by either bit.
+    check(ccTxDrive(200, true, true)[1] == 200, "drive level intact");
+}
+
+// ---------------------------------------------------------------------------
+// The CL1 VersaClock sequence.
+// ---------------------------------------------------------------------------
+static void testVersaClock()
+{
+    const auto on = versaClockCl1Banks(true);
+    const auto off = versaClockCl1Banks(false);
+    check(on.size() == 24 && off.size() == 24, "24 banks each way");
+
+    // Every bank is an I2C-1 write to chip 0x6A with the stop bit set — the
+    // 0x78 0x06 0xEA prefix deskHPSDR emits. I2C-1 is the INTERNAL bus: a bank
+    // that went to I2C-2 (0x7A) by a transposed constant would be addressed at
+    // a companion board that is probably not there, and the radio would keep
+    // running from its crystal with nothing to say so.
+    for (std::size_t i = 0; i < on.size(); ++i) {
+        check(on[i][0] == 0x78 && off[i][0] == 0x78, "C0 = I2C-1 (0x3c << 1)");
+        check(on[i][1] == 0x06 && off[i][1] == 0x06, "C1 = write cookie");
+        check(on[i][2] == 0xEA && off[i][2] == 0xEA, "C2 = stop | 0x6A");
+    }
+
+    // Spot-checks against deskHPSDR's HL2CL1on / HL2CL1off tables, at the two
+    // ends and at the pair that differs most visibly between them.
+    check(on[0][3] == 0x10 && on[0][4] == 0xC0, "on[0] = 0x10,0xC0");
+    check(on[1][3] == 0x13 && on[1][4] == 0x03, "on[1] = 0x13,0x03");
+    check(on[12][3] == 0x18 && on[12][4] == 0x00, "on[12] = 0x18,0x00");
+    check(on[23][3] == 0x63 && on[23][4] == 0x01, "on[23] = 0x63,0x01");
+    check(off[0][3] == 0x10 && off[0][4] == 0xC0, "off[0] = 0x10,0xC0");
+    check(off[1][3] == 0x13 && off[1][4] == 0x00, "off[1] = 0x13,0x00");
+    check(off[12][3] == 0x18 && off[12][4] == 0x40, "off[12] = 0x18,0x40");
+    check(off[23][3] == 0x63 && off[23][4] == 0x00, "off[23] = 0x63,0x00");
+
+    // REGISTER ORDER IS IDENTICAL in both tables and only the values differ.
+    // That is what makes "send the other table" a complete switch rather than
+    // a partial reconfiguration leaving stale registers from the previous one.
+    for (std::size_t i = 0; i < on.size(); ++i)
+        check(on[i][3] == off[i][3], "both tables address the same registers in the same order");
+
+    // The two tables are not the same table.
+    bool differs = false;
+    for (std::size_t i = 0; i < on.size(); ++i)
+        differs = differs || (on[i][4] != off[i][4]);
+    check(differs, "the on and off tables carry different values");
+}
+
+// ---------------------------------------------------------------------------
+// The EP2 audio slot.
+// ---------------------------------------------------------------------------
+static void testEp2Audio()
+{
+    // Sample layout is audio(4) then I(2) Q(2), 63 samples per 512-byte frame,
+    // two frames per packet. The first payload byte of frame 0 is at
+    // 8 (packet header) + 3 (sync) + 5 (C&C) = 16.
+    constexpr std::size_t kFrame0 = 16;
+    constexpr std::size_t kFrame1 = 8 + 512 + 8;
+
+    std::vector<std::int16_t> audio;
+    for (int i = 0; i < kTxSamplesPerPacket * 2; ++i)
+        audio.push_back(static_cast<std::int16_t>(0x0100 + i));
+
+    auto pkt = ep2Packet(0, ccConfig(SampleRate::R48k), ccRxGain(20));
+    ep2WriteTxAudio(pkt, audio);
+    check(pkt[kFrame0 + 0] == 0x01 && pkt[kFrame0 + 1] == 0x00, "frame 0 sample 0 left");
+    check(pkt[kFrame0 + 2] == 0x01 && pkt[kFrame0 + 3] == 0x01, "frame 0 sample 0 right");
+    // 63 samples into the stream is the first sample of frame 1: L = 0x0100+126.
+    check(pkt[kFrame1 + 0] == 0x01 && pkt[kFrame1 + 1] == 0x7E, "frame 1 sample 0 left");
+    // The IQ half of the same sample is untouched.
+    check(pkt[kFrame0 + 4] == 0 && pkt[kFrame0 + 5] == 0
+       && pkt[kFrame0 + 6] == 0 && pkt[kFrame0 + 7] == 0, "IQ half untouched by the audio write");
+
+    // AN EMPTY SPAN MUST LEAVE THE SLOT AT ZERO. The first word of each frame
+    // is EADDR on a bare HL2; underrun therefore has to degrade TOWARD that
+    // safe state rather than toward a stale repeat.
+    auto silent = ep2Packet(0, ccConfig(SampleRate::R48k), ccRxGain(20));
+    ep2WriteTxAudio(silent, {});
+    check(silent[kFrame0 + 0] == 0 && silent[kFrame0 + 1] == 0
+       && silent[kFrame0 + 2] == 0 && silent[kFrame0 + 3] == 0,
+          "empty audio leaves EADDR zero");
+
+    // A SHORT span fills what it can and leaves the rest zero.
+    auto part = ep2Packet(0, ccConfig(SampleRate::R48k), ccRxGain(20));
+    std::vector<std::int16_t> two{0x1234, 0x5678};
+    ep2WriteTxAudio(part, two);
+    check(part[kFrame0 + 0] == 0x12 && part[kFrame0 + 1] == 0x34, "short span: first sample written");
+    check(part[kFrame0 + 8] == 0 && part[kFrame0 + 9] == 0, "short span: the rest stays zero");
+
+    // Audio and IQ compose: the two write disjoint halves of every sample, and
+    // a transmitting codec radio needs both in the same packet.
+    auto both = ep2Packet(0, ccConfig(SampleRate::R48k), ccRxGain(20));
+    std::vector<std::complex<float>> iq(kTxSamplesPerPacket, {1.0f, -1.0f});
+    ep2WriteTxIq(both, iq);
+    ep2WriteTxAudio(both, audio);
+    check(both[kFrame0 + 0] == 0x01 && both[kFrame0 + 1] == 0x00, "composed: audio intact");
+    check(both[kFrame0 + 4] == 0x7F && both[kFrame0 + 5] == 0xFF, "composed: I = +32767");
+    check(both[kFrame0 + 6] == 0x80 && both[kFrame0 + 7] == 0x01, "composed: Q = -32767");
+}
+
+int main()
+{
+    testDitherMeaning();
+    testFilterBoard();
+    testClamps();
+    testConfigDitherRandom();
+    testAtuBit();
+    testVersaClock();
+    testEp2Audio();
+    if (g_failures == 0)
+        std::printf("hl2_hardware_options_test: all checks passed\n");
+    return g_failures == 0 ? 0 : 1;
+}
