@@ -565,6 +565,9 @@ QJsonObject describeWidget(const QWidget* w)
             range[QStringLiteral("yellowStart")] = w->property("gaugeYellowStart").toDouble();
             o[QStringLiteral("gaugeRange")] = range;
             o[QStringLiteral("gaugeTicks")] = w->property("gaugeTicks").toString();
+            o[QStringLiteral("gaugePeak")] = w->property("gaugePeak").toDouble();
+            o[QStringLiteral("gaugePeakEnabled")] =
+                w->property("gaugePeakEnabled").toBool();
         }
     }
 
@@ -2863,6 +2866,8 @@ bool isReadOnlyRequest(const QString& name, const QString& action,
         // nothing. The `tooltip ... cell` form stays outside: it scrolls the
         // view and raises a tip.
         QStringLiteral("cell"),
+        // Reads a meter's published state; moves nothing.
+        QStringLiteral("gauge"), QStringLiteral("gauges"),
     };
     if (kSafe.contains(name)) {
         return true;
@@ -3076,6 +3081,24 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
         add("floors", {}, "per-pan measured noise + display floor (dBm)",
             parseTargetPath,
             [](AutomationServer& s, A&, QLocalSocket*) { return s.doFloors(); });
+
+        // Monitoring a meter means sampling it repeatedly, and dumpTree is
+        // the whole widget tree -- hundreds of kilobytes for four numbers.
+        // This is the same state, for one gauge or all of them.
+        add("gauge", {QStringLiteral("gauges")},
+            "gauge [<target>] — value, peak and painted fraction of one gauge, "
+            "or every gauge when no target is given",
+            // Joins the rest of the line rather than taking one token: these
+            // are addressed by accessible name, and an accessible name is a
+            // phrase ("Forward power"). A single-token parse silently
+            // truncates it to "Forward" and reports the widget missing.
+            [](const QList<QByteArray>& p, A& a) -> QJsonObject {
+                a.target = vjoin(p, 1);
+                return {};
+            },
+            [](AutomationServer& s, A& a, QLocalSocket*) -> QJsonObject {
+                return s.doGauge(a.target);
+            });
 
         add("text", {QStringLiteral("getText")},
             "text <target> — full plain text of a QTextEdit/QPlainTextEdit view",
@@ -4127,6 +4150,70 @@ QJsonObject AutomationServer::doGrab(const QString& target, const QString& path)
                             QStringLiteral("widget not found: ") + target}};
     }
     return saveWidgetGrab(w, target, path);
+}
+
+// One JSON object per gauge. gaugeValue is what was last set; gaugeFraction
+// is what is actually painted, and the two disagree for the whole length of a
+// ballistics animation -- a monitor that reads only the former will report a
+// settled meter while the bar is still travelling (#3845).
+static QJsonObject gaugeStateOf(QWidget* w, const QString& name)
+{
+    QJsonObject o;
+    o[QStringLiteral("target")]   = name;
+    o[QStringLiteral("label")]    = w->property("gaugeLabel").toString();
+    o[QStringLiteral("unit")]     = w->property("gaugeUnit").toString();
+    o[QStringLiteral("value")]    = w->property("gaugeValue").toDouble();
+    o[QStringLiteral("fraction")] = w->property("gaugeFraction").toDouble();
+    o[QStringLiteral("peak")]     = w->property("gaugePeak").toDouble();
+    o[QStringLiteral("peakHeld")] = w->property("gaugePeakEnabled").toBool();
+    QJsonObject range;
+    range[QStringLiteral("min")]         = w->property("gaugeMin").toDouble();
+    range[QStringLiteral("max")]         = w->property("gaugeMax").toDouble();
+    range[QStringLiteral("redStart")]    = w->property("gaugeRedStart").toDouble();
+    range[QStringLiteral("yellowStart")] = w->property("gaugeYellowStart").toDouble();
+    o[QStringLiteral("range")] = range;
+    o[QStringLiteral("visible")] = w->isVisible();
+    return o;
+}
+
+QJsonObject AutomationServer::doGauge(const QString& target) const
+{
+    // A gauge is identified by carrying the published state, not by class:
+    // HGauge has no Q_OBJECT, so there is nothing to qobject_cast to, and a
+    // future meter that publishes the same properties should answer here too.
+    const auto isGauge = [](QWidget* w) {
+        return w->property("gaugeLabel").isValid();
+    };
+
+    if (!target.isEmpty()) {
+        QWidget* w = resolveWidget(target);
+        if (!w)
+            return err(QStringLiteral("widget not found: ") + target);
+        if (!isGauge(w))
+            return err(QStringLiteral("not a gauge: ") + target
+                       + QStringLiteral(" (") + shortClassName(w) + QLatin1Char(')'));
+        QJsonObject o = gaugeStateOf(w, target);
+        o[QStringLiteral("ok")] = true;
+        o[QStringLiteral("class")] = shortClassName(w);
+        return o;
+    }
+
+    // No target: every gauge currently constructed, named by whatever a
+    // driver could address it by. Accessible name first -- the object name is
+    // often unset on these, and the accessible name is what the a11y tree and
+    // the invoke verb already use.
+    QJsonArray all;
+    const auto widgets = QApplication::allWidgets();
+    for (QWidget* w : widgets) {
+        if (!w || !isGauge(w)) continue;
+        QString name = w->accessibleName();
+        if (name.isEmpty()) name = w->objectName();
+        if (name.isEmpty()) name = shortClassName(w);
+        all.append(gaugeStateOf(w, name));
+    }
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("count"), all.size()},
+                       {QStringLiteral("gauges"), all}};
 }
 
 // Full document for one resolved text view. dumpTree carries only a capped

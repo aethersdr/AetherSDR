@@ -268,6 +268,40 @@ static QString kiwiSetupMetadataSummary(const KiwiSdrManager* manager,
     return parts.join(QStringLiteral(" · "));
 }
 
+// Hide/show a navigation row only when its state actually changes; returns
+// whether it did. Pair with settleNavigationLayout() once per handler.
+//
+// QTreeWidgetItem::setHidden() -> QTreeView::setRowHidden() can schedule a
+// delayed layout, and updateRadioCapabilityVisibility() runs on every GPS /
+// oscillator / capability status message from the radio, re-hiding rows that are
+// already hidden. That left a layout pending almost permanently. When macOS then
+// asked for the focused element, QAccessibleTableCell::state() -> rect() ->
+// QTreeView::visualRect() ran the pending QTreeView::doItemsLayout() from
+// *inside* the cell's own method; that layout emits
+// QAccessible::TableModelChanged, which frees every accessible cell (including
+// the running one), and the next view->viewport() dereferenced null (Qt 6.8.3:
+// SIGSEGV at 0x8 in QAbstractScrollArea::viewport()).
+static bool setNavigationItemHidden(QTreeWidgetItem* item, bool hidden)
+{
+    if (!item || item->isHidden() == hidden) {
+        return false;
+    }
+    item->setHidden(hidden);
+    return true;
+}
+
+// Settle the navigation tree's layout on our own call stack once a handler has
+// changed rows, so nothing is left pending for an accessibility query to run
+// re-entrantly. One layout per handler, not one per row: Qt coalesced the
+// delayed layouts before, and each synchronous layout tears down and rebuilds
+// every accessible cell interface.
+static void settleNavigationLayout(QTreeWidget* tree, bool changed)
+{
+    if (changed && tree) {
+        tree->doItemsLayout();
+    }
+}
+
 // Wrap a tab page in a vertical QScrollArea so tabs whose stacked groups exceed
 // the dialog's visible height (Themes, Audio, Filters, Peripherals on small or
 // high-DPI displays) get a vertical scrollbar instead of forcing the dialog
@@ -775,9 +809,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("frequency calibration ppb ppm oscillator crystal clock error wwv gpsdo zero beat"),
         [this] { return buildCalibrationTab(); });
     m_calibrationPageIndex = m_pageIndexes.value(QStringLiteral("Calibration"));
-    calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+    setNavigationItemHidden(calItem, !m_model->backendCapabilities().hostFrequencyCalibration);
     connect(m_model, &RadioModel::connectionStateChanged, this, [this, calItem] {
-        calItem->setHidden(!m_model->backendCapabilities().hostFrequencyCalibration);
+        settleNavigationLayout(m_navigation, setNavigationItemHidden(
+            calItem, !m_model->backendCapabilities().hostFrequencyCalibration));
         // A different radio may now be connected — re-read its own calibration
         // so a later Trim press cannot commit the previous radio's number.
         if (m_calibrationReseed)
@@ -790,9 +825,10 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         QStringLiteral("droop calibration ddc0 panadapter spectrum sweep decimation edge cic"),
         [this] { return buildDroopCalibrationTab(); });
     m_droopCalibrationPageIndex = m_pageIndexes.value(QStringLiteral("Droop Correction"));
-    droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+    setNavigationItemHidden(droopItem, !droopCalibrationAvailable(m_model->backend()));
     connect(m_model, &RadioModel::connectionStateChanged, this, [this, droopItem] {
-        droopItem->setHidden(!droopCalibrationAvailable(m_model->backend()));
+        settleNavigationLayout(m_navigation, setNavigationItemHidden(
+            droopItem, !droopCalibrationAvailable(m_model->backend())));
         if (m_droopReseed)
             m_droopReseed();
     });
@@ -805,10 +841,11 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     QTreeWidgetItem* apdItem = addPage(hardwareCategory, QStringLiteral("APD"),
         QStringLiteral("adaptive predistortion amplifier sampler linearization"), [this] { return buildApdTab(); });
     m_apdPageIndex = m_pageIndexes.value(QStringLiteral("APD"));
-    apdItem->setHidden(!m_model->transmitModel().apdConfigurable());
+    setNavigationItemHidden(apdItem, !m_model->transmitModel().apdConfigurable());
     connect(&m_model->transmitModel(), &TransmitModel::apdStateChanged,
             this, [this, apdItem] {
-        apdItem->setHidden(!m_model->transmitModel().apdConfigurable());
+        settleNavigationLayout(m_navigation, setNavigationItemHidden(
+            apdItem, !m_model->transmitModel().apdConfigurable()));
     });
     addPage(hardwareCategory, QStringLiteral("USB Cables"),
         QStringLiteral("usb cable gpio bit bcd amplifier tuner accessory"), [this] { return buildUsbCablesTab(); });
@@ -859,6 +896,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     connect(search, &QLineEdit::textChanged, this, [this](const QString& text) {
         const QString needle = text.trimmed();
         QTreeWidgetItem* firstVisible = nullptr;
+        bool navigationChanged = false;
         for (int i = 0; i < m_navigation->topLevelItemCount(); ++i) {
             QTreeWidgetItem* category = m_navigation->topLevelItem(i);
             bool anyVisible = false;
@@ -884,16 +922,17 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                     || (calRow && !m_model->backendCapabilities().hostFrequencyCalibration)
                     || (droopRow && !droopCalibrationAvailable(m_model->backend()));
                 if (!gated) {
-                    item->setHidden(!matches);
+                    navigationChanged |= setNavigationItemHidden(item, !matches);
                 }
                 anyVisible = anyVisible || !item->isHidden();
                 if (!item->isHidden() && !firstVisible) {
                     firstVisible = item;
                 }
             }
-            category->setHidden(!anyVisible);
+            navigationChanged |= setNavigationItemHidden(category, !anyVisible);
             category->setExpanded(true);
         }
+        settleNavigationLayout(m_navigation, navigationChanged);
         // Stash the first match but do NOT make it current here: selecting it
         // fires currentItemChanged → buildDeferredTab, which would eagerly
         // construct and hardware-probe deferred pages (Audio, Serial,
@@ -1110,11 +1149,12 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
 
     const QLineEdit* search = findChild<QLineEdit*>(QStringLiteral("radioSetupSearch"));
     const QString needle = search ? search->text().trimmed() : QString();
+    bool navigationChanged = false;
     for (const int index : {m_filtersPageIndex, m_smartLinkPageIndex}) {
         if (QTreeWidgetItem* item = m_pageItems.value(index, nullptr)) {
             const QString haystack = item->text(0) + QStringLiteral(" ")
                 + item->data(0, Qt::UserRole + 1).toString();
-            item->setHidden(!isCapabilityPageAvailable(item)
+            navigationChanged |= setNavigationItemHidden(item, !isCapabilityPageAvailable(item)
                             || (!needle.isEmpty()
                                 && !haystack.contains(needle, Qt::CaseInsensitive)));
         }
@@ -1123,10 +1163,11 @@ void RadioSetupDialog::updateRadioCapabilityVisibility()
     if (QTreeWidgetItem* gpsItem = m_pageItems.value(m_gpsPageIndex, nullptr)) {
         const QString haystack = gpsItem->text(0) + QStringLiteral(" ")
             + gpsItem->data(0, Qt::UserRole + 1).toString();
-        gpsItem->setHidden(!isGpsSetupAvailable()
+        navigationChanged |= setNavigationItemHidden(gpsItem, !isGpsSetupAvailable()
                            || (!needle.isEmpty()
                                && !haystack.contains(needle, Qt::CaseInsensitive)));
     }
+    settleNavigationLayout(m_navigation, navigationChanged);
 
     const bool currentPageUnavailable = m_navigation
         && (!isCapabilityPageAvailable(m_navigation->currentItem())

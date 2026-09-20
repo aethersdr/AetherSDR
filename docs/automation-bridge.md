@@ -4471,7 +4471,7 @@ code changes RX audio or keys TX. Physical-radio persistence validation is
 still a separate radiocert task.
 
 <!-- BEGIN GENERATED VERB TABLE (tools/gen_bridge_docs.py) -->
-<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 76 verbs. -->
+<!-- Do not edit by hand — run tools/gen_bridge_docs.py. 77 verbs. -->
 
 | Verb | Aliases | Description |
 |---|---|---|
@@ -4479,6 +4479,7 @@ still a separate radiocert task.
 | `verbs` | — | list every bridge verb with aliases and help (this table) |
 | `dumpTree` | — | serialize the full widget tree as JSON |
 | `floors` | — | per-pan measured noise + display floor (dBm) |
+| `gauge` | `gauges` | gauge [<target>] — value, peak and painted fraction of one gauge, or every gauge when no target is given |
 | `text` | `getText` | text <target> — full plain text of a QTextEdit/QPlainTextEdit view |
 | `grab` | — | grab <target\|pan\|pan-visible [index]> [path] — PNG capture |
 | `close` | — | close <target> — close the target's top-level window |
