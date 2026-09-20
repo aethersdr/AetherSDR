@@ -5839,6 +5839,19 @@ add_executable(hl2_pan_limits_declaration_test tests/hl2_pan_limits_declaration_
 target_include_directories(hl2_pan_limits_declaration_test PRIVATE src tests)
 target_link_libraries(hl2_pan_limits_declaration_test PRIVATE aethercore Qt6::Core)
 add_test(NAME hl2_pan_limits_declaration_test COMMAND hl2_pan_limits_declaration_test)
+# Socket-free HL2 FM-control DECLARATIONS: the repeater duplex offset it does
+# not have (hasFmRepeaterOffset was INHERITED true, and the two backend verbs
+# behind it are no-op virtuals this backend never overrides) and the CTCSS
+# encode it cannot perform (fmTonePresentation was declared Legacy, the value
+# that OFFERS ctcss_tx, on a radio that declares FM receive-only). Asserted
+# against receiveOnlyModes and legacyFmToneModes() -- production, not a copy.
+# Separate target for the same reason as the line above: the fixture that would
+# have carried an HL2 seam assertion is retired, and a declaration must not be
+# pinned only inside something that does not build.
+add_executable(hl2_fm_controls_declaration_test tests/hl2_fm_controls_declaration_test.cpp)
+target_include_directories(hl2_fm_controls_declaration_test PRIVATE src tests)
+target_link_libraries(hl2_fm_controls_declaration_test PRIVATE aethercore Qt6::Core)
+add_test(NAME hl2_fm_controls_declaration_test COMMAND hl2_fm_controls_declaration_test)
 # The two HL2 mode vocabularies and the containment between them. Separate
 # target for the same reason as the one above: the fake-radio fixture that would
 # have carried a seam assertion is retired, and a declaration must not be pinned
@@ -6357,6 +6370,7 @@ set(AETHER_SETTINGS_CONSUMERS
     hl2_gain_restore_test
     hl2_tx_gate_test
     hl2_pan_limits_declaration_test
+    hl2_fm_controls_declaration_test
     hl2_mode_vocabulary_test
     hl2_gain_split_test
     icom_identity_test

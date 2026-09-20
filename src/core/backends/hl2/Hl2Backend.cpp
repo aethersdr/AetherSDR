@@ -1747,7 +1747,50 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.twoToneGenerator = std::nullopt;
     c.manufacturer = QStringLiteral("Hermes-Lite");
     c.model = QStringLiteral("Hermes-Lite 2");
-    c.fmTonePresentation = FmTonePresentation::Legacy;
+    // NO REPEATER DUPLEX AND NO TONE ENCODE, because this radio cannot key FM
+    // at all -- receiveOnlyModes below says so, and these two controls are the
+    // surface that still implied otherwise.
+    //
+    // hasFmRepeaterOffset was never DECLARED here; it was INHERITED. The struct
+    // defaults it true, so a radio that omits it claims a duplex offset, and
+    // the HL2 omitted it. There is nothing behind that claim:
+    // IRadioBackend::setSliceRepeaterOffsetDir and setSliceFmRepeaterOffset are
+    // virtuals with empty bodies and this backend overrides neither, so the
+    // offset spin and the +/-/simplex buttons -- enabled from this flag in BOTH
+    // VfoWidget::configureFmToneControls and RxApplet::configureFmToneControls --
+    // moved a number that reached nothing. A dead control that looks live is
+    // the failure this field exists to prevent, and the two backends that do
+    // decline it (RtlSdrBackend, and IcomCivBackend when the model profile has
+    // no duplex) decline it for exactly this reason. The HL2 has no such verb;
+    // it has no command plane at all.
+    //
+    // fmTonePresentation WAS declared, as Legacy, and Legacy is the value that
+    // fills the tone-mode combo from legacyFmToneModes() -- i.e. it OFFERS
+    // CTCSS ENCODE. There is no CTCSS encoder on this path: grep the whole of
+    // src/core/backends/hl2/ for "ctcss" and nothing answers, and this backend
+    // overrides none of setSliceFmToneMode, setSliceFmToneValue,
+    // setSliceFmToneRxValue or setSliceFmDtcs, all of which are no-op virtuals
+    // in IRadioBackend.
+    //
+    // AND THE MODE CANNOT BE KEYED AT ALL, which is the fact that does not move
+    // with the build. FM and NFM are on receiveOnlyModes below, so
+    // RadioModel::refuseKeyInReceiveOnlyMode() refuses every TxActivity in
+    // them. Resting the argument there rather than on the modulator is
+    // deliberate: the modulator is chosen at build time by AETHER_HL2_TX_TXA
+    // (default ON = a WDSP TXA channel; OFF = the in-tree phasing modulator),
+    // and a comment that described only one of the two would be half wrong in
+    // every build. TXA's own chain does carry fmmod, which is exactly why the
+    // honest gate is the declaration and not the DSP.
+    //
+    // Hidden is the honest value and is the one both widgets read to hide the
+    // container outright rather than show a control that does nothing.
+    //
+    // WHAT THIS DOES NOT TOUCH: receive. FM and NFM demodulate exactly as
+    // before -- WDSP's FM demodulator is unaffected by either field. What is
+    // withdrawn is a set of TRANSMIT-side controls for a mode this backend
+    // already refuses to key in.
+    c.hasFmRepeaterOffset = false;
+    c.fmTonePresentation = FmTonePresentation::Hidden;
     c.fmDtcsCodes = {};
     // The CEILING, not the running count. A capability answers "what can this
     // radio do", and receivers are now added on demand — so reporting the
@@ -1883,9 +1926,85 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.tuningMaxHz = 38'400'000.0;
     c.sliceFrequencyControl = {SliceFrequencyControl::Authority::Engine,
                                100'000, 38'400'000};
+    // THE MODES THE HEADLESS RECEIVE PATH MAY BE ASKED FOR, and it is an ACCEPT
+    // list rather than a menu -- ModelReceiveControlTarget reads it twice.
+    //
+    //   * ModelReceiveControlTarget::setMode refuses a REQUESTED mode that is
+    //     not in it, and
+    //   * ModelReceiveControlTarget::checkSlice, on ReceiveOperation::Mode,
+    //     requires the slice's currently OBSERVED mode to be in it.
+    //
+    // The second reading is why the omissions bit harder than a missing menu
+    // entry would, and it is SELF-LATCHING: checkSlice is the first statement
+    // of setMode, so a slice whose observed mode is absent from this list has
+    // slice.setMode refused with "capability.unavailable" WHATEVER mode is
+    // requested -- including a mode that is on the list. It cannot be steered
+    // back out over the control plane at all.
+    //
+    // (What it does NOT do is retract the verb from the advertised method set:
+    // ModelReceiveControlTarget::available is an any-slice OR over checkSlice,
+    // so with one healthy slice present slice.setMode still advertises as
+    // available while being refused for the stranded one. That is worse than a
+    // clean retraction, not better.)
+    //
+    // DSB and CWL are modes this backend genuinely demodulates --
+    // modeFromString() maps each onto its own WdspChannel::Mode (Dsb, Cwl) and
+    // defaultPassbandForMode() carries an entry written for each ({-3000,3000}
+    // and {-250,250}) -- and both are on publishedModeStrings(), so the mode
+    // MENU offers them. An operator could pick DSB out of the combo and strand
+    // the slice.
+    //
+    // CWU is added for the same second reading, not to offer a third CW button.
+    // "CW" and "CWU" are one mode under two spellings (modeFromString maps both
+    // to Mode::Cwu, and they share one defaultPassbandForMode() branch because
+    // the pitch lives in the BFO) and only "CW" was listed. The route by which
+    // "CWU" reaches a slice is NOT the restore boundary -- applyRestoredState
+    // runs canonicalOfferedMode(), which collapses CWU onto CW before the mode
+    // is stored, so a restored document cannot strand a slice here. It is the
+    // run-time route Hl2ModeVocabulary.h names in terms: "CAT, TCI and
+    // Hl2Backend::setSliceMode still put either spelling on the slice at run
+    // time", and setSliceMode stores what it is handed verbatim (`r->mode =
+    // mode;`). That is exactly why receiveOnlyModes lists BOTH members of each
+    // alias pair rather than one; this list has the same exposure and wants the
+    // same treatment. It is deliberately NOT the same question as which strings
+    // a mode MENU should offer, where listing an alias twice would be wrong --
+    // which is why publishedModeStrings() carries "CW" alone and still should.
+    //
+    // DSB BEING ON receiveOnlyModes IS NOT A CONTRADICTION: that list answers
+    // "may this radio KEY in this mode", this one answers "may the receive
+    // control plane be asked for it". A receive-only mode is precisely a mode a
+    // receiver may sit in.
+    //
+    // THE TEST APPLIED HERE is "does this backend SERVE the mode", not "does
+    // modeFromString() have a line for it". DSB and CWL pass it on the same
+    // terms as the seven already listed: a WdspChannel::Mode of their own, a
+    // defaultPassbandForMode() entry written for them, and nothing about the
+    // chain left at a value nobody chose. CWU passes on a narrower ground and
+    // it is worth being exact about it -- it is CW's second spelling, sharing
+    // both the WDSP mode and the passband entry, and it earns a place here only
+    // because the run-time paths above can put that spelling on a slice.
+    //
+    // FM, NFM, WBFM, WFM and DRM do NOT pass it, and each fails differently:
+    //
+    //   * FM/NFM reach WDSP's fmd, but nothing in this tree ever calls
+    //     SetRXAFMDeviation, so fmd runs on create_rxa's 5 kHz default whatever
+    //     the signal is; SetRXAMode(FM) also clears the AGC, and there is no
+    //     squelch on this backend at all (setSliceSquelch is not overridden
+    //     here). "Demodulates" is true and "is served" is not.
+    //   * WBFM/WFM additionally clear nbp0 and panel in SetRXAMode, which is
+    //     the stage carrying the sideband selection and the manual notches --
+    //     and broadcast FM is outside the first Nyquist zone this radio can
+    //     hear (tuningMaxHz above is 38.4 MHz).
+    //   * DRM has no decoder here at all.
+    //
+    // Declaring those five is a real question and it is not this one; it wants
+    // the deviation, squelch and AGC work behind it rather than a list entry
+    // that makes the gap harder to see.
     c.receiveModeControl = ReceiveModeControl{SliceFrequencyControl::Authority::Engine,
-        {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("DIGU"),
-         QStringLiteral("DIGL"), QStringLiteral("AM"), QStringLiteral("SAM"), QStringLiteral("CW")}};
+        {QStringLiteral("USB"), QStringLiteral("LSB"), QStringLiteral("DSB"),
+         QStringLiteral("DIGU"), QStringLiteral("DIGL"), QStringLiteral("AM"),
+         QStringLiteral("SAM"), QStringLiteral("CW"), QStringLiteral("CWU"),
+         QStringLiteral("CWL")}};
     // Conservative carrier-relative subdomains of the existing WDSP passband.
     c.receiveFilterControl = ReceiveFilterControl{SliceFrequencyControl::Authority::Engine, {
         {QStringLiteral("USB"), 0, 11990, 10, 12000, 10, 12000},

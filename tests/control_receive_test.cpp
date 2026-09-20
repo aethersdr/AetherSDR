@@ -462,6 +462,60 @@ void productionCapabilityContracts()
         "HL2 reports new-mode default passband with mode");
     hl2.setSliceFilter(0, -2500, -200);
     check(observed.filterLow == -2500 && observed.filterHigh == -200, "HL2 filter intent reports backend-owned passband");
+    // DSB AND THE TWO CW SPELLINGS ARE MODES THIS RADIO DEMODULATES, and the
+    // declaration omitted them. This is not only "unreachable through the
+    // control plane": ModelReceiveControlTarget reads this list TWICE, and
+    // checkSlice() -- the FIRST statement of its setMode() -- requires the
+    // slice's OBSERVED mode to be in it. So a slice sitting in DSB or CWL had
+    // slice.setMode refused whatever mode was asked for, including a listed
+    // one: no way back out, not merely no way in.
+    //
+    // CWU is the second spelling of the listed "CW" (both map to the same WDSP
+    // mode and share one defaultPassbandForMode() entry). It is NOT reachable
+    // through restore -- applyRestoredState runs canonicalOfferedMode(), which
+    // rewrites CWU to CW before storing. It is reachable the way
+    // Hl2ModeVocabulary.h says the alias spellings are: "CAT, TCI and
+    // Hl2Backend::setSliceMode still put either spelling on the slice at run
+    // time". The setSliceMode call below is that route, exercised directly.
+    check(hl2Caps.receiveModeControl->modes.contains(QStringLiteral("DSB"))
+        && hl2Caps.receiveModeControl->modes.contains(QStringLiteral("CWL"))
+        && hl2Caps.receiveModeControl->modes.contains(QStringLiteral("CW"))
+        && hl2Caps.receiveModeControl->modes.contains(QStringLiteral("CWU")),
+        "HL2 declares DSB and both CW spellings, which its demodulator has");
+    // AND THE BACKEND TREATS EACH AS A REAL MODE, not as a string it shrugs at.
+    // Hl2Backend::setSliceMode adopts defaultPassbandForMode() on every mode
+    // CHANGE, so the published window says whether that table has an entry for
+    // the mode or whether it landed on the function's own {150, 3000} fallback
+    // -- and a mode with no entry of its own is a mode nobody wrote a passband
+    // for. The numbers are READ BACK through the seam rather than re-typed from
+    // a table: defaultPassbandForMode() is file-local to Hl2Backend.cpp, so the
+    // published SliceDelta is the only production surface that can be asked.
+    //
+    // PRECISELY WHAT IS AND IS NOT OBSERVED HERE. This reaches
+    // defaultPassbandForMode() and NOT modeFromString(): the WDSP mode
+    // enumerator goes to the DSP object, which a pre-connect backend does not
+    // have, so it never appears in a SliceDelta. Delete DSB from
+    // modeFromString() and it would silently demodulate as USB while every
+    // assertion below still passed. observed.mode is likewise only a
+    // round-trip -- setSliceMode stores the string it was given -- so it is a
+    // sanity check, not evidence about the detector.
+    hl2.setSliceMode(0, QStringLiteral("DSB"));
+    check(observed.mode == QStringLiteral("DSB")
+        && observed.filterLow == -3000 && observed.filterHigh == 3000,
+        "HL2 DSB is carrier-straddling, not the USB fallback window");
+    hl2.setSliceMode(0, QStringLiteral("CWL"));
+    check(observed.mode == QStringLiteral("CWL")
+        && observed.filterLow == -250 && observed.filterHigh == 250,
+        "HL2 CWL is the 500 Hz carrier-centred CW window");
+    hl2.setSliceMode(0, QStringLiteral("CWU"));
+    check(observed.mode == QStringLiteral("CWU")
+        && observed.filterLow == -250 && observed.filterHigh == 250,
+        "HL2 CWU is the same window under the other spelling, not a fallback");
+    // WHAT THIS CANNOT SEE, stated rather than implied: that CWL and CWU select
+    // DIFFERENT detectors. They share one passband entry by design (the pitch
+    // lives in the BFO, cwBfoOffsetHz), so the sideband difference is invisible
+    // in a SliceDelta. Distinguishing them needs the WDSP channel, which means
+    // a DSP build and therefore is not socket-free.
     anan::AnanBackend anan;
     const auto ananCaps = anan.capabilities();
     check(!ananCaps.receiveModeControl && !ananCaps.receiveFilterControl && !ananCaps.receiveAudioControl
