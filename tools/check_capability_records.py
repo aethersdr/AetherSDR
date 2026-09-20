@@ -79,9 +79,46 @@ FROZEN_BOOL_COUNT = 71
 # parser falling over. See the vacuity check in main().
 MAX_PLAUSIBLE_DROP = 15
 
+# ---- Statement boundaries that are not `;` (#5860) ----
+# direct_bool_fields() splits on `;` and then requires each fragment to BEGIN
+# with `bool`. So anything that ends a statement WITHOUT a semicolon gets glued
+# onto the front of the next fragment, where `^\s*bool\s+` rejects it for the
+# leading junk and the field is DELETED FROM THE COUNT. Exactly the #5727
+# accessor failure, reached through `public:` and `#endif` instead — and just
+# as silent, because nothing raises the depth and nothing throws.
+#
+# Both directions are live, and the growth one is the dangerous half: a bool
+# added under an access label leaves the count EXACTLY at the freeze, so the
+# ratchet prints "ok (shrink only)" while the population has actually grown.
+# MAX_PLAUSIBLE_DROP cannot catch that, because nothing dropped.
+#
+# Handled by REMOVAL before the depth scan rather than by widening the field
+# match, so a directive form nobody anticipated still cannot smuggle a field
+# past — and so a stray brace inside `#define X {` can never collapse the scan.
+#
+# Comments are stripped over the WHOLE text: the previous per-physical-line
+# `/\*.*?\*/` never matched a comment spanning lines, leaving its interior —
+# a stray `{` included — visible to the depth tracking, and costing the next
+# field even when the comment was perfectly balanced.
+_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+# A whole logical directive line, continuations included. Indented and
+# `#  ifdef`-spaced forms are legal C++ and appear in the wild.
+_DIRECTIVE_RE = re.compile(r"^[ \t]*#(?:.*?\\\n)*.*$", re.M)
+
+
+def _blanked(m: "re.Match[str]") -> str:
+    """Replace a match with its own newlines, so line numbering survives."""
+    return "\n" * m.group(0).count("\n")
+
 
 def direct_bool_fields(text: str) -> list[str]:
     """Bool members declared directly in RadioCapabilities, nested structs excluded."""
+    # Comments and preprocessor directives are not declarations. Blank them
+    # before anything else looks at the text, so neither the depth scan nor the
+    # `;` split can ever see one. See _COMMENT_RE / _DIRECTIVE_RE (#5860).
+    text = _COMMENT_RE.sub(_blanked, text)
+    text = _DIRECTIVE_RE.sub(_blanked, text)
+
     lines = text.splitlines()
     start = None
     for i, line in enumerate(lines):
@@ -90,10 +127,6 @@ def direct_bool_fields(text: str) -> list[str]:
             break
     if start is None:
         raise SystemExit("check_capability_records: struct RadioCapabilities not found")
-
-    def code_of(raw: str) -> str:
-        """Comment-stripped text. Braces in comments are not nesting."""
-        return re.sub(r"/\*.*?\*/", "", re.sub(r"//.*$", "", raw))
 
     # Scan the struct's OWN body (depth 1) CHARACTER by character, then split
     # it into logical declarations on `;`. Matching per physical line missed a
@@ -123,7 +156,7 @@ def direct_bool_fields(text: str) -> list[str]:
     # structurally rather than by special case: `agcModes = {…};` becomes
     # `agcModes = ; ;`, both halves fail the bool match, and the field after it
     # survives — the hazard that cost hasModeIndependentSquelch exactly once.
-    code = "\n".join(code_of(line) for line in lines[start:])
+    code = "\n".join(lines[start:])
     open_brace = code.find("{")
     if open_brace < 0:
         raise SystemExit("check_capability_records: RadioCapabilities body not found")
@@ -155,8 +188,11 @@ def direct_bool_fields(text: str) -> list[str]:
         # Leading attributes and qualifiers: `[[deprecated]] bool x`,
         # `mutable bool x`. Stripped rather than enumerated, so a future
         # qualifier does not silently create another evasion.
-        head = re.sub(r"^\s*(?:\[\[[^\]]*\]\]\s*|mutable\s+|static\s+|inline\s+)+",
-                      "", statement)
+        head = re.sub(
+            r"^\s*(?:\[\[[^\]]*\]\]\s*"
+            r"|(?:public|private|protected)\s*:\s*"
+            r"|mutable\s+|static\s+|inline\s+)+",
+            "", statement)
         m = re.match(r"\s*bool\s+(?P<rest>.+)$", head, re.S)
         if not m:
             continue

@@ -203,6 +203,94 @@ def test_real_header_accessor_does_not_move_the_count():
           f"expected {len(baseline) + 1} names, got {len(grown)}")
 
 
+def test_access_label_does_not_delete_the_next_field():
+    """`public:` ends a statement without a `;` (#5860).
+
+    The split-on-`;` could not see it, so the label rode onto the front of the
+    next fragment and the `^\\s*bool\\s+` match rejected it. OLD: the field
+    after any access label was silently dropped.
+    """
+    names = direct_bool_fields("""
+struct RadioCapabilities {
+    bool alpha = false;
+public:
+    bool beta = false;
+    bool gamma = false;
+};
+""")
+    check(names == ["alpha", "beta", "gamma"], f"access label: {names}")
+
+
+def test_preprocessor_region_does_not_delete_fields():
+    """Every directive line used to cost the declaration after it (#5860).
+
+    OLD returned ['alpha'] here: `#ifdef` ate hl2Only and `#endif` ate beta.
+    Directives are blanked before the scan, so BOTH arms of an #if/#else are
+    counted — deliberate. Evaluating the condition needs a preprocessor, and
+    for a shrink-only ratchet over-counting is the fail-loud direction: it can
+    make the gate fire, never let growth through.
+    """
+    names = direct_bool_fields("""
+struct RadioCapabilities {
+    bool alpha = false;
+#ifdef HAVE_HL2
+    bool hl2Only = false;
+#endif
+    bool beta = false;
+};
+""")
+    check(names == ["alpha", "hl2Only", "beta"], f"preprocessor: {names}")
+
+
+def test_directive_with_an_unbalanced_brace_does_not_swallow_the_struct():
+    """A `{` inside a directive used to raise the depth and never return."""
+    names = direct_bool_fields("""
+struct RadioCapabilities {
+    bool alpha = false;
+#define SOMETHING_OPEN {
+    bool beta = false;
+};
+""")
+    check(names == ["alpha", "beta"], f"unbalanced directive: {names}")
+
+
+def test_multi_line_block_comment_does_not_delete_the_next_field():
+    """`/\\*.*?\\*/` was applied per PHYSICAL line, so it never matched a
+    comment spanning lines; the interior prefixed the next fragment. Costs a
+    field even when the comment is perfectly balanced."""
+    names = direct_bool_fields("""
+struct RadioCapabilities {
+    bool alpha = false;
+    /* plain
+       multi line */
+    bool beta = false;
+};
+""")
+    check(names == ["alpha", "beta"], f"multi-line comment: {names}")
+
+
+def test_real_header_label_growth_is_visible():
+    """The dangerous direction, against the SHIPPED header.
+
+    A bool added under an access label left the count EXACTLY at the frozen
+    value, so the ratchet printed "ok (shrink only)" while the population had
+    grown. MAX_PLAUSIBLE_DROP is blind to it because nothing dropped. This is
+    the #5727 failure class reached through a different door, which is why it
+    is guarded against the real file and not only a snippet.
+    """
+    text = HEADER.read_text(encoding="utf-8")
+    baseline = direct_bool_fields(text)
+    check(baseline, "no bools found in the shipped RadioCapabilities.h")
+    anchor = f"bool {baseline[0]}"
+    grown = text.replace(
+        anchor, "public:\n    bool synthetic5860Probe = false;\n    " + anchor, 1)
+    names = direct_bool_fields(grown)
+    check("synthetic5860Probe" in names,
+          "a bool added under an access label is not counted — the ratchet is blind")
+    check(len(names) == len(baseline) + 1,
+          f"expected {len(baseline) + 1} names, got {len(names)}")
+
+
 if __name__ == "__main__":
     test_plain_fields()
     test_bool_after_single_line_accessor()
@@ -214,4 +302,9 @@ if __name__ == "__main__":
     test_wrapped_and_comma_declarations()
     test_parenthesised_initialiser_is_a_stated_limitation()
     test_real_header_accessor_does_not_move_the_count()
+    test_access_label_does_not_delete_the_next_field()
+    test_preprocessor_region_does_not_delete_fields()
+    test_directive_with_an_unbalanced_brace_does_not_swallow_the_struct()
+    test_multi_line_block_comment_does_not_delete_the_next_field()
+    test_real_header_label_growth_is_visible()
     print("capability-record parser checks passed")
