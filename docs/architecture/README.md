@@ -52,6 +52,15 @@ context that would otherwise live in tribal knowledge.
   backend that omits one silently declares the feature absent. Also records the
   fields nothing reads yet, including the `maxSlices`/`maxPanadapters` bypass.
 
+- [`radio-feature-matrix.md`](radio-feature-matrix.md) — the sibling question,
+  and the opposite method: not what each backend DECLARES but where the
+  operator's click ENDS, per control per radio, with a second table for the
+  `aetherd` headless surface derived from the control records instead. Read it
+  before believing a control works because you can see it: `D` cells are live
+  widgets whose intent dies silently, and the matrix says where. Generated from
+  the source and diffed by `tools/check_radio_feature_matrix.py --strict`, so a
+  cell cannot drift without CI saying so.
+
 - [`aetherd-hl2-backend-design.md`](aetherd-hl2-backend-design.md) — the design
   note for the Hermes-Lite 2 backend: what the Python spike proved and how it
   was ported behind the `IRadioBackend` seam. HL2 ships raw IQ and nothing else,
