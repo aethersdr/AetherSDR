@@ -5851,6 +5851,11 @@ add_test(NAME hl2_pan_limits_declaration_test COMMAND hl2_pan_limits_declaration
 add_executable(hl2_fm_controls_declaration_test tests/hl2_fm_controls_declaration_test.cpp)
 target_include_directories(hl2_fm_controls_declaration_test PRIVATE src tests)
 target_link_libraries(hl2_fm_controls_declaration_test PRIVATE aethercore Qt6::Core)
+# fmTonePresentation's struct default is Hidden as well, so no constructed
+# backend can tell a STATED Hidden from an inherited one. The target reads the
+# statement out of Hl2Backend.cpp instead, which needs the repo root.
+target_compile_definitions(hl2_fm_controls_declaration_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 add_test(NAME hl2_fm_controls_declaration_test COMMAND hl2_fm_controls_declaration_test)
 # The two HL2 mode vocabularies and the containment between them. Separate
 # target for the same reason as the one above: the fake-radio fixture that would

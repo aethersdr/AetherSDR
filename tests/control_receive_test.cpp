@@ -534,6 +534,106 @@ void productionCapabilityContracts()
         "RTL exposes real mixer/bandwidth controls, not unused filter edges or retuning center");
 #endif
 }
+
+// THE STRANDING ITSELF, driven through the target that does the stranding.
+//
+// productionCapabilityContracts() above reads the HL2's receiveModeControl
+// list back and checks that four strings are in it. That assertion cannot tell
+// a CONSUMED declaration from an ignored one: strip the
+// `modes.contains(*observed.mode)` term out of
+// ModelReceiveControlTarget::checkSlice and every line of it stays green while
+// the refusal it exists to prevent disappears. This target is the other half.
+// It installs the HL2's OWN declared list on the fixture backend, reports an
+// observed mode, and asks the real ControlService for a mode change. What is
+// asserted is the OUTCOME the control plane returns, never agreement between a
+// list and itself.
+//
+// BOTH READINGS OF THE LIST ARE EXERCISED, because they are different failures
+// and only one of them is the self-latch this change is about:
+//
+//   * the OBSERVED mode, read by checkSlice() -- which is the first statement
+//     of setMode(). Refusing it is "capability.unavailable" and it is the
+//     stranding: NO requested mode gets the slice back out, including a listed
+//     one.
+//   * the REQUESTED mode, read by setMode() itself. Refusing it is
+//     "request.out_of_range" and it declines one intent and nothing more.
+//
+// The response CODE is compared, not merely the presence of a result, so a
+// refusal arriving for some unrelated reason cannot read as the refusal being
+// asserted.
+//
+// Only receiveModeControl is transplanted, deliberately: the rest of the
+// fixture's caps (canTransmit=false, the filter/audio/pan declarations) are
+// what make it socket-free and controllable, and the subject here is one list.
+//
+// WHAT THE NEGATIVE CONTROLS USE AND WHY. "DRM" stands for "a mode this list
+// does not carry". It is one of the five the Hl2Backend comment excludes, on
+// the least contestable of the grounds given there -- there is no DRM decoder
+// in this tree at all -- so it is the exclusion least likely to move. Which of
+// the other four should eventually be declared is a separate question and this
+// target deliberately takes no position on it.
+//
+// NOT THE ONLY GUARD ON EITHER TERM, and saying so is cheaper than letting a
+// reviewer find it: modeAndFilterOrdering() above already requests "RADE"
+// expecting "request.out_of_range", and reports a slice in "RADE" expecting
+// "capability.unavailable", so neutralising either read turns one of its lines
+// red too. What it does NOT do is speak about the HL2's own declared
+// list -- it uses the fixture's synthetic {USB, LSB, AM} -- so it would go on
+// passing if this declaration were narrowed instead. The two are different
+// questions and both are wanted.
+//
+// WHAT THIS STILL CANNOT SEE. The fixture's Backend records intents; it does
+// not demodulate. So this shows that the declaration is READ and OBEYED by the
+// production control target, not that the radio serves the mode -- that claim
+// rests on modeFromString() and defaultPassbandForMode(), and on nothing
+// measured on hardware.
+void hl2DeclaredModesDriveTheControlPlane()
+{
+    hl2::Hl2Backend hl2;
+    const auto hl2Caps = hl2.capabilities();
+    const auto outcome = [&](const QString& observedMode, const QString& requestedMode) {
+        Fixture f;
+        f.backend->caps.receiveModeControl = hl2Caps.receiveModeControl;
+        f.report(observedMode, -2900, -100);
+        QJsonObject values = f.params(ReceiveOperation::Mode);
+        values.insert(QStringLiteral("mode"), requestedMode);
+        const QJsonObject response = f.send(ReceiveOperation::Mode, values);
+        return response.contains(QStringLiteral("result")) ? QStringLiteral("result") : error(response);
+    };
+    const auto expect = [&](const char* observedMode, const char* requestedMode,
+                            const char* expected, const char* label) {
+        const QString actual = outcome(QString::fromLatin1(observedMode), QString::fromLatin1(requestedMode));
+        if (actual != QString::fromLatin1(expected)) {
+            std::printf("observed %s, requested %s: expected %s, got %s\n",
+                        observedMode, requestedMode, expected, qPrintable(actual));
+        }
+        check(actual == QString::fromLatin1(expected), label);
+    };
+    // The observed-mode read: a slice sitting in each newly declared mode can
+    // still be steered. "LSB" is the requested mode and was on this list in
+    // every version of the declaration, so a refusal here is always checkSlice
+    // refusing the OBSERVED mode.
+    expect("USB", "LSB", "result",
+           "positive control: a slice observed in a long-listed mode is steerable");
+    expect("DSB", "LSB", "result",
+           "a slice observed in DSB is steerable out of it -- the HL2 declares DSB");
+    expect("CWL", "LSB", "result",
+           "a slice observed in CWL is steerable out of it -- the HL2 declares CWL");
+    expect("CWU", "LSB", "result",
+           "a slice observed in the CWU spelling is steerable out of it too");
+    // The requested-mode read: each newly declared mode can also be asked for,
+    // from a slice whose observed mode was never in question.
+    expect("USB", "DSB", "result", "and DSB can be ASKED for, not only sat in");
+    expect("USB", "CWL", "result", "and CWL can be asked for");
+    expect("USB", "CWU", "result", "and the CWU spelling can be asked for");
+    // The two refusals, which are what prove the list is read at all. Remove
+    // either term from ModelReceiveControlTarget and the matching line here
+    // turns red while every membership assertion above stays green.
+    expect("DRM", "LSB", "capability.unavailable",
+           "negative control: an UNDECLARED observed mode latches the slice shut");
+    expect("USB", "DRM", "request.out_of_range",
+           "negative control: an UNDECLARED requested mode is declined, slice unharmed");
+}
 } // namespace
 
 int main(int argc, char** argv)
@@ -548,5 +648,6 @@ int main(int argc, char** argv)
     delayedIdleCannotAuthorizeReceive();
     rangesAndBudget();
     productionCapabilityContracts();
+    hl2DeclaredModesDriveTheControlPlane();
     return failures == 0 ? 0 : 1;
 }

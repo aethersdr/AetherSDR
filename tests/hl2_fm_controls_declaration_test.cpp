@@ -35,20 +35,25 @@
 // something that does not build."
 //
 // SOCKET-FREE. Constructs a backend and reads capabilities(); binds nothing,
-// connects nothing, pumps no event loop, and reaches no radio.
+// connects nothing, pumps no event loop, and reaches no radio. It does read one
+// production SOURCE file, through AETHER_SOURCE_DIR — see limitation 1 below
+// for why, and rf_gain_presentation_test for the same shape already in use.
 //
 // WHAT THIS FILE CANNOT OBSERVE, said plainly because a declaration test that
 // overstates its reach is worse than none:
 //
-//   1. fmTonePresentation's struct DEFAULT is already Hidden. So the assertion
-//      that the HL2 reports Hidden would also pass if the line were deleted
-//      entirely. It pins the VALUE, not the fact that it is stated. Nothing
-//      reachable from here distinguishes declared-Hidden from inherited-Hidden
-//      — that is a property of the source text, and RadioCapabilities.h's
-//      "a backend that omits one silently declares it absent" rule is what
-//      covers it. hasFmRepeaterOffset does not have that problem: its default
-//      is the OPPOSITE value, which is asserted below so the two facts fail
-//      separately.
+//   1. fmTonePresentation's struct DEFAULT is already Hidden, so the assertion
+//      that the HL2 REPORTS Hidden passes just as well against a backend that
+//      says nothing at all — it cannot fail on a deletion, only on a change of
+//      value. That is a property of the source TEXT, so the source text is
+//      what the second tone assertion below reads, the way
+//      rf_gain_presentation_test reads its production wiring. What THAT in
+//      turn cannot see is whether the statement it finds is the last one to
+//      run: a second assignment further down would beat it unnoticed. The two
+//      lines together are what the value assertion alone was claiming.
+//      hasFmRepeaterOffset never had this problem — its default is the
+//      OPPOSITE value, so deleting its line fails the value assertion
+//      directly, and that is why the two facts are asserted separately.
 //   2. That the two widgets actually honour these fields. VfoWidget::
 //      configureFmToneControls and RxApplet::configureFmToneControls read them
 //      directly — a coupling a reader can see in four lines — but reaching it
@@ -60,6 +65,7 @@
 #include "core/backends/hl2/Hl2Backend.h"
 
 #include <QCoreApplication>
+#include <QFile>
 
 #include <cstdio>
 
@@ -115,8 +121,22 @@ int main(int argc, char** argv)
           "hasFmRepeaterOffset still defaults TRUE — silence here is a claim");
 
     // ---- no tone encode ----
+    //
+    // TWO ASSERTIONS, BECAUSE THE VALUE ALONE CANNOT FAIL ON A DELETION. The
+    // struct default is Hidden too, so the first line pins what the HL2
+    // REPORTS — which is what every consumer reads, and worth pinning — but it
+    // is not evidence that the declaration was made. The second line is: it
+    // reads the statement out of the production source, and it is the one that
+    // fails if the assignment is deleted rather than changed.
     check(caps.fmTonePresentation == FmTonePresentation::Hidden,
           "the tone controls are HIDDEN, not offered under the legacy shape");
+    QFile backendSource(
+        QStringLiteral(AETHER_SOURCE_DIR "/src/core/backends/hl2/Hl2Backend.cpp"));
+    check(backendSource.open(QIODevice::ReadOnly),
+          "the production backend source is readable — the next assertion needs it");
+    const QByteArray backendText = backendSource.readAll();
+    check(backendText.contains("c.fmTonePresentation = FmTonePresentation::Hidden;"),
+          "and Hidden is STATED, not inherited from the struct's identical default");
     // What Legacy would have offered, read from the same function the widgets
     // populate the combo from rather than described in a comment. The point of
     // the assertion is that this list is not empty: Legacy is an OFFER of CTCSS
