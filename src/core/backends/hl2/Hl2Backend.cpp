@@ -1243,6 +1243,13 @@ bool Hl2Backend::createPanadapter()
                          << QString::fromStdString(err);
         dsp->disconnect(this);
         dsp->deleteLater();
+        // THE S-METER, HOWEVER, WAS PUBLISHED. openReceiverDsp() succeeded just
+        // above -- it is the CONFIGURE that failed -- and declaring the meter is
+        // the last thing it does. Withdraw it before m_ids.remove(ddc) below
+        // takes the UI number away, or this rolled-back receiver keeps a meter
+        // in the catalogue for a chain that is being deleted on the next line.
+        if (const Hl2ReceiverIds* ids = m_ids.byDdc(ddc))
+            withdrawSliceLevelMeter(ids->uiNumber);
         // Safe to destroy without withdrawing it first: this chain was never
         // published, so the fan-out has never held a pointer to it.
         m_rx.pop_back();
@@ -1720,9 +1727,32 @@ void Hl2Backend::releaseReceiverDsps()
     // and only then post the destruction.
     std::vector<Hl2RxDsp*> doomed;
     doomed.reserve(m_rx.size());
-    for (Receiver& r : m_rx) {
+    // Indexed rather than ranged, because the S-meter withdrawal below needs the
+    // DDC index to find the receiver's UI NUMBER, and m_rx is indexed by DDC.
+    for (std::size_t k = 0; k < m_rx.size(); ++k) {
+        Receiver& r = m_rx[k];
         if (!r.dsp)
             continue;
+        // AND WITHDRAW ITS S-METER. A non-null dsp is an exact proxy for "this
+        // receiver's openReceiverDsp() returned true", and that function declares
+        // the meter as the last thing it does -- so every chain released here has
+        // a definition standing.
+        //
+        // THIS IS NOT REDUNDANT WITH RadioModel's MeterModel::clear(). That runs
+        // from onDisconnected(), which is reached only when the wire actually
+        // came up and went down again. Two teardowns never emit disconnected()
+        // at all -- finishDspSetup()'s superseded branch and its failed-socket
+        // branch both tearDownReceivers() and return -- and buildReceivers()
+        // calls this at the START of every connect, before any of it. On the
+        // supersede path the backend then re-drives the queued connect, so a
+        // second connect at a LOWER receiver count used to leave the higher
+        // meters standing forever: keyed into MeterModel's per-slice cache,
+        // listed in allMeters(), with no chain left to ever feed them.
+        //
+        // By UI number from the map, never by k: Hl2Receivers.h is explicit that
+        // the ddc<->ui identity is the starting state and not an invariant.
+        if (const Hl2ReceiverIds* ids = m_ids.byDdc(static_cast<int>(k)))
+            withdrawSliceLevelMeter(ids->uiNumber);
         doomed.push_back(r.dsp);
         r.dsp = nullptr;
     }
@@ -3162,6 +3192,28 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
             // allowed to close them. Every other teardown in this file does this;
             // the one raw delete that remains (in the destructor) is justified
             // there by the thread already being joined.
+            // AND WITHDRAW THEIR METERS, for the same reason and in the same
+            // order. buildReceivers() called openReceiverDsp() for ALL
+            // actualNumRx receivers before the I/O thread configured any of
+            // them, and openReceiverDsp() declares the S-meter as the last
+            // thing it does -- so every receiver being trimmed here has a
+            // definition standing, INCLUDING receiver i, whose open succeeded
+            // and whose configure is what failed.
+            //
+            // Left declared, MeterModel keeps the definition and its per-slice
+            // cache entry, so the meter list goes on offering a receiver that
+            // has stopped producing readings, frozen at its last value. That is
+            // worse than the absence it replaces: nothing on screen says the
+            // receiver is gone.
+            //
+            // BEFORE m_ids.truncate(i) below, which takes these UI numbers
+            // away, and BY UI NUMBER FROM THE MAP rather than by k --
+            // Hl2Receivers.h is explicit that the ddc<->ui identity is the
+            // starting state and not an invariant.
+            for (int k = i; k < actualNumRx; ++k) {
+                if (const Hl2ReceiverIds* gone = m_ids.byDdc(k))
+                    withdrawSliceLevelMeter(gone->uiNumber);
+            }
             std::vector<Hl2RxDsp*> doomed;
             for (int k = i; k < actualNumRx; ++k) {
                 if (Hl2RxDsp* d = m_rx[static_cast<std::size_t>(k)].dsp) {
