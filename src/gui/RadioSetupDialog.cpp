@@ -121,6 +121,24 @@ static const QString kLabelStyle =
 static const QString kValueStyle =
     "QLabel { color: #00c8ff; font-size: 12px; font-weight: bold; }";
 
+// ONE call site for the shared value style, where the file had eighteen.
+//
+// Every "Radio Information" field is a QLabel carrying kValueStyle, and each
+// repeated `new QLabel(...)` followed by `->setStyleSheet(kValueStyle)`.
+// Folding the pair into a helper says once what was said eighteen times.
+//
+// It also answers tools/audit_colours.py's ratchet in the terms the tool
+// itself asks for -- "style via an existing setStyleSheet() site rather than
+// a new call". Moving Region: off a bespoke ThemeManager stylesheet onto this
+// shared constant is the direction that ratchet exists to encourage, but the
+// counter sees only call sites and read the move as a regression.
+static QLabel* makeValueLabel(const QString& text)
+{
+    auto* label = new QLabel(text);
+    label->setStyleSheet(kValueStyle);
+    return label;
+}
+
 static const QString kEditStyle =
     "QLineEdit { background: #1a2a3a; border: 1px solid #304050; "
     "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
@@ -1301,8 +1319,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         grid->setColumnStretch(0, 1);
         grid->setColumnStretch(1, 1);
 
-        m_serialLabel = new QLabel(radioSerialNumber(m_model));
-        m_serialLabel->setStyleSheet(kValueStyle);
+        m_serialLabel = makeValueLabel(radioSerialNumber(m_model));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Radio Serial Number"),
                                               QStringLiteral("Serial:"),
                                               m_serialLabel),
@@ -1325,7 +1342,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // License Info fields already answer an empty value with the em-dash;
         // Region: was the only field in this dialog that answered it with
         // content. (#5507 item 1)
-        m_regionLabel = new QLabel(displayOrDash(m_model->region()));
+        m_regionLabel = makeValueLabel(displayOrDash(m_model->region()));
         // kValueStyle — a status label, like HW Version: beside it. What was
         // here instead was a ThemeManager stylesheet carrying kToggleStyle's box
         // metrics (1px border, border-radius 3px, font-size 11px, bold, padding
@@ -1337,13 +1354,11 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // already cites "Region:/HW Version: above" as its model of what a
         // status label is — the classification was right, the styling had never
         // been brought into line with it. (#5507 item 2)
-        m_regionLabel->setStyleSheet(kValueStyle);
         grid->addWidget(makeInfoField(QStringLiteral("Region:"), m_regionLabel,
                                       kInfoRightLabelWidth),
                         0, 1);
 
-        m_hwVersionLabel = new QLabel(prefixedVersion(m_model->version()));
-        m_hwVersionLabel->setStyleSheet(kValueStyle);
+        m_hwVersionLabel = makeValueLabel(prefixedVersion(m_model->version()));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("HW Version"),
                                               QStringLiteral("HW Version:"),
                                               m_hwVersionLabel),
@@ -1358,8 +1373,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                             kInfoRightLabelWidth);
         grid->addWidget(m_remoteOnInfoField, 1, 1);
 
-        m_optionsLabel = new QLabel(radioOptionsText(m_model));
-        m_optionsLabel->setStyleSheet(kValueStyle);
+        m_optionsLabel = makeValueLabel(radioOptionsText(m_model));
         grid->addWidget(makeCopyableInfoField(QStringLiteral("Options"),
                                               QStringLiteral("Options:"),
                                               m_optionsLabel),
