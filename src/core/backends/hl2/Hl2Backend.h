@@ -359,6 +359,10 @@ private:
     friend struct Hl2DspReadbackTestAccess;
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
+    // Delivers one bandscope block through MetisClient's own signal and lets
+    // the mirror age, so the converter rows' expiry can be exercised without a
+    // radio, a socket or an EP4 stream. Reaches nothing else.
+    friend struct Hl2HealthBlockTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
                      const TxCoordinator::Completion& completion, bool cwBreakIn);
     void invalidateTxDspConfiguration();

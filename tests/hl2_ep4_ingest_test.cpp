@@ -24,13 +24,16 @@
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2BandscopeHeadroom.h"
 #include "core/AppSettings.h"
 
 #include "Hl2Ep4ArrivalsD94.h"
 #include "TestSettingsProfile.h"
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QString>
+#include <QThread>
 #include <QVariant>
 
 #include <array>
@@ -47,6 +50,26 @@ struct MetisClientTestAccess {
     static void feedDatagram(MetisClient& client, std::span<const std::uint8_t> bytes)
     {
         client.handleDatagram(bytes);
+    }
+};
+
+// ONE ACCEPTED BANDSCOPE BLOCK, delivered the way a radio delivers one.
+//
+// Through MetisClient's own signal and Hl2Backend's own handler rather than by
+// assigning m_bandscopeBlock: a test that wrote the member itself would keep
+// passing with the ingest connection deleted, which is the wiring half of what
+// section 9 is about. The clock is restarted by that handler, not here, so the
+// age the rows are gated on is the real one.
+struct Hl2HealthBlockTestAccess {
+    static void deliverBlock(Hl2Backend& backend, const Ep4Stats& block)
+    {
+        MetisClient* metis = backend.m_metis;
+        QMetaObject::invokeMethod(metis, [metis, block] {
+            emit metis->bandscopeBlockReady(block);
+        }, Qt::BlockingQueuedConnection);
+        // The handler is a queued connection onto the backend's thread, which
+        // this test never returns to an event loop to service.
+        QCoreApplication::sendPostedEvents(&backend, QEvent::MetaCall);
     }
 };
 }  // namespace AetherSDR::hl2
@@ -312,6 +335,114 @@ int main(int argc, char** argv)
                                 QStringLiteral("bandscope.enable"), 0, QVariant(false));
         check(results == 1, "requestId 0 asks for no reply and gets none");
         check(errors == 0, "...and is still not the error stub");
+    }
+
+    // ---- 9 . the converter rows EXPIRE, and the age row is what survives ----
+    //
+    // Section 8 above asserts these rows are absent BEFORE a block. This is the
+    // other edge, and it is the one that was missing: absent again once the
+    // newest block has stopped describing now.
+    //
+    // THE FAILURE THIS CLOSES. m_bandscopeBlock has two writers -- the ingest
+    // handler above and resetBandscopeMirrors(), whose only callers are the
+    // link edges. `bandscope.enable(false)` clears neither, so stopping the
+    // stream inside a live session left healthSnapshot() republishing one
+    // frozen block for the rest of the link. Measured on hardware: 31 dB of
+    // commanded LNA gain moved these rows 0.00 dB while adcSlicePeakDbfs0,
+    // which comes from a different subsystem that never stopped, moved 19.04
+    // dB over the same steps.
+    //
+    // BOTH DIRECTIONS, AND THE RETURN. A gate that withheld everything would
+    // pass "stale is withheld" and be worthless, so the fresh case is asserted
+    // first, with the block's own arithmetic rather than with numbers typed
+    // out here; and the rows are made to come BACK, because an expiry that
+    // latched would be a second freeze wearing the fix's clothes.
+    {
+        Hl2Backend backend;
+
+        // A record a real gate could produce: 2048 codes, peak 512, no DC, an
+        // AC deviation of 128 codes. Peak -12.04 dBFS, RMS -24.08, crest 12.04.
+        Ep4Stats blk;
+        blk.samples = kEp4BlockSamples;
+        blk.peakAbs = 512;
+        blk.sum = 0.0;
+        blk.sumSquares = static_cast<double>(kEp4BlockSamples) * 128.0 * 128.0;
+        blk.clippedSamples = 0;
+
+        const auto value = [](const AetherSDR::IRadioBackend::HealthSnapshot& s, const char* k) {
+            return s.values.value(QString::fromLatin1(k));
+        };
+        const auto has = [&value](const AetherSDR::IRadioBackend::HealthSnapshot& s, const char* k) {
+            return value(s, k).isValid();
+        };
+        const auto listed = [](const AetherSDR::IRadioBackend::HealthSnapshot& s, const char* k) {
+            const QString key = QString::fromLatin1(k);
+            return s.order.contains(key) && s.labels.contains(key);
+        };
+
+        Hl2HealthBlockTestAccess::deliverBlock(backend, blk);
+        const AetherSDR::IRadioBackend::HealthSnapshot fresh = backend.healthSnapshot();
+
+        // THE POSITIVE HALF.
+        check(has(fresh, "adcPeakDbfs") && has(fresh, "adcRmsDbfs")
+                  && has(fresh, "adcCrestDb") && has(fresh, "adcClippedPerBlock"),
+              "a block just delivered publishes all four converter rows");
+        // Against the block's OWN arithmetic, so the check cannot agree with a
+        // wrong reading merely because both were typed from the same guess.
+        check(value(fresh, "adcPeakDbfs").toString()
+                  == QString::number(blk.peakDbfs(), 'f', 2),
+              "...and the peak row carries this block's peak, not a default");
+        check(value(fresh, "adcRmsDbfs").toString()
+                  == QString::number(blk.rmsDbfs(), 'f', 2),
+              "...and the RMS row carries this block's RMS");
+        check(blk.crestDb().has_value()
+                  && value(fresh, "adcCrestDb").toString()
+                         == QString::number(*blk.crestDb(), 'f', 2),
+              "...and the crest row carries this block's crest");
+        check(has(fresh, "adcObservedAgoMs")
+                  && value(fresh, "adcObservedAgoMs").toLongLong() < kHeadroomMaxAgeMs,
+              "...and the age row reports an age inside the expiry");
+
+        // Let it age past the expiry with nothing delivering. Real elapsed
+        // time against the real QElapsedTimer: the gate under test is the one
+        // healthSnapshot() actually consults, not a stand-in for it.
+        QThread::msleep(static_cast<unsigned long>(kHeadroomMaxAgeMs) + 250u);
+        const AetherSDR::IRadioBackend::HealthSnapshot stale = backend.healthSnapshot();
+
+        // THE NEGATIVE HALF.
+        check(!has(stale, "adcPeakDbfs"), "an expired block withholds the peak");
+        check(!has(stale, "adcRmsDbfs"), "an expired block withholds the RMS");
+        check(!has(stale, "adcCrestDb"), "an expired block withholds the crest");
+        check(!has(stale, "adcClippedPerBlock"),
+              "an expired block withholds the rail count -- a frozen zero reads "
+              "as 'not clipping', which is the dangerous direction");
+
+        // A DASH, NOT A DISAPPEARANCE. Dropping the rows outright was tried and
+        // reverted on PR #5650 round 3; put() keeps the key in order and labels
+        // and withholds only the value, and that is what a reader sees.
+        check(listed(stale, "adcPeakDbfs") && listed(stale, "adcRmsDbfs")
+                  && listed(stale, "adcCrestDb") && listed(stale, "adcClippedPerBlock"),
+              "...while the rows keep their place and their labels");
+
+        // AND THE AGE ROW SURVIVES THE EXPIRY IT CAUSED. Four dashes and no age
+        // says only that something is missing; four dashes and an age says the
+        // gate stopped, which is the whole diagnostic.
+        check(has(stale, "adcObservedAgoMs"),
+              "the age row outlives the values it expired");
+        check(value(stale, "adcObservedAgoMs").toLongLong() > kHeadroomMaxAgeMs,
+              "...reporting an age past the expiry, which is why they are gone");
+
+        // NOT A LATCH: a new block restores the rows.
+        blk.peakAbs = 1024;
+        Hl2HealthBlockTestAccess::deliverBlock(backend, blk);
+        const AetherSDR::IRadioBackend::HealthSnapshot again = backend.healthSnapshot();
+        check(has(again, "adcPeakDbfs")
+                  && again.values.value(QStringLiteral("adcPeakDbfs")).toString()
+                         == QString::number(blk.peakDbfs(), 'f', 2),
+              "a block after an expiry publishes again, at its own level");
+        check(again.values.value(QStringLiteral("adcPeakDbfs"))
+                  != fresh.values.value(QStringLiteral("adcPeakDbfs")),
+              "...and the new level is the new block's, not the expired one's");
     }
 
     if (g_failures == 0)
