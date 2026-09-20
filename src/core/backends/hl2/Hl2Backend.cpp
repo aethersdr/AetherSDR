@@ -7008,6 +7008,15 @@ void Hl2Backend::setAutoRfGain(bool on)
             m_autoRfGainWanted = false;
             qCInfo(lcHl2) << "HL2 auto RF gain: request withdrawn (the arm was "
                              "declined earlier; the loop was not running)";
+            // THE WITHDRAWAL IS NOT DONE UNTIL SOMEBODY IS TOLD. m_autoRfGainWanted
+            // is what currentOperatingState() publishes as rfGain.autoEnabled, and
+            // RadioModel does not poll that document -- it fetches it in the
+            // operatingStateChanged handler and hands it to RadioStateMemory. So
+            // clearing the flag without this line leaves the in-memory state right
+            // and the PROFILE still carrying true, which is the exact harm this
+            // change exists to stop: the next connect from a trusted baseline
+            // re-arms a control the operator switched off.
+            notifyOperatingStateChanged();
         }
         return;
     }
@@ -7054,6 +7063,21 @@ void Hl2Backend::setAutoRfGain(bool on)
             // caller's own readback could discover was invisible on the two
             // routes that have no readback: the restore below and the bridge.
             emit autoRfGainArmSettled(false);
+            // THE SURVIVING ASK IS PERSISTED STATE, so it moves the document and
+            // has to say so. Without this the wish lives only in this process and
+            // the "arms on the next connect that allows it" promise above holds
+            // only until the application is closed -- and, worse, it makes the
+            // withdrawal above untestable: a profile that never recorded the true
+            // reads false afterwards whether or not the withdrawal works.
+            //
+            // ORDERED AFTER autoRfGainArmSettled, to match the arm and disarm
+            // branches: both emit the settled verdict inside the branch and reach
+            // the shared notifyOperatingStateChanged() at the tail afterwards.
+            // The flag this publishes is already set above, so nothing observable
+            // turns on the order -- only the uniformity does, and a handler of
+            // the verdict should not see one path's document refreshed and the
+            // other two's not.
+            notifyOperatingStateChanged();
             return;
         }
         // CLEARED ON SUCCESS. A reason that outlived the refusal it describes
@@ -7092,6 +7116,11 @@ void Hl2Backend::setAutoRfGain(bool on)
                       << "dB restored";
         emit autoRfGainArmSettled(false);
     }
+    // BOTH BRANCHES ABOVE MOVED m_autoRfGainWanted, which currentOperatingState()
+    // publishes. Reached only past the opening guard, so an idempotent call -- the
+    // operator re-asserting a switch that is already where they want it -- still
+    // announces nothing.
+    notifyOperatingStateChanged();
 }
 
 // The operator's floor. Applied live: pulling it in while the loop is holding

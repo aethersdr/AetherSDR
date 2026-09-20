@@ -68,6 +68,43 @@ RestoredRadioState rememberedGain()
     return state;
 }
 
+// WHAT THE APPLICATION ACTUALLY PERSISTS, reached the way it actually reaches it.
+//
+// RadioModel never polls currentOperatingState(). It connects
+// IRadioBackend::operatingStateChanged to scheduleOperatingStateSave() and fetches
+// the document INSIDE that handler, then hands the snapshot to
+// RadioStateMemory::store. So a backend that moves persisted state without emitting
+// leaves the flag correct in memory and the profile on disk carrying the old value.
+//
+// A test that calls currentOperatingState() directly cannot see that difference: it
+// is performing the one read the application never performs, and it answers from the
+// live flag every time. This mirror only ever samples the document when the backend
+// says the document moved, which is the whole of the contract in IRadioBackend.
+class ProfileMirror {
+public:
+    explicit ProfileMirror(hl2::Hl2Backend& backend)
+    {
+        m_conn = QObject::connect(&backend, &IRadioBackend::operatingStateChanged,
+                                  &backend, [this, &backend] {
+            m_stored = backend.currentOperatingState();
+            ++m_saves;
+        });
+    }
+    // Disconnected explicitly: the lambda captures this mirror, and ~GainSession
+    // calls disconnectRadio() on a backend that outlives it.
+    ~ProfileMirror() { QObject::disconnect(m_conn); }
+    ProfileMirror(const ProfileMirror&) = delete;
+    ProfileMirror& operator=(const ProfileMirror&) = delete;
+
+    bool storedAutoGain() const { return autoGainWanted(m_stored); }
+    int saves() const { return m_saves; }
+
+private:
+    QMetaObject::Connection m_conn;
+    RestoredRadioState m_stored;
+    int m_saves = 0;
+};
+
 // Exercise synchronous connect seeding and capture without starting transport.
 // boardMaxRx skips the unicast discovery socket. No event loop is pumped:
 // finishDspSetup cannot run, and disconnect cancels it before destruction.
@@ -306,6 +343,49 @@ int main(int argc, char** argv)
             session.backend.setAutoRfGain(true);
             check(session.backend.autoRfGainEnabled(),
                   "a profile carrying autoEnabled:true arms once the baseline allows it");
+        }
+        // THE FOURTH LEG: THE PUSH, and it is a different assertion from the three
+        // above rather than a restatement of them.
+        //
+        // Those three ask the backend for its document directly. That read always
+        // answers from the live flag, so they stay green on a backend that changes
+        // the flag and tells nobody -- which is precisely the state this file was
+        // in: setAutoRfGain moved m_autoRfGainWanted on four paths and emitted
+        // operatingStateChanged on none of them, so the withdrawal reached the
+        // document only for a caller that thought to ask. RadioModel never asks.
+        //
+        // BOTH HALVES ARE ASSERTED AND NEITHER IS OPTIONAL. Without the refusal's
+        // own emit the mirror never records the `true`, and the withdrawal
+        // assertion then passes against a document that never said anything at all
+        // -- green, on a backend where the withdrawal does not work.
+        {
+            GainSession session(autoGainProfile(false));
+            ProfileMirror mirror(session.backend);
+            session.backend.setPanRfGain(session.panId, kUntrusted);
+            // Also the harness's own positive control: if the mirror were never
+            // connected, every assertion below would read a default-constructed
+            // document and the false ones would pass for nothing.
+            check(mirror.saves() > 0 && !mirror.storedAutoGain(),
+                  "push: a gain move does reach the profile, and nothing is wanted yet");
+            session.backend.setAutoRfGain(true);
+            check(!session.backend.autoRfGainEnabled(),
+                  "push: the radio still declines from the shipped default baseline");
+            check(mirror.storedAutoGain(),
+                  "push: the refusal's surviving ask reaches the PROFILE, not just memory");
+            session.backend.setAutoRfGain(false);
+            check(!mirror.storedAutoGain(),
+                  "push: and the profile the next connect reads now records the operator's off");
+        }
+        {
+            GainSession session(autoGainProfile(false));
+            ProfileMirror mirror(session.backend);
+            session.backend.setPanRfGain(session.panId, kTrusted);
+            session.backend.setAutoRfGain(true);
+            check(session.backend.autoRfGainEnabled() && mirror.storedAutoGain(),
+                  "push positive control: a trusted baseline arms and the arm is persisted");
+            session.backend.setAutoRfGain(false);
+            check(!mirror.storedAutoGain(),
+                  "push positive control: the disarm reaches the profile by the path that worked");
         }
     }
     // Cross-family compatibility at the exact display-restore seam. No Flex or
