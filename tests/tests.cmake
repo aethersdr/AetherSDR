@@ -2564,6 +2564,14 @@ set_tests_properties(flex_control_visibility_test PROPERTIES
 # #5507: the production Radio Setup dialog against a backend that reports no
 # region, driven by RadioDelta over the real IRadioBackend::radioChanged route.
 # Same target shape as flex_control_visibility_test above — no sockets, no peers.
+# ${THEME_TEST_RESOURCES} (resources/resources.qrc, compiled at line ~1366)
+# is what puts :/themes/default-dark.json and :/themes/default-light.json in
+# this binary. Without it ThemeManager still resolves color.accent.bright --
+# ThemeSeedGenerated.cpp compiles the dark values in -- but scanAvailableThemes()
+# finds nothing in :/themes/, so availableThemes() is empty and setActiveTheme()
+# cannot switch. #5857's slot switches the theme and reads the colour back, which
+# is the only assertion that can see a widget that is tracked but carries no
+# token to re-resolve.
 add_executable(radio_setup_region_field_test
     tests/radio_setup_region_field_test.cpp
     src/gui/DragValuePopup.cpp
@@ -2574,6 +2582,7 @@ add_executable(radio_setup_region_field_test
     src/gui/SliceColorManager.cpp
     src/gui/KiwiPublicReceiverPicker.cpp
     src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
 )
 target_include_directories(radio_setup_region_field_test PRIVATE src tests)
 target_link_libraries(radio_setup_region_field_test PRIVATE
