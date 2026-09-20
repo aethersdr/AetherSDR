@@ -619,11 +619,11 @@ void testReadoutWidthIsStable()
 
 } // namespace
 
-// The marker must fall, not vanish. TxApplet holds for 2 s then decays at
-// full-scale/2.5 s (#2561, matching SmartSDR's peak-hold bar); this gauge
-// held 2.5 s and then snapped the peak to zero. Three power meters share a
-// screen and should behave alike.
-void testPeakMarkerDecaysInsteadOfVanishing()
+// Project canon is SmartMTR's extremes engine: a sliding-window max with a
+// constant-velocity glide and no hold phase. Asserts the shape -- the marker
+// glides rather than jumping, and retires itself when the peak leaves the
+// window -- not the constants.
+void testPeakMarkerUsesTheSlidingWindow()
 {
     resetSettings();
     AmpApplet applet;
@@ -632,30 +632,28 @@ void testPeakMarkerDecaysInsteadOfVanishing()
     if (!g) return;
 
     applet.setDeviceMeters(1000.0f, 1.2f);
-    report("a new peak arms the marker", qFuzzyCompare(g->peakValue(), 1000.0f),
-           QString::number(g->peakValue()));
+    QTest::qWait(80);
+    const float early = g->peakValue();
+    report("the marker glides toward the peak rather than snapping to it",
+           early < 1000.0f, QString::number(early));
 
-    // Inside the hold window the marker does not move.
-    applet.setDeviceMeters(100.0f, 1.2f);
-    QTest::qWait(900);
-    report("the marker holds through the hold window",
-           qFuzzyCompare(g->peakValue(), 1000.0f), QString::number(g->peakValue()));
-
-    // Past it, strictly between the peak and the live reading -- decaying.
-    QTest::qWait(1600);
-    const float mid = g->peakValue();
-    report("the marker decays rather than snapping away",
-           mid < 1000.0f && mid > 100.0f, QString::number(mid));
-
-    // It comes to rest on the live reading, not at zero.
-    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + 5000;
-    while (g->peakValue() > 100.5f
-           && QDateTime::currentMSecsSinceEpoch() < deadline) {
+    const qint64 upDeadline = QDateTime::currentMSecsSinceEpoch() + 6000;
+    while (g->peakValue() < 900.0f
+           && QDateTime::currentMSecsSinceEpoch() < upDeadline) {
         QTest::qWait(50);
     }
-    report("the marker settles on the live reading",
-           g->peakValue() <= 100.5f && g->peakValue() >= 99.5f && g->peakHeld(),
+    report("it reaches the peak given time", g->peakValue() >= 900.0f,
            QString::number(g->peakValue()));
+
+    // No hold timer: the window rolling past the peak is what brings it down.
+    applet.setDeviceMeters(100.0f, 1.2f);
+    const qint64 downDeadline = QDateTime::currentMSecsSinceEpoch() + 9000;
+    while (g->peakValue() > 900.0f
+           && QDateTime::currentMSecsSinceEpoch() < downDeadline) {
+        QTest::qWait(50);
+    }
+    report("it comes back down once the peak leaves the window",
+           g->peakValue() < 900.0f, QString::number(g->peakValue()));
 }
 
 int main(int argc, char** argv)
@@ -690,7 +688,7 @@ int main(int argc, char** argv)
     testWithdrawnDriveHidesTheRow();
     testFanControlStaysOperableWithoutTheSetupGroup();
     testRelayedMeffaReadsOutButStaysInert();
-    testPeakMarkerDecaysInsteadOfVanishing();
+    testPeakMarkerUsesTheSlidingWindow();
 
     std::printf("\n%s\n",
                 g_failed == 0
