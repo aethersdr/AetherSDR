@@ -1986,14 +1986,21 @@ private:
     // 1024/384000 = 2.67 ms (docs/HERMES.md 15.2.1 states the same thing as
     // 375 fps; fftSize is Hl2RxDsp.h's 1024). At rate 10,
     // localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 -- 0.66 % --
-    // and a signal shorter than the gap between frames is absent from the
-    // history entirely, not merely attenuated. The frames in between are
-    // dropped, never accumulated.
+    // and a burst shorter than the gap between ROWS can miss the history
+    // entirely rather than merely being attenuated. The frames in between
+    // never reach the waterfall at all: dropped, never accumulated.
     //
-    // The interval a row SHOULD integrate is not an open question:
-    // WaterfallRate::localRowIntervalMs(rate) is already the span of time the
-    // row occupies on screen, and WaterfallTimeMarkers labels the axis on that
-    // basis. The open question is which LAYER owns the accumulation and in
+    // The interval a row SHOULD integrate is not an open question: it is this
+    // gate's own WaterfallRate::localRowIntervalMs(rate), the gap between rows.
+    // Note what does NOT rest on that number, because it reads the other way
+    // round. updateWaterfallRow() stamps each row with its ARRIVAL time and
+    // Q_UNUSED()s the timecode; updateWaterfallMsPerRowFromHistory() measures
+    // m_wfMsPerRow from those stamps (localMsPerRow only SEEDS the preview, in
+    // resetWfTimeScale); and waterfallTimeMarkers() takes rows, head, seconds,
+    // offset and height — it never sees the rate at all, and labels wall-clock
+    // boundaries off the same stamps. localRowIntervalMs() could not carry the
+    // axis anyway: it returns 0 at rate 100, where the gate is lifted. The
+    // open question is which LAYER owns the accumulation and in
     // which domain, because averaging dBFS is averaging logarithms -- see
     // upstream #5782, which names this row and rules the above-the-seam variant
     // out in its Option C. Do not add an accumulator here until that lands.

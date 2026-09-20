@@ -7042,9 +7042,11 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     // the frame rate and normally asks for something slower. That gate paces
     // the row; it does NOT integrate it. The row that goes out is the single
     // frame that landed on the gate, so it represents one FFT window out of the
-    // interval rather than the interval — the calibration the widget's time
-    // axis assumes is still owed. See the m_backendWfLastRowNs comment in the
-    // header and upstream #5782 for why the accumulator does not belong here.
+    // interval rather than the interval. What is owed is the row's FIDELITY,
+    // not the time axis: the widget calibrates that from row ARRIVAL times and
+    // this gate is what makes them arrive on cadence. See the
+    // m_backendWfLastRowNs comment in the header and upstream #5782 for why
+    // the accumulator does not belong here.
     // Geometry for THIS pan. `panId` here is already the neutral index, which is
     // the same key the geometry handler stores under.
     const double panBandwidthMhz = m_backendPanBandwidthMhz.value(panId, 0.0);
