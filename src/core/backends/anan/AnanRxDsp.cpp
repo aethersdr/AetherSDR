@@ -187,6 +187,14 @@ void AnanRxDsp::installChannel(RebuildResult result)
     // enough to show as a brief visible drift instead of a clean start.
     m_smoothedBins.clear();
 
+    // Same idea for the S-meter, one stage further back: the new channel's
+    // own average starts at zero (create_meter() -> flush_meter()), so its
+    // first readings are low for the length of the tap's time constant
+    // whether or not a mute is involved. A rate change arms this twice --
+    // here, and again when beginRateChange()'s settle window unmutes -- which
+    // costs nothing: the window is re-armed, not accumulated.
+    armMeterSettle();
+
     // Re-apply m_config's CURRENT values -- for configure() this is exactly
     // what buildChannel() was just given (m_config == config already); for
     // a rate-change swap it may include mode/filter/AGC changes the operator
@@ -254,6 +262,14 @@ void AnanRxDsp::setAgc(int agcMode, double maximumGainDb)
 
 void AnanRxDsp::setAudioMuted(bool muted)
 {
+    // The mute LIFTING is the edge that matters to the S-meter: WDSP's
+    // average has been integrating the zeros this class fed it for the whole
+    // mute and nothing flushes it, so the first blocks after the unmute still
+    // read that silence. Swallow them instead of publishing them -- see
+    // meterSettleBlocks()'s comment for why the guard below is not enough on
+    // its own.
+    if (m_audioMuted && !muted)
+        armMeterSettle();
     m_audioMuted = muted;
 }
 
@@ -501,11 +517,23 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         // Meter ballistics are not lost: the backend already applies its own
         // attack/decay EMA to the dBm value before publishing.
         //
-        // Not while muted: during a rate change's settle window the channel is
-        // fed zeros (see setAudioMuted()), and the meter would read that
-        // silence as a signal level -- the needle would drop to the floor on
-        // every zoom.
-        if (!m_audioMuted) {
+        // Not while muted, and not for the settle window after the mute lifts
+        // or a channel is installed: during a rate change's settle window the
+        // channel is fed zeros (see setAudioMuted()), the meter would read
+        // that silence as a signal level, and its average carries that
+        // silence past the unmute -- so without the second arm the needle
+        // would dive at the END of every zoom instead of during it. See
+        // meterSettleBlocks().
+        //
+        // The countdown sits below the underrun `continue` above, so a block
+        // that produced no output does not spend a tick. That can only make
+        // the window longer, never shorter, and a channel that is not yet
+        // producing is exactly when the tap is least worth publishing.
+        if (m_audioMuted) {
+            // Our own silence. Nothing here is a signal level.
+        } else if (m_meterSettleBlocks > 0) {
+            --m_meterSettleBlocks;
+        } else {
             emit meterUpdate(static_cast<float>(
                 m_channel->meter(WdspChannel::Meter::SignalAverage)));
         }
