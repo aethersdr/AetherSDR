@@ -2391,8 +2391,14 @@ QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
         // the fwdPower/reflectedPower pair above — a client reading this scalar
         // must not get a different answer from the one reading the array
         // (#4533). swrAgeMs is still reported so a consumer can see WHY.
-        {QStringLiteral("swr"),
-         m->swrIfLive() ? QJsonValue(*m->swrIfLive()) : QJsonValue()},
+        // THE SAME DOUBLE EVALUATION, and the one the other two were copied
+        // from. swrIfLive() reads the clock inside itself like its two
+        // siblings, so testing and dereferencing are two different instants
+        // and a sample on the staleness edge can be engaged for the first and
+        // disengaged for the second. Pre-dates #5499 and is fixed with them
+        // rather than left one line away from two corrections, which is how a
+        // pattern gets copied forward.
+        {QStringLiteral("swr"), jsonOrNull(m->swrIfLive())},
         {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
         {QStringLiteral("paTemp"),          temperature.value(QStringLiteral("value"))},
         {QStringLiteral("supplyVolts"),     voltage.value(QStringLiteral("value"))},
