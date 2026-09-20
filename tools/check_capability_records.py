@@ -95,38 +95,57 @@ def direct_bool_fields(text: str) -> list[str]:
         """Comment-stripped text. Braces in comments are not nesting."""
         return re.sub(r"/\*.*?\*/", "", re.sub(r"//.*$", "", raw))
 
-    # Accumulate the struct's OWN body (depth 1) as text, then split it into
-    # logical declarations on `;`. Matching per physical line missed a
+    # Scan the struct's OWN body (depth 1) CHARACTER by character, then split
+    # it into logical declarations on `;`. Matching per physical line missed a
     # clang-format-wrapped declaration — `bool\n    x = false;` — which needs no
     # intent to evade, and treated `bool a = false; bool b = false;` as one
-    # field (#5619 re-review, ten9876). Braces are still counted per line,
-    # which is what the depth tracking needs.
-    body: list[str] = []
-    depth = 0
-    inside = False
-    for line in lines[start:]:
-        code = code_of(line)
-        if not inside:
-            if "{" in code:
-                inside = True
-                depth += code.count("{") - code.count("}")
+    # field (#5619 re-review, ten9876), so the split-on-`;` stayed.
+    #
+    # WHY CHARACTERS AND NOT LINES (#5727). The previous revision accumulated
+    # whole LINES whenever the depth entered or returned to 1, which meant a
+    # member function's body came along: its interior `;` ended the declaration
+    # early, and its closing `}` was carried into the NEXT fragment, where the
+    # `^\s*bool\s+` match below rejected it for the leading brace. The field
+    # after an accessor was therefore DELETED FROM THE COUNT — silently, since
+    # a one-line accessor never leaves depth 1 at all and the multi-line case
+    # returns to it. Both failure directions are live: a bool declared after an
+    # accessor vanishes and the ratchet reports a drop it then asks you to make
+    # permanent, and a bool ADDED after one is never seen, so the population can
+    # grow past the freeze with the count flat and MAX_PLAUSIBLE_DROP blind to
+    # it because nothing dropped. The `std::optional<Record>` + accessor shape
+    # this ratchet exists to ENCOURAGE is the shape that broke it.
+    #
+    # Two rules do it. Characters at depth >= 2 are dropped, so nothing inside a
+    # member body, a brace initializer or a nested type can reach the field
+    # match. And entering a nested block EMITS A SYNTHETIC `;`, which closes off
+    # the declarator that opened it so the following field starts clean. The
+    # synthetic terminator is what makes the multi-line initializer safe
+    # structurally rather than by special case: `agcModes = {…};` becomes
+    # `agcModes = ; ;`, both halves fail the bool match, and the field after it
+    # survives — the hazard that cost hasModeIndependentSquelch exactly once.
+    code = "\n".join(code_of(line) for line in lines[start:])
+    open_brace = code.find("{")
+    if open_brace < 0:
+        raise SystemExit("check_capability_records: RadioCapabilities body not found")
+
+    chars: list[str] = []
+    depth = 1
+    for ch in code[open_brace + 1:]:
+        if ch == "{":
+            depth += 1
+            if depth == 2:
+                chars.append(";")
             continue
-        depth_before = depth
-        depth += code.count("{") - code.count("}")
-        # Depth 1 is the struct's own body. The CLOSING line of a multi-line
-        # initializer (`agcModes = {\n  …\n};`) is at depth 2 on entry but
-        # returns to 1, and it carries the terminating `;` — without it the
-        # unterminated fragment merges with the next declaration and swallows
-        # it. That cost hasModeIndependentSquelch exactly once, caught by
-        # diffing the parser against an independent reference rather than by
-        # the count looking wrong.
-        if depth_before == 1 or depth == 1:
-            body.append(code)
-        if depth <= 0:
-            break
+        if ch == "}":
+            depth -= 1
+            if depth <= 0:
+                break
+            continue
+        if depth == 1:
+            chars.append(ch)
 
     fields: list[str] = []
-    for statement in " ".join(body).split(";"):
+    for statement in "".join(chars).split(";"):
         # `(` still excludes member functions and operator==. It also excludes a
         # parenthesised initialiser (`bool x(false);`) — the most vexing parse,
         # genuinely undecidable here, and a stated limitation rather than a
@@ -187,6 +206,14 @@ def main() -> int:
     # failure rather than progress. The threshold is deliberately generous: it
     # only has to separate "someone converted a handful" from "the parser fell
     # over".
+    #
+    # BUT ONLY THE LOUD VERSION OF "FELL OVER" (#5727). This floor sees a drop,
+    # so it is blind to a parse failure that loses ONE field — and blind by
+    # construction to one that loses nothing and stops SEEING new ones, where
+    # the count does not move at all. Widening it would not help; it would only
+    # fail real one-bool conversions. What guards the quiet direction is the
+    # parser being right, which is what tools/test_check_capability_records.py
+    # is for. Keep this sized for the brace collapse it was written for.
     if count < FROZEN_BOOL_COUNT - MAX_PLAUSIBLE_DROP:
         print(f"::error file={HEADER},title=capability-bool-vacuity::"
               f"only {count} boolean(s) found against a frozen {FROZEN_BOOL_COUNT} — "

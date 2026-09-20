@@ -3750,6 +3750,15 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME tx_meter_safety
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_tx_meter_test.py)
+    # The #5262 M2 boolean ratchet's PARSER (#5727). direct_bool_fields() is a
+    # pure text -> names function, so the shapes that break it are synthetic
+    # headers rather than a build: an accessor beside a field used to delete the
+    # next bool from the count, and a bool added after one was never seen at
+    # all. Running the checker against the real header cannot see either —
+    # which is how the bug survived two review rounds on #5619.
+    add_test(NAME capability_record_parser
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_check_capability_records.py)
     # RxApplet/VfoWidget are full-desktop translation units with no practical
     # unit-test link seam. Pin their radio-backed presentation wiring; label
     # behavior itself is covered by fm_tone_presentation_test above.
