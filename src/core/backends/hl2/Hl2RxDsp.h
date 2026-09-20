@@ -641,6 +641,13 @@ private:
     WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
+    // Blocks for which the S-meter tap must stay suppressed after the channel
+    // starts being fed real IQ again — see the settle note in processIqBlock().
+    // Armed on the mute's release edge and on a channel swap, counted down one
+    // per block that WDSP actually completes, and only on the unmuted path, so
+    // it measures the same clock the meter itself integrates on. DSP thread
+    // only, like m_audioMuted.
+    int m_meterSettleBlocks = 0;
     // Panadapter frame-rate cap. 0 = uncapped. m_spectrumClock is started on
     // the first block and only read/written on the DSP thread.
     int m_spectrumIntervalMs = 0;
