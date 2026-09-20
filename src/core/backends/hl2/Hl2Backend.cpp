@@ -4704,7 +4704,25 @@ void Hl2Backend::forwardSpeakerAudioToCodec(const std::vector<float>& mixed)
     std::vector<std::int16_t> out;
     out.reserve(frames * 4);              // 2 output frames x 2 channels
 
-    const auto toI16 = [](float v) -> std::int16_t {
+    // THE RADIO'S OWN LEVEL, which is not the application's. AudioEngine
+    // applies the operator's volume as a device attenuation on the host's
+    // QAudioSink, so it is not in these samples and no tap could find it —
+    // see Hl2HardwareOptions::speakerLevelPercent for why that makes a
+    // separate fader necessary rather than merely convenient.
+    const float speakerGain = m_hw.speakerGain();
+    if (speakerGain <= 0.0f) {
+        // Silent, but the interpolator's carry still has to advance or the
+        // first sample after the operator brings the level back up would be
+        // interpolated out of a frame from before it went down — a click at
+        // exactly the moment they are listening for one.
+        m_codecLastL = mixed[2 * (frames - 1)];
+        m_codecLastR = mixed[2 * (frames - 1) + 1];
+        m_codecHavePrev = true;
+        return;
+    }
+
+    const auto toI16 = [speakerGain](float v) -> std::int16_t {
+        v *= speakerGain;
         // Symmetric clamp, 32767 not 32768: letting a full-scale sample wrap to
         // the negative rail is a click, and this is a speaker feed.
         v = std::clamp(v, -1.0f, 1.0f);
@@ -5503,6 +5521,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
                     {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
+                    {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
                 });
             }
             return;
@@ -5529,6 +5548,9 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
             next.n2adrHpf    = boolOr("n2adrHpf", next.n2adrHpf);
             next.cl1RefClock = boolOr("cl1RefClock", next.cl1RefClock);
             next.atuGateware = boolOr("atuGateware", next.atuGateware);
+            if (in.contains(QStringLiteral("speakerLevelPercent")))
+                next.speakerLevelPercent = Hl2HardwareOptions::clampSpeakerLevel(
+                    in.value(QStringLiteral("speakerLevelPercent")).toInt());
             applyHardwareOptions(next, /*persist=*/true);
             if (requestId != 0) {
                 emit extensionResult(requestId, QVariantMap{
@@ -5540,6 +5562,7 @@ void Hl2Backend::invokeExtension(const QString& ns, const QString& verb, quint64
                     {QStringLiteral("n2adrHpf"), m_hw.n2adrHpf},
                     {QStringLiteral("cl1RefClock"), m_hw.cl1RefClock},
                     {QStringLiteral("atuGateware"), m_hw.atuGateware},
+                    {QStringLiteral("speakerLevelPercent"), m_hw.speakerLevelPercent},
                 });
             }
             return;

@@ -91,6 +91,36 @@ struct Hl2HardwareOptions {
 
     Codec codec = Codec::None;
 
+    // Level of the radio's OWN loudspeaker or headphone jack, 0..100, unity at
+    // 100. Meaningless without a codec.
+    //
+    // WHY THIS EXISTS AT ALL, when the application already has a volume
+    // control: that control is not in the samples. AudioEngine applies it as a
+    // device attenuation on the host's QAudioSink, so the mixed audio this
+    // backend produces has never seen it and no amount of tapping further down
+    // would find it. The codec feed is taken from the mix, so without a level
+    // of its own the radio's speaker would be stuck at whatever the slice
+    // faders happen to sum to.
+    //
+    // AND IT SHOULD BE SEPARATE ANYWAY. deskHPSDR ties the two together — it
+    // scales in WDSP before the buffer that feeds both the sound card and the
+    // codec — but that is a consequence of having one knob, not a decision.
+    // The speaker in the radio and the speakers on the desk are different
+    // transducers in different places, and wanting them at different levels is
+    // the ordinary case, not the exotic one.
+    //
+    // LINEAR, NOT dB, and unity at 100 — the same curve and the same reference
+    // point as the per-slice audio gain (Hl2Backend::setSliceAudioGain), which
+    // in turn matches what a Flex does with audio_level. One kind of fader in
+    // this application, not two.
+    //
+    // NOT COUPLED TO THE APPLICATION'S MUTE. Mute is the same QAudioSink
+    // attenuation as the volume and is equally invisible here; following it
+    // would mean this backend reaching into the audio engine, which is a
+    // dependency the HL2 backend does not have and should not grow for a
+    // fader. Muting the radio's speaker is done with this control.
+    int speakerLevelPercent = 100;
+
     // The operator's dither-bit intent. MEANS NOTHING on its own — read it
     // through ditherBitOnWire() below, which is where the codec's override
     // lives. Held separately from the wire value so that turning the codec
@@ -150,6 +180,21 @@ struct Hl2HardwareOptions {
     [[nodiscard]] constexpr bool hasLocalCodec() const noexcept
     {
         return codec != Codec::None;
+    }
+
+    // The speaker level as a multiplier, already clamped. 0.0 when there is no
+    // codec, so a caller that forgets to check hasLocalCodec() produces silence
+    // rather than sending samples to a radio whose audio slot is EADDR.
+    [[nodiscard]] constexpr float speakerGain() const noexcept
+    {
+        if (!hasLocalCodec())
+            return 0.0f;
+        return static_cast<float>(clampSpeakerLevel(speakerLevelPercent)) / 100.0f;
+    }
+
+    static constexpr int clampSpeakerLevel(int raw) noexcept
+    {
+        return raw < 0 ? 0 : (raw > 100 ? 100 : raw);
     }
 
     // The open-collector byte for RECEIVE at this frequency.

@@ -3801,7 +3801,55 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     codecRow->addStretch(1);
     cvb->addLayout(codecRow);
     controls->append(codecCombo);
+
+    // ── The radio's own speaker level ────────────────────────────────────────
+    //
+    // ITS OWN FADER, and the reason is structural rather than a preference:
+    // the application's volume control is a device attenuation applied to the
+    // host's audio sink, so it is not in the samples this page's codec feed is
+    // taken from and could not be picked up by any amount of tapping. Without
+    // this the radio's loudspeaker would sit at whatever the slice faders
+    // happen to sum to. See Hl2HardwareOptions::speakerLevelPercent.
+    auto* spkRow = new QHBoxLayout;
+    auto* spkLbl = new QLabel("Speaker level:");
+    themed(spkLbl, kLabel);
+    auto* spkSlider = new QSlider(Qt::Horizontal);
+    spkSlider->setObjectName(QStringLiteral("hl2HwSpeakerLevel"));
+    spkSlider->setRange(0, 100);
+    spkSlider->setMinimumWidth(180);
+    spkSlider->setAccessibleName(QStringLiteral("Radio speaker level"));
+    spkSlider->setToolTip(QStringLiteral(
+        "Level of the radio's own loudspeaker or headphone jack.\n\n"
+        "Separate from the application's volume control on purpose: that one is\n"
+        "applied to the computer's audio output and never reaches the radio.\n"
+        "Per-slice audio faders, balance and mute DO reach it — this rides on\n"
+        "top of them. Set it to 0 to silence the radio's speaker."));
+    auto* spkValue = new QLabel;
+    themed(spkValue, kHint);
+    spkValue->setMinimumWidth(36);
+    spkRow->addWidget(spkLbl);
+    spkRow->addWidget(spkSlider, 1);
+    spkRow->addWidget(spkValue);
+    cvb->addLayout(spkRow);
+    controls->append(spkSlider);
     vbox->addWidget(codecGroup);
+
+    // A fader for a speaker that is not there decides nothing. Dimmed with a
+    // stated reason rather than hidden, and the reason reaches a screen reader
+    // through accessibleDescription — a tooltip is a mouse affordance and is
+    // never announced (AGENTS.md, three-state controls).
+    auto refreshSpeaker = [spkSlider, spkValue, spkLbl, codecCombo] {
+        const bool haveCodec = codecCombo->currentData().toInt() != 0;
+        spkSlider->setEnabled(haveCodec);
+        spkLbl->setEnabled(haveCodec);
+        spkSlider->setAccessibleDescription(
+            haveCodec ? QStringLiteral("Level of the radio's own loudspeaker.")
+                      : QStringLiteral(
+                            "Unavailable: this radio has no local audio codec, so it has "
+                            "no speaker of its own to set a level for."));
+        spkValue->setText(haveCodec ? QStringLiteral("%1%").arg(spkSlider->value())
+                                    : QStringLiteral("—"));
+    };
 
     // ── The dither bit ───────────────────────────────────────────────────────
     //
@@ -3992,8 +4040,9 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     // rather than into a no-op.
     const QPointer<QComboBox> codecGuard(codecCombo);
     m_hl2HardwareReseed = [this, codecGuard, codecCombo, ditherChk, randomChk,
-                           filterCombo, hpfChk, cl1Chk, atuChk, noRadioLbl,
-                           controls, refreshDither, refreshHpf] {
+                           filterCombo, hpfChk, cl1Chk, atuChk, spkSlider,
+                           noRadioLbl, controls, refreshDither, refreshHpf,
+                           refreshSpeaker] {
         if (!codecGuard)
             return;
         const AetherSDR::Hl2HardwareOptions opts =
@@ -4015,10 +4064,13 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             hpfChk->setChecked(opts.n2adrHpf);
             cl1Chk->setChecked(opts.cl1RefClock);
             atuChk->setChecked(opts.atuGateware);
+            spkSlider->setValue(
+                AetherSDR::Hl2HardwareOptions::clampSpeakerLevel(opts.speakerLevelPercent));
             // Inside the blockers: refreshDither forces the box checked on an
             // AK4951, and that write must not be mistaken for the operator.
             refreshDither();
             refreshHpf();
+            refreshSpeaker();
         }
         // No radio identity, no write — Hl2HardwareOptions::save() refuses
         // without one rather than writing the family-wide row, which every
@@ -4043,8 +4095,9 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     m_hl2HardwareReseed();
 
     connect(codecCombo, &QComboBox::currentIndexChanged, this,
-            [apply, codecCombo, ditherChk, refreshDither](int) {
+            [apply, codecCombo, ditherChk, refreshDither, refreshSpeaker](int) {
         refreshDither();
+        refreshSpeaker();
         // The codec and the dither bit go out TOGETHER. Selecting the AK4951
         // forces the bit high in the same instant, and two calls would leave
         // one frame in which the codec is declared and the bit is not yet set —
@@ -4074,6 +4127,29 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
     });
     connect(atuChk, &QCheckBox::toggled, this, [apply](bool on) {
         apply(QVariantMap{{QStringLiteral("atuGateware"), on}});
+    });
+    // The READOUT follows every drag; the WRITE waits for the release. Dragging
+    // a slider emits valueChanged on every pixel, and persisting each one would
+    // put a full non-atomic settings write behind every one of them — the same
+    // reason the Calibration page's Trim buttons commit on release.
+    connect(spkSlider, &QSlider::valueChanged, this, [spkValue](int v) {
+        spkValue->setText(QStringLiteral("%1%").arg(v));
+    });
+    connect(spkSlider, &QSlider::sliderReleased, this, [apply, spkSlider] {
+        apply(QVariantMap{{QStringLiteral("speakerLevelPercent"), spkSlider->value()}});
+    });
+    // Keyboard and mouse-wheel changes never emit sliderReleased, so they would
+    // move the readout and persist nothing. actionTriggered fires for exactly
+    // those, and not for a drag — sliderMoved handles the drag and is already
+    // committed on release above.
+    connect(spkSlider, &QSlider::actionTriggered, this, [apply, spkSlider](int action) {
+        if (action == QAbstractSlider::SliderMove)
+            return;                       // the drag; committed on release
+        // Queued: actionTriggered fires BEFORE the value moves, so reading it
+        // here would persist the value the slider is leaving.
+        QMetaObject::invokeMethod(spkSlider, [apply, spkSlider] {
+            apply(QVariantMap{{QStringLiteral("speakerLevelPercent"), spkSlider->value()}});
+        }, Qt::QueuedConnection);
     });
 
     vbox->addStretch(1);

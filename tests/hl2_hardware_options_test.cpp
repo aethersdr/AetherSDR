@@ -168,6 +168,49 @@ static void testFilterBoard()
 }
 
 // ---------------------------------------------------------------------------
+// The radio's own speaker level.
+// ---------------------------------------------------------------------------
+static void testSpeakerLevel()
+{
+    Hl2HardwareOptions o;
+    // UNITY BY DEFAULT, so enabling a codec does not also quietly attenuate it.
+    check(o.speakerLevelPercent == 100, "speaker level defaults to unity");
+
+    // NO CODEC, NO SPEAKER. speakerGain() answers 0 whatever the level says,
+    // so a caller that forgets to check hasLocalCodec() produces silence
+    // rather than writing samples into a bare HL2's EADDR.
+    o.codec = Hl2HardwareOptions::Codec::None;
+    check(o.speakerGain() == 0.0f, "no codec: gain is zero even at level 100");
+
+    o.codec = Hl2HardwareOptions::Codec::SquareSdr2;
+    check(o.speakerGain() == 1.0f, "codec at 100 is unity");
+    o.speakerLevelPercent = 50;
+    check(o.speakerGain() == 0.5f, "linear: 50 is half");
+    o.speakerLevelPercent = 0;
+    check(o.speakerGain() == 0.0f, "0 is silent");
+
+    // Clamped at both ends — a hand-edited settings file must not command a
+    // gain above unity, which would clip the speaker feed with no control
+    // anywhere in the application able to bring it back.
+    check(Hl2HardwareOptions::clampSpeakerLevel(-5) == 0, "clamp below 0");
+    check(Hl2HardwareOptions::clampSpeakerLevel(250) == 100, "clamp above 100");
+    check(Hl2HardwareOptions::clampSpeakerLevel(73) == 73, "in range is untouched");
+    o.speakerLevelPercent = 250;
+    check(o.speakerGain() == 1.0f, "gain is clamped, not just the setter");
+    o.speakerLevelPercent = -10;
+    check(o.speakerGain() == 0.0f, "negative gain clamps to silence");
+
+    // The level is INDEPENDENT of the dither bit, which on a SquareSDR 2 is
+    // the speaker's on/off switch. Two different controls for two different
+    // things: the gateware bit cuts the speaker, this one sets its level.
+    o.speakerLevelPercent = 80;
+    o.ditherBit = false;
+    const float quiet = o.speakerGain();
+    o.ditherBit = true;
+    check(o.speakerGain() == quiet, "speaker level does not move with the dither bit");
+}
+
+// ---------------------------------------------------------------------------
 // Clamping a round-tripped settings document.
 // ---------------------------------------------------------------------------
 static void testClamps()
@@ -340,6 +383,7 @@ int main()
 {
     testDitherMeaning();
     testFilterBoard();
+    testSpeakerLevel();
     testClamps();
     testConfigDitherRandom();
     testAtuBit();
