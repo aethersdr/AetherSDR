@@ -648,6 +648,59 @@ bool WdspChannel::setAgc(int agcMode, double maximumGainDb) noexcept
     return true;
 }
 
+bool WdspChannel::setFilterTaps(int taps) noexcept
+{
+    // RX-only, and nc >= size: WDSP's fircore computes nfor = nc / size, so a
+    // filter shorter than one DSP block gives nfor == 0 and a channel that
+    // produces silence rather than an error. Refuse it here instead.
+    if (m_config.direction != Direction::Receive || taps <= 0 ||
+        static_cast<std::size_t>(taps) < m_config.dspBlockSize) {
+        return false;
+    }
+    if (taps == m_config.filterTaps) {
+        // Already there. Returning early rather than paying RXASetNC's
+        // stop/restart keeps this cheap enough for a caller that recomputes a
+        // desired length on every notch edit.
+        return true;
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+    {
+        // The same lock open() takes around RXASetNC, and for the same reason:
+        // setNc_fircore re-plans six FIR cores, and FFTW's planner is process
+        // global.
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXASetNC(m_channelId, taps);
+    }
+    m_config.filterTaps = taps;
+    endControlOperation();
+    return true;
+}
+
+bool WdspChannel::setMinimumPhase(bool on) noexcept
+{
+    if (m_config.direction != Direction::Receive) {
+        return false;
+    }
+    if (on == m_config.minimumPhase) {
+        return true;
+    }
+    if (!beginControlOperation()) {
+        return false;
+    }
+    {
+        // RXASetMP does not stop the channel, but it does run every mask
+        // through mp_imp_exec, which plans and executes FFTs at nc * pfactor.
+        // Same planner, same lock.
+        const std::scoped_lock setupLock(g_setupMutex);
+        RXASetMP(m_channelId, on ? 1 : 0);
+    }
+    m_config.minimumPhase = on;
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setShift(double shiftHz) noexcept
 {
     if (m_config.direction != Direction::Receive || !std::isfinite(shiftHz)

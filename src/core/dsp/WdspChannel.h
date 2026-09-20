@@ -284,6 +284,64 @@ public:
     // already in flight. Control-path work, guarded exactly like setMode(); it
     // must not be called from the processIq() callback.
     bool setAgc(int agcMode, double maximumGainDb) noexcept;
+
+    // ── Filter length and phase mode, at runtime ──────────────────────────
+    //
+    // Until these existed, Config::filterTaps and Config::minimumPhase could
+    // only be chosen in open(), and the only way to revisit either was
+    // reconfigure() -- which closes and reopens the channel and so DESTROYS the
+    // notch database. That is the wrong tool for both: the notch database is
+    // exactly what a caller changing the filter length is usually trying to
+    // keep.
+    //
+    // setFilterTaps() is what makes the length/selectivity trade a runtime
+    // choice rather than a connect-time one. The floor on notch width is a
+    // function of the length -- 200 Hz at 2048, 50 Hz at 8192, see
+    // minimumNotchWidthHz() -- so a caller that wants a narrow notch can buy
+    // the taps when the operator asks for one and give them back afterwards,
+    // instead of every receiver paying the group delay of the longest filter
+    // anyone might want. The group delay is (taps-1)/2 samples at the DSP
+    // rate: 4095.5 samples (85.3 ms at 48 kHz) at 8192, 1023.5 (21.3 ms) at
+    // 2048.
+    //
+    // THE NOTCH DATABASE SURVIVES. RXASetNC reaches nbp0 through
+    // RXANBPSetNC -> setNc_nbp -> calc_nbp_impulse, which rebuilds the mask
+    // FROM the notch database rather than replacing it, so notches placed
+    // before the call are still placed after it -- at the new width floor.
+    // This is the whole difference between this call and reconfigure().
+    //
+    // THE SHIFT SURVIVES TOO, and needs no replay. calc_nbp_impulse() reads the
+    // shift from the notch DATABASE (`b->shift`, folded into the passband
+    // offset as `b->tunefreq + b->shift`), and setNc_nbp() changes only the tap
+    // count before rebuilding from that same database. Nothing on the RXASetNC
+    // path writes the shift stage or the database's copy of it, so re-asserting
+    // either after this call would be ceremony.
+    //
+    // Cost, and it is not free: RXASetNC internally stops and restarts the
+    // channel (SetChannelState 0 then restore) and re-plans six FIR cores, so
+    // the operator hears the mute ramp and a filter refill. That is acceptable
+    // at a moment the operator initiated and is not acceptable per block.
+    //
+    // `taps` must be positive and not smaller than dspBlockSize -- WDSP's
+    // fircore requires nc >= size and divides by the ratio, so a shorter
+    // filter than one block silently produces nfor == 0 and no output at all.
+    //
+    // setMinimumPhase() trades linear phase for latency: the same length of
+    // filter, its energy front-loaded, so the group delay collapses while the
+    // magnitude response (and therefore the notch depth and the width floor)
+    // is preserved. Unlike RXASetNC it does NOT stop the channel -- RXASetMP
+    // only re-runs the mask through the cepstral conversion -- but it does
+    // rebuild all six masks, so it is control-path work for the same reason.
+    //
+    // Both are receive-only: RXASetNC and RXASetMP have no transmit
+    // counterpart and a TX channel has none of the six cores they address.
+    // Control-path work, guarded exactly like setMode(); neither may be called
+    // from the processIq() callback. Both are idempotent at the WDSP level --
+    // RXANBPSetNC and RXANBPSetMP compare against the stored value first -- but
+    // RXASetNC still pays the stop/restart, so a caller should not poll them.
+    bool setFilterTaps(int taps) noexcept;
+    bool setMinimumPhase(bool on) noexcept;
+
     // ── Impulse noise blanker ─────────────────────────────────────────────
     //
     // WDSP's ANB (nob.c), run on the RAW IQ ahead of the channel. It has to be
