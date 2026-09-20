@@ -424,6 +424,18 @@ public:
     // therefore stays running at constant latency and contains nothing but
     // silence when transmit ends.
     Q_INVOKABLE void setAudioMuted(bool muted);
+    // WHAT THIS OBJECT IS ACTUALLY DOING, not what it was last asked to do.
+    //
+    // The distinction is the whole point and it is the one channelConfig()'s
+    // comment makes about read-backs generally. Hl2Backend does not call
+    // setAudioMuted() — it POSTS it across a thread boundary — so the backend's
+    // own m_rxAudioMuted is a request, and the only place the applied state
+    // exists is here. #5497 turns on exactly that gap: a hold that is working
+    // and a mute that never arrived look identical from the backend side.
+    //
+    // Const and trivial; safe to read from the DSP's own thread, which is where
+    // setAudioMuted() runs.
+    [[nodiscard]] bool isAudioMuted() const noexcept { return m_audioMuted; }
     [[nodiscard]] bool isConfigured() const noexcept { return m_channel != nullptr; }
 
     // What the WDSP channel was actually OPENED WITH, for the read-back verb.

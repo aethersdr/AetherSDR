@@ -4505,6 +4505,13 @@ target_include_directories(hl2_tx_gate_test PRIVATE src)
 target_link_libraries(hl2_tx_gate_test PRIVATE aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_tx_gate_test COMMAND hl2_tx_gate_test)
 
+# #5497: the unkey unmute waits for the radio's T/R, and the MOX-off is queued
+# ahead of it. An ordering test with a clock in it — no WDSP, no socket.
+add_executable(hl2_unkey_hold_test tests/hl2_unkey_hold_test.cpp)
+target_include_directories(hl2_unkey_hold_test PRIVATE src)
+target_link_libraries(hl2_unkey_hold_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME hl2_unkey_hold_test COMMAND hl2_unkey_hold_test)
+
 # HL2 RQST/ACK state machine (docs/HERMES.md §13 item 13, oracle §5) — pure
 # policy, standalone (no Qt, no socket, no radio). The clock is EP6 frames.
 add_executable(hl2_rqst_ack_test
