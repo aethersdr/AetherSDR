@@ -1308,11 +1308,36 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                               m_serialLabel),
                         0, 0);
 
-        m_regionLabel = new QLabel(m_model->region().isEmpty() ? "USA" : m_model->region());
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_regionLabel, "QLabel { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.accent.bright}}; font-size: 11px; font-weight: bold; "
-            "padding: 3px 10px; }");
-        m_regionLabel->setAlignment(Qt::AlignCenter);
+        // displayOrDash, not a fabricated default. This read
+        //     new QLabel(m_model->region().isEmpty() ? "USA" : m_model->region())
+        // and RadioModel::m_region is written in exactly two places, both Flex:
+        // the `info` reply key/value chain and applyRadioChanges' RadioDelta,
+        // fed by FlexBackend::decodeRadioStatus. Hl2Backend builds no delta
+        // carrying a region and Hl2Discovery sets no RadioInfo::turfRegion, so
+        // on a Hermes-Lite 2 region() is UNCONDITIONALLY empty and that ternary
+        // always rendered "USA" — an invented value for a radio that has no
+        // region, in the styling of a reading. The app contradicted itself
+        // about it with no hardware in the loop: troubleshootingSnapshot
+        // publishes the same m_region and SliceTroubleshootingDialog renders it
+        // through orPlaceholder as "n/a", so the support bundle said n/a while
+        // this dialog said USA. The bundle was right. Serial:, HW Version:,
+        // Options:, the IP/mask/MAC/gateway/network-name row and all four
+        // License Info fields already answer an empty value with the em-dash;
+        // Region: was the only field in this dialog that answered it with
+        // content. (#5507 item 1)
+        m_regionLabel = new QLabel(displayOrDash(m_model->region()));
+        // kValueStyle — a status label, like HW Version: beside it. What was
+        // here instead was a ThemeManager stylesheet carrying kToggleStyle's box
+        // metrics (1px border, border-radius 3px, font-size 11px, bold, padding
+        // 3px 10px) plus setAlignment(Qt::AlignCenter): a centred bordered
+        // accent box sitting in the column that makeToggle builds Remote On: and
+        // multiFLEX: in. It reads as pressable, it is a QLabel with no event
+        // handling of any kind, and an operator clicked it and reported that it
+        // offered no options. The FlexControl: comment a few fields below
+        // already cites "Region:/HW Version: above" as its model of what a
+        // status label is — the classification was right, the styling had never
+        // been brought into line with it. (#5507 item 2)
+        m_regionLabel->setStyleSheet(kValueStyle);
         grid->addWidget(makeInfoField(QStringLiteral("Region:"), m_regionLabel,
                                       kInfoRightLabelWidth),
                         0, 1);
@@ -1429,6 +1454,16 @@ QWidget* RadioSetupDialog::buildRadioTab()
             }
             if (m_hwVersionLabel) {
                 m_hwVersionLabel->setText(prefixedVersion(m_model->version()));
+            }
+            // Region: was missing from this lambda — m_regionLabel had no
+            // setText anywhere in the file, so it froze at whatever was true
+            // when buildRadioTab ran. Its three neighbours here refreshed and it
+            // did not, and RadioModel::disconnectFromRadio clears m_region
+            // alongside m_callsign/m_nickname, so even on a Flex the label went
+            // on showing the PREVIOUS radio's region after a disconnect — the
+            // honest-direction form of the same defect. (#5507 item 3)
+            if (m_regionLabel) {
+                m_regionLabel->setText(displayOrDash(m_model->region()));
             }
             if (m_optionsLabel) {
                 m_optionsLabel->setText(radioOptionsText(m_model));
