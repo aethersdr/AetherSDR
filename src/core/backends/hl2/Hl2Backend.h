@@ -1257,7 +1257,11 @@ private:
     RestoredRadioState m_restoredState;
     QMap<QString, int> m_lnaDbByBand;
     QMap<QString, int> m_driveByBand;
-    int m_lnaDefaultDb = hl2::kLnaDefaultGainDb;
+    // There is no m_lnaDefaultDb. The LNA fallback for an unvisited band is
+    // hl2::kLnaDefaultGainDb directly (#5829) -- a member here would be a
+    // second source of truth for a value no operator action can move, which is
+    // the defect that key had. Note the asymmetry with m_driveDefaultPercent
+    // below: that one has a real first-use latch and is genuinely per-profile.
     // The connect param pinned a gain that the start band did not have stored.
     // Live value honoured, persistence refused: see Hl2BandMemoryPolicy.h.
     // Cleared when the operator changes gain or leaves the start band.

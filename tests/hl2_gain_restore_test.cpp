@@ -179,10 +179,15 @@ int main(int argc, char** argv)
         const RestoredRadioState captured = session.backend.currentOperatingState();
         check(session.liveGain() == gain,
               "stored native gain seeds the live snapshot without folding");
+        // INVERTED BY #5829 in its second half only. The per-band value is
+        // still preserved verbatim -- that is real operator memory and nothing
+        // about it changed. The `defaultDb == gain` half asserted a round trip
+        // of a key nothing could write; it is now asserted absent instead,
+        // which is the behaviour that replaces the round trip.
         check(bandGain(captured, QStringLiteral("20m")) == gain
-                  && captured.extension.value(QStringLiteral("rfGain")).toObject()
-                         .value(QStringLiteral("defaultDb")).toInt() == gain,
-              "capture preserves the stored band and default gain");
+                  && !captured.extension.value(QStringLiteral("rfGain")).toObject()
+                          .contains(QStringLiteral("defaultDb")),
+              "capture preserves the stored band gain and emits no LNA default");
     }
     {
         GainSession session(rememberedGain(), 999);
@@ -191,6 +196,58 @@ int main(int argc, char** argv)
         check(bandGain(session.backend.currentOperatingState(), QStringLiteral("20m")) == -12,
               "clamped connect override still preserves stored gain while pinned");
     }
+    // ---- #5829: a STALE rfGain.defaultDb must not steer the radio ---------
+    //
+    // The fix is worthless if an old profile keeps deciding the gain, so both
+    // halves are asserted together: a profile with NO defaultDb and a profile
+    // carrying a stale one must produce the SAME gain on a band neither has an
+    // entry for, and that gain must be the shipped constant.
+    //
+    // -6 is not an arbitrary stale value. It is the number the reporting
+    // station's profile actually held, frozen, with ten of its twelve stored
+    // bands sitting at it because each inherited it on its first visit.
+    //
+    // 15m (21.074 MHz) is the unvisited band: rememberedGain() stores 20m and
+    // 40m only, so the fallback is what decides, which is the whole subject.
+    {
+        RestoredRadioState absent = rememberedGain();
+        QJsonObject withoutKey =
+            absent.extension.value(QStringLiteral("rfGain")).toObject();
+        withoutKey.remove(QStringLiteral("defaultDb"));
+        absent.extension.insert(QStringLiteral("rfGain"), withoutKey);
+
+        RestoredRadioState stuck = absent;
+        QJsonObject withStaleKey = withoutKey;
+        withStaleKey.insert(QStringLiteral("defaultDb"), -6);
+        stuck.extension.insert(QStringLiteral("rfGain"), withStaleKey);
+
+        int gainWithNoKey = 999;
+        int gainWithStaleKey = 999;
+        {
+            GainSession session(absent);
+            session.backend.setSliceFrequency(0, 21'074'000.0);   // unvisited 15m
+            gainWithNoKey = session.liveGain();
+        }
+        {
+            GainSession session(stuck);
+            session.backend.setSliceFrequency(0, 21'074'000.0);   // unvisited 15m
+            gainWithStaleKey = session.liveGain();
+
+            // And the key does not survive a capture, which is what heals an
+            // existing document: the next snapshot simply writes it away.
+            check(!session.backend.currentOperatingState()
+                       .extension.value(QStringLiteral("rfGain")).toObject()
+                       .contains(QStringLiteral("defaultDb")),
+                  "a restored stale defaultDb is dropped from the next capture");
+        }
+        check(gainWithNoKey == gainWithStaleKey,
+              "a profile carrying a stale rfGain.defaultDb comes up on the same "
+              "unvisited-band gain as a profile without the key");
+        check(gainWithNoKey == hl2::kLnaDefaultGainDb,
+              "and that gain is the shipped kLnaDefaultGainDb, which is now the "
+              "only answer to what an unvisited band comes up on");
+    }
+
     // Cross-family compatibility at the exact display-restore seam. No Flex or
     // Icom backend is instantiated or changed; their current domain is empty.
     for (const QString& family : {QStringLiteral("flex"), QStringLiteral("icom"),
