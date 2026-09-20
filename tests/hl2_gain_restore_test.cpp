@@ -383,8 +383,21 @@ int main(int argc, char** argv)
             session.backend.setAutoRfGain(true);
             check(session.backend.autoRfGainEnabled() && mirror.storedAutoGain(),
                   "push positive control: a trusted baseline arms and the arm is persisted");
+            // COUNTED, NOT JUST READ, because `!storedAutoGain()` cannot fail on a
+            // backend that tells nobody. If the disarm emits nothing the mirror still
+            // holds the document from before the arm, whose autoEnabled was already
+            // false -- so the assertion below passes while the disarm it is named for
+            // never reached the profile at all. Neither setLnaAutoOffsetDb nor
+            // applyBandscopeForAutoGain emits, so nothing else covers this path.
+            //
+            // THE SAME SHAPE AS THE REFUSAL/WITHDRAWAL PAIR ABOVE. There, a document
+            // that never recorded the `true` reads false afterwards either way; here,
+            // a document that was never republished reads false either way. Both are
+            // an absence being mistaken for a value, and both are fixed by asserting
+            // that something was actually said.
+            const int savesBeforeDisarm = mirror.saves();
             session.backend.setAutoRfGain(false);
-            check(!mirror.storedAutoGain(),
+            check(mirror.saves() > savesBeforeDisarm && !mirror.storedAutoGain(),
                   "push positive control: the disarm reaches the profile by the path that worked");
         }
     }
