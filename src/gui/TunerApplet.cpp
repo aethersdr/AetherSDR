@@ -129,12 +129,30 @@ TunerApplet::TunerApplet(QWidget* parent)
     });
 
     // Peak hold: clear the white tick 2.5 s after the last new peak.
-    m_peakTimer = new QTimer(this);
-    m_peakTimer->setSingleShot(true);
-    m_peakTimer->setInterval(2500);
-    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
-        m_peakFwd = 0.0f;
-        static_cast<HGauge*>(m_fwdGauge)->clearPeak();
+    // Peak-hold ballistics matching TxApplet (#2561): hold, then decay
+    // toward the live reading rather than snapping the marker away.
+    m_peakTick = new QTimer(this);
+    m_peakTick->setInterval(50);
+    connect(m_peakTick, &QTimer::timeout, this, [this]() {
+        if (!m_peakHoldRunning) { m_peakTick->stop(); return; }
+        const qint64 elapsedMs = m_peakHoldTimer.elapsed();
+        if (elapsedMs <= kPeakHoldMs) return;
+        const float decaySecs = static_cast<float>(elapsedMs - kPeakHoldMs) / 1000.0f;
+        const float decayed = m_peakDecayStart - m_peakDecayWattsPerSec * decaySecs;
+        if (decayed <= m_fwdPower) {
+            m_peakFwd = m_fwdPower;
+            m_peakHoldRunning = false;
+            m_peakTick->stop();
+            // At the floor the marker goes away entirely, as it did before.
+            if (m_fwdPower <= 0.05f) {
+                m_peakFwd = 0.0f;
+                static_cast<HGauge*>(m_fwdGauge)->clearPeak();
+                return;
+            }
+        } else {
+            m_peakFwd = decayed;
+        }
+        static_cast<HGauge*>(m_fwdGauge)->setPeakValue(m_peakFwd);
     });
 
     // Relay-only completion notice. The first timer waits for the settled SWR
@@ -199,17 +217,20 @@ void TunerApplet::setPowerScale(int maxWatts, bool hasAmplifier)
         gauge->setRange(0.0f, 2000.0f, 1500.0f,
             {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1.5K"}, {2000, "2K"}},
             1000.0f);
+        m_peakDecayWattsPerSec = 2000.0f / 2.5f;
     } else if (maxWatts > 100) {
         // Aurora (500 W): 0–600 W, yellow > 400 W, red > 500 W
         gauge->setRange(0.0f, 600.0f, 500.0f,
             {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
              {400, "400"}, {500, "500"}, {600, "600"}},
             400.0f);
+        m_peakDecayWattsPerSec = 600.0f / 2.5f;
     } else {
         // Barefoot radio: 0–200 W, yellow > 80 W, red > 125 W
         gauge->setRange(0.0f, 200.0f, 125.0f,
             {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
             80.0f);
+        m_peakDecayWattsPerSec = 200.0f / 2.5f;
     }
 }
 
@@ -1249,8 +1270,11 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
     const float peakCandidate = (fwdPeak >= 0.0f) ? fwdPeak : fwdPower;
     if (peakCandidate > m_peakFwd) {
         m_peakFwd = peakCandidate;
+        m_peakDecayStart = peakCandidate;
+        m_peakHoldTimer.restart();
+        m_peakHoldRunning = true;
+        if (!m_peakTick->isActive()) m_peakTick->start();
         static_cast<HGauge*>(m_fwdGauge)->setPeakValue(peakCandidate);
-        m_peakTimer->start();
     }
     updateValueLabels();
 }

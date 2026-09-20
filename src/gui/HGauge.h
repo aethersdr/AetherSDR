@@ -111,6 +111,11 @@ public:
     // accordingly; the fraction itself is always value-normalised.
     float value() const { return m_value; }
     float filledFraction() const { return m_smooth.value(); }
+    // The peak-hold marker. peakHeld() is separate from the value because
+    // "no peak" and "peak at 0" are different states and the tick is absent
+    // in only one of them.
+    float peakValue() const { return m_peakValue; }
+    bool  peakHeld()  const { return m_peakEnabled; }
 
     void setValue(float v) {
         if (qFuzzyCompare(m_value, v)) return;

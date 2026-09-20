@@ -410,6 +410,45 @@ int main(int argc, char** argv)
         }
     }
 
+    // ── Peak-hold ballistics match the TX Controls applet ────────────
+    //
+    // The marker must fall, not vanish. This gauge held for 2.5 s and then
+    // snapped the peak to zero, while TxApplet beside it holds for 2 s and
+    // then decays at a rate scaled to the gauge full-scale (#2561, "matching
+    // SmartSDR's peak-hold bar"). Two power meters on one screen behaving
+    // differently is the defect; a marker that disappears reads as the peak
+    // being lost rather than falling.
+    {
+        TunerApplet applet;
+        HGauge* gauge = nullptr;
+        for (auto* w : applet.findChildren<QWidget*>()) {
+            if (auto* g = dynamic_cast<HGauge*>(w);
+                g && g->accessibleName() == QLatin1String("Forward power")) gauge = g;
+        }
+        CHECK(gauge != nullptr);
+        if (gauge) {
+            applet.setDeviceMeters(100.0f, 1.2f, 100.0f);
+            CHECK(qFuzzyCompare(gauge->peakValue(), 100.0f));
+
+            // Inside the hold window the marker does not move.
+            applet.setDeviceMeters(10.0f, 1.2f, 10.0f);
+            settle(900);
+            CHECK(qFuzzyCompare(gauge->peakValue(), 100.0f));
+
+            // Past it, the marker is strictly between the peak and the live
+            // reading -- decaying, not snapped away.
+            settle(1600);
+            const float mid = gauge->peakValue();
+            CHECK(mid < 100.0f);
+            CHECK(mid > 10.0f);
+
+            // It comes to rest on the live value rather than at zero.
+            CHECK(spin([&] { return gauge->peakValue() <= 10.5f; }, 5000));
+            CHECK(gauge->peakValue() >= 9.5f);
+            CHECK(gauge->peakHeld());
+        }
+    }
+
     if (g_failures == 0) {
         std::printf("tgxl_docked_parity_test: all checks passed\n");
         return 0;
