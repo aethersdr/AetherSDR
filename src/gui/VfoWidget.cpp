@@ -1973,9 +1973,10 @@ void VfoWidget::buildTabContent()
         connect(m_aetherDspBtn, &QPushButton::clicked, this,
                 &VfoWidget::aetherDspRequested);
 
-        // AetherTX launcher — opens the transmit chain window.
-        // 2 columns wide (cols 2-3 of the same row that hosts AetherRX).
+        // AetherTX launcher — opens the transmit chain window. Placed by
+        // relayoutDspGrid() beside AetherRX, always at the same width.
         m_aetherVoiceBtn = new QPushButton("AetherTX");
+        m_aetherVoiceBtn->setObjectName("aetherVoiceBtn");
         m_aetherVoiceBtn->setCheckable(false);
         m_aetherVoiceBtn->setFixedHeight(26);
         m_aetherVoiceBtn->setStyleSheet(kDspToggle);
@@ -5367,14 +5368,16 @@ void VfoWidget::relayoutDspGrid()
             if (++col >= 4) { col = 0; ++row; }
         }
     }
-    // Client-side launchers: ADSP (1 col) + AetherVoice (2 cols spanning
-    // the rightmost 2 columns) live on the same row.  If ADSP would land
-    // beyond col 1, wrap the pair to a fresh row first so AetherVoice
-    // always occupies cols 2-3.
+    // Client-side launchers, AetherRX then AetherTX, side by side on one row
+    // and always the same width. A fresh row gives each two columns; a row
+    // with one toggle already on it gives each one column, leaving the last
+    // cell empty rather than stretching one launcher past the other. A row
+    // with less room than that wraps first.
     if (m_aetherDspBtn && m_aetherVoiceBtn) {
         if (col > 1) { col = 0; ++row; }
-        m_dspGrid->addWidget(m_aetherDspBtn, row, col);
-        m_dspGrid->addWidget(m_aetherVoiceBtn, row, 2, 1, 2);
+        const int span = col == 0 ? 2 : 1;
+        m_dspGrid->addWidget(m_aetherDspBtn,   row, col,        1, span);
+        m_dspGrid->addWidget(m_aetherVoiceBtn, row, col + span, 1, span);
     }
 }
 
