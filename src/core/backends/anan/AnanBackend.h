@@ -4,8 +4,8 @@
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanDroopCalibrator.h"
 #include "core/backends/anan/P2Client.h"
+#include "core/dsp/WdspSMeter.h"
 
-#include <QElapsedTimer>
 #include <QMap>
 #include <QString>
 #include <QThread>
@@ -120,7 +120,7 @@ public:
     // round. Without this the ballistics can only be observed through the
     // tick, which makes the assertion depend on wall-clock timing and lets a
     // test pass with the smoothing replaced by a plain assignment.
-    [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeterDbm; }
+    [[nodiscard]] double sMeterDbmForTest() const noexcept { return m_sMeter.value(); }
 
 private:
     void beginDspSetup();
@@ -144,14 +144,9 @@ private:
     void defineMeters();
     // One WDSP S-meter reading (dBFS) -> dBm, smoothed, published on a tick.
     void onDspMeter(float dbfs);
-    // HL2's ballistics (Hl2Backend.h), so the two receivers' needles move
-    // alike: smooth every reading, publish at most every 100 ms.
-    static constexpr qint64 kMeterPublishIntervalMs = 100;
-    static constexpr double kMeterAttackAlpha = 0.5;
-    static constexpr double kMeterDecayAlpha  = 0.15;
-    QElapsedTimer m_sMeterClock;
-    double m_sMeterDbm = 0.0;
-    bool m_haveSMeter = false;
+    // The same smoother Hl2Backend publishes through, so the two receivers'
+    // needles move alike by construction -- see WdspSMeter.h.
+    SMeterSmoother m_sMeter;
     // Leading+trailing throttle around applyTuneToRadioAndPan() -- see
     // setSliceFrequency()'s comment for why an unthrottled click/drag-tune
     // gesture is a problem for this backend specifically.

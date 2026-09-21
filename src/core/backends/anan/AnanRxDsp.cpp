@@ -266,7 +266,7 @@ void AnanRxDsp::setAudioMuted(bool muted)
     // average has been integrating the zeros this class fed it for the whole
     // mute and nothing flushes it, so the first blocks after the unmute still
     // read that silence. Swallow them instead of publishing them -- see
-    // meterSettleBlocks()'s comment for why the guard below is not enough on
+    // WdspSMeter.h for why the guard in processIqBlock() is not enough on
     // its own.
     if (m_audioMuted && !muted)
         armMeterSettle();
@@ -523,17 +523,19 @@ void AnanRxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
         // that silence as a signal level, and its average carries that
         // silence past the unmute -- so without the second arm the needle
         // would dive at the END of every zoom instead of during it. See
-        // meterSettleBlocks().
+        // WdspSMeter.h.
+        //
+        // The same gate sets the READ CADENCE: one reading per DSP-rate
+        // block's worth of input (every inputRate/48k-th block), so the
+        // backend's smoother sees ~47 readings a second at every DDC0 rate
+        // rather than ~1500 at 1536 ksps, where a per-reading EMA would
+        // otherwise lose its smoothing as the operator zooms out.
         //
         // The countdown sits below the underrun `continue` above, so a block
         // that produced no output does not spend a tick. That can only make
         // the window longer, never shorter, and a channel that is not yet
         // producing is exactly when the tap is least worth publishing.
-        if (m_audioMuted) {
-            // Our own silence. Nothing here is a signal level.
-        } else if (m_meterSettleBlocks > 0) {
-            --m_meterSettleBlocks;
-        } else {
+        if (!m_audioMuted && m_meterTap.tick()) {
             emit meterUpdate(static_cast<float>(
                 m_channel->meter(WdspChannel::Meter::SignalAverage)));
         }

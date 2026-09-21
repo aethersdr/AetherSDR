@@ -38,7 +38,9 @@ constexpr float kUncalibratedDbfsToDbmOffset = 0.0f;
 // dBFS. deskHPSDR reads the same meter on the same scaling (1/2^23 per
 // sample) and ships a 0 dB offset for ANAN, making dBFS read as dBm out of the
 // box; this follows it. deskHPSDR also adds the ADC step attenuation here --
-// this backend does not drive the G2's attenuator yet, so it is always 0 dB.
+// this backend commands the attenuator to 0 dB in every High Priority packet
+// (P2Protocol::buildHighPriority leaves the attenuator fields zero) and offers
+// no control for it yet, so that term is exactly 0 dB rather than unknown.
 // A per-radio correction (deskHPSDR's rx_gain_calibration, set against a
 // -73 dBm generator) is not offered yet. Deliberately separate from
 // kUncalibratedDbfsToDbmOffset: that one labels the PANADAPTER axis, whose bin
@@ -217,8 +219,7 @@ AnanBackend::AnanBackend(QObject* parent)
             defineMeters();
             // A new session's needle starts from its first reading, not from
             // where the last session's left off.
-            m_haveSMeter = false;
-            m_sMeterClock.invalidate();
+            m_sMeter.reset();
         }
         emitSliceState();
         emitPanState();
@@ -1334,23 +1335,13 @@ void AnanBackend::defineMeters()
 void AnanBackend::onDspMeter(float dbfs)
 {
     const double dbm = static_cast<double>(dbfs) + kSMeterDbmOffset;
-    // Smooth EVERY reading, publish only on the tick -- the same split, and
-    // the same reasons, as Hl2Backend's receive meter: the published value
-    // represents the whole interval, and ~47 cross-thread emits a second are
-    // not repainting a needle nobody can read that fast.
-    if (!m_haveSMeter) {
-        m_sMeterDbm = dbm;
-        m_haveSMeter = true;
-    } else {
-        const double alpha = (dbm > m_sMeterDbm) ? kMeterAttackAlpha
-                                                 : kMeterDecayAlpha;
-        m_sMeterDbm = alpha * dbm + (1.0 - alpha) * m_sMeterDbm;
-    }
-    if (m_sMeterClock.isValid()
-        && m_sMeterClock.elapsed() < kMeterPublishIntervalMs)
-        return;
-    m_sMeterClock.restart();
-    emit meterUpdate(QStringLiteral("SLC:LEVEL"), m_sMeterDbm);
+    // Smooth EVERY reading, publish only on the tick -- the same smoother,
+    // and the same reasons, as Hl2Backend's receive meter (SMeterSmoother).
+    // AnanRxDsp reads the tap at one DSP-rate block's cadence whatever the
+    // DDC0 rate (WdspSMeter::emitEveryBlocks), so this sees ~47 readings a
+    // second at 48 and at 1536 ksps alike.
+    if (const auto out = m_sMeter.feed(dbm))
+        emit meterUpdate(QStringLiteral("SLC:LEVEL"), *out);
 }
 
 void AnanBackend::emitSliceState()

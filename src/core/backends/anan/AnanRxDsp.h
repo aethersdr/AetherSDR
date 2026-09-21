@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/PcmFrame.h"
+#include "core/dsp/WdspSMeter.h"
 
 #include <QElapsedTimer>
 #include <QObject>
@@ -291,41 +292,6 @@ public:
             std::exp(-2.0 * std::numbers::pi * cornerHz / sampleRateHz));
     }
 
-    // ── S-meter settle after our own silence ──────────────────────────────
-    //
-    // WDSP's signal-average meter is an EMA over the channel's own samples
-    // with tau_average = 0.100 s, fixed where RXA builds it (upstream
-    // RXA.c:138, create_meter's "averaging time constant" argument). Nothing
-    // flushes that average when this class starts or stops feeding zeros
-    // (upstream meter.c: only flush_meter() touches `avg`, and it would set
-    // it to 0, i.e. -400 dB), so the average carries our silence ACROSS the
-    // edge: the blocks right after the mute lifts still read it. Guarding the
-    // emit on m_audioMuted alone therefore moves the needle's dive from
-    // during the mute to just after it rather than removing it.
-    //
-    // So the emit is also suppressed for a settle window sized from the
-    // tap's own time constant. A fresh channel needs the same window for the
-    // same reason from the other end: create_meter() starts `avg` at 0.
-    static constexpr double kMeterAverageTauSec = 0.100;
-    // Three taus: the average is then within 10*log10(1 - e^-3) = 0.22 dB of
-    // its settled value, well inside one S-unit (6 dB).
-    static constexpr int kMeterSettleTaus = 3;
-
-    // The window's length in DSP blocks. Pure, so the settle a zoom actually
-    // waits is checkable without a channel. Blocks, not milliseconds: the
-    // meter advances per processed block and nothing else clocks it, and the
-    // count follows the rate so every DDC0 rate waits the same 0.3 s of wall
-    // clock. At least one block whatever the arguments say.
-    [[nodiscard]] static int meterSettleBlocks(int inputSampleRateHz,
-                                               int dspBlockSize) noexcept
-    {
-        if (inputSampleRateHz <= 0 || dspBlockSize <= 0)
-            return 1;
-        const double blocks = kMeterSettleTaus * kMeterAverageTauSec
-            * static_cast<double>(inputSampleRateHz) / static_cast<double>(dspBlockSize);
-        return std::max(1, static_cast<int>(std::ceil(blocks)));
-    }
-
     // ── Panadapter integrity across a transport gap ───────────────────────
     //
     // Partial FFT windows discarded at DDC0 discontinuities, including
@@ -414,15 +380,16 @@ private:
     WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
-    // S-meter blocks still to swallow before the tap is trusted again -- see
-    // meterSettleBlocks()'s comment, and its use in processIqBlock().
-    int m_meterSettleBlocks = 0;
-    // Arms that window from the CURRENT config. Both call sites run after
+    // The S-meter tap's gate: the settle window after our own silence or a
+    // channel install, and the read cadence -- see WdspSMeter.h, and its use
+    // in processIqBlock(). DSP thread only, like m_audioMuted.
+    WdspSMeterTap m_meterTap;
+    // Arms it from the CURRENT config. Both call sites run after
     // m_config.inputSampleRateHz has taken the new rate.
     void armMeterSettle() noexcept
     {
-        m_meterSettleBlocks = meterSettleBlocks(m_config.inputSampleRateHz,
-                                                m_config.dspBlockSize);
+        m_meterTap.arm(m_config.inputSampleRateHz, m_config.dspBlockSize,
+                       kWdspDspSampleRateHz);
     }
     int m_spectrumIntervalMs = 0;   // 0 = uncapped
     QElapsedTimer m_spectrumClock;

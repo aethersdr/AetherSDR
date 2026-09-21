@@ -1125,6 +1125,16 @@ target_include_directories(wdsp_process_tally_test PRIVATE src)
 target_link_libraries(wdsp_process_tally_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME wdsp_process_tally_test COMMAND wdsp_process_tally_test)
 
+# WdspSMeter.h -- the S-meter arithmetic both host-DSP receive stages and both
+# publishers share: the settle window after the backend's own silence, the
+# read cadence that keeps the reading rate at ~47/s whatever the input rate,
+# and the publish-side attack/decay/tick. Pure header, clock injected, so the
+# tick is pinned without waiting on one. No WDSP chain, no socket.
+add_executable(wdsp_smeter_test tests/wdsp_smeter_test.cpp)
+target_include_directories(wdsp_smeter_test PRIVATE src)
+target_link_libraries(wdsp_smeter_test PRIVATE Qt6::Core)
+add_test(NAME wdsp_smeter_test COMMAND wdsp_smeter_test)
+
 # The RX DSP must demodulate at every IQ rate the operator can select by zooming.
 add_executable(hl2_rxdsp_rate_test tests/hl2_rxdsp_rate_test.cpp)
 target_include_directories(hl2_rxdsp_rate_test PRIVATE src)

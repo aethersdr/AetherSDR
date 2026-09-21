@@ -233,7 +233,7 @@ int main(int argc, char** argv)
     {
         // S-meter: WDSP's dBFS reading is published as SLC:LEVEL in dBm with
         // deskHPSDR's 0 dB ANAN offset, the first reading at once, later ones
-        // smoothed and throttled to the publish tick.
+        // smoothed with SMeterSmoother's ballistics.
         AnanBackend backend;
         QSignalSpy spy(&backend, &IRadioBackend::meterUpdate);
         backend.feedMeterForTest(-73.0f);
@@ -248,8 +248,10 @@ int main(int argc, char** argv)
               "the first reading is taken whole, not smoothed against a zero start");
 
         backend.feedMeterForTest(-53.0f);
-        check(spy.count() == 1,
-              "a reading inside the 100 ms publish interval is smoothed, not published");
+        // Whether that second reading was published is NOT asserted here: it
+        // would ride on fewer than 100 ms of wall clock passing between two
+        // calls. The publish tick is pinned deterministically, against an
+        // injected clock, in wdsp_smeter_test.
         // Ballistics pinned on the smoothed value rather than on whatever the
         // 100 ms tick happened to publish: attack 0.5 on a rise, decay 0.15 on
         // a fall, which is what "HL2's ballistics" means here. Replacing the

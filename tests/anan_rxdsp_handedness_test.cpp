@@ -37,6 +37,7 @@
 #include "core/backends/anan/AnanDroopCorrection.h"
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanSpectrum.h"
+#include "core/dsp/WdspSMeter.h"
 
 #include <QCoreApplication>
 
@@ -775,7 +776,7 @@ int main(int argc, char** argv)
     // move the needle's dive from during the zoom to the end of it. Removing
     // the settle window turns the last check here red.
     {
-        const int settle = AnanRxDsp::meterSettleBlocks(kInputRate, kBlock);
+        const int settle = AetherSDR::WdspSMeter::settleBlocks(kInputRate, kBlock);
         check(settle == 15,
               "3 tau of WDSP's 0.100 s meter average at 48 ksps / 1024-sample blocks "
               "is 15 blocks (ceil of 14.0625)");
@@ -783,14 +784,14 @@ int main(int argc, char** argv)
         // has to come out as the same wall-clock time at every DDC0 rate --
         // a zoom must not settle six times longer at 48 than at 1536 ksps.
         for (const int ksps : kDdc0RatesKsps) {
-            const int n = AnanRxDsp::meterSettleBlocks(ksps * 1000, kBlock);
+            const int n = AetherSDR::WdspSMeter::settleBlocks(ksps * 1000, kBlock);
             const double seconds = static_cast<double>(n) * kBlock / (ksps * 1000.0);
-            const double target = AnanRxDsp::kMeterSettleTaus * AnanRxDsp::kMeterAverageTauSec;
+            const double target = AetherSDR::WdspSMeter::kSettleTaus * AetherSDR::WdspSMeter::kAverageTauSec;
             const double oneBlock = static_cast<double>(kBlock) / (ksps * 1000.0);
             check(seconds >= target && seconds - target <= oneBlock,
                   "the settle rounds up to the same 0.3 s at every DDC0 rate");
         }
-        check(AnanRxDsp::meterSettleBlocks(0, 0) == 1,
+        check(AetherSDR::WdspSMeter::settleBlocks(0, 0) == 1,
               "an unconfigured rate still swallows one block rather than dividing by zero");
 
         AnanRxDsp dsp;
@@ -854,7 +855,9 @@ int main(int argc, char** argv)
         check(levels.empty(),
               "nothing is published while the channel is clocked with our own silence");
 
-        // The edge this group exists for.
+        // The edge this group exists for. Cleared first so this check cannot
+        // inherit a failure of the muted-silence check above.
+        levels.clear();
         dsp.setAudioMuted(false);
         feed(settle);
         check(levels.empty(),
