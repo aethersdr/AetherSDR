@@ -1102,6 +1102,16 @@ void RadioCertification::stageModeMap()
             {QStringLiteral("passband"),
              QStringLiteral("%1..%2").arg(slice->filterLow()).arg(slice->filterHigh())},
         };
+        // A READBACK THAT DIFFERS HAS TWO CAUSES AND THIS TOOL CANNOT TELL
+        // THEM APART. It may be an unmapped mode falling through to the
+        // backend's default — the fault this stage was written for — or a
+        // DELIBERATE alias collapse, which is what the HL2 does now:
+        // Hl2Backend::setSliceMode runs hl2::canonicalOfferedMode(), so
+        // "CWU" is published back as "CW" and "NFM" as "FM" on purpose, so
+        // that the mode a slice holds is always one the mode menu can
+        // display. Both are worth REPORTING and neither may be asserted from
+        // out here, so the concern below names both rather than the one that
+        // used to be the only possibility.
         if (back.compare(mode, Qt::CaseInsensitive) != 0)
             notRetained << (mode + QStringLiteral("->") + back);
     }
@@ -1112,21 +1122,31 @@ void RadioCertification::stageModeMap()
     if (!notRetained.isEmpty())
         concern = QStringLiteral(
             "these modes did not survive a round trip: ") + notRetained.join(", ")
-            + QStringLiteral(". A mode the backend does not map does not fail — "
-                             "it becomes the default, usually USB, while the UI "
-                             "still shows what was asked for");
+            + QStringLiteral(". Each is one of two things and this stage cannot "
+                             "tell which: a mode the backend does not map, which "
+                             "does not fail but becomes the default, usually USB, "
+                             "while the UI still shows what was asked for — or a "
+                             "deliberate alias collapse onto the spelling the mode "
+                             "menu carries (on the HL2, CWU->CW and NFM->FM are "
+                             "this, and are correct). Read the passband "
+                             "fingerprint beside each: an alias keeps its own "
+                             "window, a fallback takes the default mode's");
 
     record(QStringLiteral("mode-map"),
            QStringLiteral("Every mode the app can emit survives a round trip"),
            results,
            QStringLiteral(
-               "READBACK IS NOT PROOF. The slice keeps whatever string it is "
-               "given, so every mode can come back clean while the backend maps "
-               "only some of them and silently demodulates the rest as its "
-               "default. Confirmed on this radio: RTTY survives the round trip "
-               "and the backend has no mapping for it. Compare each passband "
-               "against the fallback mode's — an exact match is a hint, and the "
-               "only one visible from outside the backend."),
+               "READBACK IS NOT PROOF. The slice keeps whatever string the "
+               "BACKEND publishes, which for most modes is the string it was "
+               "given — so every mode can come back clean while the backend "
+               "maps only some of them and silently demodulates the rest as "
+               "its default. Confirmed on this radio: RTTY survives the round "
+               "trip and the backend has no mapping for it. A readback that "
+               "DIFFERS is not automatically a fault either: a backend may "
+               "collapse an alias onto the spelling its mode menu carries, "
+               "which the HL2 does for CWU->CW and NFM->FM. Compare each "
+               "passband against the fallback mode's — an exact match is a "
+               "hint, and the only one visible from outside the backend."),
            concern,
            QStringLiteral("docs/HERMES.md 15.7"));
 }

@@ -5,8 +5,10 @@ namespace AetherSDR {
 bool aetherDspModeRequiresDisable(QStringView mode)
 {
     // CWU is not a separate mode: AetherSDR's older neutral vocabulary spells
-    // upper-side CW as "CW", and an Icom or an HL2 reports the same mode as
-    // "CWU" (VoiceModeGate::isCwMode carries the same three spellings, and
+    // upper-side CW as "CW", and an Icom reports the same mode as "CWU" --
+    // as the HL2 did, until Hl2Backend::setSliceMode began collapsing that
+    // spelling onto "CW" (VoiceModeGate::isCwMode carries the same three
+    // spellings, and
     // VfoWidget had CWU fall through for the same reason). Omitting it left
     // every client NR method running through CW on those radios — which for
     // NNR means a measured 28 dB hole where the signal was, since it treats a
