@@ -77,6 +77,37 @@ Refusing is the whole design: a scanner that is merely usually right would
 reintroduce, one level down, the two-lists-that-must-agree bug this file
 exists to remove.
 
+AND THE GUARANTEE IS A FLOOR WITH NAMED GAPS, NOT A PROOF. Saying so is not a
+hedge, it is the same argument one level up: a refusal claim whose edges are
+unstated is exactly the kind of thing that gets believed past where it holds.
+residue() refuses on "looks like a signal I did not emit", which is a floor
+over the constructs a future header could plausibly acquire — it is not a
+decision procedure for C++. The gaps known today, each found by ATTACKING this
+file rather than by reading it:
+
+  - THE SHAPE TO WATCH FOR: anything that truncates class_body() BEFORE
+    residue() runs is invisible to residue() by construction, because the
+    declarations it should object to were never in the section it scans. An
+    encoding-prefixed char literal holding a closing brace (`L'}'`) was one
+    such hole, found by G6PWY-Chris reviewing #5897 and closed by
+    DIGIT_SEPARATOR_RE. The other member found so far is a raw string
+    containing a `"` (`R"(a"b)"`), which fails LOUDLY as an unterminated class
+    body — the correct direction, and the reason it is not fixed here. A third
+    member of that class, if one exists, would be silent.
+  - A declarator list whose FIRST declarator carries a parenthesised default
+    argument (`void a(int x = f(1)), b();`) walks past
+    MULTI_DECLARATOR_RE's `[^()]*` and still drops `b` in silence. The plain
+    forms (`void a(), b();`, `void a(int x), b();`) are refused. Reading a
+    declarator list properly means parsing one, and the refusal is the cheaper
+    honest answer for a construct moc is unlikely to accept in a `signals:`
+    section at all.
+
+Outside the floor entirely: a signal this file's parse never reaches — one
+declared in a base class, or in a header this tool does not read. Nothing
+static covers that; backend_seam_affinity_test's runtime reading of
+staticMetaObject does, post-merge, which is the cost #5868 set out to reduce
+rather than eliminate.
+
 Usage:
     python tools/gen_seam_probe_table.py            # regenerate
     python tools/gen_seam_probe_table.py --check    # exit 1 if stale
@@ -120,6 +151,23 @@ PREPROCESSOR_RE = re.compile(r"^\s*#\s*(?P<directive>[A-Za-z_]\w*)")
 # so that meeting one is a refusal rather than a short table.
 TRAILING_RETURN_RE = re.compile(r"->\s*void\b")
 QT_SIGNAL_MACRO_RE = re.compile(r"\bQ_SIGNAL\b(?!S)")
+# One declaration, TWO DECLARATORS: `void a(), b();`. SIGNAL_DECL_RE.search
+# takes the first, and residue()'s finditer never sees a `void ` before `b(`,
+# so `b` would drop with no refusal at all. `[^()]*` declines nested
+# parentheses on purpose: this refuses the plain form rather than trying to
+# parse a declarator list, and the module docstring names what that leaves out.
+MULTI_DECLARATOR_RE = re.compile(r"\bvoid\s+[A-Za-z_]\w*\s*\([^()]*\)\s*,")
+# Tells a C++14 DIGIT SEPARATOR (48'000, 0x1F'FF) from an ENCODING PREFIX
+# (L'}', u'}', U'}', u8'{'). Both put an identifier character immediately
+# before a quote, which is all the first version of this guard looked at — so
+# the prefixed forms were read as separators, the literal was never blanked,
+# and a brace inside it moved class_body()'s depth. A CLOSING brace is the
+# dangerous direction: the class ends early, every signal below it vanishes,
+# and residue() cannot object because the section it scans never contained
+# them. The distinguishing rule is that a separator only ever appears inside a
+# NUMERIC literal, so the run of identifier characters ending at the quote
+# STARTS WITH A DIGIT; an encoding prefix starts with a letter.
+DIGIT_SEPARATOR_RE = re.compile(r"(?<![A-Za-z_])[0-9][0-9A-Fa-fXxbB']*\Z")
 # The line the table is made of, for reading a committed table back.
 PROBE_LINE_RE = re.compile(r"^\s*AETHER_SEAM_PROBE\((?P<name>[A-Za-z_]\w*)\);\s*$")
 
@@ -159,13 +207,20 @@ def strip_comments_and_strings(text: str) -> str:
             j = n if j < 0 else j + 2
             out.append("\n" * text.count("\n", i, j))
             i = j
-        elif c == "'" and out and (out[-1].isalnum() or out[-1] == "_"):
+        elif c == "'" and DIGIT_SEPARATOR_RE.search("".join(out[-24:])):
             # A C++14 DIGIT SEPARATOR, not a quote: 48'000, 0x1F'FF. Treating
             # it as one opens a literal that closes at the NEXT separator and
             # blanks everything between — so `int a = 48'000` and
             # `int b = 96'000` two declarations apart silently swallow the
-            # declarations in between. A quote can never follow an
-            # identifier/digit character; a separator always does.
+            # declarations in between.
+            #
+            # The test is on the RUN, not on the single preceding character.
+            # `out[-1].isalnum()` is also true after an encoding prefix, so
+            # L'}' and u8'{' were misread as separators and left unstripped —
+            # see DIGIT_SEPARATOR_RE for what that costs. \Z rather than $:
+            # with $ a run of digits followed by a blanked multi-line comment
+            # would still match across the trailing newline, and guessing
+            # "separator" is the direction that under-reads.
             out.append(c)
             i += 1
         elif c in "\"'":
@@ -301,6 +356,11 @@ def residue(section: str, body: str, names: list[str]) -> list[str]:
             problems.append(
                 f"`void {m.group('name')}(` is declared in the signals "
                 "section and did not become a probe")
+    if MULTI_DECLARATOR_RE.search(section):
+        problems.append(
+            "a declarator list (`void a(), b();`) — this scanner reads ONE "
+            "declarator per declaration, so every name after the first comma "
+            "would be dropped without a word")
     if TRAILING_RETURN_RE.search(section):
         problems.append(
             "a trailing return type (`auto f() -> void`) — this scanner "

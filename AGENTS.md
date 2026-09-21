@@ -491,6 +491,8 @@ tool's `--check` on every PR and fails naming the signal you missed. It was
 hand-maintained until #5868: #5825 added a signal without its probe line, was
 green on every PR check, and broke `main` on the merge.
 
+The families that seam carries today, and where each backend lives:
+
 | Family | Backend | Notes |
 |---|---|---|
 | `flex` | `FlexBackend` (`src/core/backends/flex/`) | SmartSDR wire stack; the Panadapter / Slice / Meter / Transmit / Amp / Tuner status+command paths decode behind it (2.2b–2.4) |

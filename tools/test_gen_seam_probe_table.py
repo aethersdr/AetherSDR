@@ -346,6 +346,56 @@ signals:
           "a char literal holding a brace must still be stripped")
 
 
+def test_encoding_prefixed_char_literal_is_stripped_too():
+    # THE COMPANION CASE, and the reason the one above was not enough. The
+    # separator rule keys on the character before the quote, and an ENCODING
+    # PREFIX puts an identifier character there just as a digit does. L'}' was
+    # therefore left unstripped, the brace moved class_body()'s depth, the
+    # class ended at `withChar`, and `second`/`third` disappeared with no
+    # refusal — residue() cannot see them, because the section it scans was
+    # truncated before it ran. That is the one under-read this file's whole
+    # claim did not cover.
+    #
+    # A CLOSING brace is asserted because it is the silent direction: L'{'
+    # merely leaves the class unterminated, which raises.
+    for prefix in ("L", "u", "U", "u8"):
+        src = ("class B : public QObject { Q_OBJECT\nsignals:\n"
+               "    void first();\n"
+               "    void withChar(char c = %s'}');\n"
+               "    void second();\n"
+               "    void third();\n};\n" % prefix)
+        check(gen.seam_signals(src, "B")
+              == ["first", "withChar", "second", "third"],
+              f"{prefix}'}}' must be stripped like the unprefixed form")
+
+    # And the separator it must not disarm, in all three bases, since the new
+    # rule reads a RUN rather than one character.
+    for literal in ("48'000", "0x1F'FF", "0b1'0"):
+        src = ("class B : public QObject { Q_OBJECT\nsignals:\n"
+               "    void first(int rate = %s);\n"
+               "    void second();\n};\n" % literal)
+        check(gen.seam_signals(src, "B") == ["first", "second"],
+              f"{literal} is a digit separator, not a quote")
+
+
+def test_declarator_list_is_refused():
+    # `void a(), b();` is one declaration with two declarators.
+    # SIGNAL_DECL_RE.search takes the first and residue()'s finditer never
+    # sees a `void ` before `b(`, so `b` used to drop silently. moc almost
+    # certainly would not accept this in a signals: section either — this
+    # refuses rather than reads it, which is the same call the tool makes for
+    # #if and for an overload.
+    for decl in ("void a(), b();", "void a(int x), b();"):
+        src = ("class B : public QObject { Q_OBJECT\nsignals:\n"
+               "    void first();\n    " + decl + "\n    void second();\n};\n")
+        try:
+            gen.seam_signals(src, "B")
+        except SystemExit as e:
+            check("declarator list" in str(e), f"message should name it: {e}")
+            continue
+        raise AssertionError(f"{decl!r} must be refused, not half-read")
+
+
 def test_trailing_return_type_is_refused():
     src = """
 class B : public QObject { Q_OBJECT
