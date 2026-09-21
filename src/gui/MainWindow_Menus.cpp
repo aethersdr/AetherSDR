@@ -49,6 +49,7 @@
 #include "VfoWidget.h"
 #include "WaveformsDialog.h"
 #include "WhatsNewDialog.h"
+#include "WindowShowState.h"
 #include "core/UpdateChecker.h"
 #include "core/AppSettings.h"
 #include "core/SpotModeResolver.h"
@@ -59,6 +60,7 @@
 #include "models/SliceModel.h"
 
 #include <QActionGroup>
+#include <QApplication>
 #include <QColor>
 #include <QCoreApplication>
 #include <QCheckBox>
@@ -66,11 +68,13 @@
 #include <QFrame>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeySequence>
 #include <QLabel>
 #include <QMenuBar>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -80,6 +84,7 @@
 #include <QVBoxLayout>
 #include <QWidgetAction>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -88,7 +93,162 @@ namespace AetherSDR {
 namespace {
 // Stall timeout for the About dialog's GitHub contributor fetch (#4688 §6).
 constexpr int kTransferTimeoutMs = 15000;
+
+QWidget* windowMenuTarget(QWidget* primaryWindow,
+                          const QList<WindowMenuEntry>& entries)
+{
+    QWidget* activeWindow = QApplication::activeWindow();
+    const bool activeIsListed = std::any_of(
+        entries.cbegin(), entries.cend(), [activeWindow](const WindowMenuEntry& entry) {
+            return entry.window == activeWindow;
+        });
+    return activeIsListed ? activeWindow : primaryWindow;
+}
+
+void toggleWindowMaximized(QWidget* window)
+{
+    if (!window) {
+        return;
+    }
+    Qt::WindowStates state = window->windowState() & ~Qt::WindowMinimized;
+    state.setFlag(Qt::WindowMaximized, !state.testFlag(Qt::WindowMaximized));
+    window->setWindowState(state);
+    window->show();
+    window->raise();
+    window->activateWindow();
+}
+
+void toggleWindowFullScreen(QWidget* window)
+{
+    if (!window) {
+        return;
+    }
+    Qt::WindowStates state = window->windowState() & ~Qt::WindowMinimized;
+    state.setFlag(Qt::WindowFullScreen,
+                  !state.testFlag(Qt::WindowFullScreen));
+    window->setWindowState(state);
+    window->show();
+    window->raise();
+    window->activateWindow();
+}
+
+QString menuActionText(const QString& label, const QString& shortcut)
+{
+    return shortcut.isEmpty()
+        ? label
+        : QStringLiteral("%1\t%2").arg(label, shortcut);
+}
+
+void populateWindowMenu(QMenu* menu, QWidget* primaryWindow,
+                        const QString& minimizeShortcut,
+                        const QString& fullScreenShortcut)
+{
+    menu->clear();
+
+    const QList<WindowMenuEntry> entries = windowInventory(primaryWindow);
+    QWidget* target = windowMenuTarget(primaryWindow, entries);
+    QPointer<QWidget> guardedTarget(target);
+
+    QAction* minimize = menu->addAction(menuActionText(
+        QObject::tr("Minimize"), minimizeShortcut));
+    minimize->setObjectName(QStringLiteral("windowMenuMinimize"));
+    minimize->setMenuRole(QAction::NoRole);
+    minimize->setEnabled(target != nullptr);
+    QObject::connect(minimize, &QAction::triggered, menu, [guardedTarget] {
+        if (guardedTarget) {
+            guardedTarget->showMinimized();
+        }
+    });
+
+#ifdef Q_OS_MAC
+    const QString maximizeLabel = QObject::tr("Zoom");
+#else
+    const QString maximizeLabel = target && target->isMaximized()
+        ? QObject::tr("Restore")
+        : QObject::tr("Maximize");
+#endif
+    QAction* maximize = menu->addAction(maximizeLabel);
+    maximize->setObjectName(QStringLiteral("windowMenuMaximize"));
+    maximize->setMenuRole(QAction::NoRole);
+    maximize->setEnabled(target != nullptr && !target->isFullScreen());
+    QObject::connect(maximize, &QAction::triggered, menu, [guardedTarget] {
+        toggleWindowMaximized(guardedTarget);
+    });
+
+    const bool fullScreen = target && target->isFullScreen();
+    const QString fullScreenLabel = fullScreen
+        ? QObject::tr("Exit Full Screen")
+        : QObject::tr("Enter Full Screen");
+    QAction* fullScreenAction = menu->addAction(menuActionText(
+        fullScreenLabel, fullScreenShortcut));
+    fullScreenAction->setObjectName(QStringLiteral("windowMenuFullScreen"));
+    fullScreenAction->setMenuRole(QAction::NoRole);
+    fullScreenAction->setEnabled(target != nullptr);
+    QObject::connect(fullScreenAction, &QAction::triggered, menu, [guardedTarget] {
+        toggleWindowFullScreen(guardedTarget);
+    });
+
+    menu->addSeparator();
+
+    QAction* bringAll = menu->addAction(QObject::tr("Bring All to Front"));
+    bringAll->setObjectName(QStringLiteral("windowMenuBringAllToFront"));
+    bringAll->setMenuRole(QAction::NoRole);
+    bringAll->setEnabled(!entries.isEmpty());
+
+    QList<QPointer<QWidget>> guardedWindows;
+    guardedWindows.reserve(entries.size());
+    for (const WindowMenuEntry& entry : entries) {
+        guardedWindows.append(QPointer<QWidget>(entry.window));
+    }
+    QObject::connect(bringAll, &QAction::triggered, menu,
+                     [guardedWindows, guardedTarget] {
+        // Raise every other window first, then restore the window that was
+        // active when the menu opened so Bring All preserves the operator's
+        // working window at the top of the application's stack.
+        for (const QPointer<QWidget>& window : guardedWindows) {
+            if (window && window != guardedTarget) {
+                showAndRaiseWindow(window);
+            }
+        }
+        if (guardedTarget) {
+            showAndRaiseWindow(guardedTarget);
+        }
+    });
+
+    menu->addSeparator();
+
+    for (const WindowMenuEntry& entry : entries) {
+        QAction* action = menu->addAction(entry.menuText);
+        action->setObjectName(QStringLiteral("windowMenuWindow"));
+        action->setMenuRole(QAction::NoRole);
+        action->setCheckable(true);
+        // Use the same resolved target as the standard window actions.  Some
+        // platforms temporarily report no active QWidget while the native
+        // menu bar owns focus; in that interval isActiveWindow() would leave
+        // every entry unchecked even though Minimize/Zoom still target one.
+        action->setChecked(entry.window == target);
+        action->setStatusTip(QObject::tr("Bring %1 to the foreground")
+                                 .arg(entry.title));
+        QPointer<QWidget> guardedWindow(entry.window);
+        QObject::connect(action, &QAction::triggered, menu, [guardedWindow] {
+            showAndRaiseWindow(guardedWindow);
+        });
+    }
+}
 } // namespace
+
+void MainWindow::minimizeActiveApplicationWindow()
+{
+    QWidget* target = windowMenuTarget(this, windowInventory(this));
+    if (target) {
+        target->showMinimized();
+    }
+}
+
+void MainWindow::toggleActiveApplicationWindowFullScreen()
+{
+    toggleWindowFullScreen(windowMenuTarget(this, windowInventory(this)));
+}
 
 void MainWindow::buildMenuBar()
 {
@@ -1130,7 +1290,7 @@ void MainWindow::buildMenuBar()
 #endif
 
     viewMenu->addSeparator();
-    m_minimalModeAction = viewMenu->addAction("Minimal Mode\tCtrl+M");
+    m_minimalModeAction = viewMenu->addAction("Minimal Mode\tCtrl+Shift+M");
     m_minimalModeAction->setCheckable(true);
     m_minimalModeAction->setChecked(
         AppSettings::instance().value("MinimalModeEnabled", "False").toString() == "True");
@@ -1424,6 +1584,24 @@ void MainWindow::buildMenuBar()
     connect(toolsMenu, &QMenu::aboutToShow, this,
             [this] { updateToolsMenuState(); });
     updateToolsMenuState();
+
+    auto* windowMenu = menuBar()->addMenu("&Window");
+    const auto refreshWindowMenu = [this, windowMenu] {
+        const auto shortcutText = [this](const QString& id) {
+            const ShortcutManager::Action* action = m_shortcutManager.action(id);
+            return action
+                ? action->currentKey.toString(QKeySequence::NativeText)
+                : QString();
+        };
+        populateWindowMenu(windowMenu, this,
+                           shortcutText(QStringLiteral("window_minimize")),
+                           shortcutText(QStringLiteral("window_fullscreen")));
+    };
+    connect(windowMenu, &QMenu::aboutToShow, this, refreshWindowMenu);
+    // Seed actions for bridge/menu discovery before first open. ShortcutManager
+    // becomes the sole keyboard owner later in MainWindow construction; the
+    // dynamic list and displayed bindings refresh on every aboutToShow edge.
+    refreshWindowMenu();
 
     auto* helpMenu = menuBar()->addMenu("&Help");
 

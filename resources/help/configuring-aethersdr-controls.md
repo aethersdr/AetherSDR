@@ -85,7 +85,7 @@ The shortcut editor also includes many actions that ship **unassigned** until yo
 
 AetherSDR also has a few ordinary menu shortcuts that are separate from the operating-shortcut system:
 
-- `Ctrl+M` — toggle Minimal Mode
+- `Ctrl+Shift+M` — toggle Minimal Mode
 - `Ctrl+=` — increase UI scale
 - `Ctrl+-` — decrease UI scale
 - `Ctrl+0` — reset UI scale to 100%

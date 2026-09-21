@@ -1364,7 +1364,21 @@ void MainWindow::registerShortcutActions()
         QKeySequence(Qt::Key_Minus), [this]() { zoomActivePanadapter(kPanZoomFactor); });
     m_shortcutManager.registerAction("open_memories", "Open Memories Dialog", "Display",
         QKeySequence(Qt::Key_Slash), [this]() { showMemoryDialog(); });
-    // No key sequence: Ctrl+M lives as an application QShortcut in
+#ifdef Q_OS_MAC
+    const QKeySequence windowMinimizeKey(QStringLiteral("Ctrl+M"));
+    const QKeySequence windowFullScreenKey(QStringLiteral("Ctrl+Meta+F"));
+#else
+    const QKeySequence windowMinimizeKey;
+    const QKeySequence windowFullScreenKey(Qt::Key_F11);
+#endif
+    m_shortcutManager.registerAction(
+        "window_minimize", "Minimize Active Window", "Display",
+        windowMinimizeKey, [this]() { minimizeActiveApplicationWindow(); });
+    m_shortcutManager.registerAction(
+        "window_fullscreen", "Toggle Active Window Full Screen", "Display",
+        windowFullScreenKey,
+        [this]() { toggleActiveApplicationWindowFullScreen(); });
+    // No key sequence: Ctrl+Shift+M lives as an application QShortcut in
     // MainWindow.cpp (it must work with the menu bar hidden, which is
     // minimal mode's whole situation).  Registering the ACTION makes the
     // toggle reachable for MIDI bindings and the bridge's `shortcut`

@@ -1605,10 +1605,11 @@ MainWindow::MainWindow(QWidget* parent)
     // before child widgets (buttons, combos) consume the key event.
     qApp->installEventFilter(this);
 
-    // Ctrl+M toggle — keep this as the single real shortcut owner.  Registering
-    // the same chord on the menu action can make Qt report an ambiguous
-    // shortcut on Windows, and the menu bar is hidden in minimal mode anyway.
-    auto* minimalShortcut = new QShortcut(QKeySequence("Ctrl+M"), this);
+    // Ctrl+Shift+M toggle — keep this as the single real shortcut owner.
+    // Registering the same chord on the menu action can make Qt report an
+    // ambiguous shortcut on Windows, and the menu bar is hidden in minimal
+    // mode anyway. Ctrl+M remains available for standard macOS Minimize.
+    auto* minimalShortcut = new QShortcut(QKeySequence("Ctrl+Shift+M"), this);
     minimalShortcut->setContext(Qt::ApplicationShortcut);
     minimalShortcut->setAutoRepeat(false);
     connect(minimalShortcut, &QShortcut::activated,
@@ -9937,7 +9938,7 @@ void MainWindow::toggleMinimalMode(bool on)
             s.value("MinimalModeGeometry", "").toByteArray());
         // Re-anchor as well as restore: this window is already mapped, so Qt
         // reapplies its caption-reserving clamp on every entry and the #4328
-        // gap would come straight back on one Ctrl+M round trip — then stick,
+        // gap would come straight back on one Ctrl+Shift+M round trip — then stick,
         // because closeEvent() saves whatever origin is current.
         if (!geom.isEmpty() && restoreGeometry(geom))
             reanchorCustomFrameGeometry(geom);
@@ -9960,7 +9961,7 @@ void MainWindow::toggleMinimalMode(bool on)
         // If the WM/double-click maximized or fullscreened us before we
         // got here, the current geometry is the maximized rect — not a
         // useful "minimal mode" geometry to persist.  Un-maximize first
-        // and skip the save.  The normal Ctrl+M / maximize-button paths
+        // and skip the save.  The normal Ctrl+Shift+M / maximize-button paths
         // arrive at minimal width with no abnormal state and save as usual.
         const bool abnormalState =
             windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen);

@@ -392,6 +392,8 @@ private:
 
     void buildUI();
     void buildMenuBar();
+    void minimizeActiveApplicationWindow();
+    void toggleActiveApplicationWindowFullScreen();
     void applyDarkTheme();
     void updateStatusBarMinimumWidth();
 
