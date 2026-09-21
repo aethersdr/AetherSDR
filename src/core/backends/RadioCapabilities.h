@@ -121,7 +121,12 @@ struct PanSpanModel {
 struct BackendPanAveraging {
     // What one FFT AVG slider step means to this backend, as an averaging
     // time. ANAN follows deskHPSDR's unit: 10 ms per step, 0 = off.
-    int msPerAverageStep = 10;
+    //
+    // DELIBERATELY NO DEFAULT. Absent record = no backend has been read;
+    // inside the record every field is a considered answer, so a backend
+    // that engages this has to state its own unit rather than inherit
+    // ANAN's by forgetting to.
+    int msPerAverageStep;
 };
 
 struct PanAmplitudeModel {
