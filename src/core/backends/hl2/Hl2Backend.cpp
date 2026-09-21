@@ -726,6 +726,14 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         m_ep4Rewinds = c.ep4Rewinds;
         m_ep4Blocks = c.bandscopeBlocks;
         m_ep4Timeouts = c.bandscopeTimeouts;
+        // The silence watchdog's recovery record. It rides this publish for the
+        // reason the bandscope's counters do -- no signal and no timer of its
+        // own -- and it has to ride SOMETHING, because a recovery that works is
+        // invisible by construction: m_linkUp never drops, so no linkDown and
+        // no linkUp fires and nothing republishes. These two numbers are the
+        // whole trace it leaves.
+        m_silenceRecoveryAttempts = c.silenceRecoveryAttempts;
+        m_silenceRecoveriesCompleted = c.silenceRecoveriesCompleted;
     });
 
     // ONE ACCEPTED BANDSCOPE BLOCK, mirrored onto the GUI thread. The same
@@ -6184,6 +6192,23 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // this is the first number to look at when it does.
     put("droppedPackets", QStringLiteral("Dropped EP6 packets"),
         static_cast<qulonglong>(m_drops));
+    // ---- the silence watchdog's recovery record ----
+    //
+    // Reported unconditionally, next to the loss row, because the question they
+    // answer is the same one: "why did the audio have a hole in it". When the
+    // radio stops streaming an established link, MetisClient re-sends the run
+    // command before declaring the link down, and a recovery that WORKS is
+    // invisible everywhere else -- no linkDown, no linkUp, no reconnect, no
+    // pane rebuilt. These two rows are the only place it shows.
+    //
+    // READ THEM TOGETHER. Attempts climbing while completions do not is the
+    // shape that says the re-send is not the right answer for whatever is
+    // actually failing, and it is the reading that would be lost if only one of
+    // them were published.
+    put("silenceRecoveryAttempts", QStringLiteral("EP6 silence recoveries attempted"),
+        static_cast<qulonglong>(m_silenceRecoveryAttempts));
+    put("silenceRecoveriesCompleted", QStringLiteral("EP6 silence recoveries completed"),
+        static_cast<qulonglong>(m_silenceRecoveriesCompleted));
     // Partial FFT windows discarded at discontinuities, including accepted
     // rewinds and duplicates. Poll each DSP's atomic like the ADC peak rows;
     // its lifetime is protected by the GUI-owned receiver list.

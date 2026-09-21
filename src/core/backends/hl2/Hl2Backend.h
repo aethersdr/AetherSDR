@@ -1133,6 +1133,12 @@ private:
     quint64 m_ep4Rewinds = 0;
     quint64 m_ep4Blocks = 0;
     quint64 m_ep4Timeouts = 0;
+    // The EP6 silence watchdog's recovery counters, mirrored the same way and
+    // for the same reason. These are NOT a bandscope number and are not reset
+    // by resetBandscopeMirrors(): they belong to the link, and MetisClient
+    // zeroes them with the rest of m_link at start().
+    quint64 m_silenceRecoveryAttempts = 0;
+    quint64 m_silenceRecoveriesCompleted = 0;
     // The bandscope GATE's state as MetisClient reports it on LinkCounters —
     // never this backend's own request. Mirrored so healthSnapshot() need not
     // reach across the I/O thread to read it.

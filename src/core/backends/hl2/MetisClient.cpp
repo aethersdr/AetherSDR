@@ -370,8 +370,7 @@ bool MetisClient::start(const Params& params)
     m_sinceLastEp6.restart();
     m_watchdogTimer->start();
     m_connectWatchdog->start(kConnectTimeoutMs);
-    m_startAttempts = 1;
-    m_startRetryTimer->start(kStartRetryMs);
+    armStartRetry();
     return true;
 }
 
@@ -383,6 +382,23 @@ void MetisClient::sendPrimingBurst(int countPerBank)
     for (int i = 0; i < countPerBank; ++i)
         sendControlPacket();
     QThread::msleep(10);
+}
+
+void MetisClient::armStartRetry()
+{
+    // THE SEED IS 1 AND IT COUNTS A DATAGRAM ALREADY SENT. Every caller puts a
+    // run byte on the wire immediately before this, so attempt number one is
+    // spent by the time the timer starts; the lambda re-sends on attempts 2..5
+    // and the tick that would make it 6 stops the timer instead. That is
+    // kStartResendsAfterArm further datagrams, not kMaxStartAttempts.
+    //
+    // Three call sites had this as two hand-copied lines -- start(),
+    // setReceiverCount() and onWatchdogTick()'s stage 1 -- and the third copy
+    // is what made the off-by-one visible: its log line reported the BUDGET
+    // where the reader wanted the REMAINING re-sends.
+    m_startAttempts = 1;
+    if (m_startRetryTimer)
+        m_startRetryTimer->start(kStartRetryMs);
 }
 
 void MetisClient::onEp2PacerTick()
@@ -479,13 +495,42 @@ void MetisClient::onWatchdogTick()
         // linkUp(), and Hl2Backend republishes its entire initial state on that,
         // over the operator's live panes. A recovery that succeeded should be
         // invisible except in the counters.
+        //
+        // AND THE CLAIM "NOTHING WAS SENDING ONE" IS TRUE ONLY WITH THE
+        // BANDSCOPE OFF. bandscopeArm() reaches sendBandscopeRunByte(true),
+        // which is metisRunCommand(true, m_watchdogEnabled) -- run bit SET --
+        // and the guard's disarm sends metisRunCommand(false, ...), run bit set
+        // again. So with the gate running, a wedged radio was already being
+        // told to run twice per kBandscopeSampleMs, by a sensor that exists for
+        // something else entirely. That is an accident, not a recovery: it is
+        // absent in the default configuration, it is invisible in the counters,
+        // and it stops the moment the operator turns the bandscope off.
+        //
+        // THE GATE THEREFORE STOPS FOR THE LENGTH OF THE ATTEMPT, so that the
+        // command below is the only thing asking this radio to run. Three
+        // things fall out of that and all three are wanted:
+        //   - the attempt is attributable. A recovery whose success might have
+        //     been bought by a 1 Hz sensor tick is not evidence about this code.
+        //   - no bandscopeTimeouts are manufactured. resetBandscopeGate() stops
+        //     the guard as well as the tick, so the extra time stage 1 buys
+        //     cannot charge an operator-visible row for a radio that is quiet.
+        //   - wide_spectrum comes DOWN on the wire, in this datagram, rather
+        //     than being left up by whichever phase the gate was in.
+        // resetBandscopeGate() is the right tool and not bandscopeDisarm():
+        // disarm would put a run byte of its own out first, which is the thing
+        // being stopped. It does not touch m_params.bandscope -- the operator's
+        // standing intent survives -- and it does not answer an outstanding
+        // requestBandscopeFrame(), which is correct here rather than an
+        // oversight: the request is still answerable. If the recovery works,
+        // handleDatagram re-applies the gate and a later block answers it; if
+        // it does not, stage 2 fails it with the link, exactly as before.
         if (!m_silenceRecoveryArmed && m_socket && m_startRetryTimer) {
             m_silenceRecoveryArmed = true;
-            ++m_silenceRecoveryAttempts;
+            ++m_link.silenceRecoveryAttempts;
             qInfo() << "MetisClient: no EP6 for" << silentMs
                     << "ms — re-sending the run command before declaring link loss"
-                       " (attempt budget" << kMaxStartAttempts << "at"
-                    << kStartRetryMs << "ms)";
+                       " (this one, then up to" << kStartResendsAfterArm
+                    << "re-sends at" << kStartRetryMs << "ms)";
             // SEQUENCE TRACKING IS DELIBERATELY LEFT ALONE, which is the one
             // place this path must NOT copy setReceiverCount(). That path
             // resets m_haveRxSeq because it sends metisStop first, and the
@@ -507,12 +552,20 @@ void MetisClient::onWatchdogTick()
             //     (`gap < 0x80000000u`) already declines to score that as loss.
             // Doing nothing is therefore correct in BOTH, and resetting is
             // correct in only one. The recovery itself is counted instead.
+            //
+            // BOTH HALVES ARE ASSERTED, because an argument this long with no
+            // test behind it is just a confident paragraph.
+            // hl2_receiver_count_restart_test drives one silence whose fake
+            // radio kept counting -- the forward gap must still be scored as
+            // loss -- and a second whose fake restarts ep6_seq_no at zero --
+            // nothing may be scored. Drop the backward-gap guard and the second
+            // one reports four billion dropped packets; reset m_haveRxSeq here
+            // and the first one reports none.
+            resetBandscopeGate();
             countTx(sendTo(*m_socket,
-                           metisRunCommand(m_bsState != BandscopeState::Idle,
-                                           m_watchdogEnabled),
+                           metisRunCommand(/*wideSpectrum=*/false, m_watchdogEnabled),
                            m_host, m_port));
-            m_startAttempts = 1;
-            m_startRetryTimer->start(kStartRetryMs);
+            armStartRetry();
             return;
         }
         // ---- STAGE 2: the attempt had its window and the stream is still gone ----
@@ -527,6 +580,18 @@ void MetisClient::onWatchdogTick()
         // ~8.5 s. It buys the case where recovery succeeds costing nothing at all.
         if (m_startRetryTimer && m_startRetryTimer->isActive())
             return;
+        // WHAT THE EXTRA WINDOW COSTS THE OUTSTANDING CONTROL REQUEST, since
+        // dropControlRequest() is a few lines below and stage 1 returns above
+        // it: a C&C request caught in a silence is now failed at ~3.5 s instead
+        // of ~2 s, and new ones are accepted throughout because the link reads
+        // up. That is deliberate and it is the cheaper of the two errors. The
+        // request's own deadline cannot expire meanwhile -- Hl2ControlRequest
+        // counts Awaiting in EP6 FRAMES, and there are none -- so nothing is
+        // racing it, and failing it at stage 1 would make a recovery that
+        // SUCCEEDS visible to the caller as a failure it never had. A recovery
+        // that worked is supposed to cost nothing above the protocol layer;
+        // 1.5 s of extra wait on the path that was going to fail anyway is the
+        // price of that.
 
         // Socket still open but the radio went quiet — surface it as link loss
         // rather than sitting in a permanently "connected" state.
@@ -561,6 +626,12 @@ void MetisClient::onWatchdogTick()
         // and the guard lowers it 420 ms later, so during the silence this
         // watchdog is measuring the bit is up ~42 % of the time.
         // (PR #5650 review round 3.)
+        //
+        // USUALLY A NO-OP NOW, and deliberately kept anyway: stage 1 stopped
+        // the gate and lowered wide_spectrum in its own run command, so on the
+        // ordinary route here m_bsState is already Idle. This still covers the
+        // route stage 1 cannot take -- no socket, or no retry timer -- where
+        // the gate is running and the bit is up.
         if (m_bsState != BandscopeState::Idle)
             bandscopeDisarm(/*expectTrailing=*/m_bsState != BandscopeState::Arming);
         resetBandscopeGate();
@@ -613,8 +684,9 @@ void MetisClient::stop()
     }
     m_running = false;
     // Any silence recovery in flight ends with the session. The COUNTERS do
-    // not: they are a session-life record and a stop is not a reason to forget
-    // that a recovery happened.
+    // not: they live on m_link, which start() replaces and stop() leaves
+    // standing, because a stop is not a reason to forget that a recovery
+    // happened.
     m_silenceRecoveryArmed = false;
     // metisStop() is 0x00, which clears wide_spectrum as well as run. The gate
     // has nothing left to sample and its intent ends with the session.
@@ -780,6 +852,15 @@ void MetisClient::setReceiverCount(int count)
     // and rebuilt. A frame taken across that boundary would be half of each.
     failPendingBandscopeFrame(QStringLiteral("the receiver count changed"));
     m_sinceLastEp6.restart();
+    // AND END ANY SILENCE RECOVERY IN FLIGHT, or this path steals its result.
+    // A restart sends its own stop + start + priming burst, so the EP6 that
+    // comes back afterwards is THIS path's doing. Left armed, handleDatagram
+    // would credit it to the watchdog's run command and record a completion the
+    // recovery did not earn -- which is exactly the number that has to stay
+    // honest, because "attempts without completions" is the whole diagnostic.
+    // The reverse case needs nothing: the watchdog cannot arm a recovery while
+    // this is running, because m_sinceLastEp6 has just been restarted.
+    m_silenceRecoveryArmed = false;
 
     countTx(sendTo(*m_socket, metisStart(m_watchdogEnabled), m_host, m_port));
     sendPrimingBurst(3);
@@ -801,8 +882,7 @@ void MetisClient::setReceiverCount(int count)
     // NOT the connect watchdog: connectFailed() is a connect-time signal and the
     // link here is already up. A restart that never recovers surfaces as link
     // loss through onWatchdogTick(), which is the truthful description of it.
-    m_startAttempts = 1;
-    m_startRetryTimer->start(kStartRetryMs);
+    armStartRetry();
 
     // RE-ESTABLISH THE GATE ACROSS THE RESTART. This is the path the guard
     // timer's second term exists for: the run byte has just gone 0x00 -> 0x01,
@@ -1475,14 +1555,25 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
     m_sinceLastEp6.restart();
     if (m_silenceRecoveryArmed) {
         // The stream is back and m_linkUp never dropped, so nothing downstream
-        // saw this happen. The counter is the only record that it did, which is
-        // the point: a recovery that is invisible to the operator must not also
-        // be invisible to whoever asks later why the audio had a hole in it.
+        // saw this happen. The counters are the only record that it did, which
+        // is the point: a recovery that is invisible to the operator must not
+        // also be invisible to whoever asks later why the audio had a hole in
+        // it. They ride LinkCounters, so they reach the health dialog and the
+        // support bundle on the next publish rather than sitting behind a
+        // getter nothing calls.
         m_silenceRecoveryArmed = false;
-        ++m_silenceRecoveriesCompleted;
+        ++m_link.silenceRecoveriesCompleted;
         qInfo() << "MetisClient: EP6 resumed after a silence recovery ("
-                << m_silenceRecoveriesCompleted << "of" << m_silenceRecoveryAttempts
+                << m_link.silenceRecoveriesCompleted << "of"
+                << m_link.silenceRecoveryAttempts
                 << "attempts recovered) — no teardown was needed";
+        // GIVE THE BANDSCOPE BACK. Stage 1 stopped the gate so that its run
+        // command was the only one on the wire; the operator's intent survived
+        // in m_params.bandscope, and this is where it is honoured again. Same
+        // call setReceiverCount() makes after its own restart, and for the same
+        // reason -- the run byte has been through a known state and the gate
+        // has to re-arm from scratch. A no-op when the bandscope was never on.
+        applyBandscopeGate();
     }
     if (!m_linkUp) {
         m_linkUp = true;

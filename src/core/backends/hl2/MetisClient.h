@@ -141,6 +141,33 @@ public:
         // samples rather than packets, and the EP4 rate at two, and at four or
         // more, receivers. Read its assumptions before suspecting hardware.
         quint64 bandscopeTimeouts = 0;
+        // ---- EP6 silence recovery ----
+        //
+        // How many times the EP6 silence watchdog re-sent the run command
+        // instead of declaring the link down, and how many of those the stream
+        // came back from. ATTEMPTS WITHOUT COMPLETIONS is the shape that says
+        // this recovery is not the right one for whatever is actually failing,
+        // and it is only readable if both numbers travel together.
+        //
+        // On LinkCounters rather than behind getters of their own, because a
+        // counter nobody reads records nothing: this struct is the file's
+        // established path to the operator. Hl2Backend mirrors it from
+        // linkCountersUpdated onto the GUI thread, healthSnapshot() turns it
+        // into rows, and RadioHealthDialog::refresh() and the automation
+        // bridge's `health` verb both iterate those rows generically -- so a
+        // new field arrives on both with no registration anywhere. (NOT the
+        // support bundle: SupportBundle::createBundle writes logs, system info,
+        // radio info and settings, and no health rows at all. The dialog's own
+        // copy-to-clipboard is the path a number takes into a bug report.) The
+        // publish is also what makes the read thread-safe. A RECOVERY THAT SUCCEEDED IS
+        // INVISIBLE EVERYWHERE ELSE by design -- m_linkUp never drops, so no
+        // signal fires and no pane republishes -- so these two rows are the
+        // only record that the audio's hole had a cause.
+        //
+        // Session-life, zeroed with the rest of m_link at start() and NOT at
+        // stop(): a stop is not a reason to forget that a recovery happened.
+        quint64 silenceRecoveryAttempts = 0;
+        quint64 silenceRecoveriesCompleted = 0;
         // Over the publish window only, so a stall that has ended stops being
         // reported as if it were still happening. Negative = nothing measured.
         int meanGapMs = -1;
@@ -467,15 +494,6 @@ public:
     Q_INVOKABLE void flushTxIq();
     [[nodiscard]] std::size_t txQueueDepth() const noexcept { return m_txIq.size(); }
 
-    // ---- Silence recovery (S3 row 3.4) ----
-    //
-    // How many times the EP6 silence watchdog re-sent the run command instead
-    // of declaring the link down, and how many of those the stream came back
-    // from. Attempts without completions is the shape that says this recovery
-    // is not the right one for whatever is actually failing.
-    [[nodiscard]] std::uint64_t silenceRecoveryAttempts() const noexcept { return m_silenceRecoveryAttempts; }
-    [[nodiscard]] std::uint64_t silenceRecoveriesCompleted() const noexcept { return m_silenceRecoveriesCompleted; }
-
     // A baseband test tone, offsetHz from the TX carrier, amplitude 0..1.
     // amplitude <= 0 disables it. Takes precedence over queued IQ.
     //
@@ -646,6 +664,16 @@ private:
     // real C&C frame; a stream started before any C&C has landed emits ADC-idle
     // samples (Q pinned to zero) until one does.
     void sendPrimingBurst(int countPerBank);
+    // Seed the start-retry budget and start its timer. The datagram itself is
+    // NOT sent here: the three callers put different bytes on the wire --
+    // start() and setReceiverCount() send metisStart(), onWatchdogTick()'s
+    // stage 1 sends metisRunCommand() -- and folding the send in would either
+    // take a 64-byte array nobody but this helper would build or hide the one
+    // line a reader of those paths most needs to see. What it does remove is
+    // the third hand-rolled copy of "m_startAttempts = 1; timer->start()" and
+    // the off-by-one that copy invited: the seed of 1 COUNTS THE DATAGRAM THE
+    // CALLER JUST SENT, so what remains is kMaxStartAttempts - 1 re-sends.
+    void armStartRetry();
     // Offer one decoded EP6 C&C response to the RQST/ACK machine and publish
     // whatever verdict that produces. Separated from the datagram loop so a
     // test can drive the reply path with a synthetic Ep6Response and no socket
@@ -693,6 +721,10 @@ private:
     static constexpr int kEp2AudioRateHz     = 48000;
     static constexpr int kStartRetryMs       = 300;
     static constexpr int kMaxStartAttempts   = 5;
+    // How many FURTHER re-sends armStartRetry() leaves, for anything that
+    // reports the budget to a human. The seed of 1 counts the datagram the
+    // caller has already sent, so "budget 5" in a log line is wrong by one.
+    static constexpr int kStartResendsAfterArm = kMaxStartAttempts - 1;
     // "EP6 is flowing" for the start-retry's purposes: a packet within this long.
     // Sits far ABOVE the slowest EP6 interpacket gap (2.6 ms, at 48 kHz with one
     // receiver) and far BELOW kStartRetryMs, so a running stream and a stopped one
@@ -704,6 +736,19 @@ private:
     static constexpr int kWatchdogTickMs     = 25;
     static constexpr int kConnectTimeoutMs   = 2000;
     static constexpr int kSilenceTimeoutMs   = 2000;
+    // THE START RETRY'S WHOLE BUDGET MUST FIT INSIDE THE SILENCE WINDOW, and
+    // two live call sites rest on it rather than one. setReceiverCount()'s
+    // comment says why for the restart path -- a budget that outlasted the
+    // window would let the watchdog fire while a retry was still pending, and
+    // the retry would be dead code. onWatchdogTick()'s stage 1 rests on the
+    // same inequality from the other side: it seeds m_startAttempts = 1 and
+    // then uses `m_startRetryTimer->isActive()` as its "the attempt still has
+    // time" test, which is only a bounded wait while the budget is shorter than
+    // the window that produced it. Pinned here because both readings are
+    // comments about constants declared in this file, and a comment does not
+    // fail a build.
+    static_assert(kMaxStartAttempts * kStartRetryMs < kSilenceTimeoutMs,
+                  "the start-retry budget must expire inside one silence window");
 
     QTimer* m_ep2Timer = nullptr;         // paces EP2 off the wall clock
     QTimer* m_watchdogTimer = nullptr;    // EP6 silence detection
@@ -715,15 +760,19 @@ private:
     // A recovery is in flight for the CURRENT silence. Set when the watchdog
     // re-sends the run command, cleared by the EP6 packet that ends the
     // silence -- so it is per-silence, not per-session, and a link that goes
-    // quiet twice gets two recoveries rather than one.
+    // quiet twice gets two recoveries rather than one. Also cleared by stop()
+    // and by setReceiverCount(), which restarts the stream by its own route and
+    // must not have its EP6 credited to this one.
     bool m_silenceRecoveryArmed = false;
-    std::uint64_t m_silenceRecoveryAttempts = 0;
-    std::uint64_t m_silenceRecoveriesCompleted = 0;
-    // No test seam here on purpose. hl2_receiver_count_restart_test already
-    // owns a fake radio that gates EP6 on its own run state, which is the exact
-    // shape of the failure this recovers from, so the silence path is driven
-    // through a real (loopback) socket and a real 2 s wall clock rather than
-    // through an override that would let the production reading rot untested.
+    // NO TEST SEAM HERE, AND THAT IS A STOP-GAP RATHER THAN A POSITION.
+    // AGENTS.md routes a disconnected input to a socket-free test that injects
+    // the transport, and lists hl2_receiver_count_restart_test's fake Metis
+    // radio among four legacy exceptions tracked for extraction in #5254. This
+    // coverage grows that exception. The reason it does is mechanical and not a
+    // preference: stage 1's only observable is a datagram, it goes out through
+    // m_socket, and there is no injectable datagram sink beside feedDatagram()
+    // to observe it with. The socket-free shape #5254 wants needs that sink
+    // first; when it lands, this belongs behind it.
     // Free-running from construction and never restarted: the RQST/ACK floor
     // differences it, so it must not be reset under an outstanding request the
     // way m_sinceLastEp6 is per packet.
