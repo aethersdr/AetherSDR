@@ -446,7 +446,23 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         }
         m_cwAutoKeyed = false;
         const TxCoordinator::Completion completion = std::exchange(m_cwHangCompletion, {});
-        setKeying(false, m_cwHangOperation, completion);
+        // applyKeying() DIRECTLY, with cwBreakIn TRUE, and that argument is the
+        // whole point of this line — see the QSK branch in applyKeying().
+        //
+        // THIS USED TO CALL setKeying(), WHICH HARD-CODES cwBreakIn=false.
+        // That made the flag unreachable on the only edge that arms the unkey
+        // hold: setCwKeying() passes true on the key-DOWN and nowhere else, so
+        // "applyKeying already receives cwBreakIn" was true of the class and
+        // false of the key-UP. A hold gated on the parameter as it stood would
+        // have been dead code in full break-in, which is exactly the case the
+        // gate exists for.
+        //
+        // NOTHING ELSE MOVES ON THE WIRE. applyKeying()'s only other use of the
+        // argument picks setCwMox() over setMox(), and MetisClient::setMoxImpl()
+        // reads cwBreakIn only in its `keyed ?` arm: on an UNKEY the two are the
+        // same function. Verified against the source rather than assumed,
+        // because this is a transmit path.
+        applyKeying(false, m_cwHangOperation, completion, /*cwBreakIn=*/true);
     });
 
     // Raw IQ -> the per-receiver DSP chains. ONE connection for every receiver,
@@ -4594,6 +4610,51 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
             // still held is released NOW rather than deferred into a fresh
             // hold. Normally a no-op, because the monitor path already
             // unmuted; it is here so that it stays a no-op.
+            if (m_unkeyUnmuteTimer)
+                m_unkeyUnmuteTimer->stop();
+            if (m_rxAudioMuted)
+                applyRxAudioMute(false);
+        } else if (cwBreakIn) {
+            // CW FULL BREAK-IN SKIPS THE HOLD. RULED, not inherited.
+            //
+            // THE RULING (ON8ST, 2026-09-21, on this PR): an operator who
+            // turns QSK on has asked to hear between elements, and accepts the
+            // leak that comes with it. So the hold does not arm here, and the
+            // receiver opens as soon as the MOX-off is away.
+            //
+            // WHAT THE HOLD WOULD HAVE COST. The unkey hold is armed per
+            // ELEMENT in full break-in, not per transmission: setCwKeying()
+            // starts m_cwHangTimer at max(kCwEnvelopeReleaseMs, cwDelay) on
+            // every element release, so at the deliberate-QSK setting of
+            // cwDelay = 0 the hang is 6 ms and every element's release reaches
+            // this function. The next element's key-down then stops the timer
+            // and re-mutes, so a hold longer than the inter-element space
+            // means the receiver never opens at all.
+            //
+            // THE CROSSOVER IS ARITHMETIC FROM THE TWO CONSTANTS ABOVE, NOT A
+            // MEASUREMENT, and that is stated because it would otherwise read
+            // as one. There is NO CW measurement anywhere behind this change:
+            // #5497's eleven windows are all 4-second SSB keys. At PARIS
+            // timing the inter-element space is 1200/WPM ms, so it falls below
+            // kUnkeyUnmuteHoldMs (70) at 1200/70 = 17.1 WPM, and below the 76
+            // ms that actually elapses from element key-up to unmute — the
+            // 6 ms hang plus the hold it arms — at 1200/76 = 15.8 WPM. Both
+            // numbers are divisions, done here, on constants in this file.
+            //
+            // SEMI-BREAK-IN IS UNAFFECTED AND MUST BE. With break-in off,
+            // setCwKeying() never keys: CW rides an MOX/PTT the operator
+            // asserted, and the unkey that ends the over is that operator's
+            // release arriving through setKeying() with cwBreakIn FALSE. It
+            // takes the branch below and gets the full hold, which is right —
+            // that unkey ends a transmission and has a real T/R turnaround
+            // behind it, and the operator asked for no gap to hear in.
+            //
+            // THE LEAK IS REAL AND IS THE PRICE. What the receiver hears in
+            // these milliseconds is the operator's own PA decaying into their
+            // own front end, forty-plus times a second at speed — the same
+            // +57.55 dB / +10.60 dBFS artefact this change removes everywhere
+            // else. It is not suppressed here because suppressing it is what
+            // takes QSK away.
             if (m_unkeyUnmuteTimer)
                 m_unkeyUnmuteTimer->stop();
             if (m_rxAudioMuted)

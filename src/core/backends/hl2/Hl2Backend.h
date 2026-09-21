@@ -1273,6 +1273,13 @@ private:
     // post-unkey dropout, and this change makes it worse — measured at 113.74
     // ms median on stock and 250.65 ms with this hold in place. That is the
     // reason not to be generous "just in case".
+    // AND IT DOES NOT APPLY IN CW FULL BREAK-IN. Ruled by ON8ST on #5850: an
+    // operator who turns QSK on has asked to hear between elements and accepts
+    // the leak. applyKeying()'s cwBreakIn branch skips the hold entirely, so
+    // this constant governs SSB, tune, digital and semi-break-in CW only. The
+    // crossover where a 70 ms hold would have swallowed the whole inter-element
+    // space is arithmetic from this number, not a measurement — there is no CW
+    // measurement behind #5497 at all. That branch shows the division.
     static constexpr int kUnkeyUnmuteHoldMs = 70;
     int m_unkeyUnmuteHoldMs = kUnkeyUnmuteHoldMs;
     // Single-shot, owned by this object, therefore on this object's thread —

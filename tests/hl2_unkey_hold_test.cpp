@@ -52,10 +52,24 @@
 //      cancel the hold. Both directions are asserted, because the branch that
 //      protects the second used to swallow the first as well.
 //
+//   7. CW FULL BREAK-IN SKIPS THE HOLD, AND SEMI-BREAK-IN DOES NOT. Ruled by
+//      ON8ST on #5850: an operator who turns QSK on has asked to hear between
+//      elements and accepts the leak. Asserted on the TIMER — "no hold is
+//      armed" — rather than on the mute, because an expired hold also leaves a
+//      chain unmuted. Both sides are driven: full break-in through
+//      setCwKeying(breakIn=true), semi-break-in as elements inside an MOX the
+//      operator asserted, whose release still gets the whole hold.
+//
 // WHAT IT DOES NOT ASSERT, said here rather than left to be discovered: any
-// audio level, anything about the HL2's actual T/R turnaround, and whether 70
-// ms is the right number. Those are bench questions and #5497 carries the
-// measurements. This is an ordering test with a clock in it.
+// audio level, anything about the HL2's actual T/R turnaround, whether 70 ms is
+// the right number, and — new with leg 7 — the ~17 WPM crossover. That figure
+// is ARITHMETIC from two constants in Hl2Backend (1200/WPM against the 70 ms
+// hold, or against the 76 ms the 6 ms envelope hang plus that hold actually
+// costs). NO CW MEASUREMENT EXISTS anywhere behind this change: #5497's eleven
+// windows are all 4-second SSB keys. These legs assert armed-or-not-armed,
+// which is a fact about the code, and leave the speed to arithmetic.
+// Those are bench questions and #5497 carries the measurements. This is an
+// ordering test with a clock in it.
 //
 // THE CLOCK, AND WHERE IT IS WALL-CLOCK. Legs 1, 2, 4 and the monitor
 // directions assert on state at a named instant and hold no stopwatch. The
@@ -155,6 +169,26 @@ struct Hl2UnkeyHoldTestAccess {
     static void setHoldMs(Hl2Backend& backend, int ms) { backend.m_unkeyUnmuteHoldMs = ms; }
     static int holdMs(const Hl2Backend& backend) { return backend.m_unkeyUnmuteHoldMs; }
     static int defaultHoldMs() { return Hl2Backend::kUnkeyUnmuteHoldMs; }
+
+    // IS A HOLD ARMED, structurally — not "is the chain still muted", which a
+    // stuck mute would also answer yes to. This is the claim the CW ruling
+    // makes: in full break-in no hold is ARMED at all, which is a stronger and
+    // clock-free statement than "it unmuted quickly".
+    static bool holdArmed(const Hl2Backend& backend)
+    {
+        return backend.m_unkeyUnmuteTimer && backend.m_unkeyUnmuteTimer->isActive();
+    }
+
+    // setCwKeying() refuses a key-down outside CW mode, and rightly: a key
+    // binding pressed in SSB must not become an unmodulated carrier. The probe
+    // receiver defaults to USB, so the CW legs have to say what mode the
+    // operator is in. Written directly because the public path to it wants a
+    // configured WDSP chain, and this file deliberately has none.
+    static void setTxReceiverMode(Hl2Backend& backend, const char* mode)
+    {
+        backend.m_rx[static_cast<std::size_t>(backend.m_txDdc)].mode =
+            QString::fromLatin1(mode);
+    }
 
     static void tearDown(Hl2Backend& backend) { backend.tearDownReceivers(); }
 };
@@ -542,6 +576,256 @@ int main(int argc, char** argv)
         check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
               "...and stays unmuted, which is what the monitor was turned on "
               "for");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+
+    // ══ CW FULL BREAK-IN SKIPS THE HOLD — THE RULING, ASSERTED BOTH WAYS ══
+    //
+    // ON8ST ruled the question this PR disclosed and did not decide: when CW
+    // full break-in is on, the unkey hold does not arm. An operator who turns
+    // QSK on has asked to hear between elements and accepts the leak.
+    //
+    // THE PREDICATE, AND WHY IT IS NOT WHAT THE THREAD SAID IT WAS. The body
+    // said "applyKeying already receives cwBreakIn". It receives it on the
+    // key-DOWN only: setCwKeying()'s down branch is the one and only site that
+    // passes true, and the key-UP arrived through the CW hang timer calling
+    // setKeying(), which hard-codes false. Gating the hold on the parameter as
+    // it stood would have been DEAD CODE in exactly the case it is for. The
+    // hang timer now calls applyKeying() directly with cwBreakIn true, which is
+    // wire-identical on an unkey (MetisClient::setMoxImpl reads the flag only
+    // in its `keyed ?` arm).
+    //
+    // THE ~17 WPM CROSSOVER IS ARITHMETIC AND IS NOT ASSERTED HERE. There is no
+    // CW measurement behind any of this — #5497's eleven windows are 4-second
+    // SSB keys. What these legs assert is the BEHAVIOUR: armed, or not armed.
+
+    // -- 7a. BREAK-IN ON: an element release arms NO hold ------------------
+    {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+        Hl2UnkeyHoldTestAccess::setTxReceiverMode(backend, "CW");
+        // A hold far longer than the shipped 70 ms, so "no hold armed" and "the
+        // hold armed" are hundreds of milliseconds apart rather than a
+        // scheduling coin toss. The 6 ms CW envelope hang is the only delay
+        // that should appear.
+        const int hold = 400;
+        Hl2UnkeyHoldTestAccess::setHoldMs(backend, hold);
+
+        // ELEMENT KEY-DOWN, full break-in. This is the site that raises MOX.
+        backend.setCwKeying(true, /*breakIn=*/true, /*breakInDelayMs=*/0, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "QSK: an element key-down mutes the demodulator, exactly as a "
+              "voice key does");
+        check(Hl2UnkeyHoldTestAccess::mixerGateClosed(backend),
+              "QSK: and closes the mixer gate with it");
+
+        // ELEMENT KEY-UP. The release starts the CW hang (6 ms at cwDelay 0);
+        // when that fires, the MOX-off goes out and — under the ruling — the
+        // receiver opens immediately behind it.
+        QElapsedTimer sinceElementUp;
+        backend.setCwKeying(false, /*breakIn=*/true, /*breakInDelayMs=*/0, tx.operation);
+        sinceElementUp.start();
+        pumpUntilUnmutedOr(backend, 10 * hold + 500);
+        const qint64 openedAfterMs = sinceElementUp.elapsed();
+
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "QSK: the receiver is OPEN after the element release");
+        check(!Hl2UnkeyHoldTestAccess::mixerGateClosed(backend),
+              "QSK: and the mixer gate is open, so audio actually flows");
+        // THE STRUCTURAL CLAIM, clock-free. "Unmuted" could also be a hold that
+        // was armed and has already expired; "no timer running" cannot.
+        check(!Hl2UnkeyHoldTestAccess::holdArmed(backend),
+              "QSK: NO HOLD IS ARMED by an element release — the ruling, "
+              "asserted on the timer and not on the mute");
+        check(Hl2UnkeyHoldTestAccess::moxOffApplied(backend),
+              "QSK: and the MOX-off did go out, so this is a real unkey and not "
+              "a key that never happened");
+        std::printf("      MEASURED: the receiver opened %lld ms after the "
+                    "element key-up (hold %d ms; with the hold armed it could "
+                    "not open before %d ms)\n",
+                    static_cast<long long>(openedAfterMs), hold, hold);
+        check(openedAfterMs < hold / 2,
+              "QSK: and it opened in a small fraction of the hold, so the hold "
+              "was skipped rather than merely short");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+
+    // -- 7b. BREAK-IN ON: the receiver is open BETWEEN elements ------------
+    //
+    // The operator-visible claim, on the SHIPPED constant rather than an
+    // inflated one, at a speed above the arithmetic crossover. 25 WPM is 48 ms
+    // of inter-element space at PARIS timing; the shipped hold is 70 ms, so on
+    // the pre-ruling behaviour this window was closed for the whole of it.
+    {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+        Hl2UnkeyHoldTestAccess::setTxReceiverMode(backend, "CW");
+        check(Hl2UnkeyHoldTestAccess::holdMs(backend)
+                  == Hl2UnkeyHoldTestAccess::defaultHoldMs(),
+              "between-elements: this leg runs on the SHIPPED hold, not a test "
+              "value");
+
+        const int interElementMs = 48;   // 1200/25 WPM, PARIS
+
+        backend.setCwKeying(true, true, 0, tx.operation);
+        backend.setCwKeying(false, true, 0, tx.operation);
+        pumpUntilUnmutedOr(backend, 10 * Hl2UnkeyHoldTestAccess::defaultHoldMs() + 500);
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "between-elements: open after element 1");
+
+        // THE WHOLE SPACE, not just its start. A hold that armed late would
+        // close the window again part way through it.
+        pumpFor(interElementMs);
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "between-elements: STILL open a full 48 ms inter-element space "
+              "later — at 25 WPM the QSK operator hears the band");
+        check(!Hl2UnkeyHoldTestAccess::holdArmed(backend),
+              "between-elements: and nothing armed a hold behind our back");
+
+        // ELEMENT 2 mutes again, which is the half that must not be lost.
+        backend.setCwKeying(true, true, 0, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "between-elements: the next element key-down mutes again — the "
+              "leak is accepted BETWEEN elements, not DURING one");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+
+    // -- 8. BREAK-IN OFF: the hold still arms and still runs its length -----
+    //
+    // SEMI-BREAK-IN IS THE OTHER HALF OF THE RULING and it is asserted, not
+    // assumed. With break-in off setCwKeying() never keys: CW rides an MOX the
+    // operator asserted, and the over ends when THEY release it. That release
+    // arrives through setKeying() with cwBreakIn false, has a real T/R
+    // turnaround behind it, and must get the full hold.
+    {
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+        Hl2UnkeyHoldTestAccess::setTxReceiverMode(backend, "CW");
+        const int hold = 200;
+        Hl2UnkeyHoldTestAccess::setHoldMs(backend, hold);
+
+        // The operator asserts MOX. This is what break-in OFF means.
+        backend.setKeying(true, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "semi: the operator's MOX mutes the receiver");
+
+        // Elements inside that MOX. They must not touch the mute in either
+        // direction — and must not arm a hold when they are released.
+        backend.setCwKeying(true, /*breakIn=*/false, /*breakInDelayMs=*/0, tx.operation);
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "semi: an element inside the over changes nothing");
+        backend.setCwKeying(false, /*breakIn=*/false, /*breakInDelayMs=*/0, tx.operation);
+        pumpFor(20);   // well past the 6 ms envelope hang, had one been started
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "semi: and its release does NOT open the receiver mid-over");
+        check(!Hl2UnkeyHoldTestAccess::holdArmed(backend),
+              "semi: an element release with break-in off arms no hold either — "
+              "it ended no transmission");
+
+        // THE REAL UNKEY: the operator drops MOX.
+        QElapsedTimer sinceRealUnkey;
+        backend.setKeying(false, tx.operation);
+        sinceRealUnkey.start();
+        check(Hl2UnkeyHoldTestAccess::holdArmed(backend),
+              "semi: THE HOLD STILL ARMS — only full break-in skips it");
+        check(Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "semi: and the receiver is held shut past the MOX-off");
+        check(Hl2UnkeyHoldTestAccess::moxOffApplied(backend),
+              "semi: with the MOX-off already applied, which is the ordering "
+              "#5497 is about");
+
+        pumpUntilUnmutedOr(backend, 10 * hold + 500);
+        const qint64 mutedForMs = sinceRealUnkey.elapsed();
+        std::printf("      MEASURED: semi-break-in held the mute %lld ms past "
+                    "the MOX-off (hold %d ms)\n",
+                    static_cast<long long>(mutedForMs), hold);
+        check(mutedForMs >= hold - (hold / 4),
+              "semi: THE HOLD RAN ITS FULL LENGTH — the CW branch did not "
+              "shorten it");
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "semi: and it expires normally");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+
+    // -- 9. THE DOUBLE-UNKEY GUARD IS UNAFFECTED, BOTH WAYS ----------------
+    //
+    // The edge guard from the last round (ten9876, #5850) stops a redundant
+    // setKeying(false) restarting the single-shot timer. The CW branch is a
+    // NEW arm of the same `if`, so the question is whether it changed the
+    // guard's behaviour on either side of the break-in switch. Leg 8 above
+    // already re-measures the semi path under a full hold; this leg drives a
+    // redundant unkey through both.
+    {
+        // 9a. WITH BREAK-IN: a redundant unkey after a QSK element release
+        // must still arm nothing. This is the shape the tune-release and
+        // watchdog paths produce, arriving on a chain that is already open.
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+        Hl2UnkeyHoldTestAccess::setTxReceiverMode(backend, "CW");
+        const int hold = 300;
+        Hl2UnkeyHoldTestAccess::setHoldMs(backend, hold);
+
+        backend.setCwKeying(true, true, 0, tx.operation);
+        backend.setCwKeying(false, true, 0, tx.operation);
+        pumpUntilUnmutedOr(backend, 10 * hold + 500);
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "double-unkey/QSK: open after the element release");
+
+        // The redundant one. m_keyed is already false and the chain is already
+        // unmuted, so this reaches the third arm of the release branch.
+        backend.setKeying(false, tx.operation);
+        check(!Hl2UnkeyHoldTestAccess::holdArmed(backend),
+              "double-unkey/QSK: a redundant unkey on an open chain arms no "
+              "hold");
+        pumpFor(hold / 4);
+        check(!Hl2UnkeyHoldTestAccess::dspMuted(backend),
+              "double-unkey/QSK: ...and does not close the receiver behind the "
+              "operator");
+
+        Hl2UnkeyHoldTestAccess::tearDown(backend);
+    }
+    {
+        // 9b. WITHOUT BREAK-IN, re-measured with the CW branch present. This
+        // is leg 6's assertion again, and it is repeated rather than trusted:
+        // the branch it now shares an `if` with is new, and the whole point of
+        // the guard is that the mute ends one hold after the REAL edge.
+        TxTestAuthority tx;
+        Hl2Backend backend;
+        Hl2UnkeyHoldTestAccess::prepare(backend);
+        Hl2UnkeyHoldTestAccess::attachProbeDsp(backend);
+        const int hold = 200;
+        Hl2UnkeyHoldTestAccess::setHoldMs(backend, hold);
+
+        backend.setKeying(true, tx.operation);
+        QElapsedTimer sinceRealUnkey;
+        backend.setKeying(false, tx.operation);
+        sinceRealUnkey.start();
+        check(Hl2UnkeyHoldTestAccess::holdArmed(backend),
+              "double-unkey/no-QSK: the real edge armed the hold");
+
+        pumpFor(hold / 2);
+        backend.setKeying(false, tx.operation);
+        pumpUntilUnmutedOr(backend, 10 * hold + 500);
+        const qint64 mutedForMs = sinceRealUnkey.elapsed();
+        std::printf("      MEASURED: with the CW branch present, the mute "
+                    "lasted %lld ms past the real MOX-off (hold %d ms; a "
+                    "restarted hold would land near %d ms)\n",
+                    static_cast<long long>(mutedForMs), hold, hold + hold / 2);
+        check(mutedForMs < hold + (hold / 4),
+              "double-unkey/no-QSK: the edge guard is UNAFFECTED by the CW "
+              "branch — still one hold after the real key-up edge");
 
         Hl2UnkeyHoldTestAccess::tearDown(backend);
     }
