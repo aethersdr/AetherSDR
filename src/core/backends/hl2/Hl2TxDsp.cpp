@@ -123,8 +123,8 @@ bool Hl2TxDsp::buildModulator(std::string* error)
     if (!m_channel) {
         // A REFUSAL, reported. Hl2Backend::beginDspSetup already carries a
         // txOk/txErr pair back to the GUI thread for exactly this, and it was
-        // dead weight until now because the phasing modulator could only fail
-        // its own argument validation.
+        // dead weight until the migration, because the modulator this replaced
+        // could only ever fail its own argument validation.
         if (error) {
             *error = err.empty() ? "WDSP transmit channel refused" : err;
         }
@@ -249,10 +249,11 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
             continue;
         }
         for (std::size_t k = 0; k < outBlock; ++k) {
-            // NO CONJUGATION, and that is the opposite of the phasing build.
+            // NO CONJUGATION, and that is the opposite of the convention the
+            // modulator this replaced used.
             // fir_bandpass builds exp(-j*w_osc*pos), so the signed passband
             // applied in applyModeAndFilter() already selects the half that
-            // gives the HPSDR wire's handedness. Adding the phasing modulator's
+            // gives the HPSDR wire's handedness. Adding that modulator's
             // -imag() here would transmit every SSB mode on the wrong sideband,
             // which is the recommendation the S6 study made and the mutation
             // that falsified it: flipping LSB's passband sign back to positive
@@ -300,11 +301,12 @@ bool Hl2TxDsp::configure(const Config& config, std::string* error)
     m_config = config;
     m_upsample = config.outputSampleRateHz / config.inputSampleRateHz;
     m_inBuffer.clear();
-    // The modulator may REFUSE now, which it could not before: the TXA build
-    // opens a WDSP channel here and a channel can be refused (the pool is 32
-    // wide and shared with every receiver). Leaving m_configured false on that
-    // path is what makes the readback honest -- Hl2Backend already carries the
-    // txOk/txErr pair back for it.
+    // The modulator can REFUSE here, which the arithmetic one it replaced could
+    // not: this opens a WDSP channel and a channel can be refused (the pool is
+    // 32 wide and shared with every receiver). Leaving m_configured false on
+    // that path is what makes the readback honest -- Hl2Backend already carries
+    // the txOk/txErr pair back for it, and gatherDspChains reports
+    // `not-configured` rather than a plausible set of requested figures.
     if (!buildModulator(error)) {
         return false;
     }
@@ -315,9 +317,11 @@ bool Hl2TxDsp::configure(const Config& config, std::string* error)
 void Hl2TxDsp::setMode(WdspChannel::Mode mode)
 {
     m_config.mode = mode;
-    // In the TXA build this is NOT a no-op and must not become one: the
-    // sideband rides on the sign of the passband, so a mode change has to
-    // re-push the passband too. applyModeAndFilter() does both.
+    // This is NOT a no-op and must not become one: the sideband rides on the
+    // sign of the passband, so a mode change has to re-push the passband too.
+    // applyModeAndFilter() does both. (The modulator this replaced read the
+    // mode per block and needed no push at all, so a reader coming from that
+    // code has exactly the wrong intuition here.)
     applyModeAndFilter();
 }
 
@@ -355,9 +359,9 @@ void Hl2TxDsp::reset()
     m_inBuffer.clear();
     // Re-arm the mid-buffer source-change warning for the next transmission.
     m_sourceChangeWarned = false;
-    // The modulator's own state, per build. In the phasing build this is the
-    // delay line; in the TXA build it deliberately does NOT rebuild the
-    // channel. See resetModulatorState().
+    // The modulator's own state, and it deliberately does NOT rebuild the
+    // channel -- a rebuild would be FFTW planning on the I/O thread. See
+    // resetModulatorState().
     resetModulatorState();
 }
 

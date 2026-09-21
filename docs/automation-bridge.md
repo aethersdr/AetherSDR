@@ -1499,7 +1499,7 @@ inside AetherSDR on the host, not in radio firmware (#5401).
   proposed again — must not arrive as a silent change of meaning. A reader
   should treat an unrecognised value as "a modulator this client does not know
   about", never as a failure.
-- On `hl2-tx` entries, `level` is `channel-config` and `filterLowHz` /
+- On a **configured** `hl2-tx` entry, `level` is `channel-config` and `filterLowHz` /
   `filterHighHz` are the signed passband last accepted by the channel (negative
   for LSB/DIGL). `dspBlockSize` is the channel's DSP-rate size; `inputBlockSize`
   is its audio-rate size, and `dspRateHz` names the DSP rate. Refused requests

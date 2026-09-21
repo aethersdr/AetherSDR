@@ -125,14 +125,13 @@ public:
     // Last applied configuration. Read-back consumers must check isConfigured()
     // before publishing it: defaults/refused or abandoned setups are not live.
     //
-    // WHAT LEVEL THIS IS depends on the build, and the difference is real.
-    // In the PHASING build there is no WDSP channel behind this, so there is no
-    // lower level to query: the modulator is hand-written arithmetic and this
-    // struct IS its state, which makes a read of it level 4 rather than a
-    // weaker stand-in for one. In the TXA build there IS a channel, this struct
-    // is what it was ASKED for, and the level-4 reads are wdspChannelId() and
-    // modulatorFaultBlocks(). Hl2Backend::gatherDspChains reports both, and
-    // labels them, rather than letting one claim stand for two builds.
+    // WHAT LEVEL THIS IS. There is a WDSP channel behind this struct, so this
+    // is what the modulator was ASKED for and NOT what the channel accepted.
+    // The channel's own answer is channelConfig(); the level-4 reads are
+    // wdspChannelId() and modulatorFaultBlocks(). Hl2Backend::gatherDspChains
+    // publishes the channel's figures for anything both can answer, and labels
+    // the entry `channel-config` to say so, precisely so that a request never
+    // gets read back as an acceptance.
     [[nodiscard]] const Config& config() const noexcept { return m_config; }
     [[nodiscard]] bool isConfigured() const noexcept { return m_configured; }
     // Read-back validity belongs to the session, unlike reset() on normal unkey.
@@ -141,30 +140,34 @@ public:
     // Gain the ALC is currently applying, in dB. 0 means unity.
     [[nodiscard]] double alcGainDb() const noexcept;
 
-    // ── Which modulator this BINARY was built with ───────────────────────
+    // ── Which modulator produced the signal ──────────────────────────────
     //
-    // Reported so the health snapshot can SAY which transmit chain is running.
-    // An operator cannot select the wrong one — the other one is not in the
-    // binary — but they can be running the wrong BUILD, and a bug report that
-    // does not say which modulator produced the signal is not actionable. This
-    // is the readback that makes the build visible without making it switchable.
+    // There is exactly one and it is selectable neither at run time nor at
+    // build time, so this is not a control and there is no second value to
+    // expect today. It is reported rather than assumed for the same reason the
+    // version string is: a transmit bug report that does not name the chain
+    // that produced the signal is not actionable, and a future second modulator
+    // — if one is ever proposed again — must not arrive as a silent change of
+    // meaning in a field that was quietly dropped.
     [[nodiscard]] static const char* modulatorName() noexcept;
 
-    // The WDSP channel behind the modulator, or -1 when this build has none.
+    // The WDSP channel behind the modulator; -1 only before configure() has
+    // succeeded, because m_channel is the thing configure() succeeds at.
     //
-    // Level 4 in the read-back sense where it is not -1: it is the id WDSP
-    // actually allocated, not a number this class chose.
+    // Level 4 in the read-back sense: it is the id WDSP actually allocated, not
+    // a number this class chose.
     [[nodiscard]] int wdspChannelId() const noexcept;
     [[nodiscard]] const WdspChannel::Config* channelConfig() const noexcept;
 
     // Blocks the modulator could not place on the wire, since configure().
     //
-    // ALWAYS 0 in the phasing build: that modulator is arithmetic and cannot
-    // fail. In the TXA build it counts every non-Ok WdspChannel::processIq —
-    // and it exists because THE PRIOR TXA ATTEMPT FAILED SILENTLY, which is the
-    // stated reason this is a build flag at all. A transmit chain that drops
-    // blocks must say so, in the log and in the health snapshot, rather than
-    // leaving an operator to work it out from the other end of a QSO.
+    // Counts every non-Ok WdspChannel::processIq. It exists because THE PRIOR
+    // TXA ATTEMPT FAILED SILENTLY, and that is the whole argument for having a
+    // counter rather than trusting the chain: a transmit path that drops blocks
+    // must say so, in the log and in the health snapshot, rather than leaving
+    // an operator to work it out from the other end of a QSO. The modulator it
+    // replaced could not starve — it was arithmetic — so this is a hazard the
+    // migration introduced and instrumented rather than one it inherited.
     //
     // Read on the I/O thread, which is also the thread processAudioBlock runs
     // on (Hl2Backend moves this object there), so it needs no atomic.
@@ -235,12 +238,14 @@ public slots:
     // hl2_txdsp_test's #4796 cases still pass unchanged, which is the evidence
     // that none of this moved the TCI/DAX path.
     //
-    // ── THE TXA BUILD IS NOT RATE-FREE, and the phasing build is ──────────
+    // ── THIS CHAIN IS NOT RATE-FREE, AND THE ONE IT REPLACED WAS ──────────
     //
-    // The phasing modulator is a convolution: N audio samples in gives exactly
-    // 2N IQ samples out, whenever they are handed over and however fast.
+    // The modulator this replaced was a convolution: N audio samples in gave
+    // exactly 2N IQ samples out, whenever they were handed over and however
+    // fast. Any caller written against that assumption is wrong here, which is
+    // why it is stated rather than left to be discovered.
     //
-    // A TXA channel is not. It is opened with blockForOutput = false -- the
+    // A TXA channel is not rate-free. It is opened with blockForOutput = false -- the
     // setting Hl2RxDsp uses and the setting every figure on #5678 was measured
     // at -- so WdspChannel::processIq RETURNS Underrun rather than waiting when
     // the channel's output side is not ready yet. A caller that feeds faster
@@ -257,8 +262,8 @@ public slots:
     // modulatorFaultBlocks() and logged.
     //
     // THIS IS ORTHOGONAL TO THE SOURCE ARGUMENT ABOVE. The rate coupling is a
-    // property of which MODULATOR was compiled in; the source argument is about
-    // which LEVEL policy applies. Neither reads the other.
+    // property of THE MODULATOR; the source argument is about which LEVEL
+    // policy applies. Neither reads the other.
     void processAudioBlock(const std::vector<float>& mono,
                            TxAudioSource source,
                            const TxCoordinator::Context& context);
@@ -288,17 +293,17 @@ signals:
     void micGainChanged(double linear);
 
 private:
-    // Build (or rebuild) whatever modulator this build compiled in. Both
-    // implementations are total: on a false return nothing is configured.
+    // Build (or rebuild) the TXA channel. Total: on a false return nothing is
+    // configured and m_channel is null.
     bool buildModulator(std::string* error);
-    // Push m_config's mode and passband at the modulator. A no-op in the
-    // phasing build, where the mode is read per block and the passband change
-    // is designFilters(); the real work in the TXA build, where BOTH have to
-    // reach the channel and the sideband rides on the passband's sign.
+    // Push m_config's mode and passband at the channel. BOTH have to reach it
+    // and neither is optional, because the sideband rides on the passband's
+    // sign rather than on the mode -- see the comment on the definition.
     void applyModeAndFilter();
     // The one modulation step. Takes LEVELLED audio at inputSampleRateHz --
     // post mic gain, post ALC, post clamp -- and appends wire-order IQ at
-    // outputSampleRateHz to m_iq. Everything above it is shared between builds.
+    // outputSampleRateHz to m_iq. Everything above it is the level chain, which
+    // is not part of the modulator and does not change with it.
     void modulate(std::span<const float> audio);
     void resetModulatorState();
     bool isLowerSideband() const;
@@ -315,9 +320,9 @@ private:
     double m_alcGain = 1.0;      // current ALC gain, carried across blocks
 
     std::vector<float> m_inBuffer;      // pending input audio
-    // Levelled audio for one call: the hand-off point between the shared level
-    // chain and whichever modulator is compiled in. Sized on demand, reused
-    // across calls so the real-time path does not allocate per block.
+    // Levelled audio for one call: the hand-off point between the level chain
+    // and the modulator. Sized on demand, reused across calls so the real-time
+    // path does not allocate per block.
     std::vector<float> m_levelled;
     std::vector<std::complex<float>> m_iq;
 

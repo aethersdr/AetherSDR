@@ -107,11 +107,13 @@ static std::vector<std::complex<float>> wholeCycles(
 // Output samples dropped from the FRONT of every capture before it is
 // analysed.
 //
-// Both modulators have a priming stretch and neither one's is a filter
-// response. The phasing modulator's is its 255-tap delay line filling, about
-// 5 ms. A TXA channel's is create_slews' mute ramp (ndelup + ntup = 840 input
+// The chain has a priming stretch and it is not a filter response. A TXA
+// channel's is create_slews' mute ramp (ndelup + ntup = 840 input
 // samples = 35 ms) plus the rest of the fill, measured as bounded at output
-// sample 2336 -- 48.7 ms -- after which the output never returns to zero. A
+// sample 2336 -- 48.7 ms -- after which the output never returns to zero. (The
+// modulator this replaced primed in about 5 ms, its 255-tap delay line
+// filling, which is why the figures below are quoted against 12288 and not
+// against whatever an older reading of this file used.) A
 // ramp is amplitude modulation, and amplitude modulation puts energy in the
 // image bin, so including it would report the envelope rather than the filter.
 //
@@ -123,8 +125,11 @@ static std::vector<std::complex<float>> wholeCycles(
 // figure that is the ENVELOPE, not the filter. 12288 clears block 5 by a
 // factor of 2.4.
 //
-// Applied in BOTH builds, because the point of this instrument is that the two
-// chains are read by one of it.
+// Applied to EVERY capture in this file without exception. The value was
+// chosen so that one instrument could read two chains on the same terms; only
+// one chain is left, and the discipline is kept because a per-block skip chosen
+// to suit a particular assertion is how this file once came to measure its own
+// settling -- see the sweep's comment on the 4096 it used to carry.
 static constexpr std::size_t kSettleSamples = 12288;
 
 // Longest prefix that is a WHOLE number of cycles of `hz`.
@@ -225,7 +230,7 @@ static double binPower(const std::vector<std::complex<float>>& iq, double hz,
 // what ties the replica to this test instead of leaving it an argument on
 // paper.
 //
-// WHAT THAT MEANS FOR THE TXA BUILD. Every TXA figure in this file bar one
+// WHAT THAT MEANS FOR THIS FILE'S TXA FIGURES. Every one of them bar one
 // group -- 167 to 332 dB -- sits at or above that floor, and NONE OF THOSE IS
 // A MEASUREMENT OF THE MODULATOR. Each is UNRESOLVED: the true suppression may
 // be higher or lower and this file cannot say which.
@@ -252,12 +257,13 @@ static double binPower(const std::vector<std::complex<float>>& iq, double hz,
 // where a TXA skirt is still resolvable and the sweep does measure it -- 59.37
 // dB at 100 Hz on {0, 4000}. That paragraph is in the sweep's own comment.)
 //
-// The phasing build's figures (7.87 to 115.75 dB) are all well under the floor
-// and are real measurements, which is why the characterisation sweep's
-// baseline table belongs to the phasing build and is not a property of "the
-// modulator".
+// THE BASELINE TABLE IN THE SWEEP BELOW IS NOT THIS CHAIN'S. Those figures
+// (7.87 to 115.75 dB) were measured on the modulator this replaced, are all
+// well under the floor, and are therefore real measurements -- which is exactly
+// why they are kept and exactly why they must not be read as a property of
+// "the modulator" now that only one is left.
 //
-// AND THE SWEEP BELOW CONFIRMS IT FROM INSIDE THIS TEST. In the TXA build its
+// AND THE SWEEP BELOW CONFIRMS THE FLOOR FROM INSIDE THIS TEST. Its
 // in-band rows do not form a curve, they alternate between the two regimes the
 // replica predicts: USB reads 174.04 dB at 500 Hz, 173.67 at 700, then 322.33
 // at 1000, 331.53 at 1500, 318.24 at 2000, then 171.98 again at 2500. A filter
@@ -302,7 +308,7 @@ static const char* floorMark(double suppDb)
 // already 240 dB down and cannot reach the result.
 static constexpr double kSidebandEps = 1e-30;
 
-// ── What the TXA build is entitled to assert about a subject it cannot
+// ── What this file is entitled to assert about a subject it cannot
 //    measure ─────────────────────────────────────────────────────────────
 //
 // This is a regression threshold on the computed ratio, not a measurement
@@ -439,9 +445,9 @@ static std::vector<std::complex<float>> modulateOnce(WdspChannel::Mode mode,
 // samples, fexchange2 slips the output stream by a whole DSP buffer
 // permanently, so a correlation across the seam averages two time origins.
 //
-// Zero faults is guaranteed in the phasing build -- arithmetic cannot starve --
-// and is a real risk in the TXA build on a SHARED machine. It is not
-// hypothetical: measured under a load average of 252, this file and
+// This is a real risk on a SHARED machine, and it is one the migration
+// introduced: the modulator this replaced was arithmetic and could not starve.
+// It is not hypothetical -- measured under a load average of 252, this file and
 // wdsp_channel_test both starved, and the sideband assertions then failed
 // saying the chain had regressed when what had happened was that eight other
 // compiler jobs were running.
@@ -449,8 +455,9 @@ static std::vector<std::complex<float>> modulateOnce(WdspChannel::Mode mode,
 // Retrying belongs HERE and would be wrong inside Hl2TxDsp: pacing is the
 // caller's responsibility, and a sleep-and-retry on the audio I/O thread would
 // hide a timing fault behind a spin -- the same class of mistake as the silent
-// failure this whole build flag exists to avoid. The runtime path counts and
-// logs the fault instead. A test is free to try again; a transmitter is not.
+// TXA failure that made modulatorFaultBlocks() worth having. The runtime path
+// counts and logs the fault instead. A test is free to try again; a
+// transmitter is not.
 //
 // Three attempts, and the retry is PRINTED, because a run that needs retrying
 // on an idle machine is evidence about the chain rather than about the machine.
@@ -638,7 +645,7 @@ int main(int argc, char** argv)
     // setFilter() on an ALREADY OPEN channel, which nothing exercised.
     //
     // That is exactly the path Hl2TxDsp::applyModeAndFilter warns about in its
-    // own comment: in the TXA build SetTXAMode does NOT choose a sideband --
+    // own comment: SetTXAMode does NOT choose a sideband --
     // TXASetupBPFilters gives TXA_LSB and TXA_USB the identical
     // CalcBandpassFilter call, so the sideband rides entirely on the SIGN of
     // the passband. A mode change pushing only the mode leaves the transmitter
@@ -723,13 +730,15 @@ int main(int argc, char** argv)
             // assertion below tests; it used to print as a negative ratio.
             std::fprintf(stderr, "USB: +1kHz %.9e, -1kHz %.9e, suppression %.2f dB%s\n",
                          upper, lower, -ratioDb, floorMark(-ratioDb));
-            // The WIRE-FACING sign, and it is the same assertion in both
-            // builds although the two modulators reach it by opposite routes:
-            // the phasing modulator emits the analytic signal and CONJUGATES
-            // it, a TXA channel is handed a signed passband and must NOT be
-            // conjugated. Either one alone, or both, puts the transmitter on
-            // the wrong sideband -- invisible from inside this application,
-            // because the panadapter reads the same wire order.
+            // The WIRE-FACING sign. This assertion survived the migration
+            // unchanged while the route to it INVERTED: the modulator this
+            // replaced emitted the analytic signal and had to CONJUGATE it, a
+            // TXA channel is handed a signed passband and must NOT be
+            // conjugated. That is why the assertion is worth keeping in this
+            // form -- it is indifferent to the mechanism and catches either
+            // mistake. Getting it wrong puts the transmitter on the wrong
+            // sideband, invisible from inside this application, because the
+            // panadapter reads the same wire order.
             check(lower > upper,
                   "USB: wire-facing IQ puts energy on the LOWER side (conjugated)");
             check(-ratioDb > kMinSuppDb, "USB: opposite sideband suppressed");
@@ -1024,7 +1033,7 @@ int main(int argc, char** argv)
     // modulator's. Those are real measurements: 7.87 to 115.75 dB, all of it
     // far under the instrument's numerical floor (kInstrumentFloorDb).
     //
-    // IN THE TXA BUILD THIS SWEEP CHARACTERISES ALMOST NOTHING, AND THE
+    // AGAINST THIS CHAIN THE SWEEP CHARACTERISES ALMOST NOTHING, AND THE
     // EXCEPTION IS THE INTERESTING PART. With the settle corrected, every row
     // of the five passbands whose low edge is 100 Hz or above prints a figure
     // at or above the numerical floor -- flagged as such in the table -- so
@@ -1065,7 +1074,9 @@ int main(int argc, char** argv)
         // block 5, so "a 4096-sample skip lands inside the ramp and the
         // residual amplitude modulation held the image bin at 4.4e-05, an
         // 81 dB figure that is the ENVELOPE, not the filter" -- and then
-        // claimed "Applied in BOTH builds", which this block made false. The
+        // claimed to apply to every capture in the file, which this block made
+        // false. (It said "Applied in BOTH builds" at the time; the wording
+        // changed when the second build did, the exception did not.) The
         // sweep read 5.9e-05 and 78.41 dB -- the same artefact, within 2.6 dB
         // of the census's own figure for it.
         //
@@ -1239,9 +1250,10 @@ int main(int argc, char** argv)
                 // under that drive and ~500x above the largest bin-noise this
                 // instrument produces at it (2.1e-9), so it separates "the
                 // filter removed the tone" from "the filter left a sideband to
-                // check". IT DROPS NOTHING IN THE PHASING BUILD -- the smallest
-                // wanted bin anywhere in that build's sweep is 1.97e-2, four
-                // decades clear -- so the control keeps every assertion it had.
+                // check". IT DROPPED NOTHING FROM THE BASELINE -- the smallest
+                // wanted bin anywhere in the predecessor's sweep is 1.97e-2,
+                // four decades clear -- so it cost the control no assertion,
+                // which is what licenses it as a gate rather than an excuse.
                 constexpr double kResolvableBin = 1e-6;
                 const bool orientable = inBand || wanted > kResolvableBin;
 
@@ -1275,8 +1287,8 @@ int main(int argc, char** argv)
                 }
 
                 // ORIENTABLE ROWS ONLY. A row whose wanted bin is in the
-                // noise has no figure to be the worst of: in the TXA build the
-                // USB 100 Hz row reads -0.86 dB, and reporting that as "the
+                // noise has no figure to be the worst of: the USB 100 Hz row
+                // reads -0.86 dB, and reporting that as "the
                 // worst point across the sweep" would put a noise ratio at the
                 // top of the summary the reader looks at first.
                 if (orientable && suppDb < worstDb) { worstDb = suppDb; worstHz = t; }
@@ -1774,29 +1786,28 @@ int main(int argc, char** argv)
             std::fprintf(stderr, "slider top: whole-run crest %.4f, "
                                  "settled-tail crest %.4f\n",
                          crest(slam), crest(settledTail(slam)));
-            // THE WINDOW DIFFERS BY BUILD, and the reason is not a tolerance.
+            // THE WINDOW IS THE SETTLED TAIL, NOT THE WHOLE RUN, and the
+            // reason is not a tolerance.
             //
             // Crest here is peak over mean |IQ|, so anything that makes the
-            // envelope non-constant raises it. In the phasing build the only
-            // such thing IS the fault this leg guards -- a key-on window of
-            // flat-topped modulator input -- so the window is the whole run,
-            // deliberately, and that is what makes this a guard rather than a
-            // restatement of the settled case.
+            // envelope non-constant raises it. A TXA channel has a LEGITIMATE
+            // source of envelope: create_slews' mute ramp, 840 input samples of
+            // deliberate T/R shaping at the head of every over. Measured here:
+            // whole run 1.0684, settled tail 1.0000 -- with ZERO samples at the
+            // clamp over the whole run, which the check above asserts
+            // separately. A whole-run crest test would therefore report the
+            // transmitter's intended envelope as distortion.
             //
-            // A TXA channel has a second, LEGITIMATE source of envelope:
-            // create_slews' mute ramp, 840 input samples of deliberate T/R
-            // shaping at the head of every over. Measured here: whole run
-            // 1.0684, settled tail 1.0000 -- with ZERO samples at the clamp
-            // over the whole run, which the check above asserts separately.
-            // So a whole-run crest test in the TXA build reports the
-            // transmitter's intended envelope as distortion, and would fail on
-            // a modulator that is in fact cleaner than the one it replaces.
-            //
-            // The key-on fault cannot occur in the TXA build for the same
-            // reason: the ramp starts the modulator's input at zero, so there
-            // is no full-scale block before the ALC has converged. The
-            // clamp-count assertion above is what pins that, and it runs on the
-            // whole run in BOTH builds.
+            // THAT WINDOW USED TO BE THE WHOLE RUN, because on the modulator
+            // this replaced the only thing that could make the envelope
+            // non-constant WAS the fault this leg guards -- a key-on window of
+            // flat-topped modulator input. That fault cannot occur here for the
+            // same reason the ramp exists: it starts the modulator's input at
+            // zero, so there is no full-scale block before the ALC has
+            // converged. What pins it now is the clamp-count assertion above,
+            // which does run on the whole run -- so narrowing this window cost
+            // no coverage, and saying which assertion took it over is the point
+            // of this paragraph.
             check(crest(settledTail(slam)) < 1.05,
                   "and puts no clipping distortion on the wire once the T/R "
                   "mute ramp has run");
@@ -1855,12 +1866,11 @@ int main(int argc, char** argv)
                     // PACED, like every other feed in this file. These three
                     // clipping cases arrived on main after this branch forked,
                     // so they were the only sites still calling the modulator
-                    // directly. In the TXA build that starves it -- 64 of 66
-                    // blocks underran and the whole-run IQ peak read 0.0000,
-                    // which the case then reported as "the transmission is not
-                    // on the air". It was on the air; the test was feeding five
-                    // times faster than the channel drains. feed() is a no-op
-                    // in the phasing build.
+                    // directly. That starves it -- 64 of 66 blocks underran and
+                    // the whole-run IQ peak read 0.0000, which the case then
+                    // reported as "the transmission is not on the air". It was
+                    // on the air; the test was feeding five times faster than
+                    // the channel drains.
                     feed(tx,
                          std::vector<float>(
                              audio.begin() + static_cast<std::ptrdiff_t>(off),
@@ -1932,12 +1942,11 @@ int main(int argc, char** argv)
                     // PACED, like every other feed in this file. These three
                     // clipping cases arrived on main after this branch forked,
                     // so they were the only sites still calling the modulator
-                    // directly. In the TXA build that starves it -- 64 of 66
-                    // blocks underran and the whole-run IQ peak read 0.0000,
-                    // which the case then reported as "the transmission is not
-                    // on the air". It was on the air; the test was feeding five
-                    // times faster than the channel drains. feed() is a no-op
-                    // in the phasing build.
+                    // directly. That starves it -- 64 of 66 blocks underran and
+                    // the whole-run IQ peak read 0.0000, which the case then
+                    // reported as "the transmission is not on the air". It was
+                    // on the air; the test was feeding five times faster than
+                    // the channel drains.
                     feed(tx,
                          std::vector<float>(
                              audio.begin() + static_cast<std::ptrdiff_t>(off),
@@ -2025,12 +2034,11 @@ int main(int argc, char** argv)
                     // PACED, like every other feed in this file. These three
                     // clipping cases arrived on main after this branch forked,
                     // so they were the only sites still calling the modulator
-                    // directly. In the TXA build that starves it -- 64 of 66
-                    // blocks underran and the whole-run IQ peak read 0.0000,
-                    // which the case then reported as "the transmission is not
-                    // on the air". It was on the air; the test was feeding five
-                    // times faster than the channel drains. feed() is a no-op
-                    // in the phasing build.
+                    // directly. That starves it -- 64 of 66 blocks underran and
+                    // the whole-run IQ peak read 0.0000, which the case then
+                    // reported as "the transmission is not on the air". It was
+                    // on the air; the test was feeding five times faster than
+                    // the channel drains.
                     feed(tx,
                          std::vector<float>(
                              audio.begin() + static_cast<std::ptrdiff_t>(off),
