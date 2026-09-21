@@ -562,9 +562,24 @@ void productionCapabilityContracts()
     // stored and published. Before this it was stored verbatim, and the combo
     // fell to index 0 ("LSB") while the receiver really was in CW.
     //
-    // The passband is asserted in the same breath: the collapse must rename
-    // the mode and not move the detector's window. -250/250 is the CW branch
-    // of defaultPassbandForMode(), the same one "CWU" reached before.
+    // The passband is asserted in the same breath: the collapse must rename the
+    // mode AND land on the CW window -- -250/250 is the CW branch of
+    // defaultPassbandForMode(), the same one "CWU" reached before.
+    //
+    // THE DSB SET BELOW IS LOAD-BEARING AND MUST NOT BE TIDIED AWAY AS A
+    // REDUNDANT WRITE. emitSliceState() publishes a full SNAPSHOT of the
+    // receiver (d.filterLow = r->filterLowHz, unconditionally), not a diff of
+    // what changed, so every assertion in this block reads the window the
+    // receiver is holding RIGHT NOW. CWL and CWU share one
+    // defaultPassbandForMode() entry, so entering CWU straight out of CWL left
+    // the passband clause below unable to fail the way its label claims: a
+    // setSliceMode() that stopped adopting a passband while still applying the
+    // rename would have left CWL's -250/250 standing and the line would have
+    // stayed green. Re-entering from DSB's -3000/3000 is what gives it teeth --
+    // the window now has to MOVE for the check to pass. Raised in review on
+    // PR #5879; the CWL leg above already had this property because it follows
+    // DSB, and this restores it for the CWU leg.
+    hl2.setSliceMode(0, QStringLiteral("DSB"));
     hl2.setSliceMode(0, QStringLiteral("CWU"));
     check(observed.mode == QStringLiteral("CW")
         && observed.filterLow == -250 && observed.filterHigh == 250,

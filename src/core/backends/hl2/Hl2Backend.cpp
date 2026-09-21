@@ -1782,8 +1782,17 @@ RadioCapabilities Hl2Backend::capabilities() const
     // every build. TXA's own chain does carry fmmod, which is exactly why the
     // honest gate is the declaration and not the DSP.
     //
-    // Hidden is the honest value and is the one both widgets read to hide the
-    // container outright rather than show a control that does nothing.
+    // Hidden is the honest value and is the one both widgets read to WITHDRAW
+    // the tone controls rather than show a control that does nothing -- by
+    // different mechanisms, which is worth stating because this comment is the
+    // artifact a later reader will trust over the code.
+    // VfoWidget::configureFmToneControls hides a CONTAINER
+    // (m_fmToneContainer->setVisible(modeEligible && presentation != Hidden));
+    // RxApplet::configureFmToneControls hides the individual CHILDREN
+    // (m_toneModeCmb, m_toneValueCmb and the CTCSS/DTCS combos) and never
+    // touches m_fmContainer by presentation at all -- that one follows the
+    // MODE, not this capability. The operator-visible outcome is the same in
+    // both: under Hidden no tone control is shown.
     //
     // WHAT THIS DOES NOT TOUCH: receive. FM and NFM demodulate exactly as
     // before -- WDSP's FM demodulator is unaffected by either field. What is

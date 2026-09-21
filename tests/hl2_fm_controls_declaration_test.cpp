@@ -100,8 +100,15 @@ int main(int argc, char** argv)
     hl2::Hl2Backend backend;
     const RadioCapabilities caps = backend.capabilities();
 
-    check(caps.family == QLatin1String("hl2"),
-          "this is the HL2 descriptor (sanity, not the subject)");
+    // NO `caps.family` ASSERTION HERE, DELIBERATELY.
+    // docs/architecture/radio-capabilities-map.md states the rule for these
+    // targets -- "Every assertion reads a capability -- never `caps.family`,
+    // never a backend type" -- on the ground that a family assertion would pass
+    // just as happily against the anti-pattern the struct exists to prevent. A
+    // family line here was a sanity check and not the subject, so dropping it
+    // costs this target nothing; softening the rule to admit it would have cost
+    // the rule. The constructed hl2::Hl2Backend above is what makes this the
+    // HL2 descriptor; every line below reads a capability.
 
     // ---- the reason both controls are dead, read from production ----
     //
@@ -168,12 +175,24 @@ int main(int argc, char** argv)
     // clang-format run that wraps after the `=` turns it red while the
     // declaration is entirely intact, and a red that means "the file was
     // reformatted" trains a reader to ignore the one that means "the
-    // declaration is gone". The pattern below is the same three tokens in the
-    // same order, with any run of whitespace (newlines included) between them,
-    // so it survives a reflow and still fails on a deletion or a change of
-    // value -- which is the whole job.
+    // declaration is gone". The pattern is the same three tokens in the same
+    // order, with any run of whitespace (newlines included) between them, so it
+    // survives a reflow.
+    //
+    // AND IT IS ANCHORED AT LINE START, which is the other half and the one
+    // that matters more. Unanchored, the pattern matches a COMMENTED-OUT copy
+    // of the statement just as happily as a live one -- so the declaration
+    // could be commented out, with the prose above it left in place explaining
+    // why the HL2 declines tone encode, and this assertion would go on passing
+    // while the backend inherited the struct default instead of stating it.
+    // That is precisely the failure mode the assertion exists to catch, and it
+    // is worse than the reflow one because the file still READS as correct.
+    // `^\s*` with MultilineOption requires the statement to begin its own line
+    // after nothing but indentation, so a leading `//` no longer satisfies it
+    // while a wrapped-but-live statement still does.
     static const QRegularExpression kToneStatement(
-        QStringLiteral(R"(c\.fmTonePresentation\s*=\s*FmTonePresentation::Hidden\s*;)"));
+        QStringLiteral(R"(^\s*c\.fmTonePresentation\s*=\s*FmTonePresentation::Hidden\s*;)"),
+        QRegularExpression::MultilineOption);
     check(kToneStatement.match(backendText).hasMatch(),
           "and Hidden is STATED, not inherited from the struct's identical default");
     // What Legacy would have offered, read from the same function the widgets
