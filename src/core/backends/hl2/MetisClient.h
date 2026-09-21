@@ -536,21 +536,55 @@ public:
     // the audio device clock drifting apart. Same counter, different shapes.
     //
     // THESE DO NOT ANSWER "WAS THIS OVER CLEAN", and the shape of the error is
-    // a FALSE POSITIVE rather than a miss. Real audio does not end on a packet
-    // boundary, so the last packet of a perfectly healthy over is short and is
-    // counted: at the moment the count is taken, "the queue is short" and "the
-    // over is over" are indistinguishable here. The floor is therefore about
-    // ONE underflow packet per over, plus 1..kTxSamplesPerPacket-1 samples --
-    // measured and pinned in hl2_tx_gate_test rather than described, so that
-    // removing it later is a change that announces itself.
+    // a FALSE POSITIVE rather than a miss. THE FLOOR HAS TWO HALVES, at the two
+    // ends of the over, and the first published description of it named only
+    // the smaller one.
+    //
+    //   THE TAIL, at key-up. Real audio does not end on a packet boundary, so
+    //   the last packet of a perfectly healthy over is short and is counted: at
+    //   the moment the count is taken, "the queue is short" and "the over is
+    //   over" are indistinguishable here. ONE underflow packet, plus
+    //   1..kTxSamplesPerPacket-1 samples.
+    //
+    //   THE PRE-ROLL, at key-down, and it is the BIGGER half. It is the same
+    //   missing pre-roll the paragraph above names, read as a floor rather than
+    //   as a fault: Hl2Backend::applyKeying posts setMox to this client
+    //   immediately, while the first block of transmit IQ cannot arrive until
+    //   the audio chain has produced one -- Hl2TxDsp works in whole
+    //   Config::dspBlockSize blocks at Config::inputSampleRateHz, and nothing
+    //   primes m_txIq before MOX. Every tick in between takes the empty-queue
+    //   arm and counts a WHOLE packet. So a clean over OPENS with a burst of
+    //   whole-packet underflows and CLOSES with the short tail, and the burst
+    //   is worth an order of magnitude more silent samples than the tail is.
+    //
+    // Both halves are measured and pinned in hl2_tx_gate_test rather than
+    // described, so that changing either is a change that announces itself.
+    // Neither is a defect in this client: they are what an unprimed,
+    // wall-clock-paced FIFO reads on a healthy transmission, and they are the
+    // reason these counters are a session budget and not a per-over verdict.
     //
     // txUnderflowPackets is the more polluted of the two: its floor is a fixed
-    // +1 per over however long the over is, while the tail contributes at most
-    // 125 samples against the 126 per packet a real starvation adds. Read these
-    // as "how much substituted silence has this SESSION put on the air", not as
-    // a per-over verdict. Suppressing the tail would need the count deferred
-    // and attributed against key-up, which is a design change and not made
-    // here; the honest floor is a reportable state in the meantime.
+    // per-over cost that does not grow with the over's length, while a real
+    // starvation adds kTxSamplesPerPacket per packet for as long as it lasts.
+    //
+    // "TOTALS" MEANS SINCE PROCESS START. Nothing resets these -- not start(),
+    // not a link edge, not flushTxIq() -- so they accumulate across reconnects
+    // and, if the operator switches radios without restarting, across radios.
+    // That is deliberate rather than an oversight, and the log line says so in
+    // those words: the question they answer is "how much substituted silence
+    // has this PROCESS put on the air", and a reset on a link edge would erase
+    // exactly the slow accumulation they exist to show. An operator who wants a
+    // per-link figure subtracts two readings.
+    //
+    // Suppressing either half of the floor would need the count deferred and
+    // attributed against the key edges, which is a design change and is not
+    // made here; the honest floor is a reportable state in the meantime.
+    //
+    // THREAD CONTRACT: I/O THREAD ONLY. See the note on the logging category in
+    // MetisClient.cpp -- these are plain integers written by the EP2 pacer, and
+    // reading them from anywhere else (healthSnapshot() is the obvious
+    // temptation) is a cross-thread read of a non-atomic. The only caller today
+    // is hl2_tx_gate_test, on one thread.
     [[nodiscard]] std::uint64_t txUnderflowPackets() const noexcept { return m_txUnderflowPackets; }
     [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
     [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
@@ -821,20 +855,48 @@ private:
     // Roughly a quarter second at 48 kHz. Past this the operator is hearing
     // latency, so dropping is better than growing the backlog.
     static constexpr std::size_t kTxQueueMax = 12000;
-    // Monotonic for the life of the client; see the accessors above. Never
-    // reset on key, unkey or link loss -- a per-over counter would answer a
-    // different question and would lose the drift that accumulates across a
-    // session, which is the one these exist to show.
+    // Monotonic for the life of the PROCESS; see the accessors above. Never
+    // reset on key, unkey, link loss or a change of radio -- a per-over counter
+    // would answer a different question and would lose the drift that
+    // accumulates, which is the one these exist to show. The log line calls
+    // them "totals since process start" for that reason and not "session".
     std::uint64_t m_txUnderflowPackets = 0;
     std::uint64_t m_txUnderflowSamples = 0;
     std::uint64_t m_txOverflowSamples = 0;
     // Length of the starvation currently in progress, in packets and in
-    // substituted silent samples, so ONE log line describes the whole event
+    // substituted silent samples, so ONE log line describes the whole EPISODE
     // instead of one line per EP2 frame at 380 frames/second. Reported and
     // cleared by reportTxUnderflowRun(), which every exit from the queued-IQ
-    // path calls: a full packet, a flush, or the key going up.
+    // path calls: a flush, the key going up, or the stream being taken by CW or
+    // the test tone.
     std::uint64_t m_txUnderflowRunPackets = 0;
     std::uint64_t m_txUnderflowRunSamples = 0;
+    // Contiguous FULL packets since the last short one.
+    //
+    // WHEN A STARVATION EPISODE IS OVER, and it is NOT "the next full packet".
+    // The first version of this flushed the run on the very next full packet.
+    // That is right for the burst shape -- the key-down pre-roll: N short
+    // packets in a row, then the queue primes and stays primed -- and wrong for
+    // the other shape this FIFO produces, which the accounting comment above
+    // names itself: the pacer and the audio device clock drifting apart gives
+    // ALTERNATING short and full packets. Flushing on every full packet turns
+    // that into one ~400-character debug line per PAIR, up to ~190 lines a
+    // second at the pacer's ~381 frames/s, which is precisely the "one line per
+    // EP2 frame" outcome the coalescing exists to prevent -- and the failure
+    // mode of #5813, where a high-rate burst flushed the support-log tail it
+    // was meant to explain.
+    //
+    // So an episode ends when the queue has KEPT UP for about 100 ms, DERIVED
+    // from the EP2 rate rather than typed as a packet count, plus the
+    // unconditional flushes at every exit from the queued-IQ path: the key
+    // going up, flushTxIq(), CW taking the stream, the test tone taking it.
+    // Within an over that gives one line per episode; across overs the unkey
+    // backstop still guarantees the line is attributed to the over it happened
+    // in rather than to the next one.
+    static constexpr std::uint64_t kUnderflowRunQuietPackets =
+        (static_cast<std::uint64_t>(kEp2AudioRateHz) / 10u)
+            / static_cast<std::uint64_t>(kTxSamplesPerPacket);
+    std::uint64_t m_txUnderflowRunQuietPackets = 0;
     void reportTxUnderflowRun();
     double m_toneHz = 0.0;
     double m_toneAmp = 0.0;

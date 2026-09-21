@@ -53,7 +53,9 @@
 static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
               "Hl2Backend.h seeds m_alcTargetPeak with this value — keep them equal");
 
-Q_LOGGING_CATEGORY(lcHl2Tx, "aether.hl2.tx")
+// lcHl2Tx moved to LogManager.h/.cpp beside every other category: this string
+// has a second writer now (MetisClient's host-queue starvation lines), and one
+// shared object is better than two with separate enabled flags.
 
 namespace AetherSDR::hl2 {
 
