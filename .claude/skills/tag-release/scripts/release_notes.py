@@ -67,7 +67,7 @@ def _utf8_stdio() -> None:
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
         except (AttributeError, ValueError):
-            pass
+            pass  # not a TextIOWrapper (a captured or redirected stream); leave its encoding alone
 
 
 def _tool(name: str) -> str:

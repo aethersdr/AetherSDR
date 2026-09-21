@@ -336,7 +336,7 @@ After creation, confirm and record:
 ```sh
 gh release view vX.Y.Z --json isDraft,isPrerelease,targetCommitish,author,createdAt,publishedAt,url
 gh api repos/aethersdr/AetherSDR/releases/latest --jq .tag_name
-python3 .claude/skills/tag-release/scripts/release_notes.py --version vX.Y.Z --prev vPREV --ref "$SHA" --check
+python3 .claude/skills/tag-release/scripts/release_notes.py --version vX.Y.Z --prev vPREV --ref "$SHA" --check --no-write
 ```
 
 Not draft, not pre-release, `target_commitish` `main`, author is you, latest
@@ -618,7 +618,7 @@ Decided: <where, or not>. Text: <the paragraph> / n/a.
 #NNNN <title> — <flagged hotfix material / noted> / none yet.
 
 ### Cleanup
-aetherweb worktree removed; scratch downloads deleted / what remains and why.
+aetherweb worktree removed; `tagmsg.txt`, `notes.md`, `title.txt` and the downloads deleted from the scratch directory / what remains and why.
 ```
 
 State current state, not the churn.

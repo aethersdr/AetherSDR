@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -51,7 +50,7 @@ def _utf8_stdio() -> None:
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
         except (AttributeError, ValueError):
-            pass
+            pass  # not a TextIOWrapper (a captured or redirected stream); leave its encoding alone
 
 
 def report(status: str, name: str, detail: str = "") -> None:
@@ -163,7 +162,7 @@ def check_release(repo: str, v: str, tag_first_line: str | None, not_latest: boo
 
 # ----------------------------------------------------------------------- runs
 
-def check_runs(repo: str, v: str, tagged_at: datetime | None, hotfix: bool) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+def check_runs(repo: str, v: str, tagged_at: datetime | None) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     runs = gh_json("run", "list", "--repo", repo, "--branch", v, "--limit", "30", "--json",
                    "workflowName,event,status,conclusion,attempt,createdAt,updatedAt,url,databaseId") or []
     by_wf: dict[str, dict[str, Any]] = {}
@@ -191,7 +190,10 @@ def check_runs(repo: str, v: str, tagged_at: datetime | None, hotfix: bool) -> t
     extra = sorted({r["workflowName"] for r in runs} - set(BUILD_WORKFLOWS))
     if extra:
         report("WARN", "other workflows ran on the tag", ", ".join(extra))
-    # signing runs execute on the default branch; match by time
+    # signing runs execute on the default branch; match by time. The window
+    # opens at the tag object's tagger date (the skill tags and pushes in the
+    # same breath); a tag created long before it was pushed would need the push
+    # time instead, which the API does not record.
     sign = gh_json("run", "list", "--repo", repo, "--workflow", "sign-release.yml", "--limit", "12", "--json",
                    "event,status,conclusion,createdAt,updatedAt,url,databaseId") or []
     since = tagged_at - timedelta(minutes=5) if tagged_at else None
@@ -223,7 +225,7 @@ def _check_macos_steps(repo: str, r: dict[str, Any]) -> None:
 # --------------------------------------------------------------------- assets
 
 def expected_assets(v: str, hotfix: bool) -> list[str]:
-    bare = v.lstrip("v")
+    bare = ".".join(v.lstrip("v").split(".")[:3])  # 26.9.5 and 26.9.5.0 both package as 26.9.5.0
     names = [f"AetherSDR-{v}-x86_64.AppImage", f"AetherSDR-{v}-aarch64.AppImage",
              f"AetherSDR-{v}-macOS-apple-silicon.dmg", f"AetherSDR-{v}-macOS-intel.dmg",
              f"AetherSDR-{v}-Windows-x64-setup.exe", f"AetherSDR-{v}-Windows-x64-portable.zip",
@@ -393,8 +395,9 @@ def check_downloads(repo: str, v: str, assets: dict[str, Any], args: argparse.Na
 
 
 def _find_key() -> Path | None:
-    p = run([_tool("git"), "rev-parse", "--show-toplevel"], check=False)
-    if p.returncode == 0:
+    git = shutil.which("git")
+    p = run([git, "rev-parse", "--show-toplevel"], check=False) if git else None
+    if p is not None and p.returncode == 0:
         cand = Path(p.stdout.strip()) / "docs" / "RELEASE-SIGNING-KEY.pub.asc"
         if cand.exists():
             return cand
@@ -476,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
 
     commit, first_line, tagged_at = check_tag(args.repo, v)
     rel = check_release(args.repo, v, first_line, args.not_latest)
-    windows_run, _ = check_runs(args.repo, v, tagged_at, hotfix)
+    windows_run, _ = check_runs(args.repo, v, tagged_at)
     if rel:
         assets = check_assets(rel, v, hotfix)
         check_downloads(args.repo, v, assets, args)
