@@ -1,6 +1,7 @@
 #include "core/backends/hl2/MetisProtocol.h"
 #include "core/backends/hl2/Hl2BandMemoryPolicy.h"
 
+#include <algorithm>   // std::max, for the variance clamp in Ep4Stats::rmsDbfs
 #include <cmath>
 
 namespace AetherSDR::hl2 {
@@ -763,10 +764,55 @@ double Ep4Stats::rmsDbfs() const noexcept
 {
     if (samples <= 0 || sumSquares <= 0.0)
         return kEp4FloorDbfs;
-    const double rms = std::sqrt(sumSquares / static_cast<double>(samples));
+    // ABOUT THE MEAN, not about zero. sumSquares/samples alone is m^2 + s^2,
+    // so a converter DC offset lands in the RMS at full weight and then
+    // deflates adcCrestDb, which is peak - rms. Removing the mean is what
+    // makes this figure describe the excursion the RF produced rather than the
+    // pedestal the converter sits on. (#5802.)
+    const double mean = sum / static_cast<double>(samples);
+    // Clamped at zero because the difference of two positives is only
+    // non-negative in exact arithmetic. On the production path it IS exact,
+    // so the clamp is defensive there rather than load-bearing.
+    //
+    // Codes are integers, so with |code| <= 2048 both `sum` (<= 4.2e6) and
+    // `sumSquares` (<= 8.6e9) are exact in a double. Exactly two producers
+    // reach here: ep4Stats(), which always yields 512 samples, and a complete
+    // block assembled by MetisClient, which is always 2048 -- it emits only at
+    // m_bsPhase == kEp4PacketsPerBlock and DISCARDS a partial block on a phase
+    // or drop mismatch rather than publishing it. Both counts are powers of
+    // two, so sumSquares/n and mean*mean are exact dyadic rationals with
+    // numerators under 2^53 and their difference is exact. No ULP excursion
+    // exists there.
+    //
+    // The clamp stays for the callers that are NOT those two: tests build
+    // records with arbitrary sample counts, and nothing in the signature
+    // promises a power of two. std::sqrt of a negative is NaN, and a NaN in a
+    // health row renders as "nan" and stays there for the session -- cheap
+    // insurance against a caller this function cannot see.
+    const double var = std::max(0.0, sumSquares / static_cast<double>(samples)
+                                         - mean * mean);
+    const double rms = std::sqrt(var);
+    // A record with no AC content at all — a DC pedestal and nothing else —
+    // reaches here with rms == 0 and takes the same floor an all-zero block
+    // does. That is the honest answer: it has no deviation to report.
     if (rms <= 0.0)
         return kEp4FloorDbfs;
     return 20.0 * std::log10(rms / static_cast<double>(kEp4FullScale));
+}
+
+std::optional<double> Ep4Stats::crestDb() const noexcept
+{
+    // Both terms must be real levels. peakDbfs() and rmsDbfs() return
+    // kEp4FloorDbfs EXACTLY when they have nothing to report, so testing
+    // against it is exact rather than an epsilon judgement. The test is `<=`
+    // and not `==` so that it also rejects an RMS computed BELOW the floor,
+    // for the same reason it rejects the sentinel: a deviation under half a
+    // code is not a quantity to take a ratio against. See the header.
+    const double peak = peakDbfs();
+    const double rms  = rmsDbfs();
+    if (peak <= kEp4FloorDbfs || rms <= kEp4FloorDbfs)
+        return std::nullopt;
+    return peak - rms;
 }
 
 void Ep4Stats::merge(const Ep4Stats& other) noexcept
@@ -778,6 +824,10 @@ void Ep4Stats::merge(const Ep4Stats& other) noexcept
     if (other.peakAbs > peakAbs)
         peakAbs = other.peakAbs;
     sumSquares += other.sumSquares;
+    // Plain addition, exactly as for sumSquares: both are linear in the
+    // record, which is what lets a merged block's mean and variance be those
+    // of the 2048-sample concatenation rather than an average over packets.
+    sum += other.sum;
     clippedSamples += other.clippedSamples;
 }
 
@@ -816,6 +866,9 @@ std::optional<Ep4Stats> ep4Stats(std::span<const std::uint8_t> pkt) noexcept
         if (mag > s.peakAbs)
             s.peakAbs = mag;
         s.sumSquares += static_cast<double>(code) * static_cast<double>(code);
+        // The SIGNED code, alongside its square: rmsDbfs() removes the mean,
+        // and a magnitude sum would not be one. (#5802.)
+        s.sum += static_cast<double>(code);
         // The gateware's own rails, not a symmetric threshold. See
         // Ep4Stats::clippedSamples in the header.
         if (code >= kEp4FullScale - 1 || code <= -kEp4FullScale)

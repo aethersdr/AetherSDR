@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.9.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,13 +55,17 @@ option(ENABLE_NVIDIA_AFX "Enable the NVIDIA Maxine AFX GPU denoiser (BNR; runtim
 # is CPU-only); see third_party/whisper.cpp/AETHER_VENDORING.md. Opt out with
 # -DENABLE_ASR=OFF.
 option(ENABLE_ASR "Enable on-device speech-to-text (ASR) via vendored whisper.cpp" ON)
-# Windows-only: consume prebuilt whisper/ggml/ggml-vulkan static libs from the
-# whisper-gpu-<ver> release asset instead of compiling from source. Bypasses
-# the 4h step-timeout on stock GitHub windows-latest runners (4 core / 16 GB)
-# where the ggml-vulkan Release compile alone exceeds the budget. Local dev
-# builds should leave this OFF and compile from source.
+# Windows-only fallback: consume prebuilt whisper/ggml/ggml-vulkan static libs
+# from the whisper-gpu-<ver> release asset instead of compiling from source.
+# The Windows installer workflow compiles the vendored tree (with the /O1
+# override below, the whole whisper target is 2-3 min on a stock 4-core
+# windows-latest runner; measured 2026-09-21, run 35660187303, and
+# 2026-07-22, runs 29904473886 and 29924632118). The pinned pack predates the
+# vendored tree's local patches
+# (third_party/whisper.cpp/AETHERSDR-PATCHES.md), so turning this ON ships
+# those patches only once the pack is rebuilt and re-pinned. Leave OFF.
 option(ASR_USE_PREBUILT_WHISPER_GPU
-    "Windows CI: consume prebuilt whisper-gpu asset instead of building from source" OFF)
+    "Windows fallback: consume the prebuilt whisper-gpu asset instead of building from source" OFF)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
 
 # ── Sanitizers: ONE tree-wide switch ─────────────────────────────────────────
@@ -798,7 +802,15 @@ set(CORE_SOURCES
     src/core/control/ControlProtocolCodec.cpp # aetherd v1 bounded JSON envelopes
     src/core/control/ControlResourceStore.cpp # typed snapshots and revisions
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
+    src/core/control/ControlCredentials.cpp   # explicit credential identity, not TX grants
+    src/core/control/ControlCredentialVault.cpp # OS-vault-only, explicit provisioning composition
+    src/core/control/ControlCredentialProvisioner.cpp
+    src/core/control/ControlInputPump.cpp     # bounded input turns and terminal authority lifetime
+    src/core/control/LocalCredentialHandshake.cpp # verify native server identity before credential writes
     src/core/control/ControlService.cpp       # aetherd v1 typed dispatch
+    src/core/control/TransmitControlService.cpp
+    src/core/control/TransmitControlTarget.h
+    src/core/control/ModelTransmitControlTarget.cpp
     src/core/control/RadioConnectionTarget.h  # socket-free connection intent seam
     src/core/backends/ModelRadioConnectionTarget.cpp # native translation and lifecycle
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
@@ -811,6 +823,8 @@ set(CORE_SOURCES
     src/core/backends/LocalRadioDiscoverySource.cpp  # native discovery below the vendor seam
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
+    src/core/backends/flex/FlexPttWireSession.cpp
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
@@ -905,6 +919,7 @@ set(CORE_SOURCES
     src/core/CwxLocalKeyer.cpp
     src/core/IambicKeyer.cpp
     src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp
     src/core/SpectralNR.cpp
     src/core/MonoDspStereoAdapter.cpp
     src/core/PanadapterStream.cpp
@@ -1197,6 +1212,7 @@ set(GUI_SOURCES
     src/gui/AetherRxDialog.cpp
     src/gui/StagePage.cpp
     src/gui/StageTabBar.cpp
+    src/gui/RxPlaybackTransmitter.cpp
     src/gui/AetherRxSettingsDialog.cpp
     src/gui/AetherTxSettingsDialog.cpp
     src/gui/AetherDspWidget.cpp
@@ -1584,12 +1600,17 @@ target_link_libraries(AetherSDR PRIVATE
 
 add_executable(aetherd
     src/aetherd/main.cpp
+    src/aetherd/CredentialStartup.cpp
+    src/aetherd/GrantAdminClient.cpp
 )
 target_link_libraries(aetherd PRIVATE
     aethercore
     Qt6::Core
     Qt6::Network
 )
+if(WIN32)
+    target_link_libraries(aethercore PRIVATE advapi32)
+endif()
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------
 # whisper.cpp is a self-contained CMake project exposing a `whisper` target
@@ -1879,7 +1900,7 @@ if (ENABLE_ASR)
             set_target_properties(ggml-vulkan PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;Vulkan::Vulkan")
             set_target_properties(ggml        PROPERTIES INTERFACE_LINK_LIBRARIES "ggml-base;ggml-cpu;ggml-vulkan")
             set_target_properties(whisper     PROPERTIES INTERFACE_LINK_LIBRARIES "ggml;Threads::Threads")
-            message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (skipped ~1h+ MSVC compile)")
+            message(STATUS "ASR: prebuilt whisper-gpu ${_whisper_gpu_ver} pack consumed (fallback; the vendored tree's local patches are absent until the pack is rebuilt)")
             # The pack is produced by a stock in-tree build (GGML_NATIVE=OFF →
             # ggml's fixed x86-64 feature set; MSVC /arch:AVX2 additionally
             # implies FMA+F16C). Recorded here for the startup inventory
@@ -3159,8 +3180,9 @@ if (NOT ENABLE_ASR)
     # stale cache still carries GGML_* entries from an earlier ASR configure
     # (which would otherwise arm an ASR warning in an ASR-less build).
 elseif (DEFINED _aether_prebuilt_ggml_baseline)
-    # Prebuilt whisper-gpu pack (Windows release): ggml's CMake never ran, so
-    # the baseline comes from the pack's recorded build settings above.
+    # Prebuilt whisper-gpu pack (the ASR_USE_PREBUILT_WHISPER_GPU fallback):
+    # ggml's CMake never ran, so the baseline comes from the pack's recorded
+    # build settings above.
     set(_aether_ggml_baseline_str "${_aether_prebuilt_ggml_baseline}")
 elseif (USE_SYSTEM_LIBWHISPER)
     # Distro libwhisper: its ISA baseline is the packager's choice and not

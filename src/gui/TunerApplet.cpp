@@ -128,33 +128,6 @@ TunerApplet::TunerApplet(QWidget* parent)
         m_swrLabel->setText("SWR");
     });
 
-    // Peak hold: clear the white tick 2.5 s after the last new peak.
-    // Peak-hold ballistics matching TxApplet (#2561): hold, then decay
-    // toward the live reading rather than snapping the marker away.
-    m_peakTick = new QTimer(this);
-    m_peakTick->setInterval(50);
-    connect(m_peakTick, &QTimer::timeout, this, [this]() {
-        if (!m_peakHoldRunning) { m_peakTick->stop(); return; }
-        const qint64 elapsedMs = m_peakHoldTimer.elapsed();
-        if (elapsedMs <= kPeakHoldMs) return;
-        const float decaySecs = static_cast<float>(elapsedMs - kPeakHoldMs) / 1000.0f;
-        const float decayed = m_peakDecayStart - m_peakDecayWattsPerSec * decaySecs;
-        if (decayed <= m_fwdPower) {
-            m_peakFwd = m_fwdPower;
-            m_peakHoldRunning = false;
-            m_peakTick->stop();
-            // At the floor the marker goes away entirely, as it did before.
-            if (m_fwdPower <= 0.05f) {
-                m_peakFwd = 0.0f;
-                static_cast<HGauge*>(m_fwdGauge)->clearPeak();
-                return;
-            }
-        } else {
-            m_peakFwd = decayed;
-        }
-        static_cast<HGauge*>(m_fwdGauge)->setPeakValue(m_peakFwd);
-    });
-
     // Relay-only completion notice. The first timer waits for the settled SWR
     // to arrive after the tune ends — the meters lag the tuning edge — and the
     // second takes the banner down again, because on this path there is no
@@ -217,20 +190,17 @@ void TunerApplet::setPowerScale(int maxWatts, bool hasAmplifier)
         gauge->setRange(0.0f, 2000.0f, 1500.0f,
             {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1.5K"}, {2000, "2K"}},
             1000.0f);
-        m_peakDecayWattsPerSec = 2000.0f / 2.5f;
     } else if (maxWatts > 100) {
         // Aurora (500 W): 0–600 W, yellow > 400 W, red > 500 W
         gauge->setRange(0.0f, 600.0f, 500.0f,
             {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
              {400, "400"}, {500, "500"}, {600, "600"}},
             400.0f);
-        m_peakDecayWattsPerSec = 600.0f / 2.5f;
     } else {
         // Barefoot radio: 0–200 W, yellow > 80 W, red > 125 W
         gauge->setRange(0.0f, 200.0f, 125.0f,
             {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
             80.0f);
-        m_peakDecayWattsPerSec = 200.0f / 2.5f;
     }
 }
 
@@ -273,8 +243,7 @@ void TunerApplet::buildUI()
     m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "", "",
         {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
         this, 80.0f);
-    // Slow release: bar rises quickly on RF bursts but decays over ~800 ms
-    static_cast<HGauge*>(m_fwdGauge)->setBallistics({0.030f, 0.800f});
+    static_cast<HGauge*>(m_fwdGauge)->setWindowPeakEnabled(true);
     m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setContentsMargins(0, 0, 0, 0);   // see AmpApplet's note
@@ -752,6 +721,12 @@ void TunerApplet::setRadioConnected(bool connected)
 {
     if (m_radioConnected == connected) return;
     m_radioConnected = connected;
+    if (!connected) {
+        auto* gauge = static_cast<HGauge*>(m_fwdGauge);
+        gauge->setWindowPeakEnabled(true);
+        gauge->setValueImmediate(0.0f);
+        gauge->clearPeak();
+    }
     updatePortRows();
 }
 
@@ -1064,7 +1039,14 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // applet is first built and decides which row is outlined.
     connect(m_model, &TunerModel::stateChanged, this, &TunerApplet::updateActivePort);
     connect(m_model, &TunerModel::directConnectionChanged, this,
-            [this](bool) { updatePortRows(); });
+            [this](bool connected) {
+                if (!connected) {
+                    auto* gauge = static_cast<HGauge*>(m_fwdGauge);
+                    gauge->setWindowPeakEnabled(true);
+                    gauge->clearPeak();
+                }
+                updatePortRows();
+            });
 
     connect(m_model, &TunerModel::alertChanged, this, &TunerApplet::setAlertText);
     setAlertText(m_model->alert());
@@ -1249,7 +1231,11 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
 {
     m_fwdPower = fwdPower;
     m_swr = swr;
-    static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
+    auto* powerGauge = static_cast<HGauge*>(m_fwdGauge);
+    if (fwdPeak < 0.0f) {
+        powerGauge->setWindowPeakEnabled(true);
+    }
+    powerGauge->setValue(fwdPower);
     // TGXL sends swr=0.0000 (return loss = 0 dB) at idle — no incident signal
     // to measure against. The model converts that to rho=1.0 → ratio=99.9, which
     // pegs the gauge. Snap to 1.0 (empty) whenever forward power is below the
@@ -1267,14 +1253,12 @@ void TunerApplet::updateMeters(float fwdPower, float swr, float fwdPeak)
     // transmission `fwd` sat at 0.14 W in roughly three samples out of four
     // while the TGXL's `peak` read up to 82 W. The radio-relayed path has no
     // peak field and keeps the old behaviour.
-    const float peakCandidate = (fwdPeak >= 0.0f) ? fwdPeak : fwdPower;
-    if (peakCandidate > m_peakFwd) {
-        m_peakFwd = peakCandidate;
-        m_peakDecayStart = peakCandidate;
-        m_peakHoldTimer.restart();
-        m_peakHoldRunning = true;
-        if (!m_peakTick->isActive()) m_peakTick->start();
-        static_cast<HGauge*>(m_fwdGauge)->setPeakValue(peakCandidate);
+    // The device's own peak is a separately measured statistic, so it owns
+    // the external-peak mode while direct telemetry is present. The relay
+    // path above switches back to a window over fwdPower when no device peak
+    // is available.
+    if (fwdPeak >= 0.0f) {
+        powerGauge->setExternalPeak(fwdPeak);
     }
     updateValueLabels();
 }

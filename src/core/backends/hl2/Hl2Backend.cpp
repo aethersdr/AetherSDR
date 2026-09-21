@@ -956,8 +956,7 @@ void Hl2Backend::buildReceivers(int count)
         }
         r.dsp = nullptr;             // never inherited; recreated below
         r.audioMuted = false;
-        r.haveSMeter = false;
-        r.sMeterClock = QElapsedTimer{};
+        r.sMeter.reset();
 
         std::string err;
         if (!openReceiverDsp(i, &err)) {
@@ -1063,25 +1062,11 @@ bool Hl2Backend::openReceiverDsp(int ddc, std::string* error)
         // change while the trace stayed put would be its own kind of lie.
         const double dbm = m_dbRef.toDbm(dbfs);
 
-        // Smooth EVERY sample, publish only on the tick. Both halves matter:
-        // smoothing all of them is what makes the published value represent
-        // the whole interval rather than one arbitrary instant inside it,
-        // and the tick is what stops ~47 cross-thread emits a second
-        // repainting a widget nobody can read that fast. Per receiver, so a
-        // strong signal on one does not drive another's needle.
-        if (!r->haveSMeter) {
-            r->sMeterDbm = dbm;
-            r->haveSMeter = true;
-        } else {
-            const double alpha = (dbm > r->sMeterDbm) ? kMeterAttackAlpha
-                                                      : kMeterDecayAlpha;
-            r->sMeterDbm = alpha * dbm + (1.0 - alpha) * r->sMeterDbm;
-        }
-        if (r->sMeterClock.isValid()
-            && r->sMeterClock.elapsed() < kMeterPublishIntervalMs)
-            return;
-        r->sMeterClock.restart();
-        emit meterUpdate(sliceMeterName(ui), r->sMeterDbm);
+        // Smooth EVERY sample, publish only on the tick -- SMeterSmoother,
+        // per receiver so a strong signal on one does not drive another's
+        // needle.
+        if (const auto out = r->sMeter.feed(dbm))
+            emit meterUpdate(sliceMeterName(ui), *out);
     });
 
     // Recorded, not published. m_rx is this thread's, so this is a plain store;
@@ -5913,10 +5898,16 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
 
     // DRIVE: WHAT WAS ASKED FOR, AND WHAT WAS WRITTEN (#4912).
     //
-    // Nothing anywhere reported the APPLIED drive. `get transmit` has rfPower
-    // and `get radio` has txPower, but both read TransmitModel — the operator's
-    // request — which is exactly the readback-shares-the-failure problem this
-    // section exists to solve. Worse, applyDrive()'s transmit gate forces the
+    // Nothing anywhere reported the APPLIED drive. `get transmit` has rfPower,
+    // which reads TransmitModel — the operator's request — which is exactly
+    // the readback-shares-the-failure problem this section exists to solve.
+    // (This used to name `get radio`.txPower alongside it as a second reader of
+    // TransmitModel. It was neither: it read a RadioModel member nothing in the
+    // tree assigned, so it was worse than the readback this paragraph warns
+    // about. It now carries the measured forward power, qualified — see
+    // AutomationServer's radioSnapshot, #5499 item 1.)
+    //
+    // Worse, applyDrive()'s transmit gate forces the
     // register to 0 while the requested percent reads back untouched, so
     // "commanded but never applied" was invisible to automation in the one area
     // where it is safety-adjacent.
@@ -6373,12 +6364,45 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     };
     put("adcPeakDbfs", QStringLiteral("ADC peak (uncalibrated pre-DDC dBFS)"),
         dbfs(peak));
-    put("adcRmsDbfs", QStringLiteral("ADC RMS (uncalibrated pre-DDC dBFS)"),
+    // AC: the deviation about the block's own mean, not about zero, so a
+    // converter DC offset is not counted as signal. The row is labelled for it
+    // because the two numbers above and below it are absolute and this one is
+    // not — a reader comparing adcPeakDbfs with adcRmsDbfs is comparing two
+    // different references, and the label is the only place that says so.
+    // (#5802.)
+    put("adcRmsDbfs", QStringLiteral("ADC RMS, AC (uncalibrated pre-DDC dBFS)"),
         dbfs(rms));
     // Peak-to-RMS, which is the one figure here that IS scale-free: it
     // survives the missing calibration intact, because both terms carry the
     // same unknown offset and it cancels.
-    put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"), dbfs(peak - rms));
+    //
+    // It is what separates a broadband floor from a discrete carrier — 11-12
+    // dB over 2048 Gaussian samples against ~3 dB for a sinusoid — and that
+    // separation is exactly what an about-zero RMS destroyed: a DC pedestal
+    // inflated the denominator and dragged the reading toward the carrier end
+    // whatever the antenna was doing. With the RMS now AC-referred and the
+    // peak still absolute (ruled on PR #5832), a large crest means EITHER a
+    // peaky signal OR a large DC offset under a quiet band; surfacing the
+    // offset itself (an adcDcDbfs row) is #5856, and until it exists this row
+    // cannot tell those two apart.
+    //
+    // NOT REPORTED, rather than fabricated, when either term is at or below
+    // the floor: that constant is a sentinel meaning "below the smallest code
+    // this converter has", and subtracting it invents the level it exists to
+    // refuse. See Ep4Stats::crestDb(), which owns the predicate so it can be
+    // tested without Qt.
+    //
+    // An invalid variant here is the SAME "nothing to say" this row and its
+    // two neighbours already use before the first block arrives: put() keeps
+    // the key in `order` and `labels` and only withholds the value, so the row
+    // stays in place and reads as a dash rather than the list changing shape
+    // under a reader — which was tried and reverted once already (PR #5650
+    // review round 3). On the bridge it lands as a JSON null, exactly as the
+    // pre-block case does, and not as a fabricated number.
+    const std::optional<double> crest =
+        haveBlock ? m_bandscopeBlock.crestDb() : std::nullopt;
+    put("adcCrestDb", QStringLiteral("ADC crest factor (dB)"),
+        crest ? QVariant(QString::number(*crest, 'f', 2)) : QVariant());
     // Counted with ad9866.v's OWN two thresholds — rxclipp at +2047 and
     // rxclipn at -2048 — and not a symmetric |code| >= 2048, which can
     // never fire on a positive clip because +2048 is not a code a 12-bit
@@ -6425,6 +6449,11 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // A radio swap ends the session, and an automatic control armed about radio
     // A's antenna has nothing to say about radio B's.
     m_autoRfGainEnabled = false;
+    // Nor does a refusal composed about radio A's baseline: the interface
+    // promises an empty reason from a backend that has not been asked, and
+    // radio B has not been. Left standing, any reader other than the toggle
+    // lambda would surface radio A's number as radio B's.
+    m_autoRfGainRefusal.clear();
     m_autoGainState = AetherSDR::hl2::AutoGainState{};
     m_autoGainConfig = AetherSDR::hl2::AutoGainConfig{};
     m_autoGainMode = QStringLiteral("ramp");
@@ -6973,16 +7002,38 @@ void Hl2Backend::setAutoRfGain(bool on)
             // so a radio that declined to arm keeps the operator's on
             // recorded"; without this line nothing had recorded it.
             m_autoRfGainWanted = true;
-            qWarning().noquote()
-                << QStringLiteral(
-                       "Hl2Backend: auto RF gain declined — the RF Gain baseline is "
-                       "%1 dB and this radio's gain axis is not trusted above %2 dB "
-                       "(#5354: +48 dB measures like +18 dB). Lower RF Gain to %2 dB "
-                       "or below and try again. Your setting has not been changed.")
+            // COMPOSED ONCE AND KEPT, because the operator needs it more than
+            // the log does. Reading isArmed() back tells the GUI THAT this
+            // declined; only this sentence says why, and it already names the
+            // baseline, the ceiling and the remedy. Storing it is what lets the
+            // checkbox explain itself instead of springing back in silence
+            // (#5817).
+            //
+            // tr(), AND WITHOUT THE ISSUE NUMBER, because this sentence stopped
+            // being a log line the moment it was kept: it is shown on the
+            // panadapter and read out by a screen reader. "#5354" is provenance
+            // for us and noise to an operator, so it stays on the qWarning --
+            // which is where the next person debugging this actually looks --
+            // and the operator gets the baseline, the ceiling and the remedy.
+            m_autoRfGainRefusal = tr(
+                       "Auto RF gain declined — the RF Gain baseline is "
+                       "%1 dB and this radio's gain axis is not trusted above "
+                       "%2 dB. Lower RF Gain to %2 dB or below and try again. "
+                       "Your setting has not been changed.")
                        .arg(m_lnaGainDb)
                        .arg(kAutoRfGainMaxBaselineDb);
+            qWarning().noquote()
+                << QStringLiteral("Hl2Backend: ") + m_autoRfGainRefusal
+                     + QStringLiteral(" (#5354: +48 dB measures like +18 dB)");
+            // SETTLED AS NOT ARMED, and said so. A refusal that only the
+            // caller's own readback could discover was invisible on the two
+            // routes that have no readback: the restore below and the bridge.
+            emit autoRfGainArmSettled(false);
             return;
         }
+        // CLEARED ON SUCCESS. A reason that outlived the refusal it describes
+        // would be shown against a later, unrelated failure.
+        m_autoRfGainRefusal.clear();
         m_autoGainState = AetherSDR::hl2::AutoGainState{};
         m_autoGainBandKey = m_currentBandKey;
         m_autoGainBaselineDb = m_lnaGainDb;
@@ -6998,6 +7049,7 @@ void Hl2Backend::setAutoRfGain(bool on)
         applyBandscopeForAutoGain();
         qCInfo(lcHl2) << "HL2 auto RF gain: ARMED at baseline" << m_lnaGainDb
                       << "dB, floor" << m_autoGainConfig.maxOffsetDb << "dB below";
+        emit autoRfGainArmSettled(true);
     } else {
         m_autoRfGainEnabled = false;
         // The operator turning it OFF is a preference, and is persisted as one.
@@ -7013,6 +7065,7 @@ void Hl2Backend::setAutoRfGain(bool on)
         setLnaAutoOffsetDb(0);
         qCInfo(lcHl2) << "HL2 auto RF gain: disarmed, baseline" << m_lnaGainDb
                       << "dB restored";
+        emit autoRfGainArmSettled(false);
     }
 }
 

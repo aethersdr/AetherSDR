@@ -33,6 +33,20 @@ namespace {
 // TODO instead of an unexplained 1:1 dBFS/dBm mapping.
 constexpr float kUncalibratedDbfsToDbmOffset = 0.0f;
 
+// S-meter: WDSP's RXA_S_AV is 10*log10 of the mean I^2+Q^2 on samples scaled
+// to the P2 wire's 24-bit full scale (P2Protocol's kFullScale24Bit), so it is
+// dBFS. deskHPSDR reads the same meter on the same scaling (1/2^23 per
+// sample) and ships a 0 dB offset for ANAN, making dBFS read as dBm out of the
+// box; this follows it. deskHPSDR also adds the ADC step attenuation here --
+// this backend commands the attenuator to 0 dB in every High Priority packet
+// (P2Protocol::buildHighPriority leaves the attenuator fields zero) and offers
+// no control for it yet, so that term is exactly 0 dB rather than unknown.
+// A per-radio correction (deskHPSDR's rx_gain_calibration, set against a
+// -73 dBm generator) is not offered yet. Deliberately separate from
+// kUncalibratedDbfsToDbmOffset: that one labels the PANADAPTER axis, whose bin
+// levels depend on the FFT's window and normalisation, not on this meter.
+constexpr double kSMeterDbmOffset = 0.0;
+
 QByteArray floatBytes(const std::vector<float>& v)
 {
     return {reinterpret_cast<const char*>(v.data()),
@@ -200,8 +214,13 @@ AnanBackend::AnanBackend(QObject* parent)
         // zoom, so connected() is suppressed for that one round trip.
         const bool wasRateChange = m_rateChanging;
         m_rateChanging = false;
-        if (!wasRateChange)
+        if (!wasRateChange) {
             emit connected();
+            defineMeters();
+            // A new session's needle starts from its first reading, not from
+            // where the last session's left off.
+            m_sMeter.reset();
+        }
         emitSliceState();
         emitPanState();
         // A rate change suppresses connected(), but a page opened during
@@ -332,9 +351,7 @@ AnanBackend::AnanBackend(QObject* parent)
         m_droopCalibrator.onSpectrumFrame(dbm);
         emit spectrumFrameReady(kSliceId, floatBytes(dbm));
     });
-    // Deliberately do not publish AnanRxDsp::meterUpdate yet. It is WDSP
-    // SignalPeak in uncalibrated dBFS; registering it as SLC:LEVEL would feed
-    // the shared S-meter, whose scale and S-unit labels require real dBm.
+    connect(m_dsp, &AnanRxDsp::meterUpdate, this, &AnanBackend::onDspMeter);
 }
 
 AnanBackend::~AnanBackend()
@@ -380,9 +397,12 @@ RadioCapabilities AnanBackend::capabilities() const
     // words twice over. kUncalibratedDbfsToDbmOffset is 0.0f, carrying a TODO
     // that calls it "an unexplained 1:1 dBFS/dBm mapping", and the spectrum path
     // emits `binsDbfs[i] + kUncalibratedDbfsToDbmOffset` -- the bins ARE the
-    // dBFS, relabelled. The SignalPeak comment states the consequence directly:
-    // registering it as SLC:LEVEL "would feed the shared S-meter, whose scale
-    // and S-unit labels require real dBm".
+    // dBFS, relabelled, and a bin's level also depends on the FFT's window and
+    // normalisation: not verified against a known input level.
+    //
+    // This is the PANADAPTER axis only. The S-meter is published in dBm
+    // (kSMeterDbmOffset): it reads WDSP's signal meter, whose scaling matches
+    // deskHPSDR's for this radio family.
     //
     // The numbers stay internally consistent; what is denied is COMPARISON. A
     // level from this radio may not be published as a spot, held against another
@@ -1293,6 +1313,35 @@ void AnanBackend::invokeExtension(const QString& ns, const QString& verb,
         emit extensionError(requestId, QStringLiteral("ANAN: unknown extension verb '%1.%2'")
                                            .arg(ns, verb));
     }
+}
+
+void AnanBackend::defineMeters()
+{
+    // Index is ours to choose -- nothing on a P2 radio assigns meter ids. Same
+    // name, unit and range as Hl2Backend::defineMeters()'s receive meter, the
+    // bare "SLC:LEVEL" MeterModel binds to the S-meter. Receive-only: no TX
+    // meters until this backend can transmit.
+    MeterDef d;
+    d.index = 1;
+    d.source = QStringLiteral("SLC");
+    d.name = QStringLiteral("LEVEL");
+    d.unit = QStringLiteral("dBm");
+    d.low = -140.0;
+    d.high = 0.0;
+    d.description = QStringLiteral("Receive signal level");
+    emit meterDefined(d);
+}
+
+void AnanBackend::onDspMeter(float dbfs)
+{
+    const double dbm = static_cast<double>(dbfs) + kSMeterDbmOffset;
+    // Smooth EVERY reading, publish only on the tick -- the same smoother,
+    // and the same reasons, as Hl2Backend's receive meter (SMeterSmoother).
+    // AnanRxDsp reads the tap at one DSP-rate block's cadence whatever the
+    // DDC0 rate (WdspSMeter::emitEveryBlocks), so this sees ~47 readings a
+    // second at 48 and at 1536 ksps alike.
+    if (const auto out = m_sMeter.feed(dbm))
+        emit meterUpdate(QStringLiteral("SLC:LEVEL"), *out);
 }
 
 void AnanBackend::emitSliceState()

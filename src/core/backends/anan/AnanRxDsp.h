@@ -1,10 +1,12 @@
 #pragma once
 
 #include "core/PcmFrame.h"
+#include "core/dsp/WdspSMeter.h"
 
 #include <QElapsedTimer>
 #include <QObject>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <complex>
@@ -323,7 +325,7 @@ signals:
     void pcmReady(const AetherSDR::PcmFrame& frame);
     void audioReady(const std::vector<float>& stereoPcm);   // interleaved L,R
     void spectrumReady(const std::vector<float>& binsDbfs); // DC-centred dBFS
-    // WDSP's own signal-strength meter (SignalPeak), NOT the RMS of the
+    // WDSP's own signal-strength meter (SignalAverage), NOT the RMS of the
     // demodulated audio -- the AGC holds audio level roughly constant, so an
     // audio-RMS meter would barely move with signal strength.
     void meterUpdate(float dbfs);
@@ -378,6 +380,17 @@ private:
     WdspProcessTally m_processTally;
 
     bool m_audioMuted = false;
+    // The S-meter tap's gate: the settle window after our own silence or a
+    // channel install, and the read cadence -- see WdspSMeter.h, and its use
+    // in processIqBlock(). DSP thread only, like m_audioMuted.
+    WdspSMeterTap m_meterTap;
+    // Arms it from the CURRENT config. Both call sites run after
+    // m_config.inputSampleRateHz has taken the new rate.
+    void armMeterSettle() noexcept
+    {
+        m_meterTap.arm(m_config.inputSampleRateHz, m_config.dspBlockSize,
+                       kWdspDspSampleRateHz);
+    }
     int m_spectrumIntervalMs = 0;   // 0 = uncapped
     QElapsedTimer m_spectrumClock;
     qint64 m_lastSpectrumMs = 0;

@@ -255,7 +255,13 @@
             "success.border.checked":     "{color.green.500}",
             "warning.background.checked": "#f5e8d0",
             "warning.foreground.checked": "{color.amber.500}",
-            "warning.border.checked":     "{color.amber.500}"
+            "warning.border.checked":     "{color.amber.500}",
+            "footer.warning.background.checked": "#2dffb84d",
+            "footer.warning.background.hover":   "#46ffb84d",
+            "footer.danger.background.checked":  "#2dff4d4d",
+            "footer.danger.background.hover":    "#46ff4d4d",
+            "footer.success.background.checked": "#2d4dd87a",
+            "footer.success.background.hover":   "#464dd87a"
           },
           "highlight": {
             "tx":      "#fc4500",

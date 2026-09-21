@@ -16,6 +16,7 @@
 #include "core/backends/anan/AnanBackend.h"
 
 #include <QCoreApplication>
+#include <QSignalSpy>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -227,6 +228,41 @@ int main(int argc, char** argv)
         }
         check(!status.value(QStringLiteral("hasResult")).toBool(),
               "a disconnected backend stages no sweep result");
+    }
+
+    {
+        // S-meter: WDSP's dBFS reading is published as SLC:LEVEL in dBm with
+        // deskHPSDR's 0 dB ANAN offset, the first reading at once, later ones
+        // smoothed with SMeterSmoother's ballistics.
+        AnanBackend backend;
+        QSignalSpy spy(&backend, &IRadioBackend::meterUpdate);
+        backend.feedMeterForTest(-73.0f);
+        check(spy.count() == 1, "first S-meter reading is published at once");
+        if (spy.count() == 1) {
+            check(spy.at(0).at(0).toString() == QStringLiteral("SLC:LEVEL"),
+                  "S-meter is published as SLC:LEVEL");
+            check(qAbs(spy.at(0).at(1).toDouble() - (-73.0)) < 1e-9,
+                  "-73 dBFS reads -73 dBm (0 dB offset, as deskHPSDR ships for ANAN)");
+        }
+        check(qAbs(backend.sMeterDbmForTest() - (-73.0)) < 1e-9,
+              "the first reading is taken whole, not smoothed against a zero start");
+
+        backend.feedMeterForTest(-53.0f);
+        // Whether that second reading was published is NOT asserted here: it
+        // would ride on fewer than 100 ms of wall clock passing between two
+        // calls. The publish tick is pinned deterministically, against an
+        // injected clock, in wdsp_smeter_test.
+        // Ballistics pinned on the smoothed value rather than on whatever the
+        // 100 ms tick happened to publish: attack 0.5 on a rise, decay 0.15 on
+        // a fall, which is what "HL2's ballistics" means here. Replacing the
+        // EMA with a plain assignment moves both numbers, so the claim is now
+        // covered rather than merely stated.
+        check(qAbs(backend.sMeterDbmForTest() - (-63.0)) < 1e-9,
+              "a rise is smoothed with attack 0.5: -73 then -53 reads -63 dBm");
+        backend.feedMeterForTest(-83.0f);
+        check(qAbs(backend.sMeterDbmForTest() - (-66.0)) < 1e-9,
+              "a fall is smoothed with decay 0.15: -66 dBm, so the needle falls "
+              "more slowly than it rises");
     }
 
     if (g_failures == 0)
