@@ -289,14 +289,13 @@ QVector<QPushButton*> StageTabBar::addFooterToggleRow(const QVector<FooterToggle
 {
     beginFooter();
 
-    // Indented like every other label, so the column has one left edge.
+    // Not indented: the grip pad the stage rows carry lines a label up with
+    // the labels above it, but these are buttons, and a button starts where
+    // the column does.
     auto* row = new QWidget;
     auto* rowBox = new QHBoxLayout(row);
     rowBox->setContentsMargins(0, 0, 0, 0);
     rowBox->setSpacing(4);
-    auto* pad = new QWidget;
-    pad->setFixedWidth(StageGrip::kGripWidth);
-    rowBox->addWidget(pad);
 
     QVector<QPushButton*> made;
     made.reserve(toggles.size());
@@ -349,25 +348,22 @@ void StageTabBar::addFooterGearButton(const QString& accessibleName,
     if (m_lastToggleRow) {
         // Exactly as tall as the toggle it sits beside: the larger glyph
         // would otherwise push it a couple of pixels past the row.
-        if (auto* item = m_lastToggleRow->itemAt(1)) {
+        if (auto* item = m_lastToggleRow->itemAt(0)) {
             if (auto* sibling = item->widget())
                 button->setFixedHeight(sibling->sizeHint().height());
         }
-        // Leftmost, right after the grip pad at index 0, so the gear leads
-        // the row and the toggle fills what is left.
-        m_lastToggleRow->insertWidget(1, button, 0);
+        // Leftmost, so the gear leads the row and the toggle fills what is
+        // left.
+        m_lastToggleRow->insertWidget(0, button, 0);
         return;
     }
 
-    // No toggle row to join: its own row, indented like every other label
-    // so the column has one left edge, with the gear at the left.
+    // No toggle row to join: its own row, flush with the column's edge like
+    // the toggle rows, with the gear at the left.
     auto* row = new QWidget;
     auto* rowBox = new QHBoxLayout(row);
     rowBox->setContentsMargins(0, 0, 0, 0);
     rowBox->setSpacing(4);
-    auto* pad = new QWidget;
-    pad->setFixedWidth(StageGrip::kGripWidth);
-    rowBox->addWidget(pad);
     rowBox->addWidget(button, 0);
     rowBox->addStretch(1);
     m_rows->addWidget(row);
