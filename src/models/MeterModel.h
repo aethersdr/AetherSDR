@@ -142,9 +142,9 @@ public:
     // TX stamp, and against kTxMeterStaleMs — the same shape, and the same
     // reason, as swrIfLive() (#4536): a radio that keeps streaming SWR but
     // stops streaming FWDPWR must not report minutes-old watts as current.
-    // Sharing the constant with `get meters`.txMetersFresh is what keeps
-    // "the TX meters are fresh" and "here is the power" from drifting apart as
-    // two different literals.
+    // The duration is shared with `get meters`.txMetersFresh; the timestamp
+    // is not. Fresh SWR or REFPWR can keep that aggregate flag true while
+    // forward power is absent here.
     std::optional<float> fwdPowerIfLive() const;
     float fwdPowerInstant() const { return m_fwdPowerInstant; }
     float reflectedPower() const { return m_reflectedPower; }

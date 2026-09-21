@@ -59,6 +59,7 @@
 
 #include <QByteArray>
 #include <QFile>
+#include <QRegularExpression>
 #include <QString>
 
 #include <cstdio>
@@ -171,13 +172,13 @@ QString bodyOf(const QString& source, const QString& signature)
     return at < 0 ? QString() : blockAt(source, at);
 }
 
-int countOf(const QString& haystack, const QString& needle)
+int countOf(const QString& haystack, const QRegularExpression& call)
 {
     int n = 0;
-    int at = 0;
-    while ((at = haystack.indexOf(needle, at)) >= 0) {
+    QRegularExpressionMatchIterator matches = call.globalMatch(haystack);
+    while (matches.hasNext()) {
+        matches.next();
         ++n;
-        at += needle.size();
     }
     return n;
 }
@@ -197,8 +198,10 @@ struct NbShape {
     }
 };
 
-const QString kFlush  = QStringLiteral("flush_anbEXT(");
-const QString kFeed   = QStringLiteral("xanbEXT(");
+// Comments have already been replaced with whitespace. C++ permits that
+// whitespace between the function identifier and its argument list.
+const QRegularExpression kFlush(QStringLiteral("\\bflush_anbEXT\\s*\\("));
+const QRegularExpression kFeed(QStringLiteral("\\bxanbEXT\\s*\\("));
 
 NbShape analyse(const QByteArray& rawSource)
 {
@@ -418,6 +421,37 @@ int main()
     const NbShape commentOnly = analyse(QByteArray(kCommentOnlyFlushMiniature));
     check("control: a flush that exists only in a COMMENT changes nothing",
           commentOnly.healthy());
+
+    const QByteArray separators[]{" ", "\t\n", " /* gap */ ", " // gap\n"};
+    for (const QByteArray& separator : separators) {
+        const QByteArray flushCall = "flush_anbEXT" + separator + "(";
+        const QByteArray feedCall = "xanbEXT" + separator + "(";
+        const NbShape spacedHealthy = analyse(QByteArray(kHealthyMiniature)
+            .replace("flush_anbEXT(", flushCall).replace("xanbEXT(", feedCall));
+        check(("control: legal call separators preserve healthy code: "
+               + separator.toHex()).constData(), spacedHealthy.healthy());
+
+        const NbShape spacedRelease = analyse(QByteArray(kFlushesOnReleaseMiniature)
+            .replace("flush_anbEXT(", flushCall));
+        check(("control: separated release flush is rejected: "
+               + separator.toHex()).constData(),
+              spacedRelease.parsed && spacedRelease.flushCount == 2
+                  && !spacedRelease.processIqNeverFlushes && !spacedRelease.healthy());
+
+        const NbShape spacedSetter = analyse(QByteArray(kHoldSetterFlushesMiniature)
+            .replace("flush_anbEXT(", flushCall));
+        check(("control: separated hold-setter flush is rejected: "
+               + separator.toHex()).constData(),
+              spacedSetter.parsed && !spacedSetter.holdSetterIsInert
+                  && !spacedSetter.healthy());
+
+        const NbShape spacedFeed = analyse(QByteArray(kFedWhileHeldMiniature)
+            .replace("xanbEXT(", feedCall));
+        check(("control: separated held feed is rejected: "
+               + separator.toHex()).constData(),
+              spacedFeed.parsed && !spacedFeed.stageSkippedWhileHeld
+                  && !spacedFeed.healthy());
+    }
 
     // ── The real file.
     QFile file(QString::fromLatin1(AETHER_SOURCE_DIR)

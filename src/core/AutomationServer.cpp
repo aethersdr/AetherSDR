@@ -1913,9 +1913,9 @@ QJsonObject radioSnapshot(const RadioModel* r)
         // is the forward-power meter, which is what a field called txPower
         // hanging off metersChanged always meant; `get transmit`.rfPower
         // remains the REQUESTED drive, a different quantity that no longer
-        // claims to be this one. Same freshness rule and same constant as
-        // `get meters`.txMetersFresh, so the two surfaces cannot disagree
-        // about whether there is power. (#5499 item 1)
+        // claims to be this one. The freshness duration matches
+        // `get meters`.txMetersFresh, but this checks FWDPWR's own timestamp:
+        // fresh SWR or REFPWR cannot revive expired watts. (#5499 item 1)
         {QStringLiteral("txPower"), jsonOrNull(r->meterModel().fwdPowerIfLive())},
         // Qualified, not the scalar: an absent or stale sensor reads null here
         // exactly as it does in `get meters`.

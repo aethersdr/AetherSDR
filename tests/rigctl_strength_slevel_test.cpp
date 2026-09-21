@@ -23,12 +23,10 @@
 // that answers the packet must answer them differently, and a reader that
 // answers a constant cannot, whatever that constant is.
 //
-// THE S9 REFERENCE IS NEVER RETYPED HERE. RigctlProtocol's kS9Dbm is a private
-// constant of the unit under test; copying -73.0 into this file would only make
-// the test agree with itself. It is an additive offset, so it cancels in a
-// difference — every numeric assertion below is therefore written on the gap
-// between two readings, which must equal the gap between the two dBm samples
-// that produced them no matter what the reference is.
+// Differences between readings pin tracking and slice selection independently
+// of the S9 offset. A separate known-value check pins the protocol's HF S9
+// reference (-73 dBm = 0 dB relative to S9), so omitting or shifting that offset
+// cannot pass merely because it cancels in every difference.
 //
 // Socket-free: an injected stub backend, slice fixtures, and meter values fed
 // straight into MeterModel. Nothing is opened and nothing is keyed.
@@ -218,6 +216,23 @@ void testStrengthTracksANewSample()
               && nearly(after - before, static_cast<double>(kRisenDbm - kSlice0Dbm)));
 }
 
+void testStrengthUsesTheHfS9Reference()
+{
+    Fixture f;
+    f.radio.meterModel().defineMeter(sliceLevelMeter(10, 0));
+    RigctlProtocol port(&f.radio);
+    port.setSliceIndex(0);
+    f.radio.meterModel().updateValueByName(QStringLiteral("SLC"), QStringLiteral("LEVEL"),
+                                         -73.0f, 0);
+    double strength = 0.0;
+    check("HF S9 (-73 dBm) reports zero dB relative to S9",
+          strengthOf(port, &strength) && nearly(strength, 0.0));
+    f.radio.meterModel().updateValueByName(QStringLiteral("SLC"), QStringLiteral("LEVEL"),
+                                         -67.0f, 0);
+    check("six dB above HF S9 reports positive six dB",
+          strengthOf(port, &strength) && nearly(strength, 6.0));
+}
+
 void testUndeclaredAndUnfedMetersAreNotReadings()
 {
     Fixture f;
@@ -291,6 +306,7 @@ int main(int argc, char** argv)
     }
     testTwoSlicesReportTheirOwnLevels();
     testStrengthTracksANewSample();
+    testStrengthUsesTheHfS9Reference();
     testUndeclaredAndUnfedMetersAreNotReadings();
     testTheAccessorAgreesWithTheArray();
     std::printf("%s\n", g_failed == 0 ? "ALL PASS" : "FAILURES");
