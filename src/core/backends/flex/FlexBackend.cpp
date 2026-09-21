@@ -64,6 +64,12 @@ FlexBackend::FlexBackend(QObject* parent)
             this, &IRadioBackend::disconnected);
     connect(m_connection, &RadioConnection::errorOccurred,
             this, &IRadioBackend::connectionError);
+    connect(m_connection, &RadioConnection::independentPttStopped,
+            this, [this](const TxStopEvidence& evidence) {
+        if (isConnected() && evidence.valid()) {
+            emit independentTxStopped(evidence);
+        }
+    });
 }
 
 FlexBackend::~FlexBackend()
@@ -131,6 +137,41 @@ void FlexBackend::setSliceCommandSink(std::function<void(const QString&)> sink)
 void FlexBackend::setModelProvider(std::function<QString()> provider)
 {
     m_modelProvider = std::move(provider);
+}
+
+void FlexBackend::setIndependentTxSequenceProvider(std::function<quint32()> sequence)
+{
+    m_sequenceProvider = std::move(sequence);
+}
+
+IndependentTxControl FlexBackend::independentTxControl() const
+{
+    // Shared SmartSDR protocol eligibility, not a model/firmware allowlist.
+    // Actual admission also requires complete, TX-allowed live idle readback;
+    // every handoff still needs the original operation's ordered stop proof.
+    // SmartLink uses another transport and remains unavailable on this path.
+    if (!m_connection || !m_connection->independentPttSupported() || !m_sequenceProvider) {
+        return {};
+    }
+    return {static_cast<unsigned>(TxCoordinator::Activity::Mox)};
+}
+
+bool FlexBackend::independentTxReady() const
+{
+    return independentTxControl().activities != 0 && m_connection->independentPttReady();
+}
+
+void FlexBackend::stopIndependentTx(const TxCoordinator::Operation& operation,
+                                    const TxCoordinator::StopRequest& request)
+{
+    // Cleanup must remain available even if a capability/provider changed.
+    if (!m_connection || !m_sequenceProvider || !request.matchesOperation(operation)) {
+        return;
+    }
+    const quint32 sequence = m_sequenceProvider();
+    QMetaObject::invokeMethod(m_connection, [connection = m_connection, sequence, operation, request] {
+        connection->stopIndependentPtt(sequence, operation, request);
+    }, Qt::QueuedConnection);
 }
 
 void FlexBackend::setRadioReportedCapacity(int maxSlices, int maxPanadapters)
@@ -514,6 +555,19 @@ void FlexBackend::sendTx(const QString& command, const TxCoordinator::Command& f
 
 void FlexBackend::setKeying(bool key, const AetherSDR::TxCoordinator::Operation& operation, const AetherSDR::TxCoordinator::Completion& completion)
 {
+    if (operation.independent()) {
+        if (key && independentTxControl().activities != 0) {
+            const quint32 sequence = m_sequenceProvider();
+            const TxCoordinator::Command command{operation, true, completion};
+            QMetaObject::invokeMethod(m_connection, [connection = m_connection, sequence, command] {
+                connection->writeIndependentPtt(sequence, command);
+            }, Qt::QueuedConnection);
+        } else {
+            // The qualified stop verb owns unkey and its stop-attempt token.
+            completion.finish();
+        }
+        return;
+    }
     // Keying is only translated here; the interlock/authorization decision is
     // made above the seam (RFC §6). Matches RadioModel::setTransmit's wire form.
     sendTx(QStringLiteral("xmit %1").arg(key ? 1 : 0), {operation, key, completion});

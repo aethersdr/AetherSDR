@@ -6,6 +6,7 @@
 #include "RadioConnectionTarget.h"
 #include "SliceFrequencyTarget.h"
 #include "ReceiveControlTarget.h"
+#include "TransmitControlService.h"
 
 #include <QJsonObject>
 #include <QString>
@@ -32,6 +33,10 @@ public:
     [[nodiscard]] bool bindConnectionTarget(RadioConnectionTarget* target);
     [[nodiscard]] bool bindFrequencyTarget(SliceFrequencyTarget* target);
     [[nodiscard]] bool bindReceiveTarget(ReceiveControlTarget* target);
+    // Optional trusted verifier, loaded before serving. Its absence retains
+    // the existing credential-rejecting local endpoint.
+    [[nodiscard]] bool bindCredentials(ControlCredentials* credentials);
+    [[nodiscard]] bool bindTransmitTarget(TransmitControlTarget* target);
 
     [[nodiscard]] ServiceReply handle(
         const QByteArray& bytes, ControlSession* session) const;
@@ -58,7 +63,10 @@ private:
     bool m_frequencyTargetBound{false};
     QPointer<ReceiveControlTarget> m_receiveTarget;
     bool m_receiveTargetBound{false};
+    QPointer<ControlCredentials> m_credentials;
+    bool m_credentialsBound{false};
     mutable bool m_dispatchStarted{false};
+    std::unique_ptr<TransmitControlService> m_transmit;
 };
 
 } // namespace AetherSDR::control

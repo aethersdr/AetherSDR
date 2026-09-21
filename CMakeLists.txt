@@ -7,7 +7,7 @@ if(POLICY CMP0156)
     cmake_policy(SET CMP0156 NEW)
 endif()
 
-project(AetherSDR VERSION 26.9.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.9.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -798,7 +798,15 @@ set(CORE_SOURCES
     src/core/control/ControlProtocolCodec.cpp # aetherd v1 bounded JSON envelopes
     src/core/control/ControlResourceStore.cpp # typed snapshots and revisions
     src/core/control/ControlSession.cpp       # subscriptions and bounded event queues
+    src/core/control/ControlCredentials.cpp   # explicit credential identity, not TX grants
+    src/core/control/ControlCredentialVault.cpp # OS-vault-only, explicit provisioning composition
+    src/core/control/ControlCredentialProvisioner.cpp
+    src/core/control/ControlInputPump.cpp     # bounded input turns and terminal authority lifetime
+    src/core/control/LocalCredentialHandshake.cpp # verify native server identity before credential writes
     src/core/control/ControlService.cpp       # aetherd v1 typed dispatch
+    src/core/control/TransmitControlService.cpp
+    src/core/control/TransmitControlTarget.h
+    src/core/control/ModelTransmitControlTarget.cpp
     src/core/control/RadioConnectionTarget.h  # socket-free connection intent seam
     src/core/backends/ModelRadioConnectionTarget.cpp # native translation and lifecycle
     src/core/control/RadioResourceAdapter.cpp # normalized model resources
@@ -811,6 +819,8 @@ set(CORE_SOURCES
     src/core/backends/LocalRadioDiscoverySource.cpp  # native discovery below the vendor seam
     src/core/backends/MemoryWireCodec.cpp    # memory kv-set decode, shared by Flex + local bank
     src/core/backends/flex/FlexBackend.cpp   # aetherd RFC step 2.2 (§5.5)
+    src/core/backends/flex/FlexPttStopTracker.cpp # operation-bound LAN PTT evidence
+    src/core/backends/flex/FlexPttWireSession.cpp
     src/core/backends/sim/SimBackend.cpp     # demo mode — 2nd IRadioBackend (RFC #4288)
     src/core/backends/sim/SimSignalSource.cpp  # demo RX engine, worker thread (#4878)
     src/core/backends/sim/SpectrumPatternGenerator.cpp  # demo mode — signal engine (RFC #4288 Phase 2)
@@ -905,6 +915,7 @@ set(CORE_SOURCES
     src/core/CwxLocalKeyer.cpp
     src/core/IambicKeyer.cpp
     src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp
     src/core/SpectralNR.cpp
     src/core/MonoDspStereoAdapter.cpp
     src/core/backends/flex/PanadapterStream.cpp
@@ -1582,12 +1593,17 @@ target_link_libraries(AetherSDR PRIVATE
 
 add_executable(aetherd
     src/aetherd/main.cpp
+    src/aetherd/CredentialStartup.cpp
+    src/aetherd/GrantAdminClient.cpp
 )
 target_link_libraries(aetherd PRIVATE
     aethercore
     Qt6::Core
     Qt6::Network
 )
+if(WIN32)
+    target_link_libraries(aethercore PRIVATE advapi32)
+endif()
 
 # --- ASR engine: vendored whisper.cpp (RFC #4333, Phase 1) -------------------
 # whisper.cpp is a self-contained CMake project exposing a `whisper` target

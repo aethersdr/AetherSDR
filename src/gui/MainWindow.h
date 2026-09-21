@@ -763,6 +763,9 @@ private:
     void showPanadapterInterlockNotification(const QString& message,
                                              const QString& key = QString(),
                                              const QString& panId = QString());
+    // RadioModel::autoRfGainArmSettled: reflect the outcome on every pan's copy
+    // of the Auto checkbox, and explain a refusal once, on the active pan.
+    void onAutoRfGainArmSettled(bool armed);
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();
     // Show a decoder panel on exactly one applet — the current decoder target —

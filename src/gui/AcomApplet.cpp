@@ -141,7 +141,7 @@ AcomApplet::AcomApplet(QWidget* parent)
     m_pwrLabel->setText("PWR");
     m_pwrGauge = new HGauge(0.0f, 700.0f, 600.0f, "", "",
         evenTicks(700.0f), this);
-    m_pwrGauge->setBallistics({0.030f, 0.800f});
+    m_pwrGauge->setWindowPeakEnabled(true);
     m_pwrGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setSpacing(4);
@@ -283,14 +283,6 @@ AcomApplet::AcomApplet(QWidget* parent)
     connect(&m_labelTimer, &QTimer::timeout, this, &AcomApplet::updateValueLabels);
     m_labelTimer.start();
 
-    m_peakTimer = new QTimer(this);
-    m_peakTimer->setSingleShot(true);
-    m_peakTimer->setInterval(2500);
-    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
-        m_peakFwd = 0.0f;
-        m_pwrGauge->clearPeak();
-    });
-
     setConnected(false);
 }
 
@@ -308,11 +300,7 @@ void AcomApplet::setForwardPower(float watts)
 {
     m_fwdWatts = watts;
     m_pwrGauge->setValue(watts);
-    if (watts > m_peakFwd) {
-        m_peakFwd = watts;
-        m_pwrGauge->setPeakValue(watts);
-        m_peakTimer->start();
-    }
+    // Peak marker: HGauge's sliding window, fed by setValue (canon).
 }
 
 void AcomApplet::setReflectedPower(float watts)
@@ -455,12 +443,9 @@ void AcomApplet::setConnected(bool connected)
         m_fwdWatts = 0.0f;
         m_reflectedWatts = 0.0f;
         m_swrVal = 1.0f;
-        // Clear the forward-power peak hold too — otherwise a stale peak from
-        // the prior session survives (m_peakFwd is not otherwise reset), and a
-        // reconnect within the 2.5 s peak-hold window suppresses the new
-        // session's peak marker until a reading exceeds the old peak.
-        m_peakFwd = 0.0f;
-        if (m_peakTimer) m_peakTimer->stop();
+        // Clear the forward-power peak too — otherwise a stale marker from
+        // the prior session survives a reconnect. clearPeak() drops the
+        // gauge's sliding window as well, which is what retires it now.
         m_pwrGauge->setValueImmediate(0.0f);
         m_pwrGauge->clearPeak();
         m_refGauge->setValueImmediate(0.0f);

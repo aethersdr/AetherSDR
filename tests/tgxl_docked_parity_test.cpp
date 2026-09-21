@@ -11,6 +11,8 @@
 // the discrete STBY/BYP keys, content scaling) is not asserted here; those are
 // the UI surface and are expected to differ.
 
+#include "gui/AccessoryPanelWidgets.h"
+#include "gui/HGauge.h"
 #include "gui/TunerApplet.h"
 #include "models/TunerModel.h"
 #include "core/backends/TunerDelta.h"
@@ -340,6 +342,109 @@ int main(int argc, char** argv)
 
         // And it takes itself down: there is no device clear on this path.
         CHECK(spin([&] { return !overlay->isVisible(); }, 5000));
+    }
+
+    // ── Which meter source drives the gauge ──────────────────────────
+    //
+    // The tuner reports forward power twice: relayed by the radio, and on its
+    // own port-9010 status. Only one can drive the gauge.
+    //
+    // The direct path must win. It polls at 60 Hz while keyed and carries the
+    // device's `peak` field; the relay has neither, and fires only when its
+    // value changes. The arbitration used to run the other way -- correct
+    // when both sources were ~1 Hz, wrong once the direct one got fast,
+    // because one relayed sample suppressed the direct path for 1500 ms and
+    // the gauge ran at the relay's rate on any station whose radio relays
+    // TGXL meters.
+    {
+        TunerApplet applet;
+        // HGauge has no Q_OBJECT, so findChildren<HGauge*> will not compile
+        // and qobject_cast cannot see it either.
+        HGauge* gauge = nullptr;
+        for (auto* w : applet.findChildren<QWidget*>()) {
+            if (auto* g = dynamic_cast<HGauge*>(w);
+                g && g->accessibleName() == QLatin1String("Forward power")) {
+                gauge = g;
+            }
+        }
+        CHECK(gauge != nullptr);
+        if (gauge) {
+            // A direct sample, then a relayed one on its heels. This is the
+            // case that was broken: the relay overwrote it.
+            applet.setDeviceMeters(100.0f, 1.2f, 100.0f);
+            CHECK(qFuzzyCompare(gauge->value(), 100.0f));
+            applet.setRadioMeters(10.0f, 1.2f);
+            CHECK(qFuzzyCompare(gauge->value(), 100.0f));
+
+            // Direct keeps winning for as long as it keeps arriving.
+            applet.setDeviceMeters(120.0f, 1.2f, 120.0f);
+            applet.setRadioMeters(10.0f, 1.2f);
+            CHECK(qFuzzyCompare(gauge->value(), 120.0f));
+        }
+    }
+    {
+        // A station with no direct connection, or one that drops mid-session,
+        // still needs a meter: direct winning must not mean the relay is dead.
+        TunerApplet applet;
+        // HGauge has no Q_OBJECT, so findChildren<HGauge*> will not compile
+        // and qobject_cast cannot see it either.
+        HGauge* gauge = nullptr;
+        for (auto* w : applet.findChildren<QWidget*>()) {
+            if (auto* g = dynamic_cast<HGauge*>(w);
+                g && g->accessibleName() == QLatin1String("Forward power")) {
+                gauge = g;
+            }
+        }
+        CHECK(gauge != nullptr);
+        if (gauge) {
+            // Nothing direct has ever arrived: the relay drives it.
+            applet.setRadioMeters(42.0f, 1.5f);
+            CHECK(qFuzzyCompare(gauge->value(), 42.0f));
+
+            // And again once a direct sample ages past the freshness window.
+            applet.setDeviceMeters(100.0f, 1.2f, 100.0f);
+            CHECK(qFuzzyCompare(gauge->value(), 100.0f));
+            settle(AetherSDR::kRelayMeterFreshnessMs + 150);
+            applet.setRadioMeters(42.0f, 1.5f);
+            CHECK(qFuzzyCompare(gauge->value(), 42.0f));
+            CHECK(gauge->peakValue() < 90.0f); // stale device peak was retired
+        }
+    }
+
+    // ── Peak marker: SmartMTR's external-peak mode, not a local hold ─
+    //
+    // The TGXL reports its own `peak` (a rolling window computed in the
+    // device), so the gauge runs MeterExtremes in external-peak mode: the
+    // marker tracks the reported peak at the fast peak slew instead of
+    // rebuilding a window from the samples we happen to have polled. The
+    // contract is therefore "the marker IS the device's peak", with no local
+    // hold timer anywhere in the path -- when the device retires its peak,
+    // so does the marker, on the very next report.
+    {
+        TunerApplet applet;
+        HGauge* gauge = nullptr;
+        for (auto* w : applet.findChildren<QWidget*>()) {
+            if (auto* g = dynamic_cast<HGauge*>(w);
+                g && g->accessibleName() == QLatin1String("Forward power")) gauge = g;
+        }
+        CHECK(gauge != nullptr);
+        if (gauge) {
+            // Instantaneous 10 W, device peak 100 W: the marker follows the
+            // PEAK, and stands off above the needle rather than collapsing
+            // onto the sample. This is the whole point of reading `peak` --
+            // the bug that started this was the bar tracking `fwd` alone.
+            applet.setDeviceMeters(10.0f, 1.2f, 100.0f);
+            CHECK(spin([&] { return gauge->peakValue() > 90.0f; }, 3000));
+            CHECK(gauge->peakHeld());
+            CHECK(gauge->peakValue() > gauge->value());
+            // And it never overshoots what the device actually reported.
+            CHECK(gauge->peakValue() <= 100.5f);
+
+            // No local hold phase: the device retires its peak and the marker
+            // follows it straight down, with no timer left to expire here.
+            applet.setDeviceMeters(10.0f, 1.2f, 10.0f);
+            CHECK(spin([&] { return gauge->peakValue() < 90.0f; }, 3000));
+        }
     }
 
     if (g_failures == 0) {

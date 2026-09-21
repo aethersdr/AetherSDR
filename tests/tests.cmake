@@ -157,12 +157,96 @@ add_executable(control_authorization_test
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlService.cpp
     src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp # no HAVE_KEYCHAIN: unavailable path, never opens OS vault
 )
 target_include_directories(control_authorization_test PRIVATE src)
 target_compile_definitions(control_authorization_test PRIVATE
     AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_authorization_test PRIVATE Qt6::Core)
 add_test(NAME control_authorization_test COMMAND control_authorization_test)
+
+# Production native-vault adapter with in-memory QtKeychain jobs: no OS vault,
+# sockets, settings or radio. Pins fallback prohibition and async lifetimes.
+# The fake models QtKeychain 0.17.0's job contract; its header documents the
+# upstream source and deliberate fault-injection differences to recheck on upgrades.
+add_executable(control_credential_vault_test
+    tests/control_credential_vault_test.cpp
+    src/aetherd/CredentialStartup.cpp
+    tests/fakes/qt6keychain/keychain.h
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlCredentialVault.cpp
+    src/core/control/ControlCredentialProvisioner.cpp
+    src/core/control/LocalCredentialHandshake.cpp
+)
+target_include_directories(control_credential_vault_test BEFORE PRIVATE tests/fakes src)
+target_compile_definitions(control_credential_vault_test PRIVATE HAVE_KEYCHAIN)
+target_link_libraries(control_credential_vault_test PRIVATE Qt6::Core)
+if(WIN32)
+    target_link_libraries(control_credential_vault_test PRIVATE advapi32)
+endif()
+add_test(NAME control_credential_vault_test COMMAND control_credential_vault_test)
+
+# Socket-free production input pump and terminal session lifetime, coupled to
+# the real grant manager/coordinator with injected qualification. No firmware
+# peer, radio model, socket, settings or RF; injected callbacks transport bytes.
+add_executable(control_transport_lifecycle_test
+    tests/control_transport_lifecycle_test.cpp
+    src/core/control/RadioConnectionTarget.h
+    src/core/control/ControlProtocolCodec.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlInputPump.cpp
+    src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp
+)
+target_include_directories(control_transport_lifecycle_test PRIVATE src)
+target_compile_definitions(control_transport_lifecycle_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_transport_lifecycle_test PRIVATE Qt6::Core)
+add_test(NAME control_transport_lifecycle_test COMMAND control_transport_lifecycle_test)
+
+# Socket-free captured Flex PTT transitions and exact operation/stop identity.
+# No radio, simulator peer, socket, settings, or RF. Passing is NOT transport
+# qualification: real transport/firmware convergence is checked separately.
+add_executable(flex_ptt_stop_tracker_test
+    tests/flex_ptt_stop_tracker_test.cpp
+    src/core/backends/flex/FlexPttStopTracker.cpp
+    src/core/TxCoordinator.cpp
+)
+target_include_directories(flex_ptt_stop_tracker_test PRIVATE src)
+target_link_libraries(flex_ptt_stop_tracker_test PRIVATE Qt6::Core)
+add_test(NAME flex_ptt_stop_tracker_test COMMAND flex_ptt_stop_tracker_test)
+
+# Socket-free production terminal-write composition; captured status inputs,
+# injected writer only. No socket or simulated firmware peer.
+add_executable(flex_ptt_wire_session_test
+    tests/flex_ptt_wire_session_test.cpp
+    src/core/backends/flex/FlexPttWireSession.cpp
+    src/core/backends/flex/FlexPttStopTracker.cpp
+    src/core/TxCoordinator.cpp)
+target_include_directories(flex_ptt_wire_session_test PRIVATE src)
+target_link_libraries(flex_ptt_wire_session_test PRIVATE Qt6::Core)
+add_test(NAME flex_ptt_wire_session_test COMMAND flex_ptt_wire_session_test)
+
+# Socket-free protocol -> real grants/coordinator -> injected typed target.
+add_executable(control_transmit_service_test
+    tests/control_transmit_service_test.cpp
+    src/core/control/RadioConnectionTarget.h
+    src/core/control/TransmitControlTarget.h
+    src/core/control/TransmitControlService.cpp
+    src/core/control/ControlService.cpp
+    src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
+    src/core/control/ControlProtocolCodec.cpp
+    src/core/control/ControlResourceStore.cpp
+    src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp)
+target_include_directories(control_transmit_service_test PRIVATE src)
+target_compile_definitions(control_transmit_service_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
+target_link_libraries(control_transmit_service_test PRIVATE Qt6::Core)
+add_test(NAME control_transmit_service_test COMMAND control_transmit_service_test)
 
 # Current-user local transport plus the first-request handshake. This test
 # binds the production QLocalServer socket and proves that the Stage-3 surface
@@ -198,6 +282,7 @@ add_executable(radio_catalogue_test
     src/core/control/RadioCatalogue.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
@@ -215,6 +300,7 @@ add_executable(control_connection_test
     src/core/control/RadioCatalogue.cpp
     src/core/control/ControlResourceStore.cpp
     src/core/control/ControlSession.cpp
+    src/core/control/ControlCredentials.cpp
     src/core/control/ControlService.cpp
     src/core/control/ControlProtocolCodec.cpp
 )
@@ -222,6 +308,18 @@ target_include_directories(control_connection_test PRIVATE src)
 target_compile_definitions(control_connection_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 target_link_libraries(control_connection_test PRIVATE Qt6::Core Qt6::Network)
 add_test(NAME control_connection_test COMMAND control_connection_test)
+
+# Each lightweight service fixture includes the same socket-free TX dispatch
+# kernel, without linking the production model/backend or opening transports.
+foreach(control_fixture control_authorization_test control_transport_lifecycle_test
+                        radio_catalogue_test control_connection_test)
+    target_sources(${control_fixture} PRIVATE
+        src/core/control/TransmitControlTarget.h
+        src/core/control/TransmitControlService.cpp)
+endforeach()
+foreach(control_fixture control_authorization_test radio_catalogue_test control_connection_test)
+    target_sources(${control_fixture} PRIVATE src/core/TxCoordinator.cpp src/core/TxGrantManager.cpp)
+endforeach()
 
 # #5594 (M1): backends announce capability revisions. Socket-free — FlexBackend's
 # radio-status decode is driven directly, and the RTL case asserts the opposite
@@ -2463,6 +2561,28 @@ set_tests_properties(flex_control_visibility_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
 
+# #5507: the production Radio Setup dialog against a backend that reports no
+# region, driven by RadioDelta over the real IRadioBackend::radioChanged route.
+# Same target shape as flex_control_visibility_test above — no sockets, no peers.
+add_executable(radio_setup_region_field_test
+    tests/radio_setup_region_field_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+)
+target_include_directories(radio_setup_region_field_test PRIVATE src tests)
+target_link_libraries(radio_setup_region_field_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_region_field_test COMMAND radio_setup_region_field_test)
+set_tests_properties(radio_setup_region_field_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
+
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
     src/core/ZipArchive.cpp
@@ -3673,6 +3793,16 @@ target_include_directories(automation_cell_test PRIVATE src)
 target_link_libraries(automation_cell_test PRIVATE aethercore Qt6::Widgets)
 add_test(NAME automation_cell_test COMMAND automation_cell_test)
 set_tests_properties(automation_cell_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+add_executable(automation_gauge_verb_test
+    tests/automation_gauge_verb_test.cpp
+    # HGauge.h's hover popup is header-inline and calls into this.
+    src/gui/DragValuePopup.cpp
+)
+target_include_directories(automation_gauge_verb_test PRIVATE src)
+target_link_libraries(automation_gauge_verb_test PRIVATE aethercore Qt6::Widgets)
+add_test(NAME automation_gauge_verb_test COMMAND automation_gauge_verb_test)
+set_tests_properties(automation_gauge_verb_test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(automation_device_diagnostics_test
     tests/automation_device_diagnostics_test.cpp
@@ -5152,6 +5282,17 @@ target_include_directories(tx_coordinator_test PRIVATE src)
 target_link_libraries(tx_coordinator_test PRIVATE Qt6::Core)
 add_test(NAME tx_coordinator_test COMMAND tx_coordinator_test)
 
+# Socket-free: independent grants, injected monotonic clock and stop evidence.
+# No firmware peer; injected confirmations do not qualify a production backend.
+add_executable(tx_grant_manager_test
+    tests/tx_grant_manager_test.cpp
+    src/core/TxCoordinator.cpp
+    src/core/TxGrantManager.cpp
+)
+target_include_directories(tx_grant_manager_test PRIVATE src)
+target_link_libraries(tx_grant_manager_test PRIVATE Qt6::Core)
+add_test(NAME tx_grant_manager_test COMMAND tx_grant_manager_test)
+
 # Socket-free: production models with injected backend command recorders.
 add_executable(tx_operation_integration_test tests/tx_operation_integration_test.cpp)
 target_include_directories(tx_operation_integration_test PRIVATE src tests)
@@ -5428,6 +5569,44 @@ set_target_properties(spectrum_overlay_band_highlight_test PROPERTIES AUTOMOC ON
 add_test(NAME spectrum_overlay_band_highlight_test
          COMMAND spectrum_overlay_band_highlight_test)
 set_tests_properties(spectrum_overlay_band_highlight_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# What a REFUSED "Auto" tick leaves on the checkbox's accessible description and
+# tooltip, and what a later successful arm has to take back off it (#5817). Same
+# shape as spectrum_overlay_band_highlight_test above -- widget only, a plain
+# QWidget parent, offscreen, no MainWindow and no backend.
+add_executable(spectrum_overlay_auto_rf_gain_refusal_test
+    tests/spectrum_overlay_auto_rf_gain_refusal_test.cpp
+    src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrontEndOverloadIndicator.cpp
+    src/gui/SpectrumOverlayWheelGuard.cpp
+    src/gui/MemoryBrowsePanel.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/DspParamPopup.cpp
+)
+target_include_directories(spectrum_overlay_auto_rf_gain_refusal_test PRIVATE src)
+if(DEBIAN_GPU_FIX_REQUIRED)
+    target_include_directories(spectrum_overlay_auto_rf_gain_refusal_test PRIVATE
+        "${DEBIAN_PRIVATE_INC}"
+        "${DEBIAN_PRIVATE_INC}/QtGui"
+    )
+endif()
+if(QT_FRAMEWORK_PRIVATE_INC)
+    target_include_directories(spectrum_overlay_auto_rf_gain_refusal_test PRIVATE
+        "${QT_FRAMEWORK_PRIVATE_INC}"
+        "${QT_FRAMEWORK_PRIVATE_INC}/QtGui"
+    )
+endif()
+target_link_libraries(spectrum_overlay_auto_rf_gain_refusal_test PRIVATE
+    aethercore Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test
+)
+if(TARGET Qt6::GuiPrivate)
+    target_link_libraries(spectrum_overlay_auto_rf_gain_refusal_test PRIVATE Qt6::GuiPrivate)
+endif()
+set_target_properties(spectrum_overlay_auto_rf_gain_refusal_test PROPERTIES AUTOMOC ON)
+add_test(NAME spectrum_overlay_auto_rf_gain_refusal_test
+         COMMAND spectrum_overlay_auto_rf_gain_refusal_test)
+set_tests_properties(spectrum_overlay_auto_rf_gain_refusal_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(device_diagnostics_test
@@ -6137,6 +6316,7 @@ set(AETHER_SETTINGS_CONSUMERS
     pcm_compatibility_test
     firmware_close_dialog_test
     flex_control_visibility_test
+    radio_setup_region_field_test
     atu_seam_gate_test
     backend_capability_revision_test
     radio_capacity_declaration_test
@@ -6236,6 +6416,7 @@ set(AETHER_SETTINGS_CONSUMERS
     vkamp_connection_test
     system_info_dialog_test
     spectrum_overlay_band_highlight_test
+    spectrum_overlay_auto_rf_gain_refusal_test
     tgxl_panel_widgets_test
     tgxl_direct_protocol_test
     tgxl_docked_parity_test
@@ -6254,6 +6435,7 @@ endforeach()
 # leave these harnesses with unresolved bridge symbols.
 set(AETHER_AUTOMATION_SERVER_TESTS
     automation_cell_test
+    automation_gauge_verb_test
     automation_persist_diagnostics_test
     automation_server_gesture_test
     automation_device_diagnostics_test
