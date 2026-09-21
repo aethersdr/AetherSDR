@@ -1,7 +1,7 @@
 # Bounded receive-contract test foundation
 
-Issue #5890 implements the first test slice of #5554 section 2.3, before the
-first #5262 M4 receive-command conversion. This is not full backend
+Issue #5890 seeds the first test slice of #5554 section 2.3. Issue #5904 extends
+it through the first #5262 M4 receive-command conversion. This is not full backend
 conformance certification and does not replace hardware convergence testing.
 
 `tests/backend_receive_contract_test.cpp` keeps one test-only family registry
@@ -11,9 +11,9 @@ its coverage level, including an explicit `NOT BUILT` row for optional RTL.
 
 | Family | Concrete implementation exercised | What this does not establish |
 | --- | --- | --- |
-| Flex | Exact guarded slice-sink commands; separately decoded status; no command echo from decode | Firmware acceptance, desktop command migration, pan creation through the compatibility adapter |
+| Flex | Exact guarded slice-sink commands, pan intent, filter origin, individual AGC fields; separately decoded status; no command echo from decode | Firmware acceptance, pan creation through the compatibility adapter |
 | Icom | Real CI-V scheduler with an unstarted transport; separately injected frequency/mode/filter/AGC reports and stale-generation rejection | Actual RS-BA1 delivery or firmware behavior |
-| HL2 | Pre-connect receiver configuration, mode/filter preservation, AGC state, owner-thread signals | Live Metis delivery or completed DSP application |
+| HL2 | Pre-connect receiver configuration plus a socket-free real RX worker: mode/filter ordering, CW passband translation and applied AGC pair | Live Metis delivery, RF convergence or completed tuning/shift application |
 | ANAN | Pre-connect receiver configuration and retained WDSP AGC values, owner-thread signals | Live Protocol 2 delivery or completed DSP application |
 | Demo | Production synthetic session state and refusal before/after the session | Hardware behavior; filter/AGC DSP that Demo does not implement |
 | RTL (optional) | Declaration and cold receive refusal, without opening USB | Connected USB/DDC dispatch |
@@ -49,14 +49,18 @@ the model lifecycle, compatibility-adapter, generation and revision checks.
 An inherited lifecycle method returning false is not proof that Flex's or
 hybrid Demo's model-owned compatibility path is broken.
 
-The next M4 slice must extend this foundation with the actual changed dispatch
-paths: explicit preserve-pan/recenter tuning intent, filter origin, and AGC
-field selection; both desktop and daemon entry points; reconnect/reused slice
-IDs; single dispatch; slice-link notification; and unchanged TX authority
-guards. Host DSP/worker dispatch must be tested at an injected worker seam
-before claiming coverage beyond the configuration-state rows above.
+`receive_intent_routing_test` drives both production model construction paths,
+including repeat wiring, synchronous observations, reconnect/reused object IDs,
+reentrant setters, off-thread refusal and frequency notification/provenance
+ordering. The daemon tests pin explicit preserve-pan and operator-filter
+requests while retaining admission checks and observation-only state. Actual
+GUI linked-slice behavior still needs bridge proof; notification ordering alone
+is not a substitute for the GUI's link adapter. The HL2 worker fixture uses the
+existing friend access to open only its RX DSP and reads the applied channel on
+the worker thread. It never starts Metis, connects hardware or configures TX.
+ANAN remains configuration-state coverage, not a claim of DSP completion.
 
-Both new tests are unconditional default CTests, registered in
+These tests are unconditional default CTests, registered in
 `tests/tests.cmake`; they run in the main full-suite and sanitizer lanes.
-The frozen per-PR CI allowlist is unchanged. Neither test opens a network
-session or synthesizes third-party firmware, and neither invokes keying.
+The frozen per-PR CI allowlist is unchanged. None opens a network session,
+synthesizes third-party firmware or invokes keying.
