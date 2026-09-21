@@ -24,6 +24,7 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <atomic>
+#include <cstdint>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -397,6 +398,10 @@ private:
     // the exact failure the connect-time reset exists to prevent, arrived at
     // from the other side (PR #5650 review).
     void resetBandscopeMirrors();
+    // Age of the mirrored bandscope block, negative when none has ever arrived
+    // — the encoding bandscopeBlockIsCurrent() and bandscopeHeadroom() both
+    // read as "never observed". The single definition its three readers share.
+    [[nodiscard]] std::int64_t bandscopeBlockAgeMs() const;
     // Per-band memory (RFC #4603 PR 3): apply the remembered LNA + drive for
     // the band containing freqHz (falling back to the restored defaults),
     // and record the operator's current values into the maps for the band

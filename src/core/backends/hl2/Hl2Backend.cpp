@@ -5853,10 +5853,8 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // requirement beside it would describe a rule that is not in force.
     if (m_autoGainConfig.requireHeadroomToRelease) {
         const AetherSDR::hl2::HeadroomObservation h =
-            AetherSDR::hl2::bandscopeHeadroom(
-                m_bandscopeBlock,
-                m_bandscopeBlockClock.isValid()
-                    ? m_bandscopeBlockClock.elapsed() : -1);
+            AetherSDR::hl2::bandscopeHeadroom(m_bandscopeBlock,
+                                              bandscopeBlockAgeMs());
         // How much room the step needs: the step, plus the gate's sampling
         // bias, plus the configured margin. This is the number the reading is
         // actually compared against, so publishing it saves an operator from
@@ -6385,7 +6383,7 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // ABSENT again rather than keep showing the previous session's last
     // reading" -- and a gate stopped mid-session is the same sentence with the
     // link still up. The auto-gain path is handed the age and refuses on it
-    // (see the bandscopeHeadroom() call in updateAutoGain); these rows were
+    // (see the bandscopeHeadroom() call in stepAutoGain); these rows were
     // handed nothing. Two readers of one block, one refusing and one
     // publishing.
     //
@@ -6397,11 +6395,28 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot() const
     // rows and the loop read one block from one gate, so a separately chosen
     // display threshold would buy nothing and would leave a window in which
     // the loop refuses a block these rows still publish -- a smaller version
-    // of the bug being fixed. RadioHealthDialog polls at kRefreshIntervalMs,
-    // well inside it, so a live gate never blinks.
-    const std::int64_t blockAgeMs = m_bandscopeBlockClock.isValid()
-                                        ? m_bandscopeBlockClock.elapsed()
-                                        : -1;
+    // of the bug being fixed.
+    //
+    // WHAT KEEPS A LIVE GATE FROM BLINKING is the producer's period against
+    // this expiry and nothing else: MetisClient::kBandscopeSampleMs is 1000 ms
+    // into kHeadroomMaxAgeMs's 3000 ms, so a running gate may miss two blocks
+    // before a row goes absent. RadioHealthDialog::kRefreshIntervalMs is NOT
+    // the reason and cannot be — a poll rate changes how soon a blink is
+    // OBSERVED, never whether there is one. (This comment asserted otherwise
+    // until PR #5880 review round 2.)
+    //
+    // AND THESE ROWS DO GO ABSENT DURING TRANSMIT. That is a consequence of
+    // this expiry and it is meant. MetisClient::bandscopeInterlocked() holds
+    // the gate off for m_mox, for the radio's OWN ptt, and for
+    // kBandscopeUnkeyHoldoffMs after unkey, and bandscopeArm() refuses
+    // silently on it — so no block arrives while keyed, and three seconds into
+    // an over these four rows read as dashes (JSON null on the bridge) until
+    // unkey plus the hold-off plus one gate period. The honest answer: the
+    // converter is being shown our own PA rather than the band, the sensor is
+    // not sampling it, and the last pre-key number presented as current is
+    // precisely the fabrication this function is fixing. adcObservedAgoMs is
+    // not expired with them and is what says which silence it is.
+    const std::int64_t blockAgeMs = bandscopeBlockAgeMs();
     const bool haveObservation = m_bandscopeBlock.samples > 0;
     const bool haveBlock =
         AetherSDR::hl2::bandscopeBlockIsCurrent(m_bandscopeBlock, blockAgeMs);
@@ -7278,9 +7293,7 @@ void Hl2Backend::stepAutoGain(const Hl2Telemetry& t)
     // invalid clock is passed as a negative age for the same reason: "never
     // observed" and "observed too long ago" are both Absent, and neither is a
     // headroom of zero.
-    obs.headroom = bandscopeHeadroom(
-        m_bandscopeBlock,
-        m_bandscopeBlockClock.isValid() ? m_bandscopeBlockClock.elapsed() : -1);
+    obs.headroom = bandscopeHeadroom(m_bandscopeBlock, bandscopeBlockAgeMs());
 
     const AutoGainAction a = autoGainStep(m_autoGainState, obs, m_autoGainConfig);
     m_autoGainState = a.next;
@@ -8036,6 +8049,21 @@ void Hl2Backend::resetIoBoardSchedule()
         m_ioBoardThrottle->stop();
     m_ioBoardSchedule.reset();
     m_ioBoardBandKey.clear();
+}
+
+// How old the mirrored bandscope block is, in the one encoding every consumer
+// of it already expects: a NEGATIVE age means "never observed", which is what
+// bandscopeBlockIsCurrent() and bandscopeHeadroom() both turn into Absent
+// rather than into a headroom of zero.
+//
+// ONE DEFINITION, because there are three readers — the auto-gain release rows,
+// the converter rows and stepAutoGain() — and this expression was written out
+// at all three. That is the same drift shape PR #5880 removed from the
+// predicate itself; leaving it in the argument would have re-opened it one
+// level down.
+std::int64_t Hl2Backend::bandscopeBlockAgeMs() const
+{
+    return m_bandscopeBlockClock.isValid() ? m_bandscopeBlockClock.elapsed() : -1;
 }
 
 void Hl2Backend::resetBandscopeMirrors()
