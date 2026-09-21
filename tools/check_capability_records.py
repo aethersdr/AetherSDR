@@ -42,7 +42,12 @@ the guard is exercised rather than dormant.
 called the guard unexercised. That was wrong, and it is the third time in this
 file's short history that a comment credited a mechanism other than the one
 running — worth stating, because the parser's correctness is the only thing
-standing behind the frozen number.)
+standing behind the frozen number. Make it the fourth and fifth: #5860's review
+found the anti-vacuity floor below, and its ::error text, still crediting the
+multi-line `/* */` blind spot that the same PR had already retired. Both are
+corrected in place. This defect is not incidental to the file, it is its
+characteristic one — when you change a mechanism here, grep for what described
+it.)
 
 WHAT A COUNT CANNOT SEE. Converting one bool to a record while adding another in
 the same commit leaves the number flat and passes. That is inherent to counting
@@ -100,23 +105,76 @@ MAX_PLAUSIBLE_DROP = 15
 # `/\*.*?\*/` never matched a comment spanning lines, leaving its interior —
 # a stray `{` included — visible to the depth tracking, and costing the next
 # field even when the comment was perfectly balanced.
-_COMMENT_RE = re.compile(r"/\*.*?\*/|//[^\n]*", re.S)
+#
+# STRING AND CHARACTER LITERALS GO IN THE SAME PASS (#5860 review, ten9876).
+# The depth scan below sees a `{` wherever it occurs, so one inside a literal —
+# `QStringLiteral("{")`, `char c = '{';` — raises the depth and never lowers
+# it, and EVERY field after that point vanishes. Measured on today's header: a
+# `"{"` literal placed anywhere after the 56th of the 71 bools loses 15 or
+# fewer, which MAX_PLAUSIBLE_DROP cannot see; just below the 60th it costs 11.
+# Silent, one-directional, and exactly the class this checker exists to close.
+#
+# ONE ALTERNATION AND NOT TWO ORDERED PASSES, deliberately. Whichever of the
+# two runs first corrupts the other's input: literals first reads the `'` pair
+# in `/* it's */ bool x = false; /* that's */` as a literal spanning the
+# declaration and DELETES x (verified — a new loss, on a shape both the
+# pre-#5727 parser and this one get right); comments first reads the `//` in
+# `QStringLiteral("http://x")` as a comment and blanks the rest of that line.
+# A single left-to-right scan has no order to get wrong: whichever construct
+# STARTS first consumes the other, which is what a real lexer does.
+#
+# Blanked to a SPACE rather than to the match's own newlines. Nothing here
+# reads a line number — the report names the file only — and preserving them
+# split a directive that contained a multi-line block comment
+# (`#define X /* a\n b */ 1`) into a live tail that ate the next field.
+#
+# NOT HANDLED: a raw string literal, `R"(…)"`. Its delimiters usually pair up
+# by accident and it survives, but an odd number of interior `"` mis-pairs and
+# an interior `{` goes live. A stated limitation, like `bool x(false)` below.
+_NON_CODE_RE = re.compile(
+    r"/\*.*?\*/"                # block comment
+    r"|//[^\n]*"                 # line comment
+    r'|"(?:\\.|[^"\\\n])*"'      # string literal
+    r"|'(?:\\.|[^'\\\n])*'",     # character literal
+    re.S)
 # A whole logical directive line, continuations included. Indented and
 # `#  ifdef`-spaced forms are legal C++ and appear in the wild.
 _DIRECTIVE_RE = re.compile(r"^[ \t]*#(?:.*?\\\n)*.*$", re.M)
 
 
 def _blanked(m: "re.Match[str]") -> str:
-    """Replace a match with its own newlines, so line numbering survives."""
-    return "\n" * m.group(0).count("\n")
+    """Replace a match with a single space: it is not code, and it is not a
+    token boundary the scan below should lose."""
+    return " "
+
+
+def _opens_a_body(chars: list[str]) -> bool:
+    """True when the `{` just entered is a FUNCTION BODY, not an initialiser.
+
+    Decided on the fragment since the last `;`, which is the declarator the
+    brace belongs to. A body is preceded by the parameter list — directly
+    (`f() {`) or through trailing qualifiers (`f() const noexcept {`) — so a
+    `(` in that fragment is the signal. Everything else that opens a block at
+    class scope is an initialiser or a nested type: `bool a{false}`,
+    `agcModes = {…}`, `struct Inner {…} inner;`, `enum class D : quint32 {…}`,
+    `auto f = []{…}`. Those need no synthetic terminator — their interior is
+    dropped at depth >= 2 and the real `;` after the closing brace already ends
+    the statement — and giving them one truncates the declarator (see the
+    comma-declarator regression noted in direct_bool_fields).
+    """
+    fragment = "".join(chars)
+    fragment = fragment[fragment.rfind(";") + 1:].rstrip()
+    return fragment.endswith(")") or "(" in fragment
 
 
 def direct_bool_fields(text: str) -> list[str]:
     """Bool members declared directly in RadioCapabilities, nested structs excluded."""
-    # Comments and preprocessor directives are not declarations. Blank them
-    # before anything else looks at the text, so neither the depth scan nor the
-    # `;` split can ever see one. See _COMMENT_RE / _DIRECTIVE_RE (#5860).
-    text = _COMMENT_RE.sub(_blanked, text)
+    # Comments, literals and preprocessor directives are not declarations.
+    # Blank them before anything else looks at the text, so neither the depth
+    # scan nor the `;` split can ever see one. Literals ride in the comment
+    # pass, not a separate one — see _NON_CODE_RE (#5860). Directives come
+    # after, because a `#` inside a literal or a comment is not a directive.
+    text = _NON_CODE_RE.sub(_blanked, text)
     text = _DIRECTIVE_RE.sub(_blanked, text)
 
     lines = text.splitlines()
@@ -150,12 +208,22 @@ def direct_bool_fields(text: str) -> list[str]:
     #
     # Two rules do it. Characters at depth >= 2 are dropped, so nothing inside a
     # member body, a brace initializer or a nested type can reach the field
-    # match. And entering a nested block EMITS A SYNTHETIC `;`, which closes off
-    # the declarator that opened it so the following field starts clean. The
-    # synthetic terminator is what makes the multi-line initializer safe
-    # structurally rather than by special case: `agcModes = {…};` becomes
-    # `agcModes = ; ;`, both halves fail the bool match, and the field after it
-    # survives — the hazard that cost hasModeIndependentSquelch exactly once.
+    # match. And entering a FUNCTION BODY emits a synthetic `;`, which closes
+    # off the declarator that opened it so the following field starts clean.
+    #
+    # A BODY ONLY, AND NOT EVERY BLOCK (#5860 review, ten9876). The first
+    # revision of this fix emitted the synthetic `;` on every depth-1 `{`. That
+    # truncated a brace-initialised comma declarator: `bool a{false}, b{true};`
+    # scanned as `bool a; , b; ;` and `b` was deleted — invisible growth with
+    # the count flat, which is the quiet direction this parser is supposed to
+    # be the guard for, and a REGRESSION against the pre-#5727 line parser,
+    # which counted both. No intent is needed to hit it; a house-style or
+    # clang-format pass to brace initialisation introduces it silently.
+    # `_opens_a_body()` tells the two apart on the fragment preceding the
+    # brace. An initializer needs no terminator anyway: `agcModes = {…};`
+    # scans as `QStringList agcModes = ;`, which fails the bool match, and the
+    # field after it survives — the hazard that cost hasModeIndependentSquelch
+    # exactly once.
     code = "\n".join(lines[start:])
     open_brace = code.find("{")
     if open_brace < 0:
@@ -166,7 +234,7 @@ def direct_bool_fields(text: str) -> list[str]:
     for ch in code[open_brace + 1:]:
         if ch == "{":
             depth += 1
-            if depth == 2:
+            if depth == 2 and _opens_a_body(chars):
                 chars.append(";")
             continue
         if ch == "}":
@@ -179,19 +247,31 @@ def direct_bool_fields(text: str) -> list[str]:
 
     fields: list[str] = []
     for statement in "".join(chars).split(";"):
-        # `(` still excludes member functions and operator==. It also excludes a
-        # parenthesised initialiser (`bool x(false);`) — the most vexing parse,
-        # genuinely undecidable here, and a stated limitation rather than a
-        # heuristic that would misfire on real declarations.
+        # `(` still excludes member functions and operator==. It also excludes
+        # ANY parenthesised initialiser — `bool x(false);`, the most vexing
+        # parse and genuinely undecidable here, but equally `bool x = fn();`
+        # and `bool x = kDefault(n);`, which are the likelier shapes and just
+        # as uncounted. A stated limitation rather than a heuristic that would
+        # misfire on real declarations (#5860 review).
         if "(" in statement:
             continue
-        # Leading attributes and qualifiers: `[[deprecated]] bool x`,
-        # `mutable bool x`. Stripped rather than enumerated, so a future
-        # qualifier does not silently create another evasion.
+        # Leading attributes, access labels and qualifiers. ENUMERATED, not
+        # stripped generically — an earlier comment here claimed the opposite
+        # and it was never true (#5860 review, ten9876). A qualifier missing
+        # from this list leaves the fragment not starting with `bool` and the
+        # field goes UNCOUNTED, which is the direction that hides growth, so
+        # the list is widened rather than trusted: `const`, `volatile` and
+        # `constexpr` are added here. What is still missed is a MACRO
+        # qualifier (`Q_DECL_DEPRECATED bool x`), unknowable without a
+        # preprocessor, and `[[deprecated("why")]] bool x`, which the `(` rule
+        # above drops before this strip ever runs. Both are pre-existing and
+        # behave identically on the pre-#5727 parser; both are stated
+        # limitations, not claims of coverage.
         head = re.sub(
             r"^\s*(?:\[\[[^\]]*\]\]\s*"
             r"|(?:public|private|protected)\s*:\s*"
-            r"|mutable\s+|static\s+|inline\s+)+",
+            r"|mutable\s+|static\s+|inline\s+"
+            r"|const\s+|volatile\s+|constexpr\s+)+",
             "", statement)
         m = re.match(r"\s*bool\s+(?P<rest>.+)$", head, re.S)
         if not m:
@@ -231,12 +311,19 @@ def main() -> int:
         return 1 if args.strict else 0
 
     # ANTI-VACUITY FLOOR, the sibling's ABOVE_SEAM_DIR_FLOOR applied here (#5619
-    # re-review, K5PTB). The multi-line /* */ blind spot documented above is not
-    # a small under-count when it fires: the brace tracking collapses, the scan
-    # finds almost nothing, and the "below the frozen count" branch below then
-    # prints "the migration is working" and tells the contributor to lower
-    # FROZEN_BOOL_COUNT to the collapsed number — which would disarm the ratchet
-    # permanently. Anyone following that message in good faith destroys the gate.
+    # re-review, K5PTB). A brace the scan cannot attribute is not a small
+    # under-count when it fires: the depth tracking collapses, the scan finds
+    # almost nothing from that point on, and the "below the frozen count"
+    # branch below then prints "the migration is working" and tells the
+    # contributor to lower FROZEN_BOOL_COUNT to the collapsed number — which
+    # would disarm the ratchet permanently. Anyone following that message in
+    # good faith destroys the gate.
+    #
+    # WHAT CAN STILL COLLAPSE IT, stated precisely, because this comment named
+    # the wrong mechanism until #5860's review: the multi-line `/* */` case it
+    # used to cite is gone (_NON_CODE_RE, re.S), and so is the brace in a
+    # string or char literal and the brace in a directive. What remains is a
+    # raw string literal, `R"(…)"` — see _NON_CODE_RE's stated limitation.
     #
     # A conversion retires bools a few at a time, so a large drop is a parse
     # failure rather than progress. The threshold is deliberately generous: it
@@ -254,8 +341,9 @@ def main() -> int:
         print(f"::error file={HEADER},title=capability-bool-vacuity::"
               f"only {count} boolean(s) found against a frozen {FROZEN_BOOL_COUNT} — "
               f"that is too large a drop to be a conversion and is almost certainly a "
-              f"PARSE FAILURE (an unbalanced brace inside a block comment collapses "
-              f"the depth tracking). DO NOT lower FROZEN_BOOL_COUNT to match: that "
+              f"PARSE FAILURE (a brace the scan could not attribute — a raw string "
+              f"literal is the one known remaining case — collapses the depth "
+              f"tracking). DO NOT lower FROZEN_BOOL_COUNT to match: that "
               f"would disarm the ratchet permanently. Fix the parser, or raise "
               f"MAX_PLAUSIBLE_DROP if a conversion really did retire this many.")
         print(f"capability-records: {count} boolean(s) against a frozen "
