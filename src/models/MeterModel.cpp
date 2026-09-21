@@ -274,7 +274,28 @@ void MeterModel::removeMeter(int index)
     const bool removedCompSource = m_compPeakIdxByTxSource.removeIf(matchesIndex) > 0;
     const bool removedCompSlice = m_compPeakIdxBySlice.removeIf(matchesIndex) > 0;
     const bool compressionMapChanged = removedCompSource || removedCompSlice;
-    if (index == m_fwdPwrIdx) { m_fwdPwrIdx = -1; m_fwdPwrUnit.clear(); }
+    if (index == m_fwdPwrIdx) {
+        m_fwdPwrIdx = -1;
+        m_fwdPwrUnit.clear();
+        // AND THE SAMPLE, not only the route. Clearing the index alone left
+        // m_fwdPower and m_lastFwdPowerUpdateMs holding the departed meter's
+        // reading, and fwdPowerIfLive() gates on the STAMP: declare any FWDPWR
+        // meter again inside kTxMeterStaleMs -- which defineMeter() itself
+        // triggers when an index is reused for a different meter -- and
+        // `get radio`.txPower answers the previous meter's smoothed watts for
+        // one that has carried no packet. That is the declared-but-never-fed
+        // case this whole change exists to report as null. REFPWR immediately
+        // below already zeroed both of its members; this is that, for the
+        // reading that has two.
+        //
+        // Zeroing the stamp also puts swrSampleLive() back on its
+        // "backend never published forward power" branch, which is correct: a
+        // radio whose FWDPWR meter has been removed is a radio with no forward
+        // power to gate the ratio on, exactly like one that never declared it.
+        m_fwdPower = 0.0f;
+        m_fwdPowerInstant = 0.0f;
+        m_lastFwdPowerUpdateMs = 0;
+    }
     if (index == m_refPwrIdx) {
         m_refPwrIdx = -1;
         m_refPwrUnit.clear();
@@ -795,7 +816,13 @@ std::optional<float> MeterModel::sLevelForSlice(int sliceIndex) const
     // third literal appearing next to two existing ones. At the ~100 Hz the
     // SLC:LEVEL row is fed while receiving, kVitalsFreshMs is 150 packets of
     // slack; it bites only when the stream has actually stopped.
-    if (!vitalIsFresh(m_valueUpdatedMs.value(index, 0) > 0, valueAgeMs(index))) {
+    //
+    // The declared-and-fed argument is a literal true because valueAgeMs()
+    // already carries it: it returns -1 when the stamp is 0 or no value has
+    // been stored, and vitalIsFresh() rejects a negative age. Re-deriving the
+    // stamp here would be a second expression that has to agree with the
+    // first. (ten9876's review of #5499)
+    if (!vitalIsFresh(true, valueAgeMs(index))) {
         return std::nullopt;
     }
     return m_values.value(index, 0.0f);

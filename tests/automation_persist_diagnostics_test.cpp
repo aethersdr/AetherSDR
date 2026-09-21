@@ -236,6 +236,41 @@ int main(int argc, char** argv) {
     radio.meterModel().removeMeter(3);
     check(radioTxPower().isNull(),
         "and removing the meter takes the reading with it");
+    // ...AND THE SAMPLE WITH IT, WHICH THE ASSERTION ABOVE CANNOT SEE.
+    // removeMeter() cleared m_fwdPwrIdx and nothing else, so the check above
+    // passes on the index alone while m_fwdPower and m_lastFwdPowerUpdateMs
+    // still hold the departed meter's reading. fwdPowerIfLive() qualifies on
+    // that STAMP: declare any FWDPWR meter again inside kTxMeterStaleMs and
+    // the stale stamp is still inside the window, so `get radio`.txPower
+    // answers 0.153 W for a meter that has carried no packet -- the
+    // declared-but-never-fed case this file asserts is null, arriving by a
+    // door the never-fed assertion above does not watch. Found by ten9876
+    // reviewing #5849; REFPWR's branch in removeMeter() already zeroed both of
+    // its members, which is what made the asymmetry visible.
+    //
+    // The re-declaration uses a DIFFERENT index on purpose: the bug is in the
+    // sample, not in index reuse, and a fresh index proves it without relying
+    // on defineMeter()'s own removeMeter() call.
+    MeterDef fwdAgain;
+    fwdAgain.index = 5; fwdAgain.source = "TX-"; fwdAgain.sourceIndex = 9;
+    fwdAgain.name = "FWDPWR"; fwdAgain.unit = "Watts";
+    radio.meterModel().defineMeter(fwdAgain);
+    check(radioTxPower().isNull(),
+        "a FWDPWR meter declared just after a removal is unfed, not the old watts");
+    // The positive control for that null, and a second reading of the same
+    // defect: the EMA's first-sample branch is `m_fwdPower < 0.01f`. With the
+    // old watts left standing, the replacement's FIRST packet arrives already
+    // smoothed against a meter it never shared a radio with -- 0.5*0.184 +
+    // 0.5*0.153 = 0.1685 -- so this assertion fails on the value as well as
+    // the null, and for a reason a client could never diagnose.
+    radio.meterModel().updateValueByName("TX-", "FWDPWR", 0.184f);
+    const QJsonValue txPowerAgain = radioTxPower();
+    check(txPowerAgain.isDouble()
+        && std::fabs(txPowerAgain.toDouble() - 0.184) < 1e-4,
+        "and its first sample is its own, not smoothed against the removed meter's");
+    radio.meterModel().removeMeter(5);
+    check(radioTxPower().isNull(),
+        "and the replacement's removal leaves nothing behind either");
 
     const auto sLevel = [&]() { return meters().value("sLevel"); };
     check(sLevel().isNull(),
