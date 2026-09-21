@@ -13,7 +13,6 @@
 #include "core/AutomationBridgeSettings.h"
 #include "core/backends/hl2/Hl2Discovery.h"   // HL2 custom-nickname settings key
 #include "core/backends/hl2/Hl2FreqCal.h"     // manual frequency calibration (Calibration page)
-#include "core/backends/hl2/Hl2HardwareOptions.h" // which HL2 variant (HL2 Hardware page)
 #include "core/NetworkSettings.h"
 #include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
@@ -4045,9 +4044,45 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
                            refreshSpeaker] {
         if (!codecGuard)
             return;
-        const AetherSDR::Hl2HardwareOptions opts =
-            AetherSDR::Hl2HardwareOptions::load(m_model->settingsScope());
-        {
+        // THROUGH THE SEAM, NOT THE VENDOR TYPE.
+        //
+        // This used to call Hl2HardwareOptions::load() directly, which meant
+        // this file included a `vendor(hl2)` header — new vendor coupling above
+        // the radio seam, which EB3 in tools/check_engine_boundary.py blocks by
+        // design (aetherd RFC §5.5). The header genuinely IS vendor: it returns
+        // the N2ADR open-collector wire bytes and includes MetisProtocol.h.
+        // Re-tagging it `mixed(hl2)` would have made the checker pass and is
+        // precisely the de-classification that file warns about, so the fix is
+        // the one EB3's own message names — route it through IRadioBackend.
+        //
+        // The backend's `hw.get` is also the BETTER source: it answers from the
+        // backend's live state rather than from the settings store, so a value
+        // changed this session is reflected even before it is persisted.
+        IRadioBackend* backend = m_model->backend();
+        const bool haveRadio = !m_model->settingsScope().radioId().isEmpty();
+        const bool canAsk = backend
+            && m_model->backendDeclaresExtension(QStringLiteral("hl2"));
+        if (!canAsk) {
+            // Nothing to read from and nothing that could persist a write.
+            // Dim everything and say why, rather than leaving the last radio's
+            // values on screen looking live.
+            for (const QPointer<QWidget>& w : *controls) {
+                if (w)
+                    w->setEnabled(false);
+            }
+            if (noRadioLbl)
+                noRadioLbl->setVisible(true);
+            return;
+        }
+
+        // REQUEST IDS ARE NOT ALLOCATED CENTRALLY — see BandscopeDialog's note.
+        // This one lives in its own decade so it cannot collide with
+        // AutomationServer's counter or RadioModel's reserved UINT64_MAX.
+        constexpr quint64 kHwRequestIdBase = 0x0300000000000000ull;
+        static quint64 nextHwId = kHwRequestIdBase;
+        const quint64 requestId = nextHwId++;
+        auto* guard = new QObject(this);
+        auto fill = [=](const QVariantMap& m) {
             const QSignalBlocker b1(codecCombo);
             const QSignalBlocker b2(ditherChk);
             const QSignalBlocker b3(randomChk);
@@ -4056,41 +4091,64 @@ QWidget* RadioSetupDialog::buildHl2HardwareTab()
             const QSignalBlocker b6(cl1Chk);
             const QSignalBlocker b7(atuChk);
             codecCombo->setCurrentIndex(
-                codecCombo->findData(static_cast<int>(opts.codec)));
-            ditherChk->setChecked(opts.ditherBit);
-            randomChk->setChecked(opts.randomBit);
+                codecCombo->findData(m.value(QStringLiteral("codec")).toInt()));
+            ditherChk->setChecked(m.value(QStringLiteral("ditherBit")).toBool());
+            randomChk->setChecked(m.value(QStringLiteral("randomBit")).toBool());
             filterCombo->setCurrentIndex(
-                filterCombo->findData(static_cast<int>(opts.filterBoard)));
-            hpfChk->setChecked(opts.n2adrHpf);
-            cl1Chk->setChecked(opts.cl1RefClock);
-            atuChk->setChecked(opts.atuGateware);
-            spkSlider->setValue(
-                AetherSDR::Hl2HardwareOptions::clampSpeakerLevel(opts.speakerLevelPercent));
+                filterCombo->findData(m.value(QStringLiteral("filterBoard")).toInt()));
+            hpfChk->setChecked(m.value(QStringLiteral("n2adrHpf")).toBool());
+            cl1Chk->setChecked(m.value(QStringLiteral("cl1RefClock")).toBool());
+            atuChk->setChecked(m.value(QStringLiteral("atuGateware")).toBool());
+            // Clamped here too, not only in the backend: this arrives as a
+            // QVariant off a generic seam, and a slider given a value outside
+            // its range silently takes the nearest end — which would then be
+            // persisted by the next drag as if the operator had chosen it.
+            spkSlider->setValue(std::clamp(
+                m.value(QStringLiteral("speakerLevelPercent"), 100).toInt(), 0, 100));
             // Inside the blockers: refreshDither forces the box checked on an
             // AK4951, and that write must not be mistaken for the operator.
             refreshDither();
             refreshHpf();
             refreshSpeaker();
-        }
-        // No radio identity, no write — Hl2HardwareOptions::save() refuses
-        // without one rather than writing the family-wide row, which every
-        // other HL2 would then inherit. Leaving the controls live would be a
-        // page that reports success while nothing persists.
-        //
-        // ONE-WAY, and deliberately so: refreshDither() and refreshHpf() above
-        // have already set each control's own availability, so this only ever
-        // takes availability AWAY. Re-enabling here would undo them — the
-        // dither box on an AK4951 would become clickable again, and moving it
-        // would ask the gateware to stop believing there is a codec.
-        const bool haveRadio = !m_model->settingsScope().radioId().isEmpty();
-        if (!haveRadio) {
-            for (const QPointer<QWidget>& w : *controls) {
-                if (w)
-                    w->setEnabled(false);
+            // No radio identity, no write — the backend refuses to persist
+            // without one rather than writing the family-wide row, which every
+            // other HL2 would then inherit. Leaving the controls live would be
+            // a page that reports success while nothing persists.
+            //
+            // ONE-WAY, and deliberately so: refreshDither() and refreshHpf()
+            // above have already set each control's own availability, so this
+            // only ever takes availability AWAY. Re-enabling here would undo
+            // them — the dither box on an AK4951 would become clickable again,
+            // and moving it would ask the gateware to stop believing there is
+            // a codec.
+            if (!haveRadio) {
+                for (const QPointer<QWidget>& w : *controls) {
+                    if (w)
+                        w->setEnabled(false);
+                }
             }
-        }
-        if (noRadioLbl)
-            noRadioLbl->setVisible(!haveRadio);
+            if (noRadioLbl)
+                noRadioLbl->setVisible(!haveRadio);
+        };
+
+        connect(backend, &IRadioBackend::extensionResult, guard,
+                [guard, requestId, fill](quint64 id, const QVariant& result) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();
+            fill(result.toMap());
+        });
+        connect(backend, &IRadioBackend::extensionError, guard,
+                [guard, requestId](quint64 id, const QString&) {
+            if (id != requestId)
+                return;
+            guard->deleteLater();   // leave the page as it stands
+        });
+        // Connected BEFORE the invoke: hw.get completes locally in the backend
+        // and emits its reply SYNCHRONOUSLY, so a handler armed afterwards
+        // would never see it.
+        m_model->invokeBackendExtension(QStringLiteral("hl2"),
+                                        QStringLiteral("hw.get"), requestId);
     };
     m_hl2HardwareReseed();
 
