@@ -104,14 +104,24 @@ int Hl2Spectrum::process(std::span<const std::complex<float>> iq, std::vector<fl
 
 void Hl2Spectrum::setAverageFrames(int frames) noexcept
 {
-    if (frames < 1)
+    if (frames < 1) {
         frames = 1;
-    // A no-op depth change must not drop the state: the pan-rebuild restore
-    // path re-applies the operator's stored number on every zoom, and a class
-    // that cleared its accumulator each time would average nothing while the
-    // operator worked the spectrum.
-    if (frames == m_averageFrames)
+    }
+    // A no-op depth change must not drop the state: a settings replay that
+    // re-applies the depth this object is already at would otherwise clear the
+    // accumulator, and a UI that replays on every control touch would average
+    // nothing while the operator worked the spectrum.
+    //
+    // NOT the pan-rebuild path, which an earlier version of this comment
+    // named. A zoom REBUILDS the chain — Hl2RxDsp::buildChannel() constructs a
+    // fresh Hl2Spectrum — so a re-applied depth always lands on an object at
+    // the default 1 and this guard cannot fire there. It would become a no-op
+    // path only if Hl2RxDsp carried the depth as its own member and re-applied
+    // it from installRebuiltChannel(), which it does not: the depth does not
+    // survive a zoom today at all.
+    if (frames == m_averageFrames) {
         return;
+    }
     m_averageFrames = frames;
     // An exponential state built at one alpha is not a state at the next one.
     // Assign rather than resize — the vector was sized at construction, so
@@ -198,8 +208,9 @@ void Hl2Spectrum::computeFrame(std::vector<float>& binsDbfs)
     // Set after the loop and only while blending, so a pass with averaging off
     // cannot leave a stale "we have a state" behind for the next one to blend
     // into. setAverageFrames() clears it on every depth change.
-    if (blending)
+    if (blending) {
         m_haveAverage = true;
+    }
 }
 
 }  // namespace AetherSDR::hl2

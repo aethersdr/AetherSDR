@@ -48,6 +48,17 @@ public:
     // N=16, fftSize=4096), and it does not divide the display cadence by N —
     // every frame still emits, which is not the operator's to lose.
     //
+    // "FRAMES" ARE DISPLAY FRAMES, NOT CONSECUTIVE PERIODOGRAMS, so the
+    // integration window moves with the operator's fps slider.
+    // Hl2RxDsp::processIqBlock() calls process() only when its
+    // spectrumFrameDue() says so; every other EP6 block goes to accumulate(),
+    // which keeps at most fftSize - 1 samples and discards the rest. One
+    // periodogram per display interval is therefore all this ever integrates:
+    // N = 8 at 25 fps spans ~320 ms of wall clock sampled once every 40 ms,
+    // not 8 back-to-back transforms. Moving the fps cap changes the time
+    // constant without changing this number — a constraint on whatever
+    // slider mapping RFC #5782 q1 settles on, not a defect here.
+    //
     // NOTHING CALLS THIS YET, DELIBERATELY. The operator-facing control is a
     // 0..100 slider, and the mapping from that number to an integration depth
     // is a behaviour decision RFC #5782 has not ruled on (q1), as is the seam
@@ -60,9 +71,25 @@ public:
     // Changing the depth DROPS the accumulated state: an exponential state
     // built at one alpha does not mean anything at another, and carrying it
     // would make the first frames after a change describe a blend of two
-    // estimators. Call it off the real-time path — it is a vector assign, not
-    // an allocation (the state is sized at construction), but the drop is a
-    // visible discontinuity on screen and belongs with the other setup.
+    // estimators.
+    //
+    // CALL IT ON THE DSP THREAD — the same thread that calls process(), which
+    // for the production owner is Hl2RxDsp's, the hl2-io thread Hl2Backend
+    // moves it to. m_averageFrames, m_avgPower and m_haveAverage are plain
+    // members with no atomic and no lock, and computeFrame() reads all three,
+    // so a call from any other thread is a data race; AGENTS.md's "atomic
+    // parameters for cross-thread DSP" rule is met by none of them. The
+    // established route is the one every other setter on that chain already
+    // takes — Q_INVOKABLE on Hl2RxDsp, reached with
+    // QMetaObject::invokeMethod(..., Qt::QueuedConnection); see
+    // Hl2RxDsp::setSpectrumRateFps and Hl2Backend::pushNoiseBlanker. The work
+    // is cheap enough for that thread: a vector assign, not an allocation,
+    // because the state is sized at construction.
+    //
+    // (The class comment above says to CONSTRUCT instances off the real-time
+    // path. That is about FFTW's process-global, non-thread-safe planner and
+    // applies to the constructor alone — it is not licence to reach into a
+    // live instance from another thread.)
     void setAverageFrames(int frames) noexcept;
     [[nodiscard]] int averageFrames() const noexcept { return m_averageFrames; }
 
@@ -117,14 +144,38 @@ public:
     // nothing and corrupts nothing; see Hl2RxDsp::spectrumGapDiscards().
     //
     // THE AVERAGING STATE IS NOT DROPPED HERE, and that is a decision rather
-    // than an omission. A geometry change — a different FFT size or span —
-    // makes accumulated bins describe a different thing and must drop them,
-    // but a geometry change reconstructs this whole object (see the paragraph
-    // above), so it already does. What this function handles is a transport
-    // gap, and the frames integrated BEFORE a gap are still measurements of
-    // the same spectrum; throwing them away on every burst of packet loss
-    // would make the display oscillate between averaged and raw. Only the
-    // partial frame, whose samples would span the discontinuity, is discarded.
+    // than an omission. What this function handles is a transport gap, and the
+    // frames integrated BEFORE a gap are still measurements of the same
+    // spectrum; throwing them away on every burst of packet loss would make
+    // the display oscillate between averaged and raw. Only the partial frame,
+    // whose samples would span the discontinuity, is discarded.
+    //
+    // A GEOMETRY CHANGE MUST drop the average, and two thirds of geometry drop
+    // it for free. FFT size and IQ rate both live in Hl2RxDsp::Config, both
+    // reach Hl2RxDsp::buildChannel(), and buildChannel() does
+    // make_unique<Hl2Spectrum>(config.fftSize) — a fresh object, m_avgPower
+    // zeroed and m_haveAverage false. That is the reconstruction the paragraph
+    // above describes.
+    //
+    // THE FREQUENCY AXIS IS GEOMETRY TOO, AND IT HAS NO SUCH PATH. A pan
+    // retune is not in Config and rebuilds nothing:
+    // Hl2Backend::setPanCenter() and Hl2Backend::setSliceFrequency() move the
+    // NCO with invokeMethod(m_metis, "setRxFrequencyHz", ...) and re-push the
+    // WDSP shift, and neither reaches this object or this function. So once
+    // anything calls setAverageFrames(N), dragging the pan blends the new
+    // spectrum into bins integrated at the OLD NCO, and the EMA carries them
+    // for roughly N display frames — at 25 fps and N = 16, ghosts at wrong
+    // frequencies for the better part of a second. #5794's own constraint,
+    // that state must be dropped across a geometry change, covers this axis.
+    //
+    // Harmless TODAY only because nothing on the shipping path calls
+    // setAverageFrames() — only hl2_spectrum_test does.
+    // Whoever wires RFC #5782's operator control owes the retune a DISTINCT
+    // drop — a dropAverage(), or a flag on this function — and must not simply
+    // call reset() from it: a transport gap and a retune want OPPOSITE answers
+    // about the frames already integrated, which is the whole reason this
+    // paragraph exists. Deliberately not implemented here; it is unreachable
+    // until that wiring lands, and the hook belongs with its caller.
     std::size_t reset() noexcept
     {
         const std::size_t discarded = m_acc.size();

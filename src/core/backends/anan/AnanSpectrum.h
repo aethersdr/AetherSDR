@@ -17,6 +17,30 @@ namespace AetherSDR::anan {
 // fact with no ANAN-specific content, so it is copied verbatim rather than
 // re-derived.
 //
+// THE LAST STEP DIVERGED IN #5833 and the divergence is intended. Hl2Spectrum
+// now squares in place and emits 10*log10(power + 1e-24) where this class
+// still takes the square root and emits 20*log10(mag + 1e-12). The four items
+// listed above are untouched and "verbatim" still describes them; only the
+// conversion to dBFS differs, and for a SINGLE frame the two are the same
+// number by the same route, since 20*log10(m) is 10*log10(m^2).
+//
+// WHY HL2 MOVED AND THIS DID NOT. Hl2Spectrum integrates across frames, and an
+// arithmetic mean of logarithms is the logarithm of the GEOMETRIC mean, which
+// biases low exactly where a panadapter is noisiest (#5794; derivation in RFC
+// #5782 §3). Accumulating in POWER is the fix, and taking the log once at emit
+// is what makes it possible. This class does not average, so it gains nothing
+// from the change and is deliberately left alone: an HL2 bring-up PR is not
+// the place to move an ANAN signal path (docs/HERMES.md, "keep bring-up inside
+// the family backend"; AGENTS.md's #5554 notice, "no copy of HL2 scaffolding
+// into another host-DSP family").
+//
+// Nor would mirroring be a free no-op. The epsilon is not a translation: the
+// old floor puts an exactly-zero bin at -120 dBFS and the new one at -240, so
+// copying the arithmetic across would change what this class emits for a
+// silent bin, and nothing here has measured what ANAN's consumers do with
+// -240. If this class ever grows averaging, move it then and re-derive the
+// floor with it.
+//
 // Owns an FFTW plan; construction/destruction allocate, process() does not
 // (fftw_execute is allocation-free). FFTW's global planner is not
 // thread-safe, so construct instances off the real-time path.
