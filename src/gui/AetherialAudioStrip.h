@@ -3,7 +3,6 @@
 #include "ClientEqApplet.h"   // ClientEqApplet::Path enum
 #include "core/AudioEngine.h" // AudioEngine::TxChainStage in signal sig
 
-#include <QPointer>
 #include <QWidget>
 
 class QPushButton;
@@ -15,7 +14,6 @@ class QVBoxLayout;
 
 namespace AetherSDR {
 
-class AetherTxSettingsDialog;
 
 class AudioEngine;
 class StageTabBar;
@@ -119,10 +117,10 @@ protected:
 private:
     void refreshIndicators();
 
-    // The Settings dialog while it is open, so monitor state that changes
-    // underneath it still reaches its buttons. QPointer because the dialog is
-    // a stack local in showSettings().
-    QPointer<AetherTxSettingsDialog> m_settingsDlg;
+    // The monitor pair at the foot of the stage column, above BYPASS. Owned
+    // by the StageTabBar; lit by MainWindow through the setMonitor* setters.
+    QPushButton* m_monRecBtn{nullptr};
+    QPushButton* m_monPlayBtn{nullptr};
 
     QLabel* m_micDot{nullptr};
     QLabel* m_micLabel{nullptr};
@@ -148,7 +146,7 @@ private:
     void setStageEnabled(Stage stage, bool on);
     bool stageEnabled(Stage stage) const;
 
-    // The profile library and the transmit monitor.
+    // The profile library.
     void showSettings();
 
     // After a profile has been applied to the engine, push fresh values
@@ -166,9 +164,6 @@ private:
     // the docked chain applet toggles the same flags.
     QTimer*              m_checkTimer{nullptr};
     bool                 m_buildingCombo{false};
-    bool               m_monRecording{false};
-    bool               m_monPlaying{false};
-    bool               m_monHasRecording{false};
     StripTubePanel*    m_tube{nullptr};
     StripGatePanel*    m_gate{nullptr};
     StripEqPanel*      m_eq{nullptr};

@@ -59,6 +59,26 @@
 namespace AetherSDR {
 
 namespace {
+// The monitor pair at the foot of the stage column. Tab-shaped like the rows
+// above them (StageTabBar::addFooterToggle draws them), recoloured from its
+// amber: Record is red and Play is green, as on the docked chain applet, so
+// a running capture and a running playback are told apart at a glance.
+constexpr const char* kMonTabBase =
+    "QPushButton { text-align: left; }"
+    "QPushButton:disabled { color: #4a5260; }";
+constexpr const char* kRecTab =
+    "QPushButton:enabled { color: #a05050; }"
+    "QPushButton:hover:enabled { color: #ff4040; border-color: #ff4040; }"
+    "QPushButton:checked { color: #ff4040; border-color: #ff4040;"
+    "                      background: rgba(255,50,50,50); }";
+constexpr const char* kPlayTab =
+    "QPushButton:enabled { color: #509050; }"
+    "QPushButton:hover:enabled { color: #40e060; border-color: #40e060; }"
+    "QPushButton:checked { color: #40e060; border-color: #40e060;"
+    "                      background: rgba(50,200,80,50); }";
+} // namespace
+
+namespace {
 // The size this window opens at, every time — see showEvent().
 constexpr QSize kLaunchSize(720, 480);
 }  // namespace
@@ -226,11 +246,11 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     // pointed in opposite directions, so a second copy of the column would
     // have been two places to fix every tab-bar bug.
     //
-    // BYPASS sits at the foot of the column, directly above Settings: it is
-    // the one control you reach for mid-QSO, so it is not behind a modal. The
-    // monitor pair and the preset controls live in Settings. Neither is
-    // stranded: ClientChainApplet carries its own BYPASS and its own
-    // record/play buttons on the docked panel.
+    // The live controls sit at the foot of the column, directly above
+    // Settings: Record, Play and BYPASS are what you reach for mid-QSO, so
+    // none of them is behind a modal. Only the profile library lives in
+    // Settings. ClientChainApplet carries its own copy of all three on the
+    // docked panel.
     auto* row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(8);
@@ -353,6 +373,40 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         refreshIndicators();
     }
 
+    // The transmit monitor pair. Checkable so the lit state can show, but a
+    // click only asks: MainWindow owns the monitor and calls
+    // setMonitorRecording / setMonitorPlaying back with what actually
+    // happened, which is when the button lights. Record red, Play green,
+    // the colours the docked applet's pair already use.
+    m_monRecBtn = m_tabs->addFooterToggle(
+        tr("Record"), QStringLiteral("aetherTxMonitorRecord"),
+        tr("Record up to 30 s of processed transmit audio (MIC must be set to "
+           "PC and DAX off). Click again to stop; playback starts by itself."));
+    m_monRecBtn->setStyleSheet(QString::fromLatin1(kMonTabBase) + kRecTab);
+    // A checkable button flips itself on click. Put it back and let the
+    // monitor's own started/stopped signals light it, so a capture the
+    // monitor declined (already playing, say) never shows as running.
+    const auto askOnly = [](QPushButton* b) {
+        QSignalBlocker block(b);
+        b->setChecked(!b->isChecked());
+    };
+    connect(m_monRecBtn, &QPushButton::clicked, this, [this, askOnly]() {
+        askOnly(m_monRecBtn);
+        emit monitorRecordClicked();
+    });
+
+    m_monPlayBtn = m_tabs->addFooterToggle(
+        tr("Play"), QStringLiteral("aetherTxMonitorPlay"),
+        tr("Play back the captured audio. Click again to cancel."));
+    m_monPlayBtn->setStyleSheet(QString::fromLatin1(kMonTabBase) + kPlayTab);
+    connect(m_monPlayBtn, &QPushButton::clicked, this, [this, askOnly]() {
+        askOnly(m_monPlayBtn);
+        emit monitorPlayClicked();
+    });
+    // Nothing recorded yet, and why it is greyed out has to reach the
+    // accessible channel too, not just the tooltip (#4896).
+    setMonitorHasRecording(false);
+
     m_bypassBtn = m_tabs->addFooterToggle(
         tr("BYPASS"), QStringLiteral("aetherTxBypass"),
         tr("Suppress every voice stage at once, so the microphone reaches the "
@@ -375,7 +429,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
 
     m_tabs->addFooterButton(
         tr("Settings"), QStringLiteral("aetherTxSettingsButton"),
-        tr("Profiles and the transmit monitor."));
+        tr("Profiles: save, load, import and export the transmit chain."));
 
     // Pin every panel to its TX engine instance, then show the first stage.
     if (m_gate)        m_gate->showForTx();
@@ -563,25 +617,11 @@ void AetherialAudioStrip::showSettings()
     // chain, and letting that happen mid-drag on a stage page would be a
     // good way to lose track of what changed.
     AetherTxSettingsDialog dlg(m_audio, this);
-    // Tracked for the life of the dialog, not handed over once: a capture
-    // reaching its 30 s cap while the dialog is open has to move the buttons,
-    // or Record stays lit and Play stays disabled -- including its accessible
-    // description, which would go on saying "nothing has been recorded" after
-    // something had been.
-    m_settingsDlg = &dlg;
-    dlg.setMonitorRecording(m_monRecording);
-    dlg.setMonitorHasRecording(m_monHasRecording);
-    dlg.setMonitorPlaying(m_monPlaying);
     connect(&dlg, &AetherTxSettingsDialog::profileApplied, this, [this]() {
         refreshAllPanelsFromEngine();
         if (m_tabs) m_tabs->refreshFromHost();
     });
-    connect(&dlg, &AetherTxSettingsDialog::monitorRecordClicked,
-            this, &AetherialAudioStrip::monitorRecordClicked);
-    connect(&dlg, &AetherTxSettingsDialog::monitorPlayClicked,
-            this, &AetherialAudioStrip::monitorPlayClicked);
     dlg.exec();
-    m_settingsDlg = nullptr;
 }
 
 AetherialAudioStrip::~AetherialAudioStrip() = default;
@@ -613,38 +653,33 @@ void AetherialAudioStrip::setTxFilterCutoffs(int lowHz, int highHz)
     if (m_eq) m_eq->setTxFilterCutoffs(lowHz, highHz);
 }
 
-namespace {
-constexpr const char* kMonBtnBase =
-    "QPushButton { background: rgba(255,255,255,15); border: none;"
-    " border-radius: 10px; font-size: 11px; padding: 0; }"
-    "QPushButton:hover:enabled { background: rgba(255,255,255,40); }"
-    "QPushButton:disabled { color: #303030;"
-    " background: rgba(255,255,255,5); }";
-constexpr const char* kRecIdle    = "QPushButton:enabled { color: #804040; }";
-constexpr const char* kRecActive  = "QPushButton { color: #ff2020;"
-                                    " background: rgba(255,50,50,60); }";
-constexpr const char* kPlayIdle   = "QPushButton:enabled { color: #406040; }";
-constexpr const char* kPlayActive = "QPushButton { color: #30d050;"
-                                    " background: rgba(50,200,80,60); }";
-} // namespace
-
 void AetherialAudioStrip::setMonitorRecording(bool on)
 {
-    // Held for the next time Settings opens, and forwarded if it is open now.
-    m_monRecording = on;
-    if (m_settingsDlg) m_settingsDlg->setMonitorRecording(on);
+    // Driven by MainWindow, which owns the monitor: the button lights when a
+    // capture is actually running, not when it was asked for. Blocked so the
+    // readback cannot look like a second click.
+    if (!m_monRecBtn) return;
+    QSignalBlocker block(m_monRecBtn);
+    m_monRecBtn->setChecked(on);
 }
 
 void AetherialAudioStrip::setMonitorPlaying(bool on)
 {
-    m_monPlaying = on;
-    if (m_settingsDlg) m_settingsDlg->setMonitorPlaying(on);
+    if (!m_monPlayBtn) return;
+    QSignalBlocker block(m_monPlayBtn);
+    m_monPlayBtn->setChecked(on);
 }
 
 void AetherialAudioStrip::setMonitorHasRecording(bool has)
 {
-    m_monHasRecording = has;
-    if (m_settingsDlg) m_settingsDlg->setMonitorHasRecording(has);
+    if (!m_monPlayBtn) return;
+    m_monPlayBtn->setEnabled(has);
+    // A screen-reader user meets a disabled button with no explanation
+    // otherwise (#4896).
+    m_monPlayBtn->setAccessibleDescription(
+        has ? tr("Play back the captured audio. Click again to cancel.")
+            : tr("Unavailable until something has been recorded. "
+                 "Use Record first."));
 }
 
 void AetherialAudioStrip::setMicInputReady(bool ready)
