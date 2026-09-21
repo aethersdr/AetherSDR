@@ -631,12 +631,14 @@ bool WdspChannel::setFilter(double lowHz, double highHz) noexcept
 
 bool WdspChannel::setFmDeviation(double deviationHz) noexcept
 {
-    // Non-positive is refused rather than clamped: WDSP computes
-    // again = rate / (deviation * TWOPI), so zero is a division by zero and a
-    // negative value inverts the recovered audio. Neither is a deviation a
-    // caller can have meant.
+    // Out of range is refused rather than clamped, and RANGE is the word:
+    // WDSP computes again = rate / (deviation * TWOPI), so zero divides by
+    // zero, a negative value inverts the recovered audio — and a tiny positive
+    // value, which a sign check waves through, sends again to infinity and the
+    // detector emits inf. See Config::kMinFmDeviationHz.
     if (m_config.direction != Direction::Receive || !std::isfinite(deviationHz) ||
-        deviationHz <= 0.0 || !beginControlOperation()) {
+        deviationHz < Config::kMinFmDeviationHz ||
+        deviationHz > Config::kMaxFmDeviationHz || !beginControlOperation()) {
         return false;
     }
     {
@@ -898,9 +900,17 @@ bool WdspChannel::validateConfig(const Config& config, std::string* error) noexc
         return false;
     }
     // Refused here as well as in setFmDeviation(), because open() pushes the
-    // Config value straight into SetRXAFMDeviation, which divides by it.
-    if (!std::isfinite(config.fmDeviationHz) || config.fmDeviationHz <= 0.0) {
-        setError(error, "WDSP FM deviation must be a positive, finite value");
+    // Config value straight into SetRXAFMDeviation, which divides by it — and
+    // refused by RANGE, not by sign, for the reason on kMinFmDeviationHz.
+    // Direction-gated like the WBFM refusal above it: open() pushes this on
+    // the RXA path only, so a transmit Config never reaches the call and has
+    // no business being failed by it.
+    if (config.direction == Direction::Receive &&
+        (!std::isfinite(config.fmDeviationHz) ||
+         config.fmDeviationHz < Config::kMinFmDeviationHz ||
+         config.fmDeviationHz > Config::kMaxFmDeviationHz)) {
+        setError(error,
+            "WDSP FM deviation is outside Config::kMinFmDeviationHz..kMaxFmDeviationHz");
         return false;
     }
     return true;

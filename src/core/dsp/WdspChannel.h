@@ -94,6 +94,18 @@ public:
         // the fmd stage and everything set on it. A deviation held only in a
         // runtime setter would revert to 5 kHz on the next sample-rate or
         // block-size change, silently and with nothing to read that says so.
+        //
+        // BOUNDED, AND THE BOUND IS THE REFUSAL. A sign check is not enough:
+        // 1e-40 is positive and finite, and `again = rate / (deviation *
+        // TWOPI)` then runs away until the detector's float output is inf.
+        // That was measured on this branch before these two numbers existed,
+        // not reasoned about. One pair, shared by setFmDeviation(),
+        // validateConfig() and RtlReceiverRegistry::boundedDsp(), so the three
+        // doors cannot drift apart. The floor sits below any narrow-FM service
+        // in use (2.5 kHz in Europe); the ceiling sits above broadcast FM's
+        // 75 kHz, which this detector does not demodulate anyway.
+        static constexpr double kMinFmDeviationHz = 100.0;
+        static constexpr double kMaxFmDeviationHz = 100000.0;
         double fmDeviationHz = 5000.0;
         bool blockForOutput = false;
         // Impulse noise blanker — see the setNoiseBlanker() block below. Kept
@@ -315,8 +327,9 @@ public:
     //
     // Returns false on a transmit channel (SetRXAFMDeviation has no TX
     // counterpart; TX deviation is SetTXAFMDeviation on a different stage), on
-    // a non-finite or non-positive value — WDSP divides by it, so 0 would make
-    // the audio gain infinite — or if a control operation is already in flight.
+    // a value outside Config::kMinFmDeviationHz..kMaxFmDeviationHz — WDSP
+    // divides by it, so 0 and anything near it drive the audio gain to
+    // infinity — or if a control operation is already in flight.
     // Control-path work, guarded exactly like setMode(); it must not be called
     // from the processIq() callback.
     bool setFmDeviation(double deviationHz) noexcept;

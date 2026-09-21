@@ -196,19 +196,21 @@ void SetRXAAGCHangThreshold(int channel, int hangThreshold);
 // ── FM demodulator deviation ──────────────────────────────────────────────
 //
 // NO VENDORED PATCH IS INVOLVED, and that is worth saying plainly because the
-// opposite was believed about this corner of WDSP for three days. The
-// per-module headers under `upstream/` — `fmd.h`, `fmsq.h` and the rest — are
-// INTERNAL and incomplete: `fmsq.c` defines `SetRXAFMSQRun` and `fmsq.h` never
-// declares it, which reads exactly like a symbol that exists and cannot be
-// reached without patching the snapshot. It is not. `upstream/wdsp.h` is
-// upstream's own GENERATED public interface — its banner says it is produced by
-// `gen_wdsp_h.py`, which scans the sources for PORT-decorated functions "so
-// that this header cannot drift from what the DLL actually exports" — and it
-// declares both `SetRXAFMDeviation` and `SetRXAFMSQRun`.
+// opposite was believed about this corner of WDSP for three days.
+// `upstream/wdsp.h` is upstream's own GENERATED public interface — its banner
+// says it is produced by `gen_wdsp_h.py`, which scans the sources for
+// PORT-decorated functions "so that this header cannot drift from what the DLL
+// actually exports" — and it is what says whether a WDSP entry point is
+// public. It declares `SetRXAFMDeviation`.
 //
-// SO: `upstream/wdsp.h` is what says whether a WDSP entry point is public. A
-// per-module header saying nothing says nothing. Check it before concluding
-// that reaching a WDSP symbol needs AETHERSDR-PATCHES.md treatment — that
+// THIS SYMBOL WAS NEVER ONE OF THE HIDDEN-LOOKING ONES: `fmd.h` declares it
+// too. What misled was a NEIGHBOUR — `fmsq.c` defines `SetRXAFMSQRun` and
+// `fmsq.h` never declares it, which reads exactly like a symbol that exists
+// and cannot be reached without patching the snapshot. It is not; `wdsp.h`
+// declares that one as well. So the rule is about the per-module headers being
+// an unreliable NEGATIVE, not about them hiding this call: a per-module header
+// saying nothing says nothing. Check `upstream/wdsp.h` before concluding that
+// reaching a WDSP symbol needs AETHERSDR-PATCHES.md treatment — that
 // discipline is for CHANGING vendored behaviour, which this is not.
 //
 // DEVIATION IS AN INVERSE AUDIO GAIN, not a bandwidth, and the name misleads

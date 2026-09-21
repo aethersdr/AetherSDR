@@ -2648,9 +2648,11 @@ bool runTransmitZerosCensusTest()
 
 // FM DEVIATION IS AN AUDIO GAIN, AND THIS MEASURES IT AS ONE.
 //
-// The row this closes said "FM deviation not settable; runs on create_rxa's
-// 5 kHz default", and the risk in closing it is the defect class this lab filed
-// twice in one evening (#5829, #5859): a setter that is called, returns true,
+// Nothing in this tree could move the FM detector's deviation: create_rxa
+// builds the fmd stage with a hard 5000.0 and no setter reached it. The risk
+// in closing that gap is the defect class #5829 and #5859 record -- a value
+// that is stored and acted on with nothing able to write it, and a mechanism
+// with no call site -- in this shape: a setter that is called, returns true,
 // and changes nothing. An API-only test — call it, read it back — cannot tell
 // those apart, because the value it reads back is the one it just stored.
 //
@@ -2698,8 +2700,13 @@ bool runFmDeviationTest()
     // should depend on which way round the spectrum sits.
     config.filterLowHz = -8000.0;
     config.filterHighHz = 8000.0;
-    // Belt and braces. RXA_FM already clears agc.p->run, but open() calls
-    // applyRxAgc AFTER SetRXAMode and would switch it straight back on.
+    // Belt and braces, and nothing more than that. SetRXAMode's case RXA_FM
+    // clears agc.p->run (RXA.c) and nothing switches it back: applyRxAgc calls
+    // SetRXAAGCMode -- which writes agc.p->mode and calls loadWcpAGC, never
+    // run -- plus the slope/top/fixed/attack/decay/hang setters, and the only
+    // `->run =` writers in wcpAGC.c are create_wcpagc and the TX ALC and
+    // leveler. So mode 0 at 0 dB does not turn the AGC off here; it makes the
+    // path a constant linear gain if it ever did run.
     config.agcMode = 0;
     config.agcFixedGainDb = 0.0;
     config.blockForOutput = true;
@@ -2813,6 +2820,21 @@ bool runFmDeviationTest()
     ok = require(channel->config().fmDeviationHz == kSignalDeviationHz,
                  "a refused setFmDeviation() still overwrote the stored value") && ok;
 
+    // A RANGE, NOT A SIGN. 1e-40 is positive and finite and a sign check waves
+    // it through; again = rate / (deviation * TWOPI) then runs away and the
+    // detector's float output goes to infinity. MEASURED on this branch before
+    // Config::kMinFmDeviationHz existed, not reasoned about: a channel opened
+    // at 1e-40 Hz was accepted and recovered `inf` from the same 2.5 kHz
+    // signal that reads 1.66 at the 5 kHz default, and 1e-3 Hz was accepted
+    // and recovered 8.3e+06 -- finite, and five million times too loud.
+    ok = require(!channel->setFmDeviation(1.0e-40),
+                 "a tiny positive FM deviation was accepted -- again = rate / "
+                 "(deviation * TWOPI) overflows and the detector emits inf") && ok;
+    ok = require(!channel->setFmDeviation(1.0e6),
+                 "an FM deviation above the ceiling was accepted") && ok;
+    ok = require(channel->config().fmDeviationHz == kSignalDeviationHz,
+                 "an out-of-range setFmDeviation() overwrote the stored value") && ok;
+
     // USB rather than FM, and the filter edges a transmitter actually uses:
     // the assertion here is about DIRECTION, and giving it an exotic TX mode
     // would only add a way for it to fail for an unrelated reason.
@@ -2830,6 +2852,33 @@ bool runFmDeviationTest()
     invalidDeviation.fmDeviationHz = 0.0;
     ok = require(WdspChannel::create(invalidDeviation, &error) == nullptr,
                  "a Config carrying a zero FM deviation was accepted") && ok;
+    // The same door, and the one the registry pushes through: open() sends the
+    // Config value straight to SetRXAFMDeviation, so a sign check here is the
+    // same hole in a second place.
+    invalidDeviation.fmDeviationHz = 1.0e-40;
+    ok = require(WdspChannel::create(invalidDeviation, &error) == nullptr,
+                 "a Config carrying a tiny positive FM deviation was accepted "
+                 "-- open() pushes it straight into SetRXAFMDeviation") && ok;
+
+    // ...and the bounds are inclusive, so a caller that asks for exactly the
+    // documented limit is not refused by an off-by-one.
+    ok = require(channel->setFmDeviation(WdspChannel::Config::kMinFmDeviationHz) &&
+                     channel->setFmDeviation(WdspChannel::Config::kMaxFmDeviationHz),
+                 "the FM deviation range refuses its own endpoints") && ok;
+
+    // The refusal is RX-only in validateConfig(), like the WBFM refusal beside
+    // it: a transmit Config never reaches SetRXAFMDeviation, so an
+    // out-of-range value on one is not this check's business. The setter still
+    // refuses a TX channel outright, which the assertion below covers.
+    WdspChannel::Config transmitDeviation = config;
+    transmitDeviation.direction = WdspChannel::Direction::Transmit;
+    transmitDeviation.mode = WdspChannel::Mode::Usb;
+    transmitDeviation.filterLowHz = 300.0;
+    transmitDeviation.filterHighHz = 2700.0;
+    transmitDeviation.fmDeviationHz = 0.0;
+    ok = require(WdspChannel::create(transmitDeviation, &error) != nullptr,
+                 "a transmit Config was refused for an FM deviation that never "
+                 "reaches a TXA stage") && ok;
 
     return ok;
 }
