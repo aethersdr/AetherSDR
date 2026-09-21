@@ -1365,7 +1365,12 @@ add_test(NAME hl2_connect_reentrancy_test COMMAND hl2_connect_reentrancy_test)
 # HL2 per-receiver S-meter lifetime — the meter a receiver declares as its chain
 # opens must go when the chain does. Drives a real MeterModel over the backend's
 # own meterDefined/meterRemoved, so the assertions are consumer lookups rather
-# than call spies. Needs no radio; see the file header.
+# than call spies. Needs no radio, and adds no fake peer — but it drives the real
+# connect flow, and the socket start at the end of finishDspSetup() BINDS A UDP
+# SOCKET LOCALLY whether or not anything answers, same as the
+# hl2_connect_reentrancy_test sibling says in its own header. Packets go to
+# TEST-NET-1 (192.0.2.0/24), which is reserved for documentation and routes
+# nowhere. See the file header.
 add_executable(hl2_slice_meter_lifecycle_test tests/hl2_slice_meter_lifecycle_test.cpp)
 target_include_directories(hl2_slice_meter_lifecycle_test PRIVATE src tests)
 target_link_libraries(hl2_slice_meter_lifecycle_test PRIVATE aethercore Qt6::Core Qt6::Network Qt6::Test)

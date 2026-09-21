@@ -21,13 +21,22 @@
 // also why defineMeters()' fixed 1..9 catalogue never appears below, since it
 // is emitted from the linkUp handler that a socket-free test never reaches.
 //
-// THE PATH UNDER TEST IS THE SUPERSEDED BUILD, because it is the one a test can
-// actually drive. A connect that arrives while the previous one's WDSP chains
-// are still opening supersedes it; finishDspSetup() releases the chains it
-// built and re-drives the queued connect. That teardown never emits
-// disconnected(), so RadioModel::onDisconnected()'s MeterModel::clear() -- the
-// backstop that hides this defect on the ordinary disconnect -- does not run.
-// The catalogue is left holding whatever the abandoned build declared.
+// TWO OF THE PATHS ARE DRIVABLE FROM HERE, and they are the two that never emit
+// disconnected() -- which is what makes them the ones worth driving.
+// RadioModel::onDisconnected()'s MeterModel::clear() is the backstop that hides
+// every one of these defects on the ordinary disconnect, and on neither path
+// below does it run at all.
+//
+//   THE SUPERSEDED BUILD. A connect arriving while the previous one's WDSP
+//   chains are still opening supersedes it; finishDspSetup() releases the
+//   chains it built and re-drives the queued connect, leaving the catalogue
+//   holding whatever the abandoned build declared.
+//
+//   THE REFUSED CONNECT. Receiver 0's configure() failing is a failed connect:
+//   finishDspSetup() reports it and returns with no teardown at all, so every
+//   receiver above the first keeps a definition for a radio that never came up.
+//   Reached by asking for a sample rate Hl2RxDsp::configure() refuses -- see
+//   requestAtRefusedRate() for why that is a real route and not a stub.
 //
 // The sibling sites share the fix but not the reachability; see the commit
 // message for which ones are covered only by inspection and why.
@@ -53,8 +62,9 @@ int failures = 0;
 void check(bool condition, const char* what)
 {
     std::fprintf(stderr, "[%s] %s\n", condition ? " OK " : "FAIL", what);
-    if (!condition)
+    if (!condition) {
         ++failures;
+    }
 }
 
 // boardMaxRx is what skips the unicast discovery probe; TEST-NET-1 alone would
@@ -66,8 +76,28 @@ RadioConnectRequest request(int numRx)
     req.host = QStringLiteral("192.0.2.1");
     req.port = 1024;
     req.params.insert(QStringLiteral("boardMaxRx"), 4);
-    if (numRx > 1)
+    if (numRx > 1) {
         req.params.insert(QStringLiteral("numRx"), numRx);
+    }
+    return req;
+}
+
+// THE SAME REQUEST WITH A SAMPLE RATE THE DSP WILL REFUSE.
+//
+// Hl2RxDsp::configure() guards its rate inputs -- "input/audio sample rate and
+// DSP block size must all be positive" -- explicitly because a params override
+// is where a malformed "sampleRateHz" gets in (QVariant::toInt of a missing or
+// junk value is 0). connectRadio() takes the override verbatim, so this is a
+// supported way to make the FIRST chain's configure() fail without touching
+// production code or standing up a fake DSP. Nothing else about the connect
+// changes: the receiver count survives (effectiveNumRx() reads numRx and
+// boardMaxRx, and maxReceiversAtRate() admits everything at a zero rate,
+// because a zero rate is zero bits per second) and both chains are opened and
+// their meters declared before the I/O thread tries to configure either.
+RadioConnectRequest requestAtRefusedRate(int numRx)
+{
+    RadioConnectRequest req = request(numRx);
+    req.params.insert(QStringLiteral("sampleRateHz"), 0);
     return req;
 }
 
@@ -181,6 +211,51 @@ void aSupersededRebuildAtTheSameCountKeepsItsMeters()
     backend.disconnectRadio();
 }
 
+// THE REFUSED CONNECT -- the exit that leaves the MOST behind, and the one with
+// no teardown in front of it.
+//
+// Receiver 0's DSP failing is a failed connect, so finishDspSetup() reports it
+// and RETURNS: no tearDownReceivers(), no wire, no connected(), and therefore
+// no disconnected() either. RadioModel's onDisconnected() clear() -- the
+// backstop that hides every one of these on the ordinary path -- is not merely
+// late here, it never runs at all. Meanwhile buildReceivers() declared a meter
+// for every receiver above the first before the I/O thread configured any of
+// them, so the catalogue is left describing receivers of a radio that never
+// came up, for the life of the application if nothing reconnects.
+//
+// The control is on the SAME backend rather than in a separate leg: the meter
+// is looked up once while the build is still in flight, where it must be
+// present, and again after the refusal, where it must be gone. An absence that
+// follows an observed presence cannot be the absence of a build that never ran.
+void aRefusedConnectTakesTheLaterReceiversMetersWithIt()
+{
+    TestSettingsProfile profile(QStringLiteral("hl2-slice-meter-refused"));
+    Hl2Backend backend;
+    Catalogue catalogue(backend);
+    BuildCounter builds(backend);
+
+    int errors = 0;
+    QObject::connect(&backend, &IRadioBackend::connectionError, &backend,
+                     [&errors](const QString&) { ++errors; });
+
+    backend.connectRadio(requestAtRefusedRate(2));
+    // connectRadio() returns once the opens are handed to the I/O thread, and
+    // openReceiverDsp() -- declarations included -- has already run on this
+    // thread by then. This is the positive control.
+    check(catalogue.sliceMeter(1) >= 0,
+          "refused: receiver 1's S-meter is declared before the configure fails");
+
+    check(test::awaitDspBuild(__func__, [&builds] { return builds.finished >= 1; }),
+          "refused: the build finishes");
+    // Names the branch. Any other exit from finishDspSetup() -- the supersede,
+    // the failed socket bind, the trim -- would leave this at zero or reach it
+    // by a route whose teardown is already covered elsewhere in this file.
+    check(errors == 1, "refused: receiver 0's DSP failure refuses the connect");
+    check(catalogue.sliceMeter(1) < 0,
+          "refused: the refused connect's receiver-1 meter goes with it");
+    backend.disconnectRadio();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -189,6 +264,7 @@ int main(int argc, char** argv)
     theSecondReceiverGetsAMeterWhenItsChainOpens();
     aSupersededBuildTakesItsMetersWithIt();
     aSupersededRebuildAtTheSameCountKeepsItsMeters();
+    aRefusedConnectTakesTheLaterReceiversMetersWithIt();
     std::fprintf(stderr, "%s\n", failures ? "FAILURES" : "all checks passed");
     return failures ? 1 : 0;
 }

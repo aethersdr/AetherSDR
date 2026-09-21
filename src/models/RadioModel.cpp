@@ -1333,8 +1333,9 @@ void RadioModel::setupBackend(const QString& family)
         QString source;
         QString name;
         int sourceIndex = -1;
-        if (!MeterModel::splitMeterId(meterId, &source, &name, &sourceIndex))
+        if (!MeterModel::splitMeterId(meterId, &source, &name, &sourceIndex)) {
             return;
+        }
         m_meterModel.updateValueByName(source, name,
                                        static_cast<float>(value), sourceIndex);
     });

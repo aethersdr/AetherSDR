@@ -77,6 +77,16 @@ public:
     // resolving against a definition whose sourceIndex is whatever the backend
     // chose. Returns false if the id has no colon or either half is empty.
     //
+    // THIS IS A CONSTRAINT ON BACKENDS, NOT ONLY A PARSER. A meterUpdate source
+    // token MUST NOT END IN A DECIMAL DIGIT unless that digit is the source
+    // index. No emitter in the tree does today — HL2's ten literals, Icom's
+    // spec table and Sim's "TX:SWR" were checked — and a backend that one day
+    // names a source "TX2" literally would have it silently rewritten to source
+    // "TX", index 2. Its definition, declared as source "TX2", would then never
+    // be found and its updates would vanish with no error anywhere: exactly the
+    // invisible drop this function exists to fix, reintroduced from the other
+    // end. Put the index in MeterDef::sourceIndex and keep it out of the name.
+    //
     // This lives here rather than in RadioModel because the naming scheme is
     // MeterDef's, not the transport's — see RadioModel's meterUpdate handler.
     static bool splitMeterId(const QString& meterId, QString* source,

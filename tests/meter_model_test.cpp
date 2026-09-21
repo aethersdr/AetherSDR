@@ -237,6 +237,54 @@ void testMeterIdSplitEdges()
            !MeterModel::splitMeterId(QStringLiteral("SLC:"), &source, &name, &sourceIndex));
 }
 
+// WITHDRAWING A METER THAT WAS NEVER DEFINED MUST DO NOTHING AT ALL.
+//
+// Backends withdraw defensively, over a set of receivers rather than over a set
+// of declarations: Hl2Backend's trim loop withdraws for every receiver at or
+// past the failure without knowing which of their chains got far enough to
+// declare anything. So removeMeter() is reached with indices nothing defines,
+// and it is reached that way on the ordinary paths, not only in error handling.
+//
+// Both halves below are consequences a consumer can see, not internal state.
+// The signal is the one the amplifier panel, the telemetry adapter and the DSP
+// applets hear; the manifest context is what decides which slice the NEXT TX
+// waveform definition belongs to, and removeMeter() resets it unconditionally,
+// so a stray withdrawal landing between an SLC block and its TX block moved
+// that block to the source-index fallback.
+void testWithdrawingAnUndeclaredMeterChangesNothing()
+{
+    MeterModel model;
+    int removals = 0;
+    QObject::connect(&model, &MeterModel::meterRemoved, &model,
+                     [&removals](int) { ++removals; });
+
+    model.defineMeter(slcMeter(12, 0));
+    model.removeMeter(4242);   // never declared, by any backend, ever
+    report("withdrawing an undeclared meter announces nothing", removals == 0);
+    report("withdrawing an undeclared meter leaves the declared ones alone",
+           model.findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"), 0) == 12);
+
+    // The context half. Same shape as testMixedSourceTxWaveformMetersUseManifest
+    // SliceContext: slice 1's TX block declares itself with source index 9, which
+    // no arithmetic maps to slice 1 -- only the SLC block in front of it does.
+    // The stray withdrawal sits exactly where a defensive teardown would put it.
+    model.defineMeter(txMeter(20, "COMPPEAK", "dB", 0));
+    model.defineMeter(slcMeter(30, 1));
+    model.removeMeter(4242);
+    model.defineMeter(txMeter(38, "COMPPEAK", "dB", 9));
+
+    model.setActiveTxSlice(1);
+    model.updateValues({38}, {rawDb(8.0f)});
+    report("a stray withdrawal does not break the SLC -> TX manifest context",
+           model.hasCompressionMeterValue() && nearlyEqual(model.compPeak(), 8.0f));
+
+    // And the guard has not made removeMeter() deaf to real withdrawals.
+    model.removeMeter(30);
+    report("a declared meter is still withdrawn, and still announced",
+           removals == 1
+               && model.findMeter(QStringLiteral("SLC"), QStringLiteral("LEVEL"), 1) < 0);
+}
+
 // These tests keep active-slice routing and direct COMPPEAK coverage. They
 // intentionally do not preserve the old AFTEREQ/SC_MIC derivation cases:
 // adjacent TX audio meters are diagnostics only and must not synthesize
@@ -1825,6 +1873,7 @@ int main(int argc, char** argv)
     testUnsuffixedSourcesKeepMatchAnyResolution();
     testSlc1SourceNeverKeysTheSliceCache();
     testMeterIdSplitEdges();
+    testWithdrawingAnUndeclaredMeterChangesNothing();
 
     testAdjacentMetersDoNotSynthesizeCompression();
     testCompPeakDirectlyExposesCompression();

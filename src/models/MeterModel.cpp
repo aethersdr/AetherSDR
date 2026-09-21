@@ -254,6 +254,26 @@ QList<int> MeterModel::firstDefinedIndices(int limit, std::optional<int> after) 
 
 void MeterModel::removeMeter(int index)
 {
+    // WITHDRAWING WHAT WAS NEVER DECLARED IS A NO-OP, and saying so here covers
+    // every caller at once.
+    //
+    // Backends withdraw defensively — a teardown loop runs over the receivers it
+    // is dropping and does not know which of their declarations actually landed
+    // (Hl2Backend's trim withdraws for every receiver at or past the failure,
+    // including ones whose chain never opened). Without this the rest of the
+    // function still ran for an index nothing defines: it reset
+    // m_manifestSliceContext, so the NEXT definition to arrive lost the SLC
+    // context it should have inherited, and it emitted meterRemoved() on to the
+    // telemetry adapter and the DSP applets for a meter no consumer ever saw.
+    // Wasted work and a misleading store write rather than a wrong reading, but
+    // there is no caller for which the old behaviour was the wanted one.
+    //
+    // m_defs is the right question to ask: it is the only map defineMeter()
+    // populates unconditionally, and every cache below is keyed from a
+    // definition that is in it — so an index absent here is absent everywhere.
+    if (!m_defs.contains(index)) {
+        return;
+    }
     const int activeSwAlcIdx = swAlcIndexForActiveTxSlice();
     // Resolved BEFORE the maps are erased, exactly like the filter taps below:
     // once the entry is gone the resolver returns -1 and the reading would
@@ -419,8 +439,9 @@ bool MeterModel::splitMeterId(const QString& meterId, QString* source,
                               QString* name, int* sourceIndex)
 {
     const int colon = meterId.indexOf(QLatin1Char(':'));
-    if (colon <= 0 || colon + 1 >= meterId.size())
+    if (colon <= 0 || colon + 1 >= meterId.size()) {
         return false;
+    }
 
     QString src = meterId.left(colon);
 
@@ -430,8 +451,9 @@ bool MeterModel::splitMeterId(const QString& meterId, QString* source,
     // index, it is a malformed id, and stripping it would leave nothing to
     // match on.
     int firstDigit = src.size();
-    while (firstDigit > 0 && src.at(firstDigit - 1).isDigit())
+    while (firstDigit > 0 && src.at(firstDigit - 1).isDigit()) {
         --firstDigit;
+    }
 
     int index = -1;
     if (firstDigit > 0 && firstDigit < src.size()) {
@@ -443,9 +465,15 @@ bool MeterModel::splitMeterId(const QString& meterId, QString* source,
         }
     }
 
-    if (source) *source = src;
-    if (name) *name = meterId.mid(colon + 1);
-    if (sourceIndex) *sourceIndex = index;
+    if (source) {
+        *source = src;
+    }
+    if (name) {
+        *name = meterId.mid(colon + 1);
+    }
+    if (sourceIndex) {
+        *sourceIndex = index;
+    }
     return true;
 }
 
