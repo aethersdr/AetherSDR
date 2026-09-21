@@ -532,7 +532,7 @@
   },
   "headless": {},
   "verified": {},
-  "note": "hasRadioDialLock is read in exactly one file, RadioModel.cpp. There is NO GUI gate: the control is on screen everywhere and the intent is dropped one layer up, silently."
+  "note": "hasRadioDialLock is read in exactly one file above the seam, RadioModel.cpp -- which is the read the D cells rest on. Below the seam IcomCivBackend.cpp reads it too, in its own dispatch and decode, on the one family whose cell is W. There is NO GUI gate: the control is on screen everywhere and the intent is dropped one layer up, silently."
  },
  "rx/rit-enable": {
   "control": "RIT on/off",

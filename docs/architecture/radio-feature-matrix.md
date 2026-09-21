@@ -28,11 +28,11 @@ that decides is one question:
 
 **In the GUI, nothing does.** The defaults are permissive — `hasFmRepeaterOffset`
 is declared `= true` — the gates are hand-written and optional, and
-`ControlAvailabilityRegistry`, the one mechanism built to enforce them, is
-referenced by nothing but itself. A capability nobody declared leaves the
-control live. So a GUI cell is derived from **reachability**: does the intent
-reach an implementation, and if not, where does it die? A declaration is a
-cross-check, never the source.
+`ControlAvailabilityRegistry`, the one mechanism built to enforce them, has **no
+production consumer** — a registered unit test and nothing else. A capability
+nobody declared leaves the control live. So a GUI cell is derived from
+**reachability**: does the intent reach an implementation, and if not, where
+does it die? A declaration is a cross-check, never the source.
 
 **In `aetherd`, something does, and it is written into the target.**
 `ModelReceiveControlTarget` opens every admission with
@@ -356,16 +356,23 @@ frame, and `IcomControls` carries a single `"rit.offset"` spec labelled
 hazard is upstream of Icom: on a two-register family the alias would write the
 wrong one, which is why the generator emits `U` for that row rather than `W`.
 
-### ANAN (P2) — one live setter, and everything else at connect time
+### ANAN (P2) — two live setters, and everything else at connect time
 
-`P2Client` exposes exactly **one** `Q_INVOKABLE` live setter,
-`setDdc0FrequencyHz`; its class comment says *"RX-ONLY: there is no PTT
+`P2Client` exposes **two** `Q_INVOKABLE` live setters, `setDdc0FrequencyHz` and
+`setDdcRateLive`; its class comment says *"RX-ONLY: there is no PTT
 parameter anywhere in this class"*. Everything else the radio is told is a
 connect-time `P2Client::Params` field. So on this family:
 
 - **reaches the wire** = frequency (`applyTuneToRadioAndPan()`, behind a 33 ms
-  leading-and-trailing throttle), and the sample rate only through a full
-  session stop/reconfigure/restart (`beginRateChange()`/`finishRateChange()`);
+  leading-and-trailing throttle), and the DDC sample rate, written **live on the
+  running session**: `AnanBackend::finishRateChange` invokes
+  `P2Client::setDdcRateLive`, which returns false without sending unless the
+  session is running and otherwise resends the whole DDC-Specific packet, three
+  times across the settle window because the protocol offers no ack. The rate no
+  longer costs a session stop/reconfigure/restart — `startP2ClientSession` is
+  reached from the connect path alone, and `AnanBackend::beginRateChange` now
+  only rebuilds the DSP channel off-thread before handing over. Its own leading
+  comment still describes the old restart, so the source says both things;
 - **reaches the DSP** = mode, filter, AGC, frame rate and CW pitch, through
   `QMetaObject::invokeMethod(m_dsp, …)` into `AnanRxDsp`.
 
@@ -508,6 +515,40 @@ the wire writes the **right** register.
 
 ---
 
+## What a green check does not prove — the roster is not guarded
+
+The checker proves the **cells** are true. It does not prove the **roster** is
+complete, and that is a real hole rather than a theoretical one.
+
+`main()` iterates the committed record — `for rid, row in matrix.items()` — so
+every check it runs is a question asked *about a row that already exists*.
+Nothing iterates the other way: nothing enumerates `IRadioBackend`'s seam verbs,
+or the controls the GUI builds, and asks whether each one has a row. Two
+consequences follow, and both are silent:
+
+- **Delete a feature entirely** — its record from the JSON and its line from the
+  table — and the run stays green. `aethersdr-agent` did exactly that with
+  `rx/agc` while reviewing this PR: `--strict` reported
+  `60 feature(s) … 0 disagreement(s)` and exited 0.
+- **Add a new seam verb with a GUI control and no row**, and nothing notices
+  either. The register simply does not describe it, and says nothing about the
+  omission.
+
+`MIN_CELLS` is not a roster check. It is a vacuity floor against a broken
+parser, set well below the current count: at 200 cells over six backends it
+does not fire until the matrix falls below 34 rows, so **27 of today's 61 rows
+could be deleted and the run would still be green**. It catches a wholesale
+collapse, never a row.
+
+So a green run reads: *every cell committed here agrees with the source.* It
+does **not** read: *every control an operator can reach is in this table.*
+Closing that needs a **roster anchor** — deriving the feature list from the seam
+and the GUI control inventory and diffing it the way the cells are diffed, so an
+addition or a deletion fails instead of passing quietly. That is a generator of
+a different shape and it is deliberately not in this PR.
+
+---
+
 ## Defects this trace found
 
 Recorded here, not filed. Each is a candidate for its own issue.
@@ -536,6 +577,9 @@ Recorded here, not filed. Each is a candidate for its own issue.
   document disagreeing with its own JSON sidecar.
 - `python tools/check_radio_feature_matrix.py --print` — the derived matrix
   alone, for checking a change before committing it.
+- **A green run does not mean the roster is complete.** The gate iterates the
+  committed record, so it guards cells, not the list of rows — see
+  [What a green check does not prove](#what-a-green-check-does-not-prove--the-roster-is-not-guarded).
 - **Do not add a capability boolean to fix a `∅` row.**
   `tools/check_capability_records.py` freezes `RadioCapabilities` at 71 booleans
   and it may only shrink. The shape that can land is an

@@ -132,7 +132,9 @@ MIN_SEAM_VIRTUALS = 60      # IRadioBackend.h carries 79 today
 MIN_CAPS_FIELDS = 90        # RadioCapabilities.h carries 116 members today
 MIN_OVERRIDES_PER_BACKEND = 8   # the sparsest backend (ANAN) has 15
 MIN_CAPS_ASSIGNMENTS = 20   # the sparsest capabilities() body assigns 35
-MIN_CELLS = 200             # 62 rows x 6 backends today
+MIN_CELLS = 200             # 61 rows x 6 backends = 366 today. A VACUITY floor,
+                            # not a roster check: deleting a row keeps the run green.
+                            # See the document's "roster is not guarded" section.
 
 
 # ---- source parsing ----------------------------------------------------------
