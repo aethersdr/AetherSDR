@@ -4175,6 +4175,42 @@ the build is what genuinely needs it: the WDSP channel id, the shift, the notch
 and blanker seeding, and `publishIoDsps()` — which is what starts feeding it IQ,
 so the first spectrum frame is the pane filling in.
 
+**A COMPLETION HAS TO FIND ITS RECEIVER, AND A UI NUMBER IS NOT ENOUGH.**
+`finishReceiverDspBuild()` cannot carry a DDC index — closing any receiver
+renumbers every index after it, because the gateware needs them contiguous — so
+it carries the UI number, which a close leaves alone. That is true and it is not
+an identity: `Hl2ReceiverMap::append()` allocates the **lowest free** UI number,
+deliberately, because the monotonic version it replaced asked for slice id 4 on a
+radio whose slice ids run 0..3 and had the receiver refused as over capacity. So
+closing a receiver hands its number straight back to the next
+`createPanadapter()`, and a build still in flight for the closed one would
+resolve to the new one — closing a pane the operator had just opened, over a
+message about a receiver that no longer exists, or writing a dead WDSP channel id
+onto a chain that does not exist yet. The build therefore carries a **monotonic
+generation** stamped when it is posted (`Receiver::dspBuildGeneration`), and a
+completion whose generation has moved returns having touched nothing. The closed
+receiver needs no teardown there: `removePanadapter()` already did it.
+
+**AND AN ANNOUNCED RECEIVER CAN BE GIVEN A JOB BEFORE IT HAS A CHAIN.** The two
+roles the backend stores as DDC indices — which receiver owns transmit, which
+one the client's shared controls act on — are the other thing publishing early
+moved. `setTxSlice()` and `setActiveSlice()` resolve through `ddcForSlice()` and
+`rx()` and read no `r.dsp`, so for the whole length of a build the operator can
+click the new pane or press it into service as the transmit slice. When the
+build then **fails**, `finishReceiverDspBuild()` erases that receiver — and
+`hl2RoleAfterRemove()` answers "the role WAS the removed receiver" with `-1` by
+contract, so the caller can choose a new home. Nothing was choosing one, and
+`rx(-1)` is null: transmit owned no slice, and every later key attempt died in
+`RadioModel`'s interlock with *"No transmit slice is assigned"* and nothing said
+from the backend. The failure path now picks the home itself, as
+`removePanadapter()` already did — DDC 0 in post-erase numbering — and
+republishes the surviving slices, because the interlock reads the per-slice
+`txSlice` flag and not the member. The helper is unchanged: its `-1` is what
+keeps "this role is gone" distinguishable from "this role shifted down to index
+0". One case `removePanadapter()` never meets is real here — it refuses to close
+the last receiver, while a failed build can be the last receiver, if the one
+before it was closed while this one built.
+
 **Not measured.** Nothing here has a stopwatch on it. `hl2_pan_create_async_test`
 occupies each thread deliberately and asserts against that interval; it says the
 wait is gone, not how long the build takes. §22.3's ~19 s first open and this
