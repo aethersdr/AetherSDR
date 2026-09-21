@@ -58,9 +58,10 @@ option(ENABLE_ASR "Enable on-device speech-to-text (ASR) via vendored whisper.cp
 # Windows-only fallback: consume prebuilt whisper/ggml/ggml-vulkan static libs
 # from the whisper-gpu-<ver> release asset instead of compiling from source.
 # The Windows installer workflow compiles the vendored tree (with the /O1
-# override below, the whole ggml-vulkan target is 2-3 min on a stock 4-core
-# windows-latest runner; measured 2026-07-22, runs 29904473886 and
-# 29924632118). The pinned pack predates the vendored tree's local patches
+# override below, the whole whisper target is 2-3 min on a stock 4-core
+# windows-latest runner; measured 2026-09-21, run 35660187303, and
+# 2026-07-22, runs 29904473886 and 29924632118). The pinned pack predates the
+# vendored tree's local patches
 # (third_party/whisper.cpp/AETHERSDR-PATCHES.md), so turning this ON ships
 # those patches only once the pack is rebuilt and re-pinned. Leave OFF.
 option(ASR_USE_PREBUILT_WHISPER_GPU

@@ -303,11 +303,12 @@ jobs:
         # Its own step so the vendored engine's compile time is a separate line
         # in the run summary and a slow compile fails HERE with its log kept
         # (see the timeout note on Build below). Measured on windows-latest
-        # with the /O1 override in effect (ci/test-windows-gpu, 2026-07-22,
-        # runs 29904473886 and 29924632118): the whole ggml-vulkan target took
-        # 2-3 min at -j 2, of which 95-137 s was the 137 per-shader glslc edges
-        # and under 10 s the ~1 MB ggml-vulkan.cpp TU. The shader edges are
-        # small and parallel, so full -j is safe here; the 16 GB thrash on
+        # with the /O1 override in effect: this step took 2 min 15 s at full
+        # -j (run 35660187303, 2026-09-21), and the ggml-vulkan target alone
+        # 2-3 min at -j 2 (ci/test-windows-gpu, 2026-07-22, runs 29904473886
+        # and 29924632118). Most of it is the 132 per-shader glslc edges,
+        # which are small and parallel, so full -j is safe here; the ~1 MB
+        # ggml-vulkan.cpp TU is 15 CPU-s under /O1. The 16 GB thrash on
         # Build is about app TUs, not these. `whisper` pulls in ggml,
         # ggml-base, ggml-cpu and ggml-vulkan. If this step cannot fit the
         # runner, -DASR_USE_PREBUILT_WHISPER_GPU=ON in Configure restores the

@@ -3,8 +3,9 @@
 .SYNOPSIS
     Package the whisper.cpp + ggml-vulkan static libs from an already-completed
     Windows build into a release asset. The Windows installer workflow compiles
-    whisper/ggml/ggml-vulkan from the vendored tree (2-3 min for ggml-vulkan on
-    a stock 4-core windows-latest runner with the /O1 override); the asset is
+    whisper/ggml/ggml-vulkan from the vendored tree (2-3 min for the whisper
+    target on a stock 4-core windows-latest runner with the /O1 override); the
+    asset is
     the ASR_USE_PREBUILT_WHISPER_GPU fallback, and a pack cut before a local
     patch under third_party/whisper.cpp does not carry that patch.
 
