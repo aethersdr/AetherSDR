@@ -77,20 +77,27 @@ namespace AetherSDR {
 // need to compose it. Prefer fftwPlannerLock().
 [[nodiscard]] std::mutex& fftwPlannerMutex();
 
-// SINGLE PRECISION (fftwf_*). A SEPARATE planner with separate global state,
-// so the double-precision lock above does not cover it and taking both is not
-// a deadlock as long as no call site takes them in opposite orders.
+// TODO(#5895): SINGLE PRECISION (fftwf_*) IS NOT COVERED BY ANYTHING.
 //
-// NOTHING TAKES THIS YET, and that is the open half of #5895 rather than an
-// oversight: RtlSdrDdc (RtlSdrDdc::RtlSdrDdc / ~RtlSdrDdc, fftwf_plan_dft_1d)
-// and the vendored third_party/libspecbleach (allocate_fftw /
-// fft_transform_free, fftwf_plan_r2r_1d, reached through SpecbleachFilter)
-// are both linked into aethercore, both plan on a connect-path thread, and
-// hold no lock against each other. Declared here so the next person to touch
-// either finds the lock they should have taken instead of inventing a third
+// fftwf_ is a SEPARATE planner with separate global state, so the lock above
+// does not reach it. Two call sites plan in single precision and hold no lock
+// against each other, both linked into aethercore, both reached from a
+// connect-path thread:
+//
+//   - RtlSdrDdc::RtlSdrDdc / ~RtlSdrDdc — fftwf_malloc, fftwf_plan_dft_1d,
+//     fftwf_destroy_plan, fftwf_free, all unguarded.
+//   - third_party/libspecbleach's fft_transform.c — fft_transform_initialize's
+//     fftwf_malloc and fftwf_plan_r2r_1d, and fft_transform_free's
+//     fftwf_destroy_plan / fftwf_free — reached through SpecbleachFilter,
+//     constructed in AudioEngine::createNr4Filter. Vendored, so the lock goes
+//     around the SpecbleachFilter construction and destruction rather than
+//     into the vendored C.
+//
+// NO fftwfPlannerLock() IS DECLARED HERE, DELIBERATELY. An exported symbol
+// with no callers reads as "something takes this" and guards nothing; it is a
+// promise in a header, which is the shape this PR argues against. The lock
+// lands in the same commit as its first caller. This note exists so that the
+// next person to touch either site adds it here rather than inventing a third
 // mutex, which is exactly how this bug was born.
-[[nodiscard]] std::unique_lock<std::mutex> fftwfPlannerLock();
-
-[[nodiscard]] std::mutex& fftwfPlannerMutex();
 
 } // namespace AetherSDR
