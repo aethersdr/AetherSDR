@@ -6621,11 +6621,27 @@ void Hl2Backend::applyRestoredState(const RestoredRadioState& state)
     // document that still carries the key is not rejected -- it is simply not
     // consulted, which is what "authoritative" has to mean here.
     //
-    // This also retires a clamp the codebase's own rule rejects. The read above
-    // qBound()ed the document value and then persisted the clamped result,
-    // which is exactly what the AGC threshold restore a few lines up refuses to
-    // do in its own words: clamping invents a setpoint the operator never chose
-    // and then writes it back.
+    // This also retires a clamp the codebase's own rule rejects. The read this
+    // comment replaces qBound()ed the document value and then persisted the
+    // clamped result, which is exactly what the AGC threshold restore a few
+    // lines up refuses to do in its own words: clamping invents a setpoint the
+    // operator never chose and then writes it back.
+    //
+    // IGNORED OUT LOUD, because this boundary logs every other value it
+    // declines -- the pre-#4914 CW passband just above, the invalid mic level
+    // just below -- and a key dropped in silence is the one an operator cannot
+    // connect to what they hear. A document still carrying this key is exactly
+    // a profile whose next UNVISITED band now comes up on +20 dB instead of
+    // whatever was frozen in it, so the line names both numbers: the value
+    // being ignored, and the value that replaces it. That is what lets a
+    // support log be traced back to #5829 rather than read as a radio fault.
+    if (rfGain.contains(QStringLiteral("defaultDb"))) {
+        qCInfo(lcHl2) << "HL2: ignoring stale restored LNA default (#5829)"
+                      << rfGain.value(QStringLiteral("defaultDb")).toVariant()
+                      << "— unvisited bands come up on"
+                      << hl2::kLnaDefaultGainDb << "dB";
+    }
+
     // ARMED LATER, NOT HERE. Restore runs before the link is up, and the
     // control refuses to arm from a baseline it does not trust -- a decision it
     // cannot make until the restored baseline has actually been applied. So
@@ -6868,8 +6884,8 @@ RestoredRadioState Hl2Backend::currentOperatingState() const
     // launch, from a gain the operator chose. See m_lnaAutoOffsetDb.
     // NO "defaultDb" KEY (#5829). It was persisted here and read back in
     // applyRestoredState with nothing in the tree able to write it, so a
-    // profile's value was frozen for
-    // the life of that profile and decided the gain of every first band visit.
+    // profile's value was frozen for the life of that profile and decided the
+    // gain of every first band visit.
     // hl2::kLnaDefaultGainDb is now the only answer to that question; see
     // applyRestoredState(). Dropping the key here is the half that heals an
     // existing document, because the next capture writes the object without it.

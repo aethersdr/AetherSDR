@@ -126,7 +126,28 @@ int main(int argc, char** argv)
               "updated gain persists through the production OperatingState store");
     }
     {
-        GainSession session(RadioStateMemory::load(scope, caps));
+        const RestoredRadioState reloaded = RadioStateMemory::load(scope, caps);
+        // THE HEAL, PINNED WHERE THE CLAIM IS MADE (#5869 review, ten9876).
+        // The absence checks elsewhere in this file read currentOperatingState(),
+        // the IN-MEMORY capture; the sentence in Hl2Backend.cpp's
+        // currentOperatingState() is about what lands in the DOCUMENT. This
+        // state got there the production way: the session above was restored
+        // from rememberedGain(), which seeds `defaultDb: 20`, and its capture
+        // went through a real RadioStateMemory::store; this is the matching
+        // load. So a stale key is shown to decay out of the stored document,
+        // not merely out of the snapshot.
+        //
+        // It is also the standing guard against a merging store. store()
+        // rebuilds the gated extension wholesale from state.extension today,
+        // which is why dropping the key from the capture is enough -- if that
+        // ever became a preserve-unknown-siblings merge, as
+        // storeRtlRfGainPreservingLegacy is for its own family, the key would
+        // survive on disk forever and this is the check that would say so.
+        check(!reloaded.extension.value(QStringLiteral("rfGain")).toObject()
+                   .contains(QStringLiteral("defaultDb")),
+              "the stored document itself carries no LNA default after a real "
+              "RadioStateMemory store/load round trip");
+        GainSession session(reloaded);
         int writes = 0;
         check(session.restoreDisplay(20, writes) == 5 && writes == 0 && session.liveGain() == 5,
               "a recreated session restores the operator's +5 despite stale global +20");

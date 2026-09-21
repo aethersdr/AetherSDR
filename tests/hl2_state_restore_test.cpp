@@ -432,6 +432,14 @@ int main(int argc, char** argv)
         // member any more -- hl2::kLnaDefaultGainDb is read directly -- so the
         // property that replaces it is that radio A's stuck 6 cannot appear in
         // radio B's capture at all, because no capture emits the key.
+        //
+        // SWAP-ISOLATION COVERAGE FOR THIS FIELD IS GONE, NOT MOVED, and this
+        // assertion is documentation of that rather than a live guard: it
+        // cannot fail on any post-fix build, because no path emits the key on
+        // any radio, swapped or not. It is kept so the inversion is visible at
+        // the site the old guard occupied. The swap isolation that is still
+        // LIVE is the per-band map and the drive baseline either side of it --
+        // those have members to leak and are checked here for real.
         check(!rfGain.contains(QStringLiteral("defaultDb")),
               "radio A's persisted LNA default does not survive the swap, and "
               "nothing writes a new one: the key is gone from the capture");
