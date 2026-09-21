@@ -3215,6 +3215,14 @@ target_include_directories(spe_protocol_test PRIVATE src)
 target_link_libraries(spe_protocol_test PRIVATE Qt6::Core)
 add_test(NAME spe_protocol_test COMMAND spe_protocol_test)
 
+add_executable(kpa1500_protocol_test
+    tests/kpa1500_protocol_test.cpp
+    src/core/Kpa1500Protocol.cpp
+)
+target_include_directories(kpa1500_protocol_test PRIVATE src)
+target_link_libraries(kpa1500_protocol_test PRIVATE Qt6::Core)
+add_test(NAME kpa1500_protocol_test COMMAND kpa1500_protocol_test)
+
 add_executable(vkamp_protocol_test
     tests/vkamp_protocol_test.cpp
     src/core/VkampProtocol.cpp

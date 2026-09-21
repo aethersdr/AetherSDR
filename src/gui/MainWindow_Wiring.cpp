@@ -48,6 +48,7 @@
 #include "AcomApplet.h"
 #include "SpeApplet.h"
 #include "VkampApplet.h"
+#include "Kpa1500Applet.h"
 #include "LpMeterApplet.h"
 #include "HealthApplet.h"
 #include "ImageFileDialog.h"
@@ -6463,6 +6464,7 @@ void MainWindow::wireMeters()
         m_acomConn.setAutoReconnect(ar);
         m_speConn.setAutoReconnect(ar);
         m_vkampConn.setAutoReconnect(ar);
+        m_kpa1500Conn.setAutoReconnect(ar);
         m_lpMeterConn.setAutoReconnect(ar);
     }
 
@@ -6994,6 +6996,63 @@ void MainWindow::wireMeters()
         const int savedVariant = PeripheralSettings::deviceInt(
             "Vkamp", "Variant", static_cast<int>(AetherSDR::Vkamp::Variant::W2000));
         m_appletPanel->vkampApplet()->setVariant(static_cast<AetherSDR::Vkamp::Variant>(savedVariant));
+    }
+
+    // ── Elecraft KPA1500 — direct TCP, no FlexRadio relay (#4097) ────────
+    // See docs/architecture/kpa1500-amplifier-design.md. Same structure and
+    // the same ordering rule as the ACOM/SPE/VKAMP blocks above: ALL signal
+    // wiring first, the auto-connect trigger LAST, so nothing misses the
+    // first connected().
+    //
+    // Deliberately absent from this block: any transmit-path wiring. The
+    // amp's `^TX` network keying is implemented in Kpa1500Connection but is
+    // not reachable from the UI or the engine, pending the maintainer
+    // decision on #4097 about whether Ethernet keying is trusted as the sole
+    // keying path. Constitution Principle VI — a path that can transmit
+    // fails closed when the operator's intent is not unambiguous.
+    connect(&m_kpa1500Conn, &Kpa1500Connection::connected, this, [this]() {
+        m_appletPanel->kpa1500Applet()->setConnected(true);
+        m_appletPanel->setKpa1500Visible(true);
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::disconnected, this, [this]() {
+        m_appletPanel->kpa1500Applet()->setConnected(false);
+        m_appletPanel->setKpa1500Visible(false);
+    });
+    connect(&m_kpa1500Conn, &Kpa1500Connection::statusUpdated, this,
+            [this](const AetherSDR::Kpa1500::Status& status) {
+        m_appletPanel->kpa1500Applet()->setStatus(status);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::operateToggled, this,
+            [this](bool operate) {
+        m_kpa1500Conn.setOperate(operate);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::tuneRequested, this, [this]() {
+        // The KPA1500 supplies its own tuning carrier, so this starts a tune
+        // on the AMPLIFIER and never keys the radio — no transmit path is
+        // involved on our side.
+        m_kpa1500Conn.startTune();
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::atuInlineToggled, this,
+            [this](bool inLine) {
+        m_kpa1500Conn.setAtuInline(inLine);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::antennaSelected, this,
+            [this](int port) {
+        m_kpa1500Conn.selectAntenna(port);
+    });
+    connect(m_appletPanel->kpa1500Applet(), &Kpa1500Applet::faultClearRequested, this, [this]() {
+        m_kpa1500Conn.clearFault();
+    });
+
+    // Startup auto-connect from saved Peripherals settings — same reasoning
+    // as ACOM/VK3AMP above: the Flex radio has no idea this amplifier
+    // exists, so the saved setting is the only trigger there will ever be.
+    {
+        const QString ip = PeripheralSettings::deviceString("Kpa1500", "ManualIp");
+        const int port = PeripheralSettings::deviceInt(
+            "Kpa1500", "ManualPort", AetherSDR::Kpa1500::kDefaultPort);
+        if (!ip.isEmpty())
+            m_kpa1500Conn.connectNetwork(ip, static_cast<quint16>(port));
     }
 
     // ── LP-100A wattmeter — serial or ser2net, no FlexRadio relay ─────────
