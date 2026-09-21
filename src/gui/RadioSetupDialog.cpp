@@ -139,6 +139,14 @@ static const QString kValueStyleTemplate =
 // each other -- the invariant #5507 item 2 is about and #5857 extends to the
 // rest of the file.
 //
+// That sentence is checkable, not aspirational: kValueStyleTemplate has exactly
+// one reference, the applyStyleSheet call below, so `grep kValueStyleTemplate`
+// returning more than the definition and that call is a site built by hand.
+// The network pair (gatewayLbl, networkNameLbl) were the last two -- built as
+// new QLabel + an explicit applyStyleSheet, carrying the right colour by the
+// right route and still outside the helper -- and they are also the pair #5857
+// names as the sites that looked correct at every other level.
+//
 // It also answers tools/audit_colours.py's ratchet, which counts setStyleSheet()
 // CALL SITES and not colours: ThemeManager::applyStyleSheet contains no
 // setStyleSheet substring, so folding a site onto this helper retires a counted
@@ -1982,13 +1990,11 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("MAC Address"), macLbl), 1, 1);
 
         grid->addWidget(new QLabel("Default Gateway:"), 1, 2);
-        auto* gatewayLbl = new QLabel(displayOrDash(m_model->gateway()));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(gatewayLbl, kValueStyleTemplate);
+        auto* gatewayLbl = makeValueLabel(displayOrDash(m_model->gateway()));
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("Default Gateway"), gatewayLbl), 1, 3);
 
         grid->addWidget(new QLabel("Network Name:"), 2, 0);
-        auto* networkNameLbl = new QLabel(displayOrDash(m_model->networkName()));
-        AetherSDR::ThemeManager::instance().applyStyleSheet(networkNameLbl, kValueStyleTemplate);
+        auto* networkNameLbl = makeValueLabel(displayOrDash(m_model->networkName()));
         grid->addWidget(makeCopyableValueLabel(QStringLiteral("Network Name"), networkNameLbl),
                         2, 1, 1, 3);
 

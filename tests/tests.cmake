@@ -2564,9 +2564,10 @@ set_tests_properties(flex_control_visibility_test PROPERTIES
 # #5507: the production Radio Setup dialog against a backend that reports no
 # region, driven by RadioDelta over the real IRadioBackend::radioChanged route.
 # Same target shape as flex_control_visibility_test above — no sockets, no peers.
-# ${THEME_TEST_RESOURCES} (resources/resources.qrc, compiled at line ~1366)
-# is what puts :/themes/default-dark.json and :/themes/default-light.json in
-# this binary. Without it ThemeManager still resolves color.accent.bright --
+# ${THEME_TEST_RESOURCES} -- set by this file's own
+# qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc), above -- is
+# what puts :/themes/default-dark.json and :/themes/default-light.json in this
+# binary. Without it ThemeManager still resolves color.accent.bright --
 # ThemeSeedGenerated.cpp compiles the dark values in -- but scanAvailableThemes()
 # finds nothing in :/themes/, so availableThemes() is empty and setActiveTheme()
 # cannot switch. #5857's slot switches the theme and reads the colour back, which

@@ -48,6 +48,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QStringList>
 #include <QToolButton>
 #include <QtTest>
@@ -464,6 +465,16 @@ private slots:
 
         ThemeManager& tm = ThemeManager::instance();
         const QString restore = tm.activeTheme();
+        // Restore on EVERY exit, not just the happy one: every QVERIFY2 below
+        // returns from the slot, so a red assertion taken under Default Light
+        // would otherwise leave the profile there for whatever runs next.
+        // Harmless while this is the last slot and TestSettingsProfile isolates
+        // the store -- the guard is what keeps it harmless if a slot is
+        // appended.
+        const auto restoreTheme = qScopeGuard([&tm, &restore] {
+            if (!restore.isEmpty() && tm.activeTheme() != restore)
+                tm.setActiveTheme(restore);
+        });
         QVERIFY2(tm.setActiveTheme(dark.name), qPrintable(dark.name));
 
         RadioModel model;
@@ -478,13 +489,31 @@ private slots:
         // bare model has no capability for simply stays unbuilt and
         // contributes nothing, which is why the coverage assertions below name
         // the pages that matter rather than a total.
-        for (const char* page : {"Radio", "Network", "GPS", "Audio",
+        //
+        // "Audio" is DELIBERATELY not in this list. buildAudioTab() is the one
+        // deferred page that performs the probe #1776 moved out of the
+        // constructor -- QMediaDevices::audioInputs()/audioOutputs() plus a
+        // live QMediaDevices monitor parented to the group box -- and the
+        // comment there names that probe as crashing on some Wayland/Qt 6.11
+        // configurations. No test in this tree opens that page offscreen, and
+        // this slot is not the one to start: every field in kNamedValueFields
+        // lives on Radio, Network or QRZ, and kMinValueLabels is reached
+        // without it. The two Audio readouts (lineoutValue, hpValue) are
+        // unnamed either way, so opening the page would buy no assertion that
+        // could fail for a reason worth knowing about -- only a
+        // platform-conditional crash on the full-suite runners.
+        for (const char* page : {"Radio", "Network", "GPS",
                                  "Antennas", "QRZ & Callsigns"}) {
             dialog.selectTab(QString::fromLatin1(page));
         }
 
         const QList<QLabel*> values = collectValueLabels(dialog);
-        for (const QLabel* l : values) qInfo() << "value label:" << describe(l);
+        // The COUNT, not the labels. describe() is already interpolated into
+        // every failure message below, so dumping all of them on a PASSING run
+        // buys nothing and costs ~28 lines of stylesheet in the log. The count
+        // is the one thing a green run cannot otherwise tell you, and it is
+        // what says how much headroom there is above kMinValueLabels.
+        qInfo() << "value labels collected:" << values.size();
 
         // Vacuity guard: a loop over an empty list passes everything. The
         // number is the count this dialog actually builds for a bare
@@ -534,8 +563,6 @@ private slots:
                      qPrintable(QStringLiteral("expected %1 back under %2: %3")
                                     .arg(dark.accentBright.name(), dark.name, describe(l))));
         }
-
-        if (!restore.isEmpty() && restore != dark.name) tm.setActiveTheme(restore);
     }
 };
 
