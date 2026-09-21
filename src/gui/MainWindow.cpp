@@ -10127,19 +10127,41 @@ void MainWindow::toggleMinimalMode(bool on)
         if (!splitterState.isEmpty())
             m_splitter->restoreState(splitterState);
 
-        // The splitter (spectrum + applet panel) stays HIDDEN until the
-        // window has its full geometry back, and is shown one event-loop turn
-        // later, below.  Shown here, every step that follows — releasing the
-        // fixed width, the status bar, restoreGeometry, showNormal, the
-        // re-anchor — resizes it, and QRhiWidget::resizeEvent renders
-        // synchronously on each resize.  When the app was launched in minimal
-        // mode the spectrum has never been drawn, so its first QRhi set-up
-        // and first texture uploads land inside that resize cascade.  On Intel
-        // D3D11 (igd10umt64xe, Arc 140V, driver 32.0.101.8626) that faults in
+        // The spectrum widgets stay HIDDEN until the window has its full
+        // geometry back, and are shown one event-loop turn later, below.
+        // Visible, every step that follows — releasing the fixed width, the
+        // status bar, restoreGeometry, showNormal, the re-anchor — resizes
+        // them, and QRhiWidget::resizeEvent renders synchronously on each
+        // resize.  When the app was launched in minimal mode the spectrum has
+        // never been drawn, so its first QRhi set-up and first texture
+        // uploads land inside that resize cascade.  On Intel D3D11
+        // (igd10umt64xe, Arc 140V, driver 32.0.101.8626) that faults in
         // ID3D11DeviceContext::UpdateSubresource and kills the process
         // (#4363, #4990).  Deferred, the first frame is drawn once, at the
         // final size, after layout has settled — the same conditions as a
-        // normal launch.
+        // normal launch.  Only the spectrum widgets are held back, not the
+        // whole splitter: hiding the splitter left the full-size window with
+        // no central content (applet panel included) until that first frame.
+        // Floating pans live in their own window and are left alone.
+        QList<QPointer<SpectrumWidget>> heldSpectra;
+        if (m_panStack) {
+            for (auto* a : m_panStack->allApplets()) {
+                auto* sw = a->spectrumWidget();
+                // Skip only an explicit hide(), never a spectrum that simply
+                // has not been shown yet — the launched-in-minimal case this
+                // hold exists for.
+                const bool explicitlyHidden = sw->isHidden()
+                    && sw->testAttribute(Qt::WA_WState_ExplicitShowHide);
+                if (m_panStack->isFloating(a->panId()) || explicitlyHidden)
+                    continue;
+                QSizePolicy sp = sw->sizePolicy();
+                sp.setRetainSizeWhenHidden(true);  // pan layout keeps its space
+                sw->setSizePolicy(sp);
+                sw->hide();
+                heldSpectra.append(sw);
+            }
+        }
+        m_splitter->show();
 
         // Release fixed width and restore minimum size
         setFixedWidth(QWIDGETSIZE_MAX);
@@ -10167,17 +10189,34 @@ void MainWindow::toggleMinimalMode(bool on)
 
         // Now show the spectrum, one turn later (see the note above the
         // splitter restore).  Queued BEFORE the canvas re-entry below, which
-        // expects the splitter visible; same-turn timers run in order.
-        QTimer::singleShot(0, this, [this] {
-            // Re-entered minimal mode during this turn (a double Ctrl+M):
-            // the enter path hides the splitter itself, so leave it hidden.
-            if (m_minimalMode)
-                return;
-            m_splitter->show();
-            // Resume spectrum rendering
-            if (m_panStack) {
+        // expects the spectrum shown; same-turn timers run in order.
+        QTimer::singleShot(0, this, [this, heldSpectra] {
+            // Resume rendering BEFORE showing the held spectra: the show
+            // delivers their pending resize, and QRhiWidget draws its first
+            // frame from that resize.  With updates still off that frame is
+            // dropped, and a render-to-texture widget does not repaint on a
+            // later update() (seen on Linux: the spectrum stayed blank until
+            // something grabbed it).  Not if minimal mode was re-entered
+            // before this turn ran — a deferred WindowStateChange landing in
+            // changeEvent during showNormal()/restoreGeometry(), the hazard
+            // m_enteringMinimalMode guards on the enter side (a second Ctrl+M
+            // is its own event and cannot get in first): the enter path
+            // suspended rendering again, so leave it suspended.
+            if (!m_minimalMode && m_panStack) {
                 for (auto* a : m_panStack->allApplets())
                     a->spectrumWidget()->setUpdatesEnabled(true);
+            }
+            // Always undo the hold, re-entered or not: the enter path has
+            // hidden the splitter by then, so showing these draws nothing,
+            // and a widget left hidden here would be skipped by every later
+            // exit.
+            for (const auto& sw : heldSpectra) {
+                if (!sw)
+                    continue;  // pan closed during the turn
+                QSizePolicy sp = sw->sizePolicy();
+                sp.setRetainSizeWhenHidden(false);
+                sw->setSizePolicy(sp);
+                sw->show();
             }
         });
 

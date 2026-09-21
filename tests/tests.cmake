@@ -5466,6 +5466,20 @@ add_test(NAME connection_panel_size_test COMMAND connection_panel_size_test)
 set_tests_properties(connection_panel_size_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# Leaving minimal mode after a launch in it must not draw the spectrum's first
+# QRhi frame inside the exit's resize cascade (#5915; #4363, #4990). Plain
+# widgets, offscreen, no GPU; the MainWindow ordering is read from the source,
+# since MainWindow is not linked into test targets.
+add_executable(minimal_mode_exit_order_test
+    tests/minimal_mode_exit_order_test.cpp
+)
+target_link_libraries(minimal_mode_exit_order_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
+target_compile_definitions(minimal_mode_exit_order_test PRIVATE
+    AETHER_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+add_test(NAME minimal_mode_exit_order_test COMMAND minimal_mode_exit_order_test)
+set_tests_properties(minimal_mode_exit_order_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 # A startup auto-connect that gives up must reopen the connection dialog rather
 # than leave the "Looking for your radio…" overlay up with no way back.
 #
