@@ -10126,13 +10126,20 @@ void MainWindow::toggleMinimalMode(bool on)
             s.value("MinimalModeSplitterSizes", "").toByteArray());
         if (!splitterState.isEmpty())
             m_splitter->restoreState(splitterState);
-        m_splitter->show();
 
-        // Resume spectrum rendering
-        if (m_panStack) {
-            for (auto* a : m_panStack->allApplets())
-                a->spectrumWidget()->setUpdatesEnabled(true);
-        }
+        // The splitter (spectrum + applet panel) stays HIDDEN until the
+        // window has its full geometry back, and is shown one event-loop turn
+        // later, below.  Shown here, every step that follows — releasing the
+        // fixed width, the status bar, restoreGeometry, showNormal, the
+        // re-anchor — resizes it, and QRhiWidget::resizeEvent renders
+        // synchronously on each resize.  When the app was launched in minimal
+        // mode the spectrum has never been drawn, so its first QRhi set-up
+        // and first texture uploads land inside that resize cascade.  On Intel
+        // D3D11 (igd10umt64xe, Arc 140V, driver 32.0.101.8626) that faults in
+        // ID3D11DeviceContext::UpdateSubresource and kills the process
+        // (#4363, #4990).  Deferred, the first frame is drawn once, at the
+        // final size, after layout has settled — the same conditions as a
+        // normal launch.
 
         // Release fixed width and restore minimum size
         setFixedWidth(QWIDGETSIZE_MAX);
@@ -10157,6 +10164,22 @@ void MainWindow::toggleMinimalMode(bool on)
         // phantom-caption offset.  Re-anchoring first would just be undone.
         if (restored)
             reanchorCustomFrameGeometry(geom);
+
+        // Now show the spectrum, one turn later (see the note above the
+        // splitter restore).  Queued BEFORE the canvas re-entry below, which
+        // expects the splitter visible; same-turn timers run in order.
+        QTimer::singleShot(0, this, [this] {
+            // Re-entered minimal mode during this turn (a double Ctrl+M):
+            // the enter path hides the splitter itself, so leave it hidden.
+            if (m_minimalMode)
+                return;
+            m_splitter->show();
+            // Resume spectrum rendering
+            if (m_panStack) {
+                for (auto* a : m_panStack->allApplets())
+                    a->spectrumWidget()->setUpdatesEnabled(true);
+            }
+        });
 
         // The round trip ends where it started: minimal entered from
         // canvas mode returns to canvas mode.  Deferred one event-loop
