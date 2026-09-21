@@ -121,6 +121,12 @@ Theme Editor can read them and restore their factory values. The stylesheet
 resolver converts that storage format to `rgba()` before applying QSS; raw
 `rgba()` token values would bypass the editor's colour and Reset paths.
 
+The AetherRX/AetherTX footer toggles use
+`color.toggle.footer.{warning,danger,success}.background.{checked,hover}`.
+The checked and hover fills have alpha `2d` and `46` respectively, and use
+the amber, red and green accent RGB values. Both bundled themes define all
+six tokens so the footer stays editable and follows theme changes.
+
 ### Hardware-display colours (specialised — paint code only)
 
 | Token | Canonical | Notes |

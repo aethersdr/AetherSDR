@@ -160,6 +160,7 @@
 #include "core/UlanziDialBackend.h"
 #include "UlanziDialMapperDialog.h"
 #include "AetherRxDialog.h"
+#include "core/TxKeyingMarker.h"
 #include "ModeFilterPresets.h"
 #include "StripEqPanel.h"
 #include "AetherDspWidget.h"
@@ -3359,11 +3360,158 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
                 {s->diguOffset(), s->diglOffset(), s->rttyShift()});
             s->setFilterWidth(edges.lo, edges.hi);
         });
-        // Seed the page with the filter it is looking at right now, rather than
-        // leaving it blank until the next slice change pushes one.
+        // REC / PLAY: the same routing as the VFO flag's record and play
+        // buttons (MainWindow_Wiring.cpp, wireVfoWidget) -- client-side to
+        // the QSO recorder, radio-side to the slice -- except this window is
+        // not pinned to one slice, so radio-side goes to whichever slice is
+        // active. The recorder can refuse to start (#4629), so the button is
+        // set from what it actually did, never from the click.
+        const auto clientSide = [] {
+            return AppSettings::instance().value("RecordingMode", "Client")
+                       .toString() == "Client";
+        };
+        connect(m_rxDialog, &AetherRxDialog::recordToggled,
+                this, [this, clientSide](bool on) {
+            if (clientSide()) {
+                if (on) m_qsoRecorder->startRecording();
+                else    m_qsoRecorder->stopRecording();
+            } else if (auto* sl = activeSlice()) {
+                sl->setRecordOn(on);
+            }
+            syncAetherRxRecordButtons();
+        });
+        connect(m_rxDialog, &AetherRxDialog::playToggled,
+                this, [this, clientSide](bool on) {
+            if (clientSide()) {
+                if (on) m_qsoRecorder->startPlayback();
+                else    m_qsoRecorder->stopPlayback();
+            } else if (auto* sl = activeSlice()) {
+                sl->setPlayOn(on);
+            }
+            syncAetherRxRecordButtons();
+        });
+        // Every recorder transition, including the error path that never
+        // emits recordingStopped, re-reads the recorder rather than trusting
+        // the last click.
+        connect(m_qsoRecorder, &QsoRecorder::recordingStarted, m_rxDialog,
+                [this](const QString&) { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::recordingStopped, m_rxDialog,
+                [this](const QString&, int) { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::recordingError, m_rxDialog,
+                [this](const QString&) { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::playbackStarted, m_rxDialog,
+                [this]() { syncAetherRxRecordButtons(); });
+        connect(m_qsoRecorder, &QsoRecorder::playbackStopped, m_rxDialog,
+                [this]() { syncAetherRxRecordButtons(); });
+        syncAetherRxRecordButtons();
+
+        // "TX Playback" on PLAY's context menu. The transmit input is
+        // captured here, at the operator's click, and carried into the
+        // session -- the same boundary the AX.25 send button uses. The
+        // bridge reaches the same routine through the registered keying
+        // action, with its own controller, and only under
+        // AETHER_AUTOMATION_ALLOW_TX: it resolves actions on a QMenu while
+        // that menu is open, which the context menu is during exec().
+        if (!m_rxPlaybackTx) {
+            m_rxPlaybackTx = std::make_unique<RxPlaybackTransmitter>(&m_radioModel, m_audio, this);
+            connect(m_rxPlaybackTx.get(), &RxPlaybackTransmitter::finished,
+                    this, [this](bool aborted, const QString& reason) {
+                statusBar()->showMessage(
+                    aborted ? tr("TX Playback stopped: %1.").arg(reason)
+                            : tr("TX Playback finished."), 4000);
+            });
+        }
+        connect(m_rxPlaybackTx.get(), &RxPlaybackTransmitter::activeChanged,
+                m_rxDialog, &AetherRxDialog::setTxPlaybackActive);
+        m_rxDialog->setTxPlaybackActive(m_rxPlaybackTx->active());
+        connect(m_rxDialog, &AetherRxDialog::txPlaybackTriggered, this, [this] {
+            if (m_rxPlaybackTx && m_rxPlaybackTx->active()) {
+                m_rxPlaybackTx->abort(tr("stopped by the operator"));
+                return;
+            }
+            const std::shared_ptr<TxController> controller = m_radioModel.localTxController();
+            if (!controller || !controller->valid()) {
+                statusBar()->showMessage(
+                    tr("TX Playback: no transmit control is available right now."), 4000);
+                return;
+            }
+            toggleRxPlaybackTransmit(
+                controller->captureProgram(TxController::Activity::Mox).request());
+        });
+        registerTxKeyingAction(m_rxDialog->txPlaybackAction(),
+            [this](const std::shared_ptr<TxController>& controller,
+                   const QString& action, const QString&) -> TxKeyingAction::Prepared {
+            if (action != QLatin1String("trigger") || !controller
+                || !controller->belongsTo(&m_radioModel)) {
+                return {};
+            }
+            const TxCoordinator::Request input =
+                controller->captureProgram(TxController::Activity::Mox).request();
+            return [this, input] { toggleRxPlaybackTransmit(input); };
+        });
+        // Seed the EQ page with the filter it is looking at right now, rather
+        // than leaving it blank until the next slice change pushes one.
         pushRxFilterCutoffsToEq();
     }
     return m_rxDialog.data();
+}
+
+void MainWindow::toggleRxPlaybackTransmit(const TxCoordinator::Request& input)
+{
+    if (!m_rxPlaybackTx) return;
+    if (m_rxPlaybackTx->active()) {
+        m_rxPlaybackTx->abort(tr("stopped by the operator"));
+        return;
+    }
+    if (!m_qsoRecorder || !m_qsoRecorder->hasLastRecording()) {
+        statusBar()->showMessage(
+            tr("TX Playback: nothing has been recorded on this client yet."), 4000);
+        return;
+    }
+    // The same file cannot go to the speakers and the transmitter at once.
+    if (m_qsoRecorder->isPlaying()) m_qsoRecorder->stopPlayback();
+    // Decode only the portion we can send. A finalized QSO can be much
+    // longer than the TX cap or the ordinary full-file playback budget.
+    const int capSecs = std::max(1,
+        AppSettings::instance().value("QsoRecordingIdleTimeout", "120").toInt());
+    const QAudioFormat format = RxPlaybackTransmitter::wireFormat();
+    const qint64 capFrames = std::min<qint64>(
+        static_cast<qint64>(capSecs) * format.sampleRate(), kQsoPlaybackMaxFrames);
+    QString why;
+    std::optional<QByteArray> pcm = m_qsoRecorder->lastRecordingPcm(
+        format, &why, capFrames, true);
+    if (!pcm) {
+        qCWarning(lcAudio) << "TX Playback refused:" << why;
+        statusBar()->showMessage(tr("TX Playback: %1.").arg(why), 4000);
+        return;
+    }
+    // The idle timeout is the operator's TX playback duration cap too.
+    if (pcm->size() == capFrames * format.bytesPerFrame()) {
+        statusBar()->showMessage(
+            tr("TX Playback: sending up to the first %1 s of the recording.")
+                .arg(capFrames / format.sampleRate()), 6000);
+    }
+    if (!m_rxPlaybackTx->start(*pcm, activeSlice(), input, &why)) {
+        qCWarning(lcAudio) << "TX Playback refused:" << why;
+        statusBar()->showMessage(tr("TX Playback: %1.").arg(why), 4000);
+    }
+}
+
+void MainWindow::syncAetherRxRecordButtons()
+{
+    if (!m_rxDialog) return;
+    const bool clientSide =
+        AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
+    if (clientSide) {
+        m_rxDialog->setRecordOn(m_qsoRecorder && m_qsoRecorder->isRecording());
+        m_rxDialog->setPlayOn(m_qsoRecorder && m_qsoRecorder->isPlaying());
+        m_rxDialog->setPlayEnabled(m_qsoRecorder && m_qsoRecorder->hasLastRecording());
+        return;
+    }
+    auto* sl = activeSlice();
+    m_rxDialog->setRecordOn(sl && sl->recordOn());
+    m_rxDialog->setPlayOn(sl && sl->playOn());
+    m_rxDialog->setPlayEnabled(sl && sl->playEnabled());
 }
 
 void MainWindow::toggleAetherRxDialog()
@@ -8539,6 +8687,8 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 
     // QSO recorder: track active slice for frequency/mode metadata (#1297)
     m_qsoRecorder->setSlice(s);
+    // Radio-side recording is per slice, and AetherRX shows the active one.
+    syncAetherRxRecordButtons();
 
     // Re-wire applet panel, overlay menu to the new active slice
     if (m_panStack) {
@@ -9055,9 +9205,7 @@ void MainWindow::setActivePanApplet(PanadapterApplet* applet)
 // so decoded text appears in the correct pan's CW widget (#864).
 void MainWindow::routeCwDecoderOutput()
 {
-#ifdef HAVE_DEEPFIST
-    refreshCwRxContext();
-#endif
+    if (m_cwAudio) { m_cwAudio->setSlice(activeSlice()); }
     // Determine which applet should receive CW decoder output:
     // the pan that owns the active audio slice (whose audio feeds the decoder).
     PanadapterApplet* target = nullptr;
@@ -9083,7 +9231,7 @@ void MainWindow::routeCwDecoderOutput()
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwModelActionRequested,
                    this, &MainWindow::cwRxModelAction);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                   &m_cwDecoder, &CwRxModel::stop);
+                   this, &MainWindow::stopCwRx);
 #endif
         disconnect(&m_cwDecoder, &CwRxModel::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwText);
@@ -9102,7 +9250,7 @@ void MainWindow::routeCwDecoderOutput()
         disconnect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
                    &m_cwDecoder, &CwRxModel::setSpeedRange);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                   &m_cwDecoder, &CwRxModel::stop);
+                   this, &MainWindow::stopCwRx);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                    &m_cwDecoderTx, &CwDecoder::stop);
         disconnect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
@@ -9145,12 +9293,13 @@ void MainWindow::routeCwDecoderOutput()
         m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(),
                                   m_cwDecoderApplet->speedRangeHigh());
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
-                &m_cwDecoder, &CwRxModel::stop);
+                this, &MainWindow::stopCwRx);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                 &m_cwDecoderTx, &CwDecoder::stop);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwRxTextDisplayed,
                 &m_cwCallsignSpotter, &CwCallsignSpotter::feedText);
     }
+    refreshCwInputStatus();
 }
 
 // Recompute the CW decoder run state, panel visibility, and the
@@ -9198,6 +9347,10 @@ void MainWindow::refreshCwDecodeState()
     refreshCwRxBackend();
 #endif
     const bool shouldRunRx = isCw && rxOn;
+    if (m_cwAudio) {
+        m_cwAudio->setSlice(s);
+        m_cwAudio->setEnabled(shouldRunRx);
+    }
     if (shouldRunRx && !m_cwDecoder.isRunning())
         m_cwDecoder.start();
     else if (!shouldRunRx && m_cwDecoder.isRunning())

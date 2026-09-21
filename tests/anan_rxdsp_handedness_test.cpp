@@ -37,6 +37,7 @@
 #include "core/backends/anan/AnanDroopCorrection.h"
 #include "core/backends/anan/AnanRxDsp.h"
 #include "core/backends/anan/AnanSpectrum.h"
+#include "core/dsp/WdspSMeter.h"
 
 #include <QCoreApplication>
 
@@ -763,6 +764,116 @@ int main(int argc, char** argv)
               "lifting the bypass restores the identical corrected frame -- the tables "
               "were hidden, never discarded, so an aborted sweep cannot lose a "
               "calibration");
+    }
+
+    // ---- Group 8: the S-meter never publishes our own silence ----
+    //
+    // Two edges, one cause. While the audio channel is clocked with zeros
+    // (setAudioMuted(), used across a rate change) WDSP's signal-average
+    // meter integrates that silence, and because nothing flushes its average
+    // the reading is still wrong for the length of its own time constant
+    // AFTER the mute lifts. A guard on the mute flag alone would therefore
+    // move the needle's dive from during the zoom to the end of it. Removing
+    // the settle window turns the last check here red.
+    {
+        const int settle = AetherSDR::WdspSMeter::settleBlocks(kInputRate, kBlock);
+        check(settle == 15,
+              "3 tau of WDSP's 0.100 s meter average at 48 ksps / 1024-sample blocks "
+              "is 15 blocks (ceil of 14.0625)");
+        // The count is in blocks but the wait is a property of the tap, so it
+        // has to come out as the same wall-clock time at every DDC0 rate --
+        // a zoom must not settle six times longer at 48 than at 1536 ksps.
+        for (const int ksps : kDdc0RatesKsps) {
+            const int n = AetherSDR::WdspSMeter::settleBlocks(ksps * 1000, kBlock);
+            const double seconds = static_cast<double>(n) * kBlock / (ksps * 1000.0);
+            const double target = AetherSDR::WdspSMeter::kSettleTaus * AetherSDR::WdspSMeter::kAverageTauSec;
+            const double oneBlock = static_cast<double>(kBlock) / (ksps * 1000.0);
+            check(seconds >= target && seconds - target <= oneBlock,
+                  "the settle rounds up to the same 0.3 s at every DDC0 rate");
+        }
+        check(AetherSDR::WdspSMeter::settleBlocks(0, 0) == 1,
+              "an unconfigured rate still swallows one block rather than dividing by zero");
+
+        AnanRxDsp dsp;
+        AnanRxDsp::Config cfg;
+        cfg.inputSampleRateHz = kInputRate;
+        cfg.audioSampleRateHz = kAudioRate;
+        cfg.dspBlockSize = kBlock;
+        cfg.fftSize = 256;
+        // WDSP taps this meter immediately AFTER the main bandpass -- upstream
+        // RXA.c:647-648 runs xnbp(nbp0) and then xmeter(smeter) on the same
+        // midbuff -- so the tone has to be inside the passband or the meter
+        // reads the floor and the group proves nothing. Group 2's arrangement,
+        // already established there: a +800 Hz WIRE tone lands in an LSB
+        // channel's negative passband.
+        cfg.mode = WdspChannel::Mode::Lsb;
+        cfg.filterLowHz = -9000.0;
+        cfg.filterHighHz = -100.0;
+        cfg.agcMode = 0;                    // AGC off: the level is the signal's
+        cfg.maximumAgcGainDb = 40.0;
+        cfg.blockForOutput = true;          // deterministic for an offline burst feed
+        std::string err;
+        check(dsp.configure(cfg, &err), err.empty() ? "AnanRxDsp configures" : err.c_str());
+
+        std::vector<float> levels;
+        const auto conn = QObject::connect(&dsp, &AnanRxDsp::meterUpdate,
+                                           [&](float dbfs) { levels.push_back(dbfs); });
+
+        double phase = 0.0;
+        const double dp = 2.0 * kPi * 800.0 / kInputRate;
+        const auto feed = [&](int blocks) {
+            for (int b = 0; b < blocks; ++b) {
+                std::vector<std::complex<float>> iq(kBlock);
+                for (int k = 0; k < kBlock; ++k) {
+                    iq[static_cast<std::size_t>(k)] = {
+                        static_cast<float>(0.25 * std::cos(phase)),
+                        static_cast<float>(0.25 * std::sin(phase))
+                    };
+                    phase += dp;
+                    if (phase > 2.0 * kPi) phase -= 2.0 * kPi;
+                }
+                dsp.processIqBlock(iq);
+            }
+        };
+
+        // A channel is born with its average at zero, so the same window
+        // applies from the other end -- no mute involved.
+        feed(settle);
+        check(levels.empty(),
+              "a freshly installed channel publishes nothing until its meter has settled");
+
+        feed(60);
+        check(!levels.empty(), "a steady tone is published once the meter has settled");
+        const float preMute = levels.empty() ? -400.0f : levels.back();
+        check(preMute > -100.0f, "the settled reading is a real level, not the meter floor");
+
+        // The mute itself: the positive control above ran through this same
+        // connection, so "no emissions" here can only be the guard.
+        levels.clear();
+        dsp.setAudioMuted(true);
+        feed(12);                           // 250 ms, the rate change's settle window
+        check(levels.empty(),
+              "nothing is published while the channel is clocked with our own silence");
+
+        // The edge this group exists for. Cleared first so this check cannot
+        // inherit a failure of the muted-silence check above.
+        levels.clear();
+        dsp.setAudioMuted(false);
+        feed(settle);
+        check(levels.empty(),
+              "and nothing is published while the meter's average still carries it");
+
+        feed(40);
+        check(!levels.empty(), "readings resume after the settle window");
+        const float first = levels.empty() ? -400.0f : levels.front();
+        std::fprintf(stderr, "S-meter: %.1f dBFS before the mute, %.1f dBFS on the "
+                             "first reading after it\n",
+                     static_cast<double>(preMute), static_cast<double>(first));
+        check(std::fabs(first - preMute) < 3.0f,
+              "the first reading after the mute is within 3 dB of the pre-mute level -- "
+              "the needle holds through a zoom instead of diving at the end of it");
+
+        QObject::disconnect(conn);
     }
 
     if (g_failures == 0)

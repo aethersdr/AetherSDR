@@ -5967,6 +5967,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 sl->setRecordOn(on);
         }
     });
+    // A capture can start from AetherRX's REC (or the bridge) as well as
+    // from this flag, and the one recorder serves them all, so the flag
+    // follows the recorder's own start rather than only its own click.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStarted, w, [w](const QString&) {
+        w->setRecordOn(true);
+    });
     // A stopped recording may have failed to write/finalize; only enable
     // playback when the recorder has a successfully finalized file.
     connect(m_qsoRecorder, &QsoRecorder::recordingStopped, w, [this, w]() {
@@ -6001,6 +6007,11 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(s, &SliceModel::recordOnChanged, w, &VfoWidget::setRecordOn);
     connect(s, &SliceModel::playOnChanged, w, &VfoWidget::setPlayOn);
     connect(s, &SliceModel::playEnabledChanged, w, &VfoWidget::setPlayEnabled);
+    // The AetherRX window's REC / PLAY follow the active slice's radio-side
+    // state through the same three signals; the sync reads which is active.
+    connect(s, &SliceModel::recordOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
+    connect(s, &SliceModel::playOnChanged, this, &MainWindow::syncAetherRxRecordButtons);
+    connect(s, &SliceModel::playEnabledChanged, this, &MainWindow::syncAetherRxRecordButtons);
     connect(w, &VfoWidget::autotuneRequested, this, [this, sliceId](bool intermittent) {
         if (m_radioModel.slice(sliceId))
             m_radioModel.cwAutoTune(sliceId, intermittent);
