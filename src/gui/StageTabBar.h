@@ -73,6 +73,16 @@ public:
     QPushButton* addFooterToggle(const QString& label, const QString& objectName,
                                  const QString& tooltip);
 
+    // Several such toggles side by side on one row, sharing its width
+    // equally — the transmit window's REC / PLAY pair. Returned in call
+    // order.
+    struct FooterToggle {
+        QString label;
+        QString objectName;
+        QString tooltip;
+    };
+    QVector<QPushButton*> addFooterToggleRow(const QVector<FooterToggle>& toggles);
+
     // Add the footer button under the stretch — Settings, in both windows.
     void addFooterButton(const QString& label, const QString& objectName,
                          const QString& tooltip);

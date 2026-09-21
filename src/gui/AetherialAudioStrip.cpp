@@ -247,7 +247,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     // have been two places to fix every tab-bar bug.
     //
     // The live controls sit at the foot of the column, directly above
-    // Settings: Record, Play and BYPASS are what you reach for mid-QSO, so
+    // Settings: REC, PLAY and BYPASS are what you reach for mid-QSO, so
     // none of them is behind a modal. Only the profile library lives in
     // Settings. ClientChainApplet carries its own copy of all three on the
     // docked panel.
@@ -373,16 +373,27 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         refreshIndicators();
     }
 
-    // The transmit monitor pair. Checkable so the lit state can show, but a
-    // click only asks: MainWindow owns the monitor and calls
+    // The transmit monitor pair, side by side on one row. Checkable so the
+    // lit state can show, but a click only asks: MainWindow owns the monitor and calls
     // setMonitorRecording / setMonitorPlaying back with what actually
     // happened, which is when the button lights. Record red, Play green,
     // the colours the docked applet's pair already use.
-    m_monRecBtn = m_tabs->addFooterToggle(
-        tr("Record"), QStringLiteral("aetherTxMonitorRecord"),
-        tr("Record up to 30 s of processed transmit audio (MIC must be set to "
-           "PC and DAX off). Click again to stop; playback starts by itself."));
+    const auto pair = m_tabs->addFooterToggleRow({
+        {tr("REC"), QStringLiteral("aetherTxMonitorRecord"),
+         tr("Record up to 30 s of processed transmit audio (MIC must be set "
+            "to PC and DAX off). Click again to stop; playback starts by "
+            "itself.")},
+        {tr("PLAY"), QStringLiteral("aetherTxMonitorPlay"),
+         tr("Play back the captured audio. Click again to cancel.")},
+    });
+    m_monRecBtn  = pair.at(0);
+    m_monPlayBtn = pair.at(1);
+    // The short labels fit the row; the spoken names stay whole words
+    // (#4896).
+    m_monRecBtn->setAccessibleName(tr("Record"));
+    m_monPlayBtn->setAccessibleName(tr("Play"));
     m_monRecBtn->setStyleSheet(QString::fromLatin1(kMonTabBase) + kRecTab);
+    m_monPlayBtn->setStyleSheet(QString::fromLatin1(kMonTabBase) + kPlayTab);
     // A checkable button flips itself on click. Put it back and let the
     // monitor's own started/stopped signals light it, so a capture the
     // monitor declined (already playing, say) never shows as running.
@@ -394,16 +405,11 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         askOnly(m_monRecBtn);
         emit monitorRecordClicked();
     });
-
-    m_monPlayBtn = m_tabs->addFooterToggle(
-        tr("Play"), QStringLiteral("aetherTxMonitorPlay"),
-        tr("Play back the captured audio. Click again to cancel."));
-    m_monPlayBtn->setStyleSheet(QString::fromLatin1(kMonTabBase) + kPlayTab);
     connect(m_monPlayBtn, &QPushButton::clicked, this, [this, askOnly]() {
         askOnly(m_monPlayBtn);
         emit monitorPlayClicked();
     });
-    // Nothing recorded yet, and why it is greyed out has to reach the
+    // Nothing recorded yet, and why PLAY is greyed out has to reach the
     // accessible channel too, not just the tooltip (#4896).
     setMonitorHasRecording(false);
 
@@ -679,7 +685,7 @@ void AetherialAudioStrip::setMonitorHasRecording(bool has)
     m_monPlayBtn->setAccessibleDescription(
         has ? tr("Play back the captured audio. Click again to cancel.")
             : tr("Unavailable until something has been recorded. "
-                 "Use Record first."));
+                 "Use REC first."));
 }
 
 void AetherialAudioStrip::setMicInputReady(bool ready)

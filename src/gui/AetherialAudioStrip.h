@@ -117,8 +117,9 @@ protected:
 private:
     void refreshIndicators();
 
-    // The monitor pair at the foot of the stage column, above BYPASS. Owned
-    // by the StageTabBar; lit by MainWindow through the setMonitor* setters.
+    // The REC / PLAY pair on one row at the foot of the stage column, above
+    // BYPASS. Owned by the StageTabBar; lit by MainWindow through the
+    // setMonitor* setters.
     QPushButton* m_monRecBtn{nullptr};
     QPushButton* m_monPlayBtn{nullptr};
 
