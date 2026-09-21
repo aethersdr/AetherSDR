@@ -94,26 +94,13 @@ AetherTxSettingsDialog::AetherTxSettingsDialog(AudioEngine* audio, QWidget* pare
     m_status->setWordWrap(true);
     root->addWidget(m_status);
 
-    // ── The two live controls the chain row used to carry ────────────────
-    auto* liveHeading = new QLabel(tr("Chain"));
+    // ── The transmit monitor the chain row used to carry ─────────────────
+    auto* liveHeading = new QLabel(tr("Monitor"));
     liveHeading->setObjectName(QStringLiteral("SectionLabel"));
     root->addWidget(liveHeading);
 
     auto* liveRow = new QHBoxLayout;
     liveRow->setSpacing(6);
-
-    m_bypassBtn = new QPushButton(tr("BYPASS"));
-    m_bypassBtn->setObjectName(QStringLiteral("aetherTxBypass"));
-    m_bypassBtn->setCheckable(true);
-    m_bypassBtn->setToolTip(
-        tr("Suppress every voice stage at once, so the microphone reaches the "
-           "radio unprocessed. The docked chain applet carries the same "
-           "control if you want it to hand mid-transmission."));
-    connect(m_bypassBtn, &QPushButton::toggled,
-            this, &AetherTxSettingsDialog::bypassToggled);
-    liveRow->addWidget(m_bypassBtn);
-
-    liveRow->addSpacing(16);
 
     m_monRecBtn = new QPushButton(tr("Record"));
     m_monRecBtn->setObjectName(QStringLiteral("aetherTxMonitorRecord"));
@@ -327,11 +314,5 @@ void AetherTxSettingsDialog::setMonitorHasRecording(bool has)
                  "Use Record first."));
 }
 
-void AetherTxSettingsDialog::setBypassed(bool on)
-{
-    if (!m_bypassBtn) return;
-    QSignalBlocker block(m_bypassBtn);
-    m_bypassBtn->setChecked(on);
-}
 
 } // namespace AetherSDR

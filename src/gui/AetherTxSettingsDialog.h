@@ -19,10 +19,10 @@ class AudioEngine;
 // file and asks what to save it as, rather than overwriting whatever shares
 // its name.
 //
-// BYPASS and the monitor record/playback pair moved here from the chain row
-// the tab column replaced. Neither is stranded: ClientChainApplet carries its
-// own copy of both, one click away on the docked panel, for when you want them
-// mid-transmission.
+// The monitor record/playback pair moved here from the chain row the tab
+// column replaced. It is not stranded: ClientChainApplet carries its own copy
+// on the docked panel. BYPASS is not here -- it sits in the stage column
+// above the Settings button, where a modal is not in the way of it.
 class AetherTxSettingsDialog : public QDialog {
     Q_OBJECT
 
@@ -34,10 +34,9 @@ signals:
     // profile can reorder the chain and flip every stage's enable.
     void profileApplied();
 
-    // Forwarded from the two live controls, so the host keeps owning what
-    // they mean. The strip already had these signals; the buttons simply
-    // live here now.
-    void bypassToggled(bool on);
+    // Forwarded from the monitor pair, so the host keeps owning what they
+    // mean. The strip already had these signals; the buttons simply live
+    // here now.
     void monitorRecordClicked();
     void monitorPlayClicked();
 
@@ -47,7 +46,6 @@ public:
     void setMonitorRecording(bool on);
     void setMonitorPlaying(bool on);
     void setMonitorHasRecording(bool has);
-    void setBypassed(bool on);
 
 private:
     void refreshList();
@@ -61,7 +59,6 @@ private:
     void onImport();
 
     AetherTxProfiles* m_profiles{nullptr};
-    QPushButton*      m_bypassBtn{nullptr};
     QPushButton*      m_monRecBtn{nullptr};
     QPushButton*      m_monPlayBtn{nullptr};
     QListWidget*      m_list{nullptr};

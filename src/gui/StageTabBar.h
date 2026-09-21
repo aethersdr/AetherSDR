@@ -9,6 +9,7 @@ class QButtonGroup;
 class QCheckBox;
 class QEvent;
 class QObject;
+class QPushButton;
 class QVBoxLayout;
 
 namespace AetherSDR {
@@ -62,6 +63,15 @@ public:
     // bar takes no interest in what it is — the transmit window puts its MIC
     // and TX indicators here.
     void addFooterWidget(QWidget* w);
+
+    // Park a checkable button at the foot of the column, in call order with
+    // the other footer entries. Drawn as a stage tab so the column keeps one
+    // look, but checked means "engaged" rather than "selected", so it is not
+    // in the tab group and carries its own checked colour. The caller owns
+    // what it means — the transmit window puts BYPASS here, directly above
+    // Settings. Returns the button for wiring and for mirroring state.
+    QPushButton* addFooterToggle(const QString& label, const QString& objectName,
+                                 const QString& tooltip);
 
     // Add the footer button under the stretch — Settings, in both windows.
     void addFooterButton(const QString& label, const QString& objectName,

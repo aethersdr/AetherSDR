@@ -35,6 +35,7 @@
 #include <QComboBox>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -225,9 +226,11 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     // pointed in opposite directions, so a second copy of the column would
     // have been two places to fix every tab-bar bug.
     //
-    // BYPASS, the monitor pair and the preset controls moved into Settings.
-    // Neither live control is stranded: ClientChainApplet carries its own
-    // BYPASS and its own record/play buttons on the docked panel.
+    // BYPASS sits at the foot of the column, directly above Settings: it is
+    // the one control you reach for mid-QSO, so it is not behind a modal. The
+    // monitor pair and the preset controls live in Settings. Neither is
+    // stranded: ClientChainApplet carries its own BYPASS and its own
+    // record/play buttons on the docked panel.
     auto* row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(8);
@@ -350,9 +353,29 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         refreshIndicators();
     }
 
+    m_bypassBtn = m_tabs->addFooterToggle(
+        tr("BYPASS"), QStringLiteral("aetherTxBypass"),
+        tr("Suppress every voice stage at once, so the microphone reaches the "
+           "radio unprocessed. Click again to restore the stages that were on."));
+    connect(m_bypassBtn, &QPushButton::toggled,
+            this, &AetherialAudioStrip::onBypassToggled);
+    if (m_audio) {
+        // Engine-owned state: mirror it here so a click on the docked chain
+        // applet's BYPASS, or a bridge command, lights this button too.
+        {
+            QSignalBlocker block(m_bypassBtn);
+            m_bypassBtn->setChecked(m_audio->isTxBypassed());
+        }
+        connect(m_audio, &AudioEngine::txBypassChanged, this, [this](bool on) {
+            if (!m_bypassBtn) return;
+            QSignalBlocker block(m_bypassBtn);
+            m_bypassBtn->setChecked(on);
+        });
+    }
+
     m_tabs->addFooterButton(
         tr("Settings"), QStringLiteral("aetherTxSettingsButton"),
-        tr("Profiles, bypass and the transmit monitor."));
+        tr("Profiles and the transmit monitor."));
 
     // Pin every panel to its TX engine instance, then show the first stage.
     if (m_gate)        m_gate->showForTx();
@@ -546,7 +569,6 @@ void AetherialAudioStrip::showSettings()
     // description, which would go on saying "nothing has been recorded" after
     // something had been.
     m_settingsDlg = &dlg;
-    dlg.setBypassed(m_audio && m_audio->isTxBypassed());
     dlg.setMonitorRecording(m_monRecording);
     dlg.setMonitorHasRecording(m_monHasRecording);
     dlg.setMonitorPlaying(m_monPlaying);
@@ -554,8 +576,6 @@ void AetherialAudioStrip::showSettings()
         refreshAllPanelsFromEngine();
         if (m_tabs) m_tabs->refreshFromHost();
     });
-    connect(&dlg, &AetherTxSettingsDialog::bypassToggled,
-            this, &AetherialAudioStrip::onBypassToggled);
     connect(&dlg, &AetherTxSettingsDialog::monitorRecordClicked,
             this, &AetherialAudioStrip::monitorRecordClicked);
     connect(&dlg, &AetherTxSettingsDialog::monitorPlayClicked,
@@ -765,9 +785,10 @@ bool AetherialAudioStrip::eventFilter(QObject* obj, QEvent* ev)
 void AetherialAudioStrip::onBypassToggled(bool checked)
 {
     if (!m_audio) return;
-    // Engine owns the bypass snapshots — both this widget and the docked
-    // Chain applet route through setTxBypassed and observe
-    // txBypassChanged to stay in lock-step. RX bypass belongs to AetherRX.
+    // Engine owns the bypass snapshots — both this window and the docked
+    // Chain applet route through setTxBypassed and observe txBypassChanged
+    // to stay in lock-step, so the click lands here and the button follows
+    // the engine back. RX bypass belongs to AetherRX.
     m_audio->setTxBypassed(checked);
 }
 

@@ -138,6 +138,9 @@ private:
     // them.  Restores the snapshot on uncheck.  Mirrors the docked
     // ClientChainApplet's BYPASS button.
     void onBypassToggled(bool checked);
+    // The BYPASS toggle at the foot of the stage column, above Settings.
+    // Owned by the StageTabBar; follows AudioEngine::txBypassChanged.
+    QPushButton* m_bypassBtn{nullptr};
 
     void addStage(Stage stage, const QString& label, QWidget* page);
 
@@ -145,7 +148,7 @@ private:
     void setStageEnabled(Stage stage, bool on);
     bool stageEnabled(Stage stage) const;
 
-    // The profile library, bypass and the transmit monitor.
+    // The profile library and the transmit monitor.
     void showSettings();
 
     // After a profile has been applied to the engine, push fresh values

@@ -248,6 +248,40 @@ void StageTabBar::addFooterWidget(QWidget* w)
     m_rows->addWidget(row);
 }
 
+QPushButton* StageTabBar::addFooterToggle(const QString& label, const QString& objectName,
+                                          const QString& tooltip)
+{
+    beginFooter();
+
+    auto* button = makeStageTab(label);
+    button->setObjectName(objectName);
+    button->setAccessibleName(label);
+    button->setToolTip(tooltip);
+    // Not in m_group: checking it must not deselect the current stage page,
+    // and the page tabs must not uncheck it. Its own checked colour, too --
+    // the tab sheet's checked state reads as "this page is showing", and an
+    // engaged bypass has to read as a warning instead. Amber, like the docked
+    // chain applet's BYPASS, so the same state looks the same in both places.
+    button->setStyleSheet(QStringLiteral(
+        "QPushButton { text-align: left; color: #c8a070; }"
+        "QPushButton:hover { color: #f2c14e; border-color: #f2c14e; }"
+        "QPushButton:checked { color: #f2c14e; border-color: #f2c14e;"
+        "                      background: #4a3818; }"
+        "QPushButton:checked:hover { background: #5a4a28; }"));
+
+    // Indented like every other label, so the column has one left edge.
+    auto* row = new QWidget;
+    auto* rowBox = new QHBoxLayout(row);
+    rowBox->setContentsMargins(0, 0, 0, 0);
+    rowBox->setSpacing(4);
+    auto* pad = new QWidget;
+    pad->setFixedWidth(StageGrip::kGripWidth);
+    rowBox->addWidget(pad);
+    rowBox->addWidget(button, 1);
+    m_rows->addWidget(row);
+    return button;
+}
+
 void StageTabBar::addFooterButton(const QString& label, const QString& objectName,
                                   const QString& tooltip)
 {
