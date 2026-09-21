@@ -7045,19 +7045,12 @@ void RadioModel::onBackendSpectrumFrame(int panId, const QByteArray& frame)
     //
     // Gated once more, because the waterfall rate is a SEPARATE control from
     // the frame rate and normally asks for something slower. That gate paces
-    // the row; it does NOT integrate it. The row that goes out is the single
-    // producer frame that landed on the gate, so it represents one frame out of
-    // the interval rather than the interval -- on HL2 one 2.67 ms FFT window,
-    // but this handler serves five families and a frame is not the same object
-    // on each of them: see the m_backendWfLastRowNs comment in the header,
-    // which scopes the arithmetic and names what ANAN and Icom do instead.
-    // What is owed is the row's FIDELITY, not the time axis: the widget
-    // calibrates that from PRESENTATION cadence, which this gate paces but does
-    // not stamp -- the nowNs below reaches PerfTelemetry only, the row is then
-    // routed through MainWindow::deferReceivePresentation, and
-    // updateWaterfallRow() takes its own currentMSecsSinceEpoch(). See RFC
-    // #5782 (this repository's own, not one of the real upstreams) for why the
-    // accumulator does not belong here.
+    // the row; it does NOT integrate it -- the row that goes out is the single
+    // producer frame that landed on the gate. What that frame is on each of
+    // the five families this handler serves, what is owed (the row's
+    // FIDELITY, not the time axis), and why the accumulator does not belong
+    // here are all on m_backendWfLastRowNs in the header, with RFC #5782
+    // (this repository's own) as the ruling. Kept in one place on purpose.
     // Geometry for THIS pan. `panId` here is already the neutral index, which is
     // the same key the geometry handler stores under.
     const double panBandwidthMhz = m_backendPanBandwidthMhz.value(panId, 0.0);

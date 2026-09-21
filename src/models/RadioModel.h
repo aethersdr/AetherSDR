@@ -1995,9 +1995,11 @@ private:
     //
     // - On HL2 the claim is exact. The frame is one unaveraged FFT window; at
     //   384 kHz that window is 1024/384000 = 2.67 ms (docs/HERMES.md 15.2.1
-    //   states the same thing as 375 fps; fftSize is Hl2RxDsp.h's 1024), and at
-    //   rate 10 localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 --
-    //   0.66 %. Hl2Spectrum carries no spectral state between frames (m_acc
+    //   states the same thing as 375 fps; fftSize is Hl2RxDsp.h's 1024) --
+    //   nominal, since Hl2Spectrum's Hanning window weights the ends down and
+    //   the effective span is shorter still -- and at rate 10
+    //   localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 -- 0.66 %,
+    //   an upper bound. Hl2Spectrum carries no spectral state between frames (m_acc
     //   holds only the partial window the NEXT frame completes from, which is
     //   why HERMES 15.2.1 says the accumulator keeps filling on a skipped
     //   interval), so the frames in between never reach the waterfall at all:
@@ -2013,8 +2015,11 @@ private:
     //   (IcomScope.h: "Raw display units, 0..160. NOT dBm"), not FFT windows at
     //   all, so neither the 2.67 ms nor the duty figure means anything there.
     //
-    // The interval a row SHOULD integrate is not an open question: it is this
-    // gate's own WaterfallRate::localRowIntervalMs(rate), the gap between rows.
+    // The interval a row SHOULD integrate is the gap between rows: this gate's
+    // own WaterfallRate::localRowIntervalMs(rate) while the gate is paced, and
+    // the pan frame interval at rate 100, where localRowIntervalMs() returns 0
+    // and the gate is lifted. Which layer that number has to reach is part of
+    // the open question below, not settled here.
     // Note what does NOT rest on that number, because it reads the other way
     // round. updateWaterfallRow() stamps each row with its ARRIVAL time and
     // Q_UNUSED()s the timecode; updateWaterfallMsPerRowFromHistory() measures
@@ -2042,9 +2047,10 @@ private:
     //
     // The open question is which LAYER owns the accumulation and in
     // which domain, because averaging dBFS is averaging logarithms -- see
-    // RFC #5782 (this repository's own; not one of the real upstreams), which
-    // names this row and rules the above-the-seam variant out in its Option C.
-    // Do not add an accumulator here until that lands.
+    // RFC #5782 (this repository's own; not one of the real upstreams), whose
+    // plan row 2.2 is the integrated waterfall row and whose Option C rules
+    // the above-the-seam variant out. Do not add an accumulator here until
+    // that lands.
     QHash<int, qint64> m_backendWfLastRowNs;
     // Covers only the window before MainWindow seeds the pan model from the
     // operator's sliders. 100 is the top of the 1..100 rate control and matches
