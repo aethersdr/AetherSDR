@@ -107,6 +107,42 @@ more, and only with a run behind it.
 there — the checker verifies all three, and they are marked so a reader knows
 the evidence class differs.
 
+**A `*` that stops being true is TWO different facts, and the checker splits
+them.** Every alternate path in this register documents the same thing: a
+control reaching a Flex by wire text built *above* the seam. The `aetherd`
+receive-control migration exists to delete exactly those bypasses, so a boolean
+"is the record still true" would raise an error on every **successful**
+migration — and an error that fires three times on good news is ignored by the
+fourth. So:
+
+| | what happened | the check |
+| --- | --- | --- |
+| **rotted** | the record's claim is false and nothing stronger replaced it | fails, naming which condition refused |
+| **retired** | the bypass was deliberately deleted because the control moved *behind* the seam | reported as progress, never fails |
+
+A retirement has to satisfy all four: the wire token is **gone from the declared
+file** (a file that still emits it has the bypass and merely names it wrong —
+that is an unrecorded rename); the backend **overrides the row's seam verb**
+with a body that is not a `Q_UNUSED` no-op; the cell **still derives `W`**; and
+the wire token is **still emitted from the backend's own source**, so the bypass
+was absorbed below the seam rather than lost. The question the split answers is
+*did the evidence get weaker, or did a weaker piece of evidence stop being
+needed?*
+
+**One case it cannot separate, and it says so rather than pretending.** Where a
+backend **already** overrode the verb and **already** carried the same wire
+token below the seam — three records today, `rx/filter`, `rx/agc-threshold` and
+`rx/pan-center` on Flex — mangling the above-seam literal yields a tree
+indistinguishable from the migration, because in every respect this register
+scores it *is* the same tree: the cell is still true and the bypass no longer
+carries that text. The other **37 of 40** records are load-bearing — the
+derivation actually rests on them — and breaking one of those moves the cell,
+so `feature-matrix-drift` fires beside the alt-path error.
+
+**A retirement notice is an edit request, not a status line.** It repeats every
+run until the `alt_path` entry is deleted from the sidecar and the `*` dropped
+from that cell here.
+
 ---
 
 ## The GUI matrix
@@ -573,8 +609,13 @@ Recorded here, not filed. Each is a candidate for its own issue.
 - `python tools/check_radio_feature_matrix.py --strict` — the gate. It fails on
   any cell that disagrees with the source, on a `V` without a citation, on a
   `∅` row whose capability field has since been added, on an alternate path
-  whose wire token has gone, on a gate the GUI no longer applies, and on the
+  that has **rotted** — as against one that **retired**, which it reports as
+  progress and does not fail — on a gate the GUI no longer applies, and on the
   document disagreeing with its own JSON sidecar.
+- **When a `*` retires, delete the record.** The check prints a
+  `feature-matrix-alt-path-retired` notice naming the row and the family; the
+  repair is to remove that family's `alt_path` from the sidecar and the `*`
+  from the cell above. The notice repeats until someone does.
 - `python tools/check_radio_feature_matrix.py --print` — the derived matrix
   alone, for checking a change before committing it.
 - **A green run does not mean the roster is complete.** The gate iterates the

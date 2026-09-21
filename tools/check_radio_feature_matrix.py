@@ -73,6 +73,10 @@ read as more than it is:
     declare an `alt_path` for a backend; the checker verifies the named file
     contains both the named symbol and the literal wire token, which is weaker
     evidence than an override and is marked as such in the document.
+    A broken alt_path is TWO different facts and the checker splits them —
+    ROTTED fails, RETIRED is reported as progress. See alt_path_state(), which
+    carries the whole argument; without the split, every successful seam
+    migration raises an error and the error stops being read.
   * WHETHER A MODEL GATE REFUSES VISIBLY OR DROPS SILENTLY. The `visible` flag
     on a model_gate is AUTHORED. The checker verifies the gate exists; it
     cannot read a tr() string and know the operator saw it.
@@ -484,6 +488,15 @@ class Source:
                 return classify_body(body, verb) == "NOOP"
         return None
 
+    def emits_wire(self, fam: str, wire: str) -> bool:
+        """Does this backend's OWN source carry the literal wire text?
+
+        Comment-free — self.bodies is already stripped — so a wire token
+        mentioned in a FlexAPI comment above a function does not count as the
+        backend emitting it.
+        """
+        return bool(wire) and wire in self.bodies[fam]
+
     def publishes(self, fam: str, token: str) -> bool:
         """Does this backend ever mention a runtime-published control descriptor?
 
@@ -539,12 +552,118 @@ class Source:
             return None
         return reads == 0
 
-    def alt_path_ok(self, alt: dict) -> bool:
+    # ---- the alternate path, and why a broken one is TWO different facts -----
+    #
+    # RETIREMENT IS NOT ROT, AND CONFLATING THEM DISARMS THE CHECK. Every
+    # alt_path in this register documents the same shape: a control that
+    # reaches a Flex by SmartSDR wire text built ABOVE the seam. The M4
+    # receive-control migration exists to delete exactly those bypasses — so
+    # under a boolean "does the file still contain both", every SUCCESSFUL
+    # migration raises feature-matrix-stale-alt-path. A reviewer who sees that
+    # error on three green migrations in a row learns to wave it through, and
+    # it is then worthless on the day it finds real drift.
+    #
+    # The distinguishing question is NOT "did the triple break" — it breaks
+    # identically either way. It is: DID THE EVIDENCE GET WEAKER, OR DID A
+    # WEAKER PIECE OF EVIDENCE STOP BEING NEEDED?
+    #
+    #   ROTTED   the record's claim is false and nothing stronger replaced it.
+    #            Fails, and says which of the four conditions below refused.
+    #   RETIRED  the bypass was deliberately deleted because the control moved
+    #            BEHIND the seam. The cell's primary evidence is intact and is
+    #            now the STRONGER kind — a compiler-checked override instead of
+    #            a text match. Reported as progress; never fails.
+    #
+    # Four conditions, each ruling out one way the cheerful reading could be
+    # wrong. All four must hold, or it is rot:
+    #
+    #   (a) THE TOKEN IS GONE FROM THE DECLARED FILE. A file that still emits
+    #       the wire token still has the bypass; the record merely names the
+    #       wrong symbol for it. That is a rename nobody recorded — rot.
+    #   (b) THE BACKEND OVERRIDES THE ROW'S SEAM VERB, with a body that is not
+    #       a Q_UNUSED no-op. This is "the primary evidence is intact", and it
+    #       is a compiler-checked fact rather than another text match. It also
+    #       means derive() never consulted this record — it returned at the
+    #       override rung — which is what makes the retirement cell-neutral.
+    #   (c) THE CELL STILL DERIVES W. The alt path existed to argue
+    #       reachability. If the control stopped being reachable, nothing was
+    #       retired; something was lost.
+    #   (d) THE WIRE TOKEN IS STILL EMITTED FROM THE BACKEND'S OWN SOURCE.
+    #       The positive half, and the one that catches a "migration" that
+    #       moved the call and forgot to send anything: the bypass has to have
+    #       been ABSORBED below the seam, not merely deleted.
+    #
+    # NO RECURSION, though (c) calls derive(): derive() consults an alt_path
+    # only at the rung it reaches when the verb is NOT overridden, and (b)
+    # has already returned ROTTED in that case.
+    #
+    # ONE CASE THIS CANNOT SEPARATE, said out loud rather than glossed. Where
+    # the backend ALREADY overrode the verb and ALREADY carried the same wire
+    # token below the seam — three records today: rx/filter, rx/agc-threshold
+    # and rx/pan-center on Flex — mangling the above-seam literal yields a tree
+    # indistinguishable from the migration, because it IS the same tree in
+    # every respect this register scores: the cell is still true and the bypass
+    # no longer carries that text. A perturbation aimed at this check therefore
+    # has to be aimed at a LOAD-BEARING record — 37 of the 40 — where breaking
+    # it really does change where the click ends.
+
+    ALT_LIVE = "LIVE"
+    ALT_RETIRED = "RETIRED"
+    ALT_ROTTED = "ROTTED"
+
+    def alt_path_state(self, rid: str, row: dict, fam: str,
+                       alt: dict) -> tuple[str, str]:
+        """LIVE / RETIRED / ROTTED for one declared alternate path."""
         path = REPO / alt.get("file", "")
+        symbol = alt.get("symbol", "")
+        wire = alt.get("wire", "")
+        cls = BACKENDS[fam][0]
         if not path.is_file():
-            return False
-        text = path.read_text(encoding="utf-8", errors="replace")
-        return alt.get("symbol", "") in text and alt.get("wire", "") in text
+            return self.ALT_ROTTED, f"{alt.get('file')} is not a file in this tree"
+        # Comment-free, so a wire token that survives only in a comment does
+        # not keep the claim alive. All forty records pass either reading
+        # today; this is the one that stays honest when one stops.
+        text = strip_comments(path.read_text(encoding="utf-8", errors="replace"))
+        has_symbol = symbol in text
+        has_wire = wire in text
+        if has_symbol and has_wire:
+            return self.ALT_LIVE, ""
+
+        # (a)
+        if has_wire:
+            return self.ALT_ROTTED, (
+                f"{path.name} still emits {wire!r}, so the bypass is still there and "
+                f"only the symbol {symbol} is wrong — that is a rename nobody "
+                f"recorded, not a retirement")
+        # (b)
+        verb = row.get("seam", "")
+        if verb not in self.overrides.get(fam, set()):
+            return self.ALT_ROTTED, (
+                f"{cls} does not override {verb}, so this record was the only "
+                f"evidence the control reaches the radio at all")
+        if self.override_is_empty(fam, verb) is not False:
+            return self.ALT_ROTTED, (
+                f"{cls}::{verb} is not an override with a body this checker can read, "
+                f"so nothing stronger replaced the record")
+        # (c)
+        derived, why = self.derive(rid, row, fam)
+        if derived != "W":
+            return self.ALT_ROTTED, (
+                f"the cell now derives {derived} ({why}), not W — the control stopped "
+                f"being reachable, so nothing was retired")
+        # (d) — a PLAIN substring, not publishes(). publishes() anchors on \b
+        # for an identifier, and a wire literal is not an identifier: "filt "
+        # ends in a space and "agc_threshold=" in an equals sign, and the
+        # character after each in the source is '%'. \b then never matches and
+        # every relocation would be reported as a loss.
+        if not self.emits_wire(fam, wire):
+            return self.ALT_ROTTED, (
+                f"{wire!r} is emitted from neither {alt.get('file')} nor {cls}'s own "
+                f"source, so the wire text was not moved below the seam — it was lost")
+
+        return self.ALT_RETIRED, (
+            f"the bypass through {symbol} is gone from {alt.get('file')} and "
+            f"{cls}::{verb} overrides the seam verb carrying {wire!r}")
 
     def derive(self, rid: str, row: dict, fam: str) -> tuple[str, str]:
         """(state, reason) for one cell. Never returns V."""
@@ -618,7 +737,7 @@ class Source:
         # matrix. An override is a compiler-checked fact; this is a file, a
         # symbol and a literal wire token that all have to still be there.
         alt = (row.get("alt_path") or {}).get(fam)
-        if alt and self.alt_path_ok(alt):
+        if alt and self.alt_path_state(rid, row, fam, alt)[0] == self.ALT_LIVE:
             return "W", f"reached outside the seam via {alt['symbol']} ({alt['wire']!r})"
 
         # (5) what the base class does with the intent instead.
@@ -849,6 +968,7 @@ def main() -> int:
 
     errors: list[str] = []
     notices: list[str] = []
+    retired: list[str] = []
     tally: dict[str, int] = {}
     reasons: dict[str, list[str]] = {}
     grounds: dict[str, list[str]] = {}
@@ -921,13 +1041,25 @@ def main() -> int:
                               f"the class this mark describes.")
 
         for fam, alt in (row.get("alt_path") or {}).items():
-            if not src.alt_path_ok(alt):
+            alt_state, alt_why = src.alt_path_state(rid, row, fam, alt)
+            if alt_state == Source.ALT_ROTTED:
                 errors.append(f"::error file={where},title=feature-matrix-stale-alt-path::"
                               f"{rid}/{fam} declares an alternate path through "
                               f"{alt.get('file')}::{alt.get('symbol')} carrying "
                               f"{alt.get('wire')!r}, and that file no longer contains both. "
-                              f"An alternate path is the weakest evidence in this document; "
-                              f"it must not be allowed to rot into a claim.")
+                              f"This is ROT, not a retirement: {alt_why}. An alternate "
+                              f"path is the weakest evidence in this document; it must "
+                              f"not be allowed to rot into a claim.")
+            elif alt_state == Source.ALT_RETIRED:
+                retired.append(f"{rid}/{fam}")
+                notices.append(
+                    f"::notice file={where},title=feature-matrix-alt-path-retired::"
+                    f"{rid}/{fam} RETIRED its alternate path — {alt_why}. That is the "
+                    f"seam migration landing, not drift: the cell is unchanged and now "
+                    f"rests on a compiler-checked override instead of a wire literal. "
+                    f"Drop the alt_path entry for {fam} from the sidecar and the `*` "
+                    f"from that cell in radio-feature-matrix.md; this line repeats "
+                    f"until someone does.")
 
         cells = row["cells"]
         if set(cells) != set(BACKEND_ORDER):
@@ -1063,11 +1195,22 @@ def main() -> int:
               "repair, not a nuance:")
         for ground, where in sorted(grounds.items()):
             print(f"  {len(where):3d}  {ground}  ({', '.join(where)})")
+    if retired:
+        print(f"radio-feature-matrix: {len(retired)} alternate path(s) RETIRED — the "
+              f"bypass is gone and the seam carries the control now. Progress, not "
+              f"drift; the record should be deleted:")
+        for cell in retired:
+            print(f"       {cell}")
     print(f"radio-feature-matrix: {len(matrix)} feature(s) x {len(BACKEND_ORDER)} "
           f"backend(s) = {cell_count} cell(s); {shape}; "
+          f"{len(retired)} alt path(s) retired; "
           f"{len(errors)} disagreement(s) with the source"
           + ("" if args.strict else " — would block under --strict"))
-    if reasons and not errors:
+    # NOT gated on a clean run. A failing run is exactly when the U cells are
+    # worth reading — an unexplained U is often the same parse failure that
+    # produced the error above it — and hiding the breakdown behind "no errors"
+    # withheld it from every run that needed it.
+    if reasons:
         print("radio-feature-matrix: the generator declined to decide —")
         for reason, where in sorted(reasons.items()):
             print(f"  {len(where):3d}  {reason}")
