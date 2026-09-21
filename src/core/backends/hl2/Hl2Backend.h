@@ -358,6 +358,7 @@ signals:
 
 private:
     friend struct Hl2DspReadbackTestAccess;
+    friend struct Hl2PanCreateTestAccess;
     friend struct Hl2PcmTestAccess;
     friend struct Hl2TxGateTestAccess;
     void applyKeying(bool key, const TxCoordinator::Operation& operation,
@@ -655,6 +656,16 @@ private:
         // finishRateChange() reconciles the difference on the success path.
         int configuredRateHz = 0;
 
+        // TRUE WHILE THIS RECEIVER'S WDSP CHAIN IS BEING BUILT off both the GUI
+        // and the I/O thread — see startReceiverDspBuild(). It is not a duplicate
+        // of configuredRateHz == 0: that says "no chain has been built yet",
+        // which is also true of a receiver whose build already FAILED, and this
+        // says "a build is in flight and will install over anything done now".
+        // finishRateChange() reads it to leave such a chain alone: reconciling it
+        // synchronously would run a second OpenChannel against the setup mutex
+        // the in-flight build is holding, and then be overwritten by it anyway.
+        bool dspBuildInFlight = false;
+
         // Per-receiver S-meter ballistics (SMeterSmoother). Deliberately NOT
         // shared: a strong signal on receiver 1 must not move receiver 3's
         // needle, which is what a single smoother would have done.
@@ -808,6 +819,26 @@ private:
     // identical wiring block is exactly how a signal gets connected in one path
     // and forgotten in the other.
     bool openReceiverDsp(int ddc, std::string* error);
+
+    // The asynchronous half of opening a receiver, split out of
+    // createPanadapter() so no WDSP OpenChannel runs on the GUI thread or on the
+    // I/O thread. startReceiverDspBuild() posts the three-hop build (I/O thread
+    // to mark, build thread to build, I/O thread to swap);
+    // finishReceiverDspBuild() is the GUI-thread completion and is everything
+    // createPanadapter() used to do after its blocking configure() returned.
+    //
+    // BOTH TAKE A UI NUMBER, NEVER A DDC INDEX. A DDC index is renumbered by any
+    // close (Hl2ReceiverMap::remove) and these run an unbounded number of event
+    // loop turns after it was taken; the UI number never changes.
+    //
+    // startReceiverDspBuild() DERIVES the Config rather than taking one. That is
+    // not only to keep Hl2RxDsp::Config out of this header, which forward-declares
+    // Hl2RxDsp and cannot name a nested type of it — it also puts the derivation
+    // in ONE place, so the initial build and the rebuild that follows a rate
+    // commit cannot drift apart.
+    void startReceiverDspBuild(int uiNumber);
+    void finishReceiverDspBuild(int uiNumber, bool ok, int channelId,
+                                int builtRateHz, const std::string& error);
     // How many receivers this radio may run right now: the board's reported
     // count, capped by the link budget at the current sample rate.
     [[nodiscard]] int receiverCeiling() const;

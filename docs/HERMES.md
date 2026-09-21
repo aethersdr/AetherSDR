@@ -4107,7 +4107,7 @@ The dialog is gated on elapsed time (1500 ms), not on a cold-cache predicate —
 that imports cleanly may still lack plans for these geometries and would report
 "warm" while the open measured regardless. See `MainWindow::armWdspSetupDialog`.
 
-### 22.4 Two paths blocked the GUI thread; one still does
+### 22.4 Three paths blocked the GUI thread; one still does
 
 #### Still open: backend teardown waits out an in-flight build
 
@@ -4131,6 +4131,54 @@ waiting. `OpenChannel` cannot be cancelled, so the honest options are a busy
 state over the teardown or a backend that can be abandoned rather than joined —
 and the second one also has to replace the `QPointer` guard in
 `beginDspSetup()`, which is sound today *because* teardown blocks.
+
+#### The third path, and it was not counted: "Add Panadapter"
+
+This section said **two** paths until it was corrected, and the missing one was
+`Hl2Backend::createPanadapter()`. It configured the new receiver's DSP over a
+`Qt::BlockingQueuedConnection` into `Hl2RxDsp`, and called
+`MetisClient::setReceiverCount` the same way — so it blocked the GUI thread
+unconditionally, exactly as teardown does, and it was never listed.
+
+§11.3 inherited the same omission: its "ONE path still blocks the GUI thread
+unconditionally" was false for as long as this one did.
+
+**The I/O thread was the expensive half, not the GUI thread.** `Hl2RxDsp` lives
+on `m_ioThread`, so the blocking hop ran `OpenChannel` ON the thread that paces
+EP2 from a 2 ms timer and drains EP6 — §20.8's case precisely, and the gateware
+watchdog halts the stream when EP2 stops arriving. `MetisClient::setReceiverCount`
+records a session lost this way already: *"The operator's session died from
+having clicked 'Add Panadapter'."*
+
+**And the premise that excused it was never true.** `Hl2RxDsp::configure()`
+carried a comment calling the add-a-panadapter path one "where nothing is
+streaming yet and blocking the I/O thread costs nothing". `createPanadapter()`
+refuses before `m_connected` (`Hl2DspSetupPolicy.h` says so), §20.10 is titled
+"receivers come and go while the radio runs", and `hl2_receiver_churn_test`
+asserts `"createPanadapter succeeds while EP6 is flowing"`. The connect half of
+that comment is sound; the add half was not.
+
+**What it looks like now.** Same three-thread split as #5783 above, for one
+chain instead of N — `startReceiverDspBuild()` marks and snapshots on the I/O
+thread, builds on `m_dspBuildThread`, swaps on the I/O thread —
+and `finishReceiverDspBuild()` picks the receiver back up on the GUI thread.
+
+**The announcement deliberately did NOT move.** `emitPanState()` and
+`emitSliceState()` still run before `createPanadapter()` returns, because two
+callers read the model the instant it does: `TciServer`'s non-Flex VFO-B branch
+diffs `slices()` immediately (its comment states the assumption — "the seam
+create is SYNCHRONOUS"), and `MainWindow::createPansSequentially()` diffs
+`panadapters()` after 300 ms, a figure chosen for the demo backend's two queued
+hops and not for a channel open. Neither emit reads `r.dsp`, so announcing
+before the chain exists describes the same receiver either way. What waits for
+the build is what genuinely needs it: the WDSP channel id, the shift, the notch
+and blanker seeding, and `publishIoDsps()` — which is what starts feeding it IQ,
+so the first spectrum frame is the pane filling in.
+
+**Not measured.** Nothing here has a stopwatch on it. `hl2_pan_create_async_test`
+occupies each thread deliberately and asserts against that interval; it says the
+wait is gone, not how long the build takes. §22.3's ~19 s first open and this
+section's own disclaimer on the derived 0.6-1.1 s figure both still stand.
 
 #### Landed in #5783: the span change builds off the I/O thread
 
