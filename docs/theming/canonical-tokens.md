@@ -100,13 +100,59 @@ single-use colours snap to the nearest canonical neighbour.
 | Token | Canonical | Notes |
 |---|---|---|
 | `color.spectrum.trace` | `#00b4d8` | live FFT trace |
-| `color.spectrum.peakHold` | `#ffb84d` | **RESERVED — nothing paints this.** There is no peak-hold overlay: no hold state, no draw pass, no control. The token entered in #3080 as one of 51 generated under theming RFC #3076, which locked the token vocabulary and assumed the overlay as a region to colour — it never proposed building one. The only design work is @ten9876's 2026-03-29 decomposition of #333 (item 4, *FFT Peak Hold / Max Hold*), explicitly deferred to community interest. Painting it needs an approved RFC first (GOVERNANCE.md: *"Any change to visual design"*); #5561, which ruled on the existing trace's LINE WIDTH, is the bar |
-| `color.spectrum.average` | `#8ea8c0` | **RESERVED — nothing paints this.** Same provenance as the row above. There is no client-drawn averaged trace on any backend; `SpectrumWidget::setFftAverage` stores a number no render path reads, and where averaging should live is still open — see #5782 and #5794. Do not read this row as describing a feature |
+| `color.spectrum.peakHold` | `#ffb84d` | **RESERVED — nothing paints this.** See the note below |
+| `color.spectrum.average` | `#8ea8c0` | **RESERVED — nothing paints this.** See the note below |
 | `color.spectrum.grid` | `#1a2330` | dB/frequency grid lines |
 | `color.waterfall.colormap` | (gradient — Phase 2 gradient support) | the 8-stop RF colormap |
 | `color.spectrum.zoomButton.disabled.background` | `#5a0f0f1a` | disabled state of the waterfall zoom / band-segment buttons |
 | `color.spectrum.zoomButton.disabled.border` | `#5a304050` | as above, border |
 | `color.spectrum.zoomButton.disabled.text` | `#8c90a0b0` | as above, glyph |
+
+#### `color.spectrum.peakHold` and `color.spectrum.average` are RESERVED
+
+Nothing paints either token. They are defined under `color.spectrum` in
+`resources/themes/default-dark.json` and `default-light.json`, emitted into
+`src/core/ThemeSeedGenerated.cpp` by `tools/gen_theme_seed.py`, and listed in
+`SpectrumWidget`'s `declareWidgetTokens()` call so an Inspect-mode click on the
+panadapter produces a hit-list. That is every occurrence: no painter, no shader
+UBO and no `ThemeManager::color()` lookup resolves either one.
+
+Both entered in #3080 as 2 of 51 tokens generated wholesale under theming RFC
+#3076, which locked the token vocabulary and assumed each overlay as a region to
+colour — it never proposed building one. The only design work is @ten9876's
+2026-03-29 decomposition of #333 (item 4, *FFT Peak Hold / Max Hold*),
+explicitly deferred to community interest. Painting either needs an approved RFC
+first (GOVERNANCE.md: *"Any change to **visual design**"*); #5561, which ruled on
+the existing trace's line width, is the bar.
+
+**`peakHold`** — there is no peak-hold overlay on the panadapter: no hold state,
+no draw pass, no control. (`SMeterWidget` draws a peak-hold line, but that is a
+different surface with its own `color.meter.*` tokens.)
+
+**`average`** — no backend draws a *separate* averaged trace, which is what this
+token was for. Do not read that as "there is no averaging": there is, in three
+places that are not this token.
+
+- **The live trace is itself client-smoothed.** `SpectrumWidget::updateSpectrum`
+  runs `m_smoothed[i] = SMOOTH_ALPHA * bins[i] + (1 - SMOOTH_ALPHA) *
+  m_smoothed[i]` at `SMOOTH_ALPHA = 0.35f`, and on ANAN
+  `AnanRxDsp::smoothSpectrumBins` has already applied a second, stateful EMA
+  below the seam. Neither of those paints in `color.spectrum.trace` either —
+  `SpectrumWidget` draws the trace in `m_fftFillColor` / `m_fftLineColor`, which
+  are operator settings rather than tokens. `color.spectrum.trace` is resolved
+  only by `BandscopeDialog` and, as a fallback, by `MiniPanScope`.
+- **`SpectrumWidget::setFftAverage` stores a number no render path reads.** It
+  is not an unused member — two snapshots and the overlay-menu sync read it — so
+  the fault is a missing branch (@ten9876's correction on #5678, recorded in
+  `RadioModel::requestPanAverage`).
+- **On Flex the averaging is the radio's.** `RadioModel::requestPanAverage`
+  sends `display pan set <pan> average=<n>` and the Flex display engine applies
+  it, so the bins that arrive are already averaged and those are what is drawn.
+  "No render path reads it" is therefore a statement about the raw-spectrum
+  backends, not about Flex.
+
+Where client-side averaging should live for the raw-spectrum backends, and in
+which domain, is still open — see #5782 and #5794.
 
 The three `zoomButton.disabled.*` tokens are the exception to this section's
 "paint code only" heading — they are consumed from a QSS template through
