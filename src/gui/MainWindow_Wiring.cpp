@@ -5481,14 +5481,21 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, sw](bool on) {
         auto* autoGain = m_radioModel.autoRfGain();
         if (autoGain) {
+            // The backend settles the request -- armed, or refused with a
+            // reason -- and says so through RadioModel::autoRfGainArmSettled.
+            // onAutoRfGainArmSettled turns that into the checkbox state, the
+            // card and the accessible description, and it is the one place all
+            // three routes to an arm meet: this click, the backend's own
+            // connect-time restore, and a bridge verb (#5817).
             autoGain->setArmed(on);
         }
-        // READ BACK WHAT ACTUALLY HAPPENED. The backend may DECLINE to arm --
-        // the HL2 refuses from a gain baseline inside the register region where
-        // #5354 measured +48 dB reading identically to +18 dB -- and a checkbox
-        // that stayed ticked over a control that is not running would be the
-        // #5395 defect exactly: a UI reporting one state while the radio is in
-        // another. So ask the control rather than assuming the request took.
+        // READ BACK WHAT ACTUALLY HAPPENED, regardless. The backend may DECLINE
+        // to arm -- the HL2 refuses from a gain baseline inside the register
+        // region where #5354 measured +48 dB reading identically to +18 dB --
+        // and a checkbox that stayed ticked over a control that is not running
+        // would be the #5395 defect exactly: a UI reporting one state while the
+        // radio is in another. The settled signal normally lands first, inside
+        // setArmed(); this is the guard for a backend that settled silently.
         if (auto* m = sw->overlayMenu()) {
             m->setAutoRfGainEnabled(autoGain && autoGain->isArmed());
         }
@@ -5531,6 +5538,70 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // live exclusively in the AetherDSP applet; the spectrum overlay menu
     // no longer surfaces them.
     refreshKiwiSdrWaterfallAvailability();
+}
+
+// AN ARM REQUEST SETTLED, from whichever route asked. Reflect it on every pan's
+// copy of the control, and if it was a refusal, say why.
+//
+// ONE HANDLER FOR ALL ROUTES. The Auto checkbox used to learn the outcome only
+// by reading isArmed() back after its own click. That covers the click and
+// nothing else: the HL2 arms (or refuses) from its stored preference inside its
+// own link-up handler, after it has already emitted connected(), and a bridge
+// `pan autorfgain on` arms without going near a widget. On both, the checkbox
+// reported the wrong state and a refusal was silent -- the #5817 springback,
+// just not on a click (#5395 is the same defect seen from the other side).
+//
+// WHAT GOES WHERE. The armed state and the refusal DESCRIPTION go on every
+// pan's checkbox, because the control is radio-wide and each pan carries a
+// copy: the description is state, and a copy left saying "declined" over a
+// running loop would be read out as such. setAutoRfGainEnabled(true) is what
+// clears a standing description. The card and the spoken announcement go
+// ONCE, on the active pan, where the operator is looking.
+//
+// ON THE PANADAPTER, NOT THE STATUS BAR, and not a dialog either. Not a dialog
+// because #4227 is stacked unclosable message boxes, and a refusal the
+// operator asked for by clicking does not warrant one. Not the status bar
+// because of #4649: any non-empty temporary message hides m_statusBarContainer
+// wholesale for its whole duration, taking the TX indicator, PA temperature
+// and supply voltage with it -- MainWindow.cpp and MainWindow_Controllers.cpp
+// both route away from it for the same reason. The card takes its OWN id
+// rather than riding on the interlock's "interlock.active" latest-wins: a
+// gain refusal must not evict a live "Transmit disabled" card, nor be evicted
+// by one.
+void MainWindow::onAutoRfGainArmSettled(bool armed)
+{
+    if (!m_panStack) {
+        return;
+    }
+    auto* autoGain = m_radioModel.autoRfGain();
+    const QString why = (!armed && autoGain) ? autoGain->lastArmRefusalReason()
+                                             : QString();
+    const QStringList panIds = m_panStack->panIds();
+    for (const QString& panId : panIds) {
+        SpectrumWidget* sw = m_panStack->spectrum(panId);
+        auto* m = sw ? sw->overlayMenu() : nullptr;
+        if (!m) {
+            continue;
+        }
+        m->setAutoRfGainEnabled(armed);
+        if (!why.isEmpty()) {
+            m->setAutoRfGainRefusalDescription(why);
+        }
+    }
+    if (why.isEmpty()) {
+        return;
+    }
+    SpectrumWidget* where = m_panStack->activeSpectrum();
+    if (!where && !panIds.isEmpty()) {
+        where = m_panStack->spectrum(panIds.first());
+    }
+    if (!where) {
+        return;
+    }
+    where->showNoticeCard(why, QStringLiteral("autorfgain.refused"), 10000);
+    if (auto* m = where->overlayMenu()) {
+        m->announceAutoRfGainRefusal(why);
+    }
 }
 
 MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(

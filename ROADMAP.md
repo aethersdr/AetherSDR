@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.9.3
+## Current cycle: post-v26.9.4
 
 ### In flight
 
@@ -27,10 +27,15 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   local receive control (mode, filter, audio gain and mute, panadapter center
   and bandwidth) with bounded read-only telemetry, and opened **Stage 4** with
   an engine-local `TxCoordinator` for primary desktop transmit intent. The
-  daemon stays observe-only unless `--allow-local-control` is passed. Remaining:
-  the multi-client TX arbiter and daemon transmit grants, per-client
-  propagation, and a replacement thin UI client — UI code still consumes models
-  directly, and that remains correct until that client exists.
+  daemon stays observe-only unless `--allow-local-control` is passed. v26.9.4
+  continued Stage 4: desktop TX producer ownership survives queued work, and
+  **credential-bound TX grants** bind independent clients to actors on the
+  `TxCoordinator` behind `--allow-local-tx` and a native-vault credential
+  authority that fails closed, with a qualified software-PTT handoff for Flex
+  radios on SmartSDR TCP API 1.4 over LAN. Startup remains disarmed. Remaining:
+  per-client propagation, transmit for SmartLink and the other families,
+  transmit audio transport, and a replacement thin UI client — UI code still
+  consumes models directly, and that remains correct until that client exists.
 - **Icom networked radios — early** — `IcomCIV` speaks CI-V inside the RS-BA1
   UDP transport, brought up in v26.8.2 against a live **IC-705** (RX, scope,
   transmit, and FT8 both decoding and spotting on PSK Reporter) and an
@@ -60,18 +65,24 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   services DDC-Specific packets in a continuous loop and its "something changed"
   hook is empty, so a rate change is just a resend — and taught the wire layer
   multi-DDC encode with per-sender-port demux, because the DDC I&Q packet
-  carries no index field. DDC0 edge droop is compensated from an in-app
-  calibration. The codec is multi-DDC capable but `AnanBackend` still drives
-  one; remaining is the `AnanRxDsp` fan-out, then transmit.
+  carries no index field. v26.9.4 shipped DDC0 droop-correction defaults
+  derived from the Saturn gateware — the CIC and 1024-tap FIR are fully
+  specified in the FPGA sources, so an unswept radio gets a corrected FFT on
+  first connect, with the in-app calibration still available — cropped the
+  panadapter's true edge instead of fading it, and gave the radio back its
+  noise-floor auto-adjust. The codec is multi-DDC capable but `AnanBackend`
+  still drives one; remaining is the `AnanRxDsp` fan-out, then transmit.
 - **RTL-SDR — experimental, receive-only** — `librtlsdr` discovery with one
   panadapter and one host-demodulated slice (AM, FM, SSB, CW) on builds carrying
   the libraries, from v26.9.2. v26.9.3 added a bounded receiver lifecycle
   foundation and device-identity persistence, plus a `SharedCapturePolicy` that
   requires every receiver's complete guarded passband to fit the shared capture
   before a tune, filter, mode or rate change is admitted. That policy is written
-  and tested but not yet wired to a live backend. Remaining: selectable sharp
-  passband filtering, and the USB/DSP/audio/viewport integration that turns the
-  policy into real multi-receiver capture.
+  and tested but not yet wired to a live backend. v26.9.4 landed RFC #5468's
+  A3 and A4 increments: rate-aware QSO recording and WAV playback, and TCI
+  receive audio that preserves the producer's 24/48 kHz rate and stereo.
+  Remaining: selectable sharp passband filtering, and the USB/DSP/audio/viewport
+  integration that turns the policy into real multi-receiver capture.
 - **Workspace canvas — experimental** — [RFC #4887](https://github.com/aethersdr/AetherSDR/issues/4887) landed complete in v26.8.3,
   all seven phases: pans and applets as freely placed, resizable, layered items
   on a canvas that can span several top-level windows, with named workspaces,
@@ -94,15 +105,25 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   straddles the marker instead of sitting where a USB filter would, **AGC mode
   and threshold that survive a restart**, and a **TX ALC that no longer
   normalises away a TCI/DAX client's own level control**. Its meter surface is
-  now certified against physical hardware.
+  now certified against physical hardware. v26.9.4 was the largest step since
+  v26.8.1: the **transmit chain moved to WDSP's TXA modulator** and it is the
+  default, after ON8ST keyed it into a dummy load and onto an antenna; the ALC
+  only ever reduces and the Mic Level slider is the transmit level; the modes
+  the phasing modulator could not transmit in are declared, so AM no longer
+  keys suppressed-carrier SSB; the **dBm reference is derived** (+3 dBm full
+  scale at 0 dB LNA gain); the **S-meter reads WDSP's average** rather than a
+  decaying peak-hold that read the noise floor 11–14 dB high; the wideband
+  bandscope (endpoint 4) is decoded with an on-demand converter view; automatic
+  RF gain drives on measured headroom (RFC #5535, shipped off until the LNA
+  default reconciles with the arming baseline); and pan-bandwidth chains are
+  built off the I/O thread, so a zoom no longer stalls EP2 and silences the
+  radio.
   **The experimental → supported call itself is still open**; what remains
-  before making it is wider mode coverage, panadapter/waterfall parity with the
-  Flex path, and hardening the raw-IQ DSP chain (HL2 ships raw IQ, so the client
-  does all the tune/decimate/demodulate work a Flex does on-radio). Two known
-  costs are on the record rather than hidden: the **+64 ms of RX latency** the
-  8192-tap notch filter buys unconditionally, and the 0.6–1.1 s UI stall when a
-  pan-bandwidth change crosses a sample-rate boundary and rebuilds every
-  receiver.
+  before making it is panadapter/waterfall parity with the Flex path, arming
+  automatic RF gain by default, and field time on the TXA chain beyond one
+  station. Two known costs are on the record rather than hidden: the **+64 ms
+  of RX latency** the 8192-tap notch filter buys unconditionally, and the
+  0.6–1.1 s pan-bandwidth rebuild, now off the audio path but still a wait.
 - **AppSettings nested-JSON refactor** — ~460 flat call sites today;
   the new pattern is one nested-JSON value per feature (Principle V).
   The storage layer moved to SQLite and the scoped feature-document store,
@@ -110,8 +131,6 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   v26.8.1 (RFC #4603, PRs 1–6). New radio-scoped configuration lands as
   versioned feature documents in `radio_settings`; the remaining work is
   migrating the legacy flat keys feature-by-feature.
-- **TX DSP chain visual rebuild** — stage-per-applet chain with the
-  visual `CHAIN` widget as the primary entry point.
 - **Flathub submission** — the AppStream metainfo and manpage landed in
   v26.6.4; the actual Flathub PR + manifest is the remaining step.
 
@@ -121,11 +140,6 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   public-receiver browser (per-receiver passwords, idle-release, and
   waterfall polish landed in v26.7.2; warm audio through TX and the
   resume-after-TX-delay option in v26.8.1).
-- **WDSP 2.10 refresh and Neural Noise Reduction** ([RFC #5684](https://github.com/aethersdr/AetherSDR/issues/5684),
-  approved) — update the vendored WDSP and add NNR as a seventh ADSP method.
-- **Global precipitation with regional radar backups** ([RFC #5630](https://github.com/aethersdr/AetherSDR/issues/5630),
-  approved) — worldwide precipitation on the map with regional radar where it
-  exists, and optional coverage shading, building on the shipped NOAA layer.
 - **Glacier waterfall palette** ([RFC #5670](https://github.com/aethersdr/AetherSDR/issues/5670), approved) — an
   additional waterfall colour scheme. Good first issue.
 - **Extended region band plans** — DXCC entities outside IARU R1/R2/R3.
@@ -255,6 +269,47 @@ implementation**. An approved RFC moves up into the cycle above. Full list:
 Highlights from the current cycle (v26.9.x). Earlier releases and the
 complete list are in [`CHANGELOG.md`](CHANGELOG.md):
 
+- **AetherRX and AetherTX, one window each** — the receive and transmit chains
+  as a stage column down the left (enable checkbox and drag-to-reorder grip per
+  stage) and one page per stage, sharing the column, page frame and profile
+  machinery. Each side gets a profile library stored as one nested-JSON
+  document; channel-strip presets are retired and split once into their two
+  halves on first open (v26.9.4).
+- **WDSP 2.10 and Neural Noise Reduction** — the vendored WDSP moves to 2.10
+  and NNR becomes the seventh client-side NR method with its full control
+  surface, the real 24 kHz-path latency declared to the stereo adapter, and
+  persistence that survives a restart. NR2 gains WDSP's psychoacoustic
+  post-processing, and the minimum-phase FIR workspace is built only when
+  minimum phase is on. RFC #5684 (v26.9.4).
+- **Global precipitation on the PSK Reporter map** — an opt-in LibreWXR
+  overlay with NOAA, ECCC and EUMETNET OPERA regional backups, a per-provider
+  intensity legend and default-off coverage shading. RFC #5630 (v26.9.4).
+- **The Hermes-Lite 2 transmits through WDSP** — the TXA modulator is the
+  default after it was keyed into a load and onto an antenna, the ALC only
+  reduces, engine-generated audio keeps its own level, the modes the phasing
+  modulator could not transmit in are declared, and the S-meter and dBm
+  reference read what the hardware actually delivers (v26.9.4).
+- **TGXL and PGXL front panels** — both 4O3A applets lay themselves out like
+  the device's own panel when popped out or on the canvas. The tuner learns
+  that `autotune` is a toggle (TUNE becomes STOP) and shows the device's alert
+  channel; the amplifier gains a drive meter and one owner for its relayed and
+  direct meters; and the tuner is metered from its own `peak` at ~60 Hz while
+  keyed, so voice no longer reads as the gaps between syllables (v26.9.4).
+- **aetherd transmit grants** — credential-bound TX grants for independent
+  clients behind `--allow-local-tx` and a fail-closed native-vault authority,
+  with qualified Flex software-PTT handoff over the SmartSDR TCP API. Startup
+  stays disarmed (v26.9.4).
+- **A three-state control doctrine** — unavailable, inactive and active, with
+  an availability registry so unsupported controls stay visible, disabled and
+  carry a reason. #5262 M3a, toward the #4896 accessibility commitment
+  (v26.9.4).
+- **Copy Assist stops taking the app down** — a GPU without room for the model
+  fails the load and retries on CPU, faults inside discovery or load leave
+  flushed stage records in the log, and a slow model drops audio at a bounded
+  backlog instead of queueing forever (v26.9.4).
+- **An optional DeepFist CW receive backend** — behind `CwRxModel`, off by
+  default at build time, with ggmorse unchanged as the default decoder
+  (v26.9.4).
 - **A Tools-first menu bar** — the top level becomes
   `File · Settings · Profiles · Tools · View · Help`, collecting the operating
   tools that were scattered across File, Settings, View and Help under one

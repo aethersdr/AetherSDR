@@ -19,6 +19,7 @@
 #include "gui/HGauge.h"
 
 #include <QApplication>
+#include <QDeadlineTimer>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QPushButton>
@@ -41,6 +42,14 @@ void check(bool ok, const char* description)
 {
     std::printf("%s %s\n", ok ? "PASS" : "FAIL", description);
     if (!ok) ++failures;
+}
+
+void settle(int ms)
+{
+    QDeadlineTimer deadline(ms);
+    while (!deadline.hasExpired()) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    }
 }
 }
 
@@ -72,12 +81,11 @@ int main(int argc, char** argv)
           "the whole name is echoed back, not the first word");
 
     gauge.setValue(150.0f);
-    gauge.setPeakValue(180.0f);
     QApplication::processEvents();
     r = request("gauge Forward power");
     check(qFuzzyCompare(r.value("value").toDouble(), 150.0), "value is reported");
-    check(qFuzzyCompare(r.value("peak").toDouble(), 180.0), "peak is reported");
-    check(r.value("peakHeld").toBool(), "a held peak says so");
+    check(!r.value("peakHeld").toBool(),
+          "an ordinary gauge does not grow a peak marker by default");
 
     // The derived state. Immediately after a step the bar has not travelled
     // yet, so fraction must NOT already equal the new value's fraction --
@@ -85,6 +93,13 @@ int main(int argc, char** argv)
     check(r.contains("fraction"), "painted fraction is carried");
     check(r.value("fraction").toDouble() < 0.75,
           "fraction lags the value while the ballistics run");
+
+    gauge.setPeakValue(180.0f);
+    settle(80); // Cross several animation ticks: none may overwrite MICPEAK.
+    r = request("gauge Forward power");
+    check(qFuzzyCompare(r.value("peak").toDouble(), 180.0),
+          "a manual external reading survives animation ticks");
+    check(r.value("peakHeld").toBool(), "a held peak says so");
 
     const QJsonObject range = r.value("range").toObject();
     check(qFuzzyCompare(range.value("max").toDouble(), 200.0)

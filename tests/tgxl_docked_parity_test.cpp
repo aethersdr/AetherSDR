@@ -407,17 +407,19 @@ int main(int argc, char** argv)
             settle(AetherSDR::kRelayMeterFreshnessMs + 150);
             applet.setRadioMeters(42.0f, 1.5f);
             CHECK(qFuzzyCompare(gauge->value(), 42.0f));
+            CHECK(gauge->peakValue() < 90.0f); // stale device peak was retired
         }
     }
 
-    // ── Peak-hold ballistics match the TX Controls applet ────────────
+    // ── Peak marker: SmartMTR's external-peak mode, not a local hold ─
     //
-    // The marker must fall, not vanish. This gauge held for 2.5 s and then
-    // snapped the peak to zero, while TxApplet beside it holds for 2 s and
-    // then decays at a rate scaled to the gauge full-scale (#2561, "matching
-    // SmartSDR's peak-hold bar"). Two power meters on one screen behaving
-    // differently is the defect; a marker that disappears reads as the peak
-    // being lost rather than falling.
+    // The TGXL reports its own `peak` (a rolling window computed in the
+    // device), so the gauge runs MeterExtremes in external-peak mode: the
+    // marker tracks the reported peak at the fast peak slew instead of
+    // rebuilding a window from the samples we happen to have polled. The
+    // contract is therefore "the marker IS the device's peak", with no local
+    // hold timer anywhere in the path -- when the device retires its peak,
+    // so does the marker, on the very next report.
     {
         TunerApplet applet;
         HGauge* gauge = nullptr;
@@ -427,25 +429,21 @@ int main(int argc, char** argv)
         }
         CHECK(gauge != nullptr);
         if (gauge) {
-            applet.setDeviceMeters(100.0f, 1.2f, 100.0f);
-            CHECK(qFuzzyCompare(gauge->peakValue(), 100.0f));
-
-            // Inside the hold window the marker does not move.
-            applet.setDeviceMeters(10.0f, 1.2f, 10.0f);
-            settle(900);
-            CHECK(qFuzzyCompare(gauge->peakValue(), 100.0f));
-
-            // Past it, the marker is strictly between the peak and the live
-            // reading -- decaying, not snapped away.
-            settle(1600);
-            const float mid = gauge->peakValue();
-            CHECK(mid < 100.0f);
-            CHECK(mid > 10.0f);
-
-            // It comes to rest on the live value rather than at zero.
-            CHECK(spin([&] { return gauge->peakValue() <= 10.5f; }, 5000));
-            CHECK(gauge->peakValue() >= 9.5f);
+            // Instantaneous 10 W, device peak 100 W: the marker follows the
+            // PEAK, and stands off above the needle rather than collapsing
+            // onto the sample. This is the whole point of reading `peak` --
+            // the bug that started this was the bar tracking `fwd` alone.
+            applet.setDeviceMeters(10.0f, 1.2f, 100.0f);
+            CHECK(spin([&] { return gauge->peakValue() > 90.0f; }, 3000));
             CHECK(gauge->peakHeld());
+            CHECK(gauge->peakValue() > gauge->value());
+            // And it never overshoots what the device actually reported.
+            CHECK(gauge->peakValue() <= 100.5f);
+
+            // No local hold phase: the device retires its peak and the marker
+            // follows it straight down, with no timer left to expire here.
+            applet.setDeviceMeters(10.0f, 1.2f, 10.0f);
+            CHECK(spin([&] { return gauge->peakValue() < 90.0f; }, 3000));
         }
     }
 

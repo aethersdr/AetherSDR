@@ -14,6 +14,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QDeadlineTimer>
 #include <QLabel>
 #include <QHelpEvent>
 #include <QMenu>
@@ -68,6 +69,14 @@ void report(const char* name, bool ok, const QString& detail = QString())
                 qPrintable(detail));
     if (!ok) {
         ++g_failed;
+    }
+}
+
+void processFor(int ms)
+{
+    QDeadlineTimer deadline(ms);
+    while (!deadline.hasExpired()) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     }
 }
 
@@ -168,11 +177,25 @@ void testTxMetersAreLiveOnly()
     report("active TX displays SWR",
            swrGauge->value() == 1.7f);
 
+    // txPeakChanged carries raw instantaneous samples. A high sample followed
+    // by a speech gap must stay represented by the sliding-window PEP marker;
+    // treating each sample as an external peak would collapse to the gap.
+    powerGauge->setValueImmediate(5.0f);
+    applet.updatePeakPower(100.0f);
+    processFor(600);
+    applet.updatePeakPower(5.0f);
+    processFor(500);
+    report("raw FWDPWR samples retain a readable PEP window",
+           powerGauge->peakHeld() && powerGauge->peakValue() > 20.0f,
+           QString::number(powerGauge->peakValue()));
+
     applet.setTransmitting(false);
     report("un-key clears RF power immediately",
            powerGauge->value() == 0.0f);
     report("un-key parks SWR immediately",
            swrGauge->value() == 1.0f);
+    report("un-key clears the PEP marker immediately",
+           !powerGauge->peakHeld());
 
     applet.updateMeters(52.0f, 2.1f, true); // reply already in flight at un-key
     applet.updatePeakPower(60.0f);

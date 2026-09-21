@@ -1429,6 +1429,12 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(&m_radioModel, &RadioModel::interlockNotificationRequested,
             this, &MainWindow::showPanadapterInterlockNotification);
+    // An automatic-gain arm request settled -- from the operator's click, the
+    // backend's own connect-time restore, or a bridge verb. One handler for all
+    // three, because the checkbox reading isArmed() back after its OWN click
+    // covered exactly one of them (#5817).
+    connect(&m_radioModel, &RadioModel::autoRfGainArmSettled,
+            this, &MainWindow::onAutoRfGainArmSettled);
     // Goes on the panadapter as a transient card, NOT the status bar (#4649).
     // A QStatusBar temporary message hides every permanent widget for its whole
     // duration -- the TX indicator, PA temperature and supply voltage among
@@ -8007,8 +8013,18 @@ void MainWindow::applyRadioSideDspToPanDisplay(SpectrumWidget* sw) const
         // did not reflect that would report a control as off while it was
         // holding the operator's gain down.
         auto* autoGain = m_radioModel.autoRfGain();
+        const bool armed = autoGain && autoGain->isArmed();
         menu->setAutoRfGainAvailable(autoGain != nullptr);
-        menu->setAutoRfGainEnabled(autoGain && autoGain->isArmed());
+        menu->setAutoRfGainEnabled(armed);
+        // AND IF THE LAST REQUEST WAS REFUSED BEFORE THIS PAN EXISTED. The
+        // backend's connect-time restore settles inside its link-up handler,
+        // after it has emitted connected() and before the pans that would have
+        // heard autoRfGainArmSettled are built. The reason is still on the
+        // control, and the description is the only channel a late pan has for
+        // it. No card: nothing just happened, this pan is only catching up.
+        if (autoGain && !armed) {
+            menu->setAutoRfGainRefusalDescription(autoGain->lastArmRefusalReason());
+        }
     }
     // A MASK, not a rewrite: the operator's stored HW preference survives a
     // session on a radio that has no hardware black level, and comes back by
