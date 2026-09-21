@@ -40,7 +40,7 @@
 #include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
-#include "core/RxPlaybackTransmitter.h"
+#include "RxPlaybackTransmitter.h"
 #include "core/ClientPuduMonitor.h"
 #include "core/AudioOutputRouter.h"
 #include "core/DxClusterClient.h"

@@ -3459,7 +3459,9 @@ void MainWindow::toggleRxPlaybackTransmit(const TxCoordinator::Request& input)
     // The same file cannot go to the speakers and the transmitter at once.
     if (m_qsoRecorder->isPlaying()) m_qsoRecorder->stopPlayback();
     QString why;
-    if (!m_rxPlaybackTx->start(m_qsoRecorder->lastRecordingPath(), activeSlice(), input, &why)) {
+    const std::optional<QByteArray> pcm =
+        m_qsoRecorder->lastRecordingPcm(RxPlaybackTransmitter::wireFormat(), &why);
+    if (!pcm || !m_rxPlaybackTx->start(*pcm, activeSlice(), input, &why)) {
         qCWarning(lcAudio) << "TX Playback refused:" << why;
         statusBar()->showMessage(tr("TX Playback: %1.").arg(why), 4000);
     }

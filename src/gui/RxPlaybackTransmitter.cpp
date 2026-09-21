@@ -1,15 +1,13 @@
 #include "RxPlaybackTransmitter.h"
 
-#include "AudioEngine.h"
-#include "DaxTxPolicy.h"
-#include "LogManager.h"
-#include "QsoWavPlayback.h"
+#include "core/AudioEngine.h"
+#include "core/LogManager.h"
+// DaxTxRequestReason arrives through RadioModel.h, whose vendor coupling is
+// already on the engine-boundary baseline; this file adds none of its own.
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
-#include <QAudioFormat>
-#include <QFile>
 #include <QTimer>
 
 #include <algorithm>
@@ -83,7 +81,16 @@ bool RxPlaybackTransmitter::bypassesDax() const
     return caps.hostModulates || caps.takesTxAudioOverSeam;
 }
 
-bool RxPlaybackTransmitter::start(const QString& wavPath, SliceModel* slice,
+QAudioFormat RxPlaybackTransmitter::wireFormat()
+{
+    QAudioFormat fmt;
+    fmt.setSampleRate(kSampleRate);
+    fmt.setChannelCount(2);
+    fmt.setSampleFormat(QAudioFormat::Float);
+    return fmt;
+}
+
+bool RxPlaybackTransmitter::start(const QByteArray& pcm, SliceModel* slice,
                                   const TxCoordinator::Request& input, QString* whyNot)
 {
     const auto refuse = [whyNot](const QString& why) {
@@ -96,22 +103,11 @@ bool RxPlaybackTransmitter::start(const QString& wavPath, SliceModel* slice,
     if (!m_radio->backendCapabilities().canTransmit)
         return refuse(tr("this radio cannot transmit"));
     if (!input.valid())      return refuse(tr("the transmit request is not valid"));
-
-    QFile file(wavPath);
-    if (!file.open(QIODevice::ReadOnly))
-        return refuse(tr("cannot open the recording: %1").arg(file.errorString()));
-    QAudioFormat fmt;
-    fmt.setSampleRate(kSampleRate);
-    fmt.setChannelCount(2);
-    fmt.setSampleFormat(QAudioFormat::Float);
-    QString error;
-    const std::optional<QByteArray> pcm = prepareQsoWavPlayback(file, fmt, &error);
-    if (!pcm) return refuse(tr("cannot read the recording: %1").arg(error));
-    if (pcm->size() < kFrameBytes) return refuse(tr("the recording is empty"));
+    if (pcm.size() < kFrameBytes) return refuse(tr("the recording is empty"));
 
     ++m_generation;
     m_request = input;
-    m_pcm = *pcm;
+    m_pcm = pcm;
     m_offset = 0;
     m_audioStartArmed = false;
     m_awaitingFinish = false;
@@ -125,8 +121,7 @@ bool RxPlaybackTransmitter::start(const QString& wavPath, SliceModel* slice,
     }
 
     qCInfo(lcAudio).noquote()
-        << QStringLiteral("RxPlaybackTransmitter: start %1 (%2 s)")
-               .arg(wavPath)
+        << QStringLiteral("RxPlaybackTransmitter: start (%1 s)")
                .arg(static_cast<double>(m_pcm.size()) / (kFrameBytes * kSampleRate), 0, 'f', 1);
 
     if (!bypassesDax() && m_audio->txStreamId() == 0) {

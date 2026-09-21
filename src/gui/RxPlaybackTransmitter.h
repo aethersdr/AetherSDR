@@ -1,7 +1,8 @@
 #pragma once
 
-#include "TxCoordinator.h"
+#include "models/TxController.h"   // TxCoordinator::Request / Context
 
+#include <QAudioFormat>
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QObject>
@@ -19,8 +20,9 @@ class SliceModel;
 // Transmits a Client-Side QSO recording over the radio: AetherRX's PLAY button
 // carries "TX Playback" on its context menu, and this is what that entry runs.
 //
-// The audio takes the path the AX.25 modem and RADE already use -- the WAV is
-// decoded to the engine's 24 kHz stereo float, paced onto the modem TX route
+// The audio takes the path the AX.25 modem and RADE already use -- the
+// recording arrives already decoded to wireFormat(), the engine's 24 kHz
+// stereo float (QsoRecorder::lastRecordingPcm), and is paced onto the modem TX route
 // (AudioEngine::sendModemTxAudio) with local DAX TX mode holding the
 // microphone off the wire, and the transmitter is keyed and released through
 // the producer PTT API under the operator's own captured input. Nothing here
@@ -41,11 +43,15 @@ public:
     // including the wait for a DAX TX stream before keying.
     bool active() const { return m_active || m_pendingStream; }
 
-    // Begin transmitting `wavPath` on `slice` (made the TX slice first if it is
-    // not already) under `input`, the operator's request captured at the
-    // click. False, with `whyNot` filled, when the session never began; once
-    // it has, every outcome arrives through finished() instead.
-    bool start(const QString& wavPath, SliceModel* slice,
+    // What start() takes: 24 kHz stereo float32, interleaved.
+    static QAudioFormat wireFormat();
+
+    // Begin transmitting `pcm` (in wireFormat()) on `slice` (made the TX
+    // slice first if it is not already) under `input`, the operator's request
+    // captured at the click. False, with `whyNot` filled, when the session
+    // never began; once it has, every outcome arrives through finished()
+    // instead.
+    bool start(const QByteArray& pcm, SliceModel* slice,
                const TxCoordinator::Request& input, QString* whyNot = nullptr);
 
     // Release the transmitter now, whatever is left to send.

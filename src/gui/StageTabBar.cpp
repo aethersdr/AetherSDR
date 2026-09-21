@@ -113,35 +113,36 @@ private:
 // page — checkable, property-selected, sized by the layout — but left-aligned,
 // because a column of centred labels of different lengths reads as ragged
 // where a row of them reads as even.
-// Idle text is the dimmed family colour; hover and checked are the bright
-// one, checked also filling the tab. Disabled goes to the column's grey so a
-// PLAY with nothing to play does not read as "off" in its own colour.
+// The family's accent token for the text; hover shows the border in the
+// same colour, and checked adds a translucent fill of the family so an
+// engaged toggle reads as a state, not a selected page. Tokens, not
+// literals: ThemeManager::applyStyleSheet() resolves them and re-applies on
+// a theme change. Disabled goes to the column's disabled text so a PLAY with
+// nothing to play does not read as "off" in its own colour.
 QString footerToggleStyle(StageTabBar::Accent accent)
 {
-    const char* dim   = "#c8a070";
-    const char* lit   = "#f2c14e";
-    const char* fill  = "#4a3818";
-    const char* hover = "#5a4a28";
+    const char* accentToken = "{{color.accent.warning}}";
+    const char* fill  = "rgba(255,184,77,45)";
+    const char* hover = "rgba(255,184,77,70)";
     switch (accent) {
     case StageTabBar::Accent::Amber:
         break;
     case StageTabBar::Accent::Red:
-        dim = "#a05050"; lit = "#ff4040";
-        fill = "rgba(255,50,50,50)"; hover = "rgba(255,50,50,80)";
+        accentToken = "{{color.accent.danger}}";
+        fill = "rgba(255,77,77,45)"; hover = "rgba(255,77,77,70)";
         break;
     case StageTabBar::Accent::Green:
-        dim = "#509050"; lit = "#40e060";
-        fill = "rgba(50,200,80,50)"; hover = "rgba(50,200,80,80)";
+        accentToken = "{{color.accent.success}}";
+        fill = "rgba(77,216,122,45)"; hover = "rgba(77,216,122,70)";
         break;
     }
     return QStringLiteral(
         "QPushButton { text-align: left; color: %1; }"
-        "QPushButton:disabled { color: #4a5260; }"
-        "QPushButton:hover:enabled { color: %2; border-color: %2; }"
-        "QPushButton:checked { color: %2; border-color: %2; background: %3; }"
-        "QPushButton:checked:hover { background: %4; }")
-        .arg(QLatin1String(dim), QLatin1String(lit),
-             QLatin1String(fill), QLatin1String(hover));
+        "QPushButton:disabled { color: {{color.text.disabled}}; }"
+        "QPushButton:hover:enabled { border-color: %1; }"
+        "QPushButton:checked { border-color: %1; background: %2; }"
+        "QPushButton:checked:hover { background: %3; }")
+        .arg(QLatin1String(accentToken), QLatin1String(fill), QLatin1String(hover));
 }
 
 QPushButton* makeStageTab(const QString& text)
@@ -309,7 +310,7 @@ QVector<QPushButton*> StageTabBar::addFooterToggleRow(const QVector<FooterToggle
         // colour, too -- the tab sheet's checked state reads as "this page
         // is showing", and an engaged bypass or a running capture has to
         // read as a state instead.
-        button->setStyleSheet(footerToggleStyle(t.accent));
+        ThemeManager::instance().applyStyleSheet(button, footerToggleStyle(t.accent));
         // Equal shares of the row: a short label must not shrink its half.
         rowBox->addWidget(button, 1);
         made.append(button);
@@ -339,10 +340,11 @@ void StageTabBar::addFooterGearButton(const QString& accessibleName,
     // toggles beside it -- the text brightens and the border shows -- in
     // neutral grey, since the gear has no colour family of its own.
     button->setFixedWidth(36);
-    button->setStyleSheet(QStringLiteral(
+    ThemeManager::instance().applyStyleSheet(button, QStringLiteral(
         "QPushButton { text-align: center; font-size: 18px;"
         "              padding-left: 0; padding-right: 0; }"
-        "QPushButton:hover { color: #d4deea; border-color: #8a96a8; }"));
+        "QPushButton:hover { color: {{color.text.primary}};"
+        "                    border-color: {{color.border.strong}}; }"));
     connect(button, &QPushButton::clicked, this, &StageTabBar::footerButtonClicked);
 
     if (m_lastToggleRow) {

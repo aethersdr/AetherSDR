@@ -991,7 +991,6 @@ set(CORE_SOURCES
     src/core/QsoPcmConverter.cpp
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
-    src/core/RxPlaybackTransmitter.cpp
     src/core/FirmwareStager.cpp
     src/core/UpdateChecker.cpp
     src/core/OleCompoundFile.cpp
@@ -1207,6 +1206,7 @@ set(GUI_SOURCES
     src/gui/AetherRxDialog.cpp
     src/gui/StagePage.cpp
     src/gui/StageTabBar.cpp
+    src/gui/RxPlaybackTransmitter.cpp
     src/gui/AetherRxSettingsDialog.cpp
     src/gui/AetherTxSettingsDialog.cpp
     src/gui/AetherDspWidget.cpp
