@@ -350,12 +350,14 @@ void StageTabBar::addFooterGearButton(const QString& accessibleName,
             if (auto* sibling = item->widget())
                 button->setFixedHeight(sibling->sizeHint().height());
         }
-        m_lastToggleRow->addWidget(button, 0);
+        // Leftmost, right after the grip pad at index 0, so the gear leads
+        // the row and the toggle fills what is left.
+        m_lastToggleRow->insertWidget(1, button, 0);
         return;
     }
 
     // No toggle row to join: its own row, indented like every other label
-    // so the column has one left edge, with the gear at the right.
+    // so the column has one left edge, with the gear at the left.
     auto* row = new QWidget;
     auto* rowBox = new QHBoxLayout(row);
     rowBox->setContentsMargins(0, 0, 0, 0);
@@ -363,8 +365,8 @@ void StageTabBar::addFooterGearButton(const QString& accessibleName,
     auto* pad = new QWidget;
     pad->setFixedWidth(StageGrip::kGripWidth);
     rowBox->addWidget(pad);
-    rowBox->addStretch(1);
     rowBox->addWidget(button, 0);
+    rowBox->addStretch(1);
     m_rows->addWidget(row);
 }
 

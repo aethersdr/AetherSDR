@@ -413,7 +413,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         });
     }
 
-    // The gear joins BYPASS's row.
+    // The gear leads BYPASS's row.
     m_tabs->addFooterGearButton(
         tr("Settings"), QStringLiteral("aetherTxSettingsButton"),
         tr("Settings: save, load, import and export transmit chain profiles."));

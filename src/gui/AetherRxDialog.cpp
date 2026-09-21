@@ -248,7 +248,7 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         });
     }
 
-    // The gear joins BYPASS's row.
+    // The gear leads BYPASS's row.
     m_tabs->addFooterGearButton(
         tr("Settings"), QStringLiteral("aetherRxSettingsButton"),
         tr("Settings: save, load, import and export receive chain profiles."));

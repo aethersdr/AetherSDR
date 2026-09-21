@@ -90,10 +90,11 @@ public:
     QVector<QPushButton*> addFooterToggleRow(const QVector<FooterToggle>& toggles);
 
     // The gear that opens Settings, in both windows. Icon-only, one tab
-    // high and square, and it joins the end of the most recent toggle row --
-    // BYPASS's, in both windows -- so the two share a line; with no toggle
-    // row yet it gets a row of its own, right-aligned. `accessibleName` is
-    // what a screen reader says for it, since the glyph says nothing.
+    // high and square, and it leads the most recent toggle row -- BYPASS's,
+    // in both windows -- so the two share a line with the gear on the left;
+    // with no toggle row yet it gets a row of its own, left-aligned.
+    // `accessibleName` is what a screen reader says for it, since the glyph
+    // says nothing.
     void addFooterGearButton(const QString& accessibleName, const QString& objectName,
                              const QString& tooltip);
 
