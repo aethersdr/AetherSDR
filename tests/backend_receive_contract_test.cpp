@@ -41,6 +41,14 @@ struct IcomCivBackendTestAccess {
     {
         return backend.m_civScheduler.stats().dispatched;
     }
+    static void pump(IcomCivBackend& backend)
+    {
+        // sendUserCommand captures its pump time before queueWrite samples
+        // enqueue time. Crossing a millisecond can defer the first write to
+        // the next production tick; drive that tick without sleeping or
+        // starting the transport, rather than requiring inline dispatch.
+        backend.pumpCiv(backend.nowMs());
+    }
     static void observe(IcomCivBackend& backend, CivFrame frame, std::uint64_t generation = 1)
     {
         frame.to = kControllerAddress;
@@ -167,6 +175,7 @@ void icomCommandsAndObservations()
         test::SeamThreadAffinityProbe affinity(&backend);
         test::attachAllSeamSignals(affinity);
         request(backend, kOperations[i]);
+        IcomCivBackendTestAccess::pump(backend);
         check(IcomCivBackendTestAccess::dispatchCount(backend) == 1
                   && IcomCivBackendTestAccess::dispatched(backend) == expected[i],
               "Icom desktop receive intent enters the production paced CI-V scheduler");
