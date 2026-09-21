@@ -105,6 +105,47 @@ private:
     int m_saves = 0;
 };
 
+// EVERY SETTLED VERDICT, AND WHAT A HANDLER WOULD HAVE SEEN WHEN IT ARRIVED.
+//
+// IRadioBackend::autoRfGainArmSettled is documented as emitted after EVERY
+// outcome of setArmed() -- refused, armed and disarmed -- because a view that
+// only reads isArmed() back after its own click never learns about an arm that
+// settled somewhere else. A path that moves the control and emits nothing is
+// invisible to MainWindow::onAutoRfGainArmSettled, and counting is the only way
+// to see that: the flag it would have read is right either way.
+//
+// AND THE REASON IS SAMPLED INSIDE THE HANDLER, not afterwards, because the
+// ORDER is a requirement and not a detail. onAutoRfGainArmSettled reads
+// lastArmRefusalReason() on entry whenever `armed` is false and re-shows the
+// refusal from it. A disarm that emitted before clearing the reason would put
+// the old "declined" sentence in front of an operator who had just switched the
+// control off -- green on any assertion taken after the call returns.
+class SettledLog {
+public:
+    explicit SettledLog(hl2::Hl2Backend& backend)
+    {
+        m_conn = QObject::connect(&backend, &IRadioBackend::autoRfGainArmSettled,
+                                  &backend, [this, &backend](bool armed) {
+            ++m_settles;
+            m_lastArmed = armed;
+            m_reasonAtEmit = backend.lastArmRefusalReason();
+        });
+    }
+    ~SettledLog() { QObject::disconnect(m_conn); }
+    SettledLog(const SettledLog&) = delete;
+    SettledLog& operator=(const SettledLog&) = delete;
+
+    int settles() const { return m_settles; }
+    bool lastArmed() const { return m_lastArmed; }
+    QString reasonAtEmit() const { return m_reasonAtEmit; }
+
+private:
+    QMetaObject::Connection m_conn;
+    int m_settles = 0;
+    bool m_lastArmed = false;
+    QString m_reasonAtEmit;
+};
+
 // Exercise synchronous connect seeding and capture without starting transport.
 // boardMaxRx skips the unicast discovery socket. No event loop is pumped:
 // finishDspSetup cannot run, and disconnect cancels it before destruction.
@@ -300,12 +341,17 @@ int main(int argc, char** argv)
         constexpr int kTrusted = kCeiling;        // +19 dB: the highest it takes
         {
             GainSession session(autoGainProfile(false));
+            SettledLog settled(session.backend);
             session.backend.setPanRfGain(session.panId, kUntrusted);
             check(!autoGainWanted(session.backend.currentOperatingState()),
                   "nothing is wanted before the operator asks");
             session.backend.setAutoRfGain(true);
             check(!session.backend.autoRfGainEnabled(),
                   "the radio declines to arm from the shipped default baseline");
+            check(settled.settles() == 1 && !settled.lastArmed(),
+                  "the refusal settles as not armed, as IRadioBackend requires of every outcome");
+            check(!session.backend.lastArmRefusalReason().isEmpty(),
+                  "and it keeps the sentence the checkbox explains itself with");
             check(autoGainWanted(session.backend.currentOperatingState()),
                   "and the asking survives the refusal, which is the documented intent");
             session.backend.setAutoRfGain(false);
@@ -313,6 +359,20 @@ int main(int argc, char** argv)
                   "the switch still reports itself off after the withdrawal");
             check(!autoGainWanted(session.backend.currentOperatingState()),
                   "the withdrawal after a refusal reaches the profile");
+            // THE OTHER TWO THINGS A SUCCESSFUL OFF OWES, and the reason the
+            // withdrawal now goes through the one disarm branch rather than a
+            // hand-copied subset of it. IAutoRfGainControl defines the reason as
+            // empty when the last attempt succeeded; an off that took is one.
+            check(session.backend.lastArmRefusalReason().isEmpty(),
+                  "the reason dies with the request: an off that took is not a declined attempt");
+            check(settled.settles() == 2 && !settled.lastArmed(),
+                  "the withdrawal settles too -- a view that missed this outcome never refreshed");
+            // THE ORDER, PINNED. Sampled inside the handler: emitting before the
+            // clear would hand MainWindow::onAutoRfGainArmSettled the stale
+            // sentence and re-show the refusal card on a plain off, and every
+            // assertion taken after the call returns would still be green.
+            check(settled.reasonAtEmit().isEmpty(),
+                  "and the reason was already gone when it settled, not merely gone afterwards");
         }
         // THE POSITIVE CONTROL, and it is not optional. The assertion above
         // could pass because the key was never written, because the extension
@@ -334,15 +394,28 @@ int main(int argc, char** argv)
                   "positive control: the withdrawal reaches the profile by this path");
         }
         // WHY THE FIRST LEG IS A DEFECT AND NOT BOOKKEEPING. A stranded `true`
-        // is read at the next connect and the linkUp handler arms on it.
+        // is what the next connect reads, and the linkUp handler arms on it.
         // Arming from a restored preference is correct in itself; it is the
         // harm only when leg one is what put the `true` there.
+        //
+        // ILLUSTRATIVE, NOT DISCRIMINATING, AND SAYING SO IS THE POINT. This leg
+        // does NOT exercise that connect-time arm and cannot. The handler is a
+        // lambda on MetisClient::linkUp, m_metis is private, and GainSession
+        // pumps no event loop -- there is no seam here to fire it through, and
+        // adding one would mean a harness that drives MetisClient, which is what
+        // socket-free costs. What arms below is the explicit setAutoRfGain(true)
+        // at a trusted baseline, so this leg passes identically with
+        // autoGainProfile(false). Read it as a statement of the harm in code --
+        // a restored `true` plus a baseline the loop trusts is exactly the pair
+        // that arms -- and read leg one's assertion on the profile as the thing
+        // that would go red if the withdrawal regressed.
         {
             GainSession session(autoGainProfile(true));
             session.backend.setPanRfGain(session.panId, kTrusted);
             session.backend.setAutoRfGain(true);
             check(session.backend.autoRfGainEnabled(),
-                  "a profile carrying autoEnabled:true arms once the baseline allows it");
+                  "illustrative (not discriminating): a restored autoEnabled:true and a "
+                  "trusted baseline are the pair that arms");
         }
         // THE FOURTH LEG: THE PUSH, and it is a different assertion from the three
         // above rather than a restatement of them.
@@ -361,12 +434,32 @@ int main(int argc, char** argv)
         {
             GainSession session(autoGainProfile(false));
             ProfileMirror mirror(session.backend);
-            session.backend.setPanRfGain(session.panId, kUntrusted);
+            // A MOVE THAT IS ONE, DERIVED FROM THE LIVE BASELINE RATHER THAN
+            // ASSUMED TO DIFFER FROM IT. setPanRfGain notifies on
+            // `moved || endedPin || recordedBand`, and this leg is here to prove
+            // the MIRROR is wired -- so it has to fire the term it claims to.
+            // Setting kUntrusted first would not: the connect baseline is
+            // already the shipped default, so `moved` would be false and the
+            // save would come from `recordedBand`, the band having had no memory
+            // entry. Green today and red on any harness that ever seeds
+            // lnaDbByBand, for a reason with nothing to do with auto gain.
+            //
+            // lnaBaselineDb, not lnaGainDb: the health row named for the gain is
+            // lnaEffectiveDb(), baseline plus the automatic offset, and `moved`
+            // compares against the baseline.
+            const int baselineDb = session.backend.healthSnapshot()
+                                       .values.value(QStringLiteral("lnaBaselineDb"), 999)
+                                       .toInt();
+            const int aRealMove = (baselineDb == kTrusted) ? kTrusted - 1 : kTrusted;
+            session.backend.setPanRfGain(session.panId, aRealMove);
             // Also the harness's own positive control: if the mirror were never
             // connected, every assertion below would read a default-constructed
             // document and the false ones would pass for nothing.
-            check(mirror.saves() > 0 && !mirror.storedAutoGain(),
+            check(baselineDb != aRealMove && mirror.saves() > 0 && !mirror.storedAutoGain(),
                   "push: a gain move does reach the profile, and nothing is wanted yet");
+            // AND NOW THE BASELINE THE GUARD REFUSES. Also a move, aRealMove
+            // being below the ceiling by construction and kUntrusted above it.
+            session.backend.setPanRfGain(session.panId, kUntrusted);
             session.backend.setAutoRfGain(true);
             check(!session.backend.autoRfGainEnabled(),
                   "push: the radio still declines from the shipped default baseline");
