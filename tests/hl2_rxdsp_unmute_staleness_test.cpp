@@ -121,7 +121,16 @@
 // it is supposed to be measuring agrees with itself while the code it guards is
 // wrong. The taps ARE read from the real header, but only to (a) print the
 // predicted support alongside the measurement and (b) size the detector's own
-// positive control. Leg 1 REPORTS. Only the controls assert.
+// positive control. Leg 1 REPORTS.
+//
+// ONE MEASUREMENT FIGURE IS ASSERTED, and only one: that marker 2 -- the live
+// input during the over -- stays below -20 dB while muted. That is not a
+// retyped constant and not a verdict on #5497: BOTH candidate builds satisfy
+// it, by different mechanisms. It is asserted because it is the only figure
+// here that goes red when the mute itself is deleted, which makes this fixture
+// protect the thing it measures. The ZERO/HOLD distinction -- which side of
+// the edge marker 1 lands on, and whether marker 2 reads -29.8 dB or -300 --
+// remains unasserted on purpose. See the check beside the marker-2 table.
 //
 // WHAT TO EXPECT IF A BUILD SPLICES
 //
@@ -250,14 +259,23 @@ static double windowCentreMs(std::size_t index, int fs, int win, int hop)
            / static_cast<double>(fs);
 }
 
-// Does the tone stay below `thrDb` for `needBelow` windows starting at `i`? A
-// run that runs off the end of the profile counts: there is nothing left that
-// could bring it back.
+// Does the tone stay below `thrDb` for `needBelow` windows starting at `i`?
+//
+// A RUN THAT CANNOT COMPLETE IS NOT A RUN. An earlier revision clamped `end` to
+// the profile size, which waived the anti-dip guard for the last
+// `needBelow - 1` windows: a single dip there counted as a full run, so
+// staleMilliseconds() reported a crossing with `reachedEnd = false` and
+// heldCheck() read a tone that was present throughout as having broken. The
+// guard exists precisely to survive that class of transient, so it must not
+// switch itself off where the evidence runs out. Refusing the short run lets
+// staleMilliseconds() fall through to its `reachedEnd = true` tail, which is
+// the honest answer for a tone that held to the end of the capture: a lower
+// bound, labelled as one.
 static bool belowRunAt(const std::vector<double>& profile, std::size_t i,
                        double refAmp, double thrDb, int needBelow)
 {
-    const std::size_t end = std::min(profile.size(),
-                                     i + static_cast<std::size_t>(needBelow));
+    const std::size_t end = i + static_cast<std::size_t>(needBelow);
+    if (end > profile.size()) return false;
     for (std::size_t k = i; k < end; ++k)
         if (amplitudeDb(profile[k], refAmp) >= thrDb) return false;
     return true;
@@ -447,7 +465,14 @@ int main(int argc, char** argv)
     cfg.maximumAgcGainDb = 39.0;
     cfg.blockForOutput = true;   // deterministic audio for an offline burst feed
     std::string err;
-    check(dsp.configure(cfg, &err), err.empty() ? "Hl2RxDsp configures" : err.c_str());
+    // Sequenced deliberately: err.empty()/err.c_str() must not share an argument
+    // list with the call that FILLS err. Argument evaluation order is
+    // unspecified, so the diagnostic could be read before configure() wrote it
+    // -- and err.c_str() taken before a reallocating assign is a dangling
+    // pointer, not merely a lost message. Same shape fixed in
+    // tests/hl2_rxdsp_test.cpp, which this was copied from.
+    const bool configured = dsp.configure(cfg, &err);
+    check(configured, err.empty() ? "Hl2RxDsp configures" : err.c_str());
     if (g_failures != 0) return 1;
 
     const int fs = cfg.audioSampleRateHz;
@@ -550,7 +575,13 @@ int main(int argc, char** argv)
     check(mutedBlocks > 0, "muted phase produced audio blocks (both builds emit at cadence)");
     check(unmutedBlocks > 0, "post-unmute phase produced audio blocks");
     check(calib2Blocks > 0, "marker-2 calibration phase produced audio blocks");
-    if (markerAudio.empty() || unmutedAudio.empty() || calib2Audio.empty()) {
+    // mutedAudio belongs in this guard as much as the others: a build whose
+    // muted branch stops emitting would otherwise print a full table whose
+    // during-mute column reads 0.0 ms / -300 dB -- indistinguishable from clean
+    // suppression. The exit code would still be 1, but the table is what gets
+    // quoted.
+    if (markerAudio.empty() || mutedAudio.empty() || unmutedAudio.empty()
+        || calib2Audio.empty()) {
         std::fprintf(stderr, "FAIL: no audio to measure; the rest is meaningless\n");
         return 1;
     }
@@ -689,6 +720,27 @@ int main(int argc, char** argv)
         };
         leakRow("during mute", m2Muted);
         leakRow("after unmute", m2Unmuted);
+
+        // THE ONE MEASUREMENT LEG THAT IS ASSERTED, and the reason it can be.
+        //
+        // Everything else here reports, because asserting it would mean
+        // comparing against a retyped DSP constant or taking a side between
+        // #5497's candidates. This figure is neither. "The live input during
+        // the over stays below -20 dB" is a property BOTH candidates satisfy
+        // -- ZERO reads -29.8 dB because it overwrites the input before
+        // fexchange2, HOLD reads -300 dB because it never reaches fexchange2
+        // -- so pinning it pre-empts neither #5497 nor #5498 and says nothing
+        // about which mechanism is right. What it does do is make this the one
+        // fixture in the tree that notices the mute being LOST: with both
+        // setAudioMuted() calls deleted this row reads 0.0 dB and this check
+        // goes red.
+        //
+        // Note what is deliberately NOT asserted here: nothing compares ZERO's
+        // -29.8 dB against HOLD's -300 dB, and nothing asserts which side of
+        // the mute edge marker 1 lands on. That boundary is #5497's to settle,
+        // and a fixture that pre-judged it would stop being an instrument.
+        check(peakDb(m2Muted, ref2, fs, win, hop) < -20.0,
+              "the mute keeps the live input during the over below -20 dB");
     }
     std::fprintf(stderr,
                  "\n  How to read the marker-2 column: BOTH mute implementations are\n"
@@ -787,18 +839,15 @@ int main(int argc, char** argv)
         auto rejects = [&](const char* what, std::span<const float> audio,
                            double detectHz, double ref, double mustBeBelowDb) {
             const auto prof = toneAmplitudeProfile(audio, detectHz, fs, win, hop);
-            double worstDb = -300.0;
-            std::size_t worstAt = 0;
-            for (std::size_t i = 0; i < prof.size(); ++i) {
-                const double db = amplitudeDb(prof[i], ref);
-                if (db > worstDb) { worstDb = db; worstAt = i; }
-            }
+            // peakDb() already IS the worst-window scan, out-param included.
+            double worstAtMs = 0.0;
+            const double worstDb = peakDb(prof, ref, fs, win, hop, &worstAtMs);
             const double ms = staleMilliseconds(prof, ref, -20.0, fs, win, hop);
             std::fprintf(stderr,
                          "  NEGATIVE CONTROL %s\n"
                          "    worst window %.1f dB at %.1f ms (must be below %.0f), "
                          "staleMilliseconds %.1f ms\n",
-                         what, worstDb, windowCentreMs(worstAt, fs, win, hop),
+                         what, worstDb, worstAtMs,
                          mustBeBelowDb, ms);
             check(worstDb < mustBeBelowDb, what);
         };
