@@ -223,7 +223,7 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     });
     setPlayEnabled(false);
 
-    // BYPASS directly above Settings, where AetherTX keeps its own. The
+    // BYPASS beside the Settings gear, where AetherTX keeps its own. The
     // engine owns the snapshot-and-restore, and the docked chain applet's RX
     // BYPASS drives the same state, so this button follows the engine back
     // rather than remembering anything itself. AetherNR is not a chain stage
@@ -248,9 +248,10 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         });
     }
 
-    m_tabs->addFooterButton(
+    // The gear joins BYPASS's row.
+    m_tabs->addFooterGearButton(
         tr("Settings"), QStringLiteral("aetherRxSettingsButton"),
-        tr("Profiles: save, load, import and export the receive chain."));
+        tr("Settings: save, load, import and export receive chain profiles."));
 
     // Pin every panel to its RX engine instance. Without this the EQ canvas
     // has no engine to enumerate bands for and collapses to its "(no EQ

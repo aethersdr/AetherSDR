@@ -19,7 +19,7 @@ class AudioEngine;
 // its name.
 //
 // Nothing live is in here. Record, Play and BYPASS sit in the stage column
-// above the Settings button, where a modal is not in the way of them.
+// beside the Settings gear, where a modal is not in the way of them.
 class AetherTxSettingsDialog : public QDialog {
     Q_OBJECT
 

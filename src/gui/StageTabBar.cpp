@@ -316,31 +316,56 @@ QVector<QPushButton*> StageTabBar::addFooterToggleRow(const QVector<FooterToggle
         made.append(button);
     }
     m_rows->addWidget(row);
+    m_lastToggleRow = rowBox;
     return made;
 }
 
-void StageTabBar::addFooterButton(const QString& label, const QString& objectName,
-                                  const QString& tooltip)
+void StageTabBar::addFooterGearButton(const QString& accessibleName,
+                                      const QString& objectName,
+                                      const QString& tooltip)
 {
     beginFooter();
 
-    auto* button = makeStageTab(label);
+    // A stage tab in every respect but the label: the same chrome, height,
+    // hover and radius as the rows above, so it reads as part of the column
+    // rather than a control dropped onto it. Square, glyph centred.
+    auto* button = makeStageTab(QString::fromUtf8("\xe2\x9a\x99"));   // ⚙
     button->setCheckable(false);
     button->setObjectName(objectName);
-    button->setAccessibleName(label);
+    button->setAccessibleName(accessibleName);
     button->setToolTip(tooltip);
+    // Same vertical padding as the tabs (left to the chrome sheet) so the
+    // gear stands exactly as tall as the BYPASS beside it; only the side
+    // padding goes, so the glyph centres in a square.
+    button->setFixedWidth(36);
+    button->setStyleSheet(QStringLiteral(
+        "QPushButton { text-align: center; font-size: 18px;"
+        "              padding-left: 0; padding-right: 0; }"));
     connect(button, &QPushButton::clicked, this, &StageTabBar::footerButtonClicked);
 
-    // Indented like every other label, so the column has one left edge.
-    m_footerRow = new QWidget;
-    auto* rowBox = new QHBoxLayout(m_footerRow);
+    if (m_lastToggleRow) {
+        // Exactly as tall as the toggle it sits beside: the larger glyph
+        // would otherwise push it a couple of pixels past the row.
+        if (auto* item = m_lastToggleRow->itemAt(1)) {
+            if (auto* sibling = item->widget())
+                button->setFixedHeight(sibling->sizeHint().height());
+        }
+        m_lastToggleRow->addWidget(button, 0);
+        return;
+    }
+
+    // No toggle row to join: its own row, indented like every other label
+    // so the column has one left edge, with the gear at the right.
+    auto* row = new QWidget;
+    auto* rowBox = new QHBoxLayout(row);
     rowBox->setContentsMargins(0, 0, 0, 0);
     rowBox->setSpacing(4);
     auto* pad = new QWidget;
     pad->setFixedWidth(StageGrip::kGripWidth);
     rowBox->addWidget(pad);
-    rowBox->addWidget(button, 1);
-    m_rows->addWidget(m_footerRow);
+    rowBox->addStretch(1);
+    rowBox->addWidget(button, 0);
+    m_rows->addWidget(row);
 }
 
 void StageTabBar::setCurrentStage(int id)

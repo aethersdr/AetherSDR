@@ -137,8 +137,8 @@ private:
     // them.  Restores the snapshot on uncheck.  Mirrors the docked
     // ClientChainApplet's BYPASS button.
     void onBypassToggled(bool checked);
-    // The BYPASS toggle at the foot of the stage column, above Settings.
-    // Owned by the StageTabBar; follows AudioEngine::txBypassChanged.
+    // The BYPASS toggle at the foot of the stage column, beside the Settings
+    // gear. Owned by the StageTabBar; follows AudioEngine::txBypassChanged.
     QPushButton* m_bypassBtn{nullptr};
 
     void addStage(Stage stage, const QString& label, QWidget* page);

@@ -226,11 +226,11 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     // pointed in opposite directions, so a second copy of the column would
     // have been two places to fix every tab-bar bug.
     //
-    // The live controls sit at the foot of the column, directly above
-    // Settings: REC, PLAY and BYPASS are what you reach for mid-QSO, so
-    // none of them is behind a modal. Only the profile library lives in
-    // Settings. ClientChainApplet carries its own copy of all three on the
-    // docked panel.
+    // The live controls sit at the foot of the column: REC and PLAY on one
+    // row, BYPASS and the Settings gear on the next. All three are what you
+    // reach for mid-QSO, so none of them is behind a modal; only the profile
+    // library lives behind the gear. ClientChainApplet carries its own copy
+    // of all three on the docked panel.
     auto* row = new QHBoxLayout;
     row->setContentsMargins(0, 0, 0, 0);
     row->setSpacing(8);
@@ -413,9 +413,10 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         });
     }
 
-    m_tabs->addFooterButton(
+    // The gear joins BYPASS's row.
+    m_tabs->addFooterGearButton(
         tr("Settings"), QStringLiteral("aetherTxSettingsButton"),
-        tr("Profiles: save, load, import and export the transmit chain."));
+        tr("Settings: save, load, import and export transmit chain profiles."));
 
     // Pin every panel to its TX engine instance, then show the first stage.
     if (m_gate)        m_gate->showForTx();

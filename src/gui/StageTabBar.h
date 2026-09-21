@@ -8,6 +8,7 @@
 class QButtonGroup;
 class QCheckBox;
 class QEvent;
+class QHBoxLayout;
 class QObject;
 class QPushButton;
 class QVBoxLayout;
@@ -68,7 +69,7 @@ public:
     // the other footer entries. Drawn as a stage tab so the column keeps one
     // look, but checked means "engaged" rather than "selected", so it is not
     // in the tab group and carries its own checked colour. The caller owns
-    // what it means — both windows put BYPASS here, directly above Settings.
+    // what it means — both windows put BYPASS here, beside the Settings gear.
     // Returns the button for wiring and for mirroring state.
     QPushButton* addFooterToggle(const QString& label, const QString& objectName,
                                  const QString& tooltip);
@@ -88,9 +89,13 @@ public:
     };
     QVector<QPushButton*> addFooterToggleRow(const QVector<FooterToggle>& toggles);
 
-    // Add the footer button under the stretch — Settings, in both windows.
-    void addFooterButton(const QString& label, const QString& objectName,
-                         const QString& tooltip);
+    // The gear that opens Settings, in both windows. Icon-only, one tab
+    // high and square, and it joins the end of the most recent toggle row --
+    // BYPASS's, in both windows -- so the two share a line; with no toggle
+    // row yet it gets a row of its own, right-aligned. `accessibleName` is
+    // what a screen reader says for it, since the glyph says nothing.
+    void addFooterGearButton(const QString& accessibleName, const QString& objectName,
+                             const QString& tooltip);
 
     // The drag payload type this column emits and accepts. Private to the
     // window: see the note in StageTabBar.cpp. Exposed so a test can cross
@@ -125,7 +130,8 @@ private:
     Host          m_host;
     QButtonGroup* m_group{nullptr};
     QVBoxLayout*  m_rows{nullptr};
-    QWidget*      m_footerRow{nullptr};
+    // The most recent toggle row's layout, for the gear to join.
+    QHBoxLayout*  m_lastToggleRow{nullptr};
 
     struct Row {
         int        id{-1};

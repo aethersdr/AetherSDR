@@ -154,8 +154,8 @@ private:
     AudioEngine*        m_audio{nullptr};
     AetherDspWidget*    m_widget{nullptr};
     StageTabBar*        m_tabs{nullptr};
-    // The BYPASS toggle at the foot of the stage column, above Settings, in
-    // the same spot AetherTX keeps its own. Owned by the StageTabBar; routes
+    // The BYPASS toggle at the foot of the stage column, beside the Settings
+    // gear, in the same spot AetherTX keeps its own. Owned by the StageTabBar; routes
     // through AudioEngine::setRxBypassed and follows rxBypassChanged.
     QPushButton*        m_bypassBtn{nullptr};
     // REC / PLAY on one row above BYPASS, as in AetherTX. These record the
