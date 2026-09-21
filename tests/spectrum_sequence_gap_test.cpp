@@ -487,7 +487,25 @@ int main(int argc, char** argv)
         check(makeDsp(dspB, &errB), ("ANAN control DSP configures: " + errB).c_str());
         const std::vector<float> cleanOnly = firstFrameAfter(dspB, postGap);
         check(binsEqual(afterGap, cleanOnly),
-              "ANAN: the post-gap frame contains no pre-gap sample");
+              "ANAN: a sub-block gap (the partly staged block dropped) leaves the "
+              "post-gap frame free of pre-gap samples");
+
+        // A WHOLE staging block fed before the gap is already inside the
+        // analyzer's input ring, and the analyzer's history is deliberately
+        // left alone (AnanRxDsp::onSequenceGap()), so the next 16k-point FFT
+        // straddles the seam: the post-gap frame is a documented blend, not a
+        // clean frame. Pinned so the tradeoff is stated rather than implied.
+        anan::AnanRxDsp dspE;
+        std::string errE;
+        check(makeDsp(dspE, &errE), ("ANAN whole-block DSP configures: " + errE).c_str());
+        dspE.processIqBlock(wireTone(1024 + kPartial, 1000.0, rate, 0.5f));
+        dspE.onSequenceGap();
+        check(dspE.spectrumGapDiscards() == 1,
+              "ANAN whole-block: only the partial block is discarded");
+        const std::vector<float> blended = firstFrameAfter(dspE, postGap);
+        check(!blended.empty() && !binsEqual(blended, cleanOnly),
+              "ANAN: whole blocks fed before a gap stay in the analyzer's ring and "
+              "blend into the post-gap frame -- the documented tradeoff, not a purge");
 
         anan::AnanRxDsp dspC;
         std::string errC;

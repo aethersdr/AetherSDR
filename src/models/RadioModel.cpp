@@ -6336,6 +6336,13 @@ bool RadioModel::requestLocalPanWeightedAverage(const QString& panId, bool on)
     if (panId.isEmpty() || !shapesDisplayRatesLocally()) {
         return false;
     }
+    // The model write mirrors requestPanAverage()'s setLocalAverage(): no
+    // radio echo is coming, so the value is authoritative here and the
+    // automation readback / resource snapshot see it (a missing pan is not
+    // an error -- the backend still gets the setting).
+    if (PanadapterModel* pan = panadapter(panId)) {
+        pan->setLocalWeightedAverage(on);
+    }
     m_backend->setPanWeightedAverage(backendPanIdFor(panId), on);
     return true;
 }

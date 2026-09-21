@@ -371,8 +371,8 @@ private:
     // See spectrumGapDiscards(). Written on the I/O thread by onSequenceGap(),
     // read by whatever polls it; relaxed for the same reasons Hl2RxDsp gives.
     std::atomic<quint64> m_spectrumGapDiscards {0};
-    // Declared after m_channel so it is destroyed first -- see RebuildResult.
     std::unique_ptr<WdspChannel> m_channel;
+    // Declared after m_channel so it is destroyed first -- see RebuildResult.
     std::unique_ptr<AnanPanAnalyzer> m_analyzer;
     double m_shiftHz = 0.0;
     Config m_config;

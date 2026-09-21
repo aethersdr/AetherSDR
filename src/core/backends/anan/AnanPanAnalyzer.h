@@ -28,7 +28,9 @@ namespace AetherSDR::anan {
 //   - Time averaging set by the operator, as an averaging TIME in ms -- the
 //     control deskHPSDR exposes: 0 = none (each frame is one FFT), t > 0 =
 //     log-recursive (WDSP average mode 3, deskHPSDR's default mode) weighting
-//     history by exp(-1 / (fps * t)). deskHPSDR's default is 250 ms. The
+//     history by exp(-1 / (F * t)) with F the analyzer's FFT rate -- fps
+//     while one FFT fits per display frame, more once the overlap saturates
+//     (see derive()). deskHPSDR's default is 250 ms. The
 //     operator can switch the recursive mode to linear (an average of power)
 //     as deskHPSDR's averaging-mode choice allows.
 //   - Levels normalised to the bandwidth of one output point.
@@ -65,6 +67,10 @@ public:
     // two, so it divides the analyzer's input ring (2 * kMaxFftSize).
     static constexpr int kBlockSize = 1024;
     // Largest FFT any setting can ask for, and the analyzer's buffer size.
+    // XCreateAnalyzer sizes its buffers for this and for WDSP's own maxima
+    // (dMAX_PIXOUTS x dMAX_AVERAGE x dMAX_PIXELS window-average frames among
+    // them): about 45 MB per analyzer, and two exist briefly during a
+    // rate-change rebuild.
     static constexpr int kMaxFftSize = 65536;
     static constexpr int kMinFftSize = 16384;
 

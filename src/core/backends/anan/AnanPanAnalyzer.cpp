@@ -60,11 +60,21 @@ AnanPanAnalyzer::Derived AnanPanAnalyzer::derive(const Settings& s) noexcept
     d.maxWriteahead = std::min(d.fftSize + static_cast<int>(ahead),
                                2 * kMaxFftSize - kBlockSize);
 
-    // Log-recursive average with time constant averageTimeMs, updated once
-    // per display frame: deskHPSDR's weight exp(-1 / (fps * t)). 0 = none.
+    // Recursive average with time constant averageTimeMs. WDSP applies the
+    // weight once per FFT, not once per display frame, so the weight is
+    // derived from the analyzer's real FFT rate, rate / (fftSize - overlap):
+    // equal to fps while one FFT fits per frame (every rate up to 384 ksps at
+    // 25 fps, where this reduces to deskHPSDR's exp(-1 / (fps * t))), and
+    // higher once the overlap saturates at zero (768 and 1536 ksps), where
+    // deskHPSDR's per-frame weight would deliver 1.9x / 3.75x less averaging
+    // time than the control says. 0 = none.
     if (s.averageTimeMs > 0) {
-        const double framesPerTau = fps * (s.averageTimeMs / 1000.0);
+        const double fftsPerSecond =
+            rate / static_cast<double>(std::max(1, d.fftSize - d.overlap));
+        const double framesPerTau = fftsPerSecond * (s.averageTimeMs / 1000.0);
         d.avBackmult = std::exp(-1.0 / framesPerTau);
+        // Only WDSP's window-averaging mode (2) reads this, and this class never
+        // selects it; set so the value is well-defined for the log line.
         d.numAverage = std::clamp(static_cast<int>(framesPerTau), 2, kMaxAverage);
     } else {
         d.avBackmult = 0.0;
@@ -180,7 +190,18 @@ void AnanPanAnalyzer::applyAveraging()
         return;
     }
     // Seed: with no weight on history the first frame IS the average. The
-    // real weight goes in once that frame has been taken (takeFrame()).
+    // real weight goes in once that frame has been taken (takeFrame()) -- so
+    // a frame the worker finished BEFORE this switch, still waiting in
+    // GetPixels because takeFrame() only polls when a display frame is due,
+    // must not be the one that counts: it was computed under the old mode,
+    // and seeding from it would leave the new mode's fresh -160 dB history
+    // in place and fade the panadapter in from black. Discard it first. (A
+    // worker mid-FFT at this instant can still land one; that window is the
+    // FFT's compute time, not a display interval.)
+    if (!m_seeded) {
+        int stale = 0;
+        GetPixels(m_disp, 0, m_scratch.data(), &stale);
+    }
     SetDisplayAvBackmult(m_disp, 0, m_seeded ? m_avBackmult : 0.0);
     SetDisplayAverageMode(m_disp, 0,
                           m_settings.logAverage ? kAverageLogRecursive : kAverageLinearRecursive);

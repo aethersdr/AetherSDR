@@ -364,11 +364,27 @@ int main(int argc, char** argv)
         check(AnanPanAnalyzer::derive(s).avBackmult == 0.0,
               "FFT AVG 0 means no time averaging");
         s.sampleRateHz = 1536000;
+        s.averageTimeMs = 250;
         d = AnanPanAnalyzer::derive(s);
         check(d.overlap == 0, "at 1536 ksps the FFTs tile the stream with no overlap");
+        // 1536000 / 16384 = 93.75 FFTs per second, each applying the weight, so
+        // the weight must be derived from that rate or 250 ms would deliver
+        // ~67 ms.
+        check(std::fabs(d.avBackmult - std::exp(-1.0 / (93.75 * 0.25))) < 1e-12,
+              "history weight follows the analyzer's FFT rate once the overlap saturates, "
+              "so FFT AVG keeps its 10 ms unit at 1536 ksps");
+        s.averageTimeMs = 0;
+        // derive() grows the FFT for a larger point count, but create() refuses
+        // anything above WDSP's dMAX_PIXELS -- pin the refusal that is actually
+        // reachable alongside the formula.
         s.numPoints = 20000;
-        d = AnanPanAnalyzer::derive(s);
-        check(d.fftSize == 32768, "the FFT grows to the next power of two above the point count");
+        check(AnanPanAnalyzer::derive(s).fftSize == 32768,
+              "derive(): the FFT grows to the next power of two above the point count");
+        {
+            std::string tooMany;
+            check(AnanPanAnalyzer::create(61, s, &tooMany) == nullptr && !tooMany.empty(),
+                  "create() refuses a point count above WDSP's dMAX_PIXELS");
+        }
         s.numPoints = 1024;
         s.framesPerSecond = 1000;
         d = AnanPanAnalyzer::derive(s);
@@ -437,6 +453,58 @@ int main(int argc, char** argv)
                   "switching log -> linear averaging mid-stream re-seeds -- no dip");
         } else {
             check(false, "re-seed: a frame after the mode switch");
+        }
+    }
+
+    // ---- Group 1c: the seed must come from a frame computed AFTER the switch ----
+    // In production takeFrame() only polls when a display frame is due (the
+    // 25 fps cap), so a frame the worker finished under the OLD mode can be
+    // waiting in GetPixels when FFT AVG is switched on. Seeding from that frame
+    // would leave the new mode's -160 dB history in place and fade the
+    // panadapter in from black -- the exact defect the seed exists to prevent.
+    {
+        AnanRxDsp capped;
+        std::string err;
+        check(capped.configure(spectrumConfig(48000), &err),
+              err.empty() ? "capped seed: configure() succeeds" : err.c_str());
+        capped.setSpectrumRateFps(25);   // what AnanBackend::setPanFrameRate() does
+        const auto steady = wireTone(2 * kOneFft, 6000.0, 48000, 0.25f);
+        const std::vector<std::complex<float>> first(steady.begin(), steady.begin() + kOneFft);
+        const std::vector<float> c1 = firstFrame(capped, first);   // averaging off
+        check(c1.size() == static_cast<std::size_t>(kPoints), "capped seed: a first frame");
+        // One more FFT's worth (the overlap advance is 1920 samples at 48 ksps
+        // and 25 fps): computed in mode "none" by the worker, NOT taken -- the
+        // next display frame is not due yet.
+        const std::vector<std::complex<float>> more(steady.begin() + kOneFft,
+                                                    steady.begin() + kOneFft + 2048);
+        capped.processIqBlock(more);
+        QThread::msleep(20);
+        capped.setSpectrumAverageMs(250);
+        // Poll without feeding for longer than a display interval. Without the
+        // drain in AnanPanAnalyzer::applyAveraging() this takes the stale
+        // mode-none frame and marks the average seeded.
+        {
+            const std::vector<std::complex<float>> none;
+            QElapsedTimer t;
+            t.start();
+            while (t.elapsed() < 120) {
+                QThread::msleep(2);
+                capped.processIqBlock(none);
+            }
+        }
+        const std::vector<std::complex<float>> after(steady.begin() + kOneFft + 2048,
+                                                     steady.begin() + kOneFft + 4096);
+        const std::vector<float> c2 = firstFrame(capped, after);   // first frame computed in log mode
+        if (c1.size() == c2.size() && !c1.empty()) {
+            const int pk = peakBin(c1);
+            std::fprintf(stderr, "capped seed: before %.2f dB, first averaged frame %.2f dB\n",
+                         c1[static_cast<std::size_t>(pk)], c2[static_cast<std::size_t>(pk)]);
+            check(std::fabs(c2[static_cast<std::size_t>(pk)] - c1[static_cast<std::size_t>(pk)])
+                      < 1.0f,
+                  "a frame pending from before the switch does not seed the new mode -- "
+                  "no fade-in from -160 dB under the display-rate cap");
+        } else {
+            check(false, "capped seed: a frame after the switch");
         }
     }
 

@@ -171,9 +171,11 @@ private:
     static constexpr int kSamplesPerRate = 8;
     static constexpr int kSampleSpacingMs = 300;
     static constexpr int kRateWaitTimeoutMs = 90'000;  // "~a minute cold" + margin
-    // Two time constants of AnanPanAnalyzer's 250 ms average. The analyzer is
-    // rebuilt on every rate change and seeds its average from the first frame,
-    // so this only has to cover that average settling on the new rate.
+    // The analyzer is rebuilt on every rate change and seeds its running
+    // average from the first frame at the new rate (AnanPanAnalyzer), so this
+    // does not have to cover an averaging time constant -- the operator's FFT
+    // AVG is anywhere in 0-1000 ms -- only the first frames landing. 500 ms
+    // is a dozen frames at 25 fps.
     static constexpr int kPostLandSettleMs = 500;
     static constexpr int kPollIntervalMs = 200;
     // Sampling needs its own bound. Only the rate wait used to have one, so a

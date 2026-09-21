@@ -5212,6 +5212,17 @@ void MainWindow::buildUI()
         }
         applet->spectrumWidget()->setBandSegmentZoomAvailable(
             m_radioModel.isConnected() && m_radioModel.usesFlexCommandPlane());
+        // The two capability switches onConnectionStateChanged() applies for
+        // the same reason: a pan created after connect would otherwise keep
+        // the widget defaults (no edge crop, client EMA on) until the next
+        // connect/disconnect -- on a G2 that is the double averaging
+        // RadioCapabilities::backendPanAveraging exists to remove.
+        const bool connected = m_radioModel.isConnected();
+        const RadioCapabilities caps = m_radioModel.backendCapabilities();
+        applet->spectrumWidget()->setPanEdgeTaperEnabled(
+            connected && caps.hasDdcPanEdgeRolloff);
+        applet->spectrumWidget()->setClientFftSmoothingEnabled(
+            !(connected && caps.backendPanAveraging.has_value()));
     });
 
     // Band stack panel signal wiring
