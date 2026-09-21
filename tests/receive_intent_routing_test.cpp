@@ -206,7 +206,13 @@ void lifetimeAndReentrancy()
     s->setAgcMode(QStringLiteral("slow"));
     check(f.backend->calls() == 0, "disconnected active object cannot dispatch receive commands");
     f.backend->connected = true;
+    const auto invalidation = QObject::connect(s, &SliceModel::receiveObservationChanged, s, [s] {
+        s->setFrequency(14.205);
+    });
     f.radio.stageSessionModelsForReconnectForTest();
+    QObject::disconnect(invalidation);
+    check(f.backend->calls() == 0,
+          "observation invalidation during reconnect cannot send an old slice's edit to the new session");
     s->setFrequency(14.22);
     check(f.backend->calls() == 0, "staged but not reclaimed object has no command authority");
     emit f.backend->sliceChanged(0, report());

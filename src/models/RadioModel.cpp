@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include <QScopedValueRollback>
 #include "TxController.h"
 #include "models/AprsDigipeaterModel.h"
 #include <QPointer>
@@ -7159,6 +7160,10 @@ void RadioModel::onConnected()
 
 void RadioModel::stageSessionModelsForReconnect()
 {
+    // onConnected has already opened the new backend session, but old slices
+    // remain in m_slices while invalidation emits model notifications. A
+    // reentrant UI callback must not dispatch through that temporary identity.
+    const QScopedValueRollback<bool> staging(m_stagingReceiveModels, true);
     ++m_sessionModelGeneration;
     // The PREVIOUS session's handle, captured when that session registered
     // (m_ownSessionHandle). clientHandle() is useless here: by stage time the
@@ -10105,7 +10110,7 @@ SliceModel* RadioModel::receiveCommandSource() const
     SliceModel* source = qobject_cast<SliceModel*>(sender());
     // A retired object must not control a new slice reusing its id. Resolve
     // the current backend only after checking exact active object identity.
-    if (!source || slice(source->sliceId()) != source || !m_backend
+    if (!source || m_stagingReceiveModels || slice(source->sliceId()) != source || !m_backend
         || !m_backend->isConnected()) {
         return nullptr;
     }
