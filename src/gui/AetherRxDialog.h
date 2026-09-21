@@ -8,6 +8,7 @@
 #include <array>
 
 class QHideEvent;
+class QPushButton;
 class QShowEvent;
 class QStackedWidget;
 class QTimer;
@@ -139,6 +140,10 @@ private:
     AudioEngine*        m_audio{nullptr};
     AetherDspWidget*    m_widget{nullptr};
     StageTabBar*        m_tabs{nullptr};
+    // The BYPASS toggle at the foot of the stage column, above Settings, in
+    // the same spot AetherTX keeps its own. Owned by the StageTabBar; routes
+    // through AudioEngine::setRxBypassed and follows rxBypassChanged.
+    QPushButton*        m_bypassBtn{nullptr};
     QStackedWidget*     m_stack{nullptr};
     QTimer*             m_checkTimer{nullptr};
 

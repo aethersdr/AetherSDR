@@ -68,8 +68,8 @@ public:
     // the other footer entries. Drawn as a stage tab so the column keeps one
     // look, but checked means "engaged" rather than "selected", so it is not
     // in the tab group and carries its own checked colour. The caller owns
-    // what it means — the transmit window puts BYPASS here, directly above
-    // Settings. Returns the button for wiring and for mirroring state.
+    // what it means — both windows put BYPASS here, directly above Settings.
+    // Returns the button for wiring and for mirroring state.
     QPushButton* addFooterToggle(const QString& label, const QString& objectName,
                                  const QString& tooltip);
 

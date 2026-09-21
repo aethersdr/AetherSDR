@@ -28,6 +28,7 @@
 #include <QPainter>
 #include <QResizeEvent>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QStackedWidget>
@@ -191,6 +192,31 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         col->addWidget(m_output, 0, Qt::AlignTop);
         col->addWidget(m_waveform, 1);
         addStage(Output, QStringLiteral("Final Output"), page);
+    }
+
+    // BYPASS directly above Settings, where AetherTX keeps its own. The
+    // engine owns the snapshot-and-restore, and the docked chain applet's RX
+    // BYPASS drives the same state, so this button follows the engine back
+    // rather than remembering anything itself. AetherNR is not a chain stage
+    // and is not touched -- its own method strip switches it off.
+    m_bypassBtn = m_tabs->addFooterToggle(
+        tr("BYPASS"), QStringLiteral("aetherRxBypass"),
+        tr("Suppress every receive chain stage at once, so audio reaches you "
+           "unprocessed. AetherNR is not affected. Click again to restore the "
+           "stages that were on."));
+    connect(m_bypassBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_audio) m_audio->setRxBypassed(on);
+    });
+    if (m_audio) {
+        {
+            QSignalBlocker block(m_bypassBtn);
+            m_bypassBtn->setChecked(m_audio->isRxBypassed());
+        }
+        connect(m_audio, &AudioEngine::rxBypassChanged, this, [this](bool on) {
+            if (!m_bypassBtn) return;
+            QSignalBlocker block(m_bypassBtn);
+            m_bypassBtn->setChecked(on);
+        });
     }
 
     m_tabs->addFooterButton(
