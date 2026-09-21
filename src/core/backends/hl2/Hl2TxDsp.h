@@ -29,41 +29,39 @@ namespace AetherSDR::hl2 {
 // interpolation, which is the same mechanism the RX side uses in the opposite
 // direction rather than a second, hand-rolled resampler.
 //
-// MODULATION is chosen AT BUILD TIME by AETHER_HL2_TX_TXA (CMakeLists.txt) and
-// by nothing else. There is no runtime switch and there must not be one: two
-// silent transmit paths are worse than one. What the flag selects is the
-// MODULATOR only — the level chain below it (mic gain, the ALC and its
-// client-leveled ceiling, the hard clamp, and all three meters) is shared, is
-// identical in both builds, and is not part of the choice.
+// MODULATION is a WDSP TXA channel at the live geometry, and it is the ONLY
+// transmit path this backend has. It is not selectable at run time and not at
+// build time either: two silent transmit paths are worse than one, and a
+// fallback nothing compiles is not a fallback. What the modulator owns is
+// modulation only — the level chain below it (mic gain, the ALC and its
+// client-leveled ceiling, the hard clamp, and all three meters) is separate and
+// is not part of it.
 //
-//   AETHER_HL2_TX_TXA=1 (default) — a WDSP TXA channel at the live geometry.
-//   AETHER_HL2_TX_TXA=0 (opt-out)   — the in-tree phasing modulator, the way
-//                                     back. NOT BUILT BY ANY CI JOB; see
-//                                     CMakeLists.txt beside the option.
-//
-// THE TWO MODULATORS HAVE OPPOSITE HANDEDNESS CONVENTIONS and this is the one
+// A TXA CHANNEL MUST NOT BE CONJUGATED FOR THE HPSDR WIRE, and this is the one
 // place that is easy to get catastrophically wrong, because it is invisible
-// from inside this application:
+// from inside this application. fir_bandpass builds exp(-j*w_osc*pos), so a
+// POSITIVE signed passband already selects the negative baseband half — TXA
+// already has the wire's handedness. The SIGN of the passband carries the
+// sideband instead, because TXASetupBPFilters handles TXA_LSB and TXA_USB with
+// the identical CalcBandpassFilter call and SetTXAMode therefore does not
+// choose a sideband for SSB at all.
 //
-//   * The PHASING modulator emits the standard analytic signal and must be
-//     CONJUGATED for the HPSDR wire. Omitting that transmitted every signal on
-//     the wrong sideband, and it took an operator with a second receiver to
-//     catch it.
-//   * A TXA channel must NOT be conjugated. fir_bandpass builds
-//     exp(-j*w_osc*pos), so a POSITIVE signed passband already selects the
-//     negative baseband half — TXA already has the wire's handedness. Instead
-//     the SIGN of the passband carries the sideband, because TXASetupBPFilters
-//     handles TXA_LSB and TXA_USB with the identical CalcBandpassFilter call and
-//     SetTXAMode therefore does not choose a sideband for SSB at all.
+// THE MODULATOR THIS REPLACED HAD THE OPPOSITE CONVENTION, and the reason to
+// record that here is that the mistake it made is still available to anyone
+// editing this file: it emitted the standard analytic signal and had to be
+// CONJUGATED. Omitting that transmitted every signal on the wrong sideband, our
+// own panadapter agreed with it because it reads the same wire order, and it
+// took an operator with a second receiver to catch it. Adding a -imag() to a
+// TXA channel reproduces that fault exactly.
 //
 // Config::filterLowHz/filterHighHz stay the POSITIVE, audio-domain pair
-// Hl2Backend pushes for every mode, in both builds. The TXA build applies the
-// sign itself, from the mode, in applyModeAndFilter(). Do not move that into
-// Hl2Backend: its table is shared with the readback and with the operator's
-// stored eSSB pair, and both want magnitudes.
+// Hl2Backend pushes for every mode. applyModeAndFilter() applies the sign
+// itself, from the mode. Do not move that into Hl2Backend: its table is shared
+// with the readback and with the operator's stored eSSB pair, and both want
+// magnitudes.
 //
-// THE TXA BUILD DEPENDS ON THE CALLER'S CADENCE and the phasing build does not.
-// See the note on processAudioBlock and modulatorFaultBlocks().
+// THE MODULATOR DEPENDS ON THE CALLER'S CADENCE. See the note on
+// processAudioBlock and modulatorFaultBlocks().
 class Hl2TxDsp : public QObject {
     Q_OBJECT
 
@@ -323,7 +321,6 @@ private:
     std::vector<float> m_levelled;
     std::vector<std::complex<float>> m_iq;
 
-#if AETHER_HL2_TX_TXA
     // ── WDSP TXA ──────────────────────────────────────────────
     std::unique_ptr<WdspChannel> m_channel;
     // Whether the TXA channel is started. reset() discards its buffered data
@@ -342,21 +339,6 @@ private:
     std::vector<float> m_outQ;
     unsigned long long m_txBlocks = 0;
     unsigned long long m_txFaultBlocks = 0;
-#else
-    // ── Phasing modulator ────────────────────────────────────
-    //
-    // Filter length. 255 taps at 48 kHz gives a transition sharp enough for a
-    // 300 Hz low edge and, with a Blackman window, opposite-sideband
-    // suppression well past what a VOICE transmitter needs -- and NOT enough at
-    // the 150 Hz low edge the digital modes use, which is the whole reason the
-    // opt-in build uses TXA. Measured: 22.06 dB at 150 Hz on {150, 3000}.
-    static constexpr std::size_t kTaps = 255;
-
-    std::vector<float> m_bandpass;      // real bandpass
-    std::vector<float> m_hilbert;       // quadrature half of the analytic bandpass
-    std::vector<float> m_hist;          // shared delay line
-    std::size_t m_histPos = 0;
-#endif
 };
 
 }  // namespace AetherSDR::hl2

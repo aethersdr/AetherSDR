@@ -1778,8 +1778,8 @@ bool runTransmitLiveGeometryTest()
 // a WDSP TXA channel opened at the LIVE HL2 transmit geometry.
 //
 // IT WAS WRITTEN AS A MEASUREMENT OF A CANDIDATE and it is now a measurement of
-// the DEFAULT BUILD's transmit modulator: AETHER_HL2_TX_TXA is on, Hl2TxDsp
-// opens a channel at this geometry, and the phasing modulator is compiled out.
+// the ONLY transmit modulator this backend has: Hl2TxDsp opens a channel at
+// this geometry and there is nothing else to open.
 // What this case still is, and why it stays separate from hl2_txdsp_test, is a
 // measurement of the RAW CHANNEL -- opened here, by this file, with no level
 // chain in front of it. hl2_txdsp_test measures the same quantity through the

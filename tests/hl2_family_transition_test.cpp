@@ -90,12 +90,19 @@ int main(int argc, char** argv)
 
     // ---- The modes the LIVE HL2 backend declares it will not transmit in ----
     //
-    // hl2_txdsp_test proves the modulator half: AM/SAM/DSB/FM/WBFM/DRM each
-    // produce IQ bit-identical to USB, so none of them is a distinct
-    // modulation. What that test cannot see is the DECLARATION — delete a
-    // string from Hl2Backend::capabilities()'s receiveOnlyModes and it still
-    // passes. This is the live target that reads it, so the list and the
-    // evidence cannot part company unnoticed.
+    // THIS IS NOW THE ONLY TEST BEHIND THE LIST, AND IT ASSERTS THE
+    // DECLARATION RATHER THAN THE MODULATOR. hl2_txdsp_test used to prove the
+    // modulator half -- AM/SAM/DSB/FM/WBFM/DRM each produced IQ bit-identical
+    // to USB, so none was a distinct modulation -- but that block only ever
+    // compiled against the in-tree phasing modulator, was guarded out when the
+    // WDSP TXA modulator became the default, and was deleted with it. TXA
+    // implements AM, SAM, FM and DSB as real WDSP transmit modes
+    // (Hl2TxDsp::applyModeAndFilter calls WdspChannel::setMode), so the
+    // bit-identity premise no longer holds and the list is a policy statement
+    // awaiting a capability decision -- #5678 rows 1.2, 6.2 and 6.3.
+    // What this block still catches is drift in the declaration itself: delete
+    // a string from Hl2Backend::capabilities()'s receiveOnlyModes and nothing
+    // else notices.
     //
     // EIGHT strings, SIX enumerators: modeFromString() maps NFM onto Mode::Fm
     // and WFM onto Mode::Wbfm, and refuseKeyInReceiveOnlyMode() compares the
@@ -119,7 +126,7 @@ int main(int argc, char** argv)
         // loses MOX, CW keying and TUNE, so it must not arrive without the
         // bit-identity evidence landing beside it.
         check(caps.receiveOnlyModes.size() == declared.size(),
-              "HL2 declares exactly the modes hl2_txdsp_test carries evidence for");
+              "HL2 declares exactly these modes receive-only");
         // The deliberate exclusions: SSB modulates correctly, and CW keys the
         // gateware NCO through MetisClient::setCwKeyDown without ever reaching
         // Hl2TxDsp. If one of these ever appears on the list it takes an

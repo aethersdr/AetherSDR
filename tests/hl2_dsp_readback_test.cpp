@@ -200,54 +200,42 @@ int main(int argc, char** argv)
         const QVariantMap t = tx.isEmpty() ? QVariantMap{} : tx.at(0).toMap();
         check(t.value(QStringLiteral("chain")).toString() == QLatin1String("hl2-tx")
                   && t.value(QStringLiteral("level")).toString()
-                         == QLatin1String(AETHER_HL2_TX_TXA ? "channel-config" : "dsp-config"),
+                         == QLatin1String("channel-config"),
               "it is named and levelled as the TX chain");
         check(near(t.value(QStringLiteral("filterLowHz")).toDouble(), 100.0)
                   && near(t.value(QStringLiteral("filterHighHz")).toDouble(), 3900.0),
               "and reports the modulator's CURRENT passband");
 
-        // WHICH MODULATOR PRODUCED THE SIGNAL. There is no runtime switch --
-        // AETHER_HL2_TX_TXA decides it at build time and the other chain is not
-        // in the process -- so this is not a control, it is the readback that
-        // makes a transmit bug report actionable. Checked against the macro
-        // rather than against a literal, so the day the default flips this
-        // fails to compile a wrong expectation rather than passing quietly.
+        // WHICH MODULATOR PRODUCED THE SIGNAL. There is exactly one and it is
+        // not selectable, so this is not a control -- it is the readback that
+        // makes a transmit bug report actionable without the reporter knowing
+        // how the binary was built.
         check(t.value(QStringLiteral("modulator")).toString()
-                  == QLatin1String(AETHER_HL2_TX_TXA ? "wdsp-txa" : "phasing"),
-              "the TX chain names the modulator this binary was built with");
-        // The level-4 reads exist exactly where a WDSP channel does, and the
-        // fault counter is present WHENEVER the channel is -- including at
+                  == QLatin1String("wdsp-txa"),
+              "the TX chain names the modulator it carries");
+        // The fault counter is present WHENEVER the channel is -- including at
         // zero. "No blocks were dropped" and "nobody counted" must not look the
         // same: that they did is the whole reason the prior TXA attempt failed
-        // silently, and the reason this is a build flag at all.
-        if (AETHER_HL2_TX_TXA) {
-            check(t.value(QStringLiteral("dspBlockSize")).toInt() == 1024
-                      && t.value(QStringLiteral("inputBlockSize")).toInt() == 512,
-                  "TXA readback distinguishes DSP-rate and input-rate block sizes");
-            check(t.value(QStringLiteral("wdspChannelId")).toInt() >= 0,
-                  "the TXA modulator reports the channel WDSP allocated");
-            check(t.contains(QStringLiteral("modulatorFaultBlocks")),
-                  "and reports dropped blocks even when there are none");
-        } else {
-            check(!t.contains(QStringLiteral("wdspChannelId")),
-                  "the phasing modulator claims no WDSP channel");
-        }
+        // silently.
+        check(t.value(QStringLiteral("dspBlockSize")).toInt() == 1024
+                  && t.value(QStringLiteral("inputBlockSize")).toInt() == 512,
+              "TXA readback distinguishes DSP-rate and input-rate block sizes");
+        check(t.value(QStringLiteral("wdspChannelId")).toInt() >= 0,
+              "the TXA modulator reports the channel WDSP allocated");
+        check(t.contains(QStringLiteral("modulatorFaultBlocks")),
+              "and reports dropped blocks even when there are none");
 
         dsp.setMode(WdspChannel::Mode::Lsb);
         const QVariantMap lsb = Hl2Backend::gatherDspChains({}, &dsp).last().toMap();
-        check(near(lsb.value(QStringLiteral("filterLowHz")).toDouble(),
-                   AETHER_HL2_TX_TXA ? -3900.0 : 100.0)
-                  && near(lsb.value(QStringLiteral("filterHighHz")).toDouble(),
-                          AETHER_HL2_TX_TXA ? -100.0 : 3900.0),
+        check(near(lsb.value(QStringLiteral("filterLowHz")).toDouble(), -3900.0)
+                  && near(lsb.value(QStringLiteral("filterHighHz")).toDouble(), -100.0),
               "LSB reports the signed passband accepted by the TXA channel");
-        if (AETHER_HL2_TX_TXA) {
-            dsp.setFilter(0.0, 0.0); // Refused by WdspChannel; readback stays applied.
-            const QVariantMap refused = Hl2Backend::gatherDspChains({}, &dsp).last().toMap();
-            check(near(refused.value(QStringLiteral("filterLowHz")).toDouble(), -3900.0)
-                      && near(refused.value(QStringLiteral("filterHighHz")).toDouble(), -100.0),
-                  "a refused filter request does not overwrite applied readback");
-            dsp.setFilter(100.0, 3900.0);
-        }
+        dsp.setFilter(0.0, 0.0); // Refused by WdspChannel; readback stays applied.
+        const QVariantMap refused = Hl2Backend::gatherDspChains({}, &dsp).last().toMap();
+        check(near(refused.value(QStringLiteral("filterLowHz")).toDouble(), -3900.0)
+                  && near(refused.value(QStringLiteral("filterHighHz")).toDouble(), -100.0),
+              "a refused filter request does not overwrite applied readback");
+        dsp.setFilter(100.0, 3900.0);
         dsp.setMode(WdspChannel::Mode::Usb);
         const QVariantMap usb = Hl2Backend::gatherDspChains({}, &dsp).last().toMap();
         check(near(usb.value(QStringLiteral("filterLowHz")).toDouble(), 100.0)

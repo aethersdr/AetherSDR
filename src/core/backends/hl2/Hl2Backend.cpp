@@ -2556,21 +2556,12 @@ void Hl2Backend::beginDspSetup()
         return;
 
     const int actualNumRx = m_pendingConnect->actualNumRx;
-    // WHETHER THE TRANSMIT CHAIN IS A STEP DEPENDS ON THE BUILD, because what
-    // Hl2TxDsp::configure() does depends on the build.
-    //
-    // In the PHASING build it designs two FIR kernels and returns — it opens no
-    // WDSP channel and measures no FFTW plan. Counting it inflated the
-    // denominator with a step that completes in microseconds and put a
-    // "Preparing the transmit chain…" label on screen for work that was
-    // already over.
-    //
-    // In the TXA build it opens a WDSP TRANSMIT CHANNEL, which is FFTW
-    // planning and is the most expensive single thing in the connect on a cold
-    // cache. Leaving it uncounted there is the opposite error: the receive
-    // label would sit at "2 of 2" for a second or more with the dialog
-    // apparently finished and the radio not yet ready.
-    const int total = actualNumRx + (AETHER_HL2_TX_TXA ? 1 : 0);
+    // THE TRANSMIT CHAIN IS A STEP, and the +1 is it. Hl2TxDsp::configure()
+    // opens a WDSP TRANSMIT CHANNEL, which is FFTW planning and is the most
+    // expensive single thing in the connect on a cold cache. Leaving it
+    // uncounted would sit the receive label at "2 of 2" for a second or more
+    // with the dialog apparently finished and the radio not yet ready.
+    const int total = actualNumRx + 1;
 
     // The chains to open, snapshotted on THIS thread. m_rx is GUI-thread-only
     // (see its declaration), so the I/O thread gets a plain vector of the
@@ -2656,11 +2647,8 @@ void Hl2Backend::beginDspSetup()
             else
                 break;   // the GUI thread trims from here; opening past it is waste
         }
-        // Announced only in the build where it is a real step -- see `total`
-        // above. In the phasing build this stays silent, because announcing a
-        // step that is over before the label repaints is worse than saying
-        // nothing.
-        if (AETHER_HL2_TX_TXA && self) {
+        // A real step, counted in `total` above, so it is announced.
+        if (self) {
             const QString stage = tr("Preparing the transmit chain…");
             const int done = static_cast<int>(chains.size());
             QMetaObject::invokeMethod(self, [self, stage, done, total] {
@@ -5208,17 +5196,15 @@ QVariantList Hl2Backend::gatherDspChains(const std::vector<Hl2RxDsp*>& rxDsps,
             return chains;
         }
         const Hl2TxDsp::Config& t = txDsp->config();
-        // WHICH MODULATOR THIS BINARY CARRIES. There is no runtime switch --
-        // AETHER_HL2_TX_TXA decides it at compile time and the other chain is
-        // not in the process -- so an operator cannot be on the wrong one. They
-        // can be on the wrong BUILD, though, and a transmit report that does
-        // not say which modulator produced the signal is not actionable. This
-        // is what makes the build visible without making it switchable.
+        // WHICH MODULATOR THIS BINARY CARRIES. There is exactly one and it is
+        // not selectable, so this is not a control -- it is the field that lets
+        // a transmit report name the chain that produced the signal without the
+        // reporter having to know how the binary was built. It is reported
+        // rather than assumed for the same reason the version string is.
         e[QStringLiteral("modulator")] =
             QString::fromLatin1(Hl2TxDsp::modulatorName());
-        // TXA reports the configuration accepted by WdspChannel; the phasing
-        // implementation reports its local DSP configuration. Neither is RF
-        // readback from the radio.
+        // The configuration accepted by WdspChannel, which is not RF readback
+        // from the radio.
         const int txChannelId = txDsp->wdspChannelId();
         const WdspChannel::Config* channel = txDsp->channelConfig();
         e[QStringLiteral("level")] = channel ? QStringLiteral("channel-config")
