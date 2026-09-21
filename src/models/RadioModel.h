@@ -1961,7 +1961,7 @@ private:
     // cannot resolve. Identity for Flex.
     QString backendPanIdFor(const QString& modelPanId) const;
 
-    // ---- waterfall pacing for raw-spectrum backends (HL2) ------------------
+    // ---- waterfall pacing for raw-spectrum backends ------------------------
     //
     // The PAN rate is capped at the source (IRadioBackend::setPanFrameRate), so
     // frames arrive here already at the operator's FFT FPS. The waterfall runs
@@ -1981,14 +1981,37 @@ private:
     // What the gate fixes is the CADENCE, and only the cadence. It does not
     // make a row represent its interval, and an earlier wording here claimed it
     // did -- which is why the remaining gap has been easy to miss. Each emitted
-    // row is still the single frame that happened to land on the gate: one FFT
-    // window out of the whole localRowIntervalMs. At 384 kHz that window is
-    // 1024/384000 = 2.67 ms (docs/HERMES.md 15.2.1 states the same thing as
-    // 375 fps; fftSize is Hl2RxDsp.h's 1024). At rate 10,
-    // localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 -- 0.66 % --
-    // and a burst shorter than the gap between ROWS can miss the history
-    // entirely rather than merely being attenuated. The frames in between
-    // never reach the waterfall at all: dropped, never accumulated.
+    // row is still the single producer frame that happened to land on the gate:
+    // one frame out of the whole localRowIntervalMs. The loss is by frame
+    // SELECTION, not only by burst length -- a burst shorter than the gap
+    // between ROWS can miss the history entirely rather than merely being
+    // attenuated, AND a burst a pan frame DID catch is still absent from the
+    // history unless that frame is the one landing on the gate.
+    //
+    // Scope what follows to HL2, because this gate is not HL2's. It hangs off
+    // the generic IRadioBackend::spectrumFrameReady, which every family except
+    // Flex emits -- HL2, ANAN, Icom, RTL-SDR and the demo SimBackend -- and
+    // what a "frame" MEANS differs across them:
+    //
+    // - On HL2 the claim is exact. The frame is one unaveraged FFT window; at
+    //   384 kHz that window is 1024/384000 = 2.67 ms (docs/HERMES.md 15.2.1
+    //   states the same thing as 375 fps; fftSize is Hl2RxDsp.h's 1024), and at
+    //   rate 10 localRowIntervalMs is 407 ms, so the row is 2.67 ms of 407 --
+    //   0.66 %. Hl2Spectrum carries no spectral state between frames (m_acc
+    //   holds only the partial window the NEXT frame completes from, which is
+    //   why HERMES 15.2.1 says the accumulator keeps filling on a skipped
+    //   interval), so the frames in between never reach the waterfall at all:
+    //   dropped, never accumulated. RTL-SDR's frames are unaveraged FFTs too,
+    //   so the shape carries there; only the numbers are HL2's.
+    // - On ANAN they are not dropped, they leak in sideways.
+    //   AnanRxDsp::smoothSpectrumBins is a STATEFUL cross-frame EMA over
+    //   m_smoothedBins at a fixed kSpectrumSmoothAlpha, run immediately before
+    //   the frame is emitted, so the row is a decaying blend -- in the dB
+    //   domain and with no relation to localRowIntervalMs. A different defect,
+    //   #5782's domain question, and still not the integration that is owed.
+    // - Icom rows are reassembled CI-V scope sweeps in display units
+    //   (IcomScope.h: "Raw display units, 0..160. NOT dBm"), not FFT windows at
+    //   all, so neither the 2.67 ms nor the duty figure means anything there.
     //
     // The interval a row SHOULD integrate is not an open question: it is this
     // gate's own WaterfallRate::localRowIntervalMs(rate), the gap between rows.
@@ -1999,11 +2022,29 @@ private:
     // resetWfTimeScale); and waterfallTimeMarkers() takes rows, head, seconds,
     // offset and height — it never sees the rate at all, and labels wall-clock
     // boundaries off the same stamps. localRowIntervalMs() could not carry the
-    // axis anyway: it returns 0 at rate 100, where the gate is lifted. The
-    // open question is which LAYER owns the accumulation and in
+    // axis anyway: it returns 0 at rate 100, where the gate is lifted.
+    //
+    // ARRIVAL there means arrival AT THE WIDGET, which is not this gate's
+    // stamp. The nowNs the gate passes out reaches PerfTelemetry only; the row
+    // is then routed through MainWindow::deferReceivePresentation, and
+    // updateWaterfallRow() takes its own QDateTime::currentMSecsSinceEpoch().
+    // So the axis calibrates from PRESENTATION cadence, which tracks this
+    // gate's cadence but is not it, and diverges under a presentation delay or
+    // a busy GUI thread.
+    //
+    // Nor does that contradict the retained rationale above, and the link is
+    // worth stating because the two paragraphs read as opposites. Both are true
+    // because resetWfTimeScale() seeds m_wfMsPerRow from localMsPerRow with
+    // m_wfTimeScaleLocked false, so the deterministic mapping IS the axis until
+    // updateWaterfallMsPerRowFromHistory() has enough rows at this rate to lock
+    // onto the measured value. The seeded half is the half unpaced rows
+    // falsified.
+    //
+    // The open question is which LAYER owns the accumulation and in
     // which domain, because averaging dBFS is averaging logarithms -- see
-    // upstream #5782, which names this row and rules the above-the-seam variant
-    // out in its Option C. Do not add an accumulator here until that lands.
+    // RFC #5782 (this repository's own; not one of the real upstreams), which
+    // names this row and rules the above-the-seam variant out in its Option C.
+    // Do not add an accumulator here until that lands.
     QHash<int, qint64> m_backendWfLastRowNs;
     // Covers only the window before MainWindow seeds the pan model from the
     // operator's sliders. 100 is the top of the 1..100 rate control and matches
