@@ -2582,6 +2582,31 @@ add_test(NAME radio_setup_region_field_test COMMAND radio_setup_region_field_tes
 set_tests_properties(radio_setup_region_field_test PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+# #5896: RadioSetupDialog's caption labels and line edits across a LIVE theme
+# switch.  Same target shape as radio_setup_region_field_test above, plus
+# ${THEME_TEST_RESOURCES}: without :/themes/ compiled in, ThemeSeedGenerated.cpp
+# still resolves every token so a construction-time reading succeeds, but
+# availableThemes() is empty and setActiveTheme() has nothing to switch to --
+# and the switch is the only thing that can see this defect.
+add_executable(radio_setup_label_theme_token_test
+    tests/radio_setup_label_theme_token_test.cpp
+    src/gui/DragValuePopup.cpp
+    src/gui/RadioSetupDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceColorManager.cpp
+    src/gui/KiwiPublicReceiverPicker.cpp
+    src/gui/GuardedSlider.h
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(radio_setup_label_theme_token_test PRIVATE src tests)
+target_link_libraries(radio_setup_label_theme_token_test PRIVATE
+    aetherdesktop_support Qt6::Widgets Qt6::Test)
+add_test(NAME radio_setup_label_theme_token_test COMMAND radio_setup_label_theme_token_test)
+set_tests_properties(radio_setup_label_theme_token_test PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
 
 add_executable(zip_archive_test
     tests/zip_archive_test.cpp
@@ -6337,6 +6362,7 @@ set(AETHER_SETTINGS_CONSUMERS
     firmware_close_dialog_test
     flex_control_visibility_test
     radio_setup_region_field_test
+    radio_setup_label_theme_token_test
     atu_seam_gate_test
     backend_capability_revision_test
     radio_capacity_declaration_test
