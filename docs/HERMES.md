@@ -1522,7 +1522,7 @@ radio. See §18 for the full audit and the proposed seam.
 | Divergence | Reference does | We do | Why ours is defensible |
 |---|---|---|---|
 | `output_samplerate` | 48000 | 24000 | AudioEngine's native rate; avoids a resample. Legitimate, but it IS a divergence in the area that produced our worst bug — keep it labelled |
-| Rate change | `SetAllRates` | Rebuild the channel | Dodges the intermediate-inconsistent-state hazard entirely. Heavier, but NOT because of FFTW — a rebuild at a new rate re-plans almost nothing (§22.4). It is heavier because it is a close+open per receiver — though since #5783 the opens run on `m_dspBuildThread` and the closes on the I/O thread at the swap, so neither blocks the GUI thread |
+| Rate change | `SetAllRates` | Rebuild the channel | Dodges the intermediate-inconsistent-state hazard entirely. Heavier, but NOT because of FFTW — a rebuild at a new rate re-plans almost nothing (§22.4). It is heavier because it is a close+open per receiver — though since #5783 the opens run on `m_dspBuildThread` and the closes on the I/O thread at the swap, so neither blocks the GUI thread; the one residue, a receiver opened mid-crossing and rebuilt synchronously by `finishRateChange()`, is in §22.4 |
 | Spectrum | WDSP analyzer (returns pixels) | Own `Hl2Spectrum` FFT | A3 §4 recommends exactly this for our architecture. **If it ever looks noisy, the lever is a detector/averaging mode, not a bigger FFT** |
 | FFTW wisdom | `WDSPwisdom(dir)` | Own `fftw_import_wisdom_from_filename` + eager export | `WDSPwisdom` is Windows-console-only. First-run slowness is expected; the fix was getting the wisdom to actually persist (§22) plus telling the operator what the wait is — in a modal dialog, because the panadapter label that first carried it was drawn behind the Connect Radio window and never seen (#5052). Tests bound the planner instead of paying it; see "AM/SAM hand back a DC pedestal" |
 
@@ -4213,7 +4213,7 @@ measured.
 **The 0.6–1.1 s figure is derived, not observed.** This subsection used to state
 that four panadapters open cost "roughly 0.6–1.1 s of frozen UI per boundary
 crossing". That number is arithmetic over §22.3 — four receivers × (an open of
-40–175 ms, which *was* measured, though §11.3 labels that run historical rather
+40–175 ms, which *was* measured, though §10 labels that run historical rather
 than a current cold-open estimate and notes the later bench observations were
 substantially slower, plus a close bounded by WDSP's own 100 ms timeout) gives
 560–1100 ms — and the end-to-end freeze it describes was never measured
