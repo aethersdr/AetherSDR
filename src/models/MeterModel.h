@@ -117,6 +117,13 @@ public:
     // Per-slice BY CONSTRUCTION rather than by convention: the caller has to
     // name a receiver, so there is no radio-wide scalar left for a future
     // reader to resolve as "whichever slice updated last".
+    //
+    // sliceIndex is the meter's MeterDef::sourceIndex, which every backend
+    // keys by slice id: Flex carries the manifest's `num` straight into it,
+    // HL2 and Icom declare one S-meter and leave it at 0. That is why
+    // RigctlProtocol can pass slice->sliceId() here. The one place the two
+    // disagree today is HL2's second receiver, published as SLC1:LEVEL with
+    // no matching definition -- see #5852 and its fix, #5866.
     std::optional<float> sLevelForSlice(int sliceIndex) const;
 
     // The radio-wide S-meter reading — what `get meters` publishes as a scalar

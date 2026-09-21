@@ -46,6 +46,16 @@
 // synthetic runs are the POSITIVE CONTROL: they prove this file can actually
 // see a flush in the wrong place, rather than reporting health because its
 // matcher never matches anything.
+//
+// WHAT stripComments() BELOW CANNOT PARSE, so that a red here is diagnosed in
+// a minute rather than an afternoon: it treats every bare ' outside a string
+// or a comment as opening a char literal, and knows nothing about digit
+// separators (1'000'000) or raw string literals (R"(...)"). WdspChannel.cpp
+// contains neither today. If one appears, the text after it is blanked as
+// though it were a literal, one of the four matchers below stops resolving,
+// `parsed` goes false and EVERY check in this file goes red at once -- on a
+// change that need not have touched the noise blanker at all. Six reds with
+// no flush anywhere near them means look here first, not at the blanker.
 
 #include <QByteArray>
 #include <QFile>

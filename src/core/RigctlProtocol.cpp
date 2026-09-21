@@ -1471,6 +1471,12 @@ QString RigctlProtocol::cmdGetLevel(const QString& arg)
         // error for an unresolvable VFO, so a client meeting one here is not
         // meeting something new. The alternative — answering the bottom of the
         // declared range — is a maintainer's call, not this change's.
+        //
+        // sliceId() is the right key: sLevelForSlice() is keyed by
+        // MeterDef::sourceIndex, and every backend puts the slice id there --
+        // Flex from the manifest's `num`, HL2 and Icom by declaring one
+        // S-meter at 0. See the header; the one gap is HL2's second receiver
+        // -- see #5852 and its fix, #5866.
         const auto dbm = m_model->meterModel().sLevelForSlice(slice->sliceId());
         if (!dbm) {
             return rprt(-11);   // RIG_ENAVAIL: no S-meter sample for this slice
