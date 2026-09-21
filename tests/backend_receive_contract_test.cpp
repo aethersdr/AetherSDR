@@ -4,10 +4,9 @@
 // Host-state cases do NOT claim that an unconfigured DSP has applied a value.
 #include "TestSettingsProfile.h"
 #include "SeamThreadAffinityProbe.h"
+#include "IcomReceiveContractTestAccess.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
-#include "core/backends/icom/IcomCivBackend.h"
-#include "core/backends/icom/IcomSession.h"
 #include "core/backends/anan/AnanBackend.h"
 #include "core/backends/sim/SimBackend.h"
 #ifdef AETHER_BACKEND_RTL
@@ -21,42 +20,6 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
-
-namespace AetherSDR::icom {
-struct IcomCivBackendTestAccess {
-    static void prepare(IcomCivBackend& backend)
-    {
-        // Unstarted IcomSession constructs no streams or sockets. Exercise
-        // the production scheduler; its final unconnected transport drops
-        // the bytes. We assert scheduled bytes, NOT successful radio writes.
-        backend.m_session = std::make_unique<IcomSession>();
-        backend.m_model = modelForId(0xA4);
-        backend.m_connected = true;
-        backend.m_sessionGeneration = 1;
-        backend.m_mode = CivMode::Usb;
-        backend.m_frequencyHz = 14'100'000;
-    }
-    static QString dispatched(const IcomCivBackend& backend) { return backend.m_lastOutboundCiv; }
-    static std::uint64_t dispatchCount(const IcomCivBackend& backend)
-    {
-        return backend.m_civScheduler.stats().dispatched;
-    }
-    static void pump(IcomCivBackend& backend)
-    {
-        // sendUserCommand captures its pump time before queueWrite samples
-        // enqueue time. Crossing a millisecond can defer the first write to
-        // the next production tick; drive that tick without sleeping or
-        // starting the transport, rather than requiring inline dispatch.
-        backend.pumpCiv(backend.nowMs());
-    }
-    static void observe(IcomCivBackend& backend, CivFrame frame, std::uint64_t generation = 1)
-    {
-        frame.to = kControllerAddress;
-        frame.from = 0xA4;
-        backend.onCivFrame(frame, generation);
-    }
-};
-}
 
 using namespace AetherSDR;
 namespace {
@@ -167,7 +130,8 @@ void icomCommandsAndObservations()
     // IC-705 CI-V reference command families: 05 frequency, 26 mode/data,
     // 1A 03 IF width, 16 12 AGC. Filter also queues its PBT pair and readbacks.
     const std::array<QString, 4> expected{
-        "05 00 00 25 14 00", "26 00 00 00 01", "1a 03 28", "16 12 01"};
+        "fe fe a4 e0 05 00 00 25 14 00 fd", "fe fe a4 e0 26 00 00 00 01 fd",
+        "fe fe a4 e0 1a 03 28 fd", "fe fe a4 e0 16 12 01 fd"};
     for (std::size_t i = 0; i < kOperations.size(); ++i) {
         IcomCivBackend backend;
         IcomCivBackendTestAccess::prepare(backend);
@@ -176,8 +140,7 @@ void icomCommandsAndObservations()
         test::attachAllSeamSignals(affinity);
         request(backend, kOperations[i]);
         IcomCivBackendTestAccess::pump(backend);
-        check(IcomCivBackendTestAccess::dispatchCount(backend) == 1
-                  && IcomCivBackendTestAccess::dispatched(backend) == expected[i],
+        check(IcomCivBackendTestAccess::firstDispatched(backend) == expected[i],
               "Icom desktop receive intent enters the production paced CI-V scheduler");
         if (kOperations[i] == Operation::Frequency || kOperations[i] == Operation::Agc) {
             check(observations.isEmpty(), "Icom frequency/AGC requests are not observations");
@@ -226,12 +189,29 @@ void icomCommandsAndObservations()
               "Icom AGC readback publishes the radio selection");
         check(affinity.violations().isEmpty(), "driven Icom seam signals stay on the owner thread");
     }
+    // A suspended/slow test may resume after the outstanding write expires.
+    // Advance only the scheduler's supplied time; no sleeping or radio peer.
+    for (std::size_t i = 0; i < kOperations.size(); ++i) {
+        IcomCivBackend delayed;
+        IcomCivBackendTestAccess::prepare(delayed);
+        request(delayed, kOperations[i]);
+        IcomCivBackendTestAccess::pump(delayed);
+        check(IcomCivBackendTestAccess::dispatchCount(delayed) > 0,
+              "Icom timeout fixture first dispatches the requested write");
+        IcomCivBackendTestAccess::expireReply(delayed);
+        // A sufficiently slow request/pump may already have sent the follow-up.
+        check(IcomCivBackendTestAccess::dispatchCount(delayed) >= 2,
+              "Icom timeout fixture also dispatches a queued follow-up");
+        check(IcomCivBackendTestAccess::firstDispatched(delayed) == expected[i],
+              "Icom first-dispatch proof survives a later reply timeout");
+    }
     IcomCivBackend backend;
     IcomCivBackendTestAccess::prepare(backend);
     backend.setSliceMode(0, QStringLiteral("SAM"));
     backend.setSliceAgc(0, QStringLiteral("off"), 50);
-    check(IcomCivBackendTestAccess::dispatchCount(backend) == 0,
-          "unsupported Icom SAM/AGC-off dispatch no CI-V command");
+    check(IcomCivBackendTestAccess::queuedCount(backend) == 0
+              && IcomCivBackendTestAccess::firstDispatched(backend).isEmpty(),
+          "unsupported Icom SAM/AGC-off queue or dispatch no CI-V command");
 }
 
 void hostConfiguration()

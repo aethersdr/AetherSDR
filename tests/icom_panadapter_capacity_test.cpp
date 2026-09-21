@@ -1,23 +1,13 @@
 // #5347: capacity describes implemented scope streams, not hardware VFOs.
 // Socket-free: select production model profiles without connecting a session.
 #include "TestSettingsProfile.h"
-#include "core/backends/icom/IcomCivBackend.h"
+#include "IcomReceiveContractTestAccess.h"
 #include "core/control/RadioResourceAdapter.h"
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
 #include <cstdio>
 #include <vector>
-
-namespace AetherSDR::icom {
-struct IcomCivBackendTestAccess {
-    static void selectModel(IcomCivBackend& backend, const IcomModel& model)
-    {
-        backend.m_model = &model;
-        backend.publishCapabilities();
-    }
-};
-}
 
 using namespace AetherSDR;
 using namespace AetherSDR::icom;

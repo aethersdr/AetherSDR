@@ -18,6 +18,14 @@ its coverage level, including an explicit `NOT BUILT` row for optional RTL.
 | Demo | Production synthetic session state and refusal before/after the session | Hardware behavior; filter/AGC DSP that Demo does not implement |
 | RTL (optional) | Declaration and cold receive refusal, without opening USB | Connected USB/DDC dispatch |
 
+Icom command checks inspect the first outbound entry in the production CI-V
+trace, including its address and framing, rather than requiring an immediate
+single dispatch. Confirmation reads and filter PBT writes may follow it. An
+explicit scheduler-time advance exercises reply expiry and verifies that a
+later dispatch cannot replace the first-command evidence; no sleeps or new
+production test hooks are used. The two Icom-facing tests share one existing
+friend-helper definition in `IcomReceiveContractTestAccess.h`.
+
 The headless capability records are checked separately from desktop verbs.
 Icom and ANAN mode/filter remain unadvertised to daemon clients; that does not
 mean the desktop implementations are absent. Demo's stored filter state does
