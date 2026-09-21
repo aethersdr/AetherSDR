@@ -28,6 +28,30 @@
 // constructor), and that page alone carries the three line edits and the
 // makeInfoField captions the floor below names, so no deferred page has to be
 // opened and no probe is triggered.
+//
+// AND THAT LAZINESS IS LOAD-BEARING FOR THE COLLECTOR, not just for the probes.
+// `captionShape()` leaves the colour open, so it matches an UNTRACKED literal
+// just as happily as a resolved token — and the registration loop then demands
+// `color.text.primary` in `tokensForWidget()` for everything it collected. An
+// untracked caption of that exact shape on the EAGER page would therefore fail
+// this test for a reason that has nothing to do with the defect it pins.
+//
+// Four untracked labels of that exact shape survive in `RadioSetupDialog.cpp`,
+// and all four sit on deferred pages:
+//
+//   - `buildRxTab`, Frequency Offset group — the GPSDO-present note, both
+//     branches (`#00c040` / `#c0a000`).
+//   - `buildUsbCablesTab` — the "No USB cables detected." placeholder and the
+//     "Select a cable type to configure this device." note (`#606880`, twice).
+//
+// Inside `buildRadioTab` every surviving raw-hex label is 10px or 11px — the
+// `m_fwStatusLabel` group (#5896's stated deferral: `#6888a0` is not any
+// token's Default Dark value) at 10px, and the licence note at 11px — so none
+// of them is collected. Make another page eager, or move one of those four
+// labels onto the Radio page, and this test goes red with nothing broken. The
+// fix then is to route that label through `applyLabelStyle`, NOT to loosen the
+// regex: narrowing the collector to dodge a real untracked widget is how this
+// test would start agreeing with itself.
 
 #include "TestSettingsProfile.h"
 #include "core/ThemeManager.h"
