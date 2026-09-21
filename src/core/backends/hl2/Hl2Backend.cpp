@@ -6983,41 +6983,43 @@ void Hl2Backend::setLnaAutoOffsetDb(int offsetDb)
 // Arm or disarm the automatic control. RADIO-WIDE: there is one AD9866.
 void Hl2Backend::setAutoRfGain(bool on)
 {
-    if (on == m_autoRfGainEnabled) {
-        // A DECLINED ARM IS A THIRD STATE, and the guard above can only see
-        // two. After a refusal the loop is off and the wish is recorded
-        // (m_autoRfGainWanted true, m_autoRfGainEnabled false), so an explicit
-        // "off" from there matches the running flag and returns here -- and the
-        // disarm branch below, the only writer of m_autoRfGainWanted = false,
-        // is never reached. currentOperatingState() persists the WISH, so the
-        // withdrawal never reaches the profile and the next connect from a
-        // baseline the loop trusts arms a control the operator switched off.
-        //
-        // NOT A CONTRADICTION OF THE DISARM BRANCH'S COMMENT. That comment is
-        // about the REFUSAL ITSELF not reaching the disarm branch, which is
-        // correct and is what keeps the asking alive across a decline. A later
-        // explicit off is a different event: the operator withdrawing the wish.
-        //
-        // HANDLED HERE RATHER THAN BY WIDENING THE GUARD. Falling through to
-        // the disarm branch would run applyBandscopeForAutoGain(), reset
-        // m_autoGainState and log "disarmed, baseline ... restored" for a loop
-        // that never ran. setLnaAutoOffsetDb(0) is safe from any state, so
-        // widening is not incorrect -- it just puts an untrue sentence in the
-        // log. Nothing is running, so nothing needs disarming.
-        if (!on && m_autoRfGainWanted) {
-            m_autoRfGainWanted = false;
-            qCInfo(lcHl2) << "HL2 auto RF gain: request withdrawn (the arm was "
-                             "declined earlier; the loop was not running)";
-            // THE WITHDRAWAL IS NOT DONE UNTIL SOMEBODY IS TOLD. m_autoRfGainWanted
-            // is what currentOperatingState() publishes as rfGain.autoEnabled, and
-            // RadioModel does not poll that document -- it fetches it in the
-            // operatingStateChanged handler and hands it to RadioStateMemory. So
-            // clearing the flag without this line leaves the in-memory state right
-            // and the PROFILE still carrying true, which is the exact harm this
-            // change exists to stop: the next connect from a trusted baseline
-            // re-arms a control the operator switched off.
-            notifyOperatingStateChanged();
-        }
+    // A DECLINED ARM IS A THIRD STATE, and a guard on the running flag alone
+    // can only see two. The refusal path leaves the loop off with the wish
+    // recorded (m_autoRfGainWanted true, m_autoRfGainEnabled false) on purpose,
+    // so that the asking survives a decline -- and an explicit "off" from there
+    // matched `on == m_autoRfGainEnabled` and returned before the disarm branch,
+    // the only writer of m_autoRfGainWanted = false. currentOperatingState()
+    // persists the WISH, so the withdrawal never reached the profile and the
+    // next connect from a baseline the loop trusts armed a control the operator
+    // had switched off (#5828).
+    //
+    // ON BOTH FLAGS RATHER THAN A SECOND DISARM PATH BEFORE THE GUARD. The
+    // withdrawal is not a different event from a disarm; it is a disarm of a
+    // loop that happens not to be running, and it owes the caller exactly what
+    // a disarm owes: the wish cleared, the refusal reason dropped, a settled
+    // verdict emitted and the document republished. Hand-copying that subset
+    // into a second exit is what produced a "successful off" that went on
+    // reporting "declined" through the bridge reply and the checkbox's
+    // accessible description. One exit, one list.
+    //
+    // AND EVERY SIDE EFFECT OF THE DISARM BRANCH IS INERT FROM THE REFUSED
+    // STATE, which is what makes routing it there safe rather than merely
+    // tidier. m_autoRfGainEnabled is already false. applyBandscopeForAutoGain()
+    // computes `wanted` false and returns at `if (!m_bandscopeOwnedByAutoGain)`,
+    // because that flag is set only where m_autoRfGainEnabled was true.
+    // m_autoGainReason is already Disarmed -- its member default, and the value
+    // every route out of a running loop leaves behind. m_autoGainState is
+    // default-constructed for the same reason. setLnaAutoOffsetDb(0) returns at
+    // its own `requested == m_lnaAutoOffsetDb`, the offset being 0 unless the
+    // loop ran. The one thing that was NOT inert is the log sentence, and it is
+    // conditioned below.
+    //
+    // THE COMBINATION THIS WIDENING NEWLY ADMITS TO THE ARM BRANCH -- on true,
+    // enabled true, wanted false -- IS UNREACHABLE: m_autoRfGainEnabled = true
+    // is written in exactly one place and the next statement sets
+    // m_autoRfGainWanted = true, while every writer of wanted = false (the
+    // disarm below, and applyRestoredState) has already set enabled false.
+    if (on == m_autoRfGainEnabled && on == m_autoRfGainWanted) {
         return;
     }
     if (on) {
@@ -7077,6 +7079,16 @@ void Hl2Backend::setAutoRfGain(bool on)
             // turns on the order -- only the uniformity does, and a handler of
             // the verdict should not see one path's document refreshed and the
             // other two's not.
+            //
+            // AND THIS SCHEDULES A WRITE ON EVERY DECLINED ASK, so the rate is
+            // worth knowing before anything new is wired to this path. Today it
+            // is bounded by who asks: the linkUp handler once per connect, the
+            // operator once per click, the bridge once per verb --- and
+            // RadioModel::scheduleOperatingStateSave() coalesces behind a
+            // debounce, so a burst is one write. A PERIODIC RE-ARM ATTEMPT would
+            // turn this into a timer-driven save of the whole operating-state
+            // document; if one is ever added, give it its own guard rather than
+            // letting it inherit this line.
             notifyOperatingStateChanged();
             return;
         }
@@ -7100,20 +7112,51 @@ void Hl2Backend::setAutoRfGain(bool on)
                       << "dB, floor" << m_autoGainConfig.maxOffsetDb << "dB below";
         emit autoRfGainArmSettled(true);
     } else {
+        // WAS IT ACTUALLY RUNNING. Read before the flag is cleared, and used
+        // only for the log: the two states that reach here with it false are a
+        // decline still standing, and the window inside a connect after
+        // applyRestoredState() has restored autoEnabled:true and before the
+        // linkUp handler has tried to arm on it. Neither has a baseline to
+        // restore, and the old sentence claimed one for both.
+        const bool wasRunning = m_autoRfGainEnabled;
         m_autoRfGainEnabled = false;
         // The operator turning it OFF is a preference, and is persisted as one.
-        // A REFUSAL does not reach here -- that path returns before this -- so a
-        // radio that declined to arm keeps the operator's "on" recorded and
-        // arms on the next connect that allows it.
+        // A REFUSAL ITSELF still does not reach here -- the arm branch returns
+        // before this -- so a radio that declined to arm keeps the operator's
+        // "on" recorded and arms on the next connect that allows it. What DOES
+        // reach here is the operator's later, explicit withdrawal of that "on",
+        // which is a different event and is what #5828 was about.
         m_autoRfGainWanted = false;
+        // THE REASON DIES WITH THE REQUEST IT DESCRIBED, and this is the only
+        // place that can kill it: it is otherwise cleared on a successful arm
+        // and on applyRestoredState, so an off that followed a decline left
+        // lastArmRefusalReason() returning "Auto RF gain declined ..." about an
+        // attempt the operator had already abandoned. IAutoRfGainControl defines
+        // that accessor as empty when the last attempt succeeded, and an off
+        // that took is an attempt that succeeded. Three readers repeat it
+        // otherwise: the bridge's `pan autorfgain` reply and every later status
+        // report, and MainWindow's per-pan catch-up, which writes it as the
+        // checkbox's ACCESSIBLE DESCRIPTION -- so a screen-reader user was told
+        // "declined" about a switch they had turned off.
+        //
+        // BEFORE THE EMIT BELOW, NOT AFTER. MainWindow::onAutoRfGainArmSettled
+        // reads lastArmRefusalReason() on entry when `armed` is false; emitting
+        // first would hand it the stale sentence and re-show the refusal card on
+        // a plain off.
+        m_autoRfGainRefusal.clear();
         applyBandscopeForAutoGain();
         m_autoGainReason = AetherSDR::hl2::AutoGainReason::Disarmed;
         m_autoGainState = AetherSDR::hl2::AutoGainState{};
         // ONE ACTION, from any state. A switch that left the radio attenuated
         // after being turned off would be a control that does not undo itself.
         setLnaAutoOffsetDb(0);
-        qCInfo(lcHl2) << "HL2 auto RF gain: disarmed, baseline" << m_lnaGainDb
-                      << "dB restored";
+        if (wasRunning) {
+            qCInfo(lcHl2) << "HL2 auto RF gain: disarmed, baseline" << m_lnaGainDb
+                          << "dB restored";
+        } else {
+            qCInfo(lcHl2) << "HL2 auto RF gain: request withdrawn; the loop was "
+                             "not running, so there is no baseline to restore";
+        }
         emit autoRfGainArmSettled(false);
     }
     // BOTH BRANCHES ABOVE MOVED m_autoRfGainWanted, which currentOperatingState()
