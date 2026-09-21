@@ -7,6 +7,7 @@
 #include "models/PanadapterModel.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2ModeVocabulary.h"
 #include "core/backends/icom/IcomCivBackend.h"
 #include "core/backends/anan/AnanBackend.h"
 #include "core/backends/sim/SimBackend.h"
@@ -470,18 +471,65 @@ void productionCapabilityContracts()
     // slice.setMode refused whatever mode was asked for, including a listed
     // one: no way back out, not merely no way in.
     //
-    // CWU is the second spelling of the listed "CW" (both map to the same WDSP
-    // mode and share one defaultPassbandForMode() entry). It is NOT reachable
-    // through restore -- applyRestoredState runs canonicalOfferedMode(), which
-    // rewrites CWU to CW before storing. It is reachable the way
-    // Hl2ModeVocabulary.h says the alias spellings are: "CAT, TCI and
-    // Hl2Backend::setSliceMode still put either spelling on the slice at run
-    // time". The setSliceMode call below is that route, exercised directly.
+    // FM is on the list for a THIRD reason, and the one that made it urgent:
+    // publishedModeStrings() carries "FM", so SliceDelta::modeList publishes
+    // it and the mode COMBO offers it. A mode an operator can select and that
+    // this list omits is a slice that cannot be steered back out at all.
     check(hl2Caps.receiveModeControl->modes.contains(QStringLiteral("DSB"))
         && hl2Caps.receiveModeControl->modes.contains(QStringLiteral("CWL"))
         && hl2Caps.receiveModeControl->modes.contains(QStringLiteral("CW"))
-        && hl2Caps.receiveModeControl->modes.contains(QStringLiteral("CWU")),
-        "HL2 declares DSB and both CW spellings, which its demodulator has");
+        && hl2Caps.receiveModeControl->modes.contains(QStringLiteral("FM")),
+        "HL2 declares DSB, CWL and FM, which its demodulator has");
+    // THE MENU AND THE CONTROL PLANE AGREE, BOTH WAYS. Derived from
+    // hl2::publishedModeStrings() rather than retyped, so a mode added to the
+    // menu later fails here instead of stranding an operator, and a spelling
+    // added to this list that the menu cannot show fails here too.
+    //
+    // The two directions catch different faults and are reported separately:
+    //   * offered-but-undeclared is the STRANDING -- checkSlice() reads the
+    //     OBSERVED mode, so any mode the combo can select must be on the list.
+    //   * declared-but-unoffered is the WEDGE below -- a spelling that can be
+    //     REQUESTED but that the backend will rewrite before publishing.
+    QStringList offeredButUndeclared;
+    for (const QString& offered : hl2::publishedModeStrings()) {
+        if (!hl2Caps.receiveModeControl->modes.contains(offered))
+            offeredButUndeclared.append(offered);
+    }
+    QStringList declaredButUnoffered;
+    for (const QString& declared : hl2Caps.receiveModeControl->modes) {
+        if (!hl2::publishedModeStrings().contains(declared))
+            declaredButUnoffered.append(declared);
+    }
+    if (!offeredButUndeclared.isEmpty() || !declaredButUnoffered.isEmpty()) {
+        std::printf("menu-only: %s | control-plane-only: %s\n",
+                    qPrintable(offeredButUndeclared.join(QLatin1Char(','))),
+                    qPrintable(declaredButUnoffered.join(QLatin1Char(','))));
+    }
+    check(offeredButUndeclared.isEmpty(),
+        "every mode the HL2 mode MENU offers is steerable -- no menu entry strands a slice");
+    check(declaredButUnoffered.isEmpty(),
+        "and nothing is requestable that the menu cannot display");
+    // THE WEDGE, PINNED AS AN INVARIANT RATHER THAN AS A LIST. Every mode on
+    // receiveModeControl must be its OWN canonical spelling.
+    //
+    // Why this is not tidiness. ModelReceiveControlTarget::setMode records the
+    // REQUESTED string (m_pendingModes.insert(slice, mode)) and releases it
+    // only on an observation comparing EQUAL to it; checkSlice() refuses every
+    // further Mode AND Filter intent on that slice with "request.conflict"
+    // while the entry stands, and the only other things that clear it are a
+    // disconnect, a backend rebuild and the slice's destruction. Now that
+    // Hl2Backend::setSliceMode canonicalises, a requested alias would be
+    // published back under its canonical spelling, the entry would never
+    // release, and the slice would be wedged permanently -- the fault this
+    // whole declaration exists to remove, arriving by the other door. An alias
+    // on this list stopped being a harmless extra entry the moment the backend
+    // started rewriting one.
+    for (const QString& declared : hl2Caps.receiveModeControl->modes) {
+        check(hl2::canonicalOfferedMode(declared) == declared,
+            qPrintable(QStringLiteral("declared mode %1 is its own canonical spelling -- "
+                                      "setSliceMode will publish back exactly what was asked for")
+                           .arg(declared)));
+    }
     // AND THE BACKEND TREATS EACH AS A REAL MODE, not as a string it shrugs at.
     // Hl2Backend::setSliceMode adopts defaultPassbandForMode() on every mode
     // CHANGE, so the published window says whether that table has an entry for
@@ -507,10 +555,35 @@ void productionCapabilityContracts()
     check(observed.mode == QStringLiteral("CWL")
         && observed.filterLow == -250 && observed.filterHigh == 250,
         "HL2 CWL is the 500 Hz carrier-centred CW window");
+    // THE ALIAS DOES NOT REACH THE SLICE. setSliceMode() runs
+    // hl2::canonicalOfferedMode() now, so the "CWU" spelling -- which
+    // publishedModeStrings() deliberately does not carry, and which the mode
+    // combo therefore cannot display -- is collapsed onto "CW" before it is
+    // stored and published. Before this it was stored verbatim, and the combo
+    // fell to index 0 ("LSB") while the receiver really was in CW.
+    //
+    // The passband is asserted in the same breath: the collapse must rename
+    // the mode and not move the detector's window. -250/250 is the CW branch
+    // of defaultPassbandForMode(), the same one "CWU" reached before.
     hl2.setSliceMode(0, QStringLiteral("CWU"));
-    check(observed.mode == QStringLiteral("CWU")
+    check(observed.mode == QStringLiteral("CW")
         && observed.filterLow == -250 && observed.filterHigh == 250,
-        "HL2 CWU is the same window under the other spelling, not a fallback");
+        "HL2 collapses the CWU spelling onto CW -- the alias never reaches a slice");
+    check(hl2::publishedModeStrings().contains(observed.mode.value_or(QString())),
+        "and what a slice ends up holding is a spelling the mode menu can display");
+    // NFM is the other pair this can reach, and the one Hl2ModeVocabulary.h
+    // wrote the reconciliation argument about in the first place.
+    hl2.setSliceMode(0, QStringLiteral("NFM"));
+    check(observed.mode == QStringLiteral("FM"),
+        "and NFM collapses onto FM for the same reason, at the same seam");
+    // A string the vocabulary does not know is passed through UNTOUCHED, not
+    // merely upper-cased: isKnownModeString() gates the collapse exactly as
+    // applyRestoredState() gates it, so nothing outside the three alias pairs
+    // changes shape here.
+    hl2.setSliceMode(0, QStringLiteral("RADE"));
+    check(observed.mode == QStringLiteral("RADE"),
+        "an unknown mode string is left alone, not normalised into something else");
+    hl2.setSliceMode(0, QStringLiteral("USB"));
     // WHAT THIS CANNOT SEE, stated rather than implied: that CWL and CWU select
     // DIFFERENT detectors. They share one passband entry by design (the pitch
     // lives in the BFO, cwBfoOffsetHz), so the sideband difference is invisible
@@ -566,12 +639,18 @@ void productionCapabilityContracts()
 // fixture's caps (canTransmit=false, the filter/audio/pan declarations) are
 // what make it socket-free and controllable, and the subject here is one list.
 //
-// WHAT THE NEGATIVE CONTROLS USE AND WHY. "DRM" stands for "a mode this list
-// does not carry". It is one of the five the Hl2Backend comment excludes, on
-// the least contestable of the grounds given there -- there is no DRM decoder
-// in this tree at all -- so it is the exclusion least likely to move. Which of
-// the other four should eventually be declared is a separate question and this
-// target deliberately takes no position on it.
+// WHAT THE NEGATIVE CONTROLS USE AND WHY, AND WHY IT IS STILL DRM. "DRM"
+// stands for "a mode this list does not carry". It was chosen when FM was one
+// of five excluded modes, precisely so that this target took no position on
+// the FM question that was then open; FM has since been declared, on the
+// separate ground that the mode MENU offers it and an undeclared menu entry
+// strands the slice. DRM is unaffected by that ruling and is still the right
+// choice: it is not on publishedModeStrings(), so no menu can produce it, and
+// there is no DRM decoder in this tree at all -- the least contestable of the
+// three remaining exclusions and the one least likely to move. WBFM and WFM
+// would serve as well; DRM is kept so the negative controls read the same
+// before and after, and so a reader comparing revisions sees the mutants
+// measured against an unchanged control.
 //
 // NOT THE ONLY GUARD ON EITHER TERM, and saying so is cheaper than letting a
 // reviewer find it: modeAndFilterOrdering() above already requests "RADE"
@@ -619,13 +698,42 @@ void hl2DeclaredModesDriveTheControlPlane()
            "a slice observed in DSB is steerable out of it -- the HL2 declares DSB");
     expect("CWL", "LSB", "result",
            "a slice observed in CWL is steerable out of it -- the HL2 declares CWL");
-    expect("CWU", "LSB", "result",
-           "a slice observed in the CWU spelling is steerable out of it too");
+    // FM IS THE ONE THE MENU COULD ACTUALLY PRODUCE. publishedModeStrings()
+    // carries "FM", so an operator can pick it out of the combo; before this
+    // declaration the set difference between the menu and receiveModeControl
+    // was exactly {FM}, and picking it stranded the slice with no way back.
+    // This line is that stranding, driven through the target that did it.
+    expect("FM", "LSB", "result",
+           "a slice observed in FM is steerable out of it -- the menu can put it there");
     // The requested-mode read: each newly declared mode can also be asked for,
     // from a slice whose observed mode was never in question.
     expect("USB", "DSB", "result", "and DSB can be ASKED for, not only sat in");
     expect("USB", "CWL", "result", "and CWL can be asked for");
-    expect("USB", "CWU", "result", "and the CWU spelling can be asked for");
+    // THE REQUEST SIDE OF THE FM DECLARATION, said out loud because it is what
+    // the change widens: slice.setMode mode="FM" is accepted here where it was
+    // refused "request.out_of_range". Keying is a different list --
+    // receiveOnlyModes -- and hl2_fm_controls_declaration_test pins that FM
+    // and NFM are still on it.
+    expect("USB", "FM", "result", "and FM can be ASKED for, not only sat in");
+    // THE ALIAS SPELLINGS ARE REFUSED, and that is the intended shape rather
+    // than a gap. "CWU" and "NFM" are not on this list, so a request for one
+    // is declined "request.out_of_range" -- which is honest, because
+    // Hl2Backend::setSliceMode would rewrite them and the control target's
+    // pending-mode entry (keyed on the REQUESTED string) would then never
+    // release, wedging every later Mode and Filter intent on the slice with
+    // "request.conflict". Refusing one intent beats wedging the slice.
+    expect("USB", "CWU", "request.out_of_range",
+           "the CWU spelling is declined, not silently rewritten under the client");
+    expect("USB", "NFM", "request.out_of_range", "and the NFM spelling likewise");
+    // AND NO SLICE CAN BE OBSERVED IN ONE, so refusing them costs no
+    // steerability. Every writer of Hl2Backend's Receiver::mode is
+    // canonicalising now -- setSliceMode() and applyRestoredState() are the
+    // only two, and productionCapabilityContracts() above measures the first
+    // through a SliceDelta. This line records what the refusal WOULD be if
+    // that ever stopped being true, so the day a new writer reopens the route
+    // the reader can see exactly which assertion changes meaning.
+    expect("CWU", "LSB", "capability.unavailable",
+           "an alias observation would latch -- unreachable today, and pinned so it stays so");
     // The two refusals, which are what prove the list is read at all. Remove
     // either term from ModelReceiveControlTarget and the matching line here
     // turns red while every membership assertion above stays green.

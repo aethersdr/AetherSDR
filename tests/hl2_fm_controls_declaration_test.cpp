@@ -47,7 +47,9 @@
 //      says nothing at all — it cannot fail on a deletion, only on a change of
 //      value. That is a property of the source TEXT, so the source text is
 //      what the second tone assertion below reads, the way
-//      rf_gain_presentation_test reads its production wiring. What THAT in
+//      rf_gain_presentation_test reads its production wiring — as a
+//      whitespace-tolerant pattern rather than a literal substring, so a
+//      reformat cannot turn it red while the declaration stands. What THAT in
 //      turn cannot see is whether the statement it finds is the last one to
 //      run: a second assignment further down would beat it unnoticed. The two
 //      lines together are what the value assertion alone was claiming.
@@ -66,6 +68,7 @@
 
 #include <QCoreApplication>
 #include <QFile>
+#include <QRegularExpression>
 
 #include <cstdio>
 
@@ -110,6 +113,31 @@ int main(int argc, char** argv)
     check(caps.receiveOnlyModes.contains(QStringLiteral("FM"))
               && caps.receiveOnlyModes.contains(QStringLiteral("NFM")),
           "FM and NFM are RECEIVE-ONLY here — the radio will not key in them");
+    // AND THAT IS THE WHOLE SAFETY ARGUMENT FOR DECLARING THEM ON
+    // receiveModeControl, so the two facts are pinned side by side rather than
+    // one of them being left to a comment. FM is on the RECEIVE control list
+    // (an operator who picks it out of the mode menu can be steered back out;
+    // before that it latched the slice shut) and on the RECEIVE-ONLY list (the
+    // radio still refuses to key in it). Those are different lists read by
+    // different code: receiveModeControl reaches ModelReceiveControlTarget and
+    // RadioResourceAdapter and nothing on the transmit side, while
+    // receiveOnlyModes is what RadioModel::refuseKeyInReceiveOnlyMode() reads
+    // inside beginTxActivity(). If a future change ever moves FM off the
+    // second list — which is what a real FM transmit chain landing would mean
+    // — this line fails and the two declarations below become re-openable.
+    check(caps.receiveModeControl
+              && caps.receiveModeControl->modes.contains(QStringLiteral("FM")),
+          "FM is STEERABLE and still unkeyable — receive control and receive-only agree");
+    // NFM is on receiveOnlyModes and NOT on receiveModeControl, and the
+    // asymmetry is deliberate rather than an oversight. receiveOnlyModes is a
+    // membership test run on whatever string a slice holds, so it lists every
+    // alias both ways and stays correct however the mode got there;
+    // receiveModeControl is a REQUEST surface, and an alias on it would be
+    // rewritten by Hl2Backend::setSliceMode and then never match the pending
+    // observation ModelReceiveControlTarget is waiting for. Asserted, because
+    // "the lists differ" is exactly the shape a careless edit would repair.
+    check(!caps.receiveModeControl->modes.contains(QStringLiteral("NFM")),
+          "and the NFM alias is receive-ONLY but not requestable — the two lists differ on purpose");
 
     // ---- no repeater duplex ----
     check(!caps.hasFmRepeaterOffset,
@@ -134,8 +162,19 @@ int main(int argc, char** argv)
         QStringLiteral(AETHER_SOURCE_DIR "/src/core/backends/hl2/Hl2Backend.cpp"));
     check(backendSource.open(QIODevice::ReadOnly),
           "the production backend source is readable — the next assertion needs it");
-    const QByteArray backendText = backendSource.readAll();
-    check(backendText.contains("c.fmTonePresentation = FmTonePresentation::Hidden;"),
+    const QString backendText = QString::fromUtf8(backendSource.readAll());
+    // WHITESPACE-TOLERANT ON PURPOSE. A literal substring match couples this
+    // assertion to the FORMATTING of the statement, not to its existence: a
+    // clang-format run that wraps after the `=` turns it red while the
+    // declaration is entirely intact, and a red that means "the file was
+    // reformatted" trains a reader to ignore the one that means "the
+    // declaration is gone". The pattern below is the same three tokens in the
+    // same order, with any run of whitespace (newlines included) between them,
+    // so it survives a reflow and still fails on a deletion or a change of
+    // value -- which is the whole job.
+    static const QRegularExpression kToneStatement(
+        QStringLiteral(R"(c\.fmTonePresentation\s*=\s*FmTonePresentation::Hidden\s*;)"));
+    check(kToneStatement.match(backendText).hasMatch(),
           "and Hidden is STATED, not inherited from the struct's identical default");
     // What Legacy would have offered, read from the same function the widgets
     // populate the combo from rather than described in a comment. The point of
