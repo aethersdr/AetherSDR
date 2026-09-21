@@ -120,7 +120,7 @@ public:
             return refusal("request.out_of_range", "passband is outside this mode's receive limits");
         }
         slice->noteReceiveFilterIntent();
-        m_radio->backend()->setSliceFilter(id, low, high);
+        m_radio->backend()->requestSliceFilter(id, {low, high, SliceFilterRequest::Origin::Operator});
         return {};
     }
 

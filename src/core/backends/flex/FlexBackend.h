@@ -81,6 +81,9 @@ public:
     void connectRadio(const RadioConnectRequest& request) override;
     void disconnectRadio() override;
     bool isConnected() const override;
+    void requestSliceTune(int sliceId, const SliceTuneRequest& request) override;
+    void requestSliceFilter(int sliceId, const SliceFilterRequest& request) override;
+    void requestSliceAgc(int sliceId, const SliceAgcRequest& request) override;
     void setSliceFrequency(int sliceId, double hz) override;
     void setSliceMode(int sliceId, const QString& mode) override;
     void setSliceFilter(int sliceId, int lowHz, int highHz) override;

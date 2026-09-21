@@ -3,6 +3,7 @@
 #include "core/DtcsCodes.h"
 #include "core/KiwiSdrProtocol.h"
 #include <QDebug>
+#include <QPointer>
 
 #include <cmath>
 
@@ -118,12 +119,18 @@ void SliceModel::setFrequency(double mhz)
         return;
     }
     if (qFuzzyCompare(m_frequency, mhz)) return;
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_tuneIntentRevision;
     m_frequency = mhz;
-    // autopan=0 prevents the radio from recentering the pan (#292).
-    // SmartSDR pcap confirms: scroll-wheel uses "slice tune <id> <freq> autopan=0".
-    sendCommand(QString("slice tune %1 %2 autopan=0").arg(m_id).arg(mhz, 0, 'f', 6));
     emit frequencyChanged(mhz);
+    if (!alive || revision != m_tuneIntentRevision) {
+        return;
+    }
     emit frequencyCommandIssued(mhz);
+    if (!alive || revision != m_tuneIntentRevision) {
+        return;
+    }
+    emit receiveTuneRequested({mhz * 1.0e6, SliceTuneRequest::PanIntent::PreservePan});
 }
 
 void SliceModel::tuneAndRecenter(double mhz)
@@ -133,12 +140,18 @@ void SliceModel::tuneAndRecenter(double mhz)
         return;
     }
     if (qFuzzyCompare(m_frequency, mhz)) return;
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_tuneIntentRevision;
     m_frequency = mhz;
-    // Without autopan=0, the radio recenters the pan on the new frequency.
-    // Used for band changes where recentering is desired.
-    sendCommand(QString("slice tune %1 %2").arg(m_id).arg(mhz, 0, 'f', 6));
     emit frequencyChanged(mhz);
+    if (!alive || revision != m_tuneIntentRevision) {
+        return;
+    }
     emit frequencyCommandIssued(mhz);
+    if (!alive || revision != m_tuneIntentRevision) {
+        return;
+    }
+    emit receiveTuneRequested({mhz * 1.0e6, SliceTuneRequest::PanIntent::AllowRecenter});
 }
 
 void SliceModel::setMode(const QString& mode)
@@ -185,10 +198,18 @@ void SliceModel::setMode(const QString& mode)
     }
 
     m_mode = mode;
+    const QPointer<SliceModel> alive(this);
+    const quint64 filterRevision = m_filterIntentRevision;
     // aetherd RFC 2.3: express intent; FlexBackend builds "slice set N mode=…"
     // and routes it through the TX-inhibit-guarded slice sink.
     emit modeChangeRequested(mode);
-    emit modeChanged(mode);
+    if (!alive || filterRevision != m_filterIntentRevision) {
+        return;
+    }
+    emit modeChanged(m_mode);
+    if (!alive || filterRevision != m_filterIntentRevision) {
+        return;
+    }
 
     // The passband belongs to the mode. Changing mode without re-checking it
     // leaves the previous mode's filter in place — switching USB -> AM kept
@@ -197,16 +218,11 @@ void SliceModel::setMode(const QString& mode)
     // mode-appropriate filter back; a backend that owns an engine-side chain
     // gets no such echo and simply keeps demodulating through the wrong filter.
     //
-    // So normalize the model here and hand the corrected passband to the
-    // engine-side backend via filterCommandIssued (RadioModel only wires that
-    // signal for a non-Flex backend). The Flex path is deliberately NOT sent a
-    // proactive `filt`: the Flex radio heals the passband on the mode echo (as
-    // above), so pushing our mirror to the wire would only race — and override —
-    // the radio's own per-mode filter memory. Keeping the Flex wire path
-    // untouched is why the model normalize is decoupled from the wire send.
+    // Mark this as normalization, not an operator filter edit. Backends that
+    // own DSP apply it; a radio with per-mode filter memory keeps its own
+    // passband. This does not advance the adaptive engine's operator epoch.
     if (normalizeFilterPolarity()) {
-        emit filterChanged(m_filterLow, m_filterHigh);
-        emit filterCommandIssued(m_filterLow, m_filterHigh);
+        notifyReceiveFilterIntent(SliceFilterRequest::Origin::ModeNormalization);
     }
 }
 
@@ -222,16 +238,11 @@ void SliceModel::setFilterWidth(int low, int high)
     // status echo will arrive to heal it. Sign-guarded: canonical input is
     // untouched.
     normalizeFilterPolarity();
-    low = m_filterLow;
-    high = m_filterHigh;
     // Operator-driven filter change (preset/drag): bump the user epoch so the
     // adaptive engine adopts this as its new baseline. applyAdaptiveFilter()
     // deliberately does NOT bump it. RFC #3878.
     ++m_userFilterEpoch;
-    // FlexAPI: "filt <id> <low_hz> <high_hz>"
-    sendCommand(QString("filt %1 %2 %3").arg(m_id).arg(low).arg(high));
-    emit filterChanged(low, high);
-    emit filterCommandIssued(low, high);
+    notifyReceiveFilterIntent(SliceFilterRequest::Origin::Operator);
 }
 
 // ── Adaptive RX filter (RFC #3878) ──────────────────────────────────────
@@ -309,9 +320,23 @@ void SliceModel::applyAdaptiveFilter(int low, int high)
     // preset/drag for baseline tracking.
     m_filterLow  = low;
     m_filterHigh = high;
-    sendCommand(QString("filt %1 %2 %3").arg(m_id).arg(low).arg(high));
-    emit filterChanged(low, high);
-    emit filterCommandIssued(low, high);
+    notifyReceiveFilterIntent(SliceFilterRequest::Origin::Adaptive);
+}
+
+void SliceModel::notifyReceiveFilterIntent(SliceFilterRequest::Origin origin)
+{
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_filterIntentRevision;
+    const SliceFilterRequest request{m_filterLow, m_filterHigh, origin};
+    emit filterChanged(request.lowHz, request.highHz);
+    if (!alive || revision != m_filterIntentRevision) {
+        return;
+    }
+    emit filterCommandIssued(request.lowHz, request.highHz);
+    if (!alive || revision != m_filterIntentRevision) {
+        return;
+    }
+    emit receiveFilterRequested(request);
 }
 
 void SliceModel::setRxAntenna(const QString& ant)
@@ -557,9 +582,18 @@ void SliceModel::setAgcMode(const QString& mode)
         return;
     }
     m_agcMode = mode;
-    sendCommand(QString("slice set %1 agc_mode=%2").arg(m_id).arg(mode));
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_agcModeIntentRevision;
     emit agcModeChanged(mode);
+    if (!alive || revision != m_agcModeIntentRevision) {
+        return;
+    }
     emit agcCommandIssued(m_agcMode, m_agcThreshold);
+    if (!alive || revision != m_agcModeIntentRevision) {
+        return;
+    }
+    emit receiveAgcRequested({SliceAgcRequest::Field::Mode, mode,
+                              m_agcThreshold, m_agcOffLevel});
 }
 
 int SliceModel::receiveAgcThresholdMinimum() const
@@ -620,9 +654,18 @@ void SliceModel::setAgcThreshold(int value)
         return;
     }
     m_agcThreshold = value;
-    sendCommand(QString("slice set %1 agc_threshold=%2").arg(m_id).arg(value));
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_agcThresholdIntentRevision;
     emit agcThresholdChanged(value);
+    if (!alive || revision != m_agcThresholdIntentRevision) {
+        return;
+    }
     emit agcCommandIssued(m_agcMode, m_agcThreshold);
+    if (!alive || revision != m_agcThresholdIntentRevision) {
+        return;
+    }
+    emit receiveAgcRequested({SliceAgcRequest::Field::Threshold, m_agcMode,
+                              value, m_agcOffLevel});
 }
 
 void SliceModel::setAgcOffLevel(int value)
@@ -641,8 +684,14 @@ void SliceModel::setAgcOffLevel(int value)
         return;
     }
     m_agcOffLevel = value;
-    sendCommand(QString("slice set %1 agc_off_level=%2").arg(m_id).arg(value));
+    const QPointer<SliceModel> alive(this);
+    const quint64 revision = ++m_agcOffLevelIntentRevision;
     emit agcOffLevelChanged(value);
+    if (!alive || revision != m_agcOffLevelIntentRevision) {
+        return;
+    }
+    emit receiveAgcRequested({SliceAgcRequest::Field::OffLevel, m_agcMode,
+                              m_agcThreshold, value});
 }
 
 void SliceModel::setSquelch(bool on, int level)
@@ -1759,6 +1808,11 @@ void SliceModel::applyChanges(const SliceDelta& d)
 
 void SliceModel::invalidateFrequencyObservation()
 {
+    ++m_tuneIntentRevision;
+    ++m_filterIntentRevision;
+    ++m_agcModeIntentRevision;
+    ++m_agcThresholdIntentRevision;
+    ++m_agcOffLevelIntentRevision;
     if (m_receiveObservation != ReceiveObservation{}) {
         m_receiveObservation = {};
         emit receiveObservationChanged();

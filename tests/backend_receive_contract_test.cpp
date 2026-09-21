@@ -33,15 +33,21 @@ void check(bool condition, const char* description)
 enum class Operation { Frequency, Mode, Filter, Agc };
 constexpr std::array kOperations{Operation::Frequency, Operation::Mode,
                                  Operation::Filter, Operation::Agc};
-// One invocation helper, shared by concrete-family cases. AGC is the legacy
-// pair contract here; M4 must deliberately revise it before desktop wiring.
+// One invocation helper, shared by concrete-family cases. The selected AGC
+// field reaches Flex alone; host backends still receive the required pair.
 void request(IRadioBackend& backend, Operation operation)
 {
     switch (operation) {
-    case Operation::Frequency: backend.setSliceFrequency(0, 14'250'000); break;
+    case Operation::Frequency:
+        backend.requestSliceTune(0, {14'250'000, SliceTuneRequest::PanIntent::PreservePan});
+        break;
     case Operation::Mode: backend.setSliceMode(0, QStringLiteral("LSB")); break;
-    case Operation::Filter: backend.setSliceFilter(0, 300, 2700); break;
-    case Operation::Agc: backend.setSliceAgc(0, QStringLiteral("fast"), 50); break;
+    case Operation::Filter:
+        backend.requestSliceFilter(0, {300, 2700, SliceFilterRequest::Origin::Operator});
+        break;
+    case Operation::Agc:
+        backend.requestSliceAgc(0, {SliceAgcRequest::Field::Mode, QStringLiteral("fast"), 50, 10});
+        break;
     }
 }
 
@@ -95,7 +101,7 @@ void flexCommandsAndObservations()
     const std::array<QStringList, 4> expected{
         QStringList{"slice tune 0 14.250000 autopan=0"},
         QStringList{"slice set 0 mode=LSB"}, QStringList{"filt 0 300 2700"},
-        QStringList{"slice set 0 agc_mode=fast", "slice set 0 agc_threshold=50"}};
+        QStringList{"slice set 0 agc_mode=fast"}};
     for (std::size_t i = 0; i < kOperations.size(); ++i) {
         FlexBackend backend;
         QStringList commands;
@@ -214,6 +220,39 @@ void icomCommandsAndObservations()
           "unsupported Icom SAM/AGC-off queue or dispatch no CI-V command");
 }
 
+void intentVariants()
+{
+    FlexBackend flex;
+    QStringList commands;
+    int genericCommands = 0;
+    flex.setSliceCommandSink([&](const QString& command) { commands.append(command); });
+    flex.setCommandSink([&](const QString&) { ++genericCommands; });
+    flex.requestSliceTune(2, {7'100'000, SliceTuneRequest::PanIntent::AllowRecenter});
+    flex.requestSliceFilter(2, {-2700, -100, SliceFilterRequest::Origin::ModeNormalization});
+    flex.requestSliceFilter(2, {-2600, -200, SliceFilterRequest::Origin::Adaptive});
+    flex.requestSliceAgc(2, {SliceAgcRequest::Field::Threshold, QStringLiteral("slow"), 42, 10});
+    flex.requestSliceAgc(2, {SliceAgcRequest::Field::OffLevel, QStringLiteral("fast"), 65, 31});
+    check(commands == QStringList{"slice tune 2 7.100000", "filt 2 -2600 -200",
+                                  "slice set 2 agc_threshold=42", "slice set 2 agc_off_level=31"}
+              && genericCommands == 0,
+          "Flex recenter/adaptive/individual AGC fields use guarded sink; mode normalization writes nothing");
+    // Retain compatibility for backend-internal callers of the paired method.
+    commands.clear();
+    flex.setSliceAgc(2, QStringLiteral("fast"), 55);
+    check(commands == QStringList{"slice set 2 agc_mode=fast", "slice set 2 agc_threshold=55"},
+          "legacy paired Flex AGC remains a deliberate two-field operation");
+
+    icom::IcomCivBackend icom;
+    icom::IcomCivBackendTestAccess::prepare(icom);
+    icom.requestSliceAgc(0, {SliceAgcRequest::Field::OffLevel, QStringLiteral("fast"), 42, 31});
+    check(icom::IcomCivBackendTestAccess::queuedCount(icom) == 0
+              && icom::IcomCivBackendTestAccess::dispatchCount(icom) == 0,
+          "AGC off-level does not invent an unsupported Icom operation");
+    icom.requestSliceAgc(0, {SliceAgcRequest::Field::Mode, QStringLiteral("off"), 42, 31});
+    check(icom::IcomCivBackendTestAccess::queuedCount(icom) == 0,
+          "new AGC adapter preserves Icom's refusal of AGC off");
+}
+
 void hostConfiguration()
 {
     // These cold backends have configuration state but no configured receive
@@ -232,7 +271,7 @@ void hostConfiguration()
         request(*backend, Operation::Mode);
         check(last(observations).mode == QStringLiteral("LSB") && last(observations).filterLow == -2900,
               "host mode change adopts its default passband");
-        backend->setSliceFilter(0, -2500, -200);
+        backend->requestSliceFilter(0, {-2500, -200, SliceFilterRequest::Origin::Operator});
         check(last(observations).filterLow == -2500 && last(observations).filterHigh == -200,
               "host filter request updates receiver configuration");
         request(*backend, Operation::Mode);
@@ -302,6 +341,7 @@ int main(int argc, char** argv)
     QCoreApplication app(argc, argv);
     declarations();
     flexCommandsAndObservations();
+    intentVariants();
     icomCommandsAndObservations();
     hostConfiguration();
     demoAndColdRefusal();

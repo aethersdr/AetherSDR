@@ -342,6 +342,13 @@ target_include_directories(backend_receive_contract_test PRIVATE src tests)
 target_link_libraries(backend_receive_contract_test PRIVATE aethercore Qt6::Core Qt6::Test)
 add_test(NAME backend_receive_contract_test COMMAND backend_receive_contract_test)
 
+# #5904: production receive bindings, injected observations/dispatch only.
+# No bound socket, firmware peer, hardware, DSP worker or TX operation.
+add_executable(receive_intent_routing_test tests/receive_intent_routing_test.cpp)
+target_include_directories(receive_intent_routing_test PRIVATE src tests)
+target_link_libraries(receive_intent_routing_test PRIVATE aethercore Qt6::Core Qt6::Test)
+add_test(NAME receive_intent_routing_test COMMAND receive_intent_routing_test)
+
 # ATU start on the IRadioBackend seam passes the TX gate (#5558): injected
 # backend records setAtu(); no sockets, no radio.
 add_executable(atu_seam_gate_test tests/atu_seam_gate_test.cpp)
@@ -6354,6 +6361,7 @@ set(AETHER_SETTINGS_CONSUMERS
     backend_capability_revision_test
     icom_panadapter_capacity_test
     backend_receive_contract_test
+    receive_intent_routing_test
     radio_capacity_declaration_test
     extension_namespace_gate_test
     control_availability_registry_test
