@@ -336,11 +336,17 @@ void StageTabBar::addFooterGearButton(const QString& accessibleName,
     button->setToolTip(tooltip);
     // Same vertical padding as the tabs (left to the chrome sheet) so the
     // gear stands exactly as tall as the BYPASS beside it; only the side
-    // padding goes, so the glyph centres in a square.
+    // padding goes, so the glyph centres in a square. Unlike the toggles it
+    // has no colour family of its own, so its affordance is the rounded grey
+    // outline, and hover fills it the way the toggles' hover lights theirs.
     button->setFixedWidth(36);
     button->setStyleSheet(QStringLiteral(
         "QPushButton { text-align: center; font-size: 18px;"
-        "              padding-left: 0; padding-right: 0; }"));
+        "              padding-left: 0; padding-right: 0;"
+        "              border: 1px solid #3c4a5c; }"
+        "QPushButton:hover { background: rgba(255,255,255,24);"
+        "                    border-color: #5a6a80; color: #d4deea; }"
+        "QPushButton:pressed { background: rgba(255,255,255,40); }"));
     connect(button, &QPushButton::clicked, this, &StageTabBar::footerButtonClicked);
 
     if (m_lastToggleRow) {
