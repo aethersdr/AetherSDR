@@ -10,7 +10,6 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
-#include <mutex>
 #include <thread>
 
 #include <cmath>
@@ -281,7 +280,6 @@ int main()
     // not reproduce the race, and no single-threaded assertion could.
     {
         using namespace std::chrono;
-        using ::WdspChannel;
 
         // POSITIVE CONTROL FIRST, so the blocking assertions below cannot pass
         // merely because constructing an Hl2Spectrum is slow. Unlocked, both
@@ -293,8 +291,8 @@ int main()
               "control: an unguarded construct+destroy is far below the wait "
               "window, so a blocked one is the lock and not the work");
 
-        // The window. Generous against a loaded machine; still two orders of
-        // magnitude above the unlocked cost measured immediately above.
+        // The window. Generous against a loaded machine, and 2.5x the bound the
+        // control above asserts on the unlocked cost.
         constexpr auto kWindow = milliseconds(250);
 
         // ---- constructor ----
