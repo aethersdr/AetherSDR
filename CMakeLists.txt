@@ -991,6 +991,7 @@ set(CORE_SOURCES
     src/core/QsoPcmConverter.cpp
     src/core/QsoWavFormat.cpp
     src/core/QsoWavPlayback.cpp
+    src/core/RxPlaybackTransmitter.cpp
     src/core/FirmwareStager.cpp
     src/core/UpdateChecker.cpp
     src/core/OleCompoundFile.cpp

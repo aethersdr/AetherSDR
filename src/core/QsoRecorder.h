@@ -102,6 +102,8 @@ public:
     bool isRecording() const { return m_recording; }
     bool isPlaying() const { return m_playing; }
     bool hasLastRecording() const { return !m_lastRecordingPath.isEmpty(); }
+    // The last finalized recording -- what PLAY and "TX Playback" replay.
+    QString lastRecordingPath() const { return m_lastRecordingPath; }
 
     // Answers "does the connected backend demodulate in-process?"
     // (IRadioBackend::ownsRxAudio) for the start policy. A CALLBACK, not a

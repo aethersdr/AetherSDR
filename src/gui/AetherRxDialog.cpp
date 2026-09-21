@@ -16,6 +16,7 @@
 #include "StripTubePanel.h"
 #include "StripWaveformPanel.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -23,6 +24,7 @@
 #include <QDragMoveEvent>
 #include <QDropEvent>
 #include <QFrame>
+#include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
@@ -36,6 +38,7 @@
 #include <QVBoxLayout>
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/TxKeyingMarker.h"
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
@@ -222,6 +225,36 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         emit playToggled(checked);
     });
     setPlayEnabled(false);
+
+    // Right-click on PLAY: one entry, "TX Playback", which sends the last
+    // recording out over the air instead of to the speakers. A keying
+    // control, so it carries the marker the automation bridge refuses to
+    // invoke without AETHER_AUTOMATION_ALLOW_TX; MainWindow registers the
+    // real keying action on it once the radio is known.
+    m_txPlaybackAction = new QAction(tr("TX Playback"), this);
+    m_txPlaybackAction->setObjectName(QStringLiteral("aetherRxTxPlayback"));
+    m_txPlaybackAction->setCheckable(true);
+    m_txPlaybackAction->setToolTip(
+        tr("Transmit the last recording over the active slice. Select again "
+           "to stop."));
+    m_txPlaybackAction->setProperty(kTxKeyingProperty, true);
+    connect(m_txPlaybackAction, &QAction::triggered, this, [this] {
+        // A checkable action flips itself; the host says what really
+        // happened through setTxPlaybackActive.
+        QSignalBlocker block(m_txPlaybackAction);
+        m_txPlaybackAction->setChecked(m_txPlaybackActive);
+        emit txPlaybackTriggered();
+    });
+    m_playBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_playBtn, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        // Stopping must stay reachable even once PLAY has been disabled
+        // underneath a running transmit.
+        m_txPlaybackAction->setEnabled(m_playBtn->isEnabled() || m_txPlaybackActive);
+        QMenu menu(m_playBtn);
+        menu.setObjectName(QStringLiteral("aetherRxPlayMenu"));
+        menu.addAction(m_txPlaybackAction);
+        menu.exec(m_playBtn->mapToGlobal(pos));
+    });
 
     // BYPASS beside the Settings gear, where AetherTX keeps its own. The
     // engine owns the snapshot-and-restore, and the docked chain applet's RX
@@ -521,6 +554,14 @@ void AetherRxDialog::setPlayEnabled(bool enabled)
         enabled ? tr("Play back the last recording. Click again to stop.")
                 : tr("Unavailable until something has been recorded. "
                      "Use REC first."));
+}
+
+void AetherRxDialog::setTxPlaybackActive(bool on)
+{
+    m_txPlaybackActive = on;
+    if (!m_txPlaybackAction) return;
+    QSignalBlocker block(m_txPlaybackAction);
+    m_txPlaybackAction->setChecked(on);
 }
 
 void AetherRxDialog::syncFromEngine()

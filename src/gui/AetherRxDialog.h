@@ -7,6 +7,7 @@
 
 #include <array>
 
+class QAction;
 class QHideEvent;
 class QPushButton;
 class QShowEvent;
@@ -76,6 +77,13 @@ public:
     void setPlayOn(bool on);
     void setPlayEnabled(bool enabled);
 
+    // "TX Playback", the one entry on PLAY's context menu: transmit the last
+    // recording over the active slice. The action is exposed so MainWindow
+    // can register the bridge-guarded keying action on it (TxKeyingMarker);
+    // selecting it again while a playback is transmitting stops it.
+    QAction* txPlaybackAction() const { return m_txPlaybackAction; }
+    void setTxPlaybackActive(bool on);
+
     // Jump to a named tab. Understands both this window's stage names
     // ("Gate", "Tube") and the noise-reduction method names ("NR2", "MNR"),
     // which select the AetherNR tab and then the method inside it — callers
@@ -99,6 +107,10 @@ signals:
     // radio-side recorder, then calls the setters with what really happened.
     void recordToggled(bool on);
     void playToggled(bool on);
+    // The operator chose "TX Playback" on PLAY's context menu. MainWindow
+    // captures the transmit input at this boundary and keys, or stops the
+    // playback already transmitting.
+    void txPlaybackTriggered();
 
     // The AetherNR checkbox re-enabling NR2. Goes out rather than straight to
     // the engine because NR2 needs MainWindow's FFTW-wisdom prep first (#2275)
@@ -163,6 +175,8 @@ private:
     // drives; the transmit window's pair captures the processed TX chain.
     QPushButton*        m_recBtn{nullptr};
     QPushButton*        m_playBtn{nullptr};
+    QAction*            m_txPlaybackAction{nullptr};
+    bool                m_txPlaybackActive{false};
     QStackedWidget*     m_stack{nullptr};
     QTimer*             m_checkTimer{nullptr};
 

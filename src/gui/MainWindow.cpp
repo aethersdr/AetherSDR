@@ -160,6 +160,7 @@
 #include "core/UlanziDialBackend.h"
 #include "UlanziDialMapperDialog.h"
 #include "AetherRxDialog.h"
+#include "core/TxKeyingMarker.h"
 #include "ModeFilterPresets.h"
 #include "StripEqPanel.h"
 #include "AetherDspWidget.h"
@@ -3403,8 +3404,65 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
         connect(m_qsoRecorder, &QsoRecorder::playbackStopped, m_rxDialog,
                 [this]() { syncAetherRxRecordButtons(); });
         syncAetherRxRecordButtons();
+
+        // "TX Playback" on PLAY's context menu. The transmit input is
+        // captured here, at the operator's click, and carried into the
+        // session -- the same boundary the AX.25 send button uses. The
+        // bridge reaches the same routine through the registered keying
+        // action, with its own controller, and only under
+        // AETHER_AUTOMATION_ALLOW_TX.
+        if (!m_rxPlaybackTx) {
+            m_rxPlaybackTx = std::make_unique<RxPlaybackTransmitter>(&m_radioModel, m_audio, this);
+            connect(m_rxPlaybackTx.get(), &RxPlaybackTransmitter::finished,
+                    this, [this](bool aborted, const QString& reason) {
+                statusBar()->showMessage(
+                    aborted ? tr("TX Playback stopped: %1.").arg(reason)
+                            : tr("TX Playback finished."), 4000);
+            });
+        }
+        connect(m_rxPlaybackTx.get(), &RxPlaybackTransmitter::activeChanged,
+                m_rxDialog, &AetherRxDialog::setTxPlaybackActive);
+        m_rxDialog->setTxPlaybackActive(m_rxPlaybackTx->active());
+        connect(m_rxDialog, &AetherRxDialog::txPlaybackTriggered, this, [this] {
+            const std::shared_ptr<TxController> controller = m_radioModel.localTxController();
+            if (!controller || !controller->valid()) return;
+            toggleRxPlaybackTransmit(
+                controller->captureProgram(TxController::Activity::Mox).request());
+        });
+        registerTxKeyingAction(m_rxDialog->txPlaybackAction(),
+            [this](const std::shared_ptr<TxController>& controller,
+                   const QString& action, const QString&) -> TxKeyingAction::Prepared {
+            if (action != QLatin1String("trigger") || !controller
+                || !controller->belongsTo(&m_radioModel)) {
+                return {};
+            }
+            const TxCoordinator::Request input =
+                controller->captureProgram(TxController::Activity::Mox).request();
+            return [this, input] { toggleRxPlaybackTransmit(input); };
+        });
     }
     return m_rxDialog.data();
+}
+
+void MainWindow::toggleRxPlaybackTransmit(const TxCoordinator::Request& input)
+{
+    if (!m_rxPlaybackTx) return;
+    if (m_rxPlaybackTx->active()) {
+        m_rxPlaybackTx->abort(tr("stopped by the operator"));
+        return;
+    }
+    if (!m_qsoRecorder || !m_qsoRecorder->hasLastRecording()) {
+        statusBar()->showMessage(
+            tr("TX Playback: nothing has been recorded on this client yet."), 4000);
+        return;
+    }
+    // The same file cannot go to the speakers and the transmitter at once.
+    if (m_qsoRecorder->isPlaying()) m_qsoRecorder->stopPlayback();
+    QString why;
+    if (!m_rxPlaybackTx->start(m_qsoRecorder->lastRecordingPath(), activeSlice(), input, &why)) {
+        qCWarning(lcAudio) << "TX Playback refused:" << why;
+        statusBar()->showMessage(tr("TX Playback: %1.").arg(why), 4000);
+    }
 }
 
 void MainWindow::syncAetherRxRecordButtons()
