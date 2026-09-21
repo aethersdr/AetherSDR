@@ -792,7 +792,9 @@ bool QsoRecorder::patchWavHeader()
 // ── Playback ───────────────────────────────────────────────────────────────
 
 std::optional<QByteArray> QsoRecorder::lastRecordingPcm(const QAudioFormat& format,
-                                                        QString* error) const
+                                                        QString* error,
+                                                        qint64 maxFrames,
+                                                        bool prefixOnly) const
 {
     if (m_lastRecordingPath.isEmpty()) {
         if (error) *error = tr("nothing has been recorded");
@@ -803,7 +805,7 @@ std::optional<QByteArray> QsoRecorder::lastRecordingPcm(const QAudioFormat& form
         if (error) *error = file.errorString();
         return std::nullopt;
     }
-    return prepareQsoWavPlayback(file, format, error);
+    return prepareQsoWavPlayback(file, format, error, maxFrames, prefixOnly);
 }
 
 bool QsoRecorder::preparePlaybackPcm(const QAudioFormat& sinkFormat, QString& error)

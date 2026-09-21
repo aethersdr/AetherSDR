@@ -82,12 +82,19 @@ int main(int argc, char** argv)
         if (m.enabled(engine)) { check(false, "no NR method runs while bypassed"); break; }
     }
 
+    // A method selection after engage must not restart DSP behind BYPASS.
+    // Try every built method: disabled build-time stubs are harmless here.
+    for (const Method& m : methods) {
+        m.set(engine, true);
+        check(!m.enabled(engine), "NR enable cannot escape active bypass");
+    }
+
     engine.setRxBypassed(false);
     check(!engine.isRxBypassed(), "bypass releases");
     check(engine.clientGateRx()->isEnabled(), "release restores the gate");
     check(!engine.clientEqRx()->isEnabled(),  "release leaves the EQ off, as it was");
     if (subject) {
-        check(subject->enabled(engine), "release restores the NR method that was running");
+        check(subject->enabled(engine), "release restores the original NR method after rejected changes");
         int running = 0;
         for (const Method& m : methods) running += m.enabled(engine) ? 1 : 0;
         check(running == 1, "exactly one NR method runs after release");

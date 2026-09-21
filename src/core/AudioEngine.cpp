@@ -6314,7 +6314,9 @@ void AudioEngine::setRxBypassed(bool on)
     // suppress it so the bypassed RX path is genuinely transparent rather
     // than "everything except the noise reduction". The methods are
     // exclusive, so at most one is on; whichever it was comes back on
-    // release. Restoring straight through the setters is safe here: a method
+    // release. NR enable requests during bypass are refused by each setter,
+    // so a new method cannot silently run behind the bypass control.
+    // Restoring straight through the setters is safe here: a method
     // that was running has already built its state (NR2's FFTW wisdom
     // included), which is the prerequisite the wisdom-prep path exists for.
     struct NrMethod {
@@ -6348,6 +6350,9 @@ void AudioEngine::setRxBypassed(bool on)
             }
         }
     } else {
+        // Release the guard before calling the ordinary NR setters. The
+        // snapshot is still intact until all the methods are restored.
+        m_rxBypassActive = false;
         for (auto s : m_rxBypassSnapshot) setStageEnabled(s, true);
         m_rxBypassSnapshot.clear();
         for (const NrMethod& m : kNrMethods) {
@@ -7398,6 +7403,10 @@ SpectralNR::WisdomResult AudioEngine::generateWisdom(
 
 void AudioEngine::setNr2Enabled(bool on)
 {
+    if (on && m_rxBypassActive) {
+        emit nr2EnabledChanged(false);
+        return;
+    }
     if (m_nr2Enabled == on) return;
     std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
     ++m_dspConfigurationGeneration;
@@ -7659,6 +7668,10 @@ void AudioEngine::setMainSourceLegacyNr2(bool legacy)
 
 void AudioEngine::setNr4Enabled(bool on)
 {
+    if (on && m_rxBypassActive) {
+        emit nr4EnabledChanged(false);
+        return;
+    }
     if (m_nr4Enabled == on) return;
     std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
     ++m_dspConfigurationGeneration;
@@ -7814,6 +7827,10 @@ void AudioEngine::setNr4SuppressionStrength(float) {}
 // MNR (macOS MMSE-Wiener noise reduction)
 void AudioEngine::setMnrEnabled(bool on)
 {
+    if (on && m_rxBypassActive) {
+        emit mnrEnabledChanged(false);
+        return;
+    }
     if (m_mnrEnabled == on) return;
     std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
     ++m_dspConfigurationGeneration;
@@ -7882,6 +7899,10 @@ float AudioEngine::mnrStrength() const
 
 void AudioEngine::setRn2Enabled(bool on)
 {
+    if (on && m_rxBypassActive) {
+        emit rn2EnabledChanged(false);
+        return;
+    }
     if (m_rn2Enabled == on) return;
     std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
     ++m_dspConfigurationGeneration;
@@ -7926,6 +7947,10 @@ void AudioEngine::setRn2Enabled(bool on)
 
 void AudioEngine::setNnrEnabled(bool on)
 {
+    if (on && m_rxBypassActive) {
+        emit nnrEnabledChanged(false);
+        return;
+    }
     if (m_nnrEnabled == on) return;
     std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
     ++m_dspConfigurationGeneration;
@@ -8103,6 +8128,10 @@ QJsonObject AudioEngine::opusTxPacingDiagnostics() const
 
 void AudioEngine::setDfnrEnabled(bool on)
 {
+    if (on && m_rxBypassActive) {
+        emit dfnrEnabledChanged(false);
+        return;
+    }
     if (m_dfnrEnabled == on) return;
     std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
     ++m_dspConfigurationGeneration;
@@ -8191,6 +8220,10 @@ void AudioEngine::setDfnrPostFilterBeta(float) {}
 
 void AudioEngine::setNvAfxEnabled(bool on)
 {
+    if (on && m_rxBypassActive) {
+        emit nvAfxEnabledChanged(false);
+        return;
+    }
     if (m_nvAfxEnabled == on) return;
     std::unique_lock<std::recursive_mutex> lock(m_dspMutex);
     ++m_dspConfigurationGeneration;

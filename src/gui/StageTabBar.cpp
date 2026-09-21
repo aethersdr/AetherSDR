@@ -122,18 +122,20 @@ private:
 QString footerToggleStyle(StageTabBar::Accent accent)
 {
     const char* accentToken = "{{color.accent.warning}}";
-    const char* fill  = "rgba(255,184,77,45)";
-    const char* hover = "rgba(255,184,77,70)";
+    const char* fill  = "{{color.toggle.footer.warning.background.checked}}";
+    const char* hover = "{{color.toggle.footer.warning.background.hover}}";
     switch (accent) {
     case StageTabBar::Accent::Amber:
         break;
     case StageTabBar::Accent::Red:
         accentToken = "{{color.accent.danger}}";
-        fill = "rgba(255,77,77,45)"; hover = "rgba(255,77,77,70)";
+        fill = "{{color.toggle.footer.danger.background.checked}}";
+        hover = "{{color.toggle.footer.danger.background.hover}}";
         break;
     case StageTabBar::Accent::Green:
         accentToken = "{{color.accent.success}}";
-        fill = "rgba(77,216,122,45)"; hover = "rgba(77,216,122,70)";
+        fill = "{{color.toggle.footer.success.background.checked}}";
+        hover = "{{color.toggle.footer.success.background.hover}}";
         break;
     }
     return QStringLiteral(

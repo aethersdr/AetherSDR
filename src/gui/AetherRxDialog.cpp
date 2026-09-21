@@ -222,6 +222,14 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
         emit recordToggled(checked);
     });
     connect(m_playBtn, &QPushButton::clicked, this, [this](bool checked) {
+        if (m_txPlaybackActive) {
+            // PLAY remains enabled to stop an active transmission. A normal
+            // click must never start speaker playback while TX owns the file.
+            QSignalBlocker block(m_playBtn);
+            m_playBtn->setChecked(false);
+            emit txPlaybackTriggered();
+            return;
+        }
         emit playToggled(checked);
     });
     setPlayEnabled(false);

@@ -4,6 +4,7 @@
 #include "PcmFrame.h"
 #include "QsoRecordingFormat.h"
 #include "QsoPcmConverter.h"
+#include "QsoWavPlayback.h"
 
 #include <QAudio>
 #include <QAudioDevice>
@@ -107,7 +108,9 @@ public:
     // caller never opens the WAV itself. Empty, with `error` filled, when
     // there is no recording or it cannot be read.
     std::optional<QByteArray> lastRecordingPcm(const QAudioFormat& format,
-                                               QString* error = nullptr) const;
+                                               QString* error = nullptr,
+                                               qint64 maxFrames = kQsoPlaybackMaxFrames,
+                                               bool prefixOnly = false) const;
 
     // Answers "does the connected backend demodulate in-process?"
     // (IRadioBackend::ownsRxAudio) for the start policy. A CALLBACK, not a
