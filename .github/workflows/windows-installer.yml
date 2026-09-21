@@ -17,6 +17,11 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      # ninja reads this on the two cmake --build steps below and stamps
+      # elapsed seconds per line, so the long-pole targets are visible in
+      # the log; the other steps ignore it.
+      NINJA_STATUS: "[%f/%t %es] "
     outputs:
       publish-flight: ${{ steps.store-plan.outputs.publishFlight }}
 
@@ -297,21 +302,24 @@ jobs:
       - name: Build whisper + ggml-vulkan (vendored ASR engine)
         # Its own step so the vendored engine's compile time is a separate line
         # in the run summary and a slow compile fails HERE with its log kept
-        # (see the timeout note on Build below). The long pole is the single
-        # ~1 MB ggml-vulkan.cpp translation unit, which no -j value splits;
-        # -j 2 matches Build for the same 16 GB reason. `whisper` pulls in
-        # ggml, ggml-base, ggml-cpu and ggml-vulkan. If this step cannot fit
-        # the runner, -DASR_USE_PREBUILT_WHISPER_GPU=ON in Configure restores
-        # the prebuilt-asset path (and this step must then go: the targets
-        # become IMPORTED, with no build rule).
-        # 180, not 240: GitHub cancels the job at its 360 min default, and a
-        # job cancel discards logs. Build took ~26 min with the prebuilt libs
-        # (run 35038022128), so 180 here still leaves it ~175 min before the
-        # job cancel.
-        timeout-minutes: 180
-        env:
-          NINJA_STATUS: "[%f/%t %es] "
-        run: cmake --build build -j 2 --target whisper
+        # (see the timeout note on Build below). Measured on windows-latest
+        # with the /O1 override in effect (ci/test-windows-gpu, 2026-07-22,
+        # runs 29904473886 and 29924632118): the whole ggml-vulkan target took
+        # 2-3 min at -j 2, of which 95-137 s was the 137 per-shader glslc edges
+        # and under 10 s the ~1 MB ggml-vulkan.cpp TU. The shader edges are
+        # small and parallel, so full -j is safe here; the 16 GB thrash on
+        # Build is about app TUs, not these. `whisper` pulls in ggml,
+        # ggml-base, ggml-cpu and ggml-vulkan. If this step cannot fit the
+        # runner, -DASR_USE_PREBUILT_WHISPER_GPU=ON in Configure restores the
+        # prebuilt-asset path (and this step must then go: the targets become
+        # IMPORTED, with no build rule) -- but the pinned whisper-gpu-1.9.1
+        # pack predates the #5773 whisper.cpp load-check patch, so that
+        # fallback ships the unpatched loader until the pack is rebuilt.
+        # 60 min is 20x the measured step, and setup + 60 + Build's 240 +
+        # packaging still fits under GitHub's 360 min job cancel, which
+        # discards logs -- a step timeout keeps them.
+        timeout-minutes: 60
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS --target whisper
 
       - name: Build
         # -j 2 (not full -j): even with ggml-vulkan already built, the main build was
@@ -320,11 +328,9 @@ jobs:
         # MSVC processes exceed RAM and swap. Halving parallelism gives each ~8 GB.
         # timeout-minutes fails the STEP (which preserves its log — unlike the
         # job-level 6 h cancel, which discards logs), so a still-slow build is
-        # finally diagnosable; NINJA_STATUS stamps elapsed seconds per line to
-        # expose the long-pole targets.
+        # finally diagnosable; the job-level NINJA_STATUS stamps elapsed
+        # seconds per line to expose the long-pole targets.
         timeout-minutes: 240
-        env:
-          NINJA_STATUS: "[%f/%t %es] "
         # Only --target AetherSDR (+ its aether-dv-waveform helper dependency)
         # ships; the default `all` also built ~200 unit-test exes the installer
         # never packages or runs — wasted time, and their links contend with the
