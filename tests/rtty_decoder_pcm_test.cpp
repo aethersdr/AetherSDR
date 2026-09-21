@@ -181,6 +181,42 @@ int main(int argc, char** argv)
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     check(decoded.isEmpty(), "stop refuses queued text even while its producer remains live");
 
+    // The legacy stereo24 byte API keeps trim-oldest on overflow, as CwDecoder's
+    // does. The observable difference is the neutral reset statistic: retiring
+    // detector state on overflow publishes one, trimming the backlog publishes
+    // none. Text alone does not separate them -- a decoder that resets on every
+    // overflow still emits characters between resets.
+    {
+        RttyDecoder legacy;
+        int neutralResets = 0;
+        QObject::connect(&legacy, &RttyDecoder::statsUpdated, &app,
+                         [&](float mark, float space, float snr, bool lockedNow) {
+                             if (mark == 0.5f && space == 0.5f && snr == 0.0f && !lockedNow) {
+                                 ++neutralResets;
+                             }
+                         });
+        legacy.start();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        neutralResets = 0;   // start() publishes one reset of its own
+
+        const QVector<float> mono = signal(24000, PcmLayout::Mono, {31, 10, 21});
+        QByteArray stereo(mono.size() * 2 * qsizetype(sizeof(float)), Qt::Uninitialized);
+        auto* out = reinterpret_cast<float*>(stereo.data());
+        for (qsizetype i = 0; i < mono.size(); ++i) {
+            out[2 * i] = mono[i];
+            out[2 * i + 1] = mono[i];
+        }
+        // Tens of seconds of audio into a four-second ring, with no event pump
+        // in between, so the worker cannot drain the backlog as it arrives.
+        for (int pass = 0; pass < 40; ++pass) {
+            legacy.feedAudio(stereo);
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(neutralResets == 0,
+              "legacy byte overflow trims the oldest samples instead of retiring detector state");
+        legacy.stop();
+    }
+
     decoder.start();
     adapter.reset();
     const QMetaObject::Connection stopOnText = QObject::connect(

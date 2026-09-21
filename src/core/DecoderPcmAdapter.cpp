@@ -7,7 +7,8 @@
 namespace AetherSDR {
 bool DecoderPcmAdapter::selectRoute(RouteLane lane, int key)
 {
-    if (key < 0 || (lane != RouteLane::NativeSlice && lane != RouteLane::Dax)) {
+    if (key < 0 || (lane != RouteLane::NativeSlice && lane != RouteLane::Dax
+                    && lane != RouteLane::RxDemod)) {
         return false;
     }
     const Route route{lane, key};
@@ -56,7 +57,8 @@ std::optional<DecoderPcmBlock> DecoderPcmAdapter::accept(const PcmFrame& frame)
     const PcmStreamDescriptor& stream = frame.stream();
     if ((m_route->lane == RouteLane::NativeSlice
          && (stream.purpose != PcmPurpose::Slice || stream.sliceId != m_route->key))
-        || (m_route->lane == RouteLane::Dax && stream.purpose != PcmPurpose::Auxiliary)) {
+        || (m_route->lane == RouteLane::Dax && stream.purpose != PcmPurpose::Auxiliary)
+        || (m_route->lane == RouteLane::RxDemod && stream.purpose != PcmPurpose::Speaker)) {
         return std::nullopt;
     }
 

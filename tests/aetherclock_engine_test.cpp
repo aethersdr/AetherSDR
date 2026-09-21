@@ -434,6 +434,21 @@ void sectionDaxReassign() {
     QCoreApplication::processEvents();
     CHECK(stream.daxChannelHeldBy(3, Clock::Clock));   // hold moved to 3
     CHECK(!stream.daxChannelHeldBy(2, Clock::Clock));  // released 2
+
+    // DAX RX runs 1-8 on the radios that have it, and the decoder route and the
+    // holder registry both span that range. A slice parked on 5-8 must take a
+    // real hold here too, not fall through to "no channel assigned".
+    for (int high : {5, 6, 7, 8}) {
+        slice.setDaxChannel(high);
+        QCoreApplication::processEvents();
+        CHECK(stream.daxChannelHeldBy(high, Clock::Clock));
+    }
+    slice.setDaxChannel(3);
+    QCoreApplication::processEvents();
+    CHECK(stream.daxChannelHeldBy(3, Clock::Clock));
+    for (int high : {5, 6, 7, 8}) {
+        CHECK(!stream.daxChannelHeldBy(high, Clock::Clock));
+    }
     CHECK(engine.lockState() == ClockLockState::NoSignal);
     CHECK(engine.currentDiagnostics().framesInWindow == 0);
     CHECK(engine.currentDiagnostics().classifiedPct == 0);

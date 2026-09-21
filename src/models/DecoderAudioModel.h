@@ -20,7 +20,10 @@ class DecoderAudioModel final : public QObject {
 public:
     enum class Consumer { Cw, Rtty };
     // Bound means an input subscription exists, not that PCM has arrived.
-    enum class RouteStatus { Inactive, DaxChannelRequired, DaxTransportUnavailable, Bound };
+    // SharedRxAudio is bound too: a DAX-capable radio with no channel assigned
+    // to the selected slice decodes the radio's shared receive stream instead,
+    // which carries every audible slice and follows speaker gain and mute.
+    enum class RouteStatus { Inactive, SharedRxAudio, DaxTransportUnavailable, Bound };
     DecoderAudioModel(RadioModel& radio, Consumer consumer, QObject* parent = nullptr);
     ~DecoderAudioModel() override;
 

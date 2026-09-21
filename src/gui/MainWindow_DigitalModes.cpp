@@ -72,10 +72,12 @@ struct DecoderInputHint {
 DecoderInputHint decoderInputHint(DecoderAudioModel::RouteStatus status)
 {
     using Status = DecoderAudioModel::RouteStatus;
-    if (status == Status::DaxChannelRequired) {
-        return {QCoreApplication::translate("MainWindow", "RX: assign DAX"),
+    if (status == Status::SharedRxAudio) {
+        return {QCoreApplication::translate("MainWindow", "RX: shared audio"),
                 QCoreApplication::translate("MainWindow",
-                    "No receive audio: assign a DAX RX channel (1-8) to the selected slice.")};
+                    "Decoding the shared receive audio, which mixes every audible slice and "
+                    "follows speaker gain and mute. Assign a DAX RX channel (1-8) to the "
+                    "selected slice to decode it on its own.")};
     }
     if (status == Status::DaxTransportUnavailable) {
         return {QCoreApplication::translate("MainWindow", "RX: unavailable"),

@@ -31,12 +31,15 @@ struct DecoderPcmBlock {
 // selected route. No finite-stream tail flush or zero padding is performed.
 class DecoderPcmAdapter final {
 public:
-    enum class RouteLane { NativeSlice, Dax };
+    enum class RouteLane { NativeSlice, Dax, RxDemod };
     static constexpr std::size_t kMaxRoutes = 32;
     static constexpr int kInputBatchFrames = 256;
 
     // NativeSlice checks frame purpose and sliceId. DAX frames are Auxiliary;
     // their external channel number must be checked by the caller before accept.
+    // RxDemod is the radio's single shared receive stream (Speaker purpose): it
+    // carries every audible slice already mixed, so it isolates nothing and its
+    // key is always 0.
     // There is no selected route at construction. A repeated selection is a no-op.
     bool selectRoute(RouteLane lane, int key);
     void clearRoute();

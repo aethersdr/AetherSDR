@@ -243,6 +243,12 @@ void daxHoldsAndAbsentRoute(QCoreApplication& app)
     QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     check(fixture.radio.panStream() == nullptr && delivered == 0,
           "missing DAX transport fails closed without falling back to native or speaker audio");
+    PcmProducer unavailableSpeaker;
+    unavailableSpeaker.start();
+    emit fixture.source->audioFrameReady(*unavailableSpeaker.produce({0.1f, 0.1f}));
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    check(delivered == 0,
+          "an assigned channel that cannot be acquired does not silently take shared audio");
     check(route.routeStatus() == DecoderAudioModel::RouteStatus::DaxTransportUnavailable,
           "missing DAX transport has an explicit status distinct from channel assignment");
 }
@@ -268,37 +274,45 @@ void daxAvailabilityStatus(QCoreApplication& app)
         check(fixture.a->daxChannel() == 0 && route.routeStatus() == Status::Inactive
               && statuses.isEmpty(), "disabled decoder does not claim a missing DAX route");
         route.setEnabled(true);
-        check(route.routeStatus() == Status::DaxChannelRequired
-              && statuses == QVector<Status>{Status::DaxChannelRequired},
-              "enabled CW and RTTY disclose the default unassigned DAX channel");
+        check(route.routeStatus() == Status::SharedRxAudio
+              && statuses == QVector<Status>{Status::SharedRxAudio},
+              "an unassigned DAX channel discloses the shared-audio fallback, not a dead route");
 
         PcmProducer native;
         PcmProducer speaker;
         native.start(PcmPurpose::Slice, 3);
         speaker.start();
         emit fixture.source->sliceAudioFrameReady(3, *native.produce({0.2f, 0.2f}));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(delivered == 0,
+              "the shared-audio lane refuses per-slice frames from the native lane");
         emit fixture.source->audioFrameReady(*speaker.produce({0.2f, 0.2f}));
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(delivered == 1,
+              "an unassigned DAX slice decodes the radio's shared receive audio");
         fixture.a->setFrequency(14.2);
-        check(delivered == 0 && statuses.size() == 1,
-              "missing assignment never falls back and repeated tuning does not repeat status");
+        check(statuses.size() == 1, "repeated tuning does not repeat the status");
 
         fixture.a->setDaxChannel(1);
         check(route.routeStatus() == Status::Bound && stream->daxChannelHeldBy(1, holder)
               && statuses.size() == 2,
-              "assignment recovers the route and clears the unavailable status");
+              "assignment upgrades the shared route to the isolated DAX route");
         PcmProducer dax;
         dax.start(PcmPurpose::Auxiliary, -1, {24000, PcmLayout::Mono});
         emit stream->daxPcmReady(1, *dax.produce({0.5f}));
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-        check(delivered == 1, "recovered DAX route delivers real adapter PCM");
+        check(delivered == 2, "recovered DAX route delivers real adapter PCM");
+        emit fixture.source->audioFrameReady(*speaker.produce({0.2f, 0.2f}));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        check(delivered == 2,
+              "an assigned DAX route stays isolated from the shared receive audio");
 
         emit stream->daxPcmReady(1, *dax.produce({0.25f}));
         fixture.a->setDaxChannel(0);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
-        check(delivered == 1 && route.routeStatus() == Status::DaxChannelRequired
+        check(delivered == 2 && route.routeStatus() == Status::SharedRxAudio
               && !stream->daxChannelHeldBy(1, holder) && statuses.size() == 3,
-              "unassignment retires queued PCM, releases the hold and restores the hint");
+              "unassignment retires queued PCM, releases the hold and returns to shared audio");
         route.setEnabled(false);
         check(route.routeStatus() == Status::Inactive && statuses.size() == 4,
               "disabling the decoder clears the route warning state");
@@ -315,7 +329,7 @@ void statusNotificationReentrancy(QCoreApplication& app)
     route->setSlice(fixture.a);
     QMetaObject::Connection repair = QObject::connect(
         route.get(), &DecoderAudioModel::routeStatusChanged, &app, [&] {
-            if (route->routeStatus() == Status::DaxChannelRequired) {
+            if (route->routeStatus() == Status::SharedRxAudio) {
                 fixture.a->setDaxChannel(1);
             }
         });
@@ -326,7 +340,7 @@ void statusNotificationReentrancy(QCoreApplication& app)
     QObject::disconnect(repair);
     QMetaObject::Connection disable = QObject::connect(
         route.get(), &DecoderAudioModel::routeStatusChanged, &app, [&] {
-            if (route->routeStatus() == Status::DaxChannelRequired) {
+            if (route->routeStatus() == Status::SharedRxAudio) {
                 route->setEnabled(false);
             }
         });

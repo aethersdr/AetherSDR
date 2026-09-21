@@ -36,13 +36,24 @@ channel, removal and connection changes retire pending input and detector contex
 The model has at most 65,536 pending frames in 256 blocks and one scheduled drain.
 Overflow discards the backlog and resets the decoder before remaining audio.
 
-On Flex, CW (both GGMorse and DeepFist) and RTTY require a DAX RX channel (1–8)
-assigned to the selected slice. The central hold requests the radio stream; it
-does not require the operating-system DAX audio bridge or PC-audio monitoring.
-Missing assignment or transport leaves input closed, with a panel hint and a
-warning on the unavailable-state transition. Successful binding clears that
-hint. A bound route reports a subscription, not proof that PCM is arriving.
-There is no speaker-audio fallback or automatic DAX assignment.
+On Flex, assigning a DAX RX channel (1–8) to the selected slice decodes that
+slice alone: the central hold requests the radio stream, and speaker mix, gain
+and mute do not reach it. It does not require the operating-system DAX audio
+bridge or PC-audio monitoring.
+
+With no channel assigned, CW (both GGMorse and DeepFist) and RTTY fall back to
+the radio's shared receive stream — the pre-A5 decoder input. That stream mixes
+every audible slice and follows speaker gain and mute, so other slices can
+interfere and muting stops decoding; the panel discloses it as `RX: shared
+audio` with the reason and the remedy on the accessible description. The
+fallback is a route lane of its own: it admits Speaker-purpose frames only, and
+an assigned DAX route refuses it, so the two can never both feed one decoder.
+
+An assigned channel whose transport cannot be acquired stays fail-closed with
+`RX: unavailable` and a warning on the transition, because the shared stream
+rides the same transport and would carry nothing either. Successful binding
+clears the hint. A bound route reports a subscription, not proof that PCM is
+arriving. There is no automatic DAX assignment.
 
 RTTY uses this model and keeps its existing decoder worker. Its ring, filters,
 bit timing and Baudot shift state reset together. Generation and epoch checks
@@ -50,7 +61,7 @@ prevent old queued text or statistics from publishing after reset, stop or sourc
 revocation. Worker teardown joins before destroying decoder state.
 
 AetherClock binds an operator-selected slice through its existing engine and DAX
-hold provider. Its production callbacks carry a selection generation; disconnecting
+hold provider, over the same 1–8 channel range as the decoder route. Its production callbacks carry a selection generation; disconnecting
 a Qt signal alone would leave previously posted calls deliverable. Converter,
 detector, frame/vote/lock and diagnostics history reset together.
 Stopped Clock diagnostics return an empty snapshot.
@@ -70,9 +81,9 @@ queued result carry an input generation; publication and estimate getters reject
 retired sources. Existing parameter snapshots and locked values survive worker resets.
 A stopped GGMorse backend retains its operator locks across neural selection;
 only the selected backend runs. Closing the panel releases the CW DAX hold.
-TX sidetone remains a separate fixed24 GGMorse instance. Its legacy byte input
-retains the existing trim-oldest backlog behavior on overflow; typed RX overflow
-retires detector state instead.
+TX sidetone remains a separate fixed24 GGMorse instance. Both decoders' legacy
+byte inputs retain the existing trim-oldest backlog behavior on overflow; typed
+RX overflow retires detector state instead.
 
 ## Clock time mapping
 

@@ -374,11 +374,42 @@ void extremeInputAndOrdering()
 }
 } // namespace
 
+// The shared receive stream carries every audible slice already mixed, so its
+// lane keys on purpose alone and must refuse both isolated lanes' frames.
+void sharedRxDemodLane()
+{
+    PcmProducer speaker;
+    PcmProducer slice;
+    PcmProducer dax;
+    speaker.start(PcmPurpose::Speaker, -1, {24000, PcmLayout::Stereo});
+    slice.start(PcmPurpose::Slice, 3, {24000, PcmLayout::Mono});
+    dax.start(PcmPurpose::Auxiliary, -1, {24000, PcmLayout::Mono});
+
+    DecoderPcmAdapter adapter;
+    check(adapter.selectRoute(Lane::RxDemod, 0), "shared receive lane selectable");
+    check(!adapter.accept(*slice.produce({0.5f})),
+          "shared lane refuses per-slice frames");
+    check(!adapter.accept(*dax.produce({0.5f})),
+          "shared lane refuses DAX auxiliary frames");
+    const auto mixed = adapter.accept(*speaker.produce({0.5f, 0.25f}));
+    check(mixed.has_value() && mixed->samples.size() == 1
+          && std::fabs(mixed->samples[0] - 0.375f) < 1e-6f,
+          "shared lane downmixes the stereo receive stream to mono24");
+
+    // Selecting an isolated lane must not keep admitting the shared stream.
+    check(adapter.selectRoute(Lane::Dax, 1), "isolated DAX selection accepted");
+    check(!adapter.accept(*speaker.produce({0.5f, 0.25f})),
+          "an isolated lane refuses the shared receive stream");
+    check(adapter.accept(*dax.produce({0.5f})).has_value(),
+          "isolated DAX lane still admits its own producer");
+}
+
 int main(int argc, char** argv)
 {
     QCoreApplication application(argc, argv);
     QObject receiver;
     passthroughAndAdmission(receiver);
+    sharedRxDemodLane();
     continuousConversion();
     transitionHistoryAndBounds();
     independentConsumers();

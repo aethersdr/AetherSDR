@@ -114,7 +114,7 @@ void RttyDecoder::appendMono(const QByteArray& mono, const PcmEpochLease& source
     }
     if (discontinuity || typed != m_typedSource
         || (typed && source.stream() != m_source.stream())
-        || m_ringBuf.size() + mono.size() > kRingCapacity) {
+        || (typed && m_ringBuf.size() + mono.size() > kRingCapacity)) {
         ++m_inputGeneration;
         m_ringBuf.clear();
         queueResetStats(m_inputGeneration.load());
@@ -122,6 +122,11 @@ void RttyDecoder::appendMono(const QByteArray& mono, const PcmEpochLease& source
     m_source = source;
     m_typedSource = typed;
     m_ringBuf.append(mono);
+    // The legacy byte API keeps its trim-oldest backlog policy, as CwDecoder's
+    // does; typed RX overflow is a source discontinuity and retires state above.
+    if (!typed && m_ringBuf.size() > kRingCapacity) {
+        m_ringBuf.remove(0, m_ringBuf.size() - kRingCapacity);
+    }
 }
 
 void RttyDecoder::feedPcmBlock(const DecoderPcmBlock& block)

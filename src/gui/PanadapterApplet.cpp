@@ -45,7 +45,9 @@ namespace {
 void setDecoderInputHint(QLabel* label, const QString& hint, const QString& reason,
                          const QString& accessibleName)
 {
-    if (label->text() == hint && label->accessibleDescription() == reason) {
+    const bool textChanged = label->text() != hint;
+    const bool reasonChanged = label->accessibleDescription() != reason;
+    if (!textChanged && !reasonChanged) {
         return;
     }
     label->setText(hint);
@@ -55,8 +57,16 @@ void setDecoderInputHint(QLabel* label, const QString& hint, const QString& reas
     ThemeManager::instance().applyStyleSheet(label, reason.isEmpty()
         ? "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; background: transparent; }"
         : "QLabel { color: {{color.accent.warning}}; font-size: 9px; background: transparent; }");
-    QAccessibleEvent event(label, QAccessible::NameChanged);
-    QAccessible::updateAccessibility(&event);
+    // A reason that changes under an unchanged hint is the whole content of the
+    // update for a screen reader, and NameChanged does not carry it (#4896).
+    if (textChanged) {
+        QAccessibleEvent event(label, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
+    if (reasonChanged) {
+        QAccessibleEvent event(label, QAccessible::DescriptionChanged);
+        QAccessible::updateAccessibility(&event);
+    }
 }
 } // namespace
 

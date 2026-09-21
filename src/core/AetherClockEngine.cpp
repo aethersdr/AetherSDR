@@ -638,7 +638,7 @@ void AetherClockEngine::start(SliceModel* slice, ClockStation station) {
     if (!d.acquireCh || !d.releaseCh) {
         qWarning() << "AetherClockEngine::start: no DAX channel provider set -"
                    << "hold not acquired; audio will not flow";
-    } else if (ch >= 1 && ch <= 4) {
+    } else if (ch >= 1 && ch <= 8) {
         d.heldChannels[static_cast<std::size_t>(ch - 1)] = true;
         const std::function<void(int)> acquire = d.acquireCh;
         acquire(ch);
@@ -674,7 +674,7 @@ void AetherClockEngine::start(SliceModel* slice, ClockStation station) {
         }
         if (!e.acquireCh || !e.releaseCh) return;
         const quint64 revision = e.transitionRevision;
-        const int nc = (newCh >= 1 && newCh <= 4) ? newCh : 0;
+        const int nc = (newCh >= 1 && newCh <= 8) ? newCh : 0;
         if (nc && !e.heldChannels[static_cast<std::size_t>(nc - 1)]) {
             e.heldChannels[static_cast<std::size_t>(nc - 1)] = true;
             const std::function<void(int)> acquire = e.acquireCh;

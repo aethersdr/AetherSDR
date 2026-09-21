@@ -55,9 +55,12 @@ struct DecoderAudioModel::Impl {
         if (!guard || revision != bindingRevision) {
             return;
         }
-        if (status == RouteStatus::DaxChannelRequired) {
-            qCWarning(lcDsp) << (consumer == Consumer::Cw ? "CW" : "RTTY")
-                            << "receive decoder: assign DAX RX channel 1-8 to the selected slice; no input route";
+        if (status == RouteStatus::SharedRxAudio) {
+            // Not a warning: with no DAX assignment this is the ordinary Flex
+            // path and the decoder still runs, just on the shared mix.
+            qCInfo(lcDsp) << (consumer == Consumer::Cw ? "CW" : "RTTY")
+                            << "receive decoder: no DAX RX channel assigned to the selected slice;"
+                            << "decoding the shared receive audio (speaker gain and mute apply)";
         } else if (status == RouteStatus::DaxTransportUnavailable) {
             qCWarning(lcDsp) << (consumer == Consumer::Cw ? "CW" : "RTTY")
                             << "receive decoder: selected DAX transport unavailable; no input route";
@@ -125,6 +128,14 @@ struct DecoderAudioModel::Impl {
     {
         if (box != inbox || !enabled || !radio || !radio->isConnected()
             || !slice || radio->slice(slice->sliceId()) != slice) {
+            // Leaving `scheduled` set on a box that is still the live inbox
+            // stops enqueue() ever posting another drain: the route would keep
+            // reporting Bound while every later frame piled up to the overflow
+            // cap and was discarded. The backlog is stale here by definition.
+            QMutexLocker lock(&box->mutex);
+            box->frames.clear();
+            box->frameCount = 0;
+            box->scheduled = false;
             return;
         }
         const QPointer<DecoderAudioModel> guard(owner);
@@ -137,9 +148,14 @@ struct DecoderAudioModel::Impl {
             box->scheduled = false;
             overflow = std::exchange(box->overflow, false);
         }
+        // adapter.reset() makes the next accepted block a discontinuity, which
+        // publishes its own reset below; without this the decoder would take two
+        // generation bumps and two neutral stat clears for one overflow.
+        bool resetPublished = false;
         if (overflow) {
             adapter.reset();
             emit owner->sourceReset();
+            resetPublished = true;
             if (!guard || box != inbox) {
                 return;
             }
@@ -153,7 +169,7 @@ struct DecoderAudioModel::Impl {
             if (!block || !block->current()) {
                 continue;
             }
-            if (block->discontinuity) {
+            if (block->discontinuity && !std::exchange(resetPublished, false)) {
                 emit owner->sourceReset();
                 if (!guard || box != inbox) {
                     return;
@@ -215,15 +231,30 @@ struct DecoderAudioModel::Impl {
             setRouteStatus(RouteStatus::Inactive);
             return;
         }
-        if (dax && (!wantedHold || !acquired)) {
-            setRouteStatus(!wantedHold ? RouteStatus::DaxChannelRequired
-                                      : RouteStatus::DaxTransportUnavailable);
+        // Only a DAX channel that exists and could not be acquired is fail-closed:
+        // the shared receive stream rides the same PanadapterStream, so when the
+        // transport is gone there is nothing to fall back to either.
+        if (dax && wantedHold && !acquired) {
+            setRouteStatus(RouteStatus::DaxTransportUnavailable);
             return;
         }
+        // A DAX-capable radio with no assignment on the selected slice: decode
+        // the radio's shared receive stream, the pre-A5 input. It mixes every
+        // audible slice and follows speaker gain/mute, so it is disclosed as a
+        // distinct status rather than reported as an isolated route.
+        const bool sharedRxAudio = dax && !wantedHold;
         inbox = std::make_shared<Inbox>();
         inbox->target = owner;
         const std::shared_ptr<Inbox> box = inbox;
-        if (dax) {
+        if (sharedRxAudio) {
+            adapter.selectRoute(DecoderPcmAdapter::RouteLane::RxDemod, 0);
+            audioConnection = QObject::connect(radio, &RadioModel::rxDemodAudioReady,
+                owner, [box](const PcmFrame& frame) {
+                    if (frame.stream().purpose == PcmPurpose::Speaker) {
+                        enqueue(box, frame);
+                    }
+                }, Qt::DirectConnection);
+        } else if (dax) {
             adapter.selectRoute(DecoderPcmAdapter::RouteLane::Dax, channel);
             if (auto* stream = radio->panStream()) {
                 audioConnection = QObject::connect(stream, &PanadapterStream::daxPcmReady,
@@ -245,7 +276,7 @@ struct DecoderAudioModel::Impl {
                     }
                 }, Qt::DirectConnection);
         }
-        setRouteStatus(RouteStatus::Bound);
+        setRouteStatus(sharedRxAudio ? RouteStatus::SharedRxAudio : RouteStatus::Bound);
     }
 };
 
