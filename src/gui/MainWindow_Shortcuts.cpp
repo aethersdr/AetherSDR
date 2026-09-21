@@ -17,7 +17,6 @@
 #include "core/TxKeyingMarker.h"
 #include "TxInputKeyEvent.h"
 #include "core/IambicKeyer.h"
-#include "models/PanZoomModeGate.h"
 
 #include <QApplication>
 #include <QKeyEvent>
@@ -31,6 +30,7 @@
 #include "GuardedSlider.h"
 #include "MeterSlider.h"
 #include "PanLayoutDialog.h"
+#include "PanZoomModeGate.h"
 #include "PanadapterStack.h"
 #include "RxApplet.h"
 #include "SpectrumOverlayMenu.h"
@@ -1545,10 +1545,30 @@ void MainWindow::togglePanZoomModeForPan(const QString& panId, bool segmentZoom)
     // did opposite things on a radio that answers neither. One predicate now
     // decides both; see PanZoomModeGate.h, including why refusing this cannot
     // withhold anything that transmits.
+    //
+    // AND THE REFUSAL SAYS SO, on the capability rung. A gate refuses BEFORE
+    // the send, so sendCmd is never reached and commandDropped() never fires:
+    // without this the six surfaces would go from the #5263 loud drop to
+    // silence, which is the dead-control shape this function is closing. Same
+    // qCWarning + notice pairing as the split_toggle gate above and the
+    // VfoWidget::splitToggled gate in MainWindow_Wiring.cpp; see
+    // MainWindow::showUnsupportedControlNotice()'s own comment for the rule
+    // and for the shared one-per-session latch. Only this rung announces --
+    // NotConnected and NoPan were silent early returns before and stay silent,
+    // so this restores exactly what the gate took away and nothing more.
     auto* pan = panId.isEmpty() ? nullptr : m_radioModel.panadapter(panId);
-    if (!panZoomModeWritable(m_radioModel.isConnected(),
-                             m_radioModel.usesFlexCommandPlane(),
-                             /*panKnown=*/pan != nullptr)) {
+    const auto refusal = panZoomModeRefusal(
+        m_radioModel.isConnected(),
+        m_radioModel.backendCapabilities().panZoomModes.has_value(),
+        /*panKnown=*/pan != nullptr);
+    if (refusal == PanZoomModeRefusal::NotDeclared) {
+        qCWarning(lcDevices)
+            << (segmentZoom ? "segment zoom" : "band zoom")
+            << "ignored: this radio declares no band/segment zoom";
+        showUnsupportedControlNotice();
+        return;
+    }
+    if (refusal != PanZoomModeRefusal::None) {
         return;
     }
     const bool on = segmentZoom ? !pan->segmentZoomOn() : !pan->bandZoomOn();
@@ -1599,6 +1619,24 @@ void MainWindow::zoomActivePanadapter(double factor)
 
 void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
 {
+    // THE CAPABILITY RUNG FIRST, ahead of the slice and pan lookup. Whether
+    // this radio takes band_zoom=/segment_zoom= at all is a property of the
+    // RADIO, not of which pan the write would land on, so it is asked with the
+    // pan taken as present -- the same question, and the same call shape, that
+    // bandSegmentZoomAvailable() asks for the B/S buttons. Asking it here also
+    // means the refusal is announced even when no slice happens to be active,
+    // rather than disappearing into the `!s` return below.
+    const bool panZoomDeclared =
+        m_radioModel.backendCapabilities().panZoomModes.has_value();
+    if (panZoomModeRefusal(m_radioModel.isConnected(), panZoomDeclared,
+                           /*panKnown=*/true)
+            == PanZoomModeRefusal::NotDeclared) {
+        qCWarning(lcDevices)
+            << (segmentZoom ? "segment zoom" : "band zoom")
+            << "ignored: this radio declares no band/segment zoom";
+        showUnsupportedControlNotice();
+        return;
+    }
     auto* s = activeSlice();
     if (!s) {
         return;
@@ -1606,13 +1644,15 @@ void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
     const QString panId = !s->panId().isEmpty()
         ? s->panId()
         : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
-    // Same gate as togglePanZoomModeForPan above, and it must be the same one:
-    // this is the explicit-state form of the identical wire text, reached from
-    // the FlexControl and RC28 wheel handlers. It checked isConnected() and a
-    // pan id and never the capability.
+    // The remaining rungs, through the same predicate as
+    // togglePanZoomModeForPan above -- and it must be the same one: this is
+    // the explicit-state form of the identical wire text, reached from the
+    // FlexControl and RC28 wheel handlers. It checked isConnected() and a pan
+    // id and never the capability. NotDeclared is already handled at the top
+    // of this function, so what is left here is NotConnected and NoPan, both
+    // of which were silent early returns before this PR and stay silent.
     auto* pan = panId.isEmpty() ? nullptr : m_radioModel.panadapter(panId);
-    if (!panZoomModeWritable(m_radioModel.isConnected(),
-                             m_radioModel.usesFlexCommandPlane(),
+    if (!panZoomModeWritable(m_radioModel.isConnected(), panZoomDeclared,
                              /*panKnown=*/pan != nullptr)) {
         return;
     }
@@ -1628,9 +1668,13 @@ void MainWindow::setPanZoomMode(bool segmentZoom, bool enable)
 
 void MainWindow::togglePanZoomMode(bool segmentZoom)
 {
-    if (!m_radioModel.isConnected()) {
-        return;
-    }
+    // No isConnected() check here: it was a second copy of the NotConnected
+    // rung this PR centralised, sitting AHEAD of the gate on five of the six
+    // surfaces -- the same two-copies-of-one-condition shape the gate exists
+    // to remove, one layer up. togglePanZoomModeForPan asks the one predicate;
+    // this only resolves which pan it asks about. (Deleting it does not make a
+    // disconnected press speak -- activeSlice() below still returns early, and
+    // the disconnected path was silent before this PR and stays silent.)
     auto* s = activeSlice();
     if (!s) {
         return;

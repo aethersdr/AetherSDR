@@ -48,9 +48,9 @@
 #include "core/MemoryRecallPolicy.h"
 #include "core/StreamStatus.h"
 #include "models/PanadapterModel.h"
-#include "models/PanZoomModeGate.h"
 #include "models/RadioStatusOwnership.h"
 #include "models/Nr2SettingsModel.h"
+#include "PanZoomModeGate.h"
 #include "SpectrumWidget.h"
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -5384,8 +5384,9 @@ void MainWindow::buildUI()
             return;
         }
         applet->spectrumWidget()->setBandSegmentZoomAvailable(
-            bandSegmentZoomAvailable(m_radioModel.isConnected(),
-                                     m_radioModel.usesFlexCommandPlane()));
+            bandSegmentZoomAvailable(
+                m_radioModel.isConnected(),
+                m_radioModel.backendCapabilities().panZoomModes.has_value()));
         // The two capability switches onConnectionStateChanged() applies for
         // the same reason: a pan created after connect would otherwise keep
         // the widget defaults (no edge crop, client EMA on) until the next
@@ -6439,24 +6440,24 @@ void MainWindow::onConnectionStateChanged(bool connected)
     m_connPanel->setConnected(connected);
     updateExperimentalRadioSupport(connected);
 
-    // Band/segment zoom only ever works on Flex (see SpectrumWidget::
-    // setBandSegmentZoomAvailable()'s own comment) -- usesFlexCommandPlane()
-    // is a direct family() == "flex" check (RadioModel.h), not merely "some
-    // connection object exists": SimBackend/demo mode owns a RadioConnection
-    // too but isn't Flex and doesn't understand band_zoom=/segment_zoom=, so
-    // the plain hasCommandPlane() this used before was one indirection looser
-    // than the actual question being asked. Edge taper is keyed off
-    // RadioCapabilities::hasDdcPanEdgeRolloff instead (see its own comment)
-    // -- a future DDC-based backend gets that automatically instead of
-    // needing its own family string added here. Re-evaluate both on every
-    // connect and disconnect, since usesFlexCommandPlane()/
-    // backendCapabilities() only know the CURRENTLY connected radio.
+    // Band/segment zoom is a DECLARED capability, not a family string. It reads
+    // RadioCapabilities::panZoomModes -- a per-feature record FlexBackend
+    // engages and every other backend sets to nullopt explicitly -- exactly as
+    // the edge taper one line below reads hasDdcPanEdgeRolloff. An earlier
+    // revision asked RadioModel::usesFlexCommandPlane(), which is a direct
+    // family() == "flex" check, and #5554's standing notice says not to add
+    // one of those; the plain hasCommandPlane() before THAT was looser still,
+    // since SimBackend/demo mode owns a RadioConnection and understands no
+    // band_zoom=/segment_zoom=. A second family that gains the verb now
+    // engages the record and needs no edit here. Re-evaluate both on every
+    // connect and disconnect, since backendCapabilities() only knows the
+    // CURRENTLY connected radio.
     if (m_panStack) {
         // One predicate with the command paths in MainWindow_Shortcuts.cpp, so
         // "the button is grey" and "the keystroke is refused" cannot drift
         // apart on the capability (PanZoomModeGate.h).
         const bool zoomAvailable = AetherSDR::bandSegmentZoomAvailable(
-            connected, m_radioModel.usesFlexCommandPlane());
+            connected, m_radioModel.backendCapabilities().panZoomModes.has_value());
         const bool edgeTaperEnabled =
             connected && m_radioModel.backendCapabilities().hasDdcPanEdgeRolloff;
         const bool backendAverages =

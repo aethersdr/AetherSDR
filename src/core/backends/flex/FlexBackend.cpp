@@ -256,6 +256,13 @@ RadioCapabilities FlexBackend::capabilities() const
     caps.hasManualNotch = false;
     caps.hasTransmitFrequencyCheck = false;
     caps.hasDdcPanEdgeRolloff = false;  // superhet/direct-sampling, no DDC decimation edge
+    // Per-pan band/segment zoom. `display pan set <pan> band_zoom=|segment_zoom=`
+    // is FlexLib's own wire text and the radio owns the resulting flags, which is
+    // why this is the only backend that engages the record. The string is the
+    // declaration naming what it grants; the gate reads only that the record is
+    // engaged (gui/PanZoomModeGate.h).
+    caps.panZoomModes = RadioCapabilities::PanZoomModes{
+        QStringLiteral("display pan set")};
     // A Flex blanks impulses in its OWN DDC, so NB is already the radio's under
     // hasRadioSideDsp above and the host has nothing to add. This flag says
     // where the blanker runs, not whether the radio has one.
