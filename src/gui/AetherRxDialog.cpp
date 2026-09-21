@@ -259,13 +259,12 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     // BYPASS beside the Settings gear, where AetherTX keeps its own. The
     // engine owns the snapshot-and-restore, and the docked chain applet's RX
     // BYPASS drives the same state, so this button follows the engine back
-    // rather than remembering anything itself. AetherNR is not a chain stage
-    // and is not touched -- its own method strip switches it off.
+    // rather than remembering anything itself. The engine takes AetherNR
+    // down with the chain, so a bypassed receive path is truly unprocessed.
     m_bypassBtn = m_tabs->addFooterToggle(
         tr("BYPASS"), QStringLiteral("aetherRxBypass"),
-        tr("Suppress every receive chain stage at once, so audio reaches you "
-           "unprocessed. AetherNR is not affected. Click again to restore the "
-           "stages that were on."));
+        tr("Suppress every receive stage at once, AetherNR included, so audio "
+           "reaches you unprocessed. Click again to restore what was on."));
     connect(m_bypassBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_audio) m_audio->setRxBypassed(on);
     });

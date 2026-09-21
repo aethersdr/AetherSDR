@@ -6310,6 +6310,28 @@ void AudioEngine::setRxBypassed(bool on)
         RxChainStage::Pudu,
     };
 
+    // The NR cluster lives outside RxChainStage, but BYPASS must still
+    // suppress it so the bypassed RX path is genuinely transparent rather
+    // than "everything except the noise reduction". The methods are
+    // exclusive, so at most one is on; whichever it was comes back on
+    // release. Restoring straight through the setters is safe here: a method
+    // that was running has already built its state (NR2's FFTW wisdom
+    // included), which is the prerequisite the wisdom-prep path exists for.
+    struct NrMethod {
+        RxBypassNr        bit;
+        bool (AudioEngine::*enabled)() const;
+        void (AudioEngine::*set)(bool);
+    };
+    static const NrMethod kNrMethods[] = {
+        {RxBypassNr::Nr2,   &AudioEngine::nr2Enabled,   &AudioEngine::setNr2Enabled},
+        {RxBypassNr::Nr4,   &AudioEngine::nr4Enabled,   &AudioEngine::setNr4Enabled},
+        {RxBypassNr::Mnr,   &AudioEngine::mnrEnabled,   &AudioEngine::setMnrEnabled},
+        {RxBypassNr::Dfnr,  &AudioEngine::dfnrEnabled,  &AudioEngine::setDfnrEnabled},
+        {RxBypassNr::Rn2,   &AudioEngine::rn2Enabled,   &AudioEngine::setRn2Enabled},
+        {RxBypassNr::NvAfx, &AudioEngine::nvAfxEnabled, &AudioEngine::setNvAfxEnabled},
+        {RxBypassNr::Nnr,   &AudioEngine::nnrEnabled,   &AudioEngine::setNnrEnabled},
+    };
+
     if (on) {
         m_rxBypassSnapshot.clear();
         for (auto s : kAllStages) {
@@ -6318,17 +6340,21 @@ void AudioEngine::setRxBypassed(bool on)
                 setStageEnabled(s, false);
             }
         }
-        // RX RN2 lives in the NR cluster — not in RxChainStage — but
-        // BYPASS must still suppress it so the bypassed RX path is
-        // genuinely transparent rather than "everything except the
-        // neural denoiser".  Mirrors the TX-side fix above (#3054).
-        m_rxBypassSnapshotRn2 = m_rn2Enabled.load();
-        if (m_rxBypassSnapshotRn2) setRn2Enabled(false);
+        m_rxBypassSnapshotNr = 0;
+        for (const NrMethod& m : kNrMethods) {
+            if ((this->*m.enabled)()) {
+                m_rxBypassSnapshotNr |= static_cast<unsigned>(m.bit);
+                (this->*m.set)(false);
+            }
+        }
     } else {
         for (auto s : m_rxBypassSnapshot) setStageEnabled(s, true);
         m_rxBypassSnapshot.clear();
-        if (m_rxBypassSnapshotRn2) setRn2Enabled(true);
-        m_rxBypassSnapshotRn2 = false;
+        for (const NrMethod& m : kNrMethods) {
+            if (m_rxBypassSnapshotNr & static_cast<unsigned>(m.bit))
+                (this->*m.set)(true);
+        }
+        m_rxBypassSnapshotNr = 0;
     }
 
     m_rxBypassActive = on;
