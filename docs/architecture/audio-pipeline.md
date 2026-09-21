@@ -181,9 +181,23 @@ RADE decoded speech is logically mono duplicated to stereo before that point.
 - RX boost is optional and applies `tanh(2*x)` after any 24 kHz to 48 kHz
   resampling.
 - RX output trim is a dB gain stage applied after RX boost.
-- `m_rxBufferCapMs` defaults to 200 ms and is clamped to 50..1000 ms. The
-  speaker timer drops the oldest samples when the normal RX buffer or RADE RX
-  buffer exceeds the cap.
+- `m_rxBufferCapMs` defaults to 100 ms (`#3193` lowered it from 200 ms) and is
+  clamped to 50..1000 ms by `setRxBufferCapMs()`. This is a **backlog cap**: a
+  ceiling on how much undelivered RX audio may sit in the queues, enforced by
+  discarding the *oldest* samples once the queue exceeds it. It is not a
+  prefill target and not a latency floor — nothing ever waits for the buffer to
+  fill to the cap. At steady state the backlog sits well below it, and the cap
+  only binds during a jitter burst.
+- The configured value is a *lower bound* on the effective cap, not the cap
+  itself. Both the drain side and the enqueue side compute the effective cap as
+  the maximum of the configured value, `kKiwiSdrBufferCapMs` (1000 ms) when any
+  KiwiSDR audio is active, and `presentationDelay + 100` when a Flex or Kiwi
+  receive presentation delay is set. With either in play the real ceiling is
+  well above the user setting.
+- Trimming happens at two sites, not only in the speaker timer:
+  `drainRxAudio()` trims the normal and KiwiSDR receive buffers (plus the RADE
+  RX buffer separately), and `processRxAudioData()` trims the NR2 packet queue
+  on the producer side as audio is enqueued.
 - The speaker drain timer runs every 10 ms, writes only full float32 samples, and
   respects `QAudioSink::bytesFree()`.
 - If decoded RADE speech is pending, the speaker timer mixes `m_radeRxBuffer`
