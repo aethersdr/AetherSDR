@@ -7678,11 +7678,12 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            {QStringLiteral("requested"), !unchanged}};
     }
     if (action == QLatin1String("filter")) {
-        // "slice filter <lowHz> <highHz>": set the RX passband explicitly. A mode change
-        // mirrors the passband in SliceModel (normalizeFilterPolarity) without emitting
-        // operator intent, so a backend owning its DSP (HL2) can diverge from the model.
-        // Routed through setFilterWidth(), which emits filterCommandIssued (reaching
-        // IRadioBackend::setSliceFilter) and normalizes polarity like the UI.
+        // Set the RX passband explicitly: "slice filter <lowHz> <highHz>".
+        //
+        // Use the desktop setter and its explicit Operator filter origin,
+        // including the same polarity normalization and adaptive-filter epoch
+        // as the UI. The typed request reaches the backend; the returned
+        // desktop value is not proof that hardware has applied it.
         const QStringList parts =
             arg.trimmed().split(QRegularExpression(QStringLiteral("[\\s,]+")),
                                 Qt::SkipEmptyParts);
@@ -7762,7 +7763,7 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
     if (action == QLatin1String("agc")) {
         // "slice agc <off|slow|med|fast> [threshold 0..100]" — drive the RX AGC
         // through the same operator setters the RX applet uses, so the change
-        // emits agcCommandIssued and reaches IRadioBackend::setSliceAgc.
+        // emits field-specific receiveAgcRequested intents through the seam.
         const QStringList parts =
             arg.trimmed().split(QRegularExpression(QStringLiteral("[\\s,]+")),
                                 Qt::SkipEmptyParts);
@@ -7792,10 +7793,9 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         if (!s)
             return err(QStringLiteral("no slice available to set AGC on"));
 
-        // Threshold first: setAgcMode() emits the intent carrying BOTH values,
-        // so applying the threshold first means a single mode+threshold request
-        // reaches the backend as one coherent pair rather than as the new mode
-        // paired with the stale threshold.
+        // Threshold first: when enabling AGC, host DSP receives the new mode
+        // with the requested threshold already in its pair. These are two
+        // field edits (when changed), not an atomic multi-field operation.
         if (threshold >= 0)
             s->setAgcThreshold(threshold);
         s->setAgcMode(mode);

@@ -7,6 +7,7 @@
 #include "IcomReceiveContractTestAccess.h"
 #include "core/backends/flex/FlexBackend.h"
 #include "core/backends/hl2/Hl2Backend.h"
+#include "core/backends/hl2/Hl2RxDsp.h"
 #include "core/backends/anan/AnanBackend.h"
 #include "core/backends/sim/SimBackend.h"
 #ifdef AETHER_BACKEND_RTL
@@ -20,6 +21,38 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+
+namespace AetherSDR::hl2 {
+// Reuse the existing friend to open only a production RX worker/channel.
+// No connectRadio(), Metis start, network peer, TX DSP configure or samples.
+struct Hl2DspReadbackTestAccess {
+    static bool prepare(Hl2Backend& backend)
+    {
+        std::string error;
+        if (!backend.openReceiverDsp(0, &error)) {
+            return false;
+        }
+        Hl2RxDsp* dsp = backend.rx(0)->dsp;
+        bool configured = false;
+        QMetaObject::invokeMethod(dsp, [&] {
+            configured = dsp->configure(Hl2RxDsp::Config{});
+        }, Qt::BlockingQueuedConnection);
+        return configured;
+    }
+    static WdspChannel::Config applied(Hl2Backend& backend)
+    {
+        Hl2RxDsp* dsp = backend.rx(0)->dsp;
+        WdspChannel::Config config;
+        // A queue barrier AND a read of the real channel, on its own thread.
+        QMetaObject::invokeMethod(dsp, [&] {
+            if (const WdspChannel::Config* current = dsp->channelConfig()) {
+                config = *current;
+            }
+        }, Qt::BlockingQueuedConnection);
+        return config;
+    }
+};
+}
 
 using namespace AetherSDR;
 namespace {
@@ -330,6 +363,38 @@ void demoAndColdRefusal()
     check(rtlObservations.isEmpty(), "cold RTL refuses receive requests without opening USB");
 #endif
 }
+
+void hl2WorkerDispatch()
+{
+    hl2::Hl2Backend backend;
+    const bool prepared = hl2::Hl2DspReadbackTestAccess::prepare(backend);
+    check(prepared, "socket-free fixture opens only the production HL2 receive DSP worker");
+    if (!prepared) { return; }
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    WdspChannel::Config applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.mode == WdspChannel::Mode::Lsb
+              && applied.filterLowHz == -2900 && applied.filterHighHz == -100,
+          "HL2 mode then default-passband reaches the actual worker in order");
+    backend.requestSliceFilter(0, {-2400, -200, SliceFilterRequest::Origin::Operator});
+    backend.setSliceMode(0, QStringLiteral("LSB"));
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.filterLowHz == -2400 && applied.filterHighHz == -200,
+          "repeated HL2 mode re-push preserves the manual passband in the worker");
+    backend.setSliceMode(0, QStringLiteral("CW"));
+    backend.requestSliceFilter(0, {-200, 200, SliceFilterRequest::Origin::Adaptive});
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.filterLowHz == 400 && applied.filterHighHz == 800,
+          "typed adaptive filter retains HL2 carrier-to-CW-pitch translation in the worker");
+    backend.requestSliceAgc(0, {SliceAgcRequest::Field::Mode, QStringLiteral("fast"), 50, 10});
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.agcMode == 4 && std::abs(applied.maximumAgcGainDb - 30.0) < 1e-9,
+          "typed AGC pair configures the actual worker's mode and gain ceiling");
+    backend.requestSliceAgc(0, {SliceAgcRequest::Field::Threshold, QStringLiteral("fast"), 40, 10});
+    backend.requestSliceAgc(0, {SliceAgcRequest::Field::OffLevel, QStringLiteral("off"), 100, 90});
+    applied = hl2::Hl2DspReadbackTestAccess::applied(backend);
+    check(applied.agcMode == 4 && std::abs(applied.maximumAgcGainDb - 24.0) < 1e-9,
+          "threshold preserves fast AGC; unsupported off-level cannot alter the worker");
+}
 }
 
 int main(int argc, char** argv)
@@ -339,11 +404,14 @@ int main(int argc, char** argv)
         return 1;
     }
     QCoreApplication app(argc, argv);
+    qputenv("AETHER_AUTOMATION", "1");
+    qunsetenv("AETHER_AUTOMATION_ALLOW_TX");
     declarations();
     flexCommandsAndObservations();
     intentVariants();
     icomCommandsAndObservations();
     hostConfiguration();
+    hl2WorkerDispatch();
     demoAndColdRefusal();
     return failures == 0 ? 0 : 1;
 }
