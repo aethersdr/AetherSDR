@@ -805,10 +805,23 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
     // fftwPlannerLock() hands out a plain std::mutex and std::mutex is not
     // recursive. The same rule is why exportWisdomAtomically() above does not
     // lock itself; see its comment.
+    //
+    // IDEMPOTENT BY CONSTRUCTION, not by call-site discipline. It nulls what
+    // it frees. No second call is reachable today — all seven call sites
+    // below return before reaching another — but "today" is the whole of the
+    // guarantee, and the shape that would break it is a copy-paste: this
+    // function has thirteen loop iterations of four near-identical blocks,
+    // each ending freeBuffers() / remove() / return, and a fifth plan type or
+    // a new cancel point added by copying one of them is exactly the edit
+    // that drops the return. Nulling does not make that edit correct — it
+    // would then plan on a null buffer — but it turns silent heap corruption
+    // into a deterministic failure at the point of the mistake.
     const auto freeBuffers = [&cbuf, &rbuf] {
         auto lock = fftwPlannerLock();
         fftw_free(rbuf);
+        rbuf = nullptr;
         fftw_free(cbuf);
+        cbuf = nullptr;
     };
     if (!cbuf || !rbuf) {
         freeBuffers();
