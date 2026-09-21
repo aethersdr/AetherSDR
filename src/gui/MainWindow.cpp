@@ -3410,7 +3410,8 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
         // session -- the same boundary the AX.25 send button uses. The
         // bridge reaches the same routine through the registered keying
         // action, with its own controller, and only under
-        // AETHER_AUTOMATION_ALLOW_TX.
+        // AETHER_AUTOMATION_ALLOW_TX: it resolves actions on a QMenu while
+        // that menu is open, which the context menu is during exec().
         if (!m_rxPlaybackTx) {
             m_rxPlaybackTx = std::make_unique<RxPlaybackTransmitter>(&m_radioModel, m_audio, this);
             connect(m_rxPlaybackTx.get(), &RxPlaybackTransmitter::finished,
@@ -3425,7 +3426,11 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
         m_rxDialog->setTxPlaybackActive(m_rxPlaybackTx->active());
         connect(m_rxDialog, &AetherRxDialog::txPlaybackTriggered, this, [this] {
             const std::shared_ptr<TxController> controller = m_radioModel.localTxController();
-            if (!controller || !controller->valid()) return;
+            if (!controller || !controller->valid()) {
+                statusBar()->showMessage(
+                    tr("TX Playback: no transmit control is available right now."), 4000);
+                return;
+            }
             toggleRxPlaybackTransmit(
                 controller->captureProgram(TxController::Activity::Mox).request());
         });
@@ -3440,6 +3445,9 @@ AetherRxDialog* MainWindow::ensureAetherRxDialog()
                 controller->captureProgram(TxController::Activity::Mox).request();
             return [this, input] { toggleRxPlaybackTransmit(input); };
         });
+        // Seed the EQ page with the filter it is looking at right now, rather
+        // than leaving it blank until the next slice change pushes one.
+        pushRxFilterCutoffsToEq();
     }
     return m_rxDialog.data();
 }
@@ -3459,9 +3467,27 @@ void MainWindow::toggleRxPlaybackTransmit(const TxCoordinator::Request& input)
     // The same file cannot go to the speakers and the transmitter at once.
     if (m_qsoRecorder->isPlaying()) m_qsoRecorder->stopPlayback();
     QString why;
-    const std::optional<QByteArray> pcm =
+    std::optional<QByteArray> pcm =
         m_qsoRecorder->lastRecordingPcm(RxPlaybackTransmitter::wireFormat(), &why);
-    if (!pcm || !m_rxPlaybackTx->start(*pcm, activeSlice(), input, &why)) {
+    if (!pcm) {
+        qCWarning(lcAudio) << "TX Playback refused:" << why;
+        statusBar()->showMessage(tr("TX Playback: %1.").arg(why), 4000);
+        return;
+    }
+    // Bounded, like every other generated-audio TX path: the cap is the
+    // Recording section's idle timeout, the same number that already bounds
+    // how long a client-side capture runs unattended. A longer recording
+    // sends its first that-many seconds, and the operator is told so.
+    const int capSecs = std::max(1,
+        AppSettings::instance().value("QsoRecordingIdleTimeout", "120").toInt());
+    const qsizetype capBytes = RxPlaybackTransmitter::bytesForSeconds(capSecs);
+    if (pcm->size() > capBytes) {
+        pcm->truncate(capBytes);
+        statusBar()->showMessage(
+            tr("TX Playback: sending the first %1 s of the recording (the Recording "
+               "idle timeout).").arg(capSecs), 6000);
+    }
+    if (!m_rxPlaybackTx->start(*pcm, activeSlice(), input, &why)) {
         qCWarning(lcAudio) << "TX Playback refused:" << why;
         statusBar()->showMessage(tr("TX Playback: %1.").arg(why), 4000);
     }

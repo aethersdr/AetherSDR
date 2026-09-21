@@ -5967,6 +5967,12 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 sl->setRecordOn(on);
         }
     });
+    // A capture can start from AetherRX's REC (or the bridge) as well as
+    // from this flag, and the one recorder serves them all, so the flag
+    // follows the recorder's own start rather than only its own click.
+    connect(m_qsoRecorder, &QsoRecorder::recordingStarted, w, [w](const QString&) {
+        w->setRecordOn(true);
+    });
     // A stopped recording may have failed to write/finalize; only enable
     // playback when the recorder has a successfully finalized file.
     connect(m_qsoRecorder, &QsoRecorder::recordingStopped, w, [this, w]() {

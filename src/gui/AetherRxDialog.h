@@ -177,6 +177,7 @@ private:
     QPushButton*        m_playBtn{nullptr};
     QAction*            m_txPlaybackAction{nullptr};
     bool                m_txPlaybackActive{false};
+    bool                m_playEnabled{false};   // what the host last said
     QStackedWidget*     m_stack{nullptr};
     QTimer*             m_checkTimer{nullptr};
 

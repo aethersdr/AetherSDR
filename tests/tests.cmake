@@ -98,6 +98,13 @@ target_link_libraries(audio_engine_rates_test PRIVATE aethercore Qt6::Core)
 add_test(NAME audio_engine_rates_test COMMAND audio_engine_rates_test)
 set_tests_properties(audio_engine_rates_test PROPERTIES TIMEOUT 120)
 
+# RX BYPASS snapshots and restores the running AetherNR method along with the
+# chain stages (#5913); enable flags only, no sockets/devices.
+add_executable(audio_engine_rx_bypass_nr_test tests/audio_engine_rx_bypass_nr_test.cpp)
+target_link_libraries(audio_engine_rx_bypass_nr_test PRIVATE aethercore Qt6::Core)
+add_test(NAME audio_engine_rx_bypass_nr_test COMMAND audio_engine_rx_bypass_nr_test)
+set_tests_properties(audio_engine_rx_bypass_nr_test PROPERTIES TIMEOUT 120)
+
 # Production auxiliary ingress/retirement versus DSP initialization; no sockets/devices.
 add_executable(audio_engine_pcm_lifetime_test tests/audio_engine_pcm_lifetime_test.cpp)
 target_link_libraries(audio_engine_pcm_lifetime_test PRIVATE aethercore Qt6::Core)

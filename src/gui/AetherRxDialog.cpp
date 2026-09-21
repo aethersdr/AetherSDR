@@ -247,9 +247,10 @@ AetherRxDialog::AetherRxDialog(AudioEngine* audio, QWidget* parent)
     });
     m_playBtn->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_playBtn, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
-        // Stopping must stay reachable even once PLAY has been disabled
-        // underneath a running transmit.
-        m_txPlaybackAction->setEnabled(m_playBtn->isEnabled() || m_txPlaybackActive);
+        // Reachable whenever there is something to send or something to
+        // stop: setPlayEnabled() keeps the button enabled while a transmit
+        // playback runs, so this handler can still open the menu to stop it.
+        m_txPlaybackAction->setEnabled(m_playEnabled || m_txPlaybackActive);
         QMenu menu(m_playBtn);
         menu.setObjectName(QStringLiteral("aetherRxPlayMenu"));
         menu.addAction(m_txPlaybackAction);
@@ -545,22 +546,30 @@ void AetherRxDialog::setPlayOn(bool on)
 
 void AetherRxDialog::setPlayEnabled(bool enabled)
 {
+    m_playEnabled = enabled;
     if (!m_playBtn) return;
-    m_playBtn->setEnabled(enabled);
+    // A disabled widget gets no context-menu event, so the menu that stops
+    // a transmit playback would vanish with it. While one is transmitting
+    // the button stays enabled whatever the host says; the host's answer is
+    // kept and applied once the transmit ends.
+    const bool effective = enabled || m_txPlaybackActive;
+    m_playBtn->setEnabled(effective);
     // Why it is greyed out has to reach the accessible channel too, not
     // just the tooltip (#4896).
     m_playBtn->setAccessibleDescription(
-        enabled ? tr("Play back the last recording. Click again to stop.")
-                : tr("Unavailable until something has been recorded. "
-                     "Use REC first."));
+        effective ? tr("Play back the last recording. Click again to stop.")
+                  : tr("Unavailable until something has been recorded. "
+                       "Use REC first."));
 }
 
 void AetherRxDialog::setTxPlaybackActive(bool on)
 {
     m_txPlaybackActive = on;
-    if (!m_txPlaybackAction) return;
-    QSignalBlocker block(m_txPlaybackAction);
-    m_txPlaybackAction->setChecked(on);
+    if (m_txPlaybackAction) {
+        QSignalBlocker block(m_txPlaybackAction);
+        m_txPlaybackAction->setChecked(on);
+    }
+    setPlayEnabled(m_playEnabled);
 }
 
 void AetherRxDialog::syncFromEngine()

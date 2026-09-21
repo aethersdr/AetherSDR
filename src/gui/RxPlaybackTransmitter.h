@@ -45,6 +45,9 @@ public:
 
     // What start() takes: 24 kHz stereo float32, interleaved.
     static QAudioFormat wireFormat();
+    // How many bytes of wireFormat() audio make `seconds`, for a caller
+    // bounding what it hands to start().
+    static qsizetype bytesForSeconds(int seconds);
 
     // Begin transmitting `pcm` (in wireFormat()) on `slice` (made the TX
     // slice first if it is not already) under `input`, the operator's request
@@ -79,7 +82,13 @@ private:
     TxCoordinator::Context m_context;
     QByteArray m_pcm;           // 24 kHz stereo float32, interleaved
     qsizetype  m_offset{0};
-    quint64    m_generation{0}; // stamps deferred work and the finish token
+    // Stamps deferred work and is the token handed to finishModemTxAudio.
+    // RadioModel::txAudioFinished is a broadcast every modem-route producer
+    // hears, and each compares the token to its own, so tokens are drawn
+    // from one process-wide counter started far above the small per-object
+    // counters the other producers use: a packet or beacon completing can
+    // never satisfy this session's wait, nor this session's theirs.
+    quint64    m_generation{0};
 
     bool m_active{false};
     bool m_pendingStream{false};

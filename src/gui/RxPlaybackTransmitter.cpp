@@ -30,6 +30,14 @@ constexpr int kLeadBufferMs = 120;
 constexpr int kTailMs = 150;
 constexpr int kStreamWaitMs = 5000;
 constexpr int kPttConfirmMs = 2000;
+
+// See m_generation in the header: one counter for every session in the
+// process, started where no per-object counter will ever reach.
+quint64 nextSessionToken()
+{
+    static quint64 token = quint64(1) << 40;
+    return ++token;
+}
 } // namespace
 
 RxPlaybackTransmitter::RxPlaybackTransmitter(RadioModel* radio, AudioEngine* audio,
@@ -51,6 +59,9 @@ RxPlaybackTransmitter::RxPlaybackTransmitter(RadioModel* radio, AudioEngine* aud
     connect(m_radio, &RadioModel::connectionStateChanged, this, [this](bool connected) {
         if (!connected && active()) finish(true, tr("the radio disconnected"));
     });
+    // Any producer's block ends this session too. Deliberately unfiltered,
+    // as the packet dialog's is: a block is the radio saying "not now", and
+    // the safe reading of that while we hold a request is to let go.
     connect(&m_radio->transmitModel(), &TransmitModel::pttBlocked,
             this, [this](const QString& message) {
         if (active()) finish(true, tr("PTT blocked: %1").arg(message));
@@ -81,6 +92,11 @@ bool RxPlaybackTransmitter::bypassesDax() const
     return caps.hostModulates || caps.takesTxAudioOverSeam;
 }
 
+qsizetype RxPlaybackTransmitter::bytesForSeconds(int seconds)
+{
+    return static_cast<qsizetype>(std::max(0, seconds)) * kSampleRate * kFrameBytes;
+}
+
 QAudioFormat RxPlaybackTransmitter::wireFormat()
 {
     QAudioFormat fmt;
@@ -105,7 +121,7 @@ bool RxPlaybackTransmitter::start(const QByteArray& pcm, SliceModel* slice,
     if (!input.valid())      return refuse(tr("the transmit request is not valid"));
     if (pcm.size() < kFrameBytes) return refuse(tr("the recording is empty"));
 
-    ++m_generation;
+    m_generation = nextSessionToken();
     m_request = input;
     m_pcm = pcm;
     m_offset = 0;
