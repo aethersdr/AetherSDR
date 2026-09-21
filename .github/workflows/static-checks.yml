@@ -179,6 +179,37 @@ jobs:
         if: ${{ !cancelled() }}
         run: python tools/gen_touchpoint_manifest.py --check
 
+      # ── The seam-probe table (tests/SeamSignalProbeTable.inc) is generated
+      # from IRadioBackend.h's signals: section. #5868.
+      #
+      # backend_seam_affinity_test already asserts this, against the
+      # meta-object — but at RUNTIME, and no PR lane runs it: ci-test-gate.txt
+      # is frozen so it cannot join the per-PR allow-list, and ci.yml's Linux
+      # job runs no ctest at all. It therefore first executes in
+      # full-suite.yml, post-merge on main. Detection was late, not absent:
+      # #5825 added autoRfGainArmSettled without the probe line, was green on
+      # every PR check, and went red on the merge with "51 probed, 52
+      # declared" (#5865 repaired it).
+      #
+      # This is that assertion restated as a static check, where it can block
+      # the PR — stdlib Python, seconds, no build, no Qt. Generating the table
+      # rather than only auditing it is the other half: a checker keeps two
+      # lists honest, a generator leaves one.
+      - name: Seam probe table covers every IRadioBackend signal
+        if: ${{ !cancelled() }}
+        run: python tools/gen_seam_probe_table.py --check
+
+      # The scanner behind that table, run here and not only as a ctest.
+      # --check compares the committed table against the SAME parser that
+      # generates it, so a parser that under-reads produces a table that is
+      # short in exactly the matching way and --check reports "up to date".
+      # The generator refuses rather than under-reads (residue()), and these
+      # tests are what hold it to that — which makes them load-bearing for
+      # the step above, unlike the other tools/test_*.py that are ctest-only.
+      - name: Seam probe scanner
+        if: ${{ !cancelled() }}
+        run: python tools/test_gen_seam_probe_table.py
+
       # ── Test registration stays in tests/tests.cmake. The root CMakeLists.txt
       # was 6,357 lines, over half of it 300+ test-target declarations; the split
       # cut it to ~2,780. tests/tests.cmake fails the CONFIGURE step if a test

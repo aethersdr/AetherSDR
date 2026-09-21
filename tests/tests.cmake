@@ -3767,6 +3767,18 @@ if(PYTHON3_EXECUTABLE)
     add_test(NAME bridge_docs_check
              COMMAND ${PYTHON3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_bridge_docs.py --check)
+    # The generated seam-probe table (tests/SeamSignalProbeTable.inc) vs
+    # IRadioBackend.h. static-checks.yml runs the same --check on every PR;
+    # this is the local copy, so `ctest` says so before a push does.
+    add_test(NAME seam_probe_table_check
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/gen_seam_probe_table.py --check)
+    # The scanner behind that table: access labels end the signals section, so
+    # IRadioBackend's protected/private publishLegacyAudio and warnAudioDropped
+    # stay out of it.
+    add_test(NAME seam_probe_table_scanner
+             COMMAND ${PYTHON3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_gen_seam_probe_table.py)
 endif()
 
 # Retired local-listener fixture. Positive behavior is covered through the live
